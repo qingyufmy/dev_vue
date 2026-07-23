@@ -193,6 +193,22 @@ describe('cancel_pending broker suffix (Fix 4)', () => {
   })
 })
 
+describe('scheduler lock contention recovery', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('reports the remaining lease instead of treating contention as an error', async () => {
+    redisModule.getRedis.mockReturnValue({ pttl: vi.fn().mockResolvedValue(91_200) })
+    expect(await __schedulerTest.schedulerLockWaitSeconds('1:XAUUSD')).toBe(92)
+    expect(__schedulerTest.schedulerWaitLabel('lock_busy')).toBe('上一轮分析仍在结束，等待释放调度权')
+    expect(__schedulerTest.retryDelayMs('lock_busy')).toBe(5000)
+  })
+
+  it('falls back to a short retry when the lease is unavailable', async () => {
+    redisModule.getRedis.mockReturnValue({ pttl: vi.fn().mockResolvedValue(-1) })
+    expect(await __schedulerTest.schedulerLockWaitSeconds('1:XAUUSD')).toBe(5)
+  })
+})
+
 describe('finalize recovery deadline', () => {
   it('returns remaining whole seconds before the fixed deadline', () => {
     expect(__schedulerTest.calculateRecoverySeconds(160_001, 100_000)).toBe(61)

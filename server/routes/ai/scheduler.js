@@ -480,8 +480,10 @@ export async function getUserAutoRuntimeStatus(userId) {
 // === Redis Lock Helpers ===
 const REDIS_LOCK_PREFIX = 'auto:scheduler:lock:'
 const REDIS_COOLDOWN_PREFIX = 'auto:scheduler:cooldown:'
-const LOCK_TTL_MS = 600000 // 10 minutes
-const LOCK_RENEW_INTERVAL_MS = 200000 // renew every ~3.3 min (1/3 of TTL)
+// A healthy inference renews this lease. If the process terminates, a new
+// server should not be blocked by an abandoned ten-minute lock.
+const LOCK_TTL_MS = 120000
+const LOCK_RENEW_INTERVAL_MS = 30000
 
 // Lua script for atomic finalize: verify token → set cooldown → delete lock
 const FINALIZE_LUA = `
@@ -504,6 +506,17 @@ async function acquireLock(key) {
     if (!ok) console.warn(`[acquireLock] ${key}: lock already held`)
     return ok ? token : null
   } catch (e) { console.error('[acquireLock]', key, e.message); return null }
+}
+
+async function schedulerLockWaitSeconds(key) {
+  const redis = getRedis()
+  if (!redis) return 5
+  try {
+    const ttlMs = Number(await redis.pttl(`${REDIS_LOCK_PREFIX}${key}`))
+    return ttlMs > 0 ? Math.max(1, Math.ceil(ttlMs / 1000)) : 5
+  } catch {
+    return 5
+  }
 }
 
 // Atomic finalize: verify token → set cooldown → delete lock in one Lua eval
@@ -565,6 +578,7 @@ function retryDelayMs(reason) {
     case 'admin_bridge_offline':
     case 'redis_unavailable':
     case 'weekly_flatten_window':
+    case 'lock_busy':
       return 5000
     case 'market_closed':
     case 'market_restricted':
@@ -665,6 +679,7 @@ function schedulerWaitLabel(reason) {
     market_unknown_no_tick: '尚未收到行情报价，等待同步',
     market_unknown: '市场状态未知，等待确认',
     private_portfolio_context_unavailable: '持仓或挂单数据不完整，等待桥接恢复',
+    lock_busy: '上一轮分析仍在结束，等待释放调度权',
   }
   return labels[reason] || `等待条件恢复（${reason}）`
 }
@@ -969,8 +984,16 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     }
     const lockToken = await acquireLock(key)
     if (!lockToken) {
-      st.lastError = 'redis_lock_failed'
-      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      // Another scheduler (or the previous process lease after a restart) is
+      // still finishing this key. Treat contention as a wait state rather
+      // than a platform error, and publish it immediately to the dashboard.
+      st.lastError = ''
+      st.waitReason = 'lock_busy'
+      st.nextRunInSeconds = await schedulerLockWaitSeconds(key)
+      st.stage = 'idle'
+      st.stageLabel = ''
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, Math.min(tickIntervalMs, st.nextRunInSeconds * 1000))
       return
     }
     st.inFlight = true
@@ -2589,5 +2612,6 @@ export const __schedulerTest = {
   retryDelayMs,
   shouldLogSchedulerWait,
   schedulerWaitLabel,
+  schedulerLockWaitSeconds,
   secondsUntilNextScheduleSlot,
 }

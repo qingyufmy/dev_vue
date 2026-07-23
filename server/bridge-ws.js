@@ -1846,11 +1846,17 @@ async function handleBrowserCommand(ws, userId, msg) {
           queryOne(`SELECT
             (SELECT COUNT(*) FROM ai_signals) AS total,
             (SELECT COUNT(*) FROM ai_signals WHERE DATE(created_at) = CURDATE()) AS today,
-            (SELECT COUNT(*) FROM ai_signals WHERE DATE(created_at) = CURDATE() AND is_executed = 1) AS today_executed,
+            (SELECT COUNT(*) FROM ai_signals signals
+              WHERE DATE(signals.created_at) = CURDATE()
+                AND (signals.is_executed = 1 OR EXISTS (
+                  SELECT 1 FROM auto_signal_deliveries deliveries
+                  WHERE deliveries.signal_id = signals.id AND deliveries.is_executed = 1
+                ))) AS today_executed,
             (SELECT COUNT(*) FROM ai_signals WHERE DATE(created_at) = CURDATE() AND signal_type = 'error') AS today_errors,
             (SELECT COUNT(*) FROM ai_signals WHERE YEARWEEK(created_at, 1) = YEARWEEK(NOW(), 1)) AS week,
             (SELECT COUNT(*) FROM ai_signals WHERE is_executed = 1) AS executed,
-            (SELECT ROUND(AVG(confidence)*100, 1) FROM ai_signals WHERE signal_type IN ('buy','sell','strong_buy','strong_sell')) AS avg_confidence`),
+            (SELECT ROUND(AVG(confidence)*100, 1) FROM ai_signals
+              WHERE signal_type LIKE 'buy%' OR signal_type LIKE 'sell%') AS avg_confidence`),
 
           // 3. Signal type distribution
           queryAll('SELECT signal_type, COUNT(*) AS cnt FROM ai_signals GROUP BY signal_type ORDER BY cnt DESC'),
@@ -1862,20 +1868,33 @@ async function handleBrowserCommand(ws, userId, msg) {
 
           // 5. Auto-reasoning & trade stats
           queryOne(`SELECT
-            (SELECT COUNT(*) FROM user_bridge_settings WHERE auto_reasoning_enabled = 1) AS auto_reasoning_users,
-            (SELECT COUNT(*) FROM user_bridge_settings WHERE trade_send_enabled = 1) AS trade_enabled_users,
-            (SELECT COUNT(*) FROM auto_scheduler WHERE enabled = 1) AS auto_scheduler_users`),
+            (SELECT COUNT(*) FROM user_bridge_settings settings JOIN users ON users.id = settings.user_id
+              WHERE settings.auto_reasoning_enabled = 1
+                AND (users.role = 'admin' OR (users.plan = 'pro' AND (users.plan_expires_at IS NULL OR users.plan_expires_at >= NOW())))) AS auto_reasoning_users,
+            (SELECT COUNT(*) FROM user_bridge_settings settings JOIN users ON users.id = settings.user_id
+              WHERE settings.trade_send_enabled = 1
+                AND (users.role = 'admin' OR (users.plan = 'pro' AND (users.plan_expires_at IS NULL OR users.plan_expires_at >= NOW())))) AS trade_enabled_users,
+            (SELECT COUNT(*) FROM auto_scheduler scheduler
+              JOIN users ON users.id = scheduler.user_id
+              JOIN auto_prompt_types strategy ON strategy.id = scheduler.prompt_type_id
+              WHERE scheduler.enabled = 1 AND strategy.is_active = 1 AND strategy.deleted_at IS NULL
+                AND (users.role = 'admin' OR (users.plan = 'pro' AND (users.plan_expires_at IS NULL OR users.plan_expires_at >= NOW())))) AS auto_scheduler_users`),
 
-          // 6. Token usage stats (using pre-calculated token_count)
+          // 6. Token usage stats from the authoritative model-call ledger.
           queryOne(`SELECT
-            (SELECT SUM(token_count) FROM ai_signals WHERE DATE(created_at) = CURDATE()) AS today_tokens,
-            (SELECT SUM(token_count) FROM ai_signals) AS total_tokens,
-            (SELECT DATE(created_at) FROM ai_signals ORDER BY id DESC LIMIT 1) AS last_api_call`),
+            (SELECT COALESCE(SUM(token_count), 0) FROM ai_model_usage_logs
+              WHERE created_at >= CURDATE() AND request_status IN ('success', 'error')) AS today_tokens,
+            (SELECT COALESCE(SUM(token_count), 0) FROM ai_model_usage_logs
+              WHERE request_status IN ('success', 'error')) AS total_tokens,
+            (SELECT created_at FROM ai_model_usage_logs
+              WHERE request_status IN ('success', 'error') ORDER BY id DESC LIMIT 1) AS last_api_call`),
 
           // 7. Daily token trend (30 days)
           queryAll(`SELECT DATE(created_at) AS day,
             SUM(token_count) AS tokens
-            FROM ai_signals WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            FROM ai_model_usage_logs
+            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+              AND request_status IN ('success', 'error')
             GROUP BY DATE(created_at) ORDER BY day`),
 
           // 8. Connected bridges (WSS + trade mode info)
@@ -1989,12 +2008,36 @@ async function handleBrowserCommand(ws, userId, msg) {
 
           // 10. Actionable operating health for the administrator workbench.
           queryOne(`SELECT
-            (SELECT COUNT(*) FROM ai_model_usage_logs WHERE created_at >= CURDATE()) AS model_requests_today,
-            (SELECT COUNT(*) FROM ai_model_usage_logs WHERE created_at >= CURDATE() AND request_status <> 'success') AS model_failures_today,
+            (SELECT COUNT(*) FROM ai_model_usage_logs WHERE created_at >= CURDATE()
+              AND request_status IN ('success', 'error')) AS model_requests_today,
+            (SELECT COUNT(*) FROM ai_model_usage_logs WHERE created_at >= CURDATE()
+              AND request_status = 'error') AS model_failures_today,
             (SELECT ROUND(AVG(duration_ms)) FROM ai_model_usage_logs WHERE created_at >= CURDATE() AND request_status = 'success') AS avg_model_latency_ms,
-            (SELECT COALESCE(SUM(request_bytes + response_bytes), 0) FROM ai_model_usage_logs WHERE created_at >= CURDATE()) AS model_bytes_today,
-            (SELECT COUNT(*) FROM period_review_cases WHERE status IN ('draft', 'edited')) AS reviews_pending,
-            (SELECT COUNT(*) FROM period_review_cases WHERE status = 'failed') AS reviews_failed,
+            (SELECT COALESCE(SUM(COALESCE(request_bytes, 0) + COALESCE(response_bytes, 0)), 0)
+              FROM ai_model_usage_logs WHERE created_at >= CURDATE()
+                AND request_status IN ('success', 'error')) AS model_bytes_today,
+            (SELECT COUNT(*) FROM period_review_cases review_case
+              WHERE review_case.status IN ('draft', 'edited')
+                AND review_case.id = (
+                  SELECT candidate.id FROM period_review_cases candidate
+                  WHERE candidate.user_id = review_case.user_id
+                    AND candidate.period_type = review_case.period_type
+                    AND candidate.period_key = review_case.period_key
+                    AND COALESCE(candidate.trading_account_id, 0) = COALESCE(review_case.trading_account_id, 0)
+                    AND candidate.strategy_id = review_case.strategy_id
+                  ORDER BY (candidate.status = 'approved') DESC, candidate.id DESC LIMIT 1
+                )) AS reviews_pending,
+            (SELECT COUNT(*) FROM period_review_cases review_case
+              WHERE review_case.status = 'failed'
+                AND review_case.id = (
+                  SELECT candidate.id FROM period_review_cases candidate
+                  WHERE candidate.user_id = review_case.user_id
+                    AND candidate.period_type = review_case.period_type
+                    AND candidate.period_key = review_case.period_key
+                    AND COALESCE(candidate.trading_account_id, 0) = COALESCE(review_case.trading_account_id, 0)
+                    AND candidate.strategy_id = review_case.strategy_id
+                  ORDER BY (candidate.status = 'approved') DESC, candidate.id DESC LIMIT 1
+                )) AS reviews_failed,
             (SELECT COUNT(*) FROM risk_decisions WHERE created_at >= CURDATE() AND decision_status = 'reject') AS risk_rejections_today`)
         ])
 

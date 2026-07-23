@@ -586,7 +586,13 @@ const AUTO_REASON_LABELS = {
   market_stale_tick: '行情停滞',
   redis_unavailable: '缓存服务未连接',
   weekly_flatten_window: '周末清仓处理中',
-  redis_lock_failed: '调度锁获取失败',
+  lock_busy: '上一轮分析仍在结束，正在等待调度权',
+  redis_lock_failed: '调度服务暂时繁忙',
+  cooldown_check_failed: '调度等待时间检查失败',
+  finalize_failed: '调度收尾状态待恢复',
+  lock_lost: '调度执行权已失效，本轮已安全停止',
+  ai_failed: '模型分析失败',
+  owner_bridge_offline: '策略所属账户桥接离线',
   redis_cooldown_active: '等待下一轮调度',
   no_api_key: '未配置接口密钥',
   strategy_disabled: '策略已停用',
@@ -8938,7 +8944,7 @@ async function updateAdminDashboard() {
     set('todayNew', us.today_new || 0);
     set('onlineNow', us.online_now || 0);
     set('todayActive', '今日活跃 ' + (us.today_active || 0) + ' 人');
-    set('schedulerUsers', (ar.auto_scheduler_users || 0) + ' 个订阅运行中');
+    set('schedulerUsers', (ar.auto_scheduler_users || 0) + ' 个订阅已启用');
     set('todayTokens', formatAdminCompactNumber(tk.today_tokens));
     set('totalTokens', '累计 ' + formatAdminCompactNumber(tk.total_tokens));
     set('todayTraffic', '流量 ' + formatAdminBytes(d.healthStats?.model_bytes_today));
@@ -9046,8 +9052,8 @@ function renderSchedulerCards(data) {
           <div><span>下次运行</span><strong class="num">${escapeHtml(countdown)}</strong></div>
           <div><span>上次运行</span><strong>${s.last_run_at ? escapeHtml(formatTimeAgo(s.last_run_at)) : '--'}</strong></div>
         </div>
-        ${s.last_error ? '<p class="ops-scheduler-message danger"><i data-lucide="circle-alert"></i>' + escapeHtml(s.last_error) + '</p>' : ''}
-        ${!s.last_error && s.market_reason ? '<p class="ops-scheduler-message"><i data-lucide="info"></i>' + escapeHtml(s.market_reason) + '</p>' : ''}
+        ${s.last_error ? '<p class="ops-scheduler-message danger"><i data-lucide="circle-alert"></i>' + escapeHtml(schedulerReasonText(s.last_error, true)) + '</p>' : ''}
+        ${!s.last_error && s.market_reason ? '<p class="ops-scheduler-message"><i data-lucide="info"></i>' + escapeHtml(schedulerReasonText(s.market_reason)) + '</p>' : ''}
       </article>
     `);
   }
@@ -9087,8 +9093,23 @@ function waitReasonText(reason) {
     no_api_key: '无API密钥',
     strategy_disabled: '策略已禁用',
     user_bridge_offline: '用户桥接离线',
+    owner_bridge_offline: '策略所属账户桥接离线',
+    lock_busy: '等待上一轮释放调度权',
+    redis_error: '缓存服务通信异常',
+    finalize_failed: '正在恢复调度状态',
+    cooldown_recovered: '等待下一轮调度',
   };
-  return map[reason] || reason;
+  return map[reason] || autoReasonText(reason);
+}
+
+function schedulerReasonText(reason, isError = false) {
+  const code = String(reason || '').trim();
+  if (!code) return isError ? '调度运行异常，请查看服务器日志' : '当前状态待确认';
+  const translated = AUTO_REASON_LABELS[code];
+  if (translated) return translated;
+  const waitTranslated = waitReasonText(code);
+  if (waitTranslated && waitTranslated !== '未知状态') return waitTranslated;
+  return isError ? '调度运行异常，请查看服务器日志' : '当前状态待确认';
 }
 
 function formatCountdown(seconds) {
@@ -9466,9 +9487,9 @@ async function renderAdminDashboard(el, d, userListResp) {
 
   const us = d.userStats, ss = d.signalStats, ar = d.autoReasonStats, tk = d.tokenStats || {};
   const wssCount = d.bridges.length;
-  const buyCnt = (d.signalTypeDist||[]).filter(r => ['buy','strong_buy'].includes(r.signal_type)).reduce((s,r)=>s+r.cnt,0);
-  const sellCnt = (d.signalTypeDist||[]).filter(r => ['sell','strong_sell'].includes(r.signal_type)).reduce((s,r)=>s+r.cnt,0);
-  const holdCnt = (d.signalTypeDist||[]).filter(r => r.signal_type==='hold').reduce((s,r)=>s+r.cnt,0);
+  const buyCnt = (d.signalTypeDist||[]).filter(r => String(r.signal_type || '').startsWith('buy') || r.signal_type === 'strong_buy').reduce((s,r)=>s+Number(r.cnt || 0),0);
+  const sellCnt = (d.signalTypeDist||[]).filter(r => String(r.signal_type || '').startsWith('sell') || r.signal_type === 'strong_sell').reduce((s,r)=>s+Number(r.cnt || 0),0);
+  const holdCnt = (d.signalTypeDist||[]).filter(r => r.signal_type==='hold').reduce((s,r)=>s+Number(r.cnt || 0),0);
   const healthSummary = adminOperationalSummary(d);
   const todayExecutionRate = Number(ss.today || 0) > 0 ? (Number(ss.today_executed || 0) / Number(ss.today || 0) * 100).toFixed(1) : '0.0';
 
@@ -9496,7 +9517,7 @@ async function renderAdminDashboard(el, d, userListResp) {
           <article class="ops-metric-card"><span class="ops-metric-icon teal"><i data-lucide="activity"></i></span><div><span>当前在线</span><strong class="num" data-field="onlineNow">${Number(us.online_now || 0)}</strong><small data-field="todayActive">今日活跃 ${Number(us.today_active || 0)} 人</small></div></article>
           <article class="ops-metric-card"><span class="ops-metric-icon gold"><i data-lucide="users"></i></span><div><span>平台注册用户</span><strong class="num" data-field="totalUsers">${Number(us.total_users || 0)}</strong><small data-field="userBreakdown">Pro ${Number(us.pro_users || 0)} · Plus ${Number(us.plus_users || 0)} · Free ${Number(us.free_users || 0)}</small></div></article>
           <article class="ops-metric-card"><span class="ops-metric-icon blue"><i data-lucide="radio-tower"></i></span><div><span>在线 MT5 终端</span><strong class="num" data-field="wss">${wssCount}</strong><small>当前 WebSocket 连接</small></div></article>
-          <article class="ops-metric-card"><span class="ops-metric-icon violet"><i data-lucide="brain-circuit"></i></span><div><span>自动分析用户</span><strong class="num" data-field="autoReason">${Number(ar.auto_reasoning_users || 0)}</strong><small data-field="schedulerUsers">${Number(ar.auto_scheduler_users || 0)} 个订阅运行中</small></div></article>
+          <article class="ops-metric-card"><span class="ops-metric-icon violet"><i data-lucide="brain-circuit"></i></span><div><span>自动分析用户</span><strong class="num" data-field="autoReason">${Number(ar.auto_reasoning_users || 0)}</strong><small data-field="schedulerUsers">${Number(ar.auto_scheduler_users || 0)} 个订阅已启用</small></div></article>
           <article class="ops-metric-card"><span class="ops-metric-icon coral"><i data-lucide="send"></i></span><div><span>交易发送开启</span><strong class="num" data-field="tradeEnabled">${Number(ar.trade_enabled_users || 0)}</strong><small>已授权自动执行</small></div></article>
           <article class="ops-metric-card"><span class="ops-metric-icon cyan"><i data-lucide="database"></i></span><div><span>今日模型消耗</span><strong class="num" data-field="todayTokens">${formatAdminCompactNumber(tk.today_tokens)}</strong><small data-field="todayTraffic">流量 ${formatAdminBytes(d.healthStats?.model_bytes_today)}</small></div></article>
         </div>
