@@ -12,6 +12,7 @@ const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', im
 const strategy = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
 const strategyOwnership = readFileSync(new URL('../../server/routes/ai/strategy-ownership.js', import.meta.url), 'utf8')
 const preferences = readFileSync(new URL('../../server/routes/ai/inference-preferences.js', import.meta.url), 'utf8')
+const userDeletion = readFileSync(new URL('../../server/admin/user-deletion.js', import.meta.url), 'utf8')
 
 describe('rollout hardening contract', () => {
   it('persists every supported entry method without truncation', () => {
@@ -80,11 +81,12 @@ describe('rollout hardening contract', () => {
 
   it('anonymizes deleted accounts, destroys credentials and preserves trading evidence', () => {
     const deleteRoute = admin.slice(admin.indexOf("router.delete('/admin-users/:id'"), admin.indexOf("router.get('/admin-audit'"))
-    expect(deleteRoute).toContain("deletion_status = 'anonymized'")
-    expect(deleteRoute).toContain('api_key_encrypted = NULL')
-    expect(deleteRoute).not.toContain('DELETE FROM users')
-    expect(deleteRoute).not.toContain('DELETE FROM trade_audit_logs')
-    expect(deleteRoute).not.toContain('DELETE FROM orders')
+    expect(deleteRoute).toContain('anonymizeAdminUser')
+    expect(userDeletion).toContain("deletion_status = 'anonymized'")
+    expect(userDeletion).toContain('api_key_encrypted = NULL')
+    expect(userDeletion).not.toContain('DELETE FROM users')
+    expect(userDeletion).not.toContain('DELETE FROM trade_audit_logs')
+    expect(userDeletion).not.toContain('DELETE FROM orders')
     expect(auth).toContain("deletion_status = 'active'")
   })
 

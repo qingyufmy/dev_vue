@@ -9,6 +9,7 @@ const legacyAdmin = readFileSync(new URL('../server/routes/admin.js', import.met
 const aiOperations = readFileSync(new URL('../server/admin/ai-operations.js', import.meta.url), 'utf8')
 const riskAudit = readFileSync(new URL('../server/admin/risk-audit.js', import.meta.url), 'utf8')
 const contentSystem = readFileSync(new URL('../server/admin/content-system.js', import.meta.url), 'utf8')
+const userDeletion = readFileSync(new URL('../server/admin/user-deletion.js', import.meta.url), 'utf8')
 
 describe('unified admin console contract', () => {
   it('ships a standalone accessible and responsive administration surface', () => {
@@ -26,6 +27,11 @@ describe('unified admin console contract', () => {
     expect(app).toContain("api('/api/admin/overview')")
     expect(app).toContain('`/api/admin/users/${userId}`')
     expect(routes).toContain("router.patch('/admin/users/:userId'")
+    expect(routes).toContain("router.delete('/admin/users/:userId'")
+    expect(app).toContain('id="deleteUserButton"')
+    expect(app).toContain('confirm_email:user.email')
+    expect(app).toContain("true,user.email")
+    expect(userDeletion).toContain("deletion_status = 'anonymized'")
     expect(routes).toContain('translateAdminProfileError')
     expect(app).toContain('运行与风控')
     expect(app).toContain('/operations-detail')

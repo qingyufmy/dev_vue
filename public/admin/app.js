@@ -350,15 +350,22 @@ function renderUserDetail(tab) {
     body.innerHTML = `${hero}<div class="summary-grid"><div class="summary-item"><span>自动分析</span><strong>${runtime.auto_reasoning_enabled ? '已开启' : '已关闭'}</strong></div><div class="summary-item"><span>交易发送</span><strong>${runtime.trade_send_enabled ? '已开启' : '已关闭'}</strong></div><div class="summary-item"><span>订阅策略</span><strong>${subscriptions.length} 条</strong></div></div><h3 style="margin-top:22px">MT5 账户</h3><div class="module-list">${accounts.length ? accounts.map(account => `<div class="module-row"><span class="module-icon">${icons.chart}</span><div><strong>${escapeHtml(account.mt5_login || '未知账号')} · ${escapeHtml(account.broker_server || '未知服务器')}</strong><small>${escapeHtml(account.nickname || '未设置账户名称')} · ${escapeHtml(account.observe_status || '状态未知')}</small></div></div>`).join('') : '<div class="notice">该用户尚未接入 MT5 账户。</div>'}</div>`
   } else {
     const expiry = String(user.plan_expires_at || '').slice(0,10)
-    body.innerHTML = `${hero}<form id="profileForm"><div class="form-grid"><div class="field"><label for="profileNickname">昵称</label><input class="input" id="profileNickname" name="nickname" value="${escapeHtml(user.nickname)}"></div><div class="field"><label for="profileEmail">邮箱</label><input class="input" id="profileEmail" name="email" type="email" required value="${escapeHtml(user.email)}"></div><div class="field"><label for="profilePhone">手机号</label><input class="input" id="profilePhone" name="phone" type="tel" value="${escapeHtml(user.phone)}"></div><div class="field"><label for="profileRole">账号角色</label><select class="select" id="profileRole" name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></div><div class="field"><label for="profilePlan">会员等级</label><select class="select" id="profilePlan" name="plan"><option value="free">免费用户</option><option value="plus">Plus 会员</option><option value="pro">Pro 专业版</option></select></div><div class="field"><label for="profileExpiry">到期日期</label><input class="input" id="profileExpiry" name="expires_at" type="date" value="${escapeHtml(expiry)}"><span class="helper">免费用户无需设置；已过期档案仍保留原会员等级。</span></div><div class="field span-2"><label for="profilePassword">重置密码（可选）</label><input class="input" id="profilePassword" name="password" type="password" autocomplete="new-password" placeholder="至少 8 位，必须包含字母和数字"><span class="helper">保存新密码后，该用户的桥接长期登录会话会立即失效。</span></div></div><div class="form-actions"><button class="secondary-button" type="button" data-close-modal>取消</button><button class="primary-button" id="saveProfileButton" type="submit">保存档案</button></div></form>`
+    body.innerHTML = `${hero}<form id="profileForm"><div class="form-grid"><div class="field"><label for="profileNickname">昵称</label><input class="input" id="profileNickname" name="nickname" value="${escapeHtml(user.nickname)}"></div><div class="field"><label for="profileEmail">邮箱</label><input class="input" id="profileEmail" name="email" type="email" required value="${escapeHtml(user.email)}"></div><div class="field"><label for="profilePhone">手机号</label><input class="input" id="profilePhone" name="phone" type="tel" value="${escapeHtml(user.phone)}"></div><div class="field"><label for="profileRole">账号角色</label><select class="select" id="profileRole" name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></div><div class="field"><label for="profilePlan">会员等级</label><select class="select" id="profilePlan" name="plan"><option value="free">免费用户</option><option value="plus">Plus 会员</option><option value="pro">Pro 专业版</option></select></div><div class="field"><label for="profileExpiry">到期日期</label><input class="input" id="profileExpiry" name="expires_at" type="date" value="${escapeHtml(expiry)}"><span class="helper">免费用户无需设置；已过期档案仍保留原会员等级。</span></div><div class="field span-2"><label for="profilePassword">重置密码（可选）</label><input class="input" id="profilePassword" name="password" type="password" autocomplete="new-password" placeholder="至少 8 位，必须包含字母和数字"><span class="helper">保存新密码后，该用户的桥接长期登录会话会立即失效。</span></div></div><div class="form-actions">${user.role!=='admin'?'<button class="text-button danger-text" id="deleteUserButton" type="button">匿名化删除账号</button>':''}<span class="action-spacer"></span><button class="secondary-button" type="button" data-close-modal>取消</button><button class="primary-button" id="saveProfileButton" type="submit">保存档案</button></div></form>`
     body.querySelector('#profileRole').value = user.role
     body.querySelector('#profilePlan').value = user.plan
     body.querySelector('#profilePlan').addEventListener('change', event => { body.querySelector('#profileExpiry').disabled = event.target.value === 'free' })
     body.querySelector('#profileExpiry').disabled = user.plan === 'free'
     body.querySelector('#profileForm').addEventListener('submit', saveUserProfile)
+    body.querySelector('#deleteUserButton')?.addEventListener('click',deleteSelectedUser)
     body.querySelector('[data-close-modal]').addEventListener('click', closeUserModal)
   }
   body.querySelectorAll('[data-detail-tab]').forEach(button => button.addEventListener('click', () => renderUserDetail(button.dataset.detailTab)))
+}
+async function deleteSelectedUser(){
+  const user=state.selectedUser?.user;if(!user||user.role==='admin')return
+  if(!await confirmAction('匿名化删除用户账号？','登录凭证、个人资料、个人模型和运行配置会被销毁；订单、交易、风控及审计证据会依法保留。该操作无法恢复。','确认永久删除',true,user.email))return
+  const button=document.querySelector('#deleteUserButton');button.disabled=true
+  try{await api(`/api/admin/users/${user.id}`,{method:'DELETE',body:JSON.stringify({confirm_email:user.email})});toast('用户账号已匿名化删除','success');closeUserModal();await loadUsers()}catch(error){handleError(error);button.disabled=false}
 }
 async function saveUserProfile(event) {
   event.preventDefault()
@@ -387,13 +394,17 @@ function closeUserModal() {
   document.body.style.overflow = ''
   state.selectedUser = null
 }
-function confirmAction(title, message, confirmLabel = '确认', danger = false) {
+function confirmAction(title, message, confirmLabel = '确认', danger = false, requiredText = '') {
   const layer = document.querySelector('#confirmModal')
   const button = document.querySelector('#confirmModalButton')
   document.querySelector('#confirmModalTitle').textContent = title
   document.querySelector('#confirmModalMessage').textContent = message
   button.textContent = confirmLabel
   button.classList.toggle('danger-button', danger)
+  const requiredField=document.querySelector('#confirmRequiredField'),requiredInput=document.querySelector('#confirmRequiredInput'),requiredLabel=document.querySelector('#confirmRequiredLabel')
+  requiredField.hidden=!requiredText;requiredInput.value='';requiredLabel.textContent=requiredText?`请输入“${requiredText}”以确认`:'请输入确认内容';button.disabled=Boolean(requiredText)
+  const validateRequired=()=>{button.disabled=Boolean(requiredText)&&requiredInput.value.trim()!==requiredText}
+  requiredInput.addEventListener('input',validateRequired)
   layer.hidden = false
   document.body.style.overflow = 'hidden'
   return new Promise(resolve => {
@@ -404,6 +415,7 @@ function confirmAction(title, message, confirmLabel = '确认', danger = false) 
       layer.hidden = true
       document.body.style.overflow = ''
       button.removeEventListener('click', accept)
+      requiredInput.removeEventListener('input',validateRequired)
       layer.querySelectorAll('[data-cancel-confirm]').forEach(item => item.removeEventListener('click', cancel))
       resolve(value)
     }
@@ -411,7 +423,7 @@ function confirmAction(title, message, confirmLabel = '确认', danger = false) 
     const cancel = () => finish(false)
     button.addEventListener('click', accept)
     layer.querySelectorAll('[data-cancel-confirm]').forEach(item => item.addEventListener('click', cancel))
-    button.focus()
+    if(requiredText)requiredInput.focus();else button.focus()
   })
 }
 function handleError(error) { toast(error?.message || '操作失败，请稍后重试', 'error') }

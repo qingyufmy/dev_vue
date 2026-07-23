@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { queryAll, queryOne } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 import { translateAdminProfileError, updateAdminUserProfile } from '../admin/user-profile.js'
+import { anonymizeAdminUser } from '../admin/user-deletion.js'
 import { getAdminAiOperationsOverview } from '../admin/ai-operations.js'
 import { updateObserverChannel, updateObserverSource } from './ai/observer-channels.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource, listObserverChannelAssignments, replaceObserverChannelAssignments } from './ai/observer-channels.js'
@@ -461,6 +462,21 @@ router.patch('/admin/users/:userId', authMiddleware, adminOnly, async (req, res)
   } catch (error) {
     const status = String(error?.message || '') === 'user_not_found' ? 404 : 400
     res.status(status).json({ ok:false, error:translateAdminProfileError(error) })
+  }
+})
+
+router.delete('/admin/users/:userId', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const user = await queryOne('SELECT email FROM users WHERE id = ?', [Number(req.params.userId)])
+    if (!user) return res.status(404).json({ ok:false, error:'用户不存在' })
+    if (String(req.body?.confirm_email || '').trim().toLowerCase() !== String(user.email || '').trim().toLowerCase()) {
+      return res.status(400).json({ ok:false, error:'确认邮箱与用户邮箱不一致' })
+    }
+    res.json({ ok:true, deleted:await anonymizeAdminUser({ actor:req.user, targetUserId:req.params.userId }) })
+  } catch (error) {
+    const labels={invalid_user_id:'用户编号无效',user_not_found:'用户不存在',admin_user_cannot_be_deleted:'管理员账号不能删除'}
+    const code=String(error?.message||'')
+    res.status(code==='user_not_found'?404:400).json({ok:false,error:labels[code]||'用户删除失败'})
   }
 })
 
