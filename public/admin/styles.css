@@ -330,6 +330,30 @@ h2 { margin:3px 0 0; font-size:22px; }
 .content-card-main small,.content-card-main p { color:var(--muted); }
 .content-card-main small { display:block; margin-top:4px; }
 .content-card-main p { margin:7px 0 0; font-size:11px; }
+.course-asset-workspace { display:grid; gap:14px; }
+.asset-course-picker .panel-body { display:grid; grid-template-columns:minmax(260px,1fr) auto; align-items:end; gap:14px; }
+.asset-summary { display:flex; align-items:center; gap:8px; }
+.asset-summary span { min-width:90px; padding:9px 11px; border:1px solid var(--border); border-radius:9px; color:var(--muted); font-size:10px; background:var(--surface-2); }
+.asset-summary strong { display:block; margin-top:3px; color:var(--text); font-size:15px; }
+.course-asset-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(360px,.82fr); gap:14px; align-items:start; }
+.asset-upload-form,.quiz-editor { display:grid; gap:10px; padding:0 14px 14px; }
+.file-drop { min-height:96px; display:flex; align-items:center; justify-content:center; padding:14px; border:1px dashed var(--border-strong); border-radius:11px; background:var(--surface-2); cursor:pointer; text-align:center; }
+.file-drop input { position:absolute; opacity:0; pointer-events:none; }
+.file-drop strong,.file-drop small { display:block; }
+.file-drop small { margin-top:5px; color:var(--muted); }
+.asset-type-checks { display:flex; flex-wrap:wrap; gap:8px; }
+.asset-type-checks label { min-height:38px; display:flex; align-items:center; gap:7px; padding:0 10px; border:1px solid var(--border); border-radius:9px; color:var(--text-2); }
+.asset-type-checks input { width:17px; height:17px; accent-color:var(--gold); }
+.resource-list,.quiz-list { display:grid; gap:7px; padding:0 14px 14px; }
+.resource-list > article { min-height:58px; display:flex; align-items:center; gap:10px; padding:9px 11px; border:1px solid var(--border); border-radius:9px; background:var(--surface-2); }
+.resource-list > article > div { min-width:0; }
+.resource-list strong,.resource-list small { display:block; }
+.resource-list small { max-width:520px; margin-top:3px; overflow:hidden; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.quiz-form-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+.quiz-row { min-height:64px; display:grid; grid-template-columns:30px minmax(0,1fr) auto auto; align-items:center; gap:9px; padding:9px 11px; border:1px solid var(--border); border-radius:9px; background:var(--surface-2); }
+.quiz-index { width:26px; height:26px; display:grid; place-items:center; border-radius:7px; background:#192536; color:var(--text-2); font-weight:700; }
+.quiz-row strong,.quiz-row small { display:block; }
+.quiz-row small { margin-top:3px; color:var(--muted); }
 .feedback-card { padding:15px; border:1px solid var(--border); border-radius:11px; background:var(--surface-2); }
 .feedback-card header,.feedback-card header > div,.feedback-card footer { display:flex; align-items:center; gap:9px; }
 .feedback-card header { justify-content:space-between; }
@@ -460,6 +484,7 @@ h2 { margin:3px 0 0; font-size:22px; }
   .operations-runtime { grid-template-columns:1fr 1fr; }
   .operations-runtime > div:first-child { grid-column:1 / -1; }
   .operations-subscription { grid-template-columns:1fr 1fr; }
+  .course-asset-grid { grid-template-columns:1fr; }
 }
 @media (max-width:900px) {
   .admin-app { display:block; }
@@ -513,6 +538,12 @@ h2 { margin:3px 0 0; font-size:22px; }
   .operations-risk-grid > label { grid-template-columns:1fr; }
   .operations-subscription { grid-template-columns:1fr; }
   .operations-subscription .secondary-button { width:100%; }
+  .asset-course-picker .panel-body { grid-template-columns:1fr; }
+  .asset-summary { display:grid; grid-template-columns:repeat(3,1fr); }
+  .asset-summary span { min-width:0; }
+  .quiz-form-grid { grid-template-columns:1fr; }
+  .quiz-row { grid-template-columns:30px minmax(0,1fr); }
+  .quiz-row .text-button { width:100%; }
   .form-grid .span-2 { grid-column:auto; }
   .form-actions { position:sticky; bottom:0; padding:12px 0 max(4px,env(safe-area-inset-bottom)); background:var(--surface); }
   .editor-actions { bottom:-24px; margin-inline:-14px; padding-inline:14px; }
