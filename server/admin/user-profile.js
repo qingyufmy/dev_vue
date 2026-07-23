@@ -55,7 +55,7 @@ export function translateAdminProfileError(error) {
 
 /**
  * 统一管理后台的用户档案写入口。
- * 主站旧后台、AI 运营中心和新管理控制台都必须复用此函数，避免权限与校验漂移。
+ * 统一管理后台必须复用此函数，避免用户档案权限与校验规则漂移。
  */
 export async function updateAdminUserProfile({ actorUserId, targetUserId, input = {} } = {}) {
   const uid = Number(targetUserId)

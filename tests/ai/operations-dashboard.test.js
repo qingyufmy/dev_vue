@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 const bridgeWs = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
-const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
+const adminApp = readFileSync(new URL('../../public/admin/app.js', import.meta.url), 'utf8')
 const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
 
 describe('operations dashboard data contracts', () => {
@@ -26,10 +26,10 @@ describe('operations dashboard data contracts', () => {
 
 describe('operations scheduler presentation', () => {
   it('localizes scheduler details instead of exposing raw internal text', () => {
-    expect(app).toContain('schedulerReasonText(s.last_error, true)')
-    expect(app).toContain('schedulerReasonText(s.market_reason)')
-    expect(app).toContain("lock_busy: '上一轮分析仍在结束，正在等待调度权'")
-    expect(app).not.toContain("escapeHtml(s.last_error) + '</p>'")
+    expect(adminApp).toContain('schedulerReason(item.last_error, true)')
+    expect(adminApp).toContain('schedulerReason(item.wait_reason)')
+    expect(adminApp).toContain("lock_busy:'等待上一轮调度结束'")
+    expect(adminApp).not.toContain('escapeHtml(item.last_error)')
   })
 
   it('treats a held lock as a wait state and shortens abandoned leases', () => {

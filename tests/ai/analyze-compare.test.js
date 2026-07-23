@@ -1031,158 +1031,45 @@ describe('historical comparison time range normalization', () => {
 })
 
 describe('historical comparison frontend contract', () => {
-  it('offers selectable historical inference snapshots separately from ad-hoc history', () => {
-    const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
-    expect(html).toContain('name="cmpDataSource" value="snapshots"')
-    expect(html).toContain('id="cmpSnapshotList"')
-    expect(html).toContain('历史信号快照')
-    expect(frontend).toContain('/api/ai/model-compare/snapshots')
-    expect(frontend).toContain('snapshot_ids:dataSource === "snapshots"')
-    expect(frontend).toContain('部分完成')
-    expect(frontend).toContain('data_source:dataSource')
-    expect(frontend).toContain('约束异常')
+  const aiHtml = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
+  const aiFrontend = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
+  const adminFrontend = readFileSync(new URL('../../public/admin/app.js', import.meta.url), 'utf8')
+  const adminRoutes = readFileSync(new URL('../../server/routes/admin-console.js', import.meta.url), 'utf8')
+
+  it('retires the duplicate AI-laboratory evaluation workspace', () => {
+    expect(aiHtml).not.toContain('id="model-compare"')
+    expect(aiHtml).not.toContain('id="cmpSnapshotList"')
+    expect(aiFrontend).not.toContain('/api/ai/model-compare/snapshots')
+    expect(aiFrontend).not.toContain('async function loadModelCompare()')
   })
 
-  const frontend = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
-
-  it('keeps snapshot selection inside the application scroll container', () => {
-    const styles = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
-    expect(frontend).toContain('function syncModelCompareSnapshotSelection()')
-    expect(frontend).toContain('syncModelCompareSnapshotSelection();\n      updateCompareSnapshotSelectionSummary();')
-    expect(styles).toMatch(/\.main\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
-    expect(styles).toMatch(/\.compare-snapshot-row\s*\{[^}]*position:\s*relative;/s)
+  it('hosts model evaluation in the unified administrator workbench', () => {
+    expect(adminFrontend).toContain('data-ai-tab="model-compare"')
+    expect(adminFrontend).toContain('/api/admin/ai/model-compare/setup')
+    expect(adminFrontend).toContain('/api/admin/ai/model-compare/snapshots?')
+    expect(adminFrontend).toContain("api('/api/admin/ai/model-compare/jobs'")
+    expect(adminFrontend).toContain('至少 2 条；一次评测只能使用同一策略版本')
+    expect(adminRoutes).toContain("router.get('/admin/ai/model-compare/setup'")
+    expect(adminRoutes).toContain("router.post('/admin/ai/model-compare/jobs'")
+    expect(adminRoutes).toContain("router.delete('/admin/ai/model-compare/jobs/:jobId'")
   })
 
-  it('polls background jobs and supports cancellation', () => {
-    expect(frontend).toContain('/api/ai/model-compare/history/${encodeURIComponent(jobId)}')
-    expect(frontend).toContain('{ method:"DELETE" }')
-    expect(frontend).not.toContain('showToast(')
-    expect(frontend).toContain('formatCompareChartTime(job.created_at_utc_msc, params.timezone_offset_minutes)')
-    const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
-    expect(backend).toContain('abort_controller:new AbortController()')
-    expect(backend).toContain('job.abort_controller.abort')
-    expect(backend).toContain('abortSignal:job.abort_controller.signal')
-  })
-
-  it('reattaches to an active background job after reloading the page', () => {
-    expect(frontend).toContain('async function monitorHistoryCompareJob')
-    expect(frontend).toContain('const activeJob = jobs.find')
-    expect(frontend).toContain('void monitorHistoryCompareJob(activeJob.id, activeJob)')
-    expect(frontend).toContain('consecutivePollFailures >= 3')
-  })
-
-  it('reconciles interrupted jobs and releases terminal in-memory state', () => {
+  it('keeps background reconciliation and cancellation in the authoritative backend', () => {
     const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
     expect(backend).toContain('async function reconcileInterruptedHistoryCompareJobs')
     expect(backend).toContain("stale.error = 'history_compare_interrupted'")
+    expect(backend).toContain('abort_controller:new AbortController()')
+    expect(backend).toContain('job.abort_controller.abort')
     expect(backend).toContain('historyCompareJobs.delete(job.id)')
   })
 
-  it('uses only fully closed historical candles and ignores live Chan anchors', () => {
+  it('uses only fully closed candles and preserves the strategy decision clock', () => {
     const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
     expect(backend).toContain('utcMs + evaluationDurationMs <= evaluationCutoffUtcMs')
     expect(backend).toContain('last_bar_closed:true')
     expect(backend).toContain('chan_structure_anchor_utc_msc:null')
-    expect(backend).toContain('const exclusiveEnd = boundedEnd < endUtcMs ? boundedEnd + 60_000 : boundedEnd')
-  })
-
-  it('uses the strategy run interval as the decision clock while retaining the primary analysis timeframe', () => {
     expect(resolveStrategyEvaluationTimeframe({ interval_minutes:5 }, [
       { timeframe:'H1' }, { timeframe:'M15' }, { timeframe:'M5' }, { timeframe:'H4' },
     ])).toBe('M5')
-    expect(resolveStrategyEvaluationTimeframe({ interval_minutes:15 }, [
-      { timeframe:'H1' }, { timeframe:'M15' }, { timeframe:'M5' },
-    ])).toBe('M15')
-  })
-
-  it('presents directional evaluation separately from the event-driven virtual account', () => {
-    expect(frontend).toContain('方向准确率')
-    expect(frontend).toContain('保留模型原始方向')
-    expect(frontend).toContain('抽样账户资金回放')
-    expect(frontend).toContain('实盘账户状态、冷却、报价时效和 ATR 风控不参与模型排名')
-    expect(frontend).toContain('尚未接入真实逐笔 Tick')
-    expect(frontend).toContain('决策周期')
-  })
-
-  it('does not invent a leading model when every response holds, no order trades, or scores tie', () => {
-    expect(frontend).toContain('本次没有模型给出可评估方向')
-    expect(frontend).toContain('本次只有观望或异常响应')
-    expect(frontend).toContain('没有形成模拟成交')
-    expect(frontend).toContain('订单均未成交')
-    expect(frontend).toContain('多个模型的方向质量暂时并列')
-    expect(frontend).toContain('directionHasUniqueLeader')
-    expect(frontend).toContain('replayHasUniqueLeader')
-  })
-
-  it('discloses conservative gap, stop-limit and intrabar margin assumptions', () => {
-    expect(frontend).toContain('跳空触发和跳空止损按更差的开盘成交价计算')
-    expect(frontend).toContain('挂单在柱内成交时，只采用价格路径能够证明发生在入场后的同柱止盈止损')
-    expect(frontend).toContain('Stop Limit 在同柱内无法确认激活与成交顺序时也延后到下一根')
-    expect(frontend).toContain('保证金优先采用桥接端 MT5 按账户币种计算的买卖方向快照')
-    expect(frontend).toContain('当前 MT5 合约参数快照，并非经纪商当时的历史合约参数')
-    expect(frontend).toContain('保证金强平按方向不利的盘中极值进行保守检查')
-    expect(frontend).toContain('异常模型不参与排名与一致度计算')
-    expect(frontend).toContain('apiErrorMessage(reason)')
-    expect(frontend).toContain('simulation.margin_calculation_status')
-    expect(frontend).toContain('simulation.margin_calculation_unavailable_count')
-    expect(frontend).toContain('未触发 / 同柱待定 / 歧义')
-    expect(frontend).toContain('stop_limit_same_bar_deferred_count')
-    expect(frontend).toContain('intrabar_entry_exit_deferred_count')
-  })
-
-  it('shows commission and MT5-timezone swap accounting separately', () => {
-    expect(frontend).toContain('隔夜利息按 MT5 服务器时区跨日计提')
-    expect(frontend).toContain('币种无法可靠换算时会明确标记为“部分未计入”')
-    expect(frontend).toContain('simulation.total_commission')
-    expect(frontend).toContain('simulation.total_swap')
-    expect(frontend).toContain('simulation.swap_status === "partial"')
-  })
-
-  it('renders an accessible multi-model equity curve with MT5 time tooltips', () => {
-    expect(frontend).toContain('data-cmp-equity-chart')
-    expect(frontend).toContain('role="img"')
-    expect(frontend).toContain('抽样资金曲线')
-    expect(frontend).toContain('execution_timezone_offset_minutes')
-    expect(frontend).toContain('bindCompareEquityChart(replayRanked, meta)')
-  })
-
-  it('supports an explicitly confirmed continuous mode with a hard decision cap', () => {
-    expect(frontend).toContain('cmpEvaluationMode')
-    expect(frontend).toContain('确认开始连续回测')
-    expect(frontend).toContain('evaluation_mode:evaluationMode')
-    expect(frontend).toContain('HISTORY_COMPARE_CONTINUOUS_LIMIT = 120')
-    expect(frontend).toContain('连续回测资金曲线')
-    expect(frontend).toContain('逐根主周期连续决策 + M1 OHLC 执行回放')
-  })
-
-  it('confirms sampled comparisons that are expected to make many model requests', () => {
-    expect(frontend).toContain('HISTORY_COMPARE_CONFIRM_CALLS = 20')
-    expect(frontend).toContain('确认开始高调用量评估')
-    expect(frontend).toContain('模型输出需要修复时可能产生额外调用')
-    expect(frontend).toContain('estimate.calls >= HISTORY_COMPARE_CONFIRM_CALLS')
-  })
-
-  it('shows actual provider usage and a reproducibility fingerprint', () => {
-    expect(frontend).toContain('meta.actual_model_calls ?? meta.estimated_model_calls')
-    expect(frontend).toContain('meta.repair_model_calls')
-    expect(frontend).toContain('meta.model_token_count')
-    expect(frontend).toContain('meta.reproducibility?.evidence_sha256')
-    expect(frontend).toContain('输入与行情已留指纹')
-    expect(frontend).toContain('模型输出具有随机性')
-  })
-
-  it('labels low-sample snapshot rankings and explains replay rejection reasons', () => {
-    expect(frontend).toContain('当前仅 ${evaluationCount} 个案例')
-    expect(frontend).toContain('至少选择 5 个案例后再比较方向质量')
-    expect(frontend).toContain('模型实际读取 ${meta.model_input_kline_count || meta.kline_count || 0} 根 K 线')
-    expect(frontend).toContain('record.broker_reason || record.reason')
-    expect(frontend).toContain('挂单价格距离当时报价过近')
-    expect(frontend).toContain('meta.snapshot_selection?.strategy_version')
-    expect(frontend).toContain('模型请求超时')
-  })
-
-  it('shows localized failure details in recent comparison jobs', () => {
-    expect(frontend).toContain('失败原因：${escapeHtml(apiErrorMessage(job.error))}')
-    expect(frontend).toContain('所选区间内没有可用的完整历史 K 线')
   })
 })

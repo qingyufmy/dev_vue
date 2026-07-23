@@ -123,6 +123,22 @@ describe('unified admin console contract', () => {
     expect(css).toContain('.governance-grid')
   })
 
+  it('moves platform strategy lifecycle management into the canonical admin console', () => {
+    expect(app).toContain('data-ai-tab="strategies"')
+    expect(app).toContain("api('/api/admin/ai/strategies')")
+    expect(app).toContain('openPlatformStrategyEditor')
+    expect(app).toContain('data-platform-timeframe')
+    expect(app).toContain('data-platform-entry')
+    expect(app).toContain('confirm_stop_subscriptions:true')
+    expect(routes).toContain("router.get('/admin/ai/strategies'")
+    expect(routes).toContain("router.post('/admin/ai/strategies'")
+    expect(routes).toContain("router.put('/admin/ai/strategies/:id'")
+    expect(routes).toContain("router.get('/admin/ai/strategies/:id/delete-preview'")
+    expect(routes).toContain("router.delete('/admin/ai/strategies/:id'")
+    expect(css).toContain('.platform-strategy-list')
+    expect(css).toContain('.strategy-governance-editor')
+  })
+
   it('moves platform memory governance and publishing into the canonical admin console', () => {
     expect(app).toContain('data-ai-tab="memory"')
     expect(app).toContain("api('/api/ai/admin/platform-experience')")
@@ -130,8 +146,12 @@ describe('unified admin console contract', () => {
     expect(app).toContain('/api/ai/admin/platform-experience/${row.dataset.memoryItem}/${action}')
     expect(app).toContain('runtime_token_budget')
     expect(app).toContain('影子评估只记录匹配结果，不注入推理')
+    expect(app).toContain("api('/api/ai/period-reviews?limit=50')")
+    expect(app).toContain('openPlatformReview')
+    expect(app).toContain('/confirm`,{method:\'POST\'')
     expect(css).toContain('.memory-governance-grid')
     expect(css).toContain('.memory-item-row')
+    expect(css).toContain('.platform-review-list')
   })
 
   it('centralizes risk status, decisions and administrator audit records', () => {

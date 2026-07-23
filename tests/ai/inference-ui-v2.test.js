@@ -62,8 +62,11 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('cancelAnimationFrame(_inferenceChartFrame)')
     expect(app).toContain('renderAnalysisDetailLoading(signalId)')
     expect(app).toContain('setTab("ai-analyze", { skipRefresh:true, analystView:"detail" })')
-    expect(app.match(/setTab = function\(tab, options = \{\}\)/g)).toHaveLength(2)
-    expect(app.match(/_origSetTab2?\(tab, options\)/g)).toHaveLength(2)
+    // The old administrator workspace wrapped setTab a second time.  The
+    // unified /admin console removed that duplicate hook, so the user
+    // inference workspace now owns the only extension.
+    expect(app.match(/setTab = function\(tab, options = \{\}\)/g)).toHaveLength(1)
+    expect(app.match(/_origSetTab\(tab, options\)/g)).toHaveLength(1)
     expect(app).toContain('!options.append && !options.skipResultRender')
     expect(app).toContain('state.selectedSignal = previousSelected')
   })
@@ -96,12 +99,11 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('stillExists || previousSelected || state.signals[0] || null')
   })
 
-  it('keeps revoked platform experience out of the active library and exposes a collapsed archive', () => {
-    expect(app).toContain('const currentItems = visibleItems.filter(item => item.status !== "revoked")')
+  it('keeps inactive personal memory out of the active library', () => {
+    expect(app).toContain('const archivedItems = visibleItems.filter(item => ["revoked","expired","archival"].includes(item.status))')
+    expect(app).toContain('const currentItems = visibleItems.filter(item => !["revoked","expired","archival"].includes(item.status))')
     expect(app).toContain("tab('long', '长期记忆'")
-    expect(app).toContain('class="platform-experience-archive"')
-    expect(app).toContain('data-platform-experience-action="delete"')
-    expect(app).toContain('method:"DELETE"')
+    expect(app).not.toContain('data-platform-experience-action="delete"')
   })
 
   it('renders pending cancellation outcomes in signal details', () => {

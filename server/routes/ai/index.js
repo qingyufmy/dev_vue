@@ -758,7 +758,7 @@ router.put('/ai/admin/users/:userId/accounts/:accountId/risk', authMiddleware, a
       set = { id:inserted.insertId }
     }
     const result = await submitRiskPolicyChanges({ policySetId:set.id, actorId:req.user.id,
-      changes:req.body?.changes || {}, reason:req.body?.reason || '管理员在运营中心更新用户风控' })
+      changes:req.body?.changes || {}, reason:req.body?.reason || '管理员在统一管理后台更新用户风控' })
     res.json({ ok:true, result })
   } catch (error) { reviewError(res, error) }
 })

@@ -13,7 +13,7 @@ import { getAdminPlatformRiskPolicy, getAdminRiskAuditOverview, listAdminAuditEv
 import { setGlobalKillSwitch } from './ai/risk-state.js'
 import { deleteAdminCourse, getAdminContentSystemOverview, getAdminCourse, listAdminCourses, listAdminFeedback, saveAdminCourse } from '../admin/content-system.js'
 import { getUserModelProfiles } from './ai/model-profiles.js'
-import { listStrategies } from './ai/strategy-ownership.js'
+import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy } from './ai/strategy-ownership.js'
 import { listModelSnapshotSamples } from './ai/model-snapshot-samples.js'
 import { deleteHistoryCompareJob, getHistoryCompareJob, listHistoryCompareJobs, startHistoryCompareJob } from './ai/strategy.js'
 
@@ -99,6 +99,15 @@ const AI_OPERATION_ERRORS = {
   snapshot_compare_schema_mismatch:'所选快照的输出结构不一致',
   history_compare_job_already_running:'已有模型评测任务正在运行，请等待任务结束',
   history_compare_job_not_found:'模型评测任务不存在或已删除',
+  strategy_not_found:'平台策略不存在或已删除',
+  symbols_required:'请至少配置一个交易品种',
+  invalid_visibility_status:'策略状态无效',
+  invalid_scope:'策略范围无效',
+  strategy_scope_immutable:'策略范围创建后不能修改',
+  strategy_delete_confirmation_mismatch:'策略名称确认不一致',
+  strategy_delete_version_changed:'策略版本已变化，请重新确认',
+  strategy_delete_impact_changed:'策略订阅影响已变化，请重新确认',
+  strategy_delete_active_subscriptions_unconfirmed:'请确认同时停止正在运行的订阅',
 }
 
 function adminAiError(res, error) {
@@ -113,6 +122,50 @@ router.get('/admin/ai/overview', authMiddleware, adminOnly, async (req, res) => 
     console.error('[AdminConsole] AI operations overview failed:', error)
     res.status(500).json({ ok:false, error:'AI 运营数据加载失败' })
   }
+})
+
+router.get('/admin/ai/strategies', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const strategies = await listStrategies(req.user.id, req.user.role, { scope:'platform', includeInactive:true })
+    res.json({ ok:true, strategies })
+  } catch (error) { adminAiError(res, error) }
+})
+
+router.get('/admin/ai/strategies/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const strategy = await getStrategyById(Number(req.params.id), req.user.id, req.user.role)
+    if (!strategy || strategy.scope !== 'platform') return res.status(404).json({ ok:false, error:'平台策略不存在或已删除', code:'strategy_not_found' })
+    res.json({ ok:true, strategy })
+  } catch (error) { adminAiError(res, error) }
+})
+
+router.post('/admin/ai/strategies', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const strategy = await createStrategy(req.user.id, req.user.role, { ...(req.body || {}), scope:'platform' })
+    await reconcileAutoSchedulers()
+    res.status(201).json({ ok:true, strategy })
+  } catch (error) { adminAiError(res, error) }
+})
+
+router.put('/admin/ai/strategies/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const strategy = await updateStrategy(Number(req.params.id), req.user.id, req.user.role, { ...(req.body || {}), scope:'platform' })
+    await reconcileAutoSchedulers()
+    res.json({ ok:true, strategy })
+  } catch (error) { adminAiError(res, error) }
+})
+
+router.get('/admin/ai/strategies/:id/delete-preview', authMiddleware, adminOnly, async (req, res) => {
+  try { res.json({ ok:true, preview:await getStrategyDeletionPreview(Number(req.params.id), req.user.id, req.user.role) }) }
+  catch (error) { adminAiError(res, error) }
+})
+
+router.delete('/admin/ai/strategies/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const deleted = await deleteStrategy(Number(req.params.id), req.user.id, req.user.role, req.body || {})
+    await reconcileAutoSchedulers()
+    res.json({ ok:true, deleted })
+  } catch (error) { adminAiError(res, error) }
 })
 
 router.get('/admin/ai/model-compare/setup', authMiddleware, adminOnly, async (req, res) => {

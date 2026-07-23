@@ -4015,7 +4015,7 @@ class MainWindow(QMainWindow):
             dialog.show_error(data.get("error", "源账号验证失败，请检查账号和密码。"))
             return
         if user.get("role") != "user" or plan_source != "observer_source":
-            dialog.show_error("该账号不是专用桥接源账号，请先在网站运营中心创建。")
+            dialog.show_error("该账号不是专用桥接源账号，请先在统一管理后台的观摩频道中创建。")
             return
         try:
             register_bridge_profile(CONFIG_ROOT, slug, values["name"] or slug)
@@ -4043,7 +4043,7 @@ class MainWindow(QMainWindow):
             return
         dialog.accept()
         self._refresh_observer_sources_button()
-        QMessageBox.information(self, "观摩源已启动", "新的桥接窗口和独立 MT5 进程正在启动。网站运营中心将在连接成功后显示在线。")
+        QMessageBox.information(self, "观摩源已启动", "新的桥接窗口和独立 MT5 进程正在启动。统一管理后台将在连接成功后显示在线。")
 
     def _on_logout(self):
         self._update_timer.stop()

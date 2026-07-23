@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260723l" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260723m" />
     <link rel="stylesheet" href="/ai/responsive.css?v=20260723d" />
   </head>
   <body>
@@ -141,16 +141,6 @@
           </button>
         </div>
 
-        <div class="nav-group" id="navGroupManage" style="display:none">
-          <span class="nav-group-label">平台管理</span>
-          <a class="nav-item admin-only" href="/admin/?view=risk-audit" style="display:none" title="在统一管理后台查看风控与审计">
-            <i data-lucide="shield-alert" size="16"></i>风控与审计
-          </a>
-          <button class="nav-item admin-only" data-tab="model-compare" data-title="模型评测" style="display:none">
-            <i data-lucide="git-compare" size="16"></i>模型评测
-          </button>
-        </div>
-
         <div class="nav-group nav-group-bottom">
           <a class="nav-item" href="/ai/guide.html" target="_blank" onclick="event.stopPropagation()">
             <i data-lucide="book-open" size="16"></i>使用手册
@@ -200,9 +190,7 @@
             </section>
             <section class="mobile-nav-section admin-only" style="display:none">
               <h3>平台管理</h3>
-              <a class="nav-item admin-only" href="/admin/?view=ai-operations" style="display:none"><i data-lucide="layout-dashboard" size="19"></i><span><strong>统一管理后台</strong><small>管理用户、会员、AI 运行与平台配置</small></span><i data-lucide="external-link" size="17"></i></a>
-              <a class="nav-item admin-only" href="/admin/?view=risk-audit" style="display:none"><i data-lucide="shield-alert" size="19"></i><span><strong>风控与审计</strong><small>查看平台边界、风控决策和操作记录</small></span><i data-lucide="external-link" size="17"></i></a>
-              <button class="nav-item admin-only" type="button" data-tab="model-compare" data-title="模型评测" style="display:none"><i data-lucide="git-compare" size="19"></i><span><strong>模型评测</strong><small>比较模型方向判断和稳定性</small></span><i data-lucide="chevron-right" size="17"></i></button>
+              <a class="nav-item admin-only" href="/admin/" style="display:none"><i data-lucide="layout-dashboard" size="19"></i><span><strong>统一管理后台</strong><small>管理用户、会员、AI 运行、风控与平台配置</small></span><i data-lucide="external-link" size="17"></i></a>
             </section>
             <section class="mobile-nav-section">
               <h3>帮助</h3>
@@ -449,13 +437,6 @@
             </section>
             </div>
             <div id="modelProfilesList" class="workspace-list"><div class="workspace-skeleton"></div><div class="workspace-skeleton"></div></div>
-            <section id="platformModelPolicy" class="workspace-panel admin-only" style="display:none">
-              <div class="section-heading"><div><h2>平台共享与配额</h2><p>共享凭据只用于已开启的用途，并受用户日配额限制。</p></div><button id="savePlatformPolicyBtn" class="btn btn-primary btn-sm">保存策略</button></div>
-              <div class="policy-switches">
-                <label><input id="shareForManual" type="checkbox"><span>手动分析</span></label><label><input id="shareForAuto" type="checkbox"><span>自动分析</span></label><label><input id="shareForReview" type="checkbox"><span>复盘生成</span></label><label><input id="shareForCompression" type="checkbox"><span>记忆压缩</span></label>
-              </div>
-              <div class="settings-grid compact"><label><span>每用户每日请求</span><input id="policyDailyRequests" type="number" min="1"></label><label><span>每用户每日 Token</span><input id="policyDailyTokens" type="number" min="1000" step="1000"></label></div>
-            </section>
           </div>
           </div>
 
@@ -480,7 +461,7 @@
               <div class="section-heading"><div><h2 id="strategyEditorTitle">新建自定义策略</h2><p id="strategyEditorBoundary">你创建的私有策略仅自己可见、可选和执行。</p></div><button id="cancelStrategyEditorBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
               <div class="strategy-editor-sections">
                 <fieldset class="strategy-form-section"><legend><span class="section-step">01</span>基本信息</legend><p>定义策略身份、可见范围和可分析品种。</p>
-                  <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120" required></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD" required></label><label><span>策略说明</span><input id="strategyDescription" maxlength="500" placeholder="简要说明适用行情与交易逻辑"></label><label id="strategyScopeField" class="admin-only is-readonly"><span>策略范围</span><input id="strategyScope" value="platform" readonly aria-readonly="true"><small id="strategyScopeHelp" class="field-help">管理员只维护平台策略；管理员账户不建立私有策略或个人记忆。</small></label><label id="strategyVisibilityField" class="admin-only"><span>可见状态</span><select id="strategyVisibility"><option value="active">上线（可用于分析）</option><option value="draft">草稿（不可用于分析）</option><option value="archived">归档（不可用于分析）</option></select><small class="field-help">可见状态同时控制策略是否可用于手动和自动分析。</small></label></div>
+                  <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120" required></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD" required></label><label><span>策略说明</span><input id="strategyDescription" maxlength="500" placeholder="简要说明适用行情与交易逻辑"></label></div>
                 </fieldset>
                 <fieldset class="strategy-form-section"><legend><span class="section-step">02</span>行情数据方案</legend><p>手动与自动分析共用这组周期和 K 线数量；主周期用于建议有效期和结果标识。</p>
                   <div id="strategyMarketPlan" class="market-plan-grid">
@@ -698,7 +679,7 @@
             <div class="workspace-subtabs" role="tablist" aria-label="AI复盘师视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="review-memory" data-workspace-target="reviews"><i data-lucide="calendar-check-2" size="15"></i>待处理复盘</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="memories"><i data-lucide="brain" size="15"></i><span id="memoryTabLabel">策略记忆</span></button></div>
             <section class="workspace-subpanel active" data-workspace-panel="review-memory" data-workspace-view="reviews"><div class="review-layout period-review-layout"><aside class="workspace-panel review-queue" aria-label="复盘队列"><div class="review-queue-heading"><div><span class="review-section-kicker">处理队列</span><h2>策略复盘</h2></div><span class="review-queue-hint">按日、按月沉淀</span></div><div class="review-period-tabs" role="tablist" aria-label="复盘周期筛选"><button class="active" type="button" role="tab" aria-selected="true" tabindex="0" data-review-period="">全部 <span id="reviewAllCount">0</span></button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-period="daily">日复盘 <span id="reviewDailyCount">0</span></button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-period="monthly">月复盘 <span id="reviewMonthlyCount">0</span></button></div><div class="review-status-tabs" role="tablist" aria-label="复盘状态筛选"><button class="active" type="button" role="tab" aria-selected="true" tabindex="0" data-review-filter="">全部</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="pending">待处理</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="draft">待确认</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="approved">已确认</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="needs_revision">有问题</button></div><div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div></aside><aside id="reviewDetail" class="workspace-panel review-detail"><div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="calendar-search" size="22"></i></span><strong>选择一个复盘周期</strong><span>查看系统统计、校对 AI 结论，确认后再沉淀为策略记忆。</span></div></aside></div></section>
             <section class="workspace-subpanel" data-workspace-panel="review-memory" data-workspace-view="memories" hidden>
-              <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">我的交易记忆</h2><p id="memorySectionDescription">这里只保留你已经确认的记忆，可以随时暂停或撤销。</p></div><label class="inline-switch user-only"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div><div id="platformExperiencePolicies" class="platform-experience-policies admin-only" style="display:none"></div><div id="platformExperienceEvaluation" class="platform-experience-evaluation admin-only" style="display:none"></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+              <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">我的交易记忆</h2><p id="memorySectionDescription">这里只保留你已经确认的记忆，可以随时暂停或撤销。</p></div><label class="inline-switch user-only"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
               <details class="workspace-panel quiet-disclosure settings-disclosure user-only"><summary><span><i data-lucide="settings-2" size="16"></i><strong>记忆设置</strong><small>自动复盘、月度归纳与效果验证</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div class="section-heading"><div><h2>个人功能设置</h2><p>这些开关只能进一步关闭功能，不能绕过管理员设置。高级效果对照会额外调用一次模型。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存设置</button></div><div class="policy-switches setting-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span><strong>自动生成交易复盘</strong><small>订单平仓且证据完整后生成</small></span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span><strong>将确认记忆用于后续分析</strong><small>只使用你确认且与当前分析环境匹配的内容</small></span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span><strong>生成月度摘要与分类压缩</strong><small>按记忆类别和适用条件归纳，减少上下文占用</small></span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span><strong>安全试运行</strong><small>只评估检索效果，不注入模型</small></span></label><label><input id="userPairedExperimentFlag" type="checkbox"><span><strong>高级效果对照实验</strong><small>付费配对实验（额外一次调用）</small></span></label></div></div></details>
             </section>
           </div>
@@ -774,201 +755,7 @@
           </div>
         </section>
 
-        <section id="global-risk" class="tab-panel admin-only" style="display:none">
-          <div class="workspace-page global-risk-workspace">
-            <header class="workspace-header calm-page-header"><div><span class="page-eyebrow">管理员 · 平台安全</span><h1>平台风控</h1><p>先处理平台异常，再按职责管理规则、发布方式和 AI 辅助功能。</p></div><button class="btn btn-secondary" data-action="refresh-global-risk"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
-            <section id="globalRiskOverview" class="insight-strip" aria-label="全局风控概览"><div class="workspace-skeleton"></div></section>
-            <div class="admin-boundary-note"><i data-lucide="shield-check" size="18"></i><div><strong>管理员边界</strong><span>可管理平台规则、紧急停止与异常账户；不可查看用户复盘正文或个人记忆内容。</span></div></div>
-            <div class="workspace-subtabs" role="tablist" aria-label="全局风控视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="global-risk" data-workspace-target="overview"><i data-lucide="layout-dashboard" size="15"></i>风控总览</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="global-risk" data-workspace-target="rules"><i data-lucide="sliders-horizontal" size="15"></i>风控规则</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="global-risk" data-workspace-target="rollout"><i data-lucide="send" size="15"></i>规则发布</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="global-risk" data-workspace-target="ai"><i data-lucide="sparkles" size="15"></i>AI 功能</button></div>
-            <section class="workspace-subpanel active" data-workspace-panel="global-risk" data-workspace-view="overview">
-              <section class="workspace-panel danger-zone"><div class="section-heading"><div><span class="section-kicker danger">紧急控制</span><h2>平台新开仓状态</h2><p>紧急停止会阻止全部新开仓，开启和解除都必须说明原因并进入审计。</p></div><button id="globalKillSwitchBtn" class="btn btn-danger">正在读取…</button></div><div id="globalKillSwitchMeta" class="workspace-row-meta"></div></section>
-              <section class="workspace-panel"><div class="section-heading"><div><h2>需要处理的账户</h2><p>只展示重复绑定、身份冲突、冻结或其他异常账户。</p></div></div><div id="accountExceptionList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
-              <details class="workspace-panel quiet-disclosure"><summary><span><i data-lucide="users" size="16"></i><strong>全部用户风险状态</strong><small>按需查看回撤、连亏、冷却与数据完整性</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div id="adminRiskAccounts" class="workspace-list"><div class="workspace-skeleton"></div></div></div></details>
-            </section>
-            <section class="workspace-subpanel" data-workspace-panel="global-risk" data-workspace-view="rules" hidden><div class="section-heading panel-section-heading"><div><h2>平台风控规则</h2><p>平台默认值、单位、用户允许范围和锁定值分组展示；保存后立即生成新版本。</p></div><button id="saveGlobalRiskBtn" class="btn btn-primary">保存并发布规则</button></div><div id="globalRiskEditor" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
-            <section class="workspace-subpanel" data-workspace-panel="global-risk" data-workspace-view="rollout" hidden><section class="workspace-panel"><div class="section-heading"><div><h2>规则发布方式</h2><p>正式拦截会阻止违规订单；仅观察（仅记录不拦截）适合新规则上线前验证。系统强制规则不可调整。</p></div></div><div id="riskRuleRolloutList" class="workspace-list risk-rollout-list"><div class="workspace-skeleton"></div></div></section></section>
-            <section class="workspace-subpanel" data-workspace-panel="global-risk" data-workspace-view="ai" hidden><section class="workspace-panel"><div class="section-heading"><div><h2>AI 辅助功能</h2><p>复盘和记忆属于辅助能力，不会改变或绕过强制风控。高级对照实验仍需用户主动开启。</p></div><button id="saveGlobalFeatureFlagsBtn" class="btn btn-primary btn-sm">保存 AI 功能</button></div><div class="policy-switches setting-switches"><label><input id="globalReviewGenerationFlag" type="checkbox"><span><strong>允许生成交易复盘</strong><small>为符合条件的平仓订单生成复盘</small></span></label><label><input id="globalExperienceMemoryFlag" type="checkbox"><span><strong>允许使用确认记忆</strong><small>用户仍可在个人设置中关闭</small></span></label><label><input id="globalMemoryCompressionFlag" type="checkbox"><span><strong>允许月度摘要与分类压缩</strong><small>按类别和适用条件归纳，控制分析上下文大小</small></span></label><label><input id="globalRetrievalShadowFlag" type="checkbox"><span><strong>启用安全试运行</strong><small>只记录检索效果，不注入推理</small></span></label><label><input id="globalPairedExperimentFlag" type="checkbox"><span><strong>允许高级对照实验</strong><small>用户开启后会额外调用一次模型</small></span></label></div><div id="rolloutHealthSummary" class="workspace-row-meta rollout-health-summary"></div></section></section>
-          </div>
-        </section>
 
-        <section id="model-compare" class="tab-panel admin-only" style="display:none">
-          <div class="workspace-page model-compare-workspace">
-            <header class="workspace-header compare-workspace-header">
-              <div>
-                <span class="page-eyebrow">管理员 · 模型质量验证</span>
-                <h1>模型评测</h1>
-              <p>让多个模型读取同一份历史分析证据，比较方向判断质量、稳定性和响应表现。</p>
-              </div>
-              <div class="compare-method-badge"><i data-lucide="shield-check" size="16"></i><span><strong>只读评估</strong><small>不会生成信号或执行交易</small></span></div>
-            </header>
-
-            <div class="compare-workspace-grid">
-              <aside class="compare-config-card" aria-label="新建模型对比任务">
-                <div class="compare-card-heading"><span>新建任务</span><strong>设置对比条件</strong></div>
-                <div class="compare-form-stack">
-                  <label class="compare-field"><span>交易策略</span><select id="cmpStrategy"><option value="">请选择策略</option></select></label>
-                  <div class="compare-field-pair">
-                    <label class="compare-field"><span>交易品种</span><select id="cmpSymbol"><option value="">先选择策略</option></select></label>
-                    <div class="compare-field"><span>评估基准</span><div id="cmpStrategyBaseline" class="compare-readonly-value">由策略自动决定</div></div>
-                  </div>
-                  <fieldset class="compare-mode-field compare-source-field">
-                    <legend>行情来源</legend>
-                    <div class="compare-mode-options">
-                      <label>
-                        <input type="radio" name="cmpDataSource" value="snapshots" checked>
-                        <span><i data-lucide="archive-restore" size="15"></i><strong>历史信号快照</strong><small>真实推理现场，可自主选择</small></span>
-                      </label>
-                      <label>
-                        <input type="radio" name="cmpDataSource" value="historical">
-                        <span><i data-lucide="calendar-range" size="15"></i><strong>自选历史</strong><small>验证特定市场区间</small></span>
-                      </label>
-                    </div>
-                    <p>历史快照会重放模型当时实际看到的提示词、K 线与结构证据，不会向待测模型透露原结论和交易结果。</p>
-                  </fieldset>
-                  <section id="cmpSnapshotSummary" class="compare-snapshot-summary">
-                    <i data-lucide="list-checks" size="16"></i>
-                    <div><strong id="cmpSnapshotSelectedCount">尚未选择快照</strong><span id="cmpSnapshotSelectionHint">请在右侧选择至少 2 条证据完整的历史信号</span></div>
-                    <button id="cmpClearSnapshots" type="button" class="btn btn-secondary btn-sm" disabled>清空</button>
-                  </section>
-                  <fieldset id="cmpEvaluationModeField" class="compare-mode-field hidden">
-                    <legend>评估方式</legend>
-                    <div class="compare-mode-options">
-                      <label>
-                        <input type="radio" name="cmpEvaluationMode" value="sampled" checked>
-                        <span><i data-lucide="scan-line" size="15"></i><strong>快速抽样</strong><small>均匀选取代表性行情</small></span>
-                      </label>
-                      <label>
-                        <input type="radio" name="cmpEvaluationMode" value="continuous">
-                        <span><i data-lucide="chart-no-axes-combined" size="15"></i><strong>连续回测</strong><small>逐根策略主周期决策</small></span>
-                      </label>
-                    </div>
-                    <p id="cmpEvaluationModeHint">适合快速比较模型方向质量和订单表现。</p>
-                  </fieldset>
-                  <fieldset id="cmpHistoricalRange" class="compare-range-field hidden">
-                    <legend>行情范围</legend>
-                    <div class="compare-range-presets" role="group" aria-label="快捷选择行情范围">
-                      <button type="button" data-cmp-range="1">近 24 小时</button>
-                      <button type="button" data-cmp-range="3">近 3 天</button>
-                      <button type="button" class="active" data-cmp-range="7">近 7 天</button>
-                    </div>
-                    <div class="compare-field-pair">
-                      <label class="compare-field"><span>开始时间（MT5）</span><input id="cmpStartTime" type="datetime-local"></label>
-                      <label class="compare-field"><span>结束时间（MT5）</span><input id="cmpEndTime" type="datetime-local"><small id="cmpTimezoneHint" class="field-help">按 MT5 服务器时区选择</small></label>
-                    </div>
-                  </fieldset>
-                  <label id="cmpSampleDepthField" class="compare-field"><span>评估深度</span>
-                    <select id="cmpSampleSize">
-                      <option value="8">快速 · 8 个行情切片</option>
-                      <option value="12" selected>标准 · 12 个行情切片</option>
-                      <option value="20">深入 · 20 个行情切片</option>
-                      <option value="30">完整 · 30 个行情切片</option>
-                    </select>
-                    <small id="cmpSampleDepthHint">建议先用 8 个案例初筛，再用 12–30 个案例复评入围模型。</small>
-                  </label>
-                  <details class="compare-simulation-settings">
-                    <summary><span>资金模拟参数</span><small>订单回放 · M1 执行</small></summary>
-                    <div class="compare-field-pair">
-                      <label class="compare-field"><span>初始资金</span><input id="cmpStartingBalance" type="number" min="100" step="100" value="10000"></label>
-                      <label class="compare-field"><span>每手往返手续费</span><input id="cmpCommissionPerLot" type="number" min="0" step="0.1" value="0"></label>
-                    </div>
-                    <div class="compare-field-pair">
-                      <label class="compare-field"><span>模拟滑点（点）</span><input id="cmpSlippagePoints" type="number" min="0" step="1" value="0"></label>
-                      <label class="compare-field"><span>最长持仓（小时）</span><input id="cmpMaxHoldingHours" type="number" min="1" max="720" step="1" value="24"></label>
-                    </div>
-                    <div class="compare-field-pair">
-                      <label class="compare-field"><span>最大并发持仓</span><input id="cmpMaxConcurrentPositions" type="number" min="1" max="100" step="1" value="5"></label>
-                      <div class="compare-field"><span>账户交易条件</span><div class="compare-readonly-value">自动读取 MT5 杠杆与强平线</div></div>
-                    </div>
-                    <p>M1 行情会按时间推进同一个虚拟账户，同时处理挂单、并发持仓、浮动盈亏、保证金和强平。</p>
-                  </details>
-                </div>
-                <div class="compare-call-estimate"><i data-lucide="calculator" size="16"></i><span>预计调用</span><strong id="cmpCallEstimate">--</strong><small id="cmpCallEstimateUnit">次模型请求</small></div>
-                <button id="cmpRunBtn" class="btn btn-primary compare-primary-action" disabled><i data-lucide="play" size="16"></i>开始评估</button>
-                <p id="cmpStatus" class="cmp-status-text" aria-live="polite"></p>
-              </aside>
-
-              <div class="compare-main-column">
-                <section id="cmpSnapshotPanel" class="workspace-panel compare-snapshot-panel">
-                  <div class="section-heading"><div><h2>选择历史信号快照</h2><p>只展示当前管理员账户中已平仓、归因完成且推理证据完整的信号；选择后会锁定同一策略版本。</p></div><span id="cmpSnapshotResultCount" class="cmp-hint">正在读取...</span></div>
-                  <div class="compare-snapshot-toolbar">
-                    <label class="compare-field"><span>交易结果</span><select id="cmpSnapshotResult"><option value="all">全部结果</option><option value="profit">仅盈利</option><option value="loss">仅亏损</option><option value="flat">持平</option></select></label>
-                    <div class="compare-snapshot-actions"><button id="cmpSelectSnapshotPage" type="button" class="btn btn-secondary btn-sm">选择本页</button><button id="cmpRefreshSnapshots" type="button" class="icon-btn" aria-label="刷新历史信号快照"><i data-lucide="refresh-cw" size="15"></i></button></div>
-                  </div>
-                  <div id="cmpSnapshotList" class="compare-snapshot-list"><div class="workspace-skeleton"></div></div>
-                  <div class="compare-snapshot-pager"><button id="cmpSnapshotPrev" type="button" class="btn btn-secondary btn-sm" disabled>上一页</button><span id="cmpSnapshotPage">第 1 页</span><button id="cmpSnapshotNext" type="button" class="btn btn-secondary btn-sm" disabled>下一页</button></div>
-                </section>
-
-                <section class="workspace-panel compare-model-panel">
-                  <div class="section-heading"><div><span class="section-kicker">步骤 2</span><h2>选择对比模型</h2><p>选择 2–5 个可用模型；所有模型使用完全相同的策略与行情上下文。</p></div><span id="cmpModelHint" class="cmp-hint"></span></div>
-                  <div id="cmpModelGroup" class="cmp-model-checkboxes"></div>
-                </section>
-
-                <section id="cmpProgressBar" class="compare-progress-panel hidden" aria-live="polite">
-                  <div class="compare-progress-head"><div><span>任务运行中</span><strong id="cmpProgressLabel">正在准备...</strong></div><span id="cmpProgressPercent">0%</span></div>
-                  <div class="cmp-progress-track"><div id="cmpProgressFill" class="cmp-progress-fill"></div></div>
-                  <div class="compare-stage-list" aria-hidden="true"><span data-cmp-stage="preparing">准备行情</span><span data-cmp-stage="models_ready">检查模型</span><span data-cmp-stage="evaluating">逐段评估</span><span data-cmp-stage="backtesting">资金回放</span><span data-cmp-stage="completed">生成结论</span></div>
-                </section>
-
-                <section id="cmpResults" class="compare-results-shell hidden">
-                  <div id="cmpResultsSummary" class="cmp-results-summary"></div>
-                  <div id="cmpResultsTableWrap" class="cmp-results-table-wrap"></div>
-                  <div id="cmpResultsTimeline" class="cmp-results-timeline"></div>
-                </section>
-
-                <section id="cmpEmptyState" class="compare-empty-state">
-                  <i data-lucide="git-compare-arrows" size="24"></i>
-                  <div><strong>等待创建对比任务</strong><p>完成左侧条件设置并选择模型后，这里会展示结论、指标和逐次决策差异。</p></div>
-                </section>
-              </div>
-            </div>
-
-            <section class="workspace-panel compare-history-panel">
-              <div class="section-heading"><div><h2>最近任务</h2><p>结果会保留，服务器重启后仍可重新查看。</p></div><button id="cmpRefreshHistory" class="btn btn-secondary btn-sm" type="button"><i data-lucide="refresh-cw" size="15"></i>刷新</button></div>
-              <div id="cmpHistoryList" class="compare-history-list"><div class="workspace-skeleton"></div></div>
-            </section>
-          </div>
-        </section>
-
-        <section id="admin-dashboard" class="tab-panel">
-          <div id="adminDashContent" class="admin-dash">
-            <div class="admin-dash-loading">
-              <i data-lucide="loader-2" size="24" class="spinning-icon"></i>
-              <span>加载中...</span>
-            </div>
-          </div>
-        </section>
-
-        <section id="audit" class="tab-panel">
-          <div class="card content-card">
-            <div class="card-header">
-              <span class="card-title">风控审计 · 中文追踪</span>
-              <button class="card-action-btn" data-action="refresh-audit"><i data-lucide="refresh-cw" size="12"></i>刷新</button>
-            </div>
-            <div class="table-toolbar">
-              <select id="auditFilterStatus" class="filter-select" aria-label="筛选审计状态">
-                <option value="">全部状态</option>
-                <option value="success">成功</option>
-                <option value="skipped">已跳过</option>
-                <option value="rejected">风控拒绝</option>
-                <option value="error">错误</option>
-                <option value="needs_confirmation">需要确认</option>
-              </select>
-              <select id="auditFilterType" class="filter-select" aria-label="筛选动作类型">
-                <option value="">全部动作</option>
-                <option value="ai">AI</option>
-                <option value="manual">手动</option>
-              </select>
-              <span id="auditCount" class="record-count">--</span>
-            </div>
-            <div class="table-wrap">
-              <table class="data-table">
-                <thead><tr><th>时间(MT5)</th><th>动作</th><th>品种</th><th>状态</th><th>中文结果</th><th>原始原因</th></tr></thead>
-                <tbody id="auditBody"></tbody>
-              </table>
-            </div>
-            <div id="auditPager" class="pager"></div>
-          </div>
-        </section>
 
         <section id="feedback" class="tab-panel">
           <div class="card content-card">
@@ -1054,18 +841,7 @@
       </main>
     </div>
 
-    <div id="observerSourceAccountEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="observerSourceAccountEditorTitle">
-      <section class="workspace-panel form-modal-dialog observer-source-account-dialog" tabindex="-1">
-        <div class="section-heading"><div><span class="ops-kicker">专用桥接身份</span><h2 id="observerSourceAccountEditorTitle">创建桥接源账号</h2><p>该账号固定为 Pro 普通用户，只用于登录桥接软件，不会获得管理员权限。</p></div><button id="cancelObserverSourceAccountBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
-        <form id="observerSourceAccountForm" class="observer-source-account-form" novalidate>
-          <label for="observerSourceAccountEmail"><span>登录邮箱 <em>必填</em></span><input id="observerSourceAccountEmail" class="form-input" type="email" maxlength="255" autocomplete="off" placeholder="例如：source-a@example.com" required><small>用于在对应桥接配置档案中登录。</small></label>
-          <label for="observerSourceAccountNickname"><span>账号名称</span><input id="observerSourceAccountNickname" class="form-input" type="text" maxlength="100" autocomplete="off" placeholder="例如：一号观摩源"><small>仅供管理员识别，不会显示给观摩用户。</small></label>
-          <label for="observerSourceAccountPassword"><span>登录密码 <em>必填</em></span><div class="observer-password-field"><input id="observerSourceAccountPassword" class="form-input" type="password" minlength="8" maxlength="128" autocomplete="new-password" required><button id="toggleObserverSourcePassword" class="btn btn-secondary btn-sm" type="button" aria-pressed="false">显示</button></div><small>至少 8 位，并同时包含字母和数字。请保存好密码，系统不会再次显示。</small></label>
-          <div id="observerSourceAccountError" class="form-inline-error hidden" role="alert"></div>
-          <div class="form-actions form-modal-actions"><button id="generateObserverSourcePassword" class="btn btn-secondary" type="button"><i data-lucide="wand-sparkles" size="15"></i>生成安全密码</button><button id="saveObserverSourceAccountBtn" class="btn btn-primary" type="submit"><i data-lucide="user-plus" size="15"></i>创建并选中</button></div>
-        </form>
-      </section>
-    </div>
+
 
     <div id="mt5BridgeModal" class="bridge-overlay hidden" role="dialog" aria-modal="true">
       <div class="bridge-dialog">
@@ -1178,7 +954,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260723l"></script>
+    <script src="/ai/app.js?v=20260723m"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

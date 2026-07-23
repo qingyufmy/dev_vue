@@ -270,6 +270,42 @@ h2 { margin:3px 0 0; font-size:22px; }
 .observer-source-title { display:flex; align-items:center; gap:11px; min-width:0; }
 .observer-source-title strong,.observer-source-title small,.channel-row strong,.channel-row small { display:block; }
 .observer-source-title small,.channel-row small { margin-top:3px; color:var(--muted); }
+.strategy-admin-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+.strategy-admin-summary article { min-height:92px; display:flex; flex-direction:column; justify-content:center; padding:14px 16px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); }
+.strategy-admin-summary span,.strategy-admin-summary small { color:var(--muted); font-size:11px; }
+.strategy-admin-summary strong { margin:4px 0 2px; color:var(--text); font-size:24px; font-variant-numeric:tabular-nums; }
+.platform-strategy-list { display:grid; gap:8px; padding:0 14px 14px; }
+.platform-strategy-row { min-height:92px; display:grid; grid-template-columns:8px minmax(0,1fr) auto; align-items:center; gap:12px; padding:12px 14px; border:1px solid var(--border); border-radius:11px; background:var(--surface-2); }
+.strategy-state { width:8px; height:36px; border-radius:99px; background:var(--muted); opacity:.35; }
+.strategy-state.is-active { background:var(--green); opacity:1; box-shadow:0 0 16px rgba(31,201,151,.2); }
+.platform-strategy-main { min-width:0; }
+.platform-strategy-main > div { display:flex; align-items:center; gap:8px; }
+.platform-strategy-main p { max-width:72ch; margin:5px 0; overflow:hidden; color:var(--text-2); text-overflow:ellipsis; white-space:nowrap; }
+.platform-strategy-main small,.platform-strategy-actions > span { color:var(--muted); font-size:11px; }
+.platform-strategy-actions { display:flex; align-items:center; gap:10px; }
+.strategy-governance-editor { display:grid; gap:16px; }
+.strategy-editor-block { display:grid; gap:12px; padding:14px; border:1px solid var(--border); border-radius:11px; background:var(--surface-2); }
+.strategy-editor-block > div:first-child strong,.strategy-editor-block > div:first-child small { display:block; }
+.strategy-editor-block > div:first-child small { margin-top:3px; color:var(--muted); }
+.strategy-timeframe-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+.strategy-timeframe-grid > label { display:grid; grid-template-columns:22px 42px minmax(90px,1fr) 24px; align-items:center; gap:8px; min-height:48px; padding:7px 10px; border:1px solid var(--border); border-radius:9px; background:var(--surface); }
+.strategy-timeframe-grid .input { min-height:34px; padding:0 8px; }
+.strategy-entry-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; }
+.strategy-entry-grid label { min-height:46px; display:flex; align-items:center; gap:8px; padding:9px 10px; border:1px solid var(--border); border-radius:9px; background:var(--surface); }
+.strategy-prompt { min-height:220px; font-family:inherit; line-height:1.65; }
+.platform-review-list { display:grid; gap:7px; padding:0 14px 14px; }
+.platform-review-row { width:100%; min-height:64px; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:11px; padding:9px 11px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); color:inherit; text-align:left; cursor:pointer; }
+.platform-review-row:hover { border-color:var(--border-strong); background:var(--surface-3); }
+.platform-review-row div { min-width:0; }
+.platform-review-row strong,.platform-review-row small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.platform-review-row small { margin-top:4px; color:var(--muted); }
+.platform-review-detail { display:grid; gap:16px; }
+.platform-review-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
+.platform-review-metrics > div { padding:11px; border:1px solid var(--border); border-radius:9px; background:var(--surface-2); }
+.platform-review-metrics span,.platform-review-metrics strong { display:block; }
+.platform-review-metrics span { color:var(--muted); font-size:11px; }
+.platform-review-metrics strong { overflow:hidden; margin-top:5px; text-overflow:ellipsis; white-space:nowrap; }
+.platform-review-editor { min-height:360px; font:12px/1.65 var(--font-mono); }
 .runtime-switches { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
 .runtime-switches label { min-height:38px; display:flex; align-items:center; gap:7px; padding:0 10px; border:1px solid var(--border); border-radius:9px; color:var(--text-2); cursor:pointer; }
 .runtime-switches input { width:17px; height:17px; accent-color:var(--gold); }
@@ -545,6 +581,7 @@ h2 { margin:3px 0 0; font-size:22px; }
   .content-grid { grid-template-columns:1fr; }
   .runtime-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .observer-admin-grid { grid-template-columns:1fr; }
+  .strategy-entry-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .compare-workspace { grid-template-columns:1fr; }
   .compare-jobs-panel { position:static; }
   .compare-result-row { grid-template-columns:32px minmax(150px,1fr) repeat(3,minmax(86px,.7fr)); }
@@ -629,6 +666,13 @@ h2 { margin:3px 0 0; font-size:22px; }
   .health-banner { align-items:flex-start; padding:16px; }
   .ai-health-grid,.runtime-grid { grid-template-columns:1fr; }
   .observer-source-row { align-items:flex-start; flex-direction:column; }
+  .strategy-admin-summary { grid-template-columns:1fr; }
+  .platform-strategy-row { grid-template-columns:6px minmax(0,1fr); align-items:start; }
+  .platform-strategy-actions { grid-column:2; justify-content:space-between; width:100%; }
+  .strategy-timeframe-grid,.strategy-entry-grid { grid-template-columns:1fr; }
+  .platform-review-metrics { grid-template-columns:1fr 1fr; }
+  .platform-review-row { grid-template-columns:auto minmax(0,1fr); }
+  .platform-review-row > .badge { grid-column:2; justify-self:start; }
   .runtime-switches { width:100%; display:grid; grid-template-columns:1fr 1fr; }
   .runtime-switches label { justify-content:center; }
   .stop-action { width:100%; margin-left:0; flex-direction:column; align-items:stretch; }
