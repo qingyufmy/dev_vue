@@ -838,12 +838,35 @@ function systemConfigInput(item) {
   if(isJson)return `<textarea class="input config-json-input" data-config-key="${escapeHtml(item.key)}" spellcheck="false">${escapeHtml(value)}</textarea>`
   return `<input class="input" data-config-key="${escapeHtml(item.key)}" value="${escapeHtml(value)}">`
 }
+function systemCategoryTools(category) {
+  if(category==='smtp')return `<section class="config-action-panel"><div><span class="eyebrow">配置验证</span><strong>发送测试邮件</strong><small>保存配置后，向指定邮箱发送一封测试邮件。</small></div><div class="config-action-form"><input class="input" id="smtpTestTarget" type="email" placeholder="收件邮箱"><button class="secondary-button" id="smtpTestSend" type="button">发送测试</button></div></section>`
+  if(category==='sms')return `<section class="config-action-panel"><div><span class="eyebrow">配置验证</span><strong>发送测试短信</strong><small>验证码、到期提醒和已过期提醒使用不同模板。</small></div><div class="config-action-form sms-action-form"><input class="input" id="smsTestTarget" type="tel" placeholder="测试手机号"><select class="select" id="smsTestTemplate"><option value="verification">验证码模板</option><option value="membership_expiry">会员到期提醒</option><option value="membership_expired">会员已过期提醒</option></select><button class="secondary-button" id="smsTestSend" type="button">发送测试</button></div></section>`
+  if(category==='crypto_wallet')return `<section class="config-action-panel crypto-operation-panel"><div><span class="eyebrow">链上资金操作</span><strong>支付模式与地址归集</strong><small>归集会发起真实链上交易，执行前必须再次确认。</small></div><div id="cryptoOperations"><div class="empty-inline">正在读取链上地址与余额…</div></div></section>`
+  return ''
+}
+async function loadCryptoOperations() {
+  const root=document.querySelector('#cryptoOperations');if(!root)return
+  try{
+    const [balanceData,modeData]=await Promise.all([api('/api/admin/crypto/sweep/balances'),api('/api/admin/crypto/payment-mode')])
+    const balances=balanceData.balances||[],fixed=modeData.fixedAddresses||{}
+    const fixedPayload={tron:fixed.fixed_tron_address||'',eth:fixed.fixed_erc20_address||'',bsc:fixed.fixed_bep20_address||'',sol:fixed.fixed_sol_address||''}
+    root.innerHTML=`<div class="crypto-mode-editor"><label class="field"><span>支付地址模式</span><select class="select" id="cryptoPaymentMode"><option value="fixed" ${modeData.mode==='fixed'?'selected':''}>固定共享地址</option><option value="dynamic" ${modeData.mode==='dynamic'?'selected':''}>动态派生地址</option></select></label><div class="crypto-main-address"><span>主归集地址</span><strong>${escapeHtml(balanceData.mainAddress||'未配置')}</strong></div><button class="secondary-button" id="saveCryptoMode" type="button">保存模式</button></div><div class="crypto-address-list">${balances.map(item=>`<article class="crypto-address-row" data-crypto-index="${Number(item.index)}"><div><strong>派生地址 #${Number(item.index)}</strong><small>${escapeHtml(item.address||'--')}</small></div><div><span>USDT</span><strong>${Number(item.usdtBalance??item.usdt??0).toFixed(2)}</strong></div><div><span>TRX</span><strong>${Number(item.trxBalance??item.trx??0).toFixed(4)}</strong></div><button class="secondary-button" data-sweep-address type="button" ${item.canSweep?'':'disabled'}>归集此地址</button></article>`).join('')||'<div class="empty-state compact-empty">没有动态派生地址</div>'}</div><div class="crypto-operation-footer"><span>固定地址：TRON ${escapeHtml(fixedPayload.tron||'未配置')} · ETH ${escapeHtml(fixedPayload.eth||'未配置')}</span><button class="danger-button primary-button" id="sweepAllAddresses" type="button" ${balances.some(item=>item.canSweep)?'':'disabled'}>一键归集可用余额</button></div>`
+    document.querySelector('#saveCryptoMode').onclick=async event=>{event.currentTarget.disabled=true;try{await api('/api/admin/crypto/payment-mode',{method:'POST',body:JSON.stringify({mode:document.querySelector('#cryptoPaymentMode').value,fixed_addresses:fixedPayload})});toast('支付地址模式已保存','success')}catch(error){handleError(error)}finally{event.currentTarget.disabled=false}}
+    root.querySelectorAll('[data-sweep-address]').forEach(button=>button.onclick=async()=>{const row=button.closest('[data-crypto-index]');if(!await confirmAction('确认归集这个地址？',`将派生地址 #${row.dataset.cryptoIndex} 的可用余额归集到主地址。该操作会产生链上交易与网络费用。`,'确认归集',true))return;button.disabled=true;try{await api(`/api/admin/crypto/sweep/${row.dataset.cryptoIndex}`,{method:'POST'});toast('链上归集已提交','success');await loadCryptoOperations()}catch(error){handleError(error);button.disabled=false}})
+    document.querySelector('#sweepAllAddresses').onclick=async event=>{if(!await confirmAction('确认一键归集？','系统会依次向所有可归集地址发起真实链上交易，并产生网络费用。','确认一键归集',true))return;event.currentTarget.disabled=true;try{const result=await api('/api/admin/crypto/sweep',{method:'POST'});toast(`归集完成：成功 ${Number(result.success||result.succeeded||0)} 个，失败 ${Number(result.failed||0)} 个`,'success');await loadCryptoOperations()}catch(error){handleError(error);event.currentTarget.disabled=false}}
+  }catch(error){root.innerHTML=`<div class="empty-inline error-helper">${escapeHtml(error.message)}</div>`}
+}
+function bindSystemCategoryTools(category) {
+  if(category==='smtp')document.querySelector('#smtpTestSend')?.addEventListener('click',async event=>{const target=document.querySelector('#smtpTestTarget').value.trim();if(!target)return handleError(new Error('请输入测试收件邮箱'));event.currentTarget.disabled=true;try{await api('/api/system-config/smtp/test',{method:'POST',body:JSON.stringify({to:target})});toast('测试邮件已发送','success')}catch(error){handleError(error)}finally{event.currentTarget.disabled=false}})
+  if(category==='sms')document.querySelector('#smsTestSend')?.addEventListener('click',async event=>{const target=document.querySelector('#smsTestTarget').value.trim(),template=document.querySelector('#smsTestTemplate').value;if(!target)return handleError(new Error('请输入测试手机号'));if(!await confirmAction('发送测试短信？',`系统将立即向 ${target} 发送所选模板，可能产生短信费用。`,'确认发送'))return;event.currentTarget.disabled=true;try{await api('/api/system-config/sms/test',{method:'POST',body:JSON.stringify({to:target,template:template==='verification'?undefined:template})});toast('测试短信已发送','success')}catch(error){handleError(error)}finally{event.currentTarget.disabled=false}})
+  if(category==='crypto_wallet')loadCryptoOperations()
+}
 function renderSystemConfigCategory() {
   const root=document.querySelector('#systemConfigEditor')
   if(!root||!state.systemConfig)return
   const category=state.systemConfigCategory
   const items=state.systemConfig[category]||[]
-  root.innerHTML=`<header class="section-head"><div><h2>${escapeHtml(systemCategoryLabels[category]||category)}</h2><p>敏感内容不会回显；留空即可保留已保存的密钥或密码。</p></div></header><form class="config-editor-form" id="systemConfigForm">${items.map((item,index)=>`<label class="config-editor-row"><span><strong>${escapeHtml(item.label||item.key)}</strong><small>${escapeHtml(item.key)}</small></span>${systemConfigInput(item)}<input type="hidden" data-config-label="${escapeHtml(item.key)}" value="${escapeHtml(item.label||'')}"><input type="hidden" data-config-order="${escapeHtml(item.key)}" value="${Number(item.sort_order??index)}"></label>`).join('')||'<div class="empty-state">该分类暂无配置项</div>'}<div class="form-actions"><button class="primary-button" type="submit" ${items.length?'':'disabled'}>保存当前分类</button></div></form>`
+  root.innerHTML=`<header class="section-head"><div><h2>${escapeHtml(systemCategoryLabels[category]||category)}</h2><p>敏感内容不会回显；留空即可保留已保存的密钥或密码。</p></div></header><form class="config-editor-form" id="systemConfigForm">${items.map((item,index)=>`<label class="config-editor-row"><span><strong>${escapeHtml(item.label||item.key)}</strong><small>${escapeHtml(item.key)}</small></span>${systemConfigInput(item)}<input type="hidden" data-config-label="${escapeHtml(item.key)}" value="${escapeHtml(item.label||'')}"><input type="hidden" data-config-order="${escapeHtml(item.key)}" value="${Number(item.sort_order??index)}"></label>`).join('')||'<div class="empty-state">该分类暂无配置项</div>'}<div class="form-actions"><button class="primary-button" type="submit" ${items.length?'':'disabled'}>保存当前分类</button></div></form>${systemCategoryTools(category)}`
   document.querySelector('#systemConfigForm').onsubmit=async event=>{
     event.preventDefault();const button=event.submitter;button.disabled=true
     try{
@@ -853,6 +876,7 @@ function renderSystemConfigCategory() {
       toast(`${systemCategoryLabels[category]||'系统'}配置已保存`,'success');await loadSystemConfig()
     }catch(error){handleError(error)}finally{button.disabled=false}
   }
+  bindSystemCategoryTools(category)
 }
 async function loadSystemConfig() {
   const data=await api('/api/system-config')

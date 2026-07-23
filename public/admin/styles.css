@@ -364,6 +364,24 @@ h2 { margin:3px 0 0; font-size:22px; }
 .config-editor-row { min-height:78px; display:grid; grid-template-columns:minmax(180px,.52fr) minmax(260px,1fr); align-items:center; gap:18px; padding:13px 18px; border-bottom:1px solid var(--border); }
 .config-editor-row > span strong,.config-editor-row > span small { display:block; }
 .config-editor-row > span small { margin-top:3px; color:var(--muted); font:10px/1.4 ui-monospace,monospace; }
+.config-action-panel { margin:0 14px 14px; padding:14px; border:1px solid rgba(235,190,52,.25); border-radius:11px; background:rgba(235,190,52,.04); }
+.config-action-panel > div:first-child > strong,.config-action-panel > div:first-child > small { display:block; }
+.config-action-panel > div:first-child > small { margin-top:3px; color:var(--muted); }
+.config-action-form { display:grid; grid-template-columns:minmax(180px,1fr) auto; gap:8px; margin-top:12px; }
+.sms-action-form { grid-template-columns:minmax(150px,1fr) minmax(160px,.75fr) auto; }
+.crypto-mode-editor { display:grid; grid-template-columns:minmax(160px,.55fr) minmax(240px,1fr) auto; align-items:end; gap:9px; margin-top:14px; }
+.crypto-main-address { min-height:66px; display:flex; flex-direction:column; justify-content:center; min-width:0; padding:9px 11px; border:1px solid var(--border); border-radius:9px; background:var(--surface-2); }
+.crypto-main-address span,.crypto-main-address strong { display:block; }
+.crypto-main-address span { color:var(--muted); font-size:10px; }
+.crypto-main-address strong { margin-top:4px; overflow:hidden; font:600 11px/1.4 ui-monospace,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
+.crypto-address-list { display:grid; gap:7px; margin-top:12px; }
+.crypto-address-row { display:grid; grid-template-columns:minmax(180px,1fr) 80px 80px auto; align-items:center; gap:9px; padding:10px 11px; border:1px solid var(--border); border-radius:9px; background:var(--surface-2); }
+.crypto-address-row strong,.crypto-address-row small,.crypto-address-row span { display:block; }
+.crypto-address-row small { max-width:320px; margin-top:3px; overflow:hidden; color:var(--muted); font:10px ui-monospace,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
+.crypto-address-row > div:not(:first-child) span { color:var(--muted); font-size:10px; }
+.crypto-address-row > div:not(:first-child) strong { margin-top:3px; font-variant-numeric:tabular-nums; }
+.crypto-operation-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.crypto-operation-footer > span { min-width:0; overflow:hidden; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
 .config-json-input { min-height:130px; padding:11px 12px; resize:vertical; font:12px/1.55 ui-monospace,Consolas,monospace; }
 .config-editor-form > .form-actions { margin:0; padding:14px 18px; }
 .full-button { width:100%; }
@@ -512,6 +530,9 @@ h2 { margin:3px 0 0; font-size:22px; }
   .config-nav { display:flex; overflow-x:auto; }
   .config-nav-item { min-width:max-content; }
   .config-editor-row { grid-template-columns:1fr; gap:8px; padding:14px; }
+  .config-action-form,.sms-action-form,.crypto-mode-editor,.crypto-address-row { grid-template-columns:1fr; }
+  .crypto-operation-footer { align-items:stretch; flex-direction:column; }
+  .crypto-operation-footer .primary-button { width:100%; }
   .risk-policy-toolbar { grid-template-columns:1fr; }
   .risk-rule-grid { grid-template-columns:1fr; }
   .risk-rule-fixed { grid-column:auto; align-items:flex-start; flex-direction:column; }
