@@ -15,9 +15,10 @@ const viewLabels = {
   overview:'运营总览',
   users:'用户与会员',
   commercial:'商业运营',
-  'ai-operations':'AI 运行管理',
+  'ai-operations':'AI 运营',
   'risk-audit':'风控与审计',
-  'content-system':'内容与系统',
+  'content-operations':'内容运营',
+  'system-settings':'系统设置',
 }
 
 const icons = {
@@ -27,6 +28,7 @@ const icons = {
   activity:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>',
   shield:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 4 6v6c0 5 3.4 8.2 8 9 4.6-.8 8-4 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-5"/></svg>',
   archive:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 8v13H3V8M1 3h22v5H1z"/><path d="M10 12h4"/></svg>',
+  settings:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.23.35.44.7.6 1 .17.33.5.57.9.6h.1v4h-.1c-.4.03-.73.27-.9.6-.16.3-.37.65-.6 1Z"/></svg>',
   chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/></svg>',
   home:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 9-8 9 8v10h-6v-6H9v6H3z"/></svg>',
   menu:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
@@ -124,14 +126,20 @@ async function renderOverview() {
       ${metric('当前在线',o.online_now,`今日活跃 ${o.active_today} 人`)}
       ${metric('已接入 MT5',o.connected_users,`${o.trading_accounts} 个交易账户`)}
     </section>
-    <section class="content-grid">
-      <article class="panel"><header class="section-head"><div><h2>需要关注</h2><p>只展示会影响用户服务或运营结果的事项。</p></div></header><div class="panel-body module-list">
+    <section class="dashboard-grid">
+      <article class="panel dashboard-attention"><header class="section-head"><div><h2>需要关注</h2><p>优先处理会影响用户服务或自动交易的事项。</p></div><span class="badge">${Number(o.expired_memberships || 0) + Number(o.pending_reviews || 0)} 项</span></header><div class="panel-body module-list">
         <div class="module-row"><span class="module-icon">${icons.users}</span><div><strong>已过期会员</strong><small>权限已按免费用户处理，档案仍保留原会员等级。</small></div><span class="state">${o.expired_memberships} 人</span></div>
         <div class="module-row"><span class="module-icon">${icons.activity}</span><div><strong>待处理复盘</strong><small>包含待生成、待确认及失败的周期复盘。</small></div><span class="state">${o.pending_reviews} 条</span></div>
       </div></article>
-      <aside class="panel"><header class="section-head"><div><h2>管理边界</h2><p>统一入口，按业务域分工。</p></div></header><div class="panel-body"><div class="notice">用户、会员、商业运营、AI 运行、风控审计、内容与系统状态均从这里管理；少数高级编辑器继续作为对应业务页中的兼容工具，不再形成第二套后台。</div></div></aside>
+      <aside class="panel dashboard-shortcuts"><header class="section-head"><div><h2>快速进入</h2><p>进入最常用的运营工作区。</p></div></header><div class="shortcut-grid">
+        <button type="button" data-overview-go="users"><span>${icons.users}</span><div><strong>用户档案</strong><small>会员、账户与策略</small></div></button>
+        <button type="button" data-overview-go="ai-operations"><span>${icons.activity}</span><div><strong>AI 运行</strong><small>调度、模型与频道</small></div></button>
+        <button type="button" data-overview-go="risk-audit"><span>${icons.shield}</span><div><strong>风控审计</strong><small>状态、规则与决策</small></div></button>
+        <button type="button" data-overview-go="commercial"><span>${icons.commercial}</span><div><strong>商业运营</strong><small>订单、通知与返佣</small></div></button>
+      </div></aside>
     </section>`
   main.querySelector('[data-go-users]').addEventListener('click', () => setView('users'))
+  main.querySelectorAll('[data-overview-go]').forEach(button => button.addEventListener('click', () => setView(button.dataset.overviewGo)))
 }
 
 function commercialTabs() {
@@ -443,12 +451,14 @@ function percent(success, total) {
   return Number(total) > 0 ? `${Math.max(0, Number(success) / Number(total) * 100).toFixed(1)}%` : '100%'
 }
 function aiTabs() {
-  return `<nav class="segment-tabs" aria-label="AI 运营治理分类">
+  return `<nav class="segment-tabs ai-section-tabs" aria-label="AI 运营治理分类">
     <button type="button" class="segment-tab ${state.aiTab === 'health' ? 'is-active' : ''}" data-ai-tab="health">运行健康</button>
-    <button type="button" class="segment-tab ${state.aiTab === 'scheduler' ? 'is-active' : ''}" data-ai-tab="scheduler">调度与模型</button>
+    <button type="button" class="segment-tab ${state.aiTab === 'scheduler' ? 'is-active' : ''}" data-ai-tab="scheduler">调度监控</button>
+    <span class="segment-divider" aria-hidden="true"></span>
     <button type="button" class="segment-tab ${state.aiTab === 'strategies' ? 'is-active' : ''}" data-ai-tab="strategies">平台策略</button>
     <button type="button" class="segment-tab ${state.aiTab === 'models' ? 'is-active' : ''}" data-ai-tab="models">平台模型</button>
     <button type="button" class="segment-tab ${state.aiTab === 'memory' ? 'is-active' : ''}" data-ai-tab="memory">平台记忆</button>
+    <span class="segment-divider" aria-hidden="true"></span>
     <button type="button" class="segment-tab ${state.aiTab === 'observer' ? 'is-active' : ''}" data-ai-tab="observer">观摩频道</button>
     <button type="button" class="segment-tab ${state.aiTab === 'model-compare' ? 'is-active' : ''}" data-ai-tab="model-compare">模型评测</button>
   </nav>`
@@ -819,7 +829,7 @@ async function loadAiOperations(silent = false) {
 }
 async function renderAiOperations() {
   const main = document.querySelector('#adminMain')
-  main.innerHTML = `<header class="page-head"><div><span class="eyebrow">模型、调度与观摩分发</span><h1>AI 运营治理</h1><p>先确认核心链路是否健康，再处理调度、模型和观摩频道。</p></div></header>${aiTabs()}<div id="aiOperationsContent"></div>`
+  main.innerHTML = `<header class="page-head"><div><span class="eyebrow">模型、调度与观摩分发</span><h1>AI 运营</h1><p>先确认核心链路是否健康，再处理调度、模型和观摩频道。</p></div></header>${aiTabs()}<div id="aiOperationsContent"></div>`
   bindAiTabs()
   if (state.aiTab === 'memory') await loadPlatformMemory()
   else if (state.aiTab === 'strategies') await loadPlatformStrategies()
@@ -883,7 +893,7 @@ async function loadPlatformRiskPolicy(){const data=await api('/api/admin/risk-au
 function renderRiskContent(){const root=document.querySelector('#riskContent');if(!root||!state.riskData)return;if(state.riskTab==='decisions')root.innerHTML=riskDecisionsContent(state.riskData);else root.innerHTML=riskStatusContent(state.riskData);if(state.riskTab==='status')bindRiskStatus();if(state.riskTab==='decisions'){const select=document.querySelector('#riskDecision');select.value=state.riskDecision;document.querySelector('#riskDecisionFilter').onsubmit=e=>{e.preventDefault();state.riskDecision=select.value;state.riskPage=1;loadRiskAudit().catch(handleError)};const p=state.riskData.pagination;document.querySelector('#riskPrev').disabled=p.page<=1;document.querySelector('#riskNext').disabled=p.page>=p.total_pages;document.querySelector('#riskPrev').onclick=()=>{state.riskPage--;loadRiskAudit().catch(handleError)};document.querySelector('#riskNext').onclick=()=>{state.riskPage++;loadRiskAudit().catch(handleError)}}}
 async function renderRiskAudit(){const main=document.querySelector('#adminMain');main.innerHTML=`<header class="page-head"><div><span class="eyebrow">交易安全与操作追溯</span><h1>风控与审计</h1><p>先确认平台和账户能否交易，再管理规则并追溯每次决策。</p></div></header>${riskTabs()}<div id="riskContent"><div class="panel"><div class="empty-state">正在读取风控状态…</div></div></div>`;document.querySelectorAll('[data-risk-tab]').forEach(button=>button.onclick=async()=>{state.riskTab=button.dataset.riskTab;document.querySelectorAll('[data-risk-tab]').forEach(item=>item.classList.toggle('is-active',item===button));if(state.riskTab==='audit')await renderAuditEvents();else if(state.riskTab==='rules')await loadPlatformRiskPolicy();else {if(!state.riskData)await loadRiskAudit();else renderRiskContent()}});if(state.riskTab==='rules')await loadPlatformRiskPolicy();else if(state.riskTab==='audit')await renderAuditEvents();else await loadRiskAudit()}
 
-function contentTabs(){return `<nav class="segment-tabs" aria-label="内容与系统分类"><button class="segment-tab ${state.contentTab==='courses'?'is-active':''}" data-content-tab="courses" type="button">课程内容</button><button class="segment-tab ${state.contentTab==='assets'?'is-active':''}" data-content-tab="assets" type="button">测验与资料</button><button class="segment-tab ${state.contentTab==='video'?'is-active':''}" data-content-tab="video" type="button">视频托管</button><button class="segment-tab ${state.contentTab==='engagement'?'is-active':''}" data-content-tab="engagement" type="button">学习与社区</button><button class="segment-tab ${state.contentTab==='feedback'?'is-active':''}" data-content-tab="feedback" type="button">用户反馈</button><button class="segment-tab ${state.contentTab==='system'?'is-active':''}" data-content-tab="system" type="button">系统发布</button></nav>`}
+function contentTabs(){return `<nav class="segment-tabs content-section-tabs" aria-label="内容运营分类"><button class="segment-tab ${state.contentTab==='courses'?'is-active':''}" data-content-tab="courses" type="button">课程内容</button><button class="segment-tab ${state.contentTab==='assets'?'is-active':''}" data-content-tab="assets" type="button">测验与资料</button><button class="segment-tab ${state.contentTab==='video'?'is-active':''}" data-content-tab="video" type="button">视频托管</button><button class="segment-tab ${state.contentTab==='engagement'?'is-active':''}" data-content-tab="engagement" type="button">学习表现</button><button class="segment-tab ${state.contentTab==='feedback'?'is-active':''}" data-content-tab="feedback" type="button">用户反馈</button></nav>`}
 const courseStatusLabels={published:'已发布',draft:'草稿',archived:'已归档'}
 const accessLabels={free:'公开免费',logged_in:'登录可看',plus_pro:'Plus / Pro',pro_only:'仅 Pro'}
 const courseCategoryLabels={morning:'早盘解读',indicator:'技术指标',pattern:'形态分析',strategy:'交易策略',advanced:'经济指标'}
@@ -981,7 +991,7 @@ function renderCourseAssets() {
   root.querySelectorAll('[data-delete-quiz]').forEach(button=>button.onclick=async()=>{const id=Number(button.closest('[data-quiz-id]').dataset.quizId);if(!await confirmAction('删除这道题？','删除后无法恢复，但不会影响课程主体和其他资料。','确认删除',true))return;try{await api(`/api/admin-quiz?id=${id}`,{method:'DELETE'});toast('题目已删除','success');await loadCourseAssets()}catch(error){handleError(error)}})
 }
 async function renderContentFeedback(){const params=new URLSearchParams({page:String(state.feedbackPage),page_size:'20'});if(state.feedbackSearch)params.set('search',state.feedbackSearch);const data=await api(`/api/admin/content-system/feedback?${params}`);document.querySelector('#contentSystemBody').innerHTML=`<section class="panel"><form class="filter-bar compact-filter" id="feedbackFilters"><div class="field"><label for="feedbackSearch">搜索反馈</label><input class="input" id="feedbackSearch" value="${escapeHtml(state.feedbackSearch)}" placeholder="标题、内容、联系方式或用户"></div><button class="secondary-button" type="submit">搜索</button></form><div class="feedback-list">${data.feedback.map(item=>`<article class="feedback-card"><header><div><span class="badge">${escapeHtml(item.type||'建议')}</span><strong>${escapeHtml(item.title)}</strong></div><time>${formatDate(item.created_at,true)}</time></header><p>${escapeHtml(item.description)}</p><footer>${escapeHtml(item.user_nickname||item.user_email||'匿名用户')} · ${escapeHtml(item.contact||'未留联系方式')}</footer></article>`).join('')||'<div class="empty-state">暂无用户反馈</div>'}</div><div class="pagination"><button class="secondary-button" id="feedbackPrev" type="button">上一页</button><span>第 ${data.pagination.page} / ${data.pagination.total_pages} 页 · 共 ${data.pagination.total} 条</span><button class="secondary-button" id="feedbackNext" type="button">下一页</button></div></section>`;document.querySelector('#feedbackFilters').onsubmit=e=>{e.preventDefault();state.feedbackSearch=document.querySelector('#feedbackSearch').value.trim();state.feedbackPage=1;renderContentFeedback().catch(handleError)};document.querySelector('#feedbackPrev').disabled=data.pagination.page<=1;document.querySelector('#feedbackNext').disabled=data.pagination.page>=data.pagination.total_pages;document.querySelector('#feedbackPrev').onclick=()=>{state.feedbackPage--;renderContentFeedback().catch(handleError)};document.querySelector('#feedbackNext').onclick=()=>{state.feedbackPage++;renderContentFeedback().catch(handleError)}}
-const systemCategoryLabels={plan_prices:'套餐价格',smtp:'发件邮箱',qiniu:'文件存储',toolbox:'金融工具箱',market_menu:'股票研究菜单',sms:'短信服务',auth_toggle:'登录与注册',crypto_wallet:'收款钱包',changelog:'版本说明'}
+const systemCategoryLabels={auth:'账户认证',auth_toggle:'登录与注册',plan_prices:'套餐价格',smtp:'发件邮箱',qiniu:'文件存储',quote_symbol:'行情品种映射',toolbox:'金融工具箱',market_menu:'股票研究菜单',sms:'短信服务',crypto_wallet:'收款钱包',changelog:'版本说明'}
 function systemConfigInput(item) {
   const value=String(item.value??'')
   const redacted=value==='***REDACTED***'
@@ -1064,11 +1074,17 @@ async function renderContentEngagement(){
   bindUserOpeners(document.querySelector('#contentSystemBody'))
 }
 async function renderContentTab(){if(state.contentTab==='assets')await loadCourseAssets();else if(state.contentTab==='video')await renderContentVideos();else if(state.contentTab==='engagement')await renderContentEngagement();else if(state.contentTab==='feedback')await renderContentFeedback();else if(state.contentTab==='system'){if(!state.contentOverview)await loadContentOverview();else renderContentSystem()}else await renderContentCourses()}
-async function renderContentSystemPage(){const main=document.querySelector('#adminMain');main.innerHTML=`<header class="page-head"><div><span class="eyebrow">课程、反馈与版本发布</span><h1>内容与系统</h1><p>日常内容运营与低频系统维护分开处理，降低配置干扰。</p></div></header>${contentTabs()}<div id="contentSystemBody"><div class="panel"><div class="empty-state">正在读取内容数据…</div></div></div>`;document.querySelectorAll('[data-content-tab]').forEach(button=>button.onclick=async()=>{state.contentTab=button.dataset.contentTab;document.querySelectorAll('[data-content-tab]').forEach(item=>item.classList.toggle('is-active',item===button));await renderContentTab()});await Promise.all([loadContentOverview(),renderContentTab()])}
+async function renderContentOperationsPage(){const main=document.querySelector('#adminMain');if(state.contentTab==='system')state.contentTab='courses';main.innerHTML=`<header class="page-head"><div><span class="eyebrow">课程与学习运营</span><h1>内容运营</h1><p>管理课程、测验、视频、学习表现和用户反馈。</p></div></header>${contentTabs()}<div id="contentSystemBody"><div class="panel"><div class="empty-state">正在读取内容数据…</div></div></div>`;document.querySelectorAll('[data-content-tab]').forEach(button=>button.onclick=async()=>{state.contentTab=button.dataset.contentTab;document.querySelectorAll('[data-content-tab]').forEach(item=>item.classList.toggle('is-active',item===button));await renderContentTab()});await Promise.all([loadContentOverview(),renderContentTab()])}
+async function renderSystemSettingsPage(){const main=document.querySelector('#adminMain');state.contentTab='system';main.innerHTML=`<header class="page-head"><div><span class="eyebrow">发布与平台配置</span><h1>系统设置</h1><p>集中管理版本发布、服务参数和敏感配置，保存前请确认影响范围。</p></div><span class="page-safety-note">高风险配置区</span></header><div id="contentSystemBody"><div class="panel"><div class="empty-state">正在读取系统配置…</div></div></div>`;await loadContentOverview()}
 
 async function setView(view) {
   state.view = view
-  document.querySelectorAll('.nav-item[data-view]').forEach(item => item.classList.toggle('is-active', item.dataset.view === view))
+  document.querySelectorAll('.nav-item[data-view]').forEach(item => {
+    const active = item.dataset.view === view
+    item.classList.toggle('is-active', active)
+    if (active) item.setAttribute('aria-current', 'page')
+    else item.removeAttribute('aria-current')
+  })
   document.querySelector('#currentViewName').textContent = viewLabels[view] || '管理工作台'
   history.replaceState({}, '', `/admin/${view === 'overview' ? '' : `?view=${view}`}`)
   document.body.classList.remove('nav-open')
@@ -1078,7 +1094,8 @@ async function setView(view) {
     else if (view === 'commercial') await renderCommercial()
     else if (view === 'ai-operations') await renderAiOperations()
     else if (view === 'risk-audit') await renderRiskAudit()
-    else if (view === 'content-system') await renderContentSystemPage()
+    else if (view === 'content-operations') await renderContentOperationsPage()
+    else if (view === 'system-settings') await renderSystemSettingsPage()
     else await renderOverview()
     document.querySelector('#adminMain').focus({ preventScroll:true })
   } catch (error) { handleError(error) }
@@ -1133,7 +1150,8 @@ async function bootstrap() {
   try {
     await loadProfile()
     const requested = new URLSearchParams(location.search).get('view')
-    await setView(['users','commercial','ai-operations','risk-audit','content-system'].includes(requested) ? requested : 'overview')
+    const legacyView = requested === 'content-system' ? 'content-operations' : requested
+    await setView(['users','commercial','ai-operations','risk-audit','content-operations','system-settings'].includes(legacyView) ? legacyView : 'overview')
   } catch (error) { handleError(error) }
 }
 bootstrap()

@@ -90,7 +90,8 @@ describe('AI governance navigation and DOM contract', () => {
     expect(adminHtml).toContain('data-view="ai-operations"')
     expect(adminHtml).toContain('data-view="risk-audit"')
     expect(adminHtml).toContain('data-view="users"')
-    expect(adminHtml).toContain('data-view="content-system"')
+    expect(adminHtml).toContain('data-view="content-operations"')
+    expect(adminHtml).toContain('data-view="system-settings"')
     expect(app).not.toContain('navGroupManage')
     expect(html).not.toContain('data-tab="account-review"')
     expect(html.indexOf('data-tab="model-strategy"')).toBeGreaterThan(html.indexOf('data-tab="risk-center"'))
@@ -99,7 +100,7 @@ describe('AI governance navigation and DOM contract', () => {
 
   it('organizes the administrator operations center around health, actions, users, and releases', () => {
     expect(adminApp).toContain('统一运营视图')
-    expect(adminApp).toContain('AI 运营治理')
+    expect(adminApp).toContain('<h1>AI 运营</h1>')
     expect(adminApp).toContain('loadCommercialNotifications')
     expect(adminApp).toContain('/api/admin/membership-expiry-notifications?')
     expect(adminHtml).toContain('用户运营档案')

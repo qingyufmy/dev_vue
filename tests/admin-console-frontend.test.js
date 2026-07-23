@@ -173,7 +173,8 @@ describe('unified admin console contract', () => {
   })
 
   it('centralizes course discovery, feedback triage and release publishing', () => {
-    expect(html).toContain('data-view="content-system"')
+    expect(html).toContain('data-view="content-operations"')
+    expect(html).toContain('data-view="system-settings"')
     expect(app).toContain('/api/admin/content-system/courses?')
     expect(app).toContain('/api/admin/content-system/feedback?')
     expect(app).toContain("api('/api/admin/release-notes'")
