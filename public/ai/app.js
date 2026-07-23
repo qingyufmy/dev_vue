@@ -8969,7 +8969,11 @@ function initAnalysisHistoryScroll() {
 }
 
 // ============ Admin Data Dashboard ============
-const _adminDashState = { charts: {}, loaded: false, activeView:'overview', observerLoaded:false, userList: { page: 1, pageSize:10, total: 0, users: [] }, selectedUserId: null, renderUserList:null, refreshTimer: null };
+const _adminDashState = {
+  charts:{}, loaded:false, activeView:'overview', observerLoaded:false, notificationLoaded:false,
+  notificationList:{ page:1, pageSize:10, total:0, records:[], filters:{ search:'', channel:'', status:'', daysBefore:'' } },
+  userList:{ page:1, pageSize:10, total:0, users:[] }, selectedUserId:null, renderUserList:null, refreshTimer:null,
+};
 
 async function loadAdminDashboard(force) {
   if (_adminDashState.loaded && !force) return;
@@ -9559,6 +9563,144 @@ async function loadObserverAdminPanel(force = false) {
   } catch (error) { showError(root, `观摩频道加载失败：${error.message}`); }
 }
 
+const MEMBERSHIP_NOTIFICATION_CHANNELS = {
+  web_main:'主站弹窗', web_ai:'AI 实验室弹窗', email:'邮件', sms:'短信',
+};
+const MEMBERSHIP_NOTIFICATION_STATES = {
+  pending:{ label:'待处理', tone:'pending' },
+  waiting_configuration:{ label:'等待配置', tone:'warning' },
+  sending:{ label:'发送中', tone:'running' },
+  sent:{ label:'已发送', tone:'success' },
+  read:{ label:'已阅读', tone:'success' },
+  failed:{ label:'发送失败', tone:'danger' },
+  skipped:{ label:'已跳过', tone:'muted' },
+  cancelled:{ label:'已失效', tone:'muted' },
+};
+
+function membershipNotificationState(stateName) {
+  return MEMBERSHIP_NOTIFICATION_STATES[stateName] || { label:'状态未知', tone:'muted' };
+}
+
+function renderMembershipNotificationTime(record) {
+  const value = record.sent_at || record.read_at || record.updated_at || record.created_at;
+  return value ? formatTime(value) : '--';
+}
+
+function renderMembershipNotificationRows(records) {
+  if (!records.length) return `<tr><td colspan="7"><div class="ops-notification-empty"><i data-lucide="inbox"></i><strong>没有符合条件的通知</strong><span>调整筛选条件后再试，历史记录不会被自动删除。</span></div></td></tr>`;
+  return records.map(record => {
+    const stateMeta = membershipNotificationState(record.delivery_state);
+    const contact = record.channel === 'email' ? record.email : record.channel === 'sms' ? record.phone : '站内提醒';
+    const resultText = record.error_text || (record.delivery_state === 'waiting_configuration'
+      ? `${record.channel === 'sms' ? '短信模板' : '邮件服务'}尚未配置，配置完成后会自动继续发送`
+      : stateMeta.label);
+    return `<tr>
+      <td data-label="用户"><strong>${escapeHtml(record.nickname || `用户 #${record.user_id}`)}</strong><small>#${Number(record.user_id)} · ${escapeHtml(contact || '未绑定联系方式')}</small></td>
+      <td data-label="会员"><strong>${escapeHtml(String(record.plan || '').toUpperCase())}</strong><small>${escapeHtml(String(record.plan_expires_at || '').slice(0, 10))} 到期</small></td>
+      <td data-label="提醒阶段"><strong>提前 ${Number(record.days_before)} 天</strong><small>${escapeHtml(MEMBERSHIP_NOTIFICATION_CHANNELS[record.channel] || '未知渠道')}</small></td>
+      <td data-label="状态"><span class="ops-delivery-state ${stateMeta.tone}">${escapeHtml(stateMeta.label)}</span></td>
+      <td data-label="结果"><span class="ops-delivery-result ${record.error_text ? 'has-error' : ''}">${escapeHtml(resultText)}</span></td>
+      <td data-label="时间"><time>${escapeHtml(renderMembershipNotificationTime(record))}</time><small>尝试 ${Number(record.attempt_count || 0)} 次</small></td>
+      <td data-label="操作">${record.retry_allowed ? `<button class="btn btn-secondary btn-sm" type="button" data-membership-notification-retry="${Number(record.id)}"><i data-lucide="rotate-cw"></i>重新发送</button>` : '<span class="ops-no-action">—</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderMembershipNotificationPager(data) {
+  const pages = Math.max(1, Math.ceil(Number(data.total || 0) / Number(data.pageSize || 10)));
+  return `<div class="ops-notification-pager">
+    <span>共 ${Number(data.total || 0)} 条 · 第 ${Number(data.page || 1)} / ${pages} 页</span>
+    <div><button class="btn btn-secondary btn-sm" type="button" data-notification-page="${Number(data.page) - 1}" ${Number(data.page) <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i>上一页</button><button class="btn btn-secondary btn-sm" type="button" data-notification-page="${Number(data.page) + 1}" ${Number(data.page) >= pages ? 'disabled' : ''}>下一页<i data-lucide="chevron-right"></i></button></div>
+  </div>`;
+}
+
+async function loadAdminMembershipNotifications(options = {}) {
+  const root = $('opsNotificationContent');
+  if (!root) return;
+  const current = _adminDashState.notificationList;
+  const filters = { ...current.filters, ...(options.filters || {}) };
+  const page = Math.max(1, Number(options.page || current.page || 1));
+  if (!options.silent) root.setAttribute('aria-busy', 'true');
+  try {
+    const params = new URLSearchParams({ page:String(page), page_size:String(current.pageSize || 10) });
+    if (filters.search) params.set('search', filters.search);
+    if (filters.channel) params.set('channel', filters.channel);
+    if (filters.status) params.set('status', filters.status);
+    if (filters.daysBefore) params.set('days_before', filters.daysBefore);
+    const data = await api(`/api/admin/membership-expiry-notifications?${params}`);
+    _adminDashState.notificationLoaded = true;
+    _adminDashState.notificationList = { ...data, filters };
+    const summary = data.summary || {};
+    root.innerHTML = `
+      <div class="ops-notification-workspace">
+        <header class="ops-notification-heading">
+          <div><span class="ops-kicker">会员触达审计</span><h2>通知记录</h2><p>查看主站、AI 实验室、邮件和短信的会员到期提醒状态。</p></div>
+          <div class="ops-provider-health" aria-label="通知服务状态">
+            <span class="${data.providerConfigured?.email ? 'ready' : 'warning'}"><i data-lucide="mail"></i>邮件${data.providerConfigured?.email ? '可用' : '未配置'}</span>
+            <span class="${data.providerConfigured?.sms ? 'ready' : 'warning'}"><i data-lucide="message-square-text"></i>短信${data.providerConfigured?.sms ? '可用' : '未配置模板'}</span>
+          </div>
+        </header>
+        <div class="ops-notification-metrics" aria-label="通知统计">
+          <article><span>全部记录</span><strong class="num">${Number(summary.total || 0)}</strong><small>保留完整触达轨迹</small></article>
+          <article><span>等待处理</span><strong class="num">${Number(summary.pending || 0)}</strong><small>包含等待服务配置</small></article>
+          <article><span>成功触达</span><strong class="num">${Number(summary.sent || 0) + Number(summary.read || 0)}</strong><small>已发送或网页已阅读</small></article>
+          <article class="${Number(summary.failed || 0) ? 'danger' : ''}"><span>发送失败</span><strong class="num">${Number(summary.failed || 0)}</strong><small>可核对原因并安全重试</small></article>
+          <article><span>失效归档</span><strong class="num">${Number(summary.cancelled || 0)}</strong><small>续费或提醒窗口变化</small></article>
+        </div>
+        <section class="ops-section-card ops-notification-list-card">
+          <form class="ops-notification-filters" id="membershipNotificationFilters">
+            <label class="ops-notification-search"><span>搜索用户</span><div><i data-lucide="search"></i><input type="search" name="search" value="${escapeHtml(filters.search)}" placeholder="昵称、邮箱、手机号或用户 ID" autocomplete="off"></div></label>
+            <label><span>渠道</span><select name="channel"><option value="">全部渠道</option>${Object.entries(MEMBERSHIP_NOTIFICATION_CHANNELS).map(([value,label]) => `<option value="${value}" ${filters.channel === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+            <label><span>状态</span><select name="status"><option value="">全部状态</option>${Object.entries(MEMBERSHIP_NOTIFICATION_STATES).filter(([value]) => value !== 'waiting_configuration').map(([value,meta]) => `<option value="${value}" ${filters.status === value ? 'selected' : ''}>${meta.label}</option>`).join('')}</select></label>
+            <label><span>提醒阶段</span><select name="days_before"><option value="">全部阶段</option>${[7,3,2,1].map(day => `<option value="${day}" ${String(filters.daysBefore) === String(day) ? 'selected' : ''}>提前 ${day} 天</option>`).join('')}</select></label>
+            <button class="btn btn-primary" type="submit"><i data-lucide="list-filter"></i>筛选</button>
+            <button class="btn btn-secondary" type="button" id="resetMembershipNotificationFilters">重置</button>
+          </form>
+          <div class="ops-notification-table-wrap">
+            <table class="ops-notification-table"><thead><tr><th>用户</th><th>会员</th><th>提醒</th><th>状态</th><th>处理结果</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${renderMembershipNotificationRows(data.records || [])}</tbody></table>
+          </div>
+          ${renderMembershipNotificationPager(data)}
+        </section>
+      </div>`;
+    const tabBadge = document.querySelector('[data-field="notificationFailureCount"]');
+    if (tabBadge) {
+      tabBadge.textContent = Number(summary.failed || 0);
+      tabBadge.classList.toggle('hidden', Number(summary.failed || 0) === 0);
+    }
+    root.querySelector('#membershipNotificationFilters')?.addEventListener('submit', event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      loadAdminMembershipNotifications({ page:1, filters:{ search:String(form.get('search') || '').trim(), channel:String(form.get('channel') || ''), status:String(form.get('status') || ''), daysBefore:String(form.get('days_before') || '') } });
+    });
+    root.querySelector('#resetMembershipNotificationFilters')?.addEventListener('click', () => loadAdminMembershipNotifications({ page:1, filters:{ search:'', channel:'', status:'', daysBefore:'' } }));
+    root.querySelectorAll('[data-notification-page]').forEach(button => button.addEventListener('click', () => loadAdminMembershipNotifications({ page:Number(button.dataset.notificationPage) })));
+    root.querySelectorAll('[data-membership-notification-retry]').forEach(button => button.addEventListener('click', async () => {
+      if (!confirm('确认重新发送这条通知？系统会再次校验会员到期时间，已成功的通知不会重复发送。')) return;
+      button.disabled = true;
+      const previous = button.innerHTML;
+      button.innerHTML = '<i data-lucide="loader-2" class="spinning-icon"></i>正在重试';
+      initIcons();
+      try {
+        const result = await api(`/api/admin/membership-expiry-notifications/${button.dataset.membershipNotificationRetry}/retry`, { method:'POST' });
+        toast(result.deferred ? '通知服务尚未配置，记录已保留在待处理队列' : result.status === 'sent' ? '通知已重新发送' : '通知已加入重试队列', result.deferred ? 'warning' : 'success');
+        await loadAdminMembershipNotifications({ page:_adminDashState.notificationList.page, silent:true });
+      } catch (error) {
+        button.disabled = false;
+        button.innerHTML = previous;
+        initIcons();
+        toast(error.message || '通知重试失败', 'error');
+      }
+    }));
+    initIcons();
+  } catch (error) {
+    root.innerHTML = `<div class="ops-notification-load-error"><i data-lucide="circle-alert"></i><strong>通知记录加载失败</strong><span>${escapeHtml(error.message || '请稍后重试')}</span><button class="btn btn-secondary" type="button" id="retryLoadMembershipNotifications">重新加载</button></div>`;
+    root.querySelector('#retryLoadMembershipNotifications')?.addEventListener('click', () => loadAdminMembershipNotifications({ page }));
+    initIcons();
+  } finally {
+    root.removeAttribute('aria-busy');
+  }
+}
+
 async function renderAdminDashboard(el, d, userListResp) {
   Object.values(_adminDashState.charts).forEach(c => { try { c.destroy() } catch {} });
   _adminDashState.charts = {};
@@ -9581,6 +9723,7 @@ async function renderAdminDashboard(el, d, userListResp) {
       <nav class="ops-view-tabs" aria-label="运营中心视图">
         <button type="button" class="active" data-admin-view="overview" aria-selected="true"><i data-lucide="gauge"></i>运营总览<span class="ops-tab-badge ${healthSummary.tone === 'healthy' ? 'hidden' : ''}" data-field="attentionCount">${healthSummary.modelFailures + healthSummary.schedulerErrors + healthSummary.reviewsFailed + healthSummary.signalErrors}</span></button>
         <button type="button" data-admin-view="users" aria-selected="false"><i data-lucide="users"></i>用户管理<span class="ops-tab-count" data-field="totalUsersTab">${Number(us.total_users || 0)}</span></button>
+        <button type="button" data-admin-view="notifications" aria-selected="false"><i data-lucide="bell-ring"></i>通知记录<span class="ops-tab-badge hidden" data-field="notificationFailureCount">0</span></button>
         <button type="button" data-admin-view="observers" aria-selected="false"><i data-lucide="radio-tower"></i>观摩频道</button>
         <button type="button" data-admin-view="release" aria-selected="false"><i data-lucide="megaphone"></i>发布管理</button>
       </nav>
@@ -9654,6 +9797,10 @@ async function renderAdminDashboard(el, d, userListResp) {
         </div>
       </section>
 
+      <section class="ops-view-panel" data-admin-panel="notifications" hidden>
+        <div id="opsNotificationContent" aria-live="polite"><div class="admin-dash-loading"><i data-lucide="loader-2" class="spinning-icon"></i><span>正在读取通知记录…</span></div></div>
+      </section>
+
       <section class="ops-view-panel" data-admin-panel="observers" hidden>
         <div id="observerAdminContent"><div class="admin-dash-loading"><i data-lucide="loader-2" class="spinning-icon"></i><span>正在读取观摩频道…</span></div></div>
       </section>
@@ -9668,18 +9815,24 @@ async function renderAdminDashboard(el, d, userListResp) {
   initIcons();
 
   const setAdminView = view => {
-    const target = ['overview', 'users', 'observers', 'release'].includes(view) ? view : 'overview';
+    const target = ['overview', 'users', 'notifications', 'observers', 'release'].includes(view) ? view : 'overview';
     _adminDashState.activeView = target;
+    let activeViewButton = null;
     el.querySelectorAll('[data-admin-view]').forEach(button => {
       const active = button.dataset.adminView === target;
       button.classList.toggle('active', active);
       button.setAttribute('aria-selected', String(active));
+      if (active) activeViewButton = button;
     });
     el.querySelectorAll('[data-admin-panel]').forEach(panel => {
       const active = panel.dataset.adminPanel === target;
       panel.classList.toggle('active', active);
       panel.hidden = !active;
     });
+    if (activeViewButton && window.matchMedia('(max-width: 760px)').matches) {
+      requestAnimationFrame(() => activeViewButton.scrollIntoView({ behavior:'smooth', block:'nearest', inline:'center' }));
+    }
+    if (target === 'notifications' && !_adminDashState.notificationLoaded) loadAdminMembershipNotifications().catch(error => toast(error.message, 'error'));
     if (target === 'observers') loadObserverAdminPanel().catch(error => toast(error.message, 'error'));
   };
   el.querySelectorAll('[data-admin-view]').forEach(button => button.addEventListener('click', () => setAdminView(button.dataset.adminView)));

@@ -1689,6 +1689,7 @@
     scrollbar-width: none;
     background: color-mix(in srgb, var(--bg-base) 92%, transparent);
     backdrop-filter: blur(12px);
+    scroll-snap-type: x proximity;
   }
 
   .global-risk-workspace > .workspace-subtabs::-webkit-scrollbar,
@@ -1701,6 +1702,7 @@
     flex: 1 0 auto;
     min-height: 44px;
     justify-content: center;
+    scroll-snap-align: center;
   }
 
   .admin-boundary-note,
@@ -1888,4 +1890,42 @@
   .observer-channel-route > svg { justify-self:center; transform:rotate(90deg); }
   .observer-channel-card footer { align-items:stretch; flex-direction:column; }
   .observer-channel-card footer .btn { width:100%; min-height:44px; justify-content:center; }
+}
+
+/* 运营中心通知记录：桌面表格在窄屏转换为可读卡片。 */
+@media (max-width: 1180px) {
+  .ops-notification-metrics { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .ops-notification-metrics article:nth-child(4) { border-left:0; border-top:1px solid var(--border-default); }
+  .ops-notification-metrics article:nth-child(5) { border-top:1px solid var(--border-default); }
+  .ops-notification-filters { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .ops-notification-search { grid-column:span 2; }
+}
+
+@media (max-width: 760px) {
+  .ops-view-tabs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); width:100%; gap:3px; overflow:visible; }
+  .ops-view-tabs button { min-width:0; padding-inline:5px; gap:5px; font-size:11px; white-space:nowrap; }
+  .ops-notification-heading { align-items:flex-start; flex-direction:column; gap:12px; }
+  .ops-provider-health { justify-content:flex-start; }
+  .ops-notification-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .ops-notification-metrics article { border-top:1px solid var(--border-default); }
+  .ops-notification-metrics article:nth-child(-n+2) { border-top:0; }
+  .ops-notification-metrics article:nth-child(odd) { border-left:0; }
+  .ops-notification-metrics article:last-child { grid-column:1/-1; }
+  .ops-notification-filters { grid-template-columns:1fr 1fr; padding:12px; }
+  .ops-notification-search { grid-column:1/-1; }
+  .ops-notification-filters .btn { width:100%; min-height:44px; }
+  .ops-notification-table-wrap { overflow:visible; padding:10px; }
+  .ops-notification-table,.ops-notification-table tbody,.ops-notification-table tr,.ops-notification-table td { display:block; width:100%; }
+  .ops-notification-table thead { display:none; }
+  .ops-notification-table tbody { display:grid; gap:10px; }
+  .ops-notification-table tr { padding:12px; border:1px solid var(--border-default); border-radius:12px; background:var(--bg-elevated); }
+  .ops-notification-table td { display:grid; grid-template-columns:88px minmax(0,1fr); align-items:start; gap:8px; padding:7px 0; border:0; }
+  .ops-notification-table td::before { content:attr(data-label); color:var(--text-muted); font-size:10px; font-weight:600; }
+  .ops-notification-table td > :is(strong,small,time,span,button) { grid-column:2; }
+  .ops-notification-table td > small { margin-top:-5px; }
+  .ops-notification-table td .btn { width:100%; min-height:44px; justify-content:center; }
+  .ops-notification-empty { grid-column:1/-1; }
+  .ops-notification-pager { align-items:stretch; flex-direction:column; }
+  .ops-notification-pager > div { display:grid; grid-template-columns:1fr 1fr; }
+  .ops-notification-pager .btn { justify-content:center; min-height:44px; }
 }

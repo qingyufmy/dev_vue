@@ -21,8 +21,11 @@ import { loadSmsConfig, sendSms } from '../server/sms.js'
 import {
   acknowledgeWebMembershipReminder,
   buildMembershipExpiryCopy,
+  cancelStaleMembershipExpiryNotifications,
   ensureMembershipExpiryNotifications,
+  getAdminMembershipExpiryNotifications,
   getPendingWebMembershipReminder,
+  membershipDeliveryErrorText,
   normalizeReminderSurface,
   processMembershipExpiryDeliveries,
 } from '../server/membership-expiry-notifications.js'
@@ -95,5 +98,38 @@ describe('membership expiry notifications', () => {
 
     await expect(acknowledgeWebMembershipReminder(9, 21, 'ai')).resolves.toBe(true)
     expect(queryRun.mock.calls.at(-1)[1]).toEqual([21, 9, 'web_ai'])
+  })
+
+  it('archives obsolete pending reminders after renewal or a changed reminder window', async () => {
+    queryRun.mockResolvedValueOnce({ changes:3 })
+    await expect(cancelStaleMembershipExpiryNotifications()).resolves.toBe(3)
+    expect(queryRun.mock.calls[0][0]).toContain("status = 'cancelled'")
+    expect(queryRun.mock.calls[0][0]).toContain('users.plan_expires_at <> notifications.plan_expires_at')
+  })
+
+  it('returns localized administrator audit data without exposing provider errors', async () => {
+    loadSmsConfig.mockResolvedValueOnce({ templateCodes:{ membership_expiry:'' } })
+    queryAll.mockImplementation(async sql => {
+      if (sql.includes("category = 'smtp'")) return [{ key:'host', value:'smtp.example.com' }, { key:'user', value:'mailer@example.com' }]
+      if (sql.includes('GROUP BY status, channel')) return [{ status:'failed', channel:'email', count:1 }]
+      if (sql.includes('SELECT notifications.id')) return [{
+        id:31, user_id:9, plan:'pro', plan_expires_at:'2026-07-30 00:00:00', days_before:7,
+        channel:'email', status:'failed', attempt_count:2, last_error:'SMTP authentication failed',
+      }]
+      return []
+    })
+    queryOne.mockResolvedValueOnce({ count:1 })
+    const data = await getAdminMembershipExpiryNotifications({ page:1, status:'failed' })
+    expect(data.summary).toMatchObject({ total:1, failed:1 })
+    expect(data.records[0]).toMatchObject({
+      delivery_state:'failed', error_text:'通知服务账号认证失败，请检查服务配置', retry_allowed:true,
+    })
+    expect(data.records[0]).not.toHaveProperty('last_error')
+    expect(data.providerConfigured).toEqual({ email:true, sms:false })
+  })
+
+  it('translates common delivery failures into operational Chinese', () => {
+    expect(membershipDeliveryErrorText('ETIMEDOUT')).toBe('通知服务连接超时，请稍后重试')
+    expect(membershipDeliveryErrorText('isv.BUSINESS_LIMIT_CONTROL')).toBe('发送频率受到服务商限制，请稍后重试')
   })
 })
