@@ -4,8 +4,9 @@ import { authMiddleware, adminOnly } from '../middleware/auth.js'
 import { translateAdminProfileError, updateAdminUserProfile } from '../admin/user-profile.js'
 import { getAdminAiOperationsOverview } from '../admin/ai-operations.js'
 import { updateObserverChannel, updateObserverSource } from './ai/observer-channels.js'
+import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource, listObserverChannelAssignments, replaceObserverChannelAssignments } from './ai/observer-channels.js'
 import { reconcileAutoSchedulers } from './ai/scheduler.js'
-import { applyBridgeRuntimeState } from '../bridge-ws.js'
+import { applyBridgeRuntimeState, isBridgeAlive } from '../bridge-ws.js'
 import { getAdminPlatformRiskPolicy, getAdminRiskAuditOverview, listAdminAuditEvents, saveAdminPlatformRiskPolicy } from '../admin/risk-audit.js'
 import { setGlobalKillSwitch } from './ai/risk-state.js'
 import { deleteAdminCourse, getAdminContentSystemOverview, getAdminCourse, listAdminCourses, listAdminFeedback, saveAdminCourse } from '../admin/content-system.js'
@@ -74,6 +75,11 @@ const AI_OPERATION_ERRORS = {
   bridge_user_not_found:'观摩源桥接账号不存在',
   bridge_user_requires_pro:'观摩源账号必须是有效 Pro 用户或管理员',
   trading_account_not_owned_by_source:'所选 MT5 账户不属于该观摩源账号',
+  observer_source_has_channels:'该观摩源仍绑定频道，请先调整或删除频道',
+  default_observer_channel_cannot_be_deleted:'默认观摩频道不能删除，请先设置其他默认频道',
+  invalid_channel_audience:'频道开放范围无效',
+  source_name_required:'请填写观摩源名称',
+  channel_name_required:'请填写频道名称',
   invalid_status:'状态值无效',
 }
 
@@ -106,9 +112,47 @@ router.patch('/admin/ai/observer-sources/:id/runtime', authMiddleware, adminOnly
   } catch (error) { adminAiError(res, error) }
 })
 
+router.get('/admin/ai/observer-candidates',authMiddleware,adminOnly,async(req,res)=>{
+  try{
+    const users=await queryAll(`SELECT id,email,nickname,role,plan,plan_source FROM users
+      WHERE deletion_status='active' AND deleted_at IS NULL AND (role='admin' OR (plan='pro' AND (plan_expires_at IS NULL OR plan_expires_at>=NOW())))
+      ORDER BY role='admin' DESC,id`)
+    const ids=users.map(user=>Number(user.id))
+    const [accounts,strategies]=await Promise.all([
+      ids.length?queryAll(`SELECT id,user_id,login_account,broker_server,nickname FROM trading_accounts WHERE is_deleted=0 AND user_id IN (${ids.map(()=>'?').join(',')}) ORDER BY user_id,updated_at DESC`,ids):[],
+      queryAll(`SELECT id,title,version FROM auto_prompt_types WHERE scope='platform' AND is_active=1 AND deleted_at IS NULL AND visibility_status='active' ORDER BY sort_order,id`),
+    ])
+    res.json({ok:true,candidates:users.map(user=>({...user,bridge_online:isBridgeAlive(Number(user.id)),accounts:accounts.filter(account=>Number(account.user_id)===Number(user.id))})),strategies})
+  }catch(error){console.error('[AdminConsole] observer candidates failed:',error);res.status(500).json({ok:false,error:'观摩源候选数据加载失败'})}
+})
+router.post('/admin/ai/observer-sources',authMiddleware,adminOnly,async(req,res)=>{
+  try{const source=await createObserverSource(req.user.id,req.body||{});await reconcileAutoSchedulers();await applyBridgeRuntimeState(Number(source.bridge_user_id),{tradeEnabled:Boolean(source.trade_send_enabled),autoReasoningEnabled:Boolean(source.auto_inference_enabled)});res.status(201).json({ok:true,source})}catch(error){adminAiError(res,error)}
+})
+router.put('/admin/ai/observer-sources/:id',authMiddleware,adminOnly,async(req,res)=>{
+  try{const source=await updateObserverSource(req.params.id,req.body||{});await reconcileAutoSchedulers();await applyBridgeRuntimeState(Number(source.bridge_user_id),{tradeEnabled:Boolean(source.trade_send_enabled),autoReasoningEnabled:Boolean(source.auto_inference_enabled)});res.json({ok:true,source})}catch(error){adminAiError(res,error)}
+})
+router.delete('/admin/ai/observer-sources/:id',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.json({ok:true,deleted:await deleteObserverSource(req.params.id)})}catch(error){adminAiError(res,error)}
+})
+
 router.patch('/admin/ai/observer-channels/:id', authMiddleware, adminOnly, async (req, res) => {
   try { res.json({ ok:true, channel:await updateObserverChannel(req.params.id, req.body || {}) }) }
   catch (error) { adminAiError(res, error) }
+})
+router.post('/admin/ai/observer-channels',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.status(201).json({ok:true,channel:await createObserverChannel(req.body||{})})}catch(error){adminAiError(res,error)}
+})
+router.put('/admin/ai/observer-channels/:id',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.json({ok:true,channel:await updateObserverChannel(req.params.id,req.body||{})})}catch(error){adminAiError(res,error)}
+})
+router.delete('/admin/ai/observer-channels/:id',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.json({ok:true,deleted:await deleteObserverChannel(req.params.id)})}catch(error){adminAiError(res,error)}
+})
+router.get('/admin/ai/observer-channels/:id/assignments',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.json({ok:true,assignments:await listObserverChannelAssignments(req.params.id)})}catch(error){adminAiError(res,error)}
+})
+router.put('/admin/ai/observer-channels/:id/assignments',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.json({ok:true,assignments:await replaceObserverChannelAssignments(req.params.id,req.user.id,req.body?.user_ids||[])})}catch(error){adminAiError(res,error)}
 })
 
 router.get('/admin/risk-audit/overview', authMiddleware, adminOnly, async (req, res) => {

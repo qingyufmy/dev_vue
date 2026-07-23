@@ -59,10 +59,16 @@ describe('unified admin console contract', () => {
     expect(app).toContain('/api/admin/ai/observer-sources/${source.id}/runtime')
     expect(routes).toContain("router.get('/admin/ai/overview'")
     expect(routes).toContain("router.patch('/admin/ai/observer-sources/:id/runtime'")
+    expect(routes).toContain("router.post('/admin/ai/observer-sources'")
+    expect(routes).toContain("router.delete('/admin/ai/observer-sources/:id'")
+    expect(routes).toContain("router.post('/admin/ai/observer-channels'")
+    expect(routes).toContain("router.delete('/admin/ai/observer-channels/:id'")
     expect(aiOperations).toContain('getAiRolloutHealth()')
     expect(aiOperations).toContain('getReviewAdminHealth()')
     expect(aiOperations).toContain("redis.smembers('auto:scheduler:keys')")
     expect(css).toContain('.observer-admin-grid')
+    expect(app).toContain('openObserverSourceEditor')
+    expect(app).toContain('openObserverChannelEditor')
   })
 
   it('centralizes risk status, decisions and administrator audit records', () => {
