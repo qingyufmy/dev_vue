@@ -42,6 +42,7 @@ import { initCryptoWallet } from './crypto/wallet.js'
 import { startHoldSignalCleanup } from './jobs/hold-signal-cleanup.js'
 import { startWeeklySystemFlatten } from './jobs/weekly-system-flatten.js'
 import { startMembershipExpiryNotificationWorker } from './membership-expiry-notifications.js'
+import { startPaymentOrderCleanup } from './jobs/payment-order-cleanup.js'
 import { securityHeaders } from './security-headers.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -428,6 +429,7 @@ initBridgeWS(server)
   } catch (err) {
     console.error('[CryptoMonitor] Failed to start:', err.message)
   }
+  startPaymentOrderCleanup()
   // Sentiment data: non-blocking initial fetch + 30-min refresh
   fetchSentiment().then(data => {
     const hasValid = data.some(d => d.longPct !== null)

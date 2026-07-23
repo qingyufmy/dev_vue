@@ -3411,6 +3411,26 @@ const migrations = [
         VALUES ('sms', 'template_code_membership_expired', '', '会员已过期提醒模板', 8)
         ON DUPLICATE KEY UPDATE label = VALUES(label), sort_order = VALUES(sort_order)`)
     }
+  },
+  {
+    id: '125_expired_payment_order_cleanup_indexes',
+    async up() {
+      const indexes = [
+        { table: 'orders', name: 'idx_orders_expired_cleanup_expiry', columns: 'status, crypto_expires_at, id' },
+        { table: 'orders', name: 'idx_orders_expired_cleanup_created', columns: 'status, created_at, id' },
+        { table: 'crypto_watch_list', name: 'idx_watch_order_cleanup', columns: 'order_id, status' },
+      ]
+      for (const index of indexes) {
+        const existing = await queryAll(
+          `SELECT INDEX_NAME FROM information_schema.STATISTICS
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+          [index.table, index.name],
+        )
+        if (!existing?.length) {
+          await queryRun(`CREATE INDEX \`${index.name}\` ON \`${index.table}\` (${index.columns})`)
+        }
+      }
+    }
   }
 ]
 
