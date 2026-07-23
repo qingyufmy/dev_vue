@@ -249,6 +249,23 @@ h2 { margin:3px 0 0; font-size:22px; }
 .config-category { min-height:58px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); }
 .config-category strong,.config-category small { display:block; }
 .config-category small,.config-category > span { color:var(--muted); font-size:11px; }
+.system-workbench { display:grid; gap:14px; }
+.release-panel { display:grid; grid-template-columns:minmax(240px,.36fr) minmax(0,1fr); }
+.release-panel > .section-head { border-right:1px solid var(--border); border-bottom:0; }
+.release-panel .release-form { grid-template-columns:180px minmax(0,1fr) auto; align-items:end; }
+.release-panel .release-textarea { min-height:92px; }
+.settings-workbench { display:grid; grid-template-columns:220px minmax(0,1fr); gap:14px; }
+.config-nav { align-self:start; display:grid; gap:3px; padding:8px; }
+.config-nav-item { min-height:43px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:0 11px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--text-2); text-align:left; cursor:pointer; }
+.config-nav-item:hover { background:var(--surface-2); color:var(--text); }
+.config-nav-item.is-active { border-color:rgba(223,183,47,.22); background:var(--gold-soft); color:#f3d56d; }
+.config-nav-item small { min-width:24px; height:22px; display:grid; place-items:center; border-radius:6px; background:rgba(255,255,255,.045); color:var(--muted); font-size:10px; }
+.config-editor-form { display:grid; }
+.config-editor-row { min-height:78px; display:grid; grid-template-columns:minmax(180px,.52fr) minmax(260px,1fr); align-items:center; gap:18px; padding:13px 18px; border-bottom:1px solid var(--border); }
+.config-editor-row > span strong,.config-editor-row > span small { display:block; }
+.config-editor-row > span small { margin-top:3px; color:var(--muted); font:10px/1.4 ui-monospace,monospace; }
+.config-json-input { min-height:130px; padding:11px 12px; resize:vertical; font:12px/1.55 ui-monospace,Consolas,monospace; }
+.config-editor-form > .form-actions { margin:0; padding:14px 18px; }
 .full-button { width:100%; }
 .modal-header { min-height:78px; display:flex; align-items:center; justify-content:space-between; padding:14px 18px 14px 22px; border-bottom:1px solid var(--border); }
 .modal-body { min-height:300px; overflow-y:auto; padding:20px 22px 24px; }
@@ -278,6 +295,9 @@ h2 { margin:3px 0 0; font-size:22px; }
   .content-grid { grid-template-columns:1fr; }
   .runtime-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .observer-admin-grid { grid-template-columns:1fr; }
+  .release-panel { grid-template-columns:1fr; }
+  .release-panel > .section-head { border-right:0; border-bottom:1px solid var(--border); }
+  .release-panel .release-form { grid-template-columns:1fr; }
 }
 @media (max-width:900px) {
   .admin-app { display:block; }
@@ -326,6 +346,10 @@ h2 { margin:3px 0 0; font-size:22px; }
   .health-banner { flex-wrap:wrap; }
   .decision-row { flex-direction:column; }
   .decision-reason { max-width:none; text-align:left; }
+  .settings-workbench { grid-template-columns:1fr; }
+  .config-nav { display:flex; overflow-x:auto; }
+  .config-nav-item { min-width:max-content; }
+  .config-editor-row { grid-template-columns:1fr; gap:8px; padding:14px; }
 }
 @media (max-width:420px) {
   .metric-grid { grid-template-columns:1fr 1fr; }

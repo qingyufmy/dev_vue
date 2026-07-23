@@ -6,7 +6,7 @@ const state = {
   referralStatus:'all',
   aiTab:'health', aiOperations:null,
   riskTab:'status', riskData:null, riskPage:1, riskDecision:'all', auditPage:1, auditSearch:'',
-  contentTab:'courses', contentOverview:null, contentPage:1, contentSearch:'', contentStatus:'all', feedbackPage:1, feedbackSearch:'',
+  contentTab:'courses', contentOverview:null, contentPage:1, contentSearch:'', contentStatus:'all', feedbackPage:1, feedbackSearch:'', systemConfig:null, systemConfigCategory:'plan_prices',
 }
 
 const viewLabels = {
@@ -608,7 +608,48 @@ async function renderContentCourses() {
   document.querySelector('#contentNext').onclick=()=>{state.contentPage++;renderContentCourses().catch(handleError)}
 }
 async function renderContentFeedback(){const params=new URLSearchParams({page:String(state.feedbackPage),page_size:'20'});if(state.feedbackSearch)params.set('search',state.feedbackSearch);const data=await api(`/api/admin/content-system/feedback?${params}`);document.querySelector('#contentSystemBody').innerHTML=`<section class="panel"><form class="filter-bar compact-filter" id="feedbackFilters"><div class="field"><label for="feedbackSearch">搜索反馈</label><input class="input" id="feedbackSearch" value="${escapeHtml(state.feedbackSearch)}" placeholder="标题、内容、联系方式或用户"></div><button class="secondary-button" type="submit">搜索</button></form><div class="feedback-list">${data.feedback.map(item=>`<article class="feedback-card"><header><div><span class="badge">${escapeHtml(item.type||'建议')}</span><strong>${escapeHtml(item.title)}</strong></div><time>${formatDate(item.created_at,true)}</time></header><p>${escapeHtml(item.description)}</p><footer>${escapeHtml(item.user_nickname||item.user_email||'匿名用户')} · ${escapeHtml(item.contact||'未留联系方式')}</footer></article>`).join('')||'<div class="empty-state">暂无用户反馈</div>'}</div><div class="pagination"><button class="secondary-button" id="feedbackPrev" type="button">上一页</button><span>第 ${data.pagination.page} / ${data.pagination.total_pages} 页 · 共 ${data.pagination.total} 条</span><button class="secondary-button" id="feedbackNext" type="button">下一页</button></div></section>`;document.querySelector('#feedbackFilters').onsubmit=e=>{e.preventDefault();state.feedbackSearch=document.querySelector('#feedbackSearch').value.trim();state.feedbackPage=1;renderContentFeedback().catch(handleError)};document.querySelector('#feedbackPrev').disabled=data.pagination.page<=1;document.querySelector('#feedbackNext').disabled=data.pagination.page>=data.pagination.total_pages;document.querySelector('#feedbackPrev').onclick=()=>{state.feedbackPage--;renderContentFeedback().catch(handleError)};document.querySelector('#feedbackNext').onclick=()=>{state.feedbackPage++;renderContentFeedback().catch(handleError)}}
-function renderContentSystem(){const o=state.contentOverview;document.querySelector('#contentSystemBody').innerHTML=`<section class="content-grid"><article class="panel"><header class="section-head"><div><h2>发布说明</h2><p>主站和 AI 实验室共用当前版本说明。</p></div></header><form class="panel-body release-form" id="releaseForm"><div class="field"><label for="releaseVersion">版本号</label><input class="input" id="releaseVersion" required maxlength="32" value="${escapeHtml(o.release.version)}"></div><div class="field"><label for="releaseContent">更新内容</label><textarea class="input release-textarea" id="releaseContent" required>${escapeHtml(o.release.content)}</textarea></div><button class="primary-button" type="submit">保存发布说明</button></form></article><article class="panel"><header class="section-head"><div><h2>配置分类</h2><p>敏感值继续由原配置服务脱敏保护。</p></div></header><div class="config-category-list">${o.categories.map(item=>`<div class="config-category"><div><strong>${escapeHtml(item.category)}</strong><small>${item.item_count} 个配置项</small></div><span>${formatDate(item.updated_at,true)}</span></div>`).join('')}</div><div class="panel-body"><a class="secondary-button full-button" href="/legacy-admin">打开高级系统配置</a></div></article></section>`;document.querySelector('#releaseForm').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{await api('/api/admin/release-notes',{method:'POST',body:JSON.stringify({version:document.querySelector('#releaseVersion').value.trim(),content:document.querySelector('#releaseContent').value.trim()})});toast('发布说明已保存','success');await loadContentOverview()}catch(error){handleError(error)}finally{button.disabled=false}}}
+const systemCategoryLabels={plan_prices:'套餐价格',smtp:'发件邮箱',qiniu:'文件存储',toolbox:'金融工具箱',market_menu:'股票研究菜单',sms:'短信服务',auth_toggle:'登录与注册',crypto_wallet:'收款钱包',changelog:'版本说明'}
+function systemConfigInput(item) {
+  const value=String(item.value??'')
+  const redacted=value==='***REDACTED***'
+  const isBoolean=['true','false'].includes(value)
+  const isJson=['items'].includes(item.key)||value.trim().startsWith('[')||value.trim().startsWith('{')
+  if(redacted)return `<input class="input" type="password" data-config-key="${escapeHtml(item.key)}" data-redacted="true" value="" placeholder="已安全配置；留空保持不变">`
+  if(isBoolean)return `<select class="select" data-config-key="${escapeHtml(item.key)}"><option value="true" ${value==='true'?'selected':''}>开启</option><option value="false" ${value==='false'?'selected':''}>关闭</option></select>`
+  if(isJson)return `<textarea class="input config-json-input" data-config-key="${escapeHtml(item.key)}" spellcheck="false">${escapeHtml(value)}</textarea>`
+  return `<input class="input" data-config-key="${escapeHtml(item.key)}" value="${escapeHtml(value)}">`
+}
+function renderSystemConfigCategory() {
+  const root=document.querySelector('#systemConfigEditor')
+  if(!root||!state.systemConfig)return
+  const category=state.systemConfigCategory
+  const items=state.systemConfig[category]||[]
+  root.innerHTML=`<header class="section-head"><div><h2>${escapeHtml(systemCategoryLabels[category]||category)}</h2><p>敏感内容不会回显；留空即可保留已保存的密钥或密码。</p></div></header><form class="config-editor-form" id="systemConfigForm">${items.map((item,index)=>`<label class="config-editor-row"><span><strong>${escapeHtml(item.label||item.key)}</strong><small>${escapeHtml(item.key)}</small></span>${systemConfigInput(item)}<input type="hidden" data-config-label="${escapeHtml(item.key)}" value="${escapeHtml(item.label||'')}"><input type="hidden" data-config-order="${escapeHtml(item.key)}" value="${Number(item.sort_order??index)}"></label>`).join('')||'<div class="empty-state">该分类暂无配置项</div>'}<div class="form-actions"><button class="primary-button" type="submit" ${items.length?'':'disabled'}>保存当前分类</button></div></form>`
+  document.querySelector('#systemConfigForm').onsubmit=async event=>{
+    event.preventDefault();const button=event.submitter;button.disabled=true
+    try{
+      const controls=[...root.querySelectorAll('[data-config-key]')]
+      const payload=controls.map((control,index)=>{const key=control.dataset.configKey;let value=control.value;if(control.dataset.redacted==='true'&&!value)value='***REDACTED***';if(value&&(['items'].includes(key)||value.trim().startsWith('[')||value.trim().startsWith('{'))){try{JSON.parse(value)}catch{throw new Error(`${control.closest('label').querySelector('strong').textContent} 的 JSON 格式不正确`)}}return{key,value,label:root.querySelector(`[data-config-label="${CSS.escape(key)}"]`)?.value||'',sort_order:Number(root.querySelector(`[data-config-order="${CSS.escape(key)}"]`)?.value||index)}})
+      await api(`/api/system-config/${encodeURIComponent(category)}`,{method:'PUT',body:JSON.stringify({items:payload})})
+      toast(`${systemCategoryLabels[category]||'系统'}配置已保存`,'success');await loadSystemConfig()
+    }catch(error){handleError(error)}finally{button.disabled=false}
+  }
+}
+async function loadSystemConfig() {
+  const data=await api('/api/system-config')
+  state.systemConfig=data.config||{}
+  const available=Object.keys(state.systemConfig).filter(key=>key!=='changelog')
+  if(!available.includes(state.systemConfigCategory))state.systemConfigCategory=available[0]||''
+  const nav=document.querySelector('#systemConfigCategories')
+  if(nav){nav.innerHTML=available.map(key=>`<button class="config-nav-item ${key===state.systemConfigCategory?'is-active':''}" data-system-category="${escapeHtml(key)}" type="button"><span>${escapeHtml(systemCategoryLabels[key]||key)}</span><small>${state.systemConfig[key].length}</small></button>`).join('');nav.querySelectorAll('[data-system-category]').forEach(button=>button.onclick=()=>{state.systemConfigCategory=button.dataset.systemCategory;nav.querySelectorAll('[data-system-category]').forEach(item=>item.classList.toggle('is-active',item===button));renderSystemConfigCategory()})}
+  renderSystemConfigCategory()
+}
+function renderContentSystem(){
+  const o=state.contentOverview
+  document.querySelector('#contentSystemBody').innerHTML=`<section class="system-workbench"><article class="panel release-panel"><header class="section-head"><div><h2>发布说明</h2><p>主站和 AI 实验室共用当前版本说明。</p></div></header><form class="panel-body release-form" id="releaseForm"><div class="field"><label for="releaseVersion">版本号</label><input class="input" id="releaseVersion" required maxlength="32" value="${escapeHtml(o.release.version)}"></div><div class="field"><label for="releaseContent">更新内容</label><textarea class="input release-textarea" id="releaseContent" required>${escapeHtml(o.release.content)}</textarea></div><button class="primary-button" type="submit">保存发布说明</button></form></article><section class="settings-workbench"><aside class="panel config-nav" id="systemConfigCategories"><div class="empty-inline">正在读取配置分类…</div></aside><article class="panel" id="systemConfigEditor"><div class="empty-state">正在读取系统配置…</div></article></section></section>`
+  document.querySelector('#releaseForm').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{await api('/api/admin/release-notes',{method:'POST',body:JSON.stringify({version:document.querySelector('#releaseVersion').value.trim(),content:document.querySelector('#releaseContent').value.trim()})});toast('发布说明已保存','success');await loadContentOverview()}catch(error){handleError(error)}finally{button.disabled=false}}
+  loadSystemConfig().catch(handleError)
+}
 async function loadContentOverview(){const data=await api('/api/admin/content-system/overview');state.contentOverview=data.overview;if(state.contentTab==='system')renderContentSystem()}
 async function renderContentTab(){if(state.contentTab==='feedback')await renderContentFeedback();else if(state.contentTab==='system'){if(!state.contentOverview)await loadContentOverview();else renderContentSystem()}else await renderContentCourses()}
 async function renderContentSystemPage(){const main=document.querySelector('#adminMain');main.innerHTML=`<header class="page-head"><div><span class="eyebrow">课程、反馈与版本发布</span><h1>内容与系统</h1><p>日常内容运营与低频系统维护分开处理，降低配置干扰。</p></div></header>${contentTabs()}<div id="contentSystemBody"><div class="panel"><div class="empty-state">正在读取内容数据…</div></div></div>`;document.querySelectorAll('[data-content-tab]').forEach(button=>button.onclick=async()=>{state.contentTab=button.dataset.contentTab;document.querySelectorAll('[data-content-tab]').forEach(item=>item.classList.toggle('is-active',item===button));await renderContentTab()});await Promise.all([loadContentOverview(),renderContentTab()])}
