@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { decorateMembership } from '../membership.js'
 
 const router = Router()
 
@@ -15,6 +16,7 @@ router.get('/profile', authMiddleware, async (req, res) => {
 
     if (!row) return res.status(404).json({ ok: false, error: '用户不存在' })
 
+    const membership = decorateMembership(row)
     const user = {
       id: row.id,
       uid: row.uid,
@@ -28,6 +30,8 @@ router.get('/profile', authMiddleware, async (req, res) => {
       planPeriod: row.plan_period || '',
       planExpiresAt: row.plan_expires_at || '',
       planSource: row.plan_source || null,
+      membershipExpired: membership.membershipExpired,
+      effectivePlan: membership.effectivePlan,
       accountCreatedAt: row.created_at || '',
       phoneVerified: !!row.phone_verified,
       emailVerified: !!row.email_verified,
@@ -65,6 +69,9 @@ router.put('/profile', authMiddleware, async (req, res) => {
       FROM users WHERE id = ?
     `, [req.user.id])
 
+    const membership = decorateMembership(user)
+    user.membershipExpired = membership.membershipExpired
+    user.effectivePlan = membership.effectivePlan
     user.name = user.nickname
     user.isAdmin = user.role === 'admin'
     user.phoneVerified = !!user.phone_verified

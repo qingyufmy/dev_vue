@@ -115,6 +115,13 @@ describe('payment.js — GET /payment preview', () => {
     expect(json.plan).toBe('pro')
   })
 
+  it.each(['plus', 'pro'])('过期会员可以重新购买 %s', async (targetPlan) => {
+    mockQueryOne.mockResolvedValue({ plan: 'pro', plan_expires_at: '2020-01-01 23:59:59', referral_credit: 0 })
+    const { json } = await callRoute('get', '/payment', { preview: '1', plan: targetPlan, period: 'month' })
+    expect(json.ok).toBe(true)
+    expect(json.plan).toBe(targetPlan)
+  })
+
   it('年付正确计算价格', async () => {
     mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
     const { json } = await callRoute('get', '/payment', { preview: '1', plan: 'pro', period: 'yearly' })

@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, unlinkSync, statSync, createReadStream } from 'f
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, optionalAuth, adminOnly } from '../middleware/auth.js'
 import { fetchBilibiliVideo } from '../utils.js'
+import { canAccessMembershipLevel } from '../membership.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const uploadDir = join(__dirname, '..', 'uploads', 'videos')
@@ -61,6 +62,11 @@ router.get('/video-stream', optionalAuth, async (req, res) => {
     // Get video info for specific episode
     const stream = await queryOne('SELECT * FROM video_streams WHERE episode_id = ?', [episode])
     const course = await queryOne('SELECT youtube_id, bilibili_id, local_video_path, access_level FROM courses WHERE episode_id = ?', [episode])
+
+    const accessLevel = stream?.access_level || course?.access_level || 'free'
+    if (!canAccessMembershipLevel(req.user, accessLevel)) {
+      return res.status(403).json({ ok:false, error:'当前会员权限不可播放该课程' })
+    }
 
     if (stream) {
       return res.json({
@@ -167,10 +173,16 @@ router.get('/video-file/:filename', authMiddleware, async (req, res) => {
     if (!existsSync(filePath)) return res.status(404).json({ error: '视频不存在' })
 
     if (req.user.role !== 'admin') {
-      const fileName = req.params.filename.replace(/\.[^.]+$/, '')
-      const video = await queryOne('SELECT access_level FROM video_streams WHERE episode_id = ?', [parseInt(fileName.replace('ep', ''))])
-      if (video && video.access_level === 'pro' && req.user.plan !== 'pro') {
-        return res.status(403).json({ error: '需要 Pro 会员权限' })
+      const filename = req.params.filename
+      const publicPath = `/uploads/videos/${filename}`
+      const video = await queryOne(`SELECT COALESCE(vs.access_level, c.access_level) AS access_level
+        FROM courses c LEFT JOIN video_streams vs ON vs.episode_id = c.episode_id
+        WHERE vs.local_path = ? OR vs.local_path LIKE ? OR c.local_video_path = ? OR c.local_video_path LIKE ?
+        LIMIT 1`, [publicPath, `%/${filename}`, publicPath, `%/${filename}`])
+      if (!video?.access_level) return res.status(403).json({ error:'视频权限信息缺失，已拒绝访问' })
+      const accessLevel = String(video.access_level)
+      if (!canAccessMembershipLevel(req.user, accessLevel)) {
+        return res.status(403).json({ error: accessLevel === 'plus_pro' ? '需要 Plus 或 Pro 有效会员权限' : '需要 Pro 有效会员权限' })
       }
     }
 

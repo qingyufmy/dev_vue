@@ -3779,9 +3779,13 @@ async function bootstrap() {
     }
     const profileRes = await api("/api/profile");
     state.user = profileRes.user;
-    // Check if plan expired (backend also downgrades, but show specific message here)
+    // The backend preserves the purchased plan and returns a separate expiry
+    // state. Expired memberships keep their label but receive free permissions.
     const expiresAt = state.user?.planExpiresAt;
-    if (expiresAt && new Date(expiresAt) <= new Date()) {
+    const membershipExpired = state.user?.membershipExpired === true
+      || Number(state.user?.membership_expired) === 1
+      || (expiresAt && new Date(expiresAt) <= new Date());
+    if (membershipExpired) {
       // Plan expired — show expired overlay instead of generic upgrade
       document.getElementById('proOverlay')?.classList.remove('hidden');
       const overlay = document.getElementById('proOverlay');
@@ -3791,8 +3795,8 @@ async function bootstrap() {
             <div class="pro-overlay-icon">⏰</div>
             <h2>会员已过期</h2>
             <p>您的会员已于 ${new Date(expiresAt).toLocaleDateString('zh-CN')} 到期</p>
-            <p>请联系管理员续费以继续使用</p>
-            <button onclick="logout()" style="margin-top:16px;padding:8px 24px;border:none;border-radius:6px;background:#e6a756;color:#1a1a2e;cursor:pointer;font-size:14px">返回首页</button>
+            <p>请返回主站重新购买 Plus 或 Pro，付款后即可恢复对应权益</p>
+            <button onclick="window.location.href='/membership'" style="margin-top:16px;padding:8px 24px;border:none;border-radius:6px;background:#e6a756;color:#1a1a2e;cursor:pointer;font-size:14px">返回主站续费</button>
           </div>
         `;
       }
@@ -3801,7 +3805,7 @@ async function bootstrap() {
     }
     // Access check: admin/pro/plus can access
     const role = state.user?.role;
-    const plan = state.user?.plan;
+    const plan = state.user?.effectivePlan || state.user?.plan;
     const hasAccess = role === 'admin' || plan === 'pro' || plan === 'plus';
     if (!hasAccess) {
       document.getElementById('proOverlay')?.classList.remove('hidden');

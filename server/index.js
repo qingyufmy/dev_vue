@@ -33,6 +33,7 @@ import { cacheSetJSON } from './redis.js'
 import { initAutoSchedulers, startPeriodReviewWorker } from './routes/ai/index.js'
 import { startOrderIntentReconciler } from './routes/ai/order-intents.js'
 import { authMiddleware } from './middleware/auth.js'
+import { hasActiveMembership } from './membership.js'
 import { initBridgeWS } from './bridge-ws.js'
 import { startMonitor } from './crypto/monitor.js'
 import { initCryptoWallet } from './crypto/wallet.js'
@@ -234,7 +235,7 @@ app.get('/ai/bridge/config', (req, res) => {
 // Bridge script download with embedded auth token
 app.get('/ai/bridge/:platform', authMiddleware, async (req, res) => {
   // Only Pro and admin users can download bridge software
-  if (req.user.plan !== 'pro' && req.user.role !== 'admin') {
+  if (!hasActiveMembership(req.user, 'pro')) {
     return res.status(403).json({ ok: false, error: '仅 Pro 会员可下载桥接软件' })
   }
   const platform = req.params.platform

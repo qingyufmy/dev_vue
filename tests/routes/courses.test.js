@@ -65,6 +65,16 @@ describe('courses.js — GET /course-items', () => {
     expect(body.courses).toHaveLength(1)
     expect(body.courses[0].title).toBe('测试课程')
   })
+
+  it('未登录或会员过期时不下发受限课程资源地址', async () => {
+    queryAll.mockResolvedValueOnce([{
+      episode_id: 2, number: 2, title: '会员课程', content_type: 'video',
+      youtube_id: 'secret-youtube', bilibili_id: 'secret-bvid', article_url: 'https://secret.example.com',
+      article_object_key: 'private/article.md', access_level: 'plus_pro', has_stream_video: 1,
+    }])
+    const body = await httpGet(makeApp(), '/api/course-items')
+    expect(body.courses[0]).toMatchObject({ youtubeId:null, bilibiliId:'', articleUrl:'', articleObjectKey:'' })
+  })
 })
 
 describe('courses.js — GET /bilibili-info/:bvid', () => {

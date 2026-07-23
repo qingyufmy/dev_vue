@@ -1,3 +1,5 @@
+import { getEffectivePlan, isMembershipExpired } from '../../membership.js'
+
 export const PLUS_OBSERVER_TABS = Object.freeze([
   'dashboard', 'ai-analyze', 'trading', 'history', 'feedback',
 ])
@@ -28,9 +30,13 @@ const PLUS_OBSERVER_HTTP_GET_PATTERNS = Object.freeze([
   /^\/ai\/observer-channels$/,
 ])
 
+const BLOCKED_HTTP_GET_PATTERNS = Object.freeze([
+  /^\/ai\/access-context$/,
+])
+
 export function buildAiAccessContext(user, options = {}) {
   const role = String(user?.role || 'user').toLowerCase()
-  const plan = String(user?.plan || 'free').toLowerCase()
+  const plan = getEffectivePlan(user)
   const ownBridgeConnected = options.ownBridgeConnected === true
 
   if (role === 'admin') {
@@ -54,15 +60,24 @@ export function buildAiAccessContext(user, options = {}) {
     }
   }
 
-  return {
-    mode: 'full', reason: null, read_only: false, can_download_bridge: plan === 'pro',
+  if (plan === 'pro') return {
+    mode: 'full', reason: null, read_only: false, can_download_bridge: true,
     allowed_tabs: null, data_source: 'own_account',
+  }
+
+  return {
+    mode: 'blocked', reason: isMembershipExpired(user) ? 'membership_expired' : 'membership_required',
+    read_only: true, can_download_bridge: false,
+    allowed_tabs: [], data_source: 'none',
   }
 }
 
 export function observerHttpRequestAllowed(access, method, path) {
   if (!access?.read_only) return true
   if (String(method || 'GET').toUpperCase() !== 'GET') return false
+  if (access.mode === 'blocked') {
+    return BLOCKED_HTTP_GET_PATTERNS.some(pattern => pattern.test(String(path || '').split('?')[0]))
+  }
   const patterns = access.reason === 'plus_plan'
     ? PLUS_OBSERVER_HTTP_GET_PATTERNS
     : PRO_OBSERVER_HTTP_GET_PATTERNS
@@ -70,10 +85,13 @@ export function observerHttpRequestAllowed(access, method, path) {
 }
 
 export function observerWsActionAllowed(access, action) {
+  if (access?.mode === 'blocked') return false
   return !access?.read_only || OBSERVER_WS_READ_ACTIONS.has(String(action || ''))
 }
 
 export function observerAccessError(access, { page = false } = {}) {
+  if (access?.reason === 'membership_expired') return '会员已过期，请续费后继续使用'
+  if (access?.reason === 'membership_required') return '当前会员等级不可使用 AI 交易实验室'
   if (page) return '观摩模式仅可访问当前套餐开放的页面数据'
   return access?.reason === 'bridge_offline'
     ? '当前为观摩模式，请连接 MT5 桥接后再操作'

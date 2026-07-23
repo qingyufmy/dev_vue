@@ -5,6 +5,7 @@ import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../..
 import { encryptCredential, decryptCredential, isEncryptionAvailable, isEncryptedEnvelope, getActiveKeyVersion } from '../../ai-credential.js'
 import { recordCredentialMigration } from './rollout-governance.js'
 import { isPlatformShareableProvider, normalizeModelProviderProfile } from './model-providers.js'
+import { getEffectivePlan } from '../../membership.js'
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
 export const USAGES = ['manual', 'model_compare', 'auto_private', 'auto_platform', 'review', 'memory_compression']
@@ -343,7 +344,7 @@ export async function beginModelUsage({ userId, profileId, credentialSource, usa
   }
 
   return await withTransaction(async run => {
-    const [lockedUsers] = await run('SELECT id, plan FROM users WHERE id = ? FOR UPDATE', [userId])
+    const [lockedUsers] = await run('SELECT id, role, plan, plan_expires_at FROM users WHERE id = ? FOR UPDATE', [userId])
     if (!lockedUsers.length) throw new Error('model_usage_user_not_found')
 
     const [policies] = await run('SELECT * FROM platform_model_usage_policy WHERE id = 1')
@@ -359,7 +360,7 @@ export async function beginModelUsage({ userId, profileId, credentialSource, usa
     const shareKey = `share_for_${usage === 'auto_private' ? 'auto' : usage}`
     if (!policy[shareKey]) throw new Error('platform_sharing_disabled')
     const allowedPlans = parseAllowedPlans(policy.allowed_plans)
-    if (!allowedPlans.includes(lockedUsers[0].plan)) throw new Error('platform_plan_not_allowed')
+    if (!allowedPlans.includes(getEffectivePlan(lockedUsers[0]))) throw new Error('platform_plan_not_allowed')
     const [rows] = await run(
       `SELECT COUNT(*) AS cnt, COALESCE(SUM(token_count), 0) AS tokens
        FROM ai_model_usage_logs
@@ -540,9 +541,9 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   if (policy[shareKey]) {
     const platformModel = await getPlatformModelForSharing()
     if (platformModel && platformModel.api_key_encrypted && isPlatformShareableProvider(platformModel.provider)) {
-      const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
+      const user = await queryOne('SELECT plan, plan_expires_at FROM users WHERE id = ?', [userId])
       const allowedPlans = parseAllowedPlans(policy.allowed_plans)
-      if (user && allowedPlans.includes(user.plan)) {
+      if (user && allowedPlans.includes(getEffectivePlan(user))) {
         return { ...buildResult(platformModel, 'platform_shared', usage, 'platform_fallback'), strategy_id: strategyId || null }
       }
     }

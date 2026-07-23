@@ -423,12 +423,12 @@ function handleBrowser(ws, url) {
       // always an observer, even if an old bridge connection still exists.
       const accessUser = await queryOne('SELECT role, plan, plan_expires_at FROM users WHERE id = ?', [userId]).catch(() => null)
       const access = buildAiAccessContext(accessUser, { ownBridgeConnected:isBridgeAlive(userId) })
-      const observerContext = access.read_only
+      const observerContext = access.mode === 'observer'
         ? await resolveObserverBridgeContext(userId, accessUser, msg.observer_channel_id, { strict:false })
         : null
-      const dataUserId = access.read_only ? observerContext.bridgeUserId : userId
+      const dataUserId = access.mode === 'observer' ? observerContext.bridgeUserId : access.mode === 'full' ? userId : null
       const bridge = dataUserId ? bridges.get(dataUserId) : null
-      const usingFallback = access.read_only
+      const usingFallback = access.mode === 'observer'
       const connected = !!(bridge && bridge.ws.readyState === 1)
       const alive = connected && (Date.now() - bridge.lastSeen < 20000)
       // In observer mode the visible switches describe the platform observer
@@ -943,23 +943,17 @@ async function handleBrowserCommand(ws, userId, msg) {
 
   try {
     const ai = await import('./routes/ai/index.js')
-    const user = await queryOne(`SELECT plan, role,
-      (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
-      FROM users WHERE id = ?`, [userId])
-    const isPro = !!user?.has_pro_access
-    const plusActive = user?.plan === 'plus' && (!user.plan_expires_at || new Date(user.plan_expires_at) >= new Date())
-    const hasAccess = isPro || plusActive
-    if (!hasAccess) return reply({ status: 'error', message: '需要Pro会员' })
-
+    const user = await queryOne('SELECT plan, role, plan_expires_at FROM users WHERE id = ?', [userId])
     const access = buildAiAccessContext(user, { ownBridgeConnected:isBridgeAlive(userId) })
     if (!observerWsActionAllowed(access, action)) {
-      return reply({ status:'error', code:'observer_read_only', message:observerAccessError(access), access })
+      const code = access.mode === 'blocked' ? access.reason : 'observer_read_only'
+      return reply({ status:'error', code, message:observerAccessError(access), access })
     }
-    const observerContext = access.read_only
+    const observerContext = access.mode === 'observer'
       ? await resolveObserverBridgeContext(userId, user, params.observer_channel_id)
       : null
-    const dataUserId = access.read_only ? observerContext.bridgeUserId : userId
-    if (access.read_only && action !== 'health' && !dataUserId) {
+    const dataUserId = access.mode === 'observer' ? observerContext.bridgeUserId : userId
+    if (access.mode === 'observer' && action !== 'health' && !dataUserId) {
       return reply({ status:'error', code:'observer_source_offline', message:'管理员观摩账户当前未连接' })
     }
 
@@ -1843,9 +1837,10 @@ async function handleBrowserCommand(ws, userId, msg) {
             (SELECT COUNT(*) FROM users WHERE DATE(created_at) = CURDATE()) AS today_new,
             (SELECT COUNT(*) FROM users WHERE last_seen_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)) AS online_now,
             (SELECT COUNT(*) FROM users WHERE last_seen_at >= CURDATE()) AS today_active,
-            (SELECT COUNT(*) FROM users WHERE plan = 'pro') AS pro_users,
-            (SELECT COUNT(*) FROM users WHERE plan = 'plus') AS plus_users,
-            (SELECT COUNT(*) FROM users WHERE plan = 'free' OR plan IS NULL) AS free_users`),
+            (SELECT COUNT(*) FROM users WHERE plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW())) AS pro_users,
+            (SELECT COUNT(*) FROM users WHERE plan = 'plus' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW())) AS plus_users,
+            (SELECT COUNT(*) FROM users WHERE plan IS NULL OR plan = 'free'
+              OR (plan IN ('pro', 'plus') AND plan_expires_at IS NOT NULL AND plan_expires_at < NOW())) AS free_users`),
 
           // 2. Signal summary
           queryOne(`SELECT

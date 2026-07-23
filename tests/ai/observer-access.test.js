@@ -31,6 +31,16 @@ describe('AI observer access', () => {
     expect(buildAiAccessContext({ role:'admin', plan:'plus' }, { ownBridgeConnected:false }).read_only).toBe(false)
   })
 
+  it('blocks expired and free memberships at the server boundary', () => {
+    const expired = buildAiAccessContext({ role:'user', plan:'pro', plan_expires_at:'2020-01-01 00:00:00' }, { ownBridgeConnected:true })
+    const free = buildAiAccessContext({ role:'user', plan:'free' }, { ownBridgeConnected:true })
+    expect(expired).toMatchObject({ mode:'blocked', reason:'membership_expired', read_only:true, can_download_bridge:false })
+    expect(free).toMatchObject({ mode:'blocked', reason:'membership_required', read_only:true, can_download_bridge:false })
+    expect(observerHttpRequestAllowed(expired, 'GET', '/ai/access-context')).toBe(true)
+    expect(observerHttpRequestAllowed(expired, 'GET', '/ai/model-profiles')).toBe(false)
+    expect(observerWsActionAllowed(expired, 'signals')).toBe(false)
+  })
+
   it('allows observer data reads but blocks mutations and hidden modules', () => {
     const plus = buildAiAccessContext({ role:'user', plan:'plus' }, { ownBridgeConnected:false })
     const pro = buildAiAccessContext({ role:'user', plan:'pro' }, { ownBridgeConnected:false })

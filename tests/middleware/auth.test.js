@@ -98,21 +98,20 @@ describe('authMiddleware', () => {
     expect(req.user.id).toBe(1)
   })
 
-  it('auto-downgrades expired plan to free', async () => {
+  it('preserves an expired plan and exposes free effective permissions', async () => {
     const token = jwt.sign({ userId: 1 }, JWT_SECRET, { expiresIn: '7d' })
     const fakeUser = { id: 1, email: 'test@test.com', role: 'user', plan: 'pro', plan_expires_at: '2020-01-01 00:00:00' }
     queryOne.mockResolvedValue(fakeUser)
-    queryRun.mockResolvedValue({ changes: 1 })
     const req = mockReq(`Bearer ${token}`)
     const res = mockRes()
     const next = mockNext()
     await authMiddleware(req, res, next)
     await new Promise(r => setTimeout(r, 10))
-    expect(req.user.plan).toBe('free')
-    expect(queryRun).toHaveBeenCalledWith(
-      expect.stringContaining('UPDATE users SET plan'),
-      ['free', 1]
-    )
+    expect(req.user.plan).toBe('pro')
+    expect(req.user.plan_expires_at).toBe('2020-01-01 00:00:00')
+    expect(req.user.membershipExpired).toBe(true)
+    expect(req.user.effectivePlan).toBe('free')
+    expect(queryRun).not.toHaveBeenCalled()
   })
 
   it('does not downgrade free plan', async () => {
@@ -125,6 +124,8 @@ describe('authMiddleware', () => {
     await authMiddleware(req, res, next)
     await new Promise(r => setTimeout(r, 10))
     expect(req.user.plan).toBe('free')
+    expect(req.user.membershipExpired).toBe(false)
+    expect(req.user.effectivePlan).toBe('free')
     expect(queryRun).not.toHaveBeenCalled()
   })
 })

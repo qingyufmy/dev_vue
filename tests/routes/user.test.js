@@ -57,11 +57,25 @@ describe('user.js — GET /profile', () => {
     expect(body.ok).toBe(true)
     expect(body.user.name).toBe('测试用户')
     expect(body.user.plan).toBe('free')
+    expect(body.user.membershipExpired).toBe(false)
+    expect(body.user.effectivePlan).toBe('free')
     expect(body.user.phoneVerified).toBe(true)
     expect(body.user.emailVerified).toBe(false)
     expect(body.user.authMethod).toBe('phone')
     expect(body.user.accountCreatedAt).toBe('2026-01-02 03:04:05')
     expect(body.user.telegramBinding).toBeNull()
+  })
+
+  it('保留过期 Pro 标识但返回免费生效权限', async () => {
+    queryOne.mockResolvedValueOnce({
+      id: 2, uid: 'WS000002', email: 'expired@example.com', nickname: '过期用户', role: 'user',
+      plan: 'pro', plan_period: 'month', plan_expires_at: '2020-01-01 23:59:59',
+      phone_verified: 0, email_verified: 1, auth_method: 'email',
+    })
+    const body = await httpReq(makeApp(), 'GET', '/api/profile')
+    expect(body.user.plan).toBe('pro')
+    expect(body.user.membershipExpired).toBe(true)
+    expect(body.user.effectivePlan).toBe('free')
   })
 
   it('有 Telegram 绑定时返回绑定信息', async () => {

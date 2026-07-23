@@ -1,7 +1,8 @@
 import { Router } from 'express'
-import { queryAll } from '../db.js'
+import { queryAll, queryOne } from '../db.js'
 import { optionalAuth, authMiddleware } from '../middleware/auth.js'
 import { fetchBilibiliVideo } from '../utils.js'
+import { canAccessMembershipLevel } from '../membership.js'
 
 const router = Router()
 
@@ -18,7 +19,9 @@ router.get('/course-items', optionalAuth, async (req, res) => {
 
     res.json({
       ok: true,
-      courses: courses.map(c => ({
+      courses: courses.map(c => {
+        const canAccess = canAccessMembershipLevel(req.user, c.access_level)
+        return ({
         id: c.episode_id,
         episodeId: c.episode_id,
         number: c.number,
@@ -27,12 +30,12 @@ router.get('/course-items', optionalAuth, async (req, res) => {
         category: c.category,
         contentType: c.content_type,
         duration: (c.duration && !isNaN(c.duration) ? formatDurationSeconds(c.duration) : c.duration) || (c.vs_duration ? formatDurationSeconds(c.vs_duration) : ''),
-        youtubeId: c.youtube_id,
-        bilibiliId: c.bilibili_id || '',
+        youtubeId: canAccess ? c.youtube_id : null,
+        bilibiliId: canAccess ? (c.bilibili_id || '') : '',
         cover: c.cover ? (c.cover.includes('.hdslb.com/') ? `/api/bilibili-proxy?url=${encodeURIComponent(c.cover)}` : c.cover.replace(/^http:\/\//, 'https://')) : c.cover,
         gradient: c.gradient,
-        articleUrl: c.article_url,
-        articleObjectKey: c.article_object_key,
+        articleUrl: canAccess ? c.article_url : '',
+        articleObjectKey: canAccess ? c.article_object_key : '',
         accessLevel: c.access_level,
         hasStreamVideo: Boolean(c.has_stream_video),
         quizCount: c.quiz_count,
@@ -43,7 +46,8 @@ router.get('/course-items', optionalAuth, async (req, res) => {
         sortOrder: c.sort_order,
         createdAt: c.created_at,
         updatedAt: c.updated_at,
-      })),
+        })
+      }),
       source: 'local-db'
     })
   } catch (err) {
@@ -55,6 +59,10 @@ router.get('/course-items', optionalAuth, async (req, res) => {
 // Get quiz for episode
 router.get('/course-items/:id/quiz', authMiddleware, async (req, res) => {
   try {
+    const course = await queryOne('SELECT access_level FROM courses WHERE episode_id = ?', [req.params.id])
+    if (!course || !canAccessMembershipLevel(req.user, course.access_level)) {
+      return res.status(403).json({ ok:false, error:'当前会员权限不可访问该课程测验' })
+    }
     const rows = await queryAll('SELECT * FROM quiz_questions WHERE episode_id = ? ORDER BY sort_order', [req.params.id])
     const questions = rows.map(q => ({
       id: q.id,
@@ -76,6 +84,10 @@ router.get('/course-items/:id/quiz', authMiddleware, async (req, res) => {
 // Get resources for episode
 router.get('/course-items/:id/resources', authMiddleware, async (req, res) => {
   try {
+    const course = await queryOne('SELECT access_level FROM courses WHERE episode_id = ?', [req.params.id])
+    if (!course || !canAccessMembershipLevel(req.user, course.access_level)) {
+      return res.status(403).json({ ok:false, error:'当前会员权限不可访问该课程资料' })
+    }
     const resources = await queryAll('SELECT * FROM course_resources WHERE episode_id = ? ORDER BY sort_order', [req.params.id])
 
     const knowledgePoints = resources.filter(r => r.type === 'knowledge').map(r => ({

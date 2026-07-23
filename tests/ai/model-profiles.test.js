@@ -112,6 +112,16 @@ describe('resolveAiTaskModel', () => {
     expect(result.error).toBe('no_model_configured')
   })
 
+  it('does not share a platform model with an expired Pro member', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(policy({ share_for_manual: 1 }))
+      .mockResolvedValueOnce(profile({ id: 99, owner_user_id: 0, scope: 'platform' }))
+      .mockResolvedValueOnce({ plan: 'pro', plan_expires_at: '2020-01-01 00:00:00' })
+    const result = await resolveAiTaskModel({ userId: 2, strategyId: null, usage: 'manual' })
+    expect(result.error).toBe('no_model_configured')
+  })
+
   it('shares a Kimi Code platform subscription when the usage switch and plan allow it', async () => {
     mockQueryOne
       .mockResolvedValueOnce(null)
@@ -379,6 +389,15 @@ describe('model usage accounting', () => {
     await expect(beginModelUsage({
       userId: 2, profileId: 99, credentialSource: 'platform_shared', usage: 'manual', estimatedTokens: 100,
     })).rejects.toThrow('daily_request_limit')
+  })
+
+  it('rechecks membership expiry while reserving shared platform quota', async () => {
+    mockTx
+      .mockResolvedValueOnce([[{ id: 2, role: 'user', plan: 'pro', plan_expires_at: '2020-01-01 00:00:00' }]])
+      .mockResolvedValueOnce([[policy({ share_for_manual: 1 })]])
+    await expect(beginModelUsage({
+      userId: 2, profileId: 99, credentialSource: 'platform_shared', usage: 'manual', estimatedTokens: 100,
+    })).rejects.toThrow('platform_plan_not_allowed')
   })
 
   it('rechecks the sharing switch inside the quota transaction', async () => {

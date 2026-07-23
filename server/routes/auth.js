@@ -7,6 +7,7 @@ import { generateToken, authMiddleware } from '../middleware/auth.js'
 import nodemailer from 'nodemailer'
 import { sendVerificationSms } from '../sms.js'
 import { generateCaptcha, verifyCaptcha } from '../captcha.js'
+import { decorateMembership } from '../membership.js'
 
 const router = Router()
 
@@ -196,6 +197,7 @@ router.post('/register', async (req, res) => {
       user.authMethod = 'phone'
       user.planExpiresAt = user.plan_expires_at || ''
       user.planSource = user.plan_source || null
+      Object.assign(user, decorateMembership(user))
 
       if (referredBy) {
         const referrer = await queryOne('SELECT id FROM users WHERE referral_code = ?', [referredBy])
@@ -241,6 +243,7 @@ router.post('/register', async (req, res) => {
     user.authMethod = 'email'
     user.planExpiresAt = user.plan_expires_at || ''
     user.planSource = user.plan_source || null
+    Object.assign(user, decorateMembership(user))
 
     if (referredBy) {
       const referrer = await queryOne('SELECT id FROM users WHERE referral_code = ?', [referredBy])
@@ -318,6 +321,9 @@ router.post('/login', async (req, res) => {
     safeUser.planExpiresAt = user.plan_expires_at || ''
     safeUser.planPeriod = user.plan_period || ''
     safeUser.planSource = user.plan_source || null
+    const membership = decorateMembership(user)
+    safeUser.membershipExpired = membership.membershipExpired
+    safeUser.effectivePlan = membership.effectivePlan
     safeUser.createdAt = user.created_at || ''
     safeUser.authMethod = user.auth_method || 'email'
     safeUser.telegramBinding = getTelegramBinding(user)

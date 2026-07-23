@@ -100,12 +100,12 @@ router.use('/ai', authMiddleware, (req, res, next) => {
 })
 
 router.get('/ai/access-context', async (req, res) => {
-  const observerSource = req.aiAccess?.read_only
-    ? await resolveObserverSourceForUser(req.user.id, req.user.plan, req.query.channel_id).catch(() => null)
+  const observerSource = req.aiAccess?.mode === 'observer'
+    ? await resolveObserverSourceForUser(req.user.id, req.user.effectivePlan, req.query.channel_id).catch(() => null)
     : null
   const observerSourceUserId = observerSource
     ? (isBridgeAlive(Number(observerSource.bridge_user_id)) ? Number(observerSource.bridge_user_id) : null)
-    : (req.aiAccess?.read_only ? await getActivePlatformBridgeUserId() : null)
+    : (req.aiAccess?.mode === 'observer' ? await getActivePlatformBridgeUserId() : null)
   res.json({
     ok:true,
     access:{ ...req.aiAccess, observer_source_available:Boolean(observerSourceUserId),
@@ -118,7 +118,7 @@ router.get('/ai/access-context', async (req, res) => {
 
 router.get('/ai/observer-channels', async (req, res) => {
   try {
-    const channels = await listObserverChannelsForUser(req.user.id, req.user.plan)
+    const channels = await listObserverChannelsForUser(req.user.id, req.user.effectivePlan)
     res.json({ ok:true, channels:channels.map(channel => ({
       id:Number(channel.id), name:channel.name, slug:channel.slug,
       description:channel.description, is_default:Boolean(channel.is_default),

@@ -20,6 +20,7 @@ import { isSubscriptionScheduleActive } from './subscription-schedule.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 import { getObserverSourceForStrategy } from './observer-channels.js'
 import { loadPlatformReferencePortfolio } from './reference-portfolio.js'
+import { hasActiveMembership } from '../../membership.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -2355,8 +2356,8 @@ export async function runSmartCloseCycle(userId) {
   const closeCfg = await getCloseConfig(userId)
   if (!closeCfg || !closeCfg.enabled) return
 
-  const user = await queryOne('SELECT plan FROM users WHERE id = ?', [userId])
-  if (!user || user.plan !== 'pro') return
+  const user = await queryOne('SELECT role, plan, plan_expires_at FROM users WHERE id = ?', [userId])
+  if (!hasActiveMembership(user, 'pro')) return
 
   const marketState = getOwnBridgeMarketState(userId)
   if (!marketState.isOpen) { return }

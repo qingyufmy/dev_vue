@@ -119,6 +119,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(bridgeWs).toContain('AS model_failures_today')
     expect(bridgeWs).toContain('AS reviews_pending')
     expect(bridgeWs).toContain('healthStats: healthStats || {}')
+    expect(app).toContain('state.user?.membershipExpired === true')
     expect(bridgeWs).toContain('Number(oldStats?.old_today || 0) + Number(delivStats?.deliv_today || 0)')
     expect(bridgeWs).toContain("selectedSymbols.join('、') || null")
   })

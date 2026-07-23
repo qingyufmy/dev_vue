@@ -75,8 +75,8 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
       weekOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE YEARWEEK(last_seen_at, 1) = YEARWEEK(NOW(), 1)')).c
     } catch (e) { console.error('[Admin] Online users query failed:', e.message) }
 
-    const plusUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'plus'")).c
-    const proUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'pro'")).c
+    const plusUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'plus' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW())")).c
+    const proUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW())")).c
 
     let totalRevenue = 0, paidOrderCount = 0
     try {

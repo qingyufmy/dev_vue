@@ -846,10 +846,23 @@ function getPlanExpiresAt(user = state.user) {
 
 function isPlanActiveClient(user = state.user) {
   if (!user || !user.plan || user.plan === 'free') return false
+  if (user.membershipExpired === true || Number(user.membership_expired) === 1) return false
   const expiresAt = getPlanExpiresAt(user)
-  if (!expiresAt) return false
+  // A null expiry represents a deliberately configured long-term membership.
+  if (!expiresAt) return true
   const expiresTime = new Date(`${expiresAt}T23:59:59+08:00`).getTime()
   return Number.isFinite(expiresTime) && expiresTime >= Date.now()
+}
+
+function isMembershipExpiredClient(user = state.user) {
+  const plan = user?.plan || 'free'
+  return (plan === 'plus' || plan === 'pro') && !isPlanActiveClient(user)
+}
+
+function getMembershipDisplayName(user = state.user) {
+  const rawPlan = user?.plan || 'free'
+  if (isMembershipExpiredClient(user)) return `${rawPlan === 'pro' ? '💎 Pro' : '⭐ Plus'} 已过期`
+  return ({ free:'体验版（免费）', plus:'⭐ Plus', pro:'💎 Pro' })[getEffectivePlan(user)] || '体验版（免费）'
 }
 
 function getEffectivePlan(user = state.user) {
@@ -5782,6 +5795,8 @@ async function refreshNotificationUnread() {
 // ===== Membership Page =====
 async function renderMembership() {
   const currentPlan = getEffectivePlan()
+  const membershipExpired = isMembershipExpiredClient()
+  const expiredPlanName = state.user?.plan === 'pro' ? 'Pro' : 'Plus'
   const currentPeriod = currentPlan === 'free' ? null : state.user?.planPeriod || null
 
   let planPrices = { plus: { month: { current: 50, original: 100 }, year: { current: 500, original: 1000 } }, pro: { month: { current: 100, original: 200 }, year: { current: 1000, original: 2000 } } }
@@ -5810,6 +5825,7 @@ async function renderMembership() {
       <div class="membership-header">
         <h1 class="membership-title">选择你的会员计划</h1>
         <p class="membership-subtitle">解锁量见全部技术分析课程，系统掌握交易技术</p>
+        ${membershipExpired ? `<div class="membership-expired-notice">当前 ${expiredPlanName} 会员已过期，您可以重新购买 Plus 或 Pro，付款后立即恢复对应权益。</div>` : ''}
       </div>
 
       <div id="membershipCreditSummary" class="membership-credit-summary">
@@ -5818,7 +5834,7 @@ async function renderMembership() {
 
       <div class="membership-cards">
         <!-- 体验版 -->
-        <div class="mem-card ${currentPlan === 'free' ? 'mem-current' : ''}">
+        <div class="mem-card ${currentPlan === 'free' && !membershipExpired ? 'mem-current' : ''}">
           <div class="mem-card-header mem-free">
             <span class="mem-icon">🆓</span>
             <h3 class="mem-plan-name">体验版</h3>
@@ -5838,7 +5854,7 @@ async function renderMembership() {
           </ul>
           <div class="mem-action">
             ${currentPlan === 'free'
-              ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
+              ? `<button class="btn mem-btn mem-btn-current" disabled>${membershipExpired ? '会员已过期' : '当前方案'}</button>`
               : '<button class="btn mem-btn mem-btn-free">当前已是更高方案</button>'}
           </div>
         </div>
@@ -6687,7 +6703,8 @@ let settingsTab = 'profile'
 
 function renderProfile() {
   const currentPlan = getEffectivePlan()
-  const planNames = { free: '体验版（免费）', plus: '⭐ Plus', pro: '💎 Pro' }
+  const membershipExpired = isMembershipExpiredClient()
+  const membershipDisplayName = getMembershipDisplayName()
 
   mainContent.innerHTML = `
     <div class="settings-page fade-in">
@@ -6757,7 +6774,7 @@ function renderProfile() {
                 </div>
                 <div class="profile-info-item">
                   <span class="profile-info-label">当前方案</span>
-                  <span class="profile-info-value">${planNames[currentPlan] || '体验版'}${state.user?.planSource === 'gift' && currentPlan !== 'free' ? ' <span class="plan-gift-tag">体验版</span>' : ''}</span>
+                  <span class="profile-info-value">${membershipDisplayName}${state.user?.planSource === 'gift' && currentPlan !== 'free' ? ' <span class="plan-gift-tag">体验版</span>' : ''}</span>
                 </div>
                 <div class="profile-info-item">
                   <span class="profile-info-label">Telegram 绑定</span>
@@ -6960,18 +6977,18 @@ function renderProfile() {
               <div class="settings-card sub-current-card">
                 <div class="sub-current-header">
                   <div>
-                    <div class="sub-current-plan">${planNames[currentPlan] || '体验版'}${state.user?.planSource === 'gift' && currentPlan !== 'free' ? ' <span class="plan-gift-tag">体验版</span>' : ''}</div>
+                    <div class="sub-current-plan">${membershipDisplayName}${state.user?.planSource === 'gift' && currentPlan !== 'free' ? ' <span class="plan-gift-tag">体验版</span>' : ''}</div>
                     <div class="sub-current-desc">${currentPlan === 'free' ? '公开视频 + 语录' : currentPlan === 'plus' ? '新视频即时解锁 + 图解 + 测验' : '全部权限 + AI信号'}</div>
                     ${state.user?.planExpiresAt ? `<div class="sub-expires">到期时间：${formatDateTime(state.user.planExpiresAt)}</div>` : ''}
                   </div>
-                  <span class="sub-current-badge sub-badge-${currentPlan}">${currentPlan === 'free' ? '免费' : currentPlan === 'plus' ? 'Plus' : 'Pro'}</span>
+                  <span class="sub-current-badge ${membershipExpired ? 'sub-badge-expired' : `sub-badge-${currentPlan}`}">${membershipExpired ? '已过期' : currentPlan === 'free' ? '免费' : currentPlan === 'plus' ? 'Plus' : 'Pro'}</span>
                 </div>
               </div>
 
               <div class="settings-card">
                 <h3 class="settings-card-title">更改方案</h3>
                 <div class="sub-plans">
-                  <div class="sub-plan-row ${currentPlan === 'free' ? 'sub-plan-active' : ''}" data-plan="free">
+                  <div class="sub-plan-row ${currentPlan === 'free' && !membershipExpired ? 'sub-plan-active' : ''}" data-plan="free">
                     <div class="sub-plan-info">
                       <span class="sub-plan-icon">🆓</span>
                       <div>
@@ -6980,7 +6997,7 @@ function renderProfile() {
                       </div>
                     </div>
                     <div class="sub-plan-price">免费</div>
-                    ${currentPlan === 'free' ? '<span class="sub-plan-current">当前</span>' : ''}
+                    ${currentPlan === 'free' && !membershipExpired ? '<span class="sub-plan-current">当前</span>' : ''}
                   </div>
                   <div class="sub-plan-row ${currentPlan === 'plus' ? 'sub-plan-active' : ''} ${currentPlan === 'pro' ? 'sub-plan-disabled' : ''}" data-plan="plus">
                     <div class="sub-plan-info">
