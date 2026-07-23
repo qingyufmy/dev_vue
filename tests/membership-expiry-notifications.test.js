@@ -36,7 +36,7 @@ describe('membership expiry notifications', () => {
     queryRun.mockResolvedValue({ changes:1, insertId:1 })
     queryAll.mockResolvedValue([])
     queryOne.mockResolvedValue(null)
-    loadSmsConfig.mockResolvedValue({ templateCodes:{ membership_expiry:'SMS_EXPIRY' } })
+    loadSmsConfig.mockResolvedValue({ templateCodes:{ membership_expiry:'SMS_EXPIRY', membership_expired:'SMS_EXPIRED' } })
     sendMail.mockResolvedValue({ messageId:'mail-1' })
     sendSms.mockResolvedValue({ code:'OK' })
   })
@@ -52,6 +52,34 @@ describe('membership expiry notifications', () => {
     })
     expect(normalizeReminderSurface('main')).toBe('web_main')
     expect(normalizeReminderSurface('ai')).toBe('web_ai')
+    expect(buildMembershipExpiryCopy({
+      plan:'plus', plan_expires_at:'2026-07-22 23:59:59', days_before:0,
+    })).toMatchObject({
+      title:'Plus 会员已过期',
+      summary:'您的 Plus 会员已于 2026年7月22日到期，续费后可恢复会员权益。',
+      days_before:0,
+    })
+  })
+
+  it('does not create an SMS delivery when the user has no phone number', async () => {
+    queryAll.mockResolvedValueOnce([{
+      id:9, email:'u@example.com', phone:null, nickname:'用户',
+      plan:'pro', plan_expires_at:'2026-07-30 23:59:59', days_before:3,
+    }])
+    const result = await ensureMembershipExpiryNotifications(9)
+    expect(result).toEqual({ users:1, created:3 })
+    expect(queryRun.mock.calls.map(call => call[1][4])).toEqual(['web_main', 'web_ai', 'email'])
+  })
+
+  it('creates one expired-stage record per available channel regardless of how late the worker runs', async () => {
+    queryAll.mockResolvedValueOnce([{
+      id:10, email:'u@example.com', phone:'13800138000', nickname:'用户',
+      plan:'pro', plan_expires_at:'2026-07-20 23:59:59', days_before:0,
+    }])
+    await ensureMembershipExpiryNotifications(10)
+    expect(queryRun).toHaveBeenCalledTimes(4)
+    expect(queryRun.mock.calls.every(call => call[1][3] === 0)).toBe(true)
+    expect(queryAll.mock.calls[0][0]).toContain('plan_expires_at < NOW()')
   })
 
   it('creates one idempotent record for each delivery channel', async () => {
@@ -86,6 +114,21 @@ describe('membership expiry notifications', () => {
       plan:'Pro', expire_date:'2026-07-30', days:'7',
     })
     expect(queryRun.mock.calls.filter(call => call[0].includes("status = 'sending'"))).toHaveLength(4)
+  })
+
+  it('uses the dedicated expired-membership SMS template without a days parameter', async () => {
+    queryAll.mockImplementation(async sql => {
+      if (sql.includes("category = 'smtp'")) return []
+      if (sql.includes('FROM membership_expiry_notifications')) return [
+        { id:13, channel:'sms', phone:'13800138000', plan:'pro', plan_expires_at:'2026-07-20 23:59:59', days_before:0 },
+      ]
+      return []
+    })
+    const result = await processMembershipExpiryDeliveries()
+    expect(result).toMatchObject({ selected:1, sent:1, failed:0 })
+    expect(sendSms).toHaveBeenCalledWith('13800138000', 'SMS_EXPIRED', {
+      plan:'Pro', expire_date:'2026-07-20',
+    })
   })
 
   it('returns and acknowledges only the requested web surface', async () => {
@@ -125,7 +168,9 @@ describe('membership expiry notifications', () => {
       delivery_state:'failed', error_text:'通知服务账号认证失败，请检查服务配置', retry_allowed:true,
     })
     expect(data.records[0]).not.toHaveProperty('last_error')
-    expect(data.providerConfigured).toEqual({ email:true, sms:false })
+    expect(data.providerConfigured).toEqual({
+      email:true, sms:false, sms_expiry:false, sms_expired:false,
+    })
   })
 
   it('translates common delivery failures into operational Chinese', () => {

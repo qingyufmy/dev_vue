@@ -3403,6 +3403,14 @@ const migrations = [
         VALUES ('sms', 'template_code_membership_expiry', '', '会员到期提醒模板', 7)
         ON DUPLICATE KEY UPDATE label = VALUES(label), sort_order = VALUES(sort_order)`)
     }
+  },
+  {
+    id: '124_membership_expired_notification_template',
+    async up() {
+      await queryRun(`INSERT INTO system_config (category, \`key\`, \`value\`, label, sort_order)
+        VALUES ('sms', 'template_code_membership_expired', '', '会员已过期提醒模板', 8)
+        ON DUPLICATE KEY UPDATE label = VALUES(label), sort_order = VALUES(sort_order)`)
+    }
   }
 ]
 

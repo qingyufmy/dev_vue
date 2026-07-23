@@ -255,15 +255,19 @@ router.post('/system-config/sms/test', authMiddleware, adminOnly, async (req, re
     }
 
     const isMembershipExpiry = template === 'membership_expiry'
-    const templateCode = isMembershipExpiry
-      ? cfg.templateCodes?.membership_expiry
-      : cfg.templateCodes?.login || cfg.templateCodes?.register
+    const isMembershipExpired = template === 'membership_expired'
+    const templateCode = isMembershipExpired
+      ? cfg.templateCodes?.membership_expired
+      : isMembershipExpiry ? cfg.templateCodes?.membership_expiry : cfg.templateCodes?.login || cfg.templateCodes?.register
     if (!templateCode) {
-      return res.json({ ok: false, error:isMembershipExpiry ? '请先配置会员到期提醒模板' : '请先配置短信模板' })
+      const error = isMembershipExpired ? '请先配置会员已过期提醒模板'
+        : isMembershipExpiry ? '请先配置会员到期提醒模板' : '请先配置短信模板'
+      return res.json({ ok: false, error })
     }
 
-    const params = isMembershipExpiry
-      ? { plan:'Pro', expire_date:'2026-07-30', days:'7' }
+    const params = isMembershipExpired
+      ? { plan:'Pro', expire_date:'2026-07-30' }
+      : isMembershipExpiry ? { plan:'Pro', expire_date:'2026-07-30', days:'7' }
       : { code:'123456' }
     await sendSms(to, templateCode, params)
     res.json({ ok: true })

@@ -9597,7 +9597,7 @@ function renderMembershipNotificationRows(records) {
     return `<tr>
       <td data-label="用户"><strong>${escapeHtml(record.nickname || `用户 #${record.user_id}`)}</strong><small>#${Number(record.user_id)} · ${escapeHtml(contact || '未绑定联系方式')}</small></td>
       <td data-label="会员"><strong>${escapeHtml(String(record.plan || '').toUpperCase())}</strong><small>${escapeHtml(String(record.plan_expires_at || '').slice(0, 10))} 到期</small></td>
-      <td data-label="提醒阶段"><strong>提前 ${Number(record.days_before)} 天</strong><small>${escapeHtml(MEMBERSHIP_NOTIFICATION_CHANNELS[record.channel] || '未知渠道')}</small></td>
+      <td data-label="提醒阶段"><strong>${Number(record.days_before) === 0 ? '已过期' : `提前 ${Number(record.days_before)} 天`}</strong><small>${escapeHtml(MEMBERSHIP_NOTIFICATION_CHANNELS[record.channel] || '未知渠道')}</small></td>
       <td data-label="状态"><span class="ops-delivery-state ${stateMeta.tone}">${escapeHtml(stateMeta.label)}</span></td>
       <td data-label="结果"><span class="ops-delivery-result ${record.error_text ? 'has-error' : ''}">${escapeHtml(resultText)}</span></td>
       <td data-label="时间"><time>${escapeHtml(renderMembershipNotificationTime(record))}</time><small>尝试 ${Number(record.attempt_count || 0)} 次</small></td>
@@ -9637,7 +9637,7 @@ async function loadAdminMembershipNotifications(options = {}) {
           <div><span class="ops-kicker">会员触达审计</span><h2>通知记录</h2><p>查看主站、AI 实验室、邮件和短信的会员到期提醒状态。</p></div>
           <div class="ops-provider-health" aria-label="通知服务状态">
             <span class="${data.providerConfigured?.email ? 'ready' : 'warning'}"><i data-lucide="mail"></i>邮件${data.providerConfigured?.email ? '可用' : '未配置'}</span>
-            <span class="${data.providerConfigured?.sms ? 'ready' : 'warning'}"><i data-lucide="message-square-text"></i>短信${data.providerConfigured?.sms ? '可用' : '未配置模板'}</span>
+            <span class="${data.providerConfigured?.sms ? 'ready' : 'warning'}"><i data-lucide="message-square-text"></i>短信${data.providerConfigured?.sms ? '可用' : data.providerConfigured?.sms_expiry || data.providerConfigured?.sms_expired ? '部分模板未配置' : '未配置模板'}</span>
           </div>
         </header>
         <div class="ops-notification-metrics" aria-label="通知统计">
@@ -9652,7 +9652,7 @@ async function loadAdminMembershipNotifications(options = {}) {
             <label class="ops-notification-search"><span>搜索用户</span><div><i data-lucide="search"></i><input type="search" name="search" value="${escapeHtml(filters.search)}" placeholder="昵称、邮箱、手机号或用户 ID" autocomplete="off"></div></label>
             <label><span>渠道</span><select name="channel"><option value="">全部渠道</option>${Object.entries(MEMBERSHIP_NOTIFICATION_CHANNELS).map(([value,label]) => `<option value="${value}" ${filters.channel === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
             <label><span>状态</span><select name="status"><option value="">全部状态</option>${Object.entries(MEMBERSHIP_NOTIFICATION_STATES).filter(([value]) => value !== 'waiting_configuration').map(([value,meta]) => `<option value="${value}" ${filters.status === value ? 'selected' : ''}>${meta.label}</option>`).join('')}</select></label>
-            <label><span>提醒阶段</span><select name="days_before"><option value="">全部阶段</option>${[7,3,2,1].map(day => `<option value="${day}" ${String(filters.daysBefore) === String(day) ? 'selected' : ''}>提前 ${day} 天</option>`).join('')}</select></label>
+            <label><span>提醒阶段</span><select name="days_before"><option value="">全部阶段</option>${[7,3,2,1].map(day => `<option value="${day}" ${String(filters.daysBefore) === String(day) ? 'selected' : ''}>提前 ${day} 天</option>`).join('')}<option value="0" ${String(filters.daysBefore) === '0' ? 'selected' : ''}>已过期</option></select></label>
             <button class="btn btn-primary" type="submit"><i data-lucide="list-filter"></i>筛选</button>
             <button class="btn btn-secondary" type="button" id="resetMembershipNotificationFilters">重置</button>
           </form>

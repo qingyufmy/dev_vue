@@ -31,6 +31,7 @@ export async function loadSmsConfig() {
       change_phone: map.template_code_bind || '',
       change_email: map.template_code_reset || '',
       membership_expiry: map.template_code_membership_expiry || '',
+      membership_expired: map.template_code_membership_expired || '',
     },
   }
 

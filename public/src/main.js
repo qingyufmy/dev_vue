@@ -4395,10 +4395,16 @@ function renderSmsConfig(container) {
         <input type="text" class="admin-plan-input" id="smsTemplateMembershipExpiry" value="${escapeHtml(getVal('template_code_membership_expiry'))}" placeholder="SMS_XXXXXX">
         <small>模板参数：plan、expire_date、days</small>
       </div>
+      <div class="admin-config-row">
+        <label>会员已过期提醒模板</label>
+        <input type="text" class="admin-plan-input" id="smsTemplateMembershipExpired" value="${escapeHtml(getVal('template_code_membership_expired'))}" placeholder="SMS_XXXXXX">
+        <small>模板参数：plan、expire_date；每次会员到期后只发送一次</small>
+      </div>
       <div class="admin-config-actions">
         <button class="btn btn-primary" id="saveSmsConfig">保存配置</button>
         <button class="btn btn-ghost" id="testSmsConfig">发送测试短信</button>
         <button class="btn btn-ghost" id="testMembershipExpirySms">测试到期提醒</button>
+        <button class="btn btn-ghost" id="testMembershipExpiredSms">测试已过期提醒</button>
       </div>
       <div id="smsTestResult" class="admin-config-test-result"></div>
     </div>
@@ -4414,6 +4420,7 @@ function renderSmsConfig(container) {
       { key: 'template_code_reset', value: document.getElementById('smsTemplateReset').value, label: '重置密码模板', sort_order: 5 },
       { key: 'template_code_bind', value: document.getElementById('smsTemplateBind').value, label: '绑定验证码模板', sort_order: 6 },
       { key: 'template_code_membership_expiry', value: document.getElementById('smsTemplateMembershipExpiry').value, label: '会员到期提醒模板', sort_order: 7 },
+      { key: 'template_code_membership_expired', value: document.getElementById('smsTemplateMembershipExpired').value, label: '会员已过期提醒模板', sort_order: 8 },
     ]
     const res = await api.put('/api/system-config/sms', { items })
     if (res.ok) {
@@ -4445,6 +4452,19 @@ function renderSmsConfig(container) {
     const res = await api.post('/api/system-config/sms/test', { to:testPhone, template:'membership_expiry' })
     if (res.ok) {
       resultEl.innerHTML = '<span style="color:#10b981">✓ 到期提醒测试短信已发送</span>'
+    } else {
+      resultEl.innerHTML = `<span style="color:#ef4444">✗ ${escapeHtml(res.error || '发送失败')}</span>`
+    }
+  })
+
+  document.getElementById('testMembershipExpiredSms')?.addEventListener('click', async () => {
+    const resultEl = document.getElementById('smsTestResult')
+    const testPhone = prompt('请输入测试手机号：')
+    if (!testPhone) return
+    resultEl.innerHTML = '<span style="color:var(--text-3)">发送中...</span>'
+    const res = await api.post('/api/system-config/sms/test', { to:testPhone, template:'membership_expired' })
+    if (res.ok) {
+      resultEl.innerHTML = '<span style="color:#10b981">✓ 已过期提醒测试短信已发送</span>'
     } else {
       resultEl.innerHTML = `<span style="color:#ef4444">✗ ${escapeHtml(res.error || '发送失败')}</span>`
     }

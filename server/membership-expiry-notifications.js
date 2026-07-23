@@ -3,6 +3,7 @@ import { queryAll, queryOne, queryRun } from './db.js'
 import { loadSmsConfig, sendSms } from './sms.js'
 
 export const MEMBERSHIP_EXPIRY_REMINDER_DAYS = Object.freeze([7, 3, 2, 1])
+export const MEMBERSHIP_EXPIRED_REMINDER_DAY = 0
 const DELIVERY_CHANNELS = Object.freeze(['web_main', 'web_ai', 'email', 'sms'])
 const MAX_DELIVERY_ATTEMPTS = 24
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000
@@ -60,9 +61,12 @@ export function buildMembershipExpiryCopy({ plan, plan_expires_at: planExpiresAt
   const label = planLabel(plan)
   const days = Number(daysBefore)
   const date = displayExpiryDate(planExpiresAt)
+  const expired = days === MEMBERSHIP_EXPIRED_REMINDER_DAY
   return {
-    title:`${label} 会员将在 ${days} 天后到期`,
-    summary:`您的 ${label} 会员有效期至 ${date}，续费后可继续使用当前会员权益。`,
+    title:expired ? `${label} 会员已过期` : `${label} 会员将在 ${days} 天后到期`,
+    summary:expired
+      ? `您的 ${label} 会员已于 ${date}到期，续费后可恢复会员权益。`
+      : `您的 ${label} 会员有效期至 ${date}，续费后可继续使用当前会员权益。`,
     plan_label:label,
     expiry_date:expiryDate(planExpiresAt),
     expiry_date_text:date,
@@ -78,16 +82,19 @@ export async function ensureMembershipExpiryNotifications(userId = null) {
     params.push(Number(userId))
   }
   const users = await queryAll(`SELECT id, email, phone, nickname, plan, plan_expires_at,
-      DATEDIFF(DATE(plan_expires_at), CURDATE()) AS days_before
+      CASE WHEN plan_expires_at < NOW() THEN 0
+        ELSE DATEDIFF(DATE(plan_expires_at), CURDATE()) END AS days_before
     FROM users
     WHERE role <> 'admin' AND deletion_status = 'active' AND deleted_at IS NULL
       AND plan IN ('plus', 'pro') AND plan_expires_at IS NOT NULL
-      AND DATEDIFF(DATE(plan_expires_at), CURDATE()) IN (?, ?, ?, ?)
+      AND (DATEDIFF(DATE(plan_expires_at), CURDATE()) IN (?, ?, ?, ?)
+        OR plan_expires_at < NOW())
       ${userFilter}`, params)
 
   let created = 0
   for (const user of users) {
-    for (const channel of DELIVERY_CHANNELS) {
+    const channels = DELIVERY_CHANNELS.filter(channel => channel !== 'sms' || String(user.phone || '').trim())
+    for (const channel of channels) {
       const result = await queryRun(`INSERT IGNORE INTO membership_expiry_notifications
         (user_id, plan, plan_expires_at, days_before, channel, status, attempt_count, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, 'pending', 0, NOW(), NOW())`, [
@@ -110,7 +117,10 @@ export async function cancelStaleMembershipExpiryNotifications() {
     WHERE notifications.status IN ('pending', 'failed', 'sending')
       AND (users.id IS NULL OR users.plan <> notifications.plan
         OR users.plan_expires_at <> notifications.plan_expires_at
-        OR DATEDIFF(DATE(notifications.plan_expires_at), CURDATE()) <> notifications.days_before)`)
+        OR (notifications.channel = 'sms' AND NULLIF(TRIM(users.phone), '') IS NULL)
+        OR (notifications.days_before = 0 AND users.plan_expires_at >= NOW())
+        OR (notifications.days_before > 0
+          AND DATEDIFF(DATE(notifications.plan_expires_at), CURDATE()) <> notifications.days_before))`)
   return Number(result.changes || 0)
 }
 
@@ -153,14 +163,13 @@ export async function sendMembershipExpiryEmail(delivery) {
 export async function sendMembershipExpirySms(delivery) {
   if (!delivery.phone) throw new Error('用户未绑定手机号')
   const cfg = await loadSmsConfig()
-  const templateCode = cfg.templateCodes.membership_expiry
-  if (!templateCode) throw new Error('会员到期提醒短信模板未配置')
   const copy = buildMembershipExpiryCopy(delivery)
-  await sendSms(delivery.phone, templateCode, {
-    plan:copy.plan_label,
-    expire_date:copy.expiry_date,
-    days:String(copy.days_before),
-  })
+  const expired = copy.days_before === MEMBERSHIP_EXPIRED_REMINDER_DAY
+  const templateCode = expired ? cfg.templateCodes.membership_expired : cfg.templateCodes.membership_expiry
+  if (!templateCode) throw new Error(expired ? '会员已过期短信模板未配置' : '会员到期提醒短信模板未配置')
+  const templateParams = { plan:copy.plan_label, expire_date:copy.expiry_date }
+  if (!expired) templateParams.days = String(copy.days_before)
+  await sendSms(delivery.phone, templateCode, templateParams)
 }
 
 async function completeDelivery(id, status, error = null) {
@@ -195,7 +204,10 @@ export async function processMembershipExpiryDeliveries(limit = 100, deliveryId 
       AND notifications.status IN ('pending', 'failed')
       AND notifications.attempt_count < ?
       AND (notifications.next_attempt_at IS NULL OR notifications.next_attempt_at <= NOW())
-      AND DATEDIFF(DATE(notifications.plan_expires_at), CURDATE()) = notifications.days_before
+      AND (notifications.channel <> 'sms' OR NULLIF(TRIM(users.phone), '') IS NOT NULL)
+      AND ((notifications.days_before = 0 AND notifications.plan_expires_at < NOW())
+        OR (notifications.days_before > 0
+          AND DATEDIFF(DATE(notifications.plan_expires_at), CURDATE()) = notifications.days_before))
       ${idFilter}
     ORDER BY notifications.id LIMIT ?`, params)
 
@@ -203,7 +215,9 @@ export async function processMembershipExpiryDeliveries(limit = 100, deliveryId 
   for (const delivery of deliveries) {
     const providerReady = delivery.channel === 'email'
       ? Boolean(smtpConfig.host && smtpConfig.user)
-      : Boolean(smsConfig.templateCodes?.membership_expiry)
+      : Boolean(Number(delivery.days_before) === MEMBERSHIP_EXPIRED_REMINDER_DAY
+        ? smsConfig.templateCodes?.membership_expired
+        : smsConfig.templateCodes?.membership_expiry)
     if (!providerReady) {
       result.deferred++
       continue
@@ -262,7 +276,9 @@ export async function getPendingWebMembershipReminder(userId, surface = 'main') 
       AND users.plan = notifications.plan AND users.plan_expires_at = notifications.plan_expires_at
       AND users.deletion_status = 'active' AND users.deleted_at IS NULL
     WHERE notifications.user_id = ? AND notifications.channel = ? AND notifications.status = 'pending'
-      AND DATEDIFF(DATE(notifications.plan_expires_at), CURDATE()) = notifications.days_before
+      AND ((notifications.days_before = 0 AND notifications.plan_expires_at < NOW())
+        OR (notifications.days_before > 0
+          AND DATEDIFF(DATE(notifications.plan_expires_at), CURDATE()) = notifications.days_before))
     ORDER BY notifications.days_before ASC, notifications.id DESC LIMIT 1`, [Number(userId), channel])
   return row ? { ...row, ...buildMembershipExpiryCopy(row) } : null
 }
@@ -285,7 +301,8 @@ export async function getAdminMembershipExpiryNotifications(options = {}) {
   const params = []
   if (allowedChannels.has(options.channel)) { where.push('notifications.channel = ?'); params.push(options.channel) }
   if (allowedStatuses.has(options.status)) { where.push('notifications.status = ?'); params.push(options.status) }
-  if (MEMBERSHIP_EXPIRY_REMINDER_DAYS.includes(Number(options.daysBefore))) {
+  if ([MEMBERSHIP_EXPIRED_REMINDER_DAY, ...MEMBERSHIP_EXPIRY_REMINDER_DAYS].includes(Number(options.daysBefore))
+      && String(options.daysBefore ?? '') !== '') {
     where.push('notifications.days_before = ?')
     params.push(Number(options.daysBefore))
   }
@@ -317,7 +334,9 @@ export async function getAdminMembershipExpiryNotifications(options = {}) {
   ])
   const providerConfigured = {
     email:Boolean(smtpConfig.host && smtpConfig.user),
-    sms:Boolean(smsConfig.templateCodes?.membership_expiry),
+    sms:Boolean(smsConfig.templateCodes?.membership_expiry && smsConfig.templateCodes?.membership_expired),
+    sms_expiry:Boolean(smsConfig.templateCodes?.membership_expiry),
+    sms_expired:Boolean(smsConfig.templateCodes?.membership_expired),
   }
   const summary = { total:0, pending:0, sent:0, read:0, failed:0, skipped:0, cancelled:0 }
   for (const row of summaryRows) {
@@ -330,7 +349,9 @@ export async function getAdminMembershipExpiryNotifications(options = {}) {
     records:rows.map(row => {
       const { last_error:rawError, ...safeRow } = row
       const waitingConfiguration = row.status === 'pending'
-        && ((row.channel === 'email' && !providerConfigured.email) || (row.channel === 'sms' && !providerConfigured.sms))
+        && ((row.channel === 'email' && !providerConfigured.email)
+          || (row.channel === 'sms' && Number(row.days_before) === MEMBERSHIP_EXPIRED_REMINDER_DAY && !providerConfigured.sms_expired)
+          || (row.channel === 'sms' && Number(row.days_before) > MEMBERSHIP_EXPIRED_REMINDER_DAY && !providerConfigured.sms_expiry))
       return {
         ...safeRow,
         delivery_state:waitingConfiguration ? 'waiting_configuration' : row.status,
@@ -351,7 +372,10 @@ export async function retryMembershipExpiryNotification(deliveryId) {
       AND users.deletion_status = 'active' AND users.deleted_at IS NULL
     WHERE notifications.id = ? AND notifications.channel IN ('email', 'sms')
       AND notifications.status = 'failed'
-      AND DATEDIFF(DATE(notifications.plan_expires_at), CURDATE()) = notifications.days_before`, [id])
+      AND (notifications.channel <> 'sms' OR NULLIF(TRIM(users.phone), '') IS NOT NULL)
+      AND ((notifications.days_before = 0 AND notifications.plan_expires_at < NOW())
+        OR (notifications.days_before > 0
+          AND DATEDIFF(DATE(notifications.plan_expires_at), CURDATE()) = notifications.days_before))`, [id])
   if (!eligible) return { ok:false, reason:'not_retryable' }
   const reset = await queryRun(`UPDATE membership_expiry_notifications
     SET status = 'pending', attempt_count = 0, next_attempt_at = NULL,

@@ -110,4 +110,19 @@ describe('config.js — membership expiry SMS test', () => {
       plan:'Pro', expire_date:'2026-07-30', days:'7',
     })
   })
+
+  it('uses a separate expired-membership template without a days parameter', async () => {
+    loadSmsConfig.mockResolvedValue({
+      accessKeyId:'key', accessKeySecret:'secret', signName:'量见',
+      templateCodes:{ membership_expired:'SMS_EXPIRED' },
+    })
+    sendSms.mockResolvedValue({ code:'OK' })
+    const body = await httpReq(makeApp(), 'POST', '/api/system-config/sms/test', {
+      to:'13800138000', template:'membership_expired',
+    })
+    expect(body.ok).toBe(true)
+    expect(sendSms).toHaveBeenCalledWith('13800138000', 'SMS_EXPIRED', {
+      plan:'Pro', expire_date:'2026-07-30',
+    })
+  })
 })

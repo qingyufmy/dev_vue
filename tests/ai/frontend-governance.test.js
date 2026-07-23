@@ -101,6 +101,8 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.ops-notification-table')
     expect(app).toContain('loadAdminMembershipNotifications')
     expect(app).toContain('/api/admin/membership-expiry-notifications')
+    expect(app).toContain("Number(record.days_before) === 0 ? '已过期'")
+    expect(app).toContain('部分模板未配置')
     expect(app).toContain('return value ? formatTime(value)')
     expect(app).not.toContain('return value ? formatDateTime(value)')
     expect(app).toContain("activeViewButton.scrollIntoView({ behavior:'smooth', block:'nearest', inline:'center' })")
