@@ -1,5 +1,7 @@
 const $ = id => document.getElementById(id)
-const embedded = new URLSearchParams(location.search).get('embed') === 'ai'
+const accountParams = new URLSearchParams(location.search)
+const embedMode = ['ai','main'].includes(accountParams.get('embed')) ? accountParams.get('embed') : ''
+const embedded = Boolean(embedMode)
 const state = { user:null, plans:null, orders:null, referral:null, notifications:null, notificationUnread:0, period:'month', tab:'overview', paymentTimer:null }
 const TAB_META = {
   overview:['账户概览','查看会员状态和常用账户信息。'],
@@ -12,6 +14,10 @@ const TAB_META = {
 }
 
 if (embedded) document.body.classList.add('account-embedded')
+if (embedMode === 'main') {
+  document.body.classList.add('account-main-embedded')
+  document.body.classList.toggle('account-main-dark', accountParams.get('theme') === 'dark')
+}
 
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[char]) }
 function formatDate(value) { if (!value) return '长期有效'; const date = new Date(value); return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN',{ hour12:false }) }
@@ -24,7 +30,8 @@ async function api(path, options = {}) {
   if (response.status === 401 || response.status === 403 && !AuthSession.token()) {
     AuthSession.clear()
     const next = encodeURIComponent(`${location.pathname}${location.search}`)
-    location.replace(embedded ? `/ai/auth/?mode=login&next=${next}` : `/auth/login?next=${next}`)
+    if (embedded) notifyParent('account-session-logout')
+    location.replace(embedMode === 'ai' ? `/ai/auth/?mode=login&next=${next}` : `/auth/login?next=${next}`)
     throw new Error('登录状态已失效')
   }
   const data = await response.json().catch(() => ({ ok:false,error:'服务器返回了无法识别的数据' }))
@@ -192,7 +199,7 @@ async function loadNotifications() {
   catch(error){ toast(error.message,'error'); state.notifications=[]; if(state.tab==='notifications') renderTab() }
 }
 async function markNotificationsRead() {
-  try { await api('/api/notifications',{ method:'PATCH',body:{ markAll:true } }); state.notifications=(state.notifications || []).map(item=>({ ...item,isRead:true })); state.notificationUnread=0; renderTab(); toast('全部消息已标为已读') }
+  try { await api('/api/notifications',{ method:'PATCH',body:{ markAll:true } }); state.notifications=(state.notifications || []).map(item=>({ ...item,isRead:true })); state.notificationUnread=0; notifyParent('account-notifications-updated',{ unreadCount:0 }); renderTab(); toast('全部消息已标为已读') }
   catch(error){ toast(error.message,'error') }
 }
 async function loadReferral() {
@@ -228,7 +235,7 @@ async function pollPayment(orderId) {
 }
 
 function logoutEverywhere() {
-  AuthSession.clear(); notifyParent('account-session-logout'); location.replace(embedded ? '/ai/auth/?mode=login' : '/')
+  AuthSession.clear(); notifyParent('account-session-logout'); location.replace(embedMode === 'ai' ? '/ai/auth/?mode=login' : '/')
 }
 
 async function refreshProfile() {
@@ -238,7 +245,8 @@ async function refreshProfile() {
 async function bootstrap() {
   if (!AuthSession.token()) {
     const next=encodeURIComponent(`${location.pathname}${location.search}`)
-    location.replace(embedded ? `/ai/auth/?mode=login&next=${next}` : `/auth/login?next=${next}`)
+    if (embedded) notifyParent('account-session-logout')
+    location.replace(embedMode === 'ai' ? `/ai/auth/?mode=login&next=${next}` : `/auth/login?next=${next}`)
     return
   }
   try {
@@ -252,10 +260,11 @@ $('accountNav').addEventListener('click',event=>{ const button=event.target.clos
 $('accountLogoutBtn').addEventListener('click',logoutEverywhere)
 $('accountCloseBtn').addEventListener('click',()=>embedded ? notifyParent('account-center-close') : history.length > 1 ? history.back() : location.assign('/'))
 $('paymentDialog').addEventListener('close',()=>clearInterval(state.paymentTimer))
-window.addEventListener('storage',event=>{ if(event.key===AuthSession.eventKey && !AuthSession.token()) location.replace(embedded ? '/ai/auth/?mode=login' : '/') })
+window.addEventListener('storage',event=>{ if(event.key===AuthSession.eventKey && !AuthSession.token()) location.replace(embedMode === 'ai' ? '/ai/auth/?mode=login' : '/') })
 window.addEventListener('message',event=>{
   if(event.origin!==location.origin || event.source!==window.parent) return
   if(event.data?.type==='account-center-tab') switchTab(event.data.tab || 'overview')
+  if(event.data?.type==='account-center-theme' && embedMode === 'main') document.body.classList.toggle('account-main-dark',event.data.theme === 'dark')
 })
 
 void bootstrap()

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 const main = readFileSync(new URL('../public/src/main.js', import.meta.url), 'utf8')
+const mainHtml = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+const mainCss = readFileSync(new URL('../public/src/style.css', import.meta.url), 'utf8')
 const aiHtml = readFileSync(new URL('../public/ai/index.html', import.meta.url), 'utf8')
 const aiApp = readFileSync(new URL('../public/ai/app.js', import.meta.url), 'utf8')
 const aiCss = readFileSync(new URL('../public/ai/styles.css', import.meta.url), 'utf8')
@@ -42,7 +44,12 @@ describe('unified authentication and account entry points', () => {
     expect(accountApp).toContain("api('/api/plans')")
     expect(accountApp).toContain("api('/api/payment'")
     expect(adminApp).toContain("location.href = '/account'")
-    expect(main).toContain("window.location.href = '/account/'")
+    expect(mainHtml).toContain('id="mainAccountCenterModal"')
+    expect(mainHtml).toContain('id="mainAccountCenterFrame"')
+    expect(main).toContain("openMainAccountCenter('overview')")
+    expect(main).toContain("openMainAccountCenter('notifications')")
+    expect(main).toContain('/account/?embed=main&tab=')
+    expect(mainCss).toContain('.main-account-center-dialog')
     expect(aiCss).toContain('.topbar-account-link')
     expect(aiResponsiveCss).toContain('.topbar-account-link span')
   })
@@ -57,6 +64,13 @@ describe('unified authentication and account entry points', () => {
 
   it('keeps embedded account content visible on mobile screens', () => {
     expect(accountCss).toContain('body.account-embedded .account-sidebar { top:auto; height:auto; }')
+  })
+
+  it('synchronizes the main-site account modal with light and dark themes', () => {
+    expect(accountApp).toContain("embedMode === 'main'")
+    expect(accountApp).toContain("event.data?.type==='account-center-theme'")
+    expect(accountCss).toContain('body.account-main-embedded:not(.account-main-dark)')
+    expect(main).toContain("type:'account-center-theme'")
   })
 
   it('redirects expired administrator sessions through the canonical login page', () => {

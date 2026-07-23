@@ -6339,6 +6339,49 @@ button { cursor: pointer; font-family: inherit; }
   transform: translateY(0) scale(1);
 }
 
+/* 主站账户中心：复用统一账户应用，外层保持主站的米白与墨绿视觉。 */
+.main-account-center {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.main-account-center.hidden { display: none; }
+.main-account-center-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(28,27,25,.34);
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+}
+.main-account-center-dialog {
+  position: relative;
+  width: min(1180px,100%);
+  height: min(860px,calc(100dvh - 48px));
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: 0 24px 64px rgba(28,27,25,.22);
+  animation: main-account-enter .2s cubic-bezier(.22,1,.36,1);
+}
+.main-account-center-dialog iframe { display: block; width: 100%; height: 100%; border: 0; background: var(--bg); }
+body.main-account-center-open { overflow: hidden; }
+@keyframes main-account-enter { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+
+[data-theme="dark"] .main-account-center-scrim { background: rgba(0,0,0,.62); }
+[data-theme="dark"] .main-account-center-dialog { box-shadow: 0 24px 64px rgba(0,0,0,.55); }
+
+@media (max-width: 760px) {
+  .main-account-center { padding: 0; }
+  .main-account-center-dialog { width: 100%; height: 100dvh; border-radius: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main-account-center-dialog { animation: none; }
+}
+
 .modal-close {
   position: absolute;
   top: 18px; right: 18px;

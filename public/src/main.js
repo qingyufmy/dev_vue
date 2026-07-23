@@ -1484,6 +1484,67 @@ const modalOverlay = $('#modalOverlay')
 const modalTitle = $('#modalTitle')
 const modalBody = $('#modalBody')
 let authModalBackdropPress = false
+const mainAccountCenterModal = $('#mainAccountCenterModal')
+const mainAccountCenterFrame = $('#mainAccountCenterFrame')
+let mainAccountCenterPreviousFocus = null
+
+function getMainAccountTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
+}
+
+function openMainAccountCenter(tab = 'overview') {
+  if (!requireLogin() || !mainAccountCenterModal || !mainAccountCenterFrame) return
+  mainAccountCenterPreviousFocus = document.activeElement
+  const theme = getMainAccountTheme()
+  const nextSrc = `/account/?embed=main&tab=${encodeURIComponent(tab)}&theme=${theme}`
+  if (!mainAccountCenterFrame.src || !mainAccountCenterFrame.src.includes('/account/')) {
+    mainAccountCenterFrame.src = nextSrc
+  } else {
+    mainAccountCenterFrame.contentWindow?.postMessage({ type:'account-center-tab',tab },window.location.origin)
+    mainAccountCenterFrame.contentWindow?.postMessage({ type:'account-center-theme',theme },window.location.origin)
+  }
+  mainAccountCenterModal.classList.remove('hidden')
+  mainAccountCenterModal.setAttribute('aria-hidden','false')
+  document.body.classList.add('main-account-center-open')
+  requestAnimationFrame(() => mainAccountCenterFrame.focus())
+}
+
+function closeMainAccountCenter() {
+  if (!mainAccountCenterModal || mainAccountCenterModal.classList.contains('hidden')) return
+  mainAccountCenterModal.classList.add('hidden')
+  mainAccountCenterModal.setAttribute('aria-hidden','true')
+  document.body.classList.remove('main-account-center-open')
+  if (mainAccountCenterPreviousFocus instanceof HTMLElement) mainAccountCenterPreviousFocus.focus()
+  mainAccountCenterPreviousFocus = null
+}
+
+function applyMainLoggedOutState() {
+  state.user = null
+  state.notificationUnread = 0
+  localStorage.removeItem('ws_user')
+  stopPresenceHeartbeat()
+  updateAuthUI()
+  renderView()
+}
+
+window.addEventListener('message',(event) => {
+  if (event.origin !== window.location.origin || event.source !== mainAccountCenterFrame?.contentWindow) return
+  if (event.data?.type === 'account-center-close') return closeMainAccountCenter()
+  if (event.data?.type === 'account-session-logout') {
+    closeMainAccountCenter()
+    applyMainLoggedOutState()
+    return
+  }
+  if (event.data?.type === 'account-profile-updated' && event.data.user) {
+    state.user = { ...state.user,...event.data.user }
+    localStorage.setItem('ws_user',JSON.stringify(state.user))
+    updateAuthUI()
+  }
+  if (event.data?.type === 'account-notifications-updated') {
+    state.notificationUnread = Number(event.data.unreadCount || 0)
+    updateAuthUI()
+  }
+})
 
 function normalizeReferralDisplayCode(code) {
   return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10)
@@ -7026,11 +7087,11 @@ function setupGlobalEvents() {
 
   $('#dropdownProfile').addEventListener('click', () => {
     userDropdown.classList.remove('active')
-    window.location.href = '/account/'
+    openMainAccountCenter('overview')
   })
   $('#dropdownNotifications').addEventListener('click', () => {
     userDropdown.classList.remove('active')
-    window.location.href = '/account/?tab=notifications'
+    openMainAccountCenter('notifications')
   })
   $('#dropdownAdmin').addEventListener('click', () => {
     userDropdown.classList.remove('active')
@@ -7048,6 +7109,7 @@ function setupGlobalEvents() {
     if (headerIcon) headerIcon.textContent = dark ? '☀️' : '🌙'
     if (headerLabel) headerLabel.textContent = dark ? '浅色' : '深色'
     syncArticleFrameTheme()
+    mainAccountCenterFrame?.contentWindow?.postMessage({ type:'account-center-theme',theme:dark ? 'dark' : 'light' },window.location.origin)
   }
   function toggleTheme() {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
@@ -7065,27 +7127,22 @@ function setupGlobalEvents() {
 
   $('#dropdownLogout').addEventListener('click', () => {
     userDropdown.classList.remove('active')
-    state.user = null
-    state.notificationUnread = 0
-    localStorage.removeItem('ws_user')
     localStorage.removeItem('ws_token')
     localStorage.removeItem('authToken')
     localStorage.setItem('ws_session_event', JSON.stringify({ type:'logout', at:Date.now() }))
     clearAuthCookie()
-    stopPresenceHeartbeat()
-    updateAuthUI()
-    renderView()
+    closeMainAccountCenter()
+    applyMainLoggedOutState()
   })
 
   window.addEventListener('storage', (event) => {
     if (!['ws_session_event', 'ws_token', 'authToken'].includes(event.key)) return
     if (localStorage.getItem('ws_token') || localStorage.getItem('authToken')) return
-    state.user = null
-    state.notificationUnread = 0
-    stopPresenceHeartbeat()
-    updateAuthUI()
-    renderView()
+    closeMainAccountCenter()
+    applyMainLoggedOutState()
   })
+
+  mainAccountCenterModal?.querySelectorAll('[data-close-main-account]').forEach(node => node.addEventListener('click',closeMainAccountCenter))
 
   $('#modalClose').addEventListener('click', closeModal)
   modalOverlay.addEventListener('pointerdown', (e) => {
@@ -7107,7 +7164,10 @@ function setupGlobalEvents() {
   })
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeModal()
+    if (e.key === 'Escape') {
+      closeMainAccountCenter()
+      closeModal()
+    }
   })
 
   modalBody.addEventListener('click', (e) => {

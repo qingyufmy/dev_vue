@@ -24,7 +24,7 @@
   
   
   <link rel="stylesheet" href="/src/quill.snow.css?v=20260702a">
-  <link rel="stylesheet" href="/src/style.css?v=20260723b">
+  <link rel="stylesheet" href="/src/style.css?v=20260723c">
   <link rel="stylesheet" href="/admin-extras.css?v=20260714f">
 </head>
 <body>
@@ -158,6 +158,14 @@
   </footer>
 
   <!-- Auth Modal -->
+  <div id="mainAccountCenterModal" class="main-account-center hidden" aria-hidden="true">
+    <div class="main-account-center-scrim" data-close-main-account></div>
+    <section class="main-account-center-dialog" role="dialog" aria-modal="true" aria-label="账户与订阅中心">
+      <iframe id="mainAccountCenterFrame" title="账户与订阅中心"></iframe>
+    </section>
+  </div>
+
+  <!-- Auth Modal -->
   <div class="modal-overlay" id="modalOverlay">
     <div class="modal" id="authModal">
       <button class="modal-close" id="modalClose">&times;</button>
@@ -169,6 +177,6 @@
   </div>
 
   <script src="/vendor/quill.js?v=2.0.3"></script>
-  <script type="module" src="/src/main.js?v=20260723e"></script>
+  <script type="module" src="/src/main.js?v=20260723f"></script>
 </body>
 </html>
