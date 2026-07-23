@@ -6,7 +6,7 @@ import { getAdminAiOperationsOverview } from '../admin/ai-operations.js'
 import { updateObserverChannel, updateObserverSource } from './ai/observer-channels.js'
 import { reconcileAutoSchedulers } from './ai/scheduler.js'
 import { applyBridgeRuntimeState } from '../bridge-ws.js'
-import { getAdminRiskAuditOverview, listAdminAuditEvents } from '../admin/risk-audit.js'
+import { getAdminPlatformRiskPolicy, getAdminRiskAuditOverview, listAdminAuditEvents, saveAdminPlatformRiskPolicy } from '../admin/risk-audit.js'
 import { setGlobalKillSwitch } from './ai/risk-state.js'
 import { deleteAdminCourse, getAdminContentSystemOverview, getAdminCourse, listAdminCourses, listAdminFeedback, saveAdminCourse } from '../admin/content-system.js'
 
@@ -129,6 +129,14 @@ router.post('/admin/risk-audit/global-stop', authMiddleware, adminOnly, async (r
     await setGlobalKillSwitch(req.user.id, req.user.role, enabled, reason)
     res.json({ ok:true })
   } catch (error) { adminAiError(res, error) }
+})
+router.get('/admin/risk-audit/platform-policy',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.json({ok:true,policy:await getAdminPlatformRiskPolicy()})}
+  catch(error){console.error('[AdminConsole] platform risk policy failed:',error);res.status(500).json({ok:false,error:'平台风控规则加载失败'})}
+})
+router.put('/admin/risk-audit/platform-policy',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.json({ok:true,result:await saveAdminPlatformRiskPolicy({actorId:req.user.id,values:req.body?.values||{},controls:req.body?.controls||{},reason:req.body?.reason||''})})}
+  catch(error){console.error('[AdminConsole] platform risk policy save failed:',error);res.status(400).json({ok:false,error:'平台风控规则保存失败，请检查输入范围'})}
 })
 
 router.get('/admin/content-system/overview', authMiddleware, adminOnly, async (req,res)=>{

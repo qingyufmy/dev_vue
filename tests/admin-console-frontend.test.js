@@ -72,9 +72,15 @@ describe('unified admin console contract', () => {
     expect(app).toContain("api('/api/admin/risk-audit/global-stop'")
     expect(routes).toContain("router.get('/admin/risk-audit/overview'")
     expect(routes).toContain("router.post('/admin/risk-audit/global-stop'")
+    expect(routes).toContain("router.get('/admin/risk-audit/platform-policy'")
+    expect(routes).toContain("router.put('/admin/risk-audit/platform-policy'")
     expect(riskAudit).toContain('formatRiskReason(row.reject_code')
+    expect(riskAudit).toContain('saveAdminPlatformRiskPolicy')
     expect(app).not.toContain("prompt('请输入开启平台紧急停止")
+    expect(app).not.toContain('/ai/?tab=global-risk')
+    expect(app).toContain('renderPlatformRiskPolicy')
     expect(css).toContain('.risk-account-list')
+    expect(css).toContain('.risk-policy-groups')
   })
 
   it('centralizes course discovery, feedback triage and release publishing', () => {

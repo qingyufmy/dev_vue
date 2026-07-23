@@ -209,6 +209,29 @@ h2 { margin:3px 0 0; font-size:22px; }
 .stop-action button { flex:0 0 auto; }
 .health-mark.risk-stop { background:rgba(255,104,120,.12); color:var(--red); }
 .risk-account-list,.decision-list { display:grid; gap:9px; padding:14px; }
+.risk-policy-toolbar { display:grid; grid-template-columns:minmax(200px,.7fr) minmax(260px,1fr) auto; align-items:end; gap:14px; margin-bottom:14px; padding:16px 18px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); }
+.risk-policy-toolbar > div:first-child strong,.risk-policy-toolbar > div:first-child small { display:block; }
+.risk-policy-toolbar > div:first-child strong { margin:4px 0 2px; font-size:18px; }
+.risk-policy-toolbar > div:first-child small { color:var(--muted); }
+.risk-policy-groups { display:grid; gap:10px; }
+.risk-policy-group { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); overflow:hidden; }
+.risk-policy-group > summary { min-height:64px; display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px 16px; cursor:pointer; list-style:none; }
+.risk-policy-group > summary::-webkit-details-marker { display:none; }
+.risk-policy-group > summary strong,.risk-policy-group > summary small { display:block; }
+.risk-policy-group > summary small,.risk-policy-group > summary > span:last-child { color:var(--muted); font-size:11px; }
+.risk-policy-list { display:grid; gap:8px; padding:0 12px 12px; border-top:1px solid var(--border); }
+.risk-rule-card { padding:14px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); }
+.risk-rule-card:first-child { margin-top:12px; }
+.risk-rule-card header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.risk-rule-card header strong,.risk-rule-card header small { display:block; }
+.risk-rule-card header small { margin-top:3px; color:var(--muted); }
+.risk-rule-grid { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)); gap:10px; margin-top:13px; }
+.risk-rule-grid > label { display:grid; gap:5px; color:var(--text-2); font-size:11px; }
+.unit-input { position:relative; }
+.unit-input .input { padding-right:58px; }
+.unit-input > span { position:absolute; right:10px; top:50%; transform:translateY(-50%); color:var(--muted); font-size:11px; pointer-events:none; }
+.risk-rule-fixed { min-height:44px; grid-column:span 3; display:flex; align-items:center; gap:10px; padding:8px 11px; border:1px dashed var(--border); border-radius:9px; color:var(--text-2); }
+.risk-rule-fixed small { color:var(--muted); }
 .risk-account-row,.decision-row { min-height:82px; display:flex; align-items:center; gap:13px; padding:13px 14px; border:1px solid var(--border); border-radius:11px; background:var(--surface-2); }
 .risk-account-row .health-mark { width:40px; height:40px; border-radius:11px; font-size:18px; }
 .risk-account-main { flex:1; min-width:0; }
@@ -298,6 +321,8 @@ h2 { margin:3px 0 0; font-size:22px; }
   .release-panel { grid-template-columns:1fr; }
   .release-panel > .section-head { border-right:0; border-bottom:1px solid var(--border); }
   .release-panel .release-form { grid-template-columns:1fr; }
+  .risk-rule-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .risk-rule-fixed { grid-column:span 1; }
 }
 @media (max-width:900px) {
   .admin-app { display:block; }
@@ -350,6 +375,9 @@ h2 { margin:3px 0 0; font-size:22px; }
   .config-nav { display:flex; overflow-x:auto; }
   .config-nav-item { min-width:max-content; }
   .config-editor-row { grid-template-columns:1fr; gap:8px; padding:14px; }
+  .risk-policy-toolbar { grid-template-columns:1fr; }
+  .risk-rule-grid { grid-template-columns:1fr; }
+  .risk-rule-fixed { grid-column:auto; align-items:flex-start; flex-direction:column; }
 }
 @media (max-width:420px) {
   .metric-grid { grid-template-columns:1fr 1fr; }

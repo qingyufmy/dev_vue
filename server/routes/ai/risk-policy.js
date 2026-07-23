@@ -64,7 +64,7 @@ function mergeKnown(base, override) {
   return result
 }
 
-function buildPlatformControls(rawConfig = {}) {
+export function buildPlatformControls(rawConfig = {}) {
   const configured = rawConfig.controls || rawConfig._controls || {}
   const platformValues = mergeKnown(DEFAULT_RISK_POLICY, rawConfig.values || rawConfig.defaults || rawConfig)
   return Object.fromEntries(Object.entries(RISK_RULES).map(([key, meta]) => {

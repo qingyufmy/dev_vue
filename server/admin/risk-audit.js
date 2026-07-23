@@ -1,5 +1,6 @@
-import { queryAll, queryOne } from '../db.js'
+import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../db.js'
 import { auditActionLabel, auditStatusLabel, formatRiskReason } from '../audit-localization.js'
+import { buildPlatformControls, DEFAULT_RISK_POLICY, normalizePlatformRiskConfig, RISK_RULES } from '../routes/ai/risk-policy.js'
 
 function number(value) { return Number(value || 0) }
 function parseJson(value, fallback = {}) {
@@ -72,4 +73,36 @@ export async function listAdminAuditEvents({ page = 1, pageSize = 20, search = '
   ])
   const total = number(totalRow?.total)
   return { events:rows.map(row => ({ ...row, id:number(row.id), user_id:number(row.user_id), action_label:auditActionLabel(row.action), status_label:auditStatusLabel('info') })), pagination:{ page:safePage, page_size:safePageSize, total, total_pages:Math.max(1, Math.ceil(total / safePageSize)) } }
+}
+
+async function ensurePlatformRiskPolicySet(actorId) {
+  let policySet=await queryOne("SELECT * FROM risk_policy_sets WHERE scope = 'platform' AND status = 'active' ORDER BY id LIMIT 1")
+  if(policySet)return policySet
+  const now=beijingNow()
+  const inserted=await queryRun("INSERT INTO risk_policy_sets (scope, owner_user_id, name, status, created_at, updated_at) VALUES ('platform', 0, '平台全局风控', 'active', ?, ?)",[now,now])
+  await queryRun(`INSERT INTO risk_policy_versions (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at)
+    VALUES (?, 1, ?, ?, '建立平台默认规则', ?, ?)`,[inserted.insertId,JSON.stringify(DEFAULT_RISK_POLICY),actorId,now,now])
+  return {id:inserted.insertId,name:'平台全局风控',active_version_id:null}
+}
+
+export async function getAdminPlatformRiskPolicy() {
+  const policySet=await queryOne("SELECT * FROM risk_policy_sets WHERE scope = 'platform' AND status = 'active' ORDER BY id LIMIT 1")
+  const version=policySet?await queryOne('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1',[policySet.id]):null
+  const raw=parseJson(version?.config_json,{})
+  const normalized=normalizePlatformRiskConfig({currentValues:raw.values||raw.defaults||raw,currentControls:raw.controls||{}})
+  return {policy_set:policySet||null,version:version?{id:number(version.id),version_no:number(version.version_no),effective_at:version.effective_at,created_at:version.created_at,change_reason:version.change_reason}:null,values:normalized.values,controls:buildPlatformControls(normalized),rule_metadata:RISK_RULES}
+}
+
+export async function saveAdminPlatformRiskPolicy({ actorId, values = {}, controls = {}, reason = '' } = {}) {
+  const policySet=await ensurePlatformRiskPolicySet(actorId)
+  return withTransaction(async run=>{
+    const [[current]]=await run('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1 FOR UPDATE',[policySet.id])
+    const raw=parseJson(current?.config_json,{})
+    const normalized=normalizePlatformRiskConfig({currentValues:raw.values||raw.defaults||raw,currentControls:raw.controls||{},valueChanges:values,controlChanges:controls})
+    const now=beijingNow(),versionNo=number(current?.version_no)+1
+    const [insert]=await run(`INSERT INTO risk_policy_versions (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`,[policySet.id,versionNo,JSON.stringify(normalized),actorId,String(reason||'管理员更新平台风控').slice(0,255),now,now])
+    await run('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?',[insert.insertId,now,policySet.id])
+    return {active_version_id:number(insert.insertId),version_no:versionNo,effective_at:now}
+  })
 }
