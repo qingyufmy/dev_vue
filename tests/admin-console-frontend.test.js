@@ -27,6 +27,13 @@ describe('unified admin console contract', () => {
     expect(app).toContain('`/api/admin/users/${userId}`')
     expect(routes).toContain("router.patch('/admin/users/:userId'")
     expect(routes).toContain('translateAdminProfileError')
+    expect(app).toContain('运行与风控')
+    expect(app).toContain('/operations-detail')
+    expect(app).toContain('/runtime`')
+    expect(app).toContain('/risk`')
+    expect(app).toContain('/subscriptions/${row.dataset.operationsSubscription}')
+    expect(css).toContain('.operations-runtime')
+    expect(css).toContain('.operations-risk-grid')
   })
 
   it('centralizes orders, membership notifications and referral settlement', () => {
