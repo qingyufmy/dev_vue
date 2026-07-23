@@ -194,6 +194,22 @@ h2 { margin:3px 0 0; font-size:22px; }
 .runtime-switches label { min-height:38px; display:flex; align-items:center; gap:7px; padding:0 10px; border:1px solid var(--border); border-radius:9px; color:var(--text-2); cursor:pointer; }
 .runtime-switches input { width:17px; height:17px; accent-color:var(--gold); }
 .channel-name { display:flex; align-items:center; gap:7px; }
+.stop-action { margin-left:auto; width:min(360px,42%); display:flex; align-items:center; gap:8px; }
+.stop-action .input { min-width:0; }
+.stop-action button { flex:0 0 auto; }
+.health-mark.risk-stop { background:rgba(255,104,120,.12); color:var(--red); }
+.risk-account-list,.decision-list { display:grid; gap:9px; padding:14px; }
+.risk-account-row,.decision-row { min-height:82px; display:flex; align-items:center; gap:13px; padding:13px 14px; border:1px solid var(--border); border-radius:11px; background:var(--surface-2); }
+.risk-account-row .health-mark { width:40px; height:40px; border-radius:11px; font-size:18px; }
+.risk-account-main { flex:1; min-width:0; }
+.risk-account-main > div:first-child { display:flex; align-items:center; gap:8px; }
+.risk-account-main small { display:block; margin-top:3px; color:var(--muted); }
+.risk-account-facts { display:flex; gap:16px; margin-top:9px; color:var(--muted); font-size:11px; }
+.risk-account-facts b { color:var(--text-2); }
+.decision-row { align-items:flex-start; justify-content:space-between; }
+.decision-row small { display:block; margin-top:3px; color:var(--muted); }
+.decision-reason { max-width:60%; text-align:right; }
+.decision-reason p { margin:6px 0 0; color:var(--text-2); }
 .modal-header { min-height:78px; display:flex; align-items:center; justify-content:space-between; padding:14px 18px 14px 22px; border-bottom:1px solid var(--border); }
 .modal-body { min-height:300px; overflow-y:auto; padding:20px 22px 24px; }
 .detail-hero { display:flex; align-items:center; gap:14px; margin-bottom:20px; }
@@ -261,6 +277,11 @@ h2 { margin:3px 0 0; font-size:22px; }
   .observer-source-row { align-items:flex-start; flex-direction:column; }
   .runtime-switches { width:100%; display:grid; grid-template-columns:1fr 1fr; }
   .runtime-switches label { justify-content:center; }
+  .stop-action { width:100%; margin-left:0; flex-direction:column; align-items:stretch; }
+  .stop-action button { width:100%; }
+  .health-banner { flex-wrap:wrap; }
+  .decision-row { flex-direction:column; }
+  .decision-reason { max-width:none; text-align:left; }
 }
 @media (max-width:420px) {
   .metric-grid { grid-template-columns:1fr 1fr; }

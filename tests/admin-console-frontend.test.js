@@ -7,6 +7,7 @@ const css = readFileSync(new URL('../public/admin/styles.css', import.meta.url),
 const routes = readFileSync(new URL('../server/routes/admin-console.js', import.meta.url), 'utf8')
 const legacyAdmin = readFileSync(new URL('../server/routes/admin.js', import.meta.url), 'utf8')
 const aiOperations = readFileSync(new URL('../server/admin/ai-operations.js', import.meta.url), 'utf8')
+const riskAudit = readFileSync(new URL('../server/admin/risk-audit.js', import.meta.url), 'utf8')
 
 describe('unified admin console contract', () => {
   it('ships a standalone accessible and responsive administration surface', () => {
@@ -59,5 +60,17 @@ describe('unified admin console contract', () => {
     expect(aiOperations).toContain('getReviewAdminHealth()')
     expect(aiOperations).toContain("redis.smembers('auto:scheduler:keys')")
     expect(css).toContain('.observer-admin-grid')
+  })
+
+  it('centralizes risk status, decisions and administrator audit records', () => {
+    expect(html).toContain('data-view="risk-audit"')
+    expect(app).toContain('/api/admin/risk-audit/overview?')
+    expect(app).toContain('/api/admin/risk-audit/admin-events?')
+    expect(app).toContain("api('/api/admin/risk-audit/global-stop'")
+    expect(routes).toContain("router.get('/admin/risk-audit/overview'")
+    expect(routes).toContain("router.post('/admin/risk-audit/global-stop'")
+    expect(riskAudit).toContain('formatRiskReason(row.reject_code')
+    expect(app).not.toContain("prompt('请输入开启平台紧急停止")
+    expect(css).toContain('.risk-account-list')
   })
 })

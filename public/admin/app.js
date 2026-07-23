@@ -5,6 +5,7 @@ const state = {
   notificationPage:1, notificationSearch:'', notificationStatus:'all', notificationChannel:'all',
   referralStatus:'all',
   aiTab:'health', aiOperations:null,
+  riskTab:'status', riskData:null, riskPage:1, riskDecision:'all', auditPage:1, auditSearch:'',
 }
 
 const icons = {
@@ -12,6 +13,7 @@ const icons = {
   users:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   commercial:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M8 15h3"/></svg>',
   activity:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>',
+  shield:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 4 6v6c0 5 3.4 8.2 8 9 4.6-.8 8-4 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-5"/></svg>',
   archive:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 8v13H3V8M1 3h22v5H1z"/><path d="M10 12h4"/></svg>',
   chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/></svg>',
   home:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 9-8 9 8v10h-6v-6H9v6H3z"/></svg>',
@@ -488,6 +490,38 @@ async function renderAiOperations() {
   await loadAiOperations()
 }
 
+function riskTabs() { return `<nav class="segment-tabs" aria-label="风控与审计分类"><button class="segment-tab ${state.riskTab === 'status' ? 'is-active' : ''}" data-risk-tab="status" type="button">风险状态</button><button class="segment-tab ${state.riskTab === 'decisions' ? 'is-active' : ''}" data-risk-tab="decisions" type="button">执行决策</button><button class="segment-tab ${state.riskTab === 'audit' ? 'is-active' : ''}" data-risk-tab="audit" type="button">管理审计</button></nav>` }
+function accountRiskStatus(account) {
+  const stopped = account.user_kill_switch || account.halt_status && account.halt_status !== 'active' || !account.data_complete
+  const reason = account.user_kill_switch ? '账户紧急停止已开启' : !account.data_complete ? (account.data_incomplete_reason || '风控数据尚不完整') : account.halt_status && account.halt_status !== 'active' ? (account.halt_reason || '账户已暂停新开仓') : '当前允许交易'
+  return `<article class="risk-account-row"><span class="health-mark ${stopped ? 'risk-stop' : ''}">${stopped ? '!' : '✓'}</span><div class="risk-account-main"><div><strong>${escapeHtml(account.nickname || account.login_account)}</strong><span class="badge ${stopped ? 'expired' : 'active'}">${stopped ? '已暂停' : '允许交易'}</span></div><small>${escapeHtml(account.user_nickname || account.user_email)} · ${escapeHtml(reason)}</small><div class="risk-account-facts"><span>回撤 <b>${account.drawdown_pct ?? '--'}%</b></span><span>连亏 <b>${account.consecutive_losses ?? '--'}</b></span><span>数据 <b>${account.data_complete ? '完整' : '不完整'}</b></span></div></div></article>`
+}
+function riskStatusContent(data) {
+  const s = data.summary, global = data.global_control
+  return `<section class="health-banner ${global.global_kill_switch ? 'needs-attention' : 'is-healthy'}"><span class="health-mark ${global.global_kill_switch ? 'risk-stop' : ''}">${global.global_kill_switch ? '!' : '✓'}</span><div><span class="eyebrow">平台交易总闸门</span><h2>${global.global_kill_switch ? '平台已暂停所有新开仓' : '平台交易总闸门正常'}</h2><p>${global.global_kill_switch ? escapeHtml(global.reason || '管理员已开启紧急停止') : '账户仍会分别接受自身风控规则检查。'}</p></div><div class="stop-action">${global.global_kill_switch ? '' : '<input class="input" id="globalStopReason" maxlength="120" placeholder="填写停止原因（至少 4 个字）">'}<button class="${global.global_kill_switch ? 'secondary-button' : 'danger-button primary-button'}" data-global-stop type="button">${global.global_kill_switch ? '解除紧急停止' : '紧急停止新开仓'}</button></div></section><section class="metric-grid">${metric('今日风控决策',s.decisions_today,`${s.adjusted_today} 次调整`,true)}${metric('今日拒绝',s.rejected_today,'正常规则命中')}${metric('暂停账户',s.paused_accounts,`共 ${s.trading_accounts} 个账户`)}${metric('管理操作',s.admin_actions_today,'今日审计记录')}</section><section class="panel"><header class="section-head"><div><h2>账户风险状态</h2><p>优先展示暂停、数据不完整和紧急停止账户。</p></div></header><div class="risk-account-list">${data.accounts.map(accountRiskStatus).join('') || '<div class="empty-state">暂无交易账户</div>'}</div></section>`
+}
+function riskDecisionsContent(data) {
+  return `<section class="panel"><form class="filter-bar compact-filter" id="riskDecisionFilter"><div class="field"><label for="riskDecision">决策结果</label><select class="select" id="riskDecision"><option value="all">全部结果</option><option value="pass">通过</option><option value="adjust">调整后通过</option><option value="reject">拒绝</option></select></div><button class="secondary-button" type="submit">筛选</button></form><div class="decision-list">${data.decisions.map(item => `<article class="decision-row"><div><strong>#${item.id} · ${escapeHtml(item.symbol || '--')}</strong><small>${escapeHtml(item.user_nickname || item.user_email || `用户 #${item.user_id}`)} · ${formatDate(item.created_at,true)}</small></div><div class="decision-reason"><span class="badge ${item.decision_status === 'reject' ? 'expired' : 'active'}">${item.decision_status === 'reject' ? '拒绝' : item.decision_status === 'adjust' ? '调整后通过' : '通过'}</span><p>${escapeHtml(item.reason || '风控检查已完成')}</p></div></article>`).join('') || '<div class="empty-state">没有符合条件的风控决策</div>'}</div><div class="pagination"><button class="secondary-button" id="riskPrev" type="button">上一页</button><span>第 ${data.pagination.page} / ${data.pagination.total_pages} 页 · 共 ${data.pagination.total} 条</span><button class="secondary-button" id="riskNext" type="button">下一页</button></div></section>`
+}
+async function loadRiskAudit() {
+  const params = new URLSearchParams({page:String(state.riskPage),page_size:'20',decision:state.riskDecision})
+  const data = await api(`/api/admin/risk-audit/overview?${params}`); state.riskData = data; renderRiskContent()
+}
+async function renderAuditEvents() {
+  const params = new URLSearchParams({page:String(state.auditPage),page_size:'20'}); if(state.auditSearch) params.set('search',state.auditSearch)
+  const data = await api(`/api/admin/risk-audit/admin-events?${params}`)
+  document.querySelector('#riskContent').innerHTML = `<section class="panel"><form class="filter-bar compact-filter" id="auditSearchForm"><div class="field"><label for="auditSearch">搜索操作记录</label><input class="input" id="auditSearch" value="${escapeHtml(state.auditSearch)}" placeholder="管理员、动作或详情"></div><button class="secondary-button" type="submit">搜索</button></form><div class="decision-list">${data.events.map(item=>`<article class="decision-row"><div><strong>${escapeHtml(item.action_label)}</strong><small>${escapeHtml(item.user_nickname || item.user_email || `管理员 #${item.user_id}`)} · ${formatDate(item.created_at,true)}</small></div><div class="decision-reason"><span class="badge">${escapeHtml(item.target_type || '系统')}</span><p>${escapeHtml(item.detail || '已记录操作')}</p></div></article>`).join('') || '<div class="empty-state">暂无管理操作记录</div>'}</div><div class="pagination"><button class="secondary-button" id="auditPrev" type="button">上一页</button><span>第 ${data.pagination.page} / ${data.pagination.total_pages} 页 · 共 ${data.pagination.total} 条</span><button class="secondary-button" id="auditNext" type="button">下一页</button></div></section>`
+  document.querySelector('#auditSearchForm').onsubmit=e=>{e.preventDefault();state.auditSearch=document.querySelector('#auditSearch').value.trim();state.auditPage=1;renderAuditEvents().catch(handleError)}
+  document.querySelector('#auditPrev').disabled=data.pagination.page<=1; document.querySelector('#auditNext').disabled=data.pagination.page>=data.pagination.total_pages
+  document.querySelector('#auditPrev').onclick=()=>{state.auditPage--;renderAuditEvents().catch(handleError)};document.querySelector('#auditNext').onclick=()=>{state.auditPage++;renderAuditEvents().catch(handleError)}
+}
+function bindRiskStatus() {
+  const stop=document.querySelector('[data-global-stop]'); if(!stop)return
+  stop.onclick=async()=>{const enabled=!state.riskData.global_control.global_kill_switch;const reason=enabled?(document.querySelector('#globalStopReason')?.value.trim()||''):'';if(enabled&&reason.length<4){toast('请先填写至少 4 个字的停止原因','error');document.querySelector('#globalStopReason')?.focus();return} if(!await confirmAction(enabled?'开启平台紧急停止':'解除平台紧急停止',enabled?'开启后所有账户都不能新增仓位。':'解除后各账户仍会继续接受自身风控检查。',enabled?'确认停止':'确认解除',enabled))return;try{await api('/api/admin/risk-audit/global-stop',{method:'POST',body:JSON.stringify({enabled,reason})});toast('平台紧急停止状态已更新','success');await loadRiskAudit()}catch(error){handleError(error)}}
+}
+function renderRiskContent(){const root=document.querySelector('#riskContent');if(!root||!state.riskData)return;if(state.riskTab==='decisions')root.innerHTML=riskDecisionsContent(state.riskData);else root.innerHTML=riskStatusContent(state.riskData);if(state.riskTab==='status')bindRiskStatus();if(state.riskTab==='decisions'){const select=document.querySelector('#riskDecision');select.value=state.riskDecision;document.querySelector('#riskDecisionFilter').onsubmit=e=>{e.preventDefault();state.riskDecision=select.value;state.riskPage=1;loadRiskAudit().catch(handleError)};const p=state.riskData.pagination;document.querySelector('#riskPrev').disabled=p.page<=1;document.querySelector('#riskNext').disabled=p.page>=p.total_pages;document.querySelector('#riskPrev').onclick=()=>{state.riskPage--;loadRiskAudit().catch(handleError)};document.querySelector('#riskNext').onclick=()=>{state.riskPage++;loadRiskAudit().catch(handleError)}}}
+async function renderRiskAudit(){const main=document.querySelector('#adminMain');main.innerHTML=`<header class="page-head"><div><span class="eyebrow">交易安全与操作追溯</span><h1>风控与审计</h1><p>先确认平台和账户能否交易，再追溯每次风控决策与管理操作。</p></div><a class="secondary-button" href="/ai/?tab=global-risk">编辑全局规则</a></header>${riskTabs()}<div id="riskContent"><div class="panel"><div class="empty-state">正在读取风控状态…</div></div></div>`;document.querySelectorAll('[data-risk-tab]').forEach(button=>button.onclick=async()=>{state.riskTab=button.dataset.riskTab;document.querySelectorAll('[data-risk-tab]').forEach(item=>item.classList.toggle('is-active',item===button));if(state.riskTab==='audit')await renderAuditEvents();else {if(!state.riskData)await loadRiskAudit();else renderRiskContent()}});await loadRiskAudit()}
+
 async function setView(view) {
   state.view = view
   document.querySelectorAll('.nav-item[data-view]').forEach(item => item.classList.toggle('is-active', item.dataset.view === view))
@@ -498,6 +532,7 @@ async function setView(view) {
     if (view === 'users') await renderUsers()
     else if (view === 'commercial') await renderCommercial()
     else if (view === 'ai-operations') await renderAiOperations()
+    else if (view === 'risk-audit') await renderRiskAudit()
     else await renderOverview()
     document.querySelector('#adminMain').focus({ preventScroll:true })
   } catch (error) { handleError(error) }
@@ -515,7 +550,7 @@ async function bootstrap() {
   try {
     await loadProfile()
     const requested = new URLSearchParams(location.search).get('view')
-    await setView(['users','commercial','ai-operations'].includes(requested) ? requested : 'overview')
+    await setView(['users','commercial','ai-operations','risk-audit'].includes(requested) ? requested : 'overview')
   } catch (error) { handleError(error) }
 }
 bootstrap()

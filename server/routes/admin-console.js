@@ -6,6 +6,8 @@ import { getAdminAiOperationsOverview } from '../admin/ai-operations.js'
 import { updateObserverChannel, updateObserverSource } from './ai/observer-channels.js'
 import { reconcileAutoSchedulers } from './ai/scheduler.js'
 import { applyBridgeRuntimeState } from '../bridge-ws.js'
+import { getAdminRiskAuditOverview, listAdminAuditEvents } from '../admin/risk-audit.js'
+import { setGlobalKillSwitch } from './ai/risk-state.js'
 
 const router = Router()
 
@@ -106,6 +108,26 @@ router.patch('/admin/ai/observer-sources/:id/runtime', authMiddleware, adminOnly
 router.patch('/admin/ai/observer-channels/:id', authMiddleware, adminOnly, async (req, res) => {
   try { res.json({ ok:true, channel:await updateObserverChannel(req.params.id, req.body || {}) }) }
   catch (error) { adminAiError(res, error) }
+})
+
+router.get('/admin/risk-audit/overview', authMiddleware, adminOnly, async (req, res) => {
+  try { res.json({ ok:true, ...(await getAdminRiskAuditOverview({ page:req.query.page, pageSize:req.query.page_size, decision:req.query.decision })) }) }
+  catch (error) { console.error('[AdminConsole] risk audit overview failed:', error); res.status(500).json({ ok:false, error:'风控与审计数据加载失败' }) }
+})
+
+router.get('/admin/risk-audit/admin-events', authMiddleware, adminOnly, async (req, res) => {
+  try { res.json({ ok:true, ...(await listAdminAuditEvents({ page:req.query.page, pageSize:req.query.page_size, search:req.query.search })) }) }
+  catch (error) { console.error('[AdminConsole] admin audit events failed:', error); res.status(500).json({ ok:false, error:'管理操作记录加载失败' }) }
+})
+
+router.post('/admin/risk-audit/global-stop', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const enabled = Boolean(req.body?.enabled)
+    const reason = String(req.body?.reason || '').trim()
+    if (enabled && reason.length < 4) return res.status(400).json({ ok:false, error:'开启平台紧急停止时，请填写至少 4 个字的原因' })
+    await setGlobalKillSwitch(req.user.id, req.user.role, enabled, reason)
+    res.json({ ok:true })
+  } catch (error) { adminAiError(res, error) }
 })
 
 router.get('/admin/commercial/overview', authMiddleware, adminOnly, async (req, res) => {
