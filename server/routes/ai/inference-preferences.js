@@ -60,7 +60,7 @@ export async function saveInferencePreference(userId, sessionId = 'default', inp
   const riskLevel = String(input.risk_level || DEFAULT_PREFERENCE.risk_level)
   if (!['low', 'medium', 'high'].includes(riskLevel)) throw new Error('invalid_risk_level')
   const maxPositionSize = Number(input.max_position_size)
-  if (!Number.isFinite(maxPositionSize) || maxPositionSize < 0.01 || maxPositionSize > 100) throw new Error('invalid_max_position_size')
+  if (!Number.isFinite(maxPositionSize) || maxPositionSize < 0.01 || maxPositionSize > 5) throw new Error('invalid_max_position_size')
   const selectedTakeProfit = Number(input.selected_take_profit)
   if (![1, 2, 3].includes(selectedTakeProfit)) throw new Error('invalid_take_profit_selection')
   const systemPrompt = input.system_prompt == null ? null : String(input.system_prompt).trim()

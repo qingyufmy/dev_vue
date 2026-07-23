@@ -284,6 +284,8 @@ describe('versioned policy semantics', () => {
     expect(DEFAULT_RISK_POLICY).not.toHaveProperty('min_rr')
     expect(DEFAULT_RISK_POLICY).not.toHaveProperty('max_directional_exposure_lots')
     expect(DEFAULT_RISK_POLICY).not.toHaveProperty('min_margin_level_pct')
+    expect(RISK_RULES.max_position_size.allowed_max).toBe(5)
+    expect(RISK_RULES.max_risk_per_trade_pct.allowed_max).toBe(100)
   })
 
   it('uses the administrator range as the user boundary independently of the platform default', () => {
@@ -291,10 +293,10 @@ describe('versioned policy semantics', () => {
       currentValues: DEFAULT_RISK_POLICY,
       valueChanges: { max_risk_per_trade_pct: 1 },
       controlChanges: {
-        max_risk_per_trade_pct: { allowed_min:0.01, allowed_max:20 },
+        max_risk_per_trade_pct: { allowed_min:0.01, allowed_max:100 },
       },
     })
-    expect(normalized.controls.max_risk_per_trade_pct.allowed_max).toBe(20)
+    expect(normalized.controls.max_risk_per_trade_pct.allowed_max).toBe(100)
     expect(normalizePlatformRiskConfig({
       currentValues: DEFAULT_RISK_POLICY,
       controlChanges: { max_position_size: { allowed_min:0.001, allowed_max:1 } },
@@ -304,6 +306,12 @@ describe('versioned policy semantics', () => {
     })
     expect(() => normalizePlatformRiskConfig({ valueChanges:{ observation_hours:72 } })).toThrow('unknown_risk_field:observation_hours')
     expect(() => normalizePlatformRiskConfig({ valueChanges:{ min_margin_level_pct:300 } })).toThrow('unknown_risk_field:min_margin_level_pct')
+    expect(() => normalizePlatformRiskConfig({
+      controlChanges:{ max_position_size:{ allowed_min:0.001, allowed_max:5.01 } },
+    })).toThrow('invalid_global_risk_range:max_position_size')
+    expect(() => normalizePlatformRiskConfig({
+      controlChanges:{ max_risk_per_trade_pct:{ allowed_min:0.01, allowed_max:100.01 } },
+    })).toThrow('invalid_global_risk_range:max_risk_per_trade_pct')
   })
 
   it('applies tightening and relaxation immediately in one version while retaining field audits', async () => {

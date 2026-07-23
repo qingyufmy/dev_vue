@@ -505,7 +505,7 @@ describe('AI governance navigation and DOM contract', () => {
   })
 
   it('explains personal single-trade risk levels and confirms the first move above recommendation', () => {
-    expect(app).toContain('function singleTradeRiskLevel(value, maximum = 2)')
+    expect(app).toContain('function singleTradeRiskLevel(value, maximum = 100)')
     expect(app).toContain('标准（推荐）')
     expect(app).toContain('data-risk-preference-preview')
     expect(app).toContain('试探仓')
@@ -516,6 +516,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('showConfirm("确认提高单笔风险"')
     expect(css).toContain('.risk-preference-preview')
     expect(css).toContain('.risk-group-level.high')
+    expect(css).toContain('.risk-group-level.critical')
     expect(responsiveCss).toContain('.risk-tier-impact')
   })
 

@@ -3332,6 +3332,50 @@ const migrations = [
         KEY idx_bridge_refresh_expiry (expires_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '122_expand_account_risk_boundaries',
+    async up() {
+      const sets = await queryAll("SELECT id FROM risk_policy_sets WHERE scope = 'platform' AND status = 'active' ORDER BY id LIMIT 1")
+      if (!sets[0]) return
+      const versions = await queryAll('SELECT * FROM risk_policy_versions WHERE policy_set_id = ? ORDER BY version_no DESC LIMIT 1', [sets[0].id])
+      if (!versions[0]) return
+      let raw = {}
+      try { raw = versions[0].config_json ? JSON.parse(versions[0].config_json) : {} } catch {}
+      const flatValues = { ...raw }
+      delete flatValues.values
+      delete flatValues.defaults
+      delete flatValues.controls
+      delete flatValues._controls
+      const values = { ...(raw.values || raw.defaults || flatValues) }
+      const controls = { ...(raw.controls || raw._controls || {}) }
+      values.max_position_size = Math.min(5, Math.max(0.001, Number(values.max_position_size) || 0.05))
+      values.max_risk_per_trade_pct = Math.min(100, Math.max(0.01, Number(values.max_risk_per_trade_pct) || 1))
+      controls.max_position_size = {
+        ...(controls.max_position_size || {}),
+        allowed_min:Math.min(5, Math.max(0.001, Number(controls.max_position_size?.allowed_min) || 0.001)),
+        allowed_max:5,
+        locked_value:controls.max_position_size?.locked_value == null
+          ? null : Math.min(5, Math.max(0.001, Number(controls.max_position_size.locked_value) || values.max_position_size)),
+        user_editable:controls.max_position_size?.user_editable !== false,
+      }
+      controls.max_risk_per_trade_pct = {
+        ...(controls.max_risk_per_trade_pct || {}),
+        allowed_min:Math.min(100, Math.max(0.01, Number(controls.max_risk_per_trade_pct?.allowed_min) || 0.01)),
+        allowed_max:100,
+        locked_value:controls.max_risk_per_trade_pct?.locked_value == null
+          ? null : Math.min(100, Math.max(0.01, Number(controls.max_risk_per_trade_pct.locked_value) || values.max_risk_per_trade_pct)),
+        user_editable:controls.max_risk_per_trade_pct?.user_editable !== false,
+      }
+      const now = beijingNow()
+      const inserted = await queryRun(`INSERT INTO risk_policy_versions
+        (policy_set_id, version_no, config_json, created_by, change_reason, effective_at, created_at)
+        VALUES (?, ?, ?, 0, '扩大账户单笔手数与风险可选上限', ?, ?)`, [
+        sets[0].id, Number(versions[0].version_no || 0) + 1,
+        JSON.stringify({ values, controls }), now, now,
+      ])
+      await queryRun('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?', [inserted.insertId, now, sets[0].id])
+    }
   }
 ]
 

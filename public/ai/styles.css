@@ -8180,6 +8180,7 @@ a.signal-link:hover {
 .risk-group-level.standard { border-color: var(--border-gold); color: var(--gold-light); }
 .risk-group-level.elevated { border-color: var(--color-warning-border); color: #fbbf24; }
 .risk-group-level.high,
+.risk-group-level.critical,
 .risk-group-level.invalid { border-color: var(--color-positive-border); color: #fda4af; }
 
 .risk-policy-group .risk-rule-table {
@@ -8214,6 +8215,7 @@ a.signal-link:hover {
 .risk-preference-preview.standard { border-color: var(--border-gold); background: var(--gold-wash-subtle); }
 .risk-preference-preview.elevated { border-color: var(--color-warning-border); background: var(--color-warning-bg); }
 .risk-preference-preview.high,
+.risk-preference-preview.critical,
 .risk-preference-preview.invalid { border-color: var(--color-positive-border); background: var(--color-positive-bg); }
 
 .risk-preference-heading {
@@ -8255,6 +8257,7 @@ a.signal-link:hover {
 .risk-preference-preview.standard .risk-preference-heading > b { color: var(--gold-light); }
 .risk-preference-preview.elevated .risk-preference-heading > b { color: #fbbf24; }
 .risk-preference-preview.high .risk-preference-heading > b,
+.risk-preference-preview.critical .risk-preference-heading > b,
 .risk-preference-preview.invalid .risk-preference-heading > b { color: #fda4af; }
 
 .risk-tier-impact {
@@ -8284,9 +8287,11 @@ a.signal-link:hover {
 
 .risk-overview-level.elevated { border-color: var(--color-warning-border) !important; }
 .risk-overview-level.high,
+.risk-overview-level.critical,
 .risk-overview-level.invalid { border-color: var(--color-positive-border) !important; }
 .risk-overview-level.elevated > strong { color: #fbbf24; }
 .risk-overview-level.high > strong,
+.risk-overview-level.critical > strong,
 .risk-overview-level.invalid > strong { color: #fda4af; }
 
 .risk-rule-name small {

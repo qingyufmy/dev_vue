@@ -51,6 +51,9 @@ describe('inference preferences', () => {
     await expect(saveInferencePreference(8, 'default', {
       risk_level: 'medium', max_position_size: 0, selected_take_profit: 2,
     })).rejects.toThrow('invalid_max_position_size')
+    await expect(saveInferencePreference(8, 'default', {
+      risk_level: 'medium', max_position_size: 5.01, selected_take_profit: 2,
+    })).rejects.toThrow('invalid_max_position_size')
     expect(queryRun).not.toHaveBeenCalled()
   })
 
