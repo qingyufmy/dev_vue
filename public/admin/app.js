@@ -4,6 +4,7 @@ const state = {
   orderPage:1, orderSearch:'', orderStatus:'all',
   notificationPage:1, notificationSearch:'', notificationStatus:'all', notificationChannel:'all',
   referralStatus:'all',
+  aiTab:'health', aiOperations:null,
 }
 
 const icons = {
@@ -370,6 +371,123 @@ function confirmAction(title, message, confirmLabel = '确认', danger = false) 
 }
 function handleError(error) { toast(error?.message || '操作失败，请稍后重试', 'error') }
 
+const schedulerReasonLabels = {
+  cooldown:'冷却期内', admin_bridge_offline:'管理员桥接离线', market_closed:'市场休市',
+  market_restricted:'交易权限受限', market_stale_tick:'行情报价停滞', market_unknown:'市场状态未知',
+  redis_unavailable:'缓存服务不可用', weekly_flatten_window:'周末清仓时段', no_api_key:'模型密钥未配置',
+  strategy_disabled:'策略已停用', user_bridge_offline:'用户桥接离线', owner_bridge_offline:'观摩源桥接离线',
+  lock_busy:'等待上一轮调度结束', redis_error:'缓存服务通信异常', finalize_failed:'调度状态恢复中',
+}
+function schedulerReason(reason, error = false) {
+  const code = String(reason || '').trim()
+  return schedulerReasonLabels[code] || (error ? '调度运行异常，请查看服务日志' : '等待运行条件恢复')
+}
+function percent(success, total) {
+  return Number(total) > 0 ? `${Math.max(0, Number(success) / Number(total) * 100).toFixed(1)}%` : '100%'
+}
+function aiTabs() {
+  return `<nav class="segment-tabs" aria-label="AI 运营治理分类">
+    <button type="button" class="segment-tab ${state.aiTab === 'health' ? 'is-active' : ''}" data-ai-tab="health">运行健康</button>
+    <button type="button" class="segment-tab ${state.aiTab === 'scheduler' ? 'is-active' : ''}" data-ai-tab="scheduler">调度与模型</button>
+    <button type="button" class="segment-tab ${state.aiTab === 'observer' ? 'is-active' : ''}" data-ai-tab="observer">观摩频道</button>
+  </nav>`
+}
+function bindAiTabs() {
+  document.querySelectorAll('[data-ai-tab]').forEach(button => button.addEventListener('click', () => {
+    state.aiTab = button.dataset.aiTab
+    renderAiOperationsContent()
+  }))
+}
+function aiHealthContent(data) {
+  const summary = data.summary
+  const requests = Number(summary.model_requests_today || 0)
+  const failures = Number(summary.model_failures_today || 0)
+  const alerts = Array.isArray(data.rollout?.alerts) ? data.rollout.alerts : []
+  const pendingReviews = (data.review_health?.cases || []).filter(item => ['draft','edited','ready','generating'].includes(item.status)).reduce((sum, item) => sum + Number(item.case_count || 0), 0)
+  const failedReviews = (data.review_health?.cases || []).filter(item => item.status === 'failed').reduce((sum, item) => sum + Number(item.case_count || 0), 0)
+  const healthy = failures === 0 && alerts.length === 0 && failedReviews === 0
+  return `<section class="health-banner ${healthy ? 'is-healthy' : 'needs-attention'}">
+      <span class="health-mark">${healthy ? '✓' : '!'}</span><div><span class="eyebrow">平台运行结论</span><h2>${healthy ? 'AI 核心链路运行正常' : '存在需要处理的运行事项'}</h2><p>${healthy ? '模型、调度与复盘链路未发现阻断性异常。' : `模型失败 ${failures} 次，治理告警 ${alerts.length} 项，失败复盘 ${failedReviews} 条。`}</p></div>
+    </section>
+    <section class="content-grid ai-health-grid">
+      <article class="panel"><header class="section-head"><div><h2>今日核心链路</h2><p>只保留影响推理和交易交付的关键指标。</p></div></header><div class="panel-body compact-facts">
+        <div><span>模型成功率</span><strong>${percent(requests - failures, requests)}</strong><small>${requests} 次请求</small></div>
+        <div><span>平均模型响应</span><strong>${summary.avg_model_latency_ms ? `${(summary.avg_model_latency_ms / 1000).toFixed(1)} 秒` : '--'}</strong><small>成功请求</small></div>
+        <div><span>今日推理信号</span><strong>${Number(summary.signals_today || 0)}</strong><small>${Number(summary.signal_errors_today || 0)} 条异常</small></div>
+        <div><span>在线桥接</span><strong>${Number(summary.connected_bridges || 0)}</strong><small>90 秒内活跃</small></div>
+      </div></article>
+      <article class="panel"><header class="section-head"><div><h2>待处理事项</h2><p>正常风控拒绝不会被误判为系统故障。</p></div></header><div class="panel-body attention-stack">
+        ${alerts.length ? alerts.map(item => `<div class="attention-row"><span class="badge expired">${item.severity === 'critical' ? '紧急' : '关注'}</span><div><strong>${item.code === 'uncertain_order_age' ? '存在长期未确认订单' : item.code === 'review_jobs_failed' ? '复盘任务生成失败' : item.code === 'memory_compression_stale' ? '记忆压缩任务积压' : 'AI 治理任务异常'}</strong><small>系统值：${Number(item.value || 0)}</small></div></div>`).join('') : '<div class="empty-inline">当前没有治理告警</div>'}
+        <div class="attention-row"><span class="badge ${failedReviews ? 'expired' : 'active'}">复盘</span><div><strong>${pendingReviews} 条待处理，${failedReviews} 条失败</strong><small>按最新有效版本统计</small></div></div>
+        <div class="attention-row"><span class="badge">风控</span><div><strong>今日正常拒绝 ${Number(summary.risk_rejections_today || 0)} 次</strong><small>用于观察规则命中，不计入系统故障</small></div></div>
+      </div></article>
+    </section>`
+}
+function schedulerCards(data) {
+  const runtime = data.scheduler?.runtime || []
+  const configured = data.scheduler?.configured || []
+  if (!runtime.length && !configured.length) return '<div class="empty-state"><div><strong>当前没有启用的自动分析调度</strong><p>启用策略订阅后，运行状态会出现在这里。</p></div></div>'
+  const runtimeIds = new Set(runtime.map(item => Number(item.strategy_id)))
+  const cards = runtime.map(item => {
+    const stateText = item.in_flight ? '正在分析' : item.last_error ? '运行异常' : item.wait_reason ? '等待条件' : item.running ? '等待下一轮' : '已停止'
+    const tone = item.last_error ? 'expired' : item.in_flight || (item.running && !item.wait_reason) ? 'active' : ''
+    const reason = item.last_error ? schedulerReason(item.last_error, true) : item.wait_reason ? schedulerReason(item.wait_reason) : '运行状态正常'
+    return `<article class="runtime-card"><header><div><strong>${escapeHtml(item.strategy_name || `策略 #${item.strategy_id}`)}</strong><small>${escapeHtml(item.symbol || '--')} · 每 ${Number(item.interval_minutes || 5)} 分钟</small></div><span class="badge ${tone}">${stateText}</span></header><div class="runtime-facts"><span>订阅用户<strong>${Number(item.subscriber_count || 0)}</strong></span><span>下次运行<strong>${item.next_run_in_seconds > 0 ? `${item.next_run_in_seconds} 秒` : '--'}</strong></span></div><p>${escapeHtml(reason)}</p></article>`
+  })
+  configured.filter(item => !runtimeIds.has(Number(item.strategy_id))).forEach(item => cards.push(`<article class="runtime-card"><header><div><strong>${escapeHtml(item.strategy_name || `策略 #${item.strategy_id}`)}</strong><small>每 ${Number(item.interval_minutes || 5)} 分钟</small></div><span class="badge">等待实例</span></header><div class="runtime-facts"><span>订阅用户<strong>${Number(item.subscriber_count || 0)}</strong></span><span>运行实例<strong>未启动</strong></span></div><p>等待桥接或调度条件满足</p></article>`))
+  return `<div class="runtime-grid">${cards.join('')}</div>`
+}
+function aiSchedulerContent(data) {
+  const rows = data.model_usage || []
+  return `<section class="panel"><header class="section-head"><div><h2>自动分析调度</h2><p>${data.scheduler?.runtime_available ? '显示实时调度状态与等待原因。' : '实时缓存暂不可用，当前显示数据库配置。'}</p></div><span class="badge ${data.scheduler?.runtime_available ? 'active' : 'expired'}">${data.scheduler?.runtime_available ? '实时数据' : '降级数据'}</span></header>${schedulerCards(data)}</section>
+    <section class="panel section-gap"><header class="section-head"><div><h2>模型调用质量</h2><p>最近 24 小时按模型统计成功率、耗时和消耗。</p></div></header>
+      ${rows.length ? `<div class="table-wrap"><table class="user-table business-table"><thead><tr><th>模型</th><th>调用</th><th>成功率</th><th>平均响应</th><th>令牌消耗</th></tr></thead><tbody>${rows.map(row => `<tr><td><strong>${escapeHtml(row.model_name || '未命名模型')}</strong><div class="helper">${escapeHtml(row.credential_source || '未知来源')}</div></td><td class="mono">${row.requests}</td><td>${percent(row.requests - row.failures, row.requests)}</td><td>${row.avg_latency_ms ? `${(row.avg_latency_ms / 1000).toFixed(1)} 秒` : '--'}</td><td class="mono">${Number(row.tokens || 0).toLocaleString('zh-CN')}</td></tr>`).join('')}</tbody></table></div><div class="mobile-user-list">${rows.map(row => `<article class="mobile-user-card"><div class="mobile-user-card-head"><strong>${escapeHtml(row.model_name || '未命名模型')}</strong><span class="badge ${row.failures ? 'expired' : 'active'}">${percent(row.requests - row.failures, row.requests)}</span></div><div class="mobile-business-grid"><span>调用<strong>${row.requests}</strong></span><span>平均响应<strong>${row.avg_latency_ms ? `${(row.avg_latency_ms / 1000).toFixed(1)} 秒` : '--'}</strong></span><span>令牌<strong>${Number(row.tokens || 0).toLocaleString('zh-CN')}</strong></span></div></article>`).join('')}</div>` : '<div class="empty-state">最近 24 小时没有模型调用记录</div>'}
+    </section>`
+}
+function audienceLabel(value) { return ({all:'全部用户',plus:'Plus 用户',pro:'Pro 用户',assigned:'指定用户'})[value] || '未设置' }
+function aiObserverContent(data) {
+  const sources = data.observer?.sources || []
+  const channels = data.observer?.channels || []
+  return `<section class="observer-admin-grid"><article class="panel"><header class="section-head"><div><h2>观摩源</h2><p>直接控制每个来源是否自动分析、是否发送交易。</p></div><span class="badge">${sources.length} 个</span></header><div class="observer-stack">${sources.length ? sources.map(source => `<article class="observer-source-row"><div class="observer-source-title"><span class="provider-dot ${source.bridge_online ? 'ok' : ''}"></span><div><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(source.strategy_title || '未绑定策略')} · ${source.bridge_online ? '桥接在线' : '桥接离线'}</small></div></div><div class="runtime-switches"><label><input type="checkbox" data-source-toggle="auto" data-source-id="${Number(source.id)}" ${Number(source.auto_inference_enabled) ? 'checked' : ''}><span>自动分析</span></label><label><input type="checkbox" data-source-toggle="trade" data-source-id="${Number(source.id)}" ${Number(source.trade_send_enabled) ? 'checked' : ''}><span>交易发送</span></label></div></article>`).join('') : '<div class="empty-state">还没有配置观摩源</div>'}</div></article>
+    <article class="panel"><header class="section-head"><div><h2>频道分发</h2><p>查看默认频道、开放范围与来源状态。</p></div><span class="badge">${channels.length} 个</span></header><div class="observer-stack">${channels.length ? channels.map(channel => `<article class="channel-row"><div><div class="channel-name"><strong>${escapeHtml(channel.name)}</strong>${Number(channel.is_default) ? '<span class="badge active">默认</span>' : ''}</div><small>${escapeHtml(channel.source_name || '未绑定来源')} · ${audienceLabel(channel.audience)}</small></div><span class="badge ${channel.status === 'active' && channel.source_status === 'active' ? 'active' : 'expired'}">${channel.status === 'active' && channel.source_status === 'active' ? '可用' : '停用'}</span></article>`).join('') : '<div class="empty-state">还没有配置观摩频道</div>'}</div></article></section>`
+}
+function bindObserverRuntime() {
+  document.querySelectorAll('[data-source-toggle]').forEach(input => input.addEventListener('change', async () => {
+    const source = state.aiOperations.observer.sources.find(item => Number(item.id) === Number(input.dataset.sourceId))
+    if (!source) return
+    input.disabled = true
+    const nextAuto = input.dataset.sourceToggle === 'auto' ? input.checked : Boolean(Number(source.auto_inference_enabled))
+    const nextTrade = input.dataset.sourceToggle === 'trade' ? input.checked : Boolean(Number(source.trade_send_enabled))
+    try {
+      await api(`/api/admin/ai/observer-sources/${source.id}/runtime`, { method:'PATCH', body:JSON.stringify({ auto_inference_enabled:nextAuto, trade_send_enabled:nextTrade }) })
+      toast('观摩源运行设置已更新', 'success')
+      await loadAiOperations(true)
+    } catch (error) { input.checked = !input.checked; handleError(error) }
+    finally { input.disabled = false }
+  }))
+}
+function renderAiOperationsContent() {
+  const content = document.querySelector('#aiOperationsContent')
+  if (!content || !state.aiOperations) return
+  if (state.aiTab === 'scheduler') content.innerHTML = aiSchedulerContent(state.aiOperations)
+  else if (state.aiTab === 'observer') content.innerHTML = aiObserverContent(state.aiOperations)
+  else content.innerHTML = aiHealthContent(state.aiOperations)
+  document.querySelectorAll('[data-ai-tab]').forEach(button => button.classList.toggle('is-active', button.dataset.aiTab === state.aiTab))
+  if (state.aiTab === 'observer') bindObserverRuntime()
+}
+async function loadAiOperations(silent = false) {
+  if (!silent) document.querySelector('#aiOperationsContent').innerHTML = '<div class="panel"><div class="empty-state">正在汇总 AI 运行数据…</div></div>'
+  const data = await api('/api/admin/ai/overview')
+  state.aiOperations = data.operations
+  renderAiOperationsContent()
+}
+async function renderAiOperations() {
+  const main = document.querySelector('#adminMain')
+  main.innerHTML = `<header class="page-head"><div><span class="eyebrow">模型、调度与观摩分发</span><h1>AI 运营治理</h1><p>先确认核心链路是否健康，再处理调度、模型和观摩频道。</p></div><a class="secondary-button" href="/ai/?tab=admin-dashboard">打开旧版高级工具</a></header>${aiTabs()}<div id="aiOperationsContent"></div>`
+  bindAiTabs()
+  await loadAiOperations()
+}
+
 async function setView(view) {
   state.view = view
   document.querySelectorAll('.nav-item[data-view]').forEach(item => item.classList.toggle('is-active', item.dataset.view === view))
@@ -379,6 +497,7 @@ async function setView(view) {
   try {
     if (view === 'users') await renderUsers()
     else if (view === 'commercial') await renderCommercial()
+    else if (view === 'ai-operations') await renderAiOperations()
     else await renderOverview()
     document.querySelector('#adminMain').focus({ preventScroll:true })
   } catch (error) { handleError(error) }
@@ -396,7 +515,7 @@ async function bootstrap() {
   try {
     await loadProfile()
     const requested = new URLSearchParams(location.search).get('view')
-    await setView(['users','commercial'].includes(requested) ? requested : 'overview')
+    await setView(['users','commercial','ai-operations'].includes(requested) ? requested : 'overview')
   } catch (error) { handleError(error) }
 }
 bootstrap()

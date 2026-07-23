@@ -6,6 +6,7 @@ const app = readFileSync(new URL('../public/admin/app.js', import.meta.url), 'ut
 const css = readFileSync(new URL('../public/admin/styles.css', import.meta.url), 'utf8')
 const routes = readFileSync(new URL('../server/routes/admin-console.js', import.meta.url), 'utf8')
 const legacyAdmin = readFileSync(new URL('../server/routes/admin.js', import.meta.url), 'utf8')
+const aiOperations = readFileSync(new URL('../server/admin/ai-operations.js', import.meta.url), 'utf8')
 
 describe('unified admin console contract', () => {
   it('ships a standalone accessible and responsive administration surface', () => {
@@ -46,5 +47,17 @@ describe('unified admin console contract', () => {
     expect(legacyAdmin).toContain('FOR UPDATE')
     expect(legacyAdmin).toContain("referral.status !== 'pending'")
     expect(legacyAdmin).toContain('SELECT latest_order.id FROM orders latest_order')
+  })
+
+  it('moves AI runtime governance into the canonical admin console', () => {
+    expect(html).toContain('data-view="ai-operations"')
+    expect(app).toContain("api('/api/admin/ai/overview')")
+    expect(app).toContain('/api/admin/ai/observer-sources/${source.id}/runtime')
+    expect(routes).toContain("router.get('/admin/ai/overview'")
+    expect(routes).toContain("router.patch('/admin/ai/observer-sources/:id/runtime'")
+    expect(aiOperations).toContain('getAiRolloutHealth()')
+    expect(aiOperations).toContain('getReviewAdminHealth()')
+    expect(aiOperations).toContain("redis.smembers('auto:scheduler:keys')")
+    expect(css).toContain('.observer-admin-grid')
   })
 })

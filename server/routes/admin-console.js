@@ -2,6 +2,10 @@ import { Router } from 'express'
 import { queryAll, queryOne } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 import { translateAdminProfileError, updateAdminUserProfile } from '../admin/user-profile.js'
+import { getAdminAiOperationsOverview } from '../admin/ai-operations.js'
+import { updateObserverChannel, updateObserverSource } from './ai/observer-channels.js'
+import { reconcileAutoSchedulers } from './ai/scheduler.js'
+import { applyBridgeRuntimeState } from '../bridge-ws.js'
 
 const router = Router()
 
@@ -58,6 +62,51 @@ function serializeOrder(row) {
     created_at:row.created_at || null,
   }
 }
+
+const AI_OPERATION_ERRORS = {
+  observer_source_not_found:'观摩源不存在',
+  observer_channel_not_found:'观摩频道不存在',
+  observer_source_strategy_invalid:'观摩源绑定的策略不可用',
+  observer_source_strategy_in_use:'该策略已被其他观摩源使用',
+  bridge_user_not_found:'观摩源桥接账号不存在',
+  bridge_user_requires_pro:'观摩源账号必须是有效 Pro 用户或管理员',
+  trading_account_not_owned_by_source:'所选 MT5 账户不属于该观摩源账号',
+  invalid_status:'状态值无效',
+}
+
+function adminAiError(res, error) {
+  const code = String(error?.message || 'ai_operations_failed')
+  const status = code.includes('not_found') ? 404 : 400
+  res.status(status).json({ ok:false, error:AI_OPERATION_ERRORS[code] || 'AI 运营配置更新失败', code })
+}
+
+router.get('/admin/ai/overview', authMiddleware, adminOnly, async (req, res) => {
+  try { res.json({ ok:true, operations:await getAdminAiOperationsOverview() }) }
+  catch (error) {
+    console.error('[AdminConsole] AI operations overview failed:', error)
+    res.status(500).json({ ok:false, error:'AI 运营数据加载失败' })
+  }
+})
+
+router.patch('/admin/ai/observer-sources/:id/runtime', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const source = await updateObserverSource(req.params.id, {
+      auto_inference_enabled:req.body?.auto_inference_enabled,
+      trade_send_enabled:req.body?.trade_send_enabled,
+    })
+    await reconcileAutoSchedulers()
+    const runtime_sync = await applyBridgeRuntimeState(Number(source.bridge_user_id), {
+      tradeEnabled:Boolean(source.trade_send_enabled),
+      autoReasoningEnabled:Boolean(source.auto_inference_enabled),
+    })
+    res.json({ ok:true, source, runtime_sync })
+  } catch (error) { adminAiError(res, error) }
+})
+
+router.patch('/admin/ai/observer-channels/:id', authMiddleware, adminOnly, async (req, res) => {
+  try { res.json({ ok:true, channel:await updateObserverChannel(req.params.id, req.body || {}) }) }
+  catch (error) { adminAiError(res, error) }
+})
 
 router.get('/admin/commercial/overview', authMiddleware, adminOnly, async (req, res) => {
   try {
