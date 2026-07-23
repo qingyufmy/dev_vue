@@ -271,6 +271,29 @@ router.get('/admin/content-system/feedback',authMiddleware,adminOnly,async(req,r
   try{res.json({ok:true,...await listAdminFeedback({page:req.query.page,pageSize:req.query.page_size,search:req.query.search,type:req.query.type})})}
   catch(error){console.error('[AdminConsole] feedback list failed:',error);res.status(500).json({ok:false,error:'用户反馈加载失败'})}
 })
+router.get('/admin/content-system/engagement',authMiddleware,adminOnly,async(req,res)=>{
+  try{
+    const [summary,leaderboard]=await Promise.all([
+      queryOne(`SELECT
+        (SELECT COUNT(*) FROM posts) AS posts_total,
+        (SELECT COUNT(*) FROM comments) AS comments_total,
+        (SELECT COUNT(*) FROM post_replies) AS replies_total,
+        (SELECT COUNT(*) FROM progress WHERE completed=1) AS lessons_completed,
+        (SELECT COUNT(DISTINCT user_id) FROM progress WHERE completed=1) AS learners_active,
+        (SELECT COUNT(*) FROM progress WHERE quiz_passed=1) AS quizzes_passed`),
+      queryAll(`SELECT u.id,u.uid,u.nickname,u.email,u.plan,u.plan_expires_at,
+        COUNT(p.episode_id) AS lessons_started,
+        SUM(CASE WHEN p.completed=1 THEN 1 ELSE 0 END) AS lessons_completed,
+        SUM(CASE WHEN p.quiz_passed=1 THEN 1 ELSE 0 END) AS quizzes_passed
+        FROM users u JOIN progress p ON p.user_id=u.id
+        WHERE COALESCE(u.deletion_status,'')<>'anonymized'
+        GROUP BY u.id,u.uid,u.nickname,u.email,u.plan,u.plan_expires_at
+        HAVING lessons_completed>0
+        ORDER BY lessons_completed DESC,quizzes_passed DESC,lessons_started DESC LIMIT 100`),
+    ])
+    res.json({ok:true,summary:Object.fromEntries(Object.entries(summary||{}).map(([key,value])=>[key,Number(value||0)])),leaderboard:leaderboard.map(row=>({...row,lessons_started:Number(row.lessons_started||0),lessons_completed:Number(row.lessons_completed||0),quizzes_passed:Number(row.quizzes_passed||0)}))})
+  }catch(error){console.error('[AdminConsole] engagement overview failed:',error);res.status(500).json({ok:false,error:'学习与社区数据加载失败'})}
+})
 
 router.get('/admin/commercial/overview', authMiddleware, adminOnly, async (req, res) => {
   try {
