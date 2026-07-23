@@ -536,7 +536,77 @@ async function renderRiskAudit(){const main=document.querySelector('#adminMain')
 function contentTabs(){return `<nav class="segment-tabs" aria-label="内容与系统分类"><button class="segment-tab ${state.contentTab==='courses'?'is-active':''}" data-content-tab="courses" type="button">课程内容</button><button class="segment-tab ${state.contentTab==='feedback'?'is-active':''}" data-content-tab="feedback" type="button">用户反馈</button><button class="segment-tab ${state.contentTab==='system'?'is-active':''}" data-content-tab="system" type="button">系统发布</button></nav>`}
 const courseStatusLabels={published:'已发布',draft:'草稿',archived:'已归档'}
 const accessLabels={free:'公开免费',logged_in:'登录可看',plus_pro:'Plus / Pro',pro_only:'仅 Pro'}
-async function renderContentCourses(){const params=new URLSearchParams({page:String(state.contentPage),page_size:'20',status:state.contentStatus});if(state.contentSearch)params.set('search',state.contentSearch);const data=await api(`/api/admin/content-system/courses?${params}`);document.querySelector('#contentSystemBody').innerHTML=`<section class="panel"><form class="filter-bar" id="courseFilters"><div class="field"><label for="contentSearch">搜索课程</label><input class="input" id="contentSearch" value="${escapeHtml(state.contentSearch)}" placeholder="课程名称、说明或分类"></div><div class="field"><label for="contentStatus">发布状态</label><select class="select" id="contentStatus"><option value="all">全部状态</option><option value="published">已发布</option><option value="draft">草稿</option><option value="archived">已归档</option></select></div><a class="secondary-button" href="/legacy-admin">新增或编辑课程</a></form><div class="content-card-list">${data.courses.map(course=>`<article class="content-card"><div class="content-card-index">${String(course.number||course.id).padStart(2,'0')}</div><div class="content-card-main"><div><strong>${escapeHtml(course.title)}</strong><span class="badge ${course.status==='published'?'active':''}">${courseStatusLabels[course.status]||'未知状态'}</span></div><small>${escapeHtml(course.category||'未分类')} · ${course.content_type==='article'?'文章':'视频'} · ${accessLabels[course.access_level]||course.access_level}</small><p>测试 ${course.quiz_count} · 思维导图 ${course.mindmap_count} · 知识点 ${course.knowledge_count}</p></div></article>`).join('')||'<div class="empty-state">没有符合条件的课程</div>'}</div><div class="pagination"><button class="secondary-button" id="contentPrev" type="button">上一页</button><span>第 ${data.pagination.page} / ${data.pagination.total_pages} 页 · 共 ${data.pagination.total} 条</span><button class="secondary-button" id="contentNext" type="button">下一页</button></div></section>`;const status=document.querySelector('#contentStatus');status.value=state.contentStatus;document.querySelector('#courseFilters').onsubmit=e=>e.preventDefault();status.onchange=()=>{state.contentStatus=status.value;state.contentPage=1;renderContentCourses().catch(handleError)};document.querySelector('#contentSearch').onchange=e=>{state.contentSearch=e.target.value.trim();state.contentPage=1;renderContentCourses().catch(handleError)};document.querySelector('#contentPrev').disabled=data.pagination.page<=1;document.querySelector('#contentNext').disabled=data.pagination.page>=data.pagination.total_pages;document.querySelector('#contentPrev').onclick=()=>{state.contentPage--;renderContentCourses().catch(handleError)};document.querySelector('#contentNext').onclick=()=>{state.contentPage++;renderContentCourses().catch(handleError)}}
+const courseCategoryLabels={morning:'早盘解读',indicator:'技术指标',pattern:'形态分析',strategy:'交易策略',advanced:'经济指标'}
+let courseModalReturnFocus=null
+function closeCourseEditor(){
+  document.querySelector('#contentModal').hidden=true
+  courseModalReturnFocus?.focus?.()
+  courseModalReturnFocus=null
+}
+function courseEditorMarkup(course={}) {
+  const selected=(value,current)=>value===current?'selected':''
+  return `<form id="courseEditorForm" class="editor-form">
+    <input type="hidden" id="courseId" value="${escapeHtml(course.id||'')}">
+    <section class="editor-section"><div class="editor-section-head"><div><h3>基础信息</h3><p>标题、栏目和发布状态决定课程在主站中的展示位置。</p></div></div><div class="form-grid">
+      <div class="field span-2"><label for="courseTitle">课程标题</label><input class="input" id="courseTitle" required maxlength="200" value="${escapeHtml(course.title||'')}" placeholder="输入面向用户的课程标题"></div>
+      <div class="field span-2"><label for="courseDescription">课程说明</label><textarea class="input editor-textarea" id="courseDescription" maxlength="2000" placeholder="简要说明本节内容与学习目标">${escapeHtml(course.description||'')}</textarea></div>
+      <div class="field"><label for="courseCategory">发布栏目</label><select class="select" id="courseCategory" required>${Object.entries(courseCategoryLabels).map(([value,label])=>`<option value="${value}" ${selected(value,course.category||'morning')}>${label}</option>`).join('')}</select></div>
+      <div class="field"><label for="courseContentType">内容类型</label><select class="select" id="courseContentType"><option value="video" ${selected('video',course.content_type||'video')}>视频课程</option><option value="article" ${selected('article',course.content_type)}>文章课程</option></select></div>
+      <div class="field"><label for="courseStatus">发布状态</label><select class="select" id="courseStatus"><option value="draft" ${selected('draft',course.status||'draft')}>草稿</option><option value="published" ${selected('published',course.status)}>已发布</option><option value="archived" ${selected('archived',course.status)}>已归档</option></select></div>
+      <div class="field"><label for="courseAccess">访问权限</label><select class="select" id="courseAccess">${Object.entries(accessLabels).map(([value,label])=>`<option value="${value}" ${selected(value,course.access_level||'free')}>${label}</option>`).join('')}</select></div>
+      <div class="field"><label for="courseNumber">展示编号</label><input class="input" id="courseNumber" type="number" min="0" value="${escapeHtml(course.number||'')}"></div>
+      <div class="field"><label for="courseSortOrder">排序值</label><input class="input" id="courseSortOrder" type="number" min="0" value="${escapeHtml(course.sort_order||0)}"></div>
+    </div></section>
+    <section class="editor-section"><div class="editor-section-head"><div><h3>内容来源</h3><p>只填写当前课程实际使用的来源；未填写的来源不会出现在前台。</p></div></div><div class="form-grid">
+      <div class="field"><label for="courseBilibili">哔哩哔哩视频编号</label><input class="input" id="courseBilibili" value="${escapeHtml(course.bilibili_id||'')}" placeholder="BV..."></div>
+      <div class="field"><label for="courseYoutube">YouTube 视频编号</label><input class="input" id="courseYoutube" value="${escapeHtml(course.youtube_id||'')}" placeholder="视频编号"></div>
+      <div class="field"><label for="courseDuration">课程时长</label><input class="input" id="courseDuration" value="${escapeHtml(course.duration||'')}" placeholder="例如 18:30"></div>
+      <div class="field"><label for="courseCover">封面地址</label><input class="input" id="courseCover" value="${escapeHtml(course.cover||'')}" placeholder="https://..."></div>
+      <div class="field span-2"><label for="courseArticleUrl">文章地址</label><input class="input" id="courseArticleUrl" value="${escapeHtml(course.article_url||'')}" placeholder="文章课程使用"></div>
+    </div></section>
+    <div class="form-actions editor-actions">${course.id?'<button class="text-button danger-text" data-delete-course type="button">删除课程</button>':''}<span class="action-spacer"></span><button class="secondary-button" data-close-content-modal type="button">取消</button><button class="primary-button" type="submit">${course.id?'保存修改':'创建课程'}</button></div>
+  </form>`
+}
+async function openCourseEditor(courseId=null) {
+  courseModalReturnFocus=document.activeElement
+  const modal=document.querySelector('#contentModal')
+  const body=document.querySelector('#contentModalBody')
+  modal.hidden=false
+  body.innerHTML='<div class="empty-state">正在读取课程资料…</div>'
+  try {
+    const course=courseId?(await api(`/api/admin/content-system/courses/${encodeURIComponent(courseId)}`)).course:{}
+    document.querySelector('#contentModalTitle').textContent=course.id?'编辑课程':'新建课程'
+    body.innerHTML=courseEditorMarkup(course)
+    body.querySelectorAll('[data-close-content-modal]').forEach(button=>button.onclick=closeCourseEditor)
+    body.querySelector('[data-delete-course]')?.addEventListener('click',async()=>{
+      if(!await confirmAction('删除这门课程？','课程、测试、资源、学习进度和评论都会被永久删除，无法恢复。','确认永久删除',true))return
+      await api(`/api/admin/content-system/courses/${course.id}`,{method:'DELETE'})
+      toast('课程已删除','success');closeCourseEditor();await renderContentCourses()
+    })
+    body.querySelector('#courseEditorForm').onsubmit=async event=>{
+      event.preventDefault();const button=event.submitter;button.disabled=true
+      const payload={id:course.id||undefined,title:body.querySelector('#courseTitle').value.trim(),description:body.querySelector('#courseDescription').value.trim(),category:body.querySelector('#courseCategory').value,content_type:body.querySelector('#courseContentType').value,status:body.querySelector('#courseStatus').value,access_level:body.querySelector('#courseAccess').value,number:Number(body.querySelector('#courseNumber').value||0),sort_order:Number(body.querySelector('#courseSortOrder').value||0),bilibili_id:body.querySelector('#courseBilibili').value.trim(),youtube_id:body.querySelector('#courseYoutube').value.trim(),duration:body.querySelector('#courseDuration').value.trim(),cover:body.querySelector('#courseCover').value.trim(),article_url:body.querySelector('#courseArticleUrl').value.trim()}
+      try{await api('/api/admin/content-system/courses',{method:'POST',body:JSON.stringify(payload)});toast(course.id?'课程已保存':'课程已创建','success');closeCourseEditor();await renderContentCourses()}catch(error){handleError(error)}finally{button.disabled=false}
+    }
+    body.querySelector('#courseTitle').focus()
+  } catch(error){body.innerHTML=`<div class="empty-state">${escapeHtml(error.message)}</div>`}
+}
+async function renderContentCourses() {
+  const params=new URLSearchParams({page:String(state.contentPage),page_size:'20',status:state.contentStatus})
+  if(state.contentSearch)params.set('search',state.contentSearch)
+  const data=await api(`/api/admin/content-system/courses?${params}`)
+  document.querySelector('#contentSystemBody').innerHTML=`<section class="panel"><form class="filter-bar" id="courseFilters"><div class="field"><label for="contentSearch">搜索课程</label><input class="input" id="contentSearch" value="${escapeHtml(state.contentSearch)}" placeholder="课程名称、说明或分类"></div><div class="field"><label for="contentStatus">发布状态</label><select class="select" id="contentStatus"><option value="all">全部状态</option><option value="published">已发布</option><option value="draft">草稿</option><option value="archived">已归档</option></select></div><button class="primary-button" data-new-course type="button">新建课程</button></form><div class="content-card-list">${data.courses.map(course=>`<button class="content-card" data-edit-course="${course.id}" type="button"><div class="content-card-index">${String(course.number||course.id).padStart(2,'0')}</div><div class="content-card-main"><div><strong>${escapeHtml(course.title)}</strong><span class="badge ${course.status==='published'?'active':''}">${courseStatusLabels[course.status]||'未知状态'}</span></div><small>${escapeHtml(course.category||'未分类')} · ${course.content_type==='article'?'文章':'视频'} · ${accessLabels[course.access_level]||course.access_level}</small><p>测试 ${course.quiz_count} · 思维导图 ${course.mindmap_count} · 知识点 ${course.knowledge_count}</p></div><span class="content-card-action">编辑</span></button>`).join('')||'<div class="empty-state">没有符合条件的课程</div>'}</div><div class="pagination"><button class="secondary-button" id="contentPrev" type="button">上一页</button><span>第 ${data.pagination.page} / ${data.pagination.total_pages} 页 · 共 ${data.pagination.total} 条</span><button class="secondary-button" id="contentNext" type="button">下一页</button></div></section>`
+  const status=document.querySelector('#contentStatus');status.value=state.contentStatus
+  document.querySelector('#courseFilters').onsubmit=e=>e.preventDefault()
+  status.onchange=()=>{state.contentStatus=status.value;state.contentPage=1;renderContentCourses().catch(handleError)}
+  document.querySelector('#contentSearch').onchange=e=>{state.contentSearch=e.target.value.trim();state.contentPage=1;renderContentCourses().catch(handleError)}
+  document.querySelector('[data-new-course]').onclick=()=>openCourseEditor()
+  document.querySelectorAll('[data-edit-course]').forEach(button=>button.onclick=()=>openCourseEditor(button.dataset.editCourse))
+  document.querySelector('#contentPrev').disabled=data.pagination.page<=1
+  document.querySelector('#contentNext').disabled=data.pagination.page>=data.pagination.total_pages
+  document.querySelector('#contentPrev').onclick=()=>{state.contentPage--;renderContentCourses().catch(handleError)}
+  document.querySelector('#contentNext').onclick=()=>{state.contentPage++;renderContentCourses().catch(handleError)}
+}
 async function renderContentFeedback(){const params=new URLSearchParams({page:String(state.feedbackPage),page_size:'20'});if(state.feedbackSearch)params.set('search',state.feedbackSearch);const data=await api(`/api/admin/content-system/feedback?${params}`);document.querySelector('#contentSystemBody').innerHTML=`<section class="panel"><form class="filter-bar compact-filter" id="feedbackFilters"><div class="field"><label for="feedbackSearch">搜索反馈</label><input class="input" id="feedbackSearch" value="${escapeHtml(state.feedbackSearch)}" placeholder="标题、内容、联系方式或用户"></div><button class="secondary-button" type="submit">搜索</button></form><div class="feedback-list">${data.feedback.map(item=>`<article class="feedback-card"><header><div><span class="badge">${escapeHtml(item.type||'建议')}</span><strong>${escapeHtml(item.title)}</strong></div><time>${formatDate(item.created_at,true)}</time></header><p>${escapeHtml(item.description)}</p><footer>${escapeHtml(item.user_nickname||item.user_email||'匿名用户')} · ${escapeHtml(item.contact||'未留联系方式')}</footer></article>`).join('')||'<div class="empty-state">暂无用户反馈</div>'}</div><div class="pagination"><button class="secondary-button" id="feedbackPrev" type="button">上一页</button><span>第 ${data.pagination.page} / ${data.pagination.total_pages} 页 · 共 ${data.pagination.total} 条</span><button class="secondary-button" id="feedbackNext" type="button">下一页</button></div></section>`;document.querySelector('#feedbackFilters').onsubmit=e=>{e.preventDefault();state.feedbackSearch=document.querySelector('#feedbackSearch').value.trim();state.feedbackPage=1;renderContentFeedback().catch(handleError)};document.querySelector('#feedbackPrev').disabled=data.pagination.page<=1;document.querySelector('#feedbackNext').disabled=data.pagination.page>=data.pagination.total_pages;document.querySelector('#feedbackPrev').onclick=()=>{state.feedbackPage--;renderContentFeedback().catch(handleError)};document.querySelector('#feedbackNext').onclick=()=>{state.feedbackPage++;renderContentFeedback().catch(handleError)}}
 function renderContentSystem(){const o=state.contentOverview;document.querySelector('#contentSystemBody').innerHTML=`<section class="content-grid"><article class="panel"><header class="section-head"><div><h2>发布说明</h2><p>主站和 AI 实验室共用当前版本说明。</p></div></header><form class="panel-body release-form" id="releaseForm"><div class="field"><label for="releaseVersion">版本号</label><input class="input" id="releaseVersion" required maxlength="32" value="${escapeHtml(o.release.version)}"></div><div class="field"><label for="releaseContent">更新内容</label><textarea class="input release-textarea" id="releaseContent" required>${escapeHtml(o.release.content)}</textarea></div><button class="primary-button" type="submit">保存发布说明</button></form></article><article class="panel"><header class="section-head"><div><h2>配置分类</h2><p>敏感值继续由原配置服务脱敏保护。</p></div></header><div class="config-category-list">${o.categories.map(item=>`<div class="config-category"><div><strong>${escapeHtml(item.category)}</strong><small>${item.item_count} 个配置项</small></div><span>${formatDate(item.updated_at,true)}</span></div>`).join('')}</div><div class="panel-body"><a class="secondary-button full-button" href="/legacy-admin">打开高级系统配置</a></div></article></section>`;document.querySelector('#releaseForm').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{await api('/api/admin/release-notes',{method:'POST',body:JSON.stringify({version:document.querySelector('#releaseVersion').value.trim(),content:document.querySelector('#releaseContent').value.trim()})});toast('发布说明已保存','success');await loadContentOverview()}catch(error){handleError(error)}finally{button.disabled=false}}}
 async function loadContentOverview(){const data=await api('/api/admin/content-system/overview');state.contentOverview=data.overview;if(state.contentTab==='system')renderContentSystem()}
@@ -565,7 +635,12 @@ document.querySelectorAll('.nav-item[data-view]').forEach(item => item.addEventL
 document.querySelector('#refreshButton').addEventListener('click', () => setView(state.view))
 document.querySelector('#accountButton').addEventListener('click', () => { location.href = '/account' })
 document.querySelectorAll('[data-close-modal]').forEach(item => item.addEventListener('click', closeUserModal))
-document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.querySelector('#userModal').hidden) closeUserModal() })
+document.querySelectorAll('#contentModal > [data-close-content-modal]').forEach(item => item.addEventListener('click', closeCourseEditor))
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return
+  if (!document.querySelector('#contentModal').hidden) closeCourseEditor()
+  else if (!document.querySelector('#userModal').hidden) closeUserModal()
+})
 document.querySelector('#mobileMenuButton').addEventListener('click', () => { const open = !document.body.classList.contains('nav-open'); document.body.classList.toggle('nav-open', open); document.querySelector('#drawerScrim').hidden = !open; document.querySelector('#mobileMenuButton').setAttribute('aria-expanded',String(open)) })
 document.querySelector('#drawerScrim').addEventListener('click', () => { document.body.classList.remove('nav-open'); document.querySelector('#drawerScrim').hidden = true })
 

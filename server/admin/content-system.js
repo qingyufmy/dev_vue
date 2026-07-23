@@ -1,4 +1,22 @@
-import { queryAll, queryOne } from '../db.js'
+import { queryAll, queryOne, queryRun, withTransaction } from '../db.js'
+import { fetchBilibiliVideo } from '../utils.js'
+
+const COURSE_CATEGORIES = new Set(['morning', 'indicator', 'pattern', 'strategy', 'advanced'])
+const COURSE_CONTENT_TYPES = new Set(['video', 'article'])
+
+function serializeCourse(row) {
+  if (!row) return null
+  return {
+    id:Number(row.episode_id), episode_id:Number(row.episode_id), number:Number(row.number || 0),
+    title:row.title || '', description:row.description || '', category:row.category || '',
+    content_type:row.content_type || 'video', duration:row.duration || '', youtube_id:row.youtube_id || '',
+    bilibili_id:row.bilibili_id || '', cover:row.cover || '', gradient:row.gradient || '',
+    article_url:row.article_url || '', article_object_key:row.article_object_key || '',
+    access_level:row.access_level || 'free', status:row.status || 'draft', sort_order:Number(row.sort_order || 0),
+    quiz_count:Number(row.quiz_count || 0), mindmap_count:Number(row.mindmap_count || 0),
+    knowledge_count:Number(row.knowledge_count || 0), created_at:row.created_at || null, updated_at:row.updated_at || null,
+  }
+}
 
 function number(value) { return Number(value || 0) }
 function pageParams(page, pageSize) {
@@ -41,6 +59,70 @@ export async function listAdminCourses({ page, pageSize, search = '', status = '
   ])
   const total=number(totalRow?.total)
   return { courses:rows.map(row=>({ ...row, id:number(row.episode_id), number:number(row.number), quiz_count:number(row.quiz_count), mindmap_count:number(row.mindmap_count), knowledge_count:number(row.knowledge_count) })), pagination:{page:paging.page,page_size:paging.pageSize,total,total_pages:Math.max(1,Math.ceil(total/paging.pageSize))} }
+}
+
+export async function getAdminCourse(courseId) {
+  const id = Number(courseId)
+  if (!Number.isInteger(id) || id <= 0) throw new Error('invalid_course_id')
+  return serializeCourse(await queryOne('SELECT * FROM courses WHERE episode_id = ?', [id]))
+}
+
+export async function saveAdminCourse(input = {}) {
+  const episodeId = Number(input.id || input.episode_id || 0)
+  const category = String(input.category || '').trim()
+  const contentType = String(input.content_type || '').trim()
+  const title = String(input.title || '').trim()
+  if (!title) throw new Error('course_title_required')
+  if (!COURSE_CATEGORIES.has(category)) throw new Error('invalid_course_category')
+  if (!COURSE_CONTENT_TYPES.has(contentType)) throw new Error('invalid_course_content_type')
+  const status = ['published','draft','archived'].includes(input.status) ? input.status : 'draft'
+  const accessLevel = ['free','logged_in','plus_pro','pro_only'].includes(input.access_level) ? input.access_level : 'free'
+  let cover = String(input.cover || '').trim()
+  let duration = String(input.duration || '').trim()
+  const bilibiliId = String(input.bilibili_id || '').trim()
+  if (bilibiliId) {
+    try {
+      const video = await fetchBilibiliVideo(bilibiliId)
+      if (video?.cover && !cover) cover = video.cover
+      if (video?.duration && !duration) duration = video.duration
+    } catch (error) { console.error('[AdminContent] Bilibili metadata failed:', error.message) }
+  }
+  const values = [
+    Math.max(0, Number(input.number || 0)), title, String(input.description || '').trim(), category, contentType,
+    duration, String(input.youtube_id || '').trim(), bilibiliId, cover, accessLevel,
+    Math.max(0, Number(input.sort_order || 0)), String(input.article_url || '').trim(),
+    String(input.article_object_key || '').trim(), status,
+  ]
+  if (episodeId > 0) {
+    const exists = await queryOne('SELECT episode_id FROM courses WHERE episode_id = ?', [episodeId])
+    if (!exists) throw new Error('course_not_found')
+    await queryRun(`UPDATE courses SET number=?, title=?, description=?, category=?, content_type=?, duration=?,
+      youtube_id=?, bilibili_id=?, cover=?, access_level=?, sort_order=?, article_url=?, article_object_key=?,
+      status=?, updated_at=NOW() WHERE episode_id=?`, [...values, episodeId])
+    return getAdminCourse(episodeId)
+  }
+  const maxRow = await queryOne('SELECT COALESCE(MAX(episode_id), 0) AS max_id FROM courses')
+  const newId = Number(maxRow?.max_id || 0) + 1
+  if (!values[0]) values[0] = newId
+  await queryRun(`INSERT INTO courses (episode_id, number, title, description, category, content_type, duration,
+    youtube_id, bilibili_id, cover, access_level, sort_order, article_url, article_object_key, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [newId, ...values])
+  return getAdminCourse(newId)
+}
+
+export async function deleteAdminCourse(courseId) {
+  const id = Number(courseId)
+  const course = await getAdminCourse(id)
+  if (!course) throw new Error('course_not_found')
+  await withTransaction(async run => {
+    await run('DELETE FROM quiz_questions WHERE episode_id = ?', [id])
+    await run('DELETE FROM course_resources WHERE episode_id = ?', [id])
+    await run('DELETE FROM video_streams WHERE episode_id = ?', [id])
+    await run('DELETE FROM progress WHERE episode_id = ?', [id])
+    await run('DELETE FROM comments WHERE episode_id = ?', [id])
+    await run('DELETE FROM courses WHERE episode_id = ?', [id])
+  })
+  return course
 }
 
 export async function listAdminFeedback({ page, pageSize, search = '', type = 'all' } = {}) {

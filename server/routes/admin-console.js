@@ -8,7 +8,7 @@ import { reconcileAutoSchedulers } from './ai/scheduler.js'
 import { applyBridgeRuntimeState } from '../bridge-ws.js'
 import { getAdminRiskAuditOverview, listAdminAuditEvents } from '../admin/risk-audit.js'
 import { setGlobalKillSwitch } from './ai/risk-state.js'
-import { getAdminContentSystemOverview, listAdminCourses, listAdminFeedback } from '../admin/content-system.js'
+import { deleteAdminCourse, getAdminContentSystemOverview, getAdminCourse, listAdminCourses, listAdminFeedback, saveAdminCourse } from '../admin/content-system.js'
 
 const router = Router()
 
@@ -138,6 +138,18 @@ router.get('/admin/content-system/overview', authMiddleware, adminOnly, async (r
 router.get('/admin/content-system/courses',authMiddleware,adminOnly,async(req,res)=>{
   try{res.json({ok:true,...await listAdminCourses({page:req.query.page,pageSize:req.query.page_size,search:req.query.search,status:req.query.status})})}
   catch(error){console.error('[AdminConsole] course list failed:',error);res.status(500).json({ok:false,error:'课程列表加载失败'})}
+})
+router.get('/admin/content-system/courses/:courseId',authMiddleware,adminOnly,async(req,res)=>{
+  try { const course=await getAdminCourse(req.params.courseId); if(!course)return res.status(404).json({ok:false,error:'课程不存在'}); res.json({ok:true,course}) }
+  catch(error){console.error('[AdminConsole] course detail failed:',error);res.status(400).json({ok:false,error:'课程详情加载失败'})}
+})
+router.post('/admin/content-system/courses',authMiddleware,adminOnly,async(req,res)=>{
+  try { res.json({ok:true,course:await saveAdminCourse(req.body||{})}) }
+  catch(error){const labels={course_title_required:'请填写课程标题',invalid_course_category:'请选择正确的发布栏目',invalid_course_content_type:'请选择正确的课程类型',course_not_found:'课程不存在'};res.status(400).json({ok:false,error:labels[error.message]||'课程保存失败'})}
+})
+router.delete('/admin/content-system/courses/:courseId',authMiddleware,adminOnly,async(req,res)=>{
+  try { res.json({ok:true,course:await deleteAdminCourse(req.params.courseId)}) }
+  catch(error){res.status(error.message==='course_not_found'?404:400).json({ok:false,error:error.message==='course_not_found'?'课程不存在':'课程删除失败'})}
 })
 router.get('/admin/content-system/feedback',authMiddleware,adminOnly,async(req,res)=>{
   try{res.json({ok:true,...await listAdminFeedback({page:req.query.page,pageSize:req.query.page_size,search:req.query.search,type:req.query.type})})}

@@ -74,6 +74,16 @@
       </div>
     </section>
   </div>
+  <div class="modal-layer" id="contentModal" hidden>
+    <div class="modal-scrim" data-close-content-modal></div>
+    <section class="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="contentModalTitle">
+      <header class="modal-header">
+        <div><span class="eyebrow">课程内容工作流</span><h2 id="contentModalTitle">编辑课程</h2></div>
+        <button class="icon-button" type="button" data-close-content-modal aria-label="关闭课程编辑"><span data-icon="close"></span></button>
+      </header>
+      <div class="modal-body" id="contentModalBody"></div>
+    </section>
+  </div>
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script type="module" src="/admin/app.js?v=20260723i"></script>
 </body>
