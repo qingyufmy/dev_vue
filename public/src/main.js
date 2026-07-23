@@ -6949,13 +6949,10 @@ function setupGlobalEvents() {
     toggleAIMenu()
   })
 
-  // Handle AI lab link click with auth check
-  aiMenu?.querySelector('.header-ai-dropdown-item:not(.header-ai-dropdown-disabled)')?.addEventListener('click', (e) => {
-    e.preventDefault()
+  // AI 实验室拥有独立认证前端；主站只负责导航，不在这里拦截登录。
+  aiMenu?.querySelector('.header-ai-dropdown-item:not(.header-ai-dropdown-disabled)')?.addEventListener('click', () => {
     closeAIMenu()
-    if (!requireLogin()) return
-    syncAuthCookieFromStorage()
-    window.open('/ai', '_blank')
+    if (localStorage.getItem('ws_token')) syncAuthCookieFromStorage()
   })
 
   function bindProtectedMarketNav(selector, targetPath) {
@@ -7029,12 +7026,11 @@ function setupGlobalEvents() {
 
   $('#dropdownProfile').addEventListener('click', () => {
     userDropdown.classList.remove('active')
-    navigate('profile')
+    window.location.href = '/account/'
   })
   $('#dropdownNotifications').addEventListener('click', () => {
     userDropdown.classList.remove('active')
-    settingsTab = 'notifications'
-    navigate('profile')
+    window.location.href = '/account/?tab=notifications'
   })
   $('#dropdownAdmin').addEventListener('click', () => {
     userDropdown.classList.remove('active')
@@ -7074,7 +7070,18 @@ function setupGlobalEvents() {
     localStorage.removeItem('ws_user')
     localStorage.removeItem('ws_token')
     localStorage.removeItem('authToken')
+    localStorage.setItem('ws_session_event', JSON.stringify({ type:'logout', at:Date.now() }))
     clearAuthCookie()
+    stopPresenceHeartbeat()
+    updateAuthUI()
+    renderView()
+  })
+
+  window.addEventListener('storage', (event) => {
+    if (!['ws_session_event', 'ws_token', 'authToken'].includes(event.key)) return
+    if (localStorage.getItem('ws_token') || localStorage.getItem('authToken')) return
+    state.user = null
+    state.notificationUnread = 0
     stopPresenceHeartbeat()
     updateAuthUI()
     renderView()

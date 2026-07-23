@@ -123,7 +123,7 @@ describe('AI governance navigation and DOM contract', () => {
   it('accepts a token handoff before the early authentication redirect', () => {
     const earlyAuth = html.slice(html.indexOf('(function()'), html.indexOf('</script>'))
     expect(earlyAuth).toContain("new URLSearchParams(window.location.search).get('token')")
-    expect(earlyAuth.indexOf("localStorage.setItem('authToken', t)")).toBeLessThan(earlyAuth.indexOf("window.location.replace('/auth/login?next=%2Fai%2F')"))
+    expect(earlyAuth.indexOf("localStorage.setItem('authToken', t)")).toBeLessThan(earlyAuth.indexOf("window.location.replace('/ai/auth/?mode=login&next=%2Fai%2F')"))
   })
 
   it('marks administrator controls and keeps private review and memory pages user-scoped', () => {

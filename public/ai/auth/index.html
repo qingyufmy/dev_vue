@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>登录 · AI交易实验室</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/ai/auth/styles.css?v=20260723a">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-story" aria-labelledby="authProductTitle">
+      <a class="product-brand" href="/" aria-label="返回主站">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 17V9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M8 7V5h8v2"/></svg></span>
+        <span><strong>AI交易实验室</strong><small>道诚科技 · 智能交易工作台</small></span>
+      </a>
+      <div class="story-copy">
+        <p class="eyebrow">独立交易工作区</p>
+        <h1 id="authProductTitle">让行情判断、风险控制与交易执行保持在同一条链路。</h1>
+        <p>使用与主站相同的账户登录。登录后，会员状态、订阅和个人资料会自动同步。</p>
+      </div>
+      <ul class="story-points" aria-label="产品能力">
+        <li><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span><div><strong>统一账户</strong><small>主站与实验室共用会员和安全验证</small></div></li>
+        <li><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v5c0 5 3.5 8 8 9 4.5-1 8-4 8-9V7l-8-4Z"/></svg></span><div><strong>后端风控</strong><small>前端无法绕过交易权限和会员边界</small></div></li>
+        <li><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 18V9m6 9V5m6 13v-7m4 7H2"/></svg></span><div><strong>独立体验</strong><small>不加载课程和社区代码，进入更快、更专注</small></div></li>
+      </ul>
+      <p class="risk-note">AI 分析不构成投资建议。真实交易可能导致本金损失，请先使用模拟账户验证。</p>
+    </section>
+
+    <section class="auth-panel" aria-label="账户认证">
+      <div class="auth-card">
+        <header class="auth-card-header">
+          <a class="mobile-brand" href="/"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 17V9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M8 7V5h8v2"/></svg></span><strong>AI交易实验室</strong></a>
+          <p id="authEyebrow" class="eyebrow">欢迎回来</p>
+          <h2 id="authTitle">登录实验室</h2>
+          <p id="authDescription">使用你的主站账户继续。</p>
+        </header>
+        <div id="authModeTabs" class="auth-mode-tabs" role="tablist" aria-label="登录或注册">
+          <button type="button" role="tab" data-mode="login" aria-selected="true">登录</button>
+          <button type="button" role="tab" data-mode="register" aria-selected="false">注册</button>
+        </div>
+        <div id="authFormHost"></div>
+        <div id="authMessage" class="auth-message" role="status" aria-live="polite"></div>
+        <footer class="auth-card-footer"><a href="/">返回主站</a><span>账户、会员与主站完全同步</span></footer>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="captchaDialog" class="captcha-dialog" aria-labelledby="captchaTitle">
+    <form method="dialog" id="captchaForm">
+      <header><div><p class="eyebrow">安全验证</p><h2 id="captchaTitle">请输入图形验证码</h2></div><button value="cancel" class="dialog-close" aria-label="关闭">×</button></header>
+      <button id="captchaImage" class="captcha-image" type="button" aria-label="刷新图形验证码"></button>
+      <label for="captchaAnswer">验证码</label>
+      <input id="captchaAnswer" autocomplete="off" inputmode="text" maxlength="8" required>
+      <p id="captchaError" class="field-error" role="alert"></p>
+      <div class="dialog-actions"><button value="cancel" class="button secondary">取消</button><button id="captchaSubmit" value="default" class="button primary">确认发送</button></div>
+    </form>
+  </dialog>
+
+  <script src="/shared/session.js?v=20260723a"></script>
+  <script src="/ai/auth/app.js?v=20260723a"></script>
+</body>
+</html>

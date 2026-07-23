@@ -3526,6 +3526,40 @@ async function withBusy(button, task) {
   }
 }
 
+let accountCenterPreviousFocus = null;
+
+function openAccountCenter(tab = "overview") {
+  const modal = $("accountCenterModal");
+  const frame = $("accountCenterFrame");
+  if (!modal || !frame) return;
+  accountCenterPreviousFocus = document.activeElement;
+  const nextSrc = `/account/?embed=ai&tab=${encodeURIComponent(tab)}`;
+  if (!frame.src || !frame.src.includes("/account/")) frame.src = nextSrc;
+  else frame.contentWindow?.postMessage({ type:"account-center-tab", tab }, window.location.origin);
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("account-center-open");
+}
+
+function closeAccountCenter() {
+  const modal = $("accountCenterModal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("account-center-open");
+  if (accountCenterPreviousFocus instanceof HTMLElement) accountCenterPreviousFocus.focus();
+  accountCenterPreviousFocus = null;
+}
+
+function handleAccountCenterMessage(event) {
+  if (event.origin !== window.location.origin || event.source !== $("accountCenterFrame")?.contentWindow) return;
+  if (event.data?.type === "account-center-close") return closeAccountCenter();
+  if (event.data?.type === "account-session-logout") return logout();
+  if (event.data?.type === "account-profile-updated" && event.data.user) {
+    state.user = { ...state.user, ...event.data.user };
+  }
+}
+
 function logout() {
   if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
   stopRealtimeSync();
@@ -3535,9 +3569,15 @@ function logout() {
   state.reviewSummaryTimer = null;
   state.user = null;
   state.selectedSignal = null;
-  setAuth("");
+  if (window.AuthSession) window.AuthSession.clear();
+  else {
+    setAuth("");
+    localStorage.removeItem("ws_token");
+    localStorage.removeItem("ws_user");
+    document.cookie = "ws_token=; Max-Age=0; Path=/; SameSite=Lax";
+  }
   showApp(false);
-  window.location.href = "/";
+  window.location.href = "/ai/auth/?mode=login";
 }
 
 // Presence heartbeat — updates last_seen_at for online count
@@ -3664,7 +3704,7 @@ async function bootstrap() {
       }
     }
     if (!state.token) {
-      window.location.href = "/auth/login?next=%2Fai%2F";
+      window.location.href = "/ai/auth/?mode=login&next=%2Fai%2F";
       return;
     }
     const profileRes = await api("/api/profile");
@@ -6805,6 +6845,15 @@ async function exportHistory() {
 
 function bindEvents() {
   $("logoutBtn").addEventListener("click", logout);
+  $("accountCenterBtn")?.addEventListener("click", () => openAccountCenter("overview"));
+  $("accountCenterModal")?.querySelectorAll("[data-close-account-center]").forEach(node => node.addEventListener("click", closeAccountCenter));
+  window.addEventListener("message", handleAccountCenterMessage);
+  window.addEventListener("storage", event => {
+    if ([window.AuthSession?.eventKey, "ws_token", "authToken"].includes(event.key) && !window.AuthSession?.token()) logout();
+  });
+  window.addEventListener("keydown", event => {
+    if (event.key === "Escape" && !$("accountCenterModal")?.classList.contains("hidden")) closeAccountCenter();
+  });
   $("refreshAllBtn").addEventListener("click", () => { _historyCache = null; _historyChartCache = null; refreshAll(); });
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
   $("analyzeStrategy")?.addEventListener("change", updateManualStrategySelection);
