@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 import { resetFixedAddressCache } from '../crypto/fixed-address.js'
+import { resetSmsConfigCache } from '../sms.js'
 
 const router = Router()
 
@@ -134,6 +135,7 @@ router.post('/system-config', authMiddleware, adminOnly, async (req, res) => {
         [category, key, value || '', label || '', sort_order || 0])
     }
     if (category === 'crypto_wallet') resetFixedAddressCache()
+    if (category === 'sms') resetSmsConfigCache()
     res.json({ ok: true, id: existing?.id, action: existing ? 'updated' : 'created' })
   } catch (err) {
     console.error('[Config] Save config error:', err)
@@ -158,6 +160,7 @@ router.put('/system-config/:category', authMiddleware, adminOnly, async (req, re
       `, [category, item.key, item.value || '', item.label || '', item.sort_order ?? i])
     }
     if (category === 'crypto_wallet') resetFixedAddressCache()
+    if (category === 'sms') resetSmsConfigCache()
     res.json({ ok: true, count: items.length })
   } catch (err) {
     console.error('[Config] Batch update error:', err)
@@ -172,6 +175,7 @@ router.delete('/system-config/:id', authMiddleware, adminOnly, async (req, res) 
     const item = await queryOne('SELECT category FROM system_config WHERE id = ?', [req.params.id])
     await queryRun('DELETE FROM system_config WHERE id = ?', [req.params.id])
     if (item?.category === 'crypto_wallet') resetFixedAddressCache()
+    if (item?.category === 'sms') resetSmsConfigCache()
     res.json({ ok: true })
   } catch (err) {
     console.error('[Config] Delete config error:', err)
@@ -184,6 +188,7 @@ router.delete('/system-config/category/:category', authMiddleware, adminOnly, as
   try {
     await queryRun('DELETE FROM system_config WHERE category = ?', [req.params.category])
     if (req.params.category === 'crypto_wallet') resetFixedAddressCache()
+    if (req.params.category === 'sms') resetSmsConfigCache()
     res.json({ ok: true })
   } catch (err) {
     console.error('[Config] Delete category error:', err)
@@ -237,7 +242,7 @@ router.post('/system-config/smtp/test', authMiddleware, adminOnly, async (req, r
 // Send test SMS
 router.post('/system-config/sms/test', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { to } = req.body
+    const { to, template } = req.body
     if (!to) return res.json({ ok: false, error: '请输入测试手机号' })
 
     const { sendSms, loadSmsConfig } = await import('../sms.js')
@@ -249,12 +254,18 @@ router.post('/system-config/sms/test', authMiddleware, adminOnly, async (req, re
       return res.json({ ok: false, error: '请先配置短信签名' })
     }
 
-    const templateCode = cfg.templateCodes?.login || cfg.templateCodes?.register
+    const isMembershipExpiry = template === 'membership_expiry'
+    const templateCode = isMembershipExpiry
+      ? cfg.templateCodes?.membership_expiry
+      : cfg.templateCodes?.login || cfg.templateCodes?.register
     if (!templateCode) {
-      return res.json({ ok: false, error: '请先配置短信模板' })
+      return res.json({ ok: false, error:isMembershipExpiry ? '请先配置会员到期提醒模板' : '请先配置短信模板' })
     }
 
-    await sendSms(to, templateCode, { code: '123456' })
+    const params = isMembershipExpiry
+      ? { plan:'Pro', expire_date:'2026-07-30', days:'7' }
+      : { code:'123456' }
+    await sendSms(to, templateCode, params)
     res.json({ ok: true })
   } catch (err) {
     console.error('[Config] SMS test error:', err)

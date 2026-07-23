@@ -20,7 +20,14 @@ vi.mock('../../server/crypto/fixed-address.js', () => ({
   resetFixedAddressCache: vi.fn(),
 }))
 
+vi.mock('../../server/sms.js', () => ({
+  resetSmsConfigCache:vi.fn(),
+  loadSmsConfig:vi.fn(),
+  sendSms:vi.fn(),
+}))
+
 import { queryAll, queryOne, queryRun } from '../../server/db.js'
+import { loadSmsConfig, sendSms } from '../../server/sms.js'
 import configRouter from '../../server/routes/config.js'
 
 function makeApp() {
@@ -83,5 +90,24 @@ describe('config.js — GET /changelog/current', () => {
     expect(body.ok).toBe(true)
     expect(body.version).toBe(1)
     expect(body.content).toBe('')
+  })
+})
+
+describe('config.js — membership expiry SMS test', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('uses the approved membership template parameters', async () => {
+    loadSmsConfig.mockResolvedValue({
+      accessKeyId:'key', accessKeySecret:'secret', signName:'量见',
+      templateCodes:{ membership_expiry:'SMS_EXPIRY' },
+    })
+    sendSms.mockResolvedValue({ code:'OK' })
+    const body = await httpReq(makeApp(), 'POST', '/api/system-config/sms/test', {
+      to:'13800138000', template:'membership_expiry',
+    })
+    expect(body.ok).toBe(true)
+    expect(sendSms).toHaveBeenCalledWith('13800138000', 'SMS_EXPIRY', {
+      plan:'Pro', expire_date:'2026-07-30', days:'7',
+    })
   })
 })

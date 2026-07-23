@@ -3763,6 +3763,82 @@ async function sendPresenceHeartbeat() {
   } catch {}
 }
 
+let membershipExpiryReminderOpen = false;
+
+async function acknowledgeMembershipExpiryReminder(reminderId) {
+  try {
+    await api(`/api/membership-expiry-reminders/${Number(reminderId)}/read`, {
+      method:"POST",
+      body:{ surface:"ai" },
+    });
+  } catch {}
+}
+
+function showMembershipExpiryReminder(reminder) {
+  if (!reminder || membershipExpiryReminderOpen) return;
+  membershipExpiryReminderOpen = true;
+  const previousFocus = document.activeElement;
+  const overlay = document.createElement("div");
+  overlay.className = "membership-expiry-overlay";
+  overlay.innerHTML = `
+    <section class="membership-expiry-dialog" role="dialog" aria-modal="true" aria-labelledby="aiMembershipExpiryTitle" aria-describedby="aiMembershipExpirySummary">
+      <button class="membership-expiry-close" type="button" aria-label="关闭会员到期提醒">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+      <div class="membership-expiry-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+      </div>
+      <p class="membership-expiry-eyebrow">会员到期提醒</p>
+      <h2 id="aiMembershipExpiryTitle">${escapeHtml(reminder.title)}</h2>
+      <p id="aiMembershipExpirySummary">${escapeHtml(reminder.summary)}</p>
+      <div class="membership-expiry-facts">
+        <span><small>当前会员</small><strong>${escapeHtml(reminder.plan_label)}</strong></span>
+        <span><small>到期日期</small><strong>${escapeHtml(reminder.expiry_date_text)}</strong></span>
+      </div>
+      <div class="membership-expiry-actions">
+        <button class="btn btn-primary membership-expiry-renew" type="button">前往续费</button>
+        <button class="btn membership-expiry-later" type="button">稍后处理</button>
+      </div>
+      <p class="membership-expiry-note">续费成功后会员有效期会自动更新，无需重新连接桥接软件。</p>
+    </section>`;
+  document.body.appendChild(overlay);
+  const dismiss = ({ renew = false } = {}) => {
+    if (!membershipExpiryReminderOpen) return;
+    membershipExpiryReminderOpen = false;
+    overlay.classList.remove("active");
+    void acknowledgeMembershipExpiryReminder(reminder.id);
+    setTimeout(() => overlay.remove(), 180);
+    if (renew) window.location.href = "/membership";
+    else if (previousFocus instanceof HTMLElement) previousFocus.focus();
+  };
+  overlay.querySelector(".membership-expiry-close")?.addEventListener("click", () => dismiss());
+  overlay.querySelector(".membership-expiry-later")?.addEventListener("click", () => dismiss());
+  overlay.querySelector(".membership-expiry-renew")?.addEventListener("click", () => dismiss({ renew:true }));
+  overlay.addEventListener("click", event => { if (event.target === overlay) dismiss(); });
+  overlay.addEventListener("keydown", event => {
+    if (event.key === "Escape") return dismiss();
+    if (event.key !== "Tab") return;
+    const focusable = [...overlay.querySelectorAll("button:not([disabled]), a[href]")];
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+  requestAnimationFrame(() => {
+    overlay.classList.add("active");
+    overlay.querySelector(".membership-expiry-renew")?.focus();
+  });
+}
+
+async function checkMembershipExpiryReminder() {
+  if (!state.user || !state.token || membershipExpiryReminderOpen) return;
+  if (!["plus", "pro"].includes(String(state.user.plan || "").toLowerCase())) return;
+  try {
+    const result = await api("/api/membership-expiry-reminders?surface=ai");
+    if (result?.reminder) showMembershipExpiryReminder(result.reminder);
+  } catch {}
+}
+
 async function bootstrap() {
   try {
     const urlToken = new URLSearchParams(window.location.search).get("token");
@@ -3824,6 +3900,7 @@ async function bootstrap() {
     await loadObserverChannels();
     showApp(true);
     checkChangelog();
+    void checkMembershipExpiryReminder();
     // Connect WebSocket FIRST — all data flows through it (with 10s timeout)
     await new Promise((resolve) => {
       const timer = setTimeout(() => {

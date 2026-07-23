@@ -27,6 +27,7 @@ import videoRoutes from './routes/video.js'
 import configRoutes from './routes/config.js'
 import aiRoutes from './routes/ai/index.js'
 import feedbackRoutes from './routes/feedback.js'
+import membershipNotificationRoutes from './routes/membership-notifications.js'
 import sentimentRoutes from './routes/sentiment.js'
 import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON } from './redis.js'
@@ -39,6 +40,7 @@ import { startMonitor } from './crypto/monitor.js'
 import { initCryptoWallet } from './crypto/wallet.js'
 import { startHoldSignalCleanup } from './jobs/hold-signal-cleanup.js'
 import { startWeeklySystemFlatten } from './jobs/weekly-system-flatten.js'
+import { startMembershipExpiryNotificationWorker } from './membership-expiry-notifications.js'
 import { securityHeaders } from './security-headers.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -208,6 +210,7 @@ app.use('/api', videoRoutes)
 app.use('/api', configRoutes)
 app.use('/api', aiRoutes)
 app.use('/api', feedbackRoutes)
+app.use('/api', membershipNotificationRoutes)
 app.use('/api', sentimentRoutes)
 app.use('/aurum-api', noCache, aiRoutes)
 
@@ -411,6 +414,7 @@ initBridgeWS(server)
   startPeriodReviewWorker()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   startWeeklySystemFlatten()
+  startMembershipExpiryNotificationWorker()
   console.log(`[TZ] server=${Intl.DateTimeFormat().resolvedOptions().timeZone} db_session=+08:00 parse=explicit(+08:00)`)
   server.listen(PORT, () => {
     console.log(`Wall Street Skill server running on http://localhost:${PORT}`)

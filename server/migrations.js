@@ -3376,6 +3376,33 @@ const migrations = [
       ])
       await queryRun('UPDATE risk_policy_sets SET active_version_id = ?, updated_at = ? WHERE id = ?', [inserted.insertId, now, sets[0].id])
     }
+  },
+  {
+    id: '123_membership_expiry_notifications',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS membership_expiry_notifications (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        plan VARCHAR(16) NOT NULL,
+        plan_expires_at DATETIME NOT NULL,
+        days_before TINYINT UNSIGNED NOT NULL,
+        channel VARCHAR(16) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        attempt_count INT NOT NULL DEFAULT 0,
+        next_attempt_at DATETIME DEFAULT NULL,
+        sent_at DATETIME DEFAULT NULL,
+        read_at DATETIME DEFAULT NULL,
+        last_error VARCHAR(500) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_membership_expiry_delivery (user_id, plan_expires_at, days_before, channel),
+        KEY idx_membership_expiry_dispatch (channel, status, next_attempt_at),
+        KEY idx_membership_expiry_user (user_id, channel, status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`INSERT INTO system_config (category, \`key\`, \`value\`, label, sort_order)
+        VALUES ('sms', 'template_code_membership_expiry', '', '会员到期提醒模板', 7)
+        ON DUPLICATE KEY UPDATE label = VALUES(label), sort_order = VALUES(sort_order)`)
+    }
   }
 ]
 

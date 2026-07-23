@@ -4712,6 +4712,92 @@ button { cursor: pointer; font-family: inherit; }
   margin-top: 2px;
 }
 
+/* Membership expiry reminder */
+.membership-expiry-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(10, 16, 28, .58);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease-out;
+}
+.membership-expiry-overlay.active { opacity: 1; pointer-events: auto; }
+.membership-expiry-dialog {
+  position: relative;
+  width: min(460px, 100%);
+  padding: 30px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--glass-border));
+  border-radius: 18px;
+  background: var(--surface, #fff);
+  color: var(--text-1);
+  box-shadow: 0 24px 70px rgba(8, 15, 30, .24);
+  transform: translateY(10px) scale(.985);
+  transition: transform .22s ease-out;
+}
+.membership-expiry-overlay.active .membership-expiry-dialog { transform: translateY(0) scale(1); }
+.membership-expiry-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.membership-expiry-close:hover { background: var(--glass-light); color: var(--text-1); }
+.membership-expiry-close:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
+.membership-expiry-close svg,
+.membership-expiry-mark svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.membership-expiry-mark {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 18px;
+  border: 1px solid rgba(191, 161, 104, .35);
+  border-radius: 14px;
+  background: rgba(191, 161, 104, .12);
+  color: #9a7412;
+}
+.membership-expiry-eyebrow { margin: 0 0 6px; color: #9a7412; font-size: 13px; font-weight: 700; letter-spacing: .06em; }
+.membership-expiry-dialog h2 { margin: 0 44px 10px 0; font-size: clamp(22px, 5vw, 28px); line-height: 1.25; }
+.membership-expiry-dialog > p:not(.membership-expiry-eyebrow):not(.membership-expiry-note) { margin: 0; color: var(--text-2); font-size: 15px; line-height: 1.7; }
+.membership-expiry-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 22px 0; }
+.membership-expiry-facts span { min-width: 0; padding: 13px 14px; border: 1px solid var(--glass-border); border-radius: 12px; background: var(--glass-light); }
+.membership-expiry-facts small,
+.membership-expiry-facts strong { display: block; }
+.membership-expiry-facts small { margin-bottom: 4px; color: var(--text-3); font-size: 12px; }
+.membership-expiry-facts strong { overflow-wrap: anywhere; font-size: 14px; }
+.membership-expiry-actions { display: flex; gap: 10px; }
+.membership-expiry-actions .btn { min-height: 44px; }
+.membership-expiry-renew { flex: 1; }
+.membership-expiry-note { margin: 15px 0 0; color: var(--text-3); font-size: 12px; line-height: 1.6; }
+[data-theme="dark"] .membership-expiry-dialog { background: #111a2a; border-color: rgba(214, 176, 68, .28); box-shadow: 0 28px 80px rgba(0, 0, 0, .46); }
+
+@media (max-width: 520px) {
+  .membership-expiry-overlay { align-items: end; padding: 12px 12px max(12px, env(safe-area-inset-bottom)); }
+  .membership-expiry-dialog { padding: 24px 20px 20px; border-radius: 18px; }
+  .membership-expiry-facts { grid-template-columns: 1fr; }
+  .membership-expiry-actions { flex-direction: column; }
+  .membership-expiry-actions .btn { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .membership-expiry-overlay,
+  .membership-expiry-dialog { transition: none; }
+}
+
 /* Progress list */
 .progress-list { list-style: none; }
 

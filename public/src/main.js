@@ -873,6 +873,84 @@ function getEffectivePlan(user = state.user) {
   return plan
 }
 
+let membershipExpiryReminderOpen = false
+
+async function acknowledgeMembershipExpiryReminder(reminderId, surface = 'main') {
+  try {
+    await api.post(`/api/membership-expiry-reminders/${Number(reminderId)}/read`, { surface })
+  } catch {
+    // The reminder may appear again after a network failure; renewal remains available.
+  }
+}
+
+function showMembershipExpiryReminder(reminder) {
+  if (!reminder || membershipExpiryReminderOpen) return
+  membershipExpiryReminderOpen = true
+  const previousFocus = document.activeElement
+  const overlay = document.createElement('div')
+  overlay.className = 'membership-expiry-overlay'
+  overlay.innerHTML = `
+    <section class="membership-expiry-dialog" role="dialog" aria-modal="true" aria-labelledby="membershipExpiryTitle" aria-describedby="membershipExpirySummary">
+      <button class="membership-expiry-close" type="button" aria-label="关闭会员到期提醒">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+      <div class="membership-expiry-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+      </div>
+      <p class="membership-expiry-eyebrow">会员到期提醒</p>
+      <h2 id="membershipExpiryTitle">${escapeHtml(reminder.title)}</h2>
+      <p id="membershipExpirySummary">${escapeHtml(reminder.summary)}</p>
+      <div class="membership-expiry-facts">
+        <span><small>当前会员</small><strong>${escapeHtml(reminder.plan_label)}</strong></span>
+        <span><small>到期日期</small><strong>${escapeHtml(reminder.expiry_date_text)}</strong></span>
+      </div>
+      <div class="membership-expiry-actions">
+        <button class="btn btn-primary membership-expiry-renew" type="button">前往续费</button>
+        <button class="btn btn-ghost membership-expiry-later" type="button">稍后处理</button>
+      </div>
+      <p class="membership-expiry-note">续费成功后会员有效期会自动更新，无需重复操作。</p>
+    </section>`
+  document.body.appendChild(overlay)
+
+  const dismiss = ({ renew = false } = {}) => {
+    if (!membershipExpiryReminderOpen) return
+    membershipExpiryReminderOpen = false
+    overlay.classList.remove('active')
+    void acknowledgeMembershipExpiryReminder(reminder.id, 'main')
+    setTimeout(() => overlay.remove(), 180)
+    if (renew) navigate('membership')
+    else if (previousFocus instanceof HTMLElement) previousFocus.focus()
+  }
+  overlay.querySelector('.membership-expiry-close')?.addEventListener('click', () => dismiss())
+  overlay.querySelector('.membership-expiry-later')?.addEventListener('click', () => dismiss())
+  overlay.querySelector('.membership-expiry-renew')?.addEventListener('click', () => dismiss({ renew:true }))
+  overlay.addEventListener('click', event => { if (event.target === overlay) dismiss() })
+  overlay.addEventListener('keydown', event => {
+    if (event.key === 'Escape') return dismiss()
+    if (event.key !== 'Tab') return
+    const focusable = [...overlay.querySelectorAll('button:not([disabled]), a[href]')]
+    if (!focusable.length) return
+    const first = focusable[0], last = focusable.at(-1)
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+  })
+  requestAnimationFrame(() => {
+    overlay.classList.add('active')
+    overlay.querySelector('.membership-expiry-renew')?.focus()
+  })
+}
+
+async function checkMembershipExpiryReminder() {
+  if (!state.user || !api._token() || membershipExpiryReminderOpen) return
+  if (!['plus', 'pro'].includes(String(state.user.plan || '').toLowerCase())) return
+  try {
+    const result = await api.get('/api/membership-expiry-reminders?surface=main')
+    if (result.ok && result.reminder) showMembershipExpiryReminder(result.reminder)
+  } catch {
+    // Reminder loading must never block the rest of the site.
+  }
+}
+
 async function refreshCurrentUserProfile({ rerender = false, syncTelegram = false } = {}) {
   if (!localStorage.getItem('ws_token')) return null
 
@@ -892,6 +970,7 @@ async function refreshCurrentUserProfile({ rerender = false, syncTelegram = fals
       updateAuthUI()
       refreshNotificationUnread()
       startPresenceHeartbeat()
+      void checkMembershipExpiryReminder()
       if (rerender || state.paymentStatus === 'success' || planChanged || adminChanged || bindingChanged) renderView()
       return r.user
     }
@@ -4311,9 +4390,15 @@ function renderSmsConfig(container) {
         <label>绑定验证码模板</label>
         <input type="text" class="admin-plan-input" id="smsTemplateBind" value="${escapeHtml(getVal('template_code_bind'))}" placeholder="SMS_XXXXXX">
       </div>
+      <div class="admin-config-row">
+        <label>会员到期提醒模板</label>
+        <input type="text" class="admin-plan-input" id="smsTemplateMembershipExpiry" value="${escapeHtml(getVal('template_code_membership_expiry'))}" placeholder="SMS_XXXXXX">
+        <small>模板参数：plan、expire_date、days</small>
+      </div>
       <div class="admin-config-actions">
         <button class="btn btn-primary" id="saveSmsConfig">保存配置</button>
         <button class="btn btn-ghost" id="testSmsConfig">发送测试短信</button>
+        <button class="btn btn-ghost" id="testMembershipExpirySms">测试到期提醒</button>
       </div>
       <div id="smsTestResult" class="admin-config-test-result"></div>
     </div>
@@ -4328,6 +4413,7 @@ function renderSmsConfig(container) {
       { key: 'template_code_register', value: document.getElementById('smsTemplateRegister').value, label: '注册验证码模板', sort_order: 4 },
       { key: 'template_code_reset', value: document.getElementById('smsTemplateReset').value, label: '重置密码模板', sort_order: 5 },
       { key: 'template_code_bind', value: document.getElementById('smsTemplateBind').value, label: '绑定验证码模板', sort_order: 6 },
+      { key: 'template_code_membership_expiry', value: document.getElementById('smsTemplateMembershipExpiry').value, label: '会员到期提醒模板', sort_order: 7 },
     ]
     const res = await api.put('/api/system-config/sms', { items })
     if (res.ok) {
@@ -4346,6 +4432,19 @@ function renderSmsConfig(container) {
     const res = await api.post('/api/system-config/sms/test', { to: testPhone })
     if (res.ok) {
       resultEl.innerHTML = '<span style="color:#10b981">✓ 测试短信已发送，请检查手机</span>'
+    } else {
+      resultEl.innerHTML = `<span style="color:#ef4444">✗ ${escapeHtml(res.error || '发送失败')}</span>`
+    }
+  })
+
+  document.getElementById('testMembershipExpirySms')?.addEventListener('click', async () => {
+    const resultEl = document.getElementById('smsTestResult')
+    const testPhone = prompt('请输入测试手机号：')
+    if (!testPhone) return
+    resultEl.innerHTML = '<span style="color:var(--text-3)">发送中...</span>'
+    const res = await api.post('/api/system-config/sms/test', { to:testPhone, template:'membership_expiry' })
+    if (res.ok) {
+      resultEl.innerHTML = '<span style="color:#10b981">✓ 到期提醒测试短信已发送</span>'
     } else {
       resultEl.innerHTML = `<span style="color:#ef4444">✗ ${escapeHtml(res.error || '发送失败')}</span>`
     }
@@ -8611,6 +8710,7 @@ function persistAuthSession(result, { syncProgress = false } = {}) {
   refreshNotificationUnread()
   startPresenceHeartbeat()
   closeModal()
+  void checkMembershipExpiryReminder()
 
   if (redirectAfterLogin) {
     if (syncProgress) progress.syncFromServer().catch(() => {})
