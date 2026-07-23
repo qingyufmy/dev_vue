@@ -112,6 +112,17 @@ describe('unified admin console contract', () => {
     expect(css).toContain('.governance-grid')
   })
 
+  it('moves platform memory governance and publishing into the canonical admin console', () => {
+    expect(app).toContain('data-ai-tab="memory"')
+    expect(app).toContain("api('/api/ai/admin/platform-experience')")
+    expect(app).toContain('/api/ai/admin/platform-experience/policies/${form.dataset.memoryPolicy}')
+    expect(app).toContain('/api/ai/admin/platform-experience/${row.dataset.memoryItem}/${action}')
+    expect(app).toContain('runtime_token_budget')
+    expect(app).toContain('影子评估只记录匹配结果，不注入推理')
+    expect(css).toContain('.memory-governance-grid')
+    expect(css).toContain('.memory-item-row')
+  })
+
   it('centralizes risk status, decisions and administrator audit records', () => {
     expect(html).toContain('data-view="risk-audit"')
     expect(app).toContain('/api/admin/risk-audit/overview?')

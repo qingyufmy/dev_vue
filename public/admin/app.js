@@ -6,7 +6,7 @@ const state = {
   referralStatus:'all',
   aiTab:'health', aiOperations:null, observerCandidates:null,
   modelCompare:{ setup:null, strategyId:0, symbol:'', result:'all', page:1, snapshots:[], pagination:null, selected:new Map(), modelIds:new Set(), jobs:[], loading:false, polling:null },
-  platformModels:{profiles:[],policy:null,governance:null},
+  platformModels:{profiles:[],policy:null,governance:null}, platformMemory:null,
   riskTab:'status', riskData:null, riskPolicy:null, riskPage:1, riskDecision:'all', auditPage:1, auditSearch:'', riskOpenGroup:'account',
   contentTab:'courses', contentOverview:null, contentPage:1, contentSearch:'', contentStatus:'all', feedbackPage:1, feedbackSearch:'', systemConfig:null, systemConfigCategory:'plan_prices', courseAssets:{courses:[],episodeId:0,resources:null,questions:[],editingQuestion:null},
 }
@@ -435,6 +435,7 @@ function aiTabs() {
     <button type="button" class="segment-tab ${state.aiTab === 'health' ? 'is-active' : ''}" data-ai-tab="health">运行健康</button>
     <button type="button" class="segment-tab ${state.aiTab === 'scheduler' ? 'is-active' : ''}" data-ai-tab="scheduler">调度与模型</button>
     <button type="button" class="segment-tab ${state.aiTab === 'models' ? 'is-active' : ''}" data-ai-tab="models">平台模型</button>
+    <button type="button" class="segment-tab ${state.aiTab === 'memory' ? 'is-active' : ''}" data-ai-tab="memory">平台记忆</button>
     <button type="button" class="segment-tab ${state.aiTab === 'observer' ? 'is-active' : ''}" data-ai-tab="observer">观摩频道</button>
     <button type="button" class="segment-tab ${state.aiTab === 'model-compare' ? 'is-active' : ''}" data-ai-tab="model-compare">模型评测</button>
   </nav>`
@@ -651,6 +652,20 @@ function renderPlatformModels() {
   document.querySelector('#rotateModelCredentials').onclick=async event=>{if(!await confirmAction('重新加密模型密钥？','系统会用当前主密钥重新加密全部模型凭证。运行期间已有请求不受影响。','确认轮换'))return;event.currentTarget.disabled=true;try{const result=await api('/api/ai/admin/credentials/rotate',{method:'POST'});toast(`密钥轮换完成：${Number(result.result?.rotatedCount||0)} 条`,'success');await loadPlatformModels()}catch(error){handleError(error);event.currentTarget.disabled=false}}
   document.querySelector('#clearLegacyCredentials').onclick=async event=>{if(!await confirmAction('清理旧明文凭证？','仅在所有迁移记录已验证后执行。清理后旧配置中的明文密钥无法恢复。','确认永久清理',true))return;event.currentTarget.disabled=true;try{await api('/api/ai/admin/credentials/finalize-legacy-cleanup',{method:'POST',body:JSON.stringify({confirm:'CLEAR_VERIFIED_LEGACY_CREDENTIALS'})});toast('旧明文凭证已清理','success');await loadPlatformModels()}catch(error){handleError(error);event.currentTarget.disabled=false}}
 }
+const platformMemoryModeLabels={off:'未启用',shadow:'影子评估',active:'正式使用'}
+function platformMemoryContent(){
+  const data=state.platformMemory||{},items=data.items||[],policies=data.policies||[],evaluation=data.evaluation||{},retrieval=evaluation.retrieval||{},paired=evaluation.paired||{}
+  const current=items.filter(item=>item.status!=='revoked'),archived=items.filter(item=>item.status==='revoked')
+  const itemCard=item=>`<article class="memory-item-row" data-memory-item="${Number(item.id)}"><span class="memory-tier ${item.memory_tier==='long'?'long':''}">${item.memory_tier==='long'?'长期':'短期'}</span><div><div class="memory-item-title"><strong>${escapeHtml(item.strategy_title||`策略 #${item.strategy_id}`)}</strong><span class="badge ${item.status==='active'?'active':''}">${item.status==='active'?'已发布':'待发布'}</span></div><p>${escapeHtml(item.lesson_text||'暂无记忆内容')}</p><small>记忆 #${Number(item.id)} · ${item.platform_version?`发布批次 ${Number(item.platform_version)}`:'尚未发布'} · ${escapeHtml(formatDate(item.updated_at,true))}</small></div><div class="row-actions">${item.status==='candidate'?'<button class="primary-button compact-action" data-memory-publish type="button">发布</button>':''}${item.status==='active'?'<button class="secondary-button compact-action" data-memory-revoke type="button">撤销</button>':''}</div></article>`
+  return `<section class="memory-governance-grid"><article class="panel"><header class="section-head"><div><span class="eyebrow">策略绑定</span><h2>平台记忆运行模式</h2><p>记忆只会参与对应策略；影子评估只记录匹配结果，不注入推理。</p></div></header><div class="memory-policy-list">${policies.map(policy=>`<form class="memory-policy-row" data-memory-policy="${Number(policy.strategy_id)}"><div><strong>${escapeHtml(policy.strategy_title)}</strong><small>修订 ${Number(policy.policy_version||1)} · ${platformMemoryModeLabels[policy.mode]||'状态待确认'}</small></div><label><span>运行模式</span><select class="select" data-memory-policy-mode><option value="off" ${policy.mode==='off'?'selected':''}>关闭</option><option value="shadow" ${policy.mode==='shadow'?'selected':''}>影子评估</option><option value="active" ${policy.mode==='active'?'selected':''}>正式使用</option></select></label><label><span>最多命中</span><input class="input" data-memory-policy-items type="number" min="1" max="10" value="${Number(policy.max_items||5)}"></label><label><span>令牌预算</span><input class="input" data-memory-policy-budget type="number" min="100" max="1600" step="100" value="${Number(policy.runtime_token_budget||800)}"></label><button class="secondary-button compact-action" type="submit">保存</button></form>`).join('')||'<div class="empty-state compact-empty">暂无平台策略</div>'}</div></article><article class="panel memory-evaluation"><header class="section-head"><div><span class="eyebrow">效果评估</span><h2>最近 ${Number(evaluation.window_days||30)} 天</h2><p>命中率衡量匹配效果，不代表收益提升。</p></div></header><div class="memory-metrics"><div><span>影子检索</span><strong>${Number(retrieval.shadow_total||0)}</strong></div><div><span>命中次数</span><strong>${Number(retrieval.shadow_hits||0)}</strong></div><div><span>影子命中率</span><strong>${Math.round(Number(retrieval.shadow_hit_rate||0)*100)}%</strong></div><div><span>配对试验</span><strong>${Number(paired.total||0)}</strong></div></div><div class="memory-strategy-stats">${(evaluation.strategies||[]).slice(0,8).map(row=>`<div><span>${escapeHtml(row.strategy_title||`策略 #${row.strategy_id}`)}</span><strong>${Number(row.shadow_hits||0)} / ${Number(row.shadow_retrievals||0)}</strong></div>`).join('')||'<div class="empty-inline">尚无可评估的检索记录</div>'}</div></article></section><section class="panel section-gap"><header class="section-head"><div><span class="eyebrow">审核发布</span><h2>平台记忆库</h2><p>日复盘形成短期记忆，月复盘形成长期记忆；发布后才可被策略读取。</p></div><div class="row-actions"><span class="badge">待发布 ${items.filter(item=>item.status==='candidate').length}</span><span class="badge active">已发布 ${items.filter(item=>item.status==='active').length}</span></div></header><div class="memory-item-list">${current.map(itemCard).join('')||'<div class="empty-state">暂无待处理或已发布的平台记忆</div>'}</div>${archived.length?`<details class="memory-archive"><summary>已撤销归档 <span>${archived.length} 条</span></summary><div>${archived.map(item=>`<article class="memory-archive-row" data-memory-item="${Number(item.id)}"><div><strong>${escapeHtml(item.strategy_title||`策略 #${item.strategy_id}`)} · 记忆 #${Number(item.id)}</strong><p>${escapeHtml(item.lesson_text||'暂无内容')}</p></div><button class="text-button danger-text" data-memory-delete type="button">永久删除</button></article>`).join('')}</div></details>`:''}</section>`
+}
+async function loadPlatformMemory(){const data=await api('/api/ai/admin/platform-experience');state.platformMemory=data;renderPlatformMemory()}
+function renderPlatformMemory(){
+  const content=document.querySelector('#aiOperationsContent');if(!content)return;content.innerHTML=platformMemoryContent();renderIcons(content)
+  document.querySelectorAll('[data-memory-policy]').forEach(form=>form.onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{await api(`/api/ai/admin/platform-experience/policies/${form.dataset.memoryPolicy}`,{method:'PUT',body:JSON.stringify({mode:form.querySelector('[data-memory-policy-mode]').value,max_items:Number(form.querySelector('[data-memory-policy-items]').value),runtime_token_budget:Number(form.querySelector('[data-memory-policy-budget]').value)})});toast('平台记忆策略已保存','success');await loadPlatformMemory()}catch(error){handleError(error);button.disabled=false}})
+  document.querySelectorAll('[data-memory-publish],[data-memory-revoke]').forEach(button=>button.onclick=async()=>{const row=button.closest('[data-memory-item]'),action=button.hasAttribute('data-memory-publish')?'publish':'revoke',label=action==='publish'?'发布':'撤销';if(!await confirmAction(`${label}平台记忆？`,action==='publish'?'发布后，精确匹配的分析任务可以使用这条记忆。':'撤销后，新分析不会再使用这条记忆。',`确认${label}`,action==='revoke'))return;button.disabled=true;try{await api(`/api/ai/admin/platform-experience/${row.dataset.memoryItem}/${action}`,{method:'POST'});toast(`平台记忆已${label}`,'success');await loadPlatformMemory()}catch(error){handleError(error);button.disabled=false}})
+  document.querySelectorAll('[data-memory-delete]').forEach(button=>button.onclick=async()=>{const row=button.closest('[data-memory-item]');if(!await confirmAction('永久删除已撤销记忆？','该记录只用于历史追溯。删除后无法恢复。','确认永久删除',true))return;button.disabled=true;try{await api(`/api/ai/admin/platform-experience/${row.dataset.memoryItem}`,{method:'DELETE'});toast('已撤销记忆已永久删除','success');await loadPlatformMemory()}catch(error){handleError(error);button.disabled=false}})
+}
 function audienceLabel(value) { return ({all:'全部用户',plus:'Plus 用户',pro:'Pro 用户',assigned:'指定用户'})[value] || '未设置' }
 let entityModalReturnFocus=null
 function closeEntityModal(){document.querySelector('#entityModal').hidden=true;entityModalReturnFocus?.focus?.();entityModalReturnFocus=null}
@@ -710,6 +725,12 @@ function bindObserverRuntime() {
 function renderAiOperationsContent() {
   const content = document.querySelector('#aiOperationsContent')
   if (!content) return
+  if (state.aiTab === 'memory') {
+    renderPlatformMemory()
+    if (!state.platformMemory) loadPlatformMemory().catch(handleError)
+    document.querySelectorAll('[data-ai-tab]').forEach(button => button.classList.toggle('is-active', button.dataset.aiTab === state.aiTab))
+    return
+  }
   if (state.aiTab === 'models') {
     renderPlatformModels()
     if (!state.platformModels.policy || !state.platformModels.governance) loadPlatformModels().catch(handleError)
@@ -741,7 +762,8 @@ async function renderAiOperations() {
   const main = document.querySelector('#adminMain')
   main.innerHTML = `<header class="page-head"><div><span class="eyebrow">模型、调度与观摩分发</span><h1>AI 运营治理</h1><p>先确认核心链路是否健康，再处理调度、模型和观摩频道。</p></div></header>${aiTabs()}<div id="aiOperationsContent"></div>`
   bindAiTabs()
-  if (state.aiTab === 'models') await loadPlatformModels()
+  if (state.aiTab === 'memory') await loadPlatformMemory()
+  else if (state.aiTab === 'models') await loadPlatformModels()
   else if (state.aiTab === 'model-compare') await loadModelCompareWorkspace()
   else await loadAiOperations()
 }
