@@ -630,6 +630,7 @@ router.get('/ai/admin/users/:userId/operations-detail', authMiddleware, async (r
     const targetUserId = Number(req.params.userId)
     if (!Number.isInteger(targetUserId) || targetUserId <= 0) throw new Error('invalid_user_id')
     const user = await queryOne(`SELECT id, nickname, email, phone, plan, role, plan_source, plan_expires_at,
+      (plan IN ('pro', 'plus') AND plan_expires_at IS NOT NULL AND plan_expires_at < NOW()) AS membership_expired,
       last_seen_at, bridge_heartbeat, created_at FROM users WHERE id = ?`, [targetUserId])
     if (!user) return res.status(404).json({ ok:false, error:'user_not_found' })
     const [settings, scheduler, accounts, subscriptions, strategies] = await Promise.all([

@@ -291,6 +291,19 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => HTML_ESCAPE[char]);
 }
 
+function userMembershipPresentation(user = {}) {
+  const plan = ['pro', 'plus', 'free'].includes(String(user.plan)) ? String(user.plan) : 'free';
+  const expired = plan !== 'free' && Boolean(Number(user.membership_expired ?? user.membershipExpired));
+  const activeLabels = { pro:'Pro 专业版', plus:'Plus 观摩版', free:'免费用户' };
+  const expiredLabels = { pro:'Pro 已过期', plus:'Plus 已过期' };
+  return {
+    plan,
+    expired,
+    label:expired ? expiredLabels[plan] : activeLabels[plan],
+    className:expired ? 'chip-expired' : `chip-${plan}`,
+  };
+}
+
 function raw(value) {
   return value === null || value === undefined || value === "" ? "--" : String(value);
 }
@@ -9530,6 +9543,12 @@ async function renderAdminDashboard(el, d, userListResp) {
             <div id="userDetailContainer" aria-live="polite"></div>
           </section>
         </div>
+        <div class="ops-profile-modal" id="adminUserProfileModal" hidden>
+          <button class="ops-profile-modal-backdrop" type="button" data-close-user-profile aria-label="关闭用户编辑窗口"></button>
+          <section class="ops-profile-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="adminProfileModalTitle" tabindex="-1">
+            <div id="adminUserProfileModalContent"></div>
+          </section>
+        </div>
       </section>
 
       <section class="ops-view-panel" data-admin-panel="observers" hidden>
@@ -9571,8 +9590,17 @@ async function renderAdminDashboard(el, d, userListResp) {
   $('clSaveButton')?.addEventListener('click', saveChangelog);
 
   const userDetailModal = $('userDetailModal');
+  const userProfileModal = $('adminUserProfileModal');
+  const closeUserProfile = ({ restoreFocus = true } = {}) => {
+    if (!userProfileModal || userProfileModal.hidden) return;
+    userProfileModal.hidden = true;
+    const detailDialog = userDetailModal?.querySelector('.ops-user-modal-dialog');
+    if (detailDialog) detailDialog.inert = false;
+    if (restoreFocus) $('editAdminUserProfile')?.focus();
+  };
   const closeUserDetail = () => {
     if (!userDetailModal || userDetailModal.hidden) return;
+    closeUserProfile({ restoreFocus:false });
     userDetailModal.hidden = true;
     document.body.classList.remove('form-modal-open');
     const previousUserId = Number(_adminDashState.selectedUserId);
@@ -9581,6 +9609,26 @@ async function renderAdminDashboard(el, d, userListResp) {
     document.querySelector(`[data-uid="${previousUserId}"]`)?.focus();
   };
   userDetailModal?.querySelector('[data-close-user-detail]')?.addEventListener('click', closeUserDetail);
+  userProfileModal?.querySelector('[data-close-user-profile]')?.addEventListener('click', () => closeUserProfile());
+  userProfileModal?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      closeUserProfile();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const dialog = userProfileModal.querySelector('.ops-profile-modal-dialog');
+    const focusable = [...dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter(item => !item.hidden && item.offsetParent !== null);
+    if (!focusable.length) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
   userDetailModal?.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
       closeUserDetail();
@@ -9651,11 +9699,13 @@ async function renderAdminDashboard(el, d, userListResp) {
         try {
           const resp = await wsApi('admin_user_search', { q, limit: 5 });
           if (resp.status !== 'success') return;
-          const planLabel = plan => ({ pro:'Pro 专业版', plus:'Plus 观摩版', free:'免费用户' }[plan] || '免费用户');
           dropdown.innerHTML = resp.users.length
-            ? resp.users.map(u => '<div class="drop-item" data-uid="' + u.id + '">' +
+            ? resp.users.map(u => {
+              const membership = userMembershipPresentation(u);
+              return '<div class="drop-item" data-uid="' + u.id + '">' +
                 '<div class="drop-info"><span class="drop-name">' + escapeHtml(u.nickname || '--') + '</span><span class="drop-email">' + escapeHtml(u.email) + '</span></div>' +
-                '<span class="chip chip-' + (u.plan||'free') + '">' + planLabel(u.plan || 'free') + (u.role==='admin'?' · 管理员':'') + '</span></div>').join('')
+                '<span class="chip ' + membership.className + '">' + membership.label + (u.role==='admin'?' · 管理员':'') + '</span></div>';
+            }).join('')
             : '<div class="drop-empty">无匹配用户</div>';
           dropdown.querySelectorAll('.drop-item').forEach(el => {
             el.addEventListener('click', async () => {
@@ -9680,17 +9730,19 @@ async function renderAdminDashboard(el, d, userListResp) {
     const container = $('userListContainer');
     const totalPages = Math.ceil((data.total || 0) / (data.pageSize || 10));
     const users = data.users || [];
-    const planLabel = plan => ({ pro:'Pro 专业版', plus:'Plus 观摩版', free:'免费用户' }[plan] || '免费用户');
     const pageStart = Math.max(1, Math.min(Math.max(1, totalPages - 4), Number(data.page || 1) - 2));
     const visiblePages = Array.from({ length:Math.min(5, totalPages) }, (_, index) => pageStart + index).filter(page => page <= totalPages);
     container.innerHTML = users.length
       ? '<div class="ops-user-list">' +
-        users.map(u => '<button type="button" class="ops-user-list-item' + (Number(u.id) === Number(_adminDashState.selectedUserId) ? ' active' : '') + '" data-uid="' + u.id + '" aria-label="查看 ' + escapeHtml(u.nickname || u.email || `用户 ${u.id}`) + ' 的运营档案">' +
+        users.map(u => {
+          const membership = userMembershipPresentation(u);
+          return '<button type="button" class="ops-user-list-item' + (Number(u.id) === Number(_adminDashState.selectedUserId) ? ' active' : '') + '" data-uid="' + u.id + '" aria-label="查看 ' + escapeHtml(u.nickname || u.email || `用户 ${u.id}`) + ' 的运营档案">' +
           '<span class="ops-user-cell"><span class="ops-user-avatar">' + escapeHtml((u.nickname || u.email || '?').slice(0, 1).toUpperCase()) + '</span><span><strong>' + escapeHtml(u.nickname || '未设置昵称') + (u.role === 'admin' ? '<em>管理员</em>' : '') + '</strong><small>#' + u.id + ' · ' + escapeHtml(u.phone || u.email || '--') + '</small></span></span>' +
-          '<span class="chip chip-' + (u.plan || 'free') + '">' + planLabel(u.plan || 'free') + '</span>' +
+          '<span class="chip ' + membership.className + '">' + membership.label + '</span>' +
           '<span class="ops-user-runtime"><span class="ops-binary-state ' + (u.bridgeConnected ? 'on' : 'off') + '"><i></i>MT5 ' + (u.bridgeConnected ? '已连接' : '未连接') + '</span><span class="ops-binary-state ' + (u.autoReasoning ? 'on' : 'off') + '"><i></i>分析' + (u.autoReasoning ? '开启' : '关闭') + '</span><span class="ops-binary-state ' + (u.tradeEnabled ? 'on' : 'off') + '"><i></i>交易' + (u.tradeEnabled ? '开启' : '关闭') + '</span></span>' +
           '<span class="ops-user-activity"><small>最近活动</small><strong>' + (u.bridge_heartbeat ? formatTimeAgo(u.bridge_heartbeat) : (u.last_seen_at ? formatTimeAgo(u.last_seen_at) : '暂无记录')) + '</strong></span>' +
-          '<span class="ops-row-action" aria-hidden="true"><i data-lucide="chevron-right"></i></span></button>').join('') +
+          '<span class="ops-row-action" aria-hidden="true"><i data-lucide="chevron-right"></i></span></button>';
+        }).join('') +
         '</div>' +
         (totalPages > 1
           ? '<div class="user-pager"><button class="page-btn" data-page="prev" aria-label="上一页"' + (data.page <= 1 ? ' disabled': '') + '><i data-lucide="chevron-left"></i></button>' +
@@ -9720,6 +9772,7 @@ async function renderAdminDashboard(el, d, userListResp) {
 
   async function showUserDetail(uid) {
     const detailContainer = $('userDetailContainer');
+    closeUserProfile({ restoreFocus:false });
     _adminDashState.selectedUserId = Number(uid);
     if (userDetailModal) {
       userDetailModal.hidden = false;
@@ -9745,22 +9798,57 @@ async function renderAdminDashboard(el, d, userListResp) {
         return `<article class="ops-account-card" data-admin-account="${Number(account.id)}"><header><div><span class="ops-kicker">MT5 账户</span><h4>${escapeHtml(account.nickname || account.login_account)}</h4><p>${escapeHtml(account.broker_server)} · ${escapeHtml(account.login_account)}</p></div><span class="status-chip ${account.observe_status === 'active' ? 'success' : 'warning'}">${account.observe_status === 'active' ? '当前接入' : '历史账户'}</span></header><div class="ops-account-metrics"><div><span>接入后累计收益</span><strong class="num ${Number(account.realized_net || 0) < 0 ? 'text-danger' : 'text-success'}">${syncReady ? `${Number(account.realized_net).toFixed(2)} ${escapeHtml(currency)}` : '同步中'}</strong><small>仅平仓净收益，不含入金和出金</small></div><div><span>资金净流入</span><strong class="num">${syncReady ? `${Number(account.net_funding || 0).toFixed(2)} ${escapeHtml(currency)}` : '--'}</strong><small>入金－出金＋信用与调整</small></div><div><span>已平仓</span><strong class="num">${account.closed_position_count ?? '--'}</strong><small>胜 ${account.winning_exit_count ?? '--'} · 负 ${account.losing_exit_count ?? '--'}</small></div><div><span>风控状态</span><strong>${account.halt_status === 'active' ? '允许交易' : '暂停新开仓'}</strong><small>回撤 ${account.drawdown_pct ?? '--'}% · 连亏 ${account.consecutive_losses ?? '--'}</small></div></div><div class="ops-account-sync"><span>统计起点 ${escapeHtml(String(account.platform_connected_at || '--').slice(0, 19))}</span><span>同步至 ${escapeHtml(String(account.performance_synced_through_date || '--').slice(0, 10))}</span><span>${syncLabel}</span></div><details class="ops-detail-editor"><summary><span><i data-lucide="shield-check"></i><strong>编辑该账户风控</strong><small>留空表示继承平台规则</small></span><i data-lucide="chevron-down"></i></summary><div class="ops-risk-editor">${riskFields}</div><div class="ops-detail-actions"><button class="btn btn-primary btn-sm" type="button" data-save-admin-risk="${Number(account.id)}">保存账户风控</button></div></details></article>`;
       }).join('') || '<div class="ops-empty-state"><strong>尚未接入 MT5 账户</strong><span>用户连接桥接软件后，这里会自动出现账户和统计。</span></div>';
       const subscriptionCards = subscriptions.map(item => `<article class="ops-subscription-row" data-admin-subscription="${Number(item.id)}"><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>${escapeHtml(item.broker_server)} · ${escapeHtml(item.login_account)}</span></div><select data-admin-subscription-strategy aria-label="选择策略">${strategyOptions(item.strategy_id)}</select><label class="ops-inline-switch"><input type="checkbox" data-admin-subscription-enabled ${Number(item.execution_enabled) ? 'checked' : ''}><span>自动分析</span></label><button class="btn btn-secondary btn-sm" type="button" data-save-admin-subscription="${Number(item.id)}">保存</button></article>`).join('') || '<div class="ops-empty-state"><strong>暂无策略订阅</strong><span>用户创建订阅后可在这里查看和调整。</span></div>';
-      const planText = ({ pro:'Pro 专业版', plus:'Plus 观摩版', free:'免费用户' })[u.plan] || '免费用户';
+      const membership = userMembershipPresentation(u);
+      const planText = membership.label;
       const expiresText = u.plan_expires_at ? String(u.plan_expires_at).slice(0, 10) : '长期有效';
       const profileLocked = u.plan_source === 'observer_source';
-      const profileEditor = `<form class="ops-profile-editor" id="adminUserProfileEditor" hidden novalidate><div class="ops-profile-editor-heading"><div><span class="ops-kicker">账号资料</span><h3>编辑用户</h3><p>${profileLocked ? '该账号是专用观摩源，会员等级固定为 Pro；仍可重置登录密码。' : '调整会员权限和有效期，或为用户重置登录密码。'}</p></div><button class="btn btn-ghost btn-sm" id="cancelAdminUserProfile" type="button"><i data-lucide="x"></i>取消</button></div><div class="ops-profile-editor-grid"><label><span>会员等级</span><select id="adminUserPlan" ${profileLocked ? 'disabled' : ''}><option value="free" ${u.plan === 'free' ? 'selected' : ''}>免费用户</option><option value="plus" ${u.plan === 'plus' ? 'selected' : ''}>Plus 观摩版</option><option value="pro" ${u.plan === 'pro' ? 'selected' : ''}>Pro 专业版</option></select><small>${profileLocked ? '观摩源账号必须保持 Pro 专业版' : '保存后立即按新等级控制功能权限'}</small></label><label><span>会员到期日期</span><input id="adminUserExpiresAt" type="date" value="${u.plan_expires_at ? escapeHtml(String(u.plan_expires_at).slice(0, 10)) : ''}" ${profileLocked || u.plan === 'free' ? 'disabled' : ''}><small>留空表示长期有效；免费用户无需设置</small></label><label class="ops-profile-password"><span>重置密码（可选）</span><div class="ops-password-field"><input id="adminUserPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="输入新密码"><button id="toggleAdminUserPassword" type="button" aria-label="显示密码"><i data-lucide="eye"></i></button></div><input id="adminUserPasswordConfirm" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="再次输入新密码"><small>两处均留空则保留原密码；至少 8 位且包含字母和数字</small></label></div><div class="ops-profile-editor-actions"><span id="adminUserProfileStatus" role="status" aria-live="polite"></span><button class="btn btn-primary" id="saveAdminUserProfile" type="submit"><i data-lucide="save"></i>保存用户资料</button></div></form>`;
+      const profileEditor = `<form class="ops-profile-editor" id="adminUserProfileEditor" novalidate>
+        <header class="ops-profile-editor-heading">
+          <div class="ops-profile-editor-title"><span class="ops-profile-editor-icon"><i data-lucide="user-cog"></i></span><div><span class="ops-kicker">账号权限</span><h3 id="adminProfileModalTitle">编辑用户档案</h3><p>会员权限与登录安全分开设置，保存后立即生效。</p></div></div>
+          <button class="btn btn-ghost btn-sm" id="cancelAdminUserProfile" type="button"><i data-lucide="x"></i>取消</button>
+        </header>
+        <div class="ops-profile-editor-layout">
+          <section class="ops-profile-edit-card ops-profile-membership-card" aria-labelledby="adminMembershipTitle">
+            <div class="ops-profile-edit-card-head"><span class="ops-profile-card-icon"><i data-lucide="badge-check"></i></span><div><h4 id="adminMembershipTitle">会员权限</h4><p>决定该用户可以进入和使用的功能范围。</p></div><span class="chip ${membership.className}">${escapeHtml(membership.label)}</span></div>
+            <div class="ops-profile-membership-fields">
+              <label><span>会员等级</span><select id="adminUserPlan" ${profileLocked ? 'disabled' : ''}><option value="free" ${u.plan === 'free' ? 'selected' : ''}>免费用户</option><option value="plus" ${u.plan === 'plus' ? 'selected' : ''}>Plus 观摩版</option><option value="pro" ${u.plan === 'pro' ? 'selected' : ''}>Pro 专业版</option></select><small>${profileLocked ? '专用观摩源账号固定为 Pro 专业版' : '调整后会立即更新用户的功能权限'}</small></label>
+              <label><span>会员到期日期</span><input id="adminUserExpiresAt" type="date" value="${u.plan_expires_at ? escapeHtml(String(u.plan_expires_at).slice(0, 10)) : ''}" ${profileLocked || u.plan === 'free' ? 'disabled' : ''}><small>截止所选日期当天 23:59；留空表示长期有效</small></label>
+            </div>
+            <div class="ops-expiry-presets" aria-label="快捷设置会员期限"><span>快捷期限</span><button type="button" data-expiry-days="30" ${profileLocked || u.plan === 'free' ? 'disabled' : ''}>30 天</button><button type="button" data-expiry-days="90" ${profileLocked || u.plan === 'free' ? 'disabled' : ''}>90 天</button><button type="button" data-expiry-days="365" ${profileLocked || u.plan === 'free' ? 'disabled' : ''}>1 年</button><button type="button" data-expiry-days="none" ${profileLocked || u.plan === 'free' ? 'disabled' : ''}>长期有效</button></div>
+          </section>
+          <section class="ops-profile-edit-card ops-profile-security-card" aria-labelledby="adminSecurityTitle">
+            <div class="ops-profile-edit-card-head"><span class="ops-profile-card-icon neutral"><i data-lucide="key-round"></i></span><div><h4 id="adminSecurityTitle">登录密码</h4><p>仅在用户忘记密码时重置，原密码无法查看。</p></div></div>
+            <div class="ops-password-idle" id="adminPasswordIdle"><i data-lucide="shield-check"></i><span><strong>密码保持不变</strong><small>如无必要，不建议主动重置用户密码。</small></span></div>
+            <button class="btn btn-secondary ops-password-reset-trigger" id="openAdminPasswordReset" type="button" aria-expanded="false" aria-controls="adminPasswordResetFields"><i data-lucide="key-round"></i>重置登录密码</button>
+            <div class="ops-profile-password-fields" id="adminPasswordResetFields" hidden>
+              <label><span>新密码</span><div class="ops-password-field"><input id="adminUserPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="至少 8 位，包含字母和数字"><button id="toggleAdminUserPassword" type="button" aria-label="显示密码"><i data-lucide="eye"></i></button></div></label>
+              <label><span>确认新密码</span><input id="adminUserPasswordConfirm" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="再次输入新密码"></label>
+              <small class="ops-field-error" id="adminUserPasswordError" role="alert"></small>
+              <button class="btn btn-ghost btn-sm" id="cancelAdminPasswordReset" type="button">不重置密码</button>
+            </div>
+          </section>
+        </div>
+        <footer class="ops-profile-editor-actions"><span id="adminUserProfileStatus" role="status" aria-live="polite"></span><button class="btn btn-primary" id="saveAdminUserProfile" type="submit"><i data-lucide="save"></i>保存更改</button></footer>
+      </form>`;
       detailContainer.innerHTML = `<section class="ops-user-control"><header class="user-detail-header"><div class="user-detail-avatar">${escapeHtml((u.nickname || u.email || '?')[0].toUpperCase())}</div><div class="user-detail-info"><span class="ops-kicker">用户运营档案</span><span class="name">${escapeHtml(u.nickname || '未设置昵称')} <small>#${Number(u.id)}</small></span><span class="email">${escapeHtml(u.phone || u.email || '--')}</span></div><div class="ops-user-profile-badges"><span class="chip chip-${escapeHtml(u.plan || 'free')}">${escapeHtml(planText)}</span><span class="ops-binary-state ${d2.bridge?.connected ? 'on' : 'off'}"><i></i>${d2.bridge?.connected ? 'MT5 在线' : 'MT5 离线'}</span></div><button class="user-detail-close" id="adminUserDetailClose" type="button" aria-label="关闭用户详情"><i data-lucide="x"></i></button></header><div class="ops-user-profile-facts"><div><span>注册时间</span><strong>${escapeHtml(String(u.created_at || '--').slice(0, 10))}</strong></div><div><span>会员有效期</span><strong>${escapeHtml(expiresText)}</strong></div><div><span>最近活动</span><strong>${u.bridge_heartbeat ? escapeHtml(formatTimeAgo(u.bridge_heartbeat)) : u.last_seen_at ? escapeHtml(formatTimeAgo(u.last_seen_at)) : '暂无记录'}</strong></div><div><span>接入账户</span><strong class="num">${accounts.length}</strong></div></div><div class="ops-runtime-controls"><div><span class="ops-kicker">实时控制</span><h3>自动分析与交易发送</h3><p>保存后立即生效；桥接离线时会在下次连接后恢复期望状态。</p></div><label class="ops-control-switch"><input id="adminUserAutoReasoning" type="checkbox" ${Number(s.auto_reasoning_enabled) ? 'checked' : ''}><span><strong>自动分析</strong><small>${d2.bridge?.connected ? '桥接在线，可实时同步' : '桥接离线，暂存期望状态'}</small></span></label><label class="ops-control-switch danger"><input id="adminUserTradeSend" type="checkbox" ${Number(s.trade_send_enabled) ? 'checked' : ''}><span><strong>交易发送</strong><small>允许系统向该用户账户发送订单</small></span></label><button class="btn btn-primary btn-sm" id="saveAdminUserRuntime" type="button"><i data-lucide="save"></i>保存运行状态</button></div><section class="ops-detail-section"><div class="ops-section-heading"><div><span class="ops-kicker">账户与收益</span><h3>接入过的 MT5 账户</h3><p>收益按账户归属期和 MT5 平仓时间汇总，入出金单独展示。</p></div><span class="ops-section-count">${accounts.length} 个账户</span></div><div class="ops-account-list">${accountCards}</div></section><section class="ops-detail-section"><div class="ops-section-heading"><div><span class="ops-kicker">策略运行</span><h3>当前策略订阅</h3><p>可以调整绑定策略和自动分析状态，所有修改都会进入审计。</p></div><span class="ops-section-count">${subscriptions.length} 条订阅</span></div><div class="ops-subscription-list">${subscriptionCards}</div></section></section>`;
       const profileHeader = detailContainer.querySelector('.user-detail-header');
+      const profileMembershipChip = profileHeader?.querySelector('.chip');
+      if (profileMembershipChip) profileMembershipChip.className = `chip ${membership.className}`;
       profileHeader?.querySelector('.ops-user-profile-badges')?.insertAdjacentHTML('afterend', `<button class="btn btn-secondary btn-sm ops-profile-edit-trigger" id="editAdminUserProfile" type="button"><i data-lucide="user-pen"></i><span>编辑</span></button>`);
-      profileHeader?.insertAdjacentHTML('afterend', profileEditor);
+      const profileModalContent = $('adminUserProfileModalContent');
+      if (profileModalContent) profileModalContent.innerHTML = profileEditor;
       $('adminUserDetailClose')?.addEventListener('click', closeUserDetail);
       const profileForm = $('adminUserProfileEditor');
       const setProfileEditorOpen = open => {
-        if (!profileForm) return;
-        profileForm.hidden = !open;
-        detailContainer.querySelector('.ops-user-control')?.classList.toggle('is-editing-profile', open);
-        if (open) requestAnimationFrame(() => (profileLocked ? $('adminUserPassword') : $('adminUserPlan'))?.focus());
-        else $('editAdminUserProfile')?.focus();
+        if (!profileForm || !userProfileModal) return;
+        if (!open) {
+          closeUserProfile();
+          return;
+        }
+        userProfileModal.hidden = false;
+        const detailDialog = userDetailModal?.querySelector('.ops-user-modal-dialog');
+        if (detailDialog) detailDialog.inert = true;
+        requestAnimationFrame(() => (profileLocked ? $('openAdminPasswordReset') : $('adminUserPlan'))?.focus());
       };
       $('editAdminUserProfile')?.addEventListener('click', () => setProfileEditorOpen(true));
       $('cancelAdminUserProfile')?.addEventListener('click', () => setProfileEditorOpen(false));
@@ -9769,12 +9857,48 @@ async function renderAdminDashboard(el, d, userListResp) {
         if (!expiry || profileLocked) return;
         expiry.disabled = event.target.value === 'free';
         if (expiry.disabled) expiry.value = '';
+        profileForm.querySelectorAll('[data-expiry-days]').forEach(button => { button.disabled = expiry.disabled; });
       });
+      profileForm?.querySelectorAll('[data-expiry-days]').forEach(button => button.addEventListener('click', () => {
+        const expiry = $('adminUserExpiresAt');
+        if (!expiry || expiry.disabled) return;
+        if (button.dataset.expiryDays === 'none') expiry.value = '';
+        else {
+          const date = new Date();
+          date.setDate(date.getDate() + Number(button.dataset.expiryDays));
+          const pad = value => String(value).padStart(2, '0');
+          expiry.value = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+        }
+        profileForm.querySelectorAll('[data-expiry-days]').forEach(item => item.classList.toggle('active', item === button));
+      }));
+      const setPasswordResetOpen = open => {
+        const fields = $('adminPasswordResetFields'), trigger = $('openAdminPasswordReset'), idle = $('adminPasswordIdle');
+        if (!fields || !trigger || !idle) return;
+        fields.hidden = !open;
+        idle.hidden = open;
+        trigger.hidden = open;
+        trigger.setAttribute('aria-expanded', String(open));
+        if (open) requestAnimationFrame(() => $('adminUserPassword')?.focus());
+        else {
+          $('adminUserPassword').value = '';
+          $('adminUserPasswordConfirm').value = '';
+          $('adminUserPasswordError').textContent = '';
+          trigger.focus();
+        }
+      };
+      $('openAdminPasswordReset')?.addEventListener('click', () => setPasswordResetOpen(true));
+      $('cancelAdminPasswordReset')?.addEventListener('click', () => setPasswordResetOpen(false));
+      [$('adminUserPassword'), $('adminUserPasswordConfirm')].forEach(input => input?.addEventListener('input', () => {
+        $('adminUserPasswordError').textContent = '';
+        input.removeAttribute('aria-invalid');
+      }));
       $('toggleAdminUserPassword')?.addEventListener('click', event => {
         const input = $('adminUserPassword');
+        const confirmation = $('adminUserPasswordConfirm');
         if (!input) return;
         const showing = input.type === 'text';
         input.type = showing ? 'password' : 'text';
+        if (confirmation) confirmation.type = showing ? 'password' : 'text';
         event.currentTarget.setAttribute('aria-label', showing ? '显示密码' : '隐藏密码');
         event.currentTarget.innerHTML = `<i data-lucide="${showing ? 'eye' : 'eye-off'}"></i>`;
         initIcons();
@@ -9786,15 +9910,16 @@ async function renderAdminDashboard(el, d, userListResp) {
         const password = $('adminUserPassword').value;
         const passwordConfirm = $('adminUserPasswordConfirm').value;
         const status = $('adminUserProfileStatus');
+        const passwordError = $('adminUserPasswordError');
         if (password && (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password))) {
-          status.textContent = '密码至少 8 位，并同时包含字母和数字';
-          status.className = 'is-error';
+          passwordError.textContent = '密码至少 8 位，并同时包含字母和数字';
+          $('adminUserPassword').setAttribute('aria-invalid', 'true');
           $('adminUserPassword').focus();
           return;
         }
         if (password !== passwordConfirm) {
-          status.textContent = '两次输入的新密码不一致';
-          status.className = 'is-error';
+          passwordError.textContent = '两次输入的新密码不一致，请重新确认';
+          $('adminUserPasswordConfirm').setAttribute('aria-invalid', 'true');
           $('adminUserPasswordConfirm').focus();
           return;
         }
@@ -9803,14 +9928,16 @@ async function renderAdminDashboard(el, d, userListResp) {
         status.textContent = '正在保存…';
         status.className = '';
         try {
-          await api(`/api/ai/admin/users/${Number(uid)}/profile`, { method:'PATCH', body:{ plan, expires_at:expiresAt, ...(password ? { password } : {}) } });
+          const saved = await api(`/api/ai/admin/users/${Number(uid)}/profile`, { method:'PATCH', body:{ plan, expires_at:expiresAt, ...(password ? { password } : {}) } });
           toast(password ? '用户资料与密码已更新' : '用户资料已更新', 'success');
           const cachedUser = _adminDashState.userList?.users?.find(item => Number(item.id) === Number(uid));
           if (cachedUser) {
             cachedUser.plan = plan;
             cachedUser.plan_expires_at = expiresAt;
+            cachedUser.membership_expired = saved.profile?.membership_expired ? 1 : 0;
             _adminDashState.renderUserList?.(_adminDashState.userList);
           }
+          closeUserProfile({ restoreFocus:false });
           await showUserDetail(uid);
         } catch (error) {
           const messages = {

@@ -47,8 +47,9 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
     : String(target.plan_expires_at || '').slice(0, 10)
   const expiry = normalizeExpiry(plan, hasExpiry ? input.expires_at : currentExpiry)
 
+  const now = beijingNow()
   const updates = ['plan = ?', 'plan_expires_at = ?', 'updated_at = ?']
-  const params = [plan, expiry, beijingNow()]
+  const params = [plan, expiry, now]
   if (plan === 'free') updates.push('plan_source = NULL')
   if (password) {
     updates.push('password = ?')
@@ -71,5 +72,11 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
     targetId:uid,
     detail:JSON.stringify(changed),
   })
-  return { id:uid, plan, plan_expires_at:expiry, password_reset:Boolean(password) }
+  return {
+    id:uid,
+    plan,
+    plan_expires_at:expiry,
+    membership_expired:Boolean(plan !== 'free' && expiry && expiry < now),
+    password_reset:Boolean(password),
+  }
 }

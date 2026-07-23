@@ -2106,12 +2106,16 @@ async function handleBrowserCommand(ws, userId, msg) {
         let users
         if (searchTerm) {
           users = await queryAll(
-            'SELECT id, email, nickname, plan, role FROM users WHERE email LIKE ? OR nickname LIKE ? ORDER BY last_seen_at DESC LIMIT ?',
+            `SELECT id, email, nickname, plan, role, plan_expires_at,
+              (plan IN ('pro', 'plus') AND plan_expires_at IS NOT NULL AND plan_expires_at < NOW()) AS membership_expired
+             FROM users WHERE email LIKE ? OR nickname LIKE ? ORDER BY last_seen_at DESC LIMIT ?`,
             [`%${searchTerm}%`, `%${searchTerm}%`, limit]
           )
         } else {
           users = await queryAll(
-            'SELECT id, email, nickname, plan, role FROM users ORDER BY last_seen_at DESC LIMIT ?',
+            `SELECT id, email, nickname, plan, role, plan_expires_at,
+              (plan IN ('pro', 'plus') AND plan_expires_at IS NOT NULL AND plan_expires_at < NOW()) AS membership_expired
+             FROM users ORDER BY last_seen_at DESC LIMIT ?`,
             [limit]
           )
         }
@@ -2129,7 +2133,9 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         const countRow = await queryOne('SELECT COUNT(*) AS total FROM users')
         const rows = await queryAll(
-          `SELECT id, email, phone, nickname, plan, role, last_seen_at, bridge_heartbeat, created_at FROM users
+          `SELECT id, email, phone, nickname, plan, role, plan_expires_at,
+             (plan IN ('pro', 'plus') AND plan_expires_at IS NOT NULL AND plan_expires_at < NOW()) AS membership_expired,
+             last_seen_at, bridge_heartbeat, created_at FROM users
            ORDER BY bridge_heartbeat DESC, last_seen_at DESC
            LIMIT ? OFFSET ?`,
           [pageSize, offset]
