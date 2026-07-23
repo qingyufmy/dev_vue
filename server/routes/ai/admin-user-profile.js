@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs'
 import { beijingNow, logAudit, queryOne, queryRun } from '../../db.js'
+import { revokeBridgeRefreshSessions } from '../../bridge-auth-session.js'
 
 const VALID_PLANS = new Set(['free', 'plus', 'pro'])
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
@@ -57,6 +58,7 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
   }
   params.push(uid)
   await queryRun(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params)
+  if (password) await revokeBridgeRefreshSessions(uid)
 
   const changed = {
     previous_plan:target.plan,

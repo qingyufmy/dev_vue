@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
+import { revokeBridgeRefreshSessions } from '../bridge-auth-session.js'
 import { fetchBilibiliVideo } from '../utils.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -308,6 +309,7 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     updates.push('updated_at = NOW()')
     params.push(uid)
     await queryRun(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params)
+    if (password) await revokeBridgeRefreshSessions(uid)
     res.json({ ok: true })
   } catch (err) {
     console.error('Admin update user error:', err)
@@ -349,6 +351,7 @@ router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) =>
       await run('DELETE FROM user_bridge_settings WHERE user_id = ?', [userId])
       await run('DELETE FROM crypto_watch_list WHERE user_id = ?', [userId])
       await run('DELETE FROM bridge_connection_status WHERE user_id = ?', [userId])
+      await run('UPDATE bridge_refresh_sessions SET revoked_at = COALESCE(revoked_at, NOW()), updated_at = NOW() WHERE user_id = ?', [userId])
       await run(`UPDATE users SET email = ?, phone = NULL, password = ?, nickname = ?, avatar = '',
         role = 'user', plan = 'free', plan_expires_at = NULL, telegram_id = NULL, telegram_username = NULL,
         telegram_name = NULL, telegram_chat_id = NULL, referral_code = NULL, referral_credit = 0,

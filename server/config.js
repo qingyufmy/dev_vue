@@ -28,6 +28,7 @@ export const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS ||
 
 // Auth
 export const JWT_EXPIRY = process.env.JWT_EXPIRY || '7d'
+export const BRIDGE_REFRESH_TTL_DAYS = Math.min(365, Math.max(7, parseInt(process.env.BRIDGE_REFRESH_TTL_DAYS || '90')))
 
 // Database
 export const MYSQL_POOL_SIZE = parseInt(process.env.MYSQL_POOL_SIZE || '10')

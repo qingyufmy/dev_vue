@@ -236,19 +236,27 @@ def http_get_json(url, timeout=10, token=None):
         with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        return e.code, {"error": str(e)}
+        try:
+            return e.code, json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return e.code, {"error": str(e)}
     except Exception as e:
         return 0, {"error": str(e)}
 
-def http_post_json(url, data, timeout=10):
+def http_post_json(url, data, timeout=10, token=None):
     try:
         body = json.dumps(data).encode("utf-8")
-        req = urllib.request.Request(url, data=body, headers={
-            "Content-Type": "application/json", "User-Agent": "AURUM-Bridge/1.0"})
+        headers = {"Content-Type": "application/json", "User-Agent": "AURUM-Bridge/1.0"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(url, data=body, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        return e.code, {"error": str(e)}
+        try:
+            return e.code, json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return e.code, {"error": str(e)}
     except Exception as e:
         return 0, {"error": str(e)}
 
@@ -440,10 +448,11 @@ class BridgeWorker(QThread):
     connected_signal = Signal()
     plan_expired_signal = Signal(str)  # reason message
 
-    def __init__(self, server_url, token, mt5_path=None):
+    def __init__(self, server_url, token, mt5_path=None, refresh_token=None):
         super().__init__()
         self.server_url = server_url
         self.token = token
+        self.refresh_token = refresh_token or ""
         self.running = True
         self._trade_enabled = False
         self._resolved_symbol = "XAUUSD"
@@ -481,17 +490,62 @@ class BridgeWorker(QThread):
         self._market_observations = {}
         self._last_market_state = None
 
+    @staticmethod
+    def _token_expires_within(token, seconds=86400):
+        """Read JWT expiry locally only to decide when to refresh; server still verifies it."""
+        try:
+            payload = str(token).split('.')[1]
+            payload += '=' * (-len(payload) % 4)
+            exp = json.loads(base64.urlsafe_b64decode(payload.encode('ascii')).decode('utf-8')).get('exp')
+            return not exp or float(exp) <= time.time() + seconds
+        except Exception:
+            return True
+
+    def _save_auth_tokens(self):
+        cfg = load_config()
+        cfg["token"] = self.token
+        if self.refresh_token:
+            cfg["refresh_token"] = self.refresh_token
+        save_config(cfg)
+
+    def _renew_access_token(self, force=False):
+        """Refresh the short-lived access token without storing or resending a password."""
+        if not force and self.token and not self._token_expires_within(self.token):
+            return True
+        server = self.server_url.replace("ws://", "http://").replace("wss://", "https://").rstrip('/')
+        if not self.refresh_token and self.token and not force:
+            status, data = http_post_json(f"{server}/api/auth/bridge-session", {}, timeout=10, token=self.token)
+            if status == 200 and data.get("refreshToken"):
+                self.refresh_token = data["refreshToken"]
+                self._save_auth_tokens()
+        if not self.refresh_token:
+            return False
+        status, data = http_post_json(f"{server}/api/auth/bridge-refresh", {
+            "refreshToken": self.refresh_token
+        }, timeout=10)
+        if status == 200 and data.get("token"):
+            self.token = data["token"]
+            self._save_auth_tokens()
+            self.log_signal.emit("桥接登录凭证已自动续期")
+            return True
+        return False
+
     def check_plan(self):
         """Check plan status via auth/me. Returns (plan, expired, message)."""
         try:
             server = self.server_url.replace("ws://", "http://").replace("wss://", "https://").rstrip("/")
             url = f"{server}/api/profile"
-            req = urllib.request.Request(url, headers={
-                "Authorization": f"Bearer {self.token}",
-                "User-Agent": "AURUM-Bridge/1.0"
-            })
-            with urllib.request.urlopen(req, timeout=10, context=_get_ssl_context()) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            self._renew_access_token()
+            status, data = http_get_json(url, timeout=10, token=self.token)
+            if status == 401 and self._renew_access_token(force=True):
+                status, data = http_get_json(url, timeout=10, token=self.token)
+            if status == 401:
+                return "unknown", True, "桥接登录已过期，请重新登录"
+            if status == 403:
+                return "unknown", True, data.get("error", "会员已过期或当前等级不能使用桥接软件")
+            if status != 200:
+                detail = data.get("error", f"HTTP {status}") if isinstance(data, dict) else f"HTTP {status}"
+                return "unknown", False, f"会员状态暂时无法确认（{detail}），将继续连接并稍后重试"
             # Profile wraps user data: { ok: true, user: { plan: "pro", ... } }
             userData = data.get("user", {})
             plan = userData.get("plan", "free")
@@ -506,8 +560,9 @@ class BridgeWorker(QThread):
                     return plan, True, f"会员已过期({expires_at[:10]})，请续费后重试"
             return plan, False, ""
         except Exception as e:
-            # fail-safe：检查失败时视为已过期，阻止连接而非放行
-            return "unknown", True, f"会员状态检查失败，请稍后重试: {e}"
+            # The WebSocket handshake independently enforces membership. A
+            # transient profile/network failure must not terminate a healthy Bridge.
+            return "unknown", False, f"会员状态暂时无法确认，将继续连接并稍后重试: {e}"
 
     def _mt5_time(self, ts):
         if not ts: return ''
@@ -2250,7 +2305,10 @@ class BridgeWorker(QThread):
             self.plan_expired_signal.emit(reason)
             self.mt5.shutdown()
             return
-        self.log_signal.emit(f"会员等级: {plan.upper()}，开始连接...")
+        if reason:
+            self.log_signal.emit(f"⚠️ {reason}")
+        else:
+            self.log_signal.emit(f"会员等级: {plan.upper()}，开始连接...")
         if self.account_created_at:
             self.log_signal.emit(f"账户创建时间: {self.account_created_at[:10]}")
 
@@ -2353,11 +2411,10 @@ class BridgeWorker(QThread):
         import websockets
 
         server = self.server_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
-        ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token}"
         http_base = self.server_url.rstrip("/")
         self.log_signal.emit(f"连接 WebSocket: {server}/aurum-api/bridge/ws")
 
-        ssl_ctx = _get_ssl_context() if ws_url.startswith('wss://') else None
+        ssl_ctx = _get_ssl_context() if server.startswith('wss://') else None
         MAX_RAPID_FAILS = 5
         rapid_fails = 0
         retry_count = 0
@@ -2402,7 +2459,7 @@ class BridgeWorker(QThread):
                     self.log_signal.emit(f"已连续重连 {int(elapsed/60)} 分钟，仍在继续尝试。请检查服务器或反向代理状态。")
 
                 # SSL context rebuild
-                if ws_url.startswith('wss://') and should_rebuild_ssl():
+                if server.startswith('wss://') and should_rebuild_ssl():
                     ssl_ctx = _get_ssl_context()
                     self.log_signal.emit("已重建 SSL 上下文，继续尝试连接 WebSocket。")
 
@@ -2424,6 +2481,9 @@ class BridgeWorker(QThread):
                         self.log_signal.emit(f"服务器健康检查失败：{BridgeWorker._brief_ws_error(he)}")
 
                 try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, self._renew_access_token)
+                    ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token}"
                     ws = await asyncio.wait_for(
                         websockets.connect(ws_url, ssl=ssl_ctx, additional_headers={"Origin": "http://localhost"},
                                            ping_interval=None, max_size=2**20, close_timeout=3),
@@ -2486,6 +2546,16 @@ class BridgeWorker(QThread):
                         self.status_signal.emit("会员等级不足", "#ef4444", "")
                         return
                     self.log_signal.emit(f"连接被服务器关闭: {reason}")
+                elif e.code == 4002:
+                    loop = asyncio.get_running_loop()
+                    renewed = await loop.run_in_executor(None, lambda: self._renew_access_token(force=True))
+                    if renewed:
+                        self.log_signal.emit("登录凭证已续期，正在重新连接")
+                        continue
+                    else:
+                        self.log_signal.emit("桥接登录已过期，请重新登录")
+                        self.status_signal.emit("登录已过期", "#ef4444", "请重新登录桥接软件")
+                        return
                 else:
                     self.log_signal.emit(f"WebSocket 连接已断开 (code={e.code})")
             except (ssl.SSLError, OSError, ConnectionResetError) as e:
@@ -2498,6 +2568,13 @@ class BridgeWorker(QThread):
                 self.log_signal.emit(f"连接已停止: {reason}")
                 self.status_signal.emit("MT5账户已切换", "#f59e0b", "请确认当前登录的平台账号")
                 return
+            if getattr(ws, "close_code", None) == 4002:
+                loop = asyncio.get_running_loop()
+                renewed = await loop.run_in_executor(None, lambda: self._renew_access_token(force=True))
+                if not renewed:
+                    self.log_signal.emit("桥接登录已过期，请重新登录")
+                    self.status_signal.emit("登录已过期", "#ef4444", "请重新登录桥接软件")
+                    return
             self._ws = None
             if not self.running:
                 break
@@ -2542,6 +2619,8 @@ class BridgeWorker(QThread):
                         self.log_signal.emit(f"❌ {reason}")
                         self.plan_expired_signal.emit(reason)
                         break
+                    if reason:
+                        self.log_signal.emit(f"⚠️ {reason}")
 
                 # Collect MT5 data with timeout protection (asyncio.shield prevents cancel)
                 loop = asyncio.get_running_loop()
@@ -2966,7 +3045,9 @@ class LoginPage(QWidget):
 
         url = f"{server.rstrip('/')}/api/login"
         is_phone = email.isdigit() and 7 <= len(email) <= 15
-        payload = {"phone": email, "password": password} if is_phone else {"email": email, "password": password}
+        payload = {"phone": email, "password": password, "client": "bridge"} if is_phone else {
+            "email": email, "password": password, "client": "bridge"
+        }
         status_code, data = http_post_json(url, payload, timeout=10)
 
         self.btn_login.setEnabled(True)
@@ -2983,6 +3064,8 @@ class LoginPage(QWidget):
             cfg["server_url"] = server
             cfg["email"] = email
             cfg["token"] = token
+            if data.get("refreshToken"):
+                cfg["refresh_token"] = data["refreshToken"]
             cfg["remember"] = self.chk_remember.isChecked()
             cfg["auto_login"] = self.chk_auto_login.isChecked()
             if self.chk_remember.isChecked():
@@ -3133,7 +3216,8 @@ class BridgePage(QWidget):
 
     def _on_plan_expired(self, reason):
         """Called when plan check detects expiry during bridge operation."""
-        QMessageBox.warning(self, "会员已过期", reason)
+        title = "登录已过期" if "登录" in str(reason) else "会员状态异常"
+        QMessageBox.warning(self, title, reason)
         self._reset_bridge_ui()
 
     def _on_worker_finished(self):
@@ -3171,7 +3255,7 @@ class BridgePage(QWidget):
                 self._log(f"MT5 路径: {mt5_path}")
             else:
                 mt5_path = None
-            self._worker = BridgeWorker(server, token, mt5_path)
+            self._worker = BridgeWorker(server, token, mt5_path, cfg.get("refresh_token", ""))
             self._worker.log_signal.connect(self._log)
             self._worker.status_signal.connect(self._set_status)
             self._worker.plan_expired_signal.connect(self._on_plan_expired)
@@ -3469,7 +3553,12 @@ class SettingsPage(QWidget):
 
     def _logout(self):
         cfg = load_config()
+        server = cfg.get("server_url", DEFAULT_SERVER).rstrip('/')
+        token = cfg.get("token", "")
+        if token:
+            http_post_json(f"{server}/api/auth/bridge-revoke", {}, timeout=5, token=token)
         cfg.pop("token", None)
+        cfg.pop("refresh_token", None)
         cfg.pop("saved_password", None)
         cfg["auto_login"] = False
         save_config(cfg)
@@ -3743,13 +3832,37 @@ class MainWindow(QMainWindow):
         # 验证 token
         if token:
             status_code, data = http_get_json(f"{server.rstrip('/')}/api/auth/me", timeout=5, token=token)
+            if status_code == 401 and cfg.get("refresh_token"):
+                refresh_status, refresh_data = http_post_json(
+                    f"{server.rstrip('/')}/api/auth/bridge-refresh",
+                    {"refreshToken": cfg["refresh_token"]}, timeout=10
+                )
+                if refresh_status == 200 and refresh_data.get("token"):
+                    token = refresh_data["token"]
+                    cfg["token"] = token
+                    save_config(cfg)
+                    status_code, data = http_get_json(
+                        f"{server.rstrip('/')}/api/auth/me", timeout=5, token=token
+                    )
             if status_code == 200:
                 user = data.get("user", data)
                 cfg["plan"] = user.get("plan", "free")
                 cfg["role"] = user.get("role", "user")
                 cfg["plan_source"] = user.get("planSource") or user.get("plan_source")
+                if not cfg.get("refresh_token"):
+                    session_status, session_data = http_post_json(
+                        f"{server.rstrip('/')}/api/auth/bridge-session", {}, timeout=10, token=token
+                    )
+                    if session_status == 200 and session_data.get("refreshToken"):
+                        cfg["refresh_token"] = session_data["refreshToken"]
                 save_config(cfg)
                 self._on_login_success(email, token)
+                return
+            if status_code == 0 or status_code >= 500:
+                self.login_page.lbl_status.setText("服务器暂时无法连接，15 秒后自动重试")
+                self.login_page.lbl_status.setProperty("warning", True)
+                self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
+                QTimer.singleShot(15000, self._auto_login)
                 return
 
         # Token 无效，回到登录页手动输入密码
@@ -3894,7 +4007,7 @@ class MainWindow(QMainWindow):
         dialog.set_submitting(True)
         QApplication.processEvents()
         status_code, data = http_post_json(f"{server.rstrip('/')}/api/login", {
-            "email": values["account"], "password": values["password"],
+            "email": values["account"], "password": values["password"], "client": "bridge",
         }, timeout=10)
         user = data.get("user", {}) if isinstance(data, dict) else {}
         plan_source = user.get("planSource") or user.get("plan_source")
@@ -3910,6 +4023,7 @@ class MainWindow(QMainWindow):
                 "server_url": server,
                 "email": values["account"],
                 "token": data["token"],
+                "refresh_token": data.get("refreshToken", ""),
                 "remember": True,
                 "auto_login": True,
                 "auto_start_bridge": True,

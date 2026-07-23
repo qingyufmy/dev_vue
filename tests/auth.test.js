@@ -17,10 +17,16 @@ vi.mock('../server/captcha.js', () => ({
   generateCaptcha: vi.fn(() => ({ id: 'cap-1', svg: '<svg/>' })),
   verifyCaptcha: vi.fn(() => true),
 }))
+vi.mock('../server/bridge-auth-session.js', () => ({
+  createBridgeRefreshSession: vi.fn(async () => ({ refreshToken: 'refresh-token', expiresInSeconds: 7776000 })),
+  useBridgeRefreshSession: vi.fn(async () => ({ user: { id: 3 }, expiresInSeconds: 7776000 })),
+  revokeBridgeRefreshSessions: vi.fn(async () => {}),
+}))
 
 import { queryOne, queryAll, queryRun } from '../server/db.js'
 import { verifyCaptcha } from '../server/captcha.js'
 import authRouter from '../server/routes/auth.js'
+import { createBridgeRefreshSession, useBridgeRefreshSession } from '../server/bridge-auth-session.js'
 
 function callRoute(method, path, body = {}, user = null) {
   return new Promise((resolve) => {
@@ -79,6 +85,24 @@ describe('auth.js — login', () => {
     queryOne.mockResolvedValue({ id: 1, password: '$2a$10$x' })
     const { json } = await callRoute('post', '/login', { email: 'a@b.com', method: 'code' })
     expect(json).toMatchObject({ ok: false, error: '请先完成验证' })
+  })
+})
+
+describe('auth.js — Bridge sessions', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('bootstraps a refresh credential from a still-valid access token', async () => {
+    const { json } = await callRoute('post', '/auth/bridge-session', {}, {
+      id: 3, role: 'user', plan: 'pro', plan_expires_at: null,
+    })
+    expect(json).toMatchObject({ ok: true, refreshToken: 'refresh-token' })
+    expect(createBridgeRefreshSession).toHaveBeenCalled()
+  })
+
+  it('returns a new short-lived token for a valid refresh credential', async () => {
+    const { json } = await callRoute('post', '/auth/bridge-refresh', { refreshToken: 'refresh-token' })
+    expect(json).toMatchObject({ ok: true, token: 'mock-token-123' })
+    expect(useBridgeRefreshSession).toHaveBeenCalledWith('refresh-token', expect.any(Object))
   })
 })
 

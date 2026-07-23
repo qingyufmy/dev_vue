@@ -3312,6 +3312,26 @@ const migrations = [
         KEY idx_mt5_performance_sync_status (sync_status, updated_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '121_bridge_refresh_sessions',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS bridge_refresh_sessions (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        token_hash CHAR(64) NOT NULL,
+        expires_at DATETIME NOT NULL,
+        revoked_at DATETIME DEFAULT NULL,
+        last_used_at DATETIME DEFAULT NULL,
+        user_agent VARCHAR(255) DEFAULT NULL,
+        last_ip VARCHAR(64) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_bridge_refresh_token (token_hash),
+        KEY idx_bridge_refresh_user (user_id, revoked_at, expires_at),
+        KEY idx_bridge_refresh_expiry (expires_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

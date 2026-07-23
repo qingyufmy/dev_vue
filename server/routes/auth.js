@@ -8,6 +8,7 @@ import nodemailer from 'nodemailer'
 import { sendVerificationSms } from '../sms.js'
 import { generateCaptcha, verifyCaptcha } from '../captcha.js'
 import { decorateMembership } from '../membership.js'
+import { createBridgeRefreshSession, useBridgeRefreshSession, revokeBridgeRefreshSessions } from '../bridge-auth-session.js'
 
 const router = Router()
 
@@ -264,9 +265,48 @@ router.post('/register', async (req, res) => {
   }
 })
 
+router.post('/auth/bridge-session', authMiddleware, async (req, res) => {
+  try {
+    const session = await createBridgeRefreshSession(req.user, { userAgent: req.get('user-agent'), ip: req.ip })
+    res.json({ ok: true, refreshToken: session.refreshToken, refreshExpiresInSeconds: session.expiresInSeconds })
+  } catch (err) {
+    const membershipBlocked = err.code === 'bridge_membership_required'
+    res.status(membershipBlocked ? 403 : 500).json({
+      ok: false,
+      code: err.code || 'bridge_session_failed',
+      error: membershipBlocked ? '当前会员状态不能使用桥接软件' : '桥接登录会话创建失败，请稍后重试',
+    })
+  }
+})
+
+router.post('/auth/bridge-refresh', async (req, res) => {
+  try {
+    const session = await useBridgeRefreshSession(req.body?.refreshToken, {
+      userAgent: req.get('user-agent'), ip: req.ip,
+    })
+    res.json({
+      ok: true,
+      token: generateToken(session.user.id),
+      refreshExpiresInSeconds: session.expiresInSeconds,
+    })
+  } catch (err) {
+    const membershipBlocked = err.code === 'bridge_membership_required'
+    res.status(membershipBlocked ? 403 : 401).json({
+      ok: false,
+      code: err.code || 'bridge_refresh_invalid',
+      error: membershipBlocked ? '会员已过期或当前等级不能使用桥接软件' : '桥接登录已过期，请重新登录',
+    })
+  }
+})
+
+router.post('/auth/bridge-revoke', authMiddleware, async (req, res) => {
+  await revokeBridgeRefreshSessions(req.user.id)
+  res.json({ ok: true })
+})
+
 router.post('/login', async (req, res) => {
   try {
-    const { email, phone: rawPhone, password, method, verifyToken } = req.body
+    const { email, phone: rawPhone, password, method, verifyToken, client } = req.body
     const phone = normalizePhone(rawPhone)
     const loginId = phone || email
     if (!loginId) return res.json({ ok: false, error: '请输入邮箱或手机号' })
@@ -334,7 +374,20 @@ router.post('/login', async (req, res) => {
 
     logAudit({ userId: user.id, action: 'login', ip: req.ip, userAgent: req.get('user-agent') })
 
-    res.json({ ok: true, token, user: safeUser })
+    let bridgeSession = null
+    if (client === 'bridge' && (user.role === 'admin' || membership.effectivePlan === 'pro')) {
+      bridgeSession = await createBridgeRefreshSession(user, { userAgent: req.get('user-agent'), ip: req.ip })
+    }
+
+    res.json({
+      ok: true,
+      token,
+      user: safeUser,
+      ...(bridgeSession ? {
+        refreshToken: bridgeSession.refreshToken,
+        refreshExpiresInSeconds: bridgeSession.expiresInSeconds,
+      } : {}),
+    })
   } catch (err) {
     console.error('Login error:', err)
     res.json({ ok: false, error: '登录失败，请稍后重试' })
@@ -502,6 +555,10 @@ router.post('/reset-password', async (req, res) => {
       } else {
         await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, targetEmail])
       }
+      const resetUser = targetPhone
+        ? await queryOne('SELECT id FROM users WHERE phone = ? OR phone = ? LIMIT 1', [targetPhone, targetPhone])
+        : await queryOne('SELECT id FROM users WHERE email = ? LIMIT 1', [targetEmail])
+      await revokeBridgeRefreshSessions(resetUser?.id)
       await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
       return res.json({ ok: true, message: '密码已重置' })
     }
@@ -528,6 +585,10 @@ router.post('/reset-password', async (req, res) => {
     } else {
       await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, targetEmail])
     }
+    const resetUser = targetPhone
+      ? await queryOne('SELECT id FROM users WHERE phone = ? OR phone = ? LIMIT 1', [targetPhone, targetPhone])
+      : await queryOne('SELECT id FROM users WHERE email = ? LIMIT 1', [targetEmail])
+    await revokeBridgeRefreshSessions(resetUser?.id)
     await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [record.id])
 
     res.json({ ok: true, message: '密码已重置' })
@@ -559,6 +620,7 @@ router.post('/change-password', authMiddleware, async (req, res) => {
 
     const hash = await bcrypt.hash(newPassword, 10)
     await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", [hash, req.user.id])
+    await revokeBridgeRefreshSessions(req.user.id)
 
     res.json({ ok: true, relogin: true, message: '密码已修改' })
   } catch (err) {

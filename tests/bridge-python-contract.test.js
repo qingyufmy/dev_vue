@@ -60,6 +60,16 @@ describe('Python Bridge history contract', () => {
     expect(source).toContain('self.account_created_at =')
   })
 
+  it('refreshes Bridge authentication without treating transient membership checks as expiry', () => {
+    const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('def _renew_access_token(self, force=False):')
+    expect(source).toContain('/api/auth/bridge-refresh')
+    expect(source).toContain('/api/auth/bridge-session')
+    expect(source).toContain('self._token_expires_within(self.token)')
+    expect(source).toContain('return "unknown", False, f"会员状态暂时无法确认')
+    expect(source).toContain('"client": "bridge"')
+  })
+
   it('stops reconnecting after the MT5 account is transferred to another platform user', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     expect(source).toContain('if e.code == 4004:')

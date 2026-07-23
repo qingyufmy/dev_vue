@@ -10,6 +10,7 @@ const passwordHash = vi.hoisted(() => vi.fn())
 
 vi.mock('../../server/db.js', () => db)
 vi.mock('bcryptjs', () => ({ default:{ hash:passwordHash } }))
+vi.mock('../../server/bridge-auth-session.js', () => ({ revokeBridgeRefreshSessions:vi.fn() }))
 
 import { updateAdminUserProfile } from '../../server/routes/ai/admin-user-profile.js'
 
