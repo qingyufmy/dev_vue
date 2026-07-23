@@ -294,6 +294,15 @@ router.get('/admin/content-system/engagement',authMiddleware,adminOnly,async(req
     res.json({ok:true,summary:Object.fromEntries(Object.entries(summary||{}).map(([key,value])=>[key,Number(value||0)])),leaderboard:leaderboard.map(row=>({...row,lessons_started:Number(row.lessons_started||0),lessons_completed:Number(row.lessons_completed||0),quizzes_passed:Number(row.quizzes_passed||0)}))})
   }catch(error){console.error('[AdminConsole] engagement overview failed:',error);res.status(500).json({ok:false,error:'学习与社区数据加载失败'})}
 })
+router.get('/admin/content-system/videos',authMiddleware,adminOnly,async(req,res)=>{
+  try{
+    const rows=await queryAll(`SELECT c.episode_id,c.number,c.title,c.access_level,c.has_stream_video,c.local_video_path,c.bilibili_id,c.youtube_id,
+      vs.id AS stream_id,vs.local_path,vs.qiniu_key,vs.duration,vs.title AS stream_title,vs.access_level AS stream_access_level
+      FROM courses c LEFT JOIN video_streams vs ON vs.episode_id=c.episode_id
+      ORDER BY c.sort_order,c.number,c.episode_id`)
+    res.json({ok:true,courses:rows.map(row=>({...row,id:Number(row.episode_id),number:Number(row.number||0),has_stream_video:Boolean(Number(row.has_stream_video)),access_level:row.stream_access_level||row.access_level||'free'}))})
+  }catch(error){console.error('[AdminConsole] hosted videos failed:',error);res.status(500).json({ok:false,error:'课程视频数据加载失败'})}
+})
 
 router.get('/admin/commercial/overview', authMiddleware, adminOnly, async (req, res) => {
   try {
