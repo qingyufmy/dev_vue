@@ -29,7 +29,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260723k" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260723l" />
     <link rel="stylesheet" href="/ai/responsive.css?v=20260723d" />
   </head>
   <body>
@@ -107,9 +107,9 @@
       <aside class="sidebar">
         <div class="nav-group">
           <span class="nav-group-label">工作台</span>
-          <button class="nav-item admin-only" data-tab="admin-dashboard" data-title="运营中心" style="display:none">
-            <i data-lucide="bar-chart-3" size="16"></i>运营中心
-          </button>
+          <a class="nav-item admin-only" href="/admin/?view=ai-operations" style="display:none" title="打开统一管理后台">
+            <i data-lucide="layout-dashboard" size="16"></i>统一管理后台
+          </a>
           <button class="nav-item active" data-tab="dashboard" data-title="首页" aria-current="page">
             <i data-lucide="layout-dashboard" size="16"></i>首页
           </button>
@@ -143,14 +143,11 @@
 
         <div class="nav-group" id="navGroupManage" style="display:none">
           <span class="nav-group-label">平台管理</span>
-          <button class="nav-item admin-only" data-tab="global-risk" data-title="平台风控" style="display:none">
-            <i data-lucide="shield-alert" size="16"></i>平台风控
-          </button>
+          <a class="nav-item admin-only" href="/admin/?view=risk-audit" style="display:none" title="在统一管理后台查看风控与审计">
+            <i data-lucide="shield-alert" size="16"></i>风控与审计
+          </a>
           <button class="nav-item admin-only" data-tab="model-compare" data-title="模型评测" style="display:none">
             <i data-lucide="git-compare" size="16"></i>模型评测
-          </button>
-          <button class="nav-item" data-tab="audit" data-title="系统审计">
-            <i data-lucide="shield-check" size="16"></i>系统审计
           </button>
         </div>
 
@@ -203,10 +200,9 @@
             </section>
             <section class="mobile-nav-section admin-only" style="display:none">
               <h3>平台管理</h3>
-              <button class="nav-item admin-only" type="button" data-tab="admin-dashboard" data-title="运营中心" style="display:none"><i data-lucide="bar-chart-3" size="19"></i><span><strong>运营中心</strong><small>查看平台健康和待处理事项</small></span><i data-lucide="chevron-right" size="17"></i></button>
-              <button class="nav-item admin-only" type="button" data-tab="global-risk" data-title="平台风控" style="display:none"><i data-lucide="shield-alert" size="19"></i><span><strong>平台风控</strong><small>管理平台边界和安全规则</small></span><i data-lucide="chevron-right" size="17"></i></button>
+              <a class="nav-item admin-only" href="/admin/?view=ai-operations" style="display:none"><i data-lucide="layout-dashboard" size="19"></i><span><strong>统一管理后台</strong><small>管理用户、会员、AI 运行与平台配置</small></span><i data-lucide="external-link" size="17"></i></a>
+              <a class="nav-item admin-only" href="/admin/?view=risk-audit" style="display:none"><i data-lucide="shield-alert" size="19"></i><span><strong>风控与审计</strong><small>查看平台边界、风控决策和操作记录</small></span><i data-lucide="external-link" size="17"></i></a>
               <button class="nav-item admin-only" type="button" data-tab="model-compare" data-title="模型评测" style="display:none"><i data-lucide="git-compare" size="19"></i><span><strong>模型评测</strong><small>比较模型方向判断和稳定性</small></span><i data-lucide="chevron-right" size="17"></i></button>
-              <button class="nav-item admin-only" type="button" data-tab="audit" data-title="系统审计" style="display:none"><i data-lucide="shield-check" size="19"></i><span><strong>系统审计</strong><small>追踪风控和执行记录</small></span><i data-lucide="chevron-right" size="17"></i></button>
             </section>
             <section class="mobile-nav-section">
               <h3>帮助</h3>
@@ -1182,7 +1178,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260723k"></script>
+    <script src="/ai/app.js?v=20260723l"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

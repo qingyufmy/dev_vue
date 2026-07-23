@@ -114,7 +114,7 @@ async function renderOverview() {
         <div class="module-row"><span class="module-icon">${icons.users}</span><div><strong>已过期会员</strong><small>权限已按免费用户处理，档案仍保留原会员等级。</small></div><span class="state">${o.expired_memberships} 人</span></div>
         <div class="module-row"><span class="module-icon">${icons.activity}</span><div><strong>待处理复盘</strong><small>包含待生成、待确认及失败的周期复盘。</small></div><span class="state">${o.pending_reviews} 条</span></div>
       </div></article>
-      <aside class="panel"><header class="section-head"><div><h2>迁移进度</h2><p>旧后台暂时保持可用。</p></div></header><div class="panel-body"><div class="notice">用户与会员已进入统一管理入口。AI 运营、风控审计、内容与系统配置将按业务域逐步迁移，期间不会中断现有功能。</div></div></aside>
+      <aside class="panel"><header class="section-head"><div><h2>管理边界</h2><p>统一入口，按业务域分工。</p></div></header><div class="panel-body"><div class="notice">用户、会员、商业运营、AI 运行、风控审计、内容与系统状态均从这里管理；少数高级编辑器继续作为对应业务页中的兼容工具，不再形成第二套后台。</div></div></aside>
     </section>`
   main.querySelector('[data-go-users]').addEventListener('click', () => setView('users'))
 }
@@ -486,7 +486,7 @@ async function loadAiOperations(silent = false) {
 }
 async function renderAiOperations() {
   const main = document.querySelector('#adminMain')
-  main.innerHTML = `<header class="page-head"><div><span class="eyebrow">模型、调度与观摩分发</span><h1>AI 运营治理</h1><p>先确认核心链路是否健康，再处理调度、模型和观摩频道。</p></div><a class="secondary-button" href="/ai/?tab=admin-dashboard">打开旧版高级工具</a></header>${aiTabs()}<div id="aiOperationsContent"></div>`
+  main.innerHTML = `<header class="page-head"><div><span class="eyebrow">模型、调度与观摩分发</span><h1>AI 运营治理</h1><p>先确认核心链路是否健康，再处理调度、模型和观摩频道。</p></div></header>${aiTabs()}<div id="aiOperationsContent"></div>`
   bindAiTabs()
   await loadAiOperations()
 }

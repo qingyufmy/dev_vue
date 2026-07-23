@@ -18,6 +18,8 @@ describe('unified admin console contract', () => {
     expect(css).toContain('@media (max-width:760px)')
     expect(css).toContain('min-height:44px')
     expect(css).toContain('prefers-reduced-motion')
+    expect(html).not.toContain('旧版管理工具')
+    expect(app).not.toContain('/ai/?tab=admin-dashboard')
   })
 
   it('uses canonical admin APIs and keeps user-facing errors in Chinese', () => {

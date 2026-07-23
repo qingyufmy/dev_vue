@@ -4787,8 +4787,7 @@ function applyRoleUI() {
   hideSidebarObserveHint();
   const navGroupManage = document.getElementById('navGroupManage');
   if (navGroupManage) {
-    const bridgeConnected = !state._usingFallback && state._lastGatewayLive;
-    navGroupManage.style.display = (isAdmin || bridgeConnected) ? '' : 'none';
+    navGroupManage.style.display = isAdmin ? '' : 'none';
   }
 }
 
