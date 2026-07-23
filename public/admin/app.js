@@ -5,6 +5,7 @@ const state = {
   notificationPage:1, notificationSearch:'', notificationStatus:'all', notificationChannel:'all',
   referralStatus:'all',
   aiTab:'health', aiOperations:null, observerCandidates:null,
+  modelCompare:{ setup:null, strategyId:0, symbol:'', result:'all', page:1, snapshots:[], pagination:null, selected:new Map(), modelIds:new Set(), jobs:[], loading:false, polling:null },
   riskTab:'status', riskData:null, riskPolicy:null, riskPage:1, riskDecision:'all', auditPage:1, auditSearch:'', riskOpenGroup:'account',
   contentTab:'courses', contentOverview:null, contentPage:1, contentSearch:'', contentStatus:'all', feedbackPage:1, feedbackSearch:'', systemConfig:null, systemConfigCategory:'plan_prices',
 }
@@ -405,6 +406,7 @@ function aiTabs() {
     <button type="button" class="segment-tab ${state.aiTab === 'health' ? 'is-active' : ''}" data-ai-tab="health">运行健康</button>
     <button type="button" class="segment-tab ${state.aiTab === 'scheduler' ? 'is-active' : ''}" data-ai-tab="scheduler">调度与模型</button>
     <button type="button" class="segment-tab ${state.aiTab === 'observer' ? 'is-active' : ''}" data-ai-tab="observer">观摩频道</button>
+    <button type="button" class="segment-tab ${state.aiTab === 'model-compare' ? 'is-active' : ''}" data-ai-tab="model-compare">模型评测</button>
   </nav>`
 }
 function bindAiTabs() {
@@ -459,6 +461,133 @@ function aiSchedulerContent(data) {
       ${rows.length ? `<div class="table-wrap"><table class="user-table business-table"><thead><tr><th>模型</th><th>调用</th><th>成功率</th><th>平均响应</th><th>令牌消耗</th></tr></thead><tbody>${rows.map(row => `<tr><td><strong>${escapeHtml(row.model_name || '未命名模型')}</strong><div class="helper">${escapeHtml(row.credential_source || '未知来源')}</div></td><td class="mono">${row.requests}</td><td>${percent(row.requests - row.failures, row.requests)}</td><td>${row.avg_latency_ms ? `${(row.avg_latency_ms / 1000).toFixed(1)} 秒` : '--'}</td><td class="mono">${Number(row.tokens || 0).toLocaleString('zh-CN')}</td></tr>`).join('')}</tbody></table></div><div class="mobile-user-list">${rows.map(row => `<article class="mobile-user-card"><div class="mobile-user-card-head"><strong>${escapeHtml(row.model_name || '未命名模型')}</strong><span class="badge ${row.failures ? 'expired' : 'active'}">${percent(row.requests - row.failures, row.requests)}</span></div><div class="mobile-business-grid"><span>调用<strong>${row.requests}</strong></span><span>平均响应<strong>${row.avg_latency_ms ? `${(row.avg_latency_ms / 1000).toFixed(1)} 秒` : '--'}</strong></span><span>令牌<strong>${Number(row.tokens || 0).toLocaleString('zh-CN')}</strong></span></div></article>`).join('')}</div>` : '<div class="empty-state">最近 24 小时没有模型调用记录</div>'}
     </section>`
 }
+
+function safeJson(value, fallback = null) {
+  if (value == null || value === '') return fallback
+  if (typeof value === 'object') return value
+  try { return JSON.parse(value) } catch { return fallback }
+}
+function compareErrorLabel(code) {
+  return ({
+    history_compare_interrupted:'服务重启导致任务中断', history_compare_failed:'模型评测失败',
+    history_compare_no_market_data:'没有可用的历史行情', model_compare_no_valid_response:'模型没有返回有效结果',
+    snapshot_compare_selection_invalid:'历史信号证据已失效', backtest_execution_candles_unavailable:'成交回放所需行情不足',
+    backtest_symbol_snapshot_unavailable:'交易品种参数不可用', no_actionable_signals:'模型未给出可执行方向',
+  })[String(code || '')] || '任务未能完成，请查看服务器日志'
+}
+function compareStatusLabel(status) {
+  return ({queued:'等待开始',running:'评测中',cancelling:'正在取消',succeeded:'已完成',failed:'失败',cancelled:'已取消'})[status] || '状态未知'
+}
+function strategySymbols(strategy) {
+  const symbols = safeJson(strategy?.symbols_json, [])
+  return Array.isArray(symbols) ? symbols.map(value => String(value || '').trim().toUpperCase()).filter(Boolean) : []
+}
+function strategyPrimaryTimeframe(strategy) {
+  const plan = safeJson(strategy?.market_data_plan_json, {}) || {}
+  return String(plan.primary_timeframe || plan.timeframes?.[0]?.timeframe || '--').toUpperCase()
+}
+function modelCompareBuilder() {
+  const compare = state.modelCompare
+  const setup = compare.setup
+  if (!setup) return '<section class="panel"><div class="empty-state">正在准备模型评测工作区…</div></section>'
+  const strategy = setup.strategies.find(item => Number(item.id) === Number(compare.strategyId))
+  const lockedVersion = compare.selected.size ? Number([...compare.selected.values()][0]?.strategy_version || 1) : null
+  const snapshots = compare.snapshots.map(item => {
+    const selected = compare.selected.has(Number(item.snapshot_id))
+    const locked = lockedVersion != null && Number(item.strategy_version || 1) !== lockedVersion
+    const profit = Number(item.net_profit || 0)
+    return `<label class="compare-snapshot ${selected ? 'is-selected' : ''} ${locked ? 'is-locked' : ''}"><input type="checkbox" data-compare-snapshot="${Number(item.snapshot_id)}" ${selected ? 'checked' : ''} ${locked ? 'disabled' : ''}><span class="snapshot-check" aria-hidden="true"></span><span class="snapshot-copy"><strong>信号 #${Number(item.signal_id)} · ${item.original_signal_type?.includes('buy') ? '做多' : item.original_signal_type?.includes('sell') ? '做空' : '观望'}</strong><small>${escapeHtml(formatDate(item.signal_created_at,true))} · 策略版本 ${Number(item.strategy_version || 1)}</small></span><span class="snapshot-outcome ${profit < 0 ? 'negative' : profit > 0 ? 'positive' : ''}"><strong>${profit > 0 ? '+' : ''}${profit.toFixed(2)}</strong><small>${Number(item.trade_count || 0)} 笔成交</small></span></label>`
+  }).join('')
+  const models = setup.profiles.map(profile => `<label class="compare-model ${compare.modelIds.has(Number(profile.id)) ? 'is-selected' : ''}"><input type="checkbox" data-compare-model="${Number(profile.id)}" ${compare.modelIds.has(Number(profile.id)) ? 'checked' : ''}><span><strong>${escapeHtml(profile.model_name || '未命名模型')}</strong><small>${escapeHtml(profile.provider || '模型服务')} ${profile.thinking_enabled ? '· 深度思考' : ''}</small></span><em>${compare.modelIds.has(Number(profile.id)) ? '已选择' : '可用'}</em></label>`).join('')
+  const totalPages = Math.max(1, Math.ceil(Number(compare.pagination?.total || 0) / Number(compare.pagination?.page_size || 10)))
+  const canRun = compare.selected.size >= 2 && compare.modelIds.size >= 2 && compare.modelIds.size <= 5 && strategy && compare.symbol
+  return `<section class="compare-workspace">
+    <article class="panel compare-setup-panel"><header class="section-head"><div><span class="eyebrow">新建评测</span><h2>用真实历史信号比较模型</h2><p>复用信号生成时的策略、行情与结构证据，不触发实盘风控或交易。</p></div></header><div class="compare-setup-body">
+      <div class="compare-form-grid"><label class="field"><span>平台策略</span><select class="select" id="compareStrategy">${setup.strategies.map(item => `<option value="${item.id}" ${Number(item.id)===Number(compare.strategyId)?'selected':''}>${escapeHtml(item.title)}</option>`).join('')}</select></label><label class="field"><span>交易品种</span><select class="select" id="compareSymbol">${strategySymbols(strategy).map(symbol => `<option value="${escapeHtml(symbol)}" ${symbol===compare.symbol?'selected':''}>${escapeHtml(symbol)}</option>`).join('')}</select></label><div class="compare-context"><span>评测上下文</span><strong>${escapeHtml(strategyPrimaryTimeframe(strategy))} 主周期 · 策略版本自动锁定</strong></div></div>
+      <div class="compare-section-head"><div><strong>1. 选择历史信号</strong><small>至少 2 条；一次评测只能使用同一策略版本。</small></div><select class="select compact-select" id="compareOutcome"><option value="all" ${compare.result==='all'?'selected':''}>全部结果</option><option value="profit" ${compare.result==='profit'?'selected':''}>仅盈利</option><option value="loss" ${compare.result==='loss'?'selected':''}>仅亏损</option><option value="flat" ${compare.result==='flat'?'selected':''}>盈亏持平</option></select></div>
+      <div class="compare-snapshot-list">${snapshots || '<div class="empty-state compact-empty">当前策略和品种暂无完整历史信号快照</div>'}</div><div class="compare-pagination"><span>已选 ${compare.selected.size} 条 · 共 ${Number(compare.pagination?.total || 0)} 条</span><div><button class="secondary-button" id="comparePrev" type="button" ${compare.page<=1?'disabled':''}>上一页</button><span>${compare.page} / ${totalPages}</span><button class="secondary-button" id="compareNext" type="button" ${compare.page>=totalPages?'disabled':''}>下一页</button></div></div>
+      <div class="compare-section-head"><div><strong>2. 选择对比模型</strong><small>选择 2–5 个模型，所有模型接收完全相同的证据。</small></div><span class="selection-count">已选 ${compare.modelIds.size} 个</span></div><div class="compare-model-grid">${models || '<div class="empty-state compact-empty">没有可用的平台模型</div>'}</div>
+      <div class="compare-runbar"><div><strong>预计请求 ${compare.selected.size * compare.modelIds.size} 次</strong><small>模型输出修复可能额外产生少量请求</small></div><button class="primary-button" id="compareRun" type="button" ${canRun&&!compare.loading?'':'disabled'}>${compare.loading?'正在提交…':'开始评测'}</button></div>
+    </div></article>
+    <article class="panel compare-jobs-panel"><header class="section-head"><div><span class="eyebrow">任务记录</span><h2>最近评测</h2><p>任务在后台运行，离开页面不会中断。</p></div><button class="secondary-button" id="compareRefreshJobs" type="button">刷新</button></header><div id="compareJobs">${modelCompareJobs()}</div></article>
+  </section>`
+}
+function modelCompareJobs() {
+  const jobs = state.modelCompare.jobs || []
+  if (!jobs.length) return '<div class="empty-state compact-empty">还没有模型评测任务</div>'
+  return `<div class="compare-job-list">${jobs.map(job => {
+    const params = job.params || {}, active = ['queued','running','cancelling'].includes(job.status)
+    return `<article class="compare-job ${active ? 'is-active' : ''}" data-compare-job="${escapeHtml(job.id)}"><div class="job-state ${escapeHtml(job.status)}"></div><div class="job-copy"><strong>${escapeHtml(params.symbol || '未知品种')} · ${Number(params.snapshot_ids?.length || 0)} 条信号</strong><small>${Number(params.model_ids?.length || 0)} 个模型 · ${escapeHtml(formatDate(job.created_at,true))}</small>${job.status==='failed'?`<p>${escapeHtml(compareErrorLabel(job.error))}</p>`:''}${active?`<div class="job-progress"><span style="width:${Math.max(2,Number(job.progress_percent||0))}%"></span></div>`:''}</div><span class="badge ${job.status==='succeeded'?'active':job.status==='failed'?'expired':''}">${compareStatusLabel(job.status)}${active?` ${Number(job.progress_percent||0)}%`:''}</span><div class="job-actions">${job.status==='succeeded'?'<button class="text-button" data-open-compare-result type="button">查看结果</button>':''}${['succeeded','failed','cancelled'].includes(job.status)?'<button class="icon-button compact-icon" data-delete-compare-job type="button" aria-label="删除评测任务"><span data-icon="close"></span></button>':''}</div></article>`
+  }).join('')}</div>`
+}
+function renderModelCompareContent() {
+  const content = document.querySelector('#aiOperationsContent')
+  if (!content) return
+  content.innerHTML = modelCompareBuilder()
+  renderIcons(content)
+  bindModelCompare()
+}
+async function loadModelCompareSnapshots() {
+  const compare = state.modelCompare
+  if (!compare.strategyId || !compare.symbol) { compare.snapshots=[]; compare.pagination=null; renderModelCompareContent(); return }
+  const query = new URLSearchParams({strategy_id:String(compare.strategyId),symbol:compare.symbol,result:compare.result,page:String(compare.page),page_size:'10'})
+  const data = await api(`/api/admin/ai/model-compare/snapshots?${query}`)
+  compare.snapshots = data.samples || []
+  compare.pagination = data.pagination || null
+  renderModelCompareContent()
+}
+async function loadModelCompareJobs({ render=true } = {}) {
+  const data = await api('/api/admin/ai/model-compare/jobs?limit=12')
+  state.modelCompare.jobs = data.jobs || []
+  if (render) renderModelCompareContent()
+  const active = state.modelCompare.jobs.some(job => ['queued','running','cancelling'].includes(job.status))
+  clearTimeout(state.modelCompare.polling)
+  state.modelCompare.polling = active && state.aiTab === 'model-compare'
+    ? setTimeout(() => loadModelCompareJobs().catch(handleError), 2500)
+    : null
+}
+async function loadModelCompareWorkspace() {
+  const compare = state.modelCompare
+  if (!compare.setup) {
+    compare.setup = await api('/api/admin/ai/model-compare/setup')
+    compare.strategyId = Number(compare.setup.strategies?.[0]?.id || 0)
+    const strategy = compare.setup.strategies?.[0]
+    compare.symbol = strategySymbols(strategy)[0] || ''
+    compare.modelIds = new Set((compare.setup.profiles || []).slice(0,2).map(item => Number(item.id)))
+  }
+  await Promise.all([loadModelCompareSnapshots(),loadModelCompareJobs({render:false})])
+  renderModelCompareContent()
+}
+function compareResultValue(value, suffix='') {
+  const number = Number(value)
+  return Number.isFinite(number) ? `${number.toFixed(1)}${suffix}` : '--'
+}
+async function openModelCompareResult(jobId) {
+  const data = await api(`/api/admin/ai/model-compare/jobs/${encodeURIComponent(jobId)}`)
+  const result = data.job?.result
+  if (!result) throw new Error('评测结果尚未生成')
+  const models = (result.results || []).slice().sort((a,b) => Number(b.directional_score?.direction_quality_score || 0)-Number(a.directional_score?.direction_quality_score || 0))
+  const rows = models.map((model,index) => {
+    const score=model.directional_score||{}, simulation=model.account_simulation||{}
+    const profit=Number(simulation.net_profit ?? simulation.total_net_profit)
+    return `<article class="compare-result-row ${model.status!=='success'?'has-error':''}"><span class="result-rank">${index+1}</span><div class="result-model"><strong>${escapeHtml(model.model_name || `模型 #${model.model_id}`)}</strong><small>${escapeHtml(model.provider || '模型服务')} · ${Number(score.actionable_count || 0)} 次出手</small></div><div><span>方向质量</span><strong>${compareResultValue(score.direction_quality_score)}</strong></div><div><span>方向准确率</span><strong>${compareResultValue(score.directional_accuracy,'%')}</strong></div><div><span>输出合规率</span><strong>${compareResultValue(score.output_compliance_rate,'%')}</strong></div><div><span>平均置信度</span><strong>${compareResultValue(score.average_confidence,'%')}</strong></div><div><span>模拟净收益</span><strong class="${profit<0?'negative':profit>0?'positive':''}">${Number.isFinite(profit)?`${profit>0?'+':''}${profit.toFixed(2)}`:simulation.status==='unavailable'?'证据不足':'--'}</strong></div></article>`
+  }).join('')
+  openEntityModal({title:'模型评测结果',eyebrow:`${result.meta?.symbol || '历史信号'} · ${result.meta?.evaluation_count || 0} 个评估案例`,content:`<div class="compare-result-summary"><div><span>实际模型请求</span><strong>${Number(result.meta?.actual_model_calls || 0)}</strong></div><div><span>成功请求</span><strong>${Number(result.meta?.successful_model_calls || 0)}</strong></div><div><span>平均一致率</span><strong>${compareResultValue(result.meta?.average_agreement_rate,'%')}</strong></div><div><span>令牌消耗</span><strong>${Number(result.meta?.model_token_count || 0).toLocaleString('zh-CN')}</strong></div></div><div class="compare-result-table">${rows || '<div class="empty-state">没有可展示的模型结果</div>'}</div><div class="modal-footer-note">结果仅用于比较模型在相同历史证据下的方向判断与输出质量，不会产生实盘订单。</div>`})
+}
+function bindModelCompare() {
+  const compare=state.modelCompare,setup=compare.setup
+  document.querySelector('#compareStrategy')?.addEventListener('change',async event=>{compare.strategyId=Number(event.target.value);const strategy=setup.strategies.find(item=>Number(item.id)===compare.strategyId);compare.symbol=strategySymbols(strategy)[0]||'';compare.page=1;compare.selected.clear();renderModelCompareContent();await loadModelCompareSnapshots().catch(handleError)})
+  document.querySelector('#compareSymbol')?.addEventListener('change',async event=>{compare.symbol=event.target.value;compare.page=1;compare.selected.clear();await loadModelCompareSnapshots().catch(handleError)})
+  document.querySelector('#compareOutcome')?.addEventListener('change',async event=>{compare.result=event.target.value;compare.page=1;await loadModelCompareSnapshots().catch(handleError)})
+  document.querySelectorAll('[data-compare-snapshot]').forEach(input=>input.addEventListener('change',()=>{const id=Number(input.dataset.compareSnapshot),item=compare.snapshots.find(row=>Number(row.snapshot_id)===id);if(input.checked&&item)compare.selected.set(id,item);else compare.selected.delete(id);renderModelCompareContent()}))
+  document.querySelectorAll('[data-compare-model]').forEach(input=>input.addEventListener('change',()=>{const id=Number(input.dataset.compareModel);if(input.checked){if(compare.modelIds.size>=5){input.checked=false;toast('每次最多选择 5 个模型','warning');return}compare.modelIds.add(id)}else compare.modelIds.delete(id);renderModelCompareContent()}))
+  document.querySelector('#comparePrev')?.addEventListener('click',async()=>{compare.page=Math.max(1,compare.page-1);await loadModelCompareSnapshots().catch(handleError)})
+  document.querySelector('#compareNext')?.addEventListener('click',async()=>{compare.page+=1;await loadModelCompareSnapshots().catch(handleError)})
+  document.querySelector('#compareRefreshJobs')?.addEventListener('click',()=>loadModelCompareJobs().catch(handleError))
+  document.querySelector('#compareRun')?.addEventListener('click',async buttonEvent=>{const button=buttonEvent.currentTarget;button.disabled=true;compare.loading=true;renderModelCompareContent();try{const data=await api('/api/admin/ai/model-compare/jobs',{method:'POST',body:JSON.stringify({strategy_id:compare.strategyId,symbol:compare.symbol,model_ids:[...compare.modelIds],data_source:'snapshots',snapshot_ids:[...compare.selected.keys()],timezone_offset_minutes:180,evaluation_mode:'sampled',backtest:{use_bridge_account_settings:true}})});toast('模型评测任务已开始','success');compare.selected.clear();await loadModelCompareJobs();if(data.job?.id)state.modelCompare.polling=setTimeout(()=>loadModelCompareJobs().catch(handleError),1200)}catch(error){handleError(error)}finally{compare.loading=false;renderModelCompareContent()}})
+  document.querySelectorAll('[data-open-compare-result]').forEach(button=>button.addEventListener('click',()=>openModelCompareResult(button.closest('[data-compare-job]').dataset.compareJob).catch(handleError)))
+  document.querySelectorAll('[data-delete-compare-job]').forEach(button=>button.addEventListener('click',async()=>{const jobId=button.closest('[data-compare-job]').dataset.compareJob;if(!await confirmAction('删除模型评测记录？','删除后无法恢复，但不会影响模型配置和历史信号。','确认删除',true))return;try{await api(`/api/admin/ai/model-compare/jobs/${encodeURIComponent(jobId)}`,{method:'DELETE'});toast('评测记录已删除','success');await loadModelCompareJobs()}catch(error){handleError(error)}}))
+}
 function audienceLabel(value) { return ({all:'全部用户',plus:'Plus 用户',pro:'Pro 用户',assigned:'指定用户'})[value] || '未设置' }
 let entityModalReturnFocus=null
 function closeEntityModal(){document.querySelector('#entityModal').hidden=true;entityModalReturnFocus?.focus?.();entityModalReturnFocus=null}
@@ -511,7 +640,15 @@ function bindObserverRuntime() {
 }
 function renderAiOperationsContent() {
   const content = document.querySelector('#aiOperationsContent')
-  if (!content || !state.aiOperations) return
+  if (!content) return
+  if (state.aiTab === 'model-compare') {
+    renderModelCompareContent()
+    if (!state.modelCompare.setup) loadModelCompareWorkspace().catch(handleError)
+    return
+  }
+  clearTimeout(state.modelCompare.polling)
+  state.modelCompare.polling = null
+  if (!state.aiOperations) return
   if (state.aiTab === 'scheduler') content.innerHTML = aiSchedulerContent(state.aiOperations)
   else if (state.aiTab === 'observer') content.innerHTML = aiObserverContent(state.aiOperations)
   else content.innerHTML = aiHealthContent(state.aiOperations)
@@ -529,7 +666,8 @@ async function renderAiOperations() {
   const main = document.querySelector('#adminMain')
   main.innerHTML = `<header class="page-head"><div><span class="eyebrow">模型、调度与观摩分发</span><h1>AI 运营治理</h1><p>先确认核心链路是否健康，再处理调度、模型和观摩频道。</p></div></header>${aiTabs()}<div id="aiOperationsContent"></div>`
   bindAiTabs()
-  await loadAiOperations()
+  if (state.aiTab === 'model-compare') await loadModelCompareWorkspace()
+  else await loadAiOperations()
 }
 
 function riskTabs() { return `<nav class="segment-tabs" aria-label="风控与审计分类"><button class="segment-tab ${state.riskTab === 'status' ? 'is-active' : ''}" data-risk-tab="status" type="button">风险状态</button><button class="segment-tab ${state.riskTab === 'rules' ? 'is-active' : ''}" data-risk-tab="rules" type="button">平台规则</button><button class="segment-tab ${state.riskTab === 'decisions' ? 'is-active' : ''}" data-risk-tab="decisions" type="button">执行决策</button><button class="segment-tab ${state.riskTab === 'audit' ? 'is-active' : ''}" data-risk-tab="audit" type="button">管理审计</button></nav>` }

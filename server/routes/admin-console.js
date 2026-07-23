@@ -10,6 +10,10 @@ import { applyBridgeRuntimeState, isBridgeAlive } from '../bridge-ws.js'
 import { getAdminPlatformRiskPolicy, getAdminRiskAuditOverview, listAdminAuditEvents, saveAdminPlatformRiskPolicy } from '../admin/risk-audit.js'
 import { setGlobalKillSwitch } from './ai/risk-state.js'
 import { deleteAdminCourse, getAdminContentSystemOverview, getAdminCourse, listAdminCourses, listAdminFeedback, saveAdminCourse } from '../admin/content-system.js'
+import { getUserModelProfiles } from './ai/model-profiles.js'
+import { listStrategies } from './ai/strategy-ownership.js'
+import { listModelSnapshotSamples } from './ai/model-snapshot-samples.js'
+import { deleteHistoryCompareJob, getHistoryCompareJob, listHistoryCompareJobs, startHistoryCompareJob } from './ai/strategy.js'
 
 const router = Router()
 
@@ -81,6 +85,15 @@ const AI_OPERATION_ERRORS = {
   source_name_required:'请填写观摩源名称',
   channel_name_required:'请填写频道名称',
   invalid_status:'状态值无效',
+  snapshot_compare_minimum_not_met:'请至少选择 2 条历史信号快照',
+  snapshot_compare_limit_exceeded:'每次最多选择 30 条历史信号快照',
+  snapshot_compare_selection_invalid:'所选快照证据不完整或已失效，请重新选择',
+  snapshot_compare_strategy_mismatch:'所选快照不属于同一策略',
+  snapshot_compare_strategy_version_mismatch:'所选快照的策略版本不一致',
+  snapshot_compare_symbol_mismatch:'所选快照的交易品种不一致',
+  snapshot_compare_schema_mismatch:'所选快照的输出结构不一致',
+  history_compare_job_already_running:'已有模型评测任务正在运行，请等待任务结束',
+  history_compare_job_not_found:'模型评测任务不存在或已删除',
 }
 
 function adminAiError(res, error) {
@@ -95,6 +108,49 @@ router.get('/admin/ai/overview', authMiddleware, adminOnly, async (req, res) => 
     console.error('[AdminConsole] AI operations overview failed:', error)
     res.status(500).json({ ok:false, error:'AI 运营数据加载失败' })
   }
+})
+
+router.get('/admin/ai/model-compare/setup', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const [profiles, strategies] = await Promise.all([
+      getUserModelProfiles(0),
+      listStrategies(req.user.id, req.user.role, { scope:'platform', includeInactive:false }),
+    ])
+    res.json({
+      ok:true,
+      profiles:profiles.filter(profile => profile.status === 'active'),
+      strategies:strategies.filter(strategy => strategy.visibility_status === 'active' && Number(strategy.is_active)),
+      limits:{ models_minimum:2, models_maximum:5, snapshots_minimum:2, snapshots_maximum:30 },
+    })
+  } catch (error) {
+    console.error('[AdminConsole] model compare setup failed:', error)
+    res.status(500).json({ ok:false, error:'模型评测配置加载失败' })
+  }
+})
+
+router.get('/admin/ai/model-compare/snapshots', authMiddleware, adminOnly, async (req, res) => {
+  try { res.json({ ok:true, ...(await listModelSnapshotSamples(req.user.id, req.query)) }) }
+  catch (error) { adminAiError(res, error) }
+})
+
+router.get('/admin/ai/model-compare/jobs', authMiddleware, adminOnly, async (req, res) => {
+  try { res.json({ ok:true, jobs:await listHistoryCompareJobs(req.user.id, req.query.limit) }) }
+  catch (error) { adminAiError(res, error) }
+})
+
+router.post('/admin/ai/model-compare/jobs', authMiddleware, adminOnly, async (req, res) => {
+  try { res.status(202).json({ ok:true, job:await startHistoryCompareJob(req.user.id, req.body || {}) }) }
+  catch (error) { adminAiError(res, error) }
+})
+
+router.get('/admin/ai/model-compare/jobs/:jobId', authMiddleware, adminOnly, async (req, res) => {
+  try { res.json({ ok:true, job:await getHistoryCompareJob(req.user.id, req.params.jobId) }) }
+  catch (error) { adminAiError(res, error) }
+})
+
+router.delete('/admin/ai/model-compare/jobs/:jobId', authMiddleware, adminOnly, async (req, res) => {
+  try { res.json({ ok:true, job:await deleteHistoryCompareJob(req.user.id, req.params.jobId) }) }
+  catch (error) { adminAiError(res, error) }
 })
 
 router.patch('/admin/ai/observer-sources/:id/runtime', authMiddleware, adminOnly, async (req, res) => {

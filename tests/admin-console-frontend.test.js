@@ -71,6 +71,21 @@ describe('unified admin console contract', () => {
     expect(app).toContain('openObserverChannelEditor')
   })
 
+  it('moves historical-snapshot model evaluation into the canonical admin console', () => {
+    expect(app).toContain('data-ai-tab="model-compare"')
+    expect(app).toContain("api('/api/admin/ai/model-compare/setup')")
+    expect(app).toContain('/api/admin/ai/model-compare/snapshots?')
+    expect(app).toContain("api('/api/admin/ai/model-compare/jobs'")
+    expect(app).toContain("data_source:'snapshots'")
+    expect(app).toContain('不触发实盘风控或交易')
+    expect(routes).toContain("router.get('/admin/ai/model-compare/setup'")
+    expect(routes).toContain("router.post('/admin/ai/model-compare/jobs'")
+    expect(routes).toContain("router.get('/admin/ai/model-compare/jobs/:jobId'")
+    expect(routes).toContain("router.delete('/admin/ai/model-compare/jobs/:jobId'")
+    expect(css).toContain('.compare-workspace')
+    expect(css).toContain('.compare-result-row')
+  })
+
   it('centralizes risk status, decisions and administrator audit records', () => {
     expect(html).toContain('data-view="risk-audit"')
     expect(app).toContain('/api/admin/risk-audit/overview?')
