@@ -95,7 +95,15 @@
       <div class="modal-body" id="entityModalBody"></div>
     </section>
   </div>
+  <div class="modal-layer admin-account-modal" id="adminAccountModal" hidden aria-hidden="true">
+    <div class="modal-scrim" data-close-admin-account></div>
+    <section class="admin-account-dialog" role="dialog" aria-modal="true" aria-labelledby="adminAccountModalTitle">
+      <h2 id="adminAccountModalTitle" class="sr-only">账户与订阅中心</h2>
+      <button class="icon-button admin-account-close" id="adminAccountCloseButton" type="button" data-close-admin-account aria-label="关闭账户与订阅中心"><span data-icon="close"></span></button>
+      <iframe id="adminAccountFrame" title="账户与订阅中心"></iframe>
+    </section>
+  </div>
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
-  <script type="module" src="/admin/app.js?v=20260723m"></script>
+  <script type="module" src="/admin/app.js?v=20260723n"></script>
 </body>
 </html>

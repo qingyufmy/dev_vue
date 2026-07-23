@@ -100,13 +100,17 @@ function toast(message, type = '') {
 }
 function skeleton(count = 4) { return `<div class="metric-grid">${Array.from({length:count}, () => '<div class="skeleton"></div>').join('')}</div>` }
 
+function applyAdminProfile(profile) {
+  state.profile = profile
+  const displayName = profile.nickname || profile.name || profile.email || '管理员'
+  document.querySelector('#accountName').textContent = displayName
+  document.querySelector('.account-avatar').textContent = displayName.slice(0, 1).toUpperCase()
+}
 async function loadProfile() {
   const data = await api('/api/profile')
   const profile = data.user || data.profile || data
   if (profile.role !== 'admin') throw new Error('当前账号没有管理权限')
-  state.profile = profile
-  document.querySelector('#accountName').textContent = profile.nickname || profile.email || '管理员'
-  document.querySelector('.account-avatar').textContent = (profile.nickname || profile.email || '管').slice(0, 1).toUpperCase()
+  applyAdminProfile(profile)
 }
 
 function metric(label, value, note, primary = false) {
@@ -1101,15 +1105,61 @@ async function setView(view) {
   } catch (error) { handleError(error) }
 }
 
+let adminAccountCenterPreviousFocus = null
+let adminAccountCenterPreviousOverflow = ''
+
+function openAdminAccountCenter(tab = 'overview') {
+  const modal = document.querySelector('#adminAccountModal')
+  const frame = document.querySelector('#adminAccountFrame')
+  if (!modal || !frame) return
+  adminAccountCenterPreviousFocus = document.activeElement
+  adminAccountCenterPreviousOverflow = document.body.style.overflow
+  const nextSrc = `/account/?embed=admin&tab=${encodeURIComponent(tab)}`
+  if (!frame.getAttribute('src')) frame.src = nextSrc
+  else if (frame.contentWindow) frame.contentWindow.postMessage({ type:'account-center-tab', tab }, window.location.origin)
+  modal.hidden = false
+  modal.setAttribute('aria-hidden', 'false')
+  document.body.style.overflow = 'hidden'
+  document.querySelector('#adminAccountCloseButton')?.focus()
+}
+
+function closeAdminAccountCenter() {
+  const modal = document.querySelector('#adminAccountModal')
+  if (!modal || modal.hidden) return
+  modal.hidden = true
+  modal.setAttribute('aria-hidden', 'true')
+  document.body.style.overflow = adminAccountCenterPreviousOverflow
+  if (adminAccountCenterPreviousFocus instanceof HTMLElement) adminAccountCenterPreviousFocus.focus()
+  adminAccountCenterPreviousFocus = null
+}
+
+function handleAdminAccountCenterMessage(event) {
+  const frame = document.querySelector('#adminAccountFrame')
+  if (event.origin !== window.location.origin || event.source !== frame?.contentWindow) return
+  if (event.data?.type === 'account-center-close') {
+    closeAdminAccountCenter()
+    return
+  }
+  if (event.data?.type === 'account-session-logout') {
+    closeAdminAccountCenter()
+    location.replace(`/auth/login?next=${encodeURIComponent('/admin/')}`)
+    return
+  }
+  if (event.data?.type === 'account-profile-updated' && event.data.user) applyAdminProfile({ ...(state.profile || {}), ...event.data.user })
+}
+
 document.querySelectorAll('.nav-item[data-view]').forEach(item => item.addEventListener('click', () => setView(item.dataset.view)))
 document.querySelector('#refreshButton').addEventListener('click', () => setView(state.view))
-document.querySelector('#accountButton').addEventListener('click', () => { location.href = '/account' })
+document.querySelector('#accountButton').addEventListener('click', () => openAdminAccountCenter('overview'))
 document.querySelectorAll('[data-close-modal]').forEach(item => item.addEventListener('click', closeUserModal))
 document.querySelectorAll('#contentModal > [data-close-content-modal]').forEach(item => item.addEventListener('click', closeCourseEditor))
 document.querySelectorAll('#entityModal > [data-close-entity-modal], #entityModal .modal-header [data-close-entity-modal]').forEach(item => item.addEventListener('click', closeEntityModal))
+document.querySelectorAll('[data-close-admin-account]').forEach(item => item.addEventListener('click', closeAdminAccountCenter))
+window.addEventListener('message', handleAdminAccountCenterMessage)
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return
-  if (!document.querySelector('#entityModal').hidden) closeEntityModal()
+  if (!document.querySelector('#adminAccountModal').hidden) closeAdminAccountCenter()
+  else if (!document.querySelector('#entityModal').hidden) closeEntityModal()
   else if (!document.querySelector('#contentModal').hidden) closeCourseEditor()
   else if (!document.querySelector('#userModal').hidden) closeUserModal()
 })

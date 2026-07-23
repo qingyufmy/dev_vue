@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id)
 const accountParams = new URLSearchParams(location.search)
-const embedMode = ['ai','main'].includes(accountParams.get('embed')) ? accountParams.get('embed') : ''
+const embedMode = ['ai','main','admin'].includes(accountParams.get('embed')) ? accountParams.get('embed') : ''
 const embedded = Boolean(embedMode)
 const state = { user:null, plans:null, orders:null, referral:null, notifications:null, notificationUnread:0, period:'month', tab:'overview', paymentTimer:null }
 const TAB_META = {
@@ -235,7 +235,7 @@ async function pollPayment(orderId) {
 }
 
 function logoutEverywhere() {
-  AuthSession.clear(); notifyParent('account-session-logout'); location.replace(embedMode === 'ai' ? '/ai/auth/?mode=login' : '/')
+  AuthSession.clear(); notifyParent('account-session-logout'); location.replace(embedMode === 'ai' ? '/ai/auth/?mode=login' : embedded ? '/auth/login?mode=login' : '/')
 }
 
 async function refreshProfile() {
@@ -260,7 +260,8 @@ $('accountNav').addEventListener('click',event=>{ const button=event.target.clos
 $('accountLogoutBtn').addEventListener('click',logoutEverywhere)
 $('accountCloseBtn').addEventListener('click',()=>embedded ? notifyParent('account-center-close') : history.length > 1 ? history.back() : location.assign('/'))
 $('paymentDialog').addEventListener('close',()=>clearInterval(state.paymentTimer))
-window.addEventListener('storage',event=>{ if(event.key===AuthSession.eventKey && !AuthSession.token()) location.replace(embedMode === 'ai' ? '/ai/auth/?mode=login' : '/') })
+window.addEventListener('keydown',event=>{ if(event.key==='Escape' && embedded){ event.preventDefault(); notifyParent('account-center-close') } })
+window.addEventListener('storage',event=>{ if(event.key===AuthSession.eventKey && !AuthSession.token()) location.replace(embedMode === 'ai' ? '/ai/auth/?mode=login' : embedded ? '/auth/login?mode=login' : '/') })
 window.addEventListener('message',event=>{
   if(event.origin!==location.origin || event.source!==window.parent) return
   if(event.data?.type==='account-center-tab') switchTab(event.data.tab || 'overview')
