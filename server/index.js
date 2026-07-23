@@ -187,6 +187,7 @@ app.get('/api/bilibili-proxy', (req, res) => {
 
 // Serve frontend static files
 const publicDir = join(__dirname, '..', 'public')
+app.get('/legacy-admin', (req, res) => res.redirect(308, '/admin/'))
 app.use(express.static(publicDir, {
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html')) {

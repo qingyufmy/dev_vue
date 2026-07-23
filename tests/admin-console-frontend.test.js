@@ -10,6 +10,8 @@ const aiOperations = readFileSync(new URL('../server/admin/ai-operations.js', im
 const riskAudit = readFileSync(new URL('../server/admin/risk-audit.js', import.meta.url), 'utf8')
 const contentSystem = readFileSync(new URL('../server/admin/content-system.js', import.meta.url), 'utf8')
 const userDeletion = readFileSync(new URL('../server/admin/user-deletion.js', import.meta.url), 'utf8')
+const server = readFileSync(new URL('../server/index.js', import.meta.url), 'utf8')
+const mainSite = readFileSync(new URL('../public/src/main.js', import.meta.url), 'utf8')
 
 describe('unified admin console contract', () => {
   it('ships a standalone accessible and responsive administration surface', () => {
@@ -21,6 +23,9 @@ describe('unified admin console contract', () => {
     expect(css).toContain('prefers-reduced-motion')
     expect(html).not.toContain('旧版管理工具')
     expect(app).not.toContain('/ai/?tab=admin-dashboard')
+    expect(server).toContain("app.get('/legacy-admin', (req, res) => res.redirect(308, '/admin/'))")
+    expect(mainSite).not.toContain('function renderAdmin()')
+    expect(mainSite).not.toContain("case 'admin'")
   })
 
   it('uses canonical admin APIs and keeps user-facing errors in Chinese', () => {
