@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>统一管理后台 · AI交易实验室</title>
-  <link rel="stylesheet" href="/admin/styles.css?v=20260723g">
+  <link rel="stylesheet" href="/admin/styles.css?v=20260723i">
 </head>
 <body>
   <a class="skip-link" href="#adminMain">跳到主要内容</a>
@@ -13,15 +13,18 @@
     <aside class="admin-sidebar" aria-label="管理后台导航">
       <a class="brand" href="/admin/" aria-label="统一管理后台首页">
         <span class="brand-mark" aria-hidden="true">A</span>
-        <span><strong>AI交易实验室</strong><small>统一管理后台</small></span>
+        <span><strong>AURUM 管理台</strong><small>业务运营工作台</small></span>
       </a>
       <nav class="side-nav">
-        <p class="nav-group">运营管理</p>
+        <p class="nav-group">工作台</p>
         <button class="nav-item is-active" data-view="overview" type="button"><span data-icon="overview"></span><span>运营总览</span></button>
+        <p class="nav-group">用户与业务</p>
         <button class="nav-item" data-view="users" type="button"><span data-icon="users"></span><span>用户与会员</span></button>
         <button class="nav-item" data-view="commercial" type="button"><span data-icon="commercial"></span><span>商业运营</span></button>
-        <button class="nav-item" data-view="ai-operations" type="button"><span data-icon="activity"></span><span>AI 运营治理</span></button>
+        <p class="nav-group">AI 与交易安全</p>
+        <button class="nav-item" data-view="ai-operations" type="button"><span data-icon="activity"></span><span>AI 运行管理</span></button>
         <button class="nav-item" data-view="risk-audit" type="button"><span data-icon="shield"></span><span>风控与审计</span></button>
+        <p class="nav-group">平台维护</p>
         <button class="nav-item" data-view="content-system" type="button"><span data-icon="archive"></span><span>内容与系统</span></button>
       </nav>
       <div class="sidebar-foot">
@@ -33,7 +36,12 @@
     <div class="admin-workspace">
       <header class="admin-topbar">
         <button class="icon-button mobile-menu" id="mobileMenuButton" type="button" aria-label="打开导航" aria-expanded="false"><span data-icon="menu"></span></button>
-        <div class="topbar-context"><span class="status-dot"></span><span>管理服务正常</span></div>
+        <div class="topbar-context"><span class="status-dot"></span><span>生产环境</span><strong id="currentViewName">运营总览</strong></div>
+        <label class="quick-nav" for="adminQuickNavSearch">
+          <span data-icon="search" aria-hidden="true"></span>
+          <input id="adminQuickNavSearch" type="search" autocomplete="off" placeholder="搜索管理模块" aria-label="搜索管理模块">
+          <kbd>/</kbd>
+        </label>
         <div class="topbar-actions">
           <button class="icon-button" id="refreshButton" type="button" aria-label="刷新当前页面"><span data-icon="refresh"></span></button>
           <button class="account-button" id="accountButton" type="button" aria-label="当前管理员账户"><span class="account-avatar">管</span><span id="accountName">管理员</span></button>
@@ -67,6 +75,6 @@
     </section>
   </div>
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
-  <script type="module" src="/admin/app.js?v=20260723h"></script>
+  <script type="module" src="/admin/app.js?v=20260723i"></script>
 </body>
 </html>

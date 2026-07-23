@@ -9,6 +9,15 @@ const state = {
   contentTab:'courses', contentOverview:null, contentPage:1, contentSearch:'', contentStatus:'all', feedbackPage:1, feedbackSearch:'',
 }
 
+const viewLabels = {
+  overview:'运营总览',
+  users:'用户与会员',
+  commercial:'商业运营',
+  'ai-operations':'AI 运行管理',
+  'risk-audit':'风控与审计',
+  'content-system':'内容与系统',
+}
+
 const icons = {
   overview:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>',
   users:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
@@ -21,6 +30,7 @@ const icons = {
   menu:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
   refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0 2 5M20 4v7h-7"/></svg>',
   close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+  search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
 }
 
 document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = icons[el.dataset.icon] || '' })
@@ -536,6 +546,7 @@ async function renderContentSystemPage(){const main=document.querySelector('#adm
 async function setView(view) {
   state.view = view
   document.querySelectorAll('.nav-item[data-view]').forEach(item => item.classList.toggle('is-active', item.dataset.view === view))
+  document.querySelector('#currentViewName').textContent = viewLabels[view] || '管理工作台'
   history.replaceState({}, '', `/admin/${view === 'overview' ? '' : `?view=${view}`}`)
   document.body.classList.remove('nav-open')
   document.querySelector('#drawerScrim').hidden = true
@@ -557,6 +568,36 @@ document.querySelectorAll('[data-close-modal]').forEach(item => item.addEventLis
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.querySelector('#userModal').hidden) closeUserModal() })
 document.querySelector('#mobileMenuButton').addEventListener('click', () => { const open = !document.body.classList.contains('nav-open'); document.body.classList.toggle('nav-open', open); document.querySelector('#drawerScrim').hidden = !open; document.querySelector('#mobileMenuButton').setAttribute('aria-expanded',String(open)) })
 document.querySelector('#drawerScrim').addEventListener('click', () => { document.body.classList.remove('nav-open'); document.querySelector('#drawerScrim').hidden = true })
+
+const quickNavInput = document.querySelector('#adminQuickNavSearch')
+function filterAdminNavigation() {
+  const keyword = quickNavInput.value.trim().toLowerCase()
+  document.querySelectorAll('.nav-item[data-view]').forEach(item => {
+    item.hidden = Boolean(keyword) && !item.textContent.trim().toLowerCase().includes(keyword)
+  })
+}
+quickNavInput.addEventListener('input', filterAdminNavigation)
+quickNavInput.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    quickNavInput.value = ''
+    filterAdminNavigation()
+    quickNavInput.blur()
+  }
+  if (event.key === 'Enter') {
+    const target = [...document.querySelectorAll('.nav-item[data-view]')].find(item => !item.hidden)
+    if (target) {
+      quickNavInput.value = ''
+      filterAdminNavigation()
+      setView(target.dataset.view)
+    }
+  }
+})
+document.addEventListener('keydown', event => {
+  if (event.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) {
+    event.preventDefault()
+    quickNavInput.focus()
+  }
+})
 
 async function bootstrap() {
   try {
