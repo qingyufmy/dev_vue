@@ -8,6 +8,7 @@ import { reconcileAutoSchedulers } from './ai/scheduler.js'
 import { applyBridgeRuntimeState } from '../bridge-ws.js'
 import { getAdminRiskAuditOverview, listAdminAuditEvents } from '../admin/risk-audit.js'
 import { setGlobalKillSwitch } from './ai/risk-state.js'
+import { getAdminContentSystemOverview, listAdminCourses, listAdminFeedback } from '../admin/content-system.js'
 
 const router = Router()
 
@@ -128,6 +129,19 @@ router.post('/admin/risk-audit/global-stop', authMiddleware, adminOnly, async (r
     await setGlobalKillSwitch(req.user.id, req.user.role, enabled, reason)
     res.json({ ok:true })
   } catch (error) { adminAiError(res, error) }
+})
+
+router.get('/admin/content-system/overview', authMiddleware, adminOnly, async (req,res)=>{
+  try{res.json({ok:true,overview:await getAdminContentSystemOverview()})}
+  catch(error){console.error('[AdminConsole] content system overview failed:',error);res.status(500).json({ok:false,error:'内容与系统概览加载失败'})}
+})
+router.get('/admin/content-system/courses',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.json({ok:true,...await listAdminCourses({page:req.query.page,pageSize:req.query.page_size,search:req.query.search,status:req.query.status})})}
+  catch(error){console.error('[AdminConsole] course list failed:',error);res.status(500).json({ok:false,error:'课程列表加载失败'})}
+})
+router.get('/admin/content-system/feedback',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.json({ok:true,...await listAdminFeedback({page:req.query.page,pageSize:req.query.page_size,search:req.query.search,type:req.query.type})})}
+  catch(error){console.error('[AdminConsole] feedback list failed:',error);res.status(500).json({ok:false,error:'用户反馈加载失败'})}
 })
 
 router.get('/admin/commercial/overview', authMiddleware, adminOnly, async (req, res) => {

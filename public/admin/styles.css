@@ -210,6 +210,25 @@ h2 { margin:3px 0 0; font-size:22px; }
 .decision-row small { display:block; margin-top:3px; color:var(--muted); }
 .decision-reason { max-width:60%; text-align:right; }
 .decision-reason p { margin:6px 0 0; color:var(--text-2); }
+.content-card-list,.feedback-list,.config-category-list { display:grid; gap:9px; padding:14px; }
+.content-card { min-height:86px; display:flex; align-items:center; gap:13px; padding:13px 14px; border:1px solid var(--border); border-radius:11px; background:var(--surface-2); }
+.content-card-index { width:42px; height:42px; display:grid; place-items:center; flex:0 0 auto; border-radius:11px; background:var(--gold-soft); color:var(--gold); font:700 14px/1 ui-monospace,Consolas,monospace; }
+.content-card-main { min-width:0; }
+.content-card-main > div { display:flex; align-items:center; gap:8px; }
+.content-card-main small,.content-card-main p { color:var(--muted); }
+.content-card-main small { display:block; margin-top:4px; }
+.content-card-main p { margin:7px 0 0; font-size:11px; }
+.feedback-card { padding:15px; border:1px solid var(--border); border-radius:11px; background:var(--surface-2); }
+.feedback-card header,.feedback-card header > div,.feedback-card footer { display:flex; align-items:center; gap:9px; }
+.feedback-card header { justify-content:space-between; }
+.feedback-card time,.feedback-card footer { color:var(--muted); font-size:11px; }
+.feedback-card p { margin:12px 0; color:var(--text-2); white-space:pre-wrap; }
+.release-form { display:grid; gap:14px; }
+.release-textarea { min-height:220px; padding:12px; resize:vertical; line-height:1.6; }
+.config-category { min-height:58px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); }
+.config-category strong,.config-category small { display:block; }
+.config-category small,.config-category > span { color:var(--muted); font-size:11px; }
+.full-button { width:100%; }
 .modal-header { min-height:78px; display:flex; align-items:center; justify-content:space-between; padding:14px 18px 14px 22px; border-bottom:1px solid var(--border); }
 .modal-body { min-height:300px; overflow-y:auto; padding:20px 22px 24px; }
 .detail-hero { display:flex; align-items:center; gap:14px; margin-bottom:20px; }

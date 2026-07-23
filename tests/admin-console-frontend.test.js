@@ -8,6 +8,7 @@ const routes = readFileSync(new URL('../server/routes/admin-console.js', import.
 const legacyAdmin = readFileSync(new URL('../server/routes/admin.js', import.meta.url), 'utf8')
 const aiOperations = readFileSync(new URL('../server/admin/ai-operations.js', import.meta.url), 'utf8')
 const riskAudit = readFileSync(new URL('../server/admin/risk-audit.js', import.meta.url), 'utf8')
+const contentSystem = readFileSync(new URL('../server/admin/content-system.js', import.meta.url), 'utf8')
 
 describe('unified admin console contract', () => {
   it('ships a standalone accessible and responsive administration surface', () => {
@@ -72,5 +73,16 @@ describe('unified admin console contract', () => {
     expect(riskAudit).toContain('formatRiskReason(row.reject_code')
     expect(app).not.toContain("prompt('请输入开启平台紧急停止")
     expect(css).toContain('.risk-account-list')
+  })
+
+  it('centralizes course discovery, feedback triage and release publishing', () => {
+    expect(html).toContain('data-view="content-system"')
+    expect(app).toContain('/api/admin/content-system/courses?')
+    expect(app).toContain('/api/admin/content-system/feedback?')
+    expect(app).toContain("api('/api/admin/release-notes'")
+    expect(routes).toContain("router.get('/admin/content-system/overview'")
+    expect(routes).toContain("router.get('/admin/content-system/courses'")
+    expect(contentSystem).toContain('getAdminContentSystemOverview')
+    expect(css).toContain('.content-card-list')
   })
 })
