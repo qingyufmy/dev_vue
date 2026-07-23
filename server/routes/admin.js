@@ -384,7 +384,11 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req
       FROM referrals r 
       LEFT JOIN users u ON r.referrer_id = u.id 
       LEFT JOIN users u2 ON r.referred_id = u2.id
-      LEFT JOIN orders o ON o.user_id = r.referred_id AND o.status = 'paid'
+      LEFT JOIN orders o ON o.id = (
+        SELECT latest_order.id FROM orders latest_order
+        WHERE latest_order.user_id = r.referred_id AND latest_order.status = 'paid'
+        ORDER BY latest_order.paid_at DESC, latest_order.id DESC LIMIT 1
+      )
       WHERE ${where} ORDER BY r.created_at DESC LIMIT 100
     `, params)
 
@@ -410,15 +414,26 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req
 router.patch('/admin/referrals/commissions/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { action } = req.body
-    const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : req.body.status
-    const referral = await queryOne('SELECT referrer_id, commission FROM referrals WHERE id = ?', [req.params.id])
-    if (!referral) return res.json({ ok: false, error: '记录不存在' })
-    await queryRun('UPDATE referrals SET status = ?, commission = CASE WHEN ? = \"voided\" THEN 0 ELSE commission END WHERE id = ?', [finalStatus, finalStatus, req.params.id])
-    if (finalStatus === 'approved' && referral.commission > 0) {
-      await queryRun('UPDATE users SET referral_credit = referral_credit + ?, updated_at = NOW() WHERE id = ?', [referral.commission, referral.referrer_id])
-    }
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '操作失败' }) }
+    const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : ''
+    if (!finalStatus) return res.status(400).json({ ok:false, error:'无效的返佣操作' })
+    const result = await withTransaction(async run => {
+      const [rows] = await run('SELECT referrer_id, commission, status FROM referrals WHERE id = ? FOR UPDATE', [req.params.id])
+      const referral = rows[0]
+      if (!referral) return { ok:false, status:404, error:'返佣记录不存在' }
+      if (referral.status === finalStatus) return { ok:true, unchanged:true }
+      if (referral.status !== 'pending') return { ok:false, status:409, error:'该返佣已经处理，不能重复操作' }
+      await run('UPDATE referrals SET status = ?, commission = CASE WHEN ? = \"voided\" THEN 0 ELSE commission END WHERE id = ?', [finalStatus, finalStatus, req.params.id])
+      if (finalStatus === 'approved' && Number(referral.commission) > 0) {
+        await run('UPDATE users SET referral_credit = referral_credit + ?, updated_at = NOW() WHERE id = ?', [referral.commission, referral.referrer_id])
+      }
+      return { ok:true }
+    })
+    if (!result.ok) return res.status(result.status).json({ ok:false, error:result.error })
+    res.json({ ok:true, unchanged:Boolean(result.unchanged) })
+  } catch (err) {
+    console.error('[Admin] referral commission update failed:', err)
+    res.status(500).json({ ok:false, error:'返佣操作失败，请稍后重试' })
+  }
 })
 
 router.get('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {

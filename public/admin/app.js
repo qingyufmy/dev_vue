@@ -1,8 +1,15 @@
-const state = { view:'overview', profile:null, overview:null, users:[], pagination:null, search:'', membership:'all', page:1, selectedUser:null }
+const state = {
+  view:'overview', profile:null, overview:null, users:[], pagination:null, search:'', membership:'all', page:1, selectedUser:null,
+  commercialTab:'orders', commercialOverview:null,
+  orderPage:1, orderSearch:'', orderStatus:'all',
+  notificationPage:1, notificationSearch:'', notificationStatus:'all', notificationChannel:'all',
+  referralStatus:'all',
+}
 
 const icons = {
   overview:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>',
   users:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  commercial:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M8 15h3"/></svg>',
   activity:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>',
   archive:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 8v13H3V8M1 3h22v5H1z"/><path d="M10 12h4"/></svg>',
   chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/></svg>',
@@ -40,6 +47,18 @@ function formatDate(value, withTime = false) {
   const date = new Date(String(value).replace(' ', 'T') + (String(value).includes('T') ? '' : '+08:00'))
   if (Number.isNaN(date.getTime())) return String(value).slice(0, withTime ? 16 : 10)
   return new Intl.DateTimeFormat('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', ...(withTime ? {hour:'2-digit',minute:'2-digit'} : {}) }).format(date)
+}
+function formatMoney(cents, currency = 'USD') {
+  const value = Number(cents || 0) / 100
+  try { return new Intl.NumberFormat('zh-CN', { style:'currency', currency:currency || 'USD', minimumFractionDigits:2 }).format(value) }
+  catch { return `$${value.toFixed(2)}` }
+}
+const orderStatusLabels = { paid:'已完成', pending:'待支付', processing:'处理中', expired:'已过期', failed:'支付失败', cancelled:'已取消' }
+const deliveryStatusLabels = { pending:'待发送', sending:'发送中', sent:'已发送', read:'已阅读', failed:'发送失败', skipped:'已跳过', cancelled:'已取消', waiting_configuration:'等待配置' }
+const referralStatusLabels = { pending:'待确认', approved:'已发放', voided:'已作废', rejected:'已拒绝' }
+function statusBadge(status, labels) {
+  const tone = ['paid','sent','read','approved'].includes(status) ? 'active' : ['failed','expired','cancelled','voided','rejected'].includes(status) ? 'expired' : ''
+  return `<span class="badge ${tone}">${escapeHtml(labels[status] || '未知状态')}</span>`
 }
 function planLabel(user) {
   if (user.plan === 'pro') return 'Pro 专业版'
@@ -94,6 +113,134 @@ async function renderOverview() {
       <aside class="panel"><header class="section-head"><div><h2>迁移进度</h2><p>旧后台暂时保持可用。</p></div></header><div class="panel-body"><div class="notice">用户与会员已进入统一管理入口。AI 运营、风控审计、内容与系统配置将按业务域逐步迁移，期间不会中断现有功能。</div></div></aside>
     </section>`
   main.querySelector('[data-go-users]').addEventListener('click', () => setView('users'))
+}
+
+function commercialTabs() {
+  return `<nav class="segment-tabs" aria-label="商业运营分类">
+    <button type="button" class="segment-tab ${state.commercialTab === 'orders' ? 'is-active' : ''}" data-commercial-tab="orders">订单与收入</button>
+    <button type="button" class="segment-tab ${state.commercialTab === 'notifications' ? 'is-active' : ''}" data-commercial-tab="notifications">到期通知</button>
+    <button type="button" class="segment-tab ${state.commercialTab === 'referrals' ? 'is-active' : ''}" data-commercial-tab="referrals">返佣激励</button>
+  </nav>`
+}
+
+function bindCommercialTabs() {
+  document.querySelectorAll('[data-commercial-tab]').forEach(button => button.addEventListener('click', async () => {
+    if (button.dataset.commercialTab === state.commercialTab) return
+    state.commercialTab = button.dataset.commercialTab
+    await renderCommercial()
+  }))
+}
+
+function commercialMetrics(overview) {
+  return `<section class="metric-grid commercial-metrics" aria-label="商业运营指标">
+    <article class="metric-card is-primary"><span class="metric-label">累计实收</span><div class="metric-value money-value">${formatMoney(overview.revenue_cents)}</div><span class="metric-note">今日 ${formatMoney(overview.today_revenue_cents)}</span></article>
+    ${metric('已完成订单', overview.orders_paid, `全部订单 ${overview.orders_total} 笔`)}
+    ${metric('待支付订单', overview.orders_pending, `已关闭 ${overview.orders_closed} 笔`)}
+    ${metric('通知异常', overview.notifications_failed, `待处理 ${overview.notifications_pending} 条`)}
+  </section>`
+}
+
+async function renderCommercial() {
+  const main = document.querySelector('#adminMain')
+  main.innerHTML = `<header class="page-head"><div><span class="eyebrow">收入与会员触达</span><h1>商业运营</h1><p>统一查看订单收入、会员到期触达和返佣结算。</p></div></header>${skeleton()}${commercialTabs()}<section class="panel" id="commercialContent"><div class="empty-state">正在读取业务数据…</div></section>`
+  bindCommercialTabs()
+  const data = await api('/api/admin/commercial/overview')
+  state.commercialOverview = data.overview
+  const firstSkeleton = main.querySelector('.metric-grid')
+  firstSkeleton.outerHTML = commercialMetrics(data.overview)
+  if (state.commercialTab === 'notifications') await renderCommercialNotifications()
+  else if (state.commercialTab === 'referrals') await renderCommercialReferrals()
+  else await renderCommercialOrders()
+}
+
+function orderRows(orders) {
+  if (!orders.length) return '<div class="empty-state"><div><strong>没有符合条件的订单</strong><p>调整订单状态或搜索条件后再试。</p></div></div>'
+  return `<div class="table-wrap"><table class="user-table business-table"><thead><tr><th>订单</th><th>用户</th><th>方案</th><th>订单金额</th><th>状态</th><th>创建时间</th></tr></thead><tbody>${orders.map(order => `<tr><td><strong>${escapeHtml(order.order_no || order.order_id)}</strong><div class="helper">${escapeHtml(order.payment_method || '未选择支付方式')}</div></td><td><strong>${escapeHtml(order.user_name || order.user_uid || `用户 #${order.user_id}`)}</strong><div class="helper">${escapeHtml(order.user_email)}</div></td><td>${escapeHtml(order.plan_label || order.plan)}<div class="helper">${escapeHtml(order.period_label || order.period)}</div></td><td class="mono amount-cell">${formatMoney(order.status === 'paid' ? order.confirmed_cents : order.amount_cents, order.currency)}</td><td>${statusBadge(order.status, orderStatusLabels)}</td><td class="mono">${escapeHtml(formatDate(order.created_at, true))}</td></tr>`).join('')}</tbody></table></div>
+    <div class="mobile-user-list">${orders.map(order => `<article class="mobile-user-card"><div class="mobile-user-card-head"><div><strong>${escapeHtml(order.order_no || order.order_id)}</strong><div class="helper">${escapeHtml(order.user_name || order.user_email || `用户 #${order.user_id}`)}</div></div>${statusBadge(order.status, orderStatusLabels)}</div><div class="mobile-business-grid"><span>方案<strong>${escapeHtml(order.plan_label || order.plan)}</strong></span><span>订单金额<strong>${formatMoney(order.status === 'paid' ? order.confirmed_cents : order.amount_cents, order.currency)}</strong></span><span>创建时间<strong>${escapeHtml(formatDate(order.created_at, true))}</strong></span></div></article>`).join('')}</div>`
+}
+
+async function loadCommercialOrders() {
+  const params = new URLSearchParams({ page:String(state.orderPage), page_size:'20', status:state.orderStatus })
+  if (state.orderSearch) params.set('search', state.orderSearch)
+  const data = await api(`/api/admin/commercial/orders?${params}`)
+  document.querySelector('#businessListArea').innerHTML = orderRows(data.orders)
+  document.querySelector('#businessPageLabel').textContent = `第 ${data.pagination.page} / ${data.pagination.total_pages} 页 · 共 ${data.pagination.total} 笔`
+  document.querySelector('#businessPrevPage').disabled = data.pagination.page <= 1
+  document.querySelector('#businessNextPage').disabled = data.pagination.page >= data.pagination.total_pages
+  document.querySelector('#businessPrevPage').onclick = () => { state.orderPage -= 1; loadCommercialOrders().catch(handleError) }
+  document.querySelector('#businessNextPage').onclick = () => { state.orderPage += 1; loadCommercialOrders().catch(handleError) }
+}
+
+async function renderCommercialOrders() {
+  const content = document.querySelector('#commercialContent')
+  content.innerHTML = `<form class="filter-bar" id="orderFilters"><div class="field"><label for="orderSearch">搜索订单</label><input class="input" id="orderSearch" placeholder="订单号、用户编号、昵称或邮箱" value="${escapeHtml(state.orderSearch)}"></div><div class="field"><label for="orderStatus">订单状态</label><select class="select" id="orderStatus"><option value="all">全部状态</option><option value="paid">已完成</option><option value="pending">待支付</option><option value="processing">处理中</option><option value="failed">支付失败</option><option value="expired">已过期</option><option value="cancelled">已取消</option></select></div><button class="secondary-button" type="submit">查询</button></form><div id="businessListArea">${skeleton(3)}</div><footer class="pagination"><button class="secondary-button" id="businessPrevPage" type="button">上一页</button><span id="businessPageLabel">正在读取…</span><button class="secondary-button" id="businessNextPage" type="button">下一页</button></footer>`
+  content.querySelector('#orderStatus').value = state.orderStatus
+  content.querySelector('#orderFilters').addEventListener('submit', event => { event.preventDefault(); state.orderSearch = content.querySelector('#orderSearch').value.trim(); state.orderStatus = content.querySelector('#orderStatus').value; state.orderPage = 1; loadCommercialOrders().catch(handleError) })
+  await loadCommercialOrders()
+}
+
+function notificationRows(records) {
+  if (!records.length) return '<div class="empty-state"><div><strong>没有符合条件的通知</strong><p>当前筛选条件下没有发送记录。</p></div></div>'
+  return `<div class="table-wrap"><table class="user-table business-table"><thead><tr><th>用户</th><th>提醒节点</th><th>渠道</th><th>状态</th><th>更新时间</th><th></th></tr></thead><tbody>${records.map(record => `<tr><td><strong>${escapeHtml(record.nickname || `用户 #${record.user_id}`)}</strong><div class="helper">${escapeHtml(record.email || record.phone || '未配置联系方式')}</div></td><td>${Number(record.days_before) === 0 ? '会员已过期' : `到期前 ${Number(record.days_before)} 天`}<div class="helper">${escapeHtml(String(record.plan || '').toUpperCase())}</div></td><td>${record.channel === 'sms' ? '短信' : record.channel === 'email' ? '邮件' : '网页弹窗'}</td><td>${statusBadge(record.delivery_state, deliveryStatusLabels)}${record.error_text ? `<div class="error-helper">${escapeHtml(record.error_text)}</div>` : ''}</td><td class="mono">${escapeHtml(formatDate(record.updated_at, true))}</td><td>${record.retry_allowed ? `<button class="text-button" type="button" data-retry-notification="${record.id}">重试</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
+    <div class="mobile-user-list">${records.map(record => `<article class="mobile-user-card"><div class="mobile-user-card-head"><div><strong>${escapeHtml(record.nickname || `用户 #${record.user_id}`)}</strong><div class="helper">${record.channel === 'sms' ? '短信' : record.channel === 'email' ? '邮件' : '网页弹窗'} · ${Number(record.days_before) === 0 ? '会员已过期' : `到期前 ${Number(record.days_before)} 天`}</div></div>${statusBadge(record.delivery_state, deliveryStatusLabels)}</div>${record.error_text ? `<p class="error-helper">${escapeHtml(record.error_text)}</p>` : ''}${record.retry_allowed ? `<button class="secondary-button compact-action" type="button" data-retry-notification="${record.id}">重新发送</button>` : ''}</article>`).join('')}</div>`
+}
+
+async function loadCommercialNotifications() {
+  const params = new URLSearchParams({ page:String(state.notificationPage), page_size:'10' })
+  if (state.notificationSearch) params.set('search', state.notificationSearch)
+  if (state.notificationStatus !== 'all') params.set('status', state.notificationStatus)
+  if (state.notificationChannel !== 'all') params.set('channel', state.notificationChannel)
+  const data = await api(`/api/admin/membership-expiry-notifications?${params}`)
+  document.querySelector('#businessListArea').innerHTML = notificationRows(data.records)
+  document.querySelector('#providerState').innerHTML = `<span class="provider-dot ${data.providerConfigured.email ? 'ok' : ''}"></span>邮件 ${data.providerConfigured.email ? '已配置' : '未配置'}<span class="provider-dot ${data.providerConfigured.sms ? 'ok' : ''}"></span>短信 ${data.providerConfigured.sms ? '已配置' : '未完整配置'}`
+  const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize))
+  document.querySelector('#businessPageLabel').textContent = `第 ${data.page} / ${totalPages} 页 · 共 ${data.total} 条`
+  document.querySelector('#businessPrevPage').disabled = data.page <= 1
+  document.querySelector('#businessNextPage').disabled = data.page >= totalPages
+  document.querySelector('#businessPrevPage').onclick = () => { state.notificationPage -= 1; loadCommercialNotifications().catch(handleError) }
+  document.querySelector('#businessNextPage').onclick = () => { state.notificationPage += 1; loadCommercialNotifications().catch(handleError) }
+  document.querySelectorAll('[data-retry-notification]').forEach(button => button.addEventListener('click', async () => {
+    if (!await confirmAction('重新发送到期通知', '系统会立即重新尝试该用户的通知渠道，请确认联系方式和服务商配置已经恢复。')) return
+    try { await api(`/api/admin/membership-expiry-notifications/${button.dataset.retryNotification}/retry`, { method:'POST' }); toast('通知已进入重试队列'); await loadCommercialNotifications() } catch (error) { handleError(error) }
+  }))
+}
+
+async function renderCommercialNotifications() {
+  const content = document.querySelector('#commercialContent')
+  content.innerHTML = `<div class="provider-state" id="providerState">正在检查通知渠道…</div><form class="filter-bar wide-filter" id="notificationFilters"><div class="field"><label for="notificationSearch">搜索用户</label><input class="input" id="notificationSearch" placeholder="昵称、邮箱、手机号或用户编号" value="${escapeHtml(state.notificationSearch)}"></div><div class="field"><label for="notificationChannel">发送渠道</label><select class="select" id="notificationChannel"><option value="all">全部渠道</option><option value="web">网页弹窗</option><option value="email">邮件</option><option value="sms">短信</option></select></div><div class="field"><label for="notificationStatus">发送状态</label><select class="select" id="notificationStatus"><option value="all">全部状态</option><option value="pending">待发送</option><option value="sent">已发送</option><option value="read">已阅读</option><option value="failed">发送失败</option><option value="skipped">已跳过</option><option value="cancelled">已取消</option></select></div><button class="secondary-button" type="submit">查询</button></form><div id="businessListArea">${skeleton(3)}</div><footer class="pagination"><button class="secondary-button" id="businessPrevPage" type="button">上一页</button><span id="businessPageLabel">正在读取…</span><button class="secondary-button" id="businessNextPage" type="button">下一页</button></footer>`
+  content.querySelector('#notificationChannel').value = state.notificationChannel
+  content.querySelector('#notificationStatus').value = state.notificationStatus
+  content.querySelector('#notificationFilters').addEventListener('submit', event => { event.preventDefault(); state.notificationSearch = content.querySelector('#notificationSearch').value.trim(); state.notificationChannel = content.querySelector('#notificationChannel').value; state.notificationStatus = content.querySelector('#notificationStatus').value; state.notificationPage = 1; loadCommercialNotifications().catch(handleError) })
+  await loadCommercialNotifications()
+}
+
+function referralRows(commissions) {
+  if (!commissions.length) return '<div class="empty-state"><div><strong>暂无返佣记录</strong><p>当前筛选条件下没有待处理事项。</p></div></div>'
+  return `<div class="table-wrap"><table class="user-table business-table"><thead><tr><th>邀请人</th><th>受邀用户</th><th>来源订单</th><th>返佣金额</th><th>状态</th><th></th></tr></thead><tbody>${commissions.map(item => `<tr><td><strong>${escapeHtml(item.referrer?.name || item.referrer?.uid || '未知用户')}</strong><div class="helper">${escapeHtml(item.referrer?.email)}</div></td><td>${escapeHtml(item.invited_user?.name || item.invited_user?.uid || '未知用户')}<div class="helper">${escapeHtml(item.invited_user?.email)}</div></td><td>${escapeHtml(item.order_id || '尚未关联订单')}<div class="helper">${escapeHtml([item.plan,item.period].filter(Boolean).join(' · '))}</div></td><td class="mono amount-cell">${formatMoney(item.amount_cents)}</td><td>${statusBadge(item.status, referralStatusLabels)}</td><td>${item.status === 'pending' ? `<div class="row-actions"><button class="text-button" type="button" data-referral-action="approve" data-referral-id="${item.id}">确认发放</button><button class="text-button danger-text" type="button" data-referral-action="void" data-referral-id="${item.id}">作废</button></div>` : ''}</td></tr>`).join('')}</tbody></table></div>
+    <div class="mobile-user-list">${commissions.map(item => `<article class="mobile-user-card"><div class="mobile-user-card-head"><div><strong>${escapeHtml(item.referrer?.name || item.referrer?.uid || '未知用户')}</strong><div class="helper">邀请 ${escapeHtml(item.invited_user?.name || item.invited_user?.uid || '未知用户')}</div></div>${statusBadge(item.status, referralStatusLabels)}</div><div class="mobile-business-grid"><span>返佣金额<strong>${formatMoney(item.amount_cents)}</strong></span><span>来源订单<strong>${escapeHtml(item.order_id || '未关联')}</strong></span></div>${item.status === 'pending' ? `<div class="mobile-actions"><button class="secondary-button" type="button" data-referral-action="void" data-referral-id="${item.id}">作废</button><button class="primary-button" type="button" data-referral-action="approve" data-referral-id="${item.id}">确认发放</button></div>` : ''}</article>`).join('')}</div>`
+}
+
+async function loadCommercialReferrals() {
+  const params = new URLSearchParams()
+  if (state.referralStatus !== 'all') params.set('status', state.referralStatus)
+  const [overview, data] = await Promise.all([api('/api/admin/referrals/overview'), api(`/api/admin/referrals/commissions?${params}`)])
+  document.querySelector('#referralSummary').innerHTML = `<span>累计邀请 <strong>${Number(overview.total || 0).toLocaleString('zh-CN')}</strong></span><span>待确认 <strong>${Number(overview.pending || 0).toLocaleString('zh-CN')}</strong></span><span>已发放 <strong>${formatMoney(overview.stats?.available_credit_cents || overview.totalCommission || 0)}</strong></span>`
+  document.querySelector('#businessListArea').innerHTML = referralRows(data.commissions || [])
+  document.querySelectorAll('[data-referral-action]').forEach(button => button.addEventListener('click', async () => {
+    const approve = button.dataset.referralAction === 'approve'
+    const title = approve ? '确认发放返佣' : '确认作废返佣'
+    const message = approve ? '确认后，返佣金额会计入邀请人的可用余额。该操作不能重复执行。' : '作废后，该条返佣金额将清零，请确认订单确实不符合返佣条件。'
+    if (!await confirmAction(title, message, approve ? '确认发放' : '确认作废', !approve)) return
+    try { await api(`/api/admin/referrals/commissions/${button.dataset.referralId}`, { method:'PATCH', body:JSON.stringify({ action:button.dataset.referralAction }) }); toast(approve ? '返佣已发放' : '返佣已作废'); await loadCommercialReferrals() } catch (error) { handleError(error) }
+  }))
+}
+
+async function renderCommercialReferrals() {
+  const content = document.querySelector('#commercialContent')
+  content.innerHTML = `<div class="referral-summary" id="referralSummary"><span>正在读取返佣数据…</span></div><form class="filter-bar compact-filter" id="referralFilters"><div class="field"><label for="referralStatus">结算状态</label><select class="select" id="referralStatus"><option value="all">全部状态</option><option value="pending">待确认</option><option value="approved">已发放</option><option value="voided">已作废</option></select></div><button class="secondary-button" type="submit">查询</button></form><div id="businessListArea">${skeleton(3)}</div>`
+  content.querySelector('#referralStatus').value = state.referralStatus
+  content.querySelector('#referralFilters').addEventListener('submit', event => { event.preventDefault(); state.referralStatus = content.querySelector('#referralStatus').value; loadCommercialReferrals().catch(handleError) })
+  await loadCommercialReferrals()
 }
 
 function userRows(users) {
@@ -194,6 +341,33 @@ function closeUserModal() {
   document.body.style.overflow = ''
   state.selectedUser = null
 }
+function confirmAction(title, message, confirmLabel = '确认', danger = false) {
+  const layer = document.querySelector('#confirmModal')
+  const button = document.querySelector('#confirmModalButton')
+  document.querySelector('#confirmModalTitle').textContent = title
+  document.querySelector('#confirmModalMessage').textContent = message
+  button.textContent = confirmLabel
+  button.classList.toggle('danger-button', danger)
+  layer.hidden = false
+  document.body.style.overflow = 'hidden'
+  return new Promise(resolve => {
+    let settled = false
+    const finish = value => {
+      if (settled) return
+      settled = true
+      layer.hidden = true
+      document.body.style.overflow = ''
+      button.removeEventListener('click', accept)
+      layer.querySelectorAll('[data-cancel-confirm]').forEach(item => item.removeEventListener('click', cancel))
+      resolve(value)
+    }
+    const accept = () => finish(true)
+    const cancel = () => finish(false)
+    button.addEventListener('click', accept)
+    layer.querySelectorAll('[data-cancel-confirm]').forEach(item => item.addEventListener('click', cancel))
+    button.focus()
+  })
+}
 function handleError(error) { toast(error?.message || '操作失败，请稍后重试', 'error') }
 
 async function setView(view) {
@@ -204,6 +378,7 @@ async function setView(view) {
   document.querySelector('#drawerScrim').hidden = true
   try {
     if (view === 'users') await renderUsers()
+    else if (view === 'commercial') await renderCommercial()
     else await renderOverview()
     document.querySelector('#adminMain').focus({ preventScroll:true })
   } catch (error) { handleError(error) }
@@ -221,7 +396,7 @@ async function bootstrap() {
   try {
     await loadProfile()
     const requested = new URLSearchParams(location.search).get('view')
-    await setView(requested === 'users' ? 'users' : 'overview')
+    await setView(['users','commercial'].includes(requested) ? requested : 'overview')
   } catch (error) { handleError(error) }
 }
 bootstrap()

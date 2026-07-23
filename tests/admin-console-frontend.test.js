@@ -24,9 +24,27 @@ describe('unified admin console contract', () => {
     expect(routes).toContain('translateAdminProfileError')
   })
 
+  it('centralizes orders, membership notifications and referral settlement', () => {
+    expect(html).toContain('data-view="commercial"')
+    expect(app).toContain("api('/api/admin/commercial/overview')")
+    expect(app).toContain('/api/admin/commercial/orders?')
+    expect(app).toContain('/api/admin/membership-expiry-notifications?')
+    expect(app).toContain('/api/admin/referrals/commissions?')
+    expect(routes).toContain("router.get('/admin/commercial/orders'")
+    expect(css).toContain('.segment-tabs')
+    expect(css).toContain('.mobile-business-grid')
+  })
+
   it('makes the legacy main-site editor reuse the canonical profile service', () => {
     expect(legacyAdmin).toContain("from '../admin/user-profile.js'")
     expect(legacyAdmin).toContain('updateAdminUserProfile({ actorUserId:req.user.id')
     expect(legacyAdmin).not.toContain('密码至少需要6位')
+  })
+
+
+  it('makes referral settlement idempotent and selects one source order', () => {
+    expect(legacyAdmin).toContain('FOR UPDATE')
+    expect(legacyAdmin).toContain("referral.status !== 'pending'")
+    expect(legacyAdmin).toContain('SELECT latest_order.id FROM orders latest_order')
   })
 })

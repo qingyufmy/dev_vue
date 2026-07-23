@@ -33,6 +33,106 @@ function serializeUser(row) {
   }
 }
 
+const ORDER_STATUSES = new Set(['pending', 'processing', 'paid', 'expired', 'failed', 'cancelled'])
+
+function serializeOrder(row) {
+  return {
+    id:Number(row.id),
+    order_id:row.order_id || row.order_no,
+    order_no:row.order_no || '',
+    user_id:Number(row.user_id),
+    user_uid:row.user_uid || '',
+    user_name:row.user_name || '',
+    user_email:row.user_email || '',
+    plan:row.plan || '',
+    plan_label:row.plan_label || '',
+    period:row.period || '',
+    period_label:row.period_label || '',
+    amount_cents:Number(row.amount || 0),
+    confirmed_cents:Number(row.amount_confirmed || 0),
+    currency:row.currency || 'USD',
+    status:row.status || 'pending',
+    status_label:row.status_label || '',
+    payment_method:row.payment_method || '',
+    paid_at:row.paid_at || null,
+    created_at:row.created_at || null,
+  }
+}
+
+router.get('/admin/commercial/overview', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const [orders, referrals, notifications] = await Promise.all([
+      queryOne(`SELECT COUNT(*) AS total,
+        SUM(status = 'paid') AS paid,
+        SUM(status IN ('pending','processing')) AS pending,
+        SUM(status IN ('failed','expired','cancelled')) AS closed,
+        COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_confirmed ELSE 0 END), 0) AS revenue_cents,
+        COALESCE(SUM(CASE WHEN status = 'paid' AND DATE(paid_at) = CURDATE() THEN amount_confirmed ELSE 0 END), 0) AS today_revenue_cents
+        FROM orders`),
+      queryOne(`SELECT COUNT(*) AS total,
+        SUM(status = 'pending') AS pending,
+        SUM(status = 'approved') AS approved,
+        COALESCE(SUM(CASE WHEN status = 'approved' THEN commission ELSE 0 END), 0) AS approved_cents
+        FROM referrals`),
+      queryOne(`SELECT COUNT(*) AS total,
+        SUM(status = 'failed') AS failed,
+        SUM(status IN ('pending','sending')) AS pending
+        FROM membership_expiry_notifications`),
+    ])
+    res.json({ ok:true, overview:{
+      orders_total:Number(orders?.total || 0),
+      orders_paid:Number(orders?.paid || 0),
+      orders_pending:Number(orders?.pending || 0),
+      orders_closed:Number(orders?.closed || 0),
+      revenue_cents:Number(orders?.revenue_cents || 0),
+      today_revenue_cents:Number(orders?.today_revenue_cents || 0),
+      referrals_total:Number(referrals?.total || 0),
+      referrals_pending:Number(referrals?.pending || 0),
+      referrals_approved:Number(referrals?.approved || 0),
+      referral_approved_cents:Number(referrals?.approved_cents || 0),
+      notifications_total:Number(notifications?.total || 0),
+      notifications_failed:Number(notifications?.failed || 0),
+      notifications_pending:Number(notifications?.pending || 0),
+    } })
+  } catch (error) {
+    console.error('[AdminConsole] commercial overview failed:', error)
+    res.status(500).json({ ok:false, error:'商业运营概览加载失败' })
+  }
+})
+
+router.get('/admin/commercial/orders', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const page = integer(req.query.page, 1, 1, 100000)
+    const pageSize = integer(req.query.page_size, 20, 5, 100)
+    const status = String(req.query.status || 'all').trim()
+    const search = String(req.query.search || '').trim().slice(0, 100)
+    const offset = (page - 1) * pageSize
+    const where = []
+    const params = []
+    if (ORDER_STATUSES.has(status)) { where.push('o.status = ?'); params.push(status) }
+    if (search) {
+      const keyword = `%${search}%`
+      where.push('(o.order_no LIKE ? OR o.order_id LIKE ? OR u.uid LIKE ? OR u.nickname LIKE ? OR u.email LIKE ?)')
+      params.push(keyword, keyword, keyword, keyword, keyword)
+    }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const totalRow = await queryOne(`SELECT COUNT(*) AS total FROM orders o LEFT JOIN users u ON u.id = o.user_id ${clause}`, params)
+    const rows = await queryAll(`SELECT o.id, o.order_id, o.order_no, o.user_id, o.plan, o.plan_label,
+      o.period, o.period_label, o.amount, o.amount_confirmed, o.currency, o.status,
+      o.status_label, o.payment_method, o.paid_at, o.created_at,
+      u.uid AS user_uid, u.nickname AS user_name, u.email AS user_email
+      FROM orders o LEFT JOIN users u ON u.id = o.user_id ${clause}
+      ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`, [...params, pageSize, offset])
+    const total = Number(totalRow?.total || 0)
+    res.json({ ok:true, orders:rows.map(serializeOrder), pagination:{
+      page, page_size:pageSize, total, total_pages:Math.max(1, Math.ceil(total / pageSize)),
+    } })
+  } catch (error) {
+    console.error('[AdminConsole] commercial orders failed:', error)
+    res.status(500).json({ ok:false, error:'订单记录加载失败' })
+  }
+})
+
 router.get('/admin/overview', authMiddleware, adminOnly, async (req, res) => {
   try {
     const [users, membership, activity, trading, review] = await Promise.all([
