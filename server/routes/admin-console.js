@@ -7,6 +7,7 @@ import { updateObserverChannel, updateObserverSource } from './ai/observer-chann
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource, listObserverChannelAssignments, replaceObserverChannelAssignments } from './ai/observer-channels.js'
 import { reconcileAutoSchedulers } from './ai/scheduler.js'
 import { applyBridgeRuntimeState, isBridgeAlive } from '../bridge-ws.js'
+import { createObserverSourceAccount } from './ai/observer-source-accounts.js'
 import { getAdminPlatformRiskPolicy, getAdminRiskAuditOverview, listAdminAuditEvents, saveAdminPlatformRiskPolicy } from '../admin/risk-audit.js'
 import { setGlobalKillSwitch } from './ai/risk-state.js'
 import { deleteAdminCourse, getAdminContentSystemOverview, getAdminCourse, listAdminCourses, listAdminFeedback, saveAdminCourse } from '../admin/content-system.js'
@@ -80,6 +81,9 @@ const AI_OPERATION_ERRORS = {
   bridge_user_requires_pro:'观摩源账号必须是有效 Pro 用户或管理员',
   trading_account_not_owned_by_source:'所选 MT5 账户不属于该观摩源账号',
   observer_source_has_channels:'该观摩源仍绑定频道，请先调整或删除频道',
+  observer_source_email_invalid:'请输入有效的桥接源登录邮箱',
+  observer_source_email_exists:'该邮箱已被其他账号使用',
+  observer_source_password_invalid:'密码需为 8 至 128 位，并同时包含字母和数字',
   default_observer_channel_cannot_be_deleted:'默认观摩频道不能删除，请先设置其他默认频道',
   invalid_channel_audience:'频道开放范围无效',
   source_name_required:'请填写观摩源名称',
@@ -180,6 +184,9 @@ router.get('/admin/ai/observer-candidates',authMiddleware,adminOnly,async(req,re
     ])
     res.json({ok:true,candidates:users.map(user=>({...user,bridge_online:isBridgeAlive(Number(user.id)),accounts:accounts.filter(account=>Number(account.user_id)===Number(user.id))})),strategies})
   }catch(error){console.error('[AdminConsole] observer candidates failed:',error);res.status(500).json({ok:false,error:'观摩源候选数据加载失败'})}
+})
+router.post('/admin/ai/observer-source-accounts',authMiddleware,adminOnly,async(req,res)=>{
+  try{res.status(201).json({ok:true,account:await createObserverSourceAccount(req.user.id,req.body||{})})}catch(error){adminAiError(res,error)}
 })
 router.post('/admin/ai/observer-sources',authMiddleware,adminOnly,async(req,res)=>{
   try{const source=await createObserverSource(req.user.id,req.body||{});await reconcileAutoSchedulers();await applyBridgeRuntimeState(Number(source.bridge_user_id),{tradeEnabled:Boolean(source.trade_send_enabled),autoReasoningEnabled:Boolean(source.auto_inference_enabled)});res.status(201).json({ok:true,source})}catch(error){adminAiError(res,error)}

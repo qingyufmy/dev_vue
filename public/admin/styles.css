@@ -480,6 +480,8 @@ h2 { margin:3px 0 0; font-size:22px; }
 .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
 .form-grid .span-2 { grid-column:1/-1; }
 .helper { color:var(--muted); font-size:12px; }
+.field-heading { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.mini-action { min-height:28px; padding:3px 0; font-size:11px; }
 .form-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; padding-top:18px; border-top:1px solid var(--border); }
 .summary-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
 .summary-item { padding:13px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); }

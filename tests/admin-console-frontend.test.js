@@ -67,6 +67,7 @@ describe('unified admin console contract', () => {
     expect(routes).toContain("router.get('/admin/ai/overview'")
     expect(routes).toContain("router.patch('/admin/ai/observer-sources/:id/runtime'")
     expect(routes).toContain("router.post('/admin/ai/observer-sources'")
+    expect(routes).toContain("router.post('/admin/ai/observer-source-accounts'")
     expect(routes).toContain("router.delete('/admin/ai/observer-sources/:id'")
     expect(routes).toContain("router.post('/admin/ai/observer-channels'")
     expect(routes).toContain("router.delete('/admin/ai/observer-channels/:id'")
@@ -76,6 +77,9 @@ describe('unified admin console contract', () => {
     expect(css).toContain('.observer-admin-grid')
     expect(app).toContain('openObserverSourceEditor')
     expect(app).toContain('openObserverChannelEditor')
+    expect(app).toContain('openObserverSourceAccountEditor')
+    expect(app).toContain("api('/api/admin/ai/observer-source-accounts'")
+    expect(css).toContain('.field-heading')
   })
 
   it('moves historical-snapshot model evaluation into the canonical admin console', () => {
