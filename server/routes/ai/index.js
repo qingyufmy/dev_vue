@@ -46,7 +46,7 @@ import { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle,
   retryPeriodReviewDerivation } from './period-review.js'
 import { listModelSnapshotSamples } from './model-snapshot-samples.js'
-import { updateAdminUserProfile } from './admin-user-profile.js'
+import { translateAdminProfileError, updateAdminUserProfile } from './admin-user-profile.js'
 
 const router = Router()
 
@@ -695,7 +695,10 @@ router.patch('/ai/admin/users/:userId/profile', authMiddleware, async (req, res)
       input:req.body || {},
     })
     res.json({ ok:true, profile })
-  } catch (error) { reviewError(res, error) }
+  } catch (error) {
+    const status = String(error?.message || '') === 'user_not_found' ? 404 : 400
+    res.status(status).json({ ok:false, error:translateAdminProfileError(error) })
+  }
 })
 
 router.patch('/ai/admin/users/:userId/runtime', authMiddleware, async (req, res) => {

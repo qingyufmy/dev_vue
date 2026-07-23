@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>统一管理后台 · AI交易实验室</title>
+  <link rel="stylesheet" href="/admin/styles.css?v=20260723b">
+</head>
+<body>
+  <a class="skip-link" href="#adminMain">跳到主要内容</a>
+  <div class="admin-app">
+    <aside class="admin-sidebar" aria-label="管理后台导航">
+      <a class="brand" href="/admin/" aria-label="统一管理后台首页">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span><strong>AI交易实验室</strong><small>统一管理后台</small></span>
+      </a>
+      <nav class="side-nav">
+        <p class="nav-group">运营管理</p>
+        <button class="nav-item is-active" data-view="overview" type="button"><span data-icon="overview"></span><span>运营总览</span></button>
+        <button class="nav-item" data-view="users" type="button"><span data-icon="users"></span><span>用户与会员</span></button>
+        <p class="nav-group">业务入口</p>
+        <a class="nav-item" href="/ai/?tab=admin-dashboard"><span data-icon="activity"></span><span>AI 运营管理</span><small>迁移中</small></a>
+        <a class="nav-item" href="/legacy-admin"><span data-icon="archive"></span><span>内容与课程</span><small>迁移中</small></a>
+      </nav>
+      <div class="sidebar-foot">
+        <a href="/ai/"><span data-icon="chart"></span>返回 AI 实验室</a>
+        <a href="/"><span data-icon="home"></span>返回主站</a>
+      </div>
+    </aside>
+
+    <div class="admin-workspace">
+      <header class="admin-topbar">
+        <button class="icon-button mobile-menu" id="mobileMenuButton" type="button" aria-label="打开导航" aria-expanded="false"><span data-icon="menu"></span></button>
+        <div class="topbar-context"><span class="status-dot"></span><span>管理服务正常</span></div>
+        <div class="topbar-actions">
+          <button class="icon-button" id="refreshButton" type="button" aria-label="刷新当前页面"><span data-icon="refresh"></span></button>
+          <button class="account-button" id="accountButton" type="button" aria-label="当前管理员账户"><span class="account-avatar">管</span><span id="accountName">管理员</span></button>
+        </div>
+      </header>
+      <main id="adminMain" tabindex="-1"></main>
+    </div>
+  </div>
+
+  <div class="drawer-scrim" id="drawerScrim" hidden></div>
+  <div class="modal-layer" id="userModal" hidden>
+    <div class="modal-scrim" data-close-modal></div>
+    <section class="user-modal" role="dialog" aria-modal="true" aria-labelledby="userModalTitle">
+      <header class="modal-header">
+        <div><span class="eyebrow">用户运营档案</span><h2 id="userModalTitle">用户详情</h2></div>
+        <button class="icon-button" type="button" data-close-modal aria-label="关闭用户详情"><span data-icon="close"></span></button>
+      </header>
+      <div class="modal-body" id="userModalBody"></div>
+    </section>
+  </div>
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <script type="module" src="/admin/app.js?v=20260723b"></script>
+</body>
+</html>

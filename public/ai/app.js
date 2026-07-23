@@ -9717,7 +9717,7 @@ async function renderAdminDashboard(el, d, userListResp) {
     <div class="ops-shell">
       <header class="ops-page-header">
         <div><span class="page-eyebrow">平台运营与服务健康</span><h1>运营中心</h1><p>优先处理异常，再查看用户、自动分析与资源消耗。</p></div>
-        <div class="ops-refresh-meta"><span class="ops-live-dot"><i aria-hidden="true"></i>实时巡检</span><span id="dashUpdatedAt">刚刚更新</span><button class="btn btn-secondary" id="dashRefreshBtn" type="button"><i data-lucide="refresh-cw"></i><span>刷新</span><small id="dashCountdown"></small></button></div>
+        <div class="ops-refresh-meta"><span class="ops-live-dot"><i aria-hidden="true"></i>实时巡检</span><span id="dashUpdatedAt">刚刚更新</span><a class="btn btn-secondary" href="/admin/"><i data-lucide="layout-dashboard"></i><span>统一管理后台</span></a><button class="btn btn-secondary" id="dashRefreshBtn" type="button"><i data-lucide="refresh-cw"></i><span>刷新</span><small id="dashCountdown"></small></button></div>
       </header>
 
       <nav class="ops-view-tabs" aria-label="运营中心视图">

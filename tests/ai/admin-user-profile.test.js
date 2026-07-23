@@ -17,7 +17,8 @@ import { updateAdminUserProfile } from '../../server/routes/ai/admin-user-profil
 describe('operations user profile editing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    db.queryOne.mockResolvedValue({ id:7, plan:'free', plan_expires_at:null, plan_source:null })
+    db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:'13800000000', nickname:'用户',
+      avatar:'', role:'user', plan:'free', plan_expires_at:null, plan_source:null })
     db.queryRun.mockResolvedValue({ affectedRows:1 })
     passwordHash.mockResolvedValue('hashed-password')
   })
@@ -45,8 +46,10 @@ describe('operations user profile editing', () => {
     await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ plan:'free', expires_at:'2027-01-01' } })
     const [sql, params] = db.queryRun.mock.calls[0]
     expect(sql).toContain('plan_source = NULL')
-    expect(params[0]).toBe('free')
-    expect(params[1]).toBeNull()
+    const planIndex = sql.split(', ').findIndex(fragment => fragment.includes('plan = ?'))
+    const expiryIndex = sql.split(', ').findIndex(fragment => fragment.includes('plan_expires_at = ?'))
+    expect(params[planIndex]).toBe('free')
+    expect(params[expiryIndex]).toBeNull()
     expect(passwordHash).not.toHaveBeenCalled()
   })
 
@@ -65,5 +68,23 @@ describe('operations user profile editing', () => {
       .rejects.toThrow('observer_source_plan_locked')
     await updateAdminUserProfile({ actorUserId:1, targetUserId:9, input:{ password:'Bridge2026' } })
     expect(db.queryRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('updates the complete operations profile through the same validated write path', async () => {
+    const result = await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{
+      nickname:'新昵称', email:'NEW@example.com', phone:'+8613900000000', role:'user',
+    } })
+    expect(result).toMatchObject({ nickname:'新昵称', email:'new@example.com', phone:'13900000000', role:'user' })
+    expect(db.queryRun.mock.calls[0][0]).toContain('nickname = ?')
+  })
+
+  it('does not allow the final administrator to be downgraded', async () => {
+    db.queryOne
+      .mockResolvedValueOnce({ id:1, email:'admin@example.com', phone:null, nickname:'管理员', avatar:'',
+        role:'admin', plan:'pro', plan_expires_at:null, plan_source:null })
+      .mockResolvedValueOnce({ count:1 })
+    await expect(updateAdminUserProfile({ actorUserId:1, targetUserId:1, input:{ role:'user' } }))
+      .rejects.toThrow('last_admin_required')
+    expect(db.queryRun).not.toHaveBeenCalled()
   })
 })

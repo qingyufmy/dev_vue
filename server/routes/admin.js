@@ -6,8 +6,8 @@ import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
-import { revokeBridgeRefreshSessions } from '../bridge-auth-session.js'
 import { fetchBilibiliVideo } from '../utils.js'
+import { translateAdminProfileError, updateAdminUserProfile } from '../admin/user-profile.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const resourceDir = join(__dirname, '..', 'uploads', 'resources')
@@ -244,26 +244,14 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
 router.post('/admin-users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { userId, plan, expiresAt, role, nickname } = req.body
-
-    const VALID_PLANS = ['free', 'plus', 'pro']
-    const VALID_ROLES = ['user', 'admin']
-
-    if (plan && !VALID_PLANS.includes(plan)) return res.json({ ok: false, error: '无效的套餐类型' })
-    if (role && !VALID_ROLES.includes(role)) return res.json({ ok: false, error: '无效的角色' })
-
-    if (plan) {
-      if (plan === 'free') {
-        await queryRun('UPDATE users SET plan = ?, plan_source = NULL, updated_at = NOW() WHERE id = ?', [plan, userId])
-      } else {
-        await queryRun('UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?', [plan, userId])
-      }
-    }
-    if (expiresAt !== undefined) await queryRun('UPDATE users SET plan_expires_at = ?, updated_at = NOW() WHERE id = ?', [expiresAt, userId])
-    if (role) await queryRun('UPDATE users SET role = ?, updated_at = NOW() WHERE id = ?', [role, userId])
-    if (nickname) await queryRun('UPDATE users SET nickname = ?, updated_at = NOW() WHERE id = ?', [nickname, userId])
-
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
+    const input = {}
+    if (plan !== undefined) input.plan = plan
+    if (expiresAt !== undefined) input.expires_at = expiresAt
+    if (role !== undefined) input.role = role
+    if (nickname !== undefined) input.nickname = nickname
+    const profile = await updateAdminUserProfile({ actorUserId:req.user.id, targetUserId:userId, input })
+    res.json({ ok: true, profile })
+  } catch (err) { res.json({ ok: false, error: translateAdminProfileError(err) }) }
 })
 
 router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
@@ -271,52 +259,16 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     const { id, userId, role, plan, nickname, email, phone, password, avatar, expiresAt } = req.body
     const uid = id || userId
     if (!uid) return res.json({ ok: false, error: '缺少用户ID' })
-
-    const VALID_PLANS = ['free', 'plus', 'pro']
-    const VALID_ROLES = ['user', 'admin']
-    if (plan && !VALID_PLANS.includes(plan)) return res.json({ ok: false, error: '无效的套餐类型' })
-    if (role && !VALID_ROLES.includes(role)) return res.json({ ok: false, error: '无效的角色' })
-
-    const updates = []
-    const params = []
-    if (email) { updates.push('email = ?'); params.push(email) }
-    if (phone !== undefined) { updates.push('phone = ?'); params.push(phone ? phone.replace(/^\+86/, '') : null) }
-    if (nickname) { updates.push('nickname = ?'); params.push(nickname) }
-    if (password) {
-      if (password.length < 6) return res.json({ ok: false, error: '密码至少需要6位' })
-      const pwHash = await bcrypt.hash(password, 10)
-      updates.push('password = ?'); params.push(pwHash)
+    const input = {}
+    for (const [key, value] of Object.entries({ role, plan, nickname, email, phone, password, avatar })) {
+      if (value !== undefined) input[key] = value
     }
-    if (avatar !== undefined) { updates.push('avatar = ?'); params.push(avatar) }
-    if (role) {
-      if (role !== 'admin' && role !== 'user') return res.json({ ok: false, error: '无效的角色' })
-      if (role !== 'admin') {
-        const adminCount = await queryOne('SELECT COUNT(*) as cnt FROM users WHERE role = ?', ['admin'])
-        if (adminCount && adminCount.cnt <= 1) return res.json({ ok: false, error: '不能降级最后一个管理员' })
-      }
-      updates.push('role = ?'); params.push(role)
-    }
-    if (plan) {
-      updates.push('plan = ?'); params.push(plan)
-      if (plan === 'free') {
-        updates.push('plan_expires_at = NULL')
-        updates.push('plan_source = NULL')
-      } else if (expiresAt) {
-        updates.push('plan_expires_at = ?'); params.push(expiresAt)
-      }
-    }
-    if (updates.length === 0) return res.json({ ok: false, error: '没有需要更新的字段' })
-    updates.push('updated_at = NOW()')
-    params.push(uid)
-    await queryRun(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params)
-    if (password) await revokeBridgeRefreshSessions(uid)
-    res.json({ ok: true })
+    if (expiresAt !== undefined) input.expires_at = expiresAt
+    const profile = await updateAdminUserProfile({ actorUserId:req.user.id, targetUserId:uid, input })
+    res.json({ ok: true, profile })
   } catch (err) {
     console.error('Admin update user error:', err)
-    let msg = '更新失败'
-    if (err.code === 'ER_DUP_ENTRY') msg = '邮箱已被其他用户使用'
-    else if (err.code === 'ER_DATA_TOO_LONG') msg = '数据超长'
-    res.json({ ok: false, error: msg })
+    res.json({ ok: false, error: translateAdminProfileError(err) })
   }
 })
 

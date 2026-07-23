@@ -1778,7 +1778,7 @@ function viewToPath(view, episode) {
     case 'membership': return '/membership'
     case 'quotes': return '/quotes'
     case 'tos': return '/tos'
-    case 'admin': return '/admin'
+    case 'admin': return '/legacy-admin'
     default: return '/'
   }
 }
@@ -1796,7 +1796,7 @@ function pathToRoute(path) {
   if (clean === '/membership') return { view: 'membership' }
   if (clean === '/quotes') return { view: 'quotes' }
   if (clean === '/tos') return { view: 'tos' }
-  if (clean === '/admin') return { view: 'admin' }
+  if (clean === '/legacy-admin') return { view: 'admin' }
 
   const articleMatch = clean.match(/^\/article\/(\d+)$/)
   if (articleMatch) {
@@ -9701,7 +9701,7 @@ function setupGlobalEvents() {
 
   $('#loginBtn').addEventListener('click', () => showAuthModal('login_password'))
   $('#registerBtn').addEventListener('click', () => showAuthModal('register'))
-  $('#adminBtn').addEventListener('click', () => navigate('admin'))
+  $('#adminBtn').addEventListener('click', () => { window.location.href = '/admin/' })
 
   // User dropdown menu — click to toggle, click elsewhere to close
   $('#userMenuTrigger').addEventListener('click', (e) => {
@@ -9744,7 +9744,7 @@ function setupGlobalEvents() {
   })
   $('#dropdownAdmin').addEventListener('click', () => {
     userDropdown.classList.remove('active')
-    navigate('admin')
+    window.location.href = '/admin/'
   })
   // Dark mode toggle
   function applyTheme(dark) {

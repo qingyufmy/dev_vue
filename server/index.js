@@ -21,6 +21,7 @@ import commentRoutes from './routes/comments.js'
 import postRoutes from './routes/posts.js'
 import userRoutes from './routes/user.js'
 import adminRoutes from './routes/admin.js'
+import adminConsoleRoutes from './routes/admin-console.js'
 import tradeRoutes from './routes/trades.js'
 import paymentRoutes from './routes/payment.js'
 import videoRoutes from './routes/video.js'
@@ -204,6 +205,7 @@ app.use('/api', commentRoutes)
 app.use('/api', postRoutes)
 app.use('/api', userRoutes)
 app.use('/api', adminRoutes)
+app.use('/api', adminConsoleRoutes)
 app.use('/api', tradeRoutes)
 app.use('/api', paymentRoutes)
 app.use('/api', videoRoutes)
