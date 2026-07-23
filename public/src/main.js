@@ -625,9 +625,11 @@ const LOGIN_REQUIRED_APP_PREFIXES = [
   '/community',
   '/post',
   '/profile',
+  '/account',
   '/membership',
   '/quotes',
   '/admin',
+  '/ai',
 ]
 const LOGIN_REQUIRED_APP_VIEWS = new Set([
   'article',
@@ -1572,6 +1574,7 @@ async function init() {
   state.paymentStatus = paymentStatus
   const authGateNext = urlParams.get('auth') === 'login' ? urlParams.get('next') : null
   let initialLoginNext = null
+  let initialAuthMode = null
   if (paymentStatus) {
     // Clean URL
     window.history.replaceState({}, '', '/')
@@ -1588,12 +1591,14 @@ async function init() {
   } else {
     // Restore view from URL path on initial load
     const route = pathToRoute(window.location.pathname)
+    initialAuthMode = route.authMode || null
     state.currentView = route.view
     if (route.episode) state.currentEpisode = route.episode
     if (route.postId) state.currentPost = route.postId
     const routePath = route.canonicalPath || window.location.pathname
+    const routeUrl = `${routePath}${window.location.search}${window.location.hash}`
     if (isLoginRequiredAppPath(routePath) && !hasClientAuth()) {
-      initialLoginNext = routePath
+      initialLoginNext = routeUrl
       state.currentView = 'home'
       state.currentEpisode = null
       state.currentPost = null
@@ -1604,16 +1609,31 @@ async function init() {
         ? { view: 'home' }
         : { view: route.view, episodeId: route.episode?.id, postId: route.postId },
       '',
-      initialLoginNext ? '/' : routePath
+      initialLoginNext ? '/' : routeUrl
     )
   }
 
+  if (state.currentView === 'profile') {
+    const requestedSettingsTab = urlParams.get('tab')
+    if (['profile','account','notifications','subscription','credits'].includes(requestedSettingsTab)) settingsTab = requestedSettingsTab
+  }
   renderView()
   updateAuthUI()
   setupGlobalEvents()
   startPresenceHeartbeat()
   loadMarketMenu()
   if (await handleAuthGateRedirect(authGateNext) === 'redirect') return
+  if (initialAuthMode) {
+    const authReturnPath = getSafeLoginReturnPath(urlParams.get('next')) || '/account'
+    if (hasClientAuth()) {
+      const verifiedUser = await refreshCurrentUserProfile().catch(() => null)
+      if (verifiedUser) {
+        window.location.replace(authReturnPath)
+        return
+      }
+    }
+    showAuthModal(initialAuthMode, { nextUrl:authReturnPath })
+  }
   if (!authGateNext && initialLoginNext) {
     showLoginRequiredModal(initialLoginNext)
   }
@@ -1774,7 +1794,7 @@ function viewToPath(view, episode) {
     case 'tools': return '/tools'
     case 'community': return '/community'
     case 'post': return state.currentPost ? `/post/${state.currentPost}` : '/community'
-    case 'profile': return '/profile'
+    case 'profile': return '/account'
     case 'membership': return '/membership'
     case 'quotes': return '/quotes'
     case 'tos': return '/tos'
@@ -1792,7 +1812,10 @@ function pathToRoute(path) {
   if (clean === '/trades') return { view: 'trades' }
   if (clean === '/tools') return { view: 'tools' }
   if (clean === '/community') return { view: 'community' }
-  if (clean === '/profile') return { view: 'profile' }
+  if (clean === '/account') return { view: 'profile' }
+  if (clean === '/profile') return { view: 'profile', canonicalPath:'/account' }
+  if (clean === '/auth' || clean === '/auth/login') return { view:'home', authMode:'login_password' }
+  if (clean === '/auth/register') return { view:'home', authMode:'register' }
   if (clean === '/membership') return { view: 'membership' }
   if (clean === '/quotes') return { view: 'quotes' }
   if (clean === '/tos') return { view: 'tos' }
@@ -7170,6 +7193,8 @@ function renderProfile() {
   mainContent.querySelectorAll('.settings-nav-item').forEach(item => {
     item.addEventListener('click', () => {
       settingsTab = item.dataset.tab
+      const accountUrl = settingsTab === 'profile' ? '/account' : `/account?tab=${encodeURIComponent(settingsTab)}`
+      window.history.replaceState({ view:'profile' }, '', accountUrl)
       if (localStorage.getItem('ws_token')) {
         refreshCurrentUserProfile({ rerender: true }).catch(() => { renderProfile() })
       } else {

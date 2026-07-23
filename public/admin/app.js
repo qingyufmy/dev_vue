@@ -32,7 +32,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, { credentials:'include', ...options, headers })
   const data = await response.json().catch(() => ({ ok:false, error:'服务器返回了无法识别的数据' }))
   if (response.status === 401) {
-    location.href = `/?auth=login&next=${encodeURIComponent('/admin/')}`
+    location.href = `/auth/login?next=${encodeURIComponent('/admin/')}`
     throw new Error('登录状态已失效')
   }
   if (response.status === 403) {
@@ -552,7 +552,7 @@ async function setView(view) {
 
 document.querySelectorAll('.nav-item[data-view]').forEach(item => item.addEventListener('click', () => setView(item.dataset.view)))
 document.querySelector('#refreshButton').addEventListener('click', () => setView(state.view))
-document.querySelector('#accountButton').addEventListener('click', () => { location.href = '/profile' })
+document.querySelector('#accountButton').addEventListener('click', () => { location.href = '/account' })
 document.querySelectorAll('[data-close-modal]').forEach(item => item.addEventListener('click', closeUserModal))
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.querySelector('#userModal').hidden) closeUserModal() })
 document.querySelector('#mobileMenuButton').addEventListener('click', () => { const open = !document.body.classList.contains('nav-open'); document.body.classList.toggle('nav-open', open); document.querySelector('#drawerScrim').hidden = !open; document.querySelector('#mobileMenuButton').setAttribute('aria-expanded',String(open)) })

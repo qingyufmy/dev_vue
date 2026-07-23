@@ -253,6 +253,14 @@
     height: 18px;
   }
 
+  .topbar-actions .topbar-account-link {
+    min-width: 44px;
+  }
+
+  .topbar-account-link span {
+    display: none;
+  }
+
   .topbar-badges {
     grid-column: 1 / -1;
     grid-row: 2;

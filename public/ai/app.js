@@ -3857,7 +3857,7 @@ async function bootstrap() {
       }
     }
     if (!state.token) {
-      window.location.href = "/";
+      window.location.href = "/auth/login?next=%2Fai%2F";
       return;
     }
     const profileRes = await api("/api/profile");
@@ -3879,7 +3879,7 @@ async function bootstrap() {
             <h2>会员已过期</h2>
             <p>您的会员已于 ${new Date(expiresAt).toLocaleDateString('zh-CN')} 到期</p>
             <p>请返回主站重新购买 Plus 或 Pro，付款后即可恢复对应权益</p>
-            <button onclick="window.location.href='/membership'" style="margin-top:16px;padding:8px 24px;border:none;border-radius:6px;background:#e6a756;color:#1a1a2e;cursor:pointer;font-size:14px">返回主站续费</button>
+            <button onclick="window.location.href='/account?tab=subscription'" style="margin-top:16px;padding:8px 24px;border:none;border-radius:6px;background:#e6a756;color:#1a1a2e;cursor:pointer;font-size:14px">前往账户中心续费</button>
           </div>
         `;
       }
