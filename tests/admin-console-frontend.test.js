@@ -93,6 +93,21 @@ describe('unified admin console contract', () => {
     expect(css).toContain('.compare-result-row')
   })
 
+  it('moves platform model sharing and AI governance into the canonical admin console', () => {
+    expect(app).toContain('data-ai-tab="models"')
+    expect(app).toContain("api('/api/ai/model-profiles?scope=platform')")
+    expect(app).toContain("api('/api/ai/platform-model-policy')")
+    expect(app).toContain("api('/api/ai/admin/rollout-health')")
+    expect(app).toContain("api('/api/ai/admin/feature-flags'")
+    expect(app).toContain('/api/ai/admin/risk-rule-rollouts/${encodeURIComponent(select.dataset.rolloutRule)}')
+    expect(app).toContain("api('/api/ai/admin/credentials/rotate'")
+    expect(app).toContain("confirm:'CLEAR_VERIFIED_LEGACY_CREDENTIALS'")
+    expect(app).toContain('openPlatformModelEditor')
+    expect(app).toContain('火山方舟 Agent Plan')
+    expect(css).toContain('.platform-model-layout')
+    expect(css).toContain('.governance-grid')
+  })
+
   it('centralizes risk status, decisions and administrator audit records', () => {
     expect(html).toContain('data-view="risk-audit"')
     expect(app).toContain('/api/admin/risk-audit/overview?')
