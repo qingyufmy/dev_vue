@@ -1,5 +1,7 @@
 # 反向持仓与趋势翻转执行方案
 
+> 本方案已合并至《自动推理、挂单管理、持仓退出与趋势反转最终方案》。后续实现以 `20260723-unified-inference-position-management-final-plan.md` 为唯一主规格，本文仅用于问题追溯。
+
 ## 1. 问题背景
 
 信号 `#6256` 为 `XAUUSD SELL_LIMIT`，模型给出 67% 偏空判断和试探仓建议。信号分发到用户 `#1` 后，执行器实时读取到 1 个 XAUUSD 买入持仓，在进入订单意图和正式风控前，以 `opposite_position_exists` 跳过执行。
