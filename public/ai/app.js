@@ -9747,8 +9747,82 @@ async function renderAdminDashboard(el, d, userListResp) {
       const subscriptionCards = subscriptions.map(item => `<article class="ops-subscription-row" data-admin-subscription="${Number(item.id)}"><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong><span>${escapeHtml(item.broker_server)} · ${escapeHtml(item.login_account)}</span></div><select data-admin-subscription-strategy aria-label="选择策略">${strategyOptions(item.strategy_id)}</select><label class="ops-inline-switch"><input type="checkbox" data-admin-subscription-enabled ${Number(item.execution_enabled) ? 'checked' : ''}><span>自动分析</span></label><button class="btn btn-secondary btn-sm" type="button" data-save-admin-subscription="${Number(item.id)}">保存</button></article>`).join('') || '<div class="ops-empty-state"><strong>暂无策略订阅</strong><span>用户创建订阅后可在这里查看和调整。</span></div>';
       const planText = ({ pro:'Pro 专业版', plus:'Plus 观摩版', free:'免费用户' })[u.plan] || '免费用户';
       const expiresText = u.plan_expires_at ? String(u.plan_expires_at).slice(0, 10) : '长期有效';
+      const profileLocked = u.plan_source === 'observer_source';
+      const profileEditor = `<form class="ops-profile-editor" id="adminUserProfileEditor" hidden novalidate><div class="ops-profile-editor-heading"><div><span class="ops-kicker">账号资料</span><h3>编辑用户</h3><p>${profileLocked ? '该账号是专用观摩源，会员等级固定为 Pro；仍可重置登录密码。' : '调整会员权限和有效期，或为用户重置登录密码。'}</p></div><button class="btn btn-ghost btn-sm" id="cancelAdminUserProfile" type="button"><i data-lucide="x"></i>取消</button></div><div class="ops-profile-editor-grid"><label><span>会员等级</span><select id="adminUserPlan" ${profileLocked ? 'disabled' : ''}><option value="free" ${u.plan === 'free' ? 'selected' : ''}>免费用户</option><option value="plus" ${u.plan === 'plus' ? 'selected' : ''}>Plus 观摩版</option><option value="pro" ${u.plan === 'pro' ? 'selected' : ''}>Pro 专业版</option></select><small>${profileLocked ? '观摩源账号必须保持 Pro 专业版' : '保存后立即按新等级控制功能权限'}</small></label><label><span>会员到期日期</span><input id="adminUserExpiresAt" type="date" value="${u.plan_expires_at ? escapeHtml(String(u.plan_expires_at).slice(0, 10)) : ''}" ${profileLocked || u.plan === 'free' ? 'disabled' : ''}><small>留空表示长期有效；免费用户无需设置</small></label><label class="ops-profile-password"><span>重置密码（可选）</span><div class="ops-password-field"><input id="adminUserPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="输入新密码"><button id="toggleAdminUserPassword" type="button" aria-label="显示密码"><i data-lucide="eye"></i></button></div><input id="adminUserPasswordConfirm" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="再次输入新密码"><small>两处均留空则保留原密码；至少 8 位且包含字母和数字</small></label></div><div class="ops-profile-editor-actions"><span id="adminUserProfileStatus" role="status" aria-live="polite"></span><button class="btn btn-primary" id="saveAdminUserProfile" type="submit"><i data-lucide="save"></i>保存用户资料</button></div></form>`;
       detailContainer.innerHTML = `<section class="ops-user-control"><header class="user-detail-header"><div class="user-detail-avatar">${escapeHtml((u.nickname || u.email || '?')[0].toUpperCase())}</div><div class="user-detail-info"><span class="ops-kicker">用户运营档案</span><span class="name">${escapeHtml(u.nickname || '未设置昵称')} <small>#${Number(u.id)}</small></span><span class="email">${escapeHtml(u.phone || u.email || '--')}</span></div><div class="ops-user-profile-badges"><span class="chip chip-${escapeHtml(u.plan || 'free')}">${escapeHtml(planText)}</span><span class="ops-binary-state ${d2.bridge?.connected ? 'on' : 'off'}"><i></i>${d2.bridge?.connected ? 'MT5 在线' : 'MT5 离线'}</span></div><button class="user-detail-close" id="adminUserDetailClose" type="button" aria-label="关闭用户详情"><i data-lucide="x"></i></button></header><div class="ops-user-profile-facts"><div><span>注册时间</span><strong>${escapeHtml(String(u.created_at || '--').slice(0, 10))}</strong></div><div><span>会员有效期</span><strong>${escapeHtml(expiresText)}</strong></div><div><span>最近活动</span><strong>${u.bridge_heartbeat ? escapeHtml(formatTimeAgo(u.bridge_heartbeat)) : u.last_seen_at ? escapeHtml(formatTimeAgo(u.last_seen_at)) : '暂无记录'}</strong></div><div><span>接入账户</span><strong class="num">${accounts.length}</strong></div></div><div class="ops-runtime-controls"><div><span class="ops-kicker">实时控制</span><h3>自动分析与交易发送</h3><p>保存后立即生效；桥接离线时会在下次连接后恢复期望状态。</p></div><label class="ops-control-switch"><input id="adminUserAutoReasoning" type="checkbox" ${Number(s.auto_reasoning_enabled) ? 'checked' : ''}><span><strong>自动分析</strong><small>${d2.bridge?.connected ? '桥接在线，可实时同步' : '桥接离线，暂存期望状态'}</small></span></label><label class="ops-control-switch danger"><input id="adminUserTradeSend" type="checkbox" ${Number(s.trade_send_enabled) ? 'checked' : ''}><span><strong>交易发送</strong><small>允许系统向该用户账户发送订单</small></span></label><button class="btn btn-primary btn-sm" id="saveAdminUserRuntime" type="button"><i data-lucide="save"></i>保存运行状态</button></div><section class="ops-detail-section"><div class="ops-section-heading"><div><span class="ops-kicker">账户与收益</span><h3>接入过的 MT5 账户</h3><p>收益按账户归属期和 MT5 平仓时间汇总，入出金单独展示。</p></div><span class="ops-section-count">${accounts.length} 个账户</span></div><div class="ops-account-list">${accountCards}</div></section><section class="ops-detail-section"><div class="ops-section-heading"><div><span class="ops-kicker">策略运行</span><h3>当前策略订阅</h3><p>可以调整绑定策略和自动分析状态，所有修改都会进入审计。</p></div><span class="ops-section-count">${subscriptions.length} 条订阅</span></div><div class="ops-subscription-list">${subscriptionCards}</div></section></section>`;
+      const profileHeader = detailContainer.querySelector('.user-detail-header');
+      profileHeader?.querySelector('.ops-user-profile-badges')?.insertAdjacentHTML('afterend', `<button class="btn btn-secondary btn-sm ops-profile-edit-trigger" id="editAdminUserProfile" type="button"><i data-lucide="user-pen"></i><span>编辑</span></button>`);
+      profileHeader?.insertAdjacentHTML('afterend', profileEditor);
       $('adminUserDetailClose')?.addEventListener('click', closeUserDetail);
+      const profileForm = $('adminUserProfileEditor');
+      const setProfileEditorOpen = open => {
+        if (!profileForm) return;
+        profileForm.hidden = !open;
+        detailContainer.querySelector('.ops-user-control')?.classList.toggle('is-editing-profile', open);
+        if (open) requestAnimationFrame(() => (profileLocked ? $('adminUserPassword') : $('adminUserPlan'))?.focus());
+        else $('editAdminUserProfile')?.focus();
+      };
+      $('editAdminUserProfile')?.addEventListener('click', () => setProfileEditorOpen(true));
+      $('cancelAdminUserProfile')?.addEventListener('click', () => setProfileEditorOpen(false));
+      $('adminUserPlan')?.addEventListener('change', event => {
+        const expiry = $('adminUserExpiresAt');
+        if (!expiry || profileLocked) return;
+        expiry.disabled = event.target.value === 'free';
+        if (expiry.disabled) expiry.value = '';
+      });
+      $('toggleAdminUserPassword')?.addEventListener('click', event => {
+        const input = $('adminUserPassword');
+        if (!input) return;
+        const showing = input.type === 'text';
+        input.type = showing ? 'password' : 'text';
+        event.currentTarget.setAttribute('aria-label', showing ? '显示密码' : '隐藏密码');
+        event.currentTarget.innerHTML = `<i data-lucide="${showing ? 'eye' : 'eye-off'}"></i>`;
+        initIcons();
+      });
+      profileForm?.addEventListener('submit', async event => {
+        event.preventDefault();
+        const plan = profileLocked ? 'pro' : $('adminUserPlan').value;
+        const expiresAt = profileLocked || plan === 'free' ? null : ($('adminUserExpiresAt').value || null);
+        const password = $('adminUserPassword').value;
+        const passwordConfirm = $('adminUserPasswordConfirm').value;
+        const status = $('adminUserProfileStatus');
+        if (password && (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password))) {
+          status.textContent = '密码至少 8 位，并同时包含字母和数字';
+          status.className = 'is-error';
+          $('adminUserPassword').focus();
+          return;
+        }
+        if (password !== passwordConfirm) {
+          status.textContent = '两次输入的新密码不一致';
+          status.className = 'is-error';
+          $('adminUserPasswordConfirm').focus();
+          return;
+        }
+        const button = $('saveAdminUserProfile');
+        button.disabled = true;
+        status.textContent = '正在保存…';
+        status.className = '';
+        try {
+          await api(`/api/ai/admin/users/${Number(uid)}/profile`, { method:'PATCH', body:{ plan, expires_at:expiresAt, ...(password ? { password } : {}) } });
+          toast(password ? '用户资料与密码已更新' : '用户资料已更新', 'success');
+          const cachedUser = _adminDashState.userList?.users?.find(item => Number(item.id) === Number(uid));
+          if (cachedUser) {
+            cachedUser.plan = plan;
+            cachedUser.plan_expires_at = expiresAt;
+            _adminDashState.renderUserList?.(_adminDashState.userList);
+          }
+          await showUserDetail(uid);
+        } catch (error) {
+          const messages = {
+            membership_expiry_invalid:'会员到期日期无效', membership_plan_invalid:'会员等级无效',
+            password_strength_insufficient:'密码至少 8 位，并同时包含字母和数字', password_too_long:'密码不能超过 128 位',
+            observer_source_plan_locked:'专用观摩源账号必须保持 Pro 专业版', user_not_found:'用户不存在',
+          };
+          status.textContent = messages[error.message] || error.message || '用户资料保存失败';
+          status.className = 'is-error';
+          button.disabled = false;
+        }
+      });
       userDetailModal?.querySelector('.ops-user-modal-dialog')?.focus();
       $('saveAdminUserRuntime')?.addEventListener('click', async event => {
         event.currentTarget.disabled = true;

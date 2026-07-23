@@ -46,6 +46,7 @@ import { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle,
   retryPeriodReviewDerivation } from './period-review.js'
 import { listModelSnapshotSamples } from './model-snapshot-samples.js'
+import { updateAdminUserProfile } from './admin-user-profile.js'
 
 const router = Router()
 
@@ -628,7 +629,7 @@ router.get('/ai/admin/users/:userId/operations-detail', authMiddleware, async (r
   try {
     const targetUserId = Number(req.params.userId)
     if (!Number.isInteger(targetUserId) || targetUserId <= 0) throw new Error('invalid_user_id')
-    const user = await queryOne(`SELECT id, nickname, email, phone, plan, role, plan_expires_at,
+    const user = await queryOne(`SELECT id, nickname, email, phone, plan, role, plan_source, plan_expires_at,
       last_seen_at, bridge_heartbeat, created_at FROM users WHERE id = ?`, [targetUserId])
     if (!user) return res.status(404).json({ ok:false, error:'user_not_found' })
     const [settings, scheduler, accounts, subscriptions, strategies] = await Promise.all([
@@ -681,6 +682,18 @@ router.get('/ai/admin/users/:userId/operations-detail', authMiddleware, async (r
     res.json({ ok:true, user, settings:settings || { trade_send_enabled:0, auto_reasoning_enabled:0 },
       bridge:{ connected:bridge, diagnostics:getBridgeDiagnostics().find(item => Number(item.userId) === targetUserId) || null }, scheduler,
       accounts:accountsWithPolicy, subscriptions, strategies, rule_metadata:RISK_RULES })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.patch('/ai/admin/users/:userId/profile', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ ok:false, error:'admin_only' })
+  try {
+    const profile = await updateAdminUserProfile({
+      actorUserId:req.user.id,
+      targetUserId:req.params.userId,
+      input:req.body || {},
+    })
+    res.json({ ok:true, profile })
   } catch (error) { reviewError(res, error) }
 })
 
