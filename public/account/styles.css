@@ -141,6 +141,7 @@ a { color:inherit; }
 body.account-embedded .account-topbar { min-height:62px; }
 body.account-embedded .account-brand small,body.account-embedded .account-topbar-actions > a { display:none; }
 body.account-embedded .icon-button { display:inline-flex; }
+body.account-admin-embedded .account-topbar-actions .icon-button { display:none; }
 body.account-embedded .account-layout { min-height:calc(100dvh - 62px); }
 body.account-embedded .account-sidebar { top:62px; height:calc(100dvh - 62px); }
 

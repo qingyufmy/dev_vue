@@ -14,6 +14,7 @@ const TAB_META = {
 }
 
 if (embedded) document.body.classList.add('account-embedded')
+if (embedMode === 'admin') document.body.classList.add('account-admin-embedded')
 if (embedMode === 'main') {
   document.body.classList.add('account-main-embedded')
   document.body.classList.toggle('account-main-dark', accountParams.get('theme') === 'dark')

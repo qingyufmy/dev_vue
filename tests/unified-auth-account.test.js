@@ -44,6 +44,8 @@ describe('unified authentication and account entry points', () => {
     expect(accountApp).toContain("api('/api/plans')")
     expect(accountApp).toContain("api('/api/payment'")
     expect(accountApp).toContain("['ai','main','admin']")
+    expect(accountApp).toContain('account-admin-embedded')
+    expect(accountCss).toContain('body.account-admin-embedded .account-topbar-actions .icon-button')
     expect(adminApp).toContain("openAdminAccountCenter('overview')")
     expect(adminApp).toContain('/account/?embed=admin&tab=')
     expect(adminApp).toContain('handleAdminAccountCenterMessage')
