@@ -73,6 +73,12 @@ describe('unified authentication and account entry points', () => {
     expect(main).toContain("type:'account-center-theme'")
   })
 
+  it('uses theme-aware compact scrollbars in both embedded account centers', () => {
+    expect(accountCss).toContain('--scrollbar-thumb:rgba(148,163,184,.34)')
+    expect(accountCss).toContain('--scrollbar-thumb:rgba(47,93,84,.28)')
+    expect(accountCss).toContain('*::-webkit-scrollbar { width:9px; height:9px; }')
+  })
+
   it('redirects expired administrator sessions through the canonical login page', () => {
     expect(adminApp).toContain('`/auth/login?next=${encodeURIComponent(\'/admin/\')}`')
     expect(adminApp).not.toContain('/?auth=login&next=')

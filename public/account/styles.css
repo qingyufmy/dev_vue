@@ -4,9 +4,17 @@
   --text:#f4f7fb; --muted:#9ba9bc; --quiet:#718096; --border:#263349;
   --gold:#e0b93d; --gold-soft:rgba(224,185,61,.11); --success:#34d399; --danger:#fb7185; --warning:#fbbf24;
   --shadow:0 24px 70px rgba(0,0,0,.35); --radius:16px;
+  --scrollbar-thumb:rgba(148,163,184,.34); --scrollbar-thumb-hover:rgba(224,185,61,.52); --scrollbar-track:rgba(255,255,255,.025);
   font-family:"Noto Sans SC","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
 }
 * { box-sizing:border-box; }
+html { scrollbar-width:thin; scrollbar-color:var(--scrollbar-thumb) var(--scrollbar-track); }
+*::-webkit-scrollbar { width:9px; height:9px; }
+*::-webkit-scrollbar-track { background:var(--scrollbar-track); }
+*::-webkit-scrollbar-thumb { min-height:44px; border:2px solid transparent; border-radius:99px; background:var(--scrollbar-thumb); background-clip:padding-box; }
+*::-webkit-scrollbar-thumb:hover { background:var(--scrollbar-thumb-hover); background-clip:padding-box; }
+*::-webkit-scrollbar-corner { background:transparent; }
+*::-webkit-scrollbar-button { display:none; width:0; height:0; }
 html,body { min-height:100%; margin:0; }
 body { background:var(--bg); color:var(--text); font-size:14px; line-height:1.5; }
 button,input,select { font:inherit; }
@@ -143,6 +151,7 @@ body.account-main-embedded:not(.account-main-dark) {
   --text:#1c1b19; --muted:#625e56; --quiet:#777268; --border:#e3ded3;
   --gold:#2f5d54; --gold-soft:#e4eeea; --success:#277158; --danger:#b2434f; --warning:#9a6816;
   --shadow:0 8px 24px rgba(28,27,25,.12);
+  --scrollbar-thumb:rgba(47,93,84,.28); --scrollbar-thumb-hover:rgba(47,93,84,.52); --scrollbar-track:rgba(47,93,84,.035);
 }
 body.account-main-embedded:not(.account-main-dark) .account-app { background:var(--bg); }
 body.account-main-embedded:not(.account-main-dark) .account-topbar { background:rgba(250,248,243,.96); }
