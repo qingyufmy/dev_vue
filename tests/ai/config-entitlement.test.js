@@ -19,4 +19,15 @@ describe('automatic inference subscriber entitlement', () => {
     expect(sql).toContain('u.plan_expires_at IS NULL')
     expect(sql).toContain('u.plan_expires_at >= NOW()')
   })
+
+  it('normalizes case, whitespace and duplicates before matching subscriber symbols', async () => {
+    queryAll.mockResolvedValueOnce([{
+      user_id:7, selected_symbols_json:'[" xauusd ","XAUUSD"]',
+      strategy_symbols_json:'["XAUUSD","EURUSD"]', strategy_scope:'platform',
+      schedule_enabled:0, outside_window_behavior:'pause_all',
+    }])
+    await expect(getAutoSubscribers(1, 'xauusd')).resolves.toEqual([
+      expect.objectContaining({ user_id:7 }),
+    ])
+  })
 })

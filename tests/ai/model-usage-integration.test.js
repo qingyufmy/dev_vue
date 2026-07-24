@@ -60,10 +60,10 @@ describe('provider-call usage integration', () => {
     await expect(requestJsonObject({
       url: 'https://api.test/v1/chat/completions', apiKey: 'test-key', model: 'test-model',
       temperature: 0.3, maxTokens: 500, messages: [], usageContext,
-    })).rejects.toThrow('LLM HTTP 429')
+    })).rejects.toThrow('model_quota_exhausted')
 
     expect(mockQueryRun.mock.calls[1][1]).toEqual([
-      0, 'error', 'LLM HTTP 429', expect.any(Number), 0, expect.any(Number), 41,
+      0, 'error', 'model_quota_exhausted', expect.any(Number), 0, expect.any(Number), 41,
     ])
     expect(mockQueryRun.mock.calls[1][1][3]).toBeGreaterThan(0)
   })

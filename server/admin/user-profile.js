@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import { beijingNow, logAudit, queryOne, queryRun } from '../db.js'
+import { beijingNow, logAudit, queryOne, queryRun, withTransaction } from '../db.js'
 import { revokeBridgeRefreshSessions } from '../bridge-auth-session.js'
 
 const VALID_PLANS = new Set(['free', 'plus', 'pro'])
@@ -42,13 +42,15 @@ export function translateAdminProfileError(error) {
     membership_expiry_invalid:'会员到期日期无效',
     observer_source_plan_locked:'观摩源账号必须保持 Pro 专业版',
     observer_source_role_locked:'观摩源账号不能设为管理员',
+    observer_source_email_required:'观摩源账号必须保留登录邮箱',
     user_role_invalid:'用户角色无效',
     last_admin_required:'至少需要保留一个管理员账号',
     email_invalid:'邮箱格式不正确',
+    contact_method_required:'邮箱和手机号至少需要保留一项',
     password_strength_insufficient:'密码至少 8 位，且必须同时包含字母和数字',
     password_too_long:'密码不能超过 128 位',
   }
-  if (error?.code === 'ER_DUP_ENTRY') return '邮箱已被其他用户使用'
+  if (error?.code === 'ER_DUP_ENTRY') return '邮箱或手机号已被其他用户使用'
   if (error?.code === 'ER_DATA_TOO_LONG') return '填写内容过长'
   return messages[code] || '保存用户档案失败'
 }
@@ -89,9 +91,13 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
     if (Number(row?.count || 0) <= 1) throw new Error('last_admin_required')
   }
 
-  const email = hasEmail ? String(input.email || '').trim().toLowerCase() : target.email
-  if (hasEmail && !EMAIL.test(email)) throw new Error('email_invalid')
+  const emailInput = hasEmail ? String(input.email || '').trim().toLowerCase() : target.email
+  const email = emailInput || null
+  if (hasEmail && email && !EMAIL.test(email)) throw new Error('email_invalid')
   const phone = hasPhone ? String(input.phone || '').trim().replace(/^\+86/, '') || null : target.phone
+  const previouslyHadContact = Boolean(target.email || target.phone)
+  if (!email && !phone && previouslyHadContact) throw new Error('contact_method_required')
+  if (target.plan_source === 'observer_source' && !email) throw new Error('observer_source_email_required')
   const nickname = hasNickname ? String(input.nickname || '').trim() || null : target.nickname
   const avatar = hasAvatar ? String(input.avatar || '').trim() : target.avatar
   const currentExpiry = target.plan_expires_at instanceof Date
@@ -112,8 +118,15 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
     params.push(await bcrypt.hash(password, 10))
   }
   params.push(uid)
-  await queryRun(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params)
-  if (password) await revokeBridgeRefreshSessions(uid)
+  const updateSql = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`
+  if (password) {
+    await withTransaction(async run => {
+      await run(updateSql, params)
+      await revokeBridgeRefreshSessions(uid, { run })
+    })
+  } else {
+    await queryRun(updateSql, params)
+  }
 
   const changed = {
     previous_plan:target.plan,

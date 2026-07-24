@@ -79,7 +79,6 @@ export async function deleteExpiredHoldSignals({ redis, limit = batchSize() } = 
   let deletedDeliveries = 0
   let deletedSnapshots = 0
   let deletedMemoryLogs = 0
-  let deletedPairedRuns = 0
   let batches = 0
 
   while (true) {
@@ -98,9 +97,6 @@ export async function deleteExpiredHoldSignals({ redis, limit = batchSize() } = 
     const ids = rows.map(row => row.id)
     const placeholders = ids.map(() => '?').join(',')
     const result = await withTransaction(async run => {
-      const [pairedResult] = await run(
-        `DELETE FROM ai_paired_inference_runs WHERE signal_id IN (${placeholders})`, ids
-      )
       const [memoryResult] = await run(
         `DELETE FROM memory_injection_logs WHERE signal_id IN (${placeholders})`, ids
       )
@@ -114,7 +110,6 @@ export async function deleteExpiredHoldSignals({ redis, limit = batchSize() } = 
         `DELETE FROM ai_signals WHERE id IN (${placeholders}) AND signal_type = 'hold'`, ids
       )
       return {
-        pairedRuns: pairedResult.affectedRows || 0,
         memoryLogs: memoryResult.affectedRows || 0,
         snapshots: snapshotResult.affectedRows || 0,
         deliveries: deliveryResult.affectedRows || 0,
@@ -122,7 +117,6 @@ export async function deleteExpiredHoldSignals({ redis, limit = batchSize() } = 
       }
     })
 
-    deletedPairedRuns += result.pairedRuns
     deletedMemoryLogs += result.memoryLogs
     deletedSnapshots += result.snapshots
     deletedDeliveries += result.deliveries
@@ -130,7 +124,7 @@ export async function deleteExpiredHoldSignals({ redis, limit = batchSize() } = 
     batches += 1
   }
 
-  return { deletedSignals, deletedDeliveries, deletedSnapshots, deletedMemoryLogs, deletedPairedRuns, batches }
+  return { deletedSignals, deletedDeliveries, deletedSnapshots, deletedMemoryLogs, batches }
 }
 
 export async function runHoldSignalCleanup(now = new Date()) {
@@ -161,7 +155,7 @@ export async function runHoldSignalCleanup(now = new Date()) {
     console.log(`[HoldSignalCleanup] Started, business_date=${businessDate}, cutoff=yesterday 00:00 Asia/Shanghai`)
     const result = await deleteExpiredHoldSignals({ redis: { client: redis, token } })
     await redis.set(LAST_SUCCESS_KEY, businessDate)
-    console.log(`[HoldSignalCleanup] Completed, signals=${result.deletedSignals}, snapshots=${result.deletedSnapshots}, memory_logs=${result.deletedMemoryLogs}, paired_runs=${result.deletedPairedRuns}, deliveries=${result.deletedDeliveries}, batches=${result.batches}, duration_ms=${Date.now() - startedAt}`)
+    console.log(`[HoldSignalCleanup] Completed, signals=${result.deletedSignals}, snapshots=${result.deletedSnapshots}, memory_logs=${result.deletedMemoryLogs}, deliveries=${result.deletedDeliveries}, batches=${result.batches}, duration_ms=${Date.now() - startedAt}`)
     return { status: 'completed', ...result }
   } catch (err) {
     console.error('[HoldSignalCleanup] Failed:', err.message)

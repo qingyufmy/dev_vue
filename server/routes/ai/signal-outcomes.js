@@ -1,6 +1,8 @@
 import crypto from 'crypto'
 import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../../db.js'
+import { broadcastAdminEvent, sendToBrowsers } from '../../bridge-ws.js'
 import { mt5Bridge } from './market-data.js'
+import { positionProtectionStatus } from './position-management.js'
 
 const SYSTEM_MAGIC = 234000
 const OPEN_STATUSES = ['open', 'closing']
@@ -15,6 +17,13 @@ function dealTicket(deal) { return ref(deal?.deal_ticket ?? deal?.ticket) }
 function dealNet(deal) { return num(deal?.profit) + num(deal?.commission) + num(deal?.swap) + num(deal?.fee) }
 function isEntry(deal) { return Number(deal?.entry) === 0 }
 function isExit(deal) { return [1, 3].includes(Number(deal?.entry)) }
+
+function positionForOutcome(outcome, result, activePositions = []) {
+  const refs = new Set([result?.positionId, outcome?.position_id, outcome?.entry_order_ticket]
+    .map(ref).filter(Boolean))
+  return activePositions.find(position => [position.ticket, position.position_id, position.identifier]
+    .map(ref).some(value => value && refs.has(value))) || null
+}
 
 export function analyzeOutcomeAttribution(outcome, allDeals = [], activePositions = [], historyOrders = [], competingPositionCount = 1) {
   const positionId = ref(outcome.position_id)
@@ -45,8 +54,10 @@ export function analyzeOutcomeAttribution(outcome, allDeals = [], activePosition
   if (deals.some(deal => num(deal.magic) !== SYSTEM_MAGIC)) interventions.push('non_system_magic_deal')
   const approved = parse(outcome.approved_order_json)
   const current = activePositions.find(position => [position.ticket, position.position_id, position.identifier].map(ref).includes(resolvedPositionId))
-  if (current && approved.sl != null && num(current.sl) !== num(approved.sl)) interventions.push('stop_loss_modified')
-  if (current && approved.tp != null && num(current.tp) !== num(approved.tp)) interventions.push('take_profit_modified')
+  const approvedStopLoss = outcome.authorized_stop_loss != null ? outcome.authorized_stop_loss : approved.sl
+  const approvedTakeProfit = outcome.authorized_take_profit != null ? outcome.authorized_take_profit : approved.tp
+  if (current && approvedStopLoss != null && num(current.sl) !== num(approvedStopLoss)) interventions.push('stop_loss_modified')
+  if (current && approvedTakeProfit != null && num(current.tp) !== num(approvedTakeProfit)) interventions.push('take_profit_modified')
   const entryOrder = historyOrders.find(order => orderRefs.has(ref(order.ticket)) || ref(order.position_id) === resolvedPositionId)
   if (entryOrder && num(entryOrder.magic) !== SYSTEM_MAGIC) interventions.push('entry_order_magic_mismatch')
 
@@ -77,8 +88,9 @@ export function resolveOutcomeClosureTransition(outcome, result, now = beijingNo
 export async function createSignalOutcomeTx(run, intent, bridgeResult, bridgeAction = null) {
   if (!intent?.trading_account_id) return null
   const request = parse(intent.approved_order_json, parse(intent.request_json))
-  const [accounts] = await run('SELECT margin_mode FROM trading_accounts WHERE id = ? LIMIT 1', [intent.trading_account_id])
-  const marginMode = accounts[0]?.margin_mode || 'netting'
+  const [accounts] = await run('SELECT margin_mode, broker_server, login_account FROM trading_accounts WHERE id = ? LIMIT 1', [intent.trading_account_id])
+  const account = Array.isArray(accounts) ? accounts[0] : null
+  const marginMode = account?.margin_mode || 'netting'
   const now = beijingNow()
   const positionId = ref(bridgeResult?.position_id ?? bridgeResult?.position)
   const orderTicket = ref(bridgeResult?.order ?? bridgeResult?.ticket)
@@ -86,18 +98,46 @@ export async function createSignalOutcomeTx(run, intent, bridgeResult, bridgeAct
   const pending = (bridgeAction || intent.action) === 'pending' ? orderTicket : null
   const sourceSignalId = String(intent.source_id || '').split(':', 1)[0]
   const signalId = Number(sourceSignalId) > 0 ? Number(sourceSignalId) : null
+  const [signals] = signalId ? await run(`SELECT prompt_type_id, signal_type, thesis_id, management_group_id,
+    stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price
+    FROM ai_signals WHERE id = ? LIMIT 1`, [signalId]) : [[]]
+  const sourceSignal = Array.isArray(signals) ? signals[0] : null
+  const [strategies] = sourceSignal?.prompt_type_id ? await run('SELECT version FROM auto_prompt_types WHERE id = ? LIMIT 1', [sourceSignal.prompt_type_id]) : [[]]
+  const strategy = Array.isArray(strategies) ? strategies[0] : null
+  const [ownershipRows] = await run(`SELECT id, broker_server_key, login_account FROM mt5_account_ownership_history
+    WHERE trading_account_id = ? AND user_id = ? AND ended_at IS NULL ORDER BY started_at DESC, id DESC LIMIT 1`,
+  [intent.trading_account_id, intent.user_id])
+  const ownership = Array.isArray(ownershipRows) ? ownershipRows[0] : null
+  const originalTakeProfits = [1, 2, 3].map(tier => num(sourceSignal?.[`take_profit_${tier}_price`] ?? request[`take_profit_${tier}_price`]))
+    .filter(value => value > 0)
+  const entryDirection = String(sourceSignal?.signal_type || request.order_type || request.type || '').toLowerCase().startsWith('buy') ? 'buy' : 'sell'
   await run(`INSERT INTO signal_outcomes
     (signal_id, order_intent_id, user_id, trading_account_id, margin_mode, symbol,
      entry_order_ticket, entry_deal_ticket, pending_ticket, position_id, expected_volume,
+     strategy_id, strategy_version, thesis_id, management_group_id, ownership_history_id,
+     broker_server_key, login_account, original_symbol, entry_direction, system_magic,
+     original_stop_loss, original_take_profits_json, protection_status,
      status, attribution_status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'pending', ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown',
+      'open', 'pending', ?, ?)
     ON DUPLICATE KEY UPDATE entry_order_ticket = COALESCE(VALUES(entry_order_ticket), entry_order_ticket),
       entry_deal_ticket = COALESCE(VALUES(entry_deal_ticket), entry_deal_ticket),
       pending_ticket = COALESCE(VALUES(pending_ticket), pending_ticket),
-      position_id = COALESCE(VALUES(position_id), position_id), updated_at = VALUES(updated_at)`, [
+      position_id = COALESCE(VALUES(position_id), position_id),
+      thesis_id = COALESCE(VALUES(thesis_id), thesis_id),
+      management_group_id = COALESCE(VALUES(management_group_id), management_group_id),
+      ownership_history_id = COALESCE(VALUES(ownership_history_id), ownership_history_id),
+      updated_at = VALUES(updated_at)`, [
     signalId, intent.id, intent.user_id, intent.trading_account_id, marginMode,
-    String(request.symbol || ''), orderTicket, deal, pending, positionId, num(request.volume || request.lot), now, now,
+    String(request.symbol || ''), orderTicket, deal, pending, positionId, num(request.volume || request.lot),
+    sourceSignal?.prompt_type_id || null, strategy?.version || null, sourceSignal?.thesis_id || null,
+    sourceSignal?.management_group_id || null, ownership?.id || null,
+    ownership?.broker_server_key || String(account?.broker_server || '').trim().toUpperCase() || null,
+    ownership?.login_account || account?.login_account || null, String(request.symbol || ''), entryDirection,
+    SYSTEM_MAGIC, num(sourceSignal?.stop_loss_price ?? request.sl) || null,
+    JSON.stringify(originalTakeProfits), now, now,
   ])
+  if (sourceSignal?.thesis_id) await run("UPDATE ai_trade_theses SET status = 'active', updated_at = ? WHERE thesis_id = ?", [now, sourceSignal.thesis_id])
 }
 
 export async function attachOutcomeDelivery(orderIntentId, deliveryId) {
@@ -111,6 +151,23 @@ export async function recordPendingOutcomeFill({ orderIntentId, deliveryId, posi
     position_id = COALESCE(?, position_id), entry_order_ticket = COALESCE(?, entry_order_ticket),
     entry_deal_ticket = COALESCE(?, entry_deal_ticket), updated_at = ? WHERE order_intent_id = ?`,
   [deliveryId || null, ref(positionId), ref(orderTicket), ref(dealTicket), beijingNow(), orderIntentId])
+}
+
+export async function reconcileTerminalPendingOutcomes() {
+  const now = beijingNow()
+  const result = await queryRun(`UPDATE signal_outcomes outcomes
+    LEFT JOIN auto_signal_deliveries deliveries ON deliveries.id = outcomes.delivery_id
+    LEFT JOIN ai_signals signals ON signals.id = outcomes.signal_id
+    SET outcomes.status = COALESCE(deliveries.pending_state, signals.pending_state),
+      outcomes.attribution_status = 'not_filled', outcomes.last_scan_at = ?, outcomes.updated_at = ?
+    WHERE outcomes.status IN ('open','closing') AND outcomes.position_id IS NULL
+      AND outcomes.pending_ticket IS NOT NULL
+      AND COALESCE(deliveries.pending_state, signals.pending_state) IN ('cancelled','expired','superseded')`, [now, now])
+  await queryRun(`UPDATE ai_trade_theses theses SET theses.status = 'closed', theses.updated_at = ?
+    WHERE theses.status IN ('proposed','active')
+      AND NOT EXISTS (SELECT 1 FROM signal_outcomes outcomes
+        WHERE outcomes.thesis_id = theses.thesis_id AND outcomes.status IN ('open','closing'))`, [now])
+  return Number(result?.changes || 0)
 }
 
 async function saveMatchedDeals(run, outcome, deals) {
@@ -128,6 +185,7 @@ async function saveMatchedDeals(run, outcome, deals) {
 }
 
 export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
+  await reconcileTerminalPendingOutcomes()
   const outcomes = await queryAll(`SELECT so.*, oi.bridge_command_ref, oi.approved_order_json
     FROM signal_outcomes so JOIN order_intents oi ON oi.id = so.order_intent_id
     WHERE so.status IN ('open','closing') ORDER BY so.user_id, so.id`)
@@ -156,10 +214,37 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
     for (const item of firstPass) {
       const key = `${item.outcome.trading_account_id}:${item.result.positionId}`
       const result = analyzeOutcomeAttribution(item.outcome, history.deals, positions.positions, history.history_orders || [], counts.get(key) || 1)
+      const currentPosition = positionForOutcome(item.outcome, result, positions.positions)
+      const protection = currentPosition
+        ? positionProtectionStatus(currentPosition, item.outcome.entry_direction)
+        : { status:'unknown', actualStopLoss:null, actualTakeProfit:null, systemOwned:false }
+      let protectionIncidentCreated = false
       await withTransaction(async run => {
         const [lockedRows] = await run('SELECT * FROM signal_outcomes WHERE id = ? FOR UPDATE', [item.outcome.id])
         const locked = lockedRows[0]
         if (!locked || !OPEN_STATUSES.includes(locked.status)) return
+        const protectionModified = currentPosition && num(locked.original_stop_loss) > 0
+          ? Math.abs(num(locked.original_stop_loss) - num(protection.actualStopLoss)) > 1e-8 : false
+        if (currentPosition) {
+          await run(`UPDATE signal_outcomes SET actual_stop_loss = ?, actual_take_profit = ?,
+            protection_status = ?, protection_modified = ?, last_position_snapshot_json = ?, updated_at = ?
+            WHERE id = ?`, [
+            protection.actualStopLoss, protection.actualTakeProfit, protection.status, protectionModified ? 1 : 0,
+            JSON.stringify(currentPosition), beijingNow(), locked.id,
+          ])
+        }
+        if (currentPosition && protection.systemOwned && ['missing_stop_loss', 'invalid_stop_loss_direction'].includes(protection.status)) {
+          await run(`INSERT INTO risk_account_state
+            (trading_account_id, user_id, halt_status, halt_reason, created_at, updated_at)
+            VALUES (?, ?, 'protection_incident', ?, ?, ?)
+            ON DUPLICATE KEY UPDATE halt_status = CASE WHEN halt_status IN ('active','protection_incident')
+              THEN 'protection_incident' ELSE halt_status END,
+              halt_reason = CASE WHEN halt_status IN ('active','protection_incident') THEN VALUES(halt_reason) ELSE halt_reason END,
+              updated_at = VALUES(updated_at)`, [
+            locked.trading_account_id, locked.user_id, protection.status, beijingNow(), beijingNow(),
+          ])
+          protectionIncidentCreated = String(locked.protection_status || '') !== protection.status
+        }
         if (result.attributionStatus === 'attribution_ambiguous') {
           await run(`UPDATE signal_outcomes SET position_id = ?, status = 'attribution_ambiguous',
             attribution_status = 'attribution_ambiguous', review_eligible_at = NULL, last_scan_at = ?, updated_at = ? WHERE id = ?`,
@@ -176,15 +261,30 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
         await run(`UPDATE signal_outcomes SET position_id = ?, entry_volume = ?, closed_volume = ?,
           gross_profit = ?, commission = ?, swap = ?, fee = ?, net_profit = ?, attribution_status = 'attributed',
           external_intervention = ?, intervention_json = ?, status = ?, closing_candidate_hash = ?,
-          fee_stable_at = ?, fully_closed_at = ?, review_eligible_at = ?, last_scan_at = ?, updated_at = ? WHERE id = ?`, [
+          fee_stable_at = ?, fully_closed_at = ?, review_eligible_at = ?, last_scan_at = ?, updated_at = ?,
+          actual_stop_loss = ?, actual_take_profit = ?, protection_status = ? WHERE id = ?`, [
           result.positionId, result.entryVolume, result.closedVolume, result.grossProfit, result.commission,
           result.swap, result.fee, result.netProfit, result.externalIntervention ? 1 : 0,
           JSON.stringify(result.interventions), transition.status, result.complete ? result.feeHash : null,
           transition.feeStableAt, result.complete ? result.latestExit : null,
-          transition.reviewEligibleAt, now, now, locked.id,
+          transition.reviewEligibleAt, now, now, protection.actualStopLoss, protection.actualTakeProfit,
+          currentPosition ? protection.status : locked.protection_status, locked.id,
         ])
         if (transition.status === 'closed') closed += 1
       })
+      if (protectionIncidentCreated) {
+        const payload = {
+          type:'position_protection_incident', outcome_id:Number(item.outcome.id),
+          trading_account_id:Number(item.outcome.trading_account_id), status:protection.status,
+          message:protection.status === 'missing_stop_loss'
+            ? '检测到系统持仓缺少真实止损，已停止该账户新增风险'
+            : '检测到系统持仓止损方向异常，已停止该账户新增风险',
+        }
+        sendToBrowsers(Number(item.outcome.user_id), payload)
+        broadcastAdminEvent('risk-audit', 'position_protection_incident', {
+          user_id:Number(item.outcome.user_id), ...payload,
+        }, { scopes:['overview', 'ai-operations', 'risk-audit'], refresh:true })
+      }
     }
   }
   return closed

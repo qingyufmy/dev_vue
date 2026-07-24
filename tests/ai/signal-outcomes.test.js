@@ -9,6 +9,7 @@ vi.mock('../../server/db.js', () => db)
 
 import {
   analyzeOutcomeAttribution,
+  reconcileTerminalPendingOutcomes,
   reconcileSignalOutcomes,
   resolveOutcomeClosureTransition,
 } from '../../server/routes/ai/signal-outcomes.js'
@@ -65,6 +66,16 @@ describe('signal outcome attribution', () => {
     ]))
   })
 
+  it('uses an administrator-authorized protection revision as the audit baseline', () => {
+    const result = analyzeOutcomeAttribution(outcome({
+      authorized_stop_loss:91,
+      authorized_take_profit:121,
+    }), [deal()], [{ ticket:'P1', sl:91, tp:121 }])
+    expect(result.externalIntervention).toBe(false)
+    expect(result.interventions).not.toContain('stop_loss_modified')
+    expect(result.interventions).not.toContain('take_profit_modified')
+  })
+
   it('requires two identical complete scans before review eligibility', () => {
     const result = analyzeOutcomeAttribution(outcome(), [deal(), deal({ deal_ticket: 'D2', entry: 1, profit: 2 })])
     const first = resolveOutcomeClosureTransition(outcome(), result, '2026-07-15 12:00:00')
@@ -82,7 +93,14 @@ describe('position outcome monitor durability', () => {
     const closed = await reconcileSignalOutcomes({ bridge: vi.fn().mockRejectedValue(new Error('offline')) })
     expect(closed).toBe(0)
     expect(db.withTransaction).not.toHaveBeenCalled()
-    expect(db.queryRun).not.toHaveBeenCalled()
+    expect(db.queryRun).toHaveBeenCalledTimes(2)
+  })
+
+  it('retires terminal pending outcomes before they reach inference context', async () => {
+    db.queryRun.mockResolvedValueOnce({ changes:97 }).mockResolvedValueOnce({ changes:97 })
+    expect(await reconcileTerminalPendingOutcomes()).toBe(97)
+    expect(db.queryRun.mock.calls[0][0]).toContain("IN ('cancelled','expired','superseded')")
+    expect(db.queryRun.mock.calls[0][0]).toContain("attribution_status = 'not_filled'")
   })
 
   it('enforces idempotency for both outcomes and MT5 deals in the schema', () => {

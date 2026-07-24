@@ -10,9 +10,81 @@ import { assertSafeModelEndpoint } from './model-endpoint-security.js'
 import { buildSharedMarketSnapshot, sha256 } from './inference-snapshots.js'
 import { normalizeEntryMethods, signalTypesForEntryMethods } from './strategy-policy.js'
 import { normalizePositionSizeTier, positionSizeFactor, resolvePositionSizeTier } from './position-sizing.js'
+import { buildPositionManagementOutputFormat, hasActivePositionManagementGroups,
+  validatePositionManagementResponse } from './position-management.js'
+import { assertModelQuotaAvailable, buildModelQuotaCircuitContext, deferModelQuotaProbe,
+  recordModelQuotaExhausted, recordModelQuotaRecovered } from './model-quota-circuit.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
+const DEBUG_LLM = process.env.DEBUG_LLM === '1' || DEBUG_LLM_PAYLOAD
 const TP_FROM_SL = { tp1: 1.5, tp2: 2.5, tp3: 4.0 }
+export const AUTO_INFERENCE_MAX_OUTPUT_TOKENS = 12_000
+export const AUTO_INFERENCE_MAX_PROMPT_CHARS = 120_000
+export const INFERENCE_KLINE_FIELDS = Object.freeze(['time', 'open', 'high', 'low', 'close', 'tick_volume'])
+const COMPACT_MARKET_INPUT_RULE = `## 市场数据紧凑编码
+strategy_context.input_encoding 说明模型输入的无损编码。各周期 klines 中每个数组元素依次对应 kline_fields 的 time、open、high、low、close、tick_volume，数组元素数量就是 K 线根数。对象 {"$ref":"#/..."} 是 JSON Pointer，表示与所指对象完全相同；分析时必须按原对象展开理解，不得视为数据缺失。`
+
+export function automaticInferenceMaxTokens(config = {}) {
+  const requested = Math.max(1_000, Number.parseInt(config.max_tokens || 2_000) || 2_000)
+  return String(config._usage || '').startsWith('auto')
+    ? Math.min(requested, AUTO_INFERENCE_MAX_OUTPUT_TOKENS)
+    : requested
+}
+
+function jsonPointerToken(value) {
+  return String(value).replace(/~/g, '~0').replace(/\//g, '~1')
+}
+
+function dedupeChanObjects(value, path, seen, state) {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => dedupeChanObjects(item, `${path}/${index}`, seen, state))
+  }
+  if (!value || typeof value !== 'object') return value
+  const signature = JSON.stringify(value)
+  if (signature.length >= 120 && seen.has(signature)) {
+    state.references++
+    return { $ref:seen.get(signature) }
+  }
+  if (signature.length >= 120) seen.set(signature, path)
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key,
+    dedupeChanObjects(item, `${path}/${jsonPointerToken(key)}`, seen, state),
+  ]))
+}
+
+/**
+ * Losslessly compact only the model-bound copy of market data. Stored market
+ * snapshots and chart K-lines retain their normal object representation.
+ */
+export function compactInferenceMarketPayload(payload) {
+  const compacted = structuredClone(payload || {})
+  const timeframes = compacted?.strategy_context?.timeframes
+  if (!timeframes || typeof timeframes !== 'object') return compacted
+  const state = { klineFrames:0, references:0 }
+  const knownFields = new Set(INFERENCE_KLINE_FIELDS)
+  for (const [timeframe, frame] of Object.entries(timeframes)) {
+    const bars = frame?.klines
+    if (Array.isArray(bars) && bars.length && bars.every(bar => {
+      if (!bar || Array.isArray(bar) || typeof bar !== 'object') return false
+      return Object.keys(bar).every(key => knownFields.has(key))
+    })) {
+      frame.klines = bars.map(bar => INFERENCE_KLINE_FIELDS.map(field => bar[field] ?? null))
+      state.klineFrames++
+    }
+    if (frame?.summary?.chan && typeof frame.summary.chan === 'object') {
+      const path = `#/strategy_context/timeframes/${jsonPointerToken(timeframe)}/summary/chan`
+      frame.summary.chan = dedupeChanObjects(frame.summary.chan, path, new Map(), state)
+    }
+  }
+  if (state.klineFrames || state.references) {
+    compacted.strategy_context.input_encoding = {
+      version:'compact-v1',
+      ...(state.klineFrames ? { kline_fields:[...INFERENCE_KLINE_FIELDS] } : {}),
+      ...(state.references ? { object_refs:'JSON Pointer; exact duplicate object' } : {}),
+    }
+  }
+  return compacted
+}
 
 export function formatPendingValidUntilUtc(validMinutes, nowMs = Date.now()) {
   const minutes = Math.min(Math.max(parseInt(validMinutes) || 240, 1), 1440)
@@ -86,6 +158,15 @@ function localizeAiSignalUserVisibleFields(signal) {
     signal.cancel_pending = signal.cancel_pending.map(item => item && typeof item === 'object'
       ? { ...item, reason:localizeInferenceNarrative(item.reason) }
       : item)
+  }
+  const management = signal?._position_management
+  if (management && typeof management === 'object') {
+    for (const key of ['pending_evaluations', 'position_evaluations']) {
+      if (!Array.isArray(management[key])) continue
+      management[key] = management[key].map(item => item && typeof item === 'object'
+        ? { ...item, reason:localizeInferenceNarrative(item.reason) }
+        : item)
+    }
   }
   return signal
 }
@@ -269,7 +350,12 @@ async function trackedModelRequest({
   const requestBody = JSON.stringify(body)
   const requestBytes = Buffer.byteLength(requestBody, 'utf8')
   let responseBytes = 0
+  const quotaCircuitContext = buildModelQuotaCircuitContext({
+    usageContext, provider, model:body?.model, url,
+  })
+  let quotaCircuitState = { probe:false }
   try {
+    quotaCircuitState = await assertModelQuotaAvailable(quotaCircuitContext)
     if (usageContext) {
       const reservation = await beginModelUsage({ ...usageContext, estimatedTokens })
       usageLogId = reservation.logId
@@ -293,7 +379,14 @@ async function trackedModelRequest({
     })
     if (!response.ok) {
       const code = providerHttpError(url, provider, response.status)
-      throw new Error(phase === 'repair' && !code.startsWith('kimi_code_') ? code.replace(/^LLM/, 'LLM repair') : code)
+      const stableCode = response.status === 429 ? 'model_quota_exhausted' : code
+      const error = new Error(phase === 'repair' && !stableCode.startsWith('kimi_code_')
+        ? stableCode.replace(/^LLM/, 'LLM repair')
+        : stableCode)
+      error.providerStatus = response.status
+      error.code = stableCode
+      error.providerCode = code
+      throw error
     }
     const data = await response.json()
     responseBytes = Buffer.byteLength(JSON.stringify(data), 'utf8')
@@ -311,6 +404,7 @@ async function trackedModelRequest({
       usageLogId = null
     }
     await emitProviderTelemetry(onProviderUsage, { phase, status: 'success', tokenCount, requestBytes, responseBytes, durationMs: Date.now() - startedAt })
+    if (quotaCircuitState.probe) await recordModelQuotaRecovered(quotaCircuitContext)
     return { response, data }
   } catch (error) {
     if (usageLogId) {
@@ -326,6 +420,15 @@ async function trackedModelRequest({
         phase, status: 'error', tokenCount: 0, errorCode: error.message,
         requestBytes, responseBytes, durationMs: Date.now() - startedAt,
       })
+    }
+    try {
+      if (Number(error?.providerStatus) === 429) {
+        await recordModelQuotaExhausted(quotaCircuitContext, error.providerCode || error.code || error.message)
+      } else if (quotaCircuitState.probe) {
+        await deferModelQuotaProbe(quotaCircuitContext)
+      }
+    } catch (circuitError) {
+      console.error('[LLM] Failed to update model quota circuit:', circuitError.message)
     }
     throw error
   }
@@ -500,13 +603,18 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
     const strategySchema = buildStrategyOutputFormat(outputFormat, config._allowed_entry_methods, config._experienceSelection)
     outputFormat = strategySchema.outputFormat
-    console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
+    const positionManagementContext = config._positionManagementContext
+    const positionManagementEnabled = hasActivePositionManagementGroups(positionManagementContext)
+    if (positionManagementEnabled) {
+      outputFormat = buildPositionManagementOutputFormat(outputFormat, positionManagementContext)
+    }
+    if (DEBUG_LLM) console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
 
     const marketOnlyRule = config._market_only
-      ? '\n\n## 共享市场推理边界\n你只能分析输入中的市场行情、K线、技术指标和 platform_strategy_reference_portfolio。该参考组合仅表示本平台策略已经产生的持仓与挂单，不代表任何订阅用户的真实账户。禁止推测订阅用户的账户、余额、权益、持仓、挂单或个人风控信息。你只能选择不建仓、试探仓、轻仓或标准仓，不得返回绝对手数；用户实际手数由独立风控根据净值、真实止损亏损和 MT5 合约规格计算。参考组合已有同向持仓时，除非行情形成明确的延续加仓机会，否则 position_action 必须为 hold_no_add；即使允许加仓，系统也会限制为试探仓。参考挂单仍符合当前逻辑时必须 keep，只有原逻辑失效时才能 cancel，方向反转且新挂单成立时才能 cancel_replace。暂不建议自动平仓。'
+      ? '\n\n## 共享市场推理边界\n你只能分析输入中的市场行情、K线、技术指标和 platform_strategy_reference_portfolio。该参考组合仅表示本平台策略已经产生的持仓与挂单，不代表任何订阅用户的真实账户。禁止推测订阅用户的账户、余额、权益、持仓、挂单或个人风控信息。你只能选择不建仓、试探仓、轻仓或标准仓，不得返回绝对手数；用户实际手数由独立风控根据净值、真实止损亏损和 MT5 合约规格计算。参考组合已有同向持仓时，除非行情形成明确的延续加仓机会，否则 position_action 必须为 hold_no_add；即使允许加仓，系统也会限制为试探仓。参考挂单仍符合当前逻辑时必须 keep，只有原逻辑失效时才能 cancel，方向反转且新挂单成立时才能 cancel_replace。'
       : ''
     const privatePortfolioRule = !config._market_only && config._include_portfolio_context
-      ? '\n\n## 私有策略账户上下文\n输入中的 positions 与 pending_orders 是当前用户账户的实时数据。请结合它们判断 position_action 与 pending_action，但不得把余额或现有手数直接复制成新订单手数；新订单仍只返回固定仓位档位，实际手数由风控精算。暂不建议自动平仓。'
+      ? '\n\n## 私有策略账户上下文\n输入中的 positions 与 pending_orders 是当前用户账户的实时数据。请结合它们判断 position_action 与 pending_action，但不得把余额或现有手数直接复制成新订单手数；新订单仍只返回固定仓位档位，实际手数由风控精算。'
       : ''
     // Personal memory is untrusted data, never a higher-priority instruction.
     // Shared platform inference is market-only and is structurally barred from it.
@@ -518,7 +626,11 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const platformExperience = config._market_only && typeof config._platformExperienceContext === 'string'
       ? config._platformExperienceContext : ''
     const pendingRule = strategySchema.hasPending ? `\n\n${PENDING_LIFECYCLE_RULE}` : ''
-    const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + platformExperience + personalMemory + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + pendingRule
+    const positionManagementRule = positionManagementEnabled ? `
+
+## 持仓管理 v1.1 强制边界
+输入中的 position_management_context 由服务端生成。你必须完整返回其中每一个挂单管理组和持仓管理组，且只能原样引用给出的 management_group_id、thesis_id、condition_id 和 evidence_refs。挂单动作只允许 keep 或 cancel；持仓动作只允许 hold 或 exit。禁止输出 replace、reverse、ticket、手数或任何账户身份。不得修改冻结条件、失效价格、条件类型、周期和确认次数。reversal_candidate 只表示解释性判断，不是执行命令。新建仓、挂单评估、持仓评估彼此独立；新建仓字段无效时也必须继续完成其他评估。` : ''
+    const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + positionManagementRule + platformExperience + personalMemory + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + (positionManagementEnabled ? '' : pendingRule)
 
     // Check if prompt wants Chan theory data
     const useChan = config._use_chan_analysis === undefined
@@ -528,10 +640,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const replaySystemPrompt = typeof config._comparison_replay_system_prompt === 'string'
       ? config._comparison_replay_system_prompt.trim()
       : ''
-    const cleanPrompt = replaySystemPrompt || promptWithChanRules.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
-    console.log(`[LLM] Chan analysis: ${useChan ? 'enabled' : 'disabled'}`)
+    let cleanPrompt = replaySystemPrompt || promptWithChanRules.replace(/\{\{USE_CHAN\}\}/g, '').replace(/\n{3,}/g, '\n\n').trim()
+    if (DEBUG_LLM) console.log(`[LLM] Chan analysis: ${useChan ? 'enabled' : 'disabled'}`)
 
-    const aiPayload = config._market_only ? buildSharedMarketSnapshot(market, {
+    let aiPayload = config._market_only ? buildSharedMarketSnapshot(market, {
       standardSymbol:market.standard_symbol || market.symbol,
       marketSource:market.market_source,
     }) : {
@@ -563,12 +675,24 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       }
       aiPayload.strategy_context = ctx
     }
-    console.log(`[LLM] Payload to model (${JSON.stringify(aiPayload).length} chars)`)
+    if (positionManagementEnabled) {
+      aiPayload.position_management_context = {
+        contract_version:positionManagementContext.contract_version,
+        as_of:positionManagementContext.as_of,
+        pending_groups:positionManagementContext.pending_groups,
+        position_groups:positionManagementContext.position_groups,
+      }
+    }
+    if (!config._comparison_replay_user_prompt) {
+      aiPayload = compactInferenceMarketPayload(aiPayload)
+      if (aiPayload?.strategy_context?.input_encoding) cleanPrompt = `${cleanPrompt}\n\n${COMPACT_MARKET_INPUT_RULE}`
+    }
+    if (DEBUG_LLM) console.log(`[LLM] Payload to model (${JSON.stringify(aiPayload).length} chars)`)
     if (DEBUG_LLM_PAYLOAD) console.log(JSON.stringify(aiPayload, null, 2).substring(0, 3000))
     // DeepSeek and Agent Plan use different reasoning contracts.
     const thinkingEnabled = (provider === 'kimi_code' || provider === 'deepseek' || provider === 'volcengine_agent_plan')
       && config.thinking_enabled !== 0 && config.thinking_enabled !== false
-    console.log(`[LLM] Request params: model=${config.model_name}, thinking=${thinkingEnabled}, effort=${config.reasoning_effort || 'max'}, temp=${thinkingEnabled ? 'ignored' : config.temperature}`)
+    if (DEBUG_LLM) console.log(`[LLM] Request params: model=${config.model_name}, thinking=${thinkingEnabled}, effort=${config.reasoning_effort || 'max'}, temp=${thinkingEnabled ? 'ignored' : config.temperature}`)
     const usageContext = config._model_profile_id ? {
       userId: config._userId || 0,
       profileId: config._model_profile_id,
@@ -579,6 +703,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const renderedUserPrompt = typeof config._comparison_replay_user_prompt === 'string'
       ? config._comparison_replay_user_prompt
       : '市场数据 JSON：\n' + JSON.stringify(aiPayload)
+    const promptChars = cleanPrompt.length + renderedUserPrompt.length
+    if (String(config._usage || '').startsWith('auto') && promptChars > AUTO_INFERENCE_MAX_PROMPT_CHARS) {
+      throw new Error(`auto_inference_prompt_budget_exceeded:${promptChars}`)
+    }
     if (typeof config._onInferencePrepared === 'function') {
       config._onInferencePrepared({
         systemPrompt: cleanPrompt,
@@ -591,7 +719,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       url, apiKey, provider,
       model: config.model_name || 'deepseek-chat',
       temperature: parseFloat(config.temperature ?? 0.3),
-      maxTokens: parseInt(config.max_tokens || 2000),
+      maxTokens: automaticInferenceMaxTokens(config),
       thinkingEnabled,
       reasoningEffort: config.reasoning_effort || 'max',
       protocol,
@@ -604,7 +732,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       signal: config._abortSignal || null,
       onProviderRequest:config._onProviderRequest || null,
       onProviderUsage:config._onProviderUsage || null,
-      validateObject: value => validateAiSignalResponse(value, config._allowed_entry_methods),
+      validateObject: value => positionManagementEnabled
+        ? validatePositionManagementResponse(value, positionManagementContext,
+          marketPlan => validateAiSignalResponse(marketPlan, config._allowed_entry_methods))
+        : validateAiSignalResponse(value, config._allowed_entry_methods),
     })
     parsed._inference_source = 'ai'
     localizeAiSignalUserVisibleFields(parsed)

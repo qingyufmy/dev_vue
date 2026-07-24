@@ -1,0 +1,1 @@
+export const DEFAULT_MAX_POSITION_SIZE = 0.05

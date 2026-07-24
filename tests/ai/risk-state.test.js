@@ -40,7 +40,7 @@ function runner({ state = stateRow, reserved = { volume: 0, daily_count: 0, noti
     if (sql.includes('FROM trading_accounts')) return [[accountRow], []]
     if (sql.includes('FROM global_risk_control')) return [[{ global_kill_switch: 0 }], []]
     if (sql.includes('FROM risk_account_state')) return [[state], []]
-    if (sql.includes('SUM(reserved_volume)')) return [[reserved], []]
+    if (sql.includes('SUM(rr.reserved_volume)') || sql.includes('SUM(reserved_volume)')) return [[reserved], []]
     if (sql.includes('COUNT(*) AS count')) return [[{ count: successes }], []]
     if (sql.includes('ORDER BY completed_at')) return [latest ? [latest] : [], []]
     if (sql.includes('approved_order_json')) return [duplicates, []]
@@ -174,10 +174,13 @@ describe('stateful gate', () => {
   })
 
   it('enforces daily count including active reservations', async () => {
-    const result = await evaluateStatefulRiskTx(runner({ reserved: { volume: 0, daily_count: 2, notional: 0 }, successes: 8 }), {
+    const observedRunner = runner({ reserved: { volume: 0, daily_count: 2, notional: 0 }, successes: 8 })
+    const result = await evaluateStatefulRiskTx(observedRunner, {
       userId: 2, accountId: 4, intentId: 9, request, policy: { ...DEFAULT_RISK_POLICY, max_daily_open_count:10 }, snapshot: snapshot(),
     })
     expect(result.reject_code).toBe('R2.3_DAILY_OPEN_COUNT')
+    const reservationQuery = observedRunner.mock.calls.find(call => String(call[0]).includes('SUM(rr.reserved_volume)'))?.[0]
+    expect(reservationQuery).toContain("rr.expires_at > NOW() OR oi.status IN ('bridge_sending','uncertain')")
   })
 
   it('observes an adjustable state rule in shadow mode without blocking the order', async () => {

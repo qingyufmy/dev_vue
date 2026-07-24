@@ -392,11 +392,21 @@ export async function updateTradingAccount(accountId, userId, payload = {}) {
   const existing = await queryOne('SELECT * FROM trading_accounts WHERE id = ? AND user_id = ? AND is_deleted = 0', [id, actorId])
   if (!existing) throw new Error('account_not_found')
   const marginMode = payload.margin_mode !== undefined ? normalizeMarginMode(payload.margin_mode) : existing.margin_mode
+  const brokerServer = String(payload.broker_server ?? existing.broker_server).trim()
+  const loginAccount = String(payload.login_account ?? existing.login_account).trim()
+  if (!brokerServer) throw new Error('broker_server_required')
+  if (!loginAccount) throw new Error('login_account_required')
+  const identityChanged = brokerServer.toUpperCase() !== String(existing.broker_server || '').trim().toUpperCase()
+    || loginAccount !== String(existing.login_account || '').trim()
+    || marginMode !== existing.margin_mode
+  if (identityChanged && existing.observe_status !== 'unverified') {
+    throw new Error('trading_account_identity_immutable')
+  }
   await queryRun(
     `UPDATE trading_accounts SET broker_server = ?, login_account = ?, nickname = ?, margin_mode = ?, updated_at = ?
      WHERE id = ? AND user_id = ? AND is_deleted = 0`,
     [
-      payload.broker_server ?? existing.broker_server, payload.login_account ?? existing.login_account,
+      brokerServer, loginAccount,
       payload.nickname ?? existing.nickname, marginMode, beijingNow(), id, actorId,
     ]
   )

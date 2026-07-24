@@ -1,0 +1,43 @@
+import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+
+const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
+const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
+const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
+const server = readFileSync(new URL('../../server/routes/admin-position-protection.js', import.meta.url), 'utf8')
+const bridge = readFileSync(new URL('../../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+
+describe('admin position protection UI contract', () => {
+  it('shows the edit action only to administrators for system-owned positions', () => {
+    expect(app).toContain('state.user?.role === "admin" && Number(position.magic) === 234000')
+    expect(app).toContain('data-edit-protection-ticket=')
+    expect(app).toContain('编辑保护')
+  })
+
+  it('provides preview, real progress, per-target results and failed-item retry', () => {
+    for (const id of [
+      'positionProtectionModal', 'positionProtectionImpact', 'positionProtectionProgress',
+      'positionProtectionResultBody', 'positionProtectionRetry',
+    ]) expect(html).toContain(`id="${id}"`)
+    expect(html).toContain('同步到同一信号涉及的所有用户')
+    expect(app).toContain("msg.type === 'position_protection_job_updated'")
+    expect(app).toContain('/retry-failed')
+    expect(css).toContain('.position-protection-target-status.failed')
+    expect(app).not.toContain('if (sourcePreview.sync_available) await loadPositionProtectionPreview(ticket, "signal")')
+    expect(app).toContain('Math.abs(stopLossValue - currentStopLoss) > 1e-8')
+    expect(app).toContain('body:{ preview_hash:preview.preview_hash }')
+  })
+
+  it('keeps batch execution on the server and verifies every MT5 write', () => {
+    expect(server).toContain("sendBridgeCommand(target.user_id, 'modify_system_position_protection'")
+    expect(server).toContain("if (Number(target.is_source))")
+    expect(server).toContain("'source_position_update_failed'")
+    expect(bridge).toContain('elif action == "modify_system_position_protection":')
+    expect(bridge).toContain('verified = self.mt5.positions_get(ticket=pos.ticket)')
+    expect(bridge).toContain('position_stop_loss_changed')
+    expect(bridge).toContain('position_take_profit_changed')
+    expect(bridge).toContain('"ticket": str(p.ticket)')
+    expect(server).toContain('stop_loss:expectedStopLoss')
+    expect(server).toContain('(position_id = ? OR entry_order_ticket = ?)')
+  })
+})

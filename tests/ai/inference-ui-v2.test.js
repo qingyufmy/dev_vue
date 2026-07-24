@@ -99,11 +99,12 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('stillExists || previousSelected || state.signals[0] || null')
   })
 
-  it('keeps inactive personal memory out of the active library', () => {
+  it('keeps inactive personal memory archived and exposes platform archive governance', () => {
     expect(app).toContain('const archivedItems = visibleItems.filter(item => ["revoked","expired","archival"].includes(item.status))')
     expect(app).toContain('const currentItems = visibleItems.filter(item => !["revoked","expired","archival"].includes(item.status))')
     expect(app).toContain("tab('long', '长期记忆'")
-    expect(app).not.toContain('data-platform-experience-action="delete"')
+    expect(app).toContain('data-platform-experience-action="delete"')
+    expect(app).toContain('function renderPlatformExperience(items = [], policies = [], evaluation = {})')
   })
 
   it('renders pending cancellation outcomes in signal details', () => {

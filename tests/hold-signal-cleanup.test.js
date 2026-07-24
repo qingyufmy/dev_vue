@@ -40,7 +40,6 @@ describe('hold signal cleanup schedule', () => {
 describe('deleteExpiredHoldSignals', () => {
   it('deletes inference artifacts and deliveries before signals in one transaction', async () => {
     const run = vi.fn()
-      .mockResolvedValueOnce([{ affectedRows: 1 }])
       .mockResolvedValueOnce([{ affectedRows: 2 }])
       .mockResolvedValueOnce([{ affectedRows: 2 }])
       .mockResolvedValueOnce([{ affectedRows: 3 }])
@@ -56,15 +55,14 @@ describe('deleteExpiredHoldSignals', () => {
     expect(mockQueryAll.mock.calls[0][0]).toContain("signal_type = 'hold'")
     expect(mockQueryAll.mock.calls[0][0]).toContain('DATE_SUB(CURDATE(), INTERVAL 1 DAY)')
     expect(run.mock.calls.map(call => call[0])).toEqual([
-      expect.stringContaining('DELETE FROM ai_paired_inference_runs'),
       expect.stringContaining('DELETE FROM memory_injection_logs'),
       expect.stringContaining('DELETE FROM inference_snapshots'),
       expect.stringContaining('DELETE FROM auto_signal_deliveries'),
       expect.stringContaining('DELETE FROM ai_signals'),
     ])
-    expect(run.mock.calls[4][0]).toContain("signal_type = 'hold'")
+    expect(run.mock.calls[3][0]).toContain("signal_type = 'hold'")
     expect(result).toEqual({ deletedSignals: 2, deletedDeliveries: 3, deletedSnapshots: 2,
-      deletedMemoryLogs: 2, deletedPairedRuns: 1, batches: 1 })
+      deletedMemoryLogs: 2, batches: 1 })
   })
 })
 
@@ -75,8 +73,9 @@ describe('orphan inference artifact migration', () => {
     const block = source.slice(start, source.indexOf('\n  }\n]', start))
     expect(block).toContain('DELETE snapshot_row FROM inference_snapshots')
     expect(block).toContain('outcome_row.id IS NULL AND review_row.id IS NULL')
-    expect(block).toContain('DELETE paired FROM ai_paired_inference_runs')
     expect(block).toContain('DELETE memory_log FROM memory_injection_logs')
+    expect(source).toContain("id: '135_remove_paired_inference_experiment'")
+    expect(source).toContain('DROP TABLE IF EXISTS ai_paired_inference_runs')
   })
 })
 

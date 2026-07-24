@@ -5,6 +5,7 @@ vi.mock('../../server/db.js', () => ({
   queryOne: vi.fn(),
   queryAll: vi.fn(),
   queryRun: vi.fn(() => Promise.resolve({ changes: 0, insertId: 0 })),
+  withConnection: vi.fn(),
   withTransaction: vi.fn(),
   beijingNow: vi.fn(() => '2026-07-15 12:00:00'),
 }))
@@ -89,13 +90,40 @@ import * as db from '../../server/db.js'
 import * as bridgeWs from '../../server/bridge-ws.js'
 import * as marketData from '../../server/routes/ai/market-data.js'
 import * as redisModule from '../../server/redis.js'
-import { __schedulerTest } from '../../server/routes/ai/scheduler.js'
+import { __schedulerTest, selectSchedulerFallbackStrategy } from '../../server/routes/ai/scheduler.js'
+
+describe('legacy scheduler strategy repair', () => {
+  const strategies = [
+    { id:7, scope:'private', owner_user_id:99 },
+    { id:8, scope:'private', owner_user_id:42 },
+    { id:9, scope:'platform', owner_user_id:0 },
+  ]
+
+  it('never assigns another user private strategy', () => {
+    expect(selectSchedulerFallbackStrategy(strategies, 42)).toMatchObject({ id:8 })
+    expect(selectSchedulerFallbackStrategy(strategies, 55)).toMatchObject({ id:9 })
+  })
+
+  it('returns null when no visible fallback exists', () => {
+    expect(selectSchedulerFallbackStrategy([{ id:7, scope:'private', owner_user_id:99 }], 42)).toBeNull()
+  })
+})
 
 describe('execution decision linkage', () => {
   it('reads a rejected pre-send risk decision from error details', () => {
     expect(__schedulerTest.executionRiskDecisionId({
       status: 'rejected', details: { risk_decision_id: 43 }, order_intent_id: 44,
     })).toBe(43)
+  })
+
+  it('preserves a durable success or uncertain result after later persistence fails', () => {
+    expect(__schedulerTest.durableDeliveryRecovery({ status:'succeeded', pending_ticket:'88' }))
+      .toEqual({ status:'success', kind:'pending', ticket:'88' })
+    expect(__schedulerTest.durableDeliveryRecovery({ status:'succeeded', trade_ticket:99 }))
+      .toEqual({ status:'success', kind:'trade', ticket:'99' })
+    expect(__schedulerTest.durableDeliveryRecovery({ status:'uncertain' }))
+      .toEqual({ status:'uncertain', kind:null, ticket:null })
+    expect(__schedulerTest.durableDeliveryRecovery({ status:'failed' })).toBeNull()
   })
 })
 
@@ -145,32 +173,29 @@ describe('weekly flatten inference boundary', () => {
   })
 })
 
-describe('cancel_pending broker suffix (Fix 4)', () => {
-  it('normalizes condition type and broker suffix', () => {
-    expect(__schedulerTest.normalizeCancelCondition(
-      { symbol: 'XAUUSD.s', pending_type: 'BUY_LIMIT' }, 'XAUUSD'
-    )).toMatchObject({ symbol: 'XAUUSD', pending_type: 'buy_limit' })
+describe('strategy-owned pending order selection', () => {
+  const deliveries = [{ pending_ticket:'10' }, { pending_ticket:'11' }, { pending_ticket:'12' }]
+
+  it('selects only system pending orders delivered by the current strategy', () => {
+    const orders = [
+      { symbol:'XAUUSD.s', ticket:10, pending_type:'BUY_LIMIT', magic:234000, price:1999 },
+      { symbol:'XAUUSD.s', ticket:11, pending_type:'BUY_LIMIT', magic:0, price:1999 },
+      { symbol:'XAUUSD.s', ticket:12, pending_type:'BUY_LIMIT', magic:9988, price:1999 },
+      { symbol:'XAUUSD.s', ticket:13, pending_type:'BUY_LIMIT', magic:234000, price:1999 },
+      { symbol:'XAUUSD.s', ticket:14, pending_type:'SELL_LIMIT', magic:234000, price:1999 },
+    ]
+
+    expect(__schedulerTest.selectOwnedStrategyPendingOrders(orders, deliveries, 'XAUUSD', 'buy'))
+      .toEqual([orders[0]])
   })
 
-  it('validates ticket before cancel_all', () => {
-    expect(__schedulerTest.matchPendingCancelCondition(
-      { symbol: 'XAUUSD.s', ticket: null },
-      { symbol: 'XAUUSD', cancel_all: true }
-    )).toEqual({ matched: false, reason: 'invalid_pending_ticket' })
-  })
-
-  it.each([null, '', 'abc', 0, -1, Infinity])('rejects invalid price %s for a price condition', (price) => {
-    const result = __schedulerTest.matchPendingCancelCondition(
-      { symbol: 'XAUUSD.s', ticket: 10, pending_type: 'BUY_LIMIT', price },
-      { symbol: 'XAUUSD', pending_type: 'buy_limit', max_price: 2000 })
-    expect(result).toMatchObject({ matched: false, reason: 'invalid_pending_price' })
-  })
-
-  it('matches type case-insensitively with a valid price', () => {
-    expect(__schedulerTest.matchPendingCancelCondition(
-      { symbol: 'XAUUSD.c', ticket: 10, pending_type: 'BUY_LIMIT', price: 1999 },
-      { symbol: 'XAUUSD', pending_type: 'buy_limit', max_price: 2000 }
-    )).toEqual({ matched: true, ticket: '10' })
+  it('does not match a manual or another-strategy order at the same symbol, side, and price', () => {
+    const orders = [
+      { symbol:'XAUUSD.c', ticket:21, pending_type:'BUY_LIMIT', magic:0, price:1999 },
+      { symbol:'XAUUSD.c', ticket:22, pending_type:'BUY_LIMIT', magic:234000, price:1999 },
+    ]
+    expect(__schedulerTest.selectOwnedStrategyPendingOrders(
+      orders, [{ pending_ticket:'99' }], 'XAUUSD', 'buy')).toEqual([])
   })
 
   it('counts both directions for the same base symbol', () => {
@@ -231,6 +256,13 @@ describe('scheduler wait cadence', () => {
     expect(__schedulerTest.retryDelayMs('admin_bridge_offline')).toBe(5000)
   })
 
+  it('backs repeated model failures off instead of retrying every 20 seconds', () => {
+    expect(__schedulerTest.retryDelayMs('ai_failed', 1)).toBe(60000)
+    expect(__schedulerTest.retryDelayMs('ai_failed', 2)).toBe(120000)
+    expect(__schedulerTest.retryDelayMs('ai_failed', 3)).toBe(240000)
+    expect(__schedulerTest.retryDelayMs('ai_failed', 4)).toBe(300000)
+  })
+
   it('logs wait transitions immediately and unchanged states only every 30 minutes', () => {
     const state = { _lastLoggedWaitReason: '', _lastWaitLogAtMs: 0 }
     expect(__schedulerTest.shouldLogSchedulerWait(state, 'market_closed', 1000)).toBe(true)
@@ -241,15 +273,27 @@ describe('scheduler wait cadence', () => {
   })
 })
 
-describe('fixed schedule slots', () => {
-  it('aligns the next run to the next five-minute wall-clock boundary', () => {
-    const at = Date.parse('2026-07-21T12:03:40.000Z')
-    expect(__schedulerTest.secondsUntilNextScheduleSlot(5, at)).toBe(80)
+describe('fixed-slot scheduler cooldown', () => {
+  const at = (minute, second = 0, ms = 0) => Date.UTC(2026, 6, 24, 12, minute, second, ms)
+
+  it('aligns a slow five-minute cycle to the next wall-clock slot', () => {
+    expect(__schedulerTest.nextFixedSlotDeadlineMs(5, at(2))).toBe(at(5))
+    expect(__schedulerTest.fixedSlotCooldownSeconds(5, at(2))).toBe(180)
   })
 
-  it('moves a completed boundary to the following slot', () => {
-    const at = Date.parse('2026-07-21T12:05:00.000Z')
-    expect(__schedulerTest.secondsUntilNextScheduleSlot(5, at)).toBe(300)
+  it('skips elapsed slots instead of replaying or accumulating drift', () => {
+    expect(__schedulerTest.nextFixedSlotDeadlineMs(5, at(7))).toBe(at(10))
+    expect(__schedulerTest.fixedSlotCooldownSeconds(5, at(7))).toBe(180)
+  })
+
+  it('chooses a future slot at the boundary and rounds the final fraction up', () => {
+    expect(__schedulerTest.fixedSlotCooldownSeconds(5, at(5))).toBe(300)
+    expect(__schedulerTest.fixedSlotCooldownSeconds(5, at(4, 59, 500))).toBe(1)
+  })
+
+  it('uses the same default alignment after a restart with an invalid interval', () => {
+    expect(__schedulerTest.nextFixedSlotDeadlineMs(null, at(2))).toBe(at(5))
+    expect(__schedulerTest.nextFixedSlotDeadlineMs(0, at(2))).toBe(at(5))
   })
 })
 
@@ -396,24 +440,18 @@ describe('Delivery claiming (Fix 3)', () => {
 })
 
 describe('automatic inference bridge snapshot', () => {
-  const validAccount = { status: 'success', balance: 10000, equity: 10020 }
-  const validPositions = { status: 'success', positions: [] }
-  const validPending = { status: 'success', orders: [] }
-
-  it('accepts a complete snapshot', () => {
-    expect(__schedulerTest.validateInferenceBridgeSnapshot(validAccount, validPositions, validPending)).toMatchObject({
-      ok: true, positions: [], pendingOrders: [],
-    })
-  })
-
-  it.each([
-    [{ status: 'error' }, validPositions, validPending, 'account_failed'],
-    [validAccount, { status: 'error' }, validPending, 'positions_failed'],
-    [validAccount, validPositions, { status: 'error' }, 'pending_list_failed'],
-    [validAccount, { status: 'success' }, validPending, 'positions_failed'],
-    [validAccount, validPositions, { status: 'success' }, 'pending_list_failed'],
-  ])('fails closed for an invalid bridge component', (account, positions, pending, reason) => {
-    expect(__schedulerTest.validateInferenceBridgeSnapshot(account, positions, pending)).toEqual({ ok: false, reason })
+  it('stores history for offline subscribers without scheduling stale automatic execution', () => {
+    expect(__schedulerTest.buildSignalDeliveryRows({
+      signalId:12,
+      userIds:new Set([7, 8, 8]),
+      onlineUserIds:new Set([7]),
+      promptTypeId:3,
+      symbol:'XAUUSD',
+      createdAt:'2026-07-24 12:00:00',
+    })).toEqual([
+      expect.objectContaining({ userId:7, deliveryStatus:'delivered', executionStatus:'not_attempted', executionResult:null }),
+      expect.objectContaining({ userId:8, deliveryStatus:'stored_offline', executionStatus:'skipped' }),
+    ])
   })
 })
 

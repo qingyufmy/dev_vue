@@ -37,11 +37,28 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('MT5 拒绝挂单：挂单价格无效')
   })
 
+  it('binds manual close and cancel commands to the state the user reviewed', () => {
+    expect(app).toContain('pendingOrders: []')
+    expect(app).toContain('function managementExpectedState(item, ticket, kind)')
+    expect(app).toContain('broker_server_key: identity.brokerServerKey')
+    expect(app).toContain('login_account: identity.loginAccount')
+    expect(app).toContain('MT5 账户身份尚未加载，请刷新账户状态后重试')
+    expect(app).toContain('expected_state: managementExpectedState(order, ticket, "pending")')
+    expect(app).toContain('confirm: true')
+    expect(app).toContain('expected_state: managementExpectedState(position, ticket, "position")')
+    expect(app).toContain('挂单状态已变化，请刷新后重试')
+    expect(app).toContain('持仓状态已变化，请刷新后重试')
+    expect(bridgeWs).toContain("const cancelParams = { ticket, expected_state: params.expected_state }")
+    expect(bridgeWs).toContain('expected_state:params.expected_state')
+    expect(bridgeWs).toContain("'manual_cancel_pending'")
+    expect(bridgeWs).toContain("message:'manual_confirmation_required'")
+  })
+
   it('publishes recoverable, ordered progress for every inference stage', () => {
     for (const field of ['progress_percent', 'progress_seq', 'cycle_id', 'cycle_started_at', 'stage_updated_at']) {
       expect(scheduler).toContain(field)
     }
-    for (const stage of ['config', 'bridge', 'market', 'ai', 'persist', 'publish', 'delivery', 'verify', 'complete']) {
+    for (const stage of ['config', 'bridge', 'market', 'ai', 'persist', 'publish', 'delivery', 'complete']) {
       expect(scheduler).toContain(`stage: '${stage}'`)
     }
     expect(scheduler).toContain('active_cycles: activeCycles')
@@ -73,7 +90,7 @@ describe('AI governance navigation and DOM contract', () => {
   })
 
   it('provides the unified user and administrator information architecture', () => {
-    for (const tab of ['model-strategy', 'trading', 'risk-center', 'history', 'review-memory']) {
+    for (const tab of ['model-strategy', 'trading', 'risk-center', 'history', 'audit', 'review-memory']) {
       expect(html).toContain(`data-tab="${tab}"`)
       expect(html).toContain(`id="${tab}"`)
     }
@@ -83,7 +100,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('data-model-strategy-panel="models"')
     expect(html).not.toContain('data-tab="model-management"')
     expect(html).not.toContain('data-tab="ai-config"')
-    for (const tab of ['global-risk', 'model-compare', 'admin-dashboard', 'audit']) {
+    for (const tab of ['global-risk', 'model-compare', 'admin-dashboard']) {
       expect(html).not.toContain(`id="${tab}"`)
     }
     expect(html).toContain('href="/admin/?view=ai-operations"')
@@ -96,6 +113,17 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).not.toContain('data-tab="account-review"')
     expect(html.indexOf('data-tab="model-strategy"')).toBeGreaterThan(html.indexOf('data-tab="risk-center"'))
     expect(html.indexOf('data-tab="model-strategy"')).toBeLessThan(html.indexOf('data-tab="review-memory"'))
+  })
+
+  it('restores the dedicated user-scoped system audit workspace', () => {
+    expect(html.match(/data-tab="audit"/g)).toHaveLength(2)
+    expect(html).toContain('<section id="audit" class="tab-panel">')
+    expect(html).toContain('时间（MT5）')
+    expect(html).toContain('风控与执行记录')
+    expect(app).toContain('wsApi("audit_logs")')
+    expect(app).toContain('row?.created_at_mt5 || row?.created_at')
+    expect(app).toContain('pagerButton.dataset.pager === "audit"')
+    expect(bridgeWs).toContain("trade_audit_logs WHERE user_id = ?")
   })
 
   it('organizes the administrator operations center around health, actions, users, and releases', () => {
@@ -116,15 +144,16 @@ describe('AI governance navigation and DOM contract', () => {
     expect(bridgeWs).toContain('AS model_failures_today')
     expect(bridgeWs).toContain('AS reviews_pending')
     expect(bridgeWs).toContain('healthStats: healthStats || {}')
-    expect(app).toContain('state.user?.membershipExpired === true')
+    expect(app).toContain("accessRes.access?.mode === 'blocked'")
+    expect(app).toContain('renderMembershipAccessState')
     expect(bridgeWs).toContain('Number(oldStats?.old_today || 0) + Number(delivStats?.deliv_today || 0)')
     expect(bridgeWs).toContain("selectedSymbols.join('、') || null")
   })
 
-  it('accepts a token handoff before the early authentication redirect', () => {
+  it('does not accept session credentials through the page URL', () => {
     const earlyAuth = html.slice(html.indexOf('(function()'), html.indexOf('</script>'))
-    expect(earlyAuth).toContain("new URLSearchParams(window.location.search).get('token')")
-    expect(earlyAuth.indexOf("localStorage.setItem('authToken', t)")).toBeLessThan(earlyAuth.indexOf("window.location.replace('/ai/auth/?mode=login&next=%2Fai%2F')"))
+    expect(earlyAuth).not.toContain("new URLSearchParams(window.location.search).get('token')")
+    expect(app).not.toContain('searchParams.get("token")')
   })
 
   it('marks administrator controls and keeps private review and memory pages user-scoped', () => {
@@ -170,13 +199,16 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('id="sharedCredentialNotice"')
     expect(adminApp).toContain('id="platformDailyRequests"')
     expect(adminApp).toContain('id="platformDailyTokens"')
-    expect(html).not.toContain('id="policyDailyRequests"')
+    expect(html).toContain('id="policyDailyRequests"')
+    expect(app).toContain('async function savePlatformPolicy()')
     const stateBlock = app.slice(app.indexOf('const state = {'), app.indexOf('// ===== History Cache'))
     expect(stateBlock).not.toMatch(/^\s*(?:apiKey|api_key|credential)\s*:/mi)
     expect(html).not.toContain('id="apiKey"')
     expect(html).not.toContain('id="autoApiKey"')
     expect(app).not.toContain('$("apiKey")')
-    expect(html).toContain('付费配对实验（额外一次调用）')
+    expect(html).not.toContain('付费配对实验')
+    expect(html).not.toContain('userPairedExperimentFlag')
+    expect(app).not.toContain('paired_experiment_enabled')
   })
 
   it('keeps existing model providers editable while supporting custom compatible endpoints', () => {
@@ -269,12 +301,26 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain("const canSubscribe = item.scope === 'platform' || Number(item.owner_user_id) === Number(state.user?.id)")
     expect(app).toContain('仅审计可见')
     expect(html).toContain('id="strategyModelHelp"')
-    expect(html).not.toContain('id="strategyScopeField"')
-    expect(adminApp).toContain('data-ai-tab="strategies"')
+    expect(html).toContain('id="strategyScopeField"')
+    expect(app).toContain('新建平台策略')
+    expect(app).toContain("|| (item.scope === 'platform' && state.user?.role === 'admin')")
+    expect(adminApp).not.toContain('data-ai-tab="strategies"')
     expect(adminApp).toContain('id="platformStrategyVisibility"')
     expect(adminApp).toContain("scope:'platform'")
     expect(adminRoutes).toContain("router.post('/admin/ai/strategies'")
     expect(app).toContain('renderStrategyModelOptions')
+  })
+
+  it('keeps platform strategy, model, review and memory management inside the AI lab', () => {
+    expect(app).not.toContain('平台模型已迁移到统一管理后台')
+    expect(app).not.toContain('平台复盘已迁移')
+    expect(app).not.toContain('统一管理平台复盘与记忆')
+    expect(app).toContain('api(`/api/ai/model-profiles${profileScopeQuery()}`)')
+    expect(app).toContain('if (state.user?.role === "admin") body.scope = "platform"')
+    expect(app).toContain('api("/api/ai/admin/platform-experience")')
+    expect(app).toContain('renderPlatformExperience(state.memoryItems')
+    expect(html).toContain('id="platformExperiencePolicies"')
+    expect(html).toContain('id="platformExperienceEvaluation"')
   })
 
   it('lets private strategy owners explicitly opt into position and pending-order context', () => {
@@ -455,9 +501,9 @@ describe('AI governance navigation and DOM contract', () => {
     expect(groups).not.toContain('observation_hours')
     expect(groups).not.toContain('ai_volume_step')
     expect(groups).not.toContain('max_notional_exposure_pct')
-    expect(adminApp).toContain('平台默认值')
-    expect(adminApp).toContain('用户可选最大值')
-    expect(adminCss).toContain('.risk-rule-card')
+    expect(adminApp).toContain('平台值')
+    expect(adminApp).toContain('用户最大值')
+    expect(adminCss).toContain('.risk-policy-row')
   })
 
   it('shows one percentage execution-deviation setting and hides the retired split controls', () => {
@@ -490,11 +536,13 @@ describe('AI governance navigation and DOM contract', () => {
     expect(groups).not.toContain('min_margin_level_pct')
   })
 
-  it('preserves the open platform-risk group in the unified administration workbench', () => {
-    expect(adminApp).toContain("riskOpenGroup:'account'")
-    expect(adminApp).toContain('data-risk-policy-group=')
-    expect(adminApp).toContain("state.riskOpenGroup===group?'open':''")
-    expect(adminApp).toContain('if(detail.open)state.riskOpenGroup=detail.dataset.riskPolicyGroup')
+  it('uses one searchable platform-risk matrix and protects unsaved changes', () => {
+    expect(adminApp).not.toContain("riskOpenGroup:'account'")
+    expect(adminApp).not.toContain('data-risk-policy-group=')
+    expect(adminApp).toContain('riskPolicySearch')
+    expect(adminApp).toContain('riskPolicyHasChanges')
+    expect(adminApp).toContain('risk-policy-matrix')
+    expect(adminCss).toContain('.risk-policy-console')
     expect(adminApp).toContain('保存后立即生效')
     expect(app).not.toContain('captureGlobalRiskEditorState')
   })
@@ -745,7 +793,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(adminCss).toContain('.workspace-modal { width:100%; max-height:100dvh; height:100dvh;')
     expect(adminCss).toContain('.compare-workspace { grid-template-columns:1fr; }')
     expect(adminCss).toContain('.observer-source-row { align-items:flex-start; flex-direction:column; }')
-    expect(html).not.toContain('data-tab="audit"')
+    expect(css).toContain('.audit-table { min-width: 860px; }')
   })
 
   it('uses a readable product type scale across the core AI workspaces', () => {
@@ -883,7 +931,33 @@ describe('route permissions and credential redaction', () => {
     expect(autoStatus).toContain('getUserAutoRuntimeStatus(userId)')
     expect(autoStatus).not.toContain('getAdminUserId')
     expect(routes).toContain('if (!scheduler.enabled) await removeUserRuntimeAutoSubscription(req.user.id)')
-    expect(routes).toContain('res.json({ ok:true, scheduler })')
+    expect(routes).toContain('res.json({ ok:true, scheduler, runtime_sync })')
+  })
+
+  it('fails closed when no observer channel is authorized and scopes signals to the bound strategy', () => {
+    expect(bridgeWs).toContain('return { bridgeUserId:null, channel:null }')
+    expect(bridgeWs).not.toContain('return { bridgeUserId:await getActivePlatformBridgeUserId(), channel:null }')
+    expect(bridgeWs).toContain('const observerStrategyId = access.mode === \'observer\'')
+    expect(bridgeWs).toContain("observerStrategyId ? 'AND d.prompt_type_id = ?' : ''")
+    expect(routes).toContain('strategy_id:Number(observerSource.strategy_id)')
+    expect(bridgeWs).not.toContain('_admin_override')
+    expect(bridgeWs).not.toContain('Fallback: try admin bridge')
+    expect(bridgeWs).not.toContain('Fall back to admin bridge for read operations')
+  })
+
+  it('keeps transient bootstrap failures signed in and removes browser JWTs from websocket URLs', () => {
+    expect(app).toContain('error?.name === "ApiError" && Number(error.status) === 401')
+    expect(app).toContain('renderBootstrapError(error)')
+    expect(app).toContain('/aurum-api/bridge/ws?type=browser`')
+    expect(app).not.toContain('type=browser&token=')
+    expect(app).toContain('window.AuthSession?.syncCookie()')
+    expect(bridgeWs).toContain("readCookie(req, 'ws_token')")
+    expect(bridgeWs).toContain('Browser websocket auth failed: ws_token cookie missing')
+  })
+
+  it('maps unexpected API failures to a generic incident instead of returning raw errors', () => {
+    expect(routes).toContain("error:'ai_internal_error', incident_id:incidentId")
+    expect(routes).not.toContain("return res.status(status).json({ ok: false, error: String(error?.message")
   })
 
   it('returns sanitized profiles and never serializes encrypted or plaintext credentials', () => {
@@ -892,5 +966,14 @@ describe('route permissions and credential redaction', () => {
     expect(profiles).toContain("out.masked_api_key = out.has_api_key ? '****' : null")
     expect(routes).toContain("router.get('/ai/model-source'")
     expect(routes).not.toContain('api_key_encrypted: resolved.model.api_key_encrypted')
+  })
+
+  it('audits sensitive AI control-plane mutations without recording model secrets', () => {
+    for (const action of [
+      'observer_source_created', 'ai_model_profile_created', 'ai_model_profile_updated',
+      'ai_strategy_created', 'trading_account_updated', 'ai_strategy_subscription_updated',
+    ]) expect(routes).toContain(action)
+    expect(routes).toContain('credential_rotated:Boolean(req.body?.api_key)')
+    expect(routes).not.toContain('detail:JSON.stringify(req.body)')
   })
 })

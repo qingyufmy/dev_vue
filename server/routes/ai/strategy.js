@@ -7,7 +7,7 @@ import { mt5Bridge, platformRates, calculateMarketData, computeAtr14 } from './m
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, parsePromptSymbols } from './config.js'
 import { resolveOwnedModelProfileForRuntime } from './model-profiles.js'
-import { retrievePersonalMemory, attachMemoryInjectionSignal, recordPairedInferenceRun, buildPersonalMemoryRetrievalContext } from './memory-system.js'
+import { retrievePersonalMemory, attachMemoryInjectionSignal, buildPersonalMemoryRetrievalContext } from './memory-system.js'
 import { attachPlatformExperienceSignal, retrievePlatformExperience } from './platform-experience.js'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
@@ -18,6 +18,8 @@ import { loadPeriodMarketWindow } from './period-market-evidence.js'
 import { normalizeBacktestOptions, simulateVirtualAccount } from './model-backtest.js'
 import { resolveModelSnapshotSelection } from './model-snapshot-samples.js'
 import { resolvePlatformAiVolumeRange } from './risk-policy.js'
+import { createTradeThesisTx, hasActivePositionManagementGroups,
+  loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
 import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
@@ -657,6 +659,24 @@ export async function handleAnalyze(userId, params) {
       marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
     })
   }
+  let positionManagementContext = null
+  try {
+    positionManagementContext = await loadActivePositionManagementContext({
+      strategyId:Number(strategy.id),
+      strategyVersion:Number(strategy.version || 1),
+      strategyScope:strategy.scope,
+      ownerUserId:strategy.scope === 'private' ? userId : 0,
+      symbol,
+      market,
+      decisionTimeframe:primaryTf,
+    })
+    if (hasActivePositionManagementGroups(positionManagementContext)
+      && positionManagementContext.as_of.closed_bar_time_utc_ms) {
+      config._positionManagementContext = positionManagementContext
+    }
+  } catch (error) {
+    console.error('[Analyze] Position management context unavailable; continuing with new signal only:', error.message)
+  }
   let memory = { promptBlock: '', mode: 'off', logId: null }
   try {
     if (strategy.scope === 'platform') {
@@ -743,10 +763,36 @@ export async function handleAnalyze(userId, params) {
       modelName: config?.model_name, credentialSource: config?._credential_source,
       memoryMode: strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off'), createdAt,
     })
+    await createTradeThesisTx(run, {
+      signalId:result.insertId,
+      strategyId:Number(strategy.id),
+      strategyVersion:Number(strategy.version || 1),
+      strategyScope:strategy.scope,
+      ownerUserId:Number(strategy.owner_user_id || 0),
+      signal:{ ...signal, symbol },
+      market,
+      decisionTimeframe:primaryTf,
+      modelProfileId:config?._model_profile_id,
+      modelName:config?.model_name,
+    })
     return { signalId: result.insertId, snapshotId }
   })
 
   signal.id = persisted.signalId
+  if (signal._position_management && positionManagementContext) {
+    try {
+      await persistPositionManagementEvaluations({
+        signalId:signal.id,
+        context:positionManagementContext,
+        management:signal._position_management,
+      })
+    } catch (error) {
+      console.error('[Analyze] Position management task persistence failed:', error.message)
+      await insertAudit(null, userId, 'position_management_persist_failed', symbol,
+        { signal_id:signal.id, strategy_id:Number(strategy.id) },
+        { status:'error', message:error.message }, 'error')
+    }
+  }
   if (strategy.scope === 'private' && memory.logId) {
     try { await attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId) }
     catch (error) { console.error('[Analyze] Memory injection attribution failed:', error.message) }
@@ -795,12 +841,21 @@ export async function handleAnalyze(userId, params) {
       await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(execResult || {}), signal.id])
       if (execResult && execResult.status === 'success') {
         const isPending = orderPayload.entry_method && orderPayload.entry_method !== 'market' && orderPayload.entry_method !== 'observe'
-        const ticket = execResult.order || execResult.ticket || null
+        const ticket = isPending
+          ? (execResult.order || execResult.pending_ticket || execResult.ticket || null)
+          : (execResult.position_id || execResult.position || execResult.trade_ticket || execResult.ticket || execResult.order || null)
         if (isPending) {
-          await queryRun('UPDATE ai_signals SET pending_ticket = ?, pending_state = ? WHERE id = ?',
-            [String(ticket), 'pending', signal.id])
+          const pendingState = ['pending', 'partially_filled', 'filled', 'cancelled', 'expired']
+            .includes(String(execResult.pending_state || '').toLowerCase())
+            ? String(execResult.pending_state).toLowerCase() : 'pending'
+          const pendingExecuted = ['partially_filled', 'filled'].includes(pendingState)
+          await queryRun(`UPDATE ai_signals SET pending_ticket = ?, pending_state = ?, is_executed = ?,
+            executed_at = CASE WHEN ? = 1 THEN COALESCE(executed_at, ?) ELSE executed_at END WHERE id = ?`,
+          [String(ticket), pendingState, pendingExecuted ? 1 : 0, pendingExecuted ? 1 : 0, beijingNow(), signal.id])
           signal.pending_ticket = String(ticket)
-          signal.pending_state = 'pending'
+          signal.pending_state = pendingState
+          signal.is_executed = pendingExecuted
+          if (pendingExecuted && !signal.executed_at) signal.executed_at = beijingNow()
         } else {
           await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?',
             [beijingNow(), ticket, signal.id])
@@ -826,29 +881,6 @@ export async function handleAnalyze(userId, params) {
       await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(signal.execution_result), signal.id])
       sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: 'failed' })
     }
-    }
-  }
-
-  if (strategy.scope === 'private' && memory.pairedExperimentEnabled && memory.mode === 'active' && memory.promptBlock) {
-    let control = null
-    let pairStatus = 'failed'
-    let pairError = null
-    try {
-      const controlConfig = { ...config, _memoryContext: '', _memoryMode: 'off' }
-      delete controlConfig._onInferencePrepared
-      control = await maybeAiSignal(null, controlConfig, market, prompt)
-      const controlSource = control?._inference_source
-      if (control) delete control._inference_source
-      pairStatus = controlSource === 'ai' ? 'succeeded' : 'failed'
-      pairError = pairStatus === 'failed' ? (control?.reasoning || 'paired_control_failed') : null
-    } catch (error) {
-      pairError = error.message || 'paired_control_failed'
-    }
-    try {
-      await recordPairedInferenceRun({ userId, strategyId: Number(strategy.id), signalId: signal.id,
-        memoryLogId: memory.logId, treatment: signal, control, status: pairStatus, errorCode: pairError })
-    } catch (error) {
-      console.error('[Analyze] Paired inference evidence write failed:', error.message)
     }
   }
 

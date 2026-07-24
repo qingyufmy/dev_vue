@@ -15,8 +15,9 @@ import { getRiskRuleRolloutModes } from './rollout-governance.js'
 import { getInferencePreference } from './inference-preferences.js'
 import { parseStrategyPolicy } from './strategy-policy.js'
 import { subscriptionAllowsExecution, subscriptionAllowsInference } from './subscription-schedule.js'
+import { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 
-export const DEFAULT_MAX_POSITION_SIZE = 0.05
+export { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
 export const DEFAULT_TAKE_PROFIT_MODE = 'ai_recommended'
 export const DEFAULT_TEMPERATURE = 0.3
@@ -143,6 +144,37 @@ export async function getAnalyzeApiKey(userId, sessionId, strategyId = null) {
     _ai_volume_max: aiVolumeRange.max,
     _ai_volume_step: aiVolumeRange.step,
   }
+}
+
+export function enrichOrderRequest({ request:prepared, quote } = {}) {
+  if (!prepared || !quote) return
+  const offset = Number(quote.timezone_offset_minutes)
+  if (Number.isFinite(offset) && offset >= -720 && offset <= 840) {
+    prepared.mt5_timezone_offset_minutes = Math.trunc(offset)
+  }
+  if (!prepared.symbol) return
+  prepared.quote_price = parseFloat(prepared.order_type === 'buy' ? quote.ask : quote.bid)
+  const pointSize = quote.point || (prepared.quote_price > 1000 ? 0.01 : 0.0001)
+  if (prepared.stop_loss_points && !prepared.sl) {
+    prepared.sl = prepared.order_type === 'buy'
+      ? round2(prepared.quote_price - prepared.stop_loss_points * pointSize)
+      : round2(prepared.quote_price + prepared.stop_loss_points * pointSize)
+  }
+  if (prepared.take_profit_points && !prepared.tp) {
+    prepared.tp = prepared.order_type === 'buy'
+      ? round2(prepared.quote_price + prepared.take_profit_points * pointSize)
+      : round2(prepared.quote_price - prepared.take_profit_points * pointSize)
+  }
+}
+
+export function projectPendingRiskSnapshot(pending, replacePendingTickets, sourceType) {
+  const rows = Array.isArray(pending) ? pending : []
+  if (sourceType !== 'auto_delivery') return rows
+  const replacementTickets = new Set((Array.isArray(replacePendingTickets) ? replacePendingTickets : [])
+    .map(ticket => String(ticket || '').trim()).filter(Boolean))
+  if (!replacementTickets.size) return rows
+  return rows.filter(item =>
+    !replacementTickets.has(String(item?.ticket ?? item?.mt5_ticket ?? '').trim()))
 }
 
 export async function getAutoConfig(db, userId) {
@@ -286,20 +318,7 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
   const filtered = rows.filter(r => {
     if (r.strategy_scope === 'private' && Number(r.strategy_owner_user_id) !== Number(r.user_id)) return false
     if (!subscriptionAllowsInference(r)) return false
-    // Determine user's effective symbols: selected_symbols_json ∩ strategy symbols
-    let userSymbols = []
-    try {
-      if (r.selected_symbols_json) {
-        userSymbols = JSON.parse(r.selected_symbols_json)
-      } else {
-        // NULL = old user, fall back to strategy all symbols
-        userSymbols = JSON.parse(r.strategy_symbols_json || '[]')
-      }
-    } catch (e) { console.warn('[Config] Failed to parse user symbols:', e.message) }
-    // Intersection with strategy symbols
-    let strategySymbols = []
-    try { strategySymbols = JSON.parse(r.strategy_symbols_json || '[]') } catch (e) {}
-    const effectiveSymbols = userSymbols.filter(s => strategySymbols.includes(s))
+    const effectiveSymbols = resolveEffectiveSymbols(r.selected_symbols_json, r.strategy_symbols_json)
     if (effectiveSymbols.length === 0) return false
     return effectiveSymbols.some(s => {
       const sNorm = String(s).toUpperCase().trim()
@@ -457,10 +476,41 @@ export async function getCloseSignalTickets(userId) {
   return map
 }
 
+export function isAiPendingOrderRequest(request = {}, sourceType = 'manual') {
+  if (sourceType === 'manual') return false
+  const entryMethod = String(request.entry_method || '').toLowerCase()
+  return entryMethod !== '' && !['market', 'observe'].includes(entryMethod)
+}
+
+export async function assertAiPendingOrderEnabled() {
+  const control = await queryOne(`SELECT ai_pending_order_enabled
+    FROM global_position_management_control WHERE id = 1`)
+  if (Number(control?.ai_pending_order_enabled ?? 0) !== 1) {
+    throw new RiskReject('ai_pending_order_disabled')
+  }
+}
+
+export async function assertAiPendingCancelEnabled() {
+  const control = await queryOne(`SELECT ai_pending_cancel_enabled
+    FROM global_position_management_control WHERE id = 1`)
+  if (Number(control?.ai_pending_cancel_enabled ?? 0) !== 1) {
+    throw new RiskReject('ai_pending_cancel_disabled')
+  }
+}
+
 export async function executeOrderCore(userId, config, request, action, options = {}) {
   options = { ...options, noFallback: true }
   const signalId = request.signal_id ?? options.signalId ?? null
   const sourceType = options.sourceType || (options.deliveryId ? 'auto_delivery' : signalId ? 'signal' : 'manual')
+  if (isAiPendingOrderRequest(request, sourceType)) {
+    try {
+      await assertAiPendingOrderEnabled()
+    } catch (error) {
+      const result = { status:'rejected', message:error?.reason || error?.message || 'ai_pending_order_disabled' }
+      await insertAudit(null, userId, action, request.symbol, request, result, 'rejected')
+      return result
+    }
+  }
   const ruleModes = await getRiskRuleRolloutModes()
   const result = await prepareAndExecuteOrderIntent({
     userId,
@@ -495,13 +545,11 @@ export async function executeOrderCore(userId, config, request, action, options 
         policy: resolved.policy,
       }
     },
-    enrichRequest: async ({ request: prepared, quote }) => {
-      const offset = Number(quote?.timezone_offset_minutes)
-      if (Number.isFinite(offset) && offset >= -720 && offset <= 840) {
-        prepared.mt5_timezone_offset_minutes = Math.trunc(offset)
-      }
-    },
     buildBridgeCall: buildBridgeOrderCall,
+    beforeBridgeSend: async ({ bridgeAction }) => {
+      if (sourceType !== 'manual' && bridgeAction === 'pending') await assertAiPendingOrderEnabled()
+    },
+    afterRiskPrepared: options.afterRiskPrepared,
     resolveTradingAccount: ({ actorId, account, requestedAccountId }) => syncTradingAccountIdentity(actorId, account, requestedAccountId),
     statefulValidate: ({ run, tradingAccountId, intentId, request: approved, risk, riskContext }) => evaluateStatefulRiskTx(run, {
       userId,
@@ -540,6 +588,12 @@ export async function executeOrderCore(userId, config, request, action, options 
         if (message.includes('Unknown action: risk_snapshot')) throw new Error('bridge_upgrade_required_for_incremental_risk')
         throw new Error(message || 'risk_snapshot_failed')
       }
+      const replacementPendingTickets = sourceType === 'auto_delivery'
+        ? new Set((Array.isArray(options.replacePendingTickets) ? options.replacePendingTickets : [])
+          .map(ticket => String(ticket || '').trim()).filter(Boolean))
+        : new Set()
+      const projectedPending = projectPendingRiskSnapshot(
+        riskSnapshot.pending, [...replacementPendingTickets], sourceType)
       const instruments = {}
       for (const item of Object.values(riskSnapshot.instruments || {})) {
         if (!item?.name) continue
@@ -565,7 +619,8 @@ export async function executeOrderCore(userId, config, request, action, options 
       }
       return {
         account, quote, instrument, instruments, fxRates,
-        positions: riskSnapshot.positions || [], pending: riskSnapshot.pending || [],
+        positions:riskSnapshot.positions || [], pending:projectedPending,
+        replacement_pending_tickets:[...replacementPendingTickets],
         snapshot_complete: riskSnapshot.complete === true,
         data_incomplete_reasons: riskSnapshot.incomplete_reasons || [],
         risk_snapshot_version: Number(riskSnapshot.snapshot_version || 0),
@@ -575,21 +630,7 @@ export async function executeOrderCore(userId, config, request, action, options 
         broker_calculation: riskSnapshot.broker_calculation || null,
       }
     },
-    enrichRequest: ({ request: prepared, quote }) => {
-      if (!quote || !prepared.symbol) return
-      prepared.quote_price = parseFloat(prepared.order_type === 'buy' ? quote.ask : quote.bid)
-      const pointSize = quote.point || (prepared.quote_price > 1000 ? 0.01 : 0.0001)
-      if (prepared.stop_loss_points && !prepared.sl) {
-        prepared.sl = prepared.order_type === 'buy'
-          ? round2(prepared.quote_price - prepared.stop_loss_points * pointSize)
-          : round2(prepared.quote_price + prepared.stop_loss_points * pointSize)
-      }
-      if (prepared.take_profit_points && !prepared.tp) {
-        prepared.tp = prepared.order_type === 'buy'
-          ? round2(prepared.quote_price + prepared.take_profit_points * pointSize)
-          : round2(prepared.quote_price - prepared.take_profit_points * pointSize)
-      }
-    },
+    enrichRequest:enrichOrderRequest,
   })
   await insertAudit(null, userId, action, request.symbol, request, result, result.status)
   return result

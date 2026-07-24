@@ -87,6 +87,33 @@ function signalExperienceUsage(signal = {}) {
   return usage && typeof usage === 'object' ? usage : {}
 }
 
+function positionManagementDecision(signal = {}) {
+  const value = signal?._position_management || signal?.position_management
+  if (!value || Array.isArray(value) || typeof value !== 'object') return null
+  const evaluations = key => (Array.isArray(value[key]) ? value[key] : []).map(item => ({
+    management_group_id:cleanText(item?.management_group_id, 80),
+    ...(key === 'position_evaluations' ? {
+      thesis_id:cleanText(item?.thesis_id, 80),
+      matched_condition_id:item?.matched_condition_id == null ? null : cleanText(item.matched_condition_id, 80),
+      reversal_candidate:Boolean(item?.reversal_candidate),
+    } : {}),
+    action:cleanText(item?.action, 16),
+    reason:cleanText(item?.reason, 1000),
+    evidence_refs:cleanList(item?.evidence_refs, 20, 160),
+  })).filter(item => item.management_group_id && item.action)
+  return {
+    contract_version:cleanText(value.contract_version, 40),
+    as_of:value.as_of && typeof value.as_of === 'object' ? {
+      decision_timeframe:cleanText(value.as_of.decision_timeframe, 16),
+      closed_bar_time_utc_ms:Number(value.as_of.closed_bar_time_utc_ms) || null,
+      market_snapshot_hash:cleanText(value.as_of.market_snapshot_hash, 80),
+    } : null,
+    pending_evaluations:evaluations('pending_evaluations'),
+    position_evaluations:evaluations('position_evaluations'),
+    validation:value.validation && typeof value.validation === 'object' ? value.validation : null,
+  }
+}
+
 export function restrictSignalExperienceUsage(signal = {}, { requesterUserId = null, requesterRole = 'user' } = {}) {
   const usage = signalExperienceUsage(signal)
   const source = String(usage.source || '').toLowerCase()
@@ -148,6 +175,7 @@ export function normalizeDecisionFields(signal = {}) {
     pending_action_reason:cleanText(signal.pending_action_reason, 320),
     management_direction:String(signal.management_direction || 'none').toLowerCase(),
     candidate_entry:candidateEntry(signal),
+    position_management:positionManagementDecision(signal),
     experience_usage:experienceUsage(signal),
     ...directionScores(signal),
   }

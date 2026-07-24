@@ -3,7 +3,7 @@ import { getRedis, isRedisAvailable } from '../redis.js'
 import { getAiRolloutHealth } from '../routes/ai/rollout-governance.js'
 import { getReviewAdminHealth } from '../routes/ai/review-workflow.js'
 import { listObserverChannels, listObserverSources } from '../routes/ai/observer-channels.js'
-import { isBridgeAlive } from '../bridge-ws.js'
+import { getLatestBridgeMt5Clock, isBridgeAlive } from '../bridge-ws.js'
 
 function number(value) {
   return Number(value || 0)
@@ -32,6 +32,10 @@ async function readSchedulerRuntime(dbRows) {
         wait_reason:state.wait_reason || '',
         last_error:state.last_error || '',
         market_reason:state.market_reason || '',
+        stage:state.stage || 'idle',
+        stage_label:state.stage_label || '',
+        progress_percent:number(state.progress_percent),
+        progress_seq:number(state.progress_seq),
         interval_minutes:number(state.interval_minutes || dbInfo?.interval_minutes || 5),
         subscriber_count:number(await redis.scard(`auto:scheduler:${key}:subs`)),
         next_run_in_seconds:number(state.next_run_in_seconds),
@@ -89,6 +93,7 @@ export async function getAdminAiOperationsOverview() {
   const runtime = await readSchedulerRuntime(schedulerRows)
   return {
     generated_at:new Date().toISOString(),
+    mt5_clock:getLatestBridgeMt5Clock(),
     summary:Object.fromEntries(Object.entries(summary || {}).map(([key, value]) => [key, number(value)])),
     model_usage:modelUsage.map(row => ({ ...row, requests:number(row.requests), failures:number(row.failures), tokens:number(row.tokens), avg_latency_ms:number(row.avg_latency_ms) })),
     scheduler:{ runtime_available:runtime.available, runtime:runtime.schedulers, configured:schedulerRows.map(row => ({ ...row, strategy_id:number(row.strategy_id), subscriber_count:number(row.subscriber_count), interval_minutes:number(row.interval_minutes) })) },

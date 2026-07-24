@@ -366,6 +366,9 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
   }
   if (['paused', 'switched', 'frozen', 'transferred'].includes(accountRow.observe_status)) return blocked('R6_ACCOUNT_PAUSED')
   if (state.user_kill_switch) return blocked('R6_USER_KILL_SWITCH')
+  if (state.halt_status === 'protection_incident') {
+    return blocked('R3_ACCOUNT_HALTED', { reason:state.halt_reason || 'position_protection_incident' })
+  }
   if (state.cooldown_until && parseBeijing(state.cooldown_until)?.getTime() > Date.now()) {
     const rejected = rolloutBlock('R3.2_LOSS_COOLDOWN', { until: state.cooldown_until }); if (rejected) return rejected
   }
@@ -401,9 +404,13 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
   if (haltReason) return blocked(haltReason, metrics)
   if (cooldownUntil) return blocked('R3.2_CONSECUTIVE_LOSS_COOLDOWN', { until: cooldownUntil })
 
-  const reserved = await txOne(run, `SELECT COALESCE(SUM(reserved_volume), 0) AS volume, COALESCE(SUM(reserved_daily_count), 0) AS daily_count,
-    COALESCE(SUM(reserved_notional), 0) AS notional FROM risk_reservations
-    WHERE trading_account_id = ? AND status = 'active' AND order_intent_id <> ?`, [accountId, intentId])
+  const reserved = await txOne(run, `SELECT COALESCE(SUM(rr.reserved_volume), 0) AS volume,
+    COALESCE(SUM(rr.reserved_daily_count), 0) AS daily_count,
+    COALESCE(SUM(rr.reserved_notional), 0) AS notional
+    FROM risk_reservations rr
+    INNER JOIN order_intents oi ON oi.id = rr.order_intent_id
+    WHERE rr.trading_account_id = ? AND rr.status = 'active' AND rr.order_intent_id <> ?
+      AND (rr.expires_at > NOW() OR oi.status IN ('bridge_sending','uncertain'))`, [accountId, intentId])
   const successCount = await txOne(run, `SELECT COUNT(*) AS count FROM order_intents WHERE trading_account_id = ? AND status = 'succeeded'
     AND completed_at >= CONCAT(CURDATE(), ' 00:00:00')`, [accountId])
   const currentDailyCount = toNumber(successCount?.count) + toNumber(reserved?.daily_count)

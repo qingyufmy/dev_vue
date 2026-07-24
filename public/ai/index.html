@@ -15,9 +15,7 @@
     " />
     <script>
       (function() {
-        var t = new URLSearchParams(window.location.search).get('token');
-        if (t) localStorage.setItem('authToken', t);
-        if (!t) t = localStorage.getItem('authToken');
+        var t = localStorage.getItem('ws_token') || localStorage.getItem('authToken');
         if (!t) {
           var m = document.cookie.match(/(?:^|;\s*)ws_token=([^;]*)/);
           if (m) t = decodeURIComponent(m[1]);
@@ -29,19 +27,75 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260723n" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260723d" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260724bridgeguard1" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260724position3" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
-    <!-- Pro-only overlay -->
-    <div id="proOverlay" class="pro-overlay hidden">
-      <div class="pro-overlay-card">
-        <div class="pro-overlay-icon">🔒</div>
-        <h2>Pro 会员专属功能</h2>
-        <p>AI交易实验室仅限 Pro 会员使用</p>
-        <a href="/account/?tab=subscription" class="pro-overlay-btn">升级会员</a>
-      </div>
+    <!-- Membership access lobby for free and expired accounts -->
+    <div id="proOverlay" class="pro-overlay membership-access-lobby hidden" role="region" aria-labelledby="membershipGateTitle">
+      <header class="membership-gate-topbar">
+        <a class="membership-gate-brand" href="/" aria-label="返回主站">
+          <span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 17V9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M8 7V5h8v2"/></svg></span>
+          <div><strong>AI交易实验室</strong><small>会员访问中心</small></div>
+        </a>
+        <div class="membership-gate-top-actions">
+          <a class="membership-gate-home" href="/"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>返回主站</a>
+          <button id="membershipGateLogoutBtn" class="membership-gate-logout" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3"/><path d="M14 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/></svg>退出账户</button>
+        </div>
+      </header>
+      <section class="membership-gate-layout">
+        <section class="membership-gate-card">
+          <div class="membership-gate-status" id="membershipGateStatus" aria-live="polite"><i aria-hidden="true"></i><span>正在确认会员权益</span></div>
+          <div class="membership-gate-hero">
+            <div class="membership-gate-icon" id="membershipGateIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 11V8a5 5 0 0 1 10 0v3"/><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M12 15v2"/></svg></div>
+            <div>
+              <p class="membership-gate-eyebrow" id="membershipGateEyebrow">访问权限</p>
+              <h1 id="membershipGateTitle">当前套餐暂未开放实验室</h1>
+              <p class="membership-gate-description" id="membershipGateDescription">账户已经安全登录，你可以选择适合的会员方案继续。</p>
+            </div>
+          </div>
+          <section class="membership-account-summary" aria-label="当前账户与访问状态">
+            <div class="membership-account-identity">
+              <span class="membership-account-avatar" id="membershipGateAvatar">用</span>
+              <div><small>当前登录账户</small><strong id="membershipGateAccount">--</strong></div>
+            </div>
+            <div class="membership-account-fact"><small>当前会员</small><strong id="membershipGatePlan">免费版</strong></div>
+            <div class="membership-account-fact"><small>实验室权限</small><strong id="membershipGateAccess">暂未开通</strong></div>
+          </section>
+          <div class="membership-retention-note" id="membershipRetentionNote">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7v5c0 5 3.5 8 8 9 4.5-1 8-4 8-9V7l-8-4Z"/><path d="m9 12 2 2 4-5"/></svg>
+            <div><strong>账户状态正常</strong><small>升级会员不会影响现有账户资料。</small></div>
+          </div>
+          <div class="membership-gate-actions">
+            <a id="membershipGatePrimary" class="membership-gate-primary" href="/account/?tab=subscription">选择会员方案<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
+            <a class="membership-gate-secondary" href="/account/">管理我的账户</a>
+          </div>
+          <p class="membership-gate-action-note">进入会员中心后可查看价格、有效期与支付方式。</p>
+        </section>
+        <aside class="membership-plan-panel" aria-label="实验室会员方案">
+          <header><p class="membership-gate-eyebrow">权限对比</p><h2>你希望如何使用实验室？</h2><p>只需先确认是否连接自己的 MT5 账户，即可快速选择。</p></header>
+          <article class="membership-plan-option" id="membershipPlusPlan">
+            <div class="membership-plan-heading"><span class="membership-plan-icon"><svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span><div><small>Plus 会员</small><strong>只观摩，不连接个人账户</strong></div><span class="membership-plan-tag">只读</span></div>
+            <p class="membership-plan-summary">适合查看平台 AI 交易过程与结果。</p>
+            <ul>
+              <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>实时查看平台行情和 AI 分析</span></li>
+              <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>查看持仓、信号与历史记录</span></li>
+              <li class="is-limited"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg><span>不连接个人 MT5，不执行交易</span></li>
+            </ul>
+          </article>
+          <article class="membership-plan-option is-primary" id="membershipProPlan">
+            <div class="membership-plan-heading"><span class="membership-plan-icon"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v5c0 5 3.5 8 8 9 4.5-1 8-4 8-9V7l-8-4Z"/><path d="m9 12 2 2 4-5"/></svg></span><div><small>Pro 专业版</small><strong>连接自己的 MT5 账户</strong></div><span class="membership-plan-tag">完整功能</span></div>
+            <p class="membership-plan-summary">适合使用完整 AI 交易工作台。</p>
+            <ul>
+              <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>连接个人 MT5 与实时行情</span></li>
+              <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>使用策略、自动推理与风险中心</span></li>
+              <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>在授权和风控范围内执行交易</span></li>
+            </ul>
+          </article>
+          <p class="membership-plan-footnote"><strong>风险提示</strong> AI 分析不构成投资建议，真实交易可能造成本金损失。</p>
+        </aside>
+      </section>
     </div>
 
     <div id="appView" class="app-layout hidden">
@@ -139,6 +193,9 @@
           <button class="nav-item" data-tab="history" data-title="交易记录">
             <i data-lucide="clock" size="16"></i>交易记录
           </button>
+          <button class="nav-item" data-tab="audit" data-title="系统审计">
+            <i data-lucide="shield-check" size="16"></i>系统审计
+          </button>
         </div>
 
         <div class="nav-group nav-group-bottom">
@@ -186,7 +243,11 @@
               <h3>策略与复盘</h3>
               <button class="nav-item" type="button" data-tab="model-strategy" data-title="AI策略师"><i data-lucide="brain-circuit" size="19"></i><span><strong>AI策略师</strong><small>管理策略、模型和自动运行</small></span><i data-lucide="chevron-right" size="17"></i></button>
               <button class="nav-item" type="button" data-tab="review-memory" data-title="AI复盘师"><i data-lucide="notebook-tabs" size="19"></i><span><strong>AI复盘师</strong><small>确认复盘并沉淀策略记忆</small></span><i data-lucide="chevron-right" size="17"></i></button>
+            </section>
+            <section class="mobile-nav-section">
+              <h3>交易档案</h3>
               <button class="nav-item" type="button" data-tab="history" data-title="交易记录"><i data-lucide="clock" size="19"></i><span><strong>交易记录</strong><small>查看历史订单和账户统计</small></span><i data-lucide="chevron-right" size="17"></i></button>
+              <button class="nav-item" type="button" data-tab="audit" data-title="系统审计"><i data-lucide="shield-check" size="19"></i><span><strong>系统审计</strong><small>追踪风控、AI 与手动执行留痕</small></span><i data-lucide="chevron-right" size="17"></i></button>
             </section>
             <section class="mobile-nav-section admin-only" style="display:none">
               <h3>平台管理</h3>
@@ -437,6 +498,16 @@
             </section>
             </div>
             <div id="modelProfilesList" class="workspace-list"><div class="workspace-skeleton"></div><div class="workspace-skeleton"></div></div>
+            <section id="platformModelPolicy" class="workspace-panel admin-only" style="display:none">
+              <div class="section-heading"><div><h2>平台共享与配额</h2><p>共享凭据只用于已开启的用途，并受用户日配额限制。</p></div><button id="savePlatformPolicyBtn" class="btn btn-primary btn-sm">保存设置</button></div>
+              <div class="policy-switches">
+                <label><input id="shareForManual" type="checkbox"><span>手动分析</span></label>
+                <label><input id="shareForAuto" type="checkbox"><span>自动分析</span></label>
+                <label><input id="shareForReview" type="checkbox"><span>复盘生成</span></label>
+                <label><input id="shareForCompression" type="checkbox"><span>记忆压缩</span></label>
+              </div>
+              <div class="settings-grid compact"><label><span>每用户每日请求</span><input id="policyDailyRequests" type="number" min="1"></label><label><span>每用户每日 Token</span><input id="policyDailyTokens" type="number" min="1000" step="1000"></label></div>
+            </section>
           </div>
           </div>
 
@@ -461,7 +532,7 @@
               <div class="section-heading"><div><h2 id="strategyEditorTitle">新建自定义策略</h2><p id="strategyEditorBoundary">你创建的私有策略仅自己可见、可选和执行。</p></div><button id="cancelStrategyEditorBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
               <div class="strategy-editor-sections">
                 <fieldset class="strategy-form-section"><legend><span class="section-step">01</span>基本信息</legend><p>定义策略身份、可见范围和可分析品种。</p>
-                  <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120" required></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD" required></label><label><span>策略说明</span><input id="strategyDescription" maxlength="500" placeholder="简要说明适用行情与交易逻辑"></label></div>
+                  <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120" required></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD" required></label><label><span>策略说明</span><input id="strategyDescription" maxlength="500" placeholder="简要说明适用行情与交易逻辑"></label><label id="strategyScopeField" class="admin-only is-readonly"><span>策略范围</span><input id="strategyScope" value="platform" readonly aria-readonly="true"><small id="strategyScopeHelp" class="field-help">管理员在这里维护平台策略，用户私有策略保持只读。</small></label><label id="strategyVisibilityField" class="admin-only"><span>可见状态</span><select id="strategyVisibility"><option value="active">上线（可用于分析）</option><option value="draft">草稿（不可用于分析）</option><option value="archived">归档（不可用于分析）</option></select><small class="field-help">可见状态同时控制策略是否进入手动和自动分析。</small></label></div>
                 </fieldset>
                 <fieldset class="strategy-form-section"><legend><span class="section-step">02</span>行情数据方案</legend><p>手动与自动分析共用这组周期和 K 线数量；主周期用于建议有效期和结果标识。</p>
                   <div id="strategyMarketPlan" class="market-plan-grid">
@@ -517,6 +588,61 @@
               </section>
               <div class="form-actions form-modal-actions"><button id="saveSubscriptionBtn" class="btn btn-primary">保存订阅</button></div>
             </section>
+            </div>
+            <div id="positionProtectionModal" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="positionProtectionTitle">
+              <section class="workspace-panel form-modal-dialog position-protection-dialog" tabindex="-1">
+                <header class="section-heading position-protection-heading">
+                  <div>
+                    <span class="section-kicker">管理员专用 · 系统持仓</span>
+                    <h2 id="positionProtectionTitle">修改持仓止盈止损</h2>
+                    <p>先复核当前持仓与同步范围，再由服务端逐账户执行并实时回传结果。</p>
+                  </div>
+                  <button id="positionProtectionClose" class="icon-btn" type="button" aria-label="关闭修改持仓止盈止损弹窗"><i data-lucide="x" size="18"></i></button>
+                </header>
+                <input id="positionProtectionTicket" type="hidden">
+                <div id="positionProtectionError" class="position-protection-error hidden" role="alert"></div>
+
+                <div id="positionProtectionFormStage">
+                  <section class="position-protection-section" aria-labelledby="positionProtectionSourceTitle">
+                    <div class="position-protection-section-head"><h3 id="positionProtectionSourceTitle">持仓复核</h3><span>实时读取 MT5</span></div>
+                    <div id="positionProtectionSourceSummary" class="position-protection-summary"><div class="workspace-skeleton"></div></div>
+                  </section>
+                  <section class="position-protection-section" aria-labelledby="positionProtectionPriceTitle">
+                    <div class="position-protection-section-head"><h3 id="positionProtectionPriceTitle">新的保护价</h3><span>至少修改一项</span></div>
+                    <div class="position-protection-price-grid">
+                      <label><span>止损价格（SL）</span><input id="positionProtectionStopLoss" class="num" type="number" min="0" step="any" inputmode="decimal" autocomplete="off"><small>保持原值时无需改动；系统会按券商最小跳动单位校准。</small></label>
+                      <label><span>止盈价格（TP）</span><input id="positionProtectionTakeProfit" class="num" type="number" min="0" step="any" inputmode="decimal" autocomplete="off"><small>执行前会校验方向、现价及最小止损距离。</small></label>
+                    </div>
+                  </section>
+                  <section class="position-protection-section" aria-labelledby="positionProtectionScopeTitle">
+                    <div class="position-protection-section-head"><h3 id="positionProtectionScopeTitle">同步范围</h3><span>仅同步唯一归因持仓</span></div>
+                    <label class="position-protection-sync-option">
+                      <input id="positionProtectionSyncScope" type="checkbox">
+                      <span><strong>同步到同一信号涉及的所有用户</strong><small id="positionProtectionScopeHelp">默认仅修改当前持仓；勾选后重新核对批量影响范围。</small></span>
+                    </label>
+                    <div id="positionProtectionImpact" class="position-protection-impact"><div class="workspace-skeleton"></div></div>
+                  </section>
+                  <label class="position-protection-reason"><span>变更原因</span><textarea id="positionProtectionReason" maxlength="500" rows="3" placeholder="请说明本次调整依据，便于审计和后续复核"></textarea><small>必填，2–500 字；将记录到管理员审计日志。</small></label>
+                </div>
+
+                <div id="positionProtectionProgressStage" class="position-protection-progress-stage hidden" aria-live="polite">
+                  <section class="position-protection-progress-card">
+                    <div><span class="section-kicker">批量执行进度</span><h3 id="positionProtectionProgressTitle">等待执行</h3><p id="positionProtectionProgressText">0% · 正在准备目标</p></div>
+                    <progress id="positionProtectionProgress" max="100" value="0" aria-label="持仓保护价同步进度">0%</progress>
+                  </section>
+                  <div class="table-wrap position-protection-results">
+                    <table class="data-table">
+                      <thead><tr><th>用户</th><th>持仓</th><th>结果</th><th>说明</th></tr></thead>
+                      <tbody id="positionProtectionResultBody"><tr class="empty-row"><td colspan="4">正在准备执行目标…</td></tr></tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <footer class="form-actions form-modal-actions position-protection-actions">
+                  <button id="positionProtectionRetry" class="btn btn-secondary hidden" type="button"><i data-lucide="rotate-cw" size="15"></i>重新核对并重试</button>
+                  <button id="positionProtectionSubmit" class="btn btn-primary" type="button"><i data-lucide="shield-check" size="16"></i>确认并执行</button>
+                </footer>
+              </section>
             </div>
             <div id="strategyCatalog" class="strategy-catalog"><div class="workspace-skeleton"></div></div>
           </div>
@@ -586,6 +712,7 @@
           </div>
           <div class="workspace-subtabs trading-view-tabs" role="tablist" aria-label="AI交易员视图">
             <button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="trading" data-workspace-target="orders"><i data-lucide="briefcase-business" size="15"></i>订单管理</button>
+            <button type="button" role="tab" aria-selected="false" tabindex="-1" data-workspace-tab="trading" data-workspace-target="management"><i data-lucide="scan-line" size="15"></i>AI持仓管理</button>
             <button type="button" role="tab" aria-selected="false" tabindex="-1" data-workspace-tab="trading" data-workspace-target="manual"><i data-lucide="mouse-pointer-click" size="15"></i>手动下单</button>
           </div>
           <div class="trading-grid">
@@ -652,6 +779,43 @@
               </div>
 
             </div>
+            <section class="position-management-panel workspace-subpanel" data-workspace-panel="trading" data-workspace-view="management" hidden aria-labelledby="positionManagementTitle">
+              <header class="position-management-head">
+                <div>
+                  <span id="positionManagementModeKicker" class="section-kicker">统一推理 · 等待读取</span>
+                  <h2 id="positionManagementTitle">自动平仓与挂单管理</h2>
+                  <p id="positionManagementModeDescription">自动平仓、AI 挂单和 AI 取消挂单使用三项独立的平台能力控制。</p>
+                </div>
+                <div class="position-management-head-actions">
+                  <span id="positionManagementLive" class="management-live-status" role="status"><i></i>等待实时数据</span>
+                  <button class="btn btn-secondary btn-sm" type="button" data-action="refresh-position-management"><i data-lucide="refresh-cw" size="14"></i>刷新</button>
+                </div>
+              </header>
+              <section id="positionManagementOverview" class="insight-strip position-management-overview" aria-label="AI持仓管理概览">
+                <div class="workspace-skeleton"></div>
+              </section>
+              <section id="positionManagementSettingsPanel" class="position-management-settings" aria-label="AI持仓管理运行设置">
+                <div class="workspace-skeleton"></div>
+              </section>
+              <div class="position-management-toolbar">
+                <label><span>任务状态</span><select id="positionManagementStatusFilter" class="filter-select" aria-label="筛选AI持仓管理任务"><option value="">全部状态</option><option value="CANDIDATE">等待证据</option><option value="EVIDENCE_CONFIRMED">证据已确认</option><option value="HELD">继续持有</option><option value="COMPLETED">已完成</option><option value="FAILED">异常</option><option value="EXPIRED">已过期</option></select></label>
+                <p id="positionManagementSafetyNote"><i data-lucide="shield-check" size="14"></i>正在读取平台 AI 交易执行能力…</p>
+              </div>
+              <div class="position-management-layout">
+                <section class="card position-management-list-card" aria-label="AI持仓管理任务列表">
+                  <div class="table-wrap">
+                    <table class="data-table position-management-table">
+                      <thead><tr><th>管理组 / 品种</th><th>任务</th><th>AI建议</th><th>证据</th><th>运行方式</th><th>决策K线(MT5)</th><th>详情</th></tr></thead>
+                      <tbody id="positionManagementBody"><tr class="empty-row"><td colspan="7">正在读取管理任务…</td></tr></tbody>
+                    </table>
+                  </div>
+                  <div id="positionManagementPager" class="pager" aria-label="AI持仓管理任务分页"></div>
+                </section>
+                <aside id="positionManagementDetail" class="card position-management-detail" aria-live="polite">
+                  <div class="position-management-empty"><i data-lucide="scan-search" size="22"></i><strong>选择一条管理任务</strong><span>查看冻结交易论点、命中条件、证据与状态记录。</span></div>
+                </aside>
+              </div>
+            </section>
           </div>
           </div>
         </section>
@@ -679,8 +843,8 @@
             <div class="workspace-subtabs" role="tablist" aria-label="AI复盘师视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="review-memory" data-workspace-target="reviews"><i data-lucide="calendar-check-2" size="15"></i>待处理复盘</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="memories"><i data-lucide="brain" size="15"></i><span id="memoryTabLabel">策略记忆</span></button></div>
             <section class="workspace-subpanel active" data-workspace-panel="review-memory" data-workspace-view="reviews"><div class="review-layout period-review-layout"><aside class="workspace-panel review-queue" aria-label="复盘队列"><div class="review-queue-heading"><div><span class="review-section-kicker">处理队列</span><h2>策略复盘</h2></div><span class="review-queue-hint">按日、按月沉淀</span></div><div class="review-period-tabs" role="tablist" aria-label="复盘周期筛选"><button class="active" type="button" role="tab" aria-selected="true" tabindex="0" data-review-period="">全部 <span id="reviewAllCount">0</span></button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-period="daily">日复盘 <span id="reviewDailyCount">0</span></button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-period="monthly">月复盘 <span id="reviewMonthlyCount">0</span></button></div><div class="review-status-tabs" role="tablist" aria-label="复盘状态筛选"><button class="active" type="button" role="tab" aria-selected="true" tabindex="0" data-review-filter="">全部</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="pending">待处理</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="draft">待确认</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="approved">已确认</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="needs_revision">有问题</button></div><div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div></aside><aside id="reviewDetail" class="workspace-panel review-detail"><div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="calendar-search" size="22"></i></span><strong>选择一个复盘周期</strong><span>查看系统统计、校对 AI 结论，确认后再沉淀为策略记忆。</span></div></aside></div></section>
             <section class="workspace-subpanel" data-workspace-panel="review-memory" data-workspace-view="memories" hidden>
-              <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">我的交易记忆</h2><p id="memorySectionDescription">这里只保留你已经确认的记忆，可以随时暂停或撤销。</p></div><label class="inline-switch user-only"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
-              <details class="workspace-panel quiet-disclosure settings-disclosure user-only"><summary><span><i data-lucide="settings-2" size="16"></i><strong>记忆设置</strong><small>自动复盘、月度归纳与效果验证</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div class="section-heading"><div><h2>个人功能设置</h2><p>这些开关只能进一步关闭功能，不能绕过管理员设置。高级效果对照会额外调用一次模型。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存设置</button></div><div class="policy-switches setting-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span><strong>自动生成交易复盘</strong><small>订单平仓且证据完整后生成</small></span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span><strong>将确认记忆用于后续分析</strong><small>只使用你确认且与当前分析环境匹配的内容</small></span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span><strong>生成月度摘要与分类压缩</strong><small>按记忆类别和适用条件归纳，减少上下文占用</small></span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span><strong>安全试运行</strong><small>只评估检索效果，不注入模型</small></span></label><label><input id="userPairedExperimentFlag" type="checkbox"><span><strong>高级效果对照实验</strong><small>付费配对实验（额外一次调用）</small></span></label></div></div></details>
+              <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">我的交易记忆</h2><p id="memorySectionDescription">这里只保留你已经确认的记忆，可以随时暂停或撤销。</p></div><label class="inline-switch user-only"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div><div id="platformExperiencePolicies" class="platform-experience-policies admin-only" style="display:none"></div><div id="platformExperienceEvaluation" class="platform-experience-evaluation admin-only" style="display:none"></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+              <details class="workspace-panel quiet-disclosure settings-disclosure user-only"><summary><span><i data-lucide="settings-2" size="16"></i><strong>记忆设置</strong><small>自动复盘、月度归纳与安全试运行</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div class="section-heading"><div><h2>个人功能设置</h2><p>这些开关只能进一步关闭功能，不能绕过管理员设置。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存设置</button></div><div class="policy-switches setting-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span><strong>自动生成交易复盘</strong><small>订单平仓且证据完整后生成</small></span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span><strong>将确认记忆用于后续分析</strong><small>只使用你确认且与当前分析环境匹配的内容</small></span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span><strong>生成月度摘要与分类压缩</strong><small>按记忆类别和适用条件归纳，减少上下文占用</small></span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span><strong>安全试运行</strong><small>只评估检索效果，不注入模型</small></span></label></div></div></details>
             </section>
           </div>
         </section>
@@ -755,7 +919,48 @@
           </div>
         </section>
 
-
+        <section id="audit" class="tab-panel">
+          <div class="workspace-page audit-workspace">
+            <header class="workspace-header calm-page-header audit-page-head">
+              <div><span class="page-eyebrow">交易执行留痕</span><h1>系统审计</h1><p>按 MT5 时间追踪 AI 与手动操作、风控结果和原始原因。</p></div>
+              <button class="btn btn-secondary" type="button" data-action="refresh-audit"><i data-lucide="refresh-cw" size="15"></i>刷新记录</button>
+            </header>
+            <section class="insight-strip audit-insight-strip" aria-label="审计记录概况">
+              <article class="insight-item primary"><span>当前留痕</span><strong id="auditTotalStat" class="num">--</strong><small>最近 100 条个人记录</small></article>
+              <article class="insight-item success"><span>执行成功</span><strong id="auditSuccessStat" class="num">--</strong><small>已完成的操作</small></article>
+              <article class="insight-item warning"><span>风控拒绝</span><strong id="auditRejectedStat" class="num">--</strong><small>被安全规则拦截</small></article>
+              <article class="insight-item danger"><span>异常记录</span><strong id="auditExceptionStat" class="num">--</strong><small>错误或待确认</small></article>
+            </section>
+            <section class="card content-card audit-records-card" aria-labelledby="auditRecordsTitle">
+              <header class="audit-records-head">
+                <div><span class="section-kicker">完整追踪</span><h2 id="auditRecordsTitle">风控与执行记录</h2><p>点击“中文结果”可展开完整执行信息。</p></div>
+                <span id="auditCount" class="record-count" aria-live="polite">--</span>
+              </header>
+              <div class="table-toolbar audit-filter-toolbar" role="group" aria-label="筛选系统审计记录">
+                <label><span>执行状态</span><select id="auditFilterStatus" class="filter-select" aria-label="筛选审计状态">
+                  <option value="">全部状态</option>
+                  <option value="success">成功</option>
+                  <option value="skipped">已跳过</option>
+                  <option value="rejected">风控拒绝</option>
+                  <option value="error">错误</option>
+                  <option value="needs_confirmation">需要确认</option>
+                </select></label>
+                <label><span>动作来源</span><select id="auditFilterType" class="filter-select" aria-label="筛选动作类型">
+                  <option value="">全部动作</option>
+                  <option value="ai">AI</option>
+                  <option value="manual">手动 / 系统</option>
+                </select></label>
+              </div>
+              <div class="table-wrap audit-table-wrap">
+                <table class="data-table audit-table">
+                  <thead><tr><th>时间（MT5）</th><th>动作</th><th>品种</th><th>状态</th><th>中文结果</th><th>原始原因</th></tr></thead>
+                  <tbody id="auditBody"><tr class="empty-row"><td colspan="6">正在读取审计记录…</td></tr></tbody>
+                </table>
+              </div>
+              <div id="auditPager" class="pager"></div>
+            </section>
+          </div>
+        </section>
 
         <section id="feedback" class="tab-panel">
           <div class="card content-card">
@@ -946,7 +1151,7 @@
     </div>
 
     <script src="lucide.js?v=20260709f"></script>
-    <script src="/shared/session.js?v=20260723a"></script>
+    <script src="/shared/session.js?v=20260724wsfix1"></script>
     <script src="/ai/js/lightweight-charts.standalone.production.js?v=20260709f"></script>
     <script>
     // Lazy-load Chart.js on first use
@@ -962,7 +1167,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260723n"></script>
+    <script src="/ai/app.js?v=20260724bridgeguard1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

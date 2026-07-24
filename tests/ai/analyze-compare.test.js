@@ -92,7 +92,6 @@ vi.mock('../../server/routes/ai/config.js', () => ({
 vi.mock('../../server/routes/ai/memory-system.js', () => ({
   retrievePersonalMemory: vi.fn(async () => ({ promptBlock: '', mode: 'off', logId: null })),
   attachMemoryInjectionSignal: vi.fn(),
-  recordPairedInferenceRun: vi.fn(),
   buildPersonalMemoryRetrievalContext: vi.fn(() => ({ direction: null, entryMethod: null, marketRegime: null })),
 }))
 

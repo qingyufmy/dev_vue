@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { RiskReject, signalOrderPayload, buildBridgeOrderCall } from '../../server/routes/ai/config.js'
+import { RiskReject, signalOrderPayload, buildBridgeOrderCall, enrichOrderRequest, isAiPendingOrderRequest, projectPendingRiskSnapshot } from '../../server/routes/ai/config.js'
 
 describe('RiskReject', () => {
   it('创建风险拒绝错误', () => {
@@ -7,6 +7,49 @@ describe('RiskReject', () => {
     expect(err.reason).toBe('missing_symbol')
     expect(err.details).toEqual({ symbol: '' })
     expect(err instanceof Error).toBe(true)
+  })
+})
+
+describe('AI pending-order platform control', () => {
+  it('applies only to AI pending orders and never to manual or market orders', () => {
+    expect(isAiPendingOrderRequest({ entry_method:'limit' }, 'auto_delivery')).toBe(true)
+    expect(isAiPendingOrderRequest({ entry_method:'stop' }, 'manual_ai')).toBe(true)
+    expect(isAiPendingOrderRequest({ entry_method:'market' }, 'auto_delivery')).toBe(false)
+    expect(isAiPendingOrderRequest({ entry_method:'limit' }, 'manual')).toBe(false)
+  })
+})
+
+describe('order request enrichment', () => {
+  it('preserves MT5 timezone while enriching quote and point-based protection', () => {
+    const request = {
+      symbol:'XAUUSD', order_type:'buy', stop_loss_points:100, take_profit_points:200,
+    }
+    enrichOrderRequest({ request, quote:{ ask:4000, bid:3999.8, point:0.01, timezone_offset_minutes:120 } })
+    expect(request).toMatchObject({
+      mt5_timezone_offset_minutes:120,
+      quote_price:4000,
+      sl:3999,
+      tp:4002,
+    })
+  })
+
+  it('ignores an invalid broker timezone without losing quote enrichment', () => {
+    const request = { symbol:'EURUSD', order_type:'sell' }
+    enrichOrderRequest({ request, quote:{ ask:1.1002, bid:1.1, timezone_offset_minutes:9999 } })
+    expect(request.quote_price).toBe(1.1)
+    expect(request).not.toHaveProperty('mt5_timezone_offset_minutes')
+  })
+})
+
+describe('replacement risk projection', () => {
+  const pending = [{ ticket:11, volume:0.01 }, { mt5_ticket:'12', volume:0.02 }]
+
+  it('removes only explicitly owned replacement tickets for automatic delivery preflight', () => {
+    expect(projectPendingRiskSnapshot(pending, ['11'], 'auto_delivery')).toEqual([pending[1]])
+  })
+
+  it('never lets manual requests subtract existing pending risk', () => {
+    expect(projectPendingRiskSnapshot(pending, ['11'], 'manual')).toEqual(pending)
   })
 })
 describe('signalOrderPayload', () => {

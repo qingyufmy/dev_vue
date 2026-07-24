@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { __chanTest } from '../../server/routes/ai/market-data.js'
 
-const { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, computeChan, selectStableChanResult } = __chanTest
+const { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, computeChan, selectStableChanResult } = __chanTest
 
 function makeRates(n, base = 4000) {
   const rates = []
@@ -490,6 +490,11 @@ describe('Chan payload summaries', () => {
 })
 
 describe('detectDivergence', () => {
+  it('保留小数值品种的MACD证据，不会在输出层被归零', () => {
+    expect(roundMacdEvidence(3.1415926535e-8)).toBe(3.1415927e-8)
+    expect(roundMacdEvidence(8.765432109e-6)).toBe(0.0000087654321)
+  })
+
   it('无有效线段时返回none', () => {
     const result = detectDivergence([], [], [])
     expect(result.type).toBe('none')

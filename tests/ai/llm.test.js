@@ -1,5 +1,56 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, automaticInferenceMaxTokens, AUTO_INFERENCE_MAX_OUTPUT_TOKENS, compactInferenceMarketPayload, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
+
+describe('automatic inference budgets', () => {
+  it('caps automated output without changing manual model profiles', () => {
+    expect(automaticInferenceMaxTokens({ _usage:'auto_platform', max_tokens:150000 }))
+      .toBe(AUTO_INFERENCE_MAX_OUTPUT_TOKENS)
+    expect(automaticInferenceMaxTokens({ _usage:'manual', max_tokens:150000 })).toBe(150000)
+  })
+})
+
+describe('compact inference market payload', () => {
+  it('keeps every K-line value and count while removing repeated field names', () => {
+    const bars = [
+      { time:'2026-07-24 10:00:00', open:1, high:2, low:0.5, close:1.5, tick_volume:10 },
+      { time:'2026-07-24 11:00:00', open:1.5, high:2.5, low:1, close:2, tick_volume:12 },
+    ]
+    const original = { strategy_context:{ timeframes:{ H1:{ summary:{}, klines:bars } } } }
+    const compacted = compactInferenceMarketPayload(original)
+    const frame = compacted.strategy_context.timeframes.H1
+    expect(frame.klines).toHaveLength(bars.length)
+    expect(compacted.strategy_context.input_encoding.kline_fields).toEqual(INFERENCE_KLINE_FIELDS)
+    const expanded = frame.klines.map(values => Object.fromEntries(
+      INFERENCE_KLINE_FIELDS.map((field, index) => [field, values[index]])))
+    expect(expanded).toEqual(bars)
+    expect(original.strategy_context.timeframes.H1.klines).toEqual(bars)
+  })
+
+  it('replaces only exact repeated Chan objects with resolvable references', () => {
+    const center = {
+      status:'active', lower:3900, upper:4000,
+      start_time:'2026-07-20 00:00:00', end_time:'2026-07-24 00:00:00',
+      evidence:Array.from({ length:6 }, (_, index) => ({ index, confirmed:true })),
+    }
+    const payload = { strategy_context:{ timeframes:{ H1:{ klines:[], summary:{ chan:{
+      current_center:center,
+      latest_center:structuredClone(center),
+      active_center:{ ...center, status:'broken_up' },
+    } } } } } }
+    const compacted = compactInferenceMarketPayload(payload)
+    const chan = compacted.strategy_context.timeframes.H1.summary.chan
+    expect(chan.current_center).toEqual(center)
+    expect(chan.latest_center).toEqual({ $ref:'#/strategy_context/timeframes/H1/summary/chan/current_center' })
+    expect(chan.active_center.status).toBe('broken_up')
+    expect(compacted.strategy_context.input_encoding.object_refs).toContain('JSON Pointer')
+  })
+
+  it('does not compact custom K-line objects with unknown fields', () => {
+    const bar = { time:'t', open:1, high:2, low:0, close:1, tick_volume:2, spread:3 }
+    const payload = { strategy_context:{ timeframes:{ M5:{ summary:{}, klines:[bar] } } } }
+    expect(compactInferenceMarketPayload(payload).strategy_context.timeframes.M5.klines).toEqual([bar])
+  })
+})
 
 describe('buildStrategyOutputFormat', () => {
   it('removes all pending-order fields from a market-only strategy', () => {
@@ -410,13 +461,18 @@ describe('requestJsonObject', () => {
     expect(body).not.toHaveProperty('temperature')
   })
 
-  it('maps Kimi Code subscription rate limits to a stable error code', async () => {
+  it('maps provider HTTP 429 to the model quota exhaustion contract', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 429 })
     await expect(requestJsonObject({
       url: 'https://api.kimi.com/coding/v1/chat/completions',
       apiKey: 'kimi-key', provider: 'kimi_code', model: 'kimi-for-coding', maxTokens: 2000,
       thinkingEnabled: true, messages: [],
-    })).rejects.toThrow('kimi_code_rate_limited')
+    })).rejects.toMatchObject({
+      message:'model_quota_exhausted',
+      code:'model_quota_exhausted',
+      providerCode:'kimi_code_rate_limited',
+      providerStatus:429,
+    })
   })
 
   it('enables K2.7 thinking without sending the unsupported effort field', async () => {
@@ -757,11 +813,32 @@ describe('maybeAiSignal', () => {
     }
     await maybeAiSignal(null, config, market)
     expect(evidence.systemPrompt).toContain('共享市场推理边界')
+    expect(evidence.systemPrompt).not.toContain('\u6682\u4e0d\u5efa\u8bae\u81ea\u52a8\u5e73\u4ed3')
     expect(evidence.userPrompt).not.toContain('"ai_volume_range"')
     expect(evidence.userPrompt).not.toContain('account')
     expect(evidence.userPrompt).not.toContain('positions')
     expect(JSON.stringify(evidence)).not.toContain('must-not-leak')
     expect(evidence.outputSchemaVersion).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('does not discourage automatic close in private portfolio boundaries', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({
+        signal_type: 'hold', entry_method: 'observe', confidence: 0.6, recommended_volume: 0,
+        stop_loss_price: null, take_profit_1_price: null, analysis: '等待', reasoning: '没有明确优势',
+      }) } }] }),
+    })
+    let evidence
+    await maybeAiSignal(null, {
+      api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
+      _include_portfolio_context: true, _onInferencePrepared: value => { evidence = value },
+    }, {
+      symbol: 'XAUUSD', timeframe: 'M5', latest_price: 2000,
+      account: { balance: 10000 }, positions: [], pending_orders: [], strategy_context: { timeframes: {} },
+    })
+    expect(evidence.systemPrompt).toContain('私有策略账户上下文')
+    expect(evidence.systemPrompt).not.toContain('\u6682\u4e0d\u5efa\u8bae\u81ea\u52a8\u5e73\u4ed3')
   })
 
   it('结构化开关启用缠论时system prompt不需要控制标签', async () => {

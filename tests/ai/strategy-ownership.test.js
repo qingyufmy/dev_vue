@@ -286,6 +286,24 @@ describe('trading account control fields', () => {
       .rejects.toThrow('account_control_fields_read_only')
   })
 
+  it('keeps a verified MT5 account identity immutable', async () => {
+    await expect(updateTradingAccount(10, 2, { login_account:'456' }))
+      .rejects.toThrow('trading_account_identity_immutable')
+    await expect(updateTradingAccount(10, 2, { broker_server:'Other' }))
+      .rejects.toThrow('trading_account_identity_immutable')
+    await expect(updateTradingAccount(10, 2, { margin_mode:'netting' }))
+      .rejects.toThrow('trading_account_identity_immutable')
+    expect(db.queryRun).not.toHaveBeenCalled()
+  })
+
+  it('still lets an unverified account correct its identity before Bridge verification', async () => {
+    db.queryOne.mockImplementation(sql => sql.includes('FROM trading_accounts')
+      ? { ...ACCOUNT, observe_status:'unverified' } : defaultQueryOne(sql))
+    await expect(updateTradingAccount(10, 2, { login_account:'456' }))
+      .resolves.toBeTruthy()
+    expect(db.queryRun).toHaveBeenCalled()
+  })
+
   it('rejects unknown margin modes', async () => {
     await expect(createTradingAccount(2, { broker_server: 'Demo', login_account: '123', margin_mode: 'magic' }))
       .rejects.toThrow('invalid_margin_mode')

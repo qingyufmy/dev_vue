@@ -9,6 +9,7 @@ const bridge = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url
 const config = readFileSync(new URL('../../server/routes/ai/config.js', import.meta.url), 'utf8')
 const rollout = readFileSync(new URL('../../server/routes/ai/rollout-governance.js', import.meta.url), 'utf8')
 const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
+const llm = readFileSync(new URL('../../server/routes/ai/llm.js', import.meta.url), 'utf8')
 const strategy = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
 const strategyOwnership = readFileSync(new URL('../../server/routes/ai/strategy-ownership.js', import.meta.url), 'utf8')
 const preferences = readFileSync(new URL('../../server/routes/ai/inference-preferences.js', import.meta.url), 'utf8')
@@ -42,12 +43,12 @@ describe('rollout hardening contract', () => {
     expect(migrations).toContain("id: '065_ai_rollout_governance'")
     expect(migrations).toContain("VALUES ('global', 0, 0, 0, 0, 1, 0")
     expect(rollout).toContain('065_ai_rollout_governance')
-    expect(rollout).toContain('066_paired_inference_evidence')
+    expect(rollout).toContain('135_remove_paired_inference_experiment')
     expect(rollout).toContain('067_manual_inference_snapshots')
     expect(rollout).toContain('068_inference_preferences')
   })
 
-  it('persists manual inference evidence atomically and keeps paired control outside execution', () => {
+  it('persists manual inference evidence atomically without a secondary control inference', () => {
     const analyze = strategy.slice(strategy.indexOf('export async function handleAnalyze'))
     expect(analyze).toContain('await withTransaction(async run =>')
     expect(analyze).toContain('await persistInferenceSnapshotTx(run, {')
@@ -58,16 +59,17 @@ describe('rollout hardening contract', () => {
     expect(analyze).toContain("signal._inference_source === 'ai_error_hold'")
     expect(analyze).toContain("error_code: 'ai_inference_failed'")
     expect(analyze).toContain('attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId)')
-    const paired = analyze.slice(analyze.indexOf("if (strategy.scope === 'private' && memory.pairedExperimentEnabled"))
-    expect(paired).toContain("_memoryContext: ''")
-    expect(paired).toContain('recordPairedInferenceRun')
-    expect(paired).not.toContain('executeOrder(')
+    expect(analyze).not.toContain('pairedExperimentEnabled')
+    expect(analyze).not.toContain('recordPairedInferenceRun')
+    expect(scheduler).not.toContain('pairedExperimentEnabled')
+    expect(scheduler).not.toContain('recordPairedInferenceRun')
   })
 
   it('keeps every provider request behind the metered JSON request path', () => {
     expect(scheduler).not.toContain('await fetch(')
-    expect(scheduler).toContain('await requestJsonObject({')
-    expect(scheduler).toContain("usage: 'manual'")
+    expect(scheduler).toContain('await maybeAiSignal(')
+    expect(llm).toContain('await requestJsonObject({')
+    expect(llm).toContain('await beginModelUsage({ ...usageContext, estimatedTokens })')
   })
 
   it('checks scheduler cooldown before repeated database and model resolution work', () => {
@@ -105,8 +107,10 @@ describe('rollout hardening contract', () => {
   })
 
   it('projects the authorized observer channel source without routing writes to it', () => {
-    expect(bridge).toContain("_source: 'admin_market_fallback'")
-    expect(bridge).toContain("const readActions = ['rates', 'symbols', 'quote']")
+    expect(bridge).toContain("_source: 'observer_channel'")
+    expect(bridge).toContain('Number(ws._observerBridgeUserId || 0) !== Number(userId)')
+    expect(bridge).not.toContain("_source: 'admin_market_fallback'")
+    expect(bridge).not.toContain("const readActions = ['rates', 'symbols', 'quote']")
     expect(bridge).toContain('resolveObserverBridgeContext(userId, user, params.observer_channel_id)')
     expect(bridge).toContain("const dataUserId = access.mode === 'observer' ? observerContext.bridgeUserId : userId")
     expect(bridge).toContain("observerWsActionAllowed(access, action)")

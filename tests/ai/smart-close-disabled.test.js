@@ -6,18 +6,25 @@ const bridge = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url
 const migrations = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
 
 describe('disabled smart-close runtime', () => {
-  it('fails closed in both scheduler entry points', () => {
-    expect(scheduler).toContain('export const SMART_CLOSE_FEATURE_ENABLED = false')
-    expect(scheduler).toMatch(/startSmartCloseScheduler[\s\S]*if \(!SMART_CLOSE_FEATURE_ENABLED\) return false/)
-    expect(scheduler).toMatch(/runSmartCloseCycle[\s\S]*if \(!SMART_CLOSE_FEATURE_ENABLED\) throw new Error\('smart_close_feature_disabled'\)/)
+  it('does not keep retired scheduler state or callable stubs', () => {
+    expect(scheduler).not.toContain('SMART_CLOSE_FEATURE_ENABLED')
+    expect(scheduler).not.toContain('closeSchedulerState')
+    expect(scheduler).not.toContain('startSmartCloseScheduler')
+    expect(scheduler).not.toContain('stopSmartCloseScheduler')
+    expect(scheduler).not.toContain('runSmartCloseCycle')
+    expect(scheduler).not.toContain('function runSmartClose(')
+    expect(scheduler).not.toContain('function runCloseRules(')
+    expect(scheduler).not.toContain("session_id, 'smart_close'")
   })
 
   it('rejects every legacy WebSocket mutation entry point', () => {
     for (const action of ['save_close_config', 'toggle_close', 'run_close_now']) {
       const start = bridge.indexOf(`case '${action}'`)
       expect(start).toBeGreaterThan(-1)
-      expect(bridge.slice(start, start + 260)).toContain('if (!ai.SMART_CLOSE_FEATURE_ENABLED)')
+      expect(bridge.slice(start, start + 320)).toContain("code:'smart_close_feature_retired'")
     }
+    expect(bridge).not.toContain('ai.runSmartCloseCycle(userId)')
+    expect(bridge).not.toContain('ai.startSmartCloseScheduler(userId)')
   })
 
   it('clears previously enabled database configurations', () => {

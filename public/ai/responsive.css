@@ -163,6 +163,12 @@
 }
 
 @media (max-width: 767px) {
+  .position-protection-dialog { min-height:100dvh; }
+  .position-protection-summary,.position-protection-impact,.position-protection-price-grid { grid-template-columns:1fr 1fr; }
+  .position-protection-progress-card { grid-template-columns:1fr; gap:14px; }
+  .position-protection-results { max-height:none; }
+  .position-row-actions-cell .btn { min-height:44px; }
+  .position-protection-actions .btn { min-height:44px; }
   .candidate-entry-reference > div:nth-child(2) { grid-template-columns:1fr; }
   :root {
     --responsive-gutter: 16px;
@@ -576,6 +582,13 @@
   :is(button, a, summary) {
     touch-action: manipulation;
   }
+}
+
+@media (max-width: 480px) {
+  .position-protection-summary,.position-protection-impact,.position-protection-price-grid { grid-template-columns:1fr; }
+  .position-protection-section { padding:12px; }
+  .position-protection-actions { flex-wrap:wrap; }
+  .position-protection-actions .btn { flex:1 1 100%; margin:0; }
 }
 
 @media (max-width: 390px) {
@@ -1468,9 +1481,12 @@
 }
 
 @media (max-width: 767px) {
-  #history .content-card,
-  #audit .content-card {
+  #history .content-card {
     padding: 14px;
+  }
+
+  #audit .content-card {
+    padding: 0;
   }
 
   #history .card-header,

@@ -59,6 +59,17 @@ function userConcurrency() {
   return Number.isFinite(configured) && configured > 0 ? Math.min(configured, 20) : 5
 }
 
+function inventoryExpectedState(item) {
+  const rawDirection = String(item?.side || item?.type || '').toLowerCase()
+  return {
+    ticket:String(item?.ticket ?? ''),
+    symbol:String(item?.symbol || ''),
+    direction:rawDirection.startsWith('buy') ? 'buy' : (rawDirection.startsWith('sell') ? 'sell' : ''),
+    magic:Number(item?.magic || 0),
+    volume:Number(item?.volume || 0),
+  }
+}
+
 async function mapWithConcurrency(items, limit, worker) {
   const results = new Array(items.length)
   let cursor = 0
@@ -241,7 +252,10 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
       }
       if (!lockOwned) throw new Error('weekly_flatten_lock_lost')
       logUser(cycle, userId, `开始取消系统挂单：品种=${order.symbol || '未知'}，ticket=${order.ticket}`)
-      const result = await sendBridgeCommand(userId, 'cancel_system_pending', { ticket: order.ticket }, 15000, { noFallback: true })
+      const result = await sendBridgeCommand(userId, 'cancel_system_pending', {
+        ticket:order.ticket,
+        expected_state:inventoryExpectedState(order),
+      }, 15000, { noFallback: true })
       const ok = result?.status === 'success'
       logUser(cycle, userId, `${ok ? '系统挂单取消成功' : '系统挂单取消失败'}：品种=${order.symbol || '未知'}，ticket=${order.ticket}${ok ? '' : `，原因=${result?.message || result?.status || '未知'}`}`)
       if (!ok) failures.push({ kind: 'pending', ticket: order.ticket, result })
@@ -273,7 +287,10 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
       }
       if (!lockOwned) throw new Error('weekly_flatten_lock_lost')
       logUser(cycle, userId, `开始平掉系统持仓：品种=${position.symbol || '未知'}，ticket=${position.ticket}，手数=${position.volume ?? '未知'}`)
-      const result = await sendBridgeCommand(userId, 'close_system_position', { ticket: position.ticket }, 15000, { noFallback: true })
+      const result = await sendBridgeCommand(userId, 'close_system_position', {
+        ticket:position.ticket,
+        expected_state:inventoryExpectedState(position),
+      }, 15000, { noFallback: true })
       const ok = result?.status === 'success'
       logUser(cycle, userId, `${ok ? '系统持仓平仓成功' : '系统持仓平仓失败'}：品种=${position.symbol || '未知'}，ticket=${position.ticket}${ok ? '' : `，原因=${result?.message || result?.status || '未知'}`}`)
       if (!ok) failures.push({ kind: 'position', ticket: position.ticket, result })

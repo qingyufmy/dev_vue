@@ -11,6 +11,7 @@ vi.mock('../../server/db.js', () => db)
 
 import {
   createObserverChannel, createObserverSource, deleteObserverChannel,
+  deleteObserverSource,
   getDefaultObserverSource, invalidateObserverChannelCache,
   listObserverChannelsForUser, replaceObserverChannelAssignments,
   resolveObserverSourceForUser, updateObserverSource,
@@ -20,6 +21,14 @@ describe('observer sources and channels', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     invalidateObserverChannelCache()
+    db.withTransaction.mockImplementation(async callback => callback(async (sql, params = []) => {
+      if (/^\s*SELECT\b/i.test(sql)) {
+        const row = await db.queryOne(sql, params)
+        return [row ? [row] : [], []]
+      }
+      const result = await db.queryRun(sql, params)
+      return [{ insertId:result?.insertId || 0, affectedRows:result?.changes ?? 1 }, []]
+    }))
   })
 
   it('resolves the source through the explicit default channel', async () => {
@@ -43,6 +52,7 @@ describe('observer sources and channels', () => {
       name:'稳健账户', bridge_user_id:7, trading_account_id:12, strategy_id:3, notes:'主观摩源',
     })
     expect(source).toMatchObject({ id:5, bridge_user_id:7, trading_account_id:12, strategy_id:3 })
+    expect(db.withTransaction).toHaveBeenCalledTimes(1)
     expect(db.queryRun.mock.calls[0][1]).toEqual(expect.arrayContaining(['稳健账户', 7, 12, 3, 'active', '主观摩源', 1]))
     expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))).toBe(true)
     expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('INSERT INTO auto_scheduler'))).toBe(true)
@@ -108,6 +118,7 @@ describe('observer sources and channels', () => {
     const source = await updateObserverSource(5, { auto_inference_enabled:false, trade_send_enabled:false })
 
     expect(source).toMatchObject({ auto_inference_enabled:false, trade_send_enabled:false })
+    expect(db.withTransaction).toHaveBeenCalledTimes(1)
     const subscriptionCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('UPDATE strategy_subscriptions SET trading_account_id'))
     const schedulerCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO auto_scheduler'))
     const bridgeSettingsCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO user_bridge_settings'))
@@ -153,12 +164,34 @@ describe('observer sources and channels', () => {
     expect(db.queryRun).not.toHaveBeenCalled()
   })
 
+  it('deletes a source only after disabling its persisted runtime atomically', async () => {
+    db.queryOne
+      .mockResolvedValueOnce({ id:5, bridge_user_id:7, strategy_id:3 })
+      .mockResolvedValueOnce({ count:0 })
+    const run = vi.fn(async () => [{ affectedRows:1 }])
+    db.withTransaction.mockImplementation(callback => callback(run))
+
+    await expect(deleteObserverSource(5)).resolves.toMatchObject({
+      id:5, bridge_user_id:7, strategy_id:3,
+    })
+    expect(run.mock.calls.some(([sql]) => sql.includes('UPDATE strategy_subscriptions'))).toBe(true)
+    expect(run.mock.calls.some(([sql]) => sql.includes('UPDATE auto_scheduler'))).toBe(true)
+    expect(run.mock.calls.some(([sql]) => sql.includes('UPDATE user_bridge_settings'))).toBe(true)
+    expect(run.mock.calls.at(-1)[0]).toContain('DELETE FROM ai_observer_sources')
+  })
+
   it('lists only channels visible to the viewer and caches the short-lived result', async () => {
-    db.queryAll.mockResolvedValue([{ id:3, audience:'plus', bridge_user_id:7 }])
+    db.queryAll.mockResolvedValue([{ id:3, audience:'plus', bridge_user_id:7, strategy_id:9 }])
     await expect(listObserverChannelsForUser(22, 'plus')).resolves.toHaveLength(1)
     await expect(listObserverChannelsForUser(22, 'plus')).resolves.toHaveLength(1)
     expect(db.queryAll).toHaveBeenCalledTimes(1)
     expect(db.queryAll.mock.calls[0][1]).toEqual(['plus', 22])
+    expect(db.queryAll.mock.calls[0][0]).toContain('sources.strategy_id')
+  })
+
+  it('returns no source instead of falling back when the viewer has no authorized channel', async () => {
+    db.queryAll.mockResolvedValue([])
+    await expect(resolveObserverSourceForUser(22, 'plus')).resolves.toBeNull()
   })
 
   it('rejects a requested channel outside the viewer visibility set', async () => {

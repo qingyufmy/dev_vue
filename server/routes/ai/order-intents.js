@@ -5,12 +5,14 @@ import { queryAll, queryOne, withTransaction, beijingNow } from '../../db.js'
 import { mt5Bridge } from './market-data.js'
 import { StatefulRiskReject, recordSuccessfulOpenTx } from './risk-state.js'
 import { createSignalOutcomeTx } from './signal-outcomes.js'
+import { broadcastAdminEvent, sendToBrowsers } from '../../bridge-ws.js'
 
 const TERMINAL_STATUSES = new Set(['succeeded', 'rejected', 'failed'])
 const DETERMINISTIC_BROKER_RETCODES = new Set([10013, 10014, 10015, 10016, 10017, 10018, 10019, 10022, 10030, 10035, 10038])
 const LEASE_SECONDS = 30
 const RESERVATION_SECONDS = 10 * 60
 const RECONCILE_INTERVAL_MS = 30_000
+const DEFINITIVE_ABSENCE_GRACE_MS = 5 * 60_000
 
 let reconcileTimer = null
 
@@ -24,8 +26,12 @@ function safeParse(value, fallback = {}) {
   try { return JSON.parse(value) } catch { return fallback }
 }
 
-function ticketFromResult(result) {
-  return result?.order ?? result?.ticket ?? result?.order_id ?? result?.trade_ticket ?? result?.pending_ticket ?? null
+export function executionTicket(result, action = 'open') {
+  if (isPendingAction(action)) {
+    return result?.order ?? result?.pending_ticket ?? result?.ticket ?? result?.order_id ?? null
+  }
+  return result?.position_id ?? result?.position ?? result?.trade_ticket
+    ?? result?.ticket ?? result?.order ?? result?.order_id ?? null
 }
 
 function isPendingAction(action) {
@@ -237,7 +243,9 @@ async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId,
     const intent = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
     if (!intent || intent.status !== 'prepared' || intent.lease_token !== leaseToken) throw new Error('order_intent_lease_lost')
     const bridgeRef = `AI-${Number(intentId).toString(36).toUpperCase()}`.slice(0, 24)
-    const payload = { ...bridgeParams, comment: String(bridgeParams.comment || bridgeRef).slice(0, 31) }
+    // The MT5 comment is the durable execution identity. Never allow a caller
+    // supplied comment to replace it; the original request remains in request_json.
+    const payload = { ...bridgeParams, comment: bridgeRef }
     await run(
       `UPDATE order_intents SET status = 'bridge_sending', bridge_command_ref = ?, bridge_payload_json = ?,
          lease_expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = ? WHERE id = ?`,
@@ -248,7 +256,7 @@ async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId,
 }
 
 async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeResult) {
-  const ticket = ticketFromResult(bridgeResult)
+  const ticket = executionTicket(bridgeResult, bridgeAction)
   const succeeded = bridgeResult?.status === 'success' && ticket != null
   const explicitReject = isDeterministicBrokerReject(bridgeResult)
   const status = succeeded ? 'succeeded' : explicitReject ? 'rejected' : 'uncertain'
@@ -317,6 +325,8 @@ export async function prepareAndExecuteOrderIntent({
   options = {},
   validateRequest,
   buildBridgeCall,
+  beforeBridgeSend,
+  afterRiskPrepared,
   enrichRequest,
   loadRiskContext,
   resolveTradingAccount,
@@ -377,6 +387,20 @@ export async function prepareAndExecuteOrderIntent({
     await reserveRisk(intentId, leaseToken, actorId, accountId, preparedRequest, risk, statefulValidate, riskContext)
     const { bridgeAction, bridgeParams } = buildBridgeCall(preparedRequest)
     if (!['open', 'pending'].includes(bridgeAction)) throw new Error('invalid_new_order_bridge_action')
+    if (typeof beforeBridgeSend === 'function') {
+      await beforeBridgeSend({ actorId, sourceType, bridgeAction, request:preparedRequest, intentId })
+    }
+    if (typeof afterRiskPrepared === 'function') {
+      await afterRiskPrepared({
+        actorId,
+        sourceType,
+        bridgeAction,
+        bridgeParams,
+        request:preparedRequest,
+        intentId,
+        risk,
+      })
+    }
     const sending = await markBridgeSending(intentId, leaseToken, actorId, accountId, bridgeAction, bridgeParams)
     bridgeStarted = true
     let bridgeResult
@@ -451,6 +475,14 @@ function reconciliationLookbackSeconds(intent, nowMs = Date.now()) {
   return Math.max(6 * 60 * 60, Math.min(10 * 365 * 24 * 60 * 60, Math.ceil((nowMs - createdMs) / 1000) + 60 * 60))
 }
 
+function intentAgeMs(intent, nowMs = Date.now()) {
+  const raw = String(intent?.created_at || intent?.updated_at || '').trim()
+  const normalized = raw && !/[zZ]|[+-]\d\d:?\d\d$/.test(raw)
+    ? `${raw.replace(' ', 'T')}+08:00` : raw
+  const createdMs = Date.parse(normalized)
+  return Number.isFinite(createdMs) ? Math.max(0, nowMs - createdMs) : 0
+}
+
 export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit = 50 } = {}) {
   const intents = await queryAll(
     `SELECT * FROM order_intents WHERE status = 'uncertain' ORDER BY updated_at ASC LIMIT ?`,
@@ -458,42 +490,167 @@ export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit
   )
   let resolved = 0
   for (const intent of intents) {
+    const bridgePayload = safeParse(intent.bridge_payload_json, {})
+    const expectedKind = bridgePayload.action === 'pending' ? 'pending' : 'trade'
+    let lookup = null
     let found = null
     let foundKind = null
     try {
-      const lookup = await bridge(intent.user_id, 'order_lookup', {
+      lookup = await bridge(intent.user_id, 'order_lookup', {
         symbol: intent.symbol,
         bridge_command_ref: intent.bridge_command_ref,
         trade_ticket: intent.trade_ticket,
         pending_ticket: intent.pending_ticket,
+        expected_kind:expectedKind,
         lookback_seconds: reconciliationLookbackSeconds(intent),
       }, { noFallback: true })
-      if (lookup?.status !== 'success' || !lookup?.found) continue
+      if (lookup?.status !== 'success') continue
+      const definitiveReject = lookup.found === true && lookup.kind === 'rejected'
+      if (!lookup.found || definitiveReject) {
+        if (!definitiveReject && lookup.complete !== true) continue
+        if (!definitiveReject && intentAgeMs(intent) < DEFINITIVE_ABSENCE_GRACE_MS) continue
+        let absentDeliveries = []
+        await withTransaction(async run => {
+          const current = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intent.id])
+          if (!current || current.status !== 'uncertain') return
+          const reconciledResult = {
+            status:definitiveReject ? 'rejected' : 'error', reconciled:true,
+            definitive_not_found:!definitiveReject, definitive_reject:definitiveReject,
+            message:definitiveReject ? 'broker_rejected_order_confirmed' : 'order_not_found_after_complete_reconciliation',
+            lookback_seconds:Number(lookup.lookback_seconds) || null,
+          }
+          const terminalStatus = definitiveReject ? 'rejected' : 'failed'
+          const errorCode = definitiveReject ? 'reconciled_broker_reject' : 'reconciled_not_found'
+          await run(`UPDATE order_intents SET status = ?, result_json = ?,
+            error_code = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
+          [terminalStatus, JSON.stringify(reconciledResult), errorCode, beijingNow(), beijingNow(), intent.id])
+          await run("UPDATE risk_reservations SET status = 'released', updated_at = ? WHERE order_intent_id = ? AND status = 'active'",
+            [beijingNow(), intent.id])
+          absentDeliveries = await txAll(run,
+            'SELECT id, signal_id FROM auto_signal_deliveries WHERE order_intent_id = ? FOR UPDATE', [intent.id])
+          for (const delivery of absentDeliveries) {
+            await run(`UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE id = ?`,
+              [terminalStatus, JSON.stringify(reconciledResult), delivery.id])
+          }
+          const auditAction = definitiveReject
+            ? 'order_intent_reconciled_broker_reject'
+            : 'order_intent_reconciled_not_found'
+          await run(`INSERT INTO trade_audit_logs
+            (user_id, action, symbol, request_json, result_json, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+            current.user_id, auditAction, current.symbol || null,
+            JSON.stringify({ order_intent_id:current.id, bridge_command_ref:current.bridge_command_ref }),
+            JSON.stringify({ complete:true, lookback_seconds:reconciledResult.lookback_seconds,
+              delivery_ids:absentDeliveries.map(item => item.id) }),
+            terminalStatus,
+            beijingNow(),
+          ])
+          resolved += 1
+        })
+        for (const delivery of absentDeliveries) {
+          sendToBrowsers(intent.user_id, {
+            type:'signal_execution_updated', signal_id:Number(delivery.signal_id),
+            status:definitiveReject ? 'rejected' : 'failed',
+            reconciled:true, definitive_not_found:!definitiveReject, definitive_reject:definitiveReject,
+          })
+        }
+        if (absentDeliveries.length) {
+          broadcastAdminEvent('ai', 'signal_execution_updated', {
+            user_id:Number(intent.user_id), status:definitiveReject ? 'rejected' : 'failed', reconciled:true,
+            definitive_not_found:!definitiveReject, definitive_reject:definitiveReject,
+            signal_ids:absentDeliveries.map(item => Number(item.signal_id)),
+          }, { scopes:['ai-operations', 'risk-audit'], refresh:true })
+        }
+        continue
+      }
       found = lookup
       foundKind = lookup.kind === 'pending' ? 'pending' : 'trade'
     } catch {
       continue
     }
     if (!found) continue
-    const ticket = ticketFromResult(found)
+    const ticket = executionTicket(found, foundKind === 'pending' ? 'pending' : 'open')
+    if (ticket == null) continue
+    let recoveredDeliveries = []
     await withTransaction(async run => {
-      const current = await txOne(run, 'SELECT id, status FROM order_intents WHERE id = ? FOR UPDATE', [intent.id])
+      const current = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intent.id])
       if (!current || current.status !== 'uncertain') return
+      const bridgeAction = foundKind === 'pending' ? 'pending' : 'open'
+      const pendingState = foundKind === 'pending' && ['pending', 'partially_filled', 'filled', 'cancelled', 'expired']
+        .includes(String(found.pending_state || '').toLowerCase())
+        ? String(found.pending_state).toLowerCase() : 'pending'
+      const pendingExecuted = ['partially_filled', 'filled'].includes(pendingState)
+      const recoveredResult = {
+        ...found,
+        status:'success',
+        reconciled:true,
+        ticket,
+        order:found.order ?? ticket,
+        kind:foundKind,
+      }
       await run(
         `UPDATE order_intents SET status = 'succeeded', trade_ticket = ?, pending_ticket = ?, result_json = ?,
            error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ?`,
         [
           foundKind === 'trade' && ticket != null ? String(ticket) : null,
           foundKind === 'pending' && ticket != null ? String(ticket) : null,
-          JSON.stringify({ status: 'success', reconciled: true, ticket, kind: foundKind }),
+          JSON.stringify(recoveredResult),
           beijingNow(),
           beijingNow(),
           intent.id,
         ]
       )
       await run("UPDATE risk_reservations SET status = 'committed', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intent.id])
+      if (current.trading_account_id) await recordSuccessfulOpenTx(run, current.trading_account_id)
+      await createSignalOutcomeTx(run, current, recoveredResult, bridgeAction)
+
+      recoveredDeliveries = await txAll(run,
+        'SELECT id, signal_id FROM auto_signal_deliveries WHERE order_intent_id = ? FOR UPDATE', [intent.id])
+      for (const delivery of recoveredDeliveries) {
+        if (foundKind === 'pending') {
+          await run(`UPDATE auto_signal_deliveries SET execution_status = 'success', pending_ticket = ?,
+            pending_state = ?, is_executed = ?,
+            executed_at = CASE WHEN ? = 1 THEN COALESCE(executed_at, NOW()) ELSE executed_at END,
+            pending_valid_until = COALESCE(pending_valid_until,
+              (SELECT pending_valid_until FROM ai_signals WHERE id = signal_id)), execution_result = ?
+            WHERE id = ?`, [String(ticket), pendingState, pendingExecuted ? 1 : 0,
+            pendingExecuted ? 1 : 0, JSON.stringify(recoveredResult), delivery.id])
+        } else {
+          await run(`UPDATE auto_signal_deliveries SET execution_status = 'success', is_executed = 1,
+            executed_at = COALESCE(executed_at, NOW()), trade_ticket = ?, execution_result = ? WHERE id = ?`,
+          [String(ticket), JSON.stringify(recoveredResult), delivery.id])
+        }
+        await run('UPDATE signal_outcomes SET delivery_id = ?, updated_at = ? WHERE order_intent_id = ?',
+          [delivery.id, beijingNow(), intent.id])
+      }
+      if (foundKind === 'pending' && ['cancelled', 'expired'].includes(pendingState)) {
+        await run(`UPDATE signal_outcomes SET status = ?, attribution_status = 'not_filled',
+          last_scan_at = ?, updated_at = ? WHERE order_intent_id = ?`,
+        [pendingState, beijingNow(), beijingNow(), intent.id])
+      }
+      await run(`INSERT INTO trade_audit_logs
+        (user_id, action, symbol, request_json, result_json, status, created_at)
+        VALUES (?, 'order_intent_reconciled', ?, ?, ?, 'success', ?)`, [
+        current.user_id, current.symbol || null,
+        JSON.stringify({ order_intent_id:current.id, bridge_command_ref:current.bridge_command_ref }),
+        JSON.stringify({ ticket:String(ticket), kind:foundKind, delivery_ids:recoveredDeliveries.map(item => item.id) }),
+        beijingNow(),
+      ])
       resolved += 1
     })
+    if (recoveredDeliveries.length) {
+      for (const delivery of recoveredDeliveries) {
+        sendToBrowsers(intent.user_id, {
+          type:'signal_execution_updated', signal_id:Number(delivery.signal_id), status:'success', reconciled:true,
+          pending_ticket:foundKind === 'pending' ? String(ticket) : null,
+          trade_ticket:foundKind === 'trade' ? String(ticket) : null,
+        })
+      }
+      broadcastAdminEvent('ai', 'signal_execution_updated', {
+        user_id:Number(intent.user_id), status:'success', reconciled:true,
+        signal_ids:recoveredDeliveries.map(item => Number(item.signal_id)),
+      }, { scopes:['ai-operations', 'risk-audit'], refresh:true })
+    }
   }
   return resolved
 }

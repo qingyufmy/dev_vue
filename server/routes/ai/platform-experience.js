@@ -404,19 +404,10 @@ function selectedExperienceIds(value) {
   return [...new Set((parse(value, []) || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
 }
 
-function pairedDifference(row) {
-  const treatment = parse(row.treatment_digest_json, {}) || {}
-  const control = parse(row.control_digest_json, {}) || {}
-  const fields = ['signal_type', 'entry_method', 'confidence', 'recommended_volume', 'stop_loss_price', 'take_profit_1_price', 'limit_price']
-  const changedFields = row.control_digest_json ? fields.filter(key => JSON.stringify(treatment[key] ?? null) !== JSON.stringify(control[key] ?? null)) : []
-  return { treatment, control:row.control_digest_json ? control : null, changed_fields:changedFields,
-    direction_changed:changedFields.includes('signal_type'), execution_changed:changedFields.includes('entry_method') }
-}
-
 export async function getPlatformExperienceEvaluation({ days = 30, limit = 20 } = {}) {
   const windowDays = Math.min(90, Math.max(1, Math.trunc(Number(days) || 30)))
   const recentLimit = Math.min(50, Math.max(5, Math.trunc(Number(limit) || 20)))
-  const [logs, items, pairedRows] = await Promise.all([
+  const [logs, items] = await Promise.all([
     queryAll(`SELECT logs.*, apt.title AS strategy_title
       FROM platform_strategy_experience_logs logs
       JOIN auto_prompt_types apt ON apt.id = logs.strategy_id
@@ -427,15 +418,6 @@ export async function getPlatformExperienceEvaluation({ days = 30, limit = 20 } 
       FROM platform_strategy_experience_items pei
       JOIN auto_prompt_types apt ON apt.id = pei.strategy_id
       WHERE pei.status = 'active' ORDER BY pei.strategy_id, pei.platform_version DESC, pei.id DESC`),
-    queryAll(`SELECT runs.*, apt.title AS strategy_title, u.nickname AS user_nickname,
-        outcomes.net_profit, outcomes.status AS outcome_status
-      FROM ai_paired_inference_runs runs
-      LEFT JOIN auto_prompt_types apt ON apt.id = runs.strategy_id
-      LEFT JOIN users u ON u.id = runs.user_id
-      LEFT JOIN signal_outcomes outcomes ON outcomes.signal_id = runs.signal_id
-      WHERE runs.created_at >= DATE_SUB(NOW(), INTERVAL ${windowDays} DAY)
-        AND apt.scope = 'platform'
-      ORDER BY runs.created_at DESC, runs.id DESC LIMIT 500`),
   ])
   const itemMap = new Map(items.map(item => [Number(item.id), item]))
   const firstPublishedByStrategy = new Map()
@@ -476,8 +458,6 @@ export async function getPlatformExperienceEvaluation({ days = 30, limit = 20 } 
       selected_item_ids:selectedIds, selected_items:selectedIds.map(id => ({ id, lesson_text:itemMap.get(id)?.lesson_text || null })),
       retrieval_context:parse(log.retrieval_context_json, {}), selection_details:parse(log.selection_details_json, []), created_at:log.created_at }
   })
-  const completedPairs = pairedRows.filter(row => row.status === 'completed' || row.status === 'succeeded')
-  const changedPairs = completedPairs.filter(row => pairedDifference(row).changed_fields.length > 0)
   return {
     generated_at:beijingNow(), window_days:windowDays,
     retrieval:{ observed_total:logs.length, total:evaluationLogs.length, hits, misses:evaluationLogs.length - hits,
@@ -488,13 +468,5 @@ export async function getPlatformExperienceEvaluation({ days = 30, limit = 20 } 
       shadow_hit_rate:row.shadow_retrievals ? row.shadow_hits / row.shadow_retrievals : 0 })),
     items:items.map(item => ({ ...item, hit_count:Number(itemHits.get(Number(item.id)) || 0) })),
     recent_retrievals:recentRetrievals,
-    paired:{ total:pairedRows.length, completed:completedPairs.length, changed:changedPairs.length,
-      failed:pairedRows.filter(row => row.status === 'failed').length,
-      recent_runs:pairedRows.slice(0, recentLimit).map(row => ({ id:Number(row.id), strategy_id:Number(row.strategy_id || 0),
-        strategy_title:row.strategy_title || null, user_id:Number(row.user_id), user_nickname:row.user_nickname || null,
-        signal_id:Number(row.signal_id || 0) || null, status:row.status, error_code:row.error_code || null,
-        net_profit:row.net_profit == null ? null : Number(row.net_profit), outcome_status:row.outcome_status || null,
-        created_at:row.created_at, ...pairedDifference(row) })),
-    },
   }
 }

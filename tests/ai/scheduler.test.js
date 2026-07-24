@@ -84,7 +84,7 @@ vi.mock('../../server/redis.js', () => ({
   isRedisAvailable: vi.fn(() => false),
 }))
 
-import { isAutoSchedulerRunning, closeSchedulerState } from '../../server/routes/ai/scheduler.js'
+import { getSubscriptionIndexHealth, isAutoSchedulerRunning, rebuildRedisSubscriptions } from '../../server/routes/ai/scheduler.js'
 import * as db from '../../server/db.js'
 import * as marketData from '../../server/routes/ai/market-data.js'
 import * as bridgeWs from '../../server/bridge-ws.js'
@@ -95,9 +95,10 @@ describe('isAutoSchedulerRunning', () => {
   })
 })
 
-describe('closeSchedulerState', () => {
-  it('初始状态为空对象', () => {
-    expect(typeof closeSchedulerState).toBe('object')
+describe('subscription index health', () => {
+  it('records Redis unavailability instead of reporting a silent successful rebuild', async () => {
+    await expect(rebuildRedisSubscriptions()).resolves.toMatchObject({ ok:false, error:'redis_unavailable' })
+    expect(getSubscriptionIndexHealth()).toMatchObject({ ok:false, error:'redis_unavailable' })
   })
 })
 
@@ -279,7 +280,9 @@ describe('reconcilePendingOrders', () => {
       .mockResolvedValueOnce([{ id: 9, user_id: 10, signal_id: 900, pending_ticket: '5009', pending_valid_until: '2020-01-01 00:00:00', src: 'delivery' }])
       .mockResolvedValueOnce([])
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
-      if (action === 'pending_list') return Promise.resolve({ orders: [{ ticket: 5009 }] })
+      if (action === 'pending_list') return Promise.resolve({ orders: [{
+        ticket: 5009, symbol: 'XAUUSD', side: 'buy', volume: 0.1, magic: 234000,
+      }] })
       if (action === 'positions') return Promise.resolve({ positions: [] })
       if (action === 'history') return Promise.resolve({ status: 'success', orders: [] })
       if (action === 'cancel_pending') return Promise.resolve({ status: 'success', ticket: 5009 })
@@ -288,7 +291,10 @@ describe('reconcilePendingOrders', () => {
 
     await reconcilePendingOrders()
 
-    expect(marketData.mt5Bridge).toHaveBeenCalledWith(10, 'cancel_pending', { ticket: '5009' }, { noFallback: true })
+    expect(marketData.mt5Bridge).toHaveBeenCalledWith(10, 'cancel_pending', {
+      ticket: '5009',
+      expected_state: { ticket: '5009', symbol: 'XAUUSD', magic: 234000, volume: 0.1, direction: 'buy' },
+    }, { noFallback: true })
     expect(db.queryRun.mock.calls.some(c => c[0].includes("pending_state = 'expired'"))).toBe(true)
   })
 })

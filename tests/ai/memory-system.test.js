@@ -9,7 +9,7 @@ vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel: vi.fn() }))
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject: vi.fn() }))
 
-import { buildPeriodMemoryScope, buildPersonalMemoryRetrievalContext, memorySimilarity, pairedInferenceDigest, rankMemoryCandidates,
+import { buildPeriodMemoryScope, buildPersonalMemoryRetrievalContext, memorySimilarity, rankMemoryCandidates,
   retrievePersonalMemory, sanitizeMemoryText } from '../../server/routes/ai/memory-system.js'
 
 describe('personal memory input hardening', () => {
@@ -169,13 +169,13 @@ describe('memory persistence, invalidation and inference boundaries', () => {
     expect(migration).toContain('uk_platform_experience_period_content')
   })
 
-  it('stores only paired decision digests and hashes, never review bodies', () => {
-    const result = pairedInferenceDigest({ signal_type: 'buy', entry_method: 'market', confidence: 0.8,
-      recommended_volume: 0.01, analysis: 'private analysis body', reasoning: 'private reasoning body' })
-    expect(result.digest).not.toHaveProperty('analysis')
-    expect(result.digest).not.toHaveProperty('reasoning')
-    expect(result.digest.analysis_hash).toHaveLength(64)
-    expect(migration).toContain('CREATE TABLE IF NOT EXISTS ai_paired_inference_runs')
-    expect(scheduler).toContain('memory.pairedExperimentEnabled')
+  it('removes paired inference without changing normal memory retrieval', () => {
+    expect(memory).not.toContain('pairedExperimentEnabled')
+    expect(memory).not.toContain('recordPairedInferenceRun')
+    expect(scheduler).not.toContain('pairedExperimentEnabled')
+    expect(scheduler).not.toContain('recordPairedInferenceRun')
+    expect(migration).toContain("id: '135_remove_paired_inference_experiment'")
+    expect(migration).toContain('DROP TABLE IF EXISTS ai_paired_inference_runs')
+    expect(migration).toContain('DROP COLUMN paired_experiment_enabled')
   })
 })

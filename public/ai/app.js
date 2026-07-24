@@ -4,7 +4,7 @@ function getCookie(name) {
 }
 
 const state = {
-  token: localStorage.getItem("authToken") || getCookie("ws_token") || "",
+  token: window.AuthSession?.token() || localStorage.getItem("ws_token") || localStorage.getItem("authToken") || getCookie("ws_token") || "",
   user: null,
   aiAccess: null,
   observerChannels: [],
@@ -23,13 +23,26 @@ const state = {
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
   accountBalance: 0,
+  bridgeAccountIdentity: null,
   historyNetResult: 0,
 
   signalTableData: [],
   signalTableTotal: 0,
   signalFilters: { direction: "", timeframe: "", page: 1, pageSize: 20 },
   historyFilters: { page: 1, pageSize: 20 },
+  auditRows: [],
+  auditFilters: { status: "", type: "", page: 1, pageSize: 20 },
   executionFilters: { page: 1, pageSize: 5, total: 0 },
+  positionManagementTasks: [],
+  positionManagementSettings: null,
+  positionManagementFilters: { status: "", page: 1, pageSize: 10, total: 0 },
+  selectedPositionManagementId: null,
+  positionManagementRealtimeTimer: null,
+  positions: [],
+  pendingOrders: [],
+  positionProtectionPreview: null,
+  positionProtectionJob: null,
+  positionProtectionPollTimer: null,
   signalTickets: {},
   closeSignalTickets: {},
   analysisHistoryOffset: 0,
@@ -260,6 +273,8 @@ const REASON_MAP = {
   pending_list_confirm_failed: "替换旧挂单后的挂单复核失败",
   pending_supersede_incomplete: "同方向旧挂单尚未完全替换",
   pending_limit_reached: "当前品种的挂单数量已达到限制",
+  ai_pending_order_disabled: "平台已关闭 AI 挂单",
+  ai_pending_cancel_disabled: "平台已关闭 AI 取消挂单",
   subscription_inactive: "策略订阅当前未启用",
   outside_schedule: "当前不在自动推理运行时段内",
   trade_send_disabled: "交易发送已关闭",
@@ -1150,6 +1165,8 @@ const API_ERROR_MESSAGES = {
   strategy_delete_active_subscriptions_unconfirmed: "仍有运行中的订阅，必须明确确认停止后才能删除",
   private_strategy_limit_reached: "当前 Pro 账户最多只能创建 1 条自定义策略",
   trading_account_not_active: "当前 MT5 账户不是活动账户，请重新连接具有交易权限的 MT5 账户",
+  trading_account_identity_immutable: "该 MT5 账户已经完成身份验证，服务器和登录账号不能直接修改；如需更换账户，请删除后重新连接验证",
+  ai_internal_error: "服务器处理失败，请稍后重试；如持续出现，请将错误编号提供给管理员",
   admin_only: "仅管理员可以使用此功能",
   observer_channel_access_denied: "当前账号不能查看这个观摩频道",
   observer_source_offline: "当前观摩频道暂时离线，请稍后重试",
@@ -1255,6 +1272,8 @@ const OBSERVER_WS_READ_ACTIONS = new Set([
 function isObserverMode() { return state.aiAccess?.read_only === true; }
 
 function observerMessage() {
+  if (state.aiAccess?.reason === "membership_expired") return "会员已过期，请续费后继续使用 AI 交易实验室";
+  if (state.aiAccess?.reason === "membership_required") return "当前为免费账户，请升级会员后使用 AI 交易实验室";
   return state.aiAccess?.reason === "bridge_offline"
     ? "当前为观摩模式，请连接 MT5 桥接后再操作"
     : "Plus 会员为观摩模式，仅支持查看";
@@ -1320,7 +1339,18 @@ async function api(path, options = {}) {
     const text = await response.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
-    if (!response.ok) throw new Error(apiErrorMessage(data.error || data.detail || data.message || `HTTP ${response.status}`));
+    if (!response.ok) {
+      const code = data.error || data.code || null;
+      const error = new Error(apiErrorMessage(code || data.detail || data.message || `HTTP ${response.status}`));
+      error.name = "ApiError";
+      error.status = response.status;
+      error.code = code;
+      error.incidentId = data.incident_id || null;
+      throw error;
+    }
+    if (data?.runtime_sync?.degraded) {
+      queueMicrotask(() => toast("设置已保存，但运行时同步仍在重试，请稍后刷新状态", "warning"));
+    }
     return data;
   } catch (err) {
     clearTimeout(timeoutId);
@@ -1382,7 +1412,9 @@ function clearAccountContextCaches() {
   _historyCache = null;
   _historyChartCache = null;
   state.lastQuote = null;
+  state.bridgeAccountIdentity = null;
   state.positions = [];
+  state.pendingOrders = [];
   state.tradingAccounts = [];
   state.strategySubscriptions = [];
   _prevPositionCount = 0;
@@ -1429,8 +1461,9 @@ function connectBridgeStatusWs(onReady) {
     if (typeof onReady === 'function') onReady();
     return;
   }
+  window.AuthSession?.syncCookie();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser&token=${encodeURIComponent(state.token)}`;
+  const url = `${proto}//${location.host}/aurum-api/bridge/ws?type=browser`;
   const ws = new WebSocket(url);
   state.bridgeWs = ws;
   let _readyFired = false;
@@ -1470,6 +1503,10 @@ function connectBridgeStatusWs(onReady) {
         handleAccountSwitched(msg).catch(error => console.warn('[AccountSwitch] 刷新失败:', error.message));
       } else if (msg.type === 'account_transferred') {
         handleAccountTransferred(msg).catch(error => console.warn('[AccountTransfer] 刷新失败:', error.message));
+      } else if (msg.type === 'position_protection_job_updated') {
+        handlePositionProtectionJobUpdate(msg.job);
+      } else if (msg.type === 'position_protection_target_updated') {
+        handlePositionProtectionTargetUpdate(msg.job_id, msg.target);
       } else if (msg.type === 'auto_state') {
         state.autoEnabled = !!msg.enabled;
         if (!msg.enabled) {
@@ -1578,6 +1615,19 @@ function connectBridgeStatusWs(onReady) {
             toast(`周末风险控制异常：${reason}`, 'error');
           }
         }
+      } else if (msg.type === 'position_management_task_updated' || msg.type === 'position_management_settings_updated') {
+        const live = $("positionManagementLive");
+        if (live) {
+          live.classList.add("live");
+          live.innerHTML = `<i></i>刚刚实时更新`;
+        }
+        if (state.positionManagementRealtimeTimer) clearTimeout(state.positionManagementRealtimeTimer);
+        state.positionManagementRealtimeTimer = setTimeout(() => {
+          state.positionManagementRealtimeTimer = null;
+          const managementVisible = activeTabId() === "trading"
+            && document.querySelector('[data-workspace-tab="trading"].active')?.dataset.workspaceTarget === "management";
+          if (managementVisible) loadPositionManagement({ quiet:true, preserveSelection:true }).catch(() => {});
+        }, 180);
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {
@@ -1691,6 +1741,12 @@ function handleBridgeData(msg) {
     }
   }
   if (msg.account) {
+    if (msg.account.server && msg.account.login != null) {
+      state.bridgeAccountIdentity = {
+        brokerServerKey: String(msg.account.server).trim().toUpperCase(),
+        loginAccount: String(msg.account.login).trim(),
+      };
+    }
     setText("accountBalance", fmt(msg.account.balance));
     setText("accountEquity", fmt(msg.account.equity));
     setText("accountMargin", fmt(msg.account.margin));
@@ -2105,7 +2161,9 @@ function renderModelProfiles() {
   setText("modelCountStat", state.modelProfiles.length);
   setText("modelActiveStat", activeProfiles.length);
   if (!state.modelProfiles.length) {
-    host.innerHTML = '<div class="workspace-panel empty-state"><strong>还没有可用模型</strong><span>添加一个自己的模型；若管理员已开放共享，也可由系统按用途自动选用平台模型。</span></div>';
+    host.innerHTML = state.user?.role === "admin"
+      ? '<div class="workspace-panel empty-state"><strong>还没有平台模型</strong><span>添加平台模型后，可按手动分析、自动分析、复盘和记忆压缩分别开放共享。</span></div>'
+      : '<div class="workspace-panel empty-state"><strong>还没有可用模型</strong><span>添加一个自己的模型；若管理员已开放共享，也可由系统按用途自动选用平台模型。</span></div>';
     return;
   }
   host.innerHTML = state.modelProfiles.map(profile => `
@@ -2118,17 +2176,11 @@ function renderModelProfiles() {
 
 async function loadModelManagement() {
   const host = $("modelProfilesList");
-  if (state.user?.role === "admin") {
-    if (host) host.innerHTML = '<div class="workspace-panel empty-state"><strong>平台模型已迁移到统一管理后台</strong><span>模型凭据、共享用途、配额和灰度开关请在统一管理后台维护。</span><a class="btn btn-primary btn-sm" href="/admin/?view=ai-operations">打开统一管理后台</a></div>';
-    setText("modelCatalogSummary", "统一后台管理");
-    setText("modelCountStat", "--"); setText("modelActiveStat", "--"); setText("modelEffectiveSource", "平台统一配置");
-    return;
-  }
   if (host) host.innerHTML = '<div class="workspace-skeleton"></div><div class="workspace-skeleton"></div>';
   setText("modelEffectiveSource", "正在选择…");
   const notice = $("modelSourceNotice");
   if (notice) notice.innerHTML = '<span><strong>模型来源：</strong>正在向服务端确认当前可用配置…</span>';
-  const usage = "manual";
+  const usage = state.user?.role === "admin" ? "auto_platform" : "manual";
   const [profilesResult, sourceResult] = await Promise.allSettled([
     api(`/api/ai/model-profiles${profileScopeQuery()}`),
     api(`/api/ai/model-source?usage=${usage}`),
@@ -2158,11 +2210,14 @@ async function loadModelManagement() {
     if (notice) notice.innerHTML = `<span><strong>模型来源解析失败：</strong> ${escapeHtml(message)}</span><button class="btn btn-secondary btn-sm" type="button" data-action="retry-model-management">重试</button>`;
     if ($("strategyModelSource")) $("strategyModelSource").textContent = "模型来源解析失败";
   }
+  if (state.user?.role === "admin" && profilesResult.status === "fulfilled") {
+    try { await loadPlatformPolicy(); }
+    catch (error) { toast(`平台共享设置加载失败：${error.message}`, "warning"); }
+  }
   initIcons();
 }
 
 function openModelEditor(profile = null) {
-  if (state.user?.role === "admin") { location.href = "/admin/?view=ai-operations"; return; }
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   const editor = $("modelProfileEditor");
   if (!editor) return;
@@ -2189,11 +2244,39 @@ async function saveModelProfile() {
   if (body.provider === "kimi_code" && body.model_name === "k3" && body.thinking_enabled) body.reasoning_effort = "max";
   const key = $("profileApiKey").value.trim();
   if (key) body.api_key = key;
+  if (state.user?.role === "admin") body.scope = "platform";
   await api(id ? `/api/ai/model-profiles/${id}` : "/api/ai/model-profiles", { method: id ? "PUT" : "POST", body });
   $("profileApiKey").value = "";
   closeFormModal(editor, false);
   toast("模型已保存", "success");
   await loadModelManagement();
+}
+
+async function loadPlatformPolicy() {
+  const data = await api("/api/ai/platform-model-policy");
+  const policy = data.policy || {};
+  $("shareForManual").checked = Boolean(policy.share_for_manual);
+  $("shareForAuto").checked = Boolean(policy.share_for_auto);
+  $("shareForReview").checked = Boolean(policy.share_for_review);
+  $("shareForCompression").checked = Boolean(policy.share_for_memory_compression);
+  $("policyDailyRequests").value = policy.daily_requests_per_user || 100;
+  $("policyDailyTokens").value = policy.daily_tokens_per_user || 500000;
+  const controls = [$("shareForManual"), $("shareForAuto"), $("shareForReview"), $("shareForCompression")].filter(Boolean);
+  const hasShareableModel = state.modelProfiles.some(profile => profile.status === "active" && profile.has_api_key && profile.share_eligible !== false);
+  controls.forEach(control => { control.disabled = !hasShareableModel; });
+}
+
+async function savePlatformPolicy() {
+  await api("/api/ai/platform-model-policy", { method:"PUT", body:{
+    share_for_manual:$("shareForManual").checked,
+    share_for_auto:$("shareForAuto").checked,
+    share_for_review:$("shareForReview").checked,
+    share_for_memory_compression:$("shareForCompression").checked,
+    allowed_plans:["pro"],
+    daily_requests_per_user:Number($("policyDailyRequests").value),
+    daily_tokens_per_user:Number($("policyDailyTokens").value),
+  } });
+  toast("平台共享策略已保存", "success");
 }
 
 async function loadStrategyCatalog() {
@@ -2212,8 +2295,8 @@ async function loadStrategyCatalog() {
   const addStrategyButton = $("addPrivateStrategyBtn");
   if (addStrategyButton && state.user?.role === "admin") {
     addStrategyButton.disabled = false;
-    addStrategyButton.title = "在统一管理后台维护平台策略";
-    addStrategyButton.innerHTML = '<i data-lucide="external-link" size="15"></i>管理平台策略';
+    addStrategyButton.title = "新建平台策略";
+    addStrategyButton.innerHTML = '<i data-lucide="plus" size="15"></i>新建平台策略';
   }
   if (addStrategyButton && state.user?.role !== "admin") {
     const ownPrivateCount = items.filter(item => item.scope === "private" && Number(item.owner_user_id) === Number(state.user?.id)).length;
@@ -2250,7 +2333,8 @@ async function loadStrategyCatalog() {
     const linked = subscriptions.filter(sub => Number(sub.strategy_id) === Number(item.id));
     const execution = linked.length ? `${linked.filter(sub => Number(sub.execution_enabled)).length}/${linked.length} 个订阅启用` : "未订阅";
     const memoryMode = linked.some(sub => sub.memory_mode === "off") ? "部分订阅关闭记忆" : memory;
-    const canEdit = item.scope === 'private' && Number(item.owner_user_id) === Number(state.user?.id);
+    const canEdit = (item.scope === 'private' && Number(item.owner_user_id) === Number(state.user?.id))
+      || (item.scope === 'platform' && state.user?.role === 'admin');
     const subRows = linked.map(sub => `<div class="subscription-row"><div class="subscription-row-info"><strong>账户 #${sub.trading_account_id}</strong><span>订阅 #${sub.id} · ${sub.execution_enabled ? '自动分析已启用' : '自动分析未启用'} · ${escapeHtml(subscriptionTakeProfitModeLabel(sub.take_profit_mode))} · ${escapeHtml(subscriptionScheduleSummary(sub))} · ${escapeHtml(subscriptionMemoryModeLabel(sub.memory_mode))}</span></div><div class="subscription-row-actions"><button class="btn btn-secondary btn-sm" data-subscription-action="edit" data-subscription-id="${sub.id}"><i data-lucide="settings-2" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-subscription-action="delete" data-subscription-id="${sub.id}"><i data-lucide="trash-2" size="14"></i>删除</button></div></div>`).join("");
     const primarySubscription = linked.find(sub => Number(sub.execution_enabled)) || linked[0];
     const subscriptionButton = primarySubscription
@@ -2330,11 +2414,13 @@ function renderStrategyModelOptions(scope, selectedId = "") {
 }
 
 function openStrategyEditor(strategy = null) {
-  if (state.user?.role === "admin") { location.href = "/admin/?view=ai-operations"; return; }
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   const editor = $("strategyEditor"); editor.dataset.strategyId = strategy?.id || "";
-  $("strategyEditorTitle").textContent = strategy ? "编辑策略" : "新建自定义策略";
-  $("strategyEditorBoundary").textContent = "你创建的私有策略仅自己可见、可选和执行。";
+  const admin = state.user?.role === "admin";
+  $("strategyEditorTitle").textContent = strategy ? "编辑策略" : (admin ? "新建平台策略" : "新建自定义策略");
+  $("strategyEditorBoundary").textContent = admin
+    ? "平台策略对所有合资格用户可见；他人私有策略只允许审计查看，不能代替用户修改或执行。"
+    : "你创建的私有策略仅自己可见、可选和执行。";
   $("strategyTitle").value = strategy?.title || ""; $("strategySymbols").value = parseJsonField(strategy?.symbols_json, []).join(", ");
   $("strategyDescription").value = strategy?.description || "";
   $("strategyPrompt").value = strategy?.system_prompt || ""; $("strategyInterval").value = strategy?.interval_minutes || 5;
@@ -2345,9 +2431,15 @@ function openStrategyEditor(strategy = null) {
   const entryMethods = new Set(parseJsonField(strategy?.entry_methods_json, ["market","limit","stop","stop_limit"]));
   document.querySelectorAll("[data-strategy-entry-method]").forEach(input => { input.checked = entryMethods.has(input.dataset.strategyEntryMethod); });
   $("strategyUseChanAnalysis").checked = Boolean(Number(strategy?.use_chan_analysis || 0));
-  $("strategyIncludePortfolioContext").checked = Boolean(Number(strategy?.include_portfolio_context || 0));
-  $("strategyPortfolioContextField")?.classList.remove("hidden");
-  renderStrategyModelOptions("private", strategy?.model_profile_id || "");
+  $("strategyIncludePortfolioContext").checked = !admin && Boolean(Number(strategy?.include_portfolio_context || 0));
+  $("strategyPortfolioContextField")?.classList.toggle("hidden", admin);
+  if (admin) {
+    $("strategyScope").value = "platform";
+    $("strategyScopeField")?.classList.add("is-readonly");
+    $("strategyVisibility").value = strategy?.visibility_status || "active";
+    $("strategyVisibilityField").style.display = "";
+  }
+  renderStrategyModelOptions(strategy?.scope || (admin ? "platform" : "private"), strategy?.model_profile_id || "");
   openFormModal(editor);
 }
 
@@ -2359,8 +2451,8 @@ async function saveStrategyEditor() {
   const primaryTimeframe = timeframes.some(item => item.timeframe === primary) ? primary : timeframes[0].timeframe;
   const entryMethods = [...document.querySelectorAll("[data-strategy-entry-method]:checked")].map(input => input.dataset.strategyEntryMethod);
   if (!entryMethods.length) throw new Error("请至少允许一种入场方式");
-  const scope = "private";
-  const visibilityStatus = "active";
+  const scope = state.user?.role === "admin" ? "platform" : "private";
+  const visibilityStatus = state.user?.role === "admin" ? $("strategyVisibility").value : "active";
   const body = { title:$("strategyTitle").value.trim(), symbols:$("strategySymbols").value.split(",").map(value => value.trim()).filter(Boolean),
     description:$("strategyDescription").value.trim(), system_prompt:$("strategyPrompt").value.trim(), interval_minutes:Number($("strategyInterval").value) || 5,
     market_data_plan:{ primary_timeframe:primaryTimeframe, timeframes }, entry_methods:entryMethods,
@@ -2961,17 +3053,8 @@ function stopReviewDetailPolling() {
 async function loadReviewMemory() {
   const query = state.reviewPeriodFilter ? `?periodType=${encodeURIComponent(state.reviewPeriodFilter)}` : "";
   const isAdmin = state.user?.role === "admin";
-  if (isAdmin) {
-    state.reviewCases = [];
-    const queue = $("reviewCaseList"), detail = $("reviewDetail"), memory = $("memoryItemsList");
-    if (queue) queue.innerHTML = '<div class="empty-state"><strong>平台复盘已迁移</strong><span>请在统一管理后台审核日复盘与月复盘。</span></div>';
-    if (detail) detail.innerHTML = '<div class="empty-state"><strong>统一管理平台复盘与记忆</strong><span>审核、确认、重试和记忆发布不再在 AI 实验室重复提供。</span><a class="btn btn-primary btn-sm" href="/admin/?view=ai-operations">打开统一管理后台</a></div>';
-    if (memory) memory.innerHTML = '<div class="empty-state"><strong>平台记忆已迁移</strong><span>策略绑定、影子评估和发布归档请在统一管理后台维护。</span></div>';
-    setText("memoryActiveStat", "--");
-    return;
-  }
   const [reviewData, memoryData, profileData, featureData] = isAdmin
-    ? await Promise.all([api(`/api/ai/period-reviews${query}`), Promise.resolve({ items:[], summaries:[], settings:{}, policies:[], evaluation:{} }), Promise.resolve({ profiles:[] }), Promise.resolve({ flags:{ user:{} } })])
+    ? await Promise.all([api(`/api/ai/period-reviews${query}`), api("/api/ai/admin/platform-experience"), Promise.resolve({ profiles:[] }), Promise.resolve({ flags:{ user:{} } })])
     : await Promise.all([api(`/api/ai/period-reviews${query}`), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
   state.reviewCases = reviewData.cases || [];
   state.memoryItems = memoryData.items || [];
@@ -2982,29 +3065,23 @@ async function loadReviewMemory() {
   await loadReviewSummary({ announce:false });
   $("sharedCredentialNotice")?.classList.toggle("hidden", isAdmin || (profileData.profiles || []).some(item => item.is_default && item.has_api_key));
   const userFlags = featureData.flags?.user || {};
-  const featureInputs = { userReviewGenerationFlag:"review_generation_enabled", userExperienceMemoryFlag:"experience_memory_enabled", userMemoryCompressionFlag:"memory_compression_enabled", userRetrievalShadowFlag:"retrieval_shadow_enabled", userPairedExperimentFlag:"paired_experiment_enabled" };
+  const featureInputs = { userReviewGenerationFlag:"review_generation_enabled", userExperienceMemoryFlag:"experience_memory_enabled", userMemoryCompressionFlag:"memory_compression_enabled", userRetrievalShadowFlag:"retrieval_shadow_enabled" };
   for (const [id,key] of Object.entries(featureInputs)) if ($(id)) {
-    // Paid paired inference is opt-in: an inherited/global permission must not
-    // silently become explicit user consent when this form is saved.
-    $(id).checked = key === "paired_experiment_enabled" ? userFlags[key] === true : userFlags[key] ?? true;
+    $(id).checked = userFlags[key] ?? true;
   }
   renderReviewCases();
   renderCachedMemoryWorkspace();
 }
 
 function renderCachedMemoryWorkspace() {
-  if (state.user?.role === "admin") {
-    setText("memoryActiveStat", "--");
-    const host = $("memoryItemsList");
-    if (host) host.innerHTML = '<div class="workspace-panel empty-state"><strong>平台记忆已迁移到统一管理后台</strong><span>策略绑定、影子评估、记忆发布和归档清理请在统一管理后台维护。</span><a class="btn btn-primary btn-sm" href="/admin/?view=ai-operations">打开统一管理后台</a></div>';
-  }
+  if (state.user?.role === "admin") renderPlatformExperience(state.memoryItems, state.platformMemoryPolicies, state.platformMemoryEvaluation);
   else renderMemoryItems(state.memoryItems, state.memorySettings, state.memorySummaries);
 }
 
 async function saveUserFeatureFlags() {
   await api("/api/ai/feature-flags", { method:"PUT", body:{ review_generation_enabled:$("userReviewGenerationFlag").checked,
     experience_memory_enabled:$("userExperienceMemoryFlag").checked, memory_compression_enabled:$("userMemoryCompressionFlag").checked,
-    retrieval_shadow_enabled:$("userRetrievalShadowFlag").checked, paired_experiment_enabled:$("userPairedExperimentFlag").checked } });
+    retrieval_shadow_enabled:$("userRetrievalShadowFlag").checked } });
   toast("个人复盘与记忆设置已保存", "success"); await loadReviewMemory();
 }
 
@@ -3406,6 +3483,58 @@ function renderMemoryItems(items, settings, summaries = []) {
   initIcons();
 }
 
+function renderPlatformExperience(items = [], policies = [], evaluation = {}) {
+  const activeItems = items.filter(item => item.status === "active");
+  const candidateItems = items.filter(item => item.status === "candidate");
+  setText("memoryActiveStat", activeItems.length);
+
+  const policyHost = $("platformExperiencePolicies");
+  if (policyHost) {
+    const modeLabels = { off:"已关闭", shadow:"影子评估", active:"正式使用" };
+    policyHost.innerHTML = `<section class="platform-governance-card">
+      <header class="platform-governance-head"><div><span class="review-section-kicker">策略绑定</span><h3>平台记忆运行模式</h3><p>每条记忆只参与对应策略；影子评估只记录匹配，不注入正式推理。</p></div><div class="platform-memory-summary"><span><strong>${policies.filter(item => item.mode === "active").length}</strong> 正式使用</span><span><strong>${policies.filter(item => item.mode === "shadow").length}</strong> 影子评估</span></div></header>
+      <div class="platform-policy-list">${policies.length ? policies.map(policy => `<article class="platform-policy-row" data-platform-policy-strategy="${Number(policy.strategy_id)}">
+        <div class="platform-policy-name"><strong>${escapeHtml(policy.strategy_title || `策略 #${policy.strategy_id}`)}</strong><small>策略 #${Number(policy.strategy_id)} · 修订 ${Number(policy.policy_version || 1)} · ${escapeHtml(modeLabels[policy.mode] || "状态待确认")}</small></div>
+        <label><span>运行模式</span><select data-platform-policy-mode><option value="off" ${policy.mode === "off" ? "selected" : ""}>关闭</option><option value="shadow" ${policy.mode === "shadow" ? "selected" : ""}>影子评估</option><option value="active" ${policy.mode === "active" ? "selected" : ""}>正式使用</option></select></label>
+        <label><span>最多命中</span><input data-platform-policy-items type="number" min="1" max="10" value="${Number(policy.max_items || 5)}"></label>
+        <label><span>令牌预算</span><input data-platform-policy-budget type="number" min="100" max="1600" step="100" value="${Number(policy.runtime_token_budget || 800)}"></label>
+        <button class="btn btn-secondary btn-sm" data-platform-policy-save><i data-lucide="save" size="14"></i>保存</button>
+      </article>`).join("") : '<div class="empty-state"><strong>暂无平台策略</strong><span>创建平台策略后，可以在这里配置记忆运行模式。</span></div>'}</div>
+    </section>`;
+  }
+
+  const evaluationHost = $("platformExperienceEvaluation");
+  if (evaluationHost) {
+    const retrieval = evaluation.retrieval || {};
+    const rate = `${Math.round(Number(retrieval.shadow_hit_rate || 0) * 100)}%`;
+    evaluationHost.innerHTML = `<section class="platform-governance-card">
+      <header class="platform-governance-head"><div><span class="review-section-kicker">效果评估</span><h3>最近 ${Number(evaluation.window_days || 30)} 天</h3><p>命中率只衡量匹配效果，不代表收益提升。</p></div></header>
+      <div class="platform-evaluation-metrics"><div><span>影子检索</span><strong>${Number(retrieval.shadow_total || 0)}</strong></div><div><span>命中次数</span><strong>${Number(retrieval.shadow_hits || 0)}</strong></div><div><span>影子命中率</span><strong>${rate}</strong></div></div>
+      <div class="platform-strategy-evaluation">${(evaluation.strategies || []).slice(0, 8).map(row => `<div><span>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id}`)}</span><strong>${Number(row.shadow_hits || 0)} / ${Number(row.shadow_retrievals || 0)}</strong></div>`).join("") || '<div class="empty-inline">尚无可评估的检索记录</div>'}</div>
+    </section>`;
+  }
+
+  const host = $("memoryItemsList");
+  if (!host) return;
+  const tierOf = item => item.memory_tier === "long" ? "long" : "short";
+  const visible = state.memoryTierFilter === "all" ? items : items.filter(item => tierOf(item) === state.memoryTierFilter);
+  const current = visible.filter(item => item.status !== "revoked");
+  const archived = visible.filter(item => item.status === "revoked");
+  const statusLabels = { candidate:"待发布", active:"已发布", revoked:"已撤销" };
+  const card = item => `<article class="platform-memory-card is-${escapeHtml(item.status)}" data-platform-memory-id="${Number(item.id)}">
+    <header><div><span class="memory-tier-mark ${tierOf(item)}">${tierOf(item) === "long" ? "长期" : "短期"}</span><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong></div><span class="status-chip ${item.status === "active" ? "success" : "warning"}">${escapeHtml(statusLabels[item.status] || "状态待确认")}</span></header>
+    <p>${escapeHtml(item.lesson_text || "暂无记忆内容")}</p>${memoryContextHtml(item)}
+    <footer><span>记忆 #${Number(item.id)} · 来源复盘修订 #${escapeHtml(item.period_review_version_id || item.review_version_id || "--")}${item.platform_version ? ` · 发布批次 ${Number(item.platform_version)}` : ""}</span><div>${item.status === "candidate" ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${Number(item.id)}">发布</button>` : ""}${item.status === "active" ? `<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${Number(item.id)}">撤销</button>` : ""}</div></footer>
+  </article>`;
+  host.innerHTML = `<section class="platform-memory-library">
+    <header class="platform-governance-head"><div><span class="review-section-kicker">审核发布</span><h3>平台记忆库</h3><p>日复盘形成短期记忆，月复盘形成长期记忆；发布后才可被策略读取。</p></div><div class="platform-memory-summary"><span><strong>${candidateItems.length}</strong> 待发布</span><span><strong>${activeItems.length}</strong> 已发布</span></div></header>
+    ${memoryTierTabsHtml({ shortCount:items.filter(item => tierOf(item) === "short" && item.status !== "revoked").length, longCount:items.filter(item => tierOf(item) === "long" && item.status !== "revoked").length })}
+    <div class="platform-memory-grid">${current.map(card).join("") || '<div class="empty-state"><strong>当前层级暂无平台记忆</strong><span>确认平台策略复盘后，记忆会先进入待发布区。</span></div>'}</div>
+    ${archived.length ? `<details class="platform-memory-archive"><summary>已撤销归档 <span>${archived.length} 条</span></summary><div>${archived.map(item => `<article><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)} · 记忆 #${Number(item.id)}</strong><p>${escapeHtml(item.lesson_text || "暂无内容")}</p></div><button class="btn btn-danger-ghost btn-sm" data-platform-experience-action="delete" data-platform-experience-id="${Number(item.id)}">永久删除</button></article>`).join("")}</div></details>` : ""}
+  </section>`;
+  initIcons();
+}
+
 let _adminRiskLoadSequence = 0;
 
 function setTab(tabId, options = {}) {
@@ -3491,18 +3620,23 @@ function setWorkspaceSubtab(group, target) {
     panel.classList.toggle("active", active);
     panel.hidden = !active;
   });
+  if (group === "trading" && target === "management" && state.token) {
+    loadPositionManagement({ preserveSelection:true }).catch(error => toast(error.message, "error"));
+  }
   initIcons();
 }
 
 async function refreshTabData(tabId) {
   if (!state.token) return;
   if (tabId === "trading") {
-    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadPendingOrders(), refreshQuote()]);
+    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadPendingOrders(), refreshQuote(), loadPositionManagement({ quiet:true, preserveSelection:true })]);
   } else if (tabId === "dashboard") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadKlineData()]);
     startKlineRefreshTimer();
   } else if (tabId === "history") {
     await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
+  } else if (tabId === "audit") {
+    await loadAudit();
   } else if (tabId === "model-strategy") {
     await Promise.allSettled([loadStrategyCatalog(), loadModelManagement()]);
   } else if (tabId === "ai-analyze") {
@@ -3655,8 +3789,10 @@ function showMembershipExpiryReminder(reminder) {
     overlay.classList.remove("active");
     void acknowledgeMembershipExpiryReminder(reminder.id);
     setTimeout(() => overlay.remove(), 180);
-    if (renew) window.location.href = "/membership";
-    else if (previousFocus instanceof HTMLElement) previousFocus.focus();
+    if (renew) {
+      openAccountCenter("subscription");
+      accountCenterPreviousFocus = previousFocus instanceof HTMLElement ? previousFocus : null;
+    } else if (previousFocus instanceof HTMLElement) previousFocus.focus();
   };
   overlay.querySelector(".membership-expiry-close")?.addEventListener("click", () => dismiss());
   overlay.querySelector(".membership-expiry-later")?.addEventListener("click", () => dismiss());
@@ -3686,16 +3822,85 @@ async function checkMembershipExpiryReminder() {
   } catch {}
 }
 
+function membershipPlanLabel(plan) {
+  const value = String(plan || 'free').toLowerCase();
+  if (value === 'pro') return 'Pro 专业版';
+  if (value === 'plus') return 'Plus 会员';
+  return '免费版';
+}
+
+function formatMembershipExpiry(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value).slice(0,10) : date.toLocaleDateString('zh-CN');
+}
+
+function renderMembershipAccessState(user, access) {
+  const gate = $('proOverlay');
+  if (!gate) return;
+  const expired = access?.reason === 'membership_expired';
+  const account = user?.name || user?.email || user?.phone || user?.uid || `用户 #${user?.id || '--'}`;
+  const avatar = String(user?.name || user?.email || user?.phone || '用').trim().slice(0,1) || '用';
+  const purchasedPlan = membershipPlanLabel(user?.plan);
+  const expiresAt = formatMembershipExpiry(user?.planExpiresAt);
+
+  gate.classList.remove('hidden');
+  gate.classList.toggle('is-expired', expired);
+  gate.classList.toggle('is-free', !expired);
+  $('membershipGateStatus').querySelector('span').textContent = expired ? '会员已到期 · 需要续费' : '免费账户 · 需要开通会员';
+  $('membershipGateEyebrow').textContent = '当前访问状态';
+  $('membershipGateTitle').textContent = expired ? '续费后恢复 AI 交易实验室' : '开通会员后进入 AI 交易实验室';
+  $('membershipGateDescription').textContent = expired
+    ? `你的 ${purchasedPlan}${expiresAt ? ` 已于 ${expiresAt} 到期` : ' 已到期'}。账户资料仍然保留，续费成功后会自动恢复对应权限。`
+    : '当前账户已成功登录，但免费版不包含实验室权限。选择 Plus 进行观摩，或选择 Pro 连接自己的 MT5。';
+  $('membershipGateAccount').textContent = account;
+  $('membershipGateAvatar').textContent = avatar;
+  $('membershipGatePlan').textContent = expired ? `${purchasedPlan} · 已过期` : '免费版';
+  $('membershipGateAccess').textContent = expired ? '已暂停' : '暂未开通';
+  $('membershipRetentionNote').querySelector('strong').textContent = expired ? '工作区资料仍然保留' : '账户状态正常';
+  $('membershipRetentionNote').querySelector('small').textContent = expired
+    ? '账户配置、策略资料和历史记录不会因到期自动删除，续费后可以继续使用。'
+    : '开通会员只会增加对应权限，不会改变你的登录账户和主站资料。';
+  $('membershipGatePrimary').firstChild.textContent = expired ? '立即续费' : '选择会员方案';
+  $('membershipGatePrimary').href = '/account/?tab=subscription';
+  const plusPlan = $('membershipPlusPlan');
+  const proPlan = $('membershipProPlan');
+  plusPlan?.classList.toggle('is-current-plan', expired && String(user?.plan || '').toLowerCase() === 'plus');
+  proPlan?.classList.toggle('is-current-plan', expired && String(user?.plan || '').toLowerCase() === 'pro');
+  const plusTag = plusPlan?.querySelector('.membership-plan-tag');
+  const proTag = proPlan?.querySelector('.membership-plan-tag');
+  if (plusTag) plusTag.textContent = plusPlan.classList.contains('is-current-plan') ? '原套餐' : '只读';
+  if (proTag) proTag.textContent = proPlan.classList.contains('is-current-plan') ? '原套餐' : '完整功能';
+  document.title = `${expired ? '会员已过期' : '升级会员'} · AI交易实验室`;
+}
+
+function renderBootstrapError(error) {
+  const gate = $('proOverlay');
+  if (!gate) {
+    showApp(false);
+    return;
+  }
+  showApp(false);
+  gate.classList.remove('hidden', 'is-expired', 'is-free');
+  const status = $('membershipGateStatus')?.querySelector('span');
+  if (status) status.textContent = '服务暂时不可用 · 登录状态已保留';
+  setText('membershipGateEyebrow', '连接异常');
+  setText('membershipGateTitle', 'AI 交易实验室暂时无法加载');
+  setText('membershipGateDescription', `当前登录没有被清除。请稍后重试；如果问题持续存在，可返回主站继续使用其他功能。${error?.incidentId ? ` 错误编号：${error.incidentId}` : ''}`);
+  setText('membershipGateAccount', state.user?.name || state.user?.email || state.user?.phone || '当前登录账户');
+  setText('membershipGateAvatar', String(state.user?.name || state.user?.email || '用').slice(0, 1));
+  setText('membershipGatePlan', membershipPlanLabel(state.user?.plan));
+  setText('membershipGateAccess', error?.code === 'observer_source_unavailable' ? '观摩源不可用' : '等待服务恢复');
+  const primary = $('membershipGatePrimary');
+  if (primary) {
+    primary.textContent = '重新加载';
+    primary.href = '/ai/';
+  }
+  document.title = '连接异常 · AI交易实验室';
+}
+
 async function bootstrap() {
   try {
-    const urlToken = new URLSearchParams(window.location.search).get("token");
-    if (urlToken) {
-      state.token = urlToken;
-      localStorage.setItem("authToken", urlToken);
-      const url = new URL(window.location);
-      url.searchParams.delete("token");
-      window.history.replaceState({}, "", url);
-    }
     if (!state.token) {
       const cookieToken = getCookie("ws_token");
       if (cookieToken) {
@@ -3709,41 +3914,16 @@ async function bootstrap() {
     }
     const profileRes = await api("/api/profile");
     state.user = profileRes.user;
-    // The backend preserves the purchased plan and returns a separate expiry
-    // state. Expired memberships keep their label but receive free permissions.
-    const expiresAt = state.user?.planExpiresAt;
-    const membershipExpired = state.user?.membershipExpired === true
-      || Number(state.user?.membership_expired) === 1
-      || (expiresAt && new Date(expiresAt) <= new Date());
-    if (membershipExpired) {
-      // Plan expired — show expired overlay instead of generic upgrade
-      document.getElementById('proOverlay')?.classList.remove('hidden');
-      const overlay = document.getElementById('proOverlay');
-      if (overlay) {
-        overlay.innerHTML = `
-          <div class="pro-overlay-content">
-            <div class="pro-overlay-icon">⏰</div>
-            <h2>会员已过期</h2>
-            <p>您的会员已于 ${new Date(expiresAt).toLocaleDateString('zh-CN')} 到期</p>
-            <p>请返回主站重新购买 Plus 或 Pro，付款后即可恢复对应权益</p>
-            <button onclick="window.location.href='/account?tab=subscription'" style="margin-top:16px;padding:8px 24px;border:none;border-radius:6px;background:#e6a756;color:#1a1a2e;cursor:pointer;font-size:14px">前往账户中心续费</button>
-          </div>
-        `;
-      }
-      showApp(false);
-      return;
-    }
-    // Access check: admin/pro/plus can access
-    const role = state.user?.role;
-    const plan = state.user?.effectivePlan || state.user?.plan;
-    const hasAccess = role === 'admin' || plan === 'pro' || plan === 'plus';
-    if (!hasAccess) {
-      document.getElementById('proOverlay')?.classList.remove('hidden');
-      showApp(false);
-      return;
-    }
+    // Membership access is server-authoritative. Free and expired accounts
+    // stay signed in and receive a useful access lobby instead of a blank app.
     const accessRes = await api("/api/ai/access-context");
     syncAiAccess(accessRes.access);
+    if (accessRes.access?.mode === 'blocked') {
+      renderMembershipAccessState(state.user, accessRes.access);
+      showApp(false);
+      return;
+    }
+    $('proOverlay')?.classList.add('hidden');
     await loadObserverChannels();
     showApp(true);
     checkChangelog();
@@ -3768,8 +3948,13 @@ async function bootstrap() {
     }
     // Data loads on-demand: tab switch + manual refresh + bridge data push
     refreshTabData(activeTabId());
-  } catch {
-    logout();
+  } catch (error) {
+    if (error?.name === "ApiError" && Number(error.status) === 401) {
+      logout();
+      return;
+    }
+    console.error("[Bootstrap] AI 实验室初始化失败:", error);
+    renderBootstrapError(error);
   }
 }
 
@@ -4029,6 +4214,10 @@ async function loadAccount() {
   const server = rawServer;
   const currency = data.currency || "USD";
   state.accountBalance = parseFloat(data.balance) || 0;
+  state.bridgeAccountIdentity = data.server && data.login != null ? {
+    brokerServerKey: String(data.server).trim().toUpperCase(),
+    loginAccount: String(data.login).trim(),
+  } : null;
   setText("mt5Server", server);
   setText("accountServerName", server);
   setText("accountBalance", fmt(data.balance));
@@ -4391,7 +4580,10 @@ function renderPositionRows(positions = [], withAction) {
         <td data-label="开仓时间" class="num">${escapeHtml(formatTime(position.time))}</td>
         ${withAction ? `<td data-label="止损" class="num">${Number(position.sl) ? fmt(position.sl, priceDigits) : "--"}</td><td data-label="止盈" class="num">${Number(position.tp) ? fmt(position.tp, priceDigits) : "--"}</td>` : ""}
         <td data-label="浮动盈亏" class="${profitClass(position.profit)}">${fmt(position.profit)}</td>
-        ${withAction ? `<td data-label="操作"><button class="btn small" data-close-ticket="${escapeHtml(position.ticket)}"><i data-lucide="x" size="12"></i>平仓</button></td>` : ""}
+        ${withAction ? `<td data-label="操作" class="position-row-actions-cell">
+          ${state.user?.role === "admin" && Number(position.magic) === 234000 ? `<button class="btn small position-protection-edit" type="button" data-edit-protection-ticket="${escapeHtml(position.ticket)}"><i data-lucide="shield-pen" size="13"></i>编辑保护</button>` : ""}
+          <button class="btn small" type="button" data-close-ticket="${escapeHtml(position.ticket)}"><i data-lucide="x" size="12"></i>平仓</button>
+        </td>` : ""}
       </tr>
     `;
   }).join("");
@@ -4425,6 +4617,7 @@ async function loadPositions() {
     loadSignalTickets(),
   ]);
   const positions = data.positions || [];
+  state.positions = positions;
   $("positionsBody").innerHTML = renderPositionRows(positions, true);
   $("dashboardPositionsBody").innerHTML = renderPositionRows(positions, false);
   $("positionsEmpty").classList.toggle("hidden", positions.length > 0);
@@ -4496,6 +4689,262 @@ function renderObserverChannelControl() {
     </button>`;
   }).join('');
   initIcons();
+}
+
+const POSITION_PROTECTION_TERMINAL_STATES = new Set(["completed", "partial_failed", "failed"]);
+
+function positionProtectionErrorLabel(code, fallback = "") {
+  const labels = {
+    bridge_offline: "用户桥接离线，请连接 MT5 后重试",
+    system_position_not_found: "持仓已不存在或已经平仓",
+    position_not_system_owned: "该持仓不是系统下单",
+    position_magic_mismatch: "持仓归属校验失败",
+    management_account_identity_mismatch: "当前桥接账户与目标账户不一致",
+    management_account_server_mismatch: "MT5 服务器已变化",
+    management_account_login_mismatch: "MT5 登录账号已变化",
+    management_symbol_mismatch: "持仓品种已变化",
+    management_direction_mismatch: "持仓方向已变化",
+    management_volume_mismatch: "持仓手数已变化",
+    position_stop_loss_changed: "止损已被其他操作修改，请重新预览",
+    position_take_profit_changed: "止盈已被其他操作修改，请重新预览",
+    stop_loss_direction_or_distance_invalid: "止损方向错误或距离现价过近",
+    take_profit_direction_or_distance_invalid: "止盈方向错误或距离现价过近",
+    source_position_update_failed: "发起持仓修改失败，未继续同步",
+    multiple_position_sources: "净持仓包含多个来源，已安全跳过",
+    position_protection_command_failed: "MT5 未确认修改结果",
+  };
+  return labels[String(code || "")] || fallback || String(code || "执行失败");
+}
+
+function stopPositionProtectionPolling() {
+  if (state.positionProtectionPollTimer) clearInterval(state.positionProtectionPollTimer);
+  state.positionProtectionPollTimer = null;
+}
+
+function startPositionProtectionPolling(jobId) {
+  stopPositionProtectionPolling();
+  if (!jobId || POSITION_PROTECTION_TERMINAL_STATES.has(state.positionProtectionJob?.status)) return;
+  state.positionProtectionPollTimer = setInterval(() => {
+    if ($("positionProtectionModal")?.classList.contains("hidden")) {
+      stopPositionProtectionPolling();
+      return;
+    }
+    loadPositionProtectionJob(jobId).catch(() => {});
+  }, 2000);
+}
+
+function renderPositionProtectionPreview(preview, loading = false) {
+  const summary = $("positionProtectionSourceSummary");
+  const impact = $("positionProtectionImpact");
+  const scope = $("positionProtectionSyncScope");
+  const submit = $("positionProtectionSubmit");
+  if (loading) {
+    if (summary) summary.innerHTML = '<div class="workspace-skeleton"></div>';
+    if (impact) impact.innerHTML = '<div class="workspace-skeleton"></div>';
+    if (submit) submit.disabled = true;
+    return;
+  }
+  if (!preview) return;
+  const source = preview.source || {};
+  if (summary) summary.innerHTML = `
+    <div><span>持仓</span><strong class="num">#${escapeHtml(source.ticket || "--")}</strong></div>
+    <div><span>品种 / 方向</span><strong>${escapeHtml(source.symbol || "--")} · ${source.direction === "buy" ? "买入" : "卖出"}</strong></div>
+    <div><span>当前 SL / TP</span><strong class="num">${Number(source.current_stop_loss) ? fmt(source.current_stop_loss, 6) : "未设置"} / ${Number(source.current_take_profit) ? fmt(source.current_take_profit, 6) : "未设置"}</strong></div>
+    <div><span>来源信号</span><strong>${source.signal_id ? `#${escapeHtml(source.signal_id)}` : "无法唯一归因"}</strong></div>`;
+  if (impact) impact.innerHTML = `
+    <div><span>涉及用户</span><strong class="num">${Number(preview.affected_users || 0)}</strong></div>
+    <div><span>涉及持仓</span><strong class="num">${Number(preview.affected_positions || 0)}</strong></div>
+    <div><span>当前在线</span><strong class="num">${Number(preview.online_users || 0)}</strong></div>
+    <div><span>安全排除</span><strong class="num">${Number(preview.exclusions?.length || 0)}</strong></div>`;
+  if (scope) {
+    scope.disabled = !preview.sync_available;
+    scope.checked = preview.sync_scope === "signal" && preview.sync_available;
+  }
+  const scopeHelp = $("positionProtectionScopeHelp");
+  if (scopeHelp) scopeHelp.textContent = preview.sync_available
+    ? "开启后，仅同步到由同一条信号产生、且当前仍能唯一归因的系统持仓。"
+    : "该持仓缺少唯一信号来源，只能修改当前持仓。";
+  if (submit) submit.disabled = false;
+}
+
+async function loadPositionProtectionPreview(ticket, syncScope = "source_only") {
+  renderPositionProtectionPreview(null, true);
+  const data = await api(`/api/admin/ai/positions/${encodeURIComponent(ticket)}/protection-preview?sync_scope=${encodeURIComponent(syncScope)}`, { timeout:20000 });
+  state.positionProtectionPreview = data.preview;
+  renderPositionProtectionPreview(data.preview);
+  return data.preview;
+}
+
+async function openPositionProtectionModal(ticket) {
+  if (state.user?.role !== "admin") return;
+  const modal = $("positionProtectionModal");
+  if (modal?.parentElement !== document.body) document.body.appendChild(modal);
+  const position = state.positions.find(item => String(item.ticket) === String(ticket));
+  if (!position || Number(position.magic) !== 234000) {
+    toast("该系统持仓已变化，请刷新后重试", "warning");
+    return;
+  }
+  state.positionProtectionPreview = null;
+  state.positionProtectionJob = null;
+  stopPositionProtectionPolling();
+  $("positionProtectionTicket").value = String(ticket);
+  $("positionProtectionStopLoss").value = Number(position.sl) ? String(position.sl) : "";
+  $("positionProtectionTakeProfit").value = Number(position.tp) ? String(position.tp) : "";
+  $("positionProtectionReason").value = "";
+  $("positionProtectionSyncScope").checked = false;
+  $("positionProtectionFormStage").classList.remove("hidden");
+  $("positionProtectionProgressStage").classList.add("hidden");
+  $("positionProtectionError").classList.add("hidden");
+  $("positionProtectionRetry").classList.add("hidden");
+  $("positionProtectionSubmit").classList.remove("hidden");
+  openFormModal(modal);
+  try {
+    await loadPositionProtectionPreview(ticket, "source_only");
+  } catch (error) {
+    $("positionProtectionError").textContent = error.message;
+    $("positionProtectionError").classList.remove("hidden");
+  }
+}
+
+function renderPositionProtectionJob(job) {
+  if (!job) return;
+  const previous = state.positionProtectionJob;
+  const mergedJob = {
+    ...(Number(previous?.id) === Number(job.id) ? previous : {}),
+    ...job,
+    targets:Array.isArray(job.targets) ? job.targets : (previous?.targets || []),
+  };
+  const wasTerminal = Number(previous?.id) === Number(mergedJob.id)
+    && POSITION_PROTECTION_TERMINAL_STATES.has(previous?.status);
+  state.positionProtectionJob = mergedJob;
+  const isTerminal = POSITION_PROTECTION_TERMINAL_STATES.has(mergedJob.status);
+  $("positionProtectionFormStage")?.classList.add("hidden");
+  $("positionProtectionProgressStage")?.classList.remove("hidden");
+  const progress = $("positionProtectionProgress");
+  if (progress) {
+    progress.value = Number(job.progress_percent || 0);
+    progress.setAttribute("aria-valuenow", String(Number(job.progress_percent || 0)));
+  }
+  job = mergedJob;
+  const statusLabels = {
+    queued:"等待执行", running:"正在同步", completed:"全部完成",
+    partial_failed:"部分完成", failed:"执行失败",
+  };
+  $("positionProtectionProgressTitle").textContent = statusLabels[job.status] || "正在处理";
+  $("positionProtectionProgressText").textContent = `${Number(job.progress_percent || 0)}% · 成功 ${Number(job.succeeded_positions || 0)} · 失败 ${Number(job.failed_positions || 0)} · 跳过 ${Number(job.skipped_positions || 0)}`;
+  const body = $("positionProtectionResultBody");
+  if (body) body.innerHTML = (job.targets || []).map(target => `
+    <tr>
+      <td>${target.is_source ? '<span class="status-chip info">发起</span>' : ""}${escapeHtml(target.user_label || `用户 ${target.user_id}`)}</td>
+      <td class="num">#${escapeHtml(target.ticket)}</td>
+      <td><span class="position-protection-target-status ${escapeHtml(target.status)}">${target.status === "succeeded" ? "成功" : target.status === "failed" ? "失败" : target.status === "skipped" ? "跳过" : target.status === "running" ? "执行中" : "等待"}</span></td>
+      <td>${target.error_code ? escapeHtml(positionProtectionErrorLabel(target.error_code, target.error_message)) : "--"}</td>
+    </tr>`).join("") || '<tr class="empty-row"><td colspan="4">正在准备执行目标…</td></tr>';
+  $("positionProtectionSubmit")?.classList.add("hidden");
+  const retry = $("positionProtectionRetry");
+  if (retry) retry.classList.toggle("hidden", !isTerminal || !(Number(job.failed_positions) || Number(job.skipped_positions)));
+  if (isTerminal) {
+    stopPositionProtectionPolling();
+    if (!wasTerminal) {
+      if (job.status === "completed") toast(`保护价已同步到 ${job.succeeded_positions} 个持仓`, "success");
+      loadPositions().catch(() => {});
+    }
+  } else startPositionProtectionPolling(job.id);
+  initIcons();
+}
+
+function handlePositionProtectionJobUpdate(job) {
+  if (!job || Number(job.id) !== Number(state.positionProtectionJob?.id)) return;
+  renderPositionProtectionJob(job);
+}
+
+function handlePositionProtectionTargetUpdate(jobId, target) {
+  const job = state.positionProtectionJob;
+  if (!job || !target || Number(jobId) !== Number(job.id)) return;
+  const targets = (job.targets || []).map(item => Number(item.id) === Number(target.id)
+    ? { ...item, ...target } : item);
+  renderPositionProtectionJob({ ...job, targets });
+}
+
+async function loadPositionProtectionJob(jobId) {
+  const data = await api(`/api/admin/ai/position-protection-jobs/${encodeURIComponent(jobId)}`);
+  renderPositionProtectionJob(data.job);
+  return data.job;
+}
+
+async function submitPositionProtectionJob() {
+  const preview = state.positionProtectionPreview;
+  if (!preview) return;
+  const submit = $("positionProtectionSubmit");
+  const errorHost = $("positionProtectionError");
+  errorHost.classList.add("hidden");
+  submit.disabled = true;
+  try {
+    const currentStopLoss = Number(preview.source?.current_stop_loss || 0);
+    const currentTakeProfit = Number(preview.source?.current_take_profit || 0);
+    const stopLossInput = $("positionProtectionStopLoss").value.trim();
+    const takeProfitInput = $("positionProtectionTakeProfit").value.trim();
+    const stopLossValue = stopLossInput === "" ? currentStopLoss : Number(stopLossInput);
+    const takeProfitValue = takeProfitInput === "" ? currentTakeProfit : Number(takeProfitInput);
+    if (stopLossInput !== "" && (!Number.isFinite(stopLossValue) || stopLossValue <= 0)) {
+      throw new Error("止损价格必须大于 0");
+    }
+    if (takeProfitInput !== "" && (!Number.isFinite(takeProfitValue) || takeProfitValue <= 0)) {
+      throw new Error("止盈价格必须大于 0");
+    }
+    const reason = $("positionProtectionReason").value.trim();
+    if (reason.length < 2 || reason.length > 500) {
+      throw new Error("请填写 2 至 500 字的变更原因");
+    }
+    const stopLoss = Number.isFinite(stopLossValue) && Math.abs(stopLossValue - currentStopLoss) > 1e-8
+      ? stopLossValue : null;
+    const takeProfit = Number.isFinite(takeProfitValue) && Math.abs(takeProfitValue - currentTakeProfit) > 1e-8
+      ? takeProfitValue : null;
+    if (stopLoss === null && takeProfit === null) {
+      throw new Error("请至少修改止损或止盈中的一项");
+    }
+    const data = await api("/api/admin/ai/position-protection-jobs", {
+      method:"POST",
+      timeout:30000,
+      body:{
+        idempotency_key:globalThis.crypto?.randomUUID?.() || `position-protection-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        source_ticket:$("positionProtectionTicket").value,
+        stop_loss:stopLoss,
+        take_profit:takeProfit,
+        sync_scope:$("positionProtectionSyncScope").checked ? "signal" : "source_only",
+        reason,
+        preview_hash:preview.preview_hash,
+      },
+    });
+    renderPositionProtectionJob(data.job);
+  } catch (error) {
+    errorHost.textContent = error.message;
+    errorHost.classList.remove("hidden");
+    if (error.message.includes("止损")) $("positionProtectionStopLoss")?.focus();
+    else if (error.message.includes("止盈")) $("positionProtectionTakeProfit")?.focus();
+    else $("positionProtectionReason")?.focus();
+    if (error.message.includes("重新预览")) {
+      await loadPositionProtectionPreview($("positionProtectionTicket").value,
+        $("positionProtectionSyncScope").checked ? "signal" : "source_only").catch(() => {});
+    }
+  } finally { submit.disabled = false; }
+}
+
+async function retryPositionProtectionJob() {
+  const job = state.positionProtectionJob;
+  const jobId = job?.id;
+  if (!jobId) return;
+  const button = $("positionProtectionRetry");
+  button.disabled = true;
+  try {
+    const preview = await loadPositionProtectionPreview(job.source_ticket, job.sync_scope || "source_only");
+    const data = await api(`/api/admin/ai/position-protection-jobs/${encodeURIComponent(jobId)}/retry-failed`, {
+      method:"POST",
+      body:{ preview_hash:preview.preview_hash },
+    });
+    renderPositionProtectionJob(data.job);
+  } catch (error) { toast(error.message, "error"); }
+  finally { button.disabled = false; }
 }
 
 async function loadObserverChannels() {
@@ -4574,7 +5023,7 @@ function applyRoleUI() {
     ? "来自观摩账户复盘的策略记忆先进入候选区，经发布后才会用于其绑定的平台策略。"
     : "这里只保留你已经确认的经验，可以随时暂停或撤销。");
   if ($("addPrivateStrategyBtn") && !$("addPrivateStrategyBtn").disabled) {
-    $("addPrivateStrategyBtn").textContent = isAdmin ? "新建策略" : "新建自定义策略";
+    $("addPrivateStrategyBtn").textContent = isAdmin ? "新建平台策略" : "新建自定义策略";
   }
 
   // Navigation is an explicit capability list in observer mode. Empty groups
@@ -5976,10 +6425,32 @@ async function loadPendingOrders() {
   try {
     const data = await wsApi("pending_list", {});
     const orders = data.orders || [];
+    state.pendingOrders = orders;
     renderPendingOrders(orders);
   } catch (e) {
+    state.pendingOrders = [];
     console.error("loadPendingOrders:", e);
   }
+}
+
+function managementExpectedState(item, ticket, kind) {
+  const identity = state.bridgeAccountIdentity;
+  if (!identity?.brokerServerKey || !identity?.loginAccount) {
+    throw new Error("MT5 账户身份尚未加载，请刷新账户状态后重试");
+  }
+  const directionValue = String(kind === "position"
+    ? (item.type || item.side || "")
+    : (item.side || item.pending_type || item.order_type || "")).toLowerCase();
+  const rawVolume = item.volume ?? item.volume_current ?? item.volume_initial;
+  return {
+    broker_server_key: identity.brokerServerKey,
+    login_account: identity.loginAccount,
+    ticket: String(ticket),
+    symbol: String(item.symbol || ""),
+    magic: Number(item.magic || 0),
+    volume: Number(rawVolume || 0),
+    direction: directionValue.startsWith("buy") ? "buy" : (directionValue.startsWith("sell") ? "sell" : ""),
+  };
 }
 
 function renderPendingOrders(orders) {
@@ -6035,7 +6506,18 @@ async function navigateToSignalByTicket(ticket) {
 async function cancelPendingOrder(ticket) {
   if (!await showConfirm("取消挂单", `确认取消挂单 ${ticket}？`, { confirmText: "取消挂单", danger: true })) return;
   try {
-    const result = await wsApi("cancel_pending", { ticket });
+    const order = state.pendingOrders.find(item =>
+      String(item.mt5_ticket ?? item.ticket ?? item.id ?? "") === String(ticket));
+    if (!order) {
+      toast("挂单状态已变化，请刷新后重试", "warning");
+      await loadPendingOrders();
+      return;
+    }
+    const result = await wsApi("cancel_pending", {
+      ticket: String(ticket),
+      confirm: true,
+      expected_state: managementExpectedState(order, ticket, "pending"),
+    });
     toast(result.message || "操作完成", result.status === "success" ? "success" : "warning");
     await loadPendingOrders();
   } catch (e) {
@@ -6130,7 +6612,17 @@ async function submitManualOrder() {
 async function closePosition(ticket) {
   if (!await showConfirm("复核平仓", `复核平仓 ticket ${ticket}？`, { confirmText: "确认平仓", danger: true })) return;
   try {
-    const result = await wsApi("close", { ticket: Number(ticket), confirm: true });
+    const position = state.positions.find(item => String(item.ticket ?? "") === String(ticket));
+    if (!position) {
+      toast("持仓状态已变化，请刷新后重试", "warning");
+      await loadPositions();
+      return;
+    }
+    const result = await wsApi("close", {
+      ticket: String(ticket),
+      confirm: true,
+      expected_state: managementExpectedState(position, ticket, "position"),
+    });
     toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadStatus()]);
   } catch (error) {
@@ -6726,8 +7218,213 @@ function _renderHistoryChart(data) {
 }
 
 
+const POSITION_MANAGEMENT_STATUS = {
+  CANDIDATE: { label:"等待证据", tone:"candidate" },
+  EVIDENCE_CONFIRMED: { label:"证据已确认", tone:"confirmed" },
+  PRECONDITIONS_LOCKED: { label:"执行条件已锁定", tone:"confirmed" },
+  PENDING_CANCEL_INTENT: { label:"已创建取消意图", tone:"candidate" },
+  PENDING_CANCEL_SENT: { label:"取消命令已发送", tone:"candidate" },
+  PENDING_RECONCILING: { label:"正在核对挂单终态", tone:"candidate" },
+  PENDING_CANCEL_CONFIRMED: { label:"挂单取消已确认", tone:"completed" },
+  PENDING_FILLED_DURING_CANCEL: { label:"取消时已经成交", tone:"failed" },
+  PENDING_UNCERTAIN: { label:"挂单终态待确认", tone:"candidate" },
+  CLOSE_INTENT_CREATED: { label:"已创建平仓意图", tone:"candidate" },
+  CLOSE_SENT: { label:"平仓命令已发送", tone:"candidate" },
+  CLOSE_RECONCILING: { label:"正在核对持仓终态", tone:"candidate" },
+  CLOSE_CONFIRMED: { label:"持仓平仓已确认", tone:"completed" },
+  CLOSE_PARTIAL: { label:"持仓仅部分平仓", tone:"failed" },
+  CLOSE_UNCERTAIN: { label:"平仓终态待确认", tone:"candidate" },
+  MANUAL_REVIEW: { label:"需要人工复核", tone:"failed" },
+  HELD: { label:"继续持有", tone:"completed" },
+  COMPLETED: { label:"已完成", tone:"completed" },
+  EXIT_ONLY_COMPLETED: { label:"平仓已完成", tone:"completed" },
+  REJECTED: { label:"已拒绝", tone:"failed" },
+  FAILED: { label:"异常", tone:"failed" },
+  EXPIRED: { label:"已过期", tone:"expired" },
+};
+
+function positionManagementStatus(status) {
+  return POSITION_MANAGEMENT_STATUS[String(status || "").toUpperCase()]
+    || { label:String(status || "未知状态"), tone:"" };
+}
+
+function positionManagementMode(mode) {
+  return ({ display:"关闭", shadow:"关闭", auto_exit:"自动平仓", auto_reverse:"自动平仓" })[mode] || "关闭";
+}
+
+function positionManagementTaskLabel(type) {
+  return type === "pending_cancel" ? "挂单管理" : "持仓平仓";
+}
+
+function positionManagementTaskMode(task = {}) {
+  return task.task_type === "pending_cancel" ? "自动撤单" : positionManagementMode(task.execution_mode);
+}
+
+function positionManagementActionLabel(action) {
+  return ({ exit:"建议平仓", cancel:"建议取消", hold:"继续持有", keep:"继续保留" })[action] || raw(action);
+}
+
+function positionManagementBarTime(task) {
+  const timestamp = Number(task?.closed_bar_time_utc_ms);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "--";
+  const offset = Number.isFinite(Number(state.mt5TimezoneOffsetMinutes)) ? Number(state.mt5TimezoneOffsetMinutes) : 180;
+  return fmtUtc(new Date(timestamp + offset * 60_000));
+}
+
+function renderPositionManagementOverview(tasks = [], settings = {}, pagination = {}) {
+  const host = $("positionManagementOverview");
+  if (!host) return;
+  const confirmed = tasks.filter(task => task.status === "EVIDENCE_CONFIRMED").length;
+  const waiting = tasks.filter(task => task.status === "CANDIDATE").length;
+  const mode = settings.effective_mode || "display";
+  const platformAutoCloseEnabled = ["auto_exit", "auto_reverse"].includes(settings.platform?.maximum_mode);
+  const pendingOrderEnabled = Number(settings.platform?.ai_pending_order_enabled ?? 0) === 1;
+  const pendingCancelEnabled = Number(settings.platform?.ai_pending_cancel_enabled ?? 0) === 1;
+  const kicker = $("positionManagementModeKicker");
+  if (kicker) kicker.textContent = `统一推理 · ${positionManagementMode(mode)}`;
+  const description = $("positionManagementModeDescription");
+  if (description) description.textContent = mode === "auto_exit"
+    ? `自动平仓已生效；AI 取消挂单${pendingCancelEnabled ? "已开启" : "已由平台关闭"}。每次操作仍须通过证据、归属、Bridge 代际与 MT5 身份核对。`
+    : `自动平仓已关闭；AI 取消挂单${pendingCancelEnabled ? "仍独立运行" : "也已由平台关闭"}。`;
+  host.innerHTML = `
+    <article class="insight-item primary"><span>当前运行方式</span><strong>${escapeHtml(positionManagementMode(mode))}</strong><small>平台总闸：${platformAutoCloseEnabled ? "已开启" : "已关闭"}</small></article>
+    <article class="insight-item"><span>管理任务</span><strong class="num">${Number(pagination.total || 0)}</strong><small>全部可追踪记录</small></article>
+    <article class="insight-item success"><span>证据已确认</span><strong class="num">${confirmed}</strong><small>当前页服务端复核通过</small></article>
+    <article class="insight-item warning"><span>等待确认</span><strong class="num">${waiting}</strong><small>当前页尚未满足执行证据</small></article>`;
+  const note = $("positionManagementSafetyNote");
+  if (note) note.innerHTML = `<i data-lucide="shield-check" size="14"></i>平台能力：自动平仓 ${platformAutoCloseEnabled ? "开启" : "关闭"} · AI 挂单 ${pendingOrderEnabled ? "开启" : "关闭"} · AI 取消挂单 ${pendingCancelEnabled ? "开启" : "关闭"}`;
+  initIcons();
+}
+
+function renderPositionManagementSettings(settings = {}) {
+  const host = $("positionManagementSettingsPanel");
+  if (!host) return;
+  const user = settings.user || {};
+  host.innerHTML = `<div class="management-settings-copy"><strong>自动平仓</strong><small>默认开启；关闭后只停止自动平仓。AI 挂单和 AI 取消挂单由平台独立控制，你的个人选择不会被平台总闸改写。</small></div><form id="positionManagementSettingsForm" class="management-settings-form"><label><span>运行状态</span><select id="positionManagementModeInput"><option value="display" ${!["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>关闭</option><option value="auto_exit" ${["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>自动平仓</option></select></label><button class="btn btn-primary btn-sm" type="submit">保存设置</button></form>`;
+  $("positionManagementSettingsForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const button = event.submitter;
+    const executionMode = $("positionManagementModeInput").value;
+    if (executionMode === "auto_exit" && !await showConfirm("开启自动平仓？", "开启后立即对当前用户生效。AI 在证据充分时可以平掉已有系统持仓；净持仓账户仍须通过同品种独占仓位与唯一归属校验。AI 挂单和 AI 取消挂单使用独立的平台开关。", { confirmText:"确认开启", danger:true })) return;
+    button.disabled = true;
+    try {
+      await api("/api/ai/position-management/settings", { method:"PUT", body:JSON.stringify({
+        execution_mode:executionMode,
+      }) });
+      toast("自动平仓设置已保存", "success");
+      await loadPositionManagement({ quiet:true, preserveSelection:true });
+    } catch (error) {
+      const message = error?.message === "position_management_mode_invalid" ? "运行方式无效，请重新选择。" : error.message;
+      toast(message, "error");
+      button.disabled = false;
+    }
+  });
+}
+
+function renderPositionManagementTasks(tasks = [], pagination = {}) {
+  const body = $("positionManagementBody");
+  if (!body) return;
+  if (!tasks.length) {
+    body.innerHTML = `<tr class="empty-row"><td colspan="7">暂无管理任务。只有冻结交易论点命中平仓或取消条件后，才会生成记录。</td></tr>`;
+  } else {
+    body.innerHTML = tasks.map(task => {
+      const status = positionManagementStatus(task.status);
+      const evidence = parseJsonField(task.evidence_validation_json, {});
+      const evidenceMeta = evidence.status === "confirmed"
+        ? { label:"已确认", tone:"confirmed" }
+        : { label:"待复核", tone:"candidate" };
+      const selected = Number(state.selectedPositionManagementId) === Number(task.id);
+      return `<tr class="${selected ? "selected" : ""}" data-position-management-row="${Number(task.id)}">
+        <td><span class="management-group-cell"><strong>${escapeHtml(task.standard_symbol || task.original_symbol || "--")}</strong><small title="${escapeHtml(task.management_group_id)}">${escapeHtml(task.management_group_id)}</small></span></td>
+        <td><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(positionManagementTaskLabel(task.task_type))}</span></td>
+        <td><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></td>
+        <td><span class="management-state ${evidenceMeta.tone}">${evidenceMeta.label}</span></td>
+        <td><span class="management-mode ${escapeHtml(task.execution_mode || "display")}">${escapeHtml(positionManagementTaskMode(task))}</span></td>
+        <td class="num" title="收盘K线时间（MT5）">${escapeHtml(compactTimeText(positionManagementBarTime(task)))}</td>
+        <td><button class="management-detail-btn" type="button" data-position-management-id="${Number(task.id)}" aria-label="查看 ${escapeHtml(task.standard_symbol || task.original_symbol || "任务")} 管理详情">查看</button></td>
+      </tr>`;
+    }).join("");
+  }
+  renderPager("positionManagementPager", Number(pagination.page || 1), Number(pagination.page_size || 10), Number(pagination.total || 0), "position-management");
+}
+
+function renderPositionManagementUnavailable(message) {
+  const body = $("positionManagementBody");
+  if (body) body.innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(message)}</td></tr>`;
+  const overview = $("positionManagementOverview");
+  if (overview) overview.innerHTML = `<article class="insight-item"><span>AI持仓管理</span><strong>当前不可用</strong><small>${escapeHtml(message)}</small></article>`;
+  const settings = $("positionManagementSettingsPanel");
+  if (settings) settings.innerHTML = `<div class="position-management-empty"><strong>运行设置暂不可用</strong><span>${escapeHtml(message)}</span></div>`;
+  $("positionManagementPager")?.replaceChildren();
+}
+
+async function loadPositionManagement(options = {}) {
+  if (isObserverMode()) {
+    renderPositionManagementUnavailable("观摩模式仅展示行情与公开分析，不显示个人账户的持仓管理任务。");
+    return;
+  }
+  const filters = state.positionManagementFilters;
+  const query = new URLSearchParams({ page:String(filters.page), page_size:String(filters.pageSize) });
+  if (filters.status) query.set("status", filters.status);
+  if (!options.quiet && $("positionManagementBody")) {
+    $("positionManagementBody").innerHTML = `<tr class="empty-row"><td colspan="7">正在读取管理任务…</td></tr>`;
+  }
+  try {
+    const [list, settings] = await Promise.all([
+      api(`/api/ai/position-management?${query}`),
+      api("/api/ai/position-management/settings"),
+    ]);
+    state.positionManagementTasks = list.tasks || [];
+    state.positionManagementSettings = settings;
+    state.positionManagementFilters.page = Number(list.pagination?.page || 1);
+    state.positionManagementFilters.total = Number(list.pagination?.total || 0);
+    renderPositionManagementOverview(state.positionManagementTasks, settings, list.pagination || {});
+    renderPositionManagementSettings(settings);
+    renderPositionManagementTasks(state.positionManagementTasks, list.pagination || {});
+    const live = $("positionManagementLive");
+    if (live) { live.classList.add("live"); live.innerHTML = `<i></i>实时通道已连接`; }
+    if (options.preserveSelection && state.selectedPositionManagementId) {
+      await loadPositionManagementDetail(state.selectedPositionManagementId, { quiet:true });
+    }
+  } catch (error) {
+    renderPositionManagementUnavailable(`读取失败：${error.message}`);
+    throw error;
+  }
+}
+
+async function loadPositionManagementDetail(taskId, options = {}) {
+  const id = Number(taskId);
+  if (!id) return;
+  state.selectedPositionManagementId = id;
+  document.querySelectorAll("[data-position-management-row]").forEach(row => row.classList.toggle("selected", Number(row.dataset.positionManagementRow) === id));
+  const host = $("positionManagementDetail");
+  if (!host) return;
+  if (!options.quiet) host.innerHTML = `<div class="position-management-empty"><span class="status-spinner" aria-hidden="true"></span><strong>正在读取任务详情</strong></div>`;
+  try {
+    const result = await api(`/api/ai/position-management/${id}`);
+    if (state.selectedPositionManagementId !== id) return;
+    const task = result.task || {};
+    const evaluation = parseJsonField(task.model_evaluation_json, {});
+    const evidence = parseJsonField(task.evidence_validation_json, {});
+    const status = positionManagementStatus(task.status);
+    const refs = Array.isArray(evaluation.evidence_refs) ? evaluation.evidence_refs : [];
+    const events = Array.isArray(result.events) ? result.events : [];
+    const commands = Array.isArray(result.commands) ? result.commands : [];
+    host.innerHTML = `
+      <header class="management-detail-head"><div><span class="section-kicker">任务 #${id}</span><h3>${escapeHtml(task.standard_symbol || task.original_symbol || "管理任务")}</h3><p>${escapeHtml(positionManagementTaskLabel(task.task_type))} · ${escapeHtml(positionManagementBarTime(task))} MT5</p></div><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(status.label)}</span></header>
+      <section class="management-detail-section"><header><h4>AI 评估结论</h4><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></header><p>${escapeHtml(evaluation.reason || "本任务由服务端安全规则生成，暂无模型说明。")}</p></section>
+      <section class="management-detail-section"><header><h4>证据与安全校验</h4><span class="management-state ${evidence.status === "confirmed" ? "confirmed" : "candidate"}">${evidence.status === "confirmed" ? "证据已确认" : "等待证据"}</span></header><div class="management-detail-grid"><div><span>命中条件</span><strong>${escapeHtml(evaluation.matched_condition_id || evidence.condition_id || "未命中冻结条件")}</strong></div><div><span>校验来源</span><strong>${escapeHtml(evidence.source || "awaiting_evidence_confirmation")}</strong></div><div><span>策略版本</span><strong>v${Number(task.strategy_version || 1)}</strong></div><div><span>运行方式</span><strong>${escapeHtml(positionManagementTaskMode(task))}</strong></div></div>${refs.length ? `<ul>${refs.map(ref => `<li>${escapeHtml(ref)}</li>`).join("")}</ul>` : `<p>暂无可用于真实执行的完整证据链。</p>`}</section>
+      <section class="management-detail-section"><header><h4>执行隔离</h4><span>${commands.length} 条命令</span></header><p>${commands.length ? "已有持久化命令记录，请结合状态时间线核对；页面不提供重发入口。" : "未创建 MT5 指令。该任务没有进入自动执行阶段。"}</p></section>
+      <section class="management-detail-section"><header><h4>状态时间线</h4><span>${events.length} 条</span></header>${events.length ? `<ol class="management-timeline">${events.map(event => `<li><time>${escapeHtml(compactTimeText(event.created_at))}</time><span><strong>${escapeHtml(positionManagementStatus(event.to_status).label)}</strong><br>${escapeHtml(event.summary || event.event_type || "状态已更新")}</span></li>`).join("")}</ol>` : `<p>暂无状态记录。</p>`}</section>`;
+    initIcons();
+  } catch (error) {
+    if (state.selectedPositionManagementId === id) host.innerHTML = `<div class="position-management-empty"><i data-lucide="triangle-alert" size="22"></i><strong>详情读取失败</strong><span>${escapeHtml(error.message)}</span></div>`;
+    initIcons();
+  }
+}
+
 async function refreshTradingPage() {
-  await Promise.allSettled([loadStatus(), loadAccount(), refreshQuote(), loadPositions()]);
+  await Promise.allSettled([loadStatus(), loadAccount(), refreshQuote(), loadPositions(), loadPendingOrders(), loadPositionManagement({ quiet:true, preserveSelection:true })]);
 }
 
 async function refreshHistoryPage() {
@@ -6843,8 +7540,110 @@ async function exportHistory() {
   }
 }
 
+function auditStatusCode(row) {
+  return String(row?.status_code || row?.status || "unknown").trim().toLowerCase();
+}
+
+function auditStatusText(row) {
+  const code = auditStatusCode(row);
+  const fallback = {
+    success: "成功", skipped: "已跳过", rejected: "风控拒绝", error: "错误",
+    failed: "失败", needs_confirmation: "需要确认", warning: "警告", info: "信息",
+    started: "进行中", superseded: "已被替代", unknown: "未知状态",
+  }[code] || "未知状态";
+  return userVisibleText(row?.status, fallback);
+}
+
+function auditStatusTone(row) {
+  const code = auditStatusCode(row);
+  if (["error", "failed"].includes(code)) return "error";
+  if (code === "rejected") return "rejected";
+  if (code === "success") return "success";
+  if (code === "needs_confirmation") return "needs_confirmation";
+  return "skipped";
+}
+
+function auditActionType(row) {
+  const code = String(row?.action_code || "").toLowerCase();
+  const label = String(row?.action || "").toLowerCase();
+  return code.startsWith("ai_") || label.includes("ai") ? "ai" : "manual";
+}
+
+function auditActionText(row) {
+  return userVisibleText(row?.action, userVisibleText(row?.action_code, "系统审计操作"));
+}
+
+function auditReasonText(row) {
+  const result = row?.result || {};
+  const riskReason = resultRiskReason(result);
+  const raw = riskReason || result.reason || result.message || result.status || "";
+  return userVisibleText(localizeReason(raw), "未记录原因");
+}
+
+function auditResultText(row) {
+  const result = row?.result || {};
+  const reason = auditReasonText(row);
+  const retcode = result.retcode || result.mt5_result?.retcode;
+  const quote = result.quote?.bid !== undefined && result.quote?.ask !== undefined
+    ? `报价 ${result.quote.bid} / ${result.quote.ask}`
+    : "";
+  return [reason, retcode ? `MT5 返回码 ${retcode}` : "", quote].filter(Boolean).join(" · ");
+}
+
+function renderAuditRows() {
+  const body = $("auditBody");
+  if (!body) return;
+  const rows = Array.isArray(state.auditRows) ? state.auditRows : [];
+  const filters = state.auditFilters;
+  const filtered = rows.filter(row => {
+    const status = auditStatusCode(row);
+    const type = auditActionType(row);
+    return (!filters.status || status === filters.status) && (!filters.type || type === filters.type);
+  });
+  filters.page = clampPage(filters.page, filters.pageSize, filtered.length);
+  const start = (filters.page - 1) * filters.pageSize;
+  const pageRows = filtered.slice(start, start + filters.pageSize);
+  const success = rows.filter(row => auditStatusCode(row) === "success").length;
+  const rejected = rows.filter(row => auditStatusCode(row) === "rejected").length;
+  const exceptions = rows.filter(row => ["error", "failed", "needs_confirmation", "warning"].includes(auditStatusCode(row))).length;
+  setText("auditTotalStat", rows.length);
+  setText("auditSuccessStat", success);
+  setText("auditRejectedStat", rejected);
+  setText("auditExceptionStat", exceptions);
+  setText("auditCount", `筛选 ${filtered.length} / 共 ${rows.length} 条`);
+  body.innerHTML = pageRows.length ? pageRows.map(row => {
+    const statusTone = auditStatusTone(row);
+    const actionType = auditActionType(row);
+    const resultText = auditResultText(row);
+    const reasonText = auditReasonText(row);
+    return `<tr class="audit-row row-${statusTone}">
+      <td data-label="时间（MT5）">${compactTimeHtml(row?.created_at_mt5 || row?.created_at)}</td>
+      <td data-label="动作"><span class="action-badge ${actionType}">${escapeHtml(auditActionText(row))}</span></td>
+      <td data-label="品种"><strong class="num">${escapeHtml(row?.symbol || "--")}</strong></td>
+      <td data-label="状态"><span class="audit-status ${statusTone}">${escapeHtml(auditStatusText(row))}</span></td>
+      <td data-label="中文结果" class="audit-result-cell"><button class="audit-result-text" type="button" title="${escapeHtml(resultText)}" aria-expanded="false" data-audit-result>${escapeHtml(resultText)}</button></td>
+      <td data-label="原始原因" title="${escapeHtml(reasonText)}">${escapeHtml(reasonText)}</td>
+    </tr>`;
+  }).join("") : `<tr class="empty-row"><td colspan="6">当前筛选下暂无审计记录</td></tr>`;
+  renderPager("auditPager", filters.page, filters.pageSize, filtered.length, "audit");
+}
+
+async function loadAudit() {
+  const body = $("auditBody");
+  if (body && !state.auditRows.length) body.innerHTML = '<tr class="empty-row"><td colspan="6">正在通过实时通道读取审计记录…</td></tr>';
+  try {
+    const data = await wsApi("audit_logs");
+    state.auditRows = data.logs || [];
+    renderAuditRows();
+  } catch (error) {
+    if (body) body.innerHTML = '<tr class="empty-row"><td colspan="6">审计记录加载失败，请检查实时连接后重试</td></tr>';
+    throw error;
+  }
+}
+
 function bindEvents() {
   $("logoutBtn").addEventListener("click", logout);
+  $("membershipGateLogoutBtn")?.addEventListener("click", logout);
   $("accountCenterBtn")?.addEventListener("click", () => openAccountCenter("overview"));
   $("accountCenterModal")?.querySelectorAll("[data-close-account-center]").forEach(node => node.addEventListener("click", closeAccountCenter));
   window.addEventListener("message", handleAccountCenterMessage);
@@ -6920,6 +7719,22 @@ function bindEvents() {
     state.signalFilters.timeframe = event.target.value;
     state.signalFilters.page = 1;
     loadSignalTable();
+  });
+  $("auditFilterStatus")?.addEventListener("change", (event) => {
+    state.auditFilters.status = event.target.value;
+    state.auditFilters.page = 1;
+    renderAuditRows();
+  });
+  $("auditFilterType")?.addEventListener("change", (event) => {
+    state.auditFilters.type = event.target.value;
+    state.auditFilters.page = 1;
+    renderAuditRows();
+  });
+  $("positionManagementStatusFilter")?.addEventListener("change", event => {
+    state.positionManagementFilters.status = event.target.value;
+    state.positionManagementFilters.page = 1;
+    state.selectedPositionManagementId = null;
+    loadPositionManagement().catch(error => toast(error.message, "error"));
   });
 
   // Gateway badge click — toggle trade sending
@@ -7006,7 +7821,24 @@ function bindEvents() {
   $("addModelProfileBtn")?.addEventListener("click", () => openModelEditor());
   $("cancelModelProfileBtn")?.addEventListener("click", () => closeFormModal($("modelProfileEditor")));
   $("saveModelProfileBtn")?.addEventListener("click", () => saveModelProfile().catch(error => toast(localizeReason(error.message), "error")));
+  $("savePlatformPolicyBtn")?.addEventListener("click", () => savePlatformPolicy().catch(error => toast(error.message, "error")));
   $("saveUserFeatureFlagsBtn")?.addEventListener("click", () => saveUserFeatureFlags().catch(error => toast(error.message, "error")));
+  $("positionProtectionClose")?.addEventListener("click", () => {
+    stopPositionProtectionPolling();
+    closeFormModal($("positionProtectionModal"));
+  });
+  $("positionProtectionSubmit")?.addEventListener("click", submitPositionProtectionJob);
+  $("positionProtectionRetry")?.addEventListener("click", retryPositionProtectionJob);
+  $("positionProtectionSyncScope")?.addEventListener("change", async event => {
+    const ticket = $("positionProtectionTicket")?.value;
+    if (!ticket) return;
+    event.target.disabled = true;
+    try { await loadPositionProtectionPreview(ticket, event.target.checked ? "signal" : "source_only"); }
+    catch (error) {
+      event.target.checked = !event.target.checked;
+      toast(error.message, "error");
+    } finally { event.target.disabled = !state.positionProtectionPreview?.sync_available; }
+  });
   $("memoryEnabled")?.addEventListener("change", async event => {
     try { await api("/api/ai/memory/settings", { method:"PUT", body:{ enabled:event.target.checked, runtime_token_budget:800 } }); toast(event.target.checked ? "个人记忆已启用" : "个人记忆已关闭", "success"); }
     catch (error) { event.target.checked = !event.target.checked; toast(error.message, "error"); }
@@ -7126,17 +7958,38 @@ function bindEvents() {
     const actionButton = event.target.closest("[data-action]");
     const tabButton = event.target.closest("[data-tab-jump]");
     const closeButton = event.target.closest("[data-close-ticket]");
+    const editProtectionButton = event.target.closest("[data-edit-protection-ticket]");
+    const auditResult = event.target.closest("[data-audit-result]");
     const pagerButton = event.target.closest("[data-pager]");
     const modelAction = event.target.closest("[data-model-action]");
     const reviewCase = event.target.closest("[data-review-id]");
     const reviewAction = event.target.closest("[data-review-action]");
     const memoryAction = event.target.closest("[data-memory-action]");
     const memoryTier = event.target.closest("[data-memory-tier]");
+    const platformExperienceAction = event.target.closest("[data-platform-experience-action]");
+    const platformPolicySave = event.target.closest("[data-platform-policy-save]");
     const riskSave = event.target.closest("[data-risk-save]");
     const killSwitch = event.target.closest("[data-kill-switch]");
     const strategyAction = event.target.closest("[data-strategy-action]");
     const subscriptionAction = event.target.closest("[data-subscription-action]");
     const openWorkspaceTab = event.target.closest("[data-open-workspace-tab]");
+    const positionManagementDetail = event.target.closest("[data-position-management-id]");
+
+    if (editProtectionButton) {
+      openPositionProtectionModal(editProtectionButton.dataset.editProtectionTicket);
+      return;
+    }
+
+    if (positionManagementDetail) {
+      loadPositionManagementDetail(positionManagementDetail.dataset.positionManagementId).catch(error => toast(error.message, "error"));
+      return;
+    }
+
+    if (auditResult) {
+      const expanded = auditResult.classList.toggle("expanded");
+      auditResult.setAttribute("aria-expanded", String(expanded));
+      return;
+    }
 
     if (memoryTier) {
       state.memoryTierFilter = memoryTier.dataset.memoryTier || "all";
@@ -7289,6 +8142,38 @@ function bindEvents() {
       }
       catch (error) { toast(error.message,"error"); } return;
     }
+    if (platformExperienceAction) {
+      try {
+        const itemId = Number(platformExperienceAction.dataset.platformExperienceId);
+        const action = platformExperienceAction.dataset.platformExperienceAction;
+        if (action === "delete") {
+          const confirmed = await showConfirm("永久删除已撤销记忆", `平台记忆 #${itemId} 将从归档中永久删除，且无法恢复。`, { confirmText:"永久删除", danger:true });
+          if (!confirmed) return;
+          await api(`/api/ai/admin/platform-experience/${itemId}`, { method:"DELETE" });
+          toast("已撤销记忆已永久删除", "success");
+        } else {
+          await api(`/api/ai/admin/platform-experience/${itemId}/${action}`, { method:"POST" });
+          toast(action === "publish" ? "平台记忆已发布" : "平台记忆已撤销", "success");
+        }
+        await loadReviewMemory();
+      } catch (error) { toast(error.message, "error"); }
+      return;
+    }
+    if (platformPolicySave) {
+      const row = platformPolicySave.closest("[data-platform-policy-strategy]");
+      try {
+        platformPolicySave.disabled = true;
+        await api(`/api/ai/admin/platform-experience/policies/${Number(row.dataset.platformPolicyStrategy)}`, { method:"PUT", body:{
+          mode:row.querySelector("[data-platform-policy-mode]").value,
+          max_items:Number(row.querySelector("[data-platform-policy-items]").value),
+          runtime_token_budget:Number(row.querySelector("[data-platform-policy-budget]").value),
+        } });
+        toast("平台记忆运行模式已保存", "success");
+        await loadReviewMemory();
+      } catch (error) { toast(error.message, "error"); }
+      finally { platformPolicySave.disabled = false; }
+      return;
+    }
     if (killSwitch) {
       const enabled = killSwitch.dataset.enabled === "1";
       const reason = prompt(enabled ? "请输入紧急停止新开仓的原因" : "请输入解除紧急停止的原因"); if (!reason) return;
@@ -7340,9 +8225,16 @@ function bindEvents() {
       } else if (pagerButton.dataset.pager === "history") {
         state.historyFilters.page = page;
         loadHistory();
+      } else if (pagerButton.dataset.pager === "audit") {
+        state.auditFilters.page = page;
+        renderAuditRows();
       } else if (pagerButton.dataset.pager === "executions") {
         state.executionFilters.page = page;
         loadExecutionDecisions().catch(error => toast(error.message, "error"));
+      } else if (pagerButton.dataset.pager === "position-management") {
+        state.positionManagementFilters.page = page;
+        state.selectedPositionManagementId = null;
+        loadPositionManagement().catch(error => toast(error.message, "error"));
       }
       return;
     }
@@ -7364,10 +8256,12 @@ function bindEvents() {
         "refresh-history": loadHistory,
         "refresh-trading-page": refreshTradingPage,
         "refresh-history-page": refreshHistoryPage,
+        "refresh-audit": loadAudit,
         "export-history": exportHistory,
         "refresh-risk-center": loadRiskCenter,
         "refresh-review-memory": loadReviewMemory,
         "retry-model-management": loadModelManagement,
+        "refresh-position-management": () => loadPositionManagement({ preserveSelection:true }),
       };
       if (tasks[action]) {
         withBusy(actionButton, tasks[action]).catch((error) => toast(error.message, "error"));

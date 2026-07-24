@@ -3,9 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
   <title>统一管理后台 · AI交易实验室</title>
-  <link rel="stylesheet" href="/admin/styles.css?v=20260723n">
+  <script>
+    (() => {
+      const saved = localStorage.getItem('ws_theme')
+      const theme = saved === 'dark' ? 'dark' : 'light'
+      document.documentElement.setAttribute('data-theme', theme)
+      document.documentElement.style.colorScheme = theme
+    })()
+  </script>
+  <link rel="stylesheet" href="/admin/styles.css?v=20260724filterui1">
 </head>
 <body>
   <a class="skip-link" href="#adminMain">跳到主要内容</a>
@@ -22,7 +30,8 @@
         <button class="nav-item" data-view="commercial" type="button"><span data-icon="commercial"></span><span>商业运营</span></button>
         <p class="nav-group">智能交易治理</p>
         <button class="nav-item" data-view="ai-operations" type="button"><span data-icon="activity"></span><span>AI 运营</span></button>
-        <button class="nav-item" data-view="risk-audit" type="button"><span data-icon="shield"></span><span>风控与审计</span></button>
+        <button class="nav-item" data-view="risk-audit" type="button"><span data-icon="shield"></span><span>风控管理</span></button>
+        <button class="nav-item" data-view="management-audit" type="button"><span data-icon="file"></span><span>管理审计</span></button>
         <p class="nav-group">平台维护</p>
         <button class="nav-item" data-view="content-operations" type="button"><span data-icon="archive"></span><span>内容运营</span></button>
         <button class="nav-item" data-view="system-settings" type="button"><span data-icon="settings"></span><span>系统设置</span></button>
@@ -37,13 +46,22 @@
       <header class="admin-topbar">
         <button class="icon-button mobile-menu" id="mobileMenuButton" type="button" aria-label="打开导航" aria-expanded="false"><span data-icon="menu"></span></button>
         <div class="topbar-context"><span class="status-dot"></span><span>生产环境</span><strong id="currentViewName">运营总览</strong></div>
+        <div class="admin-realtime-status" id="adminRealtimeStatus" data-state="connecting" aria-live="polite" aria-label="实时连接中" title="正在连接服务器实时推送">
+          <span class="admin-realtime-dot" aria-hidden="true"></span>
+          <span id="adminRealtimeStatusText">实时连接中</span>
+          <time id="adminRealtimeLastAt"></time>
+        </div>
         <label class="quick-nav" for="adminQuickNavSearch">
           <span data-icon="search" aria-hidden="true"></span>
           <input id="adminQuickNavSearch" type="search" autocomplete="off" placeholder="搜索管理模块" aria-label="搜索管理模块">
           <kbd>/</kbd>
         </label>
         <div class="topbar-actions">
-          <button class="icon-button" id="refreshButton" type="button" aria-label="刷新当前页面"><span data-icon="refresh"></span></button>
+          <button class="icon-button topbar-icon-button theme-toggle-button" id="themeToggleButton" type="button" aria-label="切换到深色模式" aria-pressed="false">
+              <span data-theme-icon aria-hidden="true"></span>
+              <span class="sr-only" data-theme-label>切换主题</span>
+          </button>
+          <button class="icon-button topbar-icon-button" id="refreshButton" type="button" aria-label="刷新当前页面"><span data-icon="refresh"></span></button>
           <button class="account-button" id="accountButton" type="button" aria-label="当前管理员账户"><span class="account-avatar">管</span><span id="accountName">管理员</span></button>
         </div>
       </header>
@@ -55,8 +73,8 @@
   <div class="modal-layer" id="userModal" hidden>
     <div class="modal-scrim" data-close-modal></div>
     <section class="user-modal" role="dialog" aria-modal="true" aria-labelledby="userModalTitle">
-      <header class="modal-header">
-        <div><span class="eyebrow">用户运营档案</span><h2 id="userModalTitle">用户详情</h2></div>
+      <header class="modal-header user-modal-header">
+        <div class="user-modal-title"><span class="user-modal-title-icon" id="userModalAvatar" aria-hidden="true">用</span><div class="user-modal-title-copy"><span class="eyebrow">用户运营档案</span><div class="user-modal-heading-line"><h2 id="userModalTitle">用户详情</h2><span id="userModalMembership"></span></div><div class="user-modal-meta" id="userModalMeta" aria-label="用户摘要"></div></div></div>
         <button class="icon-button" type="button" data-close-modal aria-label="关闭用户详情"><span data-icon="close"></span></button>
       </header>
       <div class="modal-body" id="userModalBody"></div>
@@ -77,10 +95,10 @@
   </div>
   <div class="modal-layer" id="contentModal" hidden>
     <div class="modal-scrim" data-close-content-modal></div>
-    <section class="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="contentModalTitle">
-      <header class="modal-header">
-        <div><span class="eyebrow">课程内容工作流</span><h2 id="contentModalTitle">编辑课程</h2></div>
-        <button class="icon-button" type="button" data-close-content-modal aria-label="关闭课程编辑"><span data-icon="close"></span></button>
+    <section class="workspace-modal course-editor-modal" role="dialog" aria-modal="true" aria-labelledby="contentModalTitle">
+      <header class="modal-header course-editor-modal-header">
+        <div class="course-editor-modal-title"><span class="course-editor-modal-icon" data-icon="book" aria-hidden="true"></span><div><span class="eyebrow">课程内容中心</span><h2 id="contentModalTitle">编辑课程</h2><p id="contentModalSubtitle">完善课程信息、内容来源和发布权限。</p></div></div>
+        <div class="course-editor-modal-tools"><span class="course-editor-state-pill" id="contentModalState"><i aria-hidden="true"></i><span>正在读取课程</span></span><button class="icon-button" type="button" data-close-content-modal aria-label="关闭课程编辑"><span data-icon="close"></span></button></div>
       </header>
       <div class="modal-body" id="contentModalBody"></div>
     </section>
@@ -104,6 +122,7 @@
     </section>
   </div>
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
-  <script type="module" src="/admin/app.js?v=20260723n"></script>
+  <script src="/shared/session.js?v=20260724wsfix1"></script>
+  <script type="module" src="/admin/app.js?v=20260724wsfix1"></script>
 </body>
 </html>

@@ -33,6 +33,12 @@ const CHAN_ENTRY_MAX_AGE_BARS = 20
 const CHAN_STRUCTURE_MAX_AGE_BARS = 120
 const DEBUG_CHAN = process.env.DEBUG_CHAN === '1'
 
+function roundMacdEvidence(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric) || numeric === 0) return 0
+  return Number(numeric.toPrecision(8))
+}
+
 // === MACD Series Calculation ===
 function calculateMacdSeries(closes) {
   const n = closes.length
@@ -634,7 +640,11 @@ function evaluateDivergence(current, segments, bis, macdHist, centers = [], rate
   const peakPrev = prevMacd.peak
   const peakCur = curMacd.peak
 
-  if (areaCur === 0 || areaPrev === 0) return divergenceResult('invalid_macd_area', { ...context, area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev) })
+  if (areaCur === 0 || areaPrev === 0) return divergenceResult('invalid_macd_area', {
+    ...context,
+    area_cur:roundMacdEvidence(areaCur), area_prev:roundMacdEvidence(areaPrev),
+    peak_cur:roundMacdEvidence(peakCur), peak_prev:roundMacdEvidence(peakPrev),
+  })
 
   const areaRatio = areaPrev > 0 ? areaCur / areaPrev : null
   const peakRatio = peakPrev > 0 ? peakCur / peakPrev : null
@@ -649,7 +659,8 @@ function evaluateDivergence(current, segments, bis, macdHist, centers = [], rate
         ? 'macd_height_divergence_only'
         : 'macd_no_divergence'
   const macdFields = {
-    area_cur: round2(areaCur), area_prev: round2(areaPrev), peak_cur: round2(peakCur), peak_prev: round2(peakPrev),
+    area_cur:roundMacdEvidence(areaCur), area_prev:roundMacdEvidence(areaPrev),
+    peak_cur:roundMacdEvidence(peakCur), peak_prev:roundMacdEvidence(peakPrev),
     area_ratio: areaRatio == null ? null : round3(areaRatio),
     peak_ratio: peakRatio == null ? null : round3(peakRatio),
     area_reduction_pct: areaRatio == null ? null : round2((1 - areaRatio) * 100),
@@ -1254,7 +1265,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, computeChan, computeChanWindow, selectStableChanResult }
+export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, computeChan, computeChanWindow, selectStableChanResult }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()
@@ -1351,6 +1362,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const closedRates = options.chanDataQuality?.last_bar_closed === true
     ? rates
     : rates.length > 1 ? rates.slice(0, -1) : []
+  const lastClosedRate = closedRates.at(-1) || null
   const atr14Closed = computeAtr14(closedRates)
 
   const recentHighs = highs.length >= 20 ? highs.slice(-20) : highs
@@ -1490,6 +1502,14 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
     },
     pending_orders: options.pending_orders || [],
     account: account ? { balance: account.balance, equity: account.equity } : null,
+    last_closed_bar: lastClosedRate ? {
+      time:lastClosedRate.time ?? null,
+      time_utc_msc:Number.isFinite(Number(lastClosedRate.time_utc_msc)) ? Number(lastClosedRate.time_utc_msc) : null,
+      open:round5(parseFloat(lastClosedRate.open || 0)),
+      high:round5(parseFloat(lastClosedRate.high || 0)),
+      low:round5(parseFloat(lastClosedRate.low || 0)),
+      close:round5(parseFloat(lastClosedRate.close || 0)),
+    } : null,
     market_data_quality: options.chanDataQuality ? {
       clock_status: options.chanDataQuality.clock_status || 'unknown',
       cache_gap_refilled: Boolean(options.chanDataQuality.cache_gap_refilled),

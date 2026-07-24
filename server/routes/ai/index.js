@@ -12,8 +12,8 @@ import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-provider
 import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistoryCompareJob,
   cancelHistoryCompareJob, listHistoryCompareJobs, deleteHistoryCompareJob,
   buildStrategyContextFromTags } from './strategy.js'
-import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler, runSmartCloseCycle, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
-import { applyBridgeRuntimeState, getBridgeDiagnostics, getActivePlatformBridgeUserId, isBridgeAlive } from '../../bridge-ws.js'
+import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
+import { applyBridgeRuntimeState, getBridgeDiagnostics, isBridgeAlive } from '../../bridge-ws.js'
 import { buildAiAccessContext, observerAccessError, observerHttpRequestAllowed } from './observer-access.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource,
   listObserverChannelAssignments, listObserverChannels, listObserverChannelsForUser, listObserverSources,
@@ -47,6 +47,10 @@ import { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   retryPeriodReviewDerivation } from './period-review.js'
 import { listModelSnapshotSamples } from './model-snapshot-samples.js'
 import { translateAdminProfileError, updateAdminUserProfile } from './admin-user-profile.js'
+import { getPositionManagementSettings, getPositionManagementTask, listPositionManagementTasks,
+  savePositionManagementSettings, getPositionManagementAdminSettings,
+  saveGlobalPositionManagementControl } from './position-management.js'
+import { getPositionManagementWorkerStatus } from './position-management-worker.js'
 
 const router = Router()
 
@@ -58,11 +62,15 @@ router.get('/bridge/version', (req, res) => {
   res.json({
     version: BRIDGE_VERSION,
     build_date: new Date().toISOString().slice(0, 10),
-    changelog: `${BRIDGE_VERSION}: 增量风险快照，实时风控不再传输全量历史`,
-    updater_url: `https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_${BRIDGE_VERSION}.exe`,
-    full_url: `https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_${BRIDGE_VERSION}.exe`,
+    changelog: `${BRIDGE_VERSION}: Windows 客户端异步网络、托盘唤回与 WebSocket 边界加固`,
+    bridge_ticket_required: process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN !== '1',
+    legacy_bridge_query_token_enabled: process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN === '1',
+    auto_update_enabled: false,
+    auto_update_disabled_reason: 'signed_update_manifest_required',
+    updater_url: '',
+    full_url: '',
     file_size: 0,
-    md5: ''
+    sha256: ''
   })
 })
 
@@ -100,20 +108,22 @@ router.use('/ai', authMiddleware, (req, res, next) => {
 })
 
 router.get('/ai/access-context', async (req, res) => {
-  const observerSource = req.aiAccess?.mode === 'observer'
-    ? await resolveObserverSourceForUser(req.user.id, req.user.effectivePlan, req.query.channel_id).catch(() => null)
-    : null
-  const observerSourceUserId = observerSource
-    ? (isBridgeAlive(Number(observerSource.bridge_user_id)) ? Number(observerSource.bridge_user_id) : null)
-    : (req.aiAccess?.mode === 'observer' ? await getActivePlatformBridgeUserId() : null)
-  res.json({
-    ok:true,
-    access:{ ...req.aiAccess, observer_source_available:Boolean(observerSourceUserId),
-      observer_channel:observerSource ? {
-        id:Number(observerSource.id), name:observerSource.name,
-        slug:observerSource.slug, source_id:Number(observerSource.source_id),
-      } : null },
-  })
+  try {
+    const observerSource = req.aiAccess?.mode === 'observer'
+      ? await resolveObserverSourceForUser(req.user.id, req.user.effectivePlan, req.query.channel_id)
+      : null
+    const observerSourceUserId = observerSource && isBridgeAlive(Number(observerSource.bridge_user_id))
+      ? Number(observerSource.bridge_user_id) : null
+    res.json({
+      ok:true,
+      access:{ ...req.aiAccess, observer_source_available:Boolean(observerSourceUserId),
+        observer_channel:observerSource ? {
+          id:Number(observerSource.id), name:observerSource.name,
+          slug:observerSource.slug, source_id:Number(observerSource.source_id),
+          strategy_id:Number(observerSource.strategy_id),
+        } : null },
+    })
+  } catch (error) { reviewError(res, error) }
 })
 
 router.get('/ai/observer-channels', async (req, res) => {
@@ -128,7 +138,13 @@ router.get('/ai/observer-channels', async (req, res) => {
 })
 
 function reviewError(res, error) {
-  const code = String(error?.message || 'review_request_failed')
+  const raw = String(error?.message || '')
+  const code = /^[a-z][a-z0-9_]*(?::[a-z0-9_.-]+)*$/.test(raw) ? raw : null
+  if (!code) {
+    const incidentId = `ai_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    console.error(`[AI API ${incidentId}]`, error)
+    return res.status(500).json({ ok:false, error:'ai_internal_error', incident_id:incidentId })
+  }
   const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : (code.includes('access_denied') || code.includes('admin_required') || code.includes('admin_only') || code.includes('requires_admin') || code.includes('pro_access_required')) ? 403 : 400
   return res.status(status).json({ ok: false, error: code })
 }
@@ -137,6 +153,34 @@ function requireAiAdmin(req, res) {
   if (req.user?.role === 'admin') return true
   res.status(403).json({ ok:false, error:'admin_only' })
   return false
+}
+
+function auditAiMutation(req, action, targetType, targetId, detail = {}) {
+  return logAudit({
+    userId:req.user?.id, action, targetType, targetId,
+    detail:JSON.stringify(detail || {}), ip:req.ip, userAgent:req.get?.('user-agent'),
+  })
+}
+
+async function reconcileAiRuntime() {
+  try { return { ok:true, scheduler:await reconcileAutoSchedulers() } }
+  catch (error) {
+    console.error('[AI Runtime] reconcile failed:', error)
+    return { ok:false, degraded:true, error:'scheduler_runtime_sync_pending' }
+  }
+}
+
+async function applyObserverBridgeRuntime(source) {
+  try {
+    const result = await applyBridgeRuntimeState(Number(source.bridge_user_id), {
+      tradeEnabled:source.status === 'active' && Boolean(source.trade_send_enabled),
+      autoReasoningEnabled:source.status === 'active' && Boolean(source.auto_inference_enabled),
+    })
+    return { ok:true, result }
+  } catch (error) {
+    console.error('[AI Runtime] observer bridge apply failed:', error)
+    return { ok:false, degraded:true, error:'observer_bridge_runtime_sync_pending' }
+  }
 }
 
 router.get('/ai/admin/observer-sources', async (req, res) => {
@@ -180,10 +224,14 @@ router.post('/ai/admin/observer-sources', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
   try {
     const source = await createObserverSource(req.user.id, req.body || {})
-    await reconcileAutoSchedulers()
-    const runtime_sync = await applyBridgeRuntimeState(Number(source.bridge_user_id), {
-      tradeEnabled:Boolean(source.trade_send_enabled),
-      autoReasoningEnabled:Boolean(source.auto_inference_enabled),
+    const [scheduler_sync, bridge_sync] = await Promise.all([
+      reconcileAiRuntime(), applyObserverBridgeRuntime(source),
+    ])
+    const runtime_sync = { scheduler_sync, bridge_sync,
+      degraded:!scheduler_sync.ok || !bridge_sync.ok }
+    await auditAiMutation(req, 'observer_source_created', 'ai_observer_source', source.id, {
+      bridge_user_id:source.bridge_user_id, trading_account_id:source.trading_account_id,
+      strategy_id:source.strategy_id, status:source.status,
     })
     res.status(201).json({ ok:true, source, runtime_sync })
   }
@@ -194,10 +242,14 @@ router.put('/ai/admin/observer-sources/:id', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
   try {
     const source = await updateObserverSource(req.params.id, req.body || {})
-    await reconcileAutoSchedulers()
-    const runtime_sync = await applyBridgeRuntimeState(Number(source.bridge_user_id), {
-      tradeEnabled:Boolean(source.trade_send_enabled),
-      autoReasoningEnabled:Boolean(source.auto_inference_enabled),
+    const [scheduler_sync, bridge_sync] = await Promise.all([
+      reconcileAiRuntime(), applyObserverBridgeRuntime(source),
+    ])
+    const runtime_sync = { scheduler_sync, bridge_sync,
+      degraded:!scheduler_sync.ok || !bridge_sync.ok }
+    await auditAiMutation(req, 'observer_source_updated', 'ai_observer_source', source.id, {
+      bridge_user_id:source.bridge_user_id, trading_account_id:source.trading_account_id,
+      strategy_id:source.strategy_id, status:source.status,
     })
     res.json({ ok:true, source, runtime_sync })
   }
@@ -206,7 +258,17 @@ router.put('/ai/admin/observer-sources/:id', async (req, res) => {
 
 router.delete('/ai/admin/observer-sources/:id', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
-  try { res.json({ ok:true, deleted:await deleteObserverSource(req.params.id) }) }
+  try {
+    const deleted = await deleteObserverSource(req.params.id)
+    const [scheduler_sync, bridge_sync] = await Promise.all([
+      reconcileAiRuntime(),
+      applyObserverBridgeRuntime({ ...deleted, status:'disabled', trade_send_enabled:false, auto_inference_enabled:false }),
+    ])
+    const runtime_sync = { scheduler_sync, bridge_sync,
+      degraded:!scheduler_sync.ok || !bridge_sync.ok }
+    await auditAiMutation(req, 'observer_source_deleted', 'ai_observer_source', deleted.id)
+    res.json({ ok:true, deleted, runtime_sync })
+  }
   catch (error) { reviewError(res, error) }
 })
 
@@ -267,12 +329,25 @@ router.get('/ai/model-profiles', authMiddleware, async (req, res) => {
 })
 
 router.post('/ai/model-profiles', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, profile: await createModelProfile(req.user.id, req.body || {}, req.user.role) }) }
+  try {
+    const profile = await createModelProfile(req.user.id, req.body || {}, req.user.role)
+    await auditAiMutation(req, 'ai_model_profile_created', 'ai_model_profile', profile.id, {
+      scope:profile.scope, provider:profile.provider, model_name:profile.model_name,
+    })
+    res.json({ ok:true, profile })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.put('/ai/model-profiles/:id', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, profile: await updateModelProfile(Number(req.params.id), req.body?.scope === 'platform' && req.user.role === 'admin' ? 0 : req.user.id, req.body || {}) }) }
+  try {
+    const profile = await updateModelProfile(Number(req.params.id), req.body?.scope === 'platform' && req.user.role === 'admin' ? 0 : req.user.id, req.body || {})
+    await auditAiMutation(req, 'ai_model_profile_updated', 'ai_model_profile', profile.id, {
+      scope:profile.scope, provider:profile.provider, model_name:profile.model_name,
+      credential_rotated:Boolean(req.body?.api_key),
+    })
+    res.json({ ok:true, profile })
+  }
   catch (error) { reviewError(res, error) }
 })
 
@@ -284,12 +359,22 @@ router.get('/ai/model-profiles/:id/delete-impact', authMiddleware, async (req, r
 })
 
 router.delete('/ai/model-profiles/:id', authMiddleware, async (req, res) => {
-  try { await deleteModelProfile(Number(req.params.id), req.query.scope === 'platform' && req.user.role === 'admin' ? 0 : req.user.id, req.body || {}); res.json({ ok: true }) }
+  try {
+    await deleteModelProfile(Number(req.params.id), req.query.scope === 'platform' && req.user.role === 'admin' ? 0 : req.user.id, req.body || {})
+    await auditAiMutation(req, 'ai_model_profile_deleted', 'ai_model_profile', Number(req.params.id))
+    res.json({ ok:true })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/model-profiles/:id/default', authMiddleware, async (req, res) => {
-  try { await setDefaultModelProfile(req.user.role === 'admin' && req.body?.scope === 'platform' ? 0 : req.user.id, Number(req.params.id)); res.json({ ok: true }) }
+  try {
+    await setDefaultModelProfile(req.user.role === 'admin' && req.body?.scope === 'platform' ? 0 : req.user.id, Number(req.params.id))
+    await auditAiMutation(req, 'ai_model_profile_default_changed', 'ai_model_profile', Number(req.params.id), {
+      scope:req.body?.scope === 'platform' ? 'platform' : 'user',
+    })
+    res.json({ ok:true })
+  }
   catch (error) { reviewError(res, error) }
 })
 
@@ -449,15 +534,24 @@ router.get('/ai/strategies/:id', authMiddleware, async (req, res) => {
 })
 
 router.post('/ai/strategies', authMiddleware, async (req, res) => {
-  try { res.json({ ok:true, strategy:await createStrategy(req.user.id, req.user.role, req.body || {}) }) }
+  try {
+    const strategy = await createStrategy(req.user.id, req.user.role, req.body || {})
+    await auditAiMutation(req, 'ai_strategy_created', 'ai_strategy', strategy.id, {
+      scope:strategy.scope, visibility_status:strategy.visibility_status,
+    })
+    res.json({ ok:true, strategy })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.put('/ai/strategies/:id', authMiddleware, async (req, res) => {
   try {
     const strategy = await updateStrategy(Number(req.params.id), req.user.id, req.user.role, req.body || {})
-    await reconcileAutoSchedulers()
-    res.json({ ok:true, strategy })
+    const runtime_sync = await reconcileAiRuntime()
+    await auditAiMutation(req, 'ai_strategy_updated', 'ai_strategy', strategy.id, {
+      scope:strategy.scope, visibility_status:strategy.visibility_status, version:strategy.version,
+    })
+    res.json({ ok:true, strategy, runtime_sync })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -468,7 +562,11 @@ router.get('/ai/strategies/:id/delete-preview', authMiddleware, async (req, res)
 })
 
 router.delete('/ai/strategies/:id', authMiddleware, async (req, res) => {
-  try { const deleted = await deleteStrategy(Number(req.params.id), req.user.id, req.user.role, req.body || {}); await reconcileAutoSchedulers(); res.json({ ok:true, deleted }) }
+  try {
+    const deleted = await deleteStrategy(Number(req.params.id), req.user.id, req.user.role, req.body || {})
+    const runtime_sync = await reconcileAiRuntime()
+    res.json({ ok:true, deleted, runtime_sync })
+  }
   catch (error) { reviewError(res, error) }
 })
 
@@ -478,25 +576,46 @@ router.get('/ai/trading-accounts', authMiddleware, async (req, res) => {
 })
 
 router.post('/ai/trading-accounts', authMiddleware, async (req, res) => {
-  try { res.json({ ok:true, account:await createTradingAccount(req.user.id, req.body || {}) }) }
+  try {
+    const account = await createTradingAccount(req.user.id, req.body || {})
+    await auditAiMutation(req, 'trading_account_created', 'trading_account', account.id, {
+      observe_status:account.observe_status,
+    })
+    res.json({ ok:true, account })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.put('/ai/trading-accounts/:id', authMiddleware, async (req, res) => {
-  try { res.json({ ok:true, account:await updateTradingAccount(Number(req.params.id), req.user.id, req.body || {}) }) }
+  try {
+    const account = await updateTradingAccount(Number(req.params.id), req.user.id, req.body || {})
+    await auditAiMutation(req, 'trading_account_updated', 'trading_account', account.id, {
+      nickname_changed:Object.prototype.hasOwnProperty.call(req.body || {}, 'nickname'),
+    })
+    res.json({ ok:true, account })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.delete('/ai/trading-accounts/:id', authMiddleware, async (req, res) => {
-  try { await deleteTradingAccount(Number(req.params.id), req.user.id); await reconcileAutoSchedulers(); res.json({ ok:true }) }
+  try {
+    await deleteTradingAccount(Number(req.params.id), req.user.id)
+    const runtime_sync = await reconcileAiRuntime()
+    await auditAiMutation(req, 'trading_account_deleted', 'trading_account', Number(req.params.id))
+    res.json({ ok:true, runtime_sync })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/subscriptions', authMiddleware, async (req, res) => {
   try {
     const subscription = await createSubscription(req.user.id, req.user.role, req.body || {})
-    await reconcileAutoSchedulers()
-    res.json({ ok:true, subscription })
+    const runtime_sync = await reconcileAiRuntime()
+    await auditAiMutation(req, 'ai_strategy_subscription_created', 'strategy_subscription', subscription.id, {
+      strategy_id:subscription.strategy_id, trading_account_id:subscription.trading_account_id,
+      execution_enabled:Boolean(subscription.execution_enabled),
+    })
+    res.json({ ok:true, subscription, runtime_sync })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -504,8 +623,12 @@ router.post('/ai/subscriptions', authMiddleware, async (req, res) => {
 router.put('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
   try {
     const subscription = await updateSubscription(Number(req.params.id), req.user.id, req.user.role, req.body || {})
-    await reconcileAutoSchedulers()
-    res.json({ ok:true, subscription })
+    const runtime_sync = await reconcileAiRuntime()
+    await auditAiMutation(req, 'ai_strategy_subscription_updated', 'strategy_subscription', subscription.id, {
+      strategy_id:subscription.strategy_id, trading_account_id:subscription.trading_account_id,
+      execution_enabled:Boolean(subscription.execution_enabled),
+    })
+    res.json({ ok:true, subscription, runtime_sync })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -515,8 +638,9 @@ router.delete('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
     await deleteSubscription(Number(req.params.id), req.user.id)
     const scheduler = await getUserAutoRuntimeStatus(req.user.id)
     if (!scheduler.enabled) await removeUserRuntimeAutoSubscription(req.user.id)
-    await reconcileAutoSchedulers()
-    res.json({ ok:true, scheduler })
+    const runtime_sync = await reconcileAiRuntime()
+    await auditAiMutation(req, 'ai_strategy_subscription_deleted', 'strategy_subscription', Number(req.params.id))
+    res.json({ ok:true, scheduler, runtime_sync })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -563,6 +687,75 @@ router.put('/ai/risk-center/:accountId', authMiddleware, async (req, res) => {
       sets = [{ id: inserted.insertId }]
     }
     res.json({ ok: true, result: await submitRiskPolicyChanges({ policySetId: sets[0].id, actorId: req.user.id, changes: req.body?.changes || {}, reason: req.body?.reason || '用户更新账户风控' }) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/position-management/settings', async (req, res) => {
+  try { res.json({ ok:true, ...(await getPositionManagementSettings(req.user.id)) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/position-management/settings', async (req, res) => {
+  try { res.json({ ok:true, ...(await savePositionManagementSettings(req.user.id, req.body || {})) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/position-management', async (req, res) => {
+  try {
+    res.json({ ok:true, ...(await listPositionManagementTasks({
+      userId:req.user.id,
+      status:req.query.status || null,
+      page:req.query.page,
+      pageSize:req.query.page_size,
+    })) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/position-management/:taskId', async (req, res) => {
+  try {
+    const detail = await getPositionManagementTask(Number(req.params.taskId), { userId:req.user.id })
+    if (!detail) return res.status(404).json({ ok:false, error:'position_management_task_not_found' })
+    res.json({ ok:true, ...detail })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/position-management', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try {
+    res.json({ ok:true, ...(await listPositionManagementTasks({
+      admin:true,
+      status:req.query.status || null,
+      page:req.query.page,
+      pageSize:req.query.page_size,
+    })) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/position-management-settings', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try {
+    res.json({ ok:true, ...(await getPositionManagementAdminSettings()),
+      worker:getPositionManagementWorkerStatus() })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/admin/position-management-control', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try {
+    const result = await saveGlobalPositionManagementControl(req.user.id, req.body || {})
+    await logAudit({ userId:req.user.id, action:'position_management_control_updated',
+      targetType:'global_position_management_control', targetId:'1', detail:req.body || {},
+      ip:req.ip, userAgent:req.get('user-agent') })
+    res.json({ ok:true, ...result, worker:getPositionManagementWorkerStatus() })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/position-management/:taskId', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try {
+    const detail = await getPositionManagementTask(Number(req.params.taskId), { admin:true })
+    if (!detail) return res.status(404).json({ ok:false, error:'position_management_task_not_found' })
+    res.json({ ok:true, ...detail })
   } catch (error) { reviewError(res, error) }
 })
 
@@ -726,7 +919,7 @@ router.patch('/ai/admin/users/:userId/runtime', authMiddleware, async (req, res)
       await queryRun(`INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at)
         VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = VALUES(auto_reasoning_enabled),
         updated_at = VALUES(updated_at)`, [targetUserId, enabled ? 1 : 0, beijingNow()])
-      await reconcileAutoSchedulers()
+      await reconcileAiRuntime()
     }
     if (hasTrade) {
       await queryRun(`INSERT INTO user_bridge_settings (user_id, trade_send_enabled, updated_at)
@@ -770,10 +963,10 @@ router.put('/ai/admin/users/:userId/subscriptions/:subscriptionId', authMiddlewa
     const target = await queryOne('SELECT id, role FROM users WHERE id = ?', [targetUserId])
     if (!target) return res.status(404).json({ ok:false, error:'user_not_found' })
     const subscription = await updateSubscription(subscriptionId, targetUserId, target.role || 'user', req.body || {})
-    await reconcileAutoSchedulers()
+    const runtime_sync = await reconcileAiRuntime()
     await logAudit({ userId:req.user.id, action:'admin_user_subscription_updated', targetType:'strategy_subscription',
       targetId:subscriptionId, detail:JSON.stringify({ target_user_id:targetUserId, changes:req.body || {} }) })
-    res.json({ ok:true, subscription })
+    res.json({ ok:true, subscription, runtime_sync })
   } catch (error) { reviewError(res, error) }
 })
 
@@ -1011,9 +1204,8 @@ export { buildOrderIdempotencyKey, prepareAndExecuteOrderIntent,
   startOrderIntentReconciler, stopOrderIntentReconciler } from './order-intents.js'
 
 export { startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning,
-  reconcileAutoSchedulers, closeSchedulerState, startSmartCloseScheduler, stopSmartCloseScheduler,
-  runSmartCloseCycle, syncUserRedisSubscription, removeUserRuntimeAutoSubscription,
-  getUserAutoRuntimeStatus, SMART_CLOSE_FEATURE_ENABLED } from './scheduler.js'
+  reconcileAutoSchedulers, syncUserRedisSubscription, removeUserRuntimeAutoSubscription,
+  getUserAutoRuntimeStatus } from './scheduler.js'
 
 export { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, getTradingAccountById, createTradingAccount, updateTradingAccount, deleteTradingAccount,
@@ -1059,5 +1251,12 @@ export { STRATEGY_TIMEFRAME_COUNTS, parseTimeframeTags, stripTimeframeTags,
   attachSignalTiming, timeframeIntervalMs } from './utils.js'
 export { attachSignalPresentation, buildExecutionAdvice, normalizeDecisionFields, restrictSignalExperienceUsage } from './signal-presentation.js'
 export { getInferenceVisualizationSnapshot, inferenceVisualizationSnapshot } from './inference-snapshots.js'
+export { POSITION_MANAGEMENT_CONTRACT_VERSION, buildPositionManagementAsOf,
+  buildPositionManagementOutputFormat, validatePositionManagementResponse,
+  createTradeThesisTx, loadActivePositionManagementContext, persistPositionManagementEvaluations,
+  canTransitionPositionManagement, transitionPositionManagementTask,
+  claimPositionManagementLease, createPositionManagementCommand,
+  getPositionManagementSettings, savePositionManagementSettings,
+  listPositionManagementTasks, getPositionManagementTask } from './position-management.js'
 
 export default router

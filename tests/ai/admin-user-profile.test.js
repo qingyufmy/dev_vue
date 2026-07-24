@@ -4,13 +4,16 @@ const db = vi.hoisted(() => ({
   beijingNow:vi.fn(() => '2026-07-23 10:00:00'),
   queryOne:vi.fn(),
   queryRun:vi.fn(),
+  withTransaction:vi.fn(),
   logAudit:vi.fn(),
 }))
+const transaction = vi.hoisted(() => ({ run:vi.fn() }))
+const bridge = vi.hoisted(() => ({ revokeBridgeRefreshSessions:vi.fn() }))
 const passwordHash = vi.hoisted(() => vi.fn())
 
 vi.mock('../../server/db.js', () => db)
 vi.mock('bcryptjs', () => ({ default:{ hash:passwordHash } }))
-vi.mock('../../server/bridge-auth-session.js', () => ({ revokeBridgeRefreshSessions:vi.fn() }))
+vi.mock('../../server/bridge-auth-session.js', () => bridge)
 
 import { updateAdminUserProfile } from '../../server/routes/ai/admin-user-profile.js'
 
@@ -20,6 +23,8 @@ describe('operations user profile editing', () => {
     db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:'13800000000', nickname:'用户',
       avatar:'', role:'user', plan:'free', plan_expires_at:null, plan_source:null })
     db.queryRun.mockResolvedValue({ affectedRows:1 })
+    transaction.run.mockResolvedValue([{ affectedRows:1 }, []])
+    db.withTransaction.mockImplementation(callback => callback(transaction.run))
     passwordHash.mockResolvedValue('hashed-password')
   })
 
@@ -30,7 +35,7 @@ describe('operations user profile editing', () => {
 
     expect(result).toMatchObject({ plan:'pro', plan_expires_at:'2026-12-31 23:59:59', password_reset:true })
     expect(passwordHash).toHaveBeenCalledWith('Newpass2026', 10)
-    const [sql, params] = db.queryRun.mock.calls[0]
+    const [sql, params] = transaction.run.mock.calls[0]
     expect(sql).toContain('plan_expires_at = ?')
     expect(params).toContain('2026-12-31 23:59:59')
     expect(params).toContain('hashed-password')
@@ -39,10 +44,11 @@ describe('operations user profile editing', () => {
       userId:1, action:'admin_user_profile_updated', targetId:7,
     }))
     expect(db.logAudit.mock.calls[0][0].detail).not.toContain('Newpass2026')
+    expect(bridge.revokeBridgeRefreshSessions).toHaveBeenCalledWith(7, { run:transaction.run })
   })
 
   it('clears expiry and membership source when switching to free', async () => {
-    db.queryOne.mockResolvedValue({ id:7, plan:'pro', plan_expires_at:'2026-12-31 23:59:59', plan_source:'paid' })
+    db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:null, plan:'pro', plan_expires_at:'2026-12-31 23:59:59', plan_source:'paid' })
     await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ plan:'free', expires_at:'2027-01-01' } })
     const [sql, params] = db.queryRun.mock.calls[0]
     expect(sql).toContain('plan_source = NULL')
@@ -63,11 +69,12 @@ describe('operations user profile editing', () => {
   })
 
   it('keeps dedicated observer source accounts on Pro while allowing password reset', async () => {
-    db.queryOne.mockResolvedValue({ id:9, plan:'pro', plan_expires_at:null, plan_source:'observer_source' })
+    db.queryOne.mockResolvedValue({ id:9, email:'source@example.com', phone:null, plan:'pro', plan_expires_at:null, plan_source:'observer_source' })
     await expect(updateAdminUserProfile({ actorUserId:1, targetUserId:9, input:{ plan:'plus' } }))
       .rejects.toThrow('observer_source_plan_locked')
     await updateAdminUserProfile({ actorUserId:1, targetUserId:9, input:{ password:'Bridge2026' } })
-    expect(db.queryRun).toHaveBeenCalledTimes(1)
+    expect(db.withTransaction).toHaveBeenCalledTimes(1)
+    expect(transaction.run).toHaveBeenCalledTimes(1)
   })
 
   it('updates the complete operations profile through the same validated write path', async () => {
@@ -76,6 +83,39 @@ describe('operations user profile editing', () => {
     } })
     expect(result).toMatchObject({ nickname:'新昵称', email:'new@example.com', phone:'13900000000', role:'user' })
     expect(db.queryRun.mock.calls[0][0]).toContain('nickname = ?')
+  })
+
+  it('allows a phone-registered user to remain without a bound email', async () => {
+    db.queryOne.mockResolvedValue({ id:8, email:null, phone:'13800000000', nickname:'手机用户', avatar:'',
+      role:'user', plan:'free', plan_expires_at:null, plan_source:null })
+    const result = await updateAdminUserProfile({ actorUserId:1, targetUserId:8, input:{
+      nickname:'手机用户', email:'', phone:'13800000000', role:'user', plan:'free', expires_at:'',
+    } })
+    expect(result).toMatchObject({ email:null, phone:'13800000000' })
+    expect(db.queryRun.mock.calls[0][1]).toContain(null)
+  })
+
+  it('allows a legacy account without contact details to save other profile fields', async () => {
+    db.queryOne.mockResolvedValue({ id:10, email:null, phone:null, nickname:'旧账户', avatar:'',
+      role:'user', plan:'free', plan_expires_at:null, plan_source:null })
+    const result = await updateAdminUserProfile({ actorUserId:1, targetUserId:10, input:{
+      nickname:'旧账户新名称', email:'', phone:'', role:'user', plan:'free', expires_at:'',
+    } })
+    expect(result).toMatchObject({ email:null, phone:null, nickname:'旧账户新名称' })
+    expect(db.queryRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires at least one login contact while keeping observer source email mandatory', async () => {
+    db.queryOne.mockResolvedValueOnce({ id:8, email:null, phone:'13800000000', nickname:'手机用户', avatar:'',
+      role:'user', plan:'free', plan_expires_at:null, plan_source:null })
+    await expect(updateAdminUserProfile({ actorUserId:1, targetUserId:8, input:{ email:'', phone:'' } }))
+      .rejects.toThrow('contact_method_required')
+
+    db.queryOne.mockResolvedValueOnce({ id:9, email:'source@example.com', phone:'13800000000', nickname:'观摩源', avatar:'',
+      role:'user', plan:'pro', plan_expires_at:null, plan_source:'observer_source' })
+    await expect(updateAdminUserProfile({ actorUserId:1, targetUserId:9, input:{ email:'' } }))
+      .rejects.toThrow('observer_source_email_required')
+    expect(db.queryRun).not.toHaveBeenCalled()
   })
 
   it('does not allow the final administrator to be downgraded', async () => {

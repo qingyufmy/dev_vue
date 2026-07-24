@@ -5,7 +5,6 @@ export const AI_FEATURE_KEYS = [
   'experience_memory_enabled',
   'memory_compression_enabled',
   'retrieval_shadow_enabled',
-  'paired_experiment_enabled',
 ]
 
 export const FORCED_ENFORCE_RULES = new Set([
@@ -25,7 +24,8 @@ const REQUIRED_MIGRATIONS = [
   '056_model_profiles_tables', '057_strategy_ownership', '058_order_intent_gateway', '059_core_risk_policy',
   '060_stateful_risk_governance', '061_inference_snapshots', '062_signal_outcomes',
   '063_trade_review_workflow', '064_personal_experience_memory', '065_ai_rollout_governance',
-  '066_paired_inference_evidence', '067_manual_inference_snapshots', '068_inference_preferences',
+  '067_manual_inference_snapshots', '068_inference_preferences', '135_remove_paired_inference_experiment',
+  '126_position_management_foundation',
 ]
 
 const REQUIRED_TABLES = [
@@ -34,7 +34,9 @@ const REQUIRED_TABLES = [
   'risk_policy_versions', 'risk_decisions', 'risk_account_state', 'inference_snapshots', 'signal_outcomes',
   'trade_review_cases', 'trade_review_jobs', 'experience_memory_items', 'memory_compression_jobs',
   'memory_injection_logs', 'ai_feature_flags', 'risk_rule_rollouts', 'credential_migration_runs',
-  'ai_paired_inference_runs', 'ai_inference_preferences',
+  'ai_inference_preferences',
+  'ai_trade_theses', 'ai_position_management_tasks', 'ai_position_management_commands',
+  'ai_position_management_events', 'user_position_management_settings', 'global_position_management_control',
 ]
 
 const REQUIRED_COLUMNS = {
@@ -43,7 +45,8 @@ const REQUIRED_COLUMNS = {
   order_intents: ['idempotency_key','status','lease_token','bridge_command_ref'],
   risk_decisions: ['order_intent_id','decision_status','reject_code','rule_results_json'],
   inference_snapshots: ['strategy_id','system_prompt','user_prompt','content_hash','evidence_status'],
-  signal_outcomes: ['attribution_status','review_eligible_at','net_profit'],
+  signal_outcomes: ['attribution_status','review_eligible_at','net_profit','thesis_id','management_group_id','ownership_history_id','protection_status'],
+  ai_position_management_tasks: ['task_key','state_version','lease_token','fencing_token','precondition_hash'],
   trade_review_cases: ['evidence_json','current_version_id','approved_version_id'],
   experience_memory_items: ['review_version_id','content_hash','status','token_count'],
   users: ['deletion_status','deleted_at'],
@@ -55,8 +58,9 @@ const REQUIRED_INDEXES = [
   ['order_intents','idx_order_intent_lease'], ['risk_decisions','uk_risk_decision_intent'],
   ['trade_review_jobs','idx_trade_review_job_claim'], ['memory_compression_jobs','idx_memory_compression_claim'],
   ['memory_injection_logs','idx_memory_injection_user'], ['users','idx_users_deletion_status'],
-  ['ai_paired_inference_runs','idx_paired_inference_status'],
   ['ai_inference_preferences','uk_inference_preference_user_session'],
+  ['ai_position_management_tasks','uk_position_management_task'],
+  ['ai_position_management_commands','uk_position_management_operation'],
 ]
 
 export async function assertAiGovernanceSchemaReady() {
@@ -152,7 +156,7 @@ async function metric(sql, params = []) {
 }
 
 export async function getAiRolloutHealth() {
-  const [modelUsage, intents, uncertain, rejects, outcomes, reviews, compression, memory, cost, paired, flags, riskRules, credentialRun] = await Promise.all([
+  const [modelUsage, intents, uncertain, rejects, outcomes, reviews, compression, memory, cost, flags, riskRules, credentialRun] = await Promise.all([
     metric(`SELECT credential_source, request_status, COALESCE(error_code, '') AS error_code, COUNT(*) AS count,
       SUM(token_count) AS tokens, COALESCE(SUM(request_bytes), 0) AS request_bytes,
       COALESCE(SUM(response_bytes), 0) AS response_bytes, COALESCE(AVG(duration_ms), 0) AS avg_duration_ms
@@ -173,8 +177,6 @@ export async function getAiRolloutHealth() {
       COALESCE(SUM(request_bytes), 0) AS request_bytes, COALESCE(SUM(response_bytes), 0) AS response_bytes,
       COALESCE(AVG(duration_ms), 0) AS avg_duration_ms FROM ai_model_usage_logs
       WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) GROUP BY credential_source`),
-    metric(`SELECT status, COUNT(*) AS count FROM ai_paired_inference_runs
-      WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) GROUP BY status`),
     queryAll('SELECT * FROM ai_feature_flags ORDER BY scope, user_id'),
     queryAll('SELECT * FROM risk_rule_rollouts ORDER BY forced_enforce DESC, rule_code'),
     queryOne('SELECT * FROM credential_migration_runs ORDER BY id DESC LIMIT 1'),
@@ -189,7 +191,7 @@ export async function getAiRolloutHealth() {
   if (credentialRun?.status === 'failed') alerts.push({ severity:'critical', code:'credential_migration_failed' })
   return { generated_at: beijingNow(), alerts, metrics: { model_usage:modelUsage, order_intents:intents, uncertain:uncertainState,
     risk_rejects:rejects, outcome_backlog:outcomes[0] || {}, review_queue:reviews, compression_queue:compression,
-    memory_tokens:memory, platform_cost:cost, paired_inference:paired }, feature_flags:flags.map(row => ({ ...normalizeFlags(row), scope:row.scope, user_id:row.user_id, updated_at:row.updated_at })),
+    memory_tokens:memory, platform_cost:cost }, feature_flags:flags.map(row => ({ ...normalizeFlags(row), scope:row.scope, user_id:row.user_id, updated_at:row.updated_at })),
     risk_rule_rollouts:riskRules, credential_migration:credentialRun || null }
 }
 
