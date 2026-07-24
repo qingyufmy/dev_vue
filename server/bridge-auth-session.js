@@ -2,8 +2,26 @@ import crypto from 'crypto'
 import { queryOne, queryRun } from './db.js'
 import { BRIDGE_REFRESH_TTL_DAYS } from './config.js'
 import { hasActiveMembership } from './membership.js'
+import { getRedis, isRedisAvailable } from './redis.js'
 
 const hashToken = token => crypto.createHash('sha256').update(String(token || '')).digest('hex')
+const BRIDGE_TICKET_TTL_SECONDS = 30
+const bridgeTickets = new Map()
+const CONSUME_TICKET_LUA = `
+local value = redis.call("get", KEYS[1])
+if value then redis.call("del", KEYS[1]) end
+return value
+`
+
+function ticketKey(ticket) {
+  return `bridge:ws-ticket:${hashToken(ticket)}`
+}
+
+function removeExpiredMemoryTickets(now = Date.now()) {
+  for (const [key, entry] of bridgeTickets) {
+    if (!entry || entry.expiresAt <= now) bridgeTickets.delete(key)
+  }
+}
 
 function assertBridgeEligible(user) {
   if (!user || (user.role !== 'admin' && !hasActiveMembership(user, 'pro'))) {
@@ -13,16 +31,17 @@ function assertBridgeEligible(user) {
   }
 }
 
-export async function createBridgeRefreshSession(user, { userAgent = '', ip = '' } = {}) {
+export async function createBridgeRefreshSession(user, { userAgent = '', ip = '', run } = {}) {
   assertBridgeEligible(user)
+  const execute = run || queryRun
   const refreshToken = crypto.randomBytes(48).toString('base64url')
-  await queryRun(`INSERT INTO bridge_refresh_sessions
+  await execute(`INSERT INTO bridge_refresh_sessions
     (user_id, token_hash, expires_at, last_used_at, user_agent, last_ip, created_at, updated_at)
     VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? DAY), NOW(), ?, ?, NOW(), NOW())`, [
     user.id, hashToken(refreshToken), BRIDGE_REFRESH_TTL_DAYS,
     String(userAgent || '').slice(0, 255), String(ip || '').slice(0, 64),
   ])
-  await queryRun(`DELETE FROM bridge_refresh_sessions
+  await execute(`DELETE FROM bridge_refresh_sessions
     WHERE user_id = ? AND (expires_at <= NOW() OR revoked_at IS NOT NULL)`, [user.id])
   return { refreshToken, expiresInSeconds: BRIDGE_REFRESH_TTL_DAYS * 86400 }
 }
@@ -57,9 +76,72 @@ export async function useBridgeRefreshSession(refreshToken, { userAgent = '', ip
   return { user: session, expiresInSeconds: BRIDGE_REFRESH_TTL_DAYS * 86400 }
 }
 
-export async function revokeBridgeRefreshSessions(userId) {
+export async function revokeBridgeRefreshSessions(userId, { run } = {}) {
   if (!userId) return
-  await queryRun(`UPDATE bridge_refresh_sessions
+  const execute = run || queryRun
+  await execute(`UPDATE bridge_refresh_sessions
     SET revoked_at = COALESCE(revoked_at, NOW()), updated_at = NOW()
     WHERE user_id = ? AND revoked_at IS NULL`, [userId])
+}
+
+export async function createBridgeConnectionTicket(user, { redis } = {}) {
+  assertBridgeEligible(user)
+  const ticket = crypto.randomBytes(32).toString('base64url')
+  const payload = JSON.stringify({
+    userId: Number(user.id),
+    tokenVersion: Number(user.token_version || 0),
+  })
+  const selectedRedis = redis === undefined
+    ? (isRedisAvailable() ? getRedis() : null)
+    : redis
+  if (selectedRedis) {
+    const stored = await selectedRedis.set(ticketKey(ticket), payload, 'NX', 'EX', BRIDGE_TICKET_TTL_SECONDS)
+    if (stored !== 'OK') {
+      const error = new Error('bridge_ticket_storage_failed')
+      error.code = 'bridge_ticket_storage_failed'
+      throw error
+    }
+  } else {
+    removeExpiredMemoryTickets()
+    bridgeTickets.set(ticketKey(ticket), {
+      payload,
+      expiresAt: Date.now() + BRIDGE_TICKET_TTL_SECONDS * 1000,
+    })
+  }
+  return { ticket, expiresInSeconds: BRIDGE_TICKET_TTL_SECONDS }
+}
+
+export async function consumeBridgeConnectionTicket(ticket, { redis } = {}) {
+  if (!ticket || String(ticket).length < 40) {
+    const error = new Error('bridge_ticket_invalid')
+    error.code = 'bridge_ticket_invalid'
+    throw error
+  }
+  const selectedRedis = redis === undefined
+    ? (isRedisAvailable() ? getRedis() : null)
+    : redis
+  let raw = null
+  if (selectedRedis) {
+    raw = await selectedRedis.eval(CONSUME_TICKET_LUA, 1, ticketKey(ticket))
+  } else {
+    removeExpiredMemoryTickets()
+    const key = ticketKey(ticket)
+    const entry = bridgeTickets.get(key)
+    bridgeTickets.delete(key)
+    raw = entry?.payload || null
+  }
+  if (!raw) {
+    const error = new Error('bridge_ticket_expired')
+    error.code = 'bridge_ticket_expired'
+    throw error
+  }
+  try {
+    const payload = JSON.parse(raw)
+    if (!Number.isInteger(payload.userId) || payload.userId <= 0) throw new Error('invalid_payload')
+    return payload
+  } catch {
+    const error = new Error('bridge_ticket_invalid')
+    error.code = 'bridge_ticket_invalid'
+    throw error
+  }
 }

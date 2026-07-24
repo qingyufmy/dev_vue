@@ -89,12 +89,13 @@ class NewObserverSourceDialog(QDialog):
             self.mt5_path.setText(os.path.normpath(path))
 
     def values(self):
+        raw_mt5_path = self.mt5_path.text().strip()
         return {
             "slug": self.profile_slug.text().strip(),
             "name": self.profile_name.text().strip(),
             "account": self.account.text().strip(),
             "password": self.password.text(),
-            "mt5_path": os.path.normpath(self.mt5_path.text().strip()),
+            "mt5_path": os.path.normpath(raw_mt5_path) if raw_mt5_path else "",
         }
 
     def show_error(self, message):

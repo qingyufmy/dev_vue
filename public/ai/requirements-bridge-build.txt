@@ -1,0 +1,8 @@
+# AURUM Bridge v2.4.7 reproducible Windows build environment (Python 3.11 x64).
+Nuitka==4.1.3
+PySide6==6.11.1
+shiboken6==6.11.1
+MetaTrader5==5.0.5735
+numpy==2.4.6
+websockets==16.1.1
+certifi==2026.7.22

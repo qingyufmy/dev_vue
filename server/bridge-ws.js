@@ -1,21 +1,24 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing } from './db.js'
-import { ADMIN_CACHE_TTL_MS } from './config.js'
+import { ADMIN_CACHE_TTL_MS, CORS_ORIGINS } from './config.js'
 import { getRedis, isRedisAvailable } from './redis.js'
-import { autoSchedulerState } from './routes/ai/scheduler.js'
 import { stripBrokerSuffix, utcToMt5Time } from './routes/ai/utils.js'
-import { DEFAULT_MAX_POSITION_SIZE } from './routes/ai/config.js'
+import { DEFAULT_MAX_POSITION_SIZE } from './routes/ai/defaults.js'
+import { getRegisteredAutoSchedulerState } from './routes/ai/runtime-state-registry.js'
 import { setWeeklyMarketTimezoneOffset, weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
 import { buildAiAccessContext, observerAccessError, observerWsActionAllowed } from './routes/ai/observer-access.js'
 import { getDefaultObserverSource, resolveObserverSourceForUser } from './routes/ai/observer-channels.js'
+import { tokenVersionMatches } from './middleware/auth.js'
+import { consumeBridgeConnectionTicket } from './bridge-auth-session.js'
 
 import { JWT_SECRET } from './config.js'
 
 // Per-user state
 const bridges = new Map()       // userId -> { ws, lastSeen }
 const browsers = new Map()      // userId -> Set<ws>
+const adminBrowsers = new Set() // authenticated admin console sockets
 const pendingCommands = new Map() // commandId -> { resolve, timer, userId }
 const performanceSyncJobs = new Set()
 let adminUserId = null          // cached admin userId for fallback
@@ -25,9 +28,71 @@ const _bridgeInitGen = new Map() // userId -> generation number (防并发 init 
 
 let cmdCounter = 0
 let wss = null
+let adminEventSeq = 0
+const adminEventThrottle = new Map()
 
 const PERFORMANCE_SYNC_INTERVAL_MS = 15 * 60 * 1000
 const PERFORMANCE_SYNC_CHUNKS_PER_RUN = 3
+export const BRIDGE_WS_LIMITS = Object.freeze({
+  maxPayloadBytes: 32 * 1024 * 1024,
+  maxBrowserMessageBytes: 256 * 1024,
+  maxInitQueueMessages: 32,
+  maxInitQueueBytes: 4 * 1024 * 1024,
+})
+
+export function wsMessageByteLength(data) {
+  if (typeof data === 'string') return Buffer.byteLength(data, 'utf8')
+  if (Buffer.isBuffer(data)) return data.byteLength
+  if (ArrayBuffer.isView(data)) return data.byteLength
+  if (data instanceof ArrayBuffer) return data.byteLength
+  return Buffer.byteLength(String(data ?? ''), 'utf8')
+}
+
+export function isAllowedBrowserWsOrigin(req, type) {
+  if (type !== 'browser' && type !== 'admin') return true
+  const origin = String(req?.headers?.origin || '').trim()
+  if (!origin) return false
+  return CORS_ORIGINS.includes('*') || CORS_ORIGINS.includes(origin)
+}
+
+export function createBridgeInitMessageQueue(ws) {
+  let messages = []
+  let queuedBytes = 0
+  let overflowed = false
+  let attached = true
+  const detach = () => {
+    if (!attached) return
+    attached = false
+    ws.off('message', enqueue)
+  }
+  const enqueue = data => {
+    if (overflowed) return
+    const messageBytes = wsMessageByteLength(data)
+    if (messages.length >= BRIDGE_WS_LIMITS.maxInitQueueMessages
+      || queuedBytes + messageBytes > BRIDGE_WS_LIMITS.maxInitQueueBytes) {
+      overflowed = true
+      messages = []
+      queuedBytes = 0
+      detach()
+      try { ws.close(1009, 'Bridge initialization payload limit exceeded') } catch {}
+      return
+    }
+    messages.push(data)
+    queuedBytes += messageBytes
+  }
+  ws.on('message', enqueue)
+  return {
+    get overflowed() { return overflowed },
+    detach,
+    drain() {
+      detach()
+      const queued = messages
+      messages = []
+      queuedBytes = 0
+      return queued
+    },
+  }
+}
 
 function scheduleAccountPerformanceSync(userId, accountId, { recent = false, delayMs = 0 } = {}) {
   const bridge = bridges.get(Number(userId))
@@ -263,6 +328,13 @@ function applyBridgeMarketState(bridge, payload, userId, receivedAt = Date.now()
   bridge.lastTradeMode = normalized.tradeMode
   if (previous && previous !== normalized.state) {
     console.log(`[BridgeWS] User ${userId}: market ${previous} -> ${normalized.state} (${normalized.detailReason || normalized.reason})`)
+    broadcastAdminEvent('market', 'state_changed', {
+      user_id: Number(userId),
+      market_state: normalized.state,
+      trade_mode: normalized.tradeMode,
+      symbol: normalized.symbol || null,
+      reason: normalized.detailReason || normalized.reason,
+    }, { scopes:['overview', 'ai-operations', 'risk-audit'] })
   }
   return normalized
 }
@@ -280,6 +352,9 @@ setInterval(() => {
   const cutoff = Date.now() - 30000
   for (const [uid, last] of _broadcastThrottle) {
     if (last < cutoff) _broadcastThrottle.delete(uid)
+  }
+  for (const [key, last] of adminEventThrottle) {
+    if (last < cutoff) adminEventThrottle.delete(key)
   }
 }, 10 * 60 * 1000)
 
@@ -327,7 +402,7 @@ async function resolveObserverBridgeContext(userId, user, requestedChannelId = n
     channel = await resolveObserverSourceForUser(userId, user?.plan, requestedChannelId)
   } catch (error) {
     if (strict) throw error
-    channel = await resolveObserverSourceForUser(userId, user?.plan, null)
+    return { bridgeUserId:null, channel:null, error:String(error?.message || 'observer_channel_access_denied') }
   }
   if (channel) {
     const bridgeUserId = Number(channel.bridge_user_id)
@@ -337,7 +412,7 @@ async function resolveObserverBridgeContext(userId, user, requestedChannelId = n
         source_id:Number(channel.source_id), source_name:channel.source_name },
     }
   }
-  return { bridgeUserId:await getActivePlatformBridgeUserId(), channel:null }
+  return { bridgeUserId:null, channel:null }
 }
 
 export function getPlatformMarketClockState(userId) {
@@ -365,16 +440,24 @@ async function getLabTimezoneOffsetMinutes() {
 export function initBridgeWS(server) {
   // Cache admin userId at startup
   getAdminUserId().catch(() => {})
-  wss = new WebSocketServer({ noServer: true })
+  wss = new WebSocketServer({ noServer: true, maxPayload: BRIDGE_WS_LIMITS.maxPayloadBytes })
 
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost')
     const type = url.searchParams.get('type')
-    const tokenPresent = !!url.searchParams.get('token')
+    const tokenPresent = Boolean(url.searchParams.get('token') || readCookie(req, 'ws_token'))
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress
 
     if (req.url.startsWith('/aurum-api/bridge/ws')) {
-      console.log(`[BridgeWS] upgrade path=/aurum-api/bridge/ws type=${type} tokenPresent=${tokenPresent} ip=${ip}`)
+      if (!isAllowedBrowserWsOrigin(req, type)) {
+        console.warn(`[BridgeWS] rejected ${type || 'unknown'} websocket origin`)
+        try { socket.write?.('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n') } catch {}
+        socket.destroy()
+        return
+      }
+      if (process.env.DEBUG_BRIDGE_WS === '1') {
+        console.log(`[BridgeWS] upgrade path=/aurum-api/bridge/ws type=${type} tokenPresent=${tokenPresent} ip=${ip}`)
+      }
       try {
         wss.handleUpgrade(req, socket, head, (ws) => {
           wss.emit('connection', ws, req)
@@ -392,8 +475,15 @@ export function initBridgeWS(server) {
     const url = new URL(req.url, 'http://localhost')
     const type = url.searchParams.get('type')
 
-    if (type === 'browser') return handleBrowser(ws, url)
-    if (type === 'bridge') return handleBridge(ws, url)
+    if (type === 'admin') return handleAdmin(ws, url, req)
+    if (type === 'browser') return handleBrowser(ws, url, req)
+    if (type === 'bridge') {
+      handleBridge(ws, url).catch(error => {
+        console.error('[BridgeWS] bridge initialization failed:', error.message)
+        try { ws.close(4002, 'Bridge authentication failed') } catch {}
+      })
+      return
+    }
     ws.close(4000, 'Unknown type')
   })
 
@@ -401,20 +491,114 @@ export function initBridgeWS(server) {
   return wss
 }
 
-// ============ Browser Connection ============
+function readCookie(req, name) {
+  const raw = String(req?.headers?.cookie || '')
+  for (const part of raw.split(';')) {
+    const index = part.indexOf('=')
+    if (index < 0) continue
+    if (part.slice(0, index).trim() !== name) continue
+    try { return decodeURIComponent(part.slice(index + 1).trim()) } catch { return '' }
+  }
+  return ''
+}
 
-function handleBrowser(ws, url) {
-  const token = url.searchParams.get('token')
-  let userId = null
-  try { userId = jwt.verify(token, JWT_SECRET).userId } catch (e) { console.error('[BridgeWS] Browser JWT verify failed:', e.message) }
+export function browserSessionToken(req, url) {
+  const cookieToken = readCookie(req, 'ws_token')
+  if (cookieToken) return cookieToken
+  return process.env.ALLOW_LEGACY_WS_QUERY_TOKEN === '1' ? url.searchParams.get('token') : null
+}
+
+// ============ Admin Console Connection ============
+
+async function handleAdmin(ws, url, req) {
+  const token = browserSessionToken(req, url)
+  if (!token) {
+    console.warn('[BridgeWS] Admin websocket auth failed: ws_token cookie missing')
+    ws.close(4002, 'Session cookie required')
+    return
+  }
+  let decoded = null
+  try { decoded = jwt.verify(token, JWT_SECRET) } catch (e) { console.error('[BridgeWS] Admin JWT verify failed:', e.message) }
+  const userId = decoded?.userId
   if (!userId) { ws.close(4002, 'Invalid token'); return }
 
+  const user = await queryOne('SELECT id, role, token_version FROM users WHERE id = ?', [userId]).catch(() => null)
+  if (!tokenVersionMatches(decoded, user) || String(user?.role || '').toLowerCase() !== 'admin') {
+    ws.close(4003, 'Admin access required')
+    return
+  }
+
+  ws._userId = Number(userId)
+  adminBrowsers.add(ws)
+  const send = payload => {
+    if (ws.readyState !== 1) return false
+    try { ws.send(JSON.stringify(payload)); return true } catch { return false }
+  }
+  const bridgesSnapshot = getBridgeDiagnostics()
+  send({
+    type:'admin_ready',
+    protocol:1,
+    user_id:Number(userId),
+    server_time:new Date().toISOString(),
+    bridge_count:bridgesSnapshot.length,
+    bridges:bridgesSnapshot,
+  })
+
+  ws.on('message', data => {
+    if (wsMessageByteLength(data) > BRIDGE_WS_LIMITS.maxBrowserMessageBytes) {
+      ws.close(1009, 'Message too large')
+      return
+    }
+    let msg
+    try { msg = JSON.parse(data) } catch { return }
+    if (msg.type === 'hb') {
+      send({ type:'admin_pong', seq:msg.seq ?? null, server_time:new Date().toISOString() })
+    } else if (msg.type === 'ping') {
+      send({ type:'pong', ts:msg.ts ?? Date.now() })
+    } else if (msg.type === 'subscribe') {
+      send({
+        type:'admin_subscribed',
+        scopes:Array.isArray(msg.scopes) ? msg.scopes.filter(scope => typeof scope === 'string').slice(0, 20) : [],
+      })
+    }
+  })
+
+  const remove = () => adminBrowsers.delete(ws)
+  ws.on('close', remove)
+  ws.on('error', remove)
+}
+
+// ============ Browser Connection ============
+
+async function handleBrowser(ws, url, req) {
+  const token = browserSessionToken(req, url)
+  if (!token) {
+    console.warn('[BridgeWS] Browser websocket auth failed: ws_token cookie missing')
+    ws.close(4002, 'Session cookie required')
+    return
+  }
+  let decoded = null
+  try { decoded = jwt.verify(token, JWT_SECRET) } catch (e) { console.error('[BridgeWS] Browser JWT verify failed:', e.message) }
+  const userId = decoded?.userId
+  if (!userId) { ws.close(4002, 'Invalid token'); return }
+  const sessionUser = await queryOne(`SELECT id, token_version FROM users
+    WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [userId]).catch(() => null)
+  if (!sessionUser || !tokenVersionMatches(decoded, sessionUser)) {
+    ws.close(4002, 'Session revoked')
+    return
+  }
+
   // Register
+  ws._userId = Number(userId)
   if (!browsers.has(userId)) browsers.set(userId, new Set())
   browsers.get(userId).add(ws)
 
   // Handle messages from browser
   ws.on('message', async (data) => {
+    if (wsMessageByteLength(data) > BRIDGE_WS_LIMITS.maxBrowserMessageBytes) {
+      ws.close(1009, 'Message too large')
+      return
+    }
     let msg
     try { msg = JSON.parse(data) } catch { return }
 
@@ -427,6 +611,9 @@ function handleBrowser(ws, url) {
         ? await resolveObserverBridgeContext(userId, accessUser, msg.observer_channel_id, { strict:false })
         : null
       const dataUserId = access.mode === 'observer' ? observerContext.bridgeUserId : access.mode === 'full' ? userId : null
+      ws._observerBridgeUserId = access.mode === 'observer' ? Number(dataUserId) || null : null
+      ws._observerStrategyId = access.mode === 'observer'
+        ? Number(observerContext?.channel?.strategy_id || 0) || null : null
       const bridge = dataUserId ? bridges.get(dataUserId) : null
       const usingFallback = access.mode === 'observer'
       const connected = !!(bridge && bridge.ws.readyState === 1)
@@ -463,45 +650,75 @@ function handleBrowser(ws, url) {
 
 // ============ Bridge Connection ============
 
-function handleBridge(ws, url) {
-  const token = url.searchParams.get('token')
-  let userId = null
-  try { userId = jwt.verify(token, JWT_SECRET).userId } catch (e) { console.error('[BridgeWS] bridge auth failed:', e.message) }
-  if (!userId) { console.log('[BridgeWS] bridge auth failed: no valid userId'); ws.close(4002, 'Invalid token'); return }
+async function handleBridge(ws, url) {
+  const initQueue = createBridgeInitMessageQueue(ws)
+  // Buffer early messages through authentication and runtime setup, with strict bounds.
 
-  // 在计划检查完成之前先缓存消息，防止竞态条件（消息先于 _initBridge 到达）
-  const msgQueue = []
-  const queueMsg = (data) => msgQueue.push(data)
-  ws.on('message', queueMsg)
+  let userId = null
+  let credentialTokenVersion = null
+  const ticket = url.searchParams.get('ticket')
+  if (ticket) {
+    try {
+      const payload = await consumeBridgeConnectionTicket(ticket)
+      userId = payload.userId
+      credentialTokenVersion = Number(payload.tokenVersion || 0)
+    } catch (error) {
+      initQueue.detach()
+      console.warn(`[BridgeWS] bridge ticket rejected: ${error.code || 'invalid'}`)
+      ws.close(4002, 'Invalid or expired bridge ticket')
+      return
+    }
+  } else if (process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN === '1') {
+    const token = url.searchParams.get('token')
+    let decoded = null
+    try { decoded = jwt.verify(token, JWT_SECRET) } catch (error) {
+      console.error('[BridgeWS] legacy bridge auth failed:', error.message)
+    }
+    userId = decoded?.userId
+    credentialTokenVersion = Number(decoded?.tokenVersion || 0)
+    if (userId) console.warn(`[BridgeWS] legacy query-token authentication used user=${userId}`)
+  }
+  if (!userId) {
+    initQueue.detach()
+    console.log('[BridgeWS] bridge auth failed: no valid credential')
+    ws.close(4002, 'Bridge ticket required')
+    return
+  }
 
   // Check user plan — only Pro allowed (async, blocks bridge setup)
-  queryOne(`SELECT plan, plan_expires_at, role,
+  try {
+    const user = await queryOne(`SELECT plan, plan_expires_at, role, token_version,
     (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
-    FROM users WHERE id = ?`, [userId]).then(async user => {
-    ws.off('message', queueMsg) // 移除缓存监听器
-    if (!user) { ws.close(4002, 'User not found'); return }
+    FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [userId])
+    if (initQueue.overflowed || ws.readyState !== 1) { initQueue.detach(); return }
+    if (!user) { initQueue.detach(); ws.close(4002, 'User not found'); return }
+    if (Number(user.token_version || 0) !== credentialTokenVersion) { initQueue.detach(); ws.close(4002, 'Session revoked'); return }
     if (!user.has_pro_access) {
       const now = new Date()
       const expired = user.plan_expires_at && new Date(user.plan_expires_at) < now
       const reason = expired ? '会员已过期，请续费后重试' : `当前会员等级(${user.plan})不可使用桥接，请升级Pro会员`
       console.log(`[BridgeWS] User ${userId} rejected: ${reason}`)
+      initQueue.detach()
       ws.close(4003, reason)
       return
     }
-    await _initBridge(ws, userId, user)
+    await _initBridge(ws, userId, user, initQueue)
     // 重放缓存消息
-    for (const msg of msgQueue) ws.emit('message', msg)
-  }).catch(err => {
-    ws.off('message', queueMsg)
+  } catch (err) {
+    initQueue.detach()
     console.error('[BridgeWS] Plan check error:', err)
     ws.close(4002, 'Server error')
-  })
+  }
 }
 
-async function _initBridge(ws, userId, user) {
+async function _initBridge(ws, userId, user, initQueue = null) {
   // Generation counter — prevents stale async init from corrupting a newer bridge's state
   const gen = (_bridgeInitGen.get(userId) || 0) + 1
   _bridgeInitGen.set(userId, gen)
+  const abortStaleInit = () => {
+    initQueue?.detach()
+    try { if (ws.readyState === 1) ws.close(4001, 'Replaced by newer connection') } catch {}
+  }
 
   // Close old bridge connection if still open (one bridge per account)
   const existing = bridges.get(userId)
@@ -510,6 +727,13 @@ async function _initBridge(ws, userId, user) {
     if (existing._performanceSyncTimer) clearTimeout(existing._performanceSyncTimer)
     if (existing.ws && existing.ws.readyState === 1) {
       try { existing.ws.close(4001, 'Replaced by new connection') } catch {}
+    }
+    for (const [commandId, pending] of pendingCommands) {
+      if (pending.userId === Number(userId) && pending.ws === existing.ws) {
+        clearTimeout(pending.timer)
+        pendingCommands.delete(commandId)
+        pending.resolve({ status:'error', error:'Bridge connection replaced before command result' })
+      }
     }
   }
 
@@ -521,12 +745,19 @@ async function _initBridge(ws, userId, user) {
     if (!initComplete) {
       console.log(`[BridgeWS] close during init user=${userId} code=${code} reason=${reasonStr}`)
       const current = bridges.get(userId)
+      if (current && current.ws !== ws) {
+        console.log(`[BridgeWS] stale init close user=${userId}, newer bridge remains active`)
+        return
+      }
       if (current && current.ws === ws) {
         if (current._pingInterval) clearInterval(current._pingInterval)
         if (current._performanceSyncTimer) clearTimeout(current._performanceSyncTimer)
         bridges.delete(userId)
       }
       sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
+      broadcastAdminEvent('bridge', 'disconnected', {
+        user_id:Number(userId), connected:false, alive:false,
+      }, { scopes:['overview', 'users', 'ai-operations', 'risk-audit'] })
       return
     }
     const bridge = bridges.get(userId)
@@ -550,6 +781,9 @@ async function _initBridge(ws, userId, user) {
 
     bridges.delete(userId)
     sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
+    broadcastAdminEvent('bridge', 'disconnected', {
+      user_id:Number(userId), connected:false, alive:false,
+    }, { scopes:['overview', 'users', 'ai-operations', 'risk-audit'] })
     // Persist close status to DB
     try {
       await queryRun(
@@ -594,15 +828,17 @@ async function _initBridge(ws, userId, user) {
 
   // Read bridge settings from DB (trade_send / auto_reasoning state)
   let dbTradeEnabled = false
-  let dbAutoReasoningEnabled = false
   let hasDbRow = false
   try {
-    const row = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
-    if (_bridgeInitGen.get(userId) !== gen) { console.log(`[BridgeWS] Stale init for user ${userId}, aborting`); return }
+    const row = await queryOne('SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
+    if (_bridgeInitGen.get(userId) !== gen) {
+      console.log(`[BridgeWS] Stale init for user ${userId}, aborting`)
+      abortStaleInit()
+      return
+    }
     if (row) {
       hasDbRow = true
       dbTradeEnabled = !!row.trade_send_enabled
-      dbAutoReasoningEnabled = !!row.auto_reasoning_enabled
     }
   } catch (e) {
     console.error(`[BridgeWS] Failed to read user_bridge_settings for user ${userId}:`, e.message)
@@ -611,19 +847,31 @@ async function _initBridge(ws, userId, user) {
   let schedulerAutoEnabled = false
   try {
     const schedRow = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [userId])
-    if (_bridgeInitGen.get(userId) !== gen) return
+    if (_bridgeInitGen.get(userId) !== gen) { abortStaleInit(); return }
     schedulerAutoEnabled = !!(schedRow?.enabled)
   } catch (e) { console.error('[BridgeWS] Failed to read auto_scheduler:', e.message) }
+
+  if (initQueue?.overflowed || ws.readyState !== 1) {
+    initQueue?.detach()
+    return
+  }
 
   // Admin defaults to tradeEnabled=true if no DB record exists, but respects explicit DB value of 0
   // Non-admin: use DB value as-is (defaults to false when no row)
   const isAdmin = userId === (adminUserId || -1)
   const defaultTrade = isAdmin ? (hasDbRow ? dbTradeEnabled : true) : dbTradeEnabled
   const replacedOld = !!existing
-  const bridgeEntry = { ws, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: schedulerAutoEnabled, lastPong: Date.now(), lastTradeMode: -1, marketState: null, marketStates: new Map(), _pingInterval: null, _connectTime: Date.now() }
+  const bridgeEntry = { ws, generation:gen, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: schedulerAutoEnabled, lastPong: Date.now(), lastTradeMode: -1, marketState: null, marketStates: new Map(), _pingInterval: null, _connectTime: Date.now() }
   bridges.set(userId, bridgeEntry)
   ws._userId = userId
   console.log(`[BridgeWS] bridge connected user=${userId} role=${user?.role || 'unknown'} plan=${user?.plan || 'unknown'} replacedOld=${replacedOld}`)
+  broadcastAdminEvent('bridge', 'connected', {
+    user_id:Number(userId),
+    connected:true,
+    alive:true,
+    trade_enabled:Boolean(defaultTrade),
+    auto_reasoning_enabled:Boolean(schedulerAutoEnabled),
+  }, { scopes:['overview', 'users', 'ai-operations', 'risk-audit'] })
   // Persist connection status to DB
   try {
     await queryRun(
@@ -644,11 +892,13 @@ async function _initBridge(ws, userId, user) {
     .catch(e => console.error(`[WeeklyFlatten] Reconnect trigger failed user=${userId}:`, e.message))
 
   // Restore auto-reasoning — use auto_scheduler.enabled as source of truth
-  console.log(`[BridgeWS] _initBridge user ${userId}: autoScheduler=${schedulerAutoEnabled} hasDbRow=${hasDbRow}`)
+  if (process.env.DEBUG_BRIDGE_WS === '1') {
+    console.log(`[BridgeWS] _initBridge user ${userId}: autoScheduler=${schedulerAutoEnabled} hasDbRow=${hasDbRow}`)
+  }
   if (schedulerAutoEnabled) {
     try {
       const ai = await import('./routes/ai/index.js')
-      if (_bridgeInitGen.get(userId) !== gen) return
+      if (_bridgeInitGen.get(userId) !== gen) { abortStaleInit(); return }
       await ai.stopAutoScheduler(userId)
       await ai.startAutoScheduler(userId)
       // Sync Redis subscription
@@ -690,7 +940,7 @@ async function _initBridge(ws, userId, user) {
     if (bridge) { bridge.lastSeen = Date.now(); bridge.lastPong = Date.now() }
   })
 
-  ws.on('message', (data) => {
+  const onBridgeMessage = (data) => {
     let msg
     try { msg = JSON.parse(data) } catch(e) { return }
 
@@ -736,6 +986,21 @@ async function _initBridge(ws, userId, user) {
         receivedAt: Date.now(),
       }
       applyBridgeMarketState(bridge, msg, userId)
+      broadcastAdminEvent('bridge', 'heartbeat', {
+        user_id:Number(userId),
+        connected:true,
+        alive:Boolean(bridge.ws?.readyState === 1 && Date.now() - bridge.lastSeen < 20_000),
+        last_seen_at_utc_msc:bridge.lastSeen || null,
+        mt5_time:bridge.mt5TimeStr || msg.last_quote_time || null,
+        timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? msg.timezone_offset_minutes ?? null,
+        market_state:bridge.marketState?.state || null,
+        trade_mode:typeof bridge.lastTradeMode === 'number' ? bridge.lastTradeMode : -1,
+      }, {
+        scopes:['overview', 'users', 'ai-operations', 'risk-audit'],
+        refresh:false,
+        throttleKey:`admin-bridge-heartbeat:${userId}`,
+        minIntervalMs:5000,
+      })
       if (userId === adminUserId && Number.isFinite(Number(msg.timezone_offset_minutes))) setWeeklyMarketTimezoneOffset(msg.timezone_offset_minutes)
     }
 
@@ -774,6 +1039,23 @@ async function _initBridge(ws, userId, user) {
       }
       const tradeMode = bridge ? bridge.lastTradeMode : -1
       sendToBrowsers(userId, { type: 'data', trade_mode: tradeMode, ...msg })
+      broadcastAdminEvent('market', 'tick', {
+        user_id:Number(userId),
+        trade_mode:tradeMode,
+        quote:msg.quote ? {
+          symbol:msg.quote.symbol || null,
+          bid:msg.quote.bid ?? null,
+          ask:msg.quote.ask ?? null,
+          time:msg.quote.time || null,
+          market_state:msg.quote.market_state || bridge?.marketState?.state || null,
+          market_reason:msg.quote.market_reason || bridge?.marketState?.detailReason || null,
+        } : null,
+      }, {
+        scopes:['ai-operations', 'risk-audit'],
+        refresh:false,
+        throttleKey:`admin-market-tick:${userId}`,
+        minIntervalMs:1000,
+      })
 
       if (bridge && msg.positions) {
         const curTickets = msg.positions.map(p => p.ticket).sort().join(',')
@@ -787,14 +1069,18 @@ async function _initBridge(ws, userId, user) {
     } else if (msg.type === 'result') {
       if (msg.command_id) {
         const pending = pendingCommands.get(msg.command_id)
-        if (pending) {
+        if (pending && pending.userId === Number(userId) && pending.ws === ws
+          && pending.bridgeGeneration === Number(bridge?.generation || 0)) {
           clearTimeout(pending.timer)
           pendingCommands.delete(msg.command_id)
           pending.resolve(msg.result)
         }
       }
     }
-  })
+  }
+  ws.on('message', onBridgeMessage)
+  // Register then detach synchronously so no message can fall into an init gap.
+  for (const data of initQueue?.drain() || []) onBridgeMessage(data)
 
   initComplete = true
   try {
@@ -855,6 +1141,16 @@ function validHistoryDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))
 }
 
+export function normalizeBridgePage(value) {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, 1_000_000) : 1
+}
+
+export function normalizeBridgePageSize(value) {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, 200) : 20
+}
+
 async function resolveHistoryRange(userId, params = {}) {
   const scope = ['all', 'platform', 'custom'].includes(params.history_scope) ? params.history_scope : 'all'
   if (scope === 'all') return { scope, date_from: null, date_to: null }
@@ -878,18 +1174,70 @@ async function resolveHistoryRange(userId, params = {}) {
   return { scope, date_from: dateFrom, date_to: null }
 }
 
-function sendToBrowsers(userId, data) {
-  // Admin market status override: if admin is closed, force all users to closed
-  const adminBridge = adminUserId ? bridges.get(adminUserId) : null
-  const adminTradeMode = adminBridge ? adminBridge.lastTradeMode : -1
-  const adminIsClosed = adminTradeMode === 0
+export function sendToAdminBrowsers(data) {
+  let json
+  try { json = JSON.stringify(data) } catch { return 0 }
+  let delivered = 0
+  for (const ws of adminBrowsers) {
+    if (ws.readyState === 1) {
+      try { ws.send(json); delivered++ } catch {}
+    } else {
+      adminBrowsers.delete(ws)
+    }
+  }
+  return delivered
+}
 
+export function disconnectUserSockets(userId, reason = 'Session revoked') {
+  const id = Number(userId)
+  const browserSet = browsers.get(id)
+  if (browserSet) {
+    for (const ws of browserSet) {
+      try { ws.close(4002, reason) } catch {}
+    }
+    browsers.delete(id)
+  }
+  const bridge = bridges.get(id)
+  if (bridge) {
+    if (bridge._pingInterval) clearInterval(bridge._pingInterval)
+    if (bridge._performanceSyncTimer) clearTimeout(bridge._performanceSyncTimer)
+    try { bridge.ws?.close(4002, reason) } catch {}
+    bridges.delete(id)
+  }
+  for (const ws of adminBrowsers) {
+    if (Number(ws._userId) !== id) continue
+    try { ws.close(4002, reason) } catch {}
+    adminBrowsers.delete(ws)
+  }
+}
+
+export function broadcastAdminEvent(scope, reason, data = {}, options = {}) {
+  const scopes = [...new Set((Array.isArray(options.scopes) ? options.scopes : [scope])
+    .map(value => String(value || '').trim()).filter(Boolean))]
+  const now = Date.now()
+  const throttleKey = String(options.throttleKey || '')
+  const minIntervalMs = Math.max(0, Number(options.minIntervalMs) || 0)
+  if (throttleKey && minIntervalMs > 0) {
+    const previous = adminEventThrottle.get(throttleKey) || 0
+    if (now - previous < minIntervalMs) return false
+    adminEventThrottle.set(throttleKey, now)
+  }
+  return sendToAdminBrowsers({
+    type:'admin_event',
+    event_id:`${now}-${++adminEventSeq}`,
+    scope:String(scope || 'system'),
+    scopes,
+    reason:String(reason || 'updated'),
+    refresh:options.refresh !== false,
+    changed_at:new Date(now).toISOString(),
+    data:data && typeof data === 'object' ? data : {},
+  })
+}
+
+function sendToBrowsers(userId, data) {
   const set = browsers.get(userId)
   if (set) {
-    // Override trade_mode for non-admin users when admin is closed
-    const shouldOverride = adminIsClosed && userId !== adminUserId && data.type === 'data' && data.trade_mode !== 0
-    const finalData = shouldOverride ? { ...data, trade_mode: 0, _admin_override: true } : data
-    const json = JSON.stringify(finalData)
+    const json = JSON.stringify(data)
     for (const ws of set) {
       if (ws.readyState === 1) {
         try { ws.send(json) } catch {}
@@ -898,36 +1246,30 @@ function sendToBrowsers(userId, data) {
       }
     }
   }
-  // If this is admin's bridge data, also forward to users without their own bridge.
-  // Account, position and trade-switch fields are private. Observation users may
-  // receive only the administrator bridge's market quote and market state.
-  // Throttle: max 4 broadcasts per second per user to prevent flooding browsers
-  if (userId === adminUserId && data.type === 'data' && browsers.size > 0) {
-    const adminJson = JSON.stringify({
-      type: 'data',
+  // Forward sanitized market-only data exclusively to browsers whose resolved
+  // observer channel points at this exact source. Never use a global admin fallback.
+  if (data.type === 'data' && browsers.size > 0) {
+    const observerJson = JSON.stringify({
+      type: 'platform_market_tick',
       quote: data.quote || null,
       trade_mode: typeof data.trade_mode === 'number' ? data.trade_mode : -1,
-      _source: 'admin_market_fallback',
+      _source: 'observer_channel',
     })
     const now = Date.now()
     for (const [uid, browserSet] of browsers) {
-      if (uid === adminUserId) continue
       const last = _broadcastThrottle.get(uid) || 0
       if (now - last < 250) continue // skip if < 250ms since last broadcast
-      _broadcastThrottle.set(uid, now)
-      // Users without a bridge need the regular quote message for the complete
-      // observation UI. Connected users keep their private account/quote feed,
-      // but their chart receives the platform feed through a dedicated message.
-      const payload = bridges.has(uid)
-        ? JSON.stringify({ type: 'platform_market_tick', quote: data.quote || null, _source: 'platform_admin_bridge' })
-        : adminJson
+      let delivered = false
       for (const ws of browserSet) {
+        if (Number(ws._observerBridgeUserId || 0) !== Number(userId)) continue
         if (ws.readyState === 1) {
-          try { ws.send(payload) } catch (e) { console.error('[BridgeWS] admin broadcast send failed:', uid, e.message) }
+          try { ws.send(observerJson); delivered = true }
+          catch (e) { console.error('[BridgeWS] observer broadcast send failed:', uid, e.message) }
         } else {
           browserSet.delete(ws)
         }
       }
+      if (delivered) _broadcastThrottle.set(uid, now)
     }
   }
 }
@@ -953,6 +1295,11 @@ async function handleBrowserCommand(ws, userId, msg) {
       ? await resolveObserverBridgeContext(userId, user, params.observer_channel_id)
       : null
     const dataUserId = access.mode === 'observer' ? observerContext.bridgeUserId : userId
+    const observerStrategyId = access.mode === 'observer'
+      ? Number(observerContext?.channel?.strategy_id || 0) || null
+      : null
+    ws._observerBridgeUserId = access.mode === 'observer' ? Number(dataUserId) || null : null
+    ws._observerStrategyId = observerStrategyId
     if (access.mode === 'observer' && action !== 'health' && !dataUserId) {
       return reply({ status:'error', code:'observer_source_offline', message:'管理员观摩账户当前未连接' })
     }
@@ -1044,13 +1391,23 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'close': {
         const clBridge = bridges.get(userId)
-        if (!clBridge || clBridge.ws?.readyState !== 1 || clBridge.tradeEnabled === false) {
-          result = { status: 'rejected', message: !clBridge || clBridge.ws?.readyState !== 1 ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
-          await ai.insertAudit(null, userId, 'manual_close', null, params, result, 'rejected')
+        const closeParams = {
+          ticket:params.ticket,
+          confirm:params.confirm === true,
+          expected_state:params.expected_state,
+        }
+        if (!closeParams.confirm) {
+          result = { status:'rejected', message:'manual_confirmation_required' }
+          await ai.insertAudit(null, userId, 'manual_close', null, closeParams, result, 'rejected')
           break
         }
-        result = await ai.mt5Bridge(userId, 'close', params)
-        await ai.insertAudit(null, userId, 'manual_close', null, params, result, result?.status || 'unknown')
+        if (!clBridge || clBridge.ws?.readyState !== 1 || clBridge.tradeEnabled === false) {
+          result = { status: 'rejected', message: !clBridge || clBridge.ws?.readyState !== 1 ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
+          await ai.insertAudit(null, userId, 'manual_close', null, closeParams, result, 'rejected')
+          break
+        }
+        result = await ai.mt5Bridge(userId, 'close', closeParams)
+        await ai.insertAudit(null, userId, 'manual_close', null, closeParams, result, result?.status || 'unknown')
         break
       }
       case 'toggle_trade': {
@@ -1085,8 +1442,8 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (bridgeOk) {
           // 直接透传前端参数给桥接软件（含分页、过滤）
           const bridgeParams = {
-            page: params.page || 1,
-            page_size: params.page_size || 20,
+            page: normalizeBridgePage(params.page),
+            page_size: normalizeBridgePageSize(params.page_size),
             direction: params.direction || '',
             profit_filter: params.profit_filter || '',
             force_refresh: params.force_refresh === true,
@@ -1147,14 +1504,16 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'signals_latest_id': {
         const sessionFilter = params.session_id ? 'AND session_id = ?' : ''
         const sessionParam = params.session_id ? [params.session_id] : []
+        const observerSignalFilter = observerStrategyId ? 'AND prompt_type_id = ?' : ''
+        const observerSignalParam = observerStrategyId ? [observerStrategyId] : []
 
         // 观摩模式：用 admin 的信号
         const queryUserId = dataUserId || userId
 
         // Old user signals
         const oldRow = await queryOne(
-          `SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe, 'manual' as signal_source FROM ai_signals WHERE user_id = ? ${sessionFilter} ORDER BY created_at DESC, id DESC LIMIT 1`,
-          [queryUserId, ...sessionParam]
+          `SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe, 'manual' as signal_source FROM ai_signals WHERE user_id = ? ${sessionFilter} ${observerSignalFilter} ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [queryUserId, ...sessionParam, ...observerSignalParam]
         )
 
         // Shared delivery signals
@@ -1163,8 +1522,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           `SELECT s.id, s.signal_type, d.is_executed, s.created_at, s.ttl_seconds, s.timeframe, 'auto_shared' as signal_source, d.execution_status
            FROM auto_signal_deliveries d
            JOIN ai_signals s ON s.id = d.signal_id
-           WHERE d.user_id = ? ${delivSessionFilter} ORDER BY s.created_at DESC, s.id DESC LIMIT 1`,
-          [queryUserId, ...sessionParam]
+           WHERE d.user_id = ? ${delivSessionFilter} ${observerStrategyId ? 'AND d.prompt_type_id = ?' : ''} ORDER BY s.created_at DESC, s.id DESC LIMIT 1`,
+          [queryUserId, ...sessionParam, ...observerSignalParam]
         )
 
         // Pick the newest of both
@@ -1196,8 +1555,9 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         // Check if user has a delivery for this signal
         const delivery = await queryOne(
-          'SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ?',
-          [signalId, detailUserId]
+          `SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ?
+            ${observerStrategyId ? 'AND prompt_type_id = ?' : ''}`,
+          [signalId, detailUserId, ...(observerStrategyId ? [observerStrategyId] : [])]
         )
         if (delivery) {
           const row = await queryOne('SELECT * FROM ai_signals WHERE id = ?', [signalId])
@@ -1232,7 +1592,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
 
         // Fallback: old signal check
-        const row = await queryOne('SELECT * FROM ai_signals WHERE id = ? AND (user_id = ? OR user_id = 0)', [signalId, detailUserId])
+        const row = await queryOne(`SELECT * FROM ai_signals WHERE id = ? AND (user_id = ? OR user_id = 0)
+          ${observerStrategyId ? 'AND prompt_type_id = ?' : ''}`,
+        [signalId, detailUserId, ...(observerStrategyId ? [observerStrategyId] : [])])
         if (row) {
           const item = { ...row }
           try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
@@ -1280,21 +1642,24 @@ async function handleBrowserCommand(ws, userId, msg) {
         // Old signals subquery
         const oldSessionFilter = (params.direction !== 'close' && params.session_id) ? ' AND session_id = ?' : ''
         const oldSessionParam = (params.direction !== 'close' && params.session_id) ? [params.session_id] : []
+        const observerOldFilter = observerStrategyId ? ' AND s.prompt_type_id = ?' : ''
+        const observerDeliveryFilter = observerStrategyId ? ' AND d.prompt_type_id = ?' : ''
+        const observerStrategyParam = observerStrategyId ? [observerStrategyId] : []
         // Lightweight subquery for COUNT (no TEXT columns)
         const countColsOld = 's.id'
         const countColsDeliv = 's.id'
-        const countOldSub = `(SELECT ${countColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
-        const countDelivSub = `(SELECT ${countColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
+        const countOldSub = `(SELECT ${countColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${observerOldFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
+        const countDelivSub = `(SELECT ${countColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${observerDeliveryFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         // Full subquery for data (exclude market_data_json TEXT for performance)
         const selectCols = 'id, user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, approved_order_json, created_at, delivery_id, execution_status, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, pending_state, order_state, schema_version, decision_json'
         const selectColsOld = 's.id, s.user_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, NULL as approved_order_json, s.created_at, NULL as delivery_id, NULL as execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.pending_state, s.order_state, s.schema_version, s.decision_json'
         const selectColsDeliv = 's.id, d.user_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, d.approved_order_json, s.created_at, d.id as delivery_id, d.execution_status, s.entry_method, s.limit_price, s.stop_limit_price, COALESCE(d.pending_valid_until, s.pending_valid_until) AS pending_valid_until, d.pending_ticket, d.pending_state, s.order_state, s.schema_version, s.decision_json'
-        const dataOldSub = `(SELECT ${selectColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
-        const dataDelivSub = `(SELECT ${selectColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
-        const oldParams = [queryUserId, ...oldSessionParam, ...sharedParams]
+        const dataOldSub = `(SELECT ${selectColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${observerOldFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
+        const dataDelivSub = `(SELECT ${selectColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${observerDeliveryFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
+        const oldParams = [queryUserId, ...oldSessionParam, ...observerStrategyParam, ...sharedParams]
 
         // Shared signals subquery (delivery overrides user-level execution state)
-        const delivParams = [queryUserId, ...sharedParams]
+        const delivParams = [queryUserId, ...observerStrategyParam, ...sharedParams]
 
         // COUNT uses lightweight subquery (no TEXT); data uses full subquery (no market_data_json)
         const countSql = `SELECT COUNT(*) as total FROM (${countOldSub} UNION ALL ${countDelivSub}) t`
@@ -1494,8 +1859,12 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'signal_tickets': {
         const ticketMap = {}
         const sigUserId = dataUserId || userId
+        const observerTicketFilter = observerStrategyId ? ' AND prompt_type_id = ?' : ''
+        const observerTicketParam = observerStrategyId ? [observerStrategyId] : []
         // Old signals
-        const oldRows = await queryAll('SELECT id, trade_ticket, execution_result FROM ai_signals WHERE user_id = ? AND is_executed = 1 AND (source = \'manual\' OR source IS NULL) ORDER BY id DESC LIMIT 200', [sigUserId])
+        const oldRows = await queryAll(`SELECT id, trade_ticket, execution_result FROM ai_signals
+          WHERE user_id = ? AND is_executed = 1 AND (source = 'manual' OR source IS NULL)
+          ${observerTicketFilter} ORDER BY id DESC LIMIT 200`, [sigUserId, ...observerTicketParam])
         for (const row of oldRows) {
           try {
             let ticket = row.trade_ticket
@@ -1511,8 +1880,9 @@ async function handleBrowserCommand(ws, userId, msg) {
           `SELECT d.signal_id, d.trade_ticket, d.execution_result
            FROM auto_signal_deliveries d
            WHERE d.user_id = ? AND d.is_executed = 1
+             ${observerStrategyId ? 'AND d.prompt_type_id = ?' : ''}
            ORDER BY d.id DESC LIMIT 200`,
-          [sigUserId])
+          [sigUserId, ...observerTicketParam])
         for (const row of delivRows) {
           try {
             let ticket = row.trade_ticket
@@ -1527,59 +1897,16 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'save_close_config': {
-        if (!ai.SMART_CLOSE_FEATURE_ENABLED) {
-          result = { status: 'error', message: '智能平仓功能当前未启用' }
-          break
-        }
-        const cfg = params.config
-        if (!cfg) return reply({ status: 'error', message: 'config required' })
-        const saved = await ai.saveCloseConfig(userId, cfg)
-        // Only restart scheduler if it was already running, don't auto-start
-        const schedulerState = ai.closeSchedulerState?.[userId]
-        if (schedulerState?.running) {
-          ai.stopSmartCloseScheduler(userId)
-          ai.startSmartCloseScheduler(userId)
-        }
-        result = { status: 'success', config: saved }
+        result = { status:'error', code:'smart_close_feature_retired', message:'旧智能平仓已停用，请使用仓位管理功能' }
         break
       }
       case 'get_close_config': {
-        const cfg = await ai.getCloseConfig(userId)
-        result = { status: 'success', config: cfg || { enabled: false, check_interval_seconds: 30, model_name: 'deepseek-chat' } }
+        result = { status:'success', retired:true, config:{ enabled:false } }
         break
       }
       case 'close_status': {
-        // Report smart close scheduler status including pause reasons
-        const closeCfg = await ai.getCloseConfig(userId)
-        const enabled = !!(closeCfg?.enabled)
-        const intervalSec = closeCfg?.check_interval_seconds || 30
-        let paused = false
-        let pauseReason = ''
-
-        if (enabled) {
-          const tradeMode = await getBridgeTradeMode(userId)
-          if (tradeMode !== 4) {
-            paused = true
-            pauseReason = tradeMode === 0 ? 'market_closed' : 'market_unknown'
-          } else {
-            try {
-              const posData = await sendBridgeCommand(userId, 'positions', {}, 5000, { noFallback: true })
-              const positions = posData?.positions || []
-              if (positions.length === 0) {
-                paused = true
-                pauseReason = 'no_positions'
-              }
-            } catch {
-              paused = true
-              pauseReason = 'bridge_error'
-            }
-          }
-        }
-
-        result = {
-          status: 'success',
-          scheduler: { enabled, interval_seconds: intervalSec, paused, pause_reason: pauseReason }
-        }
+        result = { status:'success', retired:true,
+          scheduler:{ enabled:false, paused:true, pause_reason:'feature_retired' } }
         break
       }
       case 'close_signal_tickets': {
@@ -1607,16 +1934,28 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'cancel_pending': {
         const ticket = params.ticket
         if (!ticket) return reply({ status: 'error', message: 'ticket required' })
+        const cancelParams = { ticket, expected_state: params.expected_state }
+        if (params.confirm !== true) {
+          result = { status:'rejected', message:'manual_confirmation_required' }
+          await ai.insertAudit(null, userId, 'manual_cancel_pending', null,
+            cancelParams, result, 'rejected')
+          break
+        }
         try {
-          const cancelResult = await ai.mt5Bridge(userId, 'cancel_pending', { ticket })
+          const cancelResult = await ai.mt5Bridge(userId, 'cancel_pending', cancelParams)
           if (cancelResult?.status === 'success') {
-            result = { status: 'success', message: '挂单已取消', cancelResult }
+            result = { ...cancelResult, message: '挂单已取消' }
           } else {
-            result = { status: 'error', message: cancelResult?.message || '取消挂单失败' }
+            result = { ...(cancelResult || {}), status:cancelResult?.status || 'error',
+              message:cancelResult?.message || '取消挂单失败' }
           }
+          await ai.insertAudit(null, userId, 'manual_cancel_pending', null,
+            cancelParams, result, result?.status || 'unknown')
         } catch (e) {
           console.error('[BridgeWS] cancel_pending error:', e.message)
           result = { status: 'error', message: '取消挂单失败' }
+          await ai.insertAudit(null, userId, 'manual_cancel_pending', null,
+            cancelParams, result, 'error').catch(() => {})
         }
         break
       }
@@ -1797,33 +2136,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'toggle_close': {
-        if (!ai.SMART_CLOSE_FEATURE_ENABLED) {
-          result = { status: 'error', message: '智能平仓功能当前未启用' }
-          break
-        }
-        const enabled = !!params.enabled
-        const existing = await ai.getCloseConfig(userId)
-        await ai.saveCloseConfig(userId, { ...(existing || {}), enabled })
-        if (enabled) {
-          ai.startSmartCloseScheduler(userId)
-        } else {
-          ai.stopSmartCloseScheduler(userId)
-        }
-        result = { status: 'success', enabled }
+        result = { status:'error', code:'smart_close_feature_retired', message:'旧智能平仓已停用，请使用仓位管理功能' }
         break
       }
       case 'run_close_now': {
-        if (!ai.SMART_CLOSE_FEATURE_ENABLED) {
-          result = { status: 'error', message: '智能平仓功能当前未启用' }
-          break
-        }
-        try {
-          await ai.runSmartCloseCycle(userId)
-          result = { status: 'success' }
-        } catch (e) {
-          console.error('[BridgeWS] run_close_now error:', e.message)
-          result = { status: 'error', message: '执行平仓检查失败' }
-        }
+        result = { status:'error', code:'smart_close_feature_retired', message:'旧智能平仓已停用，请使用仓位管理功能' }
         break
       }
       case 'admin_dashboard': {
@@ -1962,6 +2279,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             // Fill in Redis subs counts for DB-only schedulers (no runtime state)
             if (redis && isRedisAvailable()) {
               try {
+                const autoSchedulerState = getRegisteredAutoSchedulerState()
                 for (const db of dbRows) {
                   const hasRuntime = schedulers.some(s => String(s.prompt_type_id) === String(db.prompt_type_id))
                   if (hasRuntime) continue
@@ -2214,40 +2532,61 @@ async function handleBrowserCommand(ws, userId, msg) {
 }
 
 // Send command to bridge and wait for result
-export function sendBridgeCommand(userId, action, params, timeoutMs = 5000, options = {}) {
+export async function sendBridgeCommand(userId, action, params, timeoutMs = 5000, options = {}) {
+  if (action === 'open' || action === 'pending') {
+    const riskLock = weeklyRiskLockResult()
+    if (riskLock) return riskLock
+  }
+
+  const numericUserId = Number(userId)
+  let bridge = bridges.get(numericUserId)
+
+  if (!bridge || bridge.ws.readyState !== 1) {
+    return { status: 'error', error: 'Bridge not connected' }
+  }
+  const initialGeneration = Number(bridge.generation || 0)
+  if (options.expectedGeneration != null
+    && initialGeneration !== Number(options.expectedGeneration)) {
+    return { status:'error', error:'Bridge generation changed before command write' }
+  }
+
+  const cmdId = `cmd_${Date.now()}_${++cmdCounter}`
+  if (typeof options.beforeWrite === 'function') {
+    try {
+      const allowed = await options.beforeWrite({
+        commandId:cmdId,
+        bridgeGeneration:initialGeneration,
+        userId:numericUserId,
+        action,
+      })
+      if (allowed === false) return { status:'error', error:'Bridge command write blocked' }
+    } catch (error) {
+      return { status:'error', error:`Bridge command write blocked: ${error.message}` }
+    }
+  }
+
+  // The durable guard above may await database I/O. Resolve the connection
+  // again immediately before ws.send so a reconnect cannot inherit a command
+  // prepared for an older Bridge generation.
+  bridge = bridges.get(numericUserId)
+  if (!bridge || bridge.ws.readyState !== 1) {
+    return { status:'error', error:'Bridge disconnected before command write' }
+  }
+  if (options.expectedGeneration != null
+    && Number(bridge.generation || 0) !== Number(options.expectedGeneration)) {
+    return { status:'error', error:'Bridge generation changed before command write' }
+  }
+
   return new Promise((resolve) => {
-    if (action === 'open' || action === 'pending') {
-      const riskLock = weeklyRiskLockResult()
-      if (riskLock) {
-        resolve(riskLock)
-        return
-      }
-    }
-
-    let bridge = bridges.get(userId)
-    let usingFallback = false
-
-    // Fall back to admin bridge for read operations (unless noFallback)
-    if (!options.noFallback) {
-      const readActions = ['rates', 'symbols', 'quote']
-      if ((!bridge || bridge.ws.readyState !== 1) && readActions.includes(action) && adminUserId) {
-        bridge = bridges.get(adminUserId)
-        usingFallback = true
-      }
-    }
-
-    if (!bridge || bridge.ws.readyState !== 1) {
-      resolve({ status: 'error', error: 'Bridge not connected' })
-      return
-    }
-
-    const cmdId = `cmd_${Date.now()}_${++cmdCounter}`
     const timer = setTimeout(() => {
       pendingCommands.delete(cmdId)
       resolve({ status: 'error', error: 'Bridge command timeout' })
     }, timeoutMs)
 
-    pendingCommands.set(cmdId, { resolve, timer, userId })
+    pendingCommands.set(cmdId, {
+      resolve, timer, userId:numericUserId,
+      ws:bridge.ws, bridgeGeneration:Number(bridge.generation || 0),
+    })
     try {
       bridge.ws.send(JSON.stringify({ type: 'command', command_id: cmdId, action, params }))
     } catch {
@@ -2371,12 +2710,7 @@ export function getOwnBridgeMarketState(userId, symbol = null) {
 // Market status: bridge connected + tick time unchanged for 5 min → closed
 // Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
 export async function getBridgeTradeMode(userId) {
-  let bridge = bridges.get(userId)
-  if (!bridge || bridge.ws.readyState !== 1) {
-    // Fallback: try admin bridge (Pro/Plus users observing admin's MT5)
-    const adminId = await getAdminUserId()
-    if (adminId) bridge = bridges.get(adminId)
-  }
+  const bridge = bridges.get(userId)
   if (!bridge || bridge.ws.readyState !== 1) return -1
   // Use real-time trade mode detected from MT5 tick_time advancement
   if (typeof bridge.lastTradeMode === 'number') return bridge.lastTradeMode
@@ -2411,6 +2745,7 @@ export function getBridgeDiagnostics() {
       lastSeenAgeSeconds: bridge.lastSeen ? Math.round((now - bridge.lastSeen) / 1000) : -1,
       lastPongAgeSeconds: bridge.lastPong ? Math.round((now - bridge.lastPong) / 1000) : -1,
       lastMessageType: bridge._lastMessageType || '?',
+      generation: Number(bridge.generation || 0),
       tradeEnabled: !!bridge.tradeEnabled,
       autoReasoningEnabled: !!bridge.autoReasoningEnabled,
       lastTradeMode: typeof bridge.lastTradeMode === 'number' ? bridge.lastTradeMode : -1,
@@ -2422,6 +2757,30 @@ export function getBridgeDiagnostics() {
       lastQuoteTime: hb.last_quote_time || null,
     }
   })
+}
+
+export function getBridgeGeneration(userId) {
+  const bridge = bridges.get(Number(userId))
+  return bridge && bridge.ws?.readyState === 1 ? Number(bridge.generation || 0) : null
+}
+
+export function getLatestBridgeMt5Clock() {
+  let latest = null
+  for (const [userId, bridge] of bridges.entries()) {
+    const heartbeatQuoteTime = bridge._clientHeartbeat?.last_quote_time || null
+    const time = bridge.mt5TimeStr || heartbeatQuoteTime
+    const receivedAt = Number(bridge.lastTickMs || bridge._clientHeartbeat?.receivedAt || 0)
+    if (!time || bridge.ws?.readyState !== 1) continue
+    if (!latest || receivedAt > latest.received_at) {
+      latest = {
+        time:String(time),
+        user_id:Number(userId),
+        received_at:receivedAt || null,
+        timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? bridge._clientHeartbeat?.timezone_offset_minutes ?? null,
+      }
+    }
+  }
+  return latest
 }
 
 export { sendToBrowsers }

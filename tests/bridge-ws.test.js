@@ -13,11 +13,16 @@ vi.mock('../server/config.js', () => ({
   JWT_SECRET: 'test-secret',
   DEFAULT_API_BASE_URL: 'https://api.deepseek.com',
   ADMIN_CACHE_TTL_MS: 300000,
+  CORS_ORIGINS: ['http://localhost:3000', 'https://cnfxtrade.com'],
 }))
 
 vi.mock('../server/redis.js', () => ({
   getRedis: vi.fn(),
   isRedisAvailable: vi.fn(() => false),
+}))
+
+vi.mock('../server/middleware/auth.js', () => ({
+  tokenVersionMatches:vi.fn((decoded, user) => Number(decoded?.tokenVersion || 0) === Number(user?.token_version || 0)),
 }))
 
 const mockWs = {
@@ -46,6 +51,8 @@ vi.mock('jsonwebtoken', () => ({
   },
 }))
 
+import { WebSocketServer } from 'ws'
+
 import {
   initBridgeWS,
   sendBridgeCommand,
@@ -60,6 +67,15 @@ import {
   buildSignalRefIndex,
   buildSignalPendingActions,
   normalizeBridgeMarketState,
+  sendToAdminBrowsers,
+  broadcastAdminEvent,
+  browserSessionToken,
+  BRIDGE_WS_LIMITS,
+  createBridgeInitMessageQueue,
+  isAllowedBrowserWsOrigin,
+  normalizeBridgePage,
+  normalizeBridgePageSize,
+  wsMessageByteLength,
 } from '../server/bridge-ws.js'
 import { queryOne } from '../server/db.js'
 
@@ -98,6 +114,68 @@ describe('bridge-ws.js — exported API shape', () => {
 
   it('sendToBrowsers is exported as function', () => {
     expect(typeof sendToBrowsers).toBe('function')
+  })
+
+  it('admin realtime broadcast helpers are exported as functions', () => {
+    expect(typeof sendToAdminBrowsers).toBe('function')
+    expect(typeof broadcastAdminEvent).toBe('function')
+  })
+})
+
+describe('browser websocket authentication transport', () => {
+  it('reads the shared session from the cookie and ignores query JWTs by default', () => {
+    const url = new URL('http://localhost/aurum-api/bridge/ws?type=browser&token=query-secret')
+    const req = { headers:{ cookie:'theme=dark; ws_token=cookie-secret' } }
+    expect(browserSessionToken(req, url)).toBe('cookie-secret')
+    expect(browserSessionToken({ headers:{} }, url)).toBeNull()
+  })
+
+  it('accepts configured browser origins and rejects missing or foreign origins', () => {
+    expect(isAllowedBrowserWsOrigin({ headers:{ origin:'http://localhost:3000' } }, 'browser')).toBe(true)
+    expect(isAllowedBrowserWsOrigin({ headers:{ origin:'https://cnfxtrade.com' } }, 'admin')).toBe(true)
+    expect(isAllowedBrowserWsOrigin({ headers:{} }, 'browser')).toBe(false)
+    expect(isAllowedBrowserWsOrigin({ headers:{ origin:'https://evil.example' } }, 'browser')).toBe(false)
+    expect(isAllowedBrowserWsOrigin({ headers:{} }, 'bridge')).toBe(true)
+  })
+
+  it('counts UTF-8 websocket payload bytes accurately', () => {
+    expect(wsMessageByteLength('abc')).toBe(3)
+    expect(wsMessageByteLength('交易')).toBe(6)
+    expect(wsMessageByteLength(Buffer.alloc(7))).toBe(7)
+  })
+})
+
+describe('bridge initialization queue limits', () => {
+  it('closes and clears a peer that floods messages before authentication completes', () => {
+    const ws = new EventEmitter()
+    ws.close = vi.fn()
+    const queue = createBridgeInitMessageQueue(ws)
+    for (let index = 0; index <= BRIDGE_WS_LIMITS.maxInitQueueMessages; index++) ws.emit('message', Buffer.from('{}'))
+    expect(queue.overflowed).toBe(true)
+    expect(ws.close).toHaveBeenCalledWith(1009, expect.stringContaining('payload limit'))
+    expect(queue.drain()).toEqual([])
+  })
+
+  it('drains accepted early messages exactly once', () => {
+    const ws = new EventEmitter()
+    ws.close = vi.fn()
+    const queue = createBridgeInitMessageQueue(ws)
+    ws.emit('message', Buffer.from('{"type":"hb"}'))
+    expect(queue.drain()).toHaveLength(1)
+    ws.emit('message', Buffer.from('{"type":"hb"}'))
+    expect(queue.drain()).toEqual([])
+    expect(ws.close).not.toHaveBeenCalled()
+  })
+})
+
+describe('bridge history pagination bounds', () => {
+  it('normalizes invalid pages and caps browser-requested result sizes', () => {
+    expect(normalizeBridgePage('2')).toBe(2)
+    expect(normalizeBridgePage('-1')).toBe(1)
+    expect(normalizeBridgePage(Number.MAX_SAFE_INTEGER)).toBe(1_000_000)
+    expect(normalizeBridgePageSize('50')).toBe(50)
+    expect(normalizeBridgePageSize('9999')).toBe(200)
+    expect(normalizeBridgePageSize('invalid')).toBe(20)
   })
 })
 
@@ -216,6 +294,21 @@ describe('initBridgeWS', () => {
     server.emit('upgrade', req, fakeSocket, Buffer.alloc(0))
     expect(mockWss.handleUpgrade).toHaveBeenCalled()
   })
+
+  it('rejects browser websocket upgrades from a foreign origin before authentication', () => {
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const fakeSocket = { write:vi.fn(), destroy:vi.fn() }
+    const req = {
+      url:'/aurum-api/bridge/ws?type=browser',
+      headers:{ origin:'https://evil.example' },
+      socket:{ remoteAddress:'127.0.0.1' },
+    }
+    server.emit('upgrade', req, fakeSocket, Buffer.alloc(0))
+    expect(fakeSocket.write).toHaveBeenCalledWith(expect.stringContaining('403 Forbidden'))
+    expect(fakeSocket.destroy).toHaveBeenCalled()
+    expect(mockWss.handleUpgrade).not.toHaveBeenCalled()
+  })
 })
 
 describe('isBridgeAlive', () => {
@@ -254,6 +347,14 @@ describe('bridge-reported market state', () => {
       symbol_trade_mode: 4 }, 2000)).toMatchObject({ state: 'closed', reason: 'market_closed', tradeMode: 0, symbolTradeMode: 4 })
     expect(normalizeBridgeMarketState({ market_state_version: 1, market_state: 'restricted', market_reason: 'close_only',
       symbol_trade_mode: 3 })).toMatchObject({ state: 'restricted', reason: 'market_restricted', tradeMode: 3 })
+  })
+
+  it('sets a bounded websocket payload size', () => {
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    expect(WebSocketServer).toHaveBeenCalledWith(expect.objectContaining({
+      maxPayload:BRIDGE_WS_LIMITS.maxPayloadBytes,
+    }))
   })
 
   it('rejects unsupported payloads and preserves missing metrics as null', () => {

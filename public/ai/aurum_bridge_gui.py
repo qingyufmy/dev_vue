@@ -10,33 +10,45 @@ import ssl
 import json
 import time
 import math
-from bridge_order_result import classify_deal_result
+import re
+from bridge_order_result import (
+    classify_deal_result, parse_required_order_volume,
+    retryable_trade_retcodes,
+)
+from bridge_order_idempotency import lookup_existing_execution
 import asyncio
 import threading
 import ctypes
 import ctypes.wintypes
+from collections.abc import Mapping
 from datetime import datetime, timezone, timedelta
+from bridge_config_store import BridgeConfigStore
+from bridge_http_client import (
+    MAX_JSON_RESPONSE_BYTES, assert_secure_http_url, encode_json_body,
+    normalize_server_url, request_json,
+)
 
 # ── PySide6 ──
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QStackedWidget,
     QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QCheckBox, QTextEdit, QProgressBar, QFrame, QSystemTrayIcon,
-    QMenu, QMessageBox, QStyle, QDialog, QComboBox, QFileDialog,
+    QCheckBox, QTextEdit, QFrame, QSystemTrayIcon,
+    QMenu, QMessageBox, QStyle, QComboBox, QFileDialog,
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QThread, QSize
+from PySide6.QtCore import Qt, Signal, QTimer, QThread, QObject, QUrl
 from PySide6.QtGui import (
-    QFont, QColor, QPalette, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
+    QFont, QColor, QIcon, QAction, QPainter, QPen, QBrush, QPainterPath,
 )
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from bridge_source_launcher import NewObserverSourceDialog, launch_bridge_profile
 from bridge_profile_runtime import (
     acquire_instance_mutex, activate_profile_window, clear_profile_runtime,
     find_mt5_path_owner, find_source_account_owner, list_bridge_profiles,
-    normalize_profile, profile_config_dir, read_profile_runtime,
+    migrate_profile_config_secrets, normalize_profile, profile_config_dir, read_profile_runtime,
     register_bridge_profile, write_profile_config, write_profile_runtime,
 )
 
-APP_VERSION = "v2.4.1"
+APP_VERSION = "v2.4.7"
 FULL_HISTORY_START = datetime(2000, 1, 1)
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
@@ -85,66 +97,49 @@ else:
 def resource_path(relative):
     return os.path.join(BUNDLE_DIR, relative)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+_CONFIG_STORE = BridgeConfigStore(CONFIG_PATH)
 DEFAULT_SERVER = "https://www.cnfxtrade.com/"
 
 os.makedirs(CONFIG_DIR, exist_ok=True)
+try:
+    migration_report = migrate_profile_config_secrets(CONFIG_ROOT)
+    migrated_profiles = migration_report.get("migrated", [])
+    failed_profile_migrations = migration_report.get("failed", [])
+    if migrated_profiles:
+        print(f"[Bridge] 已安全迁移 {len(migrated_profiles)} 个配置档案的本机凭据")
+    for failed_profile in failed_profile_migrations:
+        print(f"[Bridge] 档案 {failed_profile['slug']} 的凭据无法迁移: {failed_profile['error']}")
+except Exception as error:
+    print(f"[Bridge] 配置凭据迁移失败: {error}")
 
 # ══════════════════════════════════════════════════════════
 #  Config helpers
 # ══════════════════════════════════════════════════════════
 
 def load_config():
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"[Bridge] 加载配置失败: {e}")
-    return {}
+    try:
+        return _CONFIG_STORE.load()
+    except Exception as e:
+        print(f"[Bridge] 加载配置失败: {e}")
+        return {}
 
 def save_config(cfg):
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        _CONFIG_STORE.save(cfg)
+        return True
     except Exception as e:
         print(f"[Bridge] 保存配置失败: {e}")
+        return False
 
 def update_config(patch):
-    cfg = load_config()
-    cfg.update(patch)
-    save_config(cfg)
-
-# ══════════════════════════════════════════════════════════
-#  Password encryption (XOR + base64)
-# ══════════════════════════════════════════════════════════
+    try:
+        _CONFIG_STORE.update(patch)
+        return True
+    except Exception as e:
+        print(f"[Bridge] 更新配置失败: {e}")
+        return False
 
 import base64
-
-_ENC_KEY = "AURUM_BRIDGE_v2"  # 简单混淆密钥
-
-def encrypt_password(password):
-    """简单 XOR + base64 加密"""
-    if not password:
-        return ""
-    try:
-        key_bytes = _ENC_KEY.encode('utf-8')
-        pwd_bytes = password.encode('utf-8')
-        encrypted = bytes([b ^ key_bytes[i % len(key_bytes)] for i, b in enumerate(pwd_bytes)])
-        return base64.b64encode(encrypted).decode('utf-8')
-    except Exception:
-        return password
-
-def decrypt_password(encrypted):
-    """解密密码"""
-    if not encrypted:
-        return ""
-    try:
-        key_bytes = _ENC_KEY.encode('utf-8')
-        pwd_bytes = base64.b64decode(encrypted)
-        decrypted = bytes([b ^ key_bytes[i % len(key_bytes)] for i, b in enumerate(pwd_bytes)])
-        return decrypted.decode('utf-8')
-    except Exception:
-        return encrypted
 
 # ══════════════════════════════════════════════════════════
 #  File logging
@@ -152,6 +147,39 @@ def decrypt_password(encrypted):
 
 LOG_DIR = os.path.join(CONFIG_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
+_LOG_LOCK = threading.RLock()
+
+
+def _is_sensitive_log_key(key):
+    normalized = str(key).strip().lower().replace("-", "_")
+    return (
+        normalized in {"authorization", "cookie", "set_cookie"}
+        or any(marker in normalized for marker in ("token", "password", "secret", "api_key"))
+    )
+
+
+def _mask_log_text(value):
+    if isinstance(value, Mapping):
+        return str({
+            str(key): "[已脱敏]" if _is_sensitive_log_key(key) else _mask_log_text(item)
+            for key, item in value.items()
+        })
+    if isinstance(value, (list, tuple)):
+        return str([_mask_log_text(item) for item in value])
+    text = str(value)
+    dict_pattern = r"""(?i)(['"]?(?:authorization|cookie|set-cookie|access_token|refresh_token|token|password|saved_password|secret|api_key)['"]?\s*:\s*['"])[^'"]+(['"])"""
+    text = re.sub(dict_pattern, r"\1[已脱敏]\2", text)
+    patterns = [
+        (r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[已脱敏]"),
+        (r"(?i)(authorization\s*[:=]\s*)[^\s,;]+", r"\1[已脱敏]"),
+        (r"(?i)(cookie\s*[:=]\s*)[^,\n\r]+", r"\1[已脱敏]"),
+        (r"(?i)((?:access_token|refresh_token|token|password|saved_password|secret|api_key)\s*[:=]\s*)[^&\s,;]+", r"\1[已脱敏]"),
+        (r"(?i)([?&]ticket=)[^&\s,;]+", r"\1[已脱敏]"),
+        (r"(?i)(bearer\s+)[^\s,;]+", r"\1[已脱敏]"),
+    ]
+    for pattern, replacement in patterns:
+        text = re.sub(pattern, replacement, text)
+    return text
 
 def _get_log_file():
     today = datetime.now().strftime("%Y-%m-%d")
@@ -177,23 +205,25 @@ def log_to_file(level, message):
     """写入日志文件"""
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"[{timestamp}] [{level}] {message}\n"
-        with open(_get_log_file(), "a", encoding="utf-8") as f:
-            f.write(line)
+        safe_message = _mask_log_text(message)
+        if len(safe_message) > 4000:
+            safe_message = safe_message[:4000] + "...[日志过长，已截断]"
+        line = f"[{timestamp}] [{level}] {safe_message}\n"
+        with _LOG_LOCK:
+            with open(_get_log_file(), "a", encoding="utf-8") as f:
+                f.write(line)
     except Exception:
         pass
 
-def log_info(message):
-    print(f"[Bridge] {message}")
-    log_to_file("INFO", message)
-
 def log_error(message):
-    print(f"[Bridge] ERROR: {message}")
-    log_to_file("ERROR", message)
+    safe_message = _mask_log_text(message)
+    print(f"[Bridge] ERROR: {safe_message}")
+    log_to_file("ERROR", safe_message)
 
 def log_warn(message):
-    print(f"[Bridge] WARN: {message}")
-    log_to_file("WARN", message)
+    safe_message = _mask_log_text(message)
+    print(f"[Bridge] WARN: {safe_message}")
+    log_to_file("WARN", safe_message)
 
 _cleanup_old_logs()
 
@@ -201,7 +231,8 @@ _cleanup_old_logs()
 #  HTTP helpers
 # ══════════════════════════════════════════════════════════
 
-import urllib.request, urllib.error
+import urllib.parse
+
 
 def _get_ssl_context():
     """Create optimized SSL context for websockets (TLS 1.2+, modern ciphers)."""
@@ -229,36 +260,95 @@ def _get_ssl_context():
 
 def http_get_json(url, timeout=10, token=None):
     try:
-        headers = {"User-Agent": "AURUM-Bridge/1.0"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
-            return resp.status, json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        try:
-            return e.code, json.loads(e.read().decode("utf-8"))
-        except Exception:
-            return e.code, {"error": str(e)}
-    except Exception as e:
-        return 0, {"error": str(e)}
+        ssl_context = _get_ssl_context() if urllib.parse.urlsplit(str(url or "")).scheme == "https" else None
+        return request_json(url, timeout=timeout, token=token, ssl_context=ssl_context)
+    except Exception as error:
+        return 0, {"error": str(error)}
 
 def http_post_json(url, data, timeout=10, token=None):
     try:
-        body = json.dumps(data).encode("utf-8")
-        headers = {"Content-Type": "application/json", "User-Agent": "AURUM-Bridge/1.0"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        req = urllib.request.Request(url, data=body, headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
-            return resp.status, json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
+        ssl_context = _get_ssl_context() if urllib.parse.urlsplit(str(url or "")).scheme == "https" else None
+        return request_json(url, data=data, timeout=timeout, token=token, ssl_context=ssl_context)
+    except Exception as error:
+        return 0, {"error": str(error)}
+
+
+class AsyncJsonRequest(QObject):
+    """One bounded, redirect-free JSON request driven by the Qt event loop."""
+
+    completed = Signal(int, object)
+
+    def __init__(self, url, data=None, timeout=10, token=None, parent=None):
+        super().__init__(parent)
+        self.url = str(url)
+        self.data = data
+        self.timeout_ms = max(1, int(float(timeout) * 1000))
+        self.token = str(token or "")
+        self.manager = QNetworkAccessManager(self)
+        self.reply = None
+        self.body = bytearray()
+        self.too_large = False
+
+    def start(self):
         try:
-            return e.code, json.loads(e.read().decode("utf-8"))
-        except Exception:
-            return e.code, {"error": str(e)}
-    except Exception as e:
-        return 0, {"error": str(e)}
+            assert_secure_http_url(self.url)
+            body = None if self.data is None else encode_json_body(self.data)
+        except (TypeError, ValueError) as error:
+            QTimer.singleShot(0, lambda message=str(error): self._finish_without_reply(message))
+            return
+        request = QNetworkRequest(QUrl(self.url))
+        request.setTransferTimeout(self.timeout_ms)
+        request.setAttribute(QNetworkRequest.RedirectPolicyAttribute, QNetworkRequest.ManualRedirectPolicy)
+        request.setRawHeader(b"User-Agent", b"AURUM-Bridge/1.0")
+        if self.token:
+            request.setRawHeader(b"Authorization", f"Bearer {self.token}".encode("utf-8"))
+        if self.data is None:
+            self.reply = self.manager.get(request)
+        else:
+            request.setRawHeader(b"Content-Type", b"application/json")
+            self.reply = self.manager.post(request, body)
+        self.reply.readyRead.connect(self._read_available)
+        self.reply.finished.connect(self._finish)
+
+    def _finish_without_reply(self, message):
+        self.completed.emit(0, {"error": str(message)})
+        self.deleteLater()
+
+    def _read_available(self):
+        if not self.reply or self.too_large:
+            return
+        self.body.extend(bytes(self.reply.readAll()))
+        if len(self.body) > MAX_JSON_RESPONSE_BYTES:
+            self.too_large = True
+            self.body.clear()
+            self.reply.abort()
+
+    def _finish(self):
+        reply = self.reply
+        if reply is None:
+            return
+        self._read_available()
+        status_value = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+        status = int(status_value or 0)
+        redirect = reply.attribute(QNetworkRequest.RedirectionTargetAttribute)
+        if self.too_large:
+            data = {"error": "桥接服务器 JSON 响应超过大小限制"}
+            status = 0
+        elif isinstance(redirect, QUrl) and redirect.isValid() and not redirect.isEmpty():
+            data = {"error": "redirect_not_allowed"}
+        else:
+            try:
+                data = json.loads(bytes(self.body).decode("utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("JSON response must be an object")
+            except (UnicodeError, ValueError, TypeError):
+                no_error = QNetworkReply.NetworkError.NoError
+                error_text = reply.errorString() if reply.error() != no_error else "invalid_json_response"
+                data = {"error": error_text}
+        self.completed.emit(status, data)
+        reply.deleteLater()
+        self.reply = None
+        self.deleteLater()
 
 # ══════════════════════════════════════════════════════════
 #  Stylesheet
@@ -442,18 +532,142 @@ class GearButton(QPushButton):
 #  Bridge Worker (QThread)
 # ══════════════════════════════════════════════════════════
 
+def find_mt5_terminal_executable(directory):
+    """Return the terminal executable in an MT5 directory, if it is usable."""
+    try:
+        normalized = os.path.normpath(str(directory or "").strip())
+    except (TypeError, ValueError):
+        return None
+    if not normalized or not os.path.isdir(normalized):
+        return None
+    for executable in ("terminal64.exe", "terminal.exe"):
+        candidate = os.path.join(normalized, executable)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def mt5_initialization_candidates(manual_path, installations):
+    """Return safe MT5 initialize targets, preferring already-running terminals."""
+    if manual_path:
+        executable = find_mt5_terminal_executable(manual_path)
+        return [executable] if executable else []
+
+    discovered = []
+    running = []
+    seen = set()
+    for directory, source in installations or []:
+        executable = find_mt5_terminal_executable(directory)
+        if not executable:
+            continue
+        key = os.path.normcase(os.path.realpath(executable))
+        if key in seen:
+            continue
+        seen.add(key)
+        discovered.append(executable)
+        if source == "运行中进程":
+            running.append(executable)
+
+    # A running terminal is the least surprising account choice. When none is
+    # running, preserve MetaTrader5's default discovery before trying installs.
+    return running if running else [None, *discovered]
+
+
+def version_is_newer(remote, local):
+    """Compare numeric releases without treating v2.4 and v2.4.0 as different."""
+    def parse(value):
+        match = re.fullmatch(
+            r"v?(\d+(?:\.\d+){0,3})(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?",
+            str(value or "").strip(),
+        )
+        if not match:
+            raise ValueError("invalid version")
+        parts = [int(item) for item in match.group(1).split(".")]
+        parts.extend([0] * (4 - len(parts)))
+        return tuple(parts), 0 if match.group(2) else 1
+    try:
+        return parse(remote) > parse(local)
+    except (TypeError, ValueError):
+        return False
+
+
+def running_mt5_process_directories():
+    """Return MT5 terminal directories using native Win32 process snapshots."""
+    if os.name != "nt":
+        return []
+
+    class ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.wintypes.DWORD),
+            ("cntUsage", ctypes.wintypes.DWORD),
+            ("th32ProcessID", ctypes.wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", ctypes.wintypes.DWORD),
+            ("cntThreads", ctypes.wintypes.DWORD),
+            ("th32ParentProcessID", ctypes.wintypes.DWORD),
+            ("pcPriClassBase", ctypes.wintypes.LONG),
+            ("dwFlags", ctypes.wintypes.DWORD),
+            ("szExeFile", ctypes.wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)]
+    kernel32.Process32FirstW.restype = ctypes.wintypes.BOOL
+    kernel32.Process32NextW.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)]
+    kernel32.Process32NextW.restype = ctypes.wintypes.BOOL
+    kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
+    kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        ctypes.wintypes.HANDLE, ctypes.wintypes.DWORD,
+        ctypes.wintypes.LPWSTR, ctypes.POINTER(ctypes.wintypes.DWORD),
+    ]
+    kernel32.QueryFullProcessImageNameW.restype = ctypes.wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+    kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if not snapshot or snapshot == invalid_handle:
+        return []
+    directories = set()
+    try:
+        entry = ProcessEntry32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        has_entry = bool(kernel32.Process32FirstW(snapshot, ctypes.byref(entry)))
+        while has_entry:
+            if str(entry.szExeFile).casefold() in {"terminal64.exe", "terminal.exe"}:
+                process = kernel32.OpenProcess(0x1000, False, entry.th32ProcessID)
+                if process:
+                    try:
+                        size = ctypes.wintypes.DWORD(32768)
+                        buffer = ctypes.create_unicode_buffer(size.value)
+                        if kernel32.QueryFullProcessImageNameW(process, 0, buffer, ctypes.byref(size)):
+                            directory = os.path.normpath(os.path.dirname(buffer.value))
+                            if os.path.isdir(directory):
+                                directories.add(directory)
+                    finally:
+                        kernel32.CloseHandle(process)
+            has_entry = bool(kernel32.Process32NextW(snapshot, ctypes.byref(entry)))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return sorted(directories, key=str.casefold)
+
+
 class BridgeWorker(QThread):
     log_signal = Signal(str)
     status_signal = Signal(str, str, str)  # text, color, account
-    connected_signal = Signal()
     plan_expired_signal = Signal(str)  # reason message
 
     def __init__(self, server_url, token, mt5_path=None, refresh_token=None):
         super().__init__()
-        self.server_url = server_url
+        self.server_url = normalize_server_url(server_url)
         self.token = token
         self.refresh_token = refresh_token or ""
         self.running = True
+        self._stop_event = threading.Event()
+        self._async_stop_event = None
         self._trade_enabled = False
         self._resolved_symbol = "XAUUSD"
         self.mt5 = None
@@ -486,6 +700,9 @@ class BridgeWorker(QThread):
         # and the one-second data publisher both use the executor, so all MT5
         # calls must share one lock.
         self._mt5_lock = threading.RLock()
+        # A canceled asyncio task cannot stop an HTTP refresh already running in
+        # an executor. Serialize refreshes so a reconnect cannot race that call.
+        self._auth_lock = threading.RLock()
         self._history_deals_cache = None
         self._market_observations = {}
         self._last_market_state = None
@@ -502,33 +719,55 @@ class BridgeWorker(QThread):
             return True
 
     def _save_auth_tokens(self):
-        cfg = load_config()
-        cfg["token"] = self.token
+        if not self.running:
+            return False
+        patch = {"token": self.token}
         if self.refresh_token:
-            cfg["refresh_token"] = self.refresh_token
-        save_config(cfg)
+            patch["refresh_token"] = self.refresh_token
+        return update_config(patch)
 
     def _renew_access_token(self, force=False):
         """Refresh the short-lived access token without storing or resending a password."""
-        if not force and self.token and not self._token_expires_within(self.token):
-            return True
-        server = self.server_url.replace("ws://", "http://").replace("wss://", "https://").rstrip('/')
-        if not self.refresh_token and self.token and not force:
-            status, data = http_post_json(f"{server}/api/auth/bridge-session", {}, timeout=10, token=self.token)
-            if status == 200 and data.get("refreshToken"):
-                self.refresh_token = data["refreshToken"]
-                self._save_auth_tokens()
-        if not self.refresh_token:
+        with self._auth_lock:
+            if not force and self.token and not self._token_expires_within(self.token):
+                return True
+            server = self.server_url.replace("ws://", "http://").replace("wss://", "https://").rstrip('/')
+            if not self.refresh_token and self.token and not force:
+                status, data = http_post_json(f"{server}/api/auth/bridge-session", {}, timeout=10, token=self.token)
+                if status == 200 and data.get("refreshToken"):
+                    self.refresh_token = data["refreshToken"]
+                    if not self._save_auth_tokens() and self.running:
+                        self.log_signal.emit("⚠️ 新的桥接续期凭证无法写入本机加密配置")
+            if not self.refresh_token:
+                return False
+            status, data = http_post_json(f"{server}/api/auth/bridge-refresh", {
+                "refreshToken": self.refresh_token
+            }, timeout=10)
+            if status == 200 and data.get("token"):
+                self.token = data["token"]
+                if data.get("refreshToken"):
+                    self.refresh_token = data["refreshToken"]
+                if not self._save_auth_tokens() and self.running:
+                    self.log_signal.emit("⚠️ 已续期，但新的登录凭证无法写入本机加密配置")
+                self.log_signal.emit("桥接登录凭证已自动续期")
+                return True
             return False
-        status, data = http_post_json(f"{server}/api/auth/bridge-refresh", {
-            "refreshToken": self.refresh_token
-        }, timeout=10)
-        if status == 200 and data.get("token"):
-            self.token = data["token"]
-            self._save_auth_tokens()
-            self.log_signal.emit("桥接登录凭证已自动续期")
-            return True
-        return False
+
+    def _create_connection_ticket(self):
+        """Exchange the access token over HTTPS for a short-lived one-use WS ticket."""
+        server = self.server_url.replace("ws://", "http://").replace("wss://", "https://").rstrip('/')
+        status, data = http_post_json(
+            f"{server}/api/auth/bridge-ticket", {}, timeout=10, token=self.token,
+        )
+        if status == 401 and self._renew_access_token(force=True):
+            status, data = http_post_json(
+                f"{server}/api/auth/bridge-ticket", {}, timeout=10, token=self.token,
+            )
+        ticket = data.get("ticket") if isinstance(data, dict) else None
+        if status != 200 or not ticket:
+            detail = data.get("error", f"HTTP {status}") if isinstance(data, dict) else f"HTTP {status}"
+            raise RuntimeError(f"无法创建桥接连接票据：{detail}")
+        return ticket
 
     def check_plan(self):
         """Check plan status via auth/me. Returns (plan, expired, message)."""
@@ -733,15 +972,11 @@ class BridgeWorker(QThread):
                 return item.name
         raise RuntimeError(f"Symbol not found in MT5: {requested}")
 
-    # MT5 retcodes that merit a price-refresh retry (requote / price moved)
-    _RETRYABLE_RETCODES = {
-        10003,  # TRADE_RETCODE_PRICE_CHANGED  — 价格已变
-        10004,  # TRADE_RETCODE_REQUOTE         — 重新报价
-        10006,  # TRADE_RETCODE_PRICE_OFF       — 报价错误
-        10024,  # TRADE_RETCODE_REQUOTE_SENT    — 请求重报
-    }
     _MAX_RETRY = 3
     _RETRY_DELAY = 0.15  # seconds
+
+    def _retryable_retcodes(self):
+        return retryable_trade_retcodes(self.mt5)
 
     def _get_filling_mode(self, symbol):
         info = self.mt5.symbol_info(symbol)
@@ -769,6 +1004,27 @@ class BridgeWorker(QThread):
             return f"volume {volume} does not match broker step {volume_step}"
         return None
 
+    @staticmethod
+    def _parse_order_price(value, field, required=False):
+        if value is None or value == "":
+            return (None, f"{field} is required") if required else (None, None)
+        if isinstance(value, bool):
+            return None, f"{field} must be a positive finite number"
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None, f"{field} must be a positive finite number"
+        if number == 0 and not required:
+            return None, None
+        if not math.isfinite(number) or number <= 0:
+            return None, f"{field} must be a positive finite number"
+        return number, None
+
+    @staticmethod
+    def _normalize_order_comment(value, fallback):
+        text = str(value or fallback).replace("\r", " ").replace("\n", " ").strip()
+        return text[:31] or str(fallback)[:31]
+
     def _order_send_with_retry(self, symbol, build_req_fn):
         """带价格刷新重试的 order_send 包装器。
         build_req_fn(tick) → dict: 根据当前 tick 构建 req，返回 (req, price_for_log)
@@ -793,7 +1049,7 @@ class BridgeWorker(QThread):
                     f"⚠ 订单返回待确认状态 (retcode={code}, ticket={getattr(result, 'order', 0) or getattr(result, 'deal', 0)}) — 禁止自动重试"
                 )
                 return result, result.comment if result else "order_send failed"
-            if code in self._RETRYABLE_RETCODES and attempt < self._MAX_RETRY:
+            if code in self._retryable_retcodes() and attempt < self._MAX_RETRY:
                 self.log_signal.emit(
                     f"报价已过期 (retcode={code})，尝试刷新价格重试 ({attempt+1}/{self._MAX_RETRY})..."
                 )
@@ -1142,32 +1398,173 @@ class BridgeWorker(QThread):
             "daily": rows, "scanned_deal_count": len(deals),
         }
 
-    def _order_send_simple_retry(self, req, ct_map=None):
-        """简单重试包装器，用于批量平仓/修改等预构建 req 场景。
-        对可重试码刷新 tick 重试最多 _MAX_RETRY 次，返回 result 对象。"""
-        for attempt in range(self._MAX_RETRY + 1):
-            if attempt > 0:
-                tick = self.mt5.symbol_info_tick(req["symbol"])
-                if tick and ct_map:
-                    req["price"] = tick.bid if ct_map.get("type") == self.mt5.ORDER_TYPE_SELL else tick.ask
-                time.sleep(0.15)
-            result = self.mt5.order_send(req)
-            if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
-                return result
-            if result and result.retcode in self._RETRYABLE_RETCODES and attempt < self._MAX_RETRY:
-                self.mt5.symbol_select(req["symbol"], True)
-                continue
-            return result
+    def _management_precondition_error(self, params, target, target_kind, required=False):
+        expected = params.get("expected_state")
+        if not isinstance(expected, dict):
+            return "management_expected_state_required" if required else None
+        if required and not str(expected.get("ticket") or "").strip():
+            return "management_expected_ticket_required"
+        if required and not str(expected.get("symbol") or "").strip():
+            return "management_expected_symbol_required"
+        if required and not str(expected.get("broker_server_key") or "").strip():
+            return "management_expected_broker_server_required"
+        if required and not str(expected.get("login_account") or "").strip():
+            return "management_expected_login_account_required"
+        if required and "magic" not in expected:
+            return "management_expected_magic_required"
+        if required and str(expected.get("direction") or "").strip().lower() not in ("buy", "sell"):
+            return "management_expected_direction_invalid"
+        if required:
+            try:
+                if not math.isfinite(float(expected.get("volume"))) or float(expected.get("volume")) <= 0:
+                    return "management_expected_volume_invalid"
+                int(expected.get("magic"))
+            except (TypeError, ValueError, OverflowError):
+                return "management_expected_state_invalid"
+        account = self.mt5.account_info()
+        if not account:
+            return "management_account_unavailable"
+        expected_server = str(expected.get("broker_server_key") or "").strip().upper()
+        expected_login = str(expected.get("login_account") or "").strip()
+        if expected_server and str(getattr(account, "server", "") or "").strip().upper() != expected_server:
+            return "management_account_server_mismatch"
+        if expected_login and str(getattr(account, "login", "") or "").strip() != expected_login:
+            return "management_account_login_mismatch"
+        expected_ticket = str(expected.get("ticket") or "").strip()
+        actual_ticket = str(getattr(target, "ticket", "") or "").strip()
+        if expected_ticket and actual_ticket != expected_ticket:
+            return "management_ticket_mismatch"
+        expected_symbol = str(expected.get("symbol") or "").strip()
+        actual_symbol = str(getattr(target, "symbol", "") or "").strip()
+        if expected_symbol and actual_symbol != expected_symbol:
+            return "management_symbol_mismatch"
+        expected_magic = expected.get("magic")
+        if expected_magic is not None and int(getattr(target, "magic", 0) or 0) != int(expected_magic):
+            return "management_magic_mismatch"
+        expected_volume = expected.get("volume")
+        actual_volume = getattr(target, "volume", None)
+        if actual_volume is None:
+            actual_volume = getattr(target, "volume_current", None)
+        if target_kind == "pending" and float(actual_volume or 0) <= 0:
+            actual_volume = getattr(target, "volume_initial", actual_volume)
+        if expected_volume is not None and abs(float(actual_volume or 0) - float(expected_volume)) > 1e-8:
+            return "management_volume_mismatch"
+        expected_direction = str(expected.get("direction") or "").strip().lower()
+        if expected_direction:
+            if target_kind == "position":
+                actual_direction = "buy" if int(getattr(target, "type", -1)) == self.mt5.ORDER_TYPE_BUY else "sell"
+            else:
+                buy_types = (self.mt5.ORDER_TYPE_BUY_LIMIT, self.mt5.ORDER_TYPE_BUY_STOP,
+                             self.mt5.ORDER_TYPE_BUY_STOP_LIMIT)
+                actual_direction = "buy" if int(getattr(target, "type", -1)) in buy_types else "sell"
+            if actual_direction != expected_direction:
+                return "management_direction_mismatch"
         return None
 
+    def _preflight_new_order(self, params, expected_kind):
+        """Fail closed or replay an existing MT5 execution before order_send."""
+        command_ref = self._normalize_order_comment(params.get("comment"), "")
+        if not command_ref.startswith("AI-"):
+            return None
+        lookup = lookup_existing_execution(
+            self.mt5,
+            {**params, "bridge_command_ref": command_ref, "expected_kind": expected_kind,
+             "lookback_seconds": 7 * 24 * 60 * 60},
+            SYSTEM_TRADE_MAGIC,
+            self._resolve_symbol,
+        )
+        if lookup.get("status") != "success":
+            return {
+                "status": "uncertain",
+                "message": lookup.get("message") or "order idempotency preflight failed",
+                "idempotency_preflight_failed": True,
+            }
+        if not lookup.get("found"):
+            return None
+        replay = dict(lookup)
+        replay["idempotent_replay"] = True
+        if replay.get("kind") == "rejected":
+            replay["status"] = "rejected"
+            replay["message"] = "matching broker rejection already exists"
+        else:
+            replay["status"] = "success"
+        return replay
+
     def _process_command(self, cmd):
+        if not isinstance(cmd, dict):
+            return {"status": "rejected", "message": "invalid_command"}
+        raw_params = cmd.get("params", {})
+        if not isinstance(raw_params, dict):
+            return {"status": "rejected", "message": "invalid_command_params"}
+        params = raw_params
+        action = str(cmd.get("action") or "")
+        if not action or len(action) > 64:
+            return {"status": "rejected", "message": "invalid_command_action"}
+        operation_id = str(params.get("operation_id") or "").strip()
+        command_id = str(cmd.get("command_id") or "").strip()
+        if len(operation_id) > 96:
+            return {"status": "rejected", "message": "operation_id_too_long"}
+        if len(command_id) > 128:
+            return {"status": "rejected", "message": "command_id_too_long"}
+        operation_signature = json.dumps({
+            "action": action,
+            "params": params,
+        }, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         with self._mt5_lock:
-            return self._process_command_locked(cmd)
+            command_cache = getattr(self, "_command_results", None)
+            if command_cache is None:
+                command_cache = {}
+                self._command_results = command_cache
+            if command_id and command_id in command_cache:
+                cached_command = command_cache[command_id]
+                if (not isinstance(cached_command, dict)
+                        or cached_command.get("signature") != operation_signature):
+                    return {"status": "rejected", "message": "command_id_conflict",
+                            "command_id": command_id}
+                replay = dict(cached_command.get("result") or {})
+                replay["idempotent_replay"] = True
+                return replay
+            cache = getattr(self, "_management_operation_results", None)
+            if cache is None:
+                cache = {}
+                self._management_operation_results = cache
+            if operation_id and operation_id in cache:
+                cached = cache[operation_id]
+                if not isinstance(cached, dict) or cached.get("signature") != operation_signature:
+                    return {"status": "rejected", "message": "operation_id_conflict",
+                            "operation_id": operation_id}
+                replay = dict(cached.get("result") or {})
+                replay["idempotent_replay"] = True
+                if command_id:
+                    command_cache[command_id] = {
+                        "signature": operation_signature, "result": dict(replay),
+                    }
+                return replay
+            result = self._process_command_locked(cmd)
+            if isinstance(result, dict):
+                result = dict(result)
+                if operation_id:
+                    result["operation_id"] = operation_id
+                if command_id:
+                    command_cache[command_id] = {
+                        "signature": operation_signature, "result": dict(result),
+                    }
+                    while len(command_cache) > 500:
+                        command_cache.pop(next(iter(command_cache)))
+                if operation_id:
+                    if cmd.get("action") in ("close", "cancel_pending", "close_system_position", "cancel_system_pending"):
+                        cache[operation_id] = {"signature": operation_signature, "result": dict(result)}
+                        while len(cache) > 500:
+                            cache.pop(next(iter(cache)))
+            return result
 
     def _process_command_locked(self, cmd):
         action = cmd.get("action"); params = cmd.get("params", {})
         try:
             if action == "open":
+                replay = self._preflight_new_order(params, "trade")
+                if replay is not None:
+                    return replay
                 if not self._trade_enabled:
                     return {"status": "rejected", "message": "trade sending is disabled"}
                 symbol = self._resolve_symbol(params.get("symbol"))
@@ -1180,14 +1577,17 @@ class BridgeWorker(QThread):
                 if dir_str not in ("buy", "sell"):
                     return {"status": "error", "message": "order type is required (buy/sell)"}
                 ot = self.mt5.ORDER_TYPE_BUY if dir_str == "buy" else self.mt5.ORDER_TYPE_SELL
-                volume = float(params.get("lot") or params.get("volume") or 0.01)
+                volume, volume_error = parse_required_order_volume(params)
+                if volume_error: return {"status": "rejected", "message": volume_error}
                 volume_error = self._validate_order_volume(info, volume)
                 if volume_error: return {"status": "rejected", "message": volume_error}
-                sl = float(params["sl"]) if params.get("sl") else None
-                tp = float(params["tp"]) if params.get("tp") else None
+                sl, price_error = self._parse_order_price(params.get("sl"), "stop loss")
+                if price_error: return {"status": "rejected", "message": price_error}
+                tp, price_error = self._parse_order_price(params.get("tp"), "take profit")
+                if price_error: return {"status": "rejected", "message": price_error}
                 base_req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": symbol,
                             "volume": volume, "type": ot, "magic": SYSTEM_TRADE_MAGIC,
-                            "comment": params.get("comment", "AI交易实验室"),
+                            "comment": self._normalize_order_comment(params.get("comment"), "AI交易实验室"),
                             "type_time": self.mt5.ORDER_TIME_GTC,
                             "type_filling": self._get_filling_mode(symbol)}
                 if params.get("deviation") is not None:
@@ -1224,10 +1624,20 @@ class BridgeWorker(QThread):
                 return {"status": "error", "message": comment or "order_send result unknown"}
             elif action == "close":
                 ticket = params.get("ticket")
+                if not ticket:
+                    return {"status": "rejected", "message": "ticket is required"}
+                if params.get("confirm") is not True:
+                    return {"status": "rejected", "message": "manual_confirmation_required"}
                 if ticket:
-                    positions = self.mt5.positions_get(ticket=ticket)
-                    if not positions: return {"status": "error", "message": f"Position {ticket} not found"}
+                    positions = self.mt5.positions_get(ticket=int(ticket))
+                    if positions is None:
+                        return {"status": "error", "message": f"positions_get failed: {self.mt5.last_error()}"}
+                    if not positions:
+                        return {"status": "rejected", "message": f"Position {ticket} not found"}
                     pos = positions[0]
+                    precondition_error = self._management_precondition_error(params, pos, "position", required=True)
+                    if precondition_error:
+                        return {"status": "rejected", "message": precondition_error, "ticket": str(pos.ticket)}
                     ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
                     self.mt5.symbol_select(pos.symbol, True)
                     sym = pos.symbol; vol = pos.volume; fill = self._get_filling_mode(sym)
@@ -1258,53 +1668,6 @@ class BridgeWorker(QThread):
                                 "retcode": getattr(result, "retcode", -1) if result else -1}
                     return {"status": "rejected", "message": comment or "close rejected", "ticket": pos.ticket,
                             "retcode": getattr(result, "retcode", -1) if result else -1}
-                else:
-                    sym = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None
-                    positions = self.mt5.positions_get(symbol=sym) if sym else self.mt5.positions_get()
-                    if positions is None:
-                        return {"status": "error", "message": f"positions_get failed: {self.mt5.last_error()}"}
-                    if len(positions) == 0:
-                        return {"status": "success", "message": "No positions", "closed": 0}
-                    closed, failed = 0, []
-                    for pos in positions:
-                        ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
-                        tick_c = self.mt5.symbol_info_tick(pos.symbol)
-                        if not tick_c:
-                            failed.append({"ticket": pos.ticket, "error": f"symbol_info_tick({pos.symbol}) returned None"})
-                            continue
-                        price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask
-                        result = self._order_send_simple_retry({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
-                            "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": SYSTEM_TRADE_MAGIC,
-                            "type_filling": self._get_filling_mode(pos.symbol), "price": price_c},
-                            ct_map={"type": ct})
-                        if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
-                            closed += 1
-                        else:
-                            failed.append({"ticket": pos.ticket, "error": result.comment if result else "order_send failed"})
-                    return {"status": "success" if not failed else "partial", "closed": closed, "failed": failed}
-            elif action == "close_all":
-                positions = self.mt5.positions_get()
-                if positions is None:
-                    return {"status": "error", "message": f"positions_get failed: {self.mt5.last_error()}"}
-                if len(positions) == 0:
-                    return {"status": "success", "closed": 0}
-                closed, failed = 0, []
-                for pos in positions:
-                    ct = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
-                    tick_c = self.mt5.symbol_info_tick(pos.symbol)
-                    if not tick_c:
-                        failed.append({"ticket": pos.ticket, "error": f"symbol_info_tick({pos.symbol}) returned None"})
-                        continue
-                    price_c = tick_c.bid if ct == self.mt5.ORDER_TYPE_SELL else tick_c.ask
-                    result = self._order_send_simple_retry({"action": self.mt5.TRADE_ACTION_DEAL, "symbol": pos.symbol,
-                        "volume": pos.volume, "type": ct, "position": pos.ticket, "magic": SYSTEM_TRADE_MAGIC,
-                        "type_filling": self._get_filling_mode(pos.symbol), "price": price_c},
-                        ct_map={"type": ct})
-                    if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
-                        closed += 1
-                    else:
-                        failed.append({"ticket": pos.ticket, "error": result.comment if result else "order_send failed"})
-                return {"status": "success" if not failed else "partial", "closed": closed, "failed": failed}
             elif action == "rates":
                 symbol = self._resolve_symbol(params.get("symbol"))
                 self.mt5.symbol_select(symbol, True)
@@ -1354,7 +1717,8 @@ class BridgeWorker(QThread):
                 if sym: sym = self._resolve_symbol(sym)
                 positions = self.mt5.positions_get(symbol=sym) if sym else self.mt5.positions_get()
                 if positions:
-                    payload = [{"ticket": p.ticket, "symbol": p.symbol, "type": "buy" if p.type==0 else "sell",
+                    payload = [{"ticket": str(p.ticket), "position_id": str(getattr(p, "identifier", p.ticket)),
+                        "identifier": str(getattr(p, "identifier", p.ticket)), "symbol": p.symbol, "type": "buy" if p.type==0 else "sell",
                         "volume": p.volume, "open_price": p.price_open, "price_open": p.price_open,
                         "price_current": p.price_current, "profit": p.profit, "sl": p.sl, "tp": p.tp,
                         "swap": p.swap, "magic": p.magic, "comment": p.comment,
@@ -1371,15 +1735,28 @@ class BridgeWorker(QThread):
                     return {"status": "error", "message": f"positions_get failed: {self.mt5.last_error()}"}
                 if orders is None:
                     return {"status": "error", "message": f"orders_get failed: {self.mt5.last_error()}"}
+                pending_type_map = {
+                    self.mt5.ORDER_TYPE_BUY_LIMIT: "buy_limit",
+                    self.mt5.ORDER_TYPE_SELL_LIMIT: "sell_limit",
+                    self.mt5.ORDER_TYPE_BUY_STOP: "buy_stop",
+                    self.mt5.ORDER_TYPE_SELL_STOP: "sell_stop",
+                    self.mt5.ORDER_TYPE_BUY_STOP_LIMIT: "buy_stop_limit",
+                    self.mt5.ORDER_TYPE_SELL_STOP_LIMIT: "sell_stop_limit",
+                }
+                pending_buy_types = (self.mt5.ORDER_TYPE_BUY_LIMIT, self.mt5.ORDER_TYPE_BUY_STOP,
+                                     self.mt5.ORDER_TYPE_BUY_STOP_LIMIT)
                 system_positions = [{
-                    "ticket": p.ticket, "symbol": p.symbol,
+                    "ticket": str(p.ticket), "symbol": p.symbol,
                     "type": "buy" if p.type == self.mt5.ORDER_TYPE_BUY else "sell",
                     "volume": p.volume, "price_open": p.price_open,
                     "price_current": p.price_current, "profit": p.profit,
+                    "sl": p.sl, "tp": p.tp,
                     "magic": p.magic, "comment": p.comment,
                 } for p in positions if int(getattr(p, "magic", 0) or 0) == SYSTEM_TRADE_MAGIC]
                 system_pending = [{
-                    "ticket": o.ticket, "symbol": o.symbol, "type": o.type,
+                    "ticket": str(o.ticket), "symbol": o.symbol,
+                    "type": pending_type_map.get(o.type, "unknown"),
+                    "side": "buy" if o.type in pending_buy_types else "sell",
                     "volume": o.volume_current, "price": o.price_open,
                     "magic": o.magic, "comment": o.comment,
                 } for o in orders if int(getattr(o, "magic", 0) or 0) == SYSTEM_TRADE_MAGIC]
@@ -1388,7 +1765,7 @@ class BridgeWorker(QThread):
                 hedging_mode = int(getattr(self.mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2))
                 return {
                     "status": "success",
-                    "account": {"login": acc.login, "server": acc.server,
+                    "account": {"login": str(acc.login), "server": acc.server,
                                 "margin_mode": margin_mode, "is_hedging": margin_mode == hedging_mode},
                     "magic": SYSTEM_TRADE_MAGIC,
                     "positions": system_positions,
@@ -1404,6 +1781,9 @@ class BridgeWorker(QThread):
                 if not positions:
                     return {"status": "success", "ticket": int(ticket), "already_absent": True}
                 pos = positions[0]
+                precondition_error = self._management_precondition_error(params, pos, "position", required=True)
+                if precondition_error:
+                    return {"status": "rejected", "message": precondition_error, "ticket": pos.ticket}
                 if int(getattr(pos, "magic", 0) or 0) != SYSTEM_TRADE_MAGIC:
                     return {"status": "rejected", "message": "position_magic_mismatch", "ticket": pos.ticket}
                 close_type = self.mt5.ORDER_TYPE_SELL if pos.type == self.mt5.ORDER_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
@@ -1413,13 +1793,15 @@ class BridgeWorker(QThread):
                     price = tick.bid if close_type == self.mt5.ORDER_TYPE_SELL else tick.ask
                     return ({"action": self.mt5.TRADE_ACTION_DEAL, "position": pos.ticket,
                              "symbol": pos.symbol, "volume": pos.volume, "type": close_type,
-                             "magic": SYSTEM_TRADE_MAGIC, "comment": "周末系统强制平仓",
+                             "magic": SYSTEM_TRADE_MAGIC,
+                             "comment": str(params.get("comment") or "AI持仓管理退出")[:31],
                              "type_filling": fill, "price": price}, price)
                 result, comment = self._order_send_with_retry(pos.symbol, _close_system)
                 remaining = self.mt5.positions_get(ticket=pos.ticket)
                 if remaining is None:
-                    return {"status": "error", "message": f"close verification failed: {self.mt5.last_error()}",
-                            "ticket": pos.ticket}
+                    return {"status": "uncertain", "message": f"close verification failed: {self.mt5.last_error()}",
+                            "ticket": pos.ticket,
+                            "retcode": getattr(result, "retcode", -1) if result else -1}
                 if len(remaining) == 0:
                     return {"status": "success", "ticket": pos.ticket,
                             "deal": getattr(result, "deal", 0) if result else 0,
@@ -1428,7 +1810,9 @@ class BridgeWorker(QThread):
                             "warning": comment}
                 remaining_volume = float(remaining[0].volume)
                 retcode = getattr(result, "retcode", -1) if result else -1
-                return {"status": "partial" if remaining_volume < float(pos.volume) else "error",
+                classification = classify_deal_result(result, self.mt5)
+                unresolved = classification in ("partial", "uncertain", "unknown")
+                return {"status": "partial" if remaining_volume < float(pos.volume) else ("uncertain" if unresolved else "rejected"),
                         "message": comment or "position still exists after close",
                         "ticket": pos.ticket, "retcode": retcode,
                         "remaining_volume": remaining_volume}
@@ -1442,18 +1826,93 @@ class BridgeWorker(QThread):
                 if not orders:
                     return {"status": "success", "ticket": int(ticket), "already_absent": True}
                 order = orders[0]
+                precondition_error = self._management_precondition_error(params, order, "pending", required=True)
+                if precondition_error:
+                    return {"status": "rejected", "message": precondition_error, "ticket": order.ticket}
                 if int(getattr(order, "magic", 0) or 0) != SYSTEM_TRADE_MAGIC:
                     return {"status": "rejected", "message": "pending_magic_mismatch", "ticket": order.ticket}
                 result = self.mt5.order_send({"action": self.mt5.TRADE_ACTION_REMOVE, "order": order.ticket})
                 remaining = self.mt5.orders_get(ticket=order.ticket)
                 if remaining is None:
-                    return {"status": "error", "message": f"cancel verification failed: {self.mt5.last_error()}",
-                            "ticket": order.ticket}
+                    return {"status": "uncertain", "message": f"cancel verification failed: {self.mt5.last_error()}",
+                            "ticket": order.ticket,
+                            "retcode": getattr(result, "retcode", -1) if result else -1}
                 if len(remaining) == 0:
                     return {"status": "success", "ticket": order.ticket,
                             "warning": result.comment if result and result.retcode != self.mt5.TRADE_RETCODE_DONE else None}
-                return {"status": "error", "message": result.comment if result else "pending order still exists after cancel",
+                retcode = getattr(result, "retcode", -1) if result else -1
+                unresolved = result is None or retcode in (
+                    self.mt5.TRADE_RETCODE_DONE,
+                    getattr(self.mt5, "TRADE_RETCODE_TIMEOUT", 10012),
+                )
+                return {"status": "uncertain" if unresolved else "rejected",
+                        "message": result.comment if result else "pending order still exists after cancel",
                         "ticket": order.ticket, "retcode": getattr(result, "retcode", -1) if result else -1}
+            elif action == "pending_order_state":
+                ticket = params.get("ticket")
+                if not ticket:
+                    return {"status": "error", "message": "ticket is required"}
+                ticket = int(ticket)
+                account = self.mt5.account_info()
+                if not account:
+                    return {"status": "error", "message": "no account info"}
+                buy_types = (self.mt5.ORDER_TYPE_BUY_LIMIT, self.mt5.ORDER_TYPE_BUY_STOP,
+                             self.mt5.ORDER_TYPE_BUY_STOP_LIMIT)
+                def _pending_state_row(order):
+                    return {
+                        "ticket": order.ticket, "position_id": getattr(order, "position_id", 0) or None,
+                        "symbol": order.symbol,
+                        "side": "buy" if int(getattr(order, "type", -1)) in buy_types else "sell",
+                        "type": int(getattr(order, "type", -1)),
+                        "state": int(getattr(order, "state", -1)),
+                        "volume_initial": float(getattr(order, "volume_initial", 0) or 0),
+                        "volume": float(getattr(order, "volume_current", 0) or 0),
+                        "price": float(getattr(order, "price_open", 0) or 0),
+                        "magic": int(getattr(order, "magic", 0) or 0),
+                        "comment": str(getattr(order, "comment", "") or ""),
+                    }
+                current = self.mt5.orders_get(ticket=ticket)
+                if current is None:
+                    return {"status": "error", "message": f"orders_get failed: {self.mt5.last_error()}"}
+                account_row = {"login": account.login, "server": account.server}
+                if current:
+                    order_row = _pending_state_row(current[0])
+                    precondition_error = self._management_precondition_error(params, current[0], "pending")
+                    if precondition_error:
+                        return {"status": "success", "account": account_row,
+                                "current_state": "identity_changed", "final_state": "unknown",
+                                "order": order_row, "precondition_error": precondition_error}
+                    return {"status": "success", "account": account_row,
+                            "current_state": "pending", "final_state": None, "order": order_row}
+                history = self.mt5.history_orders_get(ticket=ticket)
+                if history is None:
+                    return {"status": "error", "message": f"history_orders_get failed: {self.mt5.last_error()}"}
+                if not history:
+                    return {"status": "success", "account": account_row,
+                            "current_state": "absent", "final_state": "unknown", "order": None}
+                historical = history[-1]
+                order_row = _pending_state_row(historical)
+                precondition_error = self._management_precondition_error(params, historical, "pending")
+                if precondition_error:
+                    return {"status": "success", "account": account_row,
+                            "current_state": "history", "final_state": "unknown",
+                            "order": order_row, "precondition_error": precondition_error}
+                state = int(getattr(historical, "state", -1))
+                if state == getattr(self.mt5, "ORDER_STATE_FILLED", 4):
+                    final_state = "filled"
+                elif state == getattr(self.mt5, "ORDER_STATE_PARTIAL", 3):
+                    final_state = "partially_filled"
+                elif state == getattr(self.mt5, "ORDER_STATE_CANCELED", 2):
+                    final_state = "cancelled"
+                elif state == getattr(self.mt5, "ORDER_STATE_EXPIRED", 6):
+                    final_state = "expired"
+                elif state == getattr(self.mt5, "ORDER_STATE_REJECTED", 5):
+                    final_state = "rejected"
+                else:
+                    final_state = "unknown"
+                return {"status": "success", "account": account_row,
+                        "current_state": "history", "final_state": final_state,
+                        "position_id": order_row.get("position_id"), "order": order_row}
             elif action == "symbols":
                 symbols = self.mt5.symbols_get()
                 if symbols is None: return {"status": "error", "message": "MT5 symbols_get failed"}
@@ -1581,49 +2040,11 @@ class BridgeWorker(QThread):
                     },
                 }
             elif action == "order_lookup":
-                # Reconcile an uncertain send locally. Only the matching order
-                # is returned to the server; positions, pending orders and the
-                # account's historical deal list never cross the WebSocket.
-                requested_symbol = str(params.get("symbol") or "").strip()
-                symbol = self._resolve_symbol(requested_symbol) if requested_symbol else ""
-                command_ref = str(params.get("bridge_command_ref") or "").strip()
-                expected_tickets = {
-                    str(value) for value in (params.get("trade_ticket"), params.get("pending_ticket"))
-                    if value not in (None, "", 0, "0")
-                }
-                try:
-                    lookback_seconds = max(3600, min(int(params.get("lookback_seconds") or 172800), 315360000))
-                except (TypeError, ValueError):
-                    lookback_seconds = 172800
-
-                def compact_match(row, kind):
-                    ticket = str(getattr(row, "ticket", "") or getattr(row, "order", "") or "")
-                    comment = str(getattr(row, "comment", "") or "")
-                    row_symbol = str(getattr(row, "symbol", "") or "")
-                    if symbol and row_symbol != symbol: return None
-                    if int(getattr(row, "magic", 0) or 0) != SYSTEM_TRADE_MAGIC: return None
-                    if not ((command_ref and command_ref in comment) or (ticket and ticket in expected_tickets)): return None
-                    return {"status": "success", "found": True, "kind": kind,
-                            "ticket": int(ticket) if ticket.isdigit() else ticket,
-                            "symbol": row_symbol, "comment": comment}
-
-                active_orders = (self.mt5.orders_get(symbol=symbol) or []) if symbol else (self.mt5.orders_get() or [])
-                for row in active_orders:
-                    matched = compact_match(row, "pending")
-                    if matched: return matched
-                active_positions = (self.mt5.positions_get(symbol=symbol) or []) if symbol else (self.mt5.positions_get() or [])
-                for row in active_positions:
-                    matched = compact_match(row, "trade")
-                    if matched: return matched
-                date_to = datetime.now(timezone.utc) + timedelta(minutes=5)
-                date_from = date_to - timedelta(seconds=lookback_seconds)
-                historical = self.mt5.history_orders_get(date_from, date_to)
-                if historical is None:
-                    return {"status": "error", "message": f"history_orders_get failed: {self.mt5.last_error()}"}
-                for row in reversed(historical):
-                    matched = compact_match(row, "trade")
-                    if matched: return matched
-                return {"status": "success", "found": False}
+                # Only one compact match crosses the WebSocket; complete MT5
+                # positions/orders/deals remain local to the Bridge process.
+                return lookup_existing_execution(
+                    self.mt5, params, SYSTEM_TRADE_MAGIC, self._resolve_symbol,
+                )
             elif action == "risk_snapshot":
                 return self._risk_snapshot(params)
             elif action == "performance_daily":
@@ -1638,6 +2059,8 @@ class BridgeWorker(QThread):
                     page, page_size = 1, 20
                 if page < 1: page = 1
                 if page_size < 1: page_size = 20
+                page = min(page, 1_000_000)
+                page_size = min(page_size, 10_000)
                 deposit = withdrawal = credit = 0.0
                 if "date_to" in params:
                     try: date_to = datetime.strptime(params["date_to"][:10], "%Y-%m-%d") + timedelta(days=1)
@@ -1904,7 +2327,9 @@ class BridgeWorker(QThread):
                     "terminal": {"build": terminal.build, "connected": terminal.connected,
                         "trade_allowed": terminal.trade_allowed} if terminal else None}
             elif action == "toggle_trade":
-                self._trade_enabled = params.get("enable", False)
+                if not isinstance(params.get("enable"), bool):
+                    return {"status": "rejected", "message": "trade_toggle_boolean_required"}
+                self._trade_enabled = params["enable"]
                 return {"status": "success", "live_trading_enabled": self._trade_enabled}
             elif action == "set_quote_symbol":
                 self._resolved_symbol = self._resolve_symbol(params.get("symbol", "XAUUSD"))
@@ -1920,6 +2345,9 @@ class BridgeWorker(QThread):
                     **self._detect_market_state(symbol, info, tick, terminal)}
 
             elif action == "pending":
+                replay = self._preflight_new_order(params, "pending")
+                if replay is not None:
+                    return replay
                 if not self._trade_enabled:
                     return {"status": "rejected", "message": "trade sending is disabled"}
                 symbol = self._resolve_symbol(params.get("symbol"))
@@ -1928,14 +2356,17 @@ class BridgeWorker(QThread):
                 if not info: return {"status": "error", "message": f"Symbol not available: {symbol}"}
 
                 dir_str = (params.get("type") or params.get("order_type") or "").strip().lower()
-                price = float(params["price"]) if params.get("price") else None
-                volume = float(params.get("lot") or params.get("volume") or 0.01)
+                price, price_error = self._parse_order_price(params.get("price"), "price", required=True)
+                if price_error: return {"status": "rejected", "message": price_error}
+                volume, volume_error = parse_required_order_volume(params)
+                if volume_error: return {"status": "rejected", "message": volume_error}
                 volume_error = self._validate_order_volume(info, volume)
                 if volume_error: return {"status": "rejected", "message": volume_error}
-                sl = float(params["sl"]) if params.get("sl") else None
-                tp = float(params["tp"]) if params.get("tp") else None
+                sl, price_error = self._parse_order_price(params.get("sl"), "stop loss")
+                if price_error: return {"status": "rejected", "message": price_error}
+                tp, price_error = self._parse_order_price(params.get("tp"), "take profit")
+                if price_error: return {"status": "rejected", "message": price_error}
 
-                if not price: return {"status": "error", "message": "price is required for pending order"}
                 if dir_str not in ("buy_limit", "sell_limit", "buy_stop", "sell_stop", "buy_stop_limit", "sell_stop_limit"):
                     return {"status": "error", "message": f"Invalid pending type: {dir_str}"}
 
@@ -1957,10 +2388,11 @@ class BridgeWorker(QThread):
                 if expiration_val:
                     try:
                         n = float(expiration_val)
-                        if n > 1000000000:
-                            exp_ts = int(n)
-                            type_time = self.mt5.ORDER_TIME_SPECIFIED
-                    except (ValueError, TypeError):
+                        if not math.isfinite(n) or n <= 1000000000:
+                            raise ValueError("invalid pending order expiration")
+                        exp_ts = int(n)
+                        type_time = self.mt5.ORDER_TIME_SPECIFIED
+                    except (ValueError, TypeError, OverflowError):
                         try:
                             exp_dt = datetime.strptime(str(expiration_val)[:19], "%Y-%m-%d %H:%M:%S")
                             exp_ts = int(exp_dt.timestamp())
@@ -1972,7 +2404,7 @@ class BridgeWorker(QThread):
                     "action": self.mt5.TRADE_ACTION_PENDING,
                     "symbol": symbol, "volume": volume, "type": ot,
                     "price": price, "magic": SYSTEM_TRADE_MAGIC,
-                    "comment": params.get("comment", "AI挂单"),
+                    "comment": self._normalize_order_comment(params.get("comment"), "AI挂单"),
                     "type_filling": self.mt5.ORDER_FILLING_RETURN,
                     "type_time": type_time,
                     "expiration": exp_ts,
@@ -1982,8 +2414,12 @@ class BridgeWorker(QThread):
                 if params.get("deviation") is not None:
                     req["deviation"] = max(0, int(params.get("deviation") or 0))
                 stoplimit_price = params.get("stoplimit_price")
-                if stoplimit_price and ot in (self.mt5.ORDER_TYPE_BUY_STOP_LIMIT, self.mt5.ORDER_TYPE_SELL_STOP_LIMIT):
-                    req["stoplimit"] = float(stoplimit_price)
+                if ot in (self.mt5.ORDER_TYPE_BUY_STOP_LIMIT, self.mt5.ORDER_TYPE_SELL_STOP_LIMIT):
+                    stoplimit_price, price_error = self._parse_order_price(
+                        stoplimit_price, "stoplimit price", required=True,
+                    )
+                    if price_error: return {"status": "rejected", "message": price_error}
+                    req["stoplimit"] = stoplimit_price
 
                 self.log_signal.emit(f"[Pending] type_filling=RETURN type_time={type_time} exp_ts={exp_ts}")
                 check = self.mt5.order_check(req)
@@ -2010,16 +2446,21 @@ class BridgeWorker(QThread):
 
             elif action == "cancel_pending":
                 ticket = params.get("ticket")
-                if not ticket: return {"status": "error", "message": "ticket is required"}
+                if not ticket: return {"status": "rejected", "message": "ticket is required"}
                 ticket = int(ticket)  # Ensure integer type
                 self.log_signal.emit(f"[CancelPending] Looking for ticket={ticket}")
 
                 # Try to find the pending order
                 orders = self.mt5.orders_get(ticket=ticket)
-                if orders is None or len(orders) == 0:
-                    # Maybe already filled/cancelled, check positions
+                if orders is None:
+                    return {"status": "error", "message": f"orders_get failed: {self.mt5.last_error()}"}
+                if len(orders) == 0:
                     self.log_signal.emit(f"[CancelPending] Order {ticket} not found, might be filled/cancelled")
-                    return {"status": "error", "message": f"挂单 {ticket} 已不存在（可能已成交或已取消）"}
+                    return {"status": "rejected", "message": f"挂单 {ticket} 已不存在（可能已成交或已取消）"}
+
+                precondition_error = self._management_precondition_error(params, orders[0], "pending", required=True)
+                if precondition_error:
+                    return {"status": "rejected", "message": precondition_error, "ticket": ticket}
 
                 self.log_signal.emit(f"[CancelPending] Found order: {orders[0].ticket} {orders[0].symbol} type={orders[0].type}")
 
@@ -2030,11 +2471,23 @@ class BridgeWorker(QThread):
                 }
                 result = self.mt5.order_send(req)
                 self.log_signal.emit(f"[CancelPending] order_send result: retcode={result.retcode if result else 'None'} comment={result.comment if result else 'None'}")
-                if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
-                    return {"status": "success", "ticket": ticket}
-                err_msg = result.comment if result else "cancel failed"
-                err_code = result.retcode if result else -1
-                return {"status": "error", "message": f"{err_msg} (code={err_code})"}
+                remaining = self.mt5.orders_get(ticket=ticket)
+                retcode = getattr(result, "retcode", -1) if result else -1
+                if remaining is None:
+                    return {"status": "uncertain", "message": f"cancel verification failed: {self.mt5.last_error()}",
+                            "ticket": ticket, "retcode": retcode}
+                if len(remaining) == 0:
+                    response = {"status": "success", "ticket": ticket, "retcode": retcode}
+                    if not result or retcode != self.mt5.TRADE_RETCODE_DONE:
+                        response["warning"] = getattr(result, "comment", "cancel reconciled after uncertain response") if result else "cancel reconciled after missing response"
+                    return response
+                unresolved = result is None or retcode in (
+                    self.mt5.TRADE_RETCODE_DONE,
+                    getattr(self.mt5, "TRADE_RETCODE_TIMEOUT", 10012),
+                )
+                return {"status": "uncertain" if unresolved else "rejected",
+                        "message": getattr(result, "comment", "pending order still exists after cancel") if result else "pending order still exists after cancel",
+                        "ticket": ticket, "retcode": retcode}
 
             elif action == "pending_list":
                 symbol = self._resolve_symbol(params.get("symbol")) if params.get("symbol") else None
@@ -2094,100 +2547,184 @@ class BridgeWorker(QThread):
                     result_orders.append(entry)
                 return {"status": "success", "orders": result_orders}
 
-            elif action == "modify":
+            elif action == "modify_system_position_protection":
                 ticket = params.get("ticket")
                 if not ticket:
-                    return {"status": "error", "message": "ticket is required for modify"}
-                positions = self.mt5.positions_get(ticket=ticket)
+                    return {"status": "error", "message": "ticket_required"}
+                positions = self.mt5.positions_get(ticket=int(ticket))
                 if positions is None:
-                    return {"status": "error", "message": f"positions_get failed: {self.mt5.last_error()}"}
-                if len(positions) == 0:
-                    return {"status": "error", "message": f"Position {ticket} not found"}
+                    return {"status": "error", "message": "positions_get_failed"}
+                if not positions:
+                    return {"status": "rejected", "message": "system_position_not_found", "ticket": str(ticket)}
                 pos = positions[0]
-                req = {
-                    "action": self.mt5.TRADE_ACTION_SLTP,
-                    "position": ticket,
-                    "sl": float(params["sl"]) if "sl" in params and params["sl"] is not None else pos.sl,
-                    "tp": float(params["tp"]) if "tp" in params and params["tp"] is not None else pos.tp,
-                }
-                result = self.mt5.order_send(req)
-                if result and result.retcode == self.mt5.TRADE_RETCODE_DONE:
-                    return {"status": "success", "ticket": ticket}
-                return {"status": "error", "message": result.comment if result else "modify failed"}
+                precondition_error = self._management_precondition_error(params, pos, "position", required=True)
+                if precondition_error:
+                    return {"status": "rejected", "message": precondition_error, "ticket": str(pos.ticket)}
+                if int(getattr(pos, "magic", 0) or 0) != SYSTEM_TRADE_MAGIC:
+                    return {"status": "rejected", "message": "position_magic_mismatch", "ticket": str(pos.ticket)}
+
+                expected = params.get("expected_state") if isinstance(params.get("expected_state"), dict) else {}
+                info = self.mt5.symbol_info(pos.symbol)
+                tick = self.mt5.symbol_info_tick(pos.symbol)
+                if not info or not tick:
+                    return {"status": "error", "message": "position_symbol_quote_unavailable", "ticket": str(pos.ticket)}
+                point = float(getattr(info, "point", 0) or 0)
+                tick_size = float(getattr(info, "trade_tick_size", 0) or point or 0.00000001)
+                digits = max(0, int(getattr(info, "digits", 0) or 0))
+                tolerance = max(point / 2.0, tick_size / 2.0, 0.00000001)
+                expected_sl = expected.get("stop_loss")
+                expected_tp = expected.get("take_profit")
+                if expected_sl is not None:
+                    expected_sl_number = float(expected_sl or 0)
+                    if not math.isfinite(expected_sl_number) or expected_sl_number < 0:
+                        return {"status": "rejected", "message": "position_expected_stop_loss_invalid", "ticket": str(pos.ticket)}
+                else:
+                    expected_sl_number = None
+                if expected_tp is not None:
+                    expected_tp_number = float(expected_tp or 0)
+                    if not math.isfinite(expected_tp_number) or expected_tp_number < 0:
+                        return {"status": "rejected", "message": "position_expected_take_profit_invalid", "ticket": str(pos.ticket)}
+                else:
+                    expected_tp_number = None
+                if expected_sl_number is not None and abs(float(pos.sl or 0) - expected_sl_number) > tolerance:
+                    return {"status": "rejected", "message": "position_stop_loss_changed", "ticket": str(pos.ticket)}
+                if expected_tp_number is not None and abs(float(pos.tp or 0) - expected_tp_number) > tolerance:
+                    return {"status": "rejected", "message": "position_take_profit_changed", "ticket": str(pos.ticket)}
+
+                requested_sl = params.get("stop_loss")
+                requested_tp = params.get("take_profit")
+                if requested_sl is None and requested_tp is None:
+                    return {"status": "rejected", "message": "protection_price_required", "ticket": str(pos.ticket)}
+
+                def _normalize_protection_price(value, current):
+                    if value is None:
+                        return float(current or 0)
+                    number = float(value)
+                    if not math.isfinite(number) or number <= 0:
+                        raise ValueError("protection_price_invalid")
+                    normalized = round(round(number / tick_size) * tick_size, digits)
+                    if normalized <= 0:
+                        raise ValueError("protection_price_invalid")
+                    return normalized
+
+                next_sl = _normalize_protection_price(requested_sl, pos.sl)
+                next_tp = _normalize_protection_price(requested_tp, pos.tp)
+                min_points = max(int(getattr(info, "trade_stops_level", 0) or 0),
+                                 int(getattr(info, "trade_freeze_level", 0) or 0))
+                min_distance = min_points * point
+                is_buy = int(pos.type) == self.mt5.ORDER_TYPE_BUY
+                if requested_sl is not None:
+                    valid_sl = next_sl < float(tick.bid) - min_distance if is_buy else next_sl > float(tick.ask) + min_distance
+                    if not valid_sl:
+                        return {"status": "rejected", "message": "stop_loss_direction_or_distance_invalid", "ticket": str(pos.ticket)}
+                if requested_tp is not None:
+                    valid_tp = next_tp > float(tick.ask) + min_distance if is_buy else next_tp < float(tick.bid) - min_distance
+                    if not valid_tp:
+                        return {"status": "rejected", "message": "take_profit_direction_or_distance_invalid", "ticket": str(pos.ticket)}
+
+                already_applied = abs(float(pos.sl or 0) - next_sl) <= tolerance and abs(float(pos.tp or 0) - next_tp) <= tolerance
+                if already_applied:
+                    return {"status": "success", "ticket": str(pos.ticket), "stop_loss": next_sl,
+                            "take_profit": next_tp, "already_applied": True}
+
+                request = {"action": self.mt5.TRADE_ACTION_SLTP, "position": pos.ticket,
+                           "symbol": pos.symbol, "sl": next_sl, "tp": next_tp,
+                           "magic": SYSTEM_TRADE_MAGIC}
+                result = self.mt5.order_send(request)
+                verified = self.mt5.positions_get(ticket=pos.ticket)
+                if verified is None:
+                    return {"status": "uncertain", "message": "position_protection_verify_failed",
+                            "ticket": str(pos.ticket), "retcode": getattr(result, "retcode", -1) if result else -1}
+                if not verified:
+                    return {"status": "rejected", "message": "position_closed_during_protection_update", "ticket": str(pos.ticket)}
+                current = verified[0]
+                applied = abs(float(current.sl or 0) - next_sl) <= tolerance and abs(float(current.tp or 0) - next_tp) <= tolerance
+                if applied:
+                    return {"status": "success", "ticket": str(current.ticket),
+                            "stop_loss": float(current.sl or 0), "take_profit": float(current.tp or 0),
+                            "retcode": getattr(result, "retcode", -1) if result else -1,
+                            "reconciled": not bool(result and result.retcode == self.mt5.TRADE_RETCODE_DONE)}
+                return {"status": "rejected", "message": getattr(result, "comment", "position_protection_not_applied") if result else "position_protection_not_applied",
+                        "ticket": str(pos.ticket), "retcode": getattr(result, "retcode", -1) if result else -1}
+
             else:
-                return {"status": "error", "message": f"unknown action: {action}"}
+                return {"status": "rejected", "message": "unknown_bridge_action"}
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            self.log_signal.emit(
+                f"命令 {action or 'unknown'} 异常: {BridgeWorker._short_text(e, 500)}"
+            )
+            return {"status": "error", "message": "bridge_command_failed"}
 
     @staticmethod
     def _find_mt5_installations():
         """4级降级探测: 注册表HKCU → 进程 → 注册表HKLM → 文件系统glob
-        返回 [(来源, 绝对路径), ...] 列表，去重且按优先级排序
+        返回 [(绝对路径, 来源), ...] 列表，去重且按优先级排序
         """
-        import subprocess, glob
-        found = {}  # path -> source_label
+        import glob
+        found = {}  # normalized path key -> (path, source_label)
+
+        def add_installation(path, source):
+            try:
+                normalized = os.path.normpath(str(path or "").strip())
+            except (TypeError, ValueError):
+                return
+            if not find_mt5_terminal_executable(normalized):
+                return
+            key = os.path.normcase(os.path.realpath(normalized))
+            if key not in found:
+                found[key] = (normalized, source)
 
         # ── 1. 注册表 HKCU: Software\MetaQuotes\Terminal\{INSTANCE}\InstallPath ──
         try:
             import winreg
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                 r"Software\MetaQuotes\Terminal")
-            i = 0
-            while True:
-                try:
-                    subkey_name = winreg.EnumKey(key, i)
-                    inst = winreg.OpenKey(key, subkey_name)
-                    install_path, _ = winreg.QueryValueEx(inst, "InstallPath")
-                    install_path = os.path.normpath(install_path.strip().rstrip("\\"))
-                    if os.path.isdir(install_path) and install_path not in found:
-                        found[install_path] = "注册表(HKCU)"
-                except OSError:
-                    break
-                finally:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\MetaQuotes\Terminal") as key:
+                i = 0
+                while True:
+                    try:
+                        subkey_name = winreg.EnumKey(key, i)
+                    except OSError:
+                        break
                     i += 1
+                    try:
+                        with winreg.OpenKey(key, subkey_name) as inst:
+                            install_path, _ = winreg.QueryValueEx(inst, "InstallPath")
+                    except OSError:
+                        continue
+                    add_installation(install_path, "注册表(HKCU)")
         except OSError:
             pass
 
         # ── 2. 进程检测 terminal64.exe / terminal.exe ──
         try:
-            out = subprocess.check_output(
-                'wmic process where "name like \'terminal%.exe\'" get ExecutablePath',
-                shell=True, timeout=5, stderr=subprocess.DEVNULL
-            ).decode('utf-8', errors='ignore')
-            for line in out.splitlines():
-                line = line.strip()
-                if line.lower().endswith('.exe'):
-                    d = os.path.normpath(os.path.dirname(line))
-                    if os.path.isdir(d) and d not in found:
-                        found[d] = "运行中进程"
+            for directory in running_mt5_process_directories():
+                add_installation(directory, "运行中进程")
         except Exception as e:
             print(f"[Bridge] 进程检测失败: {e}")
 
         # ── 3. 注册表 HKLM (64-bit view) ──
         try:
             import winreg
-            for root, label in [(winreg.HKEY_LOCAL_MACHINE, "注册表(HKLM)"),
-                                (winreg.HKEY_LOCAL_MACHINE, "注册表(HKLM)")]:
-                try:
-                    key = winreg.OpenKey(root,
-                        r"Software\MetaQuotes\Terminal",
-                        0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"Software\MetaQuotes\Terminal",
+                    0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                ) as key:
                     i = 0
                     while True:
                         try:
                             subkey_name = winreg.EnumKey(key, i)
-                            inst = winreg.OpenKey(key, subkey_name)
-                            install_path, _ = winreg.QueryValueEx(inst, "InstallPath")
-                            install_path = os.path.normpath(install_path.strip().rstrip("\\"))
-                            if os.path.isdir(install_path) and install_path not in found:
-                                found[install_path] = label
                         except OSError:
                             break
-                        finally:
-                            i += 1
-                except OSError as e:
-                    print(f"[Bridge] 注册表读取失败: {e}")
-                break  # HKLM done once
+                        i += 1
+                        try:
+                            with winreg.OpenKey(key, subkey_name) as inst:
+                                install_path, _ = winreg.QueryValueEx(inst, "InstallPath")
+                        except OSError:
+                            continue
+                        add_installation(install_path, "注册表(HKLM)")
+            except OSError as e:
+                print(f"[Bridge] 注册表读取失败: {e}")
         except Exception as e:
             print(f"[Bridge] 注册表检测失败: {e}")
 
@@ -2204,23 +2741,22 @@ class BridgeWorker(QThread):
             for pattern in glob_patterns:
                 try:
                     for d in glob.glob(os.path.join(base, pattern)):
-                        d = os.path.normpath(d)
-                        if os.path.isdir(d) and d not in found:
-                            found[d] = "文件系统"
+                        add_installation(d, "文件系统")
                 except Exception:
                     pass
 
         # 返回按优先级排序的列表
-        priority_order = {"注册表(HKCU)": 0, "运行中进程": 1, "注册表(HKLM)": 2, "文件系统": 3}
-        result = sorted(found.items(), key=lambda x: priority_order.get(x[1], 99))
+        priority_order = {"运行中进程": 0, "注册表(HKCU)": 1, "注册表(HKLM)": 2, "文件系统": 3}
+        result = sorted(found.values(), key=lambda x: (priority_order.get(x[1], 99), x[0].casefold()))
         return result
 
     def run(self):
         # ── 尝试探测 MT5 安装目录，加入 DLL 搜索路径 ──
-        import traceback, subprocess
+        import traceback
 
         # 优先使用用户手动指定的路径
         mt5_dirs = []
+        installations = []
         manual_path = getattr(self, '_manual_mt5_path', None)
         if manual_path and os.path.isdir(manual_path):
             mt5_dirs = [manual_path]
@@ -2259,19 +2795,27 @@ class BridgeWorker(QThread):
             self.status_signal.emit("MT5 未安装", "#ef4444", "请安装MT5终端后重试")
             return
 
-        terminal_path = None
-        if manual_path:
-            for executable in ("terminal64.exe", "terminal.exe"):
-                candidate = os.path.join(manual_path, executable)
-                if os.path.isfile(candidate):
-                    terminal_path = candidate
-                    break
-            if not terminal_path:
-                self.log_signal.emit("MT5 初始化失败: 指定目录中未找到 terminal64.exe 或 terminal.exe")
-                self.status_signal.emit("MT5 路径无效", "#ef4444", "请重新选择独立 MT5 安装目录")
-                return
+        initialization_candidates = mt5_initialization_candidates(manual_path, installations)
+        if manual_path and not initialization_candidates:
+            self.log_signal.emit("MT5 初始化失败: 指定目录中未找到 terminal64.exe 或 terminal.exe")
+            self.status_signal.emit("MT5 路径无效", "#ef4444", "请重新选择独立 MT5 安装目录")
+            return
         portable = bool(load_config().get("mt5_portable", False))
-        initialized = self.mt5.initialize(terminal_path, portable=portable) if terminal_path else self.mt5.initialize()
+        initialized = False
+        terminal_path = None
+        for candidate in initialization_candidates:
+            if candidate:
+                self.log_signal.emit(f"[探测] 尝试连接终端: {candidate}")
+                initialized = bool(self.mt5.initialize(candidate, portable=portable))
+            else:
+                initialized = bool(self.mt5.initialize())
+            if initialized:
+                terminal_path = candidate
+                break
+            try:
+                self.mt5.shutdown()
+            except Exception:
+                pass
         if not initialized:
             self.log_signal.emit(f"MT5 初始化失败: {self.mt5.last_error()}")
             self.status_signal.emit("未检测到MT5", "#ef4444", "请先运行MT5并登录交易账户")
@@ -2328,9 +2872,13 @@ class BridgeWorker(QThread):
                 self._loop.close()
                 self._loop = None
         except Exception as e:
-            self.log_signal.emit(f"桥接异常退出: {e}")
+            self.log_signal.emit(f"桥接异常退出: {self._short_text(e, 500)}")
         finally:
-            if self.mt5: self.mt5.shutdown()
+            if self.mt5:
+                # Never tear MT5 down while a collector or trade command still
+                # owns the extension's process-wide lock.
+                with self._mt5_lock:
+                    self.mt5.shutdown()
             self.log_signal.emit("MT5 已断开")
 
     # ── Async core (websockets) ──────────────────────────────
@@ -2338,41 +2886,12 @@ class BridgeWorker(QThread):
     @staticmethod
     def _is_sensitive_key(key):
         """Check if a dict key represents sensitive data."""
-        k = str(key).lower()
-        return k in ('authorization', 'cookie', 'set-cookie') or 'token' in k
+        return _is_sensitive_log_key(key)
 
     @staticmethod
     def _mask_sensitive_text(value):
         """Mask sensitive fields (token/Authorization/Cookie) before logging. Supports dict/Mapping."""
-        import re
-        from collections.abc import Mapping
-
-        # Structured masking for dict/Mapping
-        if isinstance(value, Mapping):
-            masked = {}
-            for k, v in value.items():
-                key = str(k)
-                if BridgeWorker._is_sensitive_key(key):
-                    masked[key] = '[已脱敏]'
-                else:
-                    masked[key] = BridgeWorker._mask_sensitive_text(v)
-            return str(masked)
-
-        s = str(value)
-        # Dict string form: {'Authorization': 'Bearer abc', "Cookie": "sid=123"}
-        dict_pattern = r"""(?i)(['"]?(?:authorization|cookie|set-cookie|access_token|refresh_token|token)['"]?\s*:\s*['"])[^'"]+(['"])"""
-        s = re.sub(dict_pattern, r'\1[已脱敏]\2', s)
-        # Plain text patterns
-        patterns = [
-            (r'(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+', r'\1[已脱敏]'),
-            (r'(?i)(authorization\s*[:=]\s*)[^\s,;]+', r'\1[已脱敏]'),
-            (r'(?i)(cookie\s*[:=]\s*)[^,\n\r]+', r'\1[已脱敏]'),
-            (r'(?i)((?:access_token|refresh_token|token)\s*[:=]\s*)[^&\s,;]+', r'\1[已脱敏]'),
-            (r'(?i)(bearer\s+)[^\s,;]+', r'\1[已脱敏]'),
-        ]
-        for pattern, repl in patterns:
-            s = re.sub(pattern, repl, s)
-        return s
+        return _mask_log_text(value)
 
     @staticmethod
     def _short_text(value, limit=200):
@@ -2388,17 +2907,17 @@ class BridgeWorker(QThread):
         parts = []
         parts.append(type(e).__name__)
         msg = str(e) or '无详细信息'
-        parts.append(msg[:200])
+        parts.append(BridgeWorker._short_text(msg, 200))
         # Extract websockets-specific fields (safe truncation)
         for attr in ('status_code', 'status', 'code', 'reason'):
             val = getattr(e, attr, None)
             if val is not None:
-                parts.append(f'{attr}={val}')
+                parts.append(f'{attr}={BridgeWorker._short_text(val, 150)}')
         for attr in ('headers', 'response'):
             val = getattr(e, attr, None)
             if val is not None:
                 parts.append(f'{attr}={BridgeWorker._short_text(val, 150)}')
-        result = '; '.join(parts)
+        result = BridgeWorker._mask_sensitive_text('; '.join(parts))
         return result[:800] if len(result) > 800 else result
 
     @staticmethod
@@ -2410,6 +2929,10 @@ class BridgeWorker(QThread):
         """Main async loop: connect → session → reconnect with progressive backoff."""
         import websockets
 
+        self._async_stop_event = asyncio.Event()
+        if self._stop_event.is_set():
+            self._async_stop_event.set()
+
         server = self.server_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
         http_base = self.server_url.rstrip("/")
         self.log_signal.emit(f"连接 WebSocket: {server}/aurum-api/bridge/ws")
@@ -2418,7 +2941,6 @@ class BridgeWorker(QThread):
         MAX_RAPID_FAILS = 5
         rapid_fails = 0
         retry_count = 0
-        last_health_check = 0
 
         def get_backoff_delay():
             """Progressive backoff: 5s → 10s → 30s, max 60s."""
@@ -2430,7 +2952,6 @@ class BridgeWorker(QThread):
                 return 30
 
         def should_health_check():
-            nonlocal last_health_check
             if retry_count == 1 or retry_count == 3 or retry_count == 10:
                 return True
             if retry_count > 10 and retry_count % 10 == 0:
@@ -2442,7 +2963,6 @@ class BridgeWorker(QThread):
 
         last_health_ok = False
         last_health_check_retry = 0
-        last_wss_hint_retry = 0
 
         while self.running:
             retry_start = time.time()
@@ -2483,7 +3003,9 @@ class BridgeWorker(QThread):
                 try:
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, self._renew_access_token)
-                    ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&token={self.token}"
+                    ticket = await loop.run_in_executor(None, self._create_connection_ticket)
+                    encoded_ticket = urllib.parse.quote(ticket, safe='')
+                    ws_url = f"{server}/aurum-api/bridge/ws?type=bridge&ticket={encoded_ticket}"
                     ws = await asyncio.wait_for(
                         websockets.connect(ws_url, ssl=ssl_ctx, additional_headers={"Origin": "http://localhost"},
                                            ping_interval=None, max_size=2**20, close_timeout=3),
@@ -2511,7 +3033,7 @@ class BridgeWorker(QThread):
                     if last_health_ok and last_health_check_retry == retry_count:
                         self.log_signal.emit("HTTP 健康检查正常，但 WebSocket 连接失败，优先检查 Nginx WebSocket 反代。")
                     self.status_signal.emit(f"重连中...（第{retry_count}次）", "#f59e0b", "")
-                    await asyncio.sleep(delay)
+                    await self._sleep_or_stop(delay)
 
             if not ws or not self.running:
                 break
@@ -2594,12 +3116,26 @@ class BridgeWorker(QThread):
                 retry_delay = min(60, max(retry_delay, 30 + (rapid_fails - MAX_RAPID_FAILS) * 5))
             self.log_signal.emit(f"连接断开，{retry_delay}秒后自动重连...")
             self.status_signal.emit("重连中...", "#f59e0b", "")
-            await asyncio.sleep(retry_delay)
+            await self._sleep_or_stop(retry_delay)
+
+    async def _sleep_or_stop(self, seconds):
+        """Interrupt reconnect/heartbeat delays as soon as the GUI requests stop."""
+        if not self.running or self._stop_event.is_set():
+            return False
+        stop_event = self._async_stop_event
+        if stop_event is None:
+            await asyncio.sleep(seconds)
+            return self.running
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=max(0.0, float(seconds)))
+            return False
+        except asyncio.TimeoutError:
+            return self.running
 
     async def _async_send_loop(self, ws):
         """Send MT5 data every 1s with deduplication, force send every 5s for market status detection."""
         import websockets
-        last_data_hash = None
+        last_payload = None
         last_quote_time = None
         last_plan_check = time.time()
         last_send_time = time.time()
@@ -2637,7 +3173,7 @@ class BridgeWorker(QThread):
                         self.log_signal.emit(f"MT5 数据采集超时（第 {mt5_timeout_count} 次），本轮跳过发送。")
                     if mt5_timeout_count >= 10:
                         self.status_signal.emit("MT5响应慢", "#f59e0b", "")
-                    await asyncio.sleep(1)
+                    await self._sleep_or_stop(1)
                     continue
                 except Exception:
                     mt5_future = None
@@ -2651,19 +3187,18 @@ class BridgeWorker(QThread):
                 mt5_was_slow = False
 
                 if dm is None:
-                    await asyncio.sleep(1)
+                    await self._sleep_or_stop(1)
                     continue
 
                 # Dedup: hash the data, skip if unchanged (but force send every 5s for market status detection)
                 payload = json.dumps(dm, sort_keys=True, default=str, ensure_ascii=False, separators=(',', ':'))
-                data_hash = hash(payload)
                 quote_time = dm.get("quote", {}).get("time", "")
                 force_send = (time.time() - last_send_time) >= 5
                 time_changed = quote_time != last_quote_time
-                if data_hash == last_data_hash and not force_send and not time_changed:
-                    await asyncio.sleep(1)
+                if payload == last_payload and not force_send and not time_changed:
+                    await self._sleep_or_stop(1)
                     continue
-                last_data_hash = data_hash
+                last_payload = payload
                 last_quote_time = quote_time
                 last_send_time = time.time()
                 self._last_data_sent_at = last_send_time
@@ -2680,7 +3215,7 @@ class BridgeWorker(QThread):
                     self.status_signal.emit("MT5桥接-已连接", "#22c55e",
                                            f"{acc_login} @ {acc_server}  ${acc_balance:,.2f}")
 
-                await asyncio.sleep(1)
+                await self._sleep_or_stop(1)
             except websockets.ConnectionClosed:
                 break  # Normal disconnect — handled by _run_async
             except (ssl.SSLError, OSError, ConnectionResetError, BrokenPipeError) as e:
@@ -2747,6 +3282,9 @@ class BridgeWorker(QThread):
                 msg = json.loads(raw_msg)
             except Exception:
                 continue
+            if not isinstance(msg, dict):
+                self.log_signal.emit("⚠️ 收到非对象 WebSocket 消息，已跳过")
+                continue
 
             if msg.get("type") == "ping":
                 try:
@@ -2764,7 +3302,10 @@ class BridgeWorker(QThread):
                 try:
                     resp = await loop.run_in_executor(None, self._process_command, msg)
                 except Exception as ce:
-                    resp = {"status": "error", "message": str(ce)}
+                    self.log_signal.emit(
+                        f"命令执行器异常: {BridgeWorker._short_text(ce, 500)}"
+                    )
+                    resp = {"status": "error", "message": "bridge_command_failed"}
                 try:
                     await ws.send(json.dumps({"type": "result", "command_id": cmd_id, "result": resp}))
                 except Exception:
@@ -2775,7 +3316,8 @@ class BridgeWorker(QThread):
         """Send client heartbeat every 15s with status summary."""
         import websockets
         while self.running:
-            await asyncio.sleep(15)
+            if not await self._sleep_or_stop(15):
+                break
             try:
                 hb = {
                     "type": "hb",
@@ -2797,114 +3339,21 @@ class BridgeWorker(QThread):
 
     def stop(self):
         self.running = False
+        self._stop_event.set()
+        loop = getattr(self, '_loop', None)
+        async_stop_event = self._async_stop_event
+        if loop and not loop.is_closed() and async_stop_event is not None:
+            try:
+                loop.call_soon_threadsafe(async_stop_event.set)
+            except RuntimeError:
+                pass
         ws = self._ws
         if ws:
             try:
-                loop = getattr(self, '_loop', None)
                 if loop and not loop.is_closed():
                     asyncio.run_coroutine_threadsafe(ws.close(), loop)
             except Exception:
                 pass
-
-# ══════════════════════════════════════════════════════════
-#  Update Downloader
-# ══════════════════════════════════════════════════════════
-
-class UpdateDownloader(QThread):
-    progress = Signal(int)
-    finished = Signal(bool, str)
-
-    def __init__(self, url, dest):
-        super().__init__()
-        self.url = url
-        self.dest = dest
-
-    def run(self):
-        try:
-            ctx = _get_ssl_context()
-            req = urllib.request.Request(self.url, headers={"User-Agent": "AURUM-Bridge/1.0"})
-            with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
-                total = int(resp.headers.get("Content-Length", 0))
-                downloaded = 0
-                with open(self.dest, "wb") as f:
-                    while True:
-                        chunk = resp.read(65536)
-                        if not chunk: break
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total > 0:
-                            self.progress.emit(int(downloaded * 100 / total))
-            self.finished.emit(True, "OK")
-        except Exception as e:
-            self.finished.emit(False, str(e))
-
-UPDATE_TEMP = os.path.join(CONFIG_DIR, "update_temp.exe")
-
-
-class UpdateDialog(QDialog):
-    def __init__(self, download_url, temp_path, parent=None):
-        super().__init__(parent)
-        self.download_url = download_url
-        self.temp_path = temp_path
-        self.setWindowTitle("AI交易实验室 Bridge 更新")
-        self.setFixedSize(400, 180)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(24, 20, 24, 20)
-
-        self.lbl_title = QLabel("正在下载更新...")
-        self.lbl_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #e2e8f0;")
-        layout.addWidget(self.lbl_title)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFixedHeight(8)
-        self.progress_bar.setStyleSheet(""
-            "QProgressBar{background:#2d2d3f;border:1px solid #444;border-radius:4px;}"
-            "QProgressBar::chunk{background:#f59e0b;border-radius:4px;}")
-        layout.addWidget(self.progress_bar)
-
-        self.lbl_status = QLabel("准备下载...")
-        self.lbl_status.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        layout.addWidget(self.lbl_status)
-
-        self.btn_close = QPushButton("取消")
-        self.btn_close.setProperty("secondary", True)
-        self.btn_close.clicked.connect(self.reject)
-        layout.addWidget(self.btn_close, alignment=Qt.AlignRight)
-
-        self._downloader = None
-        QTimer.singleShot(300, self._start_download)
-
-    def _start_download(self):
-        self._downloader = UpdateDownloader(self.download_url, self.temp_path)
-        self._downloader.progress.connect(self._on_progress)
-        self._downloader.finished.connect(self._on_finished)
-        self._downloader.start()
-
-    def _on_progress(self, pct):
-        self.progress_bar.setValue(pct)
-        self.lbl_status.setText(f"已下载 {pct}%")
-
-    def _on_finished(self, success, msg):
-        if success:
-            self.progress_bar.setValue(100)
-            self.lbl_title.setText("下载完成！")
-            self.lbl_status.setText("正在准备替换，程序将自动重启...")
-            self.btn_close.setEnabled(False)
-            self.btn_close.setText("请稍候...")
-            if self.parent() and hasattr(self.parent(), '_apply_update'):
-                self.parent()._apply_update()
-            self.accept()
-        else:
-            self.lbl_title.setText("下载失败")
-            self.lbl_status.setText(f"错误: {msg}")
-            self.lbl_status.setStyleSheet("color: #ef4444; font-size: 12px;")
-            self.btn_close.setText("关闭")
-
 
 # ══════════════════════════════════════════════════════════
 #  Login Page
@@ -2915,6 +3364,7 @@ class LoginPage(QWidget):
 
     def __init__(self):
         super().__init__()
+        self._login_request = None
         self._init_ui()
 
     def _init_ui(self):
@@ -3023,15 +3473,26 @@ class LoginPage(QWidget):
         self.chk_remember.setChecked(cfg.get("remember", False))
         self.chk_auto_login.setChecked(cfg.get("auto_login", False))
         if cfg.get("remember") and cfg.get("saved_password"):
-            self.input_password.setText(decrypt_password(cfg["saved_password"]))
+            self.input_password.setText(cfg["saved_password"])
 
     def _do_login(self):
+        if self._login_request is not None:
+            return
         server = self.input_server.text().strip()
         email = self.input_email.text().strip()
         password = self.input_password.text().strip()
 
         if not server or not email or not password:
             self.lbl_status.setText("请填写所有字段")
+            self.lbl_status.setProperty("error", True)
+            self.lbl_status.style().polish(self.lbl_status)
+            return
+
+        try:
+            server = normalize_server_url(server)
+        except ValueError as error:
+            self.lbl_status.setText(f"❌ {error}")
+            self.lbl_status.setProperty("success", False)
             self.lbl_status.setProperty("error", True)
             self.lbl_status.style().polish(self.lbl_status)
             return
@@ -3048,7 +3509,19 @@ class LoginPage(QWidget):
         payload = {"phone": email, "password": password, "client": "bridge"} if is_phone else {
             "email": email, "password": password, "client": "bridge"
         }
-        status_code, data = http_post_json(url, payload, timeout=10)
+        remember = self.chk_remember.isChecked()
+        auto_login = self.chk_auto_login.isChecked()
+        request = AsyncJsonRequest(url, payload, timeout=10, parent=self)
+        self._login_request = request
+        request.completed.connect(
+            lambda status_code, data: self._finish_login(
+                status_code, data, server, email, password, remember, auto_login,
+            )
+        )
+        request.start()
+
+    def _finish_login(self, status_code, data, server, email, password, remember, auto_login):
+        self._login_request = None
 
         self.btn_login.setEnabled(True)
         self.btn_login.setText("登录并连接")
@@ -3066,16 +3539,20 @@ class LoginPage(QWidget):
             cfg["token"] = token
             if data.get("refreshToken"):
                 cfg["refresh_token"] = data["refreshToken"]
-            cfg["remember"] = self.chk_remember.isChecked()
-            cfg["auto_login"] = self.chk_auto_login.isChecked()
-            if self.chk_remember.isChecked():
-                cfg["saved_password"] = encrypt_password(password)
+            cfg["remember"] = remember
+            cfg["auto_login"] = auto_login
+            if remember:
+                cfg["saved_password"] = password
             else:
                 cfg.pop("saved_password", None)
             cfg["plan"] = data.get("user", {}).get("plan", "free")
             cfg["role"] = data.get("user", {}).get("role", "user")
             cfg["plan_source"] = data.get("user", {}).get("planSource") or data.get("user", {}).get("plan_source")
-            save_config(cfg)
+            if not save_config(cfg):
+                self.lbl_status.setText("登录成功，但本机加密配置保存失败；桥接尚未启动")
+                self.lbl_status.setProperty("error", True)
+                self.lbl_status.style().polish(self.lbl_status)
+                return
 
             self.login_success.emit(email, token)
         else:
@@ -3091,6 +3568,7 @@ class LoginPage(QWidget):
 class BridgePage(QWidget):
     request_settings = Signal()
     request_observer_sources = Signal()
+    worker_stopped = Signal()
 
     def __init__(self):
         super().__init__()
@@ -3222,27 +3700,30 @@ class BridgePage(QWidget):
 
     def _on_worker_finished(self):
         """Called when BridgeWorker thread exits (normal stop or early exit)."""
-        self._reset_bridge_ui()
+        worker = self.sender()
+        if worker is not None and worker is not self._worker:
+            worker.deleteLater()
+            return
+        if worker is not None:
+            worker.deleteLater()
+        self._worker = None
+        self.btn_start.setEnabled(True)
+        self.btn_start.setText("▶  启动桥接")
+        self.btn_start.setStyleSheet("background-color: #3b82f6;")
+        self._set_status("已断开", "#6b7280")
+        self.worker_stopped.emit()
 
     def _reset_bridge_ui(self):
         if self._worker and self._worker.isRunning():
-            self._worker.stop()
-            self._worker.wait(3000)
-        self._worker = None
+            self.stop_bridge()
+            return
         self.btn_start.setText("▶  启动桥接")
         self.btn_start.setStyleSheet("background-color: #3b82f6;")
         self._set_status("已断开", "#6b7280")
 
     def _toggle_bridge(self):
         if self._worker and self._worker.isRunning():
-            # Stop
-            self._worker.stop()
-            self._worker.wait(3000)
-            self._worker = None
-            self.btn_start.setText("▶  启动桥接")
-            self.btn_start.setStyleSheet("background-color: #3b82f6;")
-            self._set_status("已停止", "#ef4444")
-            self._log("桥接已停止")
+            self.stop_bridge()
         else:
             cfg = load_config()
             server = cfg.get("server_url", DEFAULT_SERVER)
@@ -3250,10 +3731,17 @@ class BridgePage(QWidget):
             if not server or not token:
                 QMessageBox.warning(self, "信息不完整", "请先登录或配置服务器地址和Token。")
                 return
+            try:
+                server = normalize_server_url(server)
+            except ValueError as error:
+                QMessageBox.warning(self, "服务器地址无效", str(error))
+                return
             mt5_path = cfg.get("mt5_path", "")
-            if mt5_path and os.path.isdir(mt5_path):
+            if find_mt5_terminal_executable(mt5_path):
                 self._log(f"MT5 路径: {mt5_path}")
             else:
+                if mt5_path:
+                    self._log("已忽略失效的 MT5 路径，将重新自动探测")
                 mt5_path = None
             self._worker = BridgeWorker(server, token, mt5_path, cfg.get("refresh_token", ""))
             self._worker.log_signal.connect(self._log)
@@ -3269,14 +3757,15 @@ class BridgePage(QWidget):
     def stop_bridge(self):
         if self._worker and self._worker.isRunning():
             self._worker.stop()
-            if not self._worker.wait(3000):
-                # Worker didn't stop in time — force terminate
-                self._worker.terminate()
-                self._worker.wait(1000)
-            self._worker = None
+            self.btn_start.setEnabled(False)
+            self.btn_start.setText("正在安全停止...")
+            self._set_status("正在停止...", "#f59e0b")
+            self._log("正在等待网络与 MT5 操作安全结束...")
+            return False
         self.btn_start.setText("▶  启动桥接")
         self.btn_start.setStyleSheet("background-color: #3b82f6;")
         self._set_status("已断开", "#6b7280")
+        return True
 
     def start_bridge(self):
         if not self._worker or not self._worker.isRunning():
@@ -3292,11 +3781,12 @@ class SettingsPage(QWidget):
 
     def __init__(self):
         super().__init__()
-        self._downloader = None
-        self._pending_update = None
         self._mt5_installations = []
         self._manual_mt5_path = None
         self._mt5_loaded = False
+        self._update_request = None
+        self._test_request = None
+        self._logout_request = None
         self._init_ui()
 
     def _init_ui(self):
@@ -3378,6 +3868,7 @@ class SettingsPage(QWidget):
         acct_row.addWidget(self.lbl_user, 1)
         btn_logout = QPushButton("退出登录")
         btn_logout.setProperty("danger", "true")
+        self.btn_logout = btn_logout
         btn_logout.clicked.connect(self._logout)
         acct_row.addWidget(btn_logout)
         account_layout.addLayout(acct_row)
@@ -3455,19 +3946,6 @@ class SettingsPage(QWidget):
         self.lbl_update_status.setVisible(False)
         version_layout.addWidget(self.lbl_update_status)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(16)
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setRange(0, 100)
-        version_layout.addWidget(self.progress_bar)
-
-        self.btn_retry_download = QPushButton("重试下载")
-        self.btn_retry_download.setProperty("warning", True)
-        self.btn_retry_download.setFixedHeight(30)
-        self.btn_retry_download.setVisible(False)
-        self.btn_retry_download.clicked.connect(self._do_update)
-        version_layout.addWidget(self.btn_retry_download)
-
         layout.addWidget(version_card)
         layout.addStretch()
 
@@ -3478,8 +3956,6 @@ class SettingsPage(QWidget):
         self.lbl_test_result.style().polish(self.lbl_test_result)
         self.lbl_update_status.setVisible(False)
         self.lbl_update_status.setText("")
-        self.progress_bar.setVisible(False)
-        self.btn_retry_download.setVisible(False)
         # Reset button to default state
         self.btn_check_update.setText("检查更新")
         self.btn_check_update.setEnabled(True)
@@ -3523,46 +3999,96 @@ class SettingsPage(QWidget):
             QTimer.singleShot(50, self._refresh_mt5_paths)
 
     def _test_connection(self):
+        if self._test_request is not None:
+            return
         server = self.input_server.text().strip()
         if not server:
             self.lbl_test_result.setText("请输入服务器地址")
+            return
+        try:
+            server = normalize_server_url(server)
+        except ValueError as error:
+            self.lbl_test_result.setText(f"❌ {error}")
+            self.lbl_test_result.setProperty("success", False)
+            self.lbl_test_result.setProperty("error", True)
+            self.lbl_test_result.style().polish(self.lbl_test_result)
             return
         self.btn_test.setEnabled(False)
         self.btn_test.setText("测试中...")
         QApplication.processEvents()
 
-        status_code, data = http_get_json(f"{server.rstrip('/')}/api/auth/me", timeout=5)
+        request = AsyncJsonRequest(f"{server.rstrip('/')}/api/auth/me", timeout=5, parent=self)
+        self._test_request = request
+        request.completed.connect(self._finish_test_connection)
+        request.start()
+
+    def _finish_test_connection(self, status_code, data):
+        self._test_request = None
         self.btn_test.setEnabled(True)
         self.btn_test.setText("测试连接")
 
         if status_code in (200, 401, 403):
             self.lbl_test_result.setText("✅ 连接正常")
             self.lbl_test_result.setProperty("success", True)
+            self.lbl_test_result.setProperty("error", False)
         else:
             self.lbl_test_result.setText(f"❌ 连接失败: {data.get('error', f'HTTP {status_code}')}")
+            self.lbl_test_result.setProperty("success", False)
             self.lbl_test_result.setProperty("error", True)
         self.lbl_test_result.style().polish(self.lbl_test_result)
 
     def _save_server(self):
         server = self.input_server.text().strip()
         if not server: return
-        update_config({"server_url": server})
-        self.lbl_test_result.setText("✅ 已保存")
-        self.lbl_test_result.setProperty("success", True)
+        try:
+            server = normalize_server_url(server)
+        except ValueError as error:
+            self.lbl_test_result.setText(f"❌ {error}")
+            self.lbl_test_result.setProperty("success", False)
+            self.lbl_test_result.setProperty("error", True)
+            self.lbl_test_result.style().polish(self.lbl_test_result)
+            return
+        saved = update_config({"server_url": server})
+        self.lbl_test_result.setText("✅ 已保存" if saved else "❌ 本机配置保存失败")
+        self.lbl_test_result.setProperty("success", saved)
+        self.lbl_test_result.setProperty("error", not saved)
         self.lbl_test_result.style().polish(self.lbl_test_result)
 
     def _logout(self):
+        if self._logout_request is not None:
+            return
         cfg = load_config()
-        server = cfg.get("server_url", DEFAULT_SERVER).rstrip('/')
         token = cfg.get("token", "")
-        if token:
-            http_post_json(f"{server}/api/auth/bridge-revoke", {}, timeout=5, token=token)
+        if not token:
+            self._finish_logout(0, {})
+            return
+        try:
+            server = normalize_server_url(cfg.get("server_url", DEFAULT_SERVER))
+        except ValueError:
+            self._finish_logout(0, {})
+            return
+        self.btn_logout.setEnabled(False)
+        request = AsyncJsonRequest(
+            f"{server.rstrip('/')}/api/auth/bridge-revoke", {},
+            timeout=5, token=token, parent=self,
+        )
+        self._logout_request = request
+        request.completed.connect(self._finish_logout)
+        request.start()
+
+    def _finish_logout(self, _status_code, _data):
+        self._logout_request = None
+        self.btn_logout.setEnabled(True)
+        self._clear_local_auth()
+        self.logout_signal.emit()
+
+    def _clear_local_auth(self):
+        cfg = load_config()
         cfg.pop("token", None)
         cfg.pop("refresh_token", None)
         cfg.pop("saved_password", None)
         cfg["auto_login"] = False
-        save_config(cfg)
-        self.logout_signal.emit()
+        return save_config(cfg)
 
     # ── MT5 路径选择 ──
 
@@ -3614,10 +4140,15 @@ class SettingsPage(QWidget):
             selected = dlg.selectedFiles()
             if selected:
                 path = os.path.normpath(selected[0])
+                if not find_mt5_terminal_executable(path):
+                    QMessageBox.warning(self, "MT5 路径无效", "所选目录中没有 terminal64.exe 或 terminal.exe。")
+                    return
                 self._set_mt5_manual(path)
 
     def _set_mt5_manual(self, path):
         """将手动指定的路径加入下拉列表并选中，同时持久化到 config"""
+        if not find_mt5_terminal_executable(path):
+            return False
         self._manual_mt5_path = path
         self.combo_mt5.blockSignals(True)
         found_idx = -1
@@ -3631,18 +4162,20 @@ class SettingsPage(QWidget):
         self.combo_mt5.setCurrentIndex(found_idx)
         self.lbl_mt5_source.setText("手动指定")
         self.combo_mt5.blockSignals(False)
-        update_config({"mt5_path": path})
+        return update_config({"mt5_path": path})
 
     def _get_selected_mt5_path(self):
         """返回当前选中的 MT5 路径，或 None"""
         idx = self.combo_mt5.currentIndex()
         if idx >= 0:
             path = self.combo_mt5.itemData(idx)
-            if path and os.path.isdir(path):
+            if find_mt5_terminal_executable(path):
                 return path
         return None
 
     def _check_update(self):
+        if self._update_request is not None:
+            return
         cfg = load_config()
         server = cfg.get("server_url", DEFAULT_SERVER)
         self.btn_check_update.setEnabled(False)
@@ -3652,26 +4185,32 @@ class SettingsPage(QWidget):
         self.lbl_update_status.setProperty("muted", True)
         QApplication.processEvents()
 
+        try:
+            server = normalize_server_url(server)
+        except ValueError as error:
+            self._finish_update_check(0, {"error": str(error)})
+            return
         url = f"{server.rstrip('/')}/api/bridge/version"
-        status_code, data = http_get_json(url, timeout=10)
+        request = AsyncJsonRequest(url, timeout=10, parent=self)
+        self._update_request = request
+        request.completed.connect(self._finish_update_check)
+        request.start()
+
+    def _finish_update_check(self, status_code, data):
+        self._update_request = None
 
         self.btn_check_update.setEnabled(True)
 
         if status_code == 200 and data.get("version"):
             remote_ver = data["version"]
             if self._version_newer(remote_ver, APP_VERSION):
-                self.lbl_update_status.setText(f"发现新版本 {remote_ver}")
+                self.lbl_update_status.setText(
+                    f"发现新版本 {remote_ver}；自动更新暂时停用，请等待带数字签名和 SHA-256 校验的安装包"
+                )
                 self.lbl_update_status.setProperty("warning", True)
                 self.lbl_update_status.style().polish(self.lbl_update_status)
-                self.btn_check_update.setText("立即更新")
-                self.btn_check_update.setProperty("secondary", False)
-                self.btn_check_update.style().polish(self.btn_check_update)
-                try: self.btn_check_update.clicked.disconnect()
-                except (TypeError, RuntimeError):
-                    pass
-                self.btn_check_update.clicked.connect(self._do_update)
-                self.btn_retry_download.setVisible(False)
-                self._pending_update = data
+                self.btn_check_update.setText("检查更新")
+                self.btn_check_update.setProperty("secondary", True)
             else:
                 self.lbl_update_status.setText("✅ 已是最新版本")
                 self.lbl_update_status.setProperty("success", True)
@@ -3679,7 +4218,6 @@ class SettingsPage(QWidget):
                 self.btn_check_update.setText("检查更新")
                 self.btn_check_update.setProperty("secondary", True)
                 self.btn_check_update.style().polish(self.btn_check_update)
-                self.btn_retry_download.setVisible(False)
         else:
             self.lbl_update_status.setText(f"❌ 检查失败: {data.get('error', f'HTTP {status_code}')}")
             self.lbl_update_status.setProperty("error", True)
@@ -3689,77 +4227,7 @@ class SettingsPage(QWidget):
             self.btn_check_update.style().polish(self.btn_check_update)
 
     def _version_newer(self, remote, local):
-        def parse(v):
-            return [int(x) for x in v.replace("v", "").split(".") if x.isdigit()]
-        try: return parse(remote) > parse(local)
-        except (AttributeError, TypeError, ValueError): return False
-
-    def _do_update(self):
-        data = self._pending_update
-        if not data:
-            return
-        server = load_config().get("server_url", DEFAULT_SERVER)
-        updater_url = data.get("updater_url", "")
-        if updater_url.startswith("/"):
-            updater_url = f"{server.rstrip('/')}{updater_url}"
-        if not updater_url:
-            return
-
-        self.btn_check_update.setEnabled(False)
-        self.btn_check_update.setText("下载中...")
-        self.btn_retry_download.setVisible(False)
-        self.lbl_update_status.setVisible(True)
-        self.lbl_update_status.setText("正在下载更新器...")
-        self.lbl_update_status.setProperty("muted", True)
-        self.lbl_update_status.style().polish(self.lbl_update_status)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
-        QApplication.processEvents()
-
-        # Download updater from Qiniu
-        updater_tmp = os.path.join(CONFIG_DIR, "aurum_updater.exe")
-        try:
-            import urllib.request, shutil
-            ctx = _get_ssl_context()
-            req = urllib.request.Request(updater_url, headers={"User-Agent": "AURUM-Bridge/1.0"})
-            with urllib.request.urlopen(req, timeout=120, context=ctx) as resp:
-                total = int(resp.headers.get("Content-Length", 0))
-                downloaded = 0
-                with open(updater_tmp, "wb") as f:
-                    while True:
-                        chunk = resp.read(65536)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total > 0:
-                            self.progress_bar.setValue(int(downloaded * 100 / total))
-                            QApplication.processEvents()
-        except Exception as e:
-            self.lbl_update_status.setText(f"❌ 下载失败: {e}")
-            self.lbl_update_status.setProperty("error", True)
-            self.lbl_update_status.style().polish(self.lbl_update_status)
-            self.btn_check_update.setEnabled(True)
-            self.btn_check_update.setText("重试")
-            self.progress_bar.setVisible(False)
-            return
-
-        self.progress_bar.setValue(100)
-        self.lbl_update_status.setText("正在替换，程序将自动重启...")
-        QApplication.processEvents()
-
-        # Launch updater
-        exe_path = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
-        import subprocess
-        updater_env = os.environ.copy()
-        updater_env["AURUM_BRIDGE_PROFILE"] = BRIDGE_PROFILE
-        subprocess.Popen(
-            [updater_tmp, server, exe_path, str(os.getpid())],
-            shell=False,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
-            env=updater_env,
-        )
-        QTimer.singleShot(500, lambda: os._exit(0))
+        return version_is_newer(remote, local)
 
 # ══════════════════════════════════════════════════════════
 #  Main Window
@@ -3771,6 +4239,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME if BRIDGE_PROFILE == "default" else f"{APP_NAME} · {BRIDGE_PROFILE}")
         self.setFixedSize(520, 600)
         self._pending_update_data = None
+        self._auto_update_request = None
+        self._auto_login_request = None
+        self._observer_login_request = None
+        self._quit_requested = False
         self._runtime_started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
         ico_path = resource_path("aurum_icon.ico")
@@ -3792,6 +4264,7 @@ class MainWindow(QMainWindow):
         self.bridge_page = BridgePage()
         self.bridge_page.request_settings.connect(self._show_settings)
         self.bridge_page.request_observer_sources.connect(self._show_observer_sources_menu)
+        self.bridge_page.worker_stopped.connect(self._finish_quit_if_ready)
         self.stack.addWidget(self.bridge_page)
 
         self.settings_page = SettingsPage()
@@ -3815,13 +4288,34 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentIndex(0)
 
     def _auto_login(self):
+        if self._auto_login_request is not None:
+            return
         cfg = load_config()
+        if not cfg.get("auto_login") or self.stack.currentIndex() != 0:
+            return
         server = cfg.get("server_url", DEFAULT_SERVER)
         token = cfg.get("token", "")
         email = cfg.get("email", "")
         if not server or not email:
             self.login_page.load_config()
             return
+        try:
+            normalized_server = normalize_server_url(server)
+        except ValueError as error:
+            self.login_page.lbl_status.setText(f"自动登录已停止：{error}")
+            self.login_page.lbl_status.setProperty("warning", False)
+            self.login_page.lbl_status.setProperty("error", True)
+            self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
+            self.login_page.load_config()
+            return
+        if normalized_server != server:
+            server = normalized_server
+            cfg["server_url"] = server
+            if not save_config(cfg):
+                self.login_page.lbl_status.setText("自动登录已停止：服务器地址规范化后无法保存")
+                self.login_page.lbl_status.setProperty("error", True)
+                self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
+                return
 
         self.login_page.input_server.setText(server)
         self.login_page.input_email.setText(email)
@@ -3829,43 +4323,107 @@ class MainWindow(QMainWindow):
         self.login_page.lbl_status.setProperty("muted", True)
         self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
 
-        # 验证 token
-        if token:
-            status_code, data = http_get_json(f"{server.rstrip('/')}/api/auth/me", timeout=5, token=token)
-            if status_code == 401 and cfg.get("refresh_token"):
-                refresh_status, refresh_data = http_post_json(
-                    f"{server.rstrip('/')}/api/auth/bridge-refresh",
-                    {"refreshToken": cfg["refresh_token"]}, timeout=10
-                )
-                if refresh_status == 200 and refresh_data.get("token"):
-                    token = refresh_data["token"]
-                    cfg["token"] = token
-                    save_config(cfg)
-                    status_code, data = http_get_json(
-                        f"{server.rstrip('/')}/api/auth/me", timeout=5, token=token
-                    )
-            if status_code == 200:
-                user = data.get("user", data)
-                cfg["plan"] = user.get("plan", "free")
-                cfg["role"] = user.get("role", "user")
-                cfg["plan_source"] = user.get("planSource") or user.get("plan_source")
-                if not cfg.get("refresh_token"):
-                    session_status, session_data = http_post_json(
-                        f"{server.rstrip('/')}/api/auth/bridge-session", {}, timeout=10, token=token
-                    )
-                    if session_status == 200 and session_data.get("refreshToken"):
-                        cfg["refresh_token"] = session_data["refreshToken"]
-                save_config(cfg)
-                self._on_login_success(email, token)
-                return
-            if status_code == 0 or status_code >= 500:
-                self.login_page.lbl_status.setText("服务器暂时无法连接，15 秒后自动重试")
-                self.login_page.lbl_status.setProperty("warning", True)
-                self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
-                QTimer.singleShot(15000, self._auto_login)
-                return
+        if not token:
+            self._show_auto_login_expired()
+            return
+        request = AsyncJsonRequest(
+            f"{server.rstrip('/')}/api/auth/me", timeout=5, token=token, parent=self,
+        )
+        self._auto_login_request = request
+        request.completed.connect(
+            lambda status, data: self._finish_auto_login_me(status, data, server, email, token, cfg)
+        )
+        request.start()
 
-        # Token 无效，回到登录页手动输入密码
+    def _finish_auto_login_me(self, status, data, server, email, token, cfg):
+        self._auto_login_request = None
+        if status == 401 and cfg.get("refresh_token"):
+            request = AsyncJsonRequest(
+                f"{server.rstrip('/')}/api/auth/bridge-refresh",
+                {"refreshToken": cfg["refresh_token"]}, timeout=10, parent=self,
+            )
+            self._auto_login_request = request
+            request.completed.connect(
+                lambda refresh_status, refresh_data: self._finish_auto_login_refresh(
+                    refresh_status, refresh_data, server, email, cfg,
+                )
+            )
+            request.start()
+            return
+        self._complete_auto_login_me(status, data, server, email, token, cfg)
+
+    def _finish_auto_login_refresh(self, status, data, server, email, cfg):
+        self._auto_login_request = None
+        token = data.get("token") if status == 200 else None
+        if not token:
+            self._complete_auto_login_me(status, data, server, email, "", cfg)
+            return
+        cfg["token"] = token
+        if data.get("refreshToken"):
+            cfg["refresh_token"] = data["refreshToken"]
+        if not save_config(cfg):
+            self.login_page.lbl_status.setText("自动登录已停止：登录凭据无法安全保存")
+            self.login_page.lbl_status.setProperty("error", True)
+            self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
+            return
+        request = AsyncJsonRequest(
+            f"{server.rstrip('/')}/api/auth/me", timeout=5, token=token, parent=self,
+        )
+        self._auto_login_request = request
+        request.completed.connect(
+            lambda me_status, me_data: self._complete_auto_login_me(
+                me_status, me_data, server, email, token, cfg,
+            )
+        )
+        request.start()
+
+    def _complete_auto_login_me(self, status, data, server, email, token, cfg):
+        self._auto_login_request = None
+        if status == 200 and token:
+            user = data.get("user", data)
+            cfg["plan"] = user.get("plan", "free")
+            cfg["role"] = user.get("role", "user")
+            cfg["plan_source"] = user.get("planSource") or user.get("plan_source")
+            if not cfg.get("refresh_token"):
+                request = AsyncJsonRequest(
+                    f"{server.rstrip('/')}/api/auth/bridge-session", {},
+                    timeout=10, token=token, parent=self,
+                )
+                self._auto_login_request = request
+                request.completed.connect(
+                    lambda session_status, session_data: self._finish_auto_login_session(
+                        session_status, session_data, email, token, cfg,
+                    )
+                )
+                request.start()
+                return
+            self._finish_auto_login_session(200, {}, email, token, cfg)
+            return
+        if status == 0 or status in (408, 425, 429) or status >= 500:
+            self.login_page.lbl_status.setText("服务器暂时无法连接，15 秒后自动重试")
+            self.login_page.lbl_status.setProperty("warning", True)
+            self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
+            QTimer.singleShot(15000, self._auto_login)
+            return
+        self._show_auto_login_expired()
+
+    def _finish_auto_login_session(self, status, data, email, token, cfg):
+        self._auto_login_request = None
+        if status == 200 and data.get("refreshToken"):
+            cfg["refresh_token"] = data["refreshToken"]
+        if not save_config(cfg):
+            self.login_page.lbl_status.setText("自动登录已停止：本机加密配置保存失败")
+            self.login_page.lbl_status.setProperty("error", True)
+            self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
+            return
+        self._on_login_success(email, token)
+
+    def _show_auto_login_expired(self):
+        cfg = load_config()
+        cfg["auto_login"] = False
+        cfg.pop("token", None)
+        cfg.pop("refresh_token", None)
+        save_config(cfg)
         self.login_page.lbl_status.setText("登录已过期，请重新登录")
         self.login_page.lbl_status.setProperty("warning", True)
         self.login_page.lbl_status.style().polish(self.login_page.lbl_status)
@@ -3889,24 +4447,39 @@ class MainWindow(QMainWindow):
                 self._refresh_observer_sources_button()
             if cfg.get("auto_start_bridge"):
                 QTimer.singleShot(700, self.bridge_page.start_bridge)
-        except Exception:
-            pass
+        except Exception as error:
+            log_error(f"登录成功后的界面初始化失败: {BridgeWorker._short_text(error, 500)}")
+            QMessageBox.warning(self, "界面初始化异常", "登录已成功，但桥接界面初始化不完整，请重启桥接软件。")
         # 启动后 3 秒自动检查更新，之后每 30 分钟检查一次
         QTimer.singleShot(3000, self._auto_check_update)
         self._update_timer.start(30 * 60 * 1000)
 
     def _auto_check_update(self):
         """静默检查更新，有新版本时在主页显示提示条"""
+        if self._auto_update_request is not None:
+            return
         cfg = load_config()
         server = cfg.get("server_url", DEFAULT_SERVER)
-        status_code, data = http_get_json(f"{server.rstrip('/')}/api/bridge/version", timeout=8)
+        try:
+            server = normalize_server_url(server)
+        except ValueError:
+            return
+        request = AsyncJsonRequest(
+            f"{server.rstrip('/')}/api/bridge/version", timeout=8, parent=self,
+        )
+        self._auto_update_request = request
+        request.completed.connect(self._finish_auto_update_check)
+        request.start()
+
+    def _finish_auto_update_check(self, status_code, data):
+        self._auto_update_request = None
         if status_code == 200 and data.get("version"):
             remote_ver = data["version"]
             if self.settings_page._version_newer(remote_ver, APP_VERSION):
                 if not self._pending_update_data:
                     self._pending_update_data = data
-                    self.bridge_page._log(f"发现新版本 {remote_ver}，请前往设置页更新")
-                    self.bridge_page.lbl_update_hint.setText(f"新版本 {remote_ver} 可用 — 点此前往更新")
+                    self.bridge_page._log(f"发现新版本 {remote_ver}；自动更新等待签名安装包")
+                    self.bridge_page.lbl_update_hint.setText(f"新版本 {remote_ver} 可用 — 自动更新暂时停用")
                     self.bridge_page.lbl_update_hint.setVisible(True)
 
     def _show_settings(self):
@@ -3934,9 +4507,9 @@ class MainWindow(QMainWindow):
             for profile in profiles:
                 runtime = read_profile_runtime(CONFIG_ROOT, profile["slug"])
                 running = bool(runtime.get("running"))
-                state_text = "运行中" if running else "已停止"
+                state_text = "无响应" if runtime.get("state") == "unresponsive" else ("运行中" if running else "已停止")
                 action = menu.addAction(f"{profile['name']}   ·   {state_text}")
-                action.setToolTip("切换到桥接窗口" if running else "启动并自动登录")
+                action.setToolTip("桥接心跳已超时，点击尝试切换窗口" if runtime.get("state") == "unresponsive" else ("切换到桥接窗口" if running else "启动并自动登录"))
                 action.triggered.connect(
                     lambda checked=False, slug=profile["slug"]: self._open_saved_observer_source(slug)
                 )
@@ -3954,7 +4527,8 @@ class MainWindow(QMainWindow):
         runtime = read_profile_runtime(CONFIG_ROOT, slug)
         if runtime.get("running"):
             if not activate_profile_window(runtime.get("pid")):
-                QMessageBox.information(self, "观摩源正在运行", "该观摩源进程仍在运行，请从任务栏切换到对应窗口。")
+                message = "该观摩源进程仍在运行，但心跳已超时，请检查对应窗口。" if runtime.get("state") == "unresponsive" else "该观摩源进程仍在运行，请从任务栏切换到对应窗口。"
+                QMessageBox.information(self, "观摩源正在运行", message)
             return
         try:
             launch_bridge_profile(
@@ -3964,7 +4538,21 @@ class MainWindow(QMainWindow):
         except OSError as error:
             QMessageBox.warning(self, "启动失败", f"观摩源启动失败：{error}")
             return
+        self._schedule_observer_source_start_check(slug)
         QMessageBox.information(self, "正在启动", "观摩源桥接与对应 MT5 正在启动，将使用已保存的账号自动登录。")
+
+    def _schedule_observer_source_start_check(self, slug):
+        QTimer.singleShot(3000, lambda checked_slug=slug: self._verify_observer_source_started(checked_slug))
+
+    def _verify_observer_source_started(self, slug):
+        runtime = read_profile_runtime(CONFIG_ROOT, slug)
+        self._refresh_observer_sources_button()
+        if not runtime.get("running"):
+            QMessageBox.warning(
+                self,
+                "观摩源未启动",
+                f"观摩源“{slug}”没有建立运行心跳。档案和加密凭据已保留，可从观摩源菜单再次启动并查看独立窗口错误。",
+            )
 
     def _open_new_observer_source(self):
         if load_config().get("role") != "admin" or BRIDGE_PROFILE != "default":
@@ -3975,10 +4563,13 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _create_and_launch_observer_source(self, dialog):
+        if self._observer_login_request is not None:
+            return
         values = dialog.values()
         raw_slug = values["slug"]
         slug = normalize_profile(raw_slug)
-        if not raw_slug or slug == "default":
+        if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}", raw_slug or "")
+                or slug == "default"):
             dialog.show_error("请输入有效的档案标识，仅支持字母、数字、短横线和下划线。")
             return
         if any(item["slug"] == slug for item in list_bridge_profiles(CONFIG_ROOT)):
@@ -3992,8 +4583,7 @@ class MainWindow(QMainWindow):
             dialog.show_error(f"该源账号已被“{account_owner.get('name') or account_owner['slug']}”使用，不能重复启动。")
             return
         mt5_path = values["mt5_path"]
-        terminal_path = next((os.path.join(mt5_path, name) for name in ("terminal64.exe", "terminal.exe")
-                              if os.path.isfile(os.path.join(mt5_path, name))), None)
+        terminal_path = find_mt5_terminal_executable(mt5_path)
         if not terminal_path:
             dialog.show_error("所选目录中没有 terminal64.exe 或 terminal.exe。")
             return
@@ -4004,11 +4594,31 @@ class MainWindow(QMainWindow):
 
         parent_cfg = load_config()
         server = parent_cfg.get("server_url", DEFAULT_SERVER)
+        try:
+            server = normalize_server_url(server)
+        except ValueError as error:
+            dialog.show_error(f"主桥接服务器地址无效：{error}")
+            return
         dialog.set_submitting(True)
         QApplication.processEvents()
-        status_code, data = http_post_json(f"{server.rstrip('/')}/api/login", {
+        request = AsyncJsonRequest(f"{server.rstrip('/')}/api/login", {
             "email": values["account"], "password": values["password"], "client": "bridge",
-        }, timeout=10)
+        }, timeout=10, parent=self)
+        self._observer_login_request = request
+        request.completed.connect(
+            lambda status_code, data: self._finish_create_observer_source_login(
+                status_code, data, dialog, values, slug, server, mt5_path,
+            )
+        )
+        request.start()
+
+    def _finish_create_observer_source_login(self, status_code, data, dialog, values, slug, server, mt5_path):
+        self._observer_login_request = None
+        try:
+            if not dialog.isVisible():
+                return
+        except RuntimeError:
+            return
         user = data.get("user", {}) if isinstance(data, dict) else {}
         plan_source = user.get("planSource") or user.get("plan_source")
         if status_code != 200 or not data.get("token"):
@@ -4018,7 +4628,6 @@ class MainWindow(QMainWindow):
             dialog.show_error("该账号不是专用桥接源账号，请先在统一管理后台的观摩频道中创建。")
             return
         try:
-            register_bridge_profile(CONFIG_ROOT, slug, values["name"] or slug)
             write_profile_config(CONFIG_ROOT, slug, {
                 "server_url": server,
                 "email": values["account"],
@@ -4027,28 +4636,54 @@ class MainWindow(QMainWindow):
                 "remember": True,
                 "auto_login": True,
                 "auto_start_bridge": True,
-                "saved_password": encrypt_password(values["password"]),
+                "saved_password": values["password"],
                 "plan": user.get("plan", "pro"),
                 "role": user.get("role", "user"),
                 "plan_source": plan_source,
                 "mt5_path": mt5_path,
                 "mt5_portable": False,
             })
+        except (OSError, ValueError) as error:
+            dialog.show_error(f"观摩源本机配置保存失败：{error}")
+            return
+        try:
+            register_bridge_profile(CONFIG_ROOT, slug, values["name"] or slug)
+        except (OSError, ValueError) as error:
+            dialog.accept()
+            self._refresh_observer_sources_button()
+            QMessageBox.warning(
+                self,
+                "观摩源已保存但名称登记失败",
+                f"加密配置已安全保存，档案仍可通过标识“{slug}”启动，但显示名称登记失败：{error}",
+            )
+            return
+        try:
             launch_bridge_profile(
                 sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__),
                 slug, frozen=bool(getattr(sys, "frozen", False)),
             )
         except OSError as error:
-            dialog.show_error(f"观摩源启动失败：{error}")
+            dialog.accept()
+            self._refresh_observer_sources_button()
+            QMessageBox.warning(
+                self,
+                "观摩源已保存但未启动",
+                f"档案和加密凭据已安全保存，但独立进程启动失败：{error}\n请从观摩源菜单再次启动。",
+            )
             return
         dialog.accept()
         self._refresh_observer_sources_button()
+        self._schedule_observer_source_start_check(slug)
         QMessageBox.information(self, "观摩源已启动", "新的桥接窗口和独立 MT5 进程正在启动。统一管理后台将在连接成功后显示在线。")
 
     def _on_logout(self):
         self._update_timer.stop()
         self._pending_update_data = None
         self.bridge_page.stop_bridge()
+        # stop_bridge() disables future token persistence synchronously. Clear
+        # once more after that boundary so an in-flight refresh cannot restore
+        # credentials between SettingsPage cleanup and this callback.
+        self.settings_page._clear_local_auth()
         self.bridge_page.lbl_login_user.setText("")
         self.bridge_page.btn_observer_sources.setVisible(False)
         self.bridge_page.lbl_update_hint.setVisible(False)
@@ -4098,9 +4733,20 @@ class MainWindow(QMainWindow):
 
     def _do_quit(self):
         self._runtime_timer.stop()
-        self.bridge_page.stop_bridge()
-        self.tray.hide()
-        QTimer.singleShot(200, QApplication.quit)
+        self._update_timer.stop()
+        self._quit_requested = True
+        if self.bridge_page.stop_bridge():
+            self._finish_quit_if_ready()
+        else:
+            self.tray.showMessage(
+                APP_NAME, "正在安全停止桥接，完成后将自动退出。",
+                QSystemTrayIcon.Information, 2000,
+            )
+
+    def _finish_quit_if_ready(self):
+        if self._quit_requested:
+            self.tray.hide()
+            QApplication.quit()
 
     def closeEvent(self, event):
         event.ignore()

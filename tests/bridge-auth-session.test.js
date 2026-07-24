@@ -7,6 +7,8 @@ vi.mock('../server/db.js', () => ({
 
 import { queryOne, queryRun } from '../server/db.js'
 import {
+  consumeBridgeConnectionTicket,
+  createBridgeConnectionTicket,
   createBridgeRefreshSession,
   revokeBridgeRefreshSessions,
   useBridgeRefreshSession,
@@ -56,5 +58,52 @@ describe('bridge refresh sessions', () => {
     queryRun.mockResolvedValue({ changes: 2 })
     await revokeBridgeRefreshSessions(15)
     expect(queryRun).toHaveBeenCalledWith(expect.stringContaining('revoked_at'), [15])
+  })
+
+  it('uses the caller transaction when revoking sessions atomically with an account change', async () => {
+    const run = vi.fn().mockResolvedValue([{ affectedRows: 2 }, []])
+    await revokeBridgeRefreshSessions(15, { run })
+    expect(run).toHaveBeenCalledWith(expect.stringContaining('revoked_at'), [15])
+    expect(queryRun).not.toHaveBeenCalled()
+  })
+})
+
+describe('bridge websocket tickets', () => {
+  it('creates an opaque ticket and consumes it exactly once', async () => {
+    const issued = await createBridgeConnectionTicket({
+      id: 7, role: 'user', plan: 'pro', plan_expires_at: null, token_version: 3,
+    }, { redis: null })
+    expect(issued.ticket.length).toBeGreaterThan(40)
+    expect(issued.expiresInSeconds).toBe(30)
+    await expect(consumeBridgeConnectionTicket(issued.ticket, { redis: null }))
+      .resolves.toEqual({ userId: 7, tokenVersion: 3 })
+    await expect(consumeBridgeConnectionTicket(issued.ticket, { redis: null }))
+      .rejects.toMatchObject({ code: 'bridge_ticket_expired' })
+  })
+
+  it('rejects malformed tickets and ineligible users', async () => {
+    await expect(consumeBridgeConnectionTicket('short', { redis: null }))
+      .rejects.toMatchObject({ code: 'bridge_ticket_invalid' })
+    await expect(createBridgeConnectionTicket({ id: 8, role: 'user', plan: 'plus' }, { redis: null }))
+      .rejects.toMatchObject({ code: 'bridge_membership_required' })
+  })
+
+  it('stores and atomically consumes tickets through Redis when available', async () => {
+    const values = new Map()
+    const redis = {
+      set: vi.fn(async (key, value) => { values.set(key, value); return 'OK' }),
+      eval: vi.fn(async (_script, _count, key) => {
+        const value = values.get(key) || null
+        values.delete(key)
+        return value
+      }),
+    }
+    const issued = await createBridgeConnectionTicket({
+      id: 9, role: 'admin', plan: 'free', token_version: 5,
+    }, { redis })
+    expect(redis.set).toHaveBeenCalledWith(expect.stringContaining('bridge:ws-ticket:'), expect.any(String), 'NX', 'EX', 30)
+    await expect(consumeBridgeConnectionTicket(issued.ticket, { redis }))
+      .resolves.toEqual({ userId: 9, tokenVersion: 5 })
+    expect(redis.eval).toHaveBeenCalledTimes(1)
   })
 })
