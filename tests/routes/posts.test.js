@@ -164,6 +164,16 @@ describe('sanitizeContentHtml', () => {
       const input = '<a href=javascript:alert(1)>link</a>'
       expect(sanitize(input)).not.toContain('javascript:')
     })
+
+    it('blocks entity-encoded javascript URLs', () => {
+      const result = sanitize('<a href="java&#x73;cript:alert(1)">link</a>')
+      expect(result).toBe('<a href="#">link</a>')
+    })
+
+    it('drops SVG payloads and inline styles', () => {
+      const result = sanitize('<svg><a href="javascript:alert(1)">bad</a></svg><p style="background:url(javascript:alert(1))">safe</p>')
+      expect(result).toBe('<p>safe</p>')
+    })
   })
 
   describe('preserves safe HTML', () => {
@@ -187,6 +197,11 @@ describe('sanitizeContentHtml', () => {
     it('keeps <a> with safe href', () => {
       expect(sanitize('<a href="https://example.com">link</a>'))
         .toBe('<a href="https://example.com">link</a>')
+    })
+
+    it('adds rel protection to new-window links', () => {
+      expect(sanitize('<a href="https://example.com" target="_blank">link</a>'))
+        .toBe('<a href="https://example.com" target="_blank" rel="noopener noreferrer">link</a>')
     })
 
     it('keeps <br> tags', () => {
@@ -263,6 +278,7 @@ describe('GET /posts — list', () => {
     expect(json.posts[0].title).toBe('Test Post')
     expect(json.posts[0].tags).toEqual([{ slug: 'tag1', label: 'tag1' }])
     expect(json.posts[0].canDelete).toBeFalsy()
+    expect(json.posts[0].user).not.toHaveProperty('email')
     expect(json.availableTags).toHaveLength(1)
   })
 
@@ -407,6 +423,7 @@ describe('GET /posts — single post', () => {
     expect(json.post.contentHtml).toBe('<p>Rich</p>')
     expect(json.post.contentText).toBe('Plain text')
     expect(json.post.contentFormat).toBe('rich')
+    expect(json.post.user).not.toHaveProperty('email')
     expect(json.post.pinned).toBe(true)
     expect(json.post.isSticky).toBe(true)
     expect(json.post.featured).toBe(true)
@@ -823,6 +840,7 @@ describe('GET /post-replies', () => {
     expect(json.replies[0].floorNumber).toBe(1)
     expect(json.replies[0].likes).toBe(3)
     expect(json.replies[0].user.name).toBe('Bob')
+    expect(json.replies[0].user).not.toHaveProperty('email')
     expect(json.replies[0].quoteReply).toBeNull()
     expect(json.total).toBe(1)
     expect(json.totalPages).toBe(1)

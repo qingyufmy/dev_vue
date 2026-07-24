@@ -6,6 +6,7 @@ vi.mock('../../server/db.js', () => ({
   queryOne: vi.fn(),
   queryAll: vi.fn(),
   queryRun: vi.fn(),
+  logAudit: vi.fn(),
 }))
 
 vi.mock('../../server/middleware/auth.js', () => ({
@@ -68,6 +69,41 @@ describe('config.js — GET /system-config-public/:category', () => {
     // express doesn't auto-set status in our test helper, check error message
     const body = await httpReq(makeApp(), 'GET', '/api/system-config-public/smtp')
     expect(body.error).toBe('Forbidden')
+  })
+})
+
+describe('config.js — admin credential redaction', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('只返回白名单配置，并对敏感值脱敏', async () => {
+    queryAll.mockResolvedValueOnce([
+      { category:'smtp', key:'pass', value:'fake-mail-password' },
+      { category:'ai_provider', key:'deepseek_api_key', value:'fake-api-key' },
+      { category:'crypto_wallet', key:'solana_rpc_url', value:'https://rpc.example.test/key' },
+      { category:'smtp', key:'host', value:'smtp.example.test' },
+    ])
+    const body = await httpReq(makeApp(), 'GET', '/api/system-config')
+    expect(body.ok).toBe(true)
+    const values = Object.fromEntries(Object.values(body.config).flat().map(item => [item.key, item.value]))
+    expect(values.pass).toBe('***REDACTED***')
+    expect(values.deepseek_api_key).toBeUndefined()
+    expect(values.solana_rpc_url).toBeUndefined()
+    expect(values.host).toBe('smtp.example.test')
+    expect(body.config.ai_provider).toBeUndefined()
+  })
+
+  it('拒绝后台白名单之外的配置分类', async () => {
+    const body = await httpReq(makeApp(), 'PUT', '/api/system-config/ai_provider', { items:[{ key:'deepseek_api_key', value:'secret' }] })
+    expect(body.ok).toBe(false)
+    expect(body.error).toContain('不可在后台修改')
+    expect(queryRun).not.toHaveBeenCalled()
+  })
+
+  it('支付模式由执行合约锁定为固定 TRC-20', async () => {
+    const body = await httpReq(makeApp(), 'PUT', '/api/system-config/crypto_wallet', { items:[{ key:'payment_mode', value:'dynamic' }] })
+    expect(body.ok).toBe(false)
+    expect(body.error).toContain('执行合约锁定')
+    expect(queryRun).not.toHaveBeenCalled()
   })
 })
 

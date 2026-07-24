@@ -15,7 +15,7 @@ vi.mock('../../server/middleware/auth.js', () => ({
   },
 }))
 
-import { queryOne, queryRun } from '../../server/db.js'
+import { queryAll, queryOne, queryRun } from '../../server/db.js'
 import userRouter from '../../server/routes/user.js'
 
 function makeApp() {
@@ -88,6 +88,31 @@ describe('user.js — GET /profile', () => {
 
     const body = await httpReq(makeApp(), 'GET', '/api/profile')
     expect(body.user.telegramBinding).toEqual({ username: 'testbot', name: 'Test' })
+  })
+})
+
+describe('user referrals - GET /referrals/me', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('reports dollar amounts from commission instead of source order amount', async () => {
+    queryOne.mockResolvedValueOnce({ referral_code:'JOIN1', referral_credit:10 })
+    queryAll.mockResolvedValueOnce([
+      { id:1, referred_id:2, status:'pending', amount_cents:100, commission:10, plan_label:'Pro', email:'friend@example.com' },
+      { id:2, referred_id:3, status:'approved', amount_cents:29, commission:2.9, plan_label:'Plus', email:'paid@example.com' },
+    ])
+
+    const body = await httpReq(makeApp(), 'GET', '/api/referrals/me')
+
+    expect(body.ok).toBe(true)
+    expect(body.stats).toMatchObject({
+      pending_credit_amount:10,
+      available_credit_amount:10,
+      reserved_credit_amount:0,
+      used_credit_amount:0,
+    })
+    expect(body.stats).not.toHaveProperty('available_credit_cents')
+    expect(body.recent_commissions[0].commission_amount).toBe(2.9)
+    expect(body.recent_invited_users[0].credit_amount).toBe(10)
   })
 })
 

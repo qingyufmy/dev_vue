@@ -1,5 +1,6 @@
 import { queryAll, queryOne, queryRun, withTransaction } from '../db.js'
 import { fetchBilibiliVideo } from '../utils.js'
+import { deleteCourseAttachmentDirectory } from '../course-attachments.js'
 
 const COURSE_CATEGORIES = new Set(['morning', 'indicator', 'pattern', 'strategy', 'advanced'])
 const COURSE_CONTENT_TYPES = new Set(['video', 'article'])
@@ -14,7 +15,8 @@ function serializeCourse(row) {
     article_url:row.article_url || '', article_object_key:row.article_object_key || '',
     access_level:row.access_level || 'free', status:row.status || 'draft', sort_order:Number(row.sort_order || 0),
     quiz_count:Number(row.quiz_count || 0), mindmap_count:Number(row.mindmap_count || 0),
-    knowledge_count:Number(row.knowledge_count || 0), created_at:row.created_at || null, updated_at:row.updated_at || null,
+    knowledge_count:Number(row.knowledge_count || 0), attachment_count:Number(row.attachment_count || 0),
+    created_at:row.created_at || null, updated_at:row.updated_at || null,
   }
 }
 
@@ -31,6 +33,7 @@ export async function getAdminContentSystemOverview() {
       (SELECT COUNT(*) FROM courses WHERE status = 'draft') AS courses_draft,
       (SELECT COUNT(*) FROM feedback) AS feedback_total,
       (SELECT COUNT(*) FROM feedback WHERE created_at >= CURDATE()) AS feedback_today,
+      (SELECT COUNT(*) FROM course_resources WHERE type = 'attachment') AS attachments_total,
       (SELECT COUNT(DISTINCT category) FROM system_config) AS config_categories`),
     queryAll(`SELECT category, COUNT(*) AS item_count, MAX(updated_at) AS updated_at
       FROM system_config GROUP BY category ORDER BY category`),
@@ -53,18 +56,21 @@ export async function listAdminCourses({ page, pageSize, search = '', status = '
   const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const [totalRow, rows] = await Promise.all([
     queryOne(`SELECT COUNT(*) AS total FROM courses ${clause}`, params),
-    queryAll(`SELECT episode_id, number, title, description, category, content_type, duration,
-      access_level, status, quiz_count, mindmap_count, knowledge_count, created_at
+    queryAll(`SELECT episode_id, number, title, description, category, content_type, duration, cover,
+      access_level, status, quiz_count, mindmap_count, knowledge_count, created_at, updated_at,
+      (SELECT COUNT(*) FROM course_resources resource WHERE resource.episode_id = courses.episode_id AND resource.type = 'attachment') AS attachment_count
       FROM courses ${clause} ORDER BY created_at DESC, episode_id DESC LIMIT ? OFFSET ?`, [...params,paging.pageSize,(paging.page-1)*paging.pageSize]),
   ])
   const total=number(totalRow?.total)
-  return { courses:rows.map(row=>({ ...row, id:number(row.episode_id), number:number(row.number), quiz_count:number(row.quiz_count), mindmap_count:number(row.mindmap_count), knowledge_count:number(row.knowledge_count) })), pagination:{page:paging.page,page_size:paging.pageSize,total,total_pages:Math.max(1,Math.ceil(total/paging.pageSize))} }
+  return { courses:rows.map(row=>({ ...row, id:number(row.episode_id), number:number(row.number), quiz_count:number(row.quiz_count), mindmap_count:number(row.mindmap_count), knowledge_count:number(row.knowledge_count), attachment_count:number(row.attachment_count) })), pagination:{page:paging.page,page_size:paging.pageSize,total,total_pages:Math.max(1,Math.ceil(total/paging.pageSize))} }
 }
 
 export async function getAdminCourse(courseId) {
   const id = Number(courseId)
   if (!Number.isInteger(id) || id <= 0) throw new Error('invalid_course_id')
-  return serializeCourse(await queryOne('SELECT * FROM courses WHERE episode_id = ?', [id]))
+  return serializeCourse(await queryOne(`SELECT courses.*,
+    (SELECT COUNT(*) FROM course_resources resource WHERE resource.episode_id = courses.episode_id AND resource.type = 'attachment') AS attachment_count
+    FROM courses WHERE episode_id = ?`, [id]))
 }
 
 export async function saveAdminCourse(input = {}) {
@@ -122,6 +128,7 @@ export async function deleteAdminCourse(courseId) {
     await run('DELETE FROM comments WHERE episode_id = ?', [id])
     await run('DELETE FROM courses WHERE episode_id = ?', [id])
   })
+  try { deleteCourseAttachmentDirectory(id) } catch (error) { console.error('[AdminContent] attachment cleanup failed:', error.message) }
   return course
 }
 

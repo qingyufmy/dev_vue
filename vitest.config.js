@@ -5,6 +5,10 @@ export default defineConfig({
     include: ['tests/**/*.test.js'],
     globals: true,
     environment: 'node',
+    env: {
+      NODE_ENV: 'test',
+      JWT_SECRET: 'vitest-only-secret-not-for-production',
+    },
     coverage: {
       provider: 'v8',
       include: ['server/routes/ai/**/*.js'],

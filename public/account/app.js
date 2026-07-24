@@ -126,7 +126,7 @@ function notificationsTemplate() {
 function referralTemplate() {
   if (!state.referral) return '<div class="page-loading"><span></span><strong>正在读取邀请信息</strong></div>'
   const stats = state.referral.stats || {}
-  return `<div class="section-stack"><article class="panel"><div class="section-heading"><div><h2>邀请链接</h2><p>好友通过该链接注册后，归因和奖励由服务器记录。</p></div></div><div class="referral-code"><input id="referralLink" value="${escapeHtml(state.referral.referral_link || '')}" readonly><button id="copyReferralBtn" class="button secondary">复制链接</button></div></article><div class="metric-grid"><article class="panel metric"><span>已邀请</span><strong>${Number(stats.invited_count || 0)} 人</strong></article><article class="panel metric"><span>已付费</span><strong>${Number(stats.paid_invited_count || 0)} 人</strong></article><article class="panel metric"><span>可用奖励</span><strong>${money(Number(stats.available_credit_cents || 0) / 100)}</strong></article></div></div>`
+  return `<div class="section-stack"><article class="panel"><div class="section-heading"><div><h2>邀请链接</h2><p>好友通过该链接注册后，归因和奖励由服务器记录。</p></div></div><div class="referral-code"><input id="referralLink" value="${escapeHtml(state.referral.referral_link || '')}" readonly><button id="copyReferralBtn" class="button secondary">复制链接</button></div></article><div class="metric-grid"><article class="panel metric"><span>已邀请</span><strong>${Number(stats.invited_count || 0)} 人</strong></article><article class="panel metric"><span>已付费</span><strong>${Number(stats.paid_invited_count || 0)} 人</strong></article><article class="panel metric"><span>可用奖励</span><strong>${money(Number(stats.available_credit_amount || 0))}</strong></article></div></div>`
 }
 
 function renderTab() {
@@ -235,7 +235,8 @@ async function pollPayment(orderId) {
   } catch {}
 }
 
-function logoutEverywhere() {
+async function logoutEverywhere() {
+  try { await api('/api/auth/logout-all',{ method:'POST' }) } catch {}
   AuthSession.clear(); notifyParent('account-session-logout'); location.replace(embedMode === 'ai' ? '/ai/auth/?mode=login' : embedded ? '/auth/login?mode=login' : '/')
 }
 

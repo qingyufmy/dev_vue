@@ -98,6 +98,19 @@ describe('authMiddleware', () => {
     expect(req.user.id).toBe(1)
   })
 
+  it('rejects a token issued before the user session version changed', async () => {
+    const token = jwt.sign({ userId:1, tokenVersion:2 }, JWT_SECRET, { expiresIn:'7d' })
+    queryOne.mockResolvedValue({ id:1, role:'user', plan:'free', token_version:3 })
+    const req = mockReq(`Bearer ${token}`)
+    const res = mockRes()
+    const next = mockNext()
+    await authMiddleware(req, res, next)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(res._status).toBe(401)
+    expect(res._json.error).toContain('登录状态已失效')
+    expect(next).not.toHaveBeenCalled()
+  })
+
   it('preserves an expired plan and exposes free effective permissions', async () => {
     const token = jwt.sign({ userId: 1 }, JWT_SECRET, { expiresIn: '7d' })
     const fakeUser = { id: 1, email: 'test@test.com', role: 'user', plan: 'pro', plan_expires_at: '2020-01-01 00:00:00' }
@@ -164,6 +177,18 @@ describe('optionalAuth', () => {
     expect(req.user).toBeDefined()
   })
 
+  it('does not attach a user for a revoked optional token', async () => {
+    const token = jwt.sign({ userId:1, tokenVersion:1 }, JWT_SECRET, { expiresIn:'7d' })
+    queryOne.mockResolvedValue({ id:1, role:'user', plan:'free', token_version:2 })
+    const req = mockReq(`Bearer ${token}`)
+    const res = mockRes()
+    const next = mockNext()
+    await optionalAuth(req, res, next)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(next).toHaveBeenCalled()
+    expect(req.user).toBeNull()
+  })
+
   it('calls next() even if DB query fails', async () => {
     const token = jwt.sign({ userId: 1 }, JWT_SECRET, { expiresIn: '7d' })
     queryOne.mockRejectedValue(new Error('DB error'))
@@ -205,10 +230,11 @@ describe('adminOnly', () => {
 
 describe('generateToken', () => {
   it('returns a valid JWT string', () => {
-    const token = generateToken(42)
+    const token = generateToken(42, 3)
     expect(typeof token).toBe('string')
     const decoded = jwt.verify(token, JWT_SECRET)
     expect(decoded.userId).toBe(42)
+    expect(decoded.tokenVersion).toBe(3)
   })
 
   it('token expires in 7 days', () => {

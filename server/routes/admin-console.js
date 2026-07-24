@@ -7,7 +7,7 @@ import { getAdminAiOperationsOverview } from '../admin/ai-operations.js'
 import { updateObserverChannel, updateObserverSource } from './ai/observer-channels.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource, listObserverChannelAssignments, replaceObserverChannelAssignments } from './ai/observer-channels.js'
 import { reconcileAutoSchedulers } from './ai/scheduler.js'
-import { applyBridgeRuntimeState, isBridgeAlive } from '../bridge-ws.js'
+import { applyBridgeRuntimeState, isBridgeAlive, broadcastAdminEvent } from '../bridge-ws.js'
 import { createObserverSourceAccount } from './ai/observer-source-accounts.js'
 import { getAdminPlatformRiskPolicy, getAdminRiskAuditOverview, listAdminAuditEvents, saveAdminPlatformRiskPolicy } from '../admin/risk-audit.js'
 import { setGlobalKillSwitch } from './ai/risk-state.js'
@@ -62,8 +62,8 @@ function serializeOrder(row) {
     plan_label:row.plan_label || '',
     period:row.period || '',
     period_label:row.period_label || '',
-    amount_cents:Number(row.amount || 0),
-    confirmed_cents:Number(row.amount_confirmed || 0),
+    amount:Number(row.amount || 0),
+    confirmed_amount:Number(row.amount_confirmed || 0),
     currency:row.currency || 'USD',
     status:row.status || 'pending',
     status_label:row.status_label || '',
@@ -273,12 +273,12 @@ router.put('/admin/ai/observer-channels/:id/assignments',authMiddleware,adminOnl
 })
 
 router.get('/admin/risk-audit/overview', authMiddleware, adminOnly, async (req, res) => {
-  try { res.json({ ok:true, ...(await getAdminRiskAuditOverview({ page:req.query.page, pageSize:req.query.page_size, decision:req.query.decision })) }) }
+  try { res.json({ ok:true, ...(await getAdminRiskAuditOverview({ accountPage:req.query.account_page, accountPageSize:req.query.account_page_size })) }) }
   catch (error) { console.error('[AdminConsole] risk audit overview failed:', error); res.status(500).json({ ok:false, error:'风控与审计数据加载失败' }) }
 })
 
 router.get('/admin/risk-audit/admin-events', authMiddleware, adminOnly, async (req, res) => {
-  try { res.json({ ok:true, ...(await listAdminAuditEvents({ page:req.query.page, pageSize:req.query.page_size, search:req.query.search })) }) }
+  try { res.json({ ok:true, ...(await listAdminAuditEvents({ page:req.query.page, pageSize:req.query.page_size, search:req.query.search, targetType:req.query.target_type })) }) }
   catch (error) { console.error('[AdminConsole] admin audit events failed:', error); res.status(500).json({ ok:false, error:'管理操作记录加载失败' }) }
 })
 
@@ -288,6 +288,11 @@ router.post('/admin/risk-audit/global-stop', authMiddleware, adminOnly, async (r
     const reason = String(req.body?.reason || '').trim()
     if (enabled && reason.length < 4) return res.status(400).json({ ok:false, error:'开启平台紧急停止时，请填写至少 4 个字的原因' })
     await setGlobalKillSwitch(req.user.id, req.user.role, enabled, reason)
+    broadcastAdminEvent('risk', enabled ? 'global_stop_enabled' : 'global_stop_disabled', {
+      enabled,
+      reason:reason.slice(0, 160),
+      changed_by:Number(req.user.id),
+    }, { scopes:['overview', 'risk-audit'], refresh:true })
     res.json({ ok:true })
   } catch (error) { adminAiError(res, error) }
 })
@@ -364,13 +369,13 @@ router.get('/admin/commercial/overview', authMiddleware, adminOnly, async (req, 
         SUM(status = 'paid') AS paid,
         SUM(status IN ('pending','processing')) AS pending,
         SUM(status IN ('failed','expired','cancelled')) AS closed,
-        COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_confirmed ELSE 0 END), 0) AS revenue_cents,
-        COALESCE(SUM(CASE WHEN status = 'paid' AND DATE(paid_at) = CURDATE() THEN amount_confirmed ELSE 0 END), 0) AS today_revenue_cents
+        COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_confirmed ELSE 0 END), 0) AS revenue,
+        COALESCE(SUM(CASE WHEN status = 'paid' AND DATE(paid_at) = CURDATE() THEN amount_confirmed ELSE 0 END), 0) AS today_revenue
         FROM orders`),
       queryOne(`SELECT COUNT(*) AS total,
         SUM(status = 'pending') AS pending,
         SUM(status = 'approved') AS approved,
-        COALESCE(SUM(CASE WHEN status = 'approved' THEN commission ELSE 0 END), 0) AS approved_cents
+        COALESCE(SUM(CASE WHEN status = 'approved' THEN commission ELSE 0 END), 0) AS approved_amount
         FROM referrals`),
       queryOne(`SELECT COUNT(*) AS total,
         SUM(status = 'failed') AS failed,
@@ -382,12 +387,12 @@ router.get('/admin/commercial/overview', authMiddleware, adminOnly, async (req, 
       orders_paid:Number(orders?.paid || 0),
       orders_pending:Number(orders?.pending || 0),
       orders_closed:Number(orders?.closed || 0),
-      revenue_cents:Number(orders?.revenue_cents || 0),
-      today_revenue_cents:Number(orders?.today_revenue_cents || 0),
+      revenue:Number(orders?.revenue || 0),
+      today_revenue:Number(orders?.today_revenue || 0),
       referrals_total:Number(referrals?.total || 0),
       referrals_pending:Number(referrals?.pending || 0),
       referrals_approved:Number(referrals?.approved || 0),
-      referral_approved_cents:Number(referrals?.approved_cents || 0),
+      referral_approved_amount:Number(referrals?.approved_amount || 0),
       notifications_total:Number(notifications?.total || 0),
       notifications_failed:Number(notifications?.failed || 0),
       notifications_pending:Number(notifications?.pending || 0),

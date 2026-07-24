@@ -1,8 +1,10 @@
 import { queryOne, queryRun, queryAll, withTransaction, beijingNow, parseBeijing } from '../db.js'
 import { adapters, getAdapter } from './chains/index.js'
 import { getCryptoWalletApiKey } from './wallet.js'
-import { calculatePlanExpiry, processReferralCommission } from '../utils.js'
+import { calculatePlanExpiry } from '../utils.js'
 import { USDT_CONTRACTS } from './constants.js'
+import { broadcastAdminEvent } from '../bridge-ws.js'
+import { enqueuePaymentSideEffect, schedulePaymentSideEffects } from '../jobs/payment-side-effects.js'
 
 const CONFIRM_POLL_MS = 15_000
 const EXPIRY_POLL_MS = 30_000
@@ -12,6 +14,16 @@ let confirmTimer = null
 let expiryTimer = null
 let fallbackTimer = null
 let started = false
+
+function rowsFrom(result) {
+  if (Array.isArray(result) && Array.isArray(result[0])) return result[0]
+  return Array.isArray(result) ? result : []
+}
+
+function affectedRows(result) {
+  const header = Array.isArray(result) ? result[0] : result
+  return Number(header?.affectedRows ?? header?.changes ?? 0)
+}
 
 export function formatUsdtAmount(amount) {
   return parseFloat(amount).toFixed(2)
@@ -67,7 +79,7 @@ async function checkConfirmations() {
 }
 
 async function activateMembership(orderId, userId) {
-  const order = await queryOne('SELECT plan, period, plan_label, amount, status FROM orders WHERE order_id = ? AND user_id = ?', [orderId, userId])
+  const order = await queryOne('SELECT plan, period, plan_label, amount, amount_confirmed, status FROM orders WHERE order_id = ? AND user_id = ?', [orderId, userId])
   if (!order) return
   if (order.status === 'paid') return true
   if (order.status && order.status !== 'pending') return false
@@ -84,17 +96,21 @@ async function activateMembership(orderId, userId) {
     const changes = result?.affectedRows ?? result?.changes ?? 0
     if (!changes) return false
 
-    const user = await queryOne('SELECT plan_expires_at FROM users WHERE id = ?', [userId])
+    const userRows = rowsFrom(await run('SELECT plan_expires_at FROM users WHERE id = ? FOR UPDATE', [userId]))
+    const user = userRows[0]
+    if (!user) throw new Error('PAYMENT_USER_NOT_FOUND')
     let baseDate = null
     if (user?.plan_expires_at) {
       const currentExpiry = new Date(user.plan_expires_at + 'T23:59:59+08:00')
       if (currentExpiry > new Date()) baseDate = currentExpiry
     }
     const expiresAt = calculatePlanExpiry(order.period, baseDate)
-    await run(
+    const userResult = await run(
       `UPDATE users SET plan = ?, plan_period = ?, plan_expires_at = ?, plan_source = 'paid', updated_at = ? WHERE id = ?`,
       [order.plan, order.period, expiresAt, now, userId]
     )
+    if (affectedRows(userResult) !== 1) throw new Error('PAYMENT_MEMBERSHIP_UPDATE_FAILED')
+    await enqueuePaymentSideEffect(run, { orderId, userId })
     return expiresAt
   })
 
@@ -104,19 +120,56 @@ async function activateMembership(orderId, userId) {
   }
 
   console.log(`[Monitor] Membership activated: user ${userId} -> ${order.plan} (expires ${activated})`)
-  void (async () => {
-    try {
-      await queryRun(
-        `INSERT INTO notifications (user_id, type, title, message) VALUES (?, 'system', '支付成功', ?)`,
-        [userId, `您已成功开通 ${order.plan_label || order.plan} 会员，有效期至 ${activated}`]
-      )
-    } catch (e) {
-      console.error('[Monitor] Notification error:', e.message)
-    }
-    await processReferralCommission(userId, order.amount, order.plan, order.plan_label, order.period)
-  })().catch(err => console.error('[Monitor] Post-payment side effect error:', err.message))
+  broadcastAdminEvent('commercial', 'payment_confirmed', {
+    user_id:Number(userId), order_id:String(orderId), status:'paid', plan:String(order.plan || ''),
+  }, { scopes:['overview', 'commercial', 'users'], refresh:true })
+  schedulePaymentSideEffects()
 
   return activated
+}
+
+export async function expirePendingOrder(orderId, { requirePendingWatch = false } = {}) {
+  return withTransaction(async (run) => {
+    const orders = rowsFrom(await run(
+      `SELECT user_id, status, referral_credit_applied FROM orders
+       WHERE order_id = ? FOR UPDATE`,
+      [orderId]
+    ))
+    const order = orders[0]
+    if (!order || order.status !== 'pending') return false
+
+    if (requirePendingWatch) {
+      const watchResult = await run(
+        `UPDATE crypto_watch_list SET status = 'expired'
+         WHERE order_id = ? AND status = 'pending'`,
+        [orderId]
+      )
+      if (affectedRows(watchResult) === 0) return false
+    } else {
+      await run(
+        `UPDATE crypto_watch_list SET status = 'expired'
+         WHERE order_id = ? AND status = 'pending'`,
+        [orderId]
+      )
+    }
+
+    const orderResult = await run(
+      `UPDATE orders SET status = 'expired', status_label = '已过期'
+       WHERE order_id = ? AND status = 'pending'`,
+      [orderId]
+    )
+    if (affectedRows(orderResult) !== 1) return false
+
+    const creditUsed = Math.max(0, Number(order.referral_credit_applied) || 0)
+    if (creditUsed > 0) {
+      await run(
+        `UPDATE users SET referral_credit = referral_credit + ?, updated_at = NOW()
+         WHERE id = ?`,
+        [creditUsed, order.user_id]
+      )
+    }
+    return true
+  })
 }
 
 async function checkExpiry() {
@@ -130,10 +183,16 @@ async function checkExpiry() {
 
     if (expiredWatches.length > 0) {
       const ids = expiredWatches.map(r => r.order_id)
-      const ph = ids.map(() => '?').join(',')
-      await queryRun(`UPDATE crypto_watch_list SET status = 'expired' WHERE order_id IN (${ph})`, ids)
-      await queryRun(`UPDATE orders SET status = 'expired', status_label = '已过期' WHERE order_id IN (${ph}) AND status = 'pending'`, ids)
-      console.log(`[Monitor] Expired ${ids.length} orders via watch_list`)
+      const expiredIds = []
+      for (const id of ids) {
+        if (await expirePendingOrder(id, { requirePendingWatch:true })) expiredIds.push(id)
+      }
+      if (expiredIds.length) {
+        broadcastAdminEvent('commercial', 'orders_expired', {
+          order_ids:expiredIds.slice(0, 50), count:expiredIds.length, status:'expired',
+        }, { scopes:['overview', 'commercial'], refresh:true })
+        console.log(`[Monitor] Expired ${expiredIds.length} orders via watch_list`)
+      }
     }
 
     const expiredOrders = await queryAll(
@@ -148,10 +207,16 @@ async function checkExpiry() {
 
     if (expiredOrders.length > 0) {
       const ids = expiredOrders.map(r => r.order_id)
-      const ph = ids.map(() => '?').join(',')
-      await queryRun(`UPDATE orders SET status = 'expired', status_label = '已过期' WHERE order_id IN (${ph}) AND status = 'pending'`, ids)
-      await queryRun(`UPDATE crypto_watch_list SET status = 'expired' WHERE order_id IN (${ph})`, ids).catch(() => {})
-      console.log(`[Monitor] Expired ${ids.length} orders via orders table`)
+      const expiredIds = []
+      for (const id of ids) {
+        if (await expirePendingOrder(id)) expiredIds.push(id)
+      }
+      if (expiredIds.length) {
+        broadcastAdminEvent('commercial', 'orders_expired', {
+          order_ids:expiredIds.slice(0, 50), count:expiredIds.length, status:'expired',
+        }, { scopes:['overview', 'commercial'], refresh:true })
+        console.log(`[Monitor] Expired ${expiredIds.length} orders via orders table`)
+      }
     }
   } catch (err) {
     console.error('[Monitor] Expiry check error:', err.message)

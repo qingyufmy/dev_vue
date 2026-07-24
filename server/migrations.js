@@ -3,7 +3,8 @@
  * Each migration has an id and an up() function.
  * Already-run migrations are tracked in the `schema_migrations` table.
  */
-import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from './db.js'
+import { queryOne, queryAll, queryRun, withConnection, withTransaction, beijingNow } from './db.js'
+import crypto from 'node:crypto'
 
 export function applyPendingLifecycleSchema(schema) {
   return {
@@ -3431,10 +3432,625 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '126_position_management_foundation',
+    async up() {
+      const addColumn = async (table, name, definition) => {
+        const existing = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, [table, name])
+        if (!existing.length) await queryRun(`ALTER TABLE \`${table}\` ADD COLUMN \`${name}\` ${definition}`)
+      }
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_trade_theses (
+        thesis_id VARCHAR(64) NOT NULL,
+        management_group_id VARCHAR(64) NOT NULL,
+        signal_id BIGINT NOT NULL,
+        strategy_id INT NOT NULL,
+        strategy_version INT NOT NULL DEFAULT 1,
+        strategy_scope VARCHAR(20) NOT NULL,
+        owner_user_id INT NOT NULL DEFAULT 0,
+        standard_symbol VARCHAR(64) NOT NULL,
+        direction VARCHAR(8) NOT NULL,
+        entry_method VARCHAR(20) NOT NULL,
+        decision_timeframe VARCHAR(16) NOT NULL,
+        closed_bar_time_utc_ms BIGINT DEFAULT NULL,
+        market_snapshot_hash CHAR(64) NOT NULL,
+        output_contract_version VARCHAR(40) NOT NULL,
+        model_profile_id BIGINT DEFAULT NULL,
+        model_name VARCHAR(150) DEFAULT NULL,
+        core_entry_reason VARCHAR(1000) DEFAULT NULL,
+        original_stop_loss DECIMAL(20,8) DEFAULT NULL,
+        original_take_profits_json TEXT DEFAULT NULL,
+        invalidation_conditions_json LONGTEXT NOT NULL,
+        evidence_refs_json LONGTEXT NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'proposed',
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (thesis_id),
+        UNIQUE KEY uk_trade_thesis_signal (signal_id),
+        KEY idx_trade_thesis_group (management_group_id, status),
+        KEY idx_trade_thesis_strategy (strategy_id, standard_symbol, status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_position_management_tasks (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        task_key CHAR(64) NOT NULL,
+        task_type VARCHAR(32) NOT NULL,
+        execution_mode VARCHAR(20) NOT NULL DEFAULT 'display',
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        ownership_history_id BIGINT DEFAULT NULL,
+        broker_server_key VARCHAR(100) DEFAULT NULL,
+        login_account VARCHAR(50) DEFAULT NULL,
+        bridge_generation BIGINT DEFAULT NULL,
+        original_symbol VARCHAR(64) NOT NULL,
+        standard_symbol VARCHAR(64) NOT NULL,
+        strategy_id INT NOT NULL,
+        strategy_version INT NOT NULL DEFAULT 1,
+        management_group_id VARCHAR(64) NOT NULL,
+        thesis_id VARCHAR(64) NOT NULL,
+        origin_signal_id BIGINT DEFAULT NULL,
+        decision_signal_id BIGINT DEFAULT NULL,
+        outcome_id BIGINT DEFAULT NULL,
+        decision_timeframe VARCHAR(16) NOT NULL,
+        closed_bar_time_utc_ms BIGINT NOT NULL,
+        market_snapshot_hash CHAR(64) NOT NULL,
+        candidate_action VARCHAR(16) NOT NULL,
+        reversal_candidate TINYINT(1) NOT NULL DEFAULT 0,
+        model_evaluation_json LONGTEXT NOT NULL,
+        evidence_validation_json LONGTEXT DEFAULT NULL,
+        precondition_hash CHAR(64) DEFAULT NULL,
+        status VARCHAR(40) NOT NULL DEFAULT 'CANDIDATE',
+        state_version BIGINT NOT NULL DEFAULT 1,
+        lease_token VARCHAR(64) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        fencing_token BIGINT NOT NULL DEFAULT 0,
+        candidate_expires_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_position_management_task (task_key),
+        KEY idx_position_management_user (user_id, status, updated_at),
+        KEY idx_position_management_account (trading_account_id, status, updated_at),
+        KEY idx_position_management_group (management_group_id, closed_bar_time_utc_ms),
+        KEY idx_position_management_lease (status, lease_expires_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_position_management_commands (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        task_id BIGINT NOT NULL,
+        command_sequence INT NOT NULL,
+        operation_id VARCHAR(96) NOT NULL,
+        command_type VARCHAR(32) NOT NULL,
+        expected_state_json LONGTEXT NOT NULL,
+        request_json LONGTEXT NOT NULL,
+        send_status VARCHAR(24) NOT NULL DEFAULT 'prepared',
+        bridge_command_id VARCHAR(64) DEFAULT NULL,
+        bridge_result_json LONGTEXT DEFAULT NULL,
+        reconciliation_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        reconciled_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_position_management_operation (operation_id),
+        UNIQUE KEY uk_position_management_sequence (task_id, command_type, command_sequence),
+        KEY idx_position_management_command_task (task_id, created_at),
+        KEY idx_position_management_command_reconcile (reconciliation_status, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_position_management_events (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        task_id BIGINT NOT NULL,
+        from_status VARCHAR(40) DEFAULT NULL,
+        to_status VARCHAR(40) NOT NULL,
+        event_type VARCHAR(48) NOT NULL,
+        summary VARCHAR(500) NOT NULL,
+        details_json LONGTEXT DEFAULT NULL,
+        actor_type VARCHAR(24) NOT NULL DEFAULT 'system',
+        actor_user_id INT DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        KEY idx_position_management_event_task (task_id, id),
+        KEY idx_position_management_event_type (event_type, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS user_position_management_settings (
+        user_id INT NOT NULL PRIMARY KEY,
+        execution_mode VARCHAR(20) NOT NULL DEFAULT 'auto_exit',
+        auto_exit_daily_limit INT NOT NULL DEFAULT 0,
+        auto_reverse_daily_limit INT NOT NULL DEFAULT 0,
+        cooldown_minutes INT NOT NULL DEFAULT 60,
+        updated_at DATETIME NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS global_position_management_control (
+        id INT NOT NULL PRIMARY KEY,
+        maximum_mode VARCHAR(20) NOT NULL DEFAULT 'auto_exit',
+        ai_pending_order_enabled TINYINT(1) NOT NULL DEFAULT 1,
+        ai_pending_cancel_enabled TINYINT(1) NOT NULL DEFAULT 1,
+        block_new_risk TINYINT(1) NOT NULL DEFAULT 0,
+        freeze_automatic_operations TINYINT(1) NOT NULL DEFAULT 0,
+        emergency_flatten_enabled TINYINT(1) NOT NULL DEFAULT 0,
+        changed_by INT DEFAULT NULL,
+        reason VARCHAR(1000) DEFAULT NULL,
+        updated_at DATETIME NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`INSERT INTO global_position_management_control
+        (id, maximum_mode, ai_pending_order_enabled, ai_pending_cancel_enabled,
+         block_new_risk, freeze_automatic_operations, emergency_flatten_enabled, updated_at)
+        VALUES (1, 'auto_exit', 1, 1, 0, 0, 0, NOW()) ON DUPLICATE KEY UPDATE id = id`)
+
+      const signalColumns = [
+        ['thesis_id', 'VARCHAR(64) DEFAULT NULL AFTER decision_json'],
+        ['management_group_id', 'VARCHAR(64) DEFAULT NULL AFTER thesis_id'],
+      ]
+      for (const [name, definition] of signalColumns) await addColumn('ai_signals', name, definition)
+
+      const outcomeColumns = [
+        ['strategy_id', 'INT DEFAULT NULL AFTER trading_account_id'],
+        ['strategy_version', 'INT DEFAULT NULL AFTER strategy_id'],
+        ['thesis_id', 'VARCHAR(64) DEFAULT NULL AFTER strategy_version'],
+        ['management_group_id', 'VARCHAR(64) DEFAULT NULL AFTER thesis_id'],
+        ['ownership_history_id', 'BIGINT DEFAULT NULL AFTER management_group_id'],
+        ['broker_server_key', 'VARCHAR(100) DEFAULT NULL AFTER ownership_history_id'],
+        ['login_account', 'VARCHAR(50) DEFAULT NULL AFTER broker_server_key'],
+        ['original_symbol', 'VARCHAR(64) DEFAULT NULL AFTER symbol'],
+        ['entry_direction', 'VARCHAR(8) DEFAULT NULL AFTER original_symbol'],
+        ['system_magic', 'BIGINT DEFAULT NULL AFTER entry_direction'],
+        ['original_stop_loss', 'DECIMAL(20,8) DEFAULT NULL AFTER expected_volume'],
+        ['original_take_profits_json', 'TEXT DEFAULT NULL AFTER original_stop_loss'],
+        ['actual_stop_loss', 'DECIMAL(20,8) DEFAULT NULL AFTER original_take_profits_json'],
+        ['actual_take_profit', 'DECIMAL(20,8) DEFAULT NULL AFTER actual_stop_loss'],
+        ['protection_status', "VARCHAR(32) NOT NULL DEFAULT 'unknown' AFTER actual_take_profit"],
+        ['protection_modified', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER protection_status'],
+        ['last_position_snapshot_json', 'LONGTEXT DEFAULT NULL AFTER protection_modified'],
+      ]
+      for (const [name, definition] of outcomeColumns) await addColumn('signal_outcomes', name, definition)
+
+      // Existing open outcomes must not become orphaned merely because their
+      // originating signal predates the v1.1 contract. Backfill immutable
+      // legacy theses conservatively; legacy-only conditions remain shadow or
+      // manual-review evidence and never authorize automatic exit by themselves.
+      const legacyRows = await queryAll(`SELECT outcomes.id AS outcome_id, outcomes.user_id,
+          outcomes.trading_account_id, outcomes.signal_id, outcomes.symbol, outcomes.pending_ticket,
+          signals.prompt_type_id AS strategy_id, signals.signal_type, signals.entry_method,
+          signals.timeframe, signals.stop_loss_price, signals.take_profit_1_price,
+          signals.take_profit_2_price, signals.take_profit_3_price, signals.reasoning,
+          signals.decision_json, signals.market_data_json, signals.ai_model, signals.created_at,
+          strategies.version AS strategy_version, strategies.scope AS strategy_scope,
+          strategies.owner_user_id, ownership.id AS ownership_history_id,
+          ownership.broker_server_key, ownership.login_account
+        FROM signal_outcomes outcomes
+        JOIN ai_signals signals ON signals.id = outcomes.signal_id
+        JOIN auto_prompt_types strategies ON strategies.id = signals.prompt_type_id
+        LEFT JOIN mt5_account_ownership_history ownership
+          ON ownership.trading_account_id = outcomes.trading_account_id
+          AND ownership.user_id = outcomes.user_id AND ownership.ended_at IS NULL
+        WHERE outcomes.status IN ('open','closing') AND outcomes.thesis_id IS NULL
+        ORDER BY outcomes.id`)
+      for (const row of legacyRows) {
+        const direction = String(row.signal_type || '').toLowerCase().startsWith('buy') ? 'buy'
+          : String(row.signal_type || '').toLowerCase().startsWith('sell') ? 'sell' : null
+        if (!direction || !row.strategy_id || !row.signal_id) continue
+        const standardSymbol = String(row.symbol || '').replace(/\.(a|s|c|pro|std|z|ecn|m|raw|mini)$/i, '').toUpperCase()
+        const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')
+        const thesisId = `thesis_${digest([row.signal_id, row.strategy_id, row.strategy_version || 1, standardSymbol, direction]).slice(0, 32)}`
+        const managementGroupId = `group_${digest([row.strategy_id, row.strategy_version || 1, standardSymbol, thesisId, direction]).slice(0, 32)}`
+        let decision = {}
+        try { decision = JSON.parse(row.decision_json || '{}') } catch {}
+        const closedBarTime = Date.parse(`${String(row.created_at || '').replace(' ', 'T')}+08:00`) || null
+        const conditions = []
+        const stopLoss = Number(row.stop_loss_price)
+        if (stopLoss > 0) {
+          const conditionId = `cond_${digest(['protective_stop', direction, stopLoss, row.timeframe]).slice(0, 32)}`
+          conditions.push({ condition_id:conditionId, kind:'hard', type:'protective_stop',
+            timeframe:row.timeframe, operator:direction === 'buy' ? 'closed_bar_lte' : 'closed_bar_gte',
+            threshold:stopLoss, required_closed_bars:1, immutable:true })
+        }
+        const invalidation = String(decision.invalidation_condition || '').trim()
+        if (invalidation) {
+          const conditionId = `cond_${digest(['soft_thesis_invalidation', invalidation, row.timeframe]).slice(0, 32)}`
+          conditions.push({ condition_id:conditionId, kind:'soft', type:'model_evidence', timeframe:row.timeframe,
+            operator:'model_confirmed', threshold:null, required_closed_bars:2,
+            description:invalidation.slice(0, 1000), immutable:true, legacy_backfill:true })
+        }
+        if (!conditions.length) {
+          const conditionId = `cond_${digest(['legacy_manual_review', thesisId]).slice(0, 32)}`
+          conditions.push({ condition_id:conditionId, kind:'soft', type:'legacy_manual_review',
+            timeframe:row.timeframe, operator:'manual_only', threshold:null, required_closed_bars:2,
+            description:'历史交易缺少结构化失效条件，只允许展示和人工复核', immutable:true, legacy_backfill:true })
+        }
+        const evidenceRefs = [
+          ...(closedBarTime ? [`bar:${row.timeframe}:${closedBarTime}`] : []),
+          ...conditions.map(condition => `condition:${condition.condition_id}`),
+        ]
+        const marketHash = digest(row.market_data_json || '{}')
+        const takeProfits = [row.take_profit_1_price, row.take_profit_2_price, row.take_profit_3_price]
+          .map(Number).filter(value => value > 0)
+        const now = beijingNow()
+        await queryRun(`INSERT INTO ai_trade_theses
+          (thesis_id, management_group_id, signal_id, strategy_id, strategy_version, strategy_scope,
+           owner_user_id, standard_symbol, direction, entry_method, decision_timeframe,
+           closed_bar_time_utc_ms, market_snapshot_hash, output_contract_version, model_name,
+           core_entry_reason, original_stop_loss, original_take_profits_json,
+           invalidation_conditions_json, evidence_refs_json, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'position-management-v1.1', ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+          ON DUPLICATE KEY UPDATE thesis_id = thesis_id`, [
+          thesisId, managementGroupId, row.signal_id, row.strategy_id, row.strategy_version || 1,
+          row.strategy_scope || 'platform', row.owner_user_id || 0, standardSymbol, direction,
+          row.entry_method || 'market', row.timeframe || 'M30', closedBarTime, marketHash,
+          row.ai_model || null, String(row.reasoning || '').slice(0, 1000), stopLoss > 0 ? stopLoss : null,
+          JSON.stringify(takeProfits), JSON.stringify(conditions), JSON.stringify(evidenceRefs),
+          row.created_at || now, now,
+        ])
+        await queryRun('UPDATE ai_signals SET thesis_id = ?, management_group_id = ? WHERE id = ?',
+          [thesisId, managementGroupId, row.signal_id])
+        await queryRun(`UPDATE signal_outcomes SET strategy_id = ?, strategy_version = ?, thesis_id = ?,
+          management_group_id = ?, ownership_history_id = ?, broker_server_key = ?, login_account = ?,
+          original_symbol = COALESCE(original_symbol, symbol), entry_direction = ?, system_magic = 234000,
+          original_stop_loss = ?, original_take_profits_json = ?, updated_at = ? WHERE id = ?`, [
+          row.strategy_id, row.strategy_version || 1, thesisId, managementGroupId,
+          row.ownership_history_id || null, row.broker_server_key || null, row.login_account || null,
+          direction, stopLoss > 0 ? stopLoss : null, JSON.stringify(takeProfits), now, row.outcome_id,
+        ])
+      }
+    }
+  },
+  {
+    id: '127_terminal_pending_outcome_cleanup',
+    async up() {
+      const terminal = await queryRun(`UPDATE signal_outcomes outcomes
+        LEFT JOIN auto_signal_deliveries deliveries ON deliveries.id = outcomes.delivery_id
+        LEFT JOIN ai_signals signals ON signals.id = outcomes.signal_id
+        SET outcomes.status = COALESCE(deliveries.pending_state, signals.pending_state),
+          outcomes.attribution_status = 'not_filled', outcomes.last_scan_at = NOW(), outcomes.updated_at = NOW()
+        WHERE outcomes.status IN ('open','closing') AND outcomes.position_id IS NULL
+          AND outcomes.pending_ticket IS NOT NULL
+          AND COALESCE(deliveries.pending_state, signals.pending_state) IN ('cancelled','expired','superseded')`)
+      await queryRun(`UPDATE ai_trade_theses theses SET theses.status = 'closed', theses.updated_at = NOW()
+        WHERE theses.status IN ('proposed','active')
+          AND NOT EXISTS (SELECT 1 FROM signal_outcomes outcomes
+            WHERE outcomes.thesis_id = theses.thesis_id AND outcomes.status IN ('open','closing'))`)
+      console.log(`[Migrations] 127 closed ${Number(terminal?.changes || 0)} terminal pending outcome(s)`)
+    }
+  },
+  {
+    id: '128_position_management_account_rollouts',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS position_management_account_rollouts (
+        trading_account_id INT NOT NULL PRIMARY KEY,
+        user_id INT NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 0,
+        maximum_mode VARCHAR(20) NOT NULL DEFAULT 'display',
+        auto_exit_daily_limit INT NOT NULL DEFAULT 1,
+        cooldown_minutes INT NOT NULL DEFAULT 60,
+        approved_by INT DEFAULT NULL,
+        reason VARCHAR(1000) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_position_management_rollout_user_account (user_id, trading_account_id),
+        KEY idx_position_management_rollout_enabled (enabled, maximum_mode, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
+  },
+  {
+    id: '129_remove_position_management_shadow_mode',
+    async up() {
+      await queryRun(`UPDATE global_position_management_control
+        SET maximum_mode = 'display', updated_at = NOW()
+        WHERE maximum_mode = 'shadow'`)
+      await queryRun(`UPDATE user_position_management_settings
+        SET execution_mode = 'display', updated_at = NOW()
+        WHERE execution_mode = 'shadow'`)
+      await queryRun(`UPDATE position_management_account_rollouts
+        SET maximum_mode = 'display', updated_at = NOW()
+        WHERE maximum_mode = 'shadow'`)
+      await queryRun(`ALTER TABLE global_position_management_control
+        MODIFY maximum_mode VARCHAR(20) NOT NULL DEFAULT 'display'`)
+      await queryRun(`ALTER TABLE user_position_management_settings
+        MODIFY execution_mode VARCHAR(20) NOT NULL DEFAULT 'display'`)
+      await queryRun(`ALTER TABLE position_management_account_rollouts
+        MODIFY maximum_mode VARCHAR(20) NOT NULL DEFAULT 'display'`)
+    }
+  },
+  {
+    id: '130_default_automatic_close_enabled',
+    async up() {
+      // Only change the default for users without an explicit preference.
+      // Existing rows, including users who manually selected "display", are
+      // intentionally preserved across platform close-switch changes.
+      await queryRun(`ALTER TABLE user_position_management_settings
+        MODIFY execution_mode VARCHAR(20) NOT NULL DEFAULT 'auto_exit'`)
+      await queryRun(`ALTER TABLE global_position_management_control
+        MODIFY maximum_mode VARCHAR(20) NOT NULL DEFAULT 'auto_exit'`)
+    }
+  },
+  {
+    id: '131_independent_ai_pending_order_controls',
+    async up() {
+      const addColumn = async (name, definition) => {
+        const existing = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'global_position_management_control'
+            AND COLUMN_NAME = ?`, [name])
+        if (!existing.length) {
+          await queryRun(`ALTER TABLE global_position_management_control ADD COLUMN \`${name}\` ${definition}`)
+        }
+      }
+      await addColumn('ai_pending_order_enabled', 'TINYINT(1) NOT NULL DEFAULT 1 AFTER maximum_mode')
+      await addColumn('ai_pending_cancel_enabled', 'TINYINT(1) NOT NULL DEFAULT 1 AFTER ai_pending_order_enabled')
+      await queryRun(`UPDATE global_position_management_control
+        SET block_new_risk = 0, freeze_automatic_operations = 0, emergency_flatten_enabled = 0
+        WHERE id = 1`)
+    }
+  },
+  {
+    id: '132_ai_model_quota_circuit',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_provider_incidents (
+        circuit_key CHAR(64) NOT NULL PRIMARY KEY,
+        model_profile_id BIGINT NOT NULL,
+        provider VARCHAR(64) NOT NULL,
+        model_name VARCHAR(191) NOT NULL,
+        endpoint_host VARCHAR(191) DEFAULT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'open',
+        first_detected_at DATETIME NOT NULL,
+        last_detected_at DATETIME NOT NULL,
+        open_until DATETIME DEFAULT NULL,
+        probe_lease_until DATETIME DEFAULT NULL,
+        recovered_at DATETIME DEFAULT NULL,
+        alert_sent_at DATETIME DEFAULT NULL,
+        recovery_sent_at DATETIME DEFAULT NULL,
+        error_count INT UNSIGNED NOT NULL DEFAULT 1,
+        last_error_code VARCHAR(191) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        KEY idx_ai_model_incident_profile (model_profile_id, status),
+        KEY idx_ai_model_incident_open (status, open_until)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
+  },
+  {
+    id: '133_admin_position_protection_jobs',
+    async up() {
+      const addColumn = async (table, name, definition) => {
+        const existing = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, [table, name])
+        if (!existing.length) await queryRun(`ALTER TABLE \`${table}\` ADD COLUMN \`${name}\` ${definition}`)
+      }
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS admin_position_protection_jobs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        idempotency_key VARCHAR(128) NOT NULL,
+        actor_user_id INT NOT NULL,
+        source_user_id INT NOT NULL,
+        source_trading_account_id INT NOT NULL,
+        source_outcome_id BIGINT DEFAULT NULL,
+        source_signal_id BIGINT DEFAULT NULL,
+        source_ticket VARCHAR(64) NOT NULL,
+        source_symbol VARCHAR(64) NOT NULL,
+        source_direction VARCHAR(8) NOT NULL,
+        requested_stop_loss DECIMAL(20,8) DEFAULT NULL,
+        requested_take_profit DECIMAL(20,8) DEFAULT NULL,
+        sync_scope VARCHAR(24) NOT NULL DEFAULT 'source_only',
+        change_reason VARCHAR(500) NOT NULL,
+        preview_hash CHAR(64) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        total_users INT NOT NULL DEFAULT 0,
+        total_positions INT NOT NULL DEFAULT 0,
+        succeeded_positions INT NOT NULL DEFAULT 0,
+        failed_positions INT NOT NULL DEFAULT 0,
+        skipped_positions INT NOT NULL DEFAULT 0,
+        pending_positions INT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL,
+        started_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_admin_position_protection_job_key (idempotency_key),
+        KEY idx_admin_position_protection_job_status (status, updated_at),
+        KEY idx_admin_position_protection_job_actor (actor_user_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS admin_position_protection_targets (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        job_id BIGINT NOT NULL,
+        target_order INT NOT NULL,
+        is_source TINYINT(1) NOT NULL DEFAULT 0,
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        ownership_history_id BIGINT DEFAULT NULL,
+        signal_id BIGINT DEFAULT NULL,
+        outcome_id BIGINT DEFAULT NULL,
+        broker_server_key VARCHAR(100) NOT NULL,
+        login_account VARCHAR(50) NOT NULL,
+        ticket VARCHAR(64) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        direction VARCHAR(8) NOT NULL,
+        volume DECIMAL(18,8) NOT NULL DEFAULT 0,
+        magic BIGINT NOT NULL DEFAULT 234000,
+        expected_stop_loss DECIMAL(20,8) DEFAULT NULL,
+        expected_take_profit DECIMAL(20,8) DEFAULT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'pending',
+        attempt_count INT NOT NULL DEFAULT 0,
+        error_code VARCHAR(128) DEFAULT NULL,
+        error_message VARCHAR(500) DEFAULT NULL,
+        result_json LONGTEXT DEFAULT NULL,
+        started_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_admin_position_protection_target (job_id, user_id, trading_account_id, ticket),
+        KEY idx_admin_position_protection_target_job (job_id, target_order, status),
+        KEY idx_admin_position_protection_target_outcome (outcome_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await addColumn('signal_outcomes', 'authorized_stop_loss',
+        'DECIMAL(20,8) DEFAULT NULL AFTER actual_take_profit')
+      await addColumn('signal_outcomes', 'authorized_take_profit',
+        'DECIMAL(20,8) DEFAULT NULL AFTER authorized_stop_loss')
+      await addColumn('signal_outcomes', 'protection_revision',
+        'INT NOT NULL DEFAULT 0 AFTER authorized_take_profit')
+      await addColumn('signal_outcomes', 'protection_updated_by',
+        'INT DEFAULT NULL AFTER protection_revision')
+      await addColumn('signal_outcomes', 'protection_updated_at',
+        'DATETIME DEFAULT NULL AFTER protection_updated_by')
+      await addColumn('signal_outcomes', 'protection_job_id',
+        'BIGINT DEFAULT NULL AFTER protection_updated_at')
+    }
+  },
+  {
+    id: '134_admin_position_protection_hardening',
+    async up() {
+      const addColumn = async (table, name, definition) => {
+        const existing = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, [table, name])
+        if (!existing.length) await queryRun(`ALTER TABLE \`${table}\` ADD COLUMN \`${name}\` ${definition}`)
+      }
+      await addColumn('admin_position_protection_targets', 'expected_stop_loss',
+        'DECIMAL(20,8) DEFAULT NULL AFTER magic')
+      await addColumn('admin_position_protection_targets', 'expected_take_profit',
+        'DECIMAL(20,8) DEFAULT NULL AFTER expected_stop_loss')
+    }
+  },
+  {
+    id: '135_remove_paired_inference_experiment',
+    async up() {
+      await queryRun('DROP TABLE IF EXISTS ai_paired_inference_runs')
+      const columns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_feature_flags'
+          AND COLUMN_NAME = 'paired_experiment_enabled'`)
+      if (columns.length) {
+        await queryRun('ALTER TABLE ai_feature_flags DROP COLUMN paired_experiment_enabled')
+      }
+    }
+  },
+  {
+    id: '136_order_referral_credit_ledger',
+    async up() {
+      const existing = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders'
+          AND COLUMN_NAME = 'referral_credit_applied'`)
+      if (!existing.length) {
+        await queryRun(`ALTER TABLE orders
+          ADD COLUMN referral_credit_applied INT NOT NULL DEFAULT 0 AFTER amount_confirmed`)
+      }
+    }
+  },
+  {
+    id: '137_users_token_version',
+    async up() {
+      const existing = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'
+          AND COLUMN_NAME = 'token_version'`)
+      if (!existing.length) {
+        await queryRun(`ALTER TABLE users
+          ADD COLUMN token_version INT NOT NULL DEFAULT 0 AFTER changelog_seen_version`)
+      }
+    }
+  },
+  {
+    id: '138_payment_money_and_referral_precision',
+    async up() {
+      await queryRun('UPDATE users SET referral_credit = 0 WHERE referral_credit IS NULL')
+      await queryRun(`UPDATE orders SET amount = COALESCE(amount, 0),
+        amount_confirmed = COALESCE(amount_confirmed, 0),
+        referral_credit_applied = COALESCE(referral_credit_applied, 0)`)
+      await queryRun('UPDATE referrals SET commission = 0 WHERE commission IS NULL')
+      await queryRun(`ALTER TABLE users
+        MODIFY COLUMN referral_credit DECIMAL(20,8) NOT NULL DEFAULT 0`)
+      await queryRun(`ALTER TABLE orders
+        MODIFY COLUMN amount DECIMAL(20,8) NOT NULL DEFAULT 0,
+        MODIFY COLUMN amount_confirmed DECIMAL(20,8) NOT NULL DEFAULT 0,
+        MODIFY COLUMN referral_credit_applied DECIMAL(20,8) NOT NULL DEFAULT 0`)
+      await queryRun(`ALTER TABLE referrals
+        MODIFY COLUMN commission DECIMAL(20,8) NOT NULL DEFAULT 0`)
+
+      const referralColumns = new Set((await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'referrals'
+          AND COLUMN_NAME IN ('amount_cents', 'cash_amount', 'order_id')`)).map(row => row.COLUMN_NAME))
+      if (referralColumns.has('amount_cents') && !referralColumns.has('cash_amount')) {
+        await queryRun('UPDATE referrals SET amount_cents = 0 WHERE amount_cents IS NULL')
+        await queryRun(`ALTER TABLE referrals
+          CHANGE COLUMN amount_cents cash_amount DECIMAL(20,8) NOT NULL DEFAULT 0`)
+      } else if (referralColumns.has('cash_amount')) {
+        await queryRun('UPDATE referrals SET cash_amount = 0 WHERE cash_amount IS NULL')
+        await queryRun(`ALTER TABLE referrals
+          MODIFY COLUMN cash_amount DECIMAL(20,8) NOT NULL DEFAULT 0`)
+      } else {
+        await queryRun(`ALTER TABLE referrals
+          ADD COLUMN cash_amount DECIMAL(20,8) NOT NULL DEFAULT 0 AFTER commission`)
+      }
+      if (!referralColumns.has('order_id')) {
+        await queryRun(`ALTER TABLE referrals ADD COLUMN order_id VARCHAR(100) DEFAULT NULL AFTER referred_id`)
+      }
+
+      const indexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'referrals'
+          AND INDEX_NAME = 'uq_referrals_order_id'`)
+      if (!indexes.length) {
+        await queryRun('ALTER TABLE referrals ADD UNIQUE KEY uq_referrals_order_id (order_id)')
+      }
+    }
+  },
+  {
+    id: '139_durable_payment_side_effects',
+    async up() {
+      const notificationColumns = await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'notifications'
+          AND COLUMN_NAME = 'dedupe_key'`)
+      if (!notificationColumns.length) {
+        await queryRun('ALTER TABLE notifications ADD COLUMN dedupe_key VARCHAR(191) DEFAULT NULL AFTER link')
+      }
+      const notificationIndexes = await queryAll(`SELECT INDEX_NAME
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'notifications'
+          AND INDEX_NAME = 'uq_notifications_dedupe_key'`)
+      if (!notificationIndexes.length) {
+        await queryRun('ALTER TABLE notifications ADD UNIQUE KEY uq_notifications_dedupe_key (dedupe_key)')
+      }
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS payment_side_effects (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        order_id VARCHAR(100) NOT NULL,
+        user_id INT NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        attempt_count INT NOT NULL DEFAULT 0,
+        next_attempt_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        locked_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        last_error VARCHAR(1000) DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_payment_side_effect_order (order_id),
+        KEY idx_payment_side_effect_ready (status, next_attempt_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 
+export async function withMigrationLock(fn, { timeoutSeconds = 60 } = {}) {
+  return withConnection(async run => {
+    const [rows] = await run(`SELECT GET_LOCK(
+      CONCAT('wss:mig:', LEFT(SHA2(COALESCE(DATABASE(), 'unknown'), 256), 56)), ?
+    ) AS acquired`, [timeoutSeconds])
+    if (Number(rows?.[0]?.acquired) !== 1) {
+      throw new Error('Could not acquire the database migration lock')
+    }
+    try {
+      return await fn()
+    } finally {
+      const [releaseRows] = await run(`SELECT RELEASE_LOCK(
+        CONCAT('wss:mig:', LEFT(SHA2(COALESCE(DATABASE(), 'unknown'), 256), 56))
+      ) AS released`)
+      if (Number(releaseRows?.[0]?.released) !== 1) {
+        console.error('[Migrations] Failed to release the database migration lock cleanly')
+      }
+    }
+  })
+}
+
 export async function runMigrations() {
+  return withMigrationLock(async () => {
   // Ensure tracking table exists
   await queryRun(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id VARCHAR(255) PRIMARY KEY,
@@ -3456,4 +4072,5 @@ export async function runMigrations() {
       throw e
     }
   }
+  })
 }

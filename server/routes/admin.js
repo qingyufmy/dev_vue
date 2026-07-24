@@ -1,16 +1,22 @@
 import { Router } from 'express'
 import multer from 'multer'
-import { join, dirname, extname, basename } from 'path'
-import { fileURLToPath } from 'url'
+import { join, extname, basename } from 'path'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
-import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
+import { queryOne, queryAll, queryRun, withTransaction, logAudit } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 import { fetchBilibiliVideo } from '../utils.js'
 import { translateAdminProfileError, updateAdminUserProfile } from '../admin/user-profile.js'
 import { anonymizeAdminUser } from '../admin/user-deletion.js'
+import {
+  COURSE_ATTACHMENT_ACCEPT,
+  deleteCourseAttachmentDirectory,
+  deleteCourseAttachmentFile,
+  serializeCourseAttachment,
+  storeCourseAttachmentFile,
+} from '../course-attachments.js'
+import { PUBLIC_UPLOAD_DIR } from '../config.js'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const resourceDir = join(__dirname, '..', 'uploads', 'resources')
+const resourceDir = join(PUBLIC_UPLOAD_DIR, 'resources')
 if (!existsSync(resourceDir)) mkdirSync(resourceDir, { recursive: true })
 
 const resourceUpload = multer({
@@ -316,15 +322,16 @@ router.get('/admin/referrals/overview', authMiddleware, adminOnly, async (req, r
     const total = (await queryOne('SELECT COUNT(*) as c FROM referrals')).c
     const pending = (await queryOne("SELECT COUNT(*) as c FROM referrals WHERE status = 'pending'")).c
     const approved = (await queryOne("SELECT COUNT(*) as c FROM referrals WHERE status = 'approved'")).c
-    const totalCommission = (await queryOne('SELECT COALESCE(SUM(commission), 0) as c FROM referrals')).c
+    const pendingCommission = (await queryOne("SELECT COALESCE(SUM(commission), 0) as c FROM referrals WHERE status = 'pending'")).c
+    const totalCommission = (await queryOne("SELECT COALESCE(SUM(commission), 0) as c FROM referrals WHERE status = 'approved'")).c
     res.json({
       ok: true,
       total, pending, approved, totalCommission,
       stats: {
         total_invites: total,
         paid_invites: approved,
-        pending_credit_cents: pending * 500,
-        available_credit_cents: totalCommission,
+        pending_credit_amount: Number(pendingCommission || 0),
+        available_credit_amount: Number(totalCommission || 0),
       },
     })
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
@@ -347,11 +354,7 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req
       FROM referrals r 
       LEFT JOIN users u ON r.referrer_id = u.id 
       LEFT JOIN users u2 ON r.referred_id = u2.id
-      LEFT JOIN orders o ON o.id = (
-        SELECT latest_order.id FROM orders latest_order
-        WHERE latest_order.user_id = r.referred_id AND latest_order.status = 'paid'
-        ORDER BY latest_order.paid_at DESC, latest_order.id DESC LIMIT 1
-      )
+       LEFT JOIN orders o ON o.order_id = r.order_id
       WHERE ${where} ORDER BY r.created_at DESC LIMIT 100
     `, params)
 
@@ -362,9 +365,9 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req
       order_id: r.order_id || null,
       plan: r.order_plan_label || r.plan_label || '',
       period: r.order_period_label || '',
-      source_cash_amount_cents: r.order_amount_confirmed || r.amount_cents || 0,
-      amount_cents: r.commission || 0,
-      rate_bps: r.amount_cents > 0 ? Math.round((r.commission / r.amount_cents) * 10000) : 500,
+      source_cash_amount: r.order_amount_confirmed ?? r.cash_amount ?? 0,
+      commission_amount: r.commission || 0,
+      rate_bps: r.cash_amount > 0 ? Math.round((r.commission / r.cash_amount) * 10000) : 500,
       status: r.status,
       available_at: r.attributed_at || r.created_at,
       created_at: r.created_at,
@@ -409,15 +412,32 @@ router.get('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res)
 router.put('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { rules } = req.body
-    if (!Array.isArray(rules)) return res.json({ ok: false, error: '无效参数' })
-    for (const r of rules) {
+    if (!Array.isArray(rules)) return res.status(400).json({ ok:false, error:'规则列表格式无效' })
+    const allowedPlans = new Set(['plus', 'pro'])
+    const allowedPeriods = new Set(['monthly', 'yearly'])
+    const normalized = rules.map(rule => {
+      const plan = String(rule?.plan || '').trim().toLowerCase()
+      const period = String(rule?.period || '').trim().toLowerCase()
+      const rateBps = Number(rule?.rate_bps)
+      if (!allowedPlans.has(plan) || !allowedPeriods.has(period)) throw new Error('referral_rule_scope_invalid')
+      if (!Number.isInteger(rateBps) || rateBps < 0 || rateBps > 10000) throw new Error('referral_rule_rate_invalid')
+      return { plan, period, rate_bps:rateBps, enabled:Boolean(rule?.enabled) }
+    })
+    const unique = new Set(normalized.map(rule => `${rule.plan}:${rule.period}`))
+    if (unique.size !== normalized.length || normalized.length > 4) throw new Error('referral_rule_duplicate')
+    for (const rule of normalized) {
       await queryRun(
         'INSERT INTO referral_rules (plan, period, rate_bps, enabled) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE rate_bps = VALUES(rate_bps), enabled = VALUES(enabled)',
-        [r.plan, r.period, r.rate_bps || 1000, r.enabled ? 1 : 0]
+        [rule.plan, rule.period, rule.rate_bps, rule.enabled ? 1 : 0]
       )
     }
-    res.json({ ok: true, message: '规则已更新' })
-  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
+    await logAudit({ userId:req.user.id, action:'referral_rules_updated', targetType:'referral_rules',
+      detail:JSON.stringify({ rules:normalized }), ip:req.ip, userAgent:req.get('user-agent') })
+    res.json({ ok:true, message:'返佣规则已更新' })
+  } catch (err) {
+    const messages={ referral_rule_scope_invalid:'仅支持 Plus/Pro 的月付与年付规则', referral_rule_rate_invalid:'返佣比例必须为 0% 到 100%', referral_rule_duplicate:'返佣规则存在重复项' }
+    res.status(err?.message?.startsWith('referral_rule_')?400:500).json({ ok:false, error:messages[err?.message] || '更新返佣规则失败' })
+  }
 })
 
 // Admin: course items
@@ -488,6 +508,7 @@ router.delete('/admin-course-items', authMiddleware, adminOnly, async (req, res)
       await run('DELETE FROM comments WHERE episode_id = ?', [episode])
       await run('DELETE FROM courses WHERE episode_id = ?', [episode])
     })
+    try { deleteCourseAttachmentDirectory(episode) } catch (error) { console.error('Course attachment directory cleanup error:', error) }
 
     res.json({ ok: true, message: '课程已删除' })
   } catch (err) {
@@ -502,14 +523,75 @@ router.get('/admin-course-resources', authMiddleware, adminOnly, async (req, res
     const { episode } = req.query
     const resources = await queryAll('SELECT * FROM course_resources WHERE episode_id = ? ORDER BY sort_order', [episode])
     const quizCount = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [episode])).c
+    const attachments = resources.filter(resource => resource.type === 'attachment').map(serializeCourseAttachment)
+    const learningResources = resources.filter(resource => resource.type !== 'attachment')
 
-    const assets = resources.map(r => ({
+    const assets = learningResources.map(r => ({
       id: r.id, type: r.type, title: r.title,
       assetType: r.type === 'mindmap' ? (r.structure ? 'mindmap_structure' : 'mindmap_image') : r.type,
     }))
 
-    res.json({ ok: true, quizCount, assets, resources })
+    res.json({ ok: true, quizCount, assets, resources:learningResources, attachments, attachmentAccept:COURSE_ATTACHMENT_ACCEPT })
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
+})
+
+router.post('/admin-course-attachments', authMiddleware, adminOnly, resourceUpload.array('files', 10), async (req, res) => {
+  const savedRows = []
+  try {
+    const episodeId = Number(req.body.episodeId)
+    const course = Number.isInteger(episodeId) && episodeId > 0
+      ? await queryOne('SELECT episode_id FROM courses WHERE episode_id = ?', [episodeId])
+      : null
+    if (!course) return res.status(404).json({ ok:false, error:'课程不存在' })
+    const files = Array.isArray(req.files) ? req.files : []
+    if (!files.length) return res.status(400).json({ ok:false, error:'请选择要上传的附件' })
+    const maxSort = await queryOne("SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM course_resources WHERE episode_id = ? AND type = 'attachment'", [episodeId])
+    let sortOrder = Number(maxSort?.max_sort ?? -1) + 1
+    const attachments = []
+    const skipped = []
+    for (const file of files) {
+      let stored = null
+      try {
+        stored = storeCourseAttachmentFile(episodeId, file)
+        savedRows.push({ episode_id:episodeId, url:stored.uri })
+        const result = await queryRun(`INSERT INTO course_resources (episode_id, type, title, content, url, structure, sort_order)
+          VALUES (?, 'attachment', ?, '', ?, ?, ?)`, [episodeId, stored.title, stored.uri, JSON.stringify(stored.metadata), sortOrder++])
+        attachments.push(serializeCourseAttachment({
+          id:result.insertId,
+          episode_id:episodeId,
+          type:'attachment',
+          title:stored.title,
+          url:stored.uri,
+          structure:JSON.stringify(stored.metadata),
+          sort_order:sortOrder - 1,
+        }))
+      } catch (error) {
+        if (stored) deleteCourseAttachmentFile({ episode_id:episodeId, url:stored.uri })
+        skipped.push({ name:file.originalname || '未命名附件', reason:error.message || '上传失败' })
+      }
+    }
+    if (!attachments.length) return res.status(400).json({ ok:false, error:skipped[0]?.reason || '附件上传失败', skipped })
+    res.status(201).json({ ok:true, attachments, skipped })
+  } catch (error) {
+    for (const row of savedRows) {
+      try { deleteCourseAttachmentFile(row) } catch {}
+    }
+    console.error('Course attachment upload error:', error)
+    res.status(400).json({ ok:false, error:error.message || '附件上传失败' })
+  }
+})
+
+router.delete('/admin-course-attachments/:attachmentId', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const attachment = await queryOne("SELECT * FROM course_resources WHERE id = ? AND type = 'attachment'", [req.params.attachmentId])
+    if (!attachment) return res.status(404).json({ ok:false, error:'附件不存在' })
+    await queryRun("DELETE FROM course_resources WHERE id = ? AND type = 'attachment'", [attachment.id])
+    try { deleteCourseAttachmentFile(attachment) } catch (error) { console.error('Course attachment file cleanup error:', error) }
+    res.json({ ok:true, attachment:serializeCourseAttachment(attachment) })
+  } catch (error) {
+    console.error('Course attachment delete error:', error)
+    res.status(400).json({ ok:false, error:'附件删除失败' })
+  }
 })
 
 router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload.array('files', 50), async (req, res) => {

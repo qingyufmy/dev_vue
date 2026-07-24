@@ -27,6 +27,19 @@ const ACTION_LABELS = {
   weekly_flatten_retry: '周末风险清理重试',
   weekly_flatten_deadline_ended: '周末风险清理到期',
   weekly_flatten_unsupported_netting: '周末风险清理不支持净持仓账户',
+  system_config_updated: '系统配置已更新',
+  system_config_batch_updated: '系统配置批量更新',
+  system_config_deleted: '系统配置项已删除',
+  system_config_category_deleted: '系统配置分类已清空',
+  referral_rules_updated: '返佣规则已更新',
+  payment_trc20_config_updated: 'TRC-20 收款配置已更新',
+  admin_user_runtime_updated: '用户运行权限已更新',
+  admin_user_profile_updated: '用户档案已更新',
+  trading_account_approved: '交易账户已审核',
+  observer_source_account_created: '观摩源账户已创建',
+  risk_recovery_approved: '风险恢复申请已批准',
+  risk_recovery_requested: '风险恢复申请已提交',
+  strategy_deleted: '策略已删除',
 }
 
 const STATUS_LABELS = {

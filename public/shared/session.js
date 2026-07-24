@@ -17,6 +17,14 @@
     return localStorage.getItem('ws_token') || localStorage.getItem('authToken') || getCookie(COOKIE_NAME) || ''
   }
 
+  function syncCookie() {
+    const storedToken = localStorage.getItem('ws_token') || localStorage.getItem('authToken') || ''
+    if (storedToken && getCookie(COOKIE_NAME) !== storedToken) {
+      document.cookie = `${COOKIE_NAME}=${encodeURIComponent(storedToken)}; ${cookieAttributes(COOKIE_MAX_AGE)}`
+    }
+    return storedToken || getCookie(COOKIE_NAME) || ''
+  }
+
   function persist(authToken, user = null) {
     if (!authToken) return clear()
     localStorage.setItem('ws_token', authToken)
@@ -39,5 +47,6 @@
     return current ? { ...extra, Authorization:`Bearer ${current}` } : { ...extra }
   }
 
-  window.AuthSession = Object.freeze({ token, persist, clear, headers, eventKey:EVENT_KEY })
+  window.AuthSession = Object.freeze({ token, persist, clear, headers, syncCookie, eventKey:EVENT_KEY })
+  syncCookie()
 })()

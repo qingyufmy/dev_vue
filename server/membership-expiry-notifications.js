@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer'
 import { queryAll, queryOne, queryRun } from './db.js'
 import { loadSmsConfig, sendSms } from './sms.js'
+import { systemConfigRowsToMap } from './system-config-secrets.js'
 
 export const MEMBERSHIP_EXPIRY_REMINDER_DAYS = Object.freeze([7, 3, 2, 1])
 export const MEMBERSHIP_EXPIRED_REMINDER_DAY = 0
@@ -126,7 +127,7 @@ export async function cancelStaleMembershipExpiryNotifications() {
 
 async function loadSmtpConfig() {
   const rows = await queryAll("SELECT `key`, `value` FROM system_config WHERE category = 'smtp'")
-  return Object.fromEntries(rows.map(row => [row.key, row.value]))
+  return systemConfigRowsToMap(rows)
 }
 
 export async function sendMembershipExpiryEmail(delivery) {
@@ -153,7 +154,7 @@ export async function sendMembershipExpiryEmail(delivery) {
         <p style="margin:0 0 8px;color:#9a7412;font-size:13px;font-weight:700">会员到期提醒</p>
         <h2 style="margin:0 0 14px;font-size:24px">${escapeHtml(copy.title)}</h2>
         <p style="margin:0 0 22px;color:#526079">${escapeHtml(copy.summary)}</p>
-        <a href="${siteUrl}/membership" style="display:inline-block;padding:11px 20px;border-radius:9px;background:#d5ad35;color:#111827;text-decoration:none;font-weight:700">前往续费</a>
+        <a href="${siteUrl}/account/?tab=subscription" style="display:inline-block;padding:11px 20px;border-radius:9px;background:#d5ad35;color:#111827;text-decoration:none;font-weight:700">前往续费</a>
         <p style="margin:22px 0 0;color:#8792a6;font-size:12px">如您已经完成续费，请忽略本邮件，系统会自动更新会员有效期。</p>
       </div>
     </div>`,

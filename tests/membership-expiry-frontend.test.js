@@ -5,6 +5,7 @@ const main = readFileSync(new URL('../public/src/main.js', import.meta.url), 'ut
 const mainCss = readFileSync(new URL('../public/src/style.css', import.meta.url), 'utf8')
 const ai = readFileSync(new URL('../public/ai/app.js', import.meta.url), 'utf8')
 const aiCss = readFileSync(new URL('../public/ai/styles.css', import.meta.url), 'utf8')
+const notifications = readFileSync(new URL('../server/membership-expiry-notifications.js', import.meta.url), 'utf8')
 
 describe('membership expiry frontend reminders', () => {
   it('keeps independent reminder acknowledgements on the main site and AI lab', () => {
@@ -12,6 +13,15 @@ describe('membership expiry frontend reminders', () => {
     expect(main).toContain("acknowledgeMembershipExpiryReminder(reminder.id, 'main')")
     expect(ai).toContain('/api/membership-expiry-reminders?surface=ai')
     expect(ai).toContain('body:{ surface:"ai" }')
+  })
+
+  it('opens subscription renewal in the canonical account center', () => {
+    expect(main).toContain("openMainAccountCenter('subscription')")
+    expect(main).not.toContain("if (renew) navigate('membership')")
+    expect(ai).toContain('openAccountCenter("subscription")')
+    expect(ai).not.toContain('window.location.href = "/membership"')
+    expect(notifications).toContain('${siteUrl}/account/?tab=subscription')
+    expect(notifications).not.toContain('${siteUrl}/membership')
   })
 
   it('uses accessible responsive dialogs with reduced-motion support', () => {

@@ -1,38 +1,21 @@
 import { Router } from 'express'
 import multer from 'multer'
-import { join, dirname, extname } from 'path'
-import { fileURLToPath } from 'url'
-import { existsSync, mkdirSync, unlinkSync } from 'fs'
+import { join } from 'path'
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, optionalAuth } from '../middleware/auth.js'
+import { sanitizeRichContent } from '../html-sanitizer.js'
+import { createImageAssetName, detectImageType } from '../image-upload.js'
+import { PUBLIC_UPLOAD_DIR } from '../config.js'
 
-const __postsDirname = dirname(fileURLToPath(import.meta.url))
-const __uploadDir = join(__postsDirname, '..', process.env.UPLOAD_DIR || 'uploads')
+const __uploadDir = PUBLIC_UPLOAD_DIR
 if (!existsSync(__uploadDir)) mkdirSync(__uploadDir, { recursive: true })
 
-const DANGEROUS_TAGS_RE = /<\s*\/?\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>|<\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*\/?\s*>/gi
-const EVENT_HANDLER_RE = /\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi
-const JS_URL_RE = /(href|src|action)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi
-const DATA_ATTR_RE = /\s+data-(?!(?:asset-id|reply-id|post-id|update-target|mindmap-structure|fallback-image|quote-reply|report-reply|post-report|post-pin|next-pin|user-id|referral-approve|referral-void|rule-rate|rule-enabled|board|field)\b)[a-z][\w-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi
-
 export function sanitizeContentHtml(html) {
-  if (!html || typeof html !== 'string') return ''
-  let out = html
-  out = out.replace(DANGEROUS_TAGS_RE, '')
-  out = out.replace(EVENT_HANDLER_RE, '')
-  out = out.replace(JS_URL_RE, '$1="#"')
-  out = out.replace(DATA_ATTR_RE, '')
-  return out
+  return sanitizeRichContent(html)
 }
 
-const postImageStorage = multer.diskStorage({
-  destination: __uploadDir,
-  filename(req, file, cb) {
-    const ext = extname(file.originalname) || '.jpg'
-    const assetId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    cb(null, assetId + ext)
-  },
-})
+const postImageStorage = multer.memoryStorage()
 const postImageUpload = multer({
   storage: postImageStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -52,7 +35,7 @@ router.get('/posts', optionalAuth, async (req, res) => {
     // Single post
     if (id) {
       const post = await queryOne(`
-        SELECT p.*, u.nickname, u.avatar, u.email, u.role as user_role,
+        SELECT p.*, u.nickname, u.avatar, u.role as user_role,
                ru.nickname as reply_user_name, ru.avatar as reply_user_avatar
         FROM posts p LEFT JOIN users u ON p.user_id = u.id
         LEFT JOIN users ru ON p.last_reply_user_id = ru.id
@@ -75,7 +58,7 @@ router.get('/posts', optionalAuth, async (req, res) => {
           board: post.board,
           title: post.title,
           content: post.content_text || post.content || '',
-          contentHtml: post.content_html || post.content || '',
+          contentHtml: sanitizeContentHtml(post.content_html || post.content || ''),
           contentText: post.content_text || '',
           contentFormat: post.content_html ? 'rich' : 'plain',
           tags: tagObjects,
@@ -99,7 +82,6 @@ router.get('/posts', optionalAuth, async (req, res) => {
             id: post.user_id,
             name: post.nickname || '匿名',
             avatar: post.avatar,
-            email: post.email,
             isAdmin: post.user_role === 'admin',
           },
           lastReplyUser: post.reply_user_name ? { name: post.reply_user_name, avatar: post.reply_user_avatar } : null,
@@ -130,7 +112,7 @@ router.get('/posts', optionalAuth, async (req, res) => {
     else orderBy += 'COALESCE(p.last_reply_at, p.created_at) DESC'
 
     const posts = await queryAll(`
-      SELECT p.*, u.nickname, u.avatar, u.email, u.role as user_role,
+      SELECT p.*, u.nickname, u.avatar, u.role as user_role,
              ru.nickname as reply_user_name, ru.avatar as reply_user_avatar
       FROM posts p LEFT JOIN users u ON p.user_id = u.id
       LEFT JOIN users ru ON p.last_reply_user_id = ru.id
@@ -188,7 +170,7 @@ router.get('/posts', optionalAuth, async (req, res) => {
           canModerate: isAdminUser,
           createdAt: p.created_at,
           lastRepliedAt: p.last_reply_at || p.created_at,
-          user: { id: p.user_id, name: p.nickname || '匿名', avatar: p.avatar, email: p.email, isAdmin: p.user_role === 'admin' },
+          user: { id: p.user_id, name: p.nickname || '匿名', avatar: p.avatar, isAdmin: p.user_role === 'admin' },
           lastReplyUser: p.reply_user_name ? { name: p.reply_user_name } : null,
           participants: participants[p.id] || [],
         }
@@ -294,7 +276,7 @@ router.get('/post-replies', optionalAuth, async (req, res) => {
     const offset = (Number(page) - 1) * limit
 
     const replies = await queryAll(`
-      SELECT r.*, u.nickname, u.avatar, u.email, u.role as user_role,
+      SELECT r.*, u.nickname, u.avatar, u.role as user_role,
              q.content as quote_content, q.user_id as quote_user_id, qu.nickname as quote_user_name,
              q.floor_number as quote_floor_number
       FROM post_replies r
@@ -314,14 +296,14 @@ router.get('/post-replies', optionalAuth, async (req, res) => {
       totalPages: Math.ceil(total / limit),
       replies: replies.map(r => ({
         id: r.id,
-        content: r.content_html || r.content,
+        content: sanitizeContentHtml(r.content_html || r.content),
         contentText: r.content_text || r.content,
-        contentHtml: r.content_html || '',
+        contentHtml: sanitizeContentHtml(r.content_html || ''),
         floorNumber: r.floor_number || 0,
         images: JSON.parse(r.images || '[]'),
         likes: r.likes,
         createdAt: r.created_at,
-        user: { id: r.user_id, name: r.nickname || '匿名', avatar: r.avatar, email: r.email, isAdmin: r.user_role === 'admin' },
+        user: { id: r.user_id, name: r.nickname || '匿名', avatar: r.avatar, isAdmin: r.user_role === 'admin' },
         quoteReply: r.quote_reply_id ? {
           id: r.quote_reply_id,
           contentText: r.quote_content,
@@ -416,22 +398,25 @@ router.get('/post-reports', authMiddleware, async (req, res) => {
 
 // Post images upload
 router.post('/post-images', authMiddleware, postImageUpload.single('file'), async (req, res) => {
+  let savedPath = null
   try {
     if (!req.file) return res.json({ ok: false, error: '未收到图片文件' })
 
-    const savedName = req.file.filename
-    const assetId = savedName.replace(/\.[^.]+$/, '')
+    const imageType = detectImageType(req.file.buffer)
+    if (!imageType) return res.status(400).json({ ok:false, error:'仅支持真实的 JPEG、PNG、WebP 或 GIF 图片' })
+    const assetId = createImageAssetName('img')
+    const savedName = `${assetId}${imageType.extension}`
+    savedPath = join(__uploadDir, savedName)
+    writeFileSync(savedPath, req.file.buffer, { flag:'wx' })
     const url = `/uploads/${savedName}`
 
     await queryRun('INSERT INTO post_assets (asset_id, user_id, file_name, file_type, file_size, url) VALUES (?, ?, ?, ?, ?, ?)',
-      [assetId, req.user.id, req.file.originalname, req.file.mimetype, req.file.size, url])
+      [assetId, req.user.id, req.file.originalname, imageType.mimeType, req.file.size, url])
 
     res.json({ ok: true, assetId, url })
   } catch (err) {
     console.error('[Posts] Image upload error:', err)
-    if (req.file) {
-      try { unlinkSync(req.file.path) } catch {}
-    }
+    if (savedPath) try { unlinkSync(savedPath) } catch {}
     res.json({ ok: false, error: '上传失败' })
   }
 })

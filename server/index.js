@@ -2,17 +2,17 @@ import express from 'express'
 import compression from 'compression'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
-import multer from 'multer'
 import jwt from 'jsonwebtoken'
 import http from 'http'
-import { JWT_SECRET, PORT, MAX_UPLOAD_SIZE, JSON_BODY_LIMIT, API_RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS } from './config.js'
+import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, API_RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, CORS_ORIGINS } from './config.js'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
-import { initDB, queryRun } from './db.js'
+import { initDB, queryOne, queryRun } from './db.js'
 import { runMigrations } from './migrations.js'
 import { isEncryptionAvailable } from './ai-credential.js'
 import { assertModelProfileSchemaReady, migrateLegacyConfigs, recoverStaleModelUsageReservations } from './routes/ai/model-profiles.js'
+import { migrateLegacySystemConfigSecrets } from './system-config-secrets.js'
 import { assertAiGovernanceSchemaReady } from './routes/ai/rollout-governance.js'
 import { BILIBILI_HEADERS } from './utils.js'
 import authRoutes from './routes/auth.js'
@@ -22,6 +22,7 @@ import postRoutes from './routes/posts.js'
 import userRoutes from './routes/user.js'
 import adminRoutes from './routes/admin.js'
 import adminConsoleRoutes from './routes/admin-console.js'
+import adminPositionProtectionRoutes, { startAdminPositionProtectionWorker } from './routes/admin-position-protection.js'
 import tradeRoutes from './routes/trades.js'
 import paymentRoutes from './routes/payment.js'
 import videoRoutes from './routes/video.js'
@@ -34,7 +35,8 @@ import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON } from './redis.js'
 import { initAutoSchedulers, startPeriodReviewWorker } from './routes/ai/index.js'
 import { startOrderIntentReconciler } from './routes/ai/order-intents.js'
-import { authMiddleware } from './middleware/auth.js'
+import { startPositionManagementWorker } from './routes/ai/position-management-worker.js'
+import { authMiddleware, tokenVersionMatches } from './middleware/auth.js'
 import { hasActiveMembership } from './membership.js'
 import { initBridgeWS } from './bridge-ws.js'
 import { startMonitor } from './crypto/monitor.js'
@@ -43,29 +45,28 @@ import { startHoldSignalCleanup } from './jobs/hold-signal-cleanup.js'
 import { startWeeklySystemFlatten } from './jobs/weekly-system-flatten.js'
 import { startMembershipExpiryNotificationWorker } from './membership-expiry-notifications.js'
 import { startPaymentOrderCleanup } from './jobs/payment-order-cleanup.js'
+import { startPaymentSideEffectWorker } from './jobs/payment-side-effects.js'
 import { securityHeaders } from './security-headers.js'
+import { blockPrivateVideoStatic } from './video-access.js'
+import { installFatalProcessHandlers, listenHttpServer } from './runtime-lifecycle.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // .env is loaded by server/config.js via dotenv — no manual parsing needed
 
 // Ensure upload dir
-const uploadDir = process.env.UPLOAD_DIR || './uploads'
-if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
-
-const upload = multer({ dest: join(__dirname, uploadDir), limits: { fileSize: MAX_UPLOAD_SIZE } })
+if (!existsSync(PUBLIC_UPLOAD_DIR)) mkdirSync(PUBLIC_UPLOAD_DIR, { recursive: true })
 
 const app = express()
 app.set('trust proxy', 1) // 仅信任第一级反向代理（Nginx等），避免 IP 欺骗
 
 // CORS: restrict to known origins
-const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3001,http://localhost:3005,http://localhost:8080,http://192.168.1.254,https://www.cnfxtrade.com,https://cnfxtrade.com,http://www.cnfxtrade.com,http://cnfxtrade.com').split(',').map(s => s.trim())
 app.use(cors({
   origin(origin, cb) {
-    if (!origin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*')) {
+    if (!origin || CORS_ORIGINS.includes(origin) || CORS_ORIGINS.includes('*')) {
       cb(null, true)
     } else {
-      console.error(`[CORS] Rejected origin: "${origin}" — allowed: [${ALLOWED_ORIGINS.join(', ')}]`)
+      console.error(`[CORS] Rejected origin: "${origin}" — allowed: [${CORS_ORIGINS.join(', ')}]`)
       cb(new Error('CORS not allowed'))
     }
   },
@@ -137,8 +138,14 @@ app.use('/api/posts', writeLimiter)
 app.use('/api/post-replies', writeLimiter)
 
 // Serve uploaded files
-app.use('/uploads', express.static(join(__dirname, uploadDir), {
-  setHeaders: (res) => { res.set('Cache-Control', 'public, max-age=604800') }
+app.use('/uploads/videos', blockPrivateVideoStatic)
+app.use('/uploads', express.static(PUBLIC_UPLOAD_DIR, {
+  setHeaders: (res) => {
+    res.set('Cache-Control', 'public, max-age=604800')
+    res.set('Content-Security-Policy', "default-src 'none'; sandbox")
+    res.set('Cross-Origin-Resource-Policy', 'same-origin')
+    res.set('X-Content-Type-Options', 'nosniff')
+  }
 }))
 
 // Bilibili CDN image proxy — bypasses Referer anti-leech
@@ -208,6 +215,7 @@ app.use('/api', postRoutes)
 app.use('/api', userRoutes)
 app.use('/api', adminRoutes)
 app.use('/api', adminConsoleRoutes)
+app.use('/api', adminPositionProtectionRoutes)
 app.use('/api', tradeRoutes)
 app.use('/api', paymentRoutes)
 app.use('/api', videoRoutes)
@@ -347,7 +355,10 @@ app.post('/api/presence', async (req, res) => {
       const token = auth.slice(7)
       const payload = jwt.verify(token, JWT_SECRET)
       if (payload && payload.userId) {
-        await queryRun("UPDATE users SET last_seen_at = NOW() WHERE id = ?", [payload.userId])
+        const sessionUser = await queryOne('SELECT token_version FROM users WHERE id = ?', [payload.userId])
+        if (sessionUser && tokenVersionMatches(payload, sessionUser)) {
+          await queryRun("UPDATE users SET last_seen_at = NOW() WHERE id = ?", [payload.userId])
+        }
       }
     }
   } catch (e) { console.warn('[Presence] Failed to update last_seen_at:', e.message) }
@@ -387,10 +398,11 @@ app.get('*', (req, res) => {
 // Init DB and start
 const server = http.createServer(app)
 // HTTP timeout settings — prevent reverse proxy / long-poll issues with WebSocket upgrade
-server.keepAliveTimeout = 65000
-server.headersTimeout = 66000
-server.requestTimeout = 0 // No timeout for HTTP requests (WebSocket upgrade needs time)
+server.keepAliveTimeout = 5000
+server.headersTimeout = 15000
+server.requestTimeout = 120000
 initBridgeWS(server)
+installFatalProcessHandlers()
 
 ;(async () => {
   await initDB()
@@ -399,6 +411,8 @@ initBridgeWS(server)
   if (isEncryptionAvailable()) {
     await assertModelProfileSchemaReady()
     await migrateLegacyConfigs()
+    const systemCredentialMigration = await migrateLegacySystemConfigSecrets()
+    if (systemCredentialMigration.migrated > 0) console.log(`[Config] Encrypted ${systemCredentialMigration.migrated} legacy system credentials`)
   } else {
     console.warn('[AI] Credential master key is unavailable; model calls and key updates are disabled')
   }
@@ -411,18 +425,20 @@ initBridgeWS(server)
     }
   }
   await recoverModelUsageReservations()
+  await listenHttpServer(server, PORT)
+  console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
+
   const modelUsageRecoveryTimer = setInterval(recoverModelUsageReservations, 5 * 60 * 1000)
   modelUsageRecoveryTimer.unref?.()
   await initAutoSchedulers()
   startOrderIntentReconciler()
+  startPositionManagementWorker()
+  startAdminPositionProtectionWorker()
   startPeriodReviewWorker()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   startWeeklySystemFlatten()
   startMembershipExpiryNotificationWorker()
   console.log(`[TZ] server=${Intl.DateTimeFormat().resolvedOptions().timeZone} db_session=+08:00 parse=explicit(+08:00)`)
-  server.listen(PORT, () => {
-    console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
-  })
   try {
     await initCryptoWallet()
     await startMonitor()
@@ -430,6 +446,7 @@ initBridgeWS(server)
     console.error('[CryptoMonitor] Failed to start:', err.message)
   }
   startPaymentOrderCleanup()
+  startPaymentSideEffectWorker()
   // Sentiment data: non-blocking initial fetch + 30-min refresh
   fetchSentiment().then(data => {
     const hasValid = data.some(d => d.longPct !== null)
@@ -452,15 +469,7 @@ initBridgeWS(server)
       }
     } catch (e) { console.error('[Sentiment] Refresh failed:', e.message) }
   }, 30 * 60 * 1000)
-})()
-
-// Crash protection — log and restart gracefully
-process.on('uncaughtException', (err) => {
-  console.error('[FATAL] Uncaught exception:', err.message)
-  if (err.code !== 'ECONNRESET' && err.code !== 'EPIPE') {
-    console.error(err.stack)
-  }
-})
-process.on('unhandledRejection', (reason) => {
-  console.error('[FATAL] Unhandled rejection:', reason?.message || reason)
+})().catch((error) => {
+  console.error('[Startup] Fatal initialization error:', error?.stack || error)
+  process.exit(1)
 })

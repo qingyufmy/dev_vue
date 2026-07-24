@@ -227,7 +227,7 @@ router.get('/referrals/me', authMiddleware, async (req, res) => {
 
     const invitedCount = referrals.length
     const paidCount = referrals.filter(r => r.status === 'approved').length
-    const pendingCredit = referrals.filter(r => r.status === 'pending').reduce((s, r) => s + (r.amount_cents || 0), 0)
+    const pendingCredit = referrals.filter(r => r.status === 'pending').reduce((sum, referral) => sum + Number(referral.commission || 0), 0)
     const availableCredit = user.referral_credit || 0
 
     res.json({
@@ -238,14 +238,14 @@ router.get('/referrals/me', authMiddleware, async (req, res) => {
       stats: {
         invited_count: invitedCount,
         paid_invited_count: paidCount,
-        pending_credit_cents: pendingCredit,
-        available_credit_cents: availableCredit,
-        reserved_credit_cents: 0,
-        used_credit_cents: 0,
+        pending_credit_amount: pendingCredit,
+        available_credit_amount: availableCredit,
+        reserved_credit_amount: 0,
+        used_credit_amount: 0,
       },
       recent_commissions: referrals.filter(r => r.status === 'approved').slice(0, 5).map(r => ({
         plan_label: r.plan_label || 'Plus',
-        amount_cents: r.amount_cents || 500,
+        commission_amount: Number(r.commission || 0),
         status: r.status,
         status_label: '已确认',
         created_at: r.created_at,
@@ -255,7 +255,7 @@ router.get('/referrals/me', authMiddleware, async (req, res) => {
         uid: r.referred_id,
         email_masked: (r.email || '').replace(/(.{2}).*(@.*)/, '$1***$2'),
         paid: r.status === 'approved',
-        credit_cents: r.amount_cents || 0,
+        credit_amount: Number(r.commission || 0),
         attributed_at: r.attributed_at || r.created_at,
       })),
     })

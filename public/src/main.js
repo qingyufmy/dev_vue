@@ -1,7 +1,7 @@
 import { episodes as staticEpisodes, categories } from './data/episodes.js?v=20260714i'
 import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
-import { createCourseContent } from './lib/course-content.js'
+import { createCourseContent } from './lib/course-content.js?v=20260723attachments1'
 import { getArticleContentValidationError, getCourseMediaValidationError } from './lib/admin-course.js?v=20260714f'
 import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js?v=20260714f'
 import { getCourseProgramByView } from './data/course-programs.js?v=20260714h'
@@ -49,6 +49,7 @@ const courseCatalog = {
       knowledgeCount: Number(item.knowledgeCount || item.knowledge_count || 0),
       mindmapCount: Number(item.mindmapCount || item.mindmap_count || 0),
       structureCount: Number(item.structureCount || item.structure_count || 0),
+      attachmentCount: Number(item.attachmentCount || item.attachment_count || 0),
       status: item.status || 'published',
       sortOrder: Number(item.sortOrder || item.sort_order || id),
       createdAt: item.createdAt || item.created_at || '',
@@ -99,17 +100,84 @@ function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
-// ===== Rich HTML sanitizer (defense-in-depth for Quill editor output) =====
-function sanitizeRichHtml(html) {
-  if (!html || typeof html !== 'string') return ''
-  let out = html
-  out = out.replace(/<\s*\/?\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>|<\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*\/?\s*>/gi, '')
-  out = out.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-  out = out.replace(/(href|src|action)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi, '$1="#"')
-  return out
+// ===== Rich HTML sanitizer (defense-in-depth for stored Quill output) =====
+const RICH_TEXT_TAGS = new Set([
+  'p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'blockquote',
+  'pre', 'code', 'ol', 'ul', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'a', 'img', 'span', 'div', 'sub', 'sup',
+])
+const RICH_TEXT_DROP_TAGS = new Set([
+  'script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea',
+  'button', 'meta', 'link', 'base', 'template', 'svg', 'math',
+])
+const RICH_TEXT_ATTRIBUTES = {
+  a:new Set(['href', 'title', 'target', 'rel']),
+  img:new Set(['src', 'alt', 'title', 'width', 'height', 'data-asset-id']),
 }
 
-function formatMinorUsd(dollars) {
+function richTextUrlAllowed(value, tagName) {
+  const source = String(value || '').trim()
+  if (!source || /^[\u0000-\u001f]/.test(source)) return false
+  try {
+    const parsed = new URL(source, location.origin)
+    const schemes = tagName === 'a' ? new Set(['http:', 'https:', 'mailto:']) : new Set(['http:', 'https:'])
+    return schemes.has(parsed.protocol)
+  } catch {
+    return false
+  }
+}
+
+function sanitizeRichHtml(html) {
+  if (!html || typeof html !== 'string') return ''
+  const documentFragment = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html')
+
+  const cleanChildren = parent => {
+    for (const node of [...parent.childNodes]) {
+      if (node.nodeType !== Node.ELEMENT_NODE) continue
+      const tagName = node.tagName.toLowerCase()
+      if (RICH_TEXT_DROP_TAGS.has(tagName)) {
+        node.remove()
+        continue
+      }
+      if (!RICH_TEXT_TAGS.has(tagName)) {
+        node.replaceWith(...node.childNodes)
+        cleanChildren(parent)
+        continue
+      }
+
+      const allowed = RICH_TEXT_ATTRIBUTES[tagName] || new Set()
+      for (const attribute of [...node.attributes]) {
+        const name = attribute.name.toLowerCase()
+        const keepQuillClass = name === 'class' && ['div', 'p', 'span', 'ol', 'ul', 'li', 'pre', 'code', 'blockquote'].includes(tagName)
+        if (!allowed.has(name) && !keepQuillClass) node.removeAttribute(attribute.name)
+      }
+
+      if (node.hasAttribute('class')) {
+        const classNames = [...node.classList].filter(name => /^ql-[a-z0-9-]+$/i.test(name))
+        if (classNames.length) node.className = classNames.join(' ')
+        else node.removeAttribute('class')
+      }
+      for (const attribute of ['href', 'src']) {
+        if (node.hasAttribute(attribute) && !richTextUrlAllowed(node.getAttribute(attribute), tagName)) {
+          node.removeAttribute(attribute)
+        }
+      }
+      if (tagName === 'a') {
+        if (node.getAttribute('target') === '_blank') node.setAttribute('rel', 'noopener noreferrer')
+        else {
+          node.removeAttribute('target')
+          node.removeAttribute('rel')
+        }
+      }
+      cleanChildren(node)
+    }
+  }
+
+  cleanChildren(documentFragment.body)
+  return documentFragment.body.innerHTML
+}
+
+function formatUsdAmount(dollars) {
   const value = Number(dollars || 0)
   return `$${Math.max(0, value).toFixed(2)}`
 }
@@ -907,8 +975,10 @@ function showMembershipExpiryReminder(reminder) {
     overlay.classList.remove('active')
     void acknowledgeMembershipExpiryReminder(reminder.id, 'main')
     setTimeout(() => overlay.remove(), 180)
-    if (renew) navigate('membership')
-    else if (previousFocus instanceof HTMLElement) previousFocus.focus()
+    if (renew) {
+      openMainAccountCenter('subscription')
+      mainAccountCenterPreviousFocus = previousFocus instanceof HTMLElement ? previousFocus : null
+    } else if (previousFocus instanceof HTMLElement) previousFocus.focus()
   }
   overlay.querySelector('.membership-expiry-close')?.addEventListener('click', () => dismiss())
   overlay.querySelector('.membership-expiry-later')?.addEventListener('click', () => dismiss())
@@ -1187,7 +1257,7 @@ const comments = {
       const data = this._getData()
       data[episodeId] = list.map(c => ({
         id: c.id,
-        user: c.user || { name: 'Unknown', email: '' },
+        user: c.user || { id: null, name: 'Unknown' },
         text: c.text,
         timestamp: c.timestamp ? new Date(c.timestamp).getTime() : Date.now(),
         likes: c.isLiked ? [state.user?.email] : [],
@@ -1195,7 +1265,7 @@ const comments = {
         _isLiked: c.isLiked || false,
         replies: (c.replies || []).map(r => ({
           id: r.id,
-          user: r.user || { name: 'Unknown', email: '' },
+          user: r.user || { id: null, name: 'Unknown' },
           text: r.text,
           timestamp: r.timestamp ? new Date(r.timestamp).getTime() : Date.now(),
           likes: r.isLiked ? [state.user?.email] : [],
@@ -1223,7 +1293,7 @@ const comments = {
     const data = this._getData()
     const comment = data[episodeId]?.[index]
     if (!comment?.id) return
-    if (!state.user || comment.user.email !== state.user.email) return
+    if (!state.user || Number(comment.user.id) !== Number(state.user.id)) return
     try {
       await api.del(`/api/comments?id=${comment.id}`)
       await this.fetchFromServer(episodeId)
@@ -1285,7 +1355,7 @@ const comments = {
     const data = this._getData()
     const reply = data[episodeId]?.[commentIndex]?.replies?.[replyIndex]
     if (!reply?.id) return
-    if (!state.user || reply.user.email !== state.user.email) return
+    if (!state.user || Number(reply.user.id) !== Number(state.user.id)) return
     try {
       await api.del(`/api/comments?id=${reply.id}`)
       await this.fetchFromServer(episodeId)
@@ -2450,6 +2520,81 @@ function renderEpisodeActions(ep, progressRecord) {
   `
 }
 
+function formatCourseAttachmentSize(bytes) {
+  const value = Math.max(0, Number(bytes || 0))
+  if (!value) return '大小未知'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
+}
+
+function courseAttachmentRegionHtml(ep) {
+  const count = Number(ep?.attachmentCount || 0)
+  if (!count) return ''
+  const hasAccess = canAccessVideo(ep.id)
+  return `
+    <section class="course-attachment-panel" id="courseAttachmentPanel" aria-labelledby="courseAttachmentsTitle">
+      <header class="course-attachment-head">
+        <div class="course-attachment-heading">
+          <span class="course-attachment-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v5h5M10 13h5M10 17h5"/></svg>
+          </span>
+          <div><span>配套课件</span><h2 id="courseAttachmentsTitle">课程附件</h2><p>${hasAccess ? '下载讲义、表格、模板与课程补充资料。' : '附件权限与本课程一致。'}</p></div>
+        </div>
+        <span class="course-attachment-count">${count} 个文件</span>
+      </header>
+      ${hasAccess
+        ? '<div class="course-attachment-list" id="courseAttachmentList" aria-live="polite"><div class="course-attachment-loading"><span></span><div><strong>正在读取课程附件</strong><small>请稍候…</small></div></div></div>'
+        : `<div class="course-attachment-locked"><strong>${!state.user ? '登录后即可下载' : '当前会员等级不可下载'}</strong><p>${!state.user ? '登录后系统会按课程权限开放附件。' : '升级会员后可下载本课程全部配套资料。'}</p><button class="btn btn-outline" id="goUpgradeAttachments" type="button">${!state.user ? '登录' : '查看会员方案'}</button></div>`}
+    </section>
+  `
+}
+
+async function hydrateCourseAttachments(ep) {
+  const panel = document.getElementById('courseAttachmentPanel')
+  const list = document.getElementById('courseAttachmentList')
+  if (!panel || !list || !canAccessVideo(ep.id)) return
+  const attachments = await courseContent.loadAttachments(ep.id)
+  if (state.currentEpisode?.id !== ep.id || !document.body.contains(panel)) return
+  if (!attachments.length) {
+    panel.remove()
+    return
+  }
+  const count = panel.querySelector('.course-attachment-count')
+  if (count) count.textContent = `${attachments.length} 个文件`
+  list.innerHTML = attachments.map(attachment => {
+    const extension = String(attachment.extension || '').replace(/^\./, '').toUpperCase() || 'FILE'
+    return `<button class="course-attachment-item" type="button" data-course-attachment-download="${escapeHtml(attachment.download_url)}" data-course-attachment-name="${escapeHtml(attachment.file_name || attachment.title || '课程附件')}">
+      <span class="course-attachment-type">${escapeHtml(extension.slice(0, 5))}</span>
+      <span class="course-attachment-copy"><strong>${escapeHtml(attachment.title || attachment.file_name || '课程附件')}</strong><small>${escapeHtml(extension)} · ${formatCourseAttachmentSize(attachment.file_size)}</small></span>
+      <span class="course-attachment-download">下载<span aria-hidden="true">↓</span></span>
+    </button>`
+  }).join('')
+}
+
+async function downloadCourseAttachment(url, fileName, button) {
+  if (!url || !button) return
+  const originalLabel = button.querySelector('.course-attachment-download')?.innerHTML || '下载'
+  button.disabled = true
+  const action = button.querySelector('.course-attachment-download')
+  if (action) action.textContent = '准备下载…'
+  try {
+    const objectUrl = await api.fetchBlobUrl(url)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = fileName || '课程附件'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  } catch (error) {
+    showToast(error.message || '附件下载失败', 'error')
+  } finally {
+    button.disabled = false
+    if (action) action.innerHTML = originalLabel
+  }
+}
+
 function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress, infoBeforeMedia = false }) {
   const progressRecord = state.user ? progress.get(ep.id) : null
   const percent = progressRecord
@@ -2481,8 +2626,10 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress, info
       ` : ''}
 
       ${infoBeforeMedia ? '' : infoHtml}
+      ${courseAttachmentRegionHtml(ep)}
     </div>
   `
+  hydrateCourseAttachments(ep).catch(error => console.error('Course attachments render error:', error))
 }
 
 function getFilteredEpisodes() {
@@ -3476,9 +3623,9 @@ async function loadMembershipCreditSummary() {
     }
     const stats = res.stats
     el.innerHTML = `
-      <div class="membership-credit-item"><span>待确认返佣</span><strong>${formatMinorUsd(stats.pending_credit_cents)}</strong></div>
-      <div class="membership-credit-item"><span>可用返佣</span><strong>${formatMinorUsd(stats.available_credit_cents)}</strong></div>
-      <div class="membership-credit-item"><span>已使用返佣</span><strong>${formatMinorUsd(stats.used_credit_cents)}</strong></div>
+      <div class="membership-credit-item"><span>待确认返佣</span><strong>${formatUsdAmount(stats.pending_credit_amount)}</strong></div>
+      <div class="membership-credit-item"><span>可用返佣</span><strong>${formatUsdAmount(stats.available_credit_amount)}</strong></div>
+      <div class="membership-credit-item"><span>已使用返佣</span><strong>${formatUsdAmount(stats.used_credit_amount)}</strong></div>
       <div class="membership-credit-link">开放后下单时自动计算可用返佣</div>`
   } catch {
     el.innerHTML = '<span>返佣邀请信息暂时无法读取</span>'
@@ -5251,7 +5398,7 @@ async function loadBillingHistory(container, page = 1) {
             <div class="billing-date">${displayDate}${orderIdShort ? ` · <span class="billing-oid" title="${o.orderId}">#${orderIdShort}</span>` : ''}</div>
           </div>
           <div class="billing-right">
-            <span class="billing-amount">${formatMinorUsd(paidAmount)}</span>
+            <span class="billing-amount">${formatUsdAmount(paidAmount)}</span>
             <span class="billing-status ${s.cls}">${s.label}</span>
           </div>
         </div>`
@@ -5327,18 +5474,18 @@ async function loadSubscriptionCreditCenter(container) {
       <div class="subscription-credit-grid">
         <div class="subscription-credit-stat"><span>邀请人数</span><strong>${Number(stats.invited_count || 0)}</strong></div>
         <div class="subscription-credit-stat"><span>付费邀请</span><strong>${Number(stats.paid_invited_count || 0)}</strong></div>
-        <div class="subscription-credit-stat"><span>待确认返佣</span><strong>${formatMinorUsd(stats.pending_credit_cents)}</strong></div>
-        <div class="subscription-credit-stat"><span>可用返佣</span><strong>${formatMinorUsd(stats.available_credit_cents)}</strong></div>
-        <div class="subscription-credit-stat"><span>处理中返佣</span><strong>${formatMinorUsd(stats.reserved_credit_cents)}</strong></div>
-        <div class="subscription-credit-stat"><span>已使用返佣</span><strong>${formatMinorUsd(stats.used_credit_cents)}</strong></div>
+        <div class="subscription-credit-stat"><span>待确认返佣</span><strong>${formatUsdAmount(stats.pending_credit_amount)}</strong></div>
+        <div class="subscription-credit-stat"><span>可用返佣</span><strong>${formatUsdAmount(stats.available_credit_amount)}</strong></div>
+        <div class="subscription-credit-stat"><span>处理中返佣</span><strong>${formatUsdAmount(stats.reserved_credit_amount)}</strong></div>
+        <div class="subscription-credit-stat"><span>已使用返佣</span><strong>${formatUsdAmount(stats.used_credit_amount)}</strong></div>
       </div>
       <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">最近返佣记录</h3>
         ${recent.length ? `<div class="subscription-credit-list">${recent.map(item => `
-          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.plan_label || '')}</strong><div class="billing-date">${formatDateTime(item.created_at) || ''} · ${escapeHtml(item.invited_user?.email_masked || '已邀请用户')}</div></div><div class="subscription-credit-row-right"><span>${formatMinorUsd(item.amount_cents)}</span><em>${escapeHtml(item.status_label || item.status || '')}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无返佣记录</div>'}
+          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.plan_label || '')}</strong><div class="billing-date">${formatDateTime(item.created_at) || ''} · ${escapeHtml(item.invited_user?.email_masked || '已邀请用户')}</div></div><div class="subscription-credit-row-right"><span>${formatUsdAmount(item.commission_amount)}</span><em>${escapeHtml(item.status_label || item.status || '')}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无返佣记录</div>'}
       </div>
       <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">最近邀请用户</h3>
         ${invited.length ? `<div class="subscription-credit-list">${invited.map(item => `
-          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.email_masked || item.uid || '已邀请用户')}</strong><div class="billing-date">${formatDateTime(item.attributed_at) || ''}</div></div><div class="subscription-credit-row-right"><span>${item.paid ? '已订阅' : '未订阅'}</span><em>${formatMinorUsd(item.credit_cents)}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无邀请用户</div>'}
+          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.email_masked || item.uid || '已邀请用户')}</strong><div class="billing-date">${formatDateTime(item.attributed_at) || ''}</div></div><div class="subscription-credit-row-right"><span>${item.paid ? '已订阅' : '未订阅'}</span><em>${formatUsdAmount(item.credit_amount)}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无邀请用户</div>'}
       </div>`
     container.querySelector('#copyReferralLink')?.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(res.referral_link); showFormMsgProfile('邀请链接已复制', 'ok') }
@@ -5539,6 +5686,52 @@ function getPasswordRuleError(password) {
   return null
 }
 
+function getAuthPasswordRuleError(password) {
+  if (!password || password.length < 8 || password.length > 32) {
+    return '密码长度需要 8-32 个字符'
+  }
+  if (!/[A-Za-z]/.test(password)) {
+    return '密码需要包含至少一个字母'
+  }
+  if (!/[0-9]/.test(password)) {
+    return '密码需要包含至少一个数字'
+  }
+  return null
+}
+
+function updateAuthPasswordValidation(form) {
+  const passwordInput = form?.elements?.password
+  const confirmInput = form?.elements?.confirmPassword
+  const rulesHint = form?.querySelector('#pwdRules')
+  const confirmHint = form?.querySelector('#confirmPasswordHint')
+  if (!passwordInput || !rulesHint) return
+
+  const password = passwordInput.value
+  const passwordError = getAuthPasswordRuleError(password)
+  if (!password) {
+    rulesHint.textContent = '需满足：8-32 位，至少包含一个字母和一个数字'
+    rulesHint.className = 'form-hint pwd-rules'
+  } else if (passwordError) {
+    rulesHint.textContent = passwordError
+    rulesHint.className = 'form-hint pwd-rules form-hint-err'
+  } else {
+    rulesHint.textContent = '密码格式正确'
+    rulesHint.className = 'form-hint pwd-rules form-hint-ok'
+  }
+
+  if (!confirmInput || !confirmHint) return
+  if (!confirmInput.value) {
+    confirmHint.textContent = ''
+    confirmHint.className = 'form-hint'
+  } else if (confirmInput.value !== password) {
+    confirmHint.textContent = '两次输入的密码不一致'
+    confirmHint.className = 'form-hint form-hint-err'
+  } else {
+    confirmHint.textContent = '两次输入的密码一致'
+    confirmHint.className = 'form-hint form-hint-ok'
+  }
+}
+
 function showToast(msg, type = 'info') {
   const toast = document.createElement('div')
   toast.className = `profile-toast profile-toast-${type === 'error' ? 'err' : type === 'success' ? 'ok' : 'ok'}`
@@ -5621,7 +5814,7 @@ const AUTH_MODE_META = {
     submitLabel: '注册',
     codePurpose: 'register',
     passwordLabel: '密码',
-    passwordPlaceholder: '8-32位，含大写字母、数字、特殊字符',
+    passwordPlaceholder: '8-32位，至少包含字母和数字',
     showPasswordRules: true,
     showConfirmPassword: true,
     showTos: true,
@@ -5634,7 +5827,7 @@ const AUTH_MODE_META = {
     accountLabel: '账号',
     accountPlaceholder: '邮箱或手机号',
     passwordLabel: '新密码',
-    passwordPlaceholder: '8-32位，含大写字母、数字、特殊字符',
+    passwordPlaceholder: '8-32位，至少包含字母和数字',
     showPasswordRules: true,
     showConfirmPassword: true,
   },
@@ -6039,13 +6232,14 @@ function showAuthModal(mode, options = {}) {
         <div class="form-group">
           <label class="form-label">${meta.passwordLabel}</label>
           <input type="password" class="form-input" name="password" ${mode === 'login_password' ? 'required' : ''} placeholder="${meta.passwordPlaceholder}">
-          ${meta.showPasswordRules ? '<p class="form-hint pwd-rules" id="pwdRules">需包含：大写字母、数字、特殊字符（如 !@#$%）</p>' : ''}
+          ${meta.showPasswordRules ? '<p class="form-hint pwd-rules" id="pwdRules" aria-live="polite">需满足：8-32 位，至少包含一个字母和一个数字</p>' : ''}
         </div>
       ` : ''}
       ${meta.showConfirmPassword ? `
         <div class="form-group">
           <label class="form-label">确认密码</label>
           <input type="password" class="form-input" name="confirmPassword" required placeholder="请再次输入密码">
+          <p class="form-hint" id="confirmPasswordHint" aria-live="polite"></p>
         </div>
       ` : ''}
       ${meta.showTos ? `
@@ -7215,6 +7409,9 @@ function setupGlobalEvents() {
         handleCodeVerify(val)
       }
     }
+    if (e.target.name === 'password' || e.target.name === 'confirmPassword') {
+      updateAuthPasswordValidation(e.target.form)
+    }
   })
 
   modalBody.addEventListener('submit', async (e) => {
@@ -7246,7 +7443,7 @@ function setupGlobalEvents() {
           return
         }
       }
-      const pwdError = getPasswordRuleError(data.password)
+      const pwdError = getAuthPasswordRuleError(data.password)
       if (pwdError) {
         showFormMsg(pwdError, 'err')
         return
@@ -7440,7 +7637,7 @@ function setupGlobalEvents() {
         resetPayload.email = loginId
       }
 
-      const pwdError = getPasswordRuleError(data.password)
+      const pwdError = getAuthPasswordRuleError(data.password)
       if (pwdError) {
         showFormMsg(pwdError, 'err')
         return
@@ -7559,8 +7756,18 @@ function setupGlobalEvents() {
     if (target.id === 'backHome') { navigate('home'); return }
     if (target.closest('.quotes-card')) { if (!requireLogin()) return; navigate('quotes'); return }
 
+    const courseAttachmentButton = target.closest('[data-course-attachment-download]')
+    if (courseAttachmentButton) {
+      await downloadCourseAttachment(
+        courseAttachmentButton.dataset.courseAttachmentDownload,
+        courseAttachmentButton.dataset.courseAttachmentName,
+        courseAttachmentButton,
+      )
+      return
+    }
+
     if (target.id === 'goUpgrade' || target.id === 'goUpgrade2' || target.id === 'goUpgradeCommunity' || target.id === 'goUpgradeCommunityReplies') { navigate('membership'); return }
-    if (target.id === 'goUpgradeVideo') { if (!state.user) { showAuthModal('login_password') } else { navigate('membership') }; return }
+    if (target.id === 'goUpgradeVideo' || target.id === 'goUpgradeAttachments') { if (!state.user) { showAuthModal('login_password') } else { navigate('membership') }; return }
 
     // Membership: subscribe button — USDT payment
     if (target.closest('.mem-btn-plus, .mem-btn-pro')) {

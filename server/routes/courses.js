@@ -3,6 +3,8 @@ import { queryAll, queryOne } from '../db.js'
 import { optionalAuth, authMiddleware } from '../middleware/auth.js'
 import { fetchBilibiliVideo } from '../utils.js'
 import { canAccessMembershipLevel } from '../membership.js'
+import { existsSync } from 'fs'
+import { parseCourseAttachmentMetadata, resolveCourseAttachmentPath, serializeCourseAttachment } from '../course-attachments.js'
 
 const router = Router()
 
@@ -11,7 +13,8 @@ router.get('/course-items', optionalAuth, async (req, res) => {
   try {
     const courses = await queryAll(`
       SELECT c.*, c.bilibili_id as bilibiliId,
-        vs.duration as vs_duration
+        vs.duration as vs_duration,
+        (SELECT COUNT(*) FROM course_resources cr WHERE cr.episode_id = c.episode_id AND cr.type = 'attachment') AS attachment_count
       FROM courses c
       LEFT JOIN video_streams vs ON vs.episode_id = c.episode_id
       WHERE c.status = 'published' ORDER BY c.created_at DESC
@@ -42,6 +45,7 @@ router.get('/course-items', optionalAuth, async (req, res) => {
         knowledgeCount: c.knowledge_count,
         mindmapCount: c.mindmap_count,
         structureCount: c.structure_count,
+        attachmentCount: Number(c.attachment_count || 0),
         status: c.status,
         sortOrder: c.sort_order,
         createdAt: c.created_at,
@@ -53,6 +57,48 @@ router.get('/course-items', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('Course items error:', err)
     res.json({ ok: false, error: '获取课程列表失败' })
+  }
+})
+
+router.get('/course-items/:id/attachments', optionalAuth, async (req, res) => {
+  try {
+    const course = await queryOne('SELECT episode_id, access_level, status FROM courses WHERE episode_id = ?', [req.params.id])
+    if (!course || (course.status !== 'published' && req.user?.role !== 'admin')) {
+      return res.status(404).json({ ok:false, error:'课程不存在' })
+    }
+    if (!canAccessMembershipLevel(req.user, course.access_level)) {
+      return res.status(403).json({ ok:false, error:'当前会员权限不可下载该课程附件' })
+    }
+    const rows = await queryAll("SELECT * FROM course_resources WHERE episode_id = ? AND type = 'attachment' ORDER BY sort_order, id", [req.params.id])
+    res.json({ ok:true, attachments:rows.map(serializeCourseAttachment) })
+  } catch (error) {
+    console.error('Course attachments error:', error)
+    res.status(500).json({ ok:false, error:'课程附件加载失败' })
+  }
+})
+
+router.get('/course-items/:id/attachments/:attachmentId/download', optionalAuth, async (req, res) => {
+  try {
+    const attachment = await queryOne(`SELECT cr.*, c.access_level, c.status AS course_status
+      FROM course_resources cr INNER JOIN courses c ON c.episode_id = cr.episode_id
+      WHERE cr.id = ? AND cr.episode_id = ? AND cr.type = 'attachment'`, [req.params.attachmentId, req.params.id])
+    if (!attachment || (attachment.course_status !== 'published' && req.user?.role !== 'admin')) {
+      return res.status(404).json({ ok:false, error:'附件不存在' })
+    }
+    if (!canAccessMembershipLevel(req.user, attachment.access_level)) {
+      return res.status(403).json({ ok:false, error:'当前会员权限不可下载该课程附件' })
+    }
+    const filePath = resolveCourseAttachmentPath(attachment)
+    if (!filePath || !existsSync(filePath)) return res.status(404).json({ ok:false, error:'附件文件不存在' })
+    const metadata = parseCourseAttachmentMetadata(attachment)
+    res.set('Cache-Control', 'private, no-store')
+    res.set('X-Content-Type-Options', 'nosniff')
+    return res.download(filePath, metadata.fileName, error => {
+      if (error && !res.headersSent) res.status(404).json({ ok:false, error:'附件下载失败' })
+    })
+  } catch (error) {
+    console.error('Course attachment download error:', error)
+    if (!res.headersSent) res.status(500).json({ ok:false, error:'附件下载失败' })
   }
 })
 

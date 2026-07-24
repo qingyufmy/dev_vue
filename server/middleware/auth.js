@@ -3,6 +3,10 @@ import { queryOne } from '../db.js'
 import { JWT_SECRET, JWT_EXPIRY } from '../config.js'
 import { decorateMembership } from '../membership.js'
 
+export function tokenVersionMatches(decoded, user) {
+  return Number(decoded?.tokenVersion ?? 0) === Number(user?.token_version ?? 0)
+}
+
 export function authMiddleware(req, res, next) {
   // Routers may apply authentication once at a module boundary and again on
   // individual legacy routes. Reuse the verified user instead of querying it
@@ -18,11 +22,14 @@ export function authMiddleware(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET)
     queryOne(`SELECT id, email, phone, nickname, avatar, role, plan, plan_expires_at,
       (plan IN ('pro', 'plus') AND plan_expires_at IS NOT NULL AND plan_expires_at < NOW()) AS membership_expired,
-      referral_code, referral_credit, telegram_id
+      referral_code, referral_credit, telegram_id, token_version
       FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [decoded.userId])
       .then(async user => {
         if (!user) {
           return res.status(401).json({ ok: false, error: '用户不存在' })
+        }
+        if (!tokenVersionMatches(decoded, user)) {
+          return res.status(401).json({ ok:false, error:'登录状态已失效，请重新登录' })
         }
         // Preserve the purchased plan for renewal/history. Authorization uses
         // effective_plan and membership_expired instead of rewriting the user.
@@ -43,9 +50,12 @@ export function optionalAuth(req, res, next) {
       const decoded = jwt.verify(token, JWT_SECRET)
         queryOne(`SELECT id, email, phone, nickname, avatar, role, plan, plan_expires_at,
           (plan IN ('pro', 'plus') AND plan_expires_at IS NOT NULL AND plan_expires_at < NOW()) AS membership_expired,
-          referral_code, referral_credit
+          referral_code, referral_credit, token_version
           FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [decoded.userId])
-        .then(user => { req.user = decorateMembership(user); next() })
+        .then(user => {
+          if (user && tokenVersionMatches(decoded, user)) req.user = decorateMembership(user)
+          next()
+        })
         .catch(() => next())
     } catch { next() }
   } else {
@@ -60,6 +70,6 @@ export function adminOnly(req, res, next) {
   next()
 }
 
-export function generateToken(userId) {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRY })
+export function generateToken(userId, tokenVersion = 0) {
+  return jwt.sign({ userId, tokenVersion:Number(tokenVersion) || 0 }, JWT_SECRET, { expiresIn: JWT_EXPIRY })
 }
