@@ -1,5 +1,0 @@
-◇ injected env (10) from server\.env // tip: ◈ encrypted .env [www.dotenvx.com]
-[initAutoSchedulers] Starting unified scheduler reconciliation
-[Redis] Connected to 192.168.1.254:6379
-[Redis] Rebuilt subscription index: 0 scheduler keys, 0 online users (of 6 configured)
-[Reconciler] Started periodic reconciliation (every 60s)

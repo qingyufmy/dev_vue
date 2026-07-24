@@ -20,6 +20,10 @@ _*.py
 *.log
 server/stdout.log
 server/stderr.log
+dev_output.txt
+dev_error.txt
+test_output.txt
+test_stderr.txt
 
 _build/
 build/
