@@ -36,7 +36,9 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | WSS 一次性 ticket；长期凭证不进入 URL、日志或普通配置 | 已实现 | `BridgeSessionClient`、Gateway、凭证与日志脱敏测试 |
 | hello_ack 必须匹配消息、会话和全部终端，串线时失败关闭 | 已实现 | `BridgeInboundRouter`、`BridgeWebSocketClient` 及握手路由测试 |
 | 网络重连保留终端 epoch 和 revision，新会话接管后围栏旧连接 | 已实现 | Gateway 重连接管、旧连接拒绝测试及真实服务器重启恢复 |
-| C#/Node 运行时消息类型均有共享 JSON Schema | 已实现 | `bridge/contracts/v3`、`tests/bridge-v3-schema-contract.test.js` |
+| 首次同步完成后绑定服务器交易账户；账户转移时关闭旧用户执行会话 | 已实现 | Gateway `onTerminalReady`、`syncTradingAccountIdentity`；旧 V3/旧桥接先禁用交易再断开 |
+| C#/Node 运行时消息类型均有共享 JSON Schema | 已实现 | `bridge/protocol/v3-json-schema`、`tests/bridge-v3-schema-contract.test.js` |
+| MT4/MT5 成交历史按需分块聚合，不常驻全历史采集 | 已实现 | `performance_daily` 普通优先级数据请求；单次最多 31 个业务日，只返回每日汇总并由服务器持久化 |
 | 日志轮转和脱敏；日志失败不阻断交易闭环 | 已实现 | `BridgeFileLogger` 及轮转/脱敏测试；交易回执独立保存在 SQLite Outbox |
 | 官方模块更新、兼容范围、Manifest/包签名、大小/hash、原子版本目录 | 已实现 | `ReleaseManifestVerifier`、`ReleaseStager`、`ReleaseInstaller` |
 | 更新前暂停新指令并等待在途指令；失败恢复当前运行 | 已实现 | `PauseForUpdateAsync`、Launcher last-known-good 与回滚测试 |
@@ -46,9 +48,9 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 | 验证 | 结果 | 边界 |
 |---|---|---|
-| .NET Bridge/Launcher 全量测试 | 158/158 通过 | 自动化功能、协议、存储、恢复、更新、未确认执行回执保留、必填 nullable 字段序列化与 UI 文案 |
-| Node 服务端全量测试 | 1681/1681 通过 | v3 Gateway、重连接管、旧 Outbox 兼容、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
-| MT5 Python Worker 测试 | 23/23 通过 | Python 适配器协议、MT5 调用封装与空快照失败关闭 |
+| .NET Bridge/Launcher 全量测试 | 161/161 通过 | 自动化功能、协议、存储、恢复、更新、MT4 有界历史汇总、未确认执行回执保留、必填 nullable 字段序列化与 UI 文案 |
+| Node 服务端全量测试 | 1685/1685 通过 | v3 Gateway、账户绑定与旧会话撤销、有界历史汇总、重连接管、旧 Outbox 兼容、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
+| MT5 Python Worker 测试 | 25/25 通过 | Python 适配器协议、MT5 调用封装、有界每日成交汇总与空快照失败关闭 |
 | MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |
 | Windows 主界面走查 | 已通过 | 平台选择、真实 MT5 账户探测、仅 MT5 Worker、内置日志查看 |
 | 浏览器授权页真实路由 | 已通过 | 登录态下显示当前账户、一次性短码、权限说明和确认按钮；JS/CSS 使用同一新缓存版本 |
