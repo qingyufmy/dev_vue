@@ -92,6 +92,10 @@ public sealed class BridgeConnectionSupervisor
                         ? BridgeConnectionState.PairingRequired
                         : BridgeConnectionState.Reconnecting;
                     Publish(state, failures, errorCode);
+                    if (state == BridgeConnectionState.PairingRequired)
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    }
                 }
                 if (!cancellationToken.IsCancellationRequested)
                 {

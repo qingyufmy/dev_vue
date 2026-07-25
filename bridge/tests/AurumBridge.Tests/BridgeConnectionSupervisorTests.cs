@@ -48,30 +48,39 @@ public sealed class BridgeConnectionSupervisorTests
     }
 
     [TestMethod]
-    public async Task PublishesPairingRequiredWithoutStoppingRecoveryLoop()
+    public async Task PublishesPairingRequiredAndWaitsForExplicitAuthorization()
     {
         var statuses = new List<BridgeConnectionStatus>();
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var attempts = 0;
+        var reconnectDelays = 0;
         var supervisor = new BridgeConnectionSupervisor(
             [Terminal()],
             "3.0.0-test",
             (_, _) =>
             {
                 attempts++;
-                if (attempts == 2)
-                {
-                    stop.Cancel();
-                }
                 throw new BridgeApiException("bridge_not_paired", HttpStatusCode.Unauthorized);
             },
             (_, _, _) => Task.CompletedTask,
-            (_, _) => Task.CompletedTask);
-        supervisor.StatusChanged += statuses.Add;
+            (_, _) =>
+            {
+                reconnectDelays++;
+                return Task.CompletedTask;
+            });
+        supervisor.StatusChanged += status =>
+        {
+            statuses.Add(status);
+            if (status.State == BridgeConnectionState.PairingRequired)
+            {
+                stop.Cancel();
+            }
+        };
 
         await supervisor.RunAsync(stop.Token);
 
-        Assert.AreEqual(2, attempts);
+        Assert.AreEqual(1, attempts);
+        Assert.AreEqual(0, reconnectDelays);
         Assert.IsTrue(statuses.Any(status => status.State == BridgeConnectionState.PairingRequired));
         Assert.AreEqual(BridgeConnectionState.Stopped, statuses[^1].State);
     }
