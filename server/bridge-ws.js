@@ -14,6 +14,7 @@ import { getDefaultObserverSource, resolveObserverSourceForUser } from './routes
 import { tokenVersionMatches } from './middleware/auth.js'
 import { consumeBridgeConnectionTicket } from './bridge-auth-session.js'
 import { BRIDGE_V3_WS_PATH, createBridgeV3Gateway } from './bridge-v3/gateway.js'
+import { createBridgeV3BusinessAdapter } from './bridge-v3/business-adapter.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -30,6 +31,7 @@ const _bridgeInitGen = new Map() // userId -> generation number (防并发 init 
 
 let cmdCounter = 0
 let wss = null
+let bridgeV3Business = null
 let adminEventSeq = 0
 const adminEventThrottle = new Map()
 
@@ -443,7 +445,8 @@ export function initBridgeWS(server) {
   // Cache admin userId at startup
   getAdminUserId().catch(() => {})
   wss = new WebSocketServer({ noServer: true, maxPayload: BRIDGE_WS_LIMITS.maxPayloadBytes })
-  const bridgeV3Gateway = createBridgeV3Gateway()
+  const v3Gateway = createBridgeV3Gateway()
+  bridgeV3Business = createBridgeV3BusinessAdapter({ gateway:v3Gateway })
 
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost')
@@ -453,7 +456,7 @@ export function initBridgeWS(server) {
 
     if (url.pathname === BRIDGE_V3_WS_PATH) {
       try {
-        bridgeV3Gateway.handleUpgrade(req, socket, head)
+        v3Gateway.handleUpgrade(req, socket, head)
       } catch (error) {
         console.error(`[BridgeV3] upgrade failed ip=${ip} error=${error.message}`)
         try { socket.destroy() } catch {}
@@ -626,11 +629,11 @@ async function handleBrowser(ws, url, req) {
         ? Number(observerContext?.channel?.strategy_id || 0) || null : null
       const bridge = dataUserId ? bridges.get(dataUserId) : null
       const usingFallback = access.mode === 'observer'
-      const connected = !!(bridge && bridge.ws.readyState === 1)
-      const alive = connected && (Date.now() - bridge.lastSeen < 20000)
+      const connected = Boolean(dataUserId && isBridgeAlive(dataUserId))
+      const alive = connected
       // In observer mode the visible switches describe the platform observer
       // account. Mutations remain blocked by the observer action allowlist.
-      const tradeEnabled = alive ? !!bridge.tradeEnabled : undefined
+      const tradeEnabled = alive ? isTradeEnabled(dataUserId) : undefined
       const autoReasoningEnabled = alive ? !!bridge.autoReasoningEnabled : undefined
       ws.send(JSON.stringify({
         type: 'hb',
@@ -1317,11 +1320,10 @@ async function handleBrowserCommand(ws, userId, msg) {
     // Block trade operations when bridge is offline or trading is disabled
     const tradeActions = ['open', 'close', 'execute']
     if (tradeActions.includes(action)) {
-      const bridge = bridges.get(userId)
-      if (!bridge || bridge.ws.readyState !== 1) {
+      if (!isBridgeAlive(userId)) {
         return reply({ status: 'error', message: '请先连接您的 MT5 账户' })
       }
-      if (bridge.tradeEnabled === false) {
+      if (!isTradeEnabled(userId)) {
         return reply({ status: 'error', message: '交易发送已关闭，请先开启' })
       }
     }
@@ -1331,11 +1333,11 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'health': {
         const bridge = dataUserId ? bridges.get(dataUserId) : null
         const usingFallback = access.read_only
-        const connected = !!(bridge && bridge.ws.readyState === 1)
-        const alive = connected && (Date.now() - bridge.lastSeen < 20000)
+        const connected = Boolean(dataUserId && isBridgeAlive(dataUserId))
+        const alive = connected
         const tradeEnabled = usingFallback
-          ? (alive ? bridge?.tradeEnabled !== false : null)
-          : alive && bridge?.tradeEnabled !== false
+          ? (alive ? isTradeEnabled(dataUserId) : null)
+          : alive && isTradeEnabled(dataUserId)
         const autoReasoningEnabled = usingFallback
           ? (alive ? !!bridge?.autoReasoningEnabled : null)
           : (alive ? !!bridge?.autoReasoningEnabled : false)
@@ -1355,7 +1357,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'account': {
-        const hasDataBridge = dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1
+        const hasDataBridge = dataUserId && isBridgeAlive(dataUserId)
         if (hasDataBridge) {
           result = await ai.mt5Bridge(dataUserId, 'account', {}, { noFallback:true })
           if (access.read_only && result && typeof result === 'object') result.observer_source = true
@@ -1368,7 +1370,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.mt5Bridge(dataUserId, 'symbols', {}, { noFallback:true })
         break
       case 'quote': {
-        if (dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1) {
+        if (dataUserId && isBridgeAlive(dataUserId)) {
           result = await ai.mt5Bridge(dataUserId, 'quote', { symbol: params.symbol }, { noFallback:true })
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
@@ -1376,7 +1378,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'positions': {
-        if (dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1) {
+        if (dataUserId && isBridgeAlive(dataUserId)) {
           result = await ai.mt5Bridge(dataUserId, 'positions', {}, { noFallback:true })
           if (access.read_only && result && typeof result === 'object') result.observer_source = true
         } else {
@@ -1386,7 +1388,9 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'open': {
         // Check trade send enabled
-        const openBridge = bridges.get(userId)
+        const openBridge = bridges.get(userId) || (isBridgeAlive(userId)
+          ? { ws:{ readyState:1 }, tradeEnabled:isTradeEnabled(userId) }
+          : null)
         if (!openBridge || openBridge.ws?.readyState !== 1 || openBridge.tradeEnabled === false) {
           result = { status: 'rejected', message: !openBridge || openBridge.ws?.readyState !== 1 ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
           await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, 'rejected')
@@ -1400,7 +1404,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'close': {
-        const clBridge = bridges.get(userId)
+        const clBridge = bridges.get(userId) || (isBridgeAlive(userId)
+          ? { ws:{ readyState:1 }, tradeEnabled:isTradeEnabled(userId) }
+          : null)
         const closeParams = {
           ticket:params.ticket,
           confirm:params.confirm === true,
@@ -1925,7 +1931,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'pending_list': {
-        const hasDataBridge = dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1
+        const hasDataBridge = dataUserId && isBridgeAlive(dataUserId)
         if (!hasDataBridge) {
           result = { status: 'error', message: '请先连接 MT5 桥接' }
           break
@@ -2549,6 +2555,9 @@ export async function sendBridgeCommand(userId, action, params, timeoutMs = 5000
   }
 
   const numericUserId = Number(userId)
+  if (bridgeV3Business?.supports(action) && bridgeV3Business.hasConnectedTerminal(numericUserId)) {
+    return bridgeV3Business.execute(numericUserId, action, params, { timeoutMs })
+  }
   let bridge = bridges.get(numericUserId)
 
   if (!bridge || bridge.ws.readyState !== 1) {
@@ -2609,15 +2618,18 @@ export async function sendBridgeCommand(userId, action, params, timeoutMs = 5000
 
 // Check if a user has an active bridge
 export function isBridgeAlive(userId) {
-  const bridge = bridges.get(userId)
-  return !!(bridge && bridge.ws.readyState === 1 && (Date.now() - bridge.lastSeen < 20000))
+  const numericUserId = Number(userId)
+  const bridge = bridges.get(numericUserId)
+  return Boolean(bridge && bridge.ws.readyState === 1 && (Date.now() - bridge.lastSeen < 20000))
+    || Boolean(bridgeV3Business?.hasConnectedTerminal(numericUserId))
 }
 
 // Check if live trading is enabled for a user
 export function isTradeEnabled(userId) {
-  const bridge = bridges.get(userId)
-  if (!bridge || bridge.ws.readyState !== 1) return false
-  return bridge.tradeEnabled !== false
+  const numericUserId = Number(userId)
+  const bridge = bridges.get(numericUserId)
+  if (bridge?.ws?.readyState === 1) return bridge.tradeEnabled !== false
+  return bridgeV3Business?.isTradeEnabled(numericUserId) === true
 }
 
 // Apply administrator-managed observer-source switches to an already connected
@@ -2626,20 +2638,20 @@ export function isTradeEnabled(userId) {
 export async function applyBridgeRuntimeState(userId, { tradeEnabled, autoReasoningEnabled } = {}) {
   const numericUserId = Number(userId)
   const bridge = bridges.get(numericUserId)
-  const connected = !!(bridge && bridge.ws?.readyState === 1)
+  const connected = isBridgeAlive(numericUserId)
   let tradeApplied = !connected
   let tradeError = null
 
   if (bridge && typeof autoReasoningEnabled === 'boolean') {
     bridge.autoReasoningEnabled = autoReasoningEnabled
   }
-  if (bridge && typeof tradeEnabled === 'boolean') {
+  if (connected && typeof tradeEnabled === 'boolean') {
     // Disable locally before the command is acknowledged so no server-side
     // order can slip through while the bridge processes the switch.
-    if (!tradeEnabled) bridge.tradeEnabled = false
+    if (!tradeEnabled && bridge) bridge.tradeEnabled = false
     const result = await sendBridgeCommand(numericUserId, 'toggle_trade', { enable:tradeEnabled }, 5000, { noFallback:true })
     tradeApplied = result?.status === 'success'
-    if (tradeApplied) bridge.tradeEnabled = tradeEnabled
+    if (tradeApplied && bridge) bridge.tradeEnabled = tradeEnabled
     else tradeError = result?.message || result?.error || 'bridge_runtime_sync_failed'
   }
 
@@ -2653,7 +2665,7 @@ export async function applyBridgeRuntimeState(userId, { tradeEnabled, autoReason
   if (typeof tradeEnabled === 'boolean') {
     sendToBrowsers(numericUserId, {
       type:'hb', mt5_connected:connected, mt5_alive:connected,
-      trade_enabled:connected ? bridge?.tradeEnabled !== false : tradeEnabled,
+      trade_enabled:connected ? isTradeEnabled(numericUserId) : tradeEnabled,
       auto_reasoning_enabled:typeof autoReasoningEnabled === 'boolean'
         ? autoReasoningEnabled : Boolean(bridge?.autoReasoningEnabled),
       trade_mode:typeof bridge?.lastTradeMode === 'number' ? bridge.lastTradeMode : -1,

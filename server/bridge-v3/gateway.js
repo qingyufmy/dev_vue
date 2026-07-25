@@ -116,6 +116,7 @@ export function createBridgeV3Gateway({
     if (!ticket) throw Object.assign(new Error('bridge_ticket_required'), { code:'bridge_ticket_required' })
     const credential = await consumeTicket(ticket)
     const user = await queryOneFn(`SELECT id, role, plan, plan_expires_at, token_version,
+      (SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = users.id LIMIT 1) AS trade_send_enabled,
       (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
       FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [credential.userId])
     if (!user || Number(user.token_version || 0) !== Number(credential.tokenVersion || 0)) {
@@ -125,6 +126,9 @@ export function createBridgeV3Gateway({
       throw Object.assign(new Error('bridge_membership_required'), { code:'bridge_membership_required' })
     }
     connection.userId = Number(user.id)
+    connection.tradeEnabled = String(user.role || '').toLowerCase() === 'admin'
+      ? user.trade_send_enabled == null || Number(user.trade_send_enabled) === 1
+      : Number(user.trade_send_enabled) === 1
     connection.authenticated = true
   }
 
@@ -298,7 +302,9 @@ export function createBridgeV3Gateway({
     if (command.type !== 'command') throw Object.assign(new Error('bridge_command_type_invalid'), { code:'bridge_command_type_invalid' })
     const ledger = await createLedgerEntry(command, { userId:Number(userId), nowUtcMsc })
     if (!['queued'].includes(ledger.command.status)) {
-      return { status:ledger.command.status, command_id:command.command_id, duplicate:true }
+      return ledger.command.result
+        ? { ...ledger.command.result, duplicate:true }
+        : { status:ledger.command.status, command_id:command.command_id, duplicate:true }
     }
 
     const routed = connectionsByTerminal.get(command.terminal_instance_id)
@@ -367,6 +373,39 @@ export function createBridgeV3Gateway({
     })
   }
 
+  function listConnectedTerminals(userId) {
+    const result = []
+    for (const { connection, terminal } of connectionsByTerminal.values()) {
+      if (connection.userId !== Number(userId) || connection.closed || !connection.ready) continue
+      result.push({
+        terminal_instance_id:terminal.terminal_instance_id,
+        platform:terminal.platform,
+        account_ref:{ ...terminal.account_ref },
+        connection_epoch:terminal.connection_epoch,
+      })
+    }
+    return result
+  }
+
+  function isTradeEnabled(userId) {
+    for (const { connection } of connectionsByTerminal.values()) {
+      if (connection.userId === Number(userId) && !connection.closed && connection.ready) {
+        return connection.tradeEnabled === true
+      }
+    }
+    return false
+  }
+
+  function setTradeEnabled(userId, enabled) {
+    let changed = false
+    for (const { connection } of connectionsByTerminal.values()) {
+      if (connection.userId !== Number(userId) || connection.closed || !connection.ready) continue
+      connection.tradeEnabled = enabled === true
+      changed = true
+    }
+    return changed
+  }
+
   return {
     wss,
     connectionsByTerminal,
@@ -376,5 +415,8 @@ export function createBridgeV3Gateway({
     },
     sendCommand,
     requestQuote,
+    listConnectedTerminals,
+    isTradeEnabled,
+    setTradeEnabled,
   }
 }

@@ -111,7 +111,9 @@ function setup(overrides = {}) {
   const dependencies = {
     WebSocketServerImpl:FakeWebSocketServer,
     consumeTicket:vi.fn().mockResolvedValue({ userId:42, tokenVersion:3 }),
-    queryOneFn:vi.fn().mockResolvedValue({ id:42, token_version:3, has_pro_access:1 }),
+    queryOneFn:vi.fn().mockResolvedValue({
+      id:42, role:'user', token_version:3, has_pro_access:1, trade_send_enabled:1,
+    }),
     registerTerminal:vi.fn().mockResolvedValue({ connected:true }),
     disconnectTerminals:vi.fn().mockResolvedValue({ changes:1 }),
     applyDelta:vi.fn().mockResolvedValue({ status:'applied', expected_revision:2 }),
@@ -145,6 +147,9 @@ describe('Bridge v3 websocket gateway', () => {
     }))
     expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({ type:'hello_ack', session_id:'session_01JGATEWAY01' })
     expect(gateway.connectionsByTerminal.has('terminal_01JGATEWAY1')).toBe(true)
+    expect(gateway.isTradeEnabled(42)).toBe(true)
+    expect(gateway.setTradeEnabled(42, false)).toBe(true)
+    expect(gateway.isTradeEnabled(42)).toBe(false)
   })
 
   it('rejects missing tickets without registering a terminal', async () => {
@@ -239,6 +244,20 @@ describe('Bridge v3 websocket gateway', () => {
     const { gateway, dependencies } = setup()
     await expect(gateway.sendCommand(42, command())).resolves.toMatchObject({
       status:'queued', error:'bridge_terminal_not_connected',
+    })
+    expect(dependencies.markDispatched).not.toHaveBeenCalled()
+  })
+
+  it('replays an already persisted final receipt without dispatching again', async () => {
+    const stored = result()
+    const { gateway, dependencies } = setup({
+      createLedgerEntry:vi.fn().mockResolvedValue({
+        command:{ status:'succeeded', result:stored },
+      }),
+    })
+
+    await expect(gateway.sendCommand(42, command())).resolves.toMatchObject({
+      status:'succeeded', command_id:'command_01JGATEWAY01', duplicate:true,
     })
     expect(dependencies.markDispatched).not.toHaveBeenCalled()
   })

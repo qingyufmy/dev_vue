@@ -73,7 +73,7 @@ describe('AI observer access', () => {
     expect(css).not.toContain('.ai-observer-mode .observer-action-panel,')
     expect(css).not.toContain('.ai-observer-mode #autoAnalyzeMode,')
     expect(bridgeWs).toContain('auto_reasoning_enabled: autoReasoningEnabled')
-    expect(bridgeWs).toContain('const tradeEnabled = alive ? !!bridge.tradeEnabled : undefined')
+    expect(bridgeWs).toContain('const tradeEnabled = alive ? isTradeEnabled(dataUserId) : undefined')
     expect(bridgeWs).toContain('const channelSource = await getDefaultObserverSource()')
     expect(bridgeWs).toContain('Never silently show another')
     expect(bridgeWs).toContain('params.observer_channel_id')
