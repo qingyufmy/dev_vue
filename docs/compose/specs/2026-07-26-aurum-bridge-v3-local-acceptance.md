@@ -55,3 +55,16 @@ Acceptance 测试总数：8，全部通过。
 - 实际终止 Python Worker 后，Host 在 1.991 秒内恢复同一终端的新 Worker；MT5 PID 与启动时间保持不变。
 - 重启后的 connection epoch 10 中，SQLite 写入账户快照和 account/positions/orders 三条 revision；由于 demo 账户为空仓且无挂单，两个集合 latest 表为 0 行。
 - 服务器不可达时 Outbox 只保留当前 epoch 的三个完整快照，execution receipts 为 0；这验证了 SQLite 的缓存/Outbox 边界，没有把它当作 broker 交易权威。
+
+## 持续运行验收工具
+
+`bridge/tests/acceptance/Measure-BridgeHealth.ps1` 会从轮转日志读取健康样本，并失败关闭地检查：
+
+- 样本跨度是否达到 168 小时；
+- 最大采样间隔是否超过 150 秒；
+- uptime 是否回退，即进程是否发生重启；
+- 终端数量是否低于要求；
+- 预热后首个窗口与最终窗口的私有内存中位数增长是否超过 5%；
+- 同时报告 working set 增长和 Online 样本比例，但不拿短跑结果外推。
+
+合成 168 小时夹具验证结果：私有内存增长 4% 时通过；将门槛收紧到 3% 时正确失败；使用默认采样间隔门槛时正确拒绝大间隔夹具。当前真实日志跨度为 1.259 小时，因此按预期返回 `bridge_health_span_insufficient`，尚不能出具 7 天通过结论。
