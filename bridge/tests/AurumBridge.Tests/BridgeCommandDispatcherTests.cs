@@ -10,6 +10,8 @@ public sealed class BridgeCommandDispatcherTests
     private const long Now = 1_800_000_000_000;
     private TestStore _testStore = null!;
 
+    public TestContext TestContext { get; set; } = null!;
+
     [TestInitialize]
     public async Task InitializeAsync()
     {
@@ -161,6 +163,61 @@ public sealed class BridgeCommandDispatcherTests
         Assert.AreEqual(0, dispatcher.InFlightCount);
         dispatcher.Resume();
         Assert.AreEqual("succeeded", (await dispatcher.DispatchAsync(Command("command_01JDISPATCH05"))).Status);
+    }
+
+    [TestMethod]
+    [TestCategory("Acceptance")]
+    public async Task TenThousandFaultInjectedCommandsNeverDuplicateOrCrossRouteAfterRestart()
+    {
+        const int injectionCount = 10_000;
+        var workerCalls = 0;
+        var successful = Command("command_01JACCEPTANCE01");
+        var expired = Command("command_01JACCEPTANCE02") with { DeadlineUtcMsc = Now };
+        var crossAccount = Command("command_01JACCEPTANCE03") with
+        {
+            AccountRef = new("Broker-Demo", "999"),
+        };
+        var interrupted = Command("command_01JACCEPTANCE04") with
+        {
+            Action = "query_execution",
+        };
+        var commands = new[] { successful, expired, crossAccount, interrupted };
+        var dispatcher = Dispatcher((command, _) =>
+        {
+            Interlocked.Increment(ref workerCalls);
+            return command.CommandId == interrupted.CommandId
+                ? throw new IOException("simulated_worker_disconnect")
+                : Task.FromResult(Success(command));
+        });
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var results = await Task.WhenAll(Enumerable.Range(0, injectionCount)
+            .Select(index => dispatcher.DispatchAsync(commands[index % commands.Length])));
+        started.Stop();
+
+        Assert.AreEqual(2, workerCalls, "Only the valid trade and interrupted reconciliation may reach the Worker.");
+        Assert.AreEqual(injectionCount / 4, results.Count(result => result.Status == "succeeded"));
+        Assert.AreEqual(injectionCount / 4, results.Count(result => result.ErrorCode == "command_expired"));
+        Assert.AreEqual(injectionCount / 4, results.Count(result => result.ErrorCode == "command_route_mismatch"));
+        Assert.AreEqual(injectionCount / 4, results.Count(result =>
+            result.Status == "uncertain" && result.ErrorCode == "worker_execution_exception"));
+
+        var replayCalls = 0;
+        var restarted = Dispatcher((command, _) =>
+        {
+            Interlocked.Increment(ref replayCalls);
+            return Task.FromResult(Success(command));
+        });
+        var replayed = await Task.WhenAll(Enumerable.Range(0, injectionCount)
+            .Select(index => restarted.DispatchAsync(commands[index % commands.Length])));
+
+        Assert.AreEqual(0, replayCalls, "Persisted terminal receipts must prevent execution after process restart.");
+        Assert.IsTrue(replayed.All(result => results.Any(original =>
+            original.CommandId == result.CommandId
+            && original.Status == result.Status
+            && original.ErrorCode == result.ErrorCode)));
+        TestContext.WriteLine(
+            $"Local in-process safety baseline: {injectionCount} injections in {started.ElapsedMilliseconds} ms; no production latency claim.");
     }
 
     private BridgeCommandDispatcher Dispatcher(
