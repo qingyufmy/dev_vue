@@ -18,6 +18,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _singleInstance = singleInstance ?? throw new ArgumentNullException(nameof(singleInstance));
         var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
         _logger = new(Path.Combine(paths.DataDirectory, "logs"));
+        EnsureAutoStart();
         _controller = new(paths);
         _form = new();
         _form.PairRequested += HandlePairRequested;
@@ -43,6 +44,22 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.Show();
         _logger.Info("bridge_started");
         _ = ObserveControllerAsync(_controller.RunAsync(_stop.Token));
+    }
+
+    private void EnsureAutoStart()
+    {
+        try
+        {
+            var registration = new BridgeAutoStartRegistration(new WindowsAutoStartValueStore());
+            if (registration.EnsureForInstalledApplication(AppContext.BaseDirectory))
+            {
+                _logger.Info("autostart_registered");
+            }
+        }
+        catch (Exception error)
+        {
+            _logger.Error("autostart_registration_failed", error);
+        }
     }
 
     private void HandleActivationRequested()
