@@ -63,6 +63,48 @@ public sealed class BridgeSessionClientTests
     }
 
     [TestMethod]
+    public async Task RetriesTransientPairingFailuresWithoutOpeningAnotherBrowser()
+    {
+        var handler = new QueueHandler(
+            new HttpRequestException("start temporarily unavailable"),
+            Response(HttpStatusCode.Created, new
+            {
+                ok = true,
+                deviceCode = new string('d', 48),
+                userCode = "ABCD-2345",
+                verificationPath = "/bridge/pair",
+                expiresInSeconds = 600,
+                intervalSeconds = 2,
+            }),
+            new TaskCanceledException("token request timed out"),
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true,
+                status = "approved",
+                refreshToken = new string('r', 64),
+                refreshExpiresInSeconds = 7_776_000,
+            }));
+        var store = new MemoryCredentialStore();
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"),
+            new HttpClient(handler),
+            store,
+            (_, _) => Task.CompletedTask,
+            () => 1_800_000_000_000);
+        var prompts = 0;
+
+        await client.PairAsync("Desk PC", _ =>
+        {
+            prompts++;
+            return Task.CompletedTask;
+        });
+
+        Assert.AreEqual(1, prompts);
+        Assert.AreEqual(4, handler.Requests.Count);
+        Assert.IsNotNull(store.Credential);
+    }
+
+    [TestMethod]
     public async Task RefreshesSessionThenAcquiresOneTimeWebSocketTicket()
     {
         var handler = new QueueHandler(
@@ -204,9 +246,9 @@ public sealed class BridgeSessionClientTests
 
     private sealed record CapturedRequest(string Uri, string? Authorization, string Body);
 
-    private sealed class QueueHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
+    private sealed class QueueHandler(params object[] responses) : HttpMessageHandler
     {
-        private readonly Queue<HttpResponseMessage> _responses = new(responses);
+        private readonly Queue<object> _responses = new(responses);
         public List<CapturedRequest> Requests { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -220,7 +262,12 @@ public sealed class BridgeSessionClientTests
                 request.RequestUri!.AbsoluteUri,
                 request.Headers.Authorization?.ToString(),
                 body));
-            return _responses.Dequeue();
+            var response = _responses.Dequeue();
+            if (response is Exception error)
+            {
+                throw error;
+            }
+            return (HttpResponseMessage)response;
         }
     }
 

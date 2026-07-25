@@ -50,10 +50,12 @@ public sealed class BridgeSessionClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(showVerification);
-        var start = await PostAsync<PairingStartResponse>(
-            "/api/auth/bridge-pair/start",
-            new { deviceName = StringSanitizer(deviceName, 120) },
-            cancellationToken: cancellationToken);
+        var start = await RetryTransientAsync(
+            token => PostAsync<PairingStartResponse>(
+                "/api/auth/bridge-pair/start",
+                new { deviceName = StringSanitizer(deviceName, 120) },
+                cancellationToken: token),
+            cancellationToken);
         if (string.IsNullOrWhiteSpace(start.DeviceCode)
             || string.IsNullOrWhiteSpace(start.UserCode)
             || string.IsNullOrWhiteSpace(start.VerificationPath))
@@ -68,10 +70,19 @@ public sealed class BridgeSessionClient
         while (_clock() < expiresAt)
         {
             await _delay(interval, cancellationToken);
-            var token = await PostAsync<PairingTokenResponse>(
-                "/api/auth/bridge-pair/token",
-                new { deviceCode = start.DeviceCode },
-                cancellationToken: cancellationToken);
+            PairingTokenResponse token;
+            try
+            {
+                token = await PostAsync<PairingTokenResponse>(
+                    "/api/auth/bridge-pair/token",
+                    new { deviceCode = start.DeviceCode },
+                    cancellationToken: cancellationToken);
+            }
+            catch (Exception error) when (
+                !cancellationToken.IsCancellationRequested && IsTransient(error))
+            {
+                continue;
+            }
             if (token.Status == "pending")
             {
                 continue;
@@ -191,6 +202,46 @@ public sealed class BridgeSessionClient
         }
         return result;
     }
+
+    private async Task<TResponse> RetryTransientAsync<TResponse>(
+        Func<CancellationToken, Task<TResponse>> operation,
+        CancellationToken cancellationToken)
+    {
+        var failures = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return await operation(cancellationToken);
+            }
+            catch (Exception error) when (
+                !cancellationToken.IsCancellationRequested && IsTransient(error))
+            {
+                failures++;
+                await _delay(RetryDelay(failures), cancellationToken);
+            }
+        }
+    }
+
+    private static bool IsTransient(Exception error) => error switch
+    {
+        HttpRequestException => true,
+        TaskCanceledException => true,
+        BridgeApiException apiError when apiError.StatusCode == HttpStatusCode.TooManyRequests
+            || (int)apiError.StatusCode >= 500 => true,
+        _ => false,
+    };
+
+    private static TimeSpan RetryDelay(int failures) => TimeSpan.FromSeconds(failures switch
+    {
+        <= 1 => 1,
+        2 => 2,
+        3 => 4,
+        4 => 8,
+        5 => 15,
+        _ => 30,
+    });
 
     private Uri BuildVerificationUri(string verificationPath, string userCode)
     {
