@@ -119,6 +119,74 @@ public sealed class BridgeSessionClientTests
         Assert.IsNull(store.Credential);
     }
 
+    [TestMethod]
+    public async Task TemporaryServerFailurePreservesThePersistentAuthorization()
+    {
+        var handler = new QueueHandler(Response(HttpStatusCode.ServiceUnavailable, new
+        {
+            ok = false,
+            code = "bridge_server_unreachable",
+        }));
+        var credential = new BridgeCredential(new string('r', 64), 1_900_000_000_000);
+        var store = new MemoryCredentialStore { Credential = credential };
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"), new HttpClient(handler), store);
+
+        await Assert.ThrowsExactlyAsync<BridgeApiException>(
+            async () => await client.AcquireConnectionAttemptAsync(Hello()));
+
+        Assert.AreEqual(credential, store.Credential);
+        Assert.HasCount(1, handler.Requests);
+    }
+
+    [TestMethod]
+    public async Task ExplicitLogoutRevokesOnlyThisSessionThenClearsLocalCredential()
+    {
+        var handler = new QueueHandler(
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true,
+                token = "short-jwt",
+                refreshExpiresInSeconds = 7_776_000,
+            }),
+            Response(HttpStatusCode.OK, new { ok = true }));
+        var refreshToken = new string('r', 64);
+        var store = new MemoryCredentialStore
+        {
+            Credential = new(refreshToken, 1_900_000_000_000),
+        };
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"), new HttpClient(handler), store);
+
+        Assert.IsTrue(await client.LogoutAsync());
+
+        Assert.IsNull(store.Credential);
+        Assert.AreEqual("https://bridge.example/api/auth/bridge-revoke", handler.Requests[1].Uri);
+        Assert.AreEqual("Bearer short-jwt", handler.Requests[1].Authorization);
+        StringAssert.Contains(handler.Requests[1].Body, refreshToken);
+    }
+
+    [TestMethod]
+    public async Task ExplicitLogoutStillClearsLocalCredentialWhenServerCannotBeReached()
+    {
+        var handler = new QueueHandler(Response(HttpStatusCode.ServiceUnavailable, new
+        {
+            ok = false,
+            code = "bridge_server_unreachable",
+        }));
+        var store = new MemoryCredentialStore
+        {
+            Credential = new(new string('r', 64), 1_900_000_000_000),
+        };
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"), new HttpClient(handler), store);
+
+        Assert.IsFalse(await client.LogoutAsync());
+
+        Assert.IsNull(store.Credential);
+        Assert.HasCount(1, handler.Requests);
+    }
+
     private static HelloMessage Hello() => new()
     {
         Type = "hello",

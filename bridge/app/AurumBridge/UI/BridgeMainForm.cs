@@ -2,6 +2,11 @@ using AurumBridge.Runtime;
 
 namespace AurumBridge.UI;
 
+public sealed class BridgePlatformChangedEventArgs(string platform) : EventArgs
+{
+    public string Platform { get; } = platform;
+}
+
 public sealed class BridgeMainForm : Form
 {
     private readonly Label _statusTitle = new();
@@ -12,6 +17,9 @@ public sealed class BridgeMainForm : Form
     private readonly Button _detectButton = new();
     private readonly Button _logButton = new();
     private readonly Button _exitButton = new();
+    private readonly Button _logoutButton = new();
+    private readonly ComboBox _platformSelector = new();
+    private bool _updatingPlatform;
     private bool _allowClose;
 
     public BridgeMainForm()
@@ -19,8 +27,8 @@ public sealed class BridgeMainForm : Form
         Text = "AURUM Bridge";
         AccessibleName = "AURUM Bridge 状态窗口";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new(520, 420);
-        ClientSize = new(560, 450);
+        MinimumSize = new(560, 470);
+        ClientSize = new(600, 500);
         BackColor = Color.FromArgb(248, 250, 252);
         Font = new("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -32,7 +40,9 @@ public sealed class BridgeMainForm : Form
     public event EventHandler? PairRequested;
     public event EventHandler? RedetectRequested;
     public event EventHandler? OpenLogsRequested;
+    public event EventHandler? LogoutRequested;
     public event EventHandler? ExitRequested;
+    public event EventHandler<BridgePlatformChangedEventArgs>? PlatformChanged;
 
     public void ApplyStatus(BridgeApplicationStatus status)
     {
@@ -41,6 +51,10 @@ public sealed class BridgeMainForm : Form
         _statusDescription.Text = text.Description;
         _statusMarker.BackColor = text.AccentColor;
         _pairButton.Visible = status.Phase == BridgeApplicationPhase.PairingRequired;
+        _logoutButton.Visible = status.SelectedPlatform is not null
+            && status.Phase is not (BridgeApplicationPhase.PairingRequired
+                or BridgeApplicationPhase.PlatformSelectionRequired);
+        ApplyPlatform(status.SelectedPlatform);
         _terminalList.SuspendLayout();
         _terminalList.Controls.Clear();
         foreach (var terminal in status.Terminals)
@@ -82,8 +96,9 @@ public sealed class BridgeMainForm : Form
             Dock = DockStyle.Fill,
             Padding = new(28, 24, 28, 22),
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 7,
         };
+        root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.Percent, 100));
@@ -108,6 +123,45 @@ public sealed class BridgeMainForm : Form
         };
         root.Controls.Add(heading);
         root.Controls.Add(subheading);
+
+        var platformBar = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            ColumnCount = 4,
+            RowCount = 1,
+            Margin = new Padding(0, 0, 0, 16),
+        };
+        platformBar.ColumnStyles.Add(new(SizeType.AutoSize));
+        platformBar.ColumnStyles.Add(new(SizeType.Absolute, 120));
+        platformBar.ColumnStyles.Add(new(SizeType.Percent, 100));
+        platformBar.ColumnStyles.Add(new(SizeType.AutoSize));
+        platformBar.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            ForeColor = Color.FromArgb(51, 65, 85),
+            Text = "交易平台",
+            Margin = new Padding(0, 8, 10, 0),
+        }, 0, 0);
+        _platformSelector.Dock = DockStyle.Fill;
+        _platformSelector.DropDownStyle = ComboBoxStyle.DropDownList;
+        _platformSelector.AccessibleName = "选择 MT4 或 MT5";
+        _platformSelector.Items.AddRange(["MT5", "MT4"]);
+        _platformSelector.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_updatingPlatform && _platformSelector.SelectedItem is string selected)
+            {
+                PlatformChanged?.Invoke(this, new(selected.ToLowerInvariant()));
+            }
+        };
+        platformBar.Controls.Add(_platformSelector, 1, 0);
+        ConfigureButton(_logoutButton, "退出账号", primary:false);
+        _logoutButton.MinimumSize = new(88, 34);
+        _logoutButton.Visible = false;
+        _logoutButton.Click += (_, _) => LogoutRequested?.Invoke(this, EventArgs.Empty);
+        platformBar.Controls.Add(_logoutButton, 3, 0);
+        root.Controls.Add(platformBar);
 
         var card = new TableLayoutPanel
         {
@@ -182,6 +236,29 @@ public sealed class BridgeMainForm : Form
         actions.Controls.Add(_exitButton);
         root.Controls.Add(actions);
         Controls.Add(root);
+    }
+
+    private void ApplyPlatform(string? platform)
+    {
+        var index = platform switch
+        {
+            BridgePlatform.Mt5 => 0,
+            BridgePlatform.Mt4 => 1,
+            _ => -1,
+        };
+        if (_platformSelector.SelectedIndex == index)
+        {
+            return;
+        }
+        _updatingPlatform = true;
+        try
+        {
+            _platformSelector.SelectedIndex = index;
+        }
+        finally
+        {
+            _updatingPlatform = false;
+        }
     }
 
     private Panel CreateTerminalRow(BridgeTerminalStatus terminal)

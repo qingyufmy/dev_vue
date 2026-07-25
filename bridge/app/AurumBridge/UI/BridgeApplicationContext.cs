@@ -10,6 +10,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly NotifyIcon _notifyIcon;
     private readonly BridgeApplicationController _controller;
     private readonly BridgeFileLogger _logger;
+    private readonly BridgeUserPreferencesStore _preferences;
     private readonly BridgeSingleInstanceGuard _singleInstance;
     private readonly BridgeUpdateCoordinator? _updateCoordinator;
     private readonly string? _startupReadyFile;
@@ -17,6 +18,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly long _startedTimestamp = Stopwatch.GetTimestamp();
     private Task? _updateTask;
     private Task? _healthTask;
+    private BridgeLogViewerForm? _logViewer;
     private int _startupReadyWritten;
     private int _latestPhase = (int)BridgeApplicationPhase.Starting;
     private int _latestTerminalCount;
@@ -30,13 +32,25 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _startupReadyFile = startupReadyFile;
         var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
         _logger = new(Path.Combine(paths.DataDirectory, "logs"));
+        _preferences = new(Path.Combine(paths.DataDirectory, "preferences.json"));
+        string? selectedPlatform = null;
+        try
+        {
+            selectedPlatform = _preferences.LoadAsync().GetAwaiter().GetResult().Platform;
+        }
+        catch (Exception error)
+        {
+            _logger.Error("preferences_load_failed", error);
+        }
         EnsureAutoStart();
         _updateCoordinator = CreateUpdateCoordinator(paths.ServerBaseUri);
-        _controller = new(paths);
+        _controller = new(paths, selectedPlatform);
         _form = new();
         _form.PairRequested += HandlePairRequested;
         _form.RedetectRequested += (_, _) => _controller.RequestRedetect();
         _form.OpenLogsRequested += HandleOpenLogsRequested;
+        _form.LogoutRequested += HandleLogoutRequested;
+        _form.PlatformChanged += HandlePlatformChanged;
         _form.ExitRequested += HandleExitRequested;
         _controller.StatusChanged += HandleStatusChanged;
         _singleInstance.ActivationRequested += HandleActivationRequested;
@@ -189,12 +203,20 @@ public sealed class BridgeApplicationContext : ApplicationContext
         try
         {
             Directory.CreateDirectory(_logger.LogDirectory);
-            Process.Start(new ProcessStartInfo
+            if (_logViewer is null || _logViewer.IsDisposed)
             {
-                FileName = "explorer.exe",
-                ArgumentList = { _logger.LogDirectory },
-                UseShellExecute = true,
-            });
+                _logViewer = new(_logger.LogDirectory);
+                _logViewer.Show(_form);
+            }
+            else if (!_logViewer.Visible)
+            {
+                _logViewer.Show(_form);
+            }
+            else
+            {
+                _ = _logViewer.ReloadAsync();
+            }
+            _logViewer.BringToFront();
         }
         catch (Exception error)
         {
@@ -203,6 +225,70 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 _form,
                 "暂时无法打开日志目录，请稍后重试。",
                 "查看日志",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private async void HandlePlatformChanged(object? sender, BridgePlatformChangedEventArgs eventArgs)
+    {
+        try
+        {
+            await _preferences.SavePlatformAsync(eventArgs.Platform, _stop.Token);
+            _controller.SelectPlatform(eventArgs.Platform);
+            _logger.Info("bridge_platform_selected", $"platform={eventArgs.Platform}");
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("preferences_save_failed", error);
+            MessageBox.Show(
+                _form,
+                "交易平台选择未能保存，请稍后重试。",
+                "选择交易平台",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private async void HandleLogoutRequested(object? sender, EventArgs eventArgs)
+    {
+        var answer = MessageBox.Show(
+            _form,
+            "确定退出当前 AURUM 账号？\n\n退出后桥接会停止服务器连接；MT 中已有订单不会被撤销或平仓。",
+            "退出账号",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (answer != DialogResult.Yes)
+        {
+            return;
+        }
+        try
+        {
+            var revoked = await _controller.LogoutAsync(_stop.Token);
+            _logger.Info("bridge_account_logged_out", $"server_revoked={revoked}");
+            MessageBox.Show(
+                _form,
+                revoked
+                    ? "已退出账号。下次连接需要重新在浏览器中授权。"
+                    : "本机已退出账号。服务器暂时无法确认撤销，但本机凭证已经清除。",
+                "退出账号",
+                MessageBoxButtons.OK,
+                revoked ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("bridge_logout_failed", error);
+            MessageBox.Show(
+                _form,
+                "暂时无法退出账号，请稍后重试。",
+                "退出账号",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
@@ -239,6 +325,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
         await _controller.DisposeAsync();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _logViewer?.Close();
+        _logViewer?.Dispose();
         _form.AllowClose();
         _form.Close();
         _form.Dispose();
@@ -338,6 +426,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
             coordinator.StartLauncher();
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
+            _logViewer?.Close();
+            _logViewer?.Dispose();
             _form.AllowClose();
             _form.Close();
             _form.Dispose();

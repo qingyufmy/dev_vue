@@ -12,7 +12,7 @@ import { decorateMembership } from '../membership.js'
 import { disconnectUserSockets } from '../bridge-ws.js'
 import {
   createBridgeConnectionTicket, createBridgeRefreshSession,
-  useBridgeRefreshSession, revokeBridgeRefreshSessions,
+  useBridgeRefreshSession, revokeBridgeRefreshSession, revokeBridgeRefreshSessions,
 } from '../bridge-auth-session.js'
 import {
   approveBridgePairing, consumeBridgePairing, startBridgePairing,
@@ -443,7 +443,7 @@ router.post('/auth/bridge-refresh', async (req, res) => {
 })
 
 router.post('/auth/bridge-revoke', authMiddleware, async (req, res) => {
-  await revokeBridgeRefreshSessions(req.user.id)
+  await revokeBridgeRefreshSession(req.user.id, req.body?.refreshToken)
   res.json({ ok: true })
 })
 

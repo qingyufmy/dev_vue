@@ -132,6 +132,40 @@ public sealed class BridgeSessionClient
         return new(BuildWebSocketUri(), ticket.Ticket, hello);
     }
 
+    public async Task<bool> LogoutAsync(CancellationToken cancellationToken = default)
+    {
+        var credential = await _credentialStore.LoadAsync(cancellationToken);
+        if (credential is null)
+        {
+            return true;
+        }
+        var revoked = false;
+        try
+        {
+            var refresh = await PostAsync<RefreshResponse>(
+                "/api/auth/bridge-refresh",
+                new { refreshToken = credential.RefreshToken },
+                cancellationToken: cancellationToken);
+            if (!string.IsNullOrWhiteSpace(refresh.Token))
+            {
+                await PostAsync<RevokeResponse>(
+                    "/api/auth/bridge-revoke",
+                    new { refreshToken = credential.RefreshToken },
+                    refresh.Token,
+                    cancellationToken);
+                revoked = true;
+            }
+        }
+        catch (Exception error) when (error is BridgeApiException or HttpRequestException or TaskCanceledException)
+        {
+        }
+        finally
+        {
+            await _credentialStore.ClearAsync(CancellationToken.None);
+        }
+        return revoked;
+    }
+
     private async Task<TResponse> PostAsync<TResponse>(
         string path,
         object body,
@@ -250,4 +284,6 @@ public sealed class BridgeSessionClient
         [JsonPropertyName("ticket")]
         public string Ticket { get; init; } = string.Empty;
     }
+
+    private sealed record RevokeResponse : ApiResponse;
 }

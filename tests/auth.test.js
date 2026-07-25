@@ -23,6 +23,7 @@ vi.mock('../server/bridge-auth-session.js', () => ({
   createBridgeConnectionTicket: vi.fn(async () => ({ ticket: 'ticket', expiresInSeconds: 30 })),
   createBridgeRefreshSession: vi.fn(async () => ({ refreshToken: 'refresh-token', expiresInSeconds: 7776000 })),
   useBridgeRefreshSession: vi.fn(async () => ({ user: { id: 3 }, expiresInSeconds: 7776000 })),
+  revokeBridgeRefreshSession: vi.fn(async () => true),
   revokeBridgeRefreshSessions: vi.fn(async () => {}),
 }))
 vi.mock('../server/bridge-pairing.js', () => ({
@@ -40,7 +41,10 @@ vi.mock('../server/bridge-ws.js', () => ({
 import { queryOne, queryAll, queryRun, withTransaction } from '../server/db.js'
 import { verifyCaptcha } from '../server/captcha.js'
 import authRouter from '../server/routes/auth.js'
-import { createBridgeRefreshSession, useBridgeRefreshSession, revokeBridgeRefreshSessions } from '../server/bridge-auth-session.js'
+import {
+  createBridgeRefreshSession, useBridgeRefreshSession,
+  revokeBridgeRefreshSession, revokeBridgeRefreshSessions,
+} from '../server/bridge-auth-session.js'
 import { disconnectUserSockets } from '../server/bridge-ws.js'
 import { approveBridgePairing, consumeBridgePairing, startBridgePairing } from '../server/bridge-pairing.js'
 
@@ -165,6 +169,16 @@ describe('auth.js — Bridge sessions', () => {
     const { json } = await callRoute('post', '/auth/bridge-refresh', { refreshToken: 'refresh-token' })
     expect(json).toMatchObject({ ok: true, token: 'mock-token-123' })
     expect(useBridgeRefreshSession).toHaveBeenCalledWith('refresh-token', expect.any(Object))
+  })
+
+  it('revokes only the current Bridge refresh credential on explicit logout', async () => {
+    const { json } = await callRoute('post', '/auth/bridge-revoke', {
+      refreshToken: 'current-device-refresh-token',
+    }, { id:3, role:'user', plan:'pro' })
+
+    expect(json).toEqual({ ok:true })
+    expect(revokeBridgeRefreshSession).toHaveBeenCalledWith(3, 'current-device-refresh-token')
+    expect(revokeBridgeRefreshSessions).not.toHaveBeenCalled()
   })
 
   it('starts, approves, and polls browser pairing without putting a refresh token in the URL', async () => {

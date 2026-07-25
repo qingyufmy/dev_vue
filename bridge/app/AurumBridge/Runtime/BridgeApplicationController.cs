@@ -8,6 +8,7 @@ namespace AurumBridge.Runtime;
 public enum BridgeApplicationPhase
 {
     Starting,
+    PlatformSelectionRequired,
     DetectingTerminal,
     TerminalNotFound,
     PairingRequired,
@@ -28,7 +29,10 @@ public sealed record BridgeTerminalStatus(
 public sealed record BridgeApplicationStatus(
     BridgeApplicationPhase Phase,
     IReadOnlyList<BridgeTerminalStatus> Terminals,
-    string? DetailCode);
+    string? DetailCode)
+{
+    public string? SelectedPlatform { get; init; }
+}
 
 public sealed class BridgeApplicationController : IAsyncDisposable
 {
@@ -48,9 +52,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private string? _detailCode;
     private BridgeCommandDispatcher? _activeCommandDispatcher;
     private bool _updatePreparation;
+    private string? _selectedPlatform;
     private bool _disposed;
 
-    public BridgeApplicationController(BridgeRuntimePaths paths)
+    public BridgeApplicationController(BridgeRuntimePaths paths, string? selectedPlatform = null)
     {
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         Directory.CreateDirectory(paths.DataDirectory);
@@ -68,10 +73,37 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             paths.PythonExecutable,
             paths.Mt5WorkerScript);
         _mt4Provisioner = new(_store);
+        _selectedPlatform = string.IsNullOrWhiteSpace(selectedPlatform)
+            ? null
+            : BridgePlatform.Normalize(selectedPlatform);
     }
 
     public event Action<BridgeApplicationStatus>? StatusChanged;
     public BridgeRuntimePaths Paths => _paths;
+    public string? SelectedPlatform
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _selectedPlatform;
+            }
+        }
+    }
+
+    public void SelectPlatform(string platform)
+    {
+        var normalized = BridgePlatform.Normalize(platform);
+        lock (_sync)
+        {
+            if (_selectedPlatform == normalized)
+            {
+                return;
+            }
+            _selectedPlatform = normalized;
+            _cycleCancellation?.Cancel();
+        }
+    }
 
     public Task RunAsync(CancellationToken cancellationToken = default)
     {
@@ -102,6 +134,13 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         {
             _cycleCancellation?.Cancel();
         }
+    }
+
+    public async Task<bool> LogoutAsync(CancellationToken cancellationToken = default)
+    {
+        var revoked = await _sessionClient.LogoutAsync(cancellationToken);
+        RequestRedetect();
+        return revoked;
     }
 
     public async Task PauseForUpdateAsync(
@@ -243,19 +282,36 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         {
             _terminalStatuses.Clear();
         }
-        Publish(BridgeApplicationPhase.DetectingTerminal);
-        var mt4RegistrationsTask = Mt4RuntimeProvisioner.AcceptRegistrationsAsync(
-            TimeSpan.FromMilliseconds(1_500),
-            cancellationToken);
-        var installations = Mt5TerminalDiscovery.DiscoverWindows();
-        var mt5 = await _mt5Provisioner.ProvisionAsync(installations, cancellationToken);
-        var registrations = new List<Mt4EaConnection>();
-        while (_pendingMt4Registrations.TryDequeue(out var pendingRegistration))
+        var selectedPlatform = SelectedPlatform;
+        if (selectedPlatform is null)
         {
-            registrations.Add(pendingRegistration);
+            Publish(BridgeApplicationPhase.PlatformSelectionRequired);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return;
         }
-        registrations.AddRange(await mt4RegistrationsTask);
-        var mt4 = await _mt4Provisioner.ProvisionAsync(registrations, cancellationToken);
+        Publish(BridgeApplicationPhase.DetectingTerminal);
+        var mt5 = new Mt5ProvisioningResult([], []);
+        var mt4 = new Mt4ProvisioningResult([], []);
+        if (selectedPlatform == BridgePlatform.Mt5)
+        {
+            while (_pendingMt4Registrations.TryDequeue(out var unusedRegistration))
+            {
+                await unusedRegistration.DisposeAsync();
+            }
+            var installations = Mt5TerminalDiscovery.DiscoverWindows();
+            mt5 = await _mt5Provisioner.ProvisionAsync(installations, cancellationToken);
+        }
+        else
+        {
+            var registrations = new List<Mt4EaConnection>();
+            while (_pendingMt4Registrations.TryDequeue(out var pendingRegistration))
+            {
+                registrations.Add(pendingRegistration);
+            }
+            registrations.AddRange(await Mt4RuntimeProvisioner.AcceptRegistrationsAsync(
+                TimeSpan.FromMilliseconds(1_500), cancellationToken));
+            mt4 = await _mt4Provisioner.ProvisionAsync(registrations, cancellationToken);
+        }
         var supervisors = mt5.Terminals.Select(terminal => terminal.Supervisor)
             .Concat(mt4.Terminals.Select(terminal => terminal.Supervisor))
             .ToArray();
@@ -263,9 +319,9 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         {
             Publish(
                 BridgeApplicationPhase.TerminalNotFound,
-                mt5.Failures.FirstOrDefault()?.ErrorCode
-                    ?? mt4.Failures.FirstOrDefault()?.ErrorCode
-                    ?? "trading_terminal_not_found");
+                selectedPlatform == BridgePlatform.Mt5
+                    ? mt5.Failures.FirstOrDefault()?.ErrorCode ?? "mt5_terminal_not_found"
+                    : mt4.Failures.FirstOrDefault()?.ErrorCode ?? "mt4_registration_invalid");
             await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
             return;
         }
@@ -349,7 +405,9 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         using var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var hostTask = host.RunAsync(runCancellation.Token);
         var connectionTask = connection.RunAsync(runCancellation.Token);
-        var registrationTask = WatchMt4RegistrationsAsync(runCancellation.Token);
+        var registrationTask = selectedPlatform == BridgePlatform.Mt4
+            ? WatchMt4RegistrationsAsync(runCancellation.Token)
+            : Task.Delay(Timeout.InfiniteTimeSpan, runCancellation.Token);
         try
         {
             await Task.WhenAll(hostTask, connectionTask, registrationTask);
@@ -446,7 +504,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private BridgeApplicationStatus Snapshot() => new(
         _phase,
         _terminalStatuses.Values.OrderBy(value => value.TerminalInstanceId).ToArray(),
-        _detailCode);
+        _detailCode)
+    {
+        SelectedPlatform = _selectedPlatform,
+    };
 
     private static string NormalizeApplicationError(Exception error) => error switch
     {

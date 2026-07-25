@@ -84,6 +84,15 @@ export async function revokeBridgeRefreshSessions(userId, { run } = {}) {
     WHERE user_id = ? AND revoked_at IS NULL`, [userId])
 }
 
+export async function revokeBridgeRefreshSession(userId, refreshToken, { run } = {}) {
+  if (!userId || !refreshToken || String(refreshToken).length < 40) return false
+  const execute = run || queryRun
+  const result = await execute(`UPDATE bridge_refresh_sessions
+    SET revoked_at = COALESCE(revoked_at, NOW()), updated_at = NOW()
+    WHERE user_id = ? AND token_hash = ? AND revoked_at IS NULL`, [userId, hashToken(refreshToken)])
+  return Number(result?.affectedRows ?? result?.changes ?? 0) === 1
+}
+
 export async function createBridgeConnectionTicket(user, { redis } = {}) {
   assertBridgeEligible(user)
   const ticket = crypto.randomBytes(32).toString('base64url')

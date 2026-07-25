@@ -10,6 +10,7 @@ import {
   consumeBridgeConnectionTicket,
   createBridgeConnectionTicket,
   createBridgeRefreshSession,
+  revokeBridgeRefreshSession,
   revokeBridgeRefreshSessions,
   useBridgeRefreshSession,
 } from '../server/bridge-auth-session.js'
@@ -65,6 +66,14 @@ describe('bridge refresh sessions', () => {
     await revokeBridgeRefreshSessions(15, { run })
     expect(run).toHaveBeenCalledWith(expect.stringContaining('revoked_at'), [15])
     expect(queryRun).not.toHaveBeenCalled()
+  })
+
+  it('revokes only the refresh session selected by Bridge logout', async () => {
+    queryRun.mockResolvedValue({ affectedRows:1 })
+    await expect(revokeBridgeRefreshSession(15, 'r'.repeat(64))).resolves.toBe(true)
+    expect(queryRun).toHaveBeenCalledWith(expect.stringContaining('token_hash = ?'), [
+      15, expect.stringMatching(/^[a-f0-9]{64}$/),
+    ])
   })
 })
 

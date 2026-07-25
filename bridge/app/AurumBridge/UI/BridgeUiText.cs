@@ -12,10 +12,15 @@ public static class BridgeUiText
         return status.Phase switch
         {
             BridgeApplicationPhase.Starting => State("正在启动", "正在准备安全连接。", 0x64748B),
-            BridgeApplicationPhase.DetectingTerminal => State("正在检测 MT5", "请保持 MT5 已打开并登录交易账户。", 0x2563EB),
+            BridgeApplicationPhase.PlatformSelectionRequired => State(
+                "请选择交易平台", "选择 MT5 或 MT4 后，桥接会自动检测对应终端。", 0xD97706),
+            BridgeApplicationPhase.DetectingTerminal => State(
+                $"正在检测 {PlatformName(status)}",
+                $"请保持 {PlatformName(status)} 已打开并登录交易账户。",
+                0x2563EB),
             BridgeApplicationPhase.TerminalNotFound => State(
-                "等待 MT5",
-                DescribeCode(status.DetailCode, "未发现可用的已登录 MT5，程序会自动重试。"),
+                $"等待 {PlatformName(status)}",
+                DescribeCode(status.DetailCode, $"未发现可用的已登录 {PlatformName(status)}，程序会自动重试。"),
                 0xD97706),
             BridgeApplicationPhase.PairingRequired => State(
                 "需要连接 AURUM 账号",
@@ -68,4 +73,7 @@ public static class BridgeUiText
 
     private static BridgeUiStateText State(string title, string description, int rgb) =>
         new(title, description, Color.FromArgb((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF));
+
+    private static string PlatformName(BridgeApplicationStatus status) =>
+        status.SelectedPlatform is null ? "交易终端" : BridgePlatform.DisplayName(status.SelectedPlatform);
 }

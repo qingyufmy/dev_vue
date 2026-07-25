@@ -49,4 +49,21 @@ public sealed class BridgeUiTextTests
             StringAssert.Contains(text, "账号");
         }
     }
+
+    [TestMethod]
+    public void DetectionCopyUsesTheCustomerSelectedPlatform()
+    {
+        var mt4 = BridgeUiText.ForStatus(new(
+            BridgeApplicationPhase.DetectingTerminal, [], null)
+        {
+            SelectedPlatform = BridgePlatform.Mt4,
+        });
+        var selection = BridgeUiText.ForStatus(new(
+            BridgeApplicationPhase.PlatformSelectionRequired, [], null));
+
+        StringAssert.Contains(mt4.Title, "MT4");
+        StringAssert.Contains(selection.Title, "选择");
+        StringAssert.Contains(selection.Description, "MT5");
+        StringAssert.Contains(selection.Description, "MT4");
+    }
 }
