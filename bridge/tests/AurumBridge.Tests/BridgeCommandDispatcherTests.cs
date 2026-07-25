@@ -124,6 +124,29 @@ public sealed class BridgeCommandDispatcherTests
     }
 
     [TestMethod]
+    public async Task PersistsTimedOutExecutionAsUncertainAndNeverReplaysItLocally()
+    {
+        var calls = 0;
+        var dispatcher = Dispatcher((_, _) =>
+        {
+            calls++;
+            throw new TimeoutException("mt5_worker_request_timeout");
+        });
+        var command = Command("command_01JDISPATCH09");
+
+        var first = await dispatcher.DispatchAsync(command);
+        var duplicate = await dispatcher.DispatchAsync(command);
+
+        Assert.AreEqual(1, calls);
+        Assert.AreEqual("uncertain", first.Status);
+        Assert.AreEqual("worker_execution_timeout", first.ErrorCode);
+        Assert.AreEqual(first.CommandId, duplicate.CommandId);
+        Assert.AreEqual(first.Status, duplicate.Status);
+        Assert.AreEqual(first.ErrorCode, duplicate.ErrorCode);
+        Assert.IsNotNull(await _testStore.Store.GetExecutionReceiptAsync(command.CommandId));
+    }
+
+    [TestMethod]
     public async Task PersistsUncertainReceiptWhenWorkerCancellationIsObserved()
     {
         using var cancellation = new CancellationTokenSource();

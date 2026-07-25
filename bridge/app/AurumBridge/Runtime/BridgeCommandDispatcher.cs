@@ -209,6 +209,10 @@ public sealed class BridgeCommandDispatcher
             {
                 result = BuildResult(command, "uncertain", "worker_execution_cancelled");
             }
+            catch (TimeoutException)
+            {
+                result = BuildResult(command, "uncertain", "worker_execution_timeout");
+            }
             catch
             {
                 result = BuildResult(command, "uncertain", "worker_execution_exception");

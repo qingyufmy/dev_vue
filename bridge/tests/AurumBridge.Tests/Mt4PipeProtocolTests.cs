@@ -430,6 +430,43 @@ public sealed class Mt4PipeProtocolTests
         Assert.AreEqual("succeeded", (await ratesTask).Status);
     }
 
+    [TestMethod]
+    public async Task EaRequestTimeoutFaultsThePipeSoLateResponsesCannotDesynchronizeIt()
+    {
+        var pipeName = $"aurum_mt4_timeout_{Guid.NewGuid():N}";
+        var accept = Mt4EaConnection.AcceptAsync(
+            pipeName,
+            TimeSpan.FromSeconds(5),
+            requestTimeouts: new(
+                TimeSpan.FromMilliseconds(150),
+                TimeSpan.FromMilliseconds(100)));
+        await using var client = new NamedPipeClientStream(
+            ".",
+            pipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+        await client.ConnectAsync(5_000);
+        await Mt4PipeProtocol.WriteFrameAsync(client, Mt4PipeProtocol.EncodeHello(new(
+            3,
+            "3.1.0-test",
+            @"C:\MT4\Data",
+            "Broker-Demo",
+            "12345678",
+            true,
+            true)));
+        await using var connection = await accept;
+        var welcomeTask = connection.SendWelcomeAsync(new(
+            "mt4_terminal_timeout_01", 7, "aurum_mt4_terminal_timeout_01"));
+        _ = Mt4PipeProtocol.DecodeWelcome(await Mt4PipeProtocol.ReadFrameAsync(client));
+        await welcomeTask;
+
+        var timeout = await Assert.ThrowsExactlyAsync<TimeoutException>(
+            () => connection.CollectAsync(Mt4CollectionStreams.All));
+
+        Assert.AreEqual("mt4_ea_request_timeout", timeout.Message);
+        Assert.IsFalse(connection.IsConnected);
+    }
+
     private static byte[] EncodeRaw(Action<BinaryWriter> write)
     {
         using var stream = new MemoryStream();

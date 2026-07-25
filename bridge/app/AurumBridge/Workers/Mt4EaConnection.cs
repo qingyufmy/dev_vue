@@ -36,17 +36,23 @@ public sealed class Mt4EaConnection : IMt4EaConnection
 {
     private readonly NamedPipeServerStream _pipe;
     private readonly WorkerRequestGate _requestGate = new();
+    private readonly WorkerRequestTimeouts _requestTimeouts;
     private bool _welcomed;
+    private bool _faulted;
     private bool _disposed;
 
-    private Mt4EaConnection(NamedPipeServerStream pipe, Mt4Hello hello)
+    private Mt4EaConnection(
+        NamedPipeServerStream pipe,
+        Mt4Hello hello,
+        WorkerRequestTimeouts requestTimeouts)
     {
         _pipe = pipe;
         Hello = hello;
+        _requestTimeouts = requestTimeouts;
     }
 
     public Mt4Hello Hello { get; }
-    public bool IsConnected => !_disposed && _pipe.IsConnected;
+    public bool IsConnected => !_disposed && !_faulted && _pipe.IsConnected;
     public bool SupportsDeals => SupportsDealsAdapter(Hello.AdapterVersion);
 
     public static bool SupportsDealsAdapter(string adapterVersion)
@@ -59,9 +65,12 @@ public sealed class Mt4EaConnection : IMt4EaConnection
     public static async Task<Mt4EaConnection> AcceptAsync(
         string pipeName,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        WorkerRequestTimeouts? requestTimeouts = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(pipeName);
+        requestTimeouts ??= WorkerRequestTimeouts.Default;
+        requestTimeouts.Validate();
         using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCancellation.CancelAfter(timeout);
         var pipe = new NamedPipeServerStream(
@@ -75,7 +84,7 @@ public sealed class Mt4EaConnection : IMt4EaConnection
             await pipe.WaitForConnectionAsync(timeoutCancellation.Token);
             var payload = await Mt4PipeProtocol.ReadFrameAsync(pipe, timeoutCancellation.Token);
             var hello = Mt4PipeProtocol.DecodeHello(payload);
-            return new(pipe, hello);
+            return new(pipe, hello, requestTimeouts);
         }
         catch
         {
@@ -177,7 +186,7 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         _disposed = true;
         using (await _requestGate.EnterAsync(WorkerRequestPriority.Trade))
         {
-            if (_pipe.IsConnected)
+            if (!_faulted && _pipe.IsConnected)
             {
                 try
                 {
@@ -209,9 +218,24 @@ public sealed class Mt4EaConnection : IMt4EaConnection
             throw new InvalidOperationException("mt4_ea_not_ready");
         }
         using var lease = await _requestGate.EnterAsync(priority, cancellationToken);
-        await Mt4PipeProtocol.WriteFrameAsync(_pipe, request, cancellationToken);
-        var response = await Mt4PipeProtocol.ReadFrameAsync(_pipe, cancellationToken);
-        return decode(response);
+        return await WorkerRequestExecution.RunAsync(
+            async requestCancellation =>
+            {
+                await Mt4PipeProtocol.WriteFrameAsync(_pipe, request, requestCancellation);
+                var response = await Mt4PipeProtocol.ReadFrameAsync(_pipe, requestCancellation);
+                return decode(response);
+            },
+            AbortAsync,
+            _requestTimeouts.Resolve(priority),
+            "mt4_ea_request_timeout",
+            cancellationToken);
+    }
+
+    private Task AbortAsync()
+    {
+        _faulted = true;
+        _pipe.Dispose();
+        return Task.CompletedTask;
     }
 
     private static byte[] EncodeMessageType(Mt4MessageType messageType)

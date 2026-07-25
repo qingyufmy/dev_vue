@@ -11,6 +11,60 @@ public enum WorkerRequestPriority
     Data,
 }
 
+public sealed record WorkerRequestTimeouts(TimeSpan Trade, TimeSpan Data)
+{
+    public static readonly WorkerRequestTimeouts Default = new(
+        TimeSpan.FromSeconds(30),
+        TimeSpan.FromSeconds(20));
+
+    public void Validate()
+    {
+        if (Trade <= TimeSpan.Zero || Data <= TimeSpan.Zero
+            || Trade > TimeSpan.FromMinutes(2) || Data > TimeSpan.FromMinutes(2))
+        {
+            throw new ArgumentOutOfRangeException(nameof(WorkerRequestTimeouts));
+        }
+    }
+
+    public TimeSpan Resolve(WorkerRequestPriority priority) =>
+        priority == WorkerRequestPriority.Trade ? Trade : Data;
+}
+
+internal static class WorkerRequestExecution
+{
+    public static async Task<T> RunAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        Func<Task> abort,
+        TimeSpan timeout,
+        string timeoutErrorCode,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCancellation.CancelAfter(timeout);
+        try
+        {
+            return await operation(timeoutCancellation.Token);
+        }
+        catch (Exception error)
+        {
+            try
+            {
+                await abort();
+            }
+            catch
+            {
+                // The original request failure is the authoritative error.
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (error is OperationCanceledException && timeoutCancellation.IsCancellationRequested)
+            {
+                throw new TimeoutException(timeoutErrorCode, error);
+            }
+            throw;
+        }
+    }
+}
+
 public interface IMt5WorkerClient : IAsyncDisposable
 {
     bool IsConnected { get; }
@@ -116,15 +170,21 @@ public sealed class Mt5WorkerClient : IMt5WorkerClient
     private readonly string _pipeName;
     private readonly ProcessStartInfo _startInfo;
     private readonly WorkerRequestGate _requestGate = new();
+    private readonly WorkerRequestTimeouts _requestTimeouts;
     private NamedPipeServerStream? _pipe;
     private Process? _process;
     private bool _disposed;
 
-    public Mt5WorkerClient(string pipeName, ProcessStartInfo startInfo)
+    public Mt5WorkerClient(
+        string pipeName,
+        ProcessStartInfo startInfo,
+        WorkerRequestTimeouts? requestTimeouts = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(pipeName);
         _pipeName = pipeName;
         _startInfo = startInfo ?? throw new ArgumentNullException(nameof(startInfo));
+        _requestTimeouts = requestTimeouts ?? WorkerRequestTimeouts.Default;
+        _requestTimeouts.Validate();
     }
 
     public JsonElement WorkerHello { get; private set; }
@@ -176,9 +236,18 @@ public sealed class Mt5WorkerClient : IMt5WorkerClient
             throw new InvalidOperationException("worker_not_connected");
         }
         using var lease = await _requestGate.EnterAsync(priority, cancellationToken);
-        await WorkerPipeProtocol.WriteAsync(_pipe, request, cancellationToken);
-        using var response = await WorkerPipeProtocol.ReadAsync(_pipe, cancellationToken);
-        return response.RootElement.Clone();
+        return await WorkerRequestExecution.RunAsync(
+            async requestCancellation =>
+            {
+                var pipe = _pipe ?? throw new InvalidOperationException("worker_not_connected");
+                await WorkerPipeProtocol.WriteAsync(pipe, request, requestCancellation);
+                using var response = await WorkerPipeProtocol.ReadAsync(pipe, requestCancellation);
+                return response.RootElement.Clone();
+            },
+            AbortAsync,
+            _requestTimeouts.Resolve(priority),
+            "mt5_worker_request_timeout",
+            cancellationToken);
     }
 
     public static ProcessStartInfo BuildStartInfo(
@@ -259,5 +328,37 @@ public sealed class Mt5WorkerClient : IMt5WorkerClient
         }
         _process.Dispose();
         _process = null;
+    }
+
+    private async Task AbortAsync()
+    {
+        var pipe = _pipe;
+        _pipe = null;
+        try
+        {
+            pipe?.Dispose();
+        }
+        catch
+        {
+        }
+
+        var process = _process;
+        _process = null;
+        if (process is null)
+        {
+            return;
+        }
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+        finally
+        {
+            process.Dispose();
+        }
     }
 }
