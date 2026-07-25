@@ -51,6 +51,22 @@ vi.mock('jsonwebtoken', () => ({
   },
 }))
 
+const { mockBridgeV3Business } = vi.hoisted(() => ({
+  mockBridgeV3Business: {
+    hasConnectedTerminal: vi.fn(() => false),
+    isTradeEnabled: vi.fn(() => false),
+    connectedTerminals: vi.fn(() => []),
+    connectedUsers: vi.fn(() => []),
+    getGeneration: vi.fn(() => null),
+    supports: vi.fn(() => false),
+    execute: vi.fn(),
+  },
+}))
+
+vi.mock('../server/bridge-v3/business-adapter.js', () => ({
+  createBridgeV3BusinessAdapter: vi.fn(() => mockBridgeV3Business),
+}))
+
 import { WebSocketServer } from 'ws'
 
 import {
@@ -266,7 +282,15 @@ describe('history export signal association', () => {
 })
 
 describe('initBridgeWS', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(false)
+    mockBridgeV3Business.isTradeEnabled.mockReturnValue(false)
+  })
+  afterEach(() => {
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(false)
+    mockBridgeV3Business.isTradeEnabled.mockReturnValue(false)
+  })
 
   it('returns a WebSocketServer instance', () => {
     const server = new EventEmitter()
@@ -321,6 +345,46 @@ describe('initBridgeWS', () => {
     expect(fakeSocket.write).toHaveBeenCalledWith(expect.stringContaining('403 Forbidden'))
     expect(fakeSocket.destroy).toHaveBeenCalled()
     expect(mockWss.handleUpgrade).not.toHaveBeenCalled()
+  })
+
+  it('answers browser heartbeats when only a V3 terminal is connected', async () => {
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.isTradeEnabled.mockReturnValue(true)
+    queryOne.mockImplementation(async sql => {
+      if (sql.includes('SELECT id FROM users WHERE role')) return { id:42 }
+      if (sql.includes('SELECT id, token_version FROM users')) return { id:42, token_version:0 }
+      if (sql.includes('SELECT role, plan, plan_expires_at FROM users')) {
+        return { role:'admin', plan:'pro', plan_expires_at:null }
+      }
+      return null
+    })
+
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls
+      .filter(([event]) => event === 'connection')
+      .at(-1)?.[1]
+    const browserWs = new EventEmitter()
+    browserWs.readyState = 1
+    browserWs.send = vi.fn()
+    browserWs.close = vi.fn()
+
+    await connectionHandler(browserWs, {
+      url:'/aurum-api/bridge/ws?type=browser',
+      headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
+    })
+    browserWs.emit('message', JSON.stringify({ type:'hb', seq:7 }))
+
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(browserWs.send.mock.calls[0][0])).toMatchObject({
+      type:'hb',
+      seq:7,
+      mt5_connected:true,
+      mt5_alive:true,
+      trade_enabled:true,
+      auto_reasoning_enabled:false,
+    })
+    browserWs.emit('close')
   })
 })
 

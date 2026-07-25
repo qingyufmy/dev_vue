@@ -658,7 +658,9 @@ async function handleBrowser(ws, url, req) {
       // In observer mode the visible switches describe the platform observer
       // account. Mutations remain blocked by the observer action allowlist.
       const tradeEnabled = alive ? isTradeEnabled(dataUserId) : undefined
-      const autoReasoningEnabled = alive ? !!bridge.autoReasoningEnabled : undefined
+      // A V3 terminal is tracked by bridgeV3Business rather than the legacy
+      // bridges map. Keep the browser heartbeat compatible with both paths.
+      const autoReasoningEnabled = alive ? !!bridge?.autoReasoningEnabled : undefined
       ws.send(JSON.stringify({
         type: 'hb',
         seq: msg.seq,
