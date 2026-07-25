@@ -23,7 +23,12 @@ internal static class Program
                 await BridgeHealthCheck.RunAsync(paths, healthFile, Path.Combine(installRoot, "health"));
                 return;
             }
-            Application.Run(new BridgeApplicationContext());
+            using var singleInstance = BridgeSingleInstanceGuard.TryAcquire("AURUMBridge.v3");
+            if (singleInstance is null)
+            {
+                return;
+            }
+            Application.Run(new BridgeApplicationContext(singleInstance));
         }
         catch (Exception error)
         {

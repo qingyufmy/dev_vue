@@ -9,11 +9,13 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly NotifyIcon _notifyIcon;
     private readonly BridgeApplicationController _controller;
     private readonly BridgeFileLogger _logger;
+    private readonly BridgeSingleInstanceGuard _singleInstance;
     private readonly CancellationTokenSource _stop = new();
     private bool _shuttingDown;
 
-    public BridgeApplicationContext()
+    public BridgeApplicationContext(BridgeSingleInstanceGuard singleInstance)
     {
+        _singleInstance = singleInstance ?? throw new ArgumentNullException(nameof(singleInstance));
         var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
         _logger = new(Path.Combine(paths.DataDirectory, "logs"));
         _controller = new(paths);
@@ -23,6 +25,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.OpenLogsRequested += HandleOpenLogsRequested;
         _form.ExitRequested += HandleExitRequested;
         _controller.StatusChanged += HandleStatusChanged;
+        _singleInstance.ActivationRequested += HandleActivationRequested;
+        _singleInstance.StartActivationListener();
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("打开 AURUM Bridge", null, (_, _) => _form.ShowFromTray());
@@ -39,6 +43,15 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.Show();
         _logger.Info("bridge_started");
         _ = ObserveControllerAsync(_controller.RunAsync(_stop.Token));
+    }
+
+    private void HandleActivationRequested()
+    {
+        if (_form.IsDisposed)
+        {
+            return;
+        }
+        _form.BeginInvoke(_form.ShowFromTray);
     }
 
     private void HandleStatusChanged(BridgeApplicationStatus status)
@@ -148,6 +161,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.Close();
         _form.Dispose();
         _stop.Dispose();
+        _singleInstance.ActivationRequested -= HandleActivationRequested;
         _logger.Dispose();
         ExitThread();
     }
