@@ -28,7 +28,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 交易回执持久化、确认前不删除且不与数据合并 | 已实现 | `BridgeStore`、`BridgeOutboxPump`、回执测试 |
 | command ID、deadline、账户/终端/epoch 路由与幂等 | 已实现 | v3 协议、`BridgeCommandDispatcher`、服务端 `command-ledger` |
 | 不明确结果返回 uncertain，不自动重放 | 已实现 | Host dispatcher 与服务端 ledger/reconcile 测试 |
-| 首次完整同步确认前禁止下发交易指令 | 已实现 | Gateway `terminalInitialSyncReady` 门禁；未同步命令保持 queued 且不标记 dispatched |
+| 首次完整同步确认前禁止下发交易指令 | 已实现 | Gateway `terminalInitialSyncReady` 门禁；未同步交易保持 queued 且不标记 dispatched；`query_execution` 仍可用于结果复核 |
 | 交易优先于数据，内存队列和 MT5 Worker 等待队列均有界 | 已实现 | `PriorityMessageQueue`、`WorkerRequestGate` 及其测试 |
 | 一终端一 Worker；单 Worker 连续失败只停止本终端 | 已实现 | `TerminalRuntimeSupervisor` 及隔离测试 |
 | Named Pipe 仅当前 Windows 用户 | 已实现 | MT4、MT5 管道均使用 `PipeOptions.CurrentUserOnly` |
@@ -45,7 +45,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 验证 | 结果 | 边界 |
 |---|---|---|
 | .NET Bridge/Launcher 全量测试 | 156/156 通过 | 自动化功能、协议、存储、恢复、更新与 UI 文案 |
-| Node 服务端全量测试 | 1676/1676 通过 | v3 Gateway、首次同步门禁、ledger、read model、共享 Schema、授权与发布清单等 |
+| Node 服务端全量测试 | 1677/1677 通过 | v3 Gateway、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
 | MT5 Python Worker 测试 | 22/22 通过 | Python 适配器协议与 MT5 调用封装 |
 | MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |
 | Windows 主界面走查 | 已通过 | 平台选择、真实 MT5 账户探测、仅 MT5 Worker、内置日志查看 |
