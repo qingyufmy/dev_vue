@@ -433,11 +433,18 @@ router.post('/auth/bridge-refresh', async (req, res) => {
       refreshExpiresInSeconds: session.expiresInSeconds,
     })
   } catch (err) {
-    const membershipBlocked = err.code === 'bridge_membership_required'
-    res.status(membershipBlocked ? 403 : 401).json({
+    const code = String(err.code || '')
+    const membershipBlocked = code === 'bridge_membership_required'
+    const credentialInvalid = code === 'bridge_refresh_invalid' || code === 'bridge_refresh_revoked'
+    const unavailable = !membershipBlocked && !credentialInvalid
+    res.status(membershipBlocked ? 403 : credentialInvalid ? 401 : 503).json({
       ok: false,
-      code: err.code || 'bridge_refresh_invalid',
-      error: membershipBlocked ? '会员已过期或当前等级不能使用桥接软件' : '桥接授权已失效，请重新授权',
+      code: unavailable ? 'bridge_refresh_unavailable' : code,
+      error: membershipBlocked
+        ? '会员已过期或当前等级不能使用桥接软件'
+        : credentialInvalid
+          ? '桥接授权已失效，请重新授权'
+          : '桥接服务暂时不可用，软件将自动重试',
     })
   }
 })

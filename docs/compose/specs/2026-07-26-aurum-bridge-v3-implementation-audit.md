@@ -20,6 +20,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 首次启动自动打开浏览器授权一次 | 已实现 | `BridgeFirstAuthorizationGate`、`BridgeApplicationContext`；本地真实启动记录 `pairing_browser_opened` |
 | 后续启动静默复用授权，主动退出才清除 | 已实现 | DPAPI `FileBridgeCredentialStore`、`BridgeSessionClient`、授权与退出测试；真实重启复用同一 refresh session 且未进入配对流程 |
 | 设备授权无固定到期登录门槛 | 已实现 | 服务端只按 token hash、撤销状态和账号有效性校验，不再以 `expires_at` 拒绝或清理设备授权；主动退出、密码重置、退出所有设备和账号删除仍会安全撤销 |
+| 临时服务端故障不得清除本地授权 | 已实现 | refresh 路由仅对明确无效/撤销凭据返回 401；数据库或未知服务故障返回可重试 503，Bridge 保留 DPAPI 凭据并自动退避重连 |
 | 日志在软件内直接查看 | 已实现 | `BridgeLogViewerForm`、`BridgeLogReader` |
 | 界面显示账户、状态、服务器、最近同步和版本 | 已实现 | `BridgeMainForm`、`BridgeUiText` |
 | Windows 登录后自动启动；关闭窗口只隐藏托盘 | 已实现 | `BridgeAutoStartRegistration`、`BridgeMainForm.HandleFormClosing` |

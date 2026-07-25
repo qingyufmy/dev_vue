@@ -171,6 +171,26 @@ describe('auth.js — Bridge sessions', () => {
     expect(useBridgeRefreshSession).toHaveBeenCalledWith('refresh-token', expect.any(Object))
   })
 
+  it('returns 401 only when the device authorization was explicitly invalidated', async () => {
+    useBridgeRefreshSession.mockRejectedValueOnce(Object.assign(
+      new Error('revoked'), { code:'bridge_refresh_revoked' },
+    ))
+
+    const result = await callRoute('post', '/auth/bridge-refresh', { refreshToken:'revoked-token' })
+
+    expect(result.status).toBe(401)
+    expect(result.json).toMatchObject({ ok:false, code:'bridge_refresh_revoked' })
+  })
+
+  it('returns a retryable 503 without invalidating authorization on server failures', async () => {
+    useBridgeRefreshSession.mockRejectedValueOnce(new Error('database offline'))
+
+    const result = await callRoute('post', '/auth/bridge-refresh', { refreshToken:'valid-token' })
+
+    expect(result.status).toBe(503)
+    expect(result.json).toMatchObject({ ok:false, code:'bridge_refresh_unavailable' })
+  })
+
   it('revokes only the current Bridge refresh credential on explicit logout', async () => {
     const { json } = await callRoute('post', '/auth/bridge-revoke', {
       refreshToken: 'current-device-refresh-token',
