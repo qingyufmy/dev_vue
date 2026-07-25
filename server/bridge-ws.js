@@ -390,18 +390,18 @@ export async function getActivePlatformBridgeUserId() {
     const channelUserId = Number(channelSource.bridge_user_id)
     // A configured channel is authoritative. Never silently show another
     // account when its source is offline.
-    return bridges.get(channelUserId)?.ws?.readyState === 1 ? channelUserId : null
+    return isBridgeAlive(channelUserId) ? channelUserId : null
   }
   const configured = await queryOne(`SELECT value FROM system_config
     WHERE category = 'market_data' AND \`key\` = 'platform_market_bridge_user_id' LIMIT 1`).catch(() => null)
   const configuredId = Number(configured?.value)
-  if (configuredId > 0 && bridges.get(configuredId)?.ws?.readyState === 1) {
+  if (configuredId > 0 && isBridgeAlive(configuredId)) {
     const configuredUser = await queryOne('SELECT role FROM users WHERE id = ?', [configuredId]).catch(() => null)
     if (configuredUser?.role === 'admin') return configuredId
   }
   const cachedAdminId = await getAdminUserId()
-  if (cachedAdminId && bridges.get(cachedAdminId)?.ws?.readyState === 1) return cachedAdminId
-  const connectedIds = [...bridges.entries()].filter(([, bridge]) => bridge.ws?.readyState === 1).map(([id]) => Number(id))
+  if (cachedAdminId && isBridgeAlive(cachedAdminId)) return cachedAdminId
+  const connectedIds = getAllBridges().filter(item => item.alive).map(item => Number(item.userId))
   if (!connectedIds.length) return null
   const rows = await queryAll(`SELECT id FROM users WHERE role = 'admin' AND id IN (${connectedIds.map(() => '?').join(',')}) ORDER BY id`, connectedIds)
   return rows[0]?.id || null
@@ -418,7 +418,7 @@ async function resolveObserverBridgeContext(userId, user, requestedChannelId = n
   if (channel) {
     const bridgeUserId = Number(channel.bridge_user_id)
     return {
-      bridgeUserId:bridges.get(bridgeUserId)?.ws?.readyState === 1 ? bridgeUserId : null,
+      bridgeUserId:isBridgeAlive(bridgeUserId) ? bridgeUserId : null,
       channel:{ id:Number(channel.id), name:channel.name, slug:channel.slug,
         source_id:Number(channel.source_id), source_name:channel.source_name },
     }
@@ -427,17 +427,34 @@ async function resolveObserverBridgeContext(userId, user, requestedChannelId = n
 }
 
 export function getPlatformMarketClockState(userId) {
-  const bridge = bridges.get(Number(userId))
+  const numericUserId = Number(userId)
+  const bridge = bridges.get(numericUserId)
   const hb = bridge?._clientHeartbeat || {}
+  if (bridge?.ws?.readyState === 1) {
+    return {
+      bridge_user_id:numericUserId || null,
+      connected:true,
+      timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? hb.timezone_offset_minutes ?? null,
+      clock_status:bridge.clockStatus || hb.clock_status || 'unknown',
+      clock_residual_ms:bridge.clockResidualMs ?? hb.clock_residual_ms ?? null,
+      last_seen_at_utc_msc:bridge.lastSeen || null,
+      broker_server:bridge.brokerServer || null,
+      account_login:bridge.accountLogin || null,
+    }
+  }
+  const routes = bridgeV3Business?.connectedTerminals(numericUserId) || []
+  const route = routes.length === 1 ? routes[0] : null
+  const userConnection = bridgeV3Business?.connectedUsers?.()
+    .find(item => Number(item.userId) === numericUserId)
   return {
-    bridge_user_id: Number(userId) || null,
-    connected: bridge?.ws?.readyState === 1,
-    timezone_offset_minutes: bridge?.timezoneOffsetMinutes ?? hb.timezone_offset_minutes ?? null,
-    clock_status: bridge?.clockStatus || hb.clock_status || 'unknown',
-    clock_residual_ms: bridge?.clockResidualMs ?? hb.clock_residual_ms ?? null,
-    last_seen_at_utc_msc: bridge?.lastSeen || null,
-    broker_server: bridge?.brokerServer || null,
-    account_login: bridge?.accountLogin || null,
+    bridge_user_id:numericUserId || null,
+    connected:Boolean(route),
+    timezone_offset_minutes:null,
+    clock_status:route ? 'utc_direct' : 'unknown',
+    clock_residual_ms:route ? 0 : null,
+    last_seen_at_utc_msc:userConnection?.lastSeen || null,
+    broker_server:route?.account_ref?.broker_server || null,
+    account_login:route?.account_ref?.login || null,
   }
 }
 
