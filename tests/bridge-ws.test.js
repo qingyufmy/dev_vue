@@ -298,6 +298,16 @@ describe('initBridgeWS', () => {
     expect(mockWss.handleUpgrade).toHaveBeenCalled()
   })
 
+  it('routes the v3 bridge path without destroying its socket', () => {
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const fakeSocket = { ws:mockWs, destroy:vi.fn() }
+    const req = { url:'/aurum-api/bridge/v3/ws?ticket=opaque', headers:{}, socket:{ remoteAddress:'127.0.0.1' } }
+    server.emit('upgrade', req, fakeSocket, Buffer.alloc(0))
+    expect(mockWss.handleUpgrade).toHaveBeenCalled()
+    expect(fakeSocket.destroy).not.toHaveBeenCalled()
+  })
+
   it('rejects browser websocket upgrades from a foreign origin before authentication', () => {
     const server = new EventEmitter()
     initBridgeWS(server)

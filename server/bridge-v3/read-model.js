@@ -1,4 +1,4 @@
-import { withTransaction } from '../db.js'
+import { queryRun, withTransaction } from '../db.js'
 import { assertBridgeV3Message, sameBridgeRoute } from './protocol.js'
 import { sha256Json, stableJson } from './command-ledger.js'
 
@@ -210,4 +210,14 @@ export async function applyBridgeDataDelta(message, {
     return { status:'applied', stream:message.stream, revision:message.revision,
       expected_revision:message.revision + 1 }
   })
+}
+
+export async function disconnectBridgeTerminalSessions(sessionId, userId, {
+  nowUtcMsc = Date.now(),
+  queryRunFn = queryRun,
+} = {}) {
+  return queryRunFn(`UPDATE bridge_v3_terminal_sessions
+    SET connected = 0, last_seen_at_utc_msc = ?
+    WHERE session_id = ? AND user_id = ? AND connected = 1`,
+  [nowUtcMsc, sessionId, Number(userId)])
 }

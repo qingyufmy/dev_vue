@@ -29,6 +29,20 @@ function route(overrides = {}) {
 }
 
 describe('Bridge v3 protocol contract', () => {
+  it('accepts one hello containing unique MT4 and MT5 terminal routes', () => {
+    const hello = envelope('hello', {
+      session_id:'session_01JBRIDGE01',
+      bridge_version:'3.0.0',
+      terminals:[
+        { ...route(), platform:'mt5' },
+        { ...route({ terminal_instance_id:'terminal_01JBRIDGE0002' }), platform:'mt4' },
+      ],
+    })
+    expect(validateBridgeV3Message(hello)).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({ ...hello, terminals:[hello.terminals[0], hello.terminals[0]] }))
+      .toMatchObject({ ok:false, errors:expect.arrayContaining(['terminals.1.terminal_instance_id:duplicate']) })
+  })
+
   it('accepts a routed, unexpired command', () => {
     const command = envelope('command', {
       ...route(),

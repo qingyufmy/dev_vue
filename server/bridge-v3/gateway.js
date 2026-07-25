@@ -1,0 +1,319 @@
+import { randomUUID } from 'node:crypto'
+import { WebSocketServer } from 'ws'
+
+import { queryOne } from '../db.js'
+import { consumeBridgeConnectionTicket } from '../bridge-auth-session.js'
+import {
+  createCommandLedgerEntry,
+  markCommandDeliveryUncertain,
+  markCommandDispatched,
+  recordCommandResult,
+} from './command-ledger.js'
+import { assertBridgeV3Message, sameBridgeRoute } from './protocol.js'
+import {
+  applyBridgeDataDelta,
+  disconnectBridgeTerminalSessions,
+  registerBridgeTerminalSession,
+} from './read-model.js'
+
+export const BRIDGE_V3_WS_PATH = '/aurum-api/bridge/v3/ws'
+export const BRIDGE_V3_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
+const AUTH_QUEUE_MAX_MESSAGES = 16
+const AUTH_QUEUE_MAX_BYTES = 1024 * 1024
+
+function messageId(prefix) {
+  return `${prefix}_${randomUUID()}`
+}
+
+function byteLength(data) {
+  if (typeof data === 'string') return Buffer.byteLength(data, 'utf8')
+  if (Buffer.isBuffer(data) || ArrayBuffer.isView(data)) return data.byteLength
+  if (data instanceof ArrayBuffer) return data.byteLength
+  return Buffer.byteLength(String(data ?? ''), 'utf8')
+}
+
+function safeSend(ws, message) {
+  if (ws?.readyState !== 1) return false
+  try {
+    ws.send(JSON.stringify(message))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function protocolError(ws, code, details = null, { closeCode = null } = {}) {
+  safeSend(ws, {
+    v:3,
+    type:'error',
+    message_id:messageId('error'),
+    sent_at_utc_msc:Date.now(),
+    error_code:code,
+    details,
+  })
+  if (closeCode) {
+    try { ws.close(closeCode, code) } catch {}
+  }
+}
+
+function routeFromTerminal(terminal) {
+  return {
+    terminal_instance_id:terminal.terminal_instance_id,
+    account_ref:terminal.account_ref,
+    connection_epoch:terminal.connection_epoch,
+  }
+}
+
+export function createBridgeV3Gateway({
+  WebSocketServerImpl = WebSocketServer,
+  consumeTicket = consumeBridgeConnectionTicket,
+  queryOneFn = queryOne,
+  registerTerminal = registerBridgeTerminalSession,
+  disconnectTerminals = disconnectBridgeTerminalSessions,
+  applyDelta = applyBridgeDataDelta,
+  createLedgerEntry = createCommandLedgerEntry,
+  markDispatched = markCommandDispatched,
+  markUncertain = markCommandDeliveryUncertain,
+  recordResult = recordCommandResult,
+  now = () => Date.now(),
+} = {}) {
+  const wss = new WebSocketServerImpl({ noServer:true, maxPayload:BRIDGE_V3_MAX_PAYLOAD_BYTES })
+  const connectionsByTerminal = new Map()
+  const pendingResults = new Map()
+
+  function unregisterConnection(connection) {
+    for (const terminal of connection.terminals.values()) {
+      const current = connectionsByTerminal.get(terminal.terminal_instance_id)
+      if (current?.connection === connection) connectionsByTerminal.delete(terminal.terminal_instance_id)
+    }
+    if (connection.sessionId && connection.userId) {
+      disconnectTerminals(connection.sessionId, connection.userId, { nowUtcMsc:now() }).catch(() => {})
+    }
+    for (const [commandId, pending] of pendingResults) {
+      if (pending.connection !== connection) continue
+      clearTimeout(pending.timer)
+      pendingResults.delete(commandId)
+      markUncertain(commandId, { reason:'bridge_disconnected', nowUtcMsc:now() })
+        .then(({ command }) => pending.resolve({ status:'uncertain', command_id:commandId, evidence:command?.result || null }))
+        .catch(error => pending.resolve({ status:'uncertain', command_id:commandId, error:error.code || error.message }))
+    }
+  }
+
+  async function authenticate(connection, url) {
+    const ticket = url.searchParams.get('ticket')
+    if (!ticket) throw Object.assign(new Error('bridge_ticket_required'), { code:'bridge_ticket_required' })
+    const credential = await consumeTicket(ticket)
+    const user = await queryOneFn(`SELECT id, role, plan, plan_expires_at, token_version,
+      (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
+      FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [credential.userId])
+    if (!user || Number(user.token_version || 0) !== Number(credential.tokenVersion || 0)) {
+      throw Object.assign(new Error('bridge_session_revoked'), { code:'bridge_session_revoked' })
+    }
+    if (Number(user.has_pro_access) !== 1) {
+      throw Object.assign(new Error('bridge_membership_required'), { code:'bridge_membership_required' })
+    }
+    connection.userId = Number(user.id)
+    connection.authenticated = true
+  }
+
+  async function acceptHello(connection, message) {
+    assertBridgeV3Message(message, { nowUtcMsc:now() })
+    if (message.type !== 'hello') throw Object.assign(new Error('bridge_hello_required'), { code:'bridge_hello_required' })
+    if (connection.ready) throw Object.assign(new Error('bridge_hello_duplicate'), { code:'bridge_hello_duplicate' })
+
+    const accepted = []
+    connection.sessionId = message.session_id
+    try {
+      for (const terminal of message.terminals) {
+        await registerTerminal({
+          userId:connection.userId,
+          sessionId:message.session_id,
+          terminalInstanceId:terminal.terminal_instance_id,
+          platform:terminal.platform,
+          brokerServer:terminal.account_ref.broker_server,
+          login:terminal.account_ref.login,
+          connectionEpoch:terminal.connection_epoch,
+          clientVersion:terminal.worker_version || message.bridge_version,
+          nowUtcMsc:now(),
+        })
+        connection.terminals.set(terminal.terminal_instance_id, terminal)
+        accepted.push(terminal.terminal_instance_id)
+      }
+    } catch (error) {
+      await disconnectTerminals(message.session_id, connection.userId, { nowUtcMsc:now() }).catch(() => {})
+      connection.terminals.clear()
+      connection.sessionId = null
+      throw error
+    }
+    connection.bridgeVersion = message.bridge_version
+    connection.ready = true
+    for (const terminal of connection.terminals.values()) {
+      const previous = connectionsByTerminal.get(terminal.terminal_instance_id)
+      if (previous && previous.connection !== connection) {
+        protocolError(previous.connection.ws, 'bridge_connection_replaced', null, { closeCode:4001 })
+      }
+      connectionsByTerminal.set(terminal.terminal_instance_id, { connection, terminal })
+    }
+    safeSend(connection.ws, {
+      v:3,
+      type:'hello_ack',
+      message_id:messageId('hello_ack'),
+      sent_at_utc_msc:now(),
+      acked_message_id:message.message_id,
+      session_id:message.session_id,
+      accepted_terminal_instance_ids:accepted,
+    })
+  }
+
+  async function handleMessage(connection, raw) {
+    let message
+    try { message = JSON.parse(raw.toString()) } catch {
+      throw Object.assign(new Error('bridge_json_invalid'), { code:'bridge_json_invalid' })
+    }
+    if (!connection.ready) return acceptHello(connection, message)
+    assertBridgeV3Message(message, { nowUtcMsc:now() })
+
+    if (message.type === 'heartbeat') {
+      if (String(message.session_id || '') !== connection.sessionId) {
+        throw Object.assign(new Error('bridge_heartbeat_session_mismatch'), { code:'bridge_heartbeat_session_mismatch' })
+      }
+      return
+    }
+
+    const terminal = connection.terminals.get(message.terminal_instance_id)
+    if (!terminal || !sameBridgeRoute(routeFromTerminal(terminal), message)) {
+      throw Object.assign(new Error('bridge_message_route_mismatch'), { code:'bridge_message_route_mismatch' })
+    }
+    if (message.type === 'data_delta') {
+      const result = await applyDelta(message, { userId:connection.userId, nowUtcMsc:now() })
+      safeSend(connection.ws, {
+        v:3,
+        type:'data_ack',
+        message_id:messageId('data_ack'),
+        sent_at_utc_msc:now(),
+        acked_message_id:message.message_id,
+        terminal_instance_id:message.terminal_instance_id,
+        connection_epoch:message.connection_epoch,
+        stream:message.stream,
+        revision:message.revision,
+        status:result.status,
+        expected_revision:result.expected_revision,
+      })
+      return
+    }
+    if (message.type === 'command_result') {
+      const stored = await recordResult(message, { nowUtcMsc:now() })
+      const pending = pendingResults.get(message.command_id)
+      if (pending && pending.connection === connection) {
+        clearTimeout(pending.timer)
+        pendingResults.delete(message.command_id)
+        pending.resolve(stored.command?.result || message)
+      }
+      return
+    }
+    throw Object.assign(new Error('bridge_message_type_unexpected'), { code:'bridge_message_type_unexpected' })
+  }
+
+  wss.on('connection', (ws, req) => {
+    const connection = {
+      ws,
+      userId:null,
+      authenticated:false,
+      ready:false,
+      sessionId:null,
+      terminals:new Map(),
+      closed:false,
+      authQueue:[],
+      authQueueBytes:0,
+    }
+    const url = new URL(req.url, 'http://localhost')
+    const onMessage = raw => {
+      if (!connection.authenticated) {
+        const size = byteLength(raw)
+        if (connection.authQueue.length >= AUTH_QUEUE_MAX_MESSAGES
+          || connection.authQueueBytes + size > AUTH_QUEUE_MAX_BYTES) {
+          connection.authQueue = []
+          protocolError(ws, 'bridge_auth_queue_overflow', null, { closeCode:1009 })
+          return
+        }
+        connection.authQueue.push(raw)
+        connection.authQueueBytes += size
+        return
+      }
+      handleMessage(connection, raw).catch(error => {
+        protocolError(ws, error.code || 'bridge_message_rejected', error.message)
+      })
+    }
+    ws.on('message', onMessage)
+    ws.on('close', () => {
+      if (connection.closed) return
+      connection.closed = true
+      unregisterConnection(connection)
+    })
+    ws.on('error', () => {})
+
+    authenticate(connection, url).then(async () => {
+      const queued = connection.authQueue
+      connection.authQueue = []
+      connection.authQueueBytes = 0
+      for (const raw of queued) {
+        if (connection.closed) break
+        try { await handleMessage(connection, raw) } catch (error) {
+          protocolError(ws, error.code || 'bridge_message_rejected', error.message)
+          break
+        }
+      }
+    }).catch(error => {
+      protocolError(ws, error.code || 'bridge_auth_failed', null, { closeCode:4002 })
+    })
+  })
+
+  async function sendCommand(userId, command, { timeoutMs = 5_000 } = {}) {
+    const nowUtcMsc = now()
+    assertBridgeV3Message(command, { nowUtcMsc })
+    if (command.type !== 'command') throw Object.assign(new Error('bridge_command_type_invalid'), { code:'bridge_command_type_invalid' })
+    const ledger = await createLedgerEntry(command, { userId:Number(userId), nowUtcMsc })
+    if (!['queued'].includes(ledger.command.status)) {
+      return { status:ledger.command.status, command_id:command.command_id, duplicate:true }
+    }
+
+    const routed = connectionsByTerminal.get(command.terminal_instance_id)
+    if (!routed || routed.connection.userId !== Number(userId)
+      || !sameBridgeRoute(routeFromTerminal(routed.terminal), command)) {
+      return { status:'queued', command_id:command.command_id, error:'bridge_terminal_not_connected' }
+    }
+    await markDispatched(command.command_id, {
+      connectionEpoch:command.connection_epoch,
+      nowUtcMsc,
+    })
+
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        pendingResults.delete(command.command_id)
+        markUncertain(command.command_id, { reason:'bridge_result_timeout', nowUtcMsc:now() })
+          .then(({ command:stored }) => resolve({ status:'uncertain', command_id:command.command_id,
+            evidence:stored?.result || null }))
+          .catch(error => resolve({ status:'uncertain', command_id:command.command_id,
+            error:error.code || error.message }))
+      }, timeoutMs)
+      pendingResults.set(command.command_id, { resolve, timer, connection:routed.connection })
+      if (!safeSend(routed.connection.ws, command)) {
+        clearTimeout(timer)
+        pendingResults.delete(command.command_id)
+        markUncertain(command.command_id, { reason:'bridge_send_failed', nowUtcMsc:now() })
+          .then(() => resolve({ status:'uncertain', command_id:command.command_id, error:'bridge_send_failed' }))
+          .catch(error => resolve({ status:'uncertain', command_id:command.command_id,
+            error:error.code || error.message }))
+      }
+    })
+  }
+
+  return {
+    wss,
+    connectionsByTerminal,
+    handleUpgrade(req, socket, head) {
+      wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req))
+    },
+    sendCommand,
+  }
+}

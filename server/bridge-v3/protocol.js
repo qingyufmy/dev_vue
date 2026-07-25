@@ -71,6 +71,31 @@ function validateCommand(message, nowUtcMsc) {
   return errors
 }
 
+function validateHello(message) {
+  const errors = validateEnvelope(message)
+  validateId(errors, 'session_id', message.session_id)
+  const bridgeVersion = String(message.bridge_version || '').trim()
+  if (!bridgeVersion || bridgeVersion.length > 64) errors.push('bridge_version:invalid')
+  if (!Array.isArray(message.terminals) || !message.terminals.length || message.terminals.length > 32) {
+    errors.push('terminals:invalid')
+    return errors
+  }
+  const ids = new Set()
+  for (const [index, terminal] of message.terminals.entries()) {
+    if (!isRecord(terminal)) {
+      errors.push(`terminals.${index}:invalid`)
+      continue
+    }
+    const routeErrors = []
+    validateTerminalRoute(routeErrors, terminal)
+    for (const error of routeErrors) errors.push(`terminals.${index}.${error}`)
+    if (!['mt4', 'mt5'].includes(terminal.platform)) errors.push(`terminals.${index}.platform:unsupported`)
+    if (ids.has(terminal.terminal_instance_id)) errors.push(`terminals.${index}.terminal_instance_id:duplicate`)
+    ids.add(terminal.terminal_instance_id)
+  }
+  return errors
+}
+
 function validateCommandResult(message) {
   const errors = validateEnvelope(message)
   validateId(errors, 'command_id', message.command_id)
@@ -105,7 +130,8 @@ export function validateBridgeV3Message(message, { nowUtcMsc = Date.now() } = {}
   if (envelopeErrors.length || !isRecord(message)) return { ok:false, errors:envelopeErrors }
 
   let errors
-  if (message.type === 'command') errors = validateCommand(message, nowUtcMsc)
+  if (message.type === 'hello') errors = validateHello(message)
+  else if (message.type === 'command') errors = validateCommand(message, nowUtcMsc)
   else if (message.type === 'command_result') errors = validateCommandResult(message)
   else if (message.type === 'data_delta') errors = validateDataDelta(message)
   else errors = envelopeErrors

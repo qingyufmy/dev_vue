@@ -13,6 +13,7 @@ import { buildAiAccessContext, observerAccessError, observerWsActionAllowed } fr
 import { getDefaultObserverSource, resolveObserverSourceForUser } from './routes/ai/observer-channels.js'
 import { tokenVersionMatches } from './middleware/auth.js'
 import { consumeBridgeConnectionTicket } from './bridge-auth-session.js'
+import { BRIDGE_V3_WS_PATH, createBridgeV3Gateway } from './bridge-v3/gateway.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -442,6 +443,7 @@ export function initBridgeWS(server) {
   // Cache admin userId at startup
   getAdminUserId().catch(() => {})
   wss = new WebSocketServer({ noServer: true, maxPayload: BRIDGE_WS_LIMITS.maxPayloadBytes })
+  const bridgeV3Gateway = createBridgeV3Gateway()
 
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost')
@@ -449,7 +451,14 @@ export function initBridgeWS(server) {
     const tokenPresent = Boolean(url.searchParams.get('token') || readCookie(req, 'ws_token'))
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress
 
-    if (req.url.startsWith('/aurum-api/bridge/ws')) {
+    if (url.pathname === BRIDGE_V3_WS_PATH) {
+      try {
+        bridgeV3Gateway.handleUpgrade(req, socket, head)
+      } catch (error) {
+        console.error(`[BridgeV3] upgrade failed ip=${ip} error=${error.message}`)
+        try { socket.destroy() } catch {}
+      }
+    } else if (url.pathname === '/aurum-api/bridge/ws') {
       if (!isAllowedBrowserWsOrigin(req, type)) {
         console.warn(`[BridgeWS] rejected ${type || 'unknown'} websocket origin`)
         try { socket.write?.('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n') } catch {}
