@@ -65,12 +65,10 @@ public sealed class BridgeWebSocketClient
                 _store, _dispatcher, outbound, quoteHandler:_quoteHandler, dataHandler:_dataHandler,
                 outboxPump:outbox);
             var helloReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            router.HelloAcknowledged += sessionId =>
+            router.HelloAcknowledged += acknowledgement =>
             {
-                if (string.Equals(sessionId, attempt.Hello.SessionId, StringComparison.Ordinal))
-                {
-                    helloReady.TrySetResult();
-                }
+                ValidateHelloAcknowledgement(attempt, acknowledgement);
+                helloReady.TrySetResult();
             };
             router.DataAcknowledged += (messageId, status) =>
             {
@@ -237,6 +235,30 @@ public sealed class BridgeWebSocketClient
             ? ticketParameter
             : $"{builder.Query.TrimStart('?')}&{ticketParameter}";
         return builder.Uri;
+    }
+
+    public static void ValidateHelloAcknowledgement(
+        BridgeConnectionAttempt attempt,
+        BridgeHelloAcknowledgement acknowledgement)
+    {
+        ArgumentNullException.ThrowIfNull(attempt);
+        ArgumentNullException.ThrowIfNull(acknowledgement);
+        var expectedTerminals = attempt.Hello.Terminals
+            .Select(terminal => terminal.TerminalInstanceId)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!string.Equals(
+                acknowledgement.AckedMessageId,
+                attempt.Hello.MessageId,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                acknowledgement.SessionId,
+                attempt.Hello.SessionId,
+                StringComparison.Ordinal)
+            || acknowledgement.AcceptedTerminalInstanceIds.Count != expectedTerminals.Count
+            || acknowledgement.AcceptedTerminalInstanceIds.Any(id => !expectedTerminals.Contains(id)))
+        {
+            throw new InvalidDataException("bridge_hello_ack_route_mismatch");
+        }
     }
 
     private static async Task IgnoreCancellationAsync(Task task)

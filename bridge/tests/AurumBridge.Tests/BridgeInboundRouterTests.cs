@@ -25,6 +25,65 @@ public sealed class BridgeInboundRouterTests
     public async Task CleanupAsync() => await _testStore.DisposeAsync();
 
     [TestMethod]
+    public async Task HelloAcknowledgementRequiresTheCompleteHandshakeRoute()
+    {
+        var router = Router();
+        BridgeHelloAcknowledgement? acknowledgement = null;
+        router.HelloAcknowledged += value => acknowledgement = value;
+        var hello = new HelloMessage
+        {
+            Type = "hello",
+            MessageId = "hello_01JROUTER0001",
+            SentAtUtcMsc = Now,
+            SessionId = "session_01JROUTER01",
+            BridgeVersion = "3.0.0",
+            Terminals = [Terminal()],
+        };
+        var attempt = new BridgeConnectionAttempt(
+            new Uri("wss://bridge.example/ws"), "ticket", hello);
+
+        await router.RouteAsync(JsonSerializer.Serialize(new
+        {
+            v = 3,
+            type = "hello_ack",
+            message_id = "hello_ack_01JROUTER01",
+            sent_at_utc_msc = Now,
+            acked_message_id = hello.MessageId,
+            session_id = hello.SessionId,
+            accepted_terminal_instance_ids = new[] { Terminal().TerminalInstanceId },
+        }));
+
+        Assert.IsNotNull(acknowledgement);
+        BridgeWebSocketClient.ValidateHelloAcknowledgement(attempt, acknowledgement);
+        Assert.ThrowsExactly<InvalidDataException>(() =>
+            BridgeWebSocketClient.ValidateHelloAcknowledgement(
+                attempt,
+                acknowledgement with { AckedMessageId = "hello_wrong_message" }));
+        Assert.ThrowsExactly<InvalidDataException>(() =>
+            BridgeWebSocketClient.ValidateHelloAcknowledgement(
+                attempt,
+                acknowledgement with { AcceptedTerminalInstanceIds = ["terminal_wrong_route"] }));
+    }
+
+    [TestMethod]
+    public async Task HelloAcknowledgementRejectsDuplicateAcceptedTerminals()
+    {
+        var router = Router();
+
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => router.RouteAsync(
+            JsonSerializer.Serialize(new
+            {
+                v = 3,
+                type = "hello_ack",
+                message_id = "hello_ack_01JROUTER02",
+                sent_at_utc_msc = Now,
+                acked_message_id = "hello_01JROUTER0001",
+                session_id = "session_01JROUTER01",
+                accepted_terminal_instance_ids = new[] { "terminal_01JROUTER01", "terminal_01JROUTER01" },
+            })));
+    }
+
+    [TestMethod]
     public async Task AppliedAckDeletesTheExactOutboxMessage()
     {
         var delta = Delta();

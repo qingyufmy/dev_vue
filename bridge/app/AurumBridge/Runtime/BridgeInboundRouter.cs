@@ -10,6 +10,11 @@ public sealed record FullSnapshotRequest(
     string Stream,
     long ExpectedRevision);
 
+public sealed record BridgeHelloAcknowledgement(
+    string AckedMessageId,
+    string SessionId,
+    IReadOnlyList<string> AcceptedTerminalInstanceIds);
+
 public sealed class BridgeInboundRouter
 {
     private readonly BridgeStore _store;
@@ -40,7 +45,7 @@ public sealed class BridgeInboundRouter
 
     public event Func<FullSnapshotRequest, Task>? FullSnapshotRequired;
     public event Action<string, string>? DataAcknowledged;
-    public event Action<string>? HelloAcknowledged;
+    public event Action<BridgeHelloAcknowledgement>? HelloAcknowledged;
     public event Action<string>? InitialSynchronizationCompleted;
 
     public async Task RouteAsync(string payloadJson, CancellationToken cancellationToken = default)
@@ -61,7 +66,11 @@ public sealed class BridgeInboundRouter
         switch (type)
         {
             case "hello_ack":
-                HelloAcknowledged?.Invoke(ReadRequiredString(root, "session_id"));
+                var helloAcknowledgement = new BridgeHelloAcknowledgement(
+                    ReadRequiredString(root, "acked_message_id"),
+                    ReadRequiredString(root, "session_id"),
+                    ReadRequiredStringArray(root, "accepted_terminal_instance_ids", 1, 32));
+                HelloAcknowledged?.Invoke(helloAcknowledgement);
                 return;
             case "data_ack":
                 await HandleDataAcknowledgementAsync(payloadJson, cancellationToken);
@@ -284,6 +293,33 @@ public sealed class BridgeInboundRouter
             throw new InvalidDataException($"bridge_{propertyName}_invalid");
         }
         return value.GetString()!;
+    }
+
+    private static IReadOnlyList<string> ReadRequiredStringArray(
+        JsonElement root,
+        string propertyName,
+        int minimumCount,
+        int maximumCount)
+    {
+        if (!root.TryGetProperty(propertyName, out var value)
+            || value.ValueKind != JsonValueKind.Array
+            || value.GetArrayLength() < minimumCount
+            || value.GetArrayLength() > maximumCount)
+        {
+            throw new InvalidDataException($"bridge_{propertyName}_invalid");
+        }
+        var values = new List<string>(value.GetArrayLength());
+        var unique = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in value.EnumerateArray())
+        {
+            var itemValue = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
+            if (string.IsNullOrWhiteSpace(itemValue) || !unique.Add(itemValue))
+            {
+                throw new InvalidDataException($"bridge_{propertyName}_invalid");
+            }
+            values.Add(itemValue);
+        }
+        return values;
     }
 
     private static void ValidateQuoteRequest(QuoteRequestMessage request)
