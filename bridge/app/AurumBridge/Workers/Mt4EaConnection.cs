@@ -17,6 +17,9 @@ public interface IMt4EaConnection : IAsyncDisposable
     Task<Mt4Rates> GetRatesAsync(
         Mt4RatesRequest request,
         CancellationToken cancellationToken = default);
+    Task<Mt4SymbolSnapshot> GetSymbolSnapshotAsync(
+        Mt4SymbolSnapshotRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class Mt4EaConnection : IMt4EaConnection
@@ -114,6 +117,14 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         RequestAsync(
             Mt4PipeProtocol.EncodeRatesRequest(request),
             Mt4PipeProtocol.DecodeRates,
+            cancellationToken);
+
+    public Task<Mt4SymbolSnapshot> GetSymbolSnapshotAsync(
+        Mt4SymbolSnapshotRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestAsync(
+            Mt4PipeProtocol.EncodeSymbolSnapshotRequest(request),
+            Mt4PipeProtocol.DecodeSymbolSnapshot,
             cancellationToken);
 
     public async ValueTask DisposeAsync()

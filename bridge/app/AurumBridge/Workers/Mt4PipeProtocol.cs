@@ -15,6 +15,8 @@ public enum Mt4MessageType
     Quote = 13,
     RatesRequest = 14,
     Rates = 15,
+    SymbolSnapshotRequest = 16,
+    SymbolSnapshot = 17,
     Command = 20,
     CommandResult = 21,
     Shutdown = 90,
@@ -81,6 +83,21 @@ public sealed record Mt4RatesRequest(
     long EndUtcMsc);
 
 public sealed record Mt4Rates(
+    string RequestId,
+    long ObservedAtUtcMsc,
+    string Status,
+    JsonElement? Payload,
+    string? ErrorCode);
+
+public sealed record Mt4SymbolSnapshotRequest(
+    string RequestId,
+    string TerminalInstanceId,
+    string BrokerServer,
+    string Login,
+    long ConnectionEpoch,
+    string Symbol);
+
+public sealed record Mt4SymbolSnapshot(
     string RequestId,
     long ObservedAtUtcMsc,
     string Status,
@@ -443,6 +460,80 @@ public static class Mt4PipeProtocol
             NullIfEmpty(ReadString(reader, 128)));
         EnsureFullyRead(reader);
         ValidateRates(result);
+        return result;
+    }
+
+    public static Mt4SymbolSnapshotRequest CreateSymbolSnapshotRequest(DataRequestMessage request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Version != 3 || request.Type != "data_request" || request.Action != "symbol_snapshot")
+        {
+            throw new InvalidDataException("mt4_symbol_snapshot_request_invalid");
+        }
+        var result = new Mt4SymbolSnapshotRequest(
+            request.RequestId, request.TerminalInstanceId, request.AccountRef.BrokerServer,
+            request.AccountRef.Login, request.ConnectionEpoch,
+            ReadOptionalString(request.Params, "symbol") ?? string.Empty);
+        ValidateSymbolSnapshotRequest(result);
+        return result;
+    }
+
+    public static byte[] EncodeSymbolSnapshotRequest(Mt4SymbolSnapshotRequest request)
+    {
+        ValidateSymbolSnapshotRequest(request);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.SymbolSnapshotRequest);
+            WriteString(writer, request.RequestId);
+            WriteString(writer, request.TerminalInstanceId);
+            WriteString(writer, request.BrokerServer);
+            WriteString(writer, request.Login);
+            writer.Write(request.ConnectionEpoch);
+            WriteString(writer, request.Symbol);
+        });
+    }
+
+    public static Mt4SymbolSnapshotRequest DecodeSymbolSnapshotRequest(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.SymbolSnapshotRequest);
+        var result = new Mt4SymbolSnapshotRequest(
+            ReadString(reader, 128), ReadString(reader, 128), ReadString(reader, 128),
+            ReadString(reader, 64), reader.ReadInt64(), ReadString(reader, 64));
+        EnsureFullyRead(reader);
+        ValidateSymbolSnapshotRequest(result);
+        return result;
+    }
+
+    public static byte[] EncodeSymbolSnapshot(Mt4SymbolSnapshot result)
+    {
+        ValidateSymbolSnapshot(result);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.SymbolSnapshot);
+            WriteString(writer, result.RequestId);
+            writer.Write(result.ObservedAtUtcMsc);
+            writer.Write(result.Status == "succeeded" ? 1 : 2);
+            WriteString(writer, result.Payload?.GetRawText() ?? string.Empty);
+            WriteString(writer, result.ErrorCode ?? string.Empty);
+        });
+    }
+
+    public static Mt4SymbolSnapshot DecodeSymbolSnapshot(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.SymbolSnapshot);
+        var requestId = ReadString(reader, 128);
+        var observedAt = reader.ReadInt64();
+        var status = reader.ReadInt32() switch
+        {
+            1 => "succeeded", 2 => "rejected",
+            _ => throw new InvalidDataException("mt4_symbol_snapshot_status_invalid"),
+        };
+        var payloadText = ReadString(reader, MaxStringBytes);
+        var result = new Mt4SymbolSnapshot(requestId, observedAt, status,
+            string.IsNullOrEmpty(payloadText) ? null : ParseObject(payloadText, "mt4_symbol_snapshot_payload_invalid"),
+            NullIfEmpty(ReadString(reader, 128)));
+        EnsureFullyRead(reader);
+        ValidateSymbolSnapshot(result);
         return result;
     }
 
@@ -899,6 +990,29 @@ public static class Mt4PipeProtocol
             || result.Status == "rejected" && string.IsNullOrWhiteSpace(result.ErrorCode))
         {
             throw new InvalidDataException("mt4_rates_invalid");
+        }
+    }
+
+    private static void ValidateSymbolSnapshotRequest(Mt4SymbolSnapshotRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.RequestId)
+            || string.IsNullOrWhiteSpace(request.TerminalInstanceId)
+            || string.IsNullOrWhiteSpace(request.BrokerServer)
+            || string.IsNullOrWhiteSpace(request.Login) || request.ConnectionEpoch <= 0
+            || string.IsNullOrWhiteSpace(request.Symbol) || request.Symbol.Length > 64)
+        {
+            throw new InvalidDataException("mt4_symbol_snapshot_request_invalid");
+        }
+    }
+
+    private static void ValidateSymbolSnapshot(Mt4SymbolSnapshot result)
+    {
+        if (string.IsNullOrWhiteSpace(result.RequestId) || result.ObservedAtUtcMsc <= 0
+            || result.Status is not ("succeeded" or "rejected")
+            || result.Status == "succeeded" && result.Payload is null
+            || result.Status == "rejected" && string.IsNullOrWhiteSpace(result.ErrorCode))
+        {
+            throw new InvalidDataException("mt4_symbol_snapshot_invalid");
         }
     }
 

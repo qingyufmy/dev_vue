@@ -182,6 +182,29 @@ public sealed class Mt4PipeProtocolTests
     }
 
     [TestMethod]
+    public void SymbolSnapshotRequestAndResponseRoundTrip()
+    {
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_symbol_01", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_symbol_01", TerminalInstanceId = "mt4_terminal_codec_01",
+            AccountRef = new("Broker-Demo", "12345678"), ConnectionEpoch = 1,
+            Action = "symbol_snapshot",
+            Params = JsonSerializer.SerializeToElement(new { symbol = "XAUUSD" }),
+        };
+        var local = Mt4PipeProtocol.CreateSymbolSnapshotRequest(request);
+        var decodedRequest = Mt4PipeProtocol.DecodeSymbolSnapshotRequest(
+            Mt4PipeProtocol.EncodeSymbolSnapshotRequest(local));
+        var decodedResponse = Mt4PipeProtocol.DecodeSymbolSnapshot(
+            Mt4PipeProtocol.EncodeSymbolSnapshot(new(
+                request.RequestId, 1_800_000_000_100, "succeeded",
+                JsonSerializer.SerializeToElement(new { symbol = "XAUUSD", source = "mt4" }), null)));
+
+        Assert.AreEqual("XAUUSD", decodedRequest.Symbol);
+        Assert.AreEqual("mt4", decodedResponse.Payload!.Value.GetProperty("source").GetString());
+    }
+
+    [TestMethod]
     public void QuoteRequestAndResponseRoundTripWithStrictRoute()
     {
         var request = Mt4PipeProtocol.CreateQuoteRequest(QuoteRequest());

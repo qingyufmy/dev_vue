@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.02"
+#property version   "3.03"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -12,6 +12,8 @@ input string InpPipeName = "AURUMBridgeV3";
 #define MSG_QUOTE        13
 #define MSG_RATES_REQUEST 14
 #define MSG_RATES        15
+#define MSG_SYMBOL_SNAPSHOT_REQUEST 16
+#define MSG_SYMBOL_SNAPSHOT 17
 #define MSG_COMMAND      20
 #define MSG_COMMAND_RESULT 21
 #define MSG_SHUTDOWN     90
@@ -99,6 +101,11 @@ void OnTimer()
       SendRates(payload, offset);
       return;
      }
+   if(message_type == MSG_SYMBOL_SNAPSHOT_REQUEST && g_welcomed)
+     {
+      SendSymbolSnapshot(payload, offset);
+      return;
+     }
    if(message_type == MSG_SHUTDOWN)
      {
       uchar response[];
@@ -119,7 +126,7 @@ bool ConnectPipe()
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
    AppendInt32(hello, 3);
-   AppendUtf8(hello, "3.0.2");
+   AppendUtf8(hello, "3.0.3");
    AppendUtf8(hello, TerminalInfoString(TERMINAL_DATA_PATH));
    AppendUtf8(hello, AccountServer());
    AppendUtf8(hello, IntegerToString(AccountNumber()));
@@ -306,6 +313,92 @@ void SendRatesResult(const string request_id, const int status,
   {
    uchar response[];
    AppendInt32(response, MSG_RATES);
+   AppendUtf8(response, request_id);
+   AppendInt64(response, observed_at > 0 ? observed_at : ((long)TimeGMT()) * 1000);
+   AppendInt32(response, status);
+   AppendUtf8(response, payload_json);
+   AppendUtf8(response, error_code);
+   if(!WriteFrame(response)) DisconnectPipe();
+  }
+
+void SendSymbolSnapshot(uchar &request[], int &offset)
+  {
+   string request_id = ReadUtf8(request, offset);
+   string terminal_id = ReadUtf8(request, offset);
+   string broker_server = ReadUtf8(request, offset);
+   string login = ReadUtf8(request, offset);
+   long connection_epoch = ReadInt64(request, offset);
+   string symbol = ReadUtf8(request, offset);
+   if(request_id == "" || terminal_id != g_terminal_id
+      || StringCompare(broker_server, AccountServer(), false) != 0
+      || login != IntegerToString(AccountNumber())
+      || connection_epoch != g_connection_epoch)
+     {
+      SendSymbolSnapshotResult(request_id, 2, "", "symbol_snapshot_route_mismatch", 0);
+      return;
+     }
+   if(symbol == "" || !SymbolSelect(symbol, true))
+     {
+      SendSymbolSnapshotResult(request_id, 2, "", "symbol_unavailable", 0);
+      return;
+     }
+   RefreshRates();
+   double point = MarketInfo(symbol, MODE_POINT);
+   double bid = MarketInfo(symbol, MODE_BID);
+   double ask = MarketInfo(symbol, MODE_ASK);
+   double margin_per_lot = MarketInfo(symbol, MODE_MARGINREQUIRED);
+   string account_json = "{\"currency\":\"" + JsonEscape(AccountCurrency()) + "\""
+      + ",\"balance\":" + JsonNumber(AccountBalance())
+      + ",\"equity\":" + JsonNumber(AccountEquity())
+      + ",\"leverage\":" + IntegerToString(AccountLeverage())
+      + ",\"margin_mode\":0"
+      + ",\"margin_so_mode\":" + IntegerToString(AccountStopoutMode())
+      + ",\"margin_so_call\":" + JsonNumber(AccountStopoutLevel())
+      + ",\"margin_so_so\":" + JsonNumber(AccountStopoutLevel()) + "}";
+   string instrument_json = "{\"name\":\"" + JsonEscape(symbol) + "\""
+      + ",\"digits\":" + IntegerToString((int)MarketInfo(symbol, MODE_DIGITS))
+      + ",\"trade_mode\":" + (MarketInfo(symbol, MODE_TRADEALLOWED) > 0 ? "4" : "0")
+      + ",\"trade_calc_mode\":" + IntegerToString((int)MarketInfo(symbol, MODE_PROFITCALCMODE))
+      + ",\"trade_exemode\":0"
+      + ",\"trade_stops_level\":" + IntegerToString((int)MarketInfo(symbol, MODE_STOPLEVEL))
+      + ",\"trade_freeze_level\":" + IntegerToString((int)MarketInfo(symbol, MODE_FREEZELEVEL))
+      + ",\"filling_mode\":0,\"order_mode\":0"
+      + ",\"point\":" + JsonNumber(point)
+      + ",\"spread\":" + IntegerToString((int)MarketInfo(symbol, MODE_SPREAD))
+      + ",\"spread_float\":false"
+      + ",\"tick_size\":" + JsonNumber(MarketInfo(symbol, MODE_TICKSIZE) * point)
+      + ",\"tick_value\":" + JsonNumber(MarketInfo(symbol, MODE_TICKVALUE))
+      + ",\"contract_size\":" + JsonNumber(MarketInfo(symbol, MODE_LOTSIZE))
+      + ",\"margin_initial\":" + JsonNumber(MarketInfo(symbol, MODE_MARGININIT))
+      + ",\"margin_maintenance\":" + JsonNumber(MarketInfo(symbol, MODE_MARGINMAINTENANCE))
+      + ",\"margin_hedged\":" + JsonNumber(MarketInfo(symbol, MODE_MARGINHEDGED))
+      + ",\"margin_per_lot_buy\":" + JsonNumber(margin_per_lot)
+      + ",\"margin_per_lot_sell\":" + JsonNumber(margin_per_lot)
+      + ",\"margin_reference_price_buy\":" + JsonNumber(ask)
+      + ",\"margin_reference_price_sell\":" + JsonNumber(bid)
+      + ",\"margin_profile_currency\":\"" + JsonEscape(AccountCurrency()) + "\""
+      + ",\"margin_profile_volume\":1"
+      + ",\"volume_min\":" + JsonNumber(MarketInfo(symbol, MODE_MINLOT))
+      + ",\"volume_max\":" + JsonNumber(MarketInfo(symbol, MODE_MAXLOT))
+      + ",\"volume_step\":" + JsonNumber(MarketInfo(symbol, MODE_LOTSTEP))
+      + ",\"volume_limit\":0"
+      + ",\"swap_mode\":" + IntegerToString((int)MarketInfo(symbol, MODE_SWAPTYPE))
+      + ",\"swap_rollover3days\":3"
+      + ",\"swap_long\":" + JsonNumber(MarketInfo(symbol, MODE_SWAPLONG))
+      + ",\"swap_short\":" + JsonNumber(MarketInfo(symbol, MODE_SWAPSHORT))
+      + ",\"currency_base\":\"\",\"currency_profit\":\"\",\"currency_margin\":\"\"}";
+   string payload_json = "{\"symbol\":\"" + JsonEscape(symbol)
+      + "\",\"source\":\"mt4\",\"account\":" + account_json
+      + ",\"instrument\":" + instrument_json + "}";
+   long source_time = (long)MarketInfo(symbol, MODE_TIME) * 1000;
+   SendSymbolSnapshotResult(request_id, 1, payload_json, "", source_time);
+  }
+
+void SendSymbolSnapshotResult(const string request_id, const int status,
+   const string payload_json, const string error_code, const long observed_at)
+  {
+   uchar response[];
+   AppendInt32(response, MSG_SYMBOL_SNAPSHOT);
    AppendUtf8(response, request_id);
    AppendInt64(response, observed_at > 0 ? observed_at : ((long)TimeGMT()) * 1000);
    AppendInt32(response, status);

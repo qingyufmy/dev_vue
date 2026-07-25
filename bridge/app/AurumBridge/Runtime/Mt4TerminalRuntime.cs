@@ -150,9 +150,27 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        if (request.Action != "rates")
+        if (request.Action is not ("rates" or "symbol_snapshot"))
         {
             return RejectedData(request, "terminal_data_action_unavailable");
+        }
+        if (request.Action == "symbol_snapshot")
+        {
+            Mt4SymbolSnapshotRequest symbolRequest;
+            try
+            {
+                symbolRequest = Mt4PipeProtocol.CreateSymbolSnapshotRequest(request);
+            }
+            catch (InvalidDataException error)
+            {
+                return RejectedData(request, error.Message);
+            }
+            var symbol = await _connection.GetSymbolSnapshotAsync(symbolRequest, cancellationToken);
+            if (symbol.RequestId != request.RequestId)
+            {
+                throw new InvalidDataException("mt4_symbol_snapshot_route_mismatch");
+            }
+            return DataResponse(request, symbol.ObservedAtUtcMsc, symbol.Status, symbol.Payload, symbol.ErrorCode);
         }
         Mt4RatesRequest localRequest;
         try
@@ -178,6 +196,16 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             Payload = local.Payload, ErrorCode = local.ErrorCode,
         };
     }
+
+    private DataResponseMessage DataResponse(
+        DataRequestMessage request, long observedAt, string status, JsonElement? payload, string? errorCode) => new()
+    {
+        Type = "data_response", MessageId = $"data_{request.RequestId}_{Guid.NewGuid():N}",
+        SentAtUtcMsc = _clock(), RequestId = request.RequestId,
+        TerminalInstanceId = _terminal.TerminalInstanceId, AccountRef = _terminal.AccountRef,
+        ConnectionEpoch = _terminal.ConnectionEpoch, Action = request.Action, Params = request.Params,
+        ObservedAtUtcMsc = observedAt, Status = status, Payload = payload, ErrorCode = errorCode,
+    };
 
     public void RequestFullSnapshot(string stream)
     {
