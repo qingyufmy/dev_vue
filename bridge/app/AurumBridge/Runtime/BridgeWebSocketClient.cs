@@ -37,6 +37,7 @@ public sealed class BridgeWebSocketClient
 
     public event Func<FullSnapshotRequest, Task>? FullSnapshotRequired;
     public event Action<string>? InitialSynchronizationCompleted;
+    public event Action<string>? DataAcknowledged;
 
     public async Task RunSessionAsync(
         BridgeConnectionAttempt attempt,
@@ -71,7 +72,11 @@ public sealed class BridgeWebSocketClient
                     helloReady.TrySetResult();
                 }
             };
-            router.DataAcknowledged += outbox.HandleAcknowledgement;
+            router.DataAcknowledged += (messageId, status) =>
+            {
+                outbox.HandleAcknowledgement(messageId, status);
+                DataAcknowledged?.Invoke(status);
+            };
             router.InitialSynchronizationCompleted += terminalId =>
                 InitialSynchronizationCompleted?.Invoke(terminalId);
             router.FullSnapshotRequired += request => FullSnapshotRequired?.Invoke(request) ?? Task.CompletedTask;

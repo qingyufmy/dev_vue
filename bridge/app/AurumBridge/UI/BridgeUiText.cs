@@ -64,6 +64,16 @@ public static class BridgeUiText
         _ => "连接中",
     };
 
+    public static string DescribeRuntimeSummary(BridgeApplicationStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        var server = status.ServerConnected ? "服务器已连接" : "服务器未连接";
+        var synchronization = status.LastDataSyncUtcMsc is long synchronizedAt
+            ? $"最近同步 {DateTimeOffset.FromUnixTimeMilliseconds(synchronizedAt).ToLocalTime():HH:mm:ss}"
+            : "等待首次同步";
+        return $"{server}  ·  {synchronization}  ·  版本 {status.BridgeVersion}";
+    }
+
     public static string DescribeCode(string? code, string fallback) => code switch
     {
         "mt5_terminal_not_found" => "未发现 MT5，请先打开并登录 MT5。",

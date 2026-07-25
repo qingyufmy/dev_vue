@@ -91,4 +91,22 @@ public sealed class BridgeUiTextTests
         StringAssert.Contains(text.Description, "多个");
         StringAssert.Contains(text.Description, "选择");
     }
+
+    [TestMethod]
+    public void RuntimeSummaryShowsServerSynchronizationAndVersion()
+    {
+        var status = new BridgeApplicationStatus(
+            BridgeApplicationPhase.Online, [], null)
+        {
+            ServerConnected = true,
+            LastDataSyncUtcMsc = 1_800_000_000_000,
+            BridgeVersion = "3.2.1",
+        };
+
+        var summary = BridgeUiText.DescribeRuntimeSummary(status);
+
+        StringAssert.Contains(summary, "服务器已连接");
+        StringAssert.Contains(summary, "最近同步");
+        StringAssert.Contains(summary, "3.2.1");
+    }
 }

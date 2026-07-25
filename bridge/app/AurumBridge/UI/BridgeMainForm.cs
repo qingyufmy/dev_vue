@@ -16,6 +16,7 @@ public sealed class BridgeMainForm : Form
 {
     private readonly Label _statusTitle = new();
     private readonly Label _statusDescription = new();
+    private readonly Label _runtimeSummary = new();
     private readonly Panel _statusMarker = new();
     private readonly FlowLayoutPanel _terminalList = new();
     private readonly Button _pairButton = new();
@@ -59,6 +60,7 @@ public sealed class BridgeMainForm : Form
         _statusTitle.Text = text.Title;
         _statusDescription.Text = text.Description;
         _statusMarker.BackColor = text.AccentColor;
+        _runtimeSummary.Text = BridgeUiText.DescribeRuntimeSummary(status);
         _pairButton.Visible = status.Phase == BridgeApplicationPhase.PairingRequired;
         _logoutButton.Visible = status.SelectedPlatform is not null
             && status.Phase is not (BridgeApplicationPhase.PairingRequired
@@ -209,11 +211,12 @@ public sealed class BridgeMainForm : Form
             BackColor = Color.White,
             Padding = new(20),
             ColumnCount = 2,
-            RowCount = 4,
+            RowCount = 5,
             Margin = new Padding(0, 0, 0, 18),
         };
         card.ColumnStyles.Add(new(SizeType.Absolute, 18));
         card.ColumnStyles.Add(new(SizeType.Percent, 100));
+        card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.AutoSize));
@@ -226,7 +229,10 @@ public sealed class BridgeMainForm : Form
         _statusDescription.AutoSize = true;
         _statusDescription.MaximumSize = new(430, 0);
         _statusDescription.ForeColor = Color.FromArgb(71, 85, 105);
-        _statusDescription.Margin = new(0, 4, 0, 16);
+        _statusDescription.Margin = new(0, 4, 0, 8);
+        _runtimeSummary.AutoSize = true;
+        _runtimeSummary.ForeColor = Color.FromArgb(100, 116, 139);
+        _runtimeSummary.Margin = new(0, 0, 0, 16);
         _terminalList.AutoScroll = true;
         _terminalList.Dock = DockStyle.Fill;
         _terminalList.FlowDirection = FlowDirection.TopDown;
@@ -234,6 +240,7 @@ public sealed class BridgeMainForm : Form
         card.Controls.Add(_statusMarker, 0, 0);
         card.Controls.Add(_statusTitle, 1, 0);
         card.Controls.Add(_statusDescription, 1, 1);
+        card.Controls.Add(_runtimeSummary, 1, 2);
         card.Controls.Add(new Label
         {
             AutoSize = true,
@@ -241,8 +248,8 @@ public sealed class BridgeMainForm : Form
             ForeColor = Color.FromArgb(51, 65, 85),
             Text = "已识别账户",
             Margin = new(0, 0, 0, 5),
-        }, 1, 2);
-        card.Controls.Add(_terminalList, 1, 3);
+        }, 1, 3);
+        card.Controls.Add(_terminalList, 1, 4);
         root.Controls.Add(card);
 
         var safety = new Label

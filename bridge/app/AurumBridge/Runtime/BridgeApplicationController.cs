@@ -41,6 +41,9 @@ public sealed record BridgeApplicationStatus(
     public string? SelectedPlatform { get; init; }
     public string? SelectedTerminalInstanceId { get; init; }
     public IReadOnlyList<BridgeTerminalCandidate> TerminalCandidates { get; init; } = [];
+    public bool ServerConnected { get; init; }
+    public long? LastDataSyncUtcMsc { get; init; }
+    public string BridgeVersion { get; init; } = "3.0.0";
 }
 
 public sealed class BridgeApplicationController : IAsyncDisposable
@@ -65,6 +68,8 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private string? _selectedMt5TerminalId;
     private string? _activeMt5TerminalId;
     private IReadOnlyList<BridgeTerminalCandidate> _terminalCandidates = [];
+    private bool _serverConnected;
+    private long? _lastDataSyncUtcMsc;
     private bool _disposed;
 
     public BridgeApplicationController(
@@ -316,6 +321,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             _terminalStatuses.Clear();
             _terminalCandidates = [];
             _activeMt5TerminalId = null;
+            _serverConnected = false;
         }
         var selectedPlatform = SelectedPlatform;
         if (selectedPlatform is null)
@@ -406,6 +412,17 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             quoteHandler:host.GetQuoteAsync,
             dataHandler:host.GetDataAsync,
             initialSnapshotHandler:host.RequestAllFullSnapshotsAsync);
+        webSocket.DataAcknowledged += status =>
+        {
+            if (status is "applied" or "duplicate")
+            {
+                lock (_sync)
+                {
+                    _lastDataSyncUtcMsc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                }
+                PublishCurrent();
+            }
+        };
         var synchronizedTerminals = new HashSet<string>(StringComparer.Ordinal);
         var synchronizationLock = new object();
         webSocket.InitialSynchronizationCompleted += terminalId =>
@@ -577,6 +594,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable
 
     private void HandleConnectionStatus(BridgeConnectionStatus status)
     {
+        lock (_sync)
+        {
+            _serverConnected = status.State == BridgeConnectionState.Connected;
+        }
         var phase = status.State switch
         {
             BridgeConnectionState.PairingRequired => BridgeApplicationPhase.PairingRequired,
@@ -618,6 +639,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         SelectedPlatform = _selectedPlatform,
         SelectedTerminalInstanceId = _activeMt5TerminalId ?? _selectedMt5TerminalId,
         TerminalCandidates = _terminalCandidates,
+        ServerConnected = _serverConnected,
+        LastDataSyncUtcMsc = _lastDataSyncUtcMsc,
+        BridgeVersion = typeof(BridgeApplicationController).Assembly.GetName().Version?.ToString(3)
+            ?? "3.0.0",
     };
 
     private static string NormalizeApplicationError(Exception error) => error switch
