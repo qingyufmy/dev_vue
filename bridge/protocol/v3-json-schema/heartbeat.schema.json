@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/heartbeat.schema.json",
+  "title": "AURUM Bridge v3 heartbeat",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "required": ["v", "type", "message_id", "sent_at_utc_msc", "session_id"],
+  "properties": {
+    "v": { "const": 3 },
+    "type": { "const": "heartbeat" },
+    "session_id": { "type": "string", "minLength": 8, "maxLength": 128 }
+  },
+  "additionalProperties": false
+}

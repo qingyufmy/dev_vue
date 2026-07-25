@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cnfxtrade.com/schemas/bridge/v3/quote.schema.json",
   "title": "AURUM Bridge v3 transient quote response",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
   "type": "object",
   "required": [
     "v", "type", "message_id", "sent_at_utc_msc", "request_id",
