@@ -26,7 +26,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 数据 revision、缺口检测、完整快照恢复 | 已实现 | `BridgeInboundRouter`、`BridgeCommandDispatcher`、读模型测试 |
 | 数据 Outbox 有界并按终端/epoch/stream 合并 | 已实现 | `BridgeStore.PersistDataDeltaAsync` 及边界测试 |
 | MT5 查询失败不得伪装为空仓或空挂单 | 已实现 | Worker 对 `positions_get` / `orders_get` 的 `None` 结果失败关闭并保留旧读模型 |
-| 交易回执持久化、确认前不删除且不与数据合并 | 已实现 | `BridgeStore`、`BridgeOutboxPump`、回执测试 |
+| 交易回执持久化、确认前不删除且不与数据合并 | 已实现 | `BridgeStore`、`BridgeOutboxPump`、回执测试；达到本地回执保留上限时，仍保留尚未获服务端确认的 `command_result` 对应回执 |
 | command ID、deadline、账户/终端/epoch 路由与幂等 | 已实现 | v3 协议、`BridgeCommandDispatcher`、服务端 `command-ledger` |
 | 不明确结果返回 uncertain，不自动重放 | 已实现 | Host dispatcher 与服务端 ledger/reconcile 测试 |
 | 首次完整同步确认前禁止下发交易指令 | 已实现 | Gateway `terminalInitialSyncReady` 门禁；未同步交易保持 queued 且不标记 dispatched；`query_execution` 仍可用于结果复核 |
@@ -46,7 +46,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 | 验证 | 结果 | 边界 |
 |---|---|---|
-| .NET Bridge/Launcher 全量测试 | 157/157 通过 | 自动化功能、协议、存储、恢复、更新、必填 nullable 字段序列化与 UI 文案 |
+| .NET Bridge/Launcher 全量测试 | 158/158 通过 | 自动化功能、协议、存储、恢复、更新、未确认执行回执保留、必填 nullable 字段序列化与 UI 文案 |
 | Node 服务端全量测试 | 1681/1681 通过 | v3 Gateway、重连接管、旧 Outbox 兼容、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
 | MT5 Python Worker 测试 | 23/23 通过 | Python 适配器协议、MT5 调用封装与空快照失败关闭 |
 | MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |
