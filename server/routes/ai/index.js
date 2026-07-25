@@ -59,16 +59,16 @@ const __dirname = dirname(__filename)
 const BRIDGE_VERSION = readFileSync(join(__dirname, '../../../VERSION'), 'utf-8').trim()
 const BRIDGE_RELEASE = Object.freeze({
   buildDate: '2026-07-25',
-  fullUrl: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.8.exe',
-  fileSize: 46703736,
-  sha256: 'BEC2344BE29E49D367963C1CFC01F8CA53B2740374EB825668A60293284D59D2'
+  fullUrl: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.9.exe',
+  fileSize: 46700815,
+  sha256: '289FB6F52A77F2D2A31ACBE11EB9229364B67B5BE570D72439941A4EF3CF5580'
 })
 
 router.get('/bridge/version', (req, res) => {
   res.json({
     version: BRIDGE_VERSION,
     build_date: BRIDGE_RELEASE.buildDate,
-    changelog: `${BRIDGE_VERSION}: Windows 客户端异步网络、托盘唤回与 WebSocket 边界加固`,
+    changelog: `${BRIDGE_VERSION}: 桥接服务器同时支持 HTTP/HTTPS 与 WS/WSS`,
     bridge_ticket_required: process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN !== '1',
     legacy_bridge_query_token_enabled: process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN === '1',
     auto_update_enabled: false,

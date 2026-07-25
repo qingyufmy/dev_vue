@@ -49,7 +49,7 @@ from bridge_profile_runtime import (
     register_bridge_profile, write_profile_config, write_profile_runtime,
 )
 
-APP_VERSION = "v2.4.8"
+APP_VERSION = "v2.4.9"
 FULL_HISTORY_START = datetime(2000, 1, 1)
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500

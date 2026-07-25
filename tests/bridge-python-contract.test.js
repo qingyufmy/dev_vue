@@ -438,7 +438,7 @@ describe('Python Bridge history contract', () => {
     expect(source).toContain('auto_update_enabled: false')
     expect(source).toContain("updater_url: ''")
     expect(source).toContain("auto_update_disabled_reason: 'signed_update_manifest_required'")
-    expect(source).toContain("fullUrl: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.8.exe'")
+    expect(source).toContain("fullUrl: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.9.exe'")
     expect(source).toContain('full_url: BRIDGE_RELEASE.fullUrl')
     expect(source).toContain('file_size: BRIDGE_RELEASE.fileSize')
     expect(source).toContain('sha256: BRIDGE_RELEASE.sha256')

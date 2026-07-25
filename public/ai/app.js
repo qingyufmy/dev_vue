@@ -4093,8 +4093,8 @@ function initBridgeModal() {
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 
   $("downloadExe")?.addEventListener("click", async () => {
-    let url = "https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.8.exe";
-    let version = "v2.4.8";
+    let url = "https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.9.exe";
+    let version = "v2.4.9";
     try {
       const resp = await fetch("/api/bridge/version");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
