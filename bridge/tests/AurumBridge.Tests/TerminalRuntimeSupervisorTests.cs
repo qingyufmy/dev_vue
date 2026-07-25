@@ -72,6 +72,63 @@ public sealed class TerminalRuntimeSupervisorTests
         Assert.IsFalse(supervisor.IsRunning);
     }
 
+    [TestMethod]
+    public async Task StopsOnlyThisTerminalAfterTheConsecutiveFailureLimit()
+    {
+        var statuses = new List<TerminalRuntimeStatus>();
+        var creations = 0;
+        var supervisor = new TerminalRuntimeSupervisor(
+            Terminal(),
+            () =>
+            {
+                creations++;
+                return new FakeRuntime(Terminal(), failCollection:true);
+            },
+            (_, _) => Task.CompletedTask,
+            maximumConsecutiveFailures:3);
+        supervisor.StatusChanged += statuses.Add;
+
+        await supervisor.RunAsync();
+
+        Assert.AreEqual(3, creations);
+        Assert.AreEqual(TerminalRuntimeState.Stopped, statuses[^1].State);
+        Assert.AreEqual(3, statuses[^1].ConsecutiveFailures);
+        Assert.AreEqual("terminal_worker_failure_limit", statuses[^1].ErrorCode);
+        Assert.IsFalse(supervisor.IsRunning);
+    }
+
+    [TestMethod]
+    public async Task AStableRunResetsTheConsecutiveFailureBudget()
+    {
+        var statuses = new List<TerminalRuntimeStatus>();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var creations = 0;
+        var supervisor = new TerminalRuntimeSupervisor(
+            Terminal(),
+            () =>
+            {
+                creations++;
+                return creations switch
+                {
+                    1 => new FakeRuntime(Terminal(), failCollection:true),
+                    2 => new FakeRuntime(Terminal(), failAfter:TimeSpan.FromMilliseconds(30)),
+                    _ => new FakeRuntime(Terminal(), stopWhenStarted:stop),
+                };
+            },
+            (_, _) => Task.CompletedTask,
+            stableRunThreshold:TimeSpan.FromMilliseconds(10),
+            maximumConsecutiveFailures:2);
+        supervisor.StatusChanged += statuses.Add;
+
+        await supervisor.RunAsync(stop.Token);
+
+        Assert.AreEqual(3, creations, "The stable second run must reset the failure budget before it fails.");
+        Assert.IsTrue(statuses.Any(status =>
+            status.State == TerminalRuntimeState.Running && status.ConsecutiveFailures == 0));
+        Assert.AreEqual(TerminalRuntimeState.Stopped, statuses[^1].State);
+        Assert.IsNull(statuses[^1].ErrorCode);
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "terminal_supervisor_01",
@@ -110,10 +167,18 @@ public sealed class TerminalRuntimeSupervisorTests
     private sealed class FakeRuntime : IBridgeTerminalRuntime
     {
         private readonly bool _failCollection;
-        public FakeRuntime(TerminalDescriptor terminal, bool failCollection = false)
+        private readonly TimeSpan? _failAfter;
+        private readonly CancellationTokenSource? _stopWhenStarted;
+        public FakeRuntime(
+            TerminalDescriptor terminal,
+            bool failCollection = false,
+            TimeSpan? failAfter = null,
+            CancellationTokenSource? stopWhenStarted = null)
         {
             Terminal = terminal;
             _failCollection = failCollection;
+            _failAfter = failAfter;
+            _stopWhenStarted = stopWhenStarted;
         }
 
         public TerminalDescriptor Terminal { get; }
@@ -126,6 +191,7 @@ public sealed class TerminalRuntimeSupervisorTests
         {
             Running.TrySetResult();
             Started?.Invoke();
+            _stopWhenStarted?.Cancel();
             return Task.CompletedTask;
         }
 
@@ -168,6 +234,11 @@ public sealed class TerminalRuntimeSupervisorTests
             if (_failCollection)
             {
                 throw new IOException("test failure");
+            }
+            if (_failAfter is { } failAfter)
+            {
+                await Task.Delay(failAfter, cancellationToken);
+                throw new IOException("delayed test failure");
             }
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }

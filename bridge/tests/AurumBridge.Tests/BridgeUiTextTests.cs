@@ -66,4 +66,18 @@ public sealed class BridgeUiTextTests
         StringAssert.Contains(selection.Description, "MT5");
         StringAssert.Contains(selection.Description, "MT4");
     }
+
+    [TestMethod]
+    public void TerminalFailureLimitExplainsThatOnlyThisTerminalNeedsRedetection()
+    {
+        var terminal = new BridgeTerminalStatus(
+            "terminal_01", "mt5", "Broker-Demo", "12345678",
+            TerminalRuntimeState.Stopped, "terminal_worker_failure_limit");
+
+        Assert.AreEqual("已暂停，请重新检测", BridgeUiText.DescribeTerminalState(terminal));
+        var description = BridgeUiText.DescribeCode(
+            terminal.ErrorCode, "fallback");
+        StringAssert.Contains(description, "该终端");
+        StringAssert.Contains(description, "重新检测");
+    }
 }

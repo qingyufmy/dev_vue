@@ -118,6 +118,48 @@ public sealed class BridgeHostTests
         await run;
     }
 
+    [TestMethod]
+    public async Task ATerminalThatExhaustsRecoveryDoesNotStopAnotherTerminal()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var failedTerminal = Terminal("terminal_failed_01", "3001");
+        var stableTerminal = Terminal("terminal_stable_01", "3002");
+        var failedStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stableRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failedSupervisor = new TerminalRuntimeSupervisor(
+            failedTerminal,
+            () => new IsolatedRuntime(failedTerminal, failCollection:true),
+            (_, _) => Task.CompletedTask,
+            maximumConsecutiveFailures:2);
+        failedSupervisor.StatusChanged += status =>
+        {
+            if (status.State == TerminalRuntimeState.Stopped
+                && status.ErrorCode == "terminal_worker_failure_limit")
+            {
+                failedStopped.TrySetResult();
+            }
+        };
+        var stableRuntime = new IsolatedRuntime(stableTerminal, failCollection:false);
+        stableRuntime.Started += () => stableRunning.TrySetResult();
+        var stableSupervisor = new TerminalRuntimeSupervisor(stableTerminal, () => stableRuntime);
+        await using var host = new BridgeHost(testStore.Store, [failedSupervisor, stableSupervisor]);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var run = host.RunAsync(cancellation.Token);
+
+        await Task.WhenAll(failedStopped.Task, stableRunning.Task).WaitAsync(TimeSpan.FromSeconds(2));
+        var result = await host.CommandDispatcher.DispatchAsync(Command(stableTerminal));
+
+        Assert.AreEqual("succeeded", result.Status);
+        Assert.IsFalse(failedSupervisor.IsRunning);
+        Assert.IsTrue(stableSupervisor.IsRunning);
+        CollectionAssert.AreEqual(
+            new[] { Command(stableTerminal).CommandId },
+            stableRuntime.CommandIds.ToArray());
+
+        cancellation.Cancel();
+        await run;
+    }
+
     private static TerminalDescriptor Terminal(string terminalId, string login) => new()
     {
         TerminalInstanceId = terminalId,

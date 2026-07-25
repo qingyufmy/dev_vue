@@ -52,6 +52,16 @@ public static class BridgeUiText
         _ => "AURUM Bridge 启动失败，请重新启动；若问题持续，请联系支持。",
     };
 
+    public static string DescribeTerminalState(BridgeTerminalStatus terminal) => terminal.RuntimeState switch
+    {
+        TerminalRuntimeState.Running => "运行中",
+        TerminalRuntimeState.Restarting => "自动恢复中",
+        TerminalRuntimeState.Stopped when terminal.ErrorCode == "terminal_worker_failure_limit" =>
+            "已暂停，请重新检测",
+        TerminalRuntimeState.Stopped => "已停止",
+        _ => "连接中",
+    };
+
     public static string DescribeCode(string? code, string fallback) => code switch
     {
         "mt5_terminal_not_found" => "未发现 MT5，请先打开并登录 MT5。",
@@ -63,6 +73,7 @@ public static class BridgeUiText
         "mt5_probe_identity_mismatch" => "MT5 账号、Server 或终端与已绑定信息不匹配，请登录正确账号后重试。",
         "mt4_ea_identity_mismatch" => "MT4 EA 的账号、Server 或终端与已绑定信息不匹配，请确认账号后重新挂载 EA。",
         "terminal_runtime_identity_mismatch" => "交易终端身份与绑定信息不匹配，桥接已拒绝连接，请确认账号和 Server。",
+        "terminal_worker_failure_limit" => "交易终端连续恢复失败，已暂停该终端；请确认 MT 正常后点击“重新检测”。",
         "mt5_probe_timeout" => "MT5 响应超时，程序会自动重试。",
         "bridge_not_paired" => "需要先连接 AURUM 账号。",
         "bridge_server_unreachable" => "暂时无法连接服务器，程序会自动重试。",

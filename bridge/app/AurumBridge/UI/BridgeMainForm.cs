@@ -263,7 +263,7 @@ public sealed class BridgeMainForm : Form
 
     private Panel CreateTerminalRow(BridgeTerminalStatus terminal)
     {
-        var state = terminal.RuntimeState == TerminalRuntimeState.Running ? "运行中" : "连接中";
+        var state = BridgeUiText.DescribeTerminalState(terminal);
         var row = new Panel
         {
             Width = 430,

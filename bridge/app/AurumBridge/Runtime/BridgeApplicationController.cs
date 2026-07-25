@@ -463,7 +463,15 @@ public sealed class BridgeApplicationController : IAsyncDisposable
                 };
             }
         }
-        PublishCurrent();
+        if (status.State == TerminalRuntimeState.Stopped
+            && status.ErrorCode == "terminal_worker_failure_limit")
+        {
+            Publish(BridgeApplicationPhase.Degraded, status.ErrorCode);
+        }
+        else
+        {
+            PublishCurrent();
+        }
     }
 
     private void HandleConnectionStatus(BridgeConnectionStatus status)

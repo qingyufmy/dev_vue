@@ -18,9 +18,13 @@ public sealed record TerminalRuntimeStatus(
 
 public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
 {
+    private const int DefaultMaximumConsecutiveFailures = 8;
+    private static readonly TimeSpan DefaultStableRunThreshold = TimeSpan.FromSeconds(30);
     private readonly TerminalDescriptor _terminal;
     private readonly Func<IBridgeTerminalRuntime> _runtimeFactory;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
+    private readonly TimeSpan _stableRunThreshold;
+    private readonly int _maximumConsecutiveFailures;
     private readonly CancellationTokenSource _stop = new();
     private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private IBridgeTerminalRuntime? _current;
@@ -30,11 +34,23 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
     public TerminalRuntimeSupervisor(
         TerminalDescriptor terminal,
         Func<IBridgeTerminalRuntime> runtimeFactory,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
+        TimeSpan? stableRunThreshold = null,
+        int maximumConsecutiveFailures = DefaultMaximumConsecutiveFailures)
     {
         _terminal = terminal ?? throw new ArgumentNullException(nameof(terminal));
         _runtimeFactory = runtimeFactory ?? throw new ArgumentNullException(nameof(runtimeFactory));
         _delay = delay ?? Task.Delay;
+        _stableRunThreshold = stableRunThreshold ?? DefaultStableRunThreshold;
+        if (_stableRunThreshold <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stableRunThreshold));
+        }
+        if (maximumConsecutiveFailures is < 1 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumConsecutiveFailures));
+        }
+        _maximumConsecutiveFailures = maximumConsecutiveFailures;
     }
 
     public TerminalDescriptor Terminal => _terminal;
@@ -54,6 +70,7 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
             _stop.Token);
         var runCancellation = linkedCancellation.Token;
         var failures = 0;
+        string? terminalStopError = null;
         try
         {
             while (!runCancellation.IsCancellationRequested)
@@ -67,7 +84,15 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
                     await runtime.StartAsync(runCancellation);
                     Volatile.Write(ref _current, runtime);
                     Publish(TerminalRuntimeState.Running, failures);
-                    await runtime.RunCollectionLoopAsync(runCancellation);
+                    var collectionTask = runtime.RunCollectionLoopAsync(runCancellation);
+                    var stableRunTask = Task.Delay(_stableRunThreshold, runCancellation);
+                    if (await Task.WhenAny(collectionTask, stableRunTask) == stableRunTask)
+                    {
+                        await stableRunTask;
+                        failures = 0;
+                        Publish(TerminalRuntimeState.Running, failures);
+                    }
+                    await collectionTask;
                     if (!runCancellation.IsCancellationRequested)
                     {
                         throw new InvalidOperationException("terminal_collection_loop_stopped");
@@ -80,7 +105,15 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
                 catch (Exception error)
                 {
                     failures++;
-                    Publish(TerminalRuntimeState.Restarting, failures, NormalizeError(error));
+                    var errorCode = NormalizeError(error);
+                    if (failures >= _maximumConsecutiveFailures)
+                    {
+                        terminalStopError = "terminal_worker_failure_limit";
+                    }
+                    else
+                    {
+                        Publish(TerminalRuntimeState.Restarting, failures, errorCode);
+                    }
                 }
                 finally
                 {
@@ -89,6 +122,11 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
                     {
                         await TryDisposeAsync(runtime);
                     }
+                }
+
+                if (terminalStopError is not null)
+                {
+                    break;
                 }
 
                 if (!runCancellation.IsCancellationRequested)
@@ -102,7 +140,7 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
         }
         finally
         {
-            Publish(TerminalRuntimeState.Stopped, failures);
+            Publish(TerminalRuntimeState.Stopped, failures, terminalStopError);
             _stopped.TrySetResult();
         }
     }
