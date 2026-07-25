@@ -1,0 +1,163 @@
+using System.Text.Json;
+using AurumBridge.Protocol;
+using AurumBridge.Runtime;
+
+namespace AurumBridge.Tests;
+
+[TestClass]
+public sealed class BridgeCommandDispatcherTests
+{
+    private const long Now = 1_800_000_000_000;
+    private TestStore _testStore = null!;
+
+    [TestInitialize]
+    public async Task InitializeAsync()
+    {
+        _testStore = await TestStore.CreateAsync();
+    }
+
+    [TestCleanup]
+    public async Task CleanupAsync() => await _testStore.DisposeAsync();
+
+    [TestMethod]
+    public async Task ConcurrentDuplicateCommandExecutesWorkerExactlyOnce()
+    {
+        var calls = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dispatcher = Dispatcher(async (command, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            await release.Task;
+            return Success(command);
+        });
+        var command = Command();
+
+        var first = dispatcher.DispatchAsync(command);
+        var second = dispatcher.DispatchAsync(command);
+        release.SetResult();
+        var results = await Task.WhenAll(first, second);
+
+        Assert.AreEqual(1, calls);
+        Assert.IsTrue(results.All(result => result.Status == "succeeded"));
+        Assert.IsNotNull(await _testStore.Store.GetExecutionReceiptAsync(command.CommandId));
+    }
+
+    [TestMethod]
+    public async Task PersistedReceiptPreventsExecutionAfterRestart()
+    {
+        var command = Command();
+        await _testStore.Store.SaveExecutionReceiptAsync(Success(command));
+        var handler = new MockHandler();
+        var dispatcher = Dispatcher(handler.ExecuteAsync);
+
+        var result = await dispatcher.DispatchAsync(command);
+
+        Assert.AreEqual("succeeded", result.Status);
+        Assert.AreEqual(0, handler.Calls);
+    }
+
+    [TestMethod]
+    public async Task RejectsExpiredAndCrossAccountCommandsWithoutCallingWorker()
+    {
+        var handler = new MockHandler();
+        var dispatcher = Dispatcher(handler.ExecuteAsync);
+
+        var expired = await dispatcher.DispatchAsync(Command() with { DeadlineUtcMsc = Now });
+        var wrongAccount = await dispatcher.DispatchAsync(Command("command_01JDISPATCH02") with
+        {
+            AccountRef = new("Broker-Demo", "999"),
+        });
+
+        Assert.AreEqual("command_expired", expired.ErrorCode);
+        Assert.AreEqual("command_route_mismatch", wrongAccount.ErrorCode);
+        Assert.AreEqual(0, handler.Calls);
+    }
+
+    [TestMethod]
+    public async Task ConvertsWorkerExceptionAndMismatchedResultToUncertain()
+    {
+        var throwing = Dispatcher((_, _) => throw new InvalidOperationException("worker lost"));
+        var failed = await throwing.DispatchAsync(Command());
+        Assert.AreEqual("uncertain", failed.Status);
+        Assert.AreEqual("worker_execution_exception", failed.ErrorCode);
+
+        var mismatched = Dispatcher((command, _) => Task.FromResult(Success(command) with
+        {
+            ConnectionEpoch = command.ConnectionEpoch + 1,
+        }));
+        var invalid = await mismatched.DispatchAsync(Command("command_01JDISPATCH03"));
+        Assert.AreEqual("uncertain", invalid.Status);
+        Assert.AreEqual("worker_result_route_mismatch", invalid.ErrorCode);
+    }
+
+    [TestMethod]
+    public async Task PersistsUncertainReceiptWhenWorkerCancellationIsObserved()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var dispatcher = Dispatcher((_, token) =>
+        {
+            cancellation.Cancel();
+            return Task.FromCanceled<CommandResultMessage>(token);
+        });
+
+        var result = await dispatcher.DispatchAsync(Command(), cancellation.Token);
+
+        Assert.AreEqual("uncertain", result.Status);
+        Assert.AreEqual("worker_execution_cancelled", result.ErrorCode);
+        Assert.IsNotNull(await _testStore.Store.GetExecutionReceiptAsync(result.CommandId));
+    }
+
+    private BridgeCommandDispatcher Dispatcher(TerminalCommandHandler handler) => new(
+        _testStore.Store,
+        terminalId => terminalId == "terminal_01JDISPATCH1" ? Terminal() : null,
+        handler,
+        () => Now);
+
+    private static TerminalDescriptor Terminal() => new()
+    {
+        TerminalInstanceId = "terminal_01JDISPATCH1",
+        Platform = "mt5",
+        AccountRef = new("Broker-Demo", "12345678"),
+        ConnectionEpoch = 7,
+    };
+
+    private static CommandMessage Command(string commandId = "command_01JDISPATCH01") => new()
+    {
+        Type = "command",
+        MessageId = $"msg_{commandId}",
+        SentAtUtcMsc = Now,
+        CommandId = commandId,
+        TerminalInstanceId = "terminal_01JDISPATCH1",
+        AccountRef = new("Broker-Demo", "12345678"),
+        ConnectionEpoch = 7,
+        IssuedAtUtcMsc = Now,
+        DeadlineUtcMsc = Now + 10_000,
+        Action = "place_order",
+        Params = JsonDocument.Parse("""{"symbol":"XAUUSD","volume":"0.01"}""").RootElement.Clone(),
+    };
+
+    private static CommandResultMessage Success(CommandMessage command) => new()
+    {
+        Type = "command_result",
+        MessageId = $"result_{command.CommandId}",
+        SentAtUtcMsc = Now + 1,
+        CommandId = command.CommandId,
+        TerminalInstanceId = command.TerminalInstanceId,
+        AccountRef = command.AccountRef,
+        ConnectionEpoch = command.ConnectionEpoch,
+        Status = "succeeded",
+        CompletedAtUtcMsc = Now + 1,
+        Evidence = new() { ObservedAtUtcMsc = Now + 1 },
+    };
+
+    private sealed class MockHandler
+    {
+        public int Calls { get; private set; }
+
+        public Task<CommandResultMessage> ExecuteAsync(CommandMessage command, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(Success(command));
+        }
+    }
+}

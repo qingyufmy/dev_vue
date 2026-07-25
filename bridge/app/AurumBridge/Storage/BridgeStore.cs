@@ -260,6 +260,26 @@ public sealed class BridgeStore : IAsyncDisposable
         }
     }
 
+    public async Task<CommandResultMessage?> GetExecutionReceiptAsync(
+        string commandId,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        ArgumentException.ThrowIfNullOrWhiteSpace(commandId);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT result_json FROM execution_receipts
+            WHERE command_id = $command_id
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$command_id", commandId);
+        var payload = Convert.ToString(await command.ExecuteScalarAsync(cancellationToken));
+        return string.IsNullOrWhiteSpace(payload)
+            ? null
+            : JsonSerializer.Deserialize<CommandResultMessage>(payload, BridgeJson.Options);
+    }
+
     public async Task<int> CountExecutionReceiptsAsync(CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
