@@ -94,6 +94,11 @@ public sealed class ReconnectableMt4EaConnection : IMt4EaConnection
         CancellationToken cancellationToken = default) =>
         ReadyConnection().GetSymbolSnapshotAsync(request, cancellationToken);
 
+    public Task<Mt4RiskSnapshot> GetRiskSnapshotAsync(
+        Mt4RiskSnapshotRequest request,
+        CancellationToken cancellationToken = default) =>
+        ReadyConnection().GetRiskSnapshotAsync(request, cancellationToken);
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)

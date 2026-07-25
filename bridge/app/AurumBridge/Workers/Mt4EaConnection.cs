@@ -20,6 +20,9 @@ public interface IMt4EaConnection : IAsyncDisposable
     Task<Mt4SymbolSnapshot> GetSymbolSnapshotAsync(
         Mt4SymbolSnapshotRequest request,
         CancellationToken cancellationToken = default);
+    Task<Mt4RiskSnapshot> GetRiskSnapshotAsync(
+        Mt4RiskSnapshotRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class Mt4EaConnection : IMt4EaConnection
@@ -126,6 +129,12 @@ public sealed class Mt4EaConnection : IMt4EaConnection
             Mt4PipeProtocol.EncodeSymbolSnapshotRequest(request),
             Mt4PipeProtocol.DecodeSymbolSnapshot,
             cancellationToken);
+
+    public Task<Mt4RiskSnapshot> GetRiskSnapshotAsync(
+        Mt4RiskSnapshotRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestAsync(Mt4PipeProtocol.EncodeRiskSnapshotRequest(request),
+            Mt4PipeProtocol.DecodeRiskSnapshot, cancellationToken);
 
     public async ValueTask DisposeAsync()
     {

@@ -132,6 +132,35 @@ public sealed class Mt4TerminalRuntimeTests
         Assert.AreEqual("XAUUSD", connection.LastSymbolRequest!.Symbol);
     }
 
+    [TestMethod]
+    public async Task MapsIncrementalRiskSnapshotWithDualCursor()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection();
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_01");
+        await runtime.StartAsync();
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_risk_01", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_risk_01", TerminalInstanceId = Terminal().TerminalInstanceId,
+            AccountRef = Terminal().AccountRef, ConnectionEpoch = Terminal().ConnectionEpoch,
+            Action = "risk_snapshot", Params = JsonSerializer.SerializeToElement(new
+            {
+                symbol = "XAUUSD", last_deal_time_msc = 100L, last_deal_ticket = 7L,
+                baseline_from_utc_msc = 0L,
+                proposed_order = new { symbol = "XAUUSD", order_type = "buy", volume = 0.1, entry_price = 2300, sl = 2290 },
+            }),
+        };
+
+        var response = await runtime.GetDataAsync(request);
+
+        Assert.AreEqual("succeeded", response.Status);
+        Assert.AreEqual(1, response.Payload!.Value.GetProperty("snapshot_version").GetInt32());
+        Assert.AreEqual(100L, connection.LastRiskRequest!.LastDealTimeMsc);
+        Assert.AreEqual(7L, connection.LastRiskRequest.LastDealTicket);
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "mt4_terminal_runtime_01",
@@ -177,6 +206,7 @@ public sealed class Mt4TerminalRuntimeTests
         public JsonElement? NextRawResult { get; init; }
         public Mt4RatesRequest? LastRatesRequest { get; private set; }
         public Mt4SymbolSnapshotRequest? LastSymbolRequest { get; private set; }
+        public Mt4RiskSnapshotRequest? LastRiskRequest { get; private set; }
 
         public Task SendWelcomeAsync(Mt4Welcome welcome, CancellationToken cancellationToken = default)
         {
@@ -238,6 +268,20 @@ public sealed class Mt4TerminalRuntimeTests
                 {
                     symbol = request.Symbol, source = "mt4",
                     account = new { leverage = 100 }, instrument = new { tick_size = 0.01 },
+                }), null));
+        }
+
+        public Task<Mt4RiskSnapshot> GetRiskSnapshotAsync(
+            Mt4RiskSnapshotRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            LastRiskRequest = request;
+            return Task.FromResult(new Mt4RiskSnapshot(
+                request.RequestId, 1_800_000_000_080, "succeeded",
+                JsonSerializer.SerializeToElement(new
+                {
+                    snapshot_version = 1, source = "mt4", complete = true,
+                    increment = new { requested_cursor = new { time_msc = request.LastDealTimeMsc, ticket = request.LastDealTicket } },
                 }), null));
         }
 

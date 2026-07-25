@@ -17,6 +17,8 @@ public enum Mt4MessageType
     Rates = 15,
     SymbolSnapshotRequest = 16,
     SymbolSnapshot = 17,
+    RiskSnapshotRequest = 18,
+    RiskSnapshot = 19,
     Command = 20,
     CommandResult = 21,
     Shutdown = 90,
@@ -98,6 +100,29 @@ public sealed record Mt4SymbolSnapshotRequest(
     string Symbol);
 
 public sealed record Mt4SymbolSnapshot(
+    string RequestId,
+    long ObservedAtUtcMsc,
+    string Status,
+    JsonElement? Payload,
+    string? ErrorCode);
+
+public sealed record Mt4RiskSnapshotRequest(
+    string RequestId,
+    string TerminalInstanceId,
+    string BrokerServer,
+    string Login,
+    long ConnectionEpoch,
+    string Symbol,
+    long LastDealTimeMsc,
+    long LastDealTicket,
+    long BaselineFromUtcMsc,
+    string ProposedSymbol,
+    string ProposedOrderType,
+    double? ProposedVolume,
+    double? ProposedEntryPrice,
+    double? ProposedStopLoss);
+
+public sealed record Mt4RiskSnapshot(
     string RequestId,
     long ObservedAtUtcMsc,
     string Status,
@@ -535,6 +560,93 @@ public static class Mt4PipeProtocol
         EnsureFullyRead(reader);
         ValidateSymbolSnapshot(result);
         return result;
+    }
+
+    public static Mt4RiskSnapshotRequest CreateRiskSnapshotRequest(DataRequestMessage request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Version != 3 || request.Type != "data_request" || request.Action != "risk_snapshot")
+        {
+            throw new InvalidDataException("mt4_risk_snapshot_request_invalid");
+        }
+        var hasProposedProperty = request.Params.TryGetProperty("proposed_order", out var value);
+        if (hasProposedProperty && value.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
+        {
+            throw new InvalidDataException("mt4_risk_snapshot_request_invalid");
+        }
+        var proposed = hasProposedProperty && value.ValueKind == JsonValueKind.Object ? value : default;
+        var result = new Mt4RiskSnapshotRequest(
+            request.RequestId, request.TerminalInstanceId, request.AccountRef.BrokerServer,
+            request.AccountRef.Login, request.ConnectionEpoch,
+            ReadOptionalString(request.Params, "symbol") ?? string.Empty,
+            ReadOptionalInt64(request.Params, "last_deal_time_msc") ?? 0,
+            ReadOptionalInt64(request.Params, "last_deal_ticket") ?? 0,
+            ReadOptionalInt64(request.Params, "baseline_from_utc_msc") ?? 0,
+            proposed.ValueKind == JsonValueKind.Object ? ReadOptionalString(proposed, "symbol") ?? string.Empty : string.Empty,
+            proposed.ValueKind == JsonValueKind.Object ? (ReadOptionalString(proposed, "order_type") ?? string.Empty).ToLowerInvariant() : string.Empty,
+            proposed.ValueKind == JsonValueKind.Object ? ReadOptionalDouble(proposed, "volume") : null,
+            proposed.ValueKind == JsonValueKind.Object ? ReadOptionalDouble(proposed, "entry_price") : null,
+            proposed.ValueKind == JsonValueKind.Object ? ReadOptionalDouble(proposed, "sl") : null);
+        ValidateRiskSnapshotRequest(result);
+        return result;
+    }
+
+    public static byte[] EncodeRiskSnapshotRequest(Mt4RiskSnapshotRequest request)
+    {
+        ValidateRiskSnapshotRequest(request);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.RiskSnapshotRequest);
+            WriteString(writer, request.RequestId); WriteString(writer, request.TerminalInstanceId);
+            WriteString(writer, request.BrokerServer); WriteString(writer, request.Login);
+            writer.Write(request.ConnectionEpoch); WriteString(writer, request.Symbol);
+            writer.Write(request.LastDealTimeMsc); writer.Write(request.LastDealTicket);
+            writer.Write(request.BaselineFromUtcMsc); WriteString(writer, request.ProposedSymbol);
+            WriteString(writer, request.ProposedOrderType); WriteNullableDouble(writer, request.ProposedVolume);
+            WriteNullableDouble(writer, request.ProposedEntryPrice); WriteNullableDouble(writer, request.ProposedStopLoss);
+        });
+    }
+
+    public static Mt4RiskSnapshotRequest DecodeRiskSnapshotRequest(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.RiskSnapshotRequest);
+        var result = new Mt4RiskSnapshotRequest(
+            ReadString(reader, 128), ReadString(reader, 128), ReadString(reader, 128),
+            ReadString(reader, 64), reader.ReadInt64(), ReadString(reader, 64),
+            reader.ReadInt64(), reader.ReadInt64(), reader.ReadInt64(),
+            ReadString(reader, 64), ReadString(reader, 32),
+            ReadDoubleString(reader, false), ReadDoubleString(reader, false), ReadDoubleString(reader, false));
+        EnsureFullyRead(reader);
+        ValidateRiskSnapshotRequest(result);
+        return result;
+    }
+
+    public static byte[] EncodeRiskSnapshot(Mt4RiskSnapshot result)
+    {
+        ValidateRiskSnapshot(result);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.RiskSnapshot); WriteString(writer, result.RequestId);
+            writer.Write(result.ObservedAtUtcMsc); writer.Write(result.Status == "succeeded" ? 1 : 2);
+            WriteString(writer, result.Payload?.GetRawText() ?? string.Empty);
+            WriteString(writer, result.ErrorCode ?? string.Empty);
+        });
+    }
+
+    public static Mt4RiskSnapshot DecodeRiskSnapshot(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.RiskSnapshot);
+        var requestId = ReadString(reader, 128); var observedAt = reader.ReadInt64();
+        var status = reader.ReadInt32() switch
+        {
+            1 => "succeeded", 2 => "rejected",
+            _ => throw new InvalidDataException("mt4_risk_snapshot_status_invalid"),
+        };
+        var payloadText = ReadString(reader, MaxStringBytes);
+        var result = new Mt4RiskSnapshot(requestId, observedAt, status,
+            string.IsNullOrEmpty(payloadText) ? null : ParseObject(payloadText, "mt4_risk_snapshot_payload_invalid"),
+            NullIfEmpty(ReadString(reader, 128)));
+        EnsureFullyRead(reader); ValidateRiskSnapshot(result); return result;
     }
 
     public static Mt4TradeCommand CreateTradeCommand(CommandMessage command)
@@ -1013,6 +1125,38 @@ public static class Mt4PipeProtocol
             || result.Status == "rejected" && string.IsNullOrWhiteSpace(result.ErrorCode))
         {
             throw new InvalidDataException("mt4_symbol_snapshot_invalid");
+        }
+    }
+
+    private static void ValidateRiskSnapshotRequest(Mt4RiskSnapshotRequest request)
+    {
+        var hasProposed = !string.IsNullOrEmpty(request.ProposedSymbol)
+            || !string.IsNullOrEmpty(request.ProposedOrderType)
+            || request.ProposedVolume is not null || request.ProposedEntryPrice is not null
+            || request.ProposedStopLoss is not null;
+        string[] orderTypes = ["buy", "sell", "buy_limit", "sell_limit", "buy_stop", "sell_stop"];
+        if (string.IsNullOrWhiteSpace(request.RequestId)
+            || string.IsNullOrWhiteSpace(request.TerminalInstanceId)
+            || string.IsNullOrWhiteSpace(request.BrokerServer) || string.IsNullOrWhiteSpace(request.Login)
+            || request.ConnectionEpoch <= 0 || string.IsNullOrWhiteSpace(request.Symbol) || request.Symbol.Length > 64
+            || request.LastDealTimeMsc < 0 || request.LastDealTicket < 0 || request.BaselineFromUtcMsc < 0
+            || hasProposed && (string.IsNullOrWhiteSpace(request.ProposedSymbol) || request.ProposedSymbol.Length > 64
+                || !orderTypes.Contains(request.ProposedOrderType, StringComparer.Ordinal)
+                || request.ProposedVolume is null or <= 0
+                || request.ProposedEntryPrice is null or <= 0 || request.ProposedStopLoss is null or <= 0))
+        {
+            throw new InvalidDataException("mt4_risk_snapshot_request_invalid");
+        }
+    }
+
+    private static void ValidateRiskSnapshot(Mt4RiskSnapshot result)
+    {
+        if (string.IsNullOrWhiteSpace(result.RequestId) || result.ObservedAtUtcMsc <= 0
+            || result.Status is not ("succeeded" or "rejected")
+            || result.Status == "succeeded" && result.Payload is null
+            || result.Status == "rejected" && string.IsNullOrWhiteSpace(result.ErrorCode))
+        {
+            throw new InvalidDataException("mt4_risk_snapshot_invalid");
         }
     }
 

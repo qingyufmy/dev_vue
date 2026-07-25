@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.03"
+#property version   "3.04"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -14,6 +14,8 @@ input string InpPipeName = "AURUMBridgeV3";
 #define MSG_RATES        15
 #define MSG_SYMBOL_SNAPSHOT_REQUEST 16
 #define MSG_SYMBOL_SNAPSHOT 17
+#define MSG_RISK_SNAPSHOT_REQUEST 18
+#define MSG_RISK_SNAPSHOT 19
 #define MSG_COMMAND      20
 #define MSG_COMMAND_RESULT 21
 #define MSG_SHUTDOWN     90
@@ -106,6 +108,11 @@ void OnTimer()
       SendSymbolSnapshot(payload, offset);
       return;
      }
+   if(message_type == MSG_RISK_SNAPSHOT_REQUEST && g_welcomed)
+     {
+      SendRiskSnapshot(payload, offset);
+      return;
+     }
    if(message_type == MSG_SHUTDOWN)
      {
       uchar response[];
@@ -126,7 +133,7 @@ bool ConnectPipe()
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
    AppendInt32(hello, 3);
-   AppendUtf8(hello, "3.0.3");
+   AppendUtf8(hello, "3.0.4");
    AppendUtf8(hello, TerminalInfoString(TERMINAL_DATA_PATH));
    AppendUtf8(hello, AccountServer());
    AppendUtf8(hello, IntegerToString(AccountNumber()));
@@ -404,6 +411,237 @@ void SendSymbolSnapshotResult(const string request_id, const int status,
    AppendInt32(response, status);
    AppendUtf8(response, payload_json);
    AppendUtf8(response, error_code);
+   if(!WriteFrame(response)) DisconnectPipe();
+  }
+
+bool CursorAfter(const long event_time, const int event_ticket,
+   const long cursor_time, const long cursor_ticket)
+  {
+   return(event_time > cursor_time || (event_time == cursor_time && event_ticket > cursor_ticket));
+  }
+
+string UtcBusinessDate(const long utc_msc)
+  {
+   string value = TimeToString((datetime)(utc_msc / 1000), TIME_DATE);
+   StringReplace(value, ".", "-");
+   return(value);
+  }
+
+string JsonLong(const long value)
+  {
+   return(StringFormat("%I64d", value));
+  }
+
+string RiskInstrumentJson(const string symbol)
+  {
+   double point = MarketInfo(symbol, MODE_POINT);
+   return("{\"name\":\"" + JsonEscape(symbol) + "\""
+      + ",\"digits\":" + IntegerToString((int)MarketInfo(symbol, MODE_DIGITS))
+      + ",\"trade_mode\":" + (MarketInfo(symbol, MODE_TRADEALLOWED) > 0 ? "4" : "0")
+      + ",\"trade_calc_mode\":" + IntegerToString((int)MarketInfo(symbol, MODE_PROFITCALCMODE))
+      + ",\"point\":" + JsonNumber(point)
+      + ",\"tick_size\":" + JsonNumber(MarketInfo(symbol, MODE_TICKSIZE) * point)
+      + ",\"tick_value\":" + JsonNumber(MarketInfo(symbol, MODE_TICKVALUE))
+      + ",\"contract_size\":" + JsonNumber(MarketInfo(symbol, MODE_LOTSIZE))
+      + ",\"margin_initial\":" + JsonNumber(MarketInfo(symbol, MODE_MARGININIT))
+      + ",\"volume_min\":" + JsonNumber(MarketInfo(symbol, MODE_MINLOT))
+      + ",\"volume_max\":" + JsonNumber(MarketInfo(symbol, MODE_MAXLOT))
+      + ",\"volume_step\":" + JsonNumber(MarketInfo(symbol, MODE_LOTSTEP))
+      + ",\"currency_profit\":\"\",\"currency_margin\":\"\"}");
+  }
+
+void AddRiskInstrument(const string symbol, string &json, string &seen)
+  {
+   if(symbol == "" || StringFind(seen, "|" + symbol + "|") >= 0) return;
+   if(json != "") json += ",";
+   json += "\"" + JsonEscape(symbol) + "\":" + RiskInstrumentJson(symbol);
+   seen += "|" + symbol + "|";
+  }
+
+string PendingTypeName(const int order_type)
+  {
+   if(order_type == OP_BUYLIMIT) return("buy_limit");
+   if(order_type == OP_SELLLIMIT) return("sell_limit");
+   if(order_type == OP_BUYSTOP) return("buy_stop");
+   if(order_type == OP_SELLSTOP) return("sell_stop");
+   return(IntegerToString(order_type));
+  }
+
+void SendRiskSnapshot(uchar &request[], int &offset)
+  {
+   string request_id = ReadUtf8(request, offset);
+   string terminal_id = ReadUtf8(request, offset);
+   string broker_server = ReadUtf8(request, offset);
+   string login = ReadUtf8(request, offset);
+   long connection_epoch = ReadInt64(request, offset);
+   string requested_symbol = ReadUtf8(request, offset);
+   long requested_cursor_time = ReadInt64(request, offset);
+   long requested_cursor_ticket = ReadInt64(request, offset);
+   long baseline_utc_msc = ReadInt64(request, offset);
+   string proposed_symbol = ReadUtf8(request, offset);
+   string proposed_order_type = ReadUtf8(request, offset);
+   string proposed_volume_value = ReadUtf8(request, offset);
+   string proposed_entry_value = ReadUtf8(request, offset);
+   string proposed_sl_value = ReadUtf8(request, offset);
+   if(request_id == "" || terminal_id != g_terminal_id
+      || StringCompare(broker_server, AccountServer(), false) != 0
+      || login != IntegerToString(AccountNumber())
+      || connection_epoch != g_connection_epoch)
+     {
+      SendRiskSnapshotResult(request_id, 2, "", "risk_snapshot_route_mismatch", 0);
+      return;
+     }
+   if(requested_symbol == "" || requested_cursor_time < 0 || requested_cursor_ticket < 0
+      || baseline_utc_msc < 0 || !SymbolSelect(requested_symbol, true))
+     {
+      SendRiskSnapshotResult(request_id, 2, "", "risk_snapshot_params_invalid", 0);
+      return;
+     }
+   long captured_at = ((long)TimeGMT()) * 1000;
+   long server_offset_msc = ((long)TimeCurrent() - (long)TimeGMT()) * 1000;
+   long raw_start = requested_cursor_time > 0 ? requested_cursor_time
+      : (baseline_utc_msc > 0 ? baseline_utc_msc : captured_at);
+   long cursor_time = requested_cursor_time > 0 ? requested_cursor_time : raw_start;
+   long cursor_ticket = requested_cursor_time > 0 ? requested_cursor_ticket : 0;
+   long through_time = cursor_time;
+   long through_ticket = cursor_ticket;
+   string positions = "[", pending = "[", instruments = "", seen_symbols = "";
+   bool first_position = true, first_pending = true;
+   AddRiskInstrument(requested_symbol, instruments, seen_symbols);
+   int active_total = OrdersTotal();
+   for(int active_index = 0; active_index < active_total; active_index++)
+     {
+      if(!OrderSelect(active_index, SELECT_BY_POS, MODE_TRADES)) continue;
+      int active_type = OrderType();
+      AddRiskInstrument(OrderSymbol(), instruments, seen_symbols);
+      if(active_type == OP_BUY || active_type == OP_SELL)
+        {
+         if(!first_position) positions += ",";
+         double current_price = MarketInfo(OrderSymbol(), active_type == OP_BUY ? MODE_BID : MODE_ASK);
+         positions += "{\"ticket\":" + IntegerToString(OrderTicket())
+            + ",\"identifier\":" + IntegerToString(OrderTicket())
+            + ",\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\""
+            + ",\"type\":\"" + (active_type == OP_BUY ? "buy" : "sell") + "\""
+            + ",\"volume\":" + JsonNumber(OrderLots())
+            + ",\"price_open\":" + JsonNumber(OrderOpenPrice())
+            + ",\"price_current\":" + JsonNumber(current_price)
+            + ",\"profit\":" + JsonNumber(OrderProfit())
+            + ",\"swap\":" + JsonNumber(OrderSwap()) + "}";
+         first_position = false;
+        }
+      else if(active_type >= OP_BUYLIMIT && active_type <= OP_SELLSTOP)
+        {
+         if(!first_pending) pending += ",";
+         pending += "{\"ticket\":" + IntegerToString(OrderTicket())
+            + ",\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\""
+            + ",\"type\":\"" + PendingTypeName(active_type) + "\""
+            + ",\"volume\":" + JsonNumber(OrderLots())
+            + ",\"volume_current\":" + JsonNumber(OrderLots())
+            + ",\"volume_initial\":" + JsonNumber(OrderLots())
+            + ",\"price\":" + JsonNumber(OrderOpenPrice()) + "}";
+         first_pending = false;
+        }
+     }
+   positions += "]"; pending += "]";
+
+   string closed = "[", events = "[", incomplete_reasons = "[";
+   bool first_closed = true, first_event = true, first_reason = true;
+   int scanned_count = 0, new_count = 0;
+   int history_total = OrdersHistoryTotal();
+   for(int history_index = 0; history_index < history_total; history_index++)
+     {
+      if(!OrderSelect(history_index, SELECT_BY_POS, MODE_HISTORY)) continue;
+      int history_type = OrderType();
+      if(history_type != OP_BUY && history_type != OP_SELL && history_type != 6 && history_type != 7)
+         continue;
+      datetime event_time = OrderCloseTime() > 0 ? OrderCloseTime() : OrderOpenTime();
+      long close_utc_msc = ((long)event_time) * 1000 - server_offset_msc;
+      if(close_utc_msc < raw_start - 300000) continue;
+      scanned_count++;
+      int history_ticket = OrderTicket();
+      if(!CursorAfter(close_utc_msc, history_ticket, cursor_time, cursor_ticket)) continue;
+      new_count++;
+      if(CursorAfter(close_utc_msc, history_ticket, through_time, through_ticket))
+        {
+         through_time = close_utc_msc;
+         through_ticket = history_ticket;
+        }
+      double net = OrderProfit() + OrderCommission() + OrderSwap();
+      if(history_type == OP_BUY || history_type == OP_SELL)
+        {
+         if(!first_closed) closed += ",";
+         closed += "{\"position_id\":" + IntegerToString(history_ticket)
+            + ",\"close_time_msc\":" + JsonLong(close_utc_msc)
+            + ",\"close_time_utc_msc\":" + JsonLong(close_utc_msc)
+            + ",\"close_deal_ticket\":" + IntegerToString(history_ticket)
+            + ",\"business_date\":\"" + UtcBusinessDate(close_utc_msc) + "\""
+            + ",\"net\":" + JsonNumber(net) + "}";
+         first_closed = false;
+        }
+      else
+        {
+         if(!first_event) events += ",";
+         events += "{\"ticket\":" + IntegerToString(history_ticket)
+            + ",\"time_msc\":" + JsonLong(close_utc_msc)
+            + ",\"business_date\":\"" + UtcBusinessDate(close_utc_msc) + "\""
+            + ",\"deal_type\":" + IntegerToString(history_type)
+            + ",\"category\":\"capital\",\"amount\":" + JsonNumber(net) + "}";
+         first_event = false;
+        }
+     }
+   closed += "]"; events += "]"; incomplete_reasons += "]";
+
+   string broker_calculation = "null", warnings = "[]";
+   if(proposed_symbol != "" && proposed_volume_value != ""
+      && proposed_entry_value != "" && proposed_sl_value != "")
+      warnings = "[\"mt4_broker_calculation_unavailable\"]";
+
+   long observed_at = ((long)MarketInfo(requested_symbol, MODE_TIME)) * 1000 - server_offset_msc;
+   if(observed_at <= 0) observed_at = captured_at;
+   int offset_minutes = (int)(server_offset_msc / 60000);
+   string account = "{\"login\":" + IntegerToString(AccountNumber())
+      + ",\"server\":\"" + JsonEscape(AccountServer()) + "\""
+      + ",\"currency\":\"" + JsonEscape(AccountCurrency()) + "\""
+      + ",\"balance\":" + JsonNumber(AccountBalance())
+      + ",\"equity\":" + JsonNumber(AccountEquity())
+      + ",\"credit\":" + JsonNumber(AccountCredit())
+      + ",\"profit\":" + JsonNumber(AccountProfit())
+      + ",\"margin\":" + JsonNumber(AccountMargin())
+      + ",\"margin_free\":" + JsonNumber(AccountFreeMargin())
+      + ",\"margin_level\":" + JsonNumber(AccountMargin() > 0 ? AccountEquity() / AccountMargin() * 100 : 0)
+      + ",\"leverage\":" + IntegerToString(AccountLeverage())
+      + ",\"margin_mode\":0,\"margin_so_mode\":" + IntegerToString(AccountStopoutMode())
+      + ",\"margin_so_call\":" + JsonNumber(AccountStopoutLevel())
+      + ",\"margin_so_so\":" + JsonNumber(AccountStopoutLevel()) + "}";
+   string payload = "{\"snapshot_version\":1,\"source\":\"mt4\",\"complete\":true"
+      + ",\"incomplete_reasons\":" + incomplete_reasons + ",\"warnings\":" + warnings
+      + ",\"business_date\":\"" + UtcBusinessDate(observed_at) + "\""
+      + ",\"mt4_time_msc\":" + JsonLong(observed_at)
+      + ",\"time_msc\":" + JsonLong(observed_at)
+      + ",\"time_utc_msc\":" + JsonLong(observed_at)
+      + ",\"timezone_offset_minutes\":" + IntegerToString(offset_minutes)
+      + ",\"clock_status\":\"offset_calibrated\",\"clock_residual_ms\":0"
+      + ",\"captured_at_utc_msc\":" + JsonLong(captured_at)
+      + ",\"account\":" + account + ",\"positions\":" + positions
+      + ",\"pending\":" + pending + ",\"instruments\":{" + instruments + "}"
+      + ",\"increment\":{\"requested_cursor\":{\"time_msc\":" + JsonLong(requested_cursor_time)
+      + ",\"ticket\":" + JsonLong(requested_cursor_ticket) + "}"
+      + ",\"through_cursor\":{\"time_msc\":" + JsonLong(through_time)
+      + ",\"ticket\":" + JsonLong(through_ticket) + "}"
+      + ",\"closed_positions\":" + closed + ",\"account_events\":" + events
+      + ",\"scanned_deal_count\":" + IntegerToString(scanned_count)
+      + ",\"new_deal_count\":" + IntegerToString(new_count) + "}"
+      + ",\"broker_calculation\":" + broker_calculation + "}";
+   SendRiskSnapshotResult(request_id, 1, payload, "", observed_at);
+  }
+
+void SendRiskSnapshotResult(const string request_id, const int status,
+   const string payload_json, const string error_code, const long observed_at)
+  {
+   uchar response[];
+   AppendInt32(response, MSG_RISK_SNAPSHOT); AppendUtf8(response, request_id);
+   AppendInt64(response, observed_at > 0 ? observed_at : ((long)TimeGMT()) * 1000);
+   AppendInt32(response, status); AppendUtf8(response, payload_json); AppendUtf8(response, error_code);
    if(!WriteFrame(response)) DisconnectPipe();
   }
 

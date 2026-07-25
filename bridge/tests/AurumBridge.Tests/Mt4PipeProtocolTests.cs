@@ -205,6 +205,52 @@ public sealed class Mt4PipeProtocolTests
     }
 
     [TestMethod]
+    public void RiskSnapshotRequestAndResponseRoundTripWithDualCursor()
+    {
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_risk_01", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_risk_01", TerminalInstanceId = "mt4_terminal_codec_01",
+            AccountRef = new("Broker-Demo", "12345678"), ConnectionEpoch = 1,
+            Action = "risk_snapshot", Params = JsonSerializer.SerializeToElement(new
+            {
+                symbol = "XAUUSD", last_deal_time_msc = 100L, last_deal_ticket = 7L,
+                baseline_from_utc_msc = 0L,
+                proposed_order = new { symbol = "XAUUSD", order_type = "buy", volume = 0.1, entry_price = 2300, sl = 2290 },
+            }),
+        };
+        var local = Mt4PipeProtocol.CreateRiskSnapshotRequest(request);
+        var decodedRequest = Mt4PipeProtocol.DecodeRiskSnapshotRequest(
+            Mt4PipeProtocol.EncodeRiskSnapshotRequest(local));
+        var decodedResponse = Mt4PipeProtocol.DecodeRiskSnapshot(
+            Mt4PipeProtocol.EncodeRiskSnapshot(new(
+                request.RequestId, 1_800_000_000_100, "succeeded",
+                JsonSerializer.SerializeToElement(new { snapshot_version = 1, complete = true }), null)));
+
+        Assert.AreEqual(100L, decodedRequest.LastDealTimeMsc);
+        Assert.AreEqual(7L, decodedRequest.LastDealTicket);
+        Assert.AreEqual("buy", decodedRequest.ProposedOrderType);
+        Assert.AreEqual(1, decodedResponse.Payload!.Value.GetProperty("snapshot_version").GetInt32());
+    }
+
+    [TestMethod]
+    public void RiskSnapshotRejectsMalformedProposedOrderBeforeEaIo()
+    {
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_risk_bad_01", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_risk_bad_01", TerminalInstanceId = "mt4_terminal_codec_01",
+            AccountRef = new("Broker-Demo", "12345678"), ConnectionEpoch = 1,
+            Action = "risk_snapshot",
+            Params = JsonSerializer.SerializeToElement(new { symbol = "XAUUSD", proposed_order = "invalid" }),
+        };
+
+        var error = Assert.ThrowsExactly<InvalidDataException>(() =>
+            Mt4PipeProtocol.CreateRiskSnapshotRequest(request));
+        Assert.AreEqual("mt4_risk_snapshot_request_invalid", error.Message);
+    }
+
+    [TestMethod]
     public void QuoteRequestAndResponseRoundTripWithStrictRoute()
     {
         var request = Mt4PipeProtocol.CreateQuoteRequest(QuoteRequest());

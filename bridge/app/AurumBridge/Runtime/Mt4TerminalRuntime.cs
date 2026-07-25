@@ -150,9 +150,27 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        if (request.Action is not ("rates" or "symbol_snapshot"))
+        if (request.Action is not ("rates" or "symbol_snapshot" or "risk_snapshot"))
         {
             return RejectedData(request, "terminal_data_action_unavailable");
+        }
+        if (request.Action == "risk_snapshot")
+        {
+            Mt4RiskSnapshotRequest riskRequest;
+            try
+            {
+                riskRequest = Mt4PipeProtocol.CreateRiskSnapshotRequest(request);
+            }
+            catch (InvalidDataException error)
+            {
+                return RejectedData(request, error.Message);
+            }
+            var risk = await _connection.GetRiskSnapshotAsync(riskRequest, cancellationToken);
+            if (risk.RequestId != request.RequestId)
+            {
+                throw new InvalidDataException("mt4_risk_snapshot_route_mismatch");
+            }
+            return DataResponse(request, risk.ObservedAtUtcMsc, risk.Status, risk.Payload, risk.ErrorCode);
         }
         if (request.Action == "symbol_snapshot")
         {
