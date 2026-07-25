@@ -107,6 +107,31 @@ public sealed class BridgeCommandDispatcherTests
         Assert.IsNotNull(await _testStore.Store.GetExecutionReceiptAsync(result.CommandId));
     }
 
+    [TestMethod]
+    public async Task PauseAtomicallyRejectsNewAdmissionAndDrainsExistingCommand()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dispatcher = Dispatcher(async (command, _) =>
+        {
+            await release.Task;
+            return Success(command);
+        });
+        var running = dispatcher.DispatchAsync(Command());
+        await WaitUntilAsync(() => dispatcher.InFlightCount == 1);
+
+        var drain = dispatcher.PauseAndDrainAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsExactlyAsync<BridgeCommandAdmissionPausedException>(() =>
+            dispatcher.DispatchAsync(Command("command_01JDISPATCH04")));
+        Assert.IsFalse(drain.IsCompleted);
+        release.SetResult();
+        await running;
+        await drain;
+
+        Assert.AreEqual(0, dispatcher.InFlightCount);
+        dispatcher.Resume();
+        Assert.AreEqual("succeeded", (await dispatcher.DispatchAsync(Command("command_01JDISPATCH05"))).Status);
+    }
+
     private BridgeCommandDispatcher Dispatcher(TerminalCommandHandler handler) => new(
         _testStore.Store,
         terminalId => terminalId == "terminal_01JDISPATCH1" ? Terminal() : null,
@@ -149,6 +174,15 @@ public sealed class BridgeCommandDispatcherTests
         CompletedAtUtcMsc = Now + 1,
         Evidence = new() { ObservedAtUtcMsc = Now + 1 },
     };
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (!condition())
+        {
+            await Task.Delay(10, timeout.Token);
+        }
+    }
 
     private sealed class MockHandler
     {

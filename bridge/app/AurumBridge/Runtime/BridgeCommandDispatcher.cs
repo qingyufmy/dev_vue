@@ -9,6 +9,9 @@ public delegate Task<CommandResultMessage> TerminalCommandHandler(
     CommandMessage command,
     CancellationToken cancellationToken);
 
+public sealed class BridgeCommandAdmissionPausedException()
+    : InvalidOperationException("bridge_command_admission_paused");
+
 public sealed class BridgeCommandDispatcher
 {
     private static readonly HashSet<string> SupportedActions = new(StringComparer.Ordinal)
@@ -25,6 +28,8 @@ public sealed class BridgeCommandDispatcher
     private readonly TerminalCommandHandler _handler;
     private readonly Func<long> _clock;
     private readonly ConcurrentDictionary<string, Lazy<Task<CommandResultMessage>>> _inFlight = new(StringComparer.Ordinal);
+    private readonly object _admissionLock = new();
+    private bool _acceptingCommands = true;
 
     public BridgeCommandDispatcher(
         BridgeStore store,
@@ -49,9 +54,17 @@ public sealed class BridgeCommandDispatcher
             return existing;
         }
 
-        var operation = _inFlight.GetOrAdd(command.CommandId, _ => new Lazy<Task<CommandResultMessage>>(
-            () => DispatchOnceAsync(command, cancellationToken),
-            LazyThreadSafetyMode.ExecutionAndPublication));
+        Lazy<Task<CommandResultMessage>> operation;
+        lock (_admissionLock)
+        {
+            if (!_acceptingCommands)
+            {
+                throw new BridgeCommandAdmissionPausedException();
+            }
+            operation = _inFlight.GetOrAdd(command.CommandId, _ => new Lazy<Task<CommandResultMessage>>(
+                () => DispatchOnceAsync(command, cancellationToken),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+        }
         try
         {
             return await operation.Value;
@@ -59,6 +72,39 @@ public sealed class BridgeCommandDispatcher
         finally
         {
             _inFlight.TryRemove(new KeyValuePair<string, Lazy<Task<CommandResultMessage>>>(command.CommandId, operation));
+        }
+    }
+
+    public int InFlightCount => _inFlight.Count;
+
+    public async Task PauseAndDrainAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        }
+        lock (_admissionLock)
+        {
+            _acceptingCommands = false;
+        }
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (!_inFlight.IsEmpty)
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw new TimeoutException("bridge_command_drain_timeout");
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken);
+        }
+    }
+
+    public void Resume()
+    {
+        lock (_admissionLock)
+        {
+            _acceptingCommands = true;
         }
     }
 
