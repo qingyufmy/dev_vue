@@ -3747,7 +3747,7 @@ function renderBridgePairing() {
       : {
           kind: 'ready',
           title: '等待您的确认',
-          detail: '请先核对下方授权码与桌面端完全一致。',
+          detail: '请确认下方账户无误，然后完成首次连接。',
         }
 
   mainContent.innerHTML = `
@@ -3764,7 +3764,7 @@ function renderBridgePairing() {
         <div class="bridge-pair-code" aria-label="本次授权码">
           <span>本次授权码</span>
           <strong>${escapeHtml(userCode || '---- ----')}</strong>
-          <small>只在桌面端显示相同代码时确认</small>
+          <small>由 AURUM Bridge 自动带入，仅本次授权有效</small>
         </div>
 
         <div class="bridge-pair-account">
@@ -3775,7 +3775,7 @@ function renderBridgePairing() {
         <ul class="bridge-pair-safety" aria-label="连接权限说明">
           <li><span aria-hidden="true">✓</span> 桥接软件不会读取或保存您的登录密码</li>
           <li><span aria-hidden="true">✓</span> 本次授权码 10 分钟内有效，并且只能使用一次</li>
-          <li><span aria-hidden="true">✓</span> 不认识此操作或代码不一致时，请不要确认</li>
+          <li><span aria-hidden="true">✓</span> 如果不是您刚刚启动的连接，请不要确认</li>
         </ul>
 
         <div class="bridge-pair-status bridge-pair-status-${initialState.kind}" id="bridgePairStatus" role="status" aria-live="polite">

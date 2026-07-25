@@ -15,7 +15,8 @@ describe('Bridge browser pairing page', () => {
   it('requires a matching one-time user code and calls only the approval API', () => {
     expect(main).toContain("/^[A-HJ-NP-Z2-9]{8}$/")
     expect(main).toContain("api.post('/api/auth/bridge-pair/approve', { userCode })")
-    expect(main).toContain('只在桌面端显示相同代码时确认')
+    expect(main).toContain('由 AURUM Bridge 自动带入，仅本次授权有效')
+    expect(main).toContain('请确认下方账户无误，然后完成首次连接。')
     expect(main).not.toContain("api.post('/api/auth/bridge-session'")
   })
 
@@ -29,7 +30,7 @@ describe('Bridge browser pairing page', () => {
   })
 
   it('cache-busts both assets that implement the pairing page', () => {
-    expect(index).toContain('/src/main.js?v=20260726bridgepair1')
-    expect(index).toContain('/src/style.css?v=20260726bridgepair1')
+    expect(index).toContain('/src/main.js?v=20260726bridgepair2')
+    expect(index).toContain('/src/style.css?v=20260726bridgepair2')
   })
 })
