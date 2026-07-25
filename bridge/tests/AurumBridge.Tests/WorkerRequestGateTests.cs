@@ -48,4 +48,23 @@ public sealed class WorkerRequestGateTests
         await Assert.ThrowsExactlyAsync<TaskCanceledException>(async () => await cancelled);
         using var nextLease = await next.WaitAsync(TimeSpan.FromSeconds(1));
     }
+
+    [TestMethod]
+    public async Task AFullWaitQueueAppliesBackpressureWithoutDroppingRequests()
+    {
+        var gate = new WorkerRequestGate(tradeCapacity:1, dataCapacity:1);
+        var current = await gate.EnterAsync(WorkerRequestPriority.Data);
+        var firstWaiting = gate.EnterAsync(WorkerRequestPriority.Data).AsTask();
+        var capacityBlocked = gate.EnterAsync(WorkerRequestPriority.Data).AsTask();
+
+        Assert.IsFalse(firstWaiting.IsCompleted);
+        Assert.IsFalse(capacityBlocked.IsCompleted);
+
+        current.Dispose();
+        var firstLease = await firstWaiting.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.IsFalse(capacityBlocked.IsCompleted);
+
+        firstLease.Dispose();
+        using var finalLease = await capacityBlocked.WaitAsync(TimeSpan.FromSeconds(1));
+    }
 }

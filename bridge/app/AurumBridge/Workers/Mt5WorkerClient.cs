@@ -25,27 +25,52 @@ public interface IMt5WorkerClient : IAsyncDisposable
 public sealed class WorkerRequestGate
 {
     private readonly object _sync = new();
-    private readonly Queue<TaskCompletionSource<IDisposable>> _trade = new();
-    private readonly Queue<TaskCompletionSource<IDisposable>> _data = new();
+    private readonly Queue<Waiter> _trade = new();
+    private readonly Queue<Waiter> _data = new();
+    private readonly SemaphoreSlim _tradeSlots;
+    private readonly SemaphoreSlim _dataSlots;
     private bool _held;
 
-    public ValueTask<IDisposable> EnterAsync(
+    public WorkerRequestGate(int tradeCapacity = 128, int dataCapacity = 128)
+    {
+        if (tradeCapacity <= 0 || dataCapacity <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tradeCapacity));
+        }
+        _tradeSlots = new(tradeCapacity, tradeCapacity);
+        _dataSlots = new(dataCapacity, dataCapacity);
+    }
+
+    public async ValueTask<IDisposable> EnterAsync(
         WorkerRequestPriority priority,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        TaskCompletionSource<IDisposable>? waiter = null;
         lock (_sync)
         {
             if (!_held)
             {
                 _held = true;
-                return ValueTask.FromResult<IDisposable>(new Lease(this));
+                return new Lease(this);
             }
-            waiter = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        var slots = priority == WorkerRequestPriority.Trade ? _tradeSlots : _dataSlots;
+        await slots.WaitAsync(cancellationToken);
+        Waiter waiter;
+        lock (_sync)
+        {
+            if (!_held)
+            {
+                _held = true;
+                slots.Release();
+                return new Lease(this);
+            }
+            waiter = new(
+                new(TaskCreationOptions.RunContinuationsAsynchronously),
+                slots);
             (priority == WorkerRequestPriority.Trade ? _trade : _data).Enqueue(waiter);
         }
-        return WaitAsync(waiter, cancellationToken);
+        return await WaitAsync(waiter.Completion, cancellationToken);
     }
 
     private static async ValueTask<IDisposable> WaitAsync(
@@ -65,7 +90,8 @@ public sealed class WorkerRequestGate
             {
                 var queue = _trade.Count > 0 ? _trade : _data;
                 var waiter = queue.Dequeue();
-                if (waiter.TrySetResult(new Lease(this)))
+                waiter.Slots.Release();
+                if (waiter.Completion.TrySetResult(new Lease(this)))
                 {
                     return;
                 }
@@ -73,6 +99,10 @@ public sealed class WorkerRequestGate
             _held = false;
         }
     }
+
+    private sealed record Waiter(
+        TaskCompletionSource<IDisposable> Completion,
+        SemaphoreSlim Slots);
 
     private sealed class Lease(WorkerRequestGate owner) : IDisposable
     {
