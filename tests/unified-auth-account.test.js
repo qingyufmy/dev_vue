@@ -98,7 +98,7 @@ describe('unified authentication and account entry points', () => {
     expect(main).toContain("confirmHint.textContent = '两次输入的密码不一致'")
     expect(main).toContain("confirmHint.textContent = '两次输入的密码一致'")
     expect(main.match(/getAuthPasswordRuleError\(data\.password\)/g)).toHaveLength(2)
-    expect(mainHtml).toContain('20260724authrules1')
+    expect(mainHtml).toContain('20260726bridgepair1')
   })
 
   it('shows server-authoritative membership access states after AI login', () => {

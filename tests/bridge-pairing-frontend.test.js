@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 const main = readFileSync(new URL('../public/src/main.js', import.meta.url), 'utf8')
 const styles = readFileSync(new URL('../public/src/style.css', import.meta.url), 'utf8')
+const index = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
 
 describe('Bridge browser pairing page', () => {
   it('keeps the pairing route behind the existing login return flow', () => {
@@ -25,5 +26,10 @@ describe('Bridge browser pairing page', () => {
     expect(styles).toContain('.bridge-pair-status-success')
     expect(styles).toContain('@media (max-width: 640px)')
     expect(styles).toContain('@media (prefers-reduced-motion: reduce)')
+  })
+
+  it('cache-busts both assets that implement the pairing page', () => {
+    expect(index).toContain('/src/main.js?v=20260726bridgepair1')
+    expect(index).toContain('/src/style.css?v=20260726bridgepair1')
   })
 })
