@@ -57,20 +57,26 @@ const router = Router()
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const BRIDGE_VERSION = readFileSync(join(__dirname, '../../../VERSION'), 'utf-8').trim()
+const BRIDGE_RELEASE = Object.freeze({
+  buildDate: '2026-07-25',
+  fullUrl: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.8.exe',
+  fileSize: 46703736,
+  sha256: 'BEC2344BE29E49D367963C1CFC01F8CA53B2740374EB825668A60293284D59D2'
+})
 
 router.get('/bridge/version', (req, res) => {
   res.json({
     version: BRIDGE_VERSION,
-    build_date: new Date().toISOString().slice(0, 10),
+    build_date: BRIDGE_RELEASE.buildDate,
     changelog: `${BRIDGE_VERSION}: Windows 客户端异步网络、托盘唤回与 WebSocket 边界加固`,
     bridge_ticket_required: process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN !== '1',
     legacy_bridge_query_token_enabled: process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN === '1',
     auto_update_enabled: false,
     auto_update_disabled_reason: 'signed_update_manifest_required',
     updater_url: '',
-    full_url: '',
-    file_size: 0,
-    sha256: ''
+    full_url: BRIDGE_RELEASE.fullUrl,
+    file_size: BRIDGE_RELEASE.fileSize,
+    sha256: BRIDGE_RELEASE.sha256
   })
 })
 
