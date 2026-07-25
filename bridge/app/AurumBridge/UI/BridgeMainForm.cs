@@ -10,6 +10,7 @@ public sealed class BridgeMainForm : Form
     private readonly FlowLayoutPanel _terminalList = new();
     private readonly Button _pairButton = new();
     private readonly Button _detectButton = new();
+    private readonly Button _logButton = new();
     private readonly Button _exitButton = new();
     private bool _allowClose;
 
@@ -30,6 +31,7 @@ public sealed class BridgeMainForm : Form
 
     public event EventHandler? PairRequested;
     public event EventHandler? RedetectRequested;
+    public event EventHandler? OpenLogsRequested;
     public event EventHandler? ExitRequested;
 
     public void ApplyStatus(BridgeApplicationStatus status)
@@ -167,13 +169,16 @@ public sealed class BridgeMainForm : Form
         };
         ConfigureButton(_pairButton, "连接账号", primary: true);
         ConfigureButton(_detectButton, "重新检测", primary: false);
+        ConfigureButton(_logButton, "查看日志", primary: false);
         ConfigureButton(_exitButton, "退出桥接", primary: false);
         _pairButton.Visible = false;
         _pairButton.Click += (_, _) => PairRequested?.Invoke(this, EventArgs.Empty);
         _detectButton.Click += (_, _) => RedetectRequested?.Invoke(this, EventArgs.Empty);
+        _logButton.Click += (_, _) => OpenLogsRequested?.Invoke(this, EventArgs.Empty);
         _exitButton.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
         actions.Controls.Add(_pairButton);
         actions.Controls.Add(_detectButton);
+        actions.Controls.Add(_logButton);
         actions.Controls.Add(_exitButton);
         root.Controls.Add(actions);
         Controls.Add(root);

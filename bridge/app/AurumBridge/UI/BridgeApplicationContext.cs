@@ -8,16 +8,19 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly BridgeMainForm _form;
     private readonly NotifyIcon _notifyIcon;
     private readonly BridgeApplicationController _controller;
+    private readonly BridgeFileLogger _logger;
     private readonly CancellationTokenSource _stop = new();
     private bool _shuttingDown;
 
     public BridgeApplicationContext()
     {
         var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
+        _logger = new(Path.Combine(paths.DataDirectory, "logs"));
         _controller = new(paths);
         _form = new();
         _form.PairRequested += HandlePairRequested;
         _form.RedetectRequested += (_, _) => _controller.RequestRedetect();
+        _form.OpenLogsRequested += HandleOpenLogsRequested;
         _form.ExitRequested += HandleExitRequested;
         _controller.StatusChanged += HandleStatusChanged;
 
@@ -34,11 +37,15 @@ public sealed class BridgeApplicationContext : ApplicationContext
         };
         _notifyIcon.DoubleClick += (_, _) => _form.ShowFromTray();
         _form.Show();
+        _logger.Info("bridge_started");
         _ = ObserveControllerAsync(_controller.RunAsync(_stop.Token));
     }
 
     private void HandleStatusChanged(BridgeApplicationStatus status)
     {
+        _logger.Info(
+            "bridge_status_changed",
+            $"phase={status.Phase}; terminals={status.Terminals.Count}; detail={status.DetailCode ?? "none"}");
         if (_form.IsDisposed)
         {
             return;
@@ -54,6 +61,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private async void HandlePairRequested(object? sender, EventArgs eventArgs)
     {
+        _logger.Info("pairing_started");
         _form.SetPairingBusy(true);
         try
         {
@@ -65,12 +73,14 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 });
                 return Task.CompletedTask;
             }, _stop.Token);
+            _logger.Info("pairing_completed");
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
         }
         catch (Exception error)
         {
+            _logger.Error("pairing_failed", error);
             MessageBox.Show(
                 _form,
                 BridgeUiText.DescribeError(error),
@@ -84,6 +94,30 @@ public sealed class BridgeApplicationContext : ApplicationContext
             {
                 _form.SetPairingBusy(false);
             }
+        }
+    }
+
+    private void HandleOpenLogsRequested(object? sender, EventArgs eventArgs)
+    {
+        try
+        {
+            Directory.CreateDirectory(_logger.LogDirectory);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                ArgumentList = { _logger.LogDirectory },
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception error)
+        {
+            _logger.Error("open_logs_failed", error);
+            MessageBox.Show(
+                _form,
+                "暂时无法打开日志目录，请稍后重试。",
+                "查看日志",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
     }
 
@@ -105,6 +139,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             return;
         }
         _shuttingDown = true;
+        _logger.Info("bridge_stopping");
         _stop.Cancel();
         await _controller.DisposeAsync();
         _notifyIcon.Visible = false;
@@ -113,6 +148,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.Close();
         _form.Dispose();
         _stop.Dispose();
+        _logger.Dispose();
         ExitThread();
     }
 
@@ -127,6 +163,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         catch (Exception error)
         {
+            _logger.Error("bridge_runtime_failed", error);
             if (!_form.IsDisposed)
             {
                 _form.BeginInvoke(() => MessageBox.Show(
