@@ -52,14 +52,85 @@ public sealed class BridgeInboundRequestDispatcherTests
             secondStarted.TrySetResult();
         });
 
-        await dispatcher.RouteAsync(Message("command", "first"));
+        await dispatcher.RouteAsync(Message("command", "first", "terminal_a"));
         await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await dispatcher.RouteAsync(Message("command", "second"));
+        await dispatcher.RouteAsync(Message("command", "second", "terminal_a"));
 
         await Assert.ThrowsExactlyAsync<TimeoutException>(
             () => secondStarted.Task.WaitAsync(TimeSpan.FromMilliseconds(100)));
         releaseFirst.TrySetResult();
         await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [TestMethod]
+    public async Task CommandsForDifferentTerminalsRunIndependently()
+    {
+        var firstStarted = Signal();
+        var releaseFirst = Signal();
+        var secondStarted = Signal();
+        await using var dispatcher = new BridgeInboundRequestDispatcher(async (payload, cancellationToken) =>
+        {
+            using var document = JsonDocument.Parse(payload);
+            var terminal = document.RootElement.GetProperty("terminal_instance_id").GetString();
+            if (terminal == "terminal_a")
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task.WaitAsync(cancellationToken);
+                return;
+            }
+            secondStarted.TrySetResult();
+        });
+
+        await dispatcher.RouteAsync(Message("command", "first", "terminal_a"));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await dispatcher.RouteAsync(Message("command", "second", "terminal_b"));
+
+        await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        releaseFirst.TrySetResult();
+    }
+
+    [TestMethod]
+    public async Task DataCapacityCountsRequestsAlreadyExecuting()
+    {
+        var firstStarted = Signal();
+        var releaseFirst = Signal();
+        await using var dispatcher = new BridgeInboundRequestDispatcher(
+            async (_, cancellationToken) =>
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task.WaitAsync(cancellationToken);
+            },
+            dataCapacity:1);
+
+        await dispatcher.RouteAsync(Message("data_request", "first"));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            dispatcher.RouteAsync(Message("quote_request", "second")).AsTask());
+        Assert.AreEqual("bridge_inbound_data_capacity_exceeded", error.Message);
+        releaseFirst.TrySetResult();
+    }
+
+    [TestMethod]
+    public async Task TradeCapacityCountsRequestsAlreadyExecuting()
+    {
+        var firstStarted = Signal();
+        var releaseFirst = Signal();
+        await using var dispatcher = new BridgeInboundRequestDispatcher(
+            async (_, cancellationToken) =>
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task.WaitAsync(cancellationToken);
+            },
+            tradeCapacity:1);
+
+        await dispatcher.RouteAsync(Message("command", "first", "terminal_a"));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            dispatcher.RouteAsync(Message("command", "second", "terminal_b")).AsTask());
+        Assert.AreEqual("bridge_inbound_trade_capacity_exceeded", error.Message);
+        releaseFirst.TrySetResult();
     }
 
     [TestMethod]
@@ -93,8 +164,17 @@ public sealed class BridgeInboundRequestDispatcherTests
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private static string Message(string type, string id = "message") =>
-        JsonSerializer.Serialize(new { v = 3, type, message_id = id });
+    private static string Message(
+        string type,
+        string id = "message",
+        string? terminalInstanceId = null) =>
+        JsonSerializer.Serialize(new
+        {
+            v = 3,
+            type,
+            message_id = id,
+            terminal_instance_id = terminalInstanceId,
+        });
 
     private static string? MessageType(string payload)
     {

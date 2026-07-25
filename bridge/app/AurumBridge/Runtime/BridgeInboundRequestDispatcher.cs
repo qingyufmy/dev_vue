@@ -7,14 +7,19 @@ public sealed class BridgeInboundRequestDispatcher : IAsyncDisposable
 {
     private const int DefaultTradeCapacity = 128;
     private const int DefaultDataCapacity = 96;
+    private const int DataWorkerCount = 4;
+    private const string InvalidTradeRoute = "__invalid_terminal_route__";
+
     private readonly Func<string, CancellationToken, Task> _routeHandler;
-    private readonly Channel<string> _tradeRequests;
     private readonly Channel<string> _dataRequests;
+    private readonly SemaphoreSlim _tradeSlots;
+    private readonly SemaphoreSlim _dataSlots;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly TaskCompletionSource _faulted = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly Task _tradeWorker;
-    private readonly Task _dataWorker;
+    private readonly object _tradeSync = new();
+    private readonly Dictionary<string, Task> _tradeTails = new(StringComparer.Ordinal);
+    private readonly Task[] _dataWorkers;
     private int _stopped;
 
     public BridgeInboundRequestDispatcher(
@@ -36,10 +41,18 @@ public sealed class BridgeInboundRequestDispatcher : IAsyncDisposable
         {
             throw new ArgumentOutOfRangeException(nameof(tradeCapacity));
         }
-        _tradeRequests = CreateQueue(tradeCapacity);
-        _dataRequests = CreateQueue(dataCapacity);
-        _tradeWorker = ConsumeAsync(_tradeRequests.Reader);
-        _dataWorker = ConsumeAsync(_dataRequests.Reader);
+        _tradeSlots = new(tradeCapacity, tradeCapacity);
+        _dataSlots = new(dataCapacity, dataCapacity);
+        _dataRequests = Channel.CreateBounded<string>(new BoundedChannelOptions(dataCapacity)
+        {
+            SingleReader = false,
+            SingleWriter = true,
+            FullMode = BoundedChannelFullMode.Wait,
+            AllowSynchronousContinuations = false,
+        });
+        _dataWorkers = Enumerable.Range(0, DataWorkerCount)
+            .Select(_ => ConsumeDataAsync())
+            .ToArray();
     }
 
     public Task Faulted => _faulted.Task;
@@ -50,26 +63,28 @@ public sealed class BridgeInboundRequestDispatcher : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(payloadJson);
         cancellationToken.ThrowIfCancellationRequested();
-        if (Volatile.Read(ref _stopped) != 0)
-        {
-            throw new InvalidOperationException("bridge_inbound_dispatcher_stopped");
-        }
+        ThrowIfStopped();
 
-        var priority = ReadRequestPriority(payloadJson);
-        if (priority is null)
+        var request = ReadRequestRoute(payloadJson);
+        if (request is null)
         {
             await _routeHandler(payloadJson, cancellationToken);
             return;
         }
-
-        var writer = priority == BridgeMessagePriority.Trade
-            ? _tradeRequests.Writer
-            : _dataRequests.Writer;
-        if (!writer.TryWrite(payloadJson))
+        if (request.Priority == BridgeMessagePriority.Trade)
         {
-            throw new InvalidDataException(priority == BridgeMessagePriority.Trade
-                ? "bridge_inbound_trade_capacity_exceeded"
-                : "bridge_inbound_data_capacity_exceeded");
+            ScheduleTrade(request.TerminalInstanceId ?? InvalidTradeRoute, payloadJson);
+            return;
+        }
+
+        if (!_dataSlots.Wait(0))
+        {
+            throw new InvalidDataException("bridge_inbound_data_capacity_exceeded");
+        }
+        if (!_dataRequests.Writer.TryWrite(payloadJson))
+        {
+            _dataSlots.Release();
+            throw new InvalidDataException("bridge_inbound_data_capacity_exceeded");
         }
     }
 
@@ -79,29 +94,73 @@ public sealed class BridgeInboundRequestDispatcher : IAsyncDisposable
         {
             return;
         }
-        _tradeRequests.Writer.TryComplete();
         _dataRequests.Writer.TryComplete();
         await _shutdown.CancelAsync();
-        await Task.WhenAll(_tradeWorker, _dataWorker);
+        Task[] tradeTails;
+        lock (_tradeSync)
+        {
+            tradeTails = _tradeTails.Values.ToArray();
+        }
+        await Task.WhenAll(_dataWorkers.Concat(tradeTails));
+        _tradeSlots.Dispose();
+        _dataSlots.Dispose();
         _shutdown.Dispose();
     }
 
-    private static Channel<string> CreateQueue(int capacity) =>
-        Channel.CreateBounded<string>(new BoundedChannelOptions(capacity)
+    private void ScheduleTrade(string terminalInstanceId, string payloadJson)
+    {
+        if (!_tradeSlots.Wait(0))
         {
-            SingleReader = true,
-            SingleWriter = true,
-            FullMode = BoundedChannelFullMode.Wait,
-            AllowSynchronousContinuations = false,
-        });
+            throw new InvalidDataException("bridge_inbound_trade_capacity_exceeded");
+        }
+        lock (_tradeSync)
+        {
+            if (Volatile.Read(ref _stopped) != 0 || _shutdown.IsCancellationRequested)
+            {
+                _tradeSlots.Release();
+                throw new InvalidOperationException("bridge_inbound_dispatcher_stopped");
+            }
+            var previous = _tradeTails.GetValueOrDefault(terminalInstanceId, Task.CompletedTask);
+            _tradeTails[terminalInstanceId] = RunTradeAsync(previous, payloadJson);
+        }
+    }
 
-    private async Task ConsumeAsync(ChannelReader<string> reader)
+    private async Task RunTradeAsync(Task previous, string payloadJson)
+    {
+        await Task.Yield();
+        try
+        {
+            await previous;
+            _shutdown.Token.ThrowIfCancellationRequested();
+            await _routeHandler(payloadJson, _shutdown.Token);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            await SignalFaultAsync(error);
+        }
+        finally
+        {
+            _tradeSlots.Release();
+        }
+    }
+
+    private async Task ConsumeDataAsync()
     {
         try
         {
-            await foreach (var payloadJson in reader.ReadAllAsync(_shutdown.Token))
+            await foreach (var payloadJson in _dataRequests.Reader.ReadAllAsync(_shutdown.Token))
             {
-                await _routeHandler(payloadJson, _shutdown.Token);
+                try
+                {
+                    await _routeHandler(payloadJson, _shutdown.Token);
+                }
+                finally
+                {
+                    _dataSlots.Release();
+                }
             }
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
@@ -109,14 +168,28 @@ public sealed class BridgeInboundRequestDispatcher : IAsyncDisposable
         }
         catch (Exception error)
         {
-            _faulted.TrySetException(error);
-            _tradeRequests.Writer.TryComplete(error);
+            await SignalFaultAsync(error);
+        }
+    }
+
+    private async Task SignalFaultAsync(Exception error)
+    {
+        if (_faulted.TrySetException(error))
+        {
             _dataRequests.Writer.TryComplete(error);
             await _shutdown.CancelAsync();
         }
     }
 
-    private static BridgeMessagePriority? ReadRequestPriority(string payloadJson)
+    private void ThrowIfStopped()
+    {
+        if (Volatile.Read(ref _stopped) != 0 || _shutdown.IsCancellationRequested)
+        {
+            throw new InvalidOperationException("bridge_inbound_dispatcher_stopped");
+        }
+    }
+
+    private static InboundRequestRoute? ReadRequestRoute(string payloadJson)
     {
         using var document = JsonDocument.Parse(payloadJson, new JsonDocumentOptions
         {
@@ -124,16 +197,26 @@ public sealed class BridgeInboundRequestDispatcher : IAsyncDisposable
             AllowTrailingCommas = false,
             CommentHandling = JsonCommentHandling.Disallow,
         });
-        if (!document.RootElement.TryGetProperty("type", out var typeElement)
+        var root = document.RootElement;
+        if (!root.TryGetProperty("type", out var typeElement)
             || typeElement.ValueKind != JsonValueKind.String)
         {
             return null;
         }
         return typeElement.GetString() switch
         {
-            "command" => BridgeMessagePriority.Trade,
-            "quote_request" or "data_request" => BridgeMessagePriority.Data,
+            "command" => new(
+                BridgeMessagePriority.Trade,
+                root.TryGetProperty("terminal_instance_id", out var terminalElement)
+                    && terminalElement.ValueKind == JsonValueKind.String
+                        ? terminalElement.GetString()
+                        : null),
+            "quote_request" or "data_request" => new(BridgeMessagePriority.Data, null),
             _ => null,
         };
     }
+
+    private sealed record InboundRequestRoute(
+        BridgeMessagePriority Priority,
+        string? TerminalInstanceId);
 }
