@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using AurumBridge.Runtime;
+using AurumBridge.Update;
 
 namespace AurumBridge.UI;
 
@@ -10,7 +11,9 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly BridgeApplicationController _controller;
     private readonly BridgeFileLogger _logger;
     private readonly BridgeSingleInstanceGuard _singleInstance;
+    private readonly BridgeUpdateCoordinator? _updateCoordinator;
     private readonly CancellationTokenSource _stop = new();
+    private Task? _updateTask;
     private bool _shuttingDown;
 
     public BridgeApplicationContext(BridgeSingleInstanceGuard singleInstance)
@@ -19,6 +22,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
         _logger = new(Path.Combine(paths.DataDirectory, "logs"));
         EnsureAutoStart();
+        _updateCoordinator = CreateUpdateCoordinator(paths.ServerBaseUri);
         _controller = new(paths);
         _form = new();
         _form.PairRequested += HandlePairRequested;
@@ -44,6 +48,23 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.Show();
         _logger.Info("bridge_started");
         _ = ObserveControllerAsync(_controller.RunAsync(_stop.Token));
+        if (_updateCoordinator is not null)
+        {
+            _updateTask = ObserveUpdatesAsync(_updateCoordinator, _stop.Token);
+        }
+    }
+
+    private BridgeUpdateCoordinator? CreateUpdateCoordinator(Uri serverBaseUri)
+    {
+        try
+        {
+            return BridgeUpdateCoordinator.CreateIfInstalled(AppContext.BaseDirectory, serverBaseUri);
+        }
+        catch (Exception error)
+        {
+            _logger.Error("update_initialization_failed", error);
+            return null;
+        }
     }
 
     private void EnsureAutoStart()
@@ -171,6 +192,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _shuttingDown = true;
         _logger.Info("bridge_stopping");
         _stop.Cancel();
+        if (_updateTask is not null)
+        {
+            await IgnoreCancellationAsync(_updateTask);
+        }
         await _controller.DisposeAsync();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
@@ -179,8 +204,111 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.Dispose();
         _stop.Dispose();
         _singleInstance.ActivationRequested -= HandleActivationRequested;
+        _updateCoordinator?.Dispose();
         _logger.Dispose();
         ExitThread();
+    }
+
+    private async Task ObserveUpdatesAsync(
+        BridgeUpdateCoordinator coordinator,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromMinutes(1), cancellationToken);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var staged = await coordinator.CheckAndStageAsync(cancellationToken);
+                    if (staged is not null)
+                    {
+                        _form.BeginInvoke(() => _ = ApplyStagedUpdateAsync(coordinator, staged));
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception error)
+                {
+                    _logger.Error("update_check_failed", error);
+                }
+                await Task.Delay(TimeSpan.FromHours(6), cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task ApplyStagedUpdateAsync(
+        BridgeUpdateCoordinator coordinator,
+        StagedRelease staged)
+    {
+        if (_shuttingDown)
+        {
+            return;
+        }
+        var admissionPaused = false;
+        var activationPrepared = false;
+        try
+        {
+            await _controller.PauseForUpdateAsync(TimeSpan.FromSeconds(30), _stop.Token);
+            admissionPaused = true;
+            await coordinator.PrepareActivationAsync(staged, _stop.Token);
+            activationPrepared = true;
+            _shuttingDown = true;
+            _logger.Info("update_activation_prepared", $"version={staged.Version}");
+            _stop.Cancel();
+            await _controller.DisposeAsync();
+            _singleInstance.ActivationRequested -= HandleActivationRequested;
+            _singleInstance.Dispose();
+            coordinator.StartLauncher();
+            _notifyIcon.Visible = false;
+            _notifyIcon.Dispose();
+            _form.AllowClose();
+            _form.Close();
+            _form.Dispose();
+            coordinator.Dispose();
+            _logger.Dispose();
+            ExitThread();
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("update_activation_failed", error);
+            if (admissionPaused && !activationPrepared)
+            {
+                _controller.ResumeAfterFailedUpdate();
+            }
+            if (activationPrepared && !_form.IsDisposed)
+            {
+                MessageBox.Show(
+                    _form,
+                    "更新已准备完成，但自动重启失败。请手动重新打开 AURUM Bridge。",
+                    "更新等待重启",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                _form.AllowClose();
+                _form.Close();
+                ExitThread();
+            }
+        }
+    }
+
+    private static async Task IgnoreCancellationAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private async Task ObserveControllerAsync(Task runTask)

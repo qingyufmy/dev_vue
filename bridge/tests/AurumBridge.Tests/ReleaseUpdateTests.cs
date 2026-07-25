@@ -121,6 +121,27 @@ public sealed class ReleaseUpdateTests
     }
 
     [TestMethod]
+    public async Task ReusesAnIdenticalPreviouslyStagedReleaseAfterRestart()
+    {
+        var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["core"] = Zip(("AURUMBridge.exe", "core")),
+        };
+        var handler = new PackageResponseHandler(packages);
+        using var http = new HttpClient(handler);
+        var installer = new ReleaseInstaller(_directory, new ReleaseStager(http));
+        var manifest = ManifestForPackages("3.1.0", packages);
+
+        var first = await installer.StageAsync(manifest, new Version(3, 0, 0));
+        var second = await installer.StageAsync(manifest, new Version(3, 0, 0));
+
+        Assert.IsNotNull(first);
+        Assert.IsNotNull(second);
+        Assert.AreEqual(first.VersionDirectory, second.VersionDirectory);
+        Assert.AreEqual(1, handler.Requests);
+    }
+
+    [TestMethod]
     public async Task RefusesDowngradeAndIncompatibleModulesBeforeDownloading()
     {
         var handler = new PackageResponseHandler(new Dictionary<string, byte[]>());
@@ -210,6 +231,25 @@ public sealed class ReleaseUpdateTests
         Assert.AreEqual("3.1.0", pointer.ActiveVersion);
         Assert.AreEqual("3.0.0", pointer.LastKnownGoodVersion);
         Assert.AreEqual("pending", pointer.Status);
+    }
+
+    [TestMethod]
+    public void ResolvesUpdatesOnlyFromACompleteInstalledLayout()
+    {
+        var applicationDirectory = Path.Combine(_directory, "versions", "3.0.0");
+        Directory.CreateDirectory(applicationDirectory);
+        File.WriteAllBytes(Path.Combine(_directory, "AURUMBridge.Launcher.exe"), []);
+        File.WriteAllText(Path.Combine(_directory, "release-public-key.pem"), "public-key");
+        File.WriteAllText(Path.Combine(_directory, "current.json"), "{}");
+
+        var environment = BridgeUpdateCoordinator.ResolveEnvironment(
+            applicationDirectory,
+            _ => new Version(1, 0, 0));
+
+        Assert.IsNotNull(environment);
+        Assert.AreEqual(new Version(3, 0, 0), environment.CurrentVersion);
+        Assert.AreEqual(new Version(1, 0, 0), environment.LauncherVersion);
+        Assert.IsNull(BridgeUpdateCoordinator.ResolveEnvironment(Path.Combine(_directory, "bin", "Debug")));
     }
 
     private static ReleaseManifest Manifest(string sha256, long size, string signature) => new()

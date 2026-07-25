@@ -9,6 +9,7 @@ public sealed class ReleaseInstaller(
     string installRoot,
     ReleaseStager stager)
 {
+    private const string ReleaseMarkerFileName = ".aurum-release.json";
     private readonly string _installRoot = Path.GetFullPath(installRoot);
     private readonly ReleaseStager _stager = stager ?? throw new ArgumentNullException(nameof(stager));
 
@@ -34,7 +35,12 @@ public sealed class ReleaseInstaller(
         EnsureDescendant(versionsRoot, finalVersionDirectory);
         if (Directory.Exists(finalVersionDirectory))
         {
-            throw new IOException("update_version_already_exists");
+            return await MatchesStagedReleaseAsync(
+                finalVersionDirectory,
+                manifest,
+                cancellationToken)
+                ? new(manifest.ReleaseVersion, finalVersionDirectory)
+                : throw new IOException("update_version_already_exists");
         }
 
         var operationId = Guid.NewGuid().ToString("N");
@@ -66,6 +72,17 @@ public sealed class ReleaseInstaller(
             {
                 throw new InvalidDataException("update_core_executable_missing");
             }
+            await using (var marker = new FileStream(
+                Path.Combine(temporaryVersionDirectory, ReleaseMarkerFileName),
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(marker, manifest, cancellationToken:cancellationToken);
+                await marker.FlushAsync(cancellationToken);
+            }
             Directory.CreateDirectory(versionsRoot);
             Directory.Move(temporaryVersionDirectory, finalVersionDirectory);
             return new(manifest.ReleaseVersion, finalVersionDirectory);
@@ -74,6 +91,40 @@ public sealed class ReleaseInstaller(
         {
             DeleteTemporaryDirectory(temporaryVersionDirectory, versionsRoot);
             DeleteTemporaryDirectory(downloadDirectory, Path.Combine(_installRoot, "staging"));
+        }
+    }
+
+    private static async Task<bool> MatchesStagedReleaseAsync(
+        string versionDirectory,
+        ReleaseManifest expected,
+        CancellationToken cancellationToken)
+    {
+        var executable = Path.Combine(versionDirectory, "AURUMBridge.exe");
+        var markerPath = Path.Combine(versionDirectory, ReleaseMarkerFileName);
+        if (!File.Exists(executable) || !File.Exists(markerPath))
+        {
+            return false;
+        }
+        try
+        {
+            await using var marker = new FileStream(
+                markerPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                4096,
+                FileOptions.Asynchronous);
+            var actual = await JsonSerializer.DeserializeAsync<ReleaseManifest>(
+                marker,
+                cancellationToken:cancellationToken);
+            return actual is not null
+                && actual.Signature == expected.Signature
+                && ReleaseManifestVerifier.Canonicalize(actual)
+                    == ReleaseManifestVerifier.Canonicalize(expected);
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

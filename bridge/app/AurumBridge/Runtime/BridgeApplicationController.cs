@@ -46,6 +46,8 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private Task? _runTask;
     private BridgeApplicationPhase _phase = BridgeApplicationPhase.Starting;
     private string? _detailCode;
+    private BridgeCommandDispatcher? _activeCommandDispatcher;
+    private bool _updatePreparation;
     private bool _disposed;
 
     public BridgeApplicationController(BridgeRuntimePaths paths)
@@ -102,6 +104,49 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         }
     }
 
+    public async Task PauseForUpdateAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        BridgeCommandDispatcher? dispatcher;
+        lock (_sync)
+        {
+            if (_updatePreparation)
+            {
+                throw new InvalidOperationException("bridge_update_already_preparing");
+            }
+            _updatePreparation = true;
+            dispatcher = _activeCommandDispatcher;
+        }
+        try
+        {
+            if (dispatcher is not null)
+            {
+                await dispatcher.PauseAndDrainAsync(timeout, cancellationToken);
+            }
+        }
+        catch
+        {
+            lock (_sync)
+            {
+                _updatePreparation = false;
+            }
+            dispatcher?.Resume();
+            throw;
+        }
+    }
+
+    public void ResumeAfterFailedUpdate()
+    {
+        BridgeCommandDispatcher? dispatcher;
+        lock (_sync)
+        {
+            _updatePreparation = false;
+            dispatcher = _activeCommandDispatcher;
+        }
+        dispatcher?.Resume();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -144,6 +189,16 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             await _store.InitializeAsync(stopping);
             while (!stopping.IsCancellationRequested)
             {
+                bool updatePreparation;
+                lock (_sync)
+                {
+                    updatePreparation = _updatePreparation;
+                }
+                if (updatePreparation)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), stopping);
+                    continue;
+                }
                 using var cycle = CancellationTokenSource.CreateLinkedTokenSource(stopping);
                 lock (_sync)
                 {
@@ -238,6 +293,18 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         }
 
         await using var host = new BridgeHost(_store, supervisors);
+        bool pauseForUpdate;
+        lock (_sync)
+        {
+            _activeCommandDispatcher = host.CommandDispatcher;
+            pauseForUpdate = _updatePreparation;
+        }
+        if (pauseForUpdate)
+        {
+            await host.CommandDispatcher.PauseAndDrainAsync(
+                TimeSpan.FromSeconds(30),
+                cancellationToken);
+        }
         var webSocket = new BridgeWebSocketClient(
             _store,
             host.CommandDispatcher,
@@ -261,6 +328,13 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         }
         finally
         {
+            lock (_sync)
+            {
+                if (ReferenceEquals(_activeCommandDispatcher, host.CommandDispatcher))
+                {
+                    _activeCommandDispatcher = null;
+                }
+            }
             runCancellation.Cancel();
             await IgnoreCancellationAsync(hostTask);
             await IgnoreCancellationAsync(connectionTask);
