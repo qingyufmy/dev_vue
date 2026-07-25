@@ -217,6 +217,35 @@ describe('Bridge v3 websocket gateway', () => {
     })
   })
 
+  it('marks a terminal ready only after all three full snapshots are acknowledged', async () => {
+    const { gateway } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    expect(gateway.listConnectedTerminals(42)[0].initial_sync_ready).toBe(false)
+
+    for (const [index, stream] of ['account', 'positions', 'orders'].entries()) {
+      ws.emit('message', Buffer.from(JSON.stringify({
+        ...hello().terminals[0],
+        v:3,
+        type:'data_delta',
+        message_id:`msg_01JGATEWAY_FULL_${stream}`,
+        sent_at_utc_msc:NOW,
+        stream,
+        revision:index + 1,
+        base_revision:0,
+        observed_at_utc_msc:NOW,
+        source_time_msc:NOW,
+        full_snapshot:true,
+        upserts:stream === 'account' ? [{ login:12345678 }] : [],
+        deletes:[],
+      })))
+      await flush()
+    }
+
+    expect(gateway.listConnectedTerminals(42)[0].initial_sync_ready).toBe(true)
+  })
+
   it('persists dispatch before writing and resolves only after a stored result', async () => {
     const order = []
     const { gateway, dependencies } = setup({

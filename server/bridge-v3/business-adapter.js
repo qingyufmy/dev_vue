@@ -269,6 +269,7 @@ export function createBridgeV3BusinessAdapter({
   }
 
   async function executeTrade(userId, route, action, params, timeoutMs) {
+    if (route.initial_sync_ready !== true) throw adapterError('bridge_terminal_initializing')
     await assertTradeEnabled(userId)
     const issuedAt = now()
     const command = {

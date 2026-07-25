@@ -10,6 +10,7 @@ function route(overrides = {}) {
     platform:'mt5',
     account_ref:{ broker_server:'Broker-Demo', login:'12345678' },
     connection_epoch:7,
+    initial_sync_ready:true,
     ...overrides,
   }
 }
@@ -153,6 +154,15 @@ describe('Bridge v3 business compatibility adapter', () => {
     await expect(adapter.execute(42, 'close', { ticket:'10' })).resolves.toMatchObject({
       status:'error', error:'bridge_trade_disabled',
     })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('does not admit trades until all initial snapshots are acknowledged', async () => {
+    const { adapter, gateway } = setup({ routes:[route({ initial_sync_ready:false })] })
+
+    await expect(adapter.execute(42, 'open', {
+      symbol:'XAUUSD', order_type:'buy', volume:0.1,
+    })).resolves.toMatchObject({ status:'error', error:'bridge_terminal_initializing' })
     expect(gateway.sendCommand).not.toHaveBeenCalled()
   })
 

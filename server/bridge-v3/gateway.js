@@ -21,6 +21,7 @@ export const BRIDGE_V3_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 const AUTH_QUEUE_MAX_MESSAGES = 16
 const AUTH_QUEUE_MAX_BYTES = 1024 * 1024
 const MAX_PENDING_QUOTES_PER_CONNECTION = 64
+const REQUIRED_INITIAL_STREAMS = Object.freeze(['account', 'positions', 'orders'])
 
 function messageId(prefix) {
   return `${prefix}_${randomUUID()}`
@@ -153,6 +154,7 @@ export function createBridgeV3Gateway({
           nowUtcMsc:now(),
         })
         connection.terminals.set(terminal.terminal_instance_id, terminal)
+        connection.initialSnapshotStreams.set(terminal.terminal_instance_id, new Set())
         accepted.push(terminal.terminal_instance_id)
       }
     } catch (error) {
@@ -202,6 +204,10 @@ export function createBridgeV3Gateway({
     }
     if (message.type === 'data_delta') {
       const result = await applyDelta(message, { userId:connection.userId, nowUtcMsc:now() })
+      if (message.full_snapshot === true && ['applied', 'duplicate'].includes(result.status)
+        && REQUIRED_INITIAL_STREAMS.includes(message.stream)) {
+        connection.initialSnapshotStreams.get(message.terminal_instance_id)?.add(message.stream)
+      }
       safeSend(connection.ws, {
         v:3,
         type:'data_ack',
@@ -250,6 +256,7 @@ export function createBridgeV3Gateway({
       ready:false,
       sessionId:null,
       terminals:new Map(),
+      initialSnapshotStreams:new Map(),
       closed:false,
       authQueue:[],
       authQueueBytes:0,
@@ -382,6 +389,8 @@ export function createBridgeV3Gateway({
         platform:terminal.platform,
         account_ref:{ ...terminal.account_ref },
         connection_epoch:terminal.connection_epoch,
+        initial_sync_ready:REQUIRED_INITIAL_STREAMS.every(stream =>
+          connection.initialSnapshotStreams.get(terminal.terminal_instance_id)?.has(stream)),
       })
     }
     return result
