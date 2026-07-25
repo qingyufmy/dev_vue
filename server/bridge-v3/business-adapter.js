@@ -632,7 +632,7 @@ export function createBridgeV3BusinessAdapter({
     const pendingTicket = String(params.pending_ticket || '').trim()
     const ticket = String(params.ticket || '').trim()
     const lookbackSeconds = Number(params.lookback_seconds || 172_800)
-    if (!symbol || symbol.length > 64) throw adapterError('symbol_invalid')
+    if (symbol.length > 64) throw adapterError('symbol_invalid')
     if (!['trade', 'pending'].includes(expectedKind)) throw adapterError('expected_kind_required')
     if (!bridgeCommandRef && !tradeTicket && !pendingTicket && !ticket) {
       throw adapterError('bridge_reference_required')
@@ -653,7 +653,7 @@ export function createBridgeV3BusinessAdapter({
       issued_at_utc_msc:issuedAt,
       deadline_utc_msc:issuedAt + lookupTimeoutMs,
       action:'query_execution',
-      params:cleanObject({ symbol, expected_kind:expectedKind,
+      params:cleanObject({ symbol:symbol || undefined, expected_kind:expectedKind,
         bridge_command_ref:bridgeCommandRef || undefined,
         trade_ticket:tradeTicket || undefined, pending_ticket:pendingTicket || undefined,
         ticket:ticket || undefined, lookback_seconds:lookbackSeconds }),

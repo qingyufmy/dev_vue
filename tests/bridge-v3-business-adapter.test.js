@@ -134,6 +134,13 @@ describe('Bridge v3 business compatibility adapter', () => {
     expect(gateway.requestData).not.toHaveBeenCalled()
   })
 
+  it('rejects rates without a symbol before contacting the terminal', async () => {
+    const { adapter, gateway } = setup()
+    await expect(adapter.execute(42, 'rates', { timeframe:'M30', count:100 }))
+      .resolves.toMatchObject({ status:'error', error:'symbol_invalid' })
+    expect(gateway.requestData).not.toHaveBeenCalled()
+  })
+
   it('routes a lightweight symbol snapshot over the transient data channel', async () => {
     const { adapter, gateway } = setup({ dataResponse:{
       status:'succeeded', payload:{ symbol:'XAUUSD', account:{ leverage:100 },
@@ -191,6 +198,18 @@ describe('Bridge v3 business compatibility adapter', () => {
     expect(gateway.sendCommand).toHaveBeenCalledWith(42, expect.objectContaining({
       action:'query_execution', params:{ symbol:'XAUUSD', expected_kind:'trade',
         bridge_command_ref:'intent:abc', trade_ticket:'999', lookback_seconds:3600 },
+    }), { timeoutMs:5000 })
+  })
+
+  it('allows ticket-only order reconciliation without a symbol', async () => {
+    const { adapter, gateway } = setup({ commandResult:{
+      status:'succeeded', raw_result:{ found:false, complete:true, lookback_seconds:315_360_000 },
+    } })
+    await expect(adapter.execute(42, 'order_lookup', {
+      expected_kind:'pending', pending_ticket:'5003', lookback_seconds:315_360_000,
+    })).resolves.toMatchObject({ status:'success', found:false, complete:true })
+    expect(gateway.sendCommand).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'query_execution', params:{ expected_kind:'pending', pending_ticket:'5003', lookback_seconds:315_360_000 },
     }), { timeoutMs:5000 })
   })
 

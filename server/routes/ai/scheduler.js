@@ -2247,19 +2247,14 @@ export async function reconcilePendingOrders() {
       const itemHasRef = (item, ref) => [item?.ticket, item?.order, item?.order_ticket, item?.position_id, item?.identifier]
         .some(value => value != null && String(value) === ref)
       const positionSet = collectRefs(positionList)
-      let historyOrders
-      let historySet
-      const getHistorySet = async () => {
-        if (historySet !== undefined) return historySet
-        const historyResp = await mt5Bridge(userId, 'history', { page: 1, page_size: 200, include_deals: true }, { noFallback: true })
-        const historyItems = historyResp?.status === 'success' && Array.isArray(historyResp.orders)
-          ? [...historyResp.orders, ...(Array.isArray(historyResp.deals) ? historyResp.deals : [])]
-          : null
-        historyOrders = historyItems
-          ? historyItems.filter(isFilledHistoryOrder)
-          : null
-        historySet = historyOrders ? collectRefs(historyOrders) : null
-        return historySet
+      const lookupByTicket = new Map()
+      const getOrderLookup = ticket => {
+        if (!lookupByTicket.has(ticket)) {
+          lookupByTicket.set(ticket, mt5Bridge(userId, 'order_lookup', {
+            expected_kind:'pending', pending_ticket:ticket, lookback_seconds:315_360_000,
+          }, { noFallback:true }))
+        }
+        return lookupByTicket.get(ticket)
       }
 
       for (const row of rows) {
@@ -2292,11 +2287,15 @@ export async function reconcilePendingOrders() {
           continue
         }
 
-        const confirmedHistorySet = positionSet.has(ticket) ? null : await getHistorySet()
-        if (positionSet.has(ticket) || confirmedHistorySet?.has(ticket)) {
-          const matchedPosition = positionList.find(item => itemHasRef(item, ticket))
-          const matchedHistory = historyOrders?.find(item => itemHasRef(item, ticket))
-          const resolvedTradeTicket = String(matchedPosition?.ticket ?? matchedPosition?.position_id ?? matchedHistory?.position_id ?? matchedHistory?.ticket ?? ticket)
+        const matchedPosition = positionList.find(item => itemHasRef(item, ticket))
+        const lookup = matchedPosition ? null : await getOrderLookup(ticket)
+        const lookupState = String(lookup?.pending_state || lookup?.final_state || '').toLowerCase()
+        const lookupFilled = lookup?.status === 'success' && lookup?.found === true
+          && (String(lookup?.kind || '').toLowerCase() === 'trade'
+            || ['filled', 'partially_filled'].includes(lookupState))
+        if (matchedPosition || lookupFilled) {
+          const resolvedTradeTicket = String(matchedPosition?.ticket ?? matchedPosition?.position_id
+            ?? lookup?.position_id ?? lookup?.ticket ?? ticket)
           if (row.src === 'delivery') {
             await queryRun(
               "UPDATE auto_signal_deliveries SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
@@ -2304,9 +2303,9 @@ export async function reconcilePendingOrders() {
             await recordPendingOutcomeFill({
               orderIntentId: row.order_intent_id,
               deliveryId: row.id,
-              positionId: matchedPosition?.position_id ?? matchedPosition?.ticket ?? matchedHistory?.position_id,
+              positionId: matchedPosition?.position_id ?? matchedPosition?.ticket ?? lookup?.position_id,
               orderTicket: ticket,
-              dealTicket: matchedHistory?.deal_ticket,
+              dealTicket: lookup?.deal ?? lookup?.deal_ticket,
             })
             // Fix 6: do NOT sync user ticket to shared root ai_signals
           } else {
@@ -2321,11 +2320,16 @@ export async function reconcilePendingOrders() {
         }
 
         // A pending ticket can disappear briefly while MT5 moves it into a
-        // position/history record. Keep it pending until that transition can
-        // be confirmed, or until its configured validity has elapsed.
+        // position/history record. Keep it pending until a targeted lookup
+        // proves a terminal state; never infer expiry from a transient gap.
         if (validUntilUtc > 0 && nowUtc > validUntilUtc) {
-          if (!confirmedHistorySet) {
-            console.warn(`[PendingReconciler] User ${userId}: history unavailable for expired ticket=${ticket}, defer classification`)
+          const lookupKind = String(lookup?.kind || '').toLowerCase()
+          const lookupComplete = lookup?.status === 'success'
+            && ((lookup?.found === false && lookup?.complete === true)
+              || (lookup?.found === true
+                && (lookupKind === 'rejected' || ['cancelled', 'expired', 'rejected'].includes(lookupState))))
+          if (!lookupComplete) {
+            console.warn(`[PendingReconciler] User ${userId}: order lookup incomplete for expired ticket=${ticket}, defer classification`)
             continue
           }
           if (row.src === 'delivery') {

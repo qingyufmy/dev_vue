@@ -821,22 +821,25 @@ class Mt5Adapter:
         command_ref = str(params.get("bridge_command_ref") or params.get("comment") or "").strip()
         if expected_kind not in {"trade", "pending"}:
             raise WorkerError("expected_kind_required")
-        if not symbol or len(symbol) > 64:
+        if len(symbol) > 64:
             raise WorkerError("symbol_invalid")
         expected_tickets = {str(params.get(key) or "").strip()
                             for key in ("trade_ticket", "pending_ticket", "ticket")}
         expected_tickets.discard("")
         if not command_ref and not expected_tickets:
             raise WorkerError("bridge_reference_required")
+        if any(not ticket.isdigit() or len(ticket) > 32 for ticket in expected_tickets):
+            raise WorkerError("order_lookup_ticket_invalid")
         try:
             lookback_seconds = int(params.get("lookback_seconds") or 172_800)
         except (TypeError, ValueError) as error:
             raise WorkerError("order_lookup_params_invalid") from error
         if lookback_seconds < 3_600 or lookback_seconds > 315_360_000:
             raise WorkerError("order_lookup_params_invalid")
+        direct_ticket = int(next(iter(expected_tickets))) if not command_ref and len(expected_tickets) == 1 else None
 
         def matches(row: Any) -> bool:
-            if str(getattr(row, "symbol", "") or "").strip() != symbol:
+            if symbol and str(getattr(row, "symbol", "") or "").strip() != symbol:
                 return False
             if int(getattr(row, "magic", 0) or 0) != 234000:
                 return False
@@ -898,32 +901,38 @@ class Mt5Adapter:
         date_to = datetime.now(timezone.utc) + timedelta(minutes=5)
         date_from = date_to - timedelta(seconds=lookback_seconds)
         if expected_kind == "pending":
-            active = self.mt5.orders_get(symbol=symbol)
+            active = self.mt5.orders_get(symbol=symbol) if symbol else self.mt5.orders_get()
             if active is None:
                 raise WorkerError("orders_query_failed")
             found = next((active_pending(row) for row in active if matches(row)), None)
             if found is None:
-                history_orders = self.mt5.history_orders_get(date_from, date_to)
+                history_orders = (self.mt5.history_orders_get(ticket=direct_ticket)
+                                  if direct_ticket is not None
+                                  else self.mt5.history_orders_get(date_from, date_to))
                 if history_orders is None:
                     raise WorkerError("history_orders_query_failed")
                 found = next((historical_order(row) for row in reversed(history_orders) if matches(row)), None)
-            if found is None:
+            if found is None and direct_ticket is None:
                 history_deals = self.mt5.history_deals_get(date_from, date_to)
                 if history_deals is None:
                     raise WorkerError("history_deals_query_failed")
                 found = next((historical_deal(row) for row in reversed(history_deals) if matches(row)), None)
         else:
-            active = self.mt5.positions_get(symbol=symbol)
+            active = self.mt5.positions_get(symbol=symbol) if symbol else self.mt5.positions_get()
             if active is None:
                 raise WorkerError("positions_query_failed")
             found = next((active_trade(row) for row in active if matches(row)), None)
             if found is None:
-                history_deals = self.mt5.history_deals_get(date_from, date_to)
+                history_deals = (self.mt5.history_deals_get(position=direct_ticket)
+                                 if direct_ticket is not None
+                                 else self.mt5.history_deals_get(date_from, date_to))
                 if history_deals is None:
                     raise WorkerError("history_deals_query_failed")
                 found = next((historical_deal(row) for row in reversed(history_deals) if matches(row)), None)
             if found is None:
-                history_orders = self.mt5.history_orders_get(date_from, date_to)
+                history_orders = (self.mt5.history_orders_get(position=direct_ticket)
+                                  if direct_ticket is not None
+                                  else self.mt5.history_orders_get(date_from, date_to))
                 if history_orders is None:
                     raise WorkerError("history_orders_query_failed")
                 found = next((historical_order(row) for row in reversed(history_orders) if matches(row)), None)

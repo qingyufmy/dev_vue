@@ -302,6 +302,20 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(501, result["raw_result"]["position_id"])
         self.assertEqual(["501"], result["evidence"]["position_tickets"])
 
+    def test_query_execution_accepts_ticket_without_symbol(self):
+        adapter = self.adapter()
+        adapter.mt5.orders_get = lambda **kwargs: ()
+        history_queries = []
+        adapter.mt5.history_orders_get = lambda *args, **kwargs: history_queries.append((args, kwargs)) or ()
+        result = adapter.execute(self.command(
+            command_id="command_01JWORKER_LOOKUP_TICKET", action="query_execution",
+            params={"expected_kind": "pending", "pending_ticket": "5003",
+                    "lookback_seconds": 3600}))
+        self.assertEqual("succeeded", result["status"])
+        self.assertFalse(result["raw_result"]["found"])
+        self.assertTrue(result["raw_result"]["complete"])
+        self.assertEqual([((), {"ticket": 5003})], history_queries)
+
     def test_probe_returns_read_only_account_identity(self):
         result = worker.probe(FakeMt5(), __file__)
         self.assertEqual("mt5_probe", result["type"])

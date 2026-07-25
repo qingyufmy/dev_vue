@@ -179,6 +179,33 @@ describe('reconcilePendingOrders', () => {
     expect(filledCall).toBeTruthy()
   })
 
+  it('marks a missing pending ticket filled from a targeted order lookup', async () => {
+    db.queryAll
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: 21, user_id: 10, signal_id: 2100, pending_ticket: '5021', pending_valid_until: '2026-12-31 23:59:59', src: 'delivery' },
+      ])
+      .mockResolvedValueOnce([])
+    marketData.mt5Bridge.mockImplementation((_uid, action) => {
+      if (action === 'pending_list') return Promise.resolve({ orders: [] })
+      if (action === 'positions') return Promise.resolve({ positions: [] })
+      if (action === 'order_lookup') return Promise.resolve({
+        status:'success', found:true, kind:'pending', pending_state:'filled',
+        ticket:'5021', position_id:'7021', deal:'8021',
+      })
+      return Promise.resolve({})
+    })
+
+    await reconcilePendingOrders()
+
+    expect(marketData.mt5Bridge).toHaveBeenCalledWith(10, 'order_lookup', {
+      expected_kind:'pending', pending_ticket:'5021', lookback_seconds:315_360_000,
+    }, { noFallback:true })
+    expect(marketData.mt5Bridge.mock.calls.some(([, action]) => action === 'history')).toBe(false)
+    const filledCall = db.queryRun.mock.calls.find(c => c[0].includes("'filled'"))
+    expect(filledCall?.[1]?.[0]).toBe('7021')
+  })
+
   it('expired — ticket 不在任一集合中，且已过有效期', async () => {
     db.queryAll
       .mockResolvedValueOnce([])  // stale executing check
@@ -190,7 +217,7 @@ describe('reconcilePendingOrders', () => {
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
       if (action === 'pending_list') return Promise.resolve({ orders: [] })
       if (action === 'positions') return Promise.resolve({ positions: [] })
-      if (action === 'history') return Promise.resolve({ status: 'success', orders: [] })
+      if (action === 'order_lookup') return Promise.resolve({ status:'success', found:false, complete:true })
       return Promise.resolve({})
     })
 
@@ -264,7 +291,7 @@ describe('reconcilePendingOrders', () => {
     marketData.mt5Bridge.mockImplementation((_uid, action) => {
       if (action === 'pending_list') return Promise.resolve({ orders: [] })
       if (action === 'positions') return Promise.resolve({ positions: [] })
-      if (action === 'history') return Promise.resolve({ status: 'success', orders: [] })
+      if (action === 'order_lookup') return Promise.resolve({ status:'success', found:false, complete:true })
       return Promise.resolve({})
     })
 
@@ -284,7 +311,6 @@ describe('reconcilePendingOrders', () => {
         ticket: 5009, symbol: 'XAUUSD', side: 'buy', volume: 0.1, magic: 234000,
       }] })
       if (action === 'positions') return Promise.resolve({ positions: [] })
-      if (action === 'history') return Promise.resolve({ status: 'success', orders: [] })
       if (action === 'cancel_pending') return Promise.resolve({ status: 'success', ticket: 5009 })
       return Promise.resolve({ status: 'error' })
     })
