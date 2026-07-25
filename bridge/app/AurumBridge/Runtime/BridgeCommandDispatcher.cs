@@ -130,8 +130,9 @@ public sealed class BridgeCommandDispatcher
             {
                 return false;
             }
+            var wasReady = RequiredInitialStreams.IsSubsetOf(state.Streams);
             state.Streams.Add(stream);
-            return RequiredInitialStreams.IsSubsetOf(state.Streams);
+            return !wasReady && RequiredInitialStreams.IsSubsetOf(state.Streams);
         }
     }
 

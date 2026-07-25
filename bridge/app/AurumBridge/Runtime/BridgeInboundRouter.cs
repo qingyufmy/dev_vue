@@ -35,6 +35,7 @@ public sealed class BridgeInboundRouter
     public event Func<FullSnapshotRequest, Task>? FullSnapshotRequired;
     public event Action<string, string>? DataAcknowledged;
     public event Action<string>? HelloAcknowledged;
+    public event Action<string>? InitialSynchronizationCompleted;
 
     public async Task RouteAsync(string payloadJson, CancellationToken cancellationToken = default)
     {
@@ -125,10 +126,13 @@ public sealed class BridgeInboundRouter
                 cancellationToken);
             if (removed && acknowledgedDelta?.FullSnapshot == true)
             {
-                _dispatcher.AcknowledgeInitialSnapshot(
+                if (_dispatcher.AcknowledgeInitialSnapshot(
                     acknowledgedDelta.TerminalInstanceId,
                     acknowledgedDelta.ConnectionEpoch,
-                    acknowledgedDelta.Stream);
+                    acknowledgedDelta.Stream))
+                {
+                    InitialSynchronizationCompleted?.Invoke(acknowledgedDelta.TerminalInstanceId);
+                }
             }
             DataAcknowledged?.Invoke(acknowledgement.AckedMessageId, acknowledgement.Status);
             return;

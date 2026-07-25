@@ -310,13 +310,40 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             host.CommandDispatcher,
             quoteHandler:host.GetQuoteAsync,
             initialSnapshotHandler:host.RequestAllFullSnapshotsAsync);
+        var synchronizedTerminals = new HashSet<string>(StringComparer.Ordinal);
+        var synchronizationLock = new object();
+        webSocket.InitialSynchronizationCompleted += terminalId =>
+        {
+            bool allSynchronized;
+            lock (synchronizationLock)
+            {
+                synchronizedTerminals.Add(terminalId);
+                allSynchronized = synchronizedTerminals.Count == host.Terminals.Count;
+            }
+            if (allSynchronized)
+            {
+                Publish(BridgeApplicationPhase.Online);
+            }
+        };
         webSocket.FullSnapshotRequired += host.HandleFullSnapshotRequestAsync;
         var connection = new BridgeConnectionSupervisor(
             host.Terminals,
             typeof(BridgeApplicationController).Assembly.GetName().Version?.ToString() ?? "3.0.0",
             _sessionClient.AcquireConnectionAttemptAsync,
             (attempt, ready, token) => webSocket.RunSessionAsync(attempt, ready, token));
-        connection.StatusChanged += HandleConnectionStatus;
+        connection.StatusChanged += status =>
+        {
+            if (status.State is BridgeConnectionState.Connecting
+                or BridgeConnectionState.Reconnecting
+                or BridgeConnectionState.PairingRequired)
+            {
+                lock (synchronizationLock)
+                {
+                    synchronizedTerminals.Clear();
+                }
+            }
+            HandleConnectionStatus(status);
+        };
 
         using var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var hostTask = host.RunAsync(runCancellation.Token);
@@ -386,7 +413,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         {
             BridgeConnectionState.PairingRequired => BridgeApplicationPhase.PairingRequired,
             BridgeConnectionState.Connecting or BridgeConnectionState.Reconnecting => BridgeApplicationPhase.Connecting,
-            BridgeConnectionState.Connected => BridgeApplicationPhase.Online,
+            BridgeConnectionState.Connected => BridgeApplicationPhase.Connecting,
             BridgeConnectionState.Stopped when _stop.IsCancellationRequested => BridgeApplicationPhase.Stopped,
             _ => _phase,
         };

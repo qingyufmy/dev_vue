@@ -12,13 +12,18 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly BridgeFileLogger _logger;
     private readonly BridgeSingleInstanceGuard _singleInstance;
     private readonly BridgeUpdateCoordinator? _updateCoordinator;
+    private readonly string? _startupReadyFile;
     private readonly CancellationTokenSource _stop = new();
     private Task? _updateTask;
+    private int _startupReadyWritten;
     private bool _shuttingDown;
 
-    public BridgeApplicationContext(BridgeSingleInstanceGuard singleInstance)
+    public BridgeApplicationContext(
+        BridgeSingleInstanceGuard singleInstance,
+        string? startupReadyFile = null)
     {
         _singleInstance = singleInstance ?? throw new ArgumentNullException(nameof(singleInstance));
+        _startupReadyFile = startupReadyFile;
         var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
         _logger = new(Path.Combine(paths.DataDirectory, "logs"));
         EnsureAutoStart();
@@ -97,6 +102,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _logger.Info(
             "bridge_status_changed",
             $"phase={status.Phase}; terminals={status.Terminals.Count}; detail={status.DetailCode ?? "none"}");
+        if (status.Phase == BridgeApplicationPhase.Online
+            && _startupReadyFile is not null
+            && Interlocked.Exchange(ref _startupReadyWritten, 1) == 0)
+        {
+            _ = WriteStartupReadyAsync(_startupReadyFile);
+        }
         if (_form.IsDisposed)
         {
             return;
@@ -108,6 +119,24 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 ? "AURUM Bridge · 运行中"
                 : "AURUM Bridge";
         });
+    }
+
+    private async Task WriteStartupReadyAsync(string path)
+    {
+        try
+        {
+            var version = typeof(BridgeApplicationContext).Assembly.GetName().Version?.ToString(3)
+                ?? "3.0.0";
+            await BridgeStartupSignal.WriteAsync(path, version, cancellationToken:_stop.Token);
+            _logger.Info("startup_ready_confirmed", $"version={version}");
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("startup_ready_signal_failed", error);
+        }
     }
 
     private async void HandlePairRequested(object? sender, EventArgs eventArgs)

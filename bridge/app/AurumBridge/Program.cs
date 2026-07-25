@@ -9,7 +9,7 @@ internal static class Program
     public static async Task Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
-        var healthMode = args.Length > 0;
+        var healthMode = args.Contains("--health-check", StringComparer.Ordinal);
         try
         {
             if (TryReadHealthArguments(args, out var healthFile))
@@ -23,12 +23,13 @@ internal static class Program
                 await BridgeHealthCheck.RunAsync(paths, healthFile, Path.Combine(installRoot, "health"));
                 return;
             }
+            var startupReadyFile = ReadStartupReadyFile(args);
             using var singleInstance = BridgeSingleInstanceGuard.TryAcquire("AURUMBridge.v3");
             if (singleInstance is null)
             {
                 return;
             }
-            Application.Run(new BridgeApplicationContext(singleInstance));
+            Application.Run(new BridgeApplicationContext(singleInstance, startupReadyFile));
         }
         catch (Exception error)
         {
@@ -43,6 +44,22 @@ internal static class Program
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
+    }
+
+    private static string? ReadStartupReadyFile(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            return null;
+        }
+        if (args.Length != 2
+            || args[0] != "--ready-file"
+            || string.IsNullOrWhiteSpace(args[1])
+            || !Path.IsPathFullyQualified(args[1]))
+        {
+            throw new ArgumentException("bridge_arguments_invalid", nameof(args));
+        }
+        return Path.GetFullPath(args[1]);
     }
 
     private static bool TryReadHealthArguments(string[] args, out string healthFile)

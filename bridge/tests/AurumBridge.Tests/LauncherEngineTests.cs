@@ -24,7 +24,7 @@ public sealed class LauncherEngineTests
     {
         CreateVersion("3.1.0");
         await _store.SaveAsync(Pointer("3.1.0", "3.0.0", "pending"));
-        var runner = new FakeRunner(_ => true);
+        var runner = new FakeRunner(_ => true, startupReady:true);
         var engine = new LauncherEngine(_directory, _store, runner, () => 1_800_000_000_100);
 
         var launched = await engine.LaunchAsync();
@@ -34,6 +34,7 @@ public sealed class LauncherEngineTests
         Assert.AreEqual("3.1.0", pointer.LastKnownGoodVersion);
         Assert.AreEqual("healthy", pointer.Status);
         StringAssert.Contains(runner.StartedExecutable!, Path.Combine("3.1.0", "AURUMBridge.exe"));
+        Assert.HasCount(1, runner.StartupChecks);
     }
 
     [TestMethod]
@@ -52,6 +53,25 @@ public sealed class LauncherEngineTests
         Assert.AreEqual("3.0.0", pointer.ActiveVersion);
         Assert.AreEqual("rolled_back", pointer.Status);
         Assert.HasCount(2, runner.HealthChecks);
+        StringAssert.Contains(runner.StartedExecutable!, Path.Combine("3.0.0", "AURUMBridge.exe"));
+    }
+
+    [TestMethod]
+    public async Task RollsBackWhenPendingVersionDoesNotCompleteInitialSynchronization()
+    {
+        CreateVersion("3.0.0");
+        CreateVersion("3.1.0");
+        await _store.SaveAsync(Pointer("3.1.0", "3.0.0", "pending"));
+        var runner = new FakeRunner(_ => true, startupReady:false);
+        var engine = new LauncherEngine(_directory, _store, runner, () => 1_800_000_000_300);
+
+        var launched = await engine.LaunchAsync();
+        var pointer = await _store.LoadAsync();
+
+        Assert.AreEqual("3.0.0", launched);
+        Assert.AreEqual("3.0.0", pointer.ActiveVersion);
+        Assert.AreEqual("rolled_back", pointer.Status);
+        Assert.HasCount(1, runner.StartupChecks);
         StringAssert.Contains(runner.StartedExecutable!, Path.Combine("3.0.0", "AURUMBridge.exe"));
     }
 
@@ -81,9 +101,10 @@ public sealed class LauncherEngineTests
         UpdatedAtUtcMsc = 1_800_000_000_000,
     };
 
-    private sealed class FakeRunner(Func<string, bool> health) : IBridgeProcessRunner
+    private sealed class FakeRunner(Func<string, bool> health, bool startupReady = true) : IBridgeProcessRunner
     {
         public List<string> HealthChecks { get; } = [];
+        public List<string> StartupChecks { get; } = [];
         public string? StartedExecutable { get; private set; }
 
         public Task<bool> RunHealthCheckAsync(
@@ -95,5 +116,18 @@ public sealed class LauncherEngineTests
         }
 
         public void StartBridge(string executablePath) => StartedExecutable = executablePath;
+
+        public Task<bool> StartBridgeAndWaitReadyAsync(
+            string executablePath,
+            TimeSpan timeout,
+            CancellationToken cancellationToken = default)
+        {
+            StartupChecks.Add(executablePath);
+            if (startupReady)
+            {
+                StartedExecutable = executablePath;
+            }
+            return Task.FromResult(startupReady);
+        }
     }
 }

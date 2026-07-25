@@ -65,6 +65,8 @@ public sealed class BridgeInboundRouterTests
         var terminal = Terminal();
         var dispatcher = Dispatcher(initialSyncReady:false);
         var router = new BridgeInboundRouter(_testStore.Store, dispatcher, _outbound, () => Now);
+        var synchronized = new List<string>();
+        router.InitialSynchronizationCompleted += synchronized.Add;
 
         foreach (var stream in new[] { "account", "positions", "orders" })
         {
@@ -76,6 +78,7 @@ public sealed class BridgeInboundRouterTests
         Assert.IsTrue(dispatcher.IsInitialSyncReady(
             terminal.TerminalInstanceId,
             terminal.ConnectionEpoch));
+        CollectionAssert.AreEqual(new[] { terminal.TerminalInstanceId }, synchronized);
     }
 
     [TestMethod]
