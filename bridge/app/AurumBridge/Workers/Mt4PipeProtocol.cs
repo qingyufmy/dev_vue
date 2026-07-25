@@ -24,6 +24,8 @@ public enum Mt4MessageType
     CommandResult = 21,
     PerformanceDailyRequest = 22,
     PerformanceDaily = 23,
+    DealsRequest = 24,
+    Deals = 25,
     Shutdown = 90,
     ShutdownAck = 91,
 }
@@ -147,6 +149,22 @@ public sealed record Mt4PerformanceDaily(
     string Status,
     JsonElement? Payload,
     string? ErrorCode);
+
+public sealed record Mt4DealsRequest(
+    string TerminalInstanceId,
+    string BrokerServer,
+    string Login,
+    long ConnectionEpoch,
+    long CursorTimeMsc,
+    long CursorTicket,
+    int Limit);
+
+public sealed record Mt4DealsBatch(
+    long SourceTimeMsc,
+    IReadOnlyList<JsonElement> Items,
+    long NextTimeMsc,
+    long NextTicket,
+    bool HasMore);
 
 public enum Mt4TradeAction
 {
@@ -734,6 +752,66 @@ public static class Mt4PipeProtocol
         EnsureFullyRead(reader); ValidatePerformanceDaily(result); return result;
     }
 
+    public static byte[] EncodeDealsRequest(Mt4DealsRequest request)
+    {
+        ValidateDealsRequest(request);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.DealsRequest);
+            WriteString(writer, request.TerminalInstanceId);
+            WriteString(writer, request.BrokerServer);
+            WriteString(writer, request.Login);
+            writer.Write(request.ConnectionEpoch);
+            writer.Write(request.CursorTimeMsc);
+            writer.Write(request.CursorTicket);
+            writer.Write(request.Limit);
+        });
+    }
+
+    public static Mt4DealsRequest DecodeDealsRequest(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.DealsRequest);
+        var result = new Mt4DealsRequest(
+            ReadString(reader, 128),
+            ReadString(reader, 128),
+            ReadString(reader, 64),
+            reader.ReadInt64(),
+            reader.ReadInt64(),
+            reader.ReadInt64(),
+            reader.ReadInt32());
+        EnsureFullyRead(reader);
+        ValidateDealsRequest(result);
+        return result;
+    }
+
+    public static byte[] EncodeDeals(Mt4DealsBatch result)
+    {
+        ValidateDeals(result);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.Deals);
+            writer.Write(result.SourceTimeMsc);
+            WriteString(writer, JsonSerializer.Serialize(result.Items, BridgeJson.Options));
+            writer.Write(result.NextTimeMsc);
+            writer.Write(result.NextTicket);
+            writer.Write(result.HasMore ? 1 : 0);
+        });
+    }
+
+    public static Mt4DealsBatch DecodeDeals(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.Deals);
+        var result = new Mt4DealsBatch(
+            reader.ReadInt64(),
+            ParseArray(ReadString(reader, MaxStringBytes), "mt4_deals_payload_invalid"),
+            reader.ReadInt64(),
+            reader.ReadInt64(),
+            ReadBoolean(reader));
+        EnsureFullyRead(reader);
+        ValidateDeals(result);
+        return result;
+    }
+
     public static Mt4TradeCommand CreateTradeCommand(CommandMessage command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -1269,6 +1347,44 @@ public static class Mt4PipeProtocol
             || result.Status == "rejected" && string.IsNullOrWhiteSpace(result.ErrorCode))
         {
             throw new InvalidDataException("mt4_performance_invalid");
+        }
+    }
+
+    private static void ValidateDealsRequest(Mt4DealsRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.TerminalInstanceId)
+            || string.IsNullOrWhiteSpace(request.BrokerServer)
+            || string.IsNullOrWhiteSpace(request.Login)
+            || request.ConnectionEpoch <= 0
+            || request.CursorTimeMsc <= 0
+            || request.CursorTicket < 0
+            || request.Limit is < 1 or > 250)
+        {
+            throw new InvalidDataException("mt4_deals_request_invalid");
+        }
+    }
+
+    private static void ValidateDeals(Mt4DealsBatch result)
+    {
+        if (result.SourceTimeMsc <= 0
+            || result.NextTimeMsc <= 0
+            || result.NextTicket < 0
+            || result.Items.Count > 250
+            || result.Items.Any(item => item.ValueKind != JsonValueKind.Object))
+        {
+            throw new InvalidDataException("mt4_deals_invalid");
+        }
+        foreach (var item in result.Items)
+        {
+            if (!item.TryGetProperty("ticket", out var ticket)
+                || ticket.ValueKind is not (JsonValueKind.String or JsonValueKind.Number)
+                || !item.TryGetProperty("time_msc", out var time)
+                || time.ValueKind != JsonValueKind.Number
+                || !time.TryGetInt64(out var timeMsc)
+                || timeMsc <= 0)
+            {
+                throw new InvalidDataException("mt4_deals_item_invalid");
+            }
         }
     }
 

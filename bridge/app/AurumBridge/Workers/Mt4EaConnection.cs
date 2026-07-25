@@ -4,6 +4,7 @@ namespace AurumBridge.Workers;
 
 public interface IMt4EaConnection : IAsyncDisposable
 {
+    bool SupportsDeals { get; }
     Task SendWelcomeAsync(Mt4Welcome welcome, CancellationToken cancellationToken = default);
     Task<Mt4Snapshot> CollectAsync(
         Mt4CollectionStreams streams,
@@ -26,6 +27,9 @@ public interface IMt4EaConnection : IAsyncDisposable
     Task<Mt4PerformanceDaily> GetPerformanceDailyAsync(
         Mt4PerformanceDailyRequest request,
         CancellationToken cancellationToken = default);
+    Task<Mt4DealsBatch> CollectDealsAsync(
+        Mt4DealsRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class Mt4EaConnection : IMt4EaConnection
@@ -43,6 +47,14 @@ public sealed class Mt4EaConnection : IMt4EaConnection
 
     public Mt4Hello Hello { get; }
     public bool IsConnected => !_disposed && _pipe.IsConnected;
+    public bool SupportsDeals => SupportsDealsAdapter(Hello.AdapterVersion);
+
+    public static bool SupportsDealsAdapter(string adapterVersion)
+    {
+        var stableVersion = adapterVersion?.Split('-', 2)[0];
+        return Version.TryParse(stableVersion, out var version)
+            && version >= new Version(3, 1, 0);
+    }
 
     public static async Task<Mt4EaConnection> AcceptAsync(
         string pipeName,
@@ -149,6 +161,12 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         CancellationToken cancellationToken = default) =>
         RequestAsync(Mt4PipeProtocol.EncodePerformanceDailyRequest(request),
             Mt4PipeProtocol.DecodePerformanceDaily, WorkerRequestPriority.Data, cancellationToken);
+
+    public Task<Mt4DealsBatch> CollectDealsAsync(
+        Mt4DealsRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestAsync(Mt4PipeProtocol.EncodeDealsRequest(request),
+            Mt4PipeProtocol.DecodeDeals, WorkerRequestPriority.Data, cancellationToken);
 
     public async ValueTask DisposeAsync()
     {

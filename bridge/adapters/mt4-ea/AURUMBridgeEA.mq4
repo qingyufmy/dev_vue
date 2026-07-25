@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.04"
+#property version   "3.10"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -20,6 +20,8 @@ input string InpPipeName = "AURUMBridgeV3";
 #define MSG_COMMAND_RESULT 21
 #define MSG_PERFORMANCE_DAILY_REQUEST 22
 #define MSG_PERFORMANCE_DAILY 23
+#define MSG_DEALS_REQUEST 24
+#define MSG_DEALS        25
 #define MSG_SHUTDOWN     90
 #define MSG_SHUTDOWN_ACK 91
 #define STREAM_ACCOUNT   1
@@ -120,6 +122,11 @@ void OnTimer()
       SendPerformanceDaily(payload, offset);
       return;
      }
+   if(message_type == MSG_DEALS_REQUEST && g_welcomed)
+     {
+      SendDeals(payload, offset);
+      return;
+     }
    if(message_type == MSG_SHUTDOWN)
      {
       uchar response[];
@@ -140,7 +147,7 @@ bool ConnectPipe()
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
    AppendInt32(hello, 3);
-   AppendUtf8(hello, "3.0.4");
+   AppendUtf8(hello, "3.1.0");
    AppendUtf8(hello, TerminalInfoString(TERMINAL_DATA_PATH));
    AppendUtf8(hello, AccountServer());
    AppendUtf8(hello, IntegerToString(AccountNumber()));
@@ -804,6 +811,141 @@ void SendPerformanceDailyResult(const string request_id, const int status,
    AppendInt32(response, MSG_PERFORMANCE_DAILY); AppendUtf8(response, request_id);
    AppendInt64(response, observed_at > 0 ? observed_at : ((long)TimeGMT()) * 1000);
    AppendInt32(response, status); AppendUtf8(response, payload_json); AppendUtf8(response, error_code);
+   if(!WriteFrame(response)) DisconnectPipe();
+  }
+
+string BuildSelectedHistoryDealJson(const long event_utc_msc)
+  {
+   int order_type = OrderType();
+   string category = (order_type == OP_BUY || order_type == OP_SELL)
+      ? "trade" : (order_type == 6 ? "balance" : (order_type == 7 ? "credit" : "account_event"));
+   string side = order_type == OP_BUY ? "buy" : (order_type == OP_SELL ? "sell" : "none");
+   return("{"
+      + "\"ticket\":\"" + IntegerToString(OrderTicket()) + "\","
+      + "\"deal_ticket\":\"" + IntegerToString(OrderTicket()) + "\","
+      + "\"order_ticket\":\"" + IntegerToString(OrderTicket()) + "\","
+      + "\"position_id\":\"" + IntegerToString(OrderTicket()) + "\","
+      + "\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\","
+      + "\"time_msc\":" + JsonLong(event_utc_msc) + ","
+      + "\"type\":" + IntegerToString(order_type) + ","
+      + "\"category\":\"" + category + "\","
+      + "\"side\":\"" + side + "\","
+      + "\"volume\":" + JsonNumber(OrderLots()) + ","
+      + "\"price\":" + JsonNumber(OrderClosePrice()) + ","
+      + "\"price_open\":" + JsonNumber(OrderOpenPrice()) + ","
+      + "\"price_close\":" + JsonNumber(OrderClosePrice()) + ","
+      + "\"profit\":" + JsonNumber(OrderProfit()) + ","
+      + "\"commission\":" + JsonNumber(OrderCommission()) + ","
+      + "\"swap\":" + JsonNumber(OrderSwap()) + ","
+      + "\"magic\":" + IntegerToString(OrderMagicNumber()) + ","
+      + "\"comment\":\"" + JsonEscape(OrderComment()) + "\","
+      + "\"source\":\"mt4_history_order\"}");
+  }
+
+void SendDeals(uchar &request[], int &offset)
+  {
+   string terminal_id = ReadUtf8(request, offset);
+   string broker_server = ReadUtf8(request, offset);
+   string login = ReadUtf8(request, offset);
+   long connection_epoch = ReadInt64(request, offset);
+   long cursor_time = ReadInt64(request, offset);
+   long cursor_ticket = ReadInt64(request, offset);
+   int limit = ReadInt32(request, offset);
+   if(terminal_id != g_terminal_id
+      || StringCompare(broker_server, AccountServer(), false) != 0
+      || login != IntegerToString(AccountNumber())
+      || connection_epoch != g_connection_epoch
+      || cursor_time <= 0 || cursor_ticket < 0 || limit < 1 || limit > 250)
+     {
+      DisconnectPipe();
+      return;
+     }
+
+   long captured_at = ((long)TimeGMT()) * 1000;
+   long window_end = cursor_time + 86400000;
+   if(window_end > captured_at) window_end = captured_at;
+   if(window_end < cursor_time) window_end = cursor_time;
+   long server_offset_msc = ((long)TimeCurrent() - (long)TimeGMT()) * 1000;
+   long event_times[];
+   long event_tickets[];
+   int total_candidates = 0;
+   int history_total = OrdersHistoryTotal();
+   for(int history_index = 0; history_index < history_total; history_index++)
+     {
+      if(!OrderSelect(history_index, SELECT_BY_POS, MODE_HISTORY)) continue;
+      int order_type = OrderType();
+      if(order_type == OP_BUYLIMIT || order_type == OP_SELLLIMIT
+         || order_type == OP_BUYSTOP || order_type == OP_SELLSTOP) continue;
+      datetime event_time = OrderCloseTime() > 0 ? OrderCloseTime() : OrderOpenTime();
+      long event_utc_msc = ((long)event_time) * 1000 - server_offset_msc;
+      int event_ticket = OrderTicket();
+      if(!CursorAfter(event_utc_msc, event_ticket, cursor_time, cursor_ticket)
+         || event_utc_msc > window_end) continue;
+      total_candidates++;
+
+      int stored = ArraySize(event_times);
+      int insert_at = stored;
+      for(int find_index = 0; find_index < stored; find_index++)
+        {
+         if(event_utc_msc < event_times[find_index]
+            || (event_utc_msc == event_times[find_index]
+               && event_ticket < event_tickets[find_index]))
+           {
+            insert_at = find_index;
+            break;
+           }
+        }
+      int capacity = limit + 1;
+      if(stored >= capacity && insert_at >= capacity) continue;
+      if(stored < capacity)
+        {
+         ArrayResize(event_times, stored + 1);
+         ArrayResize(event_tickets, stored + 1);
+        }
+      int last_index = stored < capacity ? stored : capacity - 1;
+      for(int move_index = last_index; move_index > insert_at; move_index--)
+        {
+         event_times[move_index] = event_times[move_index - 1];
+         event_tickets[move_index] = event_tickets[move_index - 1];
+        }
+      event_times[insert_at] = event_utc_msc;
+      event_tickets[insert_at] = event_ticket;
+     }
+
+   int selected_count = ArraySize(event_times);
+   if(selected_count > limit) selected_count = limit;
+   string items = "[";
+   for(int selected_index = 0; selected_index < selected_count; selected_index++)
+     {
+      if(!OrderSelect((int)event_tickets[selected_index], SELECT_BY_TICKET, MODE_HISTORY))
+        {
+         DisconnectPipe();
+         return;
+        }
+      if(selected_index > 0) items += ",";
+      items += BuildSelectedHistoryDealJson(event_times[selected_index]);
+     }
+   items += "]";
+
+   bool truncated = total_candidates > limit;
+   bool has_more = truncated || window_end < captured_at;
+   long next_time = window_end;
+   long next_ticket = 0;
+   if(truncated && selected_count > 0)
+     {
+      next_time = event_times[selected_count - 1];
+      next_ticket = event_tickets[selected_count - 1];
+     }
+   else if(selected_count > 0 && event_times[selected_count - 1] == window_end)
+      next_ticket = event_tickets[selected_count - 1];
+
+   uchar response[];
+   AppendInt32(response, MSG_DEALS);
+   AppendInt64(response, captured_at);
+   AppendUtf8(response, items);
+   AppendInt64(response, next_time);
+   AppendInt64(response, next_ticket);
+   AppendInt32(response, has_more ? 1 : 0);
    if(!WriteFrame(response)) DisconnectPipe();
   }
 

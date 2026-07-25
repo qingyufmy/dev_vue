@@ -291,6 +291,40 @@ public sealed class Mt4PipeProtocolTests
     }
 
     [TestMethod]
+    public void DealsRequestAndBatchRoundTripWithBoundedDualCursor()
+    {
+        var request = new Mt4DealsRequest(
+            "mt4_terminal_codec_01", "Broker-Demo", "12345678", 7,
+            1_800_000_000_000, 99, 250);
+        var decodedRequest = Mt4PipeProtocol.DecodeDealsRequest(
+            Mt4PipeProtocol.EncodeDealsRequest(request));
+        var batch = new Mt4DealsBatch(
+            1_800_000_001_000,
+            [JsonSerializer.SerializeToElement(new
+            {
+                ticket = "100", time_msc = 1_800_000_000_100, symbol = "XAUUSD",
+            })],
+            1_800_000_000_100,
+            100,
+            true);
+        var decodedBatch = Mt4PipeProtocol.DecodeDeals(Mt4PipeProtocol.EncodeDeals(batch));
+
+        Assert.AreEqual(request, decodedRequest);
+        Assert.AreEqual(100L, decodedBatch.NextTicket);
+        Assert.IsTrue(decodedBatch.HasMore);
+        Assert.AreEqual("100", decodedBatch.Items[0].GetProperty("ticket").GetString());
+    }
+
+    [TestMethod]
+    public void DealCapabilityRequiresVersionThreePointOneOrNewer()
+    {
+        Assert.IsFalse(Mt4EaConnection.SupportsDealsAdapter("3.0.4"));
+        Assert.IsFalse(Mt4EaConnection.SupportsDealsAdapter("invalid"));
+        Assert.IsTrue(Mt4EaConnection.SupportsDealsAdapter("3.1.0"));
+        Assert.IsTrue(Mt4EaConnection.SupportsDealsAdapter("3.1.0-test"));
+    }
+
+    [TestMethod]
     public void QuoteRequestAndResponseRoundTripWithStrictRoute()
     {
         var request = Mt4PipeProtocol.CreateQuoteRequest(QuoteRequest());

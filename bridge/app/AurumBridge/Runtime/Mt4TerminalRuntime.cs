@@ -8,7 +8,9 @@ namespace AurumBridge.Runtime;
 
 public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
 {
-    private static readonly string[] Streams = ["account", "positions", "orders"];
+    private const long InitialDealLookbackMsc = 7L * 24 * 60 * 60 * 1_000;
+    private const long DealPollIntervalMsc = 5_000;
+    private static readonly string[] SnapshotStreams = ["account", "positions", "orders"];
     private readonly TerminalDescriptor _terminal;
     private readonly IMt4EaConnection _connection;
     private readonly BridgeStore _store;
@@ -18,6 +20,9 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     private readonly Dictionary<string, string> _latest = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _fullSnapshots = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _collectionWake = new(0, 1);
+    private HistoryCursor _dealCursor = HistoryCursor.Empty;
+    private bool _dealBackfillPending;
+    private bool _dealsEnabled;
     private bool _initialized;
 
     public Mt4TerminalRuntime(
@@ -42,7 +47,7 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         await _connection.SendWelcomeAsync(
             new(_terminal.TerminalInstanceId, _terminal.ConnectionEpoch, _reconnectPipeName),
             cancellationToken);
-        foreach (var stream in Streams)
+        foreach (var stream in SnapshotStreams)
         {
             _revisions[stream] = await _store.GetStreamRevisionAsync(
                 _terminal.TerminalInstanceId,
@@ -51,16 +56,39 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
                 cancellationToken);
             _fullSnapshots[stream] = 0;
         }
+        _dealsEnabled = _connection.SupportsDeals;
+        if (_dealsEnabled)
+        {
+            _revisions["deals"] = await _store.GetStreamRevisionAsync(
+                _terminal.TerminalInstanceId, _terminal.ConnectionEpoch, "deals", cancellationToken);
+            _dealCursor = await _store.GetHistoryCursorAsync(
+                _terminal.TerminalInstanceId, "deals", cancellationToken);
+            if (_dealCursor == HistoryCursor.Empty)
+            {
+                _dealCursor = new(Math.Max(1, _clock() - InitialDealLookbackMsc), "0");
+            }
+            _fullSnapshots["deals"] = 0;
+        }
         _initialized = true;
     }
 
     public async Task RunCollectionLoopAsync(CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
+        var lastDealCollection = 0L;
         while (!cancellationToken.IsCancellationRequested)
         {
             var snapshot = await _connection.CollectAsync(Mt4CollectionStreams.All, cancellationToken);
             await IngestSnapshotAsync(snapshot, cancellationToken);
+            var now = _clock();
+            if (_dealsEnabled
+                && (_fullSnapshots.ContainsKey("deals")
+                    || _dealBackfillPending
+                    || now - lastDealCollection >= DealPollIntervalMsc))
+            {
+                await CollectDealsAsync(cancellationToken);
+                lastDealCollection = now;
+            }
             var hasTrades = snapshot.Positions.Count > 0 || snapshot.Orders.Count > 0;
             await _collectionWake.WaitAsync(CollectionDelay(hasTrades), cancellationToken);
         }
@@ -270,11 +298,85 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
 
     public void RequestFullSnapshot(string stream)
     {
-        if (!Streams.Contains(stream, StringComparer.Ordinal))
+        if (!SnapshotStreams.Contains(stream, StringComparer.Ordinal)
+            && !(stream == "deals" && _dealsEnabled))
         {
             throw new ArgumentOutOfRangeException(nameof(stream));
         }
         _fullSnapshots[stream] = 0;
+    }
+
+    public async Task<int> IngestDealsAsync(
+        Mt4DealsBatch batch,
+        bool fullSnapshot,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        if (!_dealsEnabled)
+        {
+            throw new InvalidOperationException("mt4_deals_adapter_unsupported");
+        }
+        var nextCursor = new HistoryCursor(
+            batch.NextTimeMsc,
+            batch.NextTicket.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (CompareCursor(nextCursor, _dealCursor) < 0)
+        {
+            throw new InvalidDataException("mt4_deals_cursor_regression");
+        }
+        var previous = _dealCursor;
+        foreach (var item in batch.Items)
+        {
+            var itemCursor = ReadDealCursor(item);
+            if (CompareCursor(itemCursor, previous) <= 0
+                || CompareCursor(itemCursor, nextCursor) > 0)
+            {
+                throw new InvalidDataException("mt4_deals_order_invalid");
+            }
+            previous = itemCursor;
+        }
+        var observedAt = _clock();
+        var persisted = 0;
+        if (fullSnapshot || batch.Items.Count > 0)
+        {
+            var revision = _revisions["deals"] + 1;
+            var message = new DataDeltaMessage
+            {
+                Type = "data_delta",
+                MessageId = $"delta_{_terminal.TerminalInstanceId}_deals_{revision}_{Guid.NewGuid():N}",
+                SentAtUtcMsc = _clock(),
+                TerminalInstanceId = _terminal.TerminalInstanceId,
+                AccountRef = _terminal.AccountRef,
+                ConnectionEpoch = _terminal.ConnectionEpoch,
+                Stream = "deals",
+                Revision = revision,
+                BaseRevision = fullSnapshot ? 0 : _revisions["deals"],
+                ObservedAtUtcMsc = observedAt,
+                SourceTimeMsc = batch.SourceTimeMsc,
+                FullSnapshot = fullSnapshot,
+                Upserts = batch.Items,
+                Deletes = [],
+            };
+            var result = await _store.PersistDataDeltaAsync(
+                message, cancellationToken, historyCursor: nextCursor);
+            if (result.Status is not (PersistDeltaStatus.Applied or PersistDeltaStatus.Duplicate))
+            {
+                throw new InvalidDataException("mt4_deals_revision_gap");
+            }
+            _revisions["deals"] = revision;
+            persisted = 1;
+        }
+        else if (batch.HasMore)
+        {
+            await _store.AdvanceHistoryCursorAsync(
+                _terminal.TerminalInstanceId, "deals", nextCursor, observedAt, cancellationToken);
+        }
+        _dealCursor = nextCursor;
+        _dealBackfillPending = batch.HasMore;
+        if (_dealBackfillPending)
+        {
+            WakeCollection();
+        }
+        return persisted;
     }
 
     public async Task<int> IngestSnapshotAsync(
@@ -352,6 +454,76 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         }
         _revisions[stream] = revision;
         return 1;
+    }
+
+    private async Task CollectDealsAsync(CancellationToken cancellationToken)
+    {
+        var cursorTicket = ParseCursorTicket(_dealCursor.Ticket);
+        var batch = await _connection.CollectDealsAsync(new(
+            _terminal.TerminalInstanceId,
+            _terminal.AccountRef.BrokerServer,
+            _terminal.AccountRef.Login,
+            _terminal.ConnectionEpoch,
+            _dealCursor.TimeMsc,
+            cursorTicket,
+            250), cancellationToken);
+        var fullSnapshot = _fullSnapshots.TryRemove("deals", out _);
+        await IngestDealsAsync(batch, fullSnapshot, cancellationToken);
+    }
+
+    private static HistoryCursor ReadDealCursor(JsonElement item)
+    {
+        if (!item.TryGetProperty("time_msc", out var time)
+            || time.ValueKind != JsonValueKind.Number
+            || !time.TryGetInt64(out var timeMsc)
+            || timeMsc <= 0
+            || !item.TryGetProperty("ticket", out var ticket))
+        {
+            throw new InvalidDataException("mt4_deals_item_invalid");
+        }
+        var ticketValue = ticket.ValueKind switch
+        {
+            JsonValueKind.String => ticket.GetString(),
+            JsonValueKind.Number => ticket.GetRawText(),
+            _ => null,
+        };
+        if (string.IsNullOrWhiteSpace(ticketValue))
+        {
+            throw new InvalidDataException("mt4_deals_item_invalid");
+        }
+        try
+        {
+            _ = ParseCursorTicket(ticketValue);
+        }
+        catch (InvalidDataException error)
+        {
+            throw new InvalidDataException("mt4_deals_item_invalid", error);
+        }
+        return new(timeMsc, ticketValue);
+    }
+
+    private static int CompareCursor(HistoryCursor left, HistoryCursor right)
+    {
+        var timeComparison = left.TimeMsc.CompareTo(right.TimeMsc);
+        if (timeComparison != 0)
+        {
+            return timeComparison;
+        }
+        return ParseCursorTicket(left.Ticket).CompareTo(ParseCursorTicket(right.Ticket));
+    }
+
+    private static long ParseCursorTicket(string ticket)
+    {
+        if (!long.TryParse(
+                ticket,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var value)
+            || value < 0)
+        {
+            throw new InvalidDataException("mt4_deals_cursor_invalid");
+        }
+        return value;
     }
 
     private static string ReadKey(JsonElement value, string stream)

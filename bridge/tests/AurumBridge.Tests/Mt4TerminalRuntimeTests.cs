@@ -265,6 +265,50 @@ public sealed class Mt4TerminalRuntimeTests
         Assert.AreEqual("2026-01-31", connection.LastPerformanceRequest.DateTo);
     }
 
+    [TestMethod]
+    public async Task PersistsImmutableMt4HistoryWithDualCursor()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection { SupportsDeals = true };
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_deals",
+            () => 1_800_000_001_000);
+        await runtime.StartAsync();
+
+        var persisted = await runtime.IngestDealsAsync(new Mt4DealsBatch(
+            1_800_000_000_900,
+            [
+                Json("""{"ticket":"101","time_msc":1799999999900,"symbol":"XAUUSD"}"""),
+                Json("""{"ticket":"102","time_msc":1800000000000,"symbol":"XAUUSD"}"""),
+            ],
+            1_800_000_000_000,
+            102,
+            true),
+            fullSnapshot: true);
+
+        Assert.AreEqual(1, persisted);
+        Assert.AreEqual(
+            new AurumBridge.Storage.HistoryCursor(1_800_000_000_000, "102"),
+            await testStore.Store.GetHistoryCursorAsync(Terminal().TerminalInstanceId, "deals"));
+        var outbox = await testStore.Store.GetPendingOutboxAsync();
+        var delta = JsonDocument.Parse(outbox.Single().PayloadJson).RootElement;
+        Assert.AreEqual("deals", delta.GetProperty("stream").GetString());
+        Assert.HasCount(2, delta.GetProperty("upserts").EnumerateArray().ToArray());
+    }
+
+    [TestMethod]
+    public async Task OldMt4AdapterDoesNotExposeDealsStream()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection { SupportsDeals = false };
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_old_adapter");
+        await runtime.StartAsync();
+
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => runtime.RequestFullSnapshot("deals"));
+        Assert.AreEqual(0, connection.DealsCollectCount);
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "mt4_terminal_runtime_01",
@@ -313,9 +357,11 @@ public sealed class Mt4TerminalRuntimeTests
 
     private sealed class FakeConnection : IMt4EaConnection
     {
+        public bool SupportsDeals { get; init; }
         public Mt4Welcome? Welcome { get; private set; }
         public int ExecuteCount { get; private set; }
         public int CollectCount { get; private set; }
+        public int DealsCollectCount { get; private set; }
         public Mt4TradeCommand? LastCommand { get; private set; }
         public List<Mt4TradeCommand> Commands { get; } = [];
         public JsonElement? NextRawResult { get; init; }
@@ -425,6 +471,19 @@ public sealed class Mt4TerminalRuntimeTests
                     timezone_offset_minutes = 0, account = new { login = 12345678, server = "Broker-Demo" },
                     daily = Array.Empty<object>(), scanned_deal_count = 0, source = "mt4",
                 }), null));
+        }
+
+        public Task<Mt4DealsBatch> CollectDealsAsync(
+            Mt4DealsRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            DealsCollectCount++;
+            return Task.FromResult(new Mt4DealsBatch(
+                1_800_000_000_100,
+                [],
+                request.CursorTimeMsc,
+                request.CursorTicket,
+                false));
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
