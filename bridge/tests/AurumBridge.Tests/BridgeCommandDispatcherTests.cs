@@ -220,6 +220,44 @@ public sealed class BridgeCommandDispatcherTests
             $"Local in-process safety baseline: {injectionCount} injections in {started.ElapsedMilliseconds} ms; no production latency claim.");
     }
 
+    [TestMethod]
+    [TestCategory("Acceptance")]
+    public async Task BridgeDispatchOverheadP99StaysWithinFiftyMilliseconds()
+    {
+        const int warmupCount = 100;
+        const int sampleCount = 1_000;
+        var handlerCalls = 0;
+        var dispatcher = Dispatcher((command, _) =>
+        {
+            Interlocked.Increment(ref handlerCalls);
+            return Task.FromResult(Success(command));
+        });
+        var samples = new double[sampleCount];
+
+        for (var index = 0; index < warmupCount + sampleCount; index++)
+        {
+            var command = Command($"command_01JPERF{index:D6}") with
+            {
+                Action = "query_execution",
+            };
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            var result = await dispatcher.DispatchAsync(command);
+            Assert.AreEqual("succeeded", result.Status);
+            if (index >= warmupCount)
+            {
+                samples[index - warmupCount] = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            }
+        }
+
+        Array.Sort(samples);
+        var p99 = samples[(int)Math.Ceiling(samples.Length * 0.99) - 1];
+        TestContext.WriteLine(
+            $"Local Bridge dispatch p99: {p99:F3} ms ({sampleCount} samples; SQLite receipt included, Worker execution excluded).");
+        Assert.AreEqual(warmupCount + sampleCount, handlerCalls);
+        Assert.IsLessThanOrEqualTo(50.0, p99,
+            "Local Bridge dispatch overhead p99 exceeded the acceptance budget.");
+    }
+
     private BridgeCommandDispatcher Dispatcher(
         TerminalCommandHandler handler,
         bool initialSyncReady = true)
