@@ -117,10 +117,11 @@ public sealed class Mt4PipeProtocolTests
             true)));
         await using var connection = await accept;
 
-        var welcomeTask = connection.SendWelcomeAsync(new("mt4_terminal_pipe_01", 7));
+        var welcomeTask = connection.SendWelcomeAsync(new("mt4_terminal_pipe_01", 7, "aurum_mt4_terminal_pipe_01"));
         var welcome = Mt4PipeProtocol.DecodeWelcome(await Mt4PipeProtocol.ReadFrameAsync(client));
         await welcomeTask;
         Assert.AreEqual(7L, welcome.ConnectionEpoch);
+        Assert.AreEqual("aurum_mt4_terminal_pipe_01", welcome.ReconnectPipeName);
 
         var collectTask = connection.CollectAsync(Mt4CollectionStreams.All);
         var streams = Mt4PipeProtocol.DecodeCollect(await Mt4PipeProtocol.ReadFrameAsync(client));

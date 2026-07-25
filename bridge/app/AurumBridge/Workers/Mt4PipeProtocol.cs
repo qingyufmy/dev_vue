@@ -36,7 +36,10 @@ public sealed record Mt4Hello(
     bool Connected,
     bool TradeAllowed);
 
-public sealed record Mt4Welcome(string TerminalInstanceId, long ConnectionEpoch);
+public sealed record Mt4Welcome(
+    string TerminalInstanceId,
+    long ConnectionEpoch,
+    string ReconnectPipeName);
 
 public sealed record Mt4Snapshot(
     long ObservedAtUtcMsc,
@@ -153,15 +156,21 @@ public static class Mt4PipeProtocol
             writer.Write((int)Mt4MessageType.Welcome);
             WriteString(writer, welcome.TerminalInstanceId);
             writer.Write(welcome.ConnectionEpoch);
+            WriteString(writer, welcome.ReconnectPipeName);
         });
     }
 
     public static Mt4Welcome DecodeWelcome(ReadOnlySpan<byte> payload)
     {
         using var reader = CreateReader(payload, Mt4MessageType.Welcome);
-        var result = new Mt4Welcome(ReadString(reader, 128), reader.ReadInt64());
+        var result = new Mt4Welcome(
+            ReadString(reader, 128),
+            reader.ReadInt64(),
+            ReadString(reader, 128));
         EnsureFullyRead(reader);
-        if (string.IsNullOrWhiteSpace(result.TerminalInstanceId) || result.ConnectionEpoch <= 0)
+        if (string.IsNullOrWhiteSpace(result.TerminalInstanceId)
+            || result.ConnectionEpoch <= 0
+            || string.IsNullOrWhiteSpace(result.ReconnectPipeName))
         {
             throw new InvalidDataException("mt4_welcome_invalid");
         }

@@ -17,6 +17,7 @@ public sealed class Mt4TerminalRuntimeTests
             Terminal(),
             connection,
             testStore.Store,
+            "aurum_mt4_runtime_01",
             () => 1_800_000_000_100);
         await runtime.StartAsync();
 
@@ -39,7 +40,8 @@ public sealed class Mt4TerminalRuntimeTests
     {
         await using var testStore = await TestStore.CreateAsync();
         var connection = new FakeConnection();
-        await using var runtime = new Mt4TerminalRuntime(Terminal(), connection, testStore.Store);
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_01");
         await runtime.StartAsync();
 
         var result = await runtime.ExecuteCommandAsync(Command("place_order", new

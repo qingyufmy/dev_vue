@@ -13,6 +13,7 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     private readonly IMt4EaConnection _connection;
     private readonly BridgeStore _store;
     private readonly Func<long> _clock;
+    private readonly string _reconnectPipeName;
     private readonly Dictionary<string, long> _revisions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _latest = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _fullSnapshots = new(StringComparer.Ordinal);
@@ -22,11 +23,14 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         TerminalDescriptor terminal,
         IMt4EaConnection connection,
         BridgeStore store,
+        string reconnectPipeName,
         Func<long>? clock = null)
     {
         _terminal = terminal ?? throw new ArgumentNullException(nameof(terminal));
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
         _store = store ?? throw new ArgumentNullException(nameof(store));
+        ArgumentException.ThrowIfNullOrWhiteSpace(reconnectPipeName);
+        _reconnectPipeName = reconnectPipeName;
         _clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
 
@@ -35,7 +39,7 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         await _connection.SendWelcomeAsync(
-            new(_terminal.TerminalInstanceId, _terminal.ConnectionEpoch),
+            new(_terminal.TerminalInstanceId, _terminal.ConnectionEpoch, _reconnectPipeName),
             cancellationToken);
         foreach (var stream in Streams)
         {

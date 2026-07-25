@@ -31,9 +31,11 @@ int    g_pipe = INVALID_HANDLE;
 bool   g_welcomed = false;
 string g_terminal_id = "";
 long   g_connection_epoch = 0;
+string g_pipe_name = "";
 
 int OnInit()
   {
+   g_pipe_name = InpPipeName;
    EventSetTimer(1);
    return(INIT_SUCCEEDED);
   }
@@ -63,7 +65,11 @@ void OnTimer()
      {
       g_terminal_id = ReadUtf8(payload, offset);
       g_connection_epoch = ReadInt64(payload, offset);
-      g_welcomed = (StringLen(g_terminal_id) > 0 && g_connection_epoch > 0);
+      string reconnect_pipe = ReadUtf8(payload, offset);
+      if(StringLen(reconnect_pipe) > 0)
+         g_pipe_name = reconnect_pipe;
+      g_welcomed = (StringLen(g_terminal_id) > 0 && g_connection_epoch > 0
+         && StringLen(g_pipe_name) > 0);
       return;
      }
    if(message_type == MSG_COLLECT && g_welcomed)
@@ -89,7 +95,7 @@ void OnTimer()
 bool ConnectPipe()
   {
    ResetLastError();
-   string pipe_path = "\\\\.\\pipe\\" + InpPipeName;
+   string pipe_path = "\\\\.\\pipe\\" + g_pipe_name;
    g_pipe = FileOpen(pipe_path, FILE_READ|FILE_WRITE|FILE_BIN|FILE_ANSI);
    if(g_pipe == INVALID_HANDLE)
       return(false);
