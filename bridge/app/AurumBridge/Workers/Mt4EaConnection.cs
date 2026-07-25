@@ -23,6 +23,9 @@ public interface IMt4EaConnection : IAsyncDisposable
     Task<Mt4RiskSnapshot> GetRiskSnapshotAsync(
         Mt4RiskSnapshotRequest request,
         CancellationToken cancellationToken = default);
+    Task<Mt4PerformanceDaily> GetPerformanceDailyAsync(
+        Mt4PerformanceDailyRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class Mt4EaConnection : IMt4EaConnection
@@ -140,6 +143,12 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         CancellationToken cancellationToken = default) =>
         RequestAsync(Mt4PipeProtocol.EncodeRiskSnapshotRequest(request),
             Mt4PipeProtocol.DecodeRiskSnapshot, WorkerRequestPriority.Data, cancellationToken);
+
+    public Task<Mt4PerformanceDaily> GetPerformanceDailyAsync(
+        Mt4PerformanceDailyRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestAsync(Mt4PipeProtocol.EncodePerformanceDailyRequest(request),
+            Mt4PipeProtocol.DecodePerformanceDaily, WorkerRequestPriority.Data, cancellationToken);
 
     public async ValueTask DisposeAsync()
     {

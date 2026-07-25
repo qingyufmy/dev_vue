@@ -251,6 +251,45 @@ public sealed class Mt4PipeProtocolTests
     }
 
     [TestMethod]
+    public void PerformanceDailyRequestAndResponseRoundTripWithBoundedRange()
+    {
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_performance_01", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_performance_01", TerminalInstanceId = "mt4_terminal_codec_01",
+            AccountRef = new("Broker-Demo", "12345678"), ConnectionEpoch = 1,
+            Action = "performance_daily",
+            Params = JsonSerializer.SerializeToElement(new { date_from = "2026-01-01", date_to = "2026-01-31" }),
+        };
+        var local = Mt4PipeProtocol.CreatePerformanceDailyRequest(request);
+        var decodedRequest = Mt4PipeProtocol.DecodePerformanceDailyRequest(
+            Mt4PipeProtocol.EncodePerformanceDailyRequest(local));
+        var decodedResponse = Mt4PipeProtocol.DecodePerformanceDaily(
+            Mt4PipeProtocol.EncodePerformanceDaily(new(
+                request.RequestId, 1_800_000_000_100, "succeeded",
+                JsonSerializer.SerializeToElement(new { performance_version = 1, daily = Array.Empty<object>() }), null)));
+
+        Assert.AreEqual("2026-01-01", decodedRequest.DateFrom);
+        Assert.AreEqual("2026-01-31", decodedRequest.DateTo);
+        Assert.AreEqual(1, decodedResponse.Payload!.Value.GetProperty("performance_version").GetInt32());
+    }
+
+    [TestMethod]
+    public void PerformanceDailyRejectsMoreThanThirtyDayDifference()
+    {
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_performance_bad", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_performance_bad", TerminalInstanceId = "mt4_terminal_codec_01",
+            AccountRef = new("Broker-Demo", "12345678"), ConnectionEpoch = 1,
+            Action = "performance_daily",
+            Params = JsonSerializer.SerializeToElement(new { date_from = "2026-01-01", date_to = "2026-02-01" }),
+        };
+
+        Assert.ThrowsExactly<InvalidDataException>(() => Mt4PipeProtocol.CreatePerformanceDailyRequest(request));
+    }
+
+    [TestMethod]
     public void QuoteRequestAndResponseRoundTripWithStrictRoute()
     {
         var request = Mt4PipeProtocol.CreateQuoteRequest(QuoteRequest());

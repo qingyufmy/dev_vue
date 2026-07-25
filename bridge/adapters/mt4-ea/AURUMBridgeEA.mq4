@@ -18,6 +18,8 @@ input string InpPipeName = "AURUMBridgeV3";
 #define MSG_RISK_SNAPSHOT 19
 #define MSG_COMMAND      20
 #define MSG_COMMAND_RESULT 21
+#define MSG_PERFORMANCE_DAILY_REQUEST 22
+#define MSG_PERFORMANCE_DAILY 23
 #define MSG_SHUTDOWN     90
 #define MSG_SHUTDOWN_ACK 91
 #define STREAM_ACCOUNT   1
@@ -108,9 +110,14 @@ void OnTimer()
       SendSymbolSnapshot(payload, offset);
       return;
      }
-   if(message_type == MSG_RISK_SNAPSHOT_REQUEST && g_welcomed)
+    if(message_type == MSG_RISK_SNAPSHOT_REQUEST && g_welcomed)
      {
       SendRiskSnapshot(payload, offset);
+      return;
+     }
+   if(message_type == MSG_PERFORMANCE_DAILY_REQUEST && g_welcomed)
+     {
+      SendPerformanceDaily(payload, offset);
       return;
      }
    if(message_type == MSG_SHUTDOWN)
@@ -640,6 +647,161 @@ void SendRiskSnapshotResult(const string request_id, const int status,
   {
    uchar response[];
    AppendInt32(response, MSG_RISK_SNAPSHOT); AppendUtf8(response, request_id);
+   AppendInt64(response, observed_at > 0 ? observed_at : ((long)TimeGMT()) * 1000);
+   AppendInt32(response, status); AppendUtf8(response, payload_json); AppendUtf8(response, error_code);
+    if(!WriteFrame(response)) DisconnectPipe();
+   }
+
+void SendPerformanceDaily(uchar &request[], int &offset)
+  {
+   string request_id = ReadUtf8(request, offset);
+   string terminal_id = ReadUtf8(request, offset);
+   string broker_server = ReadUtf8(request, offset);
+   string login = ReadUtf8(request, offset);
+   long connection_epoch = ReadInt64(request, offset);
+   string date_from = ReadUtf8(request, offset);
+   string date_to = ReadUtf8(request, offset);
+   long observed_at = ((long)TimeGMT()) * 1000;
+   if(terminal_id != g_terminal_id || broker_server != AccountServer()
+      || login != IntegerToString(AccountNumber()) || connection_epoch != g_connection_epoch)
+     {
+      SendPerformanceDailyResult(request_id, 2, "", "performance_route_mismatch", observed_at);
+      return;
+     }
+   string parse_from = date_from;
+   string parse_to = date_to;
+   StringReplace(parse_from, "-", ".");
+   StringReplace(parse_to, "-", ".");
+   datetime range_start = StringToTime(parse_from + " 00:00");
+   datetime range_end = StringToTime(parse_to + " 00:00");
+   int day_count = (int)((range_end - range_start) / 86400) + 1;
+   if(range_start <= 0 || range_end < range_start || day_count < 1 || day_count > 31)
+     {
+      SendPerformanceDailyResult(request_id, 2, "", "performance_date_range_invalid", observed_at);
+      return;
+     }
+
+   string days[31];
+   double trade_profit[31], commission[31], swaps[31], realized_net[31];
+   double deposit[31], withdrawal[31], credit_change[31], closed_volume[31];
+   int exit_count[31], closed_count[31], winning_count[31], losing_count[31];
+   long first_time[31], last_time[31], last_ticket[31];
+   bool complete[31], used[31];
+   string issue[31];
+   ArrayInitialize(trade_profit, 0.0); ArrayInitialize(commission, 0.0);
+   ArrayInitialize(swaps, 0.0); ArrayInitialize(realized_net, 0.0);
+   ArrayInitialize(deposit, 0.0); ArrayInitialize(withdrawal, 0.0);
+   ArrayInitialize(credit_change, 0.0); ArrayInitialize(closed_volume, 0.0);
+   ArrayInitialize(exit_count, 0); ArrayInitialize(closed_count, 0);
+   ArrayInitialize(winning_count, 0); ArrayInitialize(losing_count, 0);
+   ArrayInitialize(first_time, 0); ArrayInitialize(last_time, 0); ArrayInitialize(last_ticket, 0);
+   ArrayInitialize(used, false);
+   ArrayInitialize(complete, true);
+   for(int day_index = 0; day_index < day_count; day_index++)
+     {
+      days[day_index] = TimeToString(range_start + day_index * 86400, TIME_DATE);
+      StringReplace(days[day_index], ".", "-");
+     }
+
+   int scanned_count = 0;
+   long server_offset_msc = ((long)TimeCurrent() - (long)TimeGMT()) * 1000;
+   for(int history_index = OrdersHistoryTotal() - 1; history_index >= 0; history_index--)
+     {
+      if(!OrderSelect(history_index, SELECT_BY_POS, MODE_HISTORY)) continue;
+      datetime close_time = OrderCloseTime();
+      if(close_time >= range_end + 86400) continue;
+      if(close_time < range_start) break;
+      int order_type = OrderType();
+      if(order_type == OP_BUYLIMIT || order_type == OP_SELLLIMIT
+         || order_type == OP_BUYSTOP || order_type == OP_SELLSTOP) continue;
+      string business_date = TimeToString(close_time, TIME_DATE);
+      StringReplace(business_date, ".", "-");
+      int slot = -1;
+      for(int find_index = 0; find_index < day_count; find_index++)
+         if(days[find_index] == business_date) { slot = find_index; break; }
+      if(slot < 0) continue;
+      scanned_count++;
+      used[slot] = true;
+      long event_msc = ((long)close_time) * 1000 - server_offset_msc;
+      long ticket = (long)OrderTicket();
+      if(first_time[slot] == 0 || event_msc < first_time[slot]) first_time[slot] = event_msc;
+      if(event_msc > last_time[slot] || (event_msc == last_time[slot] && ticket > last_ticket[slot]))
+        {
+         last_time[slot] = event_msc;
+         last_ticket[slot] = ticket;
+        }
+      double net = OrderProfit() + OrderCommission() + OrderSwap();
+      if(order_type == OP_BUY || order_type == OP_SELL)
+        {
+         trade_profit[slot] += OrderProfit();
+         commission[slot] += OrderCommission();
+         swaps[slot] += OrderSwap();
+         realized_net[slot] += net;
+         exit_count[slot]++;
+         closed_count[slot]++;
+         closed_volume[slot] += OrderLots();
+         if(net > 0) winning_count[slot]++;
+         else if(net < 0) losing_count[slot]++;
+        }
+      else if(order_type == 6) // MT4 balance operation; no named MQL4 constant exists.
+        {
+         if(net >= 0) deposit[slot] += net;
+         else withdrawal[slot] += MathAbs(net);
+        }
+      else if(order_type == 7) // MT4 credit operation; no named MQL4 constant exists.
+         credit_change[slot] += net;
+      else
+        {
+         complete[slot] = false;
+         issue[slot] = "unknown_order_type:" + IntegerToString(order_type);
+        }
+     }
+
+   string rows = "[";
+   bool first_row = true;
+   for(int row_index = 0; row_index < day_count; row_index++)
+     {
+      if(!used[row_index]) continue;
+      if(!first_row) rows += ",";
+      string issues = issue[row_index] == "" ? "[]" : "[\"" + JsonEscape(issue[row_index]) + "\"]";
+      rows += "{\"business_date\":\"" + days[row_index] + "\""
+         + ",\"trade_profit\":" + JsonNumber(trade_profit[row_index])
+         + ",\"commission\":" + JsonNumber(commission[row_index])
+         + ",\"swap\":" + JsonNumber(swaps[row_index]) + ",\"fee\":0,\"pnl_adjustment\":0"
+         + ",\"realized_net\":" + JsonNumber(realized_net[row_index])
+         + ",\"deposit\":" + JsonNumber(deposit[row_index])
+         + ",\"withdrawal\":" + JsonNumber(withdrawal[row_index])
+         + ",\"credit_change\":" + JsonNumber(credit_change[row_index])
+         + ",\"other_capital_change\":0"
+         + ",\"exit_deal_count\":" + IntegerToString(exit_count[row_index])
+         + ",\"closed_position_count\":" + IntegerToString(closed_count[row_index])
+         + ",\"winning_exit_count\":" + IntegerToString(winning_count[row_index])
+         + ",\"losing_exit_count\":" + IntegerToString(losing_count[row_index])
+         + ",\"closed_volume\":" + JsonNumber(closed_volume[row_index])
+         + ",\"first_deal_time_msc\":" + JsonLong(first_time[row_index])
+         + ",\"last_deal_time_msc\":" + JsonLong(last_time[row_index])
+         + ",\"last_deal_ticket\":" + JsonLong(last_ticket[row_index])
+         + ",\"data_complete\":" + (complete[row_index] ? "true" : "false")
+         + ",\"data_issues\":" + issues + "}";
+      first_row = false;
+     }
+   rows += "]";
+   int offset_minutes = (int)(server_offset_msc / 60000);
+   string payload = "{\"performance_version\":1,\"date_from\":\"" + date_from
+      + "\",\"date_to\":\"" + date_to + "\",\"timezone_offset_minutes\":"
+      + IntegerToString(offset_minutes) + ",\"clock_status\":\"offset_calibrated\""
+      + ",\"account\":{\"login\":" + IntegerToString(AccountNumber())
+      + ",\"server\":\"" + JsonEscape(AccountServer()) + "\",\"currency\":\""
+      + JsonEscape(AccountCurrency()) + "\"},\"daily\":" + rows
+      + ",\"scanned_deal_count\":" + IntegerToString(scanned_count) + ",\"source\":\"mt4\"}";
+   SendPerformanceDailyResult(request_id, 1, payload, "", observed_at);
+  }
+
+void SendPerformanceDailyResult(const string request_id, const int status,
+   const string payload_json, const string error_code, const long observed_at)
+  {
+   uchar response[];
+   AppendInt32(response, MSG_PERFORMANCE_DAILY); AppendUtf8(response, request_id);
    AppendInt64(response, observed_at > 0 ? observed_at : ((long)TimeGMT()) * 1000);
    AppendInt32(response, status); AppendUtf8(response, payload_json); AppendUtf8(response, error_code);
    if(!WriteFrame(response)) DisconnectPipe();

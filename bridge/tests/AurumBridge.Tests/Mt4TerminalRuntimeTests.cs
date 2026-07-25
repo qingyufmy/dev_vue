@@ -205,6 +205,31 @@ public sealed class Mt4TerminalRuntimeTests
         Assert.AreEqual(7L, connection.LastRiskRequest.LastDealTicket);
     }
 
+    [TestMethod]
+    public async Task MapsBoundedDailyPerformanceWithoutAFullHistoryPayload()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection();
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_01");
+        await runtime.StartAsync();
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_performance_01", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_performance_01", TerminalInstanceId = Terminal().TerminalInstanceId,
+            AccountRef = Terminal().AccountRef, ConnectionEpoch = Terminal().ConnectionEpoch,
+            Action = "performance_daily",
+            Params = JsonSerializer.SerializeToElement(new { date_from = "2026-01-01", date_to = "2026-01-31" }),
+        };
+
+        var response = await runtime.GetDataAsync(request);
+
+        Assert.AreEqual("succeeded", response.Status);
+        Assert.AreEqual(1, response.Payload!.Value.GetProperty("performance_version").GetInt32());
+        Assert.AreEqual("2026-01-01", connection.LastPerformanceRequest!.DateFrom);
+        Assert.AreEqual("2026-01-31", connection.LastPerformanceRequest.DateTo);
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "mt4_terminal_runtime_01",
@@ -252,6 +277,7 @@ public sealed class Mt4TerminalRuntimeTests
         public Mt4RatesRequest? LastRatesRequest { get; private set; }
         public Mt4SymbolSnapshotRequest? LastSymbolRequest { get; private set; }
         public Mt4RiskSnapshotRequest? LastRiskRequest { get; private set; }
+        public Mt4PerformanceDailyRequest? LastPerformanceRequest { get; private set; }
 
         public Task SendWelcomeAsync(Mt4Welcome welcome, CancellationToken cancellationToken = default)
         {
@@ -330,6 +356,21 @@ public sealed class Mt4TerminalRuntimeTests
                 {
                     snapshot_version = 1, source = "mt4", complete = true,
                     increment = new { requested_cursor = new { time_msc = request.LastDealTimeMsc, ticket = request.LastDealTicket } },
+                }), null));
+        }
+
+        public Task<Mt4PerformanceDaily> GetPerformanceDailyAsync(
+            Mt4PerformanceDailyRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            LastPerformanceRequest = request;
+            return Task.FromResult(new Mt4PerformanceDaily(
+                request.RequestId, 1_800_000_000_090, "succeeded",
+                JsonSerializer.SerializeToElement(new
+                {
+                    performance_version = 1, date_from = request.DateFrom, date_to = request.DateTo,
+                    timezone_offset_minutes = 0, account = new { login = 12345678, server = "Broker-Demo" },
+                    daily = Array.Empty<object>(), scanned_deal_count = 0, source = "mt4",
                 }), null));
         }
 

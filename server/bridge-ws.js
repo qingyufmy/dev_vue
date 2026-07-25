@@ -24,6 +24,7 @@ const browsers = new Map()      // userId -> Set<ws>
 const adminBrowsers = new Set() // authenticated admin console sockets
 const pendingCommands = new Map() // commandId -> { resolve, timer, userId }
 const performanceSyncJobs = new Set()
+const performanceSyncTimers = new Map()
 let adminUserId = null          // cached admin userId for fallback
 let adminUserIdLastCheck = 0
 const ADMIN_CACHE_TTL = ADMIN_CACHE_TTL_MS
@@ -33,6 +34,7 @@ let cmdCounter = 0
 let wss = null
 let bridgeV3Business = null
 const bridgeV3MarketStates = new Map()
+const bridgeV3TradingAccounts = new Map()
 let adminEventSeq = 0
 const adminEventThrottle = new Map()
 
@@ -99,16 +101,38 @@ export function createBridgeInitMessageQueue(ws) {
   }
 }
 
-function scheduleAccountPerformanceSync(userId, accountId, { recent = false, delayMs = 0 } = {}) {
+function hasAccountBridgeConnection(userId, accountId) {
+  const numericUserId = Number(userId)
+  const numericAccountId = Number(accountId)
   const bridge = bridges.get(Number(userId))
-  if (!bridge || bridge.ws?.readyState !== 1 || Number(bridge.tradingAccountId || 0) !== Number(accountId)) return
-  if (bridge._performanceSyncTimer) clearTimeout(bridge._performanceSyncTimer)
-  bridge._performanceSyncTimer = setTimeout(() => {
-    bridge._performanceSyncTimer = null
+  if (bridge?.ws?.readyState === 1 && Number(bridge.tradingAccountId || 0) === numericAccountId) return true
+  const connectedIds = new Set((bridgeV3Business?.connectedTerminals(numericUserId) || [])
+    .map(route => route.terminal_instance_id))
+  const bindings = bridgeV3TradingAccounts.get(numericUserId)
+  return [...(bindings || [])].some(([terminalId, boundAccountId]) =>
+    connectedIds.has(terminalId) && Number(boundAccountId) === numericAccountId)
+}
+
+function bridgeV3RouteForAccount(userId, accountId) {
+  const bindings = bridgeV3TradingAccounts.get(Number(userId))
+  return (bridgeV3Business?.connectedTerminals(Number(userId)) || []).find(route =>
+    Number(bindings?.get(route.terminal_instance_id) || 0) === Number(accountId)) || null
+}
+
+function scheduleAccountPerformanceSync(userId, accountId, { recent = false, delayMs = 0 } = {}) {
+  const numericUserId = Number(userId)
+  const numericAccountId = Number(accountId)
+  if (!hasAccountBridgeConnection(numericUserId, numericAccountId)) return
+  const jobKey = `${numericUserId}:${numericAccountId}`
+  const existing = performanceSyncTimers.get(jobKey)
+  if (existing) clearTimeout(existing)
+  const timer = setTimeout(() => {
+    performanceSyncTimers.delete(jobKey)
     runAccountPerformanceSync(Number(userId), Number(accountId), { recent }).catch(error => {
       console.warn(`[AccountPerformance] Background sync failed user=${userId} account=${accountId}:`, error.message)
     })
   }, Math.max(0, Number(delayMs) || 0))
+  performanceSyncTimers.set(jobKey, timer)
 }
 
 async function runAccountPerformanceSync(userId, accountId, { recent = false } = {}) {
@@ -122,13 +146,17 @@ async function runAccountPerformanceSync(userId, accountId, { recent = false } =
     const ai = await import('./routes/ai/index.js')
     const maxChunks = recent ? 1 : PERFORMANCE_SYNC_CHUNKS_PER_RUN
     for (let index = 0; index < maxChunks; index++) {
-      const bridge = bridges.get(userId)
-      if (!bridge || bridge.ws?.readyState !== 1 || Number(bridge.tradingAccountId || 0) !== accountId) break
+      if (!hasAccountBridgeConnection(userId, accountId)) break
       const window = await ai.getAccountPerformanceSyncWindow(userId, accountId, { recent })
       if (!window) { caughtUp = true; break }
       try {
+        const v3Route = bridgeV3RouteForAccount(userId, accountId)
         const result = await sendBridgeCommand(userId, 'performance_daily', {
           date_from:window.date_from, date_to:window.date_to,
+          ...(v3Route ? {
+            terminal_instance_id:v3Route.terminal_instance_id,
+            account_ref:v3Route.account_ref,
+          } : {}),
         }, 30_000, { noFallback:true })
         if (!result || result.status !== 'success') throw new Error(result?.message || result?.error || 'performance_sync_failed')
         await ai.saveAccountPerformanceChunk(userId, accountId, result, { advanceCursor:!recent })
@@ -150,8 +178,7 @@ async function runAccountPerformanceSync(userId, accountId, { recent = false } =
     throw error
   } finally {
     performanceSyncJobs.delete(jobKey)
-    const bridge = bridges.get(userId)
-    if (bridge?.ws?.readyState === 1 && Number(bridge.tradingAccountId || 0) === accountId) {
+    if (hasAccountBridgeConnection(userId, accountId)) {
       scheduleAccountPerformanceSync(userId, accountId, failed
         ? { recent:false, delayMs:5 * 60 * 1000 }
         : caughtUp
@@ -163,6 +190,63 @@ async function runAccountPerformanceSync(userId, accountId, { recent = false } =
 
 export function queueAccountPerformanceSync(userId, accountId, options = {}) {
   scheduleAccountPerformanceSync(Number(userId), Number(accountId), options)
+}
+
+async function synchronizeBridgeV3TerminalIdentity({ userId, terminal, connectionGeneration }) {
+  const route = (bridgeV3Business?.connectedTerminals(Number(userId)) || [])
+    .find(item => item.terminal_instance_id === terminal.terminal_instance_id
+      && Number(item.connection_generation) === Number(connectionGeneration))
+  if (!route) return
+  const account = await bridgeV3Business.execute(Number(userId), 'account', {
+    terminal_instance_id:terminal.terminal_instance_id,
+    account_ref:terminal.account_ref,
+  }, { timeoutMs:5_000 })
+  if (account?.status !== 'success' || !account.server || account.login === undefined) {
+    throw new Error(account?.message || account?.error || 'bridge_v3_identity_unavailable')
+  }
+  const ai = await import('./routes/ai/index.js')
+  const identity = await ai.syncTradingAccountIdentity(Number(userId), account)
+  let bindings = bridgeV3TradingAccounts.get(Number(userId))
+  if (!bindings) {
+    bindings = new Map()
+    bridgeV3TradingAccounts.set(Number(userId), bindings)
+  }
+  bindings.set(terminal.terminal_instance_id, identity.accountId)
+  if (identity.verified) queueAccountPerformanceSync(userId, identity.accountId, { recent:false, delayMs:250 })
+  sendToBrowsers(Number(userId), {
+    type:'account_switched',
+    account:{ id:identity.accountId, server:account.server, login:account.login },
+    switched:Boolean(identity.switched),
+    ownership_transferred:Boolean(identity.ownershipTransferred),
+    verified:Boolean(identity.verified),
+    anomaly_code:identity.anomalyCode || null,
+  })
+  for (const previousUserId of identity.previousOwnerUserIds || []) {
+    sendToBrowsers(previousUserId, {
+      type:'account_transferred',
+      account:{ server:account.server, login:account.login },
+      reason:'new_trade_authorized_bridge_connected',
+    })
+    await ai.stopAutoScheduler(previousUserId).catch(() => {})
+    await ai.removeUserRuntimeAutoSubscription(previousUserId).catch(() => {})
+    if (bridgeV3Business?.hasConnectedTerminal(Number(previousUserId))) {
+      await bridgeV3Business.execute(Number(previousUserId), 'toggle_trade', { enable:false })
+      bridgeV3Business.disconnectUser(Number(previousUserId), 'bridge_account_ownership_transferred')
+    }
+    const previousBridge = bridges.get(Number(previousUserId))
+    if (previousBridge?.ws?.readyState === 1) {
+      previousBridge.tradeEnabled = false
+      previousBridge.autoReasoningEnabled = false
+      try { await sendBridgeCommand(previousUserId, 'toggle_trade', { enable:false }, 2000, { noFallback:true }) } catch {}
+      try { previousBridge.ws.close(4004, 'MT5 account ownership transferred') } catch {}
+    }
+  }
+}
+
+function forgetBridgeV3TerminalIdentity({ userId, terminal }) {
+  const bindings = bridgeV3TradingAccounts.get(Number(userId))
+  bindings?.delete(terminal.terminal_instance_id)
+  if (bindings?.size === 0) bridgeV3TradingAccounts.delete(Number(userId))
 }
 
 const TRADE_REF_KEYS = new Set([
@@ -469,7 +553,10 @@ export function initBridgeWS(server) {
   // Cache admin userId at startup
   getAdminUserId().catch(() => {})
   wss = new WebSocketServer({ noServer: true, maxPayload: BRIDGE_WS_LIMITS.maxPayloadBytes })
-  const v3Gateway = createBridgeV3Gateway()
+  const v3Gateway = createBridgeV3Gateway({
+    onTerminalReady:synchronizeBridgeV3TerminalIdentity,
+    onTerminalDisconnected:forgetBridgeV3TerminalIdentity,
+  })
   bridgeV3Business = createBridgeV3BusinessAdapter({ gateway:v3Gateway })
 
   server.on('upgrade', (req, socket, head) => {

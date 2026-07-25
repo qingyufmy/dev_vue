@@ -12,7 +12,7 @@ const TRADE_ACTIONS = new Set([
 ])
 const SUPPORTED_ACTIONS = new Set([
   ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'rates', 'symbol_snapshot', 'risk_snapshot',
-  'order_lookup',
+  'performance_daily', 'order_lookup',
   'toggle_trade', 'set_quote_symbol',
 ])
 const RATE_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
@@ -529,6 +529,31 @@ export function createBridgeV3BusinessAdapter({
     return { ...result.payload, status:'success', source:result.payload.source || route.platform }
   }
 
+  async function requestPerformanceDaily(userId, route, params, timeoutMs) {
+    const dateFrom = String(params.date_from || '').slice(0, 10)
+    const dateTo = String(params.date_to || '').slice(0, 10)
+    const start = Date.parse(`${dateFrom}T00:00:00.000Z`)
+    const end = Date.parse(`${dateTo}T00:00:00.000Z`)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)
+      || !Number.isFinite(start) || !Number.isFinite(end)) {
+      throw adapterError('performance_date_range_required')
+    }
+    if (end < start) throw adapterError('performance_date_range_invalid')
+    if (end - start > 30 * 24 * 60 * 60 * 1000) {
+      throw adapterError('performance_date_range_too_large')
+    }
+    const request = {
+      v:3, type:'data_request', message_id:`message_${randomUUID()}`, sent_at_utc_msc:now(),
+      request_id:`data_${randomUUID()}`, ...routeParams(route), action:'performance_daily',
+      params:{ date_from:dateFrom, date_to:dateTo },
+    }
+    const result = await gateway.requestData(userId, request, { timeoutMs:Math.min(timeoutMs, 30_000) })
+    if (result.status !== 'succeeded') {
+      return { status:'error', error:result.error_code, message:result.error_code }
+    }
+    return { ...result.payload, status:'success', source:result.payload.source || route.platform }
+  }
+
   async function requestMarketState(userId, route, params, timeoutMs) {
     const checkedAt = now()
     const quote = await requestQuote(userId, route, params, timeoutMs)
@@ -697,6 +722,9 @@ export function createBridgeV3BusinessAdapter({
         return await requestSymbolSnapshot(userId, route, params, timeoutMs)
       }
       if (action === 'risk_snapshot') return await requestRiskSnapshot(userId, route, params, timeoutMs)
+      if (action === 'performance_daily') {
+        return await requestPerformanceDaily(userId, route, params, timeoutMs)
+      }
       if (action === 'order_lookup') return await executeOrderLookup(userId, route, params, timeoutMs)
       if (action === 'close_system_position' || action === 'cancel_system_pending'
         || action === 'modify_system_position_protection') {
@@ -715,6 +743,7 @@ export function createBridgeV3BusinessAdapter({
     supports:action => SUPPORTED_ACTIONS.has(action),
     hasConnectedTerminal:userId => connectedTerminals(userId).length > 0,
     isTradeEnabled:userId => gateway.isTradeEnabled(Number(userId)),
+    disconnectUser:(userId, reason) => gateway.disconnectUser?.(Number(userId), reason) || 0,
     connectedTerminals,
     connectedUsers:() => gateway.listConnectedUsers?.() || [],
     getGeneration:userId => {

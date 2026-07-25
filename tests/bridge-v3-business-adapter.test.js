@@ -182,6 +182,29 @@ describe('Bridge v3 business compatibility adapter', () => {
     expect(gateway.requestData).not.toHaveBeenCalled()
   })
 
+  it('routes a bounded daily performance query without exporting unbounded history', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ performance_version:1, date_from:'2026-01-01',
+        date_to:'2026-01-31', timezone_offset_minutes:0, daily:[], scanned_deal_count:0 },
+    } })
+    await expect(adapter.execute(42, 'performance_daily', {
+      date_from:'2026-01-01', date_to:'2026-01-31',
+    }, { timeoutMs:30_000 })).resolves.toMatchObject({
+      status:'success', performance_version:1, source:'mt5', daily:[],
+    })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'performance_daily', params:{ date_from:'2026-01-01', date_to:'2026-01-31' },
+    }), { timeoutMs:30_000 })
+  })
+
+  it('rejects an oversized performance range before terminal I/O', async () => {
+    const { adapter, gateway } = setup()
+    await expect(adapter.execute(42, 'performance_daily', {
+      date_from:'2026-01-01', date_to:'2026-02-01',
+    })).resolves.toMatchObject({ status:'error', error:'performance_date_range_too_large' })
+    expect(gateway.requestData).not.toHaveBeenCalled()
+  })
+
   it('maps order reconciliation to a durable query_execution command', async () => {
     const { adapter, gateway } = setup({ commandResult:{
       status:'succeeded', command_id:'command_01JLOOKUP01',

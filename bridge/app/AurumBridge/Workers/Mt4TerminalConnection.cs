@@ -99,6 +99,11 @@ public sealed class ReconnectableMt4EaConnection : IMt4EaConnection
         CancellationToken cancellationToken = default) =>
         ReadyConnection().GetRiskSnapshotAsync(request, cancellationToken);
 
+    public Task<Mt4PerformanceDaily> GetPerformanceDailyAsync(
+        Mt4PerformanceDailyRequest request,
+        CancellationToken cancellationToken = default) =>
+        ReadyConnection().GetPerformanceDailyAsync(request, cancellationToken);
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)

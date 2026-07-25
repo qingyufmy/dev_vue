@@ -79,6 +79,8 @@ export function createBridgeV3Gateway({
   markDispatched = markCommandDispatched,
   markUncertain = markCommandDeliveryUncertain,
   recordResult = recordCommandResult,
+  onTerminalReady = async () => {},
+  onTerminalDisconnected = async () => {},
   now = () => Date.now(),
 } = {}) {
   const wss = new WebSocketServerImpl({ noServer:true, maxPayload:BRIDGE_V3_MAX_PAYLOAD_BYTES })
@@ -105,7 +107,14 @@ export function createBridgeV3Gateway({
   function unregisterConnection(connection) {
     for (const terminal of connection.terminals.values()) {
       const current = connectionsByTerminal.get(terminal.terminal_instance_id)
-      if (current?.connection === connection) connectionsByTerminal.delete(terminal.terminal_instance_id)
+      if (current?.connection === connection) {
+        connectionsByTerminal.delete(terminal.terminal_instance_id)
+        Promise.resolve(onTerminalDisconnected({
+          userId:connection.userId,
+          terminal:{ ...terminal },
+          connectionGeneration:connection.generation,
+        })).catch(() => {})
+      }
     }
     if (connection.sessionId && connection.userId) {
       disconnectTerminals(connection.sessionId, connection.userId, { nowUtcMsc:now() }).catch(() => {})
@@ -238,6 +247,7 @@ export function createBridgeV3Gateway({
     }
     connection.lastSeen = now()
     if (message.type === 'data_delta') {
+      const wasInitialSyncReady = terminalInitialSyncReady(connection, message.terminal_instance_id)
       const result = await applyDelta(message, { userId:connection.userId, nowUtcMsc:now() })
       if (message.full_snapshot === true && ['applied', 'duplicate'].includes(result.status)
         && REQUIRED_INITIAL_STREAMS.includes(message.stream)) {
@@ -256,6 +266,15 @@ export function createBridgeV3Gateway({
         status:result.status,
         expected_revision:result.expected_revision,
       })
+      if (!wasInitialSyncReady && terminalInitialSyncReady(connection, message.terminal_instance_id)) {
+        Promise.resolve(onTerminalReady({
+          userId:connection.userId,
+          terminal:{ ...terminal },
+          connectionGeneration:connection.generation,
+        })).catch(error => {
+          console.warn(`[BridgeV3] terminal ready callback failed user=${connection.userId} error=${error.message}`)
+        })
+      }
       return
     }
     if (message.type === 'command_result') {
@@ -544,6 +563,18 @@ export function createBridgeV3Gateway({
     return changed
   }
 
+  function disconnectUser(userId, reason = 'bridge_session_revoked') {
+    const connections = new Set()
+    for (const { connection } of connectionsByTerminal.values()) {
+      if (connection.userId === Number(userId) && !connection.closed) connections.add(connection)
+    }
+    for (const connection of connections) {
+      connection.tradeEnabled = false
+      protocolError(connection.ws, reason, null, { closeCode:4004 })
+    }
+    return connections.size
+  }
+
   return {
     wss,
     connectionsByTerminal,
@@ -559,5 +590,6 @@ export function createBridgeV3Gateway({
     listConnectedUsers,
     isTradeEnabled,
     setTradeEnabled,
+    disconnectUser,
   }
 }

@@ -151,6 +151,9 @@ describe('Bridge v3 protocol contract', () => {
       params:{ symbol:'XAUUSD', timeframe:'M30', count:100 },
     })
     expect(validateBridgeV3Message(request)).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({
+      ...request, action:'performance_daily', params:{ date_from:'2026-01-01', date_to:'2026-01-31' },
+    })).toEqual({ ok:true, errors:[] })
     expect(validateBridgeV3Message({ ...request, action:'shell' })).toMatchObject({
       ok:false, errors:expect.arrayContaining(['action:unsupported']),
     })

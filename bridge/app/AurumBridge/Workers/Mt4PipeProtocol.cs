@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using AurumBridge.Protocol;
@@ -21,6 +22,8 @@ public enum Mt4MessageType
     RiskSnapshot = 19,
     Command = 20,
     CommandResult = 21,
+    PerformanceDailyRequest = 22,
+    PerformanceDaily = 23,
     Shutdown = 90,
     ShutdownAck = 91,
 }
@@ -123,6 +126,22 @@ public sealed record Mt4RiskSnapshotRequest(
     double? ProposedStopLoss);
 
 public sealed record Mt4RiskSnapshot(
+    string RequestId,
+    long ObservedAtUtcMsc,
+    string Status,
+    JsonElement? Payload,
+    string? ErrorCode);
+
+public sealed record Mt4PerformanceDailyRequest(
+    string RequestId,
+    string TerminalInstanceId,
+    string BrokerServer,
+    string Login,
+    long ConnectionEpoch,
+    string DateFrom,
+    string DateTo);
+
+public sealed record Mt4PerformanceDaily(
     string RequestId,
     long ObservedAtUtcMsc,
     string Status,
@@ -649,6 +668,72 @@ public static class Mt4PipeProtocol
         EnsureFullyRead(reader); ValidateRiskSnapshot(result); return result;
     }
 
+    public static Mt4PerformanceDailyRequest CreatePerformanceDailyRequest(DataRequestMessage request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Version != 3 || request.Type != "data_request" || request.Action != "performance_daily")
+        {
+            throw new InvalidDataException("mt4_performance_request_invalid");
+        }
+        var result = new Mt4PerformanceDailyRequest(
+            request.RequestId, request.TerminalInstanceId, request.AccountRef.BrokerServer,
+            request.AccountRef.Login, request.ConnectionEpoch,
+            ReadOptionalString(request.Params, "date_from") ?? string.Empty,
+            ReadOptionalString(request.Params, "date_to") ?? string.Empty);
+        ValidatePerformanceDailyRequest(result);
+        return result;
+    }
+
+    public static byte[] EncodePerformanceDailyRequest(Mt4PerformanceDailyRequest request)
+    {
+        ValidatePerformanceDailyRequest(request);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.PerformanceDailyRequest);
+            WriteString(writer, request.RequestId); WriteString(writer, request.TerminalInstanceId);
+            WriteString(writer, request.BrokerServer); WriteString(writer, request.Login);
+            writer.Write(request.ConnectionEpoch); WriteString(writer, request.DateFrom);
+            WriteString(writer, request.DateTo);
+        });
+    }
+
+    public static Mt4PerformanceDailyRequest DecodePerformanceDailyRequest(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.PerformanceDailyRequest);
+        var result = new Mt4PerformanceDailyRequest(
+            ReadString(reader, 128), ReadString(reader, 128), ReadString(reader, 128),
+            ReadString(reader, 64), reader.ReadInt64(), ReadString(reader, 10), ReadString(reader, 10));
+        EnsureFullyRead(reader); ValidatePerformanceDailyRequest(result); return result;
+    }
+
+    public static byte[] EncodePerformanceDaily(Mt4PerformanceDaily result)
+    {
+        ValidatePerformanceDaily(result);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.PerformanceDaily); WriteString(writer, result.RequestId);
+            writer.Write(result.ObservedAtUtcMsc); writer.Write(result.Status == "succeeded" ? 1 : 2);
+            WriteString(writer, result.Payload?.GetRawText() ?? string.Empty);
+            WriteString(writer, result.ErrorCode ?? string.Empty);
+        });
+    }
+
+    public static Mt4PerformanceDaily DecodePerformanceDaily(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.PerformanceDaily);
+        var requestId = ReadString(reader, 128); var observedAt = reader.ReadInt64();
+        var status = reader.ReadInt32() switch
+        {
+            1 => "succeeded", 2 => "rejected",
+            _ => throw new InvalidDataException("mt4_performance_status_invalid"),
+        };
+        var payloadText = ReadString(reader, MaxStringBytes);
+        var result = new Mt4PerformanceDaily(requestId, observedAt, status,
+            string.IsNullOrEmpty(payloadText) ? null : ParseObject(payloadText, "mt4_performance_payload_invalid"),
+            NullIfEmpty(ReadString(reader, 128)));
+        EnsureFullyRead(reader); ValidatePerformanceDaily(result); return result;
+    }
+
     public static Mt4TradeCommand CreateTradeCommand(CommandMessage command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -1157,6 +1242,33 @@ public static class Mt4PipeProtocol
             || result.Status == "rejected" && string.IsNullOrWhiteSpace(result.ErrorCode))
         {
             throw new InvalidDataException("mt4_risk_snapshot_invalid");
+        }
+    }
+
+    private static void ValidatePerformanceDailyRequest(Mt4PerformanceDailyRequest request)
+    {
+        var validFrom = DateOnly.TryParseExact(request.DateFrom, "yyyy-MM-dd",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var dateFrom);
+        var validTo = DateOnly.TryParseExact(request.DateTo, "yyyy-MM-dd",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var dateTo);
+        if (string.IsNullOrWhiteSpace(request.RequestId)
+            || string.IsNullOrWhiteSpace(request.TerminalInstanceId)
+            || string.IsNullOrWhiteSpace(request.BrokerServer)
+            || string.IsNullOrWhiteSpace(request.Login) || request.ConnectionEpoch <= 0
+            || !validFrom || !validTo || dateTo < dateFrom || dateTo.DayNumber - dateFrom.DayNumber > 30)
+        {
+            throw new InvalidDataException("mt4_performance_request_invalid");
+        }
+    }
+
+    private static void ValidatePerformanceDaily(Mt4PerformanceDaily result)
+    {
+        if (string.IsNullOrWhiteSpace(result.RequestId) || result.ObservedAtUtcMsc <= 0
+            || result.Status is not ("succeeded" or "rejected")
+            || result.Status == "succeeded" && result.Payload is null
+            || result.Status == "rejected" && string.IsNullOrWhiteSpace(result.ErrorCode))
+        {
+            throw new InvalidDataException("mt4_performance_invalid");
         }
     }
 

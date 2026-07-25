@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import math
 import struct
@@ -196,7 +197,7 @@ class Mt5Adapter:
             self._validate_route(request)
             self._ensure_identity()
             action = request.get("action")
-            if action not in {"rates", "symbol_snapshot", "risk_snapshot"}:
+            if action not in {"rates", "symbol_snapshot", "risk_snapshot", "performance_daily"}:
                 raise WorkerError("terminal_data_action_unsupported")
             params = request.get("params")
             if not isinstance(params, dict):
@@ -205,8 +206,10 @@ class Mt5Adapter:
                 payload = self._rates(params)
             elif action == "symbol_snapshot":
                 payload = self._symbol_snapshot(params)
-            else:
+            elif action == "risk_snapshot":
                 payload = self._risk_snapshot(params)
+            else:
+                payload = self._performance_daily(params)
             return self._data_result(request, "succeeded", payload=payload)
         except WorkerError as error:
             return self._data_result(request, "rejected", error_code=error.code)
@@ -354,6 +357,131 @@ class Mt5Adapter:
                 "margin_so_so": float(getattr(account, "margin_so_so", 0.0) or 0.0),
             },
             "instrument": instrument,
+        }
+
+    def _performance_daily(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            start_date = datetime.strptime(str(params.get("date_from") or "")[:10], "%Y-%m-%d")
+            end_date = datetime.strptime(str(params.get("date_to") or "")[:10], "%Y-%m-%d")
+        except (TypeError, ValueError) as error:
+            raise WorkerError("performance_date_range_required") from error
+        if end_date < start_date:
+            raise WorkerError("performance_date_range_invalid")
+        if (end_date - start_date).days > 30:
+            raise WorkerError("performance_date_range_too_large")
+
+        account = self.mt5.account_info()
+        if account is None:
+            raise WorkerError("performance_account_unavailable")
+        date_from = (start_date - timedelta(days=1)).replace(tzinfo=timezone.utc)
+        date_to = (end_date + timedelta(days=2)).replace(tzinfo=timezone.utc)
+        deals = self.mt5.history_deals_get(date_from, date_to)
+        if deals is None:
+            raise WorkerError("performance_history_unavailable", str(self.mt5.last_error()))
+
+        trade_types = {int(getattr(self.mt5, "DEAL_TYPE_BUY", 0)),
+                       int(getattr(self.mt5, "DEAL_TYPE_SELL", 1))}
+        balance_type = int(getattr(self.mt5, "DEAL_TYPE_BALANCE", 2))
+        credit_type = int(getattr(self.mt5, "DEAL_TYPE_CREDIT", 3))
+        other_capital_types = {int(getattr(self.mt5, name, value)) for name, value in (
+            ("DEAL_TYPE_CORRECTION", 5), ("DEAL_TYPE_BONUS", 6))}
+        adjustment_types = {int(getattr(self.mt5, name, value)) for name, value in (
+            ("DEAL_TYPE_CHARGE", 4), ("DEAL_TYPE_COMMISSION", 7),
+            ("DEAL_TYPE_COMMISSION_DAILY", 8), ("DEAL_TYPE_COMMISSION_MONTHLY", 9),
+            ("DEAL_TYPE_COMMISSION_AGENT_DAILY", 10),
+            ("DEAL_TYPE_COMMISSION_AGENT_MONTHLY", 11), ("DEAL_TYPE_INTEREST", 12),
+            ("DEAL_TYPE_DIVIDEND", 15), ("DEAL_TYPE_DIVIDEND_FRANKED", 16),
+            ("DEAL_TYPE_TAX", 17))}
+        exit_entries = {int(getattr(self.mt5, name, value)) for name, value in (
+            ("DEAL_ENTRY_OUT", 1), ("DEAL_ENTRY_INOUT", 2), ("DEAL_ENTRY_OUT_BY", 3))}
+
+        def empty_day(day: str) -> dict[str, Any]:
+            return {
+                "business_date": day, "trade_profit": 0.0, "commission": 0.0,
+                "swap": 0.0, "fee": 0.0, "pnl_adjustment": 0.0,
+                "realized_net": 0.0, "deposit": 0.0, "withdrawal": 0.0,
+                "credit_change": 0.0, "other_capital_change": 0.0,
+                "exit_deal_count": 0, "closed_position_count": 0,
+                "winning_exit_count": 0, "losing_exit_count": 0,
+                "closed_volume": 0.0, "first_deal_time_msc": 0,
+                "last_deal_time_msc": 0, "last_deal_ticket": 0,
+                "data_complete": True, "data_issues": [], "_positions": set(),
+            }
+
+        daily: dict[str, dict[str, Any]] = {}
+        start_text = start_date.strftime("%Y-%m-%d")
+        end_text = end_date.strftime("%Y-%m-%d")
+        for item in deals:
+            raw = _plain(item)
+            if not isinstance(raw, dict):
+                raise WorkerError("performance_history_invalid")
+            event_ms = int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000)
+            day = datetime.fromtimestamp(event_ms / 1000.0, timezone.utc).strftime("%Y-%m-%d")
+            if day < start_text or day > end_text:
+                continue
+            row = daily.setdefault(day, empty_day(day))
+            ticket = int(raw.get("ticket") or 0)
+            if not row["first_deal_time_msc"] or event_ms < row["first_deal_time_msc"]:
+                row["first_deal_time_msc"] = event_ms
+            if (event_ms, ticket) > (row["last_deal_time_msc"], row["last_deal_ticket"]):
+                row["last_deal_time_msc"], row["last_deal_ticket"] = event_ms, ticket
+            deal_type = int(raw.get("type") if raw.get("type") is not None else -1)
+            profit = float(raw.get("profit") or 0.0)
+            commission = float(raw.get("commission") or 0.0)
+            swap = float(raw.get("swap") or 0.0)
+            fee = float(raw.get("fee") or 0.0)
+            net = profit + commission + swap + fee
+            if deal_type in trade_types:
+                row["trade_profit"] += profit
+                row["commission"] += commission
+                row["swap"] += swap
+                row["fee"] += fee
+                row["realized_net"] += net
+                if int(raw.get("entry") if raw.get("entry") is not None else -1) in exit_entries:
+                    row["exit_deal_count"] += 1
+                    row["closed_volume"] += float(raw.get("volume") or 0.0)
+                    position_id = int(raw.get("position_id") or 0)
+                    if position_id:
+                        row["_positions"].add(position_id)
+                    if net > 0:
+                        row["winning_exit_count"] += 1
+                    elif net < 0:
+                        row["losing_exit_count"] += 1
+            elif deal_type == balance_type:
+                if net >= 0:
+                    row["deposit"] += net
+                else:
+                    row["withdrawal"] += abs(net)
+            elif deal_type == credit_type:
+                row["credit_change"] += net
+            elif deal_type in other_capital_types:
+                row["other_capital_change"] += net
+            elif deal_type in adjustment_types:
+                row["pnl_adjustment"] += net
+                row["realized_net"] += net
+            else:
+                row["data_complete"] = False
+                row["data_issues"].append(f"unknown_deal_type:{deal_type}")
+
+        numeric_fields = ("trade_profit", "commission", "swap", "fee", "pnl_adjustment",
+                          "realized_net", "deposit", "withdrawal", "credit_change",
+                          "other_capital_change", "closed_volume")
+        rows: list[dict[str, Any]] = []
+        for day in sorted(daily):
+            row = daily[day]
+            row["closed_position_count"] = len(row.pop("_positions"))
+            row["data_issues"] = sorted(set(row["data_issues"]))
+            for field in numeric_fields:
+                row[field] = round(float(row[field]), 8)
+            digest = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            row["source_hash"] = hashlib.sha256(digest.encode("utf-8")).hexdigest()
+            rows.append(row)
+        return {
+            "performance_version": 1, "date_from": start_text, "date_to": end_text,
+            "timezone_offset_minutes": 0, "clock_status": "utc_direct",
+            "account": {"login": int(account.login), "server": str(account.server),
+                        "currency": str(getattr(account, "currency", "") or "")},
+            "daily": rows, "scanned_deal_count": len(deals), "source": "mt5",
         }
 
     def _risk_snapshot(self, params: dict[str, Any]) -> dict[str, Any]:

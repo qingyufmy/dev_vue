@@ -374,6 +374,40 @@ describe('Bridge v3 websocket gateway', () => {
     expect(gateway.listConnectedTerminals(42)[0].initial_sync_ready).toBe(true)
   })
 
+  it('notifies account binding once when initial sync becomes ready and on disconnect', async () => {
+    const onTerminalReady = vi.fn().mockResolvedValue(undefined)
+    const onTerminalDisconnected = vi.fn().mockResolvedValue(undefined)
+    const { gateway } = setup({ onTerminalReady, onTerminalDisconnected })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    await completeInitialSync(ws)
+
+    expect(onTerminalReady).toHaveBeenCalledOnce()
+    expect(onTerminalReady).toHaveBeenCalledWith(expect.objectContaining({
+      userId:42,
+      terminal:expect.objectContaining({ terminal_instance_id:'terminal_01JGATEWAY1' }),
+      connectionGeneration:1,
+    }))
+    ws.emit('close')
+    await flush()
+    expect(onTerminalDisconnected).toHaveBeenCalledOnce()
+  })
+
+  it('disables trading and closes every connection when account ownership is revoked', async () => {
+    const { gateway } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    expect(gateway.isTradeEnabled(42)).toBe(true)
+
+    expect(gateway.disconnectUser(42, 'bridge_account_ownership_transferred')).toBe(1)
+
+    expect(gateway.isTradeEnabled(42)).toBe(false)
+    expect(ws.close).toHaveBeenCalledWith(4004, 'bridge_account_ownership_transferred')
+  })
+
   it('keeps commands queued until all initial snapshots are acknowledged', async () => {
     const { gateway, dependencies } = setup()
     const ws = await connect(gateway)

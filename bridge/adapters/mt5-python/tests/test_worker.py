@@ -120,6 +120,44 @@ class WorkerTests(unittest.TestCase):
                     adapter.collect([stream])
                 self.assertEqual(error_code, raised.exception.code)
 
+    def test_returns_bounded_daily_performance_without_exporting_raw_deals(self):
+        adapter = self.adapter()
+        event_ms = 1_767_312_000_000  # 2026-01-02T12:00:00Z
+        adapter.mt5.history_deals_get = lambda *args: (
+            Deal(501, event_ms // 1000, event_ms, 0, 1, 7001,
+                 12.5, -0.5, -0.25, 0.0),
+        )
+        request = {
+            "v": 3, "type": "data_request", "request_id": "data_01JPERFORMANCE",
+            "terminal_instance_id": "terminal_01JWORKER01",
+            "account_ref": {"broker_server": "Broker-Demo", "login": "12345678"},
+            "connection_epoch": 7, "action": "performance_daily",
+            "params": {"date_from": "2026-01-02", "date_to": "2026-01-02"},
+        }
+
+        result = adapter.data(request)
+
+        self.assertEqual("succeeded", result["status"])
+        self.assertEqual(1, result["payload"]["scanned_deal_count"])
+        self.assertEqual(11.75, result["payload"]["daily"][0]["realized_net"])
+        self.assertEqual(1, result["payload"]["daily"][0]["closed_position_count"])
+        self.assertNotIn("deals", result["payload"])
+
+    def test_rejects_performance_ranges_larger_than_31_days_before_history_query(self):
+        adapter = self.adapter()
+        called = []
+        adapter.mt5.history_deals_get = lambda *args: called.append(args) or ()
+        result = adapter.data({
+            "v": 3, "type": "data_request", "request_id": "data_01JPERFORMANCE",
+            "terminal_instance_id": "terminal_01JWORKER01",
+            "account_ref": {"broker_server": "Broker-Demo", "login": "12345678"},
+            "connection_epoch": 7, "action": "performance_daily",
+            "params": {"date_from": "2026-01-01", "date_to": "2026-02-02"},
+        })
+        self.assertEqual("rejected", result["status"])
+        self.assertEqual("performance_date_range_too_large", result["error_code"])
+        self.assertEqual([], called)
+
     def test_executes_matching_command_and_caches_result(self):
         adapter = self.adapter()
         command = self.command()
