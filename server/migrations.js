@@ -4025,6 +4025,51 @@ const migrations = [
         KEY idx_payment_side_effect_ready (status, next_attempt_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '140_bridge_v3_command_ledger',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS bridge_v3_command_ledger (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        command_id VARCHAR(128) NOT NULL,
+        user_id INT NOT NULL,
+        terminal_instance_id VARCHAR(128) NOT NULL,
+        broker_server VARCHAR(128) NOT NULL,
+        login_account VARCHAR(64) NOT NULL,
+        connection_epoch BIGINT UNSIGNED NOT NULL,
+        action VARCHAR(32) NOT NULL,
+        params_json LONGTEXT NOT NULL,
+        payload_hash CHAR(64) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        deadline_at_utc_msc BIGINT UNSIGNED NOT NULL,
+        dispatch_attempt_count INT UNSIGNED NOT NULL DEFAULT 0,
+        last_dispatched_at_utc_msc BIGINT UNSIGNED DEFAULT NULL,
+        completed_at_utc_msc BIGINT UNSIGNED DEFAULT NULL,
+        result_status VARCHAR(24) DEFAULT NULL,
+        result_json LONGTEXT DEFAULT NULL,
+        result_hash CHAR(64) DEFAULT NULL,
+        error_code VARCHAR(128) DEFAULT NULL,
+        error_message VARCHAR(1000) DEFAULT NULL,
+        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+        UNIQUE KEY uk_bridge_v3_command_id (command_id),
+        KEY idx_bridge_v3_command_ready (status, deadline_at_utc_msc),
+        KEY idx_bridge_v3_command_route (user_id, terminal_instance_id, connection_epoch, status),
+        KEY idx_bridge_v3_command_updated (updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS bridge_v3_command_events (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        command_id VARCHAR(128) NOT NULL,
+        event_type VARCHAR(32) NOT NULL,
+        from_status VARCHAR(24) DEFAULT NULL,
+        to_status VARCHAR(24) NOT NULL,
+        detail_json LONGTEXT DEFAULT NULL,
+        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        KEY idx_bridge_v3_command_event (command_id, id),
+        KEY idx_bridge_v3_command_event_created (created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 
