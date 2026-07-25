@@ -25,6 +25,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | SQLite WAL 只保存最新读模型、Outbox、绑定和有限回执 | 已实现 | `BridgeStore` 及其测试 |
 | 数据 revision、缺口检测、完整快照恢复 | 已实现 | `BridgeInboundRouter`、`BridgeCommandDispatcher`、读模型测试 |
 | 数据 Outbox 有界并按终端/epoch/stream 合并 | 已实现 | `BridgeStore.PersistDataDeltaAsync` 及边界测试 |
+| MT5 查询失败不得伪装为空仓或空挂单 | 已实现 | Worker 对 `positions_get` / `orders_get` 的 `None` 结果失败关闭并保留旧读模型 |
 | 交易回执持久化、确认前不删除且不与数据合并 | 已实现 | `BridgeStore`、`BridgeOutboxPump`、回执测试 |
 | command ID、deadline、账户/终端/epoch 路由与幂等 | 已实现 | v3 协议、`BridgeCommandDispatcher`、服务端 `command-ledger` |
 | 不明确结果返回 uncertain，不自动重放 | 已实现 | Host dispatcher 与服务端 ledger/reconcile 测试 |
@@ -46,7 +47,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 |---|---|---|
 | .NET Bridge/Launcher 全量测试 | 156/156 通过 | 自动化功能、协议、存储、恢复、更新与 UI 文案 |
 | Node 服务端全量测试 | 1677/1677 通过 | v3 Gateway、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
-| MT5 Python Worker 测试 | 22/22 通过 | Python 适配器协议与 MT5 调用封装 |
+| MT5 Python Worker 测试 | 23/23 通过 | Python 适配器协议、MT5 调用封装与空快照失败关闭 |
 | MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |
 | Windows 主界面走查 | 已通过 | 平台选择、真实 MT5 账户探测、仅 MT5 Worker、内置日志查看 |
 | 浏览器授权页真实路由 | 已通过 | 登录态下显示当前账户、一次性短码、权限说明和确认按钮；JS/CSS 使用同一新缓存版本 |
