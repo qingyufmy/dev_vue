@@ -41,7 +41,7 @@ public sealed class TerminalRuntimeSupervisorTests
         await run;
 
         CollectionAssert.AreEqual(
-            new[] { 1, 2, 4, 8, 16, 30, 30 },
+            new[] { 1, 2, 4, 8, 10, 10, 10 },
             delays.Select(delay => (int)delay.TotalSeconds).ToArray());
         Assert.IsTrue(created.First().Disposed);
     }

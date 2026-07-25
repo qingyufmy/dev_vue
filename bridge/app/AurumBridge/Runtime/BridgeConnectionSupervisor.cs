@@ -127,7 +127,14 @@ public sealed class BridgeConnectionSupervisor
 
     private static TimeSpan RestartDelay(int failures)
     {
-        var seconds = failures >= 6 ? 30 : 1 << Math.Max(0, failures - 1);
+        var seconds = failures switch
+        {
+            <= 1 => 1,
+            2 => 2,
+            3 => 4,
+            4 => 8,
+            _ => 10,
+        };
         return TimeSpan.FromSeconds(seconds);
     }
 

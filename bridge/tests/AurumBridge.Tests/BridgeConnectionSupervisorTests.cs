@@ -76,6 +76,44 @@ public sealed class BridgeConnectionSupervisorTests
         Assert.AreEqual(BridgeConnectionState.Stopped, statuses[^1].State);
     }
 
+    [TestMethod]
+    public async Task CapsReconnectBackoffToPreserveTheSixtySecondRecoveryBudget()
+    {
+        var delays = new List<TimeSpan>();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var attempts = 0;
+        var supervisor = new BridgeConnectionSupervisor(
+            [Terminal()],
+            "3.0.0-test",
+            (hello, _) =>
+            {
+                attempts++;
+                if (attempts <= 7)
+                {
+                    throw new HttpRequestException("simulated_disconnect");
+                }
+                return Task.FromResult(new BridgeConnectionAttempt(
+                    new("wss://example.com/aurum-api/bridge/v3/ws"), "ticket", hello));
+            },
+            (_, ready, _) =>
+            {
+                ready();
+                stop.Cancel();
+                return Task.CompletedTask;
+            },
+            (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            });
+
+        await supervisor.RunAsync(stop.Token);
+
+        CollectionAssert.AreEqual(
+            new[] { 1, 2, 4, 8, 10, 10, 10 },
+            delays.Select(delay => (int)delay.TotalSeconds).ToArray());
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "mt5_terminal_connection_01",
