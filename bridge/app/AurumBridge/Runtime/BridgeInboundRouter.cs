@@ -180,7 +180,7 @@ public sealed class BridgeInboundRouter
         await _outbound.EnqueueAsync(new(
             response.MessageId,
             JsonSerializer.Serialize(response, BridgeJson.Options),
-            BridgeMessagePriority.Trade), cancellationToken);
+            BridgeMessagePriority.Data), cancellationToken);
     }
 
     private async Task HandleDataRequestAsync(
@@ -209,7 +209,7 @@ public sealed class BridgeInboundRouter
         await _outbound.EnqueueAsync(new(
             response.MessageId,
             JsonSerializer.Serialize(response, BridgeJson.Options),
-            BridgeMessagePriority.Trade), cancellationToken);
+            BridgeMessagePriority.Data), cancellationToken);
     }
 
     private async Task HandleDataAcknowledgementAsync(

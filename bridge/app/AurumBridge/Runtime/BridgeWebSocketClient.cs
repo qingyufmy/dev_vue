@@ -186,32 +186,59 @@ public sealed class BridgeWebSocketClient
         BridgeInboundRouter router,
         CancellationToken cancellationToken)
     {
-        var receiveBuffer = new byte[16 * 1024];
+        await using var dispatcher = new BridgeInboundRequestDispatcher(router);
+        using var receiveCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         while (!cancellationToken.IsCancellationRequested && socket.State == WebSocketState.Open)
         {
-            var writer = new ArrayBufferWriter<byte>();
-            WebSocketReceiveResult result;
-            do
+            var receiveTask = ReceiveMessageAsync(socket, receiveCancellation.Token);
+            var completed = await Task.WhenAny(receiveTask, dispatcher.Faulted);
+            if (completed == dispatcher.Faulted || dispatcher.Faulted.IsCompleted)
             {
-                result = await socket.ReceiveAsync(receiveBuffer, cancellationToken);
-                if (result.MessageType == WebSocketMessageType.Close)
+                await receiveCancellation.CancelAsync();
+                try
                 {
-                    return;
+                    await receiveTask;
                 }
-                if (result.MessageType != WebSocketMessageType.Text)
+                catch
                 {
-                    throw new InvalidDataException("bridge_binary_message_unsupported");
                 }
-                if (writer.WrittenCount + result.Count > MaxInboundMessageBytes)
-                {
-                    throw new InvalidDataException("bridge_message_too_large");
-                }
-                writer.Write(receiveBuffer.AsSpan(0, result.Count));
+                await dispatcher.Faulted;
             }
-            while (!result.EndOfMessage);
-
-            await router.RouteAsync(Encoding.UTF8.GetString(writer.WrittenSpan), cancellationToken);
+            var payloadJson = await receiveTask;
+            if (payloadJson is null)
+            {
+                return;
+            }
+            await dispatcher.RouteAsync(payloadJson, cancellationToken);
         }
+    }
+
+    private static async Task<string?> ReceiveMessageAsync(
+        ClientWebSocket socket,
+        CancellationToken cancellationToken)
+    {
+        var receiveBuffer = new byte[16 * 1024];
+        var writer = new ArrayBufferWriter<byte>();
+        WebSocketReceiveResult result;
+        do
+        {
+            result = await socket.ReceiveAsync(receiveBuffer, cancellationToken);
+            if (result.MessageType == WebSocketMessageType.Close)
+            {
+                return null;
+            }
+            if (result.MessageType != WebSocketMessageType.Text)
+            {
+                throw new InvalidDataException("bridge_binary_message_unsupported");
+            }
+            if (writer.WrittenCount + result.Count > MaxInboundMessageBytes)
+            {
+                throw new InvalidDataException("bridge_message_too_large");
+            }
+            writer.Write(receiveBuffer.AsSpan(0, result.Count));
+        }
+        while (!result.EndOfMessage);
+        return Encoding.UTF8.GetString(writer.WrittenSpan);
     }
 
     private static async Task SendDirectAsync(

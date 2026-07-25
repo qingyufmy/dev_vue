@@ -208,7 +208,7 @@ public sealed class BridgeInboundRouterTests
     }
 
     [TestMethod]
-    public async Task QuoteRequestUsesTradePriorityWithoutPersistingOutbox()
+    public async Task QuoteRequestUsesDataPriorityWithoutPersistingOutbox()
     {
         var terminal = Terminal();
         var router = new BridgeInboundRouter(
@@ -239,14 +239,14 @@ public sealed class BridgeInboundRouterTests
         await router.RouteAsync(JsonSerializer.Serialize(QuoteRequest(), BridgeJson.Options));
 
         var response = await _outbound.DequeueAsync();
-        Assert.AreEqual(BridgeMessagePriority.Trade, response.Priority);
+        Assert.AreEqual(BridgeMessagePriority.Data, response.Priority);
         Assert.AreEqual("quote", JsonDocument.Parse(response.PayloadJson).RootElement
             .GetProperty("type").GetString());
         Assert.IsEmpty(await _testStore.Store.GetPendingOutboxAsync());
     }
 
     [TestMethod]
-    public async Task DataRequestUsesTradePriorityWithoutPersistingOutbox()
+    public async Task DataRequestUsesDataPriorityWithoutPersistingOutbox()
     {
         var router = new BridgeInboundRouter(
             _testStore.Store, Dispatcher(), _outbound, () => Now,
@@ -262,7 +262,7 @@ public sealed class BridgeInboundRouterTests
         await router.RouteAsync(JsonSerializer.Serialize(DataRequest(), BridgeJson.Options));
 
         var response = await _outbound.DequeueAsync();
-        Assert.AreEqual(BridgeMessagePriority.Trade, response.Priority);
+        Assert.AreEqual(BridgeMessagePriority.Data, response.Priority);
         Assert.AreEqual("data_response", JsonDocument.Parse(response.PayloadJson).RootElement
             .GetProperty("type").GetString());
         Assert.IsEmpty(await _testStore.Store.GetPendingOutboxAsync());
