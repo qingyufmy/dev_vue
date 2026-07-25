@@ -314,6 +314,31 @@ describe('Bridge v3 websocket gateway', () => {
     expect(ws.send.mock.calls.map(call => JSON.parse(call[0]).type)).not.toContain('command')
   })
 
+  it('allows execution reconciliation before initial snapshots finish', async () => {
+    const { gateway, dependencies } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    const query = {
+      ...command(),
+      message_id:'msg_01JGATEWAY_QUERY',
+      command_id:'command_01JGATEWAY_QUERY',
+      action:'query_execution',
+      params:{ expected_kind:'pending', ticket:'1001' },
+    }
+
+    const pending = gateway.sendCommand(42, query)
+    await flush()
+    expect(dependencies.markDispatched).toHaveBeenCalledWith(
+      query.command_id, expect.objectContaining({ connectionEpoch:7 })
+    )
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'command', action:'query_execution', command_id:query.command_id,
+    })
+    ws.emit('message', Buffer.from(JSON.stringify({ ...result(), command_id:query.command_id })))
+    await expect(pending).resolves.toMatchObject({ status:'succeeded', command_id:query.command_id })
+  })
+
   it('persists dispatch before writing and resolves only after a stored result', async () => {
     const order = []
     const { gateway, dependencies } = setup({

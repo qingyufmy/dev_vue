@@ -368,7 +368,8 @@ export function createBridgeV3Gateway({
       || !sameBridgeRoute(routeFromTerminal(routed.terminal), command)) {
       return { status:'queued', command_id:command.command_id, error:'bridge_terminal_not_connected' }
     }
-    if (!terminalInitialSyncReady(routed.connection, command.terminal_instance_id)) {
+    if (command.action !== 'query_execution'
+      && !terminalInitialSyncReady(routed.connection, command.terminal_instance_id)) {
       return { status:'queued', command_id:command.command_id, error:'bridge_terminal_initial_sync_pending' }
     }
     await markDispatched(command.command_id, {
