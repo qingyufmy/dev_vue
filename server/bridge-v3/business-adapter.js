@@ -11,7 +11,7 @@ const TRADE_ACTIONS = new Set([
   'modify_system_position_protection',
 ])
 const SUPPORTED_ACTIONS = new Set([
-  ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'rates', 'symbol_snapshot',
+  ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'rates', 'symbol_snapshot', 'risk_snapshot',
   'toggle_trade', 'set_quote_symbol',
 ])
 const RATE_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
@@ -484,6 +484,50 @@ export function createBridgeV3BusinessAdapter({
     return { ...result.payload, status:'success', source:result.payload.source || route.platform }
   }
 
+  async function requestRiskSnapshot(userId, route, params, timeoutMs) {
+    const symbol = String(params.symbol || '').trim()
+    const lastDealTimeMsc = Number(params.last_deal_time_msc || 0)
+    const lastDealTicket = Number(params.last_deal_ticket || 0)
+    const baselineFromUtcMsc = Number(params.baseline_from_utc_msc || 0)
+    if (!symbol || symbol.length > 64) throw adapterError('symbol_invalid')
+    if (![lastDealTimeMsc, lastDealTicket, baselineFromUtcMsc]
+      .every(value => Number.isSafeInteger(value) && value >= 0)) {
+      throw adapterError('risk_snapshot_cursor_invalid')
+    }
+    let proposedOrder
+    if (params.proposed_order != null) {
+      if (!params.proposed_order || typeof params.proposed_order !== 'object'
+        || Array.isArray(params.proposed_order)) throw adapterError('risk_snapshot_proposed_order_invalid')
+      const proposedSymbol = String(params.proposed_order.symbol || '').trim()
+      const orderType = String(params.proposed_order.order_type || '').trim().toLowerCase()
+      const volume = Number(params.proposed_order.volume)
+      const entryPrice = Number(params.proposed_order.entry_price)
+      const stopLoss = Number(params.proposed_order.sl)
+      if (!proposedSymbol || proposedSymbol.length > 64
+        || !['buy', 'sell', 'buy_limit', 'sell_limit', 'buy_stop', 'sell_stop',
+          'buy_stop_limit', 'sell_stop_limit'].includes(orderType)
+        || !Number.isFinite(volume) || volume <= 0
+        || !Number.isFinite(entryPrice) || entryPrice <= 0
+        || !Number.isFinite(stopLoss) || stopLoss <= 0) {
+        throw adapterError('risk_snapshot_proposed_order_invalid')
+      }
+      proposedOrder = { symbol:proposedSymbol, order_type:orderType, volume,
+        entry_price:entryPrice, sl:stopLoss }
+    }
+    const request = {
+      v:3, type:'data_request', message_id:`message_${randomUUID()}`, sent_at_utc_msc:now(),
+      request_id:`data_${randomUUID()}`, ...routeParams(route), action:'risk_snapshot',
+      params:cleanObject({ symbol, last_deal_time_msc:lastDealTimeMsc,
+        last_deal_ticket:lastDealTicket, baseline_from_utc_msc:baselineFromUtcMsc,
+        proposed_order:proposedOrder }),
+    }
+    const result = await gateway.requestData(userId, request, { timeoutMs:Math.min(timeoutMs, 30_000) })
+    if (result.status !== 'succeeded') {
+      return { status:'error', error:result.error_code, message:result.error_code }
+    }
+    return { ...result.payload, status:'success', source:result.payload.source || route.platform }
+  }
+
   async function requestMarketState(userId, route, params, timeoutMs) {
     const checkedAt = now()
     const quote = await requestQuote(userId, route, params, timeoutMs)
@@ -605,6 +649,7 @@ export function createBridgeV3BusinessAdapter({
       if (action === 'symbol_snapshot') {
         return await requestSymbolSnapshot(userId, route, params, timeoutMs)
       }
+      if (action === 'risk_snapshot') return await requestRiskSnapshot(userId, route, params, timeoutMs)
       if (action === 'close_system_position' || action === 'cancel_system_pending'
         || action === 'modify_system_position_protection') {
         const prepared = await prepareSystemManagement(route, action, params)

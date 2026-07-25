@@ -6,7 +6,9 @@ export const BRIDGE_V3_MESSAGE_TYPES = Object.freeze(new Set([
   'data_delta', 'data_ack', 'heartbeat', 'error',
 ]))
 
-export const BRIDGE_V3_DATA_REQUEST_ACTIONS = Object.freeze(new Set(['rates', 'symbol_snapshot']))
+export const BRIDGE_V3_DATA_REQUEST_ACTIONS = Object.freeze(new Set([
+  'rates', 'symbol_snapshot', 'risk_snapshot',
+]))
 
 export const BRIDGE_V3_COMMAND_ACTIONS = Object.freeze(new Set([
   'place_order', 'cancel_order', 'modify_order', 'modify_position', 'close_position', 'query_execution',

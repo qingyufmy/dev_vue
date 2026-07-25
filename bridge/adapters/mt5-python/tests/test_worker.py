@@ -19,6 +19,7 @@ Account = namedtuple("Account", "login server balance")
 Terminal = namedtuple("Terminal", "connected")
 Tick = namedtuple("Tick", "bid ask")
 Result = namedtuple("Result", "retcode order deal comment")
+Deal = namedtuple("Deal", "ticket time time_msc type entry position_id profit commission swap fee")
 
 
 class FakeMt5:
@@ -51,6 +52,7 @@ class FakeMt5:
 
     def __init__(self):
         self.sent = []
+        self.calculations = []
 
     def account_info(self): return Account(12345678, "Broker-Demo", 1000)
     def terminal_info(self): return Terminal(True)
@@ -67,6 +69,12 @@ class FakeMt5:
     def order_send(self, request):
         self.sent.append(request)
         return Result(10009, 1001, 2001, "done")
+    def order_calc_profit(self, order_type, symbol, volume, entry, stop_loss):
+        self.calculations.append(("profit", order_type, symbol, volume, entry, stop_loss))
+        return -100.0
+    def order_calc_margin(self, order_type, symbol, volume, entry):
+        self.calculations.append(("margin", order_type, symbol, volume, entry))
+        return 250.0
     def last_error(self): return (0, "ok")
     def initialize(self, **kwargs): return True
     def shutdown(self): pass
@@ -250,6 +258,30 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(100.0, result["payload"]["instrument"]["contract_size"])
         self.assertEqual(1000.0, result["payload"]["instrument"]["margin_per_lot_buy"])
         self.assertNotIn("positions", result["payload"])
+
+    def test_risk_snapshot_uses_time_and_ticket_as_incremental_cursor(self):
+        adapter = self.adapter()
+        event_time = 1_700_000_000_000
+        adapter.mt5.history_deals_get = lambda *args, **kwargs: (
+            Deal(10, event_time // 1000, event_time, 2, 0, 0, 100.0, 0.0, 0.0, 0.0),
+            Deal(11, event_time // 1000, event_time, 2, 0, 0, -25.0, 0.0, 0.0, 0.0),
+        )
+        result = adapter.data(self.command(
+            type="data_request", request_id="data_01JWORKER04", action="risk_snapshot",
+            params={"symbol": "XAUUSD", "last_deal_time_msc": event_time,
+                    "last_deal_ticket": 10, "baseline_from_utc_msc": 0,
+                    "proposed_order": {"symbol": "XAUUSD", "order_type": "buy_limit",
+                                       "volume": 0.1, "entry_price": 2300.0, "sl": 2290.0}}))
+        self.assertEqual("succeeded", result["status"])
+        snapshot = result["payload"]
+        self.assertTrue(snapshot["complete"])
+        self.assertEqual(1, snapshot["increment"]["new_deal_count"])
+        self.assertEqual(11, snapshot["increment"]["account_events"][0]["ticket"])
+        self.assertEqual({"time_msc": event_time, "ticket": 11},
+                         snapshot["increment"]["through_cursor"])
+        self.assertEqual("utc_direct", snapshot["clock_status"])
+        self.assertEqual(0, adapter.mt5.calculations[0][1])
+        self.assertEqual(100.0, snapshot["broker_calculation"]["loss_to_sl"])
 
     def test_probe_returns_read_only_account_identity(self):
         result = worker.probe(FakeMt5(), __file__)

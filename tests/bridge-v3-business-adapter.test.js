@@ -147,6 +147,34 @@ describe('Bridge v3 business compatibility adapter', () => {
     }), { timeoutMs:5000 })
   })
 
+  it('normalizes and routes an incremental risk snapshot without the command ledger', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ snapshot_version:1, complete:true,
+        increment:{ through_cursor:{ time_msc:123, ticket:9 } }, positions:[], pending:[] },
+    } })
+    await expect(adapter.execute(42, 'risk_snapshot', {
+      symbol:'XAUUSD', last_deal_time_msc:100, last_deal_ticket:8,
+      baseline_from_utc_msc:0,
+      proposed_order:{ symbol:'XAUUSD', order_type:'buy_limit', volume:'0.1', entry_price:'2300', sl:'2290' },
+    }, { timeoutMs:10_000 })).resolves.toMatchObject({
+      status:'success', snapshot_version:1, complete:true, source:'mt5',
+    })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'risk_snapshot', params:{ symbol:'XAUUSD', last_deal_time_msc:100,
+        last_deal_ticket:8, baseline_from_utc_msc:0,
+        proposed_order:{ symbol:'XAUUSD', order_type:'buy_limit', volume:0.1, entry_price:2300, sl:2290 } },
+    }), { timeoutMs:10_000 })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed risk snapshot cursors before terminal I/O', async () => {
+    const { adapter, gateway } = setup()
+    await expect(adapter.execute(42, 'risk_snapshot', {
+      symbol:'XAUUSD', last_deal_time_msc:-1,
+    })).resolves.toMatchObject({ status:'error', error:'risk_snapshot_cursor_invalid' })
+    expect(gateway.requestData).not.toHaveBeenCalled()
+  })
+
   it('derives a versioned market state from a fresh transient quote', async () => {
     const { adapter } = setup({ quote:{
       status:'succeeded', symbol:'XAUUSD', bid:2300, ask:2300.2,
