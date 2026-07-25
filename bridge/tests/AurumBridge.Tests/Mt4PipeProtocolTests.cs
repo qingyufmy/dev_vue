@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Json;
+using AurumBridge.Protocol;
 using AurumBridge.Workers;
 
 namespace AurumBridge.Tests;
@@ -53,6 +55,46 @@ public sealed class Mt4PipeProtocolTests
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => Mt4PipeProtocol.ReadFrameAsync(stream));
     }
 
+    [TestMethod]
+    public void ConvertsV3TradeCommandToStrictMt4Fields()
+    {
+        var command = Command("place_order", new
+        {
+            symbol = "XAUUSD",
+            side = "buy",
+            order_kind = "limit",
+            volume = 0.1,
+            price = 2300.5,
+            stop_loss = 2290.0,
+        });
+
+        var local = Mt4PipeProtocol.CreateTradeCommand(command);
+        var payload = Mt4PipeProtocol.EncodeCommand(local);
+
+        Assert.AreEqual(Mt4TradeAction.PlaceOrder, local.Action);
+        Assert.AreEqual(Mt4OrderSide.Buy, local.Side);
+        Assert.AreEqual(Mt4OrderKind.Limit, local.OrderKind);
+        Assert.AreEqual(0.1, local.Volume);
+        Assert.IsGreaterThan(64, payload.Length);
+    }
+
+    [TestMethod]
+    public void RejectsMt5OnlyStopLimitBeforeSendingToEa()
+    {
+        var command = Command("place_order", new
+        {
+            symbol = "XAUUSD",
+            side = "buy",
+            order_kind = "stop_limit",
+            volume = 0.1,
+        });
+
+        var error = Assert.ThrowsExactly<InvalidDataException>(() =>
+            Mt4PipeProtocol.CreateTradeCommand(command));
+
+        Assert.AreEqual("mt4_stop_limit_unsupported", error.Message);
+    }
+
     private static byte[] EncodeRaw(Action<BinaryWriter> write)
     {
         using var stream = new MemoryStream();
@@ -67,4 +109,19 @@ public sealed class Mt4PipeProtocolTests
         writer.Write(bytes.Length);
         writer.Write(bytes);
     }
+
+    private static CommandMessage Command(string action, object parameters) => new()
+    {
+        Type = "command",
+        MessageId = "message_mt4_codec_01",
+        SentAtUtcMsc = 1_800_000_000_000,
+        CommandId = "command_mt4_codec_01",
+        TerminalInstanceId = "mt4_terminal_codec_01",
+        AccountRef = new("Broker-Demo", "12345678"),
+        ConnectionEpoch = 1,
+        IssuedAtUtcMsc = 1_800_000_000_000,
+        DeadlineUtcMsc = 1_800_000_030_000,
+        Action = action,
+        Params = JsonSerializer.SerializeToElement(parameters),
+    };
 }

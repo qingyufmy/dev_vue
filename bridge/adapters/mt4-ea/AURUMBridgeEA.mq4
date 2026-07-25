@@ -8,12 +8,24 @@ input string InpPipeName = "AURUMBridgeV3";
 #define MSG_WELCOME      2
 #define MSG_COLLECT      10
 #define MSG_SNAPSHOT     11
+#define MSG_COMMAND      20
+#define MSG_COMMAND_RESULT 21
 #define MSG_SHUTDOWN     90
 #define MSG_SHUTDOWN_ACK 91
 #define STREAM_ACCOUNT   1
 #define STREAM_POSITIONS 2
 #define STREAM_ORDERS    4
 #define MAX_FRAME_BYTES  4194304
+#define ACTION_PLACE     1
+#define ACTION_CANCEL    2
+#define ACTION_MODIFY    3
+#define ACTION_CLOSE     4
+#define ACTION_QUERY     5
+#define SIDE_BUY         1
+#define SIDE_SELL        2
+#define KIND_MARKET      1
+#define KIND_LIMIT       2
+#define KIND_STOP        3
 
 int    g_pipe = INVALID_HANDLE;
 bool   g_welcomed = false;
@@ -58,6 +70,11 @@ void OnTimer()
      {
       int streams = ReadInt32(payload, offset);
       SendSnapshot(streams);
+      return;
+     }
+   if(message_type == MSG_COMMAND && g_welcomed)
+     {
+      ExecuteCommand(payload, offset);
       return;
      }
    if(message_type == MSG_SHUTDOWN)
@@ -116,6 +133,206 @@ void SendSnapshot(const int streams)
    AppendUtf8(payload, positions_json);
    AppendUtf8(payload, orders_json);
    if(!WriteFrame(payload))
+      DisconnectPipe();
+  }
+
+void ExecuteCommand(uchar &payload[], int &offset)
+  {
+   string command_id = ReadUtf8(payload, offset);
+   string terminal_id = ReadUtf8(payload, offset);
+   string broker_server = ReadUtf8(payload, offset);
+   string login = ReadUtf8(payload, offset);
+   long connection_epoch = ReadInt64(payload, offset);
+   long deadline = ReadInt64(payload, offset);
+   int action = ReadInt32(payload, offset);
+   string symbol = ReadUtf8(payload, offset);
+   int side = ReadInt32(payload, offset);
+   int order_kind = ReadInt32(payload, offset);
+   long ticket_value = ReadInt64(payload, offset);
+   double volume = StrToDouble(ReadUtf8(payload, offset));
+   string price_value = ReadUtf8(payload, offset);
+   string stop_loss_value = ReadUtf8(payload, offset);
+   string take_profit_value = ReadUtf8(payload, offset);
+   int deviation = ReadInt32(payload, offset);
+   int magic = ReadInt32(payload, offset);
+   long expiration = ReadInt64(payload, offset);
+   if(command_id == "" || terminal_id != g_terminal_id
+      || StringCompare(broker_server, AccountServer(), false) != 0
+      || login != IntegerToString(AccountNumber())
+      || connection_epoch != g_connection_epoch)
+     {
+      SendCommandResult(command_id, 2, "command_route_mismatch", "", 0, 0);
+      return;
+     }
+   if(deadline <= ((long)TimeGMT()) * 1000)
+     {
+      SendCommandResult(command_id, 2, "command_expired", "", 0, 0);
+      return;
+     }
+   if(action != ACTION_QUERY && !IsTradeAllowed())
+     {
+      SendCommandResult(command_id, 2, "mt4_trade_not_allowed", "", 0, 0);
+      return;
+     }
+   ResetLastError();
+   if(action == ACTION_PLACE)
+     {
+      ExecutePlace(command_id, symbol, side, order_kind, volume, price_value,
+         stop_loss_value, take_profit_value, deviation, magic, expiration);
+      return;
+     }
+   if(action == ACTION_CANCEL)
+     {
+      ExecuteCancel(command_id, (int)ticket_value);
+      return;
+     }
+   if(action == ACTION_MODIFY)
+     {
+      ExecuteModify(command_id, (int)ticket_value, price_value,
+         stop_loss_value, take_profit_value, expiration);
+      return;
+     }
+   if(action == ACTION_CLOSE)
+     {
+      ExecuteClose(command_id, (int)ticket_value, volume, deviation);
+      return;
+     }
+   if(action == ACTION_QUERY)
+     {
+      ExecuteQuery(command_id, (int)ticket_value);
+      return;
+     }
+   SendCommandResult(command_id, 2, "command_action_unsupported", "", 0, 0);
+  }
+
+void ExecutePlace(const string command_id, const string symbol, const int side,
+   const int order_kind, const double volume, const string price_value,
+   const string stop_loss_value, const string take_profit_value,
+   const int deviation, const int magic, const long expiration)
+  {
+   int operation = -1;
+   if(order_kind == KIND_MARKET && side == SIDE_BUY) operation = OP_BUY;
+   else if(order_kind == KIND_MARKET && side == SIDE_SELL) operation = OP_SELL;
+   else if(order_kind == KIND_LIMIT && side == SIDE_BUY) operation = OP_BUYLIMIT;
+   else if(order_kind == KIND_LIMIT && side == SIDE_SELL) operation = OP_SELLLIMIT;
+   else if(order_kind == KIND_STOP && side == SIDE_BUY) operation = OP_BUYSTOP;
+   else if(order_kind == KIND_STOP && side == SIDE_SELL) operation = OP_SELLSTOP;
+   if(operation < 0 || symbol == "" || volume <= 0)
+     {
+      SendCommandResult(command_id, 2, "mt4_place_order_params_invalid", "", 0, 0);
+      return;
+     }
+   RefreshRates();
+   double price = (price_value == "")
+      ? MarketInfo(symbol, side == SIDE_BUY ? MODE_ASK : MODE_BID)
+      : StrToDouble(price_value);
+   double stop_loss = (stop_loss_value == "") ? 0 : StrToDouble(stop_loss_value);
+   double take_profit = (take_profit_value == "") ? 0 : StrToDouble(take_profit_value);
+   string suffix = StringSubstr(command_id, MathMax(0, StringLen(command_id) - 20));
+   int ticket = OrderSend(symbol, operation, volume, price, deviation, stop_loss, take_profit,
+      "AURUM:" + suffix, magic, (datetime)expiration, clrNONE);
+   if(ticket > 0)
+      SendCommandResult(command_id, 1, "", "", 0, ticket);
+   else
+      SendTradeFailure(command_id, "mt4_order_send_failed");
+  }
+
+void ExecuteCancel(const string command_id, const int ticket)
+  {
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+     {
+      SendTradeFailure(command_id, "order_not_found");
+      return;
+     }
+   int order_type = OrderType();
+   if(order_type == OP_BUY || order_type == OP_SELL)
+     {
+      SendCommandResult(command_id, 2, "order_not_pending", "", 0, ticket);
+      return;
+     }
+   if(OrderDelete(ticket, clrNONE))
+      SendCommandResult(command_id, 1, "", "", 0, ticket);
+   else
+      SendTradeFailure(command_id, "mt4_order_delete_failed");
+  }
+
+void ExecuteModify(const string command_id, const int ticket, const string price_value,
+   const string stop_loss_value, const string take_profit_value, const long expiration)
+  {
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+     {
+      SendTradeFailure(command_id, "order_not_found");
+      return;
+     }
+   double price = (price_value == "") ? OrderOpenPrice() : StrToDouble(price_value);
+   double stop_loss = (stop_loss_value == "") ? OrderStopLoss() : StrToDouble(stop_loss_value);
+   double take_profit = (take_profit_value == "") ? OrderTakeProfit() : StrToDouble(take_profit_value);
+   datetime expiry = (expiration == 0) ? OrderExpiration() : (datetime)expiration;
+   if(OrderModify(ticket, price, stop_loss, take_profit, expiry, clrNONE))
+      SendCommandResult(command_id, 1, "", "", 0, ticket);
+   else
+      SendTradeFailure(command_id, "mt4_order_modify_failed");
+  }
+
+void ExecuteClose(const string command_id, const int ticket, const double requested_volume,
+   const int deviation)
+  {
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+     {
+      SendTradeFailure(command_id, "position_not_found");
+      return;
+     }
+   int order_type = OrderType();
+   if(order_type != OP_BUY && order_type != OP_SELL)
+     {
+      SendCommandResult(command_id, 2, "position_not_found", "", 0, ticket);
+      return;
+     }
+   double volume = (requested_volume <= 0) ? OrderLots() : requested_volume;
+   if(volume <= 0 || volume > OrderLots())
+     {
+      SendCommandResult(command_id, 2, "close_volume_invalid", "", 0, ticket);
+      return;
+     }
+   RefreshRates();
+   double price = MarketInfo(OrderSymbol(), order_type == OP_BUY ? MODE_BID : MODE_ASK);
+   if(OrderClose(ticket, volume, price, deviation, clrNONE))
+      SendCommandResult(command_id, 1, "", "", 0, ticket);
+   else
+      SendTradeFailure(command_id, "mt4_order_close_failed");
+  }
+
+void ExecuteQuery(const string command_id, const int ticket)
+  {
+   ResetLastError();
+   bool found = OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES);
+   if(!found)
+      found = OrderSelect(ticket, SELECT_BY_TICKET, MODE_HISTORY);
+   SendCommandResult(command_id, 1, "", "", found ? 0 : GetLastError(), found ? ticket : 0);
+  }
+
+void SendTradeFailure(const string command_id, const string fallback_code)
+  {
+   int error_code = GetLastError();
+   string code = (error_code > 0)
+      ? "mt4_error_" + IntegerToString(error_code)
+      : fallback_code;
+   SendCommandResult(command_id, 2, code, fallback_code, error_code, 0);
+  }
+
+void SendCommandResult(const string command_id, const int status, const string error_code,
+   const string error_message, const int broker_retcode, const long ticket)
+  {
+   uchar response[];
+   AppendInt32(response, MSG_COMMAND_RESULT);
+   AppendUtf8(response, command_id);
+   AppendInt32(response, status);
+   AppendUtf8(response, error_code);
+   AppendUtf8(response, error_message);
+   AppendInt32(response, broker_retcode);
+   AppendInt64(response, ticket);
+   AppendInt64(response, ((long)TimeGMT()) * 1000);
+   if(!WriteFrame(response))
       DisconnectPipe();
   }
 

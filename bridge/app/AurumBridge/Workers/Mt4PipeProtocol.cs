@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
+using AurumBridge.Protocol;
 
 namespace AurumBridge.Workers;
 
@@ -42,6 +43,59 @@ public sealed record Mt4Snapshot(
     JsonElement Account,
     IReadOnlyList<JsonElement> Positions,
     IReadOnlyList<JsonElement> Orders);
+
+public enum Mt4TradeAction
+{
+    PlaceOrder = 1,
+    CancelOrder = 2,
+    ModifyOrder = 3,
+    ClosePosition = 4,
+    QueryExecution = 5,
+}
+
+public enum Mt4OrderSide
+{
+    None = 0,
+    Buy = 1,
+    Sell = 2,
+}
+
+public enum Mt4OrderKind
+{
+    None = 0,
+    Market = 1,
+    Limit = 2,
+    Stop = 3,
+}
+
+public sealed record Mt4TradeCommand(
+    string CommandId,
+    string TerminalInstanceId,
+    string BrokerServer,
+    string Login,
+    long ConnectionEpoch,
+    long DeadlineUtcMsc,
+    Mt4TradeAction Action,
+    string Symbol,
+    Mt4OrderSide Side,
+    Mt4OrderKind OrderKind,
+    long Ticket,
+    double Volume,
+    double? Price,
+    double? StopLoss,
+    double? TakeProfit,
+    int Deviation,
+    int Magic,
+    long Expiration);
+
+public sealed record Mt4TradeResult(
+    string CommandId,
+    string Status,
+    string? ErrorCode,
+    string? ErrorMessage,
+    int BrokerRetcode,
+    long Ticket,
+    long ObservedAtUtcMsc);
 
 public static class Mt4PipeProtocol
 {
@@ -123,6 +177,118 @@ public static class Mt4PipeProtocol
         return new(observedAt, account, positions, orders);
     }
 
+    public static Mt4TradeCommand CreateTradeCommand(CommandMessage command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Version != 3 || command.Type != "command")
+        {
+            throw new InvalidDataException("mt4_command_envelope_invalid");
+        }
+        var action = command.Action switch
+        {
+            "place_order" => Mt4TradeAction.PlaceOrder,
+            "cancel_order" => Mt4TradeAction.CancelOrder,
+            "modify_order" => Mt4TradeAction.ModifyOrder,
+            "close_position" => Mt4TradeAction.ClosePosition,
+            "query_execution" => Mt4TradeAction.QueryExecution,
+            _ => throw new InvalidDataException("command_action_unsupported"),
+        };
+        var symbol = ReadOptionalString(command.Params, "symbol") ?? string.Empty;
+        var side = (ReadOptionalString(command.Params, "side") ?? string.Empty).ToLowerInvariant() switch
+        {
+            "" => Mt4OrderSide.None,
+            "buy" => Mt4OrderSide.Buy,
+            "sell" => Mt4OrderSide.Sell,
+            _ => throw new InvalidDataException("order_side_invalid"),
+        };
+        var orderKind = (ReadOptionalString(command.Params, "order_kind") ?? "market").ToLowerInvariant() switch
+        {
+            "market" => Mt4OrderKind.Market,
+            "limit" => Mt4OrderKind.Limit,
+            "stop" => Mt4OrderKind.Stop,
+            "stop_limit" => throw new InvalidDataException("mt4_stop_limit_unsupported"),
+            _ => throw new InvalidDataException("order_kind_invalid"),
+        };
+        var tradeCommand = new Mt4TradeCommand(
+            command.CommandId,
+            command.TerminalInstanceId,
+            command.AccountRef.BrokerServer,
+            command.AccountRef.Login,
+            command.ConnectionEpoch,
+            command.DeadlineUtcMsc,
+            action,
+            symbol,
+            side,
+            orderKind,
+            ReadOptionalInt64(command.Params, "ticket") ?? 0,
+            ReadOptionalDouble(command.Params, "volume") ?? 0,
+            ReadOptionalDouble(command.Params, "price"),
+            ReadOptionalDouble(command.Params, "stop_loss"),
+            ReadOptionalDouble(command.Params, "take_profit"),
+            checked((int)(ReadOptionalInt64(command.Params, "deviation") ?? 20)),
+            checked((int)(ReadOptionalInt64(command.Params, "magic") ?? 234000)),
+            ReadOptionalInt64(command.Params, "expiration") ?? 0);
+        ValidateTradeCommand(tradeCommand);
+        return tradeCommand;
+    }
+
+    public static byte[] EncodeCommand(Mt4TradeCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateTradeCommand(command);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.Command);
+            WriteString(writer, command.CommandId);
+            WriteString(writer, command.TerminalInstanceId);
+            WriteString(writer, command.BrokerServer);
+            WriteString(writer, command.Login);
+            writer.Write(command.ConnectionEpoch);
+            writer.Write(command.DeadlineUtcMsc);
+            writer.Write((int)command.Action);
+            WriteString(writer, command.Symbol);
+            writer.Write((int)command.Side);
+            writer.Write((int)command.OrderKind);
+            writer.Write(command.Ticket);
+            WriteString(writer, command.Volume.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+            WriteNullableDouble(writer, command.Price);
+            WriteNullableDouble(writer, command.StopLoss);
+            WriteNullableDouble(writer, command.TakeProfit);
+            writer.Write(command.Deviation);
+            writer.Write(command.Magic);
+            writer.Write(command.Expiration);
+        });
+    }
+
+    public static Mt4TradeResult DecodeCommandResult(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.CommandResult);
+        var commandId = ReadString(reader, 128);
+        var status = reader.ReadInt32() switch
+        {
+            1 => "succeeded",
+            2 => "rejected",
+            3 => "uncertain",
+            _ => throw new InvalidDataException("mt4_command_result_status_invalid"),
+        };
+        var errorCode = NullIfEmpty(ReadString(reader, 128));
+        var errorMessage = NullIfEmpty(ReadString(reader, 1_024));
+        var result = new Mt4TradeResult(
+            commandId,
+            status,
+            errorCode,
+            errorMessage,
+            reader.ReadInt32(),
+            reader.ReadInt64(),
+            reader.ReadInt64());
+        EnsureFullyRead(reader);
+        if (string.IsNullOrWhiteSpace(result.CommandId) || result.ObservedAtUtcMsc <= 0)
+        {
+            throw new InvalidDataException("mt4_command_result_invalid");
+        }
+        return result;
+    }
+
     public static async Task WriteFrameAsync(
         Stream stream,
         ReadOnlyMemory<byte> payload,
@@ -197,6 +363,13 @@ public static class Mt4PipeProtocol
         writer.Write(bytes);
     }
 
+    private static void WriteNullableDouble(BinaryWriter writer, double? value)
+    {
+        WriteString(
+            writer,
+            value?.ToString("R", System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty);
+    }
+
     private static string ReadString(BinaryReader reader, int limit)
     {
         var length = reader.ReadInt32();
@@ -253,6 +426,95 @@ public static class Mt4PipeProtocol
             throw new InvalidDataException("mt4_pipe_trailing_data");
         }
     }
+
+    private static void ValidateTradeCommand(Mt4TradeCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.CommandId)
+            || string.IsNullOrWhiteSpace(command.TerminalInstanceId)
+            || string.IsNullOrWhiteSpace(command.BrokerServer)
+            || string.IsNullOrWhiteSpace(command.Login)
+            || command.ConnectionEpoch <= 0
+            || command.DeadlineUtcMsc <= 0
+            || command.Deviation < 0)
+        {
+            throw new InvalidDataException("mt4_command_route_invalid");
+        }
+        if (command.Action == Mt4TradeAction.PlaceOrder
+            && (string.IsNullOrWhiteSpace(command.Symbol)
+                || command.Side == Mt4OrderSide.None
+                || command.OrderKind == Mt4OrderKind.None
+                || command.Volume <= 0))
+        {
+            throw new InvalidDataException("mt4_place_order_params_invalid");
+        }
+        if (command.Action is Mt4TradeAction.CancelOrder
+                or Mt4TradeAction.ModifyOrder
+                or Mt4TradeAction.ClosePosition
+                or Mt4TradeAction.QueryExecution
+            && command.Ticket <= 0)
+        {
+            throw new InvalidDataException("ticket_required");
+        }
+        if (command.Action == Mt4TradeAction.ClosePosition && command.Volume < 0)
+        {
+            throw new InvalidDataException("close_volume_invalid");
+        }
+    }
+
+    private static string? ReadOptionalString(JsonElement value, string propertyName)
+    {
+        if (!value.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidDataException($"{propertyName}_invalid");
+        }
+        return property.GetString()?.Trim();
+    }
+
+    private static long? ReadOptionalInt64(JsonElement value, string propertyName)
+    {
+        if (!value.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var number))
+        {
+            return number;
+        }
+        if (property.ValueKind == JsonValueKind.String && long.TryParse(
+                property.GetString(),
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out number))
+        {
+            return number;
+        }
+        throw new InvalidDataException($"{propertyName}_invalid");
+    }
+
+    private static double? ReadOptionalDouble(JsonElement value, string propertyName)
+    {
+        if (!value.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+        double number;
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetDouble(out number)
+            || property.ValueKind == JsonValueKind.String && double.TryParse(
+                property.GetString(),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out number))
+        {
+            return double.IsFinite(number) ? number : throw new InvalidDataException($"{propertyName}_invalid");
+        }
+        throw new InvalidDataException($"{propertyName}_invalid");
+    }
+
+    private static string? NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;
 
     private static async Task ReadExactlyAsync(
         Stream stream,
