@@ -117,16 +117,25 @@ public sealed class BridgeInboundRouter
             ?? throw new InvalidDataException("bridge_data_ack_invalid");
         if (acknowledgement.Status is "applied" or "duplicate")
         {
-            await _store.AcknowledgeOutboxAsync(
+            var acknowledgedDelta = await ReadPendingDeltaAsync(acknowledgement, cancellationToken);
+            var removed = await _store.AcknowledgeOutboxAsync(
                 acknowledgement.AckedMessageId,
                 acknowledgement.Status,
                 _clock(),
                 cancellationToken);
+            if (removed && acknowledgedDelta?.FullSnapshot == true)
+            {
+                _dispatcher.AcknowledgeInitialSnapshot(
+                    acknowledgedDelta.TerminalInstanceId,
+                    acknowledgedDelta.ConnectionEpoch,
+                    acknowledgedDelta.Stream);
+            }
             DataAcknowledged?.Invoke(acknowledgement.AckedMessageId, acknowledgement.Status);
             return;
         }
         if (acknowledgement.Status == "gap")
         {
+            await ReadPendingDeltaAsync(acknowledgement, cancellationToken);
             var expectedRevision = acknowledgement.ExpectedRevision
                 ?? throw new InvalidDataException("bridge_data_ack_expected_revision_missing");
             var handler = FullSnapshotRequired;
@@ -142,6 +151,31 @@ public sealed class BridgeInboundRouter
             return;
         }
         throw new InvalidDataException("bridge_data_ack_rejected");
+    }
+
+    private async Task<DataDeltaMessage?> ReadPendingDeltaAsync(
+        DataAckMessage acknowledgement,
+        CancellationToken cancellationToken)
+    {
+        var outbox = await _store.GetPendingOutboxMessageAsync(
+            acknowledgement.AckedMessageId,
+            cancellationToken);
+        if (outbox is null)
+        {
+            return null;
+        }
+        var delta = JsonSerializer.Deserialize<DataDeltaMessage>(outbox.PayloadJson, BridgeJson.Options)
+            ?? throw new InvalidDataException("bridge_data_ack_source_invalid");
+        if (delta.Type != "data_delta"
+            || delta.MessageId != acknowledgement.AckedMessageId
+            || delta.TerminalInstanceId != acknowledgement.TerminalInstanceId
+            || delta.ConnectionEpoch != acknowledgement.ConnectionEpoch
+            || delta.Stream != acknowledgement.Stream
+            || delta.Revision != acknowledgement.Revision)
+        {
+            throw new InvalidDataException("bridge_data_ack_route_mismatch");
+        }
+        return delta;
     }
 
     private static string ReadRequiredString(JsonElement root, string propertyName)

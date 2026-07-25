@@ -210,6 +210,36 @@ public sealed class BridgeStore : IAsyncDisposable
         return result;
     }
 
+    public async Task<OutboxMessage?> GetPendingOutboxMessageAsync(
+        string messageId,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, message_id, message_type, priority, payload_json, attempt_count, created_at_utc_msc
+            FROM outbox_messages
+            WHERE message_id = $message_id AND acked_at_utc_msc IS NULL
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$message_id", messageId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+        return new(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetInt32(5),
+            reader.GetInt64(6));
+    }
+
     public async Task<bool> AcknowledgeOutboxAsync(
         string messageId,
         string acknowledgementStatus,

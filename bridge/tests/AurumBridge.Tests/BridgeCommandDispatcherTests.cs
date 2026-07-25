@@ -74,6 +74,37 @@ public sealed class BridgeCommandDispatcherTests
     }
 
     [TestMethod]
+    public async Task RejectsTradeUntilInitialSnapshotsAreAcknowledgedButAllowsReconciliation()
+    {
+        var handler = new MockHandler();
+        var dispatcher = Dispatcher(handler.ExecuteAsync, initialSyncReady:false);
+
+        var trade = await dispatcher.DispatchAsync(Command("command_01JDISPATCH06"));
+        var query = await dispatcher.DispatchAsync(Command("command_01JDISPATCH07") with
+        {
+            Action = "query_execution",
+        });
+
+        Assert.AreEqual("rejected", trade.Status);
+        Assert.AreEqual("terminal_initial_sync_pending", trade.ErrorCode);
+        Assert.AreEqual("succeeded", query.Status);
+        Assert.AreEqual(1, handler.Calls);
+    }
+
+    [TestMethod]
+    public async Task ANewSessionResetsInitialSnapshotReadiness()
+    {
+        var handler = new MockHandler();
+        var dispatcher = Dispatcher(handler.ExecuteAsync);
+        dispatcher.BeginSession("session_dispatch_02", [Terminal()]);
+
+        var result = await dispatcher.DispatchAsync(Command("command_01JDISPATCH08"));
+
+        Assert.AreEqual("terminal_initial_sync_pending", result.ErrorCode);
+        Assert.AreEqual(0, handler.Calls);
+    }
+
+    [TestMethod]
     public async Task ConvertsWorkerExceptionAndMismatchedResultToUncertain()
     {
         var throwing = Dispatcher((_, _) => throw new InvalidOperationException("worker lost"));
@@ -132,11 +163,28 @@ public sealed class BridgeCommandDispatcherTests
         Assert.AreEqual("succeeded", (await dispatcher.DispatchAsync(Command("command_01JDISPATCH05"))).Status);
     }
 
-    private BridgeCommandDispatcher Dispatcher(TerminalCommandHandler handler) => new(
-        _testStore.Store,
-        terminalId => terminalId == "terminal_01JDISPATCH1" ? Terminal() : null,
-        handler,
-        () => Now);
+    private BridgeCommandDispatcher Dispatcher(
+        TerminalCommandHandler handler,
+        bool initialSyncReady = true)
+    {
+        var dispatcher = new BridgeCommandDispatcher(
+            _testStore.Store,
+            terminalId => terminalId == "terminal_01JDISPATCH1" ? Terminal() : null,
+            handler,
+            () => Now);
+        dispatcher.BeginSession("session_dispatch_01", [Terminal()]);
+        if (initialSyncReady)
+        {
+            foreach (var stream in new[] { "account", "positions", "orders" })
+            {
+                dispatcher.AcknowledgeInitialSnapshot(
+                    Terminal().TerminalInstanceId,
+                    Terminal().ConnectionEpoch,
+                    stream);
+            }
+        }
+        return dispatcher;
+    }
 
     private static TerminalDescriptor Terminal() => new()
     {

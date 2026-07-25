@@ -5,6 +5,7 @@ namespace AurumBridge.Runtime;
 
 public sealed class BridgeHost : IAsyncDisposable
 {
+    private static readonly string[] SnapshotStreams = ["account", "positions", "orders"];
     private readonly IReadOnlyDictionary<string, TerminalRuntimeSupervisor> _terminals;
 
     public BridgeHost(BridgeStore store, IEnumerable<TerminalRuntimeSupervisor> terminals)
@@ -35,6 +36,18 @@ public sealed class BridgeHost : IAsyncDisposable
         if (_terminals.TryGetValue(request.TerminalInstanceId, out var terminal))
         {
             terminal.RequestFullSnapshot(request.Stream, request.ConnectionEpoch);
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task RequestAllFullSnapshotsAsync()
+    {
+        foreach (var terminal in _terminals.Values)
+        {
+            foreach (var stream in SnapshotStreams)
+            {
+                terminal.RequestFullSnapshot(stream, terminal.Terminal.ConnectionEpoch);
+            }
         }
         return Task.CompletedTask;
     }

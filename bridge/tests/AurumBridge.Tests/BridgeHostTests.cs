@@ -37,6 +37,11 @@ public sealed class BridgeHostTests
             "orders",
             1));
         Assert.HasCount(1, second.FullSnapshotRequests);
+        await host.RequestAllFullSnapshotsAsync();
+        CollectionAssert.AreEquivalent(
+            new[] { "account", "positions", "orders" },
+            first.FullSnapshotRequests);
+        Assert.AreEqual(4, second.FullSnapshotRequests.Count);
 
         cancellation.Cancel();
         await run;

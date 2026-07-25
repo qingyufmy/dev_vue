@@ -60,6 +60,38 @@ public sealed class BridgeInboundRouterTests
     }
 
     [TestMethod]
+    public async Task FullSnapshotAcknowledgementsOpenLocalTradeAdmission()
+    {
+        var terminal = Terminal();
+        var dispatcher = Dispatcher(initialSyncReady:false);
+        var router = new BridgeInboundRouter(_testStore.Store, dispatcher, _outbound, () => Now);
+
+        foreach (var stream in new[] { "account", "positions", "orders" })
+        {
+            var delta = Delta(stream, $"msg_01JROUTER_FULL_{stream}", fullSnapshot:true);
+            await _testStore.Store.PersistDataDeltaAsync(delta);
+            await router.RouteAsync(JsonSerializer.Serialize(Ack(delta, "applied"), BridgeJson.Options));
+        }
+
+        Assert.IsTrue(dispatcher.IsInitialSyncReady(
+            terminal.TerminalInstanceId,
+            terminal.ConnectionEpoch));
+    }
+
+    [TestMethod]
+    public async Task MismatchedAcknowledgementCannotDeleteOutboxWork()
+    {
+        var delta = Delta();
+        await _testStore.Store.PersistDataDeltaAsync(delta);
+        var router = Router();
+
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => router.RouteAsync(
+            JsonSerializer.Serialize(Ack(delta, "applied") with { Stream = "orders" }, BridgeJson.Options)));
+
+        Assert.HasCount(1, await _testStore.Store.GetPendingOutboxAsync());
+    }
+
+    [TestMethod]
     public async Task DuplicateCommandsReplayAReceiptWithoutExecutingWorkerTwice()
     {
         var router = Router();
@@ -127,6 +159,11 @@ public sealed class BridgeInboundRouterTests
 
     private BridgeInboundRouter Router()
     {
+        return new(_testStore.Store, Dispatcher(), _outbound, () => Now);
+    }
+
+    private BridgeCommandDispatcher Dispatcher(bool initialSyncReady = true)
+    {
         var terminal = Terminal();
         var dispatcher = new BridgeCommandDispatcher(
             _testStore.Store,
@@ -137,7 +174,18 @@ public sealed class BridgeInboundRouterTests
                 return Task.FromResult(Result(command));
             },
             () => Now);
-        return new(_testStore.Store, dispatcher, _outbound, () => Now);
+        dispatcher.BeginSession("session_router_01", [terminal]);
+        if (initialSyncReady)
+        {
+            foreach (var stream in new[] { "account", "positions", "orders" })
+            {
+                dispatcher.AcknowledgeInitialSnapshot(
+                    terminal.TerminalInstanceId,
+                    terminal.ConnectionEpoch,
+                    stream);
+            }
+        }
+        return dispatcher;
     }
 
     private static TerminalDescriptor Terminal() => new()
@@ -189,20 +237,26 @@ public sealed class BridgeInboundRouterTests
         Evidence = new() { ObservedAtUtcMsc = Now + 1 },
     };
 
-    private static DataDeltaMessage Delta() => new()
+    private static DataDeltaMessage Delta(
+        string stream = "positions",
+        string messageId = "msg_01JROUTER_DELTA",
+        bool fullSnapshot = false) => new()
     {
         Type = "data_delta",
-        MessageId = "msg_01JROUTER_DELTA",
+        MessageId = messageId,
         SentAtUtcMsc = Now,
         TerminalInstanceId = Terminal().TerminalInstanceId,
         AccountRef = Terminal().AccountRef,
         ConnectionEpoch = 7,
-        Stream = "positions",
+        Stream = stream,
         Revision = 1,
         BaseRevision = 0,
         ObservedAtUtcMsc = Now,
         SourceTimeMsc = Now,
-        Upserts = [JsonSerializer.SerializeToElement(new { ticket = "1001" })],
+        FullSnapshot = fullSnapshot,
+        Upserts = stream == "account"
+            ? [JsonSerializer.SerializeToElement(new { login = "12345678" })]
+            : [JsonSerializer.SerializeToElement(new { ticket = "1001" })],
         Deletes = [],
     };
 

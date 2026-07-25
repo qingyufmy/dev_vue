@@ -14,6 +14,13 @@ public sealed class BridgeCommandAdmissionPausedException()
 
 public sealed class BridgeCommandDispatcher
 {
+    private static readonly HashSet<string> RequiredInitialStreams = new(StringComparer.Ordinal)
+    {
+        "account",
+        "positions",
+        "orders",
+    };
+
     private static readonly HashSet<string> SupportedActions = new(StringComparer.Ordinal)
     {
         "place_order",
@@ -29,7 +36,11 @@ public sealed class BridgeCommandDispatcher
     private readonly Func<long> _clock;
     private readonly ConcurrentDictionary<string, Lazy<Task<CommandResultMessage>>> _inFlight = new(StringComparer.Ordinal);
     private readonly object _admissionLock = new();
+    private readonly Dictionary<string, InitialSyncState> _initialSync = new(StringComparer.Ordinal);
     private bool _acceptingCommands = true;
+    private string? _sessionId;
+
+    private sealed record InitialSyncState(long ConnectionEpoch, HashSet<string> Streams);
 
     public BridgeCommandDispatcher(
         BridgeStore store,
@@ -76,6 +87,64 @@ public sealed class BridgeCommandDispatcher
     }
 
     public int InFlightCount => _inFlight.Count;
+
+    public void BeginSession(string sessionId, IEnumerable<TerminalDescriptor> terminals)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(terminals);
+        lock (_admissionLock)
+        {
+            _sessionId = sessionId;
+            _initialSync.Clear();
+            foreach (var terminal in terminals)
+            {
+                _initialSync[terminal.TerminalInstanceId] = new(
+                    terminal.ConnectionEpoch,
+                    new(StringComparer.Ordinal));
+            }
+        }
+    }
+
+    public void EndSession(string sessionId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        lock (_admissionLock)
+        {
+            if (!string.Equals(_sessionId, sessionId, StringComparison.Ordinal))
+            {
+                return;
+            }
+            _sessionId = null;
+            _initialSync.Clear();
+        }
+    }
+
+    public bool AcknowledgeInitialSnapshot(string terminalInstanceId, long connectionEpoch, string stream)
+    {
+        lock (_admissionLock)
+        {
+            if (_sessionId is null
+                || !RequiredInitialStreams.Contains(stream)
+                || !_initialSync.TryGetValue(terminalInstanceId, out var state)
+                || state.ConnectionEpoch != connectionEpoch)
+            {
+                return false;
+            }
+            state.Streams.Add(stream);
+            return RequiredInitialStreams.IsSubsetOf(state.Streams);
+        }
+    }
+
+    public bool IsInitialSyncReady(string terminalInstanceId, long connectionEpoch)
+    {
+        lock (_admissionLock)
+        {
+            return _sessionId is not null
+                && _initialSync.TryGetValue(terminalInstanceId, out var state)
+                && state.ConnectionEpoch == connectionEpoch
+                && RequiredInitialStreams.IsSubsetOf(state.Streams);
+        }
+    }
 
     public async Task PauseAndDrainAsync(
         TimeSpan timeout,
@@ -175,6 +244,11 @@ public sealed class BridgeCommandDispatcher
             || !string.Equals(terminal.AccountRef.BrokerServer, command.AccountRef.BrokerServer, StringComparison.OrdinalIgnoreCase))
         {
             return "command_route_mismatch";
+        }
+        if (command.Action != "query_execution"
+            && !IsInitialSyncReady(command.TerminalInstanceId, command.ConnectionEpoch))
+        {
+            return "terminal_initial_sync_pending";
         }
         return null;
     }
