@@ -147,6 +147,8 @@ describe('Bridge v3 websocket gateway', () => {
     }))
     expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({ type:'hello_ack', session_id:'session_01JGATEWAY01' })
     expect(gateway.connectionsByTerminal.has('terminal_01JGATEWAY1')).toBe(true)
+    expect(gateway.listConnectedTerminals(42)[0].connection_generation).toBe(1)
+    expect(gateway.listConnectedUsers()).toEqual([expect.objectContaining({ userId:42, generation:1 })])
     expect(gateway.isTradeEnabled(42)).toBe(true)
     expect(gateway.setTradeEnabled(42, false)).toBe(true)
     expect(gateway.isTradeEnabled(42)).toBe(false)

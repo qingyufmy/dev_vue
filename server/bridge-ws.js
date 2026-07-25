@@ -2556,7 +2556,7 @@ export async function sendBridgeCommand(userId, action, params, timeoutMs = 5000
 
   const numericUserId = Number(userId)
   if (bridgeV3Business?.supports(action) && bridgeV3Business.hasConnectedTerminal(numericUserId)) {
-    return bridgeV3Business.execute(numericUserId, action, params, { timeoutMs })
+    return bridgeV3Business.execute(numericUserId, action, params, { ...options, timeoutMs })
   }
   let bridge = bridges.get(numericUserId)
 
@@ -2742,16 +2742,27 @@ export async function getBridgeTradeMode(userId) {
 
 // Get all connected bridges (for admin)
 export function getAllBridges() {
-  const result = []
+  const byUser = new Map()
   for (const [userId, bridge] of bridges) {
-    result.push({
+    byUser.set(Number(userId), {
       userId,
       connected: bridge.ws.readyState === 1,
       alive: Date.now() - bridge.lastSeen < 20000,
       lastSeen: bridge.lastSeen,
     })
   }
-  return result
+  for (const item of bridgeV3Business?.connectedUsers?.() || []) {
+    const existing = byUser.get(Number(item.userId))
+    byUser.set(Number(item.userId), existing
+      ? {
+          ...existing,
+          connected:existing.connected || item.connected,
+          alive:existing.alive || item.alive,
+          lastSeen:Math.max(Number(existing.lastSeen || 0), Number(item.lastSeen || 0)),
+        }
+      : item)
+  }
+  return Array.from(byUser.values())
 }
 
 export function getBridgeDiagnostics() {
@@ -2783,7 +2794,8 @@ export function getBridgeDiagnostics() {
 
 export function getBridgeGeneration(userId) {
   const bridge = bridges.get(Number(userId))
-  return bridge && bridge.ws?.readyState === 1 ? Number(bridge.generation || 0) : null
+  if (bridge && bridge.ws?.readyState === 1) return Number(bridge.generation || 0)
+  return bridgeV3Business?.getGeneration(Number(userId)) ?? null
 }
 
 export function getLatestBridgeMt5Clock() {

@@ -83,6 +83,7 @@ export function createBridgeV3Gateway({
   const connectionsByTerminal = new Map()
   const pendingResults = new Map()
   const pendingQuotes = new Map()
+  let connectionGeneration = 0
 
   function gatewayError(code) {
     return Object.assign(new Error(code), { code })
@@ -164,6 +165,8 @@ export function createBridgeV3Gateway({
       throw error
     }
     connection.bridgeVersion = message.bridge_version
+    connection.generation = ++connectionGeneration
+    connection.lastSeen = now()
     connection.ready = true
     for (const terminal of connection.terminals.values()) {
       const previous = connectionsByTerminal.get(terminal.terminal_instance_id)
@@ -189,6 +192,7 @@ export function createBridgeV3Gateway({
       throw Object.assign(new Error('bridge_json_invalid'), { code:'bridge_json_invalid' })
     }
     if (!connection.ready) return acceptHello(connection, message)
+    connection.lastSeen = now()
     assertBridgeV3Message(message, { nowUtcMsc:now() })
 
     if (message.type === 'heartbeat') {
@@ -391,9 +395,28 @@ export function createBridgeV3Gateway({
         connection_epoch:terminal.connection_epoch,
         initial_sync_ready:REQUIRED_INITIAL_STREAMS.every(stream =>
           connection.initialSnapshotStreams.get(terminal.terminal_instance_id)?.has(stream)),
+        connection_generation:connection.generation,
       })
     }
     return result
+  }
+
+  function listConnectedUsers() {
+    const users = new Map()
+    for (const { connection } of connectionsByTerminal.values()) {
+      if (connection.closed || !connection.ready) continue
+      const current = users.get(connection.userId)
+      if (!current || Number(connection.generation) > Number(current.generation)) {
+        users.set(connection.userId, {
+          userId:Number(connection.userId),
+          connected:true,
+          alive:true,
+          lastSeen:Number(connection.lastSeen || 0),
+          generation:Number(connection.generation || 0),
+        })
+      }
+    }
+    return Array.from(users.values())
   }
 
   function isTradeEnabled(userId) {
@@ -425,6 +448,7 @@ export function createBridgeV3Gateway({
     sendCommand,
     requestQuote,
     listConnectedTerminals,
+    listConnectedUsers,
     isTradeEnabled,
     setTradeEnabled,
   }

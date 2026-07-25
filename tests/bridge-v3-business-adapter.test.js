@@ -10,6 +10,7 @@ function route(overrides = {}) {
     platform:'mt5',
     account_ref:{ broker_server:'Broker-Demo', login:'12345678' },
     connection_epoch:7,
+    connection_generation:11,
     initial_sync_ready:true,
     ...overrides,
   }
@@ -164,6 +165,41 @@ describe('Bridge v3 business compatibility adapter', () => {
       symbol:'XAUUSD', order_type:'buy', volume:0.1,
     })).resolves.toMatchObject({ status:'error', error:'bridge_terminal_initializing' })
     expect(gateway.sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('preserves generation and durable before-write guards for v3 trades', async () => {
+    const beforeWrite = vi.fn().mockResolvedValue(true)
+    const { adapter, gateway } = setup()
+
+    await expect(adapter.execute(42, 'close', { ticket:'1001', operation_id:'op-guard' }, {
+      expectedGeneration:11,
+      beforeWrite,
+    })).resolves.toMatchObject({ status:'success' })
+    expect(beforeWrite).toHaveBeenCalledWith(expect.objectContaining({
+      bridgeGeneration:11,
+      userId:42,
+      action:'close',
+    }))
+    expect(gateway.sendCommand).toHaveBeenCalledOnce()
+
+    await expect(adapter.execute(42, 'close', { ticket:'1002' }, {
+      expectedGeneration:10,
+      beforeWrite,
+    })).resolves.toMatchObject({ status:'error', error:'Bridge generation changed before command write' })
+    expect(gateway.sendCommand).toHaveBeenCalledOnce()
+
+    await expect(adapter.execute(42, 'close', { ticket:'1003' }, {
+      expectedGeneration:11,
+      beforeWrite:vi.fn().mockResolvedValue(false),
+    })).resolves.toMatchObject({ status:'error', error:'Bridge command write blocked' })
+    await expect(adapter.execute(42, 'close', { ticket:'1004' }, {
+      expectedGeneration:11,
+      beforeWrite:vi.fn().mockRejectedValue(new Error('ledger unavailable')),
+    })).resolves.toMatchObject({
+      status:'error',
+      error:'Bridge command write blocked: ledger unavailable',
+    })
+    expect(gateway.sendCommand).toHaveBeenCalledOnce()
   })
 
   it('applies the local trade switch without sending a terminal trade command', async () => {

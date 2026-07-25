@@ -268,8 +268,12 @@ export function createBridgeV3BusinessAdapter({
     if (!enabled) throw adapterError('bridge_trade_disabled')
   }
 
-  async function executeTrade(userId, route, action, params, timeoutMs) {
+  async function executeTrade(userId, route, action, params, timeoutMs, options = {}) {
     if (route.initial_sync_ready !== true) throw adapterError('bridge_terminal_initializing')
+    if (options.expectedGeneration != null
+      && Number(route.connection_generation) !== Number(options.expectedGeneration)) {
+      throw adapterError('Bridge generation changed before command write')
+    }
     await assertTradeEnabled(userId)
     const issuedAt = now()
     const command = {
@@ -284,10 +288,33 @@ export function createBridgeV3BusinessAdapter({
       action:v3Action(action),
       params:tradeParams(action, params),
     }
+    if (typeof options.beforeWrite === 'function') {
+      let allowed
+      try {
+        allowed = await options.beforeWrite({
+          commandId:command.command_id,
+          bridgeGeneration:Number(route.connection_generation),
+          userId:Number(userId),
+          action,
+        })
+      } catch (error) {
+        throw adapterError(`Bridge command write blocked: ${error.message}`)
+      }
+      if (allowed === false) throw adapterError('Bridge command write blocked')
+    }
+    const currentRoute = selectRoute(userId, {
+      terminal_instance_id:route.terminal_instance_id,
+      account_ref:route.account_ref,
+    })
+    if (Number(currentRoute.connection_generation) !== Number(route.connection_generation)
+      || Number(currentRoute.connection_epoch) !== Number(route.connection_epoch)) {
+      throw adapterError('Bridge generation changed before command write')
+    }
     return legacyTradeResult(action, await gateway.sendCommand(userId, command, { timeoutMs }))
   }
 
-  async function execute(userId, action, params = {}, { timeoutMs = 5_000 } = {}) {
+  async function execute(userId, action, params = {}, options = {}) {
+    const timeoutMs = options.timeoutMs ?? 5_000
     if (!SUPPORTED_ACTIONS.has(action)) throw adapterError('bridge_v3_action_unsupported')
     try {
       if (action === 'toggle_trade') {
@@ -306,7 +333,7 @@ export function createBridgeV3BusinessAdapter({
       if (action === 'account') return await readAccount(route)
       if (READ_ACTIONS.has(action)) return await readCollection(route, action, params)
       if (action === 'quote') return await requestQuote(userId, route, params, timeoutMs)
-      return await executeTrade(userId, route, action, params, timeoutMs)
+      return await executeTrade(userId, route, action, params, timeoutMs, options)
     } catch (error) {
       const code = error?.code || error?.message || 'bridge_v3_request_failed'
       return { status:'error', error:code, message:code }
@@ -318,6 +345,11 @@ export function createBridgeV3BusinessAdapter({
     hasConnectedTerminal:userId => connectedTerminals(userId).length > 0,
     isTradeEnabled:userId => gateway.isTradeEnabled(Number(userId)),
     connectedTerminals,
+    connectedUsers:() => gateway.listConnectedUsers?.() || [],
+    getGeneration:userId => {
+      const generations = new Set(connectedTerminals(userId).map(route => Number(route.connection_generation)))
+      return generations.size === 1 ? generations.values().next().value : null
+    },
     execute,
     selectRoute,
   }
