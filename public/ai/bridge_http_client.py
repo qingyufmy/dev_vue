@@ -6,12 +6,11 @@ import urllib.parse
 import urllib.request
 
 
-LOCAL_SERVER_HOSTS = {"localhost", "127.0.0.1", "::1"}
 MAX_JSON_REQUEST_BYTES = 256 * 1024
 MAX_JSON_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
-def assert_secure_http_url(url):
+def validate_bridge_http_url(url):
     text = str(url or "").strip()
     if not text or any(ord(character) < 32 for character in text):
         raise ValueError("桥接服务器地址无效")
@@ -24,17 +23,15 @@ def assert_secure_http_url(url):
         parsed.port
     except ValueError as error:
         raise ValueError("桥接服务器端口无效") from error
-    if parsed.scheme == "https" and parsed.hostname:
+    if parsed.scheme in {"http", "https"} and parsed.hostname:
         return
-    if parsed.scheme == "http" and parsed.hostname in LOCAL_SERVER_HOSTS:
-        return
-    raise ValueError("桥接服务器必须使用 HTTPS；仅本机调试允许 HTTP")
+    raise ValueError("桥接服务器地址仅支持 HTTP 或 HTTPS")
 
 
 def normalize_server_url(url):
     """Return one canonical base URL shared by HTTP and WebSocket callers."""
     text = str(url or "").strip()
-    assert_secure_http_url(text)
+    validate_bridge_http_url(text)
     parsed = urllib.parse.urlsplit(text)
     scheme = parsed.scheme.lower()
     host = (parsed.hostname or "").lower()
@@ -60,7 +57,7 @@ class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         target = urllib.parse.urljoin(req.full_url, newurl)
         try:
-            assert_secure_http_url(target)
+            validate_bridge_http_url(target)
         except ValueError as error:
             raise urllib.error.HTTPError(target, code, str(error), headers, fp) from error
         if _origin(req.full_url) != _origin(target):
@@ -89,7 +86,7 @@ def encode_json_body(value, limit=MAX_JSON_REQUEST_BYTES):
 
 def request_json(url, data=None, timeout=10, token=None, ssl_context=None):
     try:
-        assert_secure_http_url(url)
+        validate_bridge_http_url(url)
         body = None if data is None else encode_json_body(data)
         headers = {"User-Agent": "AURUM-Bridge/1.0"}
         if body is not None:

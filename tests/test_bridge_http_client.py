@@ -13,22 +13,23 @@ if AI_DIR not in sys.path:
 
 from bridge_http_client import (
     MAX_JSON_REQUEST_BYTES, MAX_JSON_RESPONSE_BYTES, SameOriginRedirectHandler,
-    assert_secure_http_url, encode_json_body, normalize_server_url, read_json_body,
+    encode_json_body, normalize_server_url, read_json_body, validate_bridge_http_url,
 )
 
 
 class BridgeHttpClientTests(unittest.TestCase):
-    def test_rejects_plaintext_remote_and_url_credentials(self):
+    def test_accepts_http_and_https_but_rejects_unsafe_url_content(self):
+        validate_bridge_http_url("http://example.com/api")
+        validate_bridge_http_url("http://localhost:3000/health")
+        validate_bridge_http_url("https://example.com/api")
         with self.assertRaises(ValueError):
-            assert_secure_http_url("http://example.com/api")
+            validate_bridge_http_url("ftp://example.com/api")
         with self.assertRaises(ValueError):
-            assert_secure_http_url("https://user:secret@example.com/api")
+            validate_bridge_http_url("https://user:secret@example.com/api")
         with self.assertRaises(ValueError):
-            assert_secure_http_url("https://example.com/api?next=evil")
+            validate_bridge_http_url("https://example.com/api?next=evil")
         with self.assertRaises(ValueError):
-            assert_secure_http_url("https://example.com/api#fragment")
-        assert_secure_http_url("http://localhost:3000/health")
-        assert_secure_http_url("https://example.com/api")
+            validate_bridge_http_url("https://example.com/api#fragment")
 
     def test_normalizes_one_shared_server_base_url(self):
         self.assertEqual(
@@ -40,7 +41,7 @@ class BridgeHttpClientTests(unittest.TestCase):
             "http://[::1]:3000",
         )
 
-    def test_blocks_cross_origin_and_https_downgrade_redirects(self):
+    def test_blocks_cross_origin_and_protocol_changing_redirects(self):
         handler = SameOriginRedirectHandler()
         request = urllib.request.Request(
             "https://safe.example/api", headers={"Authorization": "Bearer secret"},

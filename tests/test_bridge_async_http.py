@@ -105,7 +105,7 @@ class AsyncJsonRequestTests(unittest.TestCase):
         loop = QEventLoop()
         results = []
         requests = [
-            AsyncJsonRequest("http://example.com/api"),
+            AsyncJsonRequest("ftp://example.com/api"),
             AsyncJsonRequest(f"{self.base_url}/echo", {"value": "x" * (256 * 1024)}),
         ]
         for request in requests:
@@ -116,7 +116,7 @@ class AsyncJsonRequestTests(unittest.TestCase):
         loop.exec()
         self.assertEqual(len(results), 2)
         self.assertTrue(all(status == 0 for status, _body in results))
-        self.assertIn("HTTPS", results[0][1]["error"])
+        self.assertIn("HTTP 或 HTTPS", results[0][1]["error"])
         self.assertIn("大小限制", results[1][1]["error"])
 
 

@@ -25,7 +25,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone, timedelta
 from bridge_config_store import BridgeConfigStore
 from bridge_http_client import (
-    MAX_JSON_RESPONSE_BYTES, assert_secure_http_url, encode_json_body,
+    MAX_JSON_RESPONSE_BYTES, encode_json_body, validate_bridge_http_url,
     normalize_server_url, request_json,
 )
 
@@ -292,7 +292,7 @@ class AsyncJsonRequest(QObject):
 
     def start(self):
         try:
-            assert_secure_http_url(self.url)
+            validate_bridge_http_url(self.url)
             body = None if self.data is None else encode_json_body(self.data)
         except (TypeError, ValueError) as error:
             QTimer.singleShot(0, lambda message=str(error): self._finish_without_reply(message))
@@ -800,7 +800,7 @@ class BridgeWorker(QThread):
             return False
 
     def _create_connection_ticket(self):
-        """Exchange the access token over HTTPS for a short-lived one-use WS ticket."""
+        """Exchange the access token over HTTP(S) for a short-lived one-use WS ticket."""
         server = self.server_url.replace("ws://", "http://").replace("wss://", "https://").rstrip('/')
         status, data = http_post_json(
             f"{server}/api/auth/bridge-ticket", {}, timeout=10, token=self.token,

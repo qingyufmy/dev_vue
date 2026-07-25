@@ -377,14 +377,14 @@ describe('Python Bridge history contract', () => {
     expect(gui).toContain('"comment": self._normalize_order_comment(params.get("comment"), "AI挂单")')
   })
 
-  it('rejects plaintext remote transport while allowing localhost development', () => {
+  it('accepts HTTP and HTTPS bridge servers while preserving URL safety checks', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     const httpClient = readFileSync(new URL('../public/ai/bridge_http_client.py', import.meta.url), 'utf8')
-    expect(httpClient).toContain('LOCAL_SERVER_HOSTS = {"localhost", "127.0.0.1", "::1"}')
-    expect(httpClient).toContain('桥接服务器必须使用 HTTPS；仅本机调试允许 HTTP')
+    expect(httpClient).toContain('parsed.scheme in {"http", "https"} and parsed.hostname')
+    expect(httpClient).toContain('桥接服务器地址仅支持 HTTP 或 HTTPS')
     expect(httpClient).toContain('class SameOriginRedirectHandler')
     expect(httpClient).toContain('MAX_JSON_RESPONSE_BYTES = 2 * 1024 * 1024')
-    expect(source).toContain('MAX_JSON_RESPONSE_BYTES, assert_secure_http_url, encode_json_body,')
+    expect(source).toContain('MAX_JSON_RESPONSE_BYTES, encode_json_body, validate_bridge_http_url,')
     expect(source).toContain('normalize_server_url, request_json,')
     expect(httpClient).toContain('def normalize_server_url(url):')
     expect(source).not.toContain('shell=True')
