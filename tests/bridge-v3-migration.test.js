@@ -35,4 +35,12 @@ describe('Bridge v3 schema migration', () => {
     expect(migrations).toContain('approved_token_version INT DEFAULT NULL')
     expect(migrations).toContain('consumed_at DATETIME DEFAULT NULL')
   })
+
+  it('stores immutable bridge deal history with account and cursor indexes', () => {
+    expect(migrations).toContain("id: '143_bridge_v3_deal_history'")
+    expect(migrations).toContain('CREATE TABLE IF NOT EXISTS bridge_v3_deals')
+    expect(migrations).toContain('PRIMARY KEY (terminal_instance_id, deal_ticket)')
+    expect(migrations).toContain('idx_bridge_v3_deals_user_time (user_id, deal_time_msc)')
+    expect(migrations).toContain('idx_bridge_v3_deals_position (terminal_instance_id, position_id, deal_time_msc)')
+  })
 })

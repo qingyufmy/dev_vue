@@ -128,6 +128,43 @@ describe('Bridge v3 incremental read model', () => {
     expect(sql.some(value => value.includes('ticket IN'))).toBe(true)
   })
 
+  it('persists immutable deals without deleting historical rows on a full snapshot', async () => {
+    const message = delta('deals', {
+      revision:1,
+      base_revision:0,
+      full_snapshot:true,
+      upserts:[{
+        ticket:'5001', order:'4001', position_id:'3001', symbol:'XAUUSD',
+        time_msc:NOW - 100, profit:12.5,
+      }],
+      deletes:[],
+    })
+    const { run, transactionFn } = transactionFor()
+
+    await expect(applyBridgeDataDelta(message, { userId:42, nowUtcMsc:NOW, transactionFn }))
+      .resolves.toMatchObject({ status:'applied', stream:'deals', revision:1 })
+
+    const sql = run.mock.calls.map(([value]) => value)
+    expect(sql.some(value => value.includes('INSERT INTO bridge_v3_deals'))).toBe(true)
+    expect(sql.some(value => value.includes('DELETE FROM bridge_v3_deals'))).toBe(false)
+    expect(run.mock.calls.find(([value]) => value.includes('INSERT INTO bridge_v3_deals'))[1])
+      .toEqual(expect.arrayContaining(['5001', 42, '4001', '3001', 'XAUUSD', NOW - 100]))
+  })
+
+  it('rejects deletes and missing source times in the deals stream', async () => {
+    const deleted = transactionFor()
+    await expect(applyBridgeDataDelta(delta('deals', {
+      upserts:[{ ticket:'5001', time_msc:NOW - 100 }], deletes:['5000'],
+    }), { userId:42, nowUtcMsc:NOW, transactionFn:deleted.transactionFn }))
+      .rejects.toMatchObject({ code:'bridge_deals_delete_invalid' })
+
+    const missingTime = transactionFor()
+    await expect(applyBridgeDataDelta(delta('deals', {
+      upserts:[{ ticket:'5001' }],
+    }), { userId:42, nowUtcMsc:NOW, transactionFn:missingTime.transactionFn }))
+      .rejects.toMatchObject({ code:'bridge_deals_time_invalid' })
+  })
+
   it('returns a gap without mutating latest state when the base revision is stale', async () => {
     const { run, transactionFn } = transactionFor({ revision:{ revision:4 } })
     await expect(applyBridgeDataDelta(delta('orders', { revision:6, base_revision:5 }), {

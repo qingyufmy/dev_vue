@@ -2,7 +2,7 @@ import { queryRun, withTransaction } from '../db.js'
 import { assertBridgeV3Message, sameBridgeRoute } from './protocol.js'
 import { sha256Json, stableJson } from './command-ledger.js'
 
-const SUPPORTED_READ_MODEL_STREAMS = new Set(['account', 'positions', 'orders'])
+const SUPPORTED_READ_MODEL_STREAMS = new Set(['account', 'positions', 'orders', 'deals'])
 const BATCH_SIZE = 250
 
 function readModelError(code, message = code) {
@@ -32,7 +32,10 @@ function itemTicket(item, stream) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     throw readModelError(`bridge_${stream}_item_invalid`)
   }
-  const ticket = String(item.ticket ?? item[stream === 'positions' ? 'position_id' : 'order_id'] ?? '').trim()
+  const fallback = stream === 'positions' ? item.position_id
+    : stream === 'orders' ? item.order_id
+      : item.deal_ticket ?? item.deal
+  const ticket = String(item.ticket ?? fallback ?? '').trim()
   if (!ticket || ticket.length > 64) throw readModelError(`bridge_${stream}_ticket_invalid`)
   return ticket
 }
@@ -90,6 +93,51 @@ async function applyCollection(run, message) {
     await run(`DELETE FROM ${table}
       WHERE terminal_instance_id = ? AND ticket IN (${batch.map(() => '?').join(', ')})`,
     [message.terminal_instance_id, ...batch])
+  }
+}
+
+function dealTimeMsc(item) {
+  const milliseconds = Number(item?.time_msc || 0)
+  if (Number.isSafeInteger(milliseconds) && milliseconds > 0) return milliseconds
+  const seconds = Number(item?.time || 0)
+  if (Number.isSafeInteger(seconds) && seconds > 0
+    && Number.isSafeInteger(seconds * 1000)) return seconds * 1000
+  throw readModelError('bridge_deals_time_invalid')
+}
+
+function optionalDealText(value, code, maxLength = 64) {
+  if (value == null) return null
+  const normalized = String(value).trim()
+  if (!normalized || normalized.length > maxLength) throw readModelError(code)
+  return normalized
+}
+
+async function applyDeals(run, message, userId) {
+  if (message.deletes.length) throw readModelError('bridge_deals_delete_invalid')
+  const deals = message.upserts.map(item => ({
+    ticket:itemTicket(item, 'deals'),
+    orderTicket:optionalDealText(item.order ?? item.order_ticket, 'bridge_deals_order_ticket_invalid'),
+    positionId:optionalDealText(item.position_id, 'bridge_deals_position_id_invalid'),
+    symbol:optionalDealText(item.symbol, 'bridge_deals_symbol_invalid'),
+    timeMsc:dealTimeMsc(item),
+    payload:stableJson(item),
+  }))
+  for (const batch of chunks(deals)) {
+    if (!batch.length) continue
+    const values = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ')
+    const params = batch.flatMap(item => [
+      message.terminal_instance_id, item.ticket, Number(userId), message.connection_epoch,
+      item.orderTicket, item.positionId, item.symbol || null, item.timeMsc,
+      message.observed_at_utc_msc, message.source_time_msc, item.payload,
+    ])
+    await run(`INSERT INTO bridge_v3_deals
+      (terminal_instance_id, deal_ticket, user_id, connection_epoch, order_ticket, position_id,
+       symbol, deal_time_msc, observed_at_utc_msc, source_time_msc, payload_json)
+      VALUES ${values}
+      ON DUPLICATE KEY UPDATE connection_epoch = VALUES(connection_epoch),
+        order_ticket = VALUES(order_ticket), position_id = VALUES(position_id), symbol = VALUES(symbol),
+        deal_time_msc = VALUES(deal_time_msc), observed_at_utc_msc = VALUES(observed_at_utc_msc),
+        source_time_msc = VALUES(source_time_msc), payload_json = VALUES(payload_json)`, params)
   }
 }
 
@@ -190,6 +238,7 @@ export async function applyBridgeDataDelta(message, {
     }
 
     if (message.stream === 'account') await replaceAccount(run, message)
+    else if (message.stream === 'deals') await applyDeals(run, message, userId)
     else await applyCollection(run, message)
 
     await run(`INSERT INTO bridge_v3_stream_revisions

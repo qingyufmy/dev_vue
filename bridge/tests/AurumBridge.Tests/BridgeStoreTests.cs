@@ -156,6 +156,45 @@ public sealed class BridgeStoreTests
     }
 
     [TestMethod]
+    public async Task CoalescesUnacknowledgedDealsAndKeepsDurableCursorUntilServerAck()
+    {
+        await _store.PersistDataDeltaAsync(Delta(
+            "deals", 1, 0, [Json("""{"ticket":"101","time_msc":1000,"symbol":"XAUUSD"}""")]),
+            dataOutboxLimitPerStream:3);
+        await _store.PersistDataDeltaAsync(Delta(
+            "deals", 2, 1, [Json("""{"ticket":"102","time_msc":2000,"symbol":"XAUUSD"}""")]),
+            dataOutboxLimitPerStream:3);
+        var latest = Delta(
+            "deals", 3, 2, [Json("""{"ticket":"103","time_msc":3000,"symbol":"XAUUSD"}""")]);
+        await _store.PersistDataDeltaAsync(latest, dataOutboxLimitPerStream:3);
+
+        var pending = await _store.GetPendingOutboxAsync(20);
+        var merged = JsonSerializer.Deserialize<DataDeltaMessage>(pending.Single().PayloadJson, BridgeJson.Options);
+        var cursor = await _store.GetHistoryCursorAsync("terminal_01JSTORE0001", "deals");
+
+        Assert.IsNotNull(merged);
+        Assert.IsTrue(merged.FullSnapshot);
+        Assert.HasCount(3, merged.Upserts);
+        Assert.AreEqual(3_000, cursor.TimeMsc);
+        Assert.AreEqual("103", cursor.Ticket);
+        Assert.AreEqual(3, await _store.CountPendingDealsAsync("terminal_01JSTORE0001"));
+
+        Assert.IsTrue(await _store.AcknowledgeOutboxAsync(latest.MessageId, "applied", 4_000));
+        Assert.AreEqual(0, await _store.CountPendingDealsAsync("terminal_01JSTORE0001"));
+        Assert.AreEqual(cursor, await _store.GetHistoryCursorAsync("terminal_01JSTORE0001", "deals"));
+    }
+
+    [TestMethod]
+    public async Task RejectsDeletesFromImmutableDealsStream()
+    {
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            _store.PersistDataDeltaAsync(Delta(
+                "deals", 1, 0,
+                [Json("""{"ticket":"101","time_msc":1000}""")],
+                [Json(""""101"""")])));
+    }
+
+    [TestMethod]
     public async Task ARequestedFullSnapshotSupersedesOlderUnacknowledgedDeltasOnlyForItsStream()
     {
         await _store.PersistDataDeltaAsync(Delta(

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AurumBridge.Protocol;
 using Microsoft.Data.Sqlite;
 
@@ -14,6 +15,13 @@ public enum PersistDeltaStatus
 }
 
 public sealed record PersistDeltaResult(PersistDeltaStatus Status, long CurrentRevision, long ExpectedRevision);
+
+public sealed record HistoryCursor(
+    [property: JsonPropertyName("time_msc")] long TimeMsc,
+    [property: JsonPropertyName("ticket")] string Ticket)
+{
+    public static readonly HistoryCursor Empty = new(0, "0");
+}
 
 public sealed record OutboxMessage(
     long Id,
@@ -51,6 +59,7 @@ public sealed class BridgeStore : IAsyncDisposable
         "account",
         "positions",
         "orders",
+        "deals",
     };
 
     private readonly string _connectionString;
@@ -166,6 +175,10 @@ public sealed class BridgeStore : IAsyncDisposable
             {
                 await PersistAccountAsync(connection, transaction, message, cancellationToken);
             }
+            else if (message.Stream == "deals")
+            {
+                await PersistDealsAsync(connection, transaction, message, cancellationToken);
+            }
             else
             {
                 await PersistCollectionAsync(connection, transaction, message, cancellationToken);
@@ -176,7 +189,7 @@ public sealed class BridgeStore : IAsyncDisposable
             var outboxMessage = message;
             if (message.FullSnapshot || pendingForStream >= dataOutboxLimitPerStream - 1)
             {
-                if (!message.FullSnapshot)
+                if (!message.FullSnapshot || message.Stream == "deals")
                 {
                     outboxMessage = message with
                     {
@@ -281,18 +294,118 @@ public sealed class BridgeStore : IAsyncDisposable
         try
         {
             await using var connection = await OpenConnectionAsync(cancellationToken);
-            await using var command = connection.CreateCommand();
-            command.CommandText = """
-                DELETE FROM outbox_messages
-                WHERE message_id = $message_id AND acked_at_utc_msc IS NULL;
-                """;
-            command.Parameters.AddWithValue("$message_id", messageId);
-            return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            string? payloadJson;
+            await using (var read = connection.CreateCommand())
+            {
+                read.Transaction = (SqliteTransaction)transaction;
+                read.CommandText = """
+                    SELECT payload_json FROM outbox_messages
+                    WHERE message_id = $message_id AND acked_at_utc_msc IS NULL
+                    LIMIT 1;
+                    """;
+                read.Parameters.AddWithValue("$message_id", messageId);
+                payloadJson = Convert.ToString(await read.ExecuteScalarAsync(cancellationToken));
+            }
+            if (string.IsNullOrWhiteSpace(payloadJson))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+            await using (var delete = connection.CreateCommand())
+            {
+                delete.Transaction = (SqliteTransaction)transaction;
+                delete.CommandText = """
+                    DELETE FROM outbox_messages
+                    WHERE message_id = $message_id AND acked_at_utc_msc IS NULL;
+                    """;
+                delete.Parameters.AddWithValue("$message_id", messageId);
+                if (await delete.ExecuteNonQueryAsync(cancellationToken) != 1)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return false;
+                }
+            }
+            DataDeltaMessage? acknowledgedDelta = null;
+            using (var payload = JsonDocument.Parse(payloadJson))
+            {
+                if (payload.RootElement.TryGetProperty("type", out var type)
+                    && type.GetString() == "data_delta")
+                {
+                    acknowledgedDelta = payload.RootElement.Deserialize<DataDeltaMessage>(BridgeJson.Options);
+                }
+            }
+            if (acknowledgedDelta?.Stream == "deals")
+            {
+                foreach (var item in acknowledgedDelta.Upserts)
+                {
+                    await using var prune = connection.CreateCommand();
+                    prune.Transaction = (SqliteTransaction)transaction;
+                    prune.CommandText = """
+                        DELETE FROM deals_pending
+                        WHERE terminal_instance_id = $terminal_id AND ticket = $ticket;
+                        """;
+                    prune.Parameters.AddWithValue("$terminal_id", acknowledgedDelta.TerminalInstanceId);
+                    prune.Parameters.AddWithValue("$ticket", ReadTicket(item, "deals"));
+                    await prune.ExecuteNonQueryAsync(cancellationToken);
+                }
+            }
+            await transaction.CommitAsync(cancellationToken);
+            return true;
         }
         finally
         {
             _writer.Release();
         }
+    }
+
+    public async Task<HistoryCursor> GetHistoryCursorAsync(
+        string terminalInstanceId,
+        string stream,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        ArgumentException.ThrowIfNullOrWhiteSpace(terminalInstanceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stream);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT cursor_value FROM history_cursors
+            WHERE terminal_instance_id = $terminal_id AND stream = $stream
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+        command.Parameters.AddWithValue("$stream", stream);
+        var value = Convert.ToString(await command.ExecuteScalarAsync(cancellationToken));
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return HistoryCursor.Empty;
+        }
+        try
+        {
+            return JsonSerializer.Deserialize<HistoryCursor>(value, BridgeJson.Options)
+                ?? HistoryCursor.Empty;
+        }
+        catch (JsonException)
+        {
+            throw new InvalidDataException("bridge_history_cursor_invalid");
+        }
+    }
+
+    public async Task<int> CountPendingDealsAsync(
+        string terminalInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        ArgumentException.ThrowIfNullOrWhiteSpace(terminalInstanceId);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*) FROM deals_pending
+            WHERE terminal_instance_id = $terminal_id;
+            """;
+        command.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken) ?? 0);
     }
 
     public async Task SaveExecutionReceiptAsync(
@@ -704,6 +817,67 @@ public sealed class BridgeStore : IAsyncDisposable
         }
     }
 
+    private static async Task PersistDealsAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        DataDeltaMessage message,
+        CancellationToken cancellationToken)
+    {
+        if (message.Deletes.Count != 0)
+        {
+            throw new InvalidDataException("bridge_deals_delete_invalid");
+        }
+        var cursor = HistoryCursor.Empty;
+        foreach (var item in message.Upserts)
+        {
+            var ticket = ReadTicket(item, "deals");
+            var timeMsc = ReadDealTimeMsc(item);
+            if (CompareCursor(timeMsc, ticket, cursor) > 0)
+            {
+                cursor = new(timeMsc, ticket);
+            }
+            await using var upsert = connection.CreateCommand();
+            upsert.Transaction = (SqliteTransaction)transaction;
+            upsert.CommandText = """
+                INSERT INTO deals_pending
+                  (terminal_instance_id, ticket, connection_epoch, revision, deal_time_msc,
+                   observed_at_utc_msc, source_time_msc, payload_json)
+                VALUES ($terminal_id, $ticket, $epoch, $revision, $deal_time,
+                        $observed_at, $source_time, $payload)
+                ON CONFLICT(terminal_instance_id, ticket) DO UPDATE SET
+                  connection_epoch = excluded.connection_epoch,
+                  revision = excluded.revision,
+                  deal_time_msc = excluded.deal_time_msc,
+                  observed_at_utc_msc = excluded.observed_at_utc_msc,
+                  source_time_msc = excluded.source_time_msc,
+                  payload_json = excluded.payload_json;
+                """;
+            AddDeltaParameters(upsert, message);
+            upsert.Parameters.AddWithValue("$ticket", ticket);
+            upsert.Parameters.AddWithValue("$deal_time", timeMsc);
+            upsert.Parameters.AddWithValue("$payload", item.GetRawText());
+            await upsert.ExecuteNonQueryAsync(cancellationToken);
+        }
+        if (cursor.TimeMsc <= 0)
+        {
+            return;
+        }
+        await using var updateCursor = connection.CreateCommand();
+        updateCursor.Transaction = (SqliteTransaction)transaction;
+        updateCursor.CommandText = """
+            INSERT INTO history_cursors
+              (terminal_instance_id, stream, cursor_value, updated_at_utc_msc)
+            VALUES ($terminal_id, 'deals', $cursor, $updated_at)
+            ON CONFLICT(terminal_instance_id, stream) DO UPDATE SET
+              cursor_value = excluded.cursor_value,
+              updated_at_utc_msc = excluded.updated_at_utc_msc;
+            """;
+        updateCursor.Parameters.AddWithValue("$terminal_id", message.TerminalInstanceId);
+        updateCursor.Parameters.AddWithValue("$cursor", JsonSerializer.Serialize(cursor, BridgeJson.Options));
+        updateCursor.Parameters.AddWithValue("$updated_at", message.ObservedAtUtcMsc);
+        await updateCursor.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static async Task EnqueueOutboxAsync(
         SqliteConnection connection,
         System.Data.Common.DbTransaction transaction,
@@ -785,13 +959,16 @@ public sealed class BridgeStore : IAsyncDisposable
             "account" => "account_latest",
             "positions" => "positions_latest",
             "orders" => "orders_latest",
+            "deals" => "deals_pending",
             _ => throw new InvalidDataException("bridge_data_stream_invalid"),
         };
         await using var command = connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
         command.CommandText = stream == "account"
             ? $"SELECT payload_json FROM {table} WHERE terminal_instance_id = $terminal_id;"
-            : $"SELECT payload_json FROM {table} WHERE terminal_instance_id = $terminal_id ORDER BY ticket;";
+            : stream == "deals"
+                ? $"SELECT payload_json FROM {table} WHERE terminal_instance_id = $terminal_id ORDER BY deal_time_msc, ticket;"
+                : $"SELECT payload_json FROM {table} WHERE terminal_instance_id = $terminal_id ORDER BY ticket;";
         command.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
         var items = new List<JsonElement>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -823,12 +1000,50 @@ public sealed class BridgeStore : IAsyncDisposable
         {
             return ReadScalarTicket(ticket, stream);
         }
-        var fallback = stream == "positions" ? "position_id" : "order_id";
+        var fallback = stream switch
+        {
+            "positions" => "position_id",
+            "orders" => "order_id",
+            "deals" => "deal_ticket",
+            _ => string.Empty,
+        };
         if (item.TryGetProperty(fallback, out ticket))
         {
             return ReadScalarTicket(ticket, stream);
         }
+        if (stream == "deals" && item.TryGetProperty("deal", out ticket))
+        {
+            return ReadScalarTicket(ticket, stream);
+        }
         throw new InvalidDataException($"bridge_{stream}_ticket_invalid");
+    }
+
+    private static long ReadDealTimeMsc(JsonElement item)
+    {
+        if (item.TryGetProperty("time_msc", out var timeMsc)
+            && timeMsc.ValueKind == JsonValueKind.Number
+            && timeMsc.TryGetInt64(out var value)
+            && value > 0)
+        {
+            return value;
+        }
+        if (item.TryGetProperty("time", out var time)
+            && time.ValueKind == JsonValueKind.Number
+            && time.TryGetInt64(out value)
+            && value > 0
+            && value <= long.MaxValue / 1_000)
+        {
+            return value * 1_000;
+        }
+        throw new InvalidDataException("bridge_deals_time_invalid");
+    }
+
+    private static int CompareCursor(long timeMsc, string ticket, HistoryCursor cursor)
+    {
+        var timeComparison = timeMsc.CompareTo(cursor.TimeMsc);
+        return timeComparison != 0
+            ? timeComparison
+            : string.CompareOrdinal(ticket.PadLeft(64, '0'), cursor.Ticket.PadLeft(64, '0'));
     }
 
     private static string ReadScalarTicket(JsonElement value, string stream)
@@ -939,6 +1154,19 @@ public sealed class BridgeStore : IAsyncDisposable
           payload_json TEXT NOT NULL,
           PRIMARY KEY (terminal_instance_id, ticket)
         );
+        CREATE TABLE IF NOT EXISTS deals_pending (
+          terminal_instance_id TEXT NOT NULL,
+          ticket TEXT NOT NULL,
+          connection_epoch INTEGER NOT NULL,
+          revision INTEGER NOT NULL,
+          deal_time_msc INTEGER NOT NULL,
+          observed_at_utc_msc INTEGER NOT NULL,
+          source_time_msc INTEGER,
+          payload_json TEXT NOT NULL,
+          PRIMARY KEY (terminal_instance_id, ticket)
+        );
+        CREATE INDEX IF NOT EXISTS idx_deals_pending_cursor
+          ON deals_pending (terminal_instance_id, deal_time_msc, ticket);
         CREATE TABLE IF NOT EXISTS history_cursors (
           terminal_instance_id TEXT NOT NULL,
           stream TEXT NOT NULL,

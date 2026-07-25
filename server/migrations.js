@@ -4166,6 +4166,29 @@ const migrations = [
         KEY idx_bridge_pair_user (user_id, status, updated_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '143_bridge_v3_deal_history',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS bridge_v3_deals (
+        terminal_instance_id VARCHAR(128) NOT NULL,
+        deal_ticket VARCHAR(64) NOT NULL,
+        user_id INT NOT NULL,
+        connection_epoch BIGINT UNSIGNED NOT NULL,
+        order_ticket VARCHAR(64) DEFAULT NULL,
+        position_id VARCHAR(64) DEFAULT NULL,
+        symbol VARCHAR(64) DEFAULT NULL,
+        deal_time_msc BIGINT UNSIGNED NOT NULL,
+        observed_at_utc_msc BIGINT UNSIGNED NOT NULL,
+        source_time_msc BIGINT UNSIGNED DEFAULT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+        PRIMARY KEY (terminal_instance_id, deal_ticket),
+        KEY idx_bridge_v3_deals_user_time (user_id, deal_time_msc),
+        KEY idx_bridge_v3_deals_position (terminal_instance_id, position_id, deal_time_msc)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 
