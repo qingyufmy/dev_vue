@@ -59,6 +59,29 @@ public sealed class Mt4TerminalRuntimeTests
         Assert.AreEqual(0, connection.ExecuteCount);
     }
 
+    [TestMethod]
+    public async Task MapsStructuredExecutionQueryWithoutTradingPermissionFallbacks()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection
+        {
+            NextRawResult = Json("""{"found":true,"complete":true,"kind":"trade","ticket":"5003","position_id":"5003","comment":"AI-2F"}"""),
+        };
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_01");
+        await runtime.StartAsync();
+
+        var result = await runtime.ExecuteCommandAsync(Command("query_execution", new
+        {
+            expected_kind = "pending", pending_ticket = "5003", bridge_command_ref = "AI-2F",
+        }));
+
+        Assert.AreEqual("succeeded", result.Status);
+        Assert.IsTrue(result.RawResult!.Value.GetProperty("found").GetBoolean());
+        Assert.AreEqual(5003L, connection.LastCommand!.Ticket);
+        Assert.AreEqual("AI-2F", connection.LastCommand.BridgeCommandRef);
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "mt4_terminal_runtime_01",
@@ -100,6 +123,8 @@ public sealed class Mt4TerminalRuntimeTests
     {
         public Mt4Welcome? Welcome { get; private set; }
         public int ExecuteCount { get; private set; }
+        public Mt4TradeCommand? LastCommand { get; private set; }
+        public JsonElement? NextRawResult { get; init; }
 
         public Task SendWelcomeAsync(Mt4Welcome welcome, CancellationToken cancellationToken = default)
         {
@@ -116,6 +141,7 @@ public sealed class Mt4TerminalRuntimeTests
             CancellationToken cancellationToken = default)
         {
             ExecuteCount++;
+            LastCommand = command;
             return Task.FromResult(new Mt4TradeResult(
                 command.CommandId,
                 "succeeded",
@@ -123,7 +149,8 @@ public sealed class Mt4TerminalRuntimeTests
                 null,
                 0,
                 command.Ticket,
-                1_800_000_000_050));
+                1_800_000_000_050,
+                NextRawResult));
         }
 
         public Task<Mt4Quote> GetQuoteAsync(

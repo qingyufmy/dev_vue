@@ -122,6 +122,42 @@ public sealed class Mt4PipeProtocolTests
     }
 
     [TestMethod]
+    public void DurableCommentAndTicketOnlyExecutionQueryRoundTrip()
+    {
+        var place = Mt4PipeProtocol.DecodeCommand(Mt4PipeProtocol.EncodeCommand(
+            Mt4PipeProtocol.CreateTradeCommand(Command("place_order", new
+            {
+                symbol = "XAUUSD", side = "buy", order_kind = "market", volume = 0.1,
+                comment = "AI-2F",
+            }))));
+        var query = Mt4PipeProtocol.DecodeCommand(Mt4PipeProtocol.EncodeCommand(
+            Mt4PipeProtocol.CreateTradeCommand(Command("query_execution", new
+            {
+                expected_kind = "pending", pending_ticket = "5003", bridge_command_ref = "AI-2F",
+            }))));
+
+        Assert.AreEqual("AI-2F", place.Comment);
+        Assert.AreEqual(5003L, query.Ticket);
+        Assert.AreEqual("pending", query.ExpectedKind);
+        Assert.AreEqual("AI-2F", query.BridgeCommandRef);
+    }
+
+    [TestMethod]
+    public void CommandResultRoundTripsStructuredExecutionEvidence()
+    {
+        var raw = JsonSerializer.SerializeToElement(new
+        {
+            found = true, complete = true, kind = "pending", ticket = "5003", pending_state = "filled",
+        });
+        var decoded = Mt4PipeProtocol.DecodeCommandResult(Mt4PipeProtocol.EncodeCommandResult(new(
+            "command_mt4_query_01", "succeeded", null, null, 0, 5003,
+            1_800_000_000_100, raw)));
+
+        Assert.IsTrue(decoded.RawResult!.Value.GetProperty("found").GetBoolean());
+        Assert.AreEqual("filled", decoded.RawResult.Value.GetProperty("pending_state").GetString());
+    }
+
+    [TestMethod]
     public void QuoteRequestAndResponseRoundTripWithStrictRoute()
     {
         var request = Mt4PipeProtocol.CreateQuoteRequest(QuoteRequest());

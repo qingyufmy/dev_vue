@@ -84,6 +84,10 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         {
             throw new InvalidDataException("mt4_command_result_id_mismatch");
         }
+        if (command.Action == "query_execution" && localResult.RawResult is null)
+        {
+            return Rejected(command, "mt4_query_result_invalid");
+        }
         var ticket = localResult.Ticket > 0 ? localResult.Ticket.ToString() : null;
         return new()
         {
@@ -98,7 +102,8 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             CompletedAtUtcMsc = localResult.ObservedAtUtcMsc,
             ErrorCode = localResult.ErrorCode,
             ErrorMessage = localResult.ErrorMessage,
-            RawResult = JsonSerializer.SerializeToElement(new { broker_retcode = localResult.BrokerRetcode }),
+            RawResult = localResult.RawResult
+                ?? JsonSerializer.SerializeToElement(new { broker_retcode = localResult.BrokerRetcode }),
             Evidence = new()
             {
                 ObservedAtUtcMsc = localResult.ObservedAtUtcMsc,

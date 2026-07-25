@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.00"
+#property version   "3.01"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -226,6 +226,9 @@ void ExecuteCommand(uchar &payload[], int &offset)
    long expiration = ReadInt64(payload, offset);
    string expected_stop_loss_value = ReadUtf8(payload, offset);
    string expected_take_profit_value = ReadUtf8(payload, offset);
+   string order_comment = ReadUtf8(payload, offset);
+   string expected_kind = ReadUtf8(payload, offset);
+   string bridge_command_ref = ReadUtf8(payload, offset);
    if(command_id == "" || terminal_id != g_terminal_id
       || StringCompare(broker_server, AccountServer(), false) != 0
       || login != IntegerToString(AccountNumber())
@@ -248,7 +251,7 @@ void ExecuteCommand(uchar &payload[], int &offset)
    if(action == ACTION_PLACE)
      {
       ExecutePlace(command_id, symbol, side, order_kind, volume, price_value,
-         stop_loss_value, take_profit_value, deviation, magic, expiration);
+         stop_loss_value, take_profit_value, deviation, magic, expiration, order_comment);
       return;
      }
    if(action == ACTION_CANCEL)
@@ -276,7 +279,8 @@ void ExecuteCommand(uchar &payload[], int &offset)
      }
    if(action == ACTION_QUERY)
      {
-      ExecuteQuery(command_id, (int)ticket_value);
+      ExecuteQuery(command_id, (int)ticket_value, symbol, expected_kind,
+         bridge_command_ref, magic);
       return;
      }
    SendCommandResult(command_id, 2, "command_action_unsupported", "", 0, 0);
@@ -285,7 +289,8 @@ void ExecuteCommand(uchar &payload[], int &offset)
 void ExecutePlace(const string command_id, const string symbol, const int side,
    const int order_kind, const double volume, const string price_value,
    const string stop_loss_value, const string take_profit_value,
-   const int deviation, const int magic, const long expiration)
+   const int deviation, const int magic, const long expiration,
+   const string order_comment)
   {
    int operation = -1;
    if(order_kind == KIND_MARKET && side == SIDE_BUY) operation = OP_BUY;
@@ -306,8 +311,9 @@ void ExecutePlace(const string command_id, const string symbol, const int side,
    double stop_loss = (stop_loss_value == "") ? 0 : StrToDouble(stop_loss_value);
    double take_profit = (take_profit_value == "") ? 0 : StrToDouble(take_profit_value);
    string suffix = StringSubstr(command_id, MathMax(0, StringLen(command_id) - 20));
+   string durable_comment = order_comment == "" ? "AURUM:" + suffix : order_comment;
    int ticket = OrderSend(symbol, operation, volume, price, deviation, stop_loss, take_profit,
-      "AURUM:" + suffix, magic, (datetime)expiration, clrNONE);
+      durable_comment, magic, (datetime)expiration, clrNONE);
    if(ticket > 0)
       SendCommandResult(command_id, 1, "", "", 0, ticket);
    else
@@ -562,13 +568,78 @@ void ExecuteModifyPosition(const string command_id, const int ticket,
    SendCommandResult(command_id, 1, "", "", 0, ticket);
   }
 
-void ExecuteQuery(const string command_id, const int ticket)
+bool SelectQueryOrder(const int ticket, const string expected_symbol,
+   const string bridge_command_ref, const int expected_magic, const int pool)
+  {
+   if(bridge_command_ref != "")
+     {
+      int total = pool == MODE_TRADES ? OrdersTotal() : OrdersHistoryTotal();
+      for(int index = total - 1; index >= 0; index--)
+        {
+         if(!OrderSelect(index, SELECT_BY_POS, pool))
+            continue;
+         if(OrderComment() != bridge_command_ref)
+            continue;
+         if(expected_symbol != "" && OrderSymbol() != expected_symbol)
+            continue;
+         if(OrderMagicNumber() != expected_magic)
+            continue;
+         return(true);
+        }
+      return(false);
+     }
+   if(ticket <= 0 || !OrderSelect(ticket, SELECT_BY_TICKET, pool))
+      return(false);
+   bool selected_active = OrderCloseTime() == 0;
+   if((pool == MODE_TRADES && !selected_active)
+      || (pool == MODE_HISTORY && selected_active))
+      return(false);
+   if(expected_symbol != "" && OrderSymbol() != expected_symbol)
+      return(false);
+   return(OrderMagicNumber() == expected_magic);
+  }
+
+void ExecuteQuery(const string command_id, const int ticket,
+   const string expected_symbol, const string expected_kind,
+   const string bridge_command_ref, const int expected_magic)
   {
    ResetLastError();
-   bool found = OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES);
+   bool active = SelectQueryOrder(ticket, expected_symbol, bridge_command_ref,
+      expected_magic, MODE_TRADES);
+   bool found = active;
    if(!found)
-      found = OrderSelect(ticket, SELECT_BY_TICKET, MODE_HISTORY);
-   SendCommandResult(command_id, 1, "", "", found ? 0 : GetLastError(), found ? ticket : 0);
+      found = SelectQueryOrder(ticket, expected_symbol, bridge_command_ref,
+         expected_magic, MODE_HISTORY);
+   if(!found)
+     {
+      SendCommandResult(command_id, 1, "", "", 0, 0,
+         "{\"found\":false,\"complete\":true}");
+      return;
+     }
+   int selected_ticket = OrderTicket();
+   int order_type = OrderType();
+   bool is_market = order_type == OP_BUY || order_type == OP_SELL;
+   string kind = is_market ? "trade" : "pending";
+   string pending_state = "";
+   if(!is_market)
+     {
+      if(active)
+         pending_state = "pending";
+      else if(OrderExpiration() > 0 && OrderCloseTime() >= OrderExpiration())
+         pending_state = "expired";
+      else
+         pending_state = "cancelled";
+     }
+   string raw = "{\"found\":true,\"complete\":true"
+      + ",\"kind\":\"" + kind + "\""
+      + ",\"ticket\":\"" + IntegerToString(selected_ticket) + "\""
+      + ",\"order\":\"" + IntegerToString(selected_ticket) + "\""
+      + (is_market ? ",\"position_id\":\"" + IntegerToString(selected_ticket) + "\"" : "")
+      + ",\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\""
+      + ",\"comment\":\"" + JsonEscape(OrderComment()) + "\""
+      + (pending_state == "" ? "" : ",\"pending_state\":\"" + pending_state + "\"")
+      + "}";
+   SendCommandResult(command_id, 1, "", "", 0, selected_ticket, raw);
   }
 
 void SendTradeFailure(const string command_id, const string fallback_code)
@@ -581,7 +652,8 @@ void SendTradeFailure(const string command_id, const string fallback_code)
   }
 
 void SendCommandResult(const string command_id, const int status, const string error_code,
-   const string error_message, const int broker_retcode, const long ticket)
+   const string error_message, const int broker_retcode, const long ticket,
+   const string raw_result_json = "")
   {
    uchar response[];
    AppendInt32(response, MSG_COMMAND_RESULT);
@@ -592,6 +664,7 @@ void SendCommandResult(const string command_id, const int status, const string e
    AppendInt32(response, broker_retcode);
    AppendInt64(response, ticket);
    AppendInt64(response, ((long)TimeGMT()) * 1000);
+   AppendUtf8(response, raw_result_json);
    if(!WriteFrame(response))
       DisconnectPipe();
   }

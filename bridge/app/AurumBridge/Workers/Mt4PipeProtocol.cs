@@ -111,7 +111,10 @@ public sealed record Mt4TradeCommand(
     int Magic,
     long Expiration,
     double? ExpectedStopLoss,
-    double? ExpectedTakeProfit);
+    double? ExpectedTakeProfit,
+    string Comment,
+    string ExpectedKind,
+    string BridgeCommandRef);
 
 public sealed record Mt4TradeResult(
     string CommandId,
@@ -120,7 +123,8 @@ public sealed record Mt4TradeResult(
     string? ErrorMessage,
     int BrokerRetcode,
     long Ticket,
-    long ObservedAtUtcMsc);
+    long ObservedAtUtcMsc,
+    JsonElement? RawResult = null);
 
 public static class Mt4PipeProtocol
 {
@@ -381,7 +385,10 @@ public static class Mt4PipeProtocol
             symbol,
             side,
             orderKind,
-            ReadOptionalInt64(command.Params, "ticket") ?? 0,
+            ReadOptionalInt64(command.Params, "ticket")
+                ?? ReadOptionalInt64(command.Params, "pending_ticket")
+                ?? ReadOptionalInt64(command.Params, "trade_ticket")
+                ?? 0,
             ReadOptionalDouble(command.Params, "volume") ?? 0,
             ReadOptionalDouble(command.Params, "price"),
             ReadOptionalDouble(command.Params, "stop_loss"),
@@ -390,7 +397,10 @@ public static class Mt4PipeProtocol
             checked((int)(ReadOptionalInt64(command.Params, "magic") ?? 234000)),
             ReadOptionalInt64(command.Params, "expiration") ?? 0,
             ReadOptionalDouble(command.Params, "expected_stop_loss"),
-            ReadOptionalDouble(command.Params, "expected_take_profit"));
+            ReadOptionalDouble(command.Params, "expected_take_profit"),
+            ReadOptionalString(command.Params, "comment") ?? string.Empty,
+            (ReadOptionalString(command.Params, "expected_kind") ?? string.Empty).ToLowerInvariant(),
+            ReadOptionalString(command.Params, "bridge_command_ref") ?? string.Empty);
         ValidateTradeCommand(tradeCommand);
         return tradeCommand;
     }
@@ -422,6 +432,9 @@ public static class Mt4PipeProtocol
             writer.Write(command.Expiration);
             WriteNullableDouble(writer, command.ExpectedStopLoss);
             WriteNullableDouble(writer, command.ExpectedTakeProfit);
+            WriteString(writer, command.Comment);
+            WriteString(writer, command.ExpectedKind);
+            WriteString(writer, command.BridgeCommandRef);
         });
     }
 
@@ -448,7 +461,10 @@ public static class Mt4PipeProtocol
             reader.ReadInt32(),
             reader.ReadInt64(),
             ReadDoubleString(reader, required: false),
-            ReadDoubleString(reader, required: false));
+            ReadDoubleString(reader, required: false),
+            ReadString(reader, 64),
+            ReadString(reader, 16),
+            ReadString(reader, 64));
         EnsureFullyRead(reader);
         ValidateTradeCommand(command);
         return command;
@@ -478,6 +494,7 @@ public static class Mt4PipeProtocol
             writer.Write(result.BrokerRetcode);
             writer.Write(result.Ticket);
             writer.Write(result.ObservedAtUtcMsc);
+            WriteString(writer, result.RawResult?.GetRawText() ?? string.Empty);
         });
     }
 
@@ -494,14 +511,21 @@ public static class Mt4PipeProtocol
         };
         var errorCode = NullIfEmpty(ReadString(reader, 128));
         var errorMessage = NullIfEmpty(ReadString(reader, 1_024));
+        var brokerRetcode = reader.ReadInt32();
+        var ticket = reader.ReadInt64();
+        var observedAt = reader.ReadInt64();
+        var rawResultText = ReadString(reader, MaxStringBytes);
         var result = new Mt4TradeResult(
             commandId,
             status,
             errorCode,
             errorMessage,
-            reader.ReadInt32(),
-            reader.ReadInt64(),
-            reader.ReadInt64());
+            brokerRetcode,
+            ticket,
+            observedAt,
+            string.IsNullOrEmpty(rawResultText)
+                ? null
+                : ParseObject(rawResultText, "mt4_command_raw_result_invalid"));
         EnsureFullyRead(reader);
         if (string.IsNullOrWhiteSpace(result.CommandId) || result.ObservedAtUtcMsc <= 0)
         {
@@ -675,10 +699,21 @@ public static class Mt4PipeProtocol
                 or Mt4TradeAction.ModifyOrder
                 or Mt4TradeAction.ModifyPosition
                 or Mt4TradeAction.ClosePosition
-                or Mt4TradeAction.QueryExecution
             && command.Ticket <= 0)
         {
             throw new InvalidDataException("ticket_required");
+        }
+        if (command.Action == Mt4TradeAction.QueryExecution
+            && command.Ticket <= 0
+            && string.IsNullOrWhiteSpace(command.BridgeCommandRef))
+        {
+            throw new InvalidDataException("bridge_reference_required");
+        }
+        if (command.Comment.Length > 64
+            || command.BridgeCommandRef.Length > 64
+            || command.ExpectedKind is not ("" or "trade" or "pending"))
+        {
+            throw new InvalidDataException("mt4_command_query_params_invalid");
         }
         if (command.Action == Mt4TradeAction.ClosePosition && command.Volume < 0)
         {
