@@ -59,10 +59,16 @@ public sealed class Mt5TerminalRuntimeTests
     {
         var command = new CommandMessage
         {
-            Type = "command", MessageId = "msg_command_01", SentAtUtcMsc = 1,
-            CommandId = "command_01JRUNTIME01", TerminalInstanceId = Terminal().TerminalInstanceId,
-            AccountRef = Terminal().AccountRef, ConnectionEpoch = 7, IssuedAtUtcMsc = 1,
-            DeadlineUtcMsc = long.MaxValue, Action = "cancel_order",
+            Type = "command",
+            MessageId = "msg_command_01",
+            SentAtUtcMsc = 1,
+            CommandId = "command_01JRUNTIME01",
+            TerminalInstanceId = Terminal().TerminalInstanceId,
+            AccountRef = Terminal().AccountRef,
+            ConnectionEpoch = 7,
+            IssuedAtUtcMsc = 1,
+            DeadlineUtcMsc = long.MaxValue,
+            Action = "cancel_order",
             Params = JsonSerializer.SerializeToElement(new { ticket = "1001" }),
         };
         _worker.Response = JsonSerializer.SerializeToElement(Result(command));
@@ -98,6 +104,41 @@ public sealed class Mt5TerminalRuntimeTests
         }
     }
 
+    [TestMethod]
+    public void RejectsUnsupportedSnapshotStream()
+    {
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => _runtime.RequestFullSnapshot("history"));
+    }
+
+    [TestMethod]
+    public async Task GapRequestForcesOnlyTheRequestedStreamOnTheNextPoll()
+    {
+        _worker.Response = Snapshot("1001");
+        _worker.RequestObserved = count =>
+        {
+            if (count == 1)
+            {
+                _runtime.RequestFullSnapshot("positions");
+            }
+        };
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var collection = _runtime.RunCollectionLoopAsync(cancellation.Token);
+
+        await _worker.WaitForRequestCountAsync(2).WaitAsync(TimeSpan.FromSeconds(3));
+        while ((await _testStore.Store.GetPendingOutboxAsync()).Count < 4)
+        {
+            await Task.Delay(10, cancellation.Token);
+        }
+        cancellation.Cancel();
+        await Assert.ThrowsExactlyAsync<TaskCanceledException>(async () => await collection);
+
+        var outbox = await _testStore.Store.GetPendingOutboxAsync();
+        Assert.HasCount(4, outbox);
+        var refresh = JsonDocument.Parse(outbox[^1].PayloadJson).RootElement;
+        Assert.AreEqual("positions", refresh.GetProperty("stream").GetString());
+        Assert.IsTrue(refresh.GetProperty("full_snapshot").GetBoolean());
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "terminal_01JRUNTIME01",
@@ -121,10 +162,15 @@ public sealed class Mt5TerminalRuntimeTests
 
     private static CommandResultMessage Result(CommandMessage command) => new()
     {
-        Type = "command_result", MessageId = "result_01JRUNTIME01", SentAtUtcMsc = 2,
-        CommandId = command.CommandId, TerminalInstanceId = command.TerminalInstanceId,
-        AccountRef = command.AccountRef, ConnectionEpoch = command.ConnectionEpoch,
-        Status = "succeeded", CompletedAtUtcMsc = 2,
+        Type = "command_result",
+        MessageId = "result_01JRUNTIME01",
+        SentAtUtcMsc = 2,
+        CommandId = command.CommandId,
+        TerminalInstanceId = command.TerminalInstanceId,
+        AccountRef = command.AccountRef,
+        ConnectionEpoch = command.ConnectionEpoch,
+        Status = "succeeded",
+        CompletedAtUtcMsc = 2,
         Evidence = new() { ObservedAtUtcMsc = 2 },
     };
 
@@ -134,6 +180,8 @@ public sealed class Mt5TerminalRuntimeTests
         public JsonElement WorkerHello { get; private set; }
         public JsonElement Response { get; set; }
         public int RequestCount { get; private set; }
+        public Action<int>? RequestObserved { get; set; }
+        private readonly TaskCompletionSource _secondRequest = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task StartAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
         {
             IsConnected = true;
@@ -142,8 +190,17 @@ public sealed class Mt5TerminalRuntimeTests
         public Task<JsonElement> RequestAsync<T>(T request, CancellationToken cancellationToken = default)
         {
             RequestCount++;
+            RequestObserved?.Invoke(RequestCount);
+            if (RequestCount >= 2)
+            {
+                _secondRequest.TrySetResult();
+            }
             return Task.FromResult(Response);
         }
+
+        public Task WaitForRequestCountAsync(int count) => count <= RequestCount || count < 2
+            ? Task.CompletedTask
+            : _secondRequest.Task;
         public ValueTask DisposeAsync()
         {
             IsConnected = false;

@@ -5,7 +5,7 @@ using AurumBridge.Workers;
 
 namespace AurumBridge.Runtime;
 
-public sealed class Mt5TerminalRuntime : IAsyncDisposable
+public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
 {
     private static readonly string[] CollectionStreams = ["account", "positions", "orders"];
     private readonly TerminalDescriptor _terminal;
@@ -19,6 +19,8 @@ public sealed class Mt5TerminalRuntime : IAsyncDisposable
         ["positions"] = new(StringComparer.Ordinal),
         ["orders"] = new(StringComparer.Ordinal),
     };
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _fullSnapshotRequests
+        = new(StringComparer.Ordinal);
     private bool _initialized;
 
     public Mt5TerminalRuntime(
@@ -47,6 +49,16 @@ public sealed class Mt5TerminalRuntime : IAsyncDisposable
                 cancellationToken);
         }
         _initialized = true;
+        RequestAllFullSnapshots();
+    }
+
+    public void RequestFullSnapshot(string stream)
+    {
+        if (!CollectionStreams.Contains(stream, StringComparer.Ordinal))
+        {
+            throw new ArgumentOutOfRangeException(nameof(stream), stream, "Unsupported terminal stream.");
+        }
+        _fullSnapshotRequests[stream] = 0;
     }
 
     public async Task<CommandResultMessage> ExecuteCommandAsync(
@@ -62,7 +74,6 @@ public sealed class Mt5TerminalRuntime : IAsyncDisposable
     public async Task RunCollectionLoopAsync(CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        var fullSnapshot = true;
         var lastCalibration = 0L;
         var lastAccountCollection = 0L;
         while (!cancellationToken.IsCancellationRequested)
@@ -70,11 +81,12 @@ public sealed class Mt5TerminalRuntime : IAsyncDisposable
             var now = _clock();
             if (now - lastCalibration >= 10_000)
             {
-                fullSnapshot = true;
+                RequestAllFullSnapshots();
                 lastCalibration = now;
             }
+            var fullSnapshotStreams = DrainFullSnapshotRequests();
             var requestedStreams = new List<string> { "positions", "orders" };
-            if (fullSnapshot || now - lastAccountCollection >= 1_000)
+            if (fullSnapshotStreams.Contains("account") || now - lastAccountCollection >= 1_000)
             {
                 requestedStreams.Insert(0, "account");
                 lastAccountCollection = now;
@@ -86,8 +98,7 @@ public sealed class Mt5TerminalRuntime : IAsyncDisposable
                 request_id = $"collect_{Guid.NewGuid():N}",
                 streams = requestedStreams,
             }, cancellationToken);
-            await IngestSnapshotAsync(response, fullSnapshot, cancellationToken);
-            fullSnapshot = false;
+            await IngestSnapshotAsync(response, fullSnapshotStreams, cancellationToken);
             var active = _collections["positions"].Count > 0 || _collections["orders"].Count > 0;
             await Task.Delay(active ? 250 : 750, cancellationToken);
         }
@@ -97,6 +108,17 @@ public sealed class Mt5TerminalRuntime : IAsyncDisposable
         JsonElement snapshot,
         bool fullSnapshot,
         CancellationToken cancellationToken = default)
+    {
+        var streams = fullSnapshot
+            ? CollectionStreams.ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+        return await IngestSnapshotAsync(snapshot, streams, cancellationToken);
+    }
+
+    private async Task<int> IngestSnapshotAsync(
+        JsonElement snapshot,
+        IReadOnlySet<string> fullSnapshotStreams,
+        CancellationToken cancellationToken)
     {
         EnsureInitialized();
         if (!snapshot.TryGetProperty("v", out var version) || version.GetInt32() != 3
@@ -112,9 +134,10 @@ public sealed class Mt5TerminalRuntime : IAsyncDisposable
         if (streams.TryGetProperty("account", out var account) && account.ValueKind == JsonValueKind.Object)
         {
             var raw = account.GetRawText();
-            if (fullSnapshot || !_account.TryGetValue("value", out var previous) || previous != raw)
+            var accountFullSnapshot = fullSnapshotStreams.Contains("account");
+            if (accountFullSnapshot || !_account.TryGetValue("value", out var previous) || previous != raw)
             {
-                await PersistAsync("account", [account.Clone()], [], fullSnapshot, observedAt, cancellationToken);
+                await PersistAsync("account", [account.Clone()], [], accountFullSnapshot, observedAt, cancellationToken);
                 _account["value"] = raw;
                 persisted++;
             }
@@ -134,22 +157,44 @@ public sealed class Mt5TerminalRuntime : IAsyncDisposable
                 elements[ticket] = value.Clone();
             }
             var previous = _collections[stream];
-            var upserts = fullSnapshot
+            var streamFullSnapshot = fullSnapshotStreams.Contains(stream);
+            var upserts = streamFullSnapshot
                 ? elements.Values.ToArray()
                 : elements.Where(pair => !previous.TryGetValue(pair.Key, out var old) || old != current[pair.Key])
                     .Select(pair => pair.Value).ToArray();
-            var deletes = fullSnapshot
+            var deletes = streamFullSnapshot
                 ? Array.Empty<JsonElement>()
                 : previous.Keys.Where(ticket => !current.ContainsKey(ticket))
                     .Select(ticket => JsonSerializer.SerializeToElement(ticket)).ToArray();
-            if (fullSnapshot || upserts.Length > 0 || deletes.Length > 0)
+            if (streamFullSnapshot || upserts.Length > 0 || deletes.Length > 0)
             {
-                await PersistAsync(stream, upserts, deletes, fullSnapshot, observedAt, cancellationToken);
+                await PersistAsync(stream, upserts, deletes, streamFullSnapshot, observedAt, cancellationToken);
                 persisted++;
             }
             _collections[stream] = current;
         }
         return persisted;
+    }
+
+    private void RequestAllFullSnapshots()
+    {
+        foreach (var stream in CollectionStreams)
+        {
+            _fullSnapshotRequests[stream] = 0;
+        }
+    }
+
+    private HashSet<string> DrainFullSnapshotRequests()
+    {
+        var requested = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var stream in CollectionStreams)
+        {
+            if (_fullSnapshotRequests.TryRemove(stream, out _))
+            {
+                requested.Add(stream);
+            }
+        }
+        return requested;
     }
 
     private async Task PersistAsync(
