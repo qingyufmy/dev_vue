@@ -189,12 +189,13 @@ class Mt5Adapter:
         try:
             self._validate_route(request)
             self._ensure_identity()
-            if request.get("action") != "rates":
+            action = request.get("action")
+            if action not in {"rates", "symbol_snapshot"}:
                 raise WorkerError("terminal_data_action_unsupported")
             params = request.get("params")
             if not isinstance(params, dict):
                 raise WorkerError("rates_params_invalid")
-            payload = self._rates(params)
+            payload = self._rates(params) if action == "rates" else self._symbol_snapshot(params)
             return self._data_result(request, "succeeded", payload=payload)
         except WorkerError as error:
             return self._data_result(request, "rejected", error_code=error.code)
@@ -255,6 +256,93 @@ class Mt5Adapter:
             "rates": output, "source": "mt5", "range_complete": range_complete,
             "range_start_utc_msc": start_utc_msc or None,
             "range_end_utc_msc": end_utc_msc or None,
+        }
+
+    def _symbol_snapshot(self, params: dict[str, Any]) -> dict[str, Any]:
+        symbol = str(params.get("symbol") or "").strip()
+        if not symbol or len(symbol) > 64:
+            raise WorkerError("symbol_invalid")
+        select = getattr(self.mt5, "symbol_select", None)
+        if callable(select) and not select(symbol, True):
+            raise WorkerError("symbol_select_failed")
+        info = self.mt5.symbol_info(symbol)
+        account = self.mt5.account_info()
+        if info is None:
+            raise WorkerError("symbol_info_unavailable")
+        if account is None:
+            raise WorkerError("mt5_account_unavailable")
+        tick = self.mt5.symbol_info_tick(symbol)
+        reference_buy = float(getattr(tick, "ask", 0.0) or 0.0) if tick else 0.0
+        reference_sell = float(getattr(tick, "bid", 0.0) or 0.0) if tick else 0.0
+        volume_min = float(getattr(info, "volume_min", 0.0) or 0.0)
+        volume_max = float(getattr(info, "volume_max", 0.0) or 0.0)
+        volume_step = float(getattr(info, "volume_step", 0.0) or 0.0)
+        margin_probe_volume = max(volume_min, min(1.0, volume_max)) if volume_max > 0 else 1.0
+        if volume_step > 0:
+            margin_probe_volume = round(margin_probe_volume / volume_step) * volume_step
+            margin_probe_volume = max(volume_min, min(margin_probe_volume, volume_max))
+
+        def margin_per_lot(order_type: int, price: float) -> float | None:
+            calculator = getattr(self.mt5, "order_calc_margin", None)
+            if not callable(calculator) or price <= 0 or margin_probe_volume <= 0:
+                return None
+            try:
+                value = calculator(order_type, symbol, margin_probe_volume, price)
+                return float(value) / margin_probe_volume if value is not None and float(value) >= 0 else None
+            except (TypeError, ValueError, RuntimeError):
+                return None
+
+        instrument = {
+            "name": str(getattr(info, "name", symbol) or symbol),
+            "digits": int(getattr(info, "digits", 0) or 0),
+            "trade_mode": int(getattr(info, "trade_mode", 0) or 0),
+            "trade_calc_mode": int(getattr(info, "trade_calc_mode", 0) or 0),
+            "trade_exemode": int(getattr(info, "trade_exemode", 0) or 0),
+            "trade_stops_level": int(getattr(info, "trade_stops_level", 0) or 0),
+            "trade_freeze_level": int(getattr(info, "trade_freeze_level", 0) or 0),
+            "filling_mode": int(getattr(info, "filling_mode", 0) or 0),
+            "order_mode": int(getattr(info, "order_mode", 0) or 0),
+            "point": float(getattr(info, "point", 0.0) or 0.0),
+            "spread": int(getattr(info, "spread", 0) or 0),
+            "spread_float": bool(getattr(info, "spread_float", False)),
+            "tick_size": float(getattr(info, "trade_tick_size", 0.0) or 0.0),
+            "tick_value": float(getattr(info, "trade_tick_value", 0.0) or 0.0),
+            "contract_size": float(getattr(info, "trade_contract_size", 0.0) or 0.0),
+            "margin_initial": float(getattr(info, "margin_initial", 0.0) or 0.0),
+            "margin_maintenance": float(getattr(info, "margin_maintenance", 0.0) or 0.0),
+            "margin_hedged": float(getattr(info, "margin_hedged", 0.0) or 0.0),
+            "margin_per_lot_buy": margin_per_lot(self.mt5.ORDER_TYPE_BUY, reference_buy),
+            "margin_per_lot_sell": margin_per_lot(self.mt5.ORDER_TYPE_SELL, reference_sell),
+            "margin_reference_price_buy": reference_buy if reference_buy > 0 else None,
+            "margin_reference_price_sell": reference_sell if reference_sell > 0 else None,
+            "margin_profile_currency": str(getattr(account, "currency", "") or ""),
+            "margin_profile_volume": margin_probe_volume,
+            "volume_min": volume_min, "volume_max": volume_max, "volume_step": volume_step,
+            "volume_limit": float(getattr(info, "volume_limit", 0.0) or 0.0),
+            "swap_mode": int(getattr(info, "swap_mode", 0) or 0),
+            "swap_rollover3days": int(getattr(info, "swap_rollover3days", 0) or 0),
+            "swap_long": float(getattr(info, "swap_long", 0.0) or 0.0),
+            "swap_short": float(getattr(info, "swap_short", 0.0) or 0.0),
+            **{f"swap_{day}": (float(getattr(info, f"swap_{day}"))
+                if getattr(info, f"swap_{day}", None) is not None else None)
+               for day in ("sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday")},
+            "currency_base": str(getattr(info, "currency_base", "") or ""),
+            "currency_profit": str(getattr(info, "currency_profit", "") or ""),
+            "currency_margin": str(getattr(info, "currency_margin", "") or ""),
+        }
+        return {
+            "symbol": symbol, "source": "mt5",
+            "account": {
+                "currency": str(getattr(account, "currency", "") or ""),
+                "balance": float(getattr(account, "balance", 0.0) or 0.0),
+                "equity": float(getattr(account, "equity", 0.0) or 0.0),
+                "leverage": int(getattr(account, "leverage", 0) or 0),
+                "margin_mode": int(getattr(account, "margin_mode", 0) or 0),
+                "margin_so_mode": int(getattr(account, "margin_so_mode", 0) or 0),
+                "margin_so_call": float(getattr(account, "margin_so_call", 0.0) or 0.0),
+                "margin_so_so": float(getattr(account, "margin_so_so", 0.0) or 0.0),
+            },
+            "instrument": instrument,
         }
 
     def _validate_route(self, command: dict[str, Any]) -> None:

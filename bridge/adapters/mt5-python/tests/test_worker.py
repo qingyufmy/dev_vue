@@ -235,6 +235,22 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("rejected", result["status"])
         self.assertEqual("rates_timeframe_invalid", result["error_code"])
 
+    def test_returns_lightweight_symbol_snapshot(self):
+        adapter = self.adapter()
+        adapter.mt5.symbol_info = lambda symbol: SimpleNamespace(
+            name=symbol, digits=2, trade_mode=4, point=0.01,
+            trade_tick_size=0.01, trade_tick_value=1.0,
+            trade_contract_size=100.0, volume_min=0.01,
+            volume_max=100.0, volume_step=0.01)
+        adapter.mt5.order_calc_margin = lambda order_type, symbol, volume, price: 1000.0 * volume
+        result = adapter.data(self.command(
+            type="data_request", request_id="data_01JWORKER03", action="symbol_snapshot",
+            params={"symbol": "XAUUSD"}))
+        self.assertEqual("succeeded", result["status"])
+        self.assertEqual(100.0, result["payload"]["instrument"]["contract_size"])
+        self.assertEqual(1000.0, result["payload"]["instrument"]["margin_per_lot_buy"])
+        self.assertNotIn("positions", result["payload"])
+
     def test_probe_returns_read_only_account_identity(self):
         result = worker.probe(FakeMt5(), __file__)
         self.assertEqual("mt5_probe", result["type"])

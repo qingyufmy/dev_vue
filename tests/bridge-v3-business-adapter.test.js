@@ -134,6 +134,19 @@ describe('Bridge v3 business compatibility adapter', () => {
     expect(gateway.requestData).not.toHaveBeenCalled()
   })
 
+  it('routes a lightweight symbol snapshot over the transient data channel', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ symbol:'XAUUSD', account:{ leverage:100 },
+        instrument:{ tick_size:0.01, contract_size:100 } },
+    } })
+    await expect(adapter.execute(42, 'symbol_snapshot', { symbol:'XAUUSD' }))
+      .resolves.toMatchObject({ status:'success', source:'mt5',
+        instrument:{ tick_size:0.01, contract_size:100 } })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'symbol_snapshot', params:{ symbol:'XAUUSD' },
+    }), { timeoutMs:5000 })
+  })
+
   it('derives a versioned market state from a fresh transient quote', async () => {
     const { adapter } = setup({ quote:{
       status:'succeeded', symbol:'XAUUSD', bid:2300, ask:2300.2,

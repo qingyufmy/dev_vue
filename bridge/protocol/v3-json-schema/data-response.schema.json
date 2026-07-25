@@ -11,7 +11,7 @@
     "request_id": { "type": "string", "minLength": 8, "maxLength": 128 },
     "terminal_instance_id": { "type": "string", "minLength": 8, "maxLength": 128 },
     "account_ref": { "type": "object", "required": ["broker_server", "login"], "properties": { "broker_server": { "type": "string" }, "login": { "type": "string" } }, "additionalProperties": false },
-    "connection_epoch": { "type": "integer", "minimum": 1 }, "action": { "enum": ["rates"] },
+    "connection_epoch": { "type": "integer", "minimum": 1 }, "action": { "enum": ["rates", "symbol_snapshot"] },
     "params": { "type": "object" }, "observed_at_utc_msc": { "type": "integer", "minimum": 1 },
     "status": { "enum": ["succeeded", "rejected"] }, "payload": { "type": "object" },
     "error_code": { "type": "string", "minLength": 1, "maxLength": 128 }

@@ -17,7 +17,7 @@
       "additionalProperties": false
     },
     "connection_epoch": { "type": "integer", "minimum": 1 },
-    "action": { "enum": ["rates"] },
+    "action": { "enum": ["rates", "symbol_snapshot"] },
     "params": { "type": "object" }
   },
   "additionalProperties": false

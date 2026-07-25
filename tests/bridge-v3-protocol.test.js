@@ -100,6 +100,9 @@ describe('Bridge v3 protocol contract', () => {
       symbol:'XAUUSD',
     })
     expect(validateBridgeV3Message(request)).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({
+      ...request, action:'symbol_snapshot', params:{ symbol:'XAUUSD' },
+    })).toEqual({ ok:true, errors:[] })
 
     const quote = {
       ...request,

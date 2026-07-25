@@ -11,7 +11,8 @@ const TRADE_ACTIONS = new Set([
   'modify_system_position_protection',
 ])
 const SUPPORTED_ACTIONS = new Set([
-  ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'rates', 'toggle_trade', 'set_quote_symbol',
+  ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'rates', 'symbol_snapshot',
+  'toggle_trade', 'set_quote_symbol',
 ])
 const RATE_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
 const DEFAULT_FRESHNESS_MS = 30_000
@@ -468,6 +469,21 @@ export function createBridgeV3BusinessAdapter({
     return { ...result.payload, status:'success', source:result.payload.source || route.platform }
   }
 
+  async function requestSymbolSnapshot(userId, route, params, timeoutMs) {
+    const symbol = String(params.symbol || '').trim()
+    if (!symbol || symbol.length > 64) throw adapterError('symbol_invalid')
+    const request = {
+      v:3, type:'data_request', message_id:`message_${randomUUID()}`, sent_at_utc_msc:now(),
+      request_id:`data_${randomUUID()}`, ...routeParams(route), action:'symbol_snapshot',
+      params:{ symbol },
+    }
+    const result = await gateway.requestData(userId, request, { timeoutMs:Math.min(timeoutMs, 30_000) })
+    if (result.status !== 'succeeded') {
+      return { status:'error', error:result.error_code, message:result.error_code }
+    }
+    return { ...result.payload, status:'success', source:result.payload.source || route.platform }
+  }
+
   async function requestMarketState(userId, route, params, timeoutMs) {
     const checkedAt = now()
     const quote = await requestQuote(userId, route, params, timeoutMs)
@@ -586,6 +602,9 @@ export function createBridgeV3BusinessAdapter({
       if (READ_ACTIONS.has(action)) return await readCollection(route, action, params)
       if (action === 'quote') return await requestQuote(userId, route, params, timeoutMs)
       if (action === 'rates') return await requestRates(userId, route, params, timeoutMs)
+      if (action === 'symbol_snapshot') {
+        return await requestSymbolSnapshot(userId, route, params, timeoutMs)
+      }
       if (action === 'close_system_position' || action === 'cancel_system_pending'
         || action === 'modify_system_position_protection') {
         const prepared = await prepareSystemManagement(route, action, params)
