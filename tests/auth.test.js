@@ -19,9 +19,19 @@ vi.mock('../server/captcha.js', () => ({
   verifyCaptcha: vi.fn(() => true),
 }))
 vi.mock('../server/bridge-auth-session.js', () => ({
+  assertBridgeEligible: vi.fn(),
+  createBridgeConnectionTicket: vi.fn(async () => ({ ticket: 'ticket', expiresInSeconds: 30 })),
   createBridgeRefreshSession: vi.fn(async () => ({ refreshToken: 'refresh-token', expiresInSeconds: 7776000 })),
   useBridgeRefreshSession: vi.fn(async () => ({ user: { id: 3 }, expiresInSeconds: 7776000 })),
   revokeBridgeRefreshSessions: vi.fn(async () => {}),
+}))
+vi.mock('../server/bridge-pairing.js', () => ({
+  startBridgePairing: vi.fn(async () => ({
+    deviceCode: 'device-code', userCode: 'ABCD-2345', verificationPath: '/bridge/pair',
+    expiresInSeconds: 600, intervalSeconds: 2,
+  })),
+  approveBridgePairing: vi.fn(async () => ({ approved: true })),
+  consumeBridgePairing: vi.fn(async () => ({ status: 'pending' })),
 }))
 vi.mock('../server/bridge-ws.js', () => ({
   disconnectUserSockets:vi.fn(),
@@ -32,6 +42,7 @@ import { verifyCaptcha } from '../server/captcha.js'
 import authRouter from '../server/routes/auth.js'
 import { createBridgeRefreshSession, useBridgeRefreshSession, revokeBridgeRefreshSessions } from '../server/bridge-auth-session.js'
 import { disconnectUserSockets } from '../server/bridge-ws.js'
+import { approveBridgePairing, consumeBridgePairing, startBridgePairing } from '../server/bridge-pairing.js'
 
 withTransaction.mockImplementation(callback => callback(async (sql, params = []) => {
   if (/^\s*SELECT/i.test(sql)) {
@@ -154,6 +165,23 @@ describe('auth.js — Bridge sessions', () => {
     const { json } = await callRoute('post', '/auth/bridge-refresh', { refreshToken: 'refresh-token' })
     expect(json).toMatchObject({ ok: true, token: 'mock-token-123' })
     expect(useBridgeRefreshSession).toHaveBeenCalledWith('refresh-token', expect.any(Object))
+  })
+
+  it('starts, approves, and polls browser pairing without putting a refresh token in the URL', async () => {
+    const started = await callRoute('post', '/auth/bridge-pair/start', { deviceName: 'Desk PC' })
+    expect(started.status).toBe(201)
+    expect(started.json).toMatchObject({ ok: true, verificationPath: '/bridge/pair' })
+    expect(startBridgePairing).toHaveBeenCalled()
+
+    const approved = await callRoute('post', '/auth/bridge-pair/approve', { userCode: 'ABCD-2345' }, {
+      id: 3, role: 'user', plan: 'pro',
+    })
+    expect(approved.json).toMatchObject({ ok: true, approved: true })
+    expect(approveBridgePairing).toHaveBeenCalled()
+
+    const polled = await callRoute('post', '/auth/bridge-pair/token', { deviceCode: 'device-code' })
+    expect(polled.status).toBe(202)
+    expect(consumeBridgePairing).toHaveBeenCalled()
   })
 })
 

@@ -26,4 +26,13 @@ describe('Bridge v3 schema migration', () => {
     expect(migrations).toContain('PRIMARY KEY (terminal_instance_id, connection_epoch, stream)')
     expect(migrations).toContain('PRIMARY KEY (terminal_instance_id, ticket)')
   })
+
+  it('stores device pairing secrets as hashes with one-time lifecycle fields', () => {
+    expect(migrations).toContain("id: '142_bridge_device_pairing'")
+    expect(migrations).toContain('CREATE TABLE IF NOT EXISTS bridge_device_pairings')
+    expect(migrations).toContain('device_code_hash CHAR(64) NOT NULL')
+    expect(migrations).toContain('user_code_hash CHAR(64) NOT NULL')
+    expect(migrations).toContain('approved_token_version INT DEFAULT NULL')
+    expect(migrations).toContain('consumed_at DATETIME DEFAULT NULL')
+  })
 })

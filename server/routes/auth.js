@@ -14,6 +14,9 @@ import {
   createBridgeConnectionTicket, createBridgeRefreshSession,
   useBridgeRefreshSession, revokeBridgeRefreshSessions,
 } from '../bridge-auth-session.js'
+import {
+  approveBridgePairing, consumeBridgePairing, startBridgePairing,
+} from '../bridge-pairing.js'
 
 const router = Router()
 
@@ -353,6 +356,54 @@ router.post('/auth/bridge-session', authMiddleware, async (req, res) => {
       ok: false,
       code: err.code || 'bridge_session_failed',
       error: membershipBlocked ? '当前会员状态不能使用桥接软件' : '桥接登录会话创建失败，请稍后重试',
+    })
+  }
+})
+
+router.post('/auth/bridge-pair/start', async (req, res) => {
+  try {
+    const pairing = await startBridgePairing({
+      deviceName: req.body?.deviceName,
+      ip: req.ip,
+    })
+    res.status(201).json({ ok: true, ...pairing })
+  } catch (err) {
+    res.status(503).json({
+      ok: false,
+      code: err.code || 'bridge_pair_start_failed',
+      error: 'Bridge authorization could not be started. Please try again.',
+    })
+  }
+})
+
+router.post('/auth/bridge-pair/approve', authMiddleware, async (req, res) => {
+  try {
+    await approveBridgePairing(req.user, req.body?.userCode, { ip: req.ip })
+    res.json({ ok: true, approved: true })
+  } catch (err) {
+    const membershipBlocked = err.code === 'bridge_membership_required'
+    res.status(membershipBlocked ? 403 : 400).json({
+      ok: false,
+      code: err.code || 'bridge_pair_code_invalid',
+      error: membershipBlocked
+        ? 'The current membership cannot use Bridge.'
+        : 'The authorization code is invalid or expired.',
+    })
+  }
+})
+
+router.post('/auth/bridge-pair/token', async (req, res) => {
+  try {
+    const pairing = await consumeBridgePairing(req.body?.deviceCode, {
+      userAgent: req.get('user-agent'),
+      ip: req.ip,
+    })
+    res.status(pairing.status === 'pending' ? 202 : 200).json({ ok: true, ...pairing })
+  } catch (err) {
+    res.status(400).json({
+      ok: false,
+      code: err.code || 'bridge_pair_failed',
+      error: 'Bridge authorization expired. Please start again.',
     })
   }
 })

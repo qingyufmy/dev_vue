@@ -23,7 +23,7 @@ function removeExpiredMemoryTickets(now = Date.now()) {
   }
 }
 
-function assertBridgeEligible(user) {
+export function assertBridgeEligible(user) {
   if (!user || (user.role !== 'admin' && !hasActiveMembership(user, 'pro'))) {
     const error = new Error('bridge_membership_required')
     error.code = 'bridge_membership_required'

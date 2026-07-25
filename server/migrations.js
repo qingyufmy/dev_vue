@@ -4141,6 +4141,31 @@ const migrations = [
         KEY idx_bridge_v3_order_updated (terminal_instance_id, updated_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '142_bridge_device_pairing',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS bridge_device_pairings (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        device_code_hash CHAR(64) NOT NULL,
+        user_code_hash CHAR(64) NOT NULL,
+        user_id INT DEFAULT NULL,
+        approved_token_version INT DEFAULT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        device_name VARCHAR(120) DEFAULT NULL,
+        created_ip VARCHAR(64) DEFAULT NULL,
+        approved_ip VARCHAR(64) DEFAULT NULL,
+        expires_at DATETIME NOT NULL,
+        approved_at DATETIME DEFAULT NULL,
+        consumed_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_bridge_pair_device_code (device_code_hash),
+        UNIQUE KEY uk_bridge_pair_user_code (user_code_hash),
+        KEY idx_bridge_pair_expiry (status, expires_at),
+        KEY idx_bridge_pair_user (user_id, status, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 
