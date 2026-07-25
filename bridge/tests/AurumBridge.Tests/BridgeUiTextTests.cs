@@ -109,4 +109,14 @@ public sealed class BridgeUiTextTests
         StringAssert.Contains(summary, "最近同步");
         StringAssert.Contains(summary, "3.2.1");
     }
+
+    [TestMethod]
+    public void FirstAuthorizationCopyExplainsTheOneTimeBrowserLogin()
+    {
+        var text = BridgeUiText.ForStatus(new(
+            BridgeApplicationPhase.PairingRequired, [], null));
+
+        StringAssert.Contains(text.Description, "浏览器");
+        StringAssert.Contains(text.Description, "一次");
+    }
 }

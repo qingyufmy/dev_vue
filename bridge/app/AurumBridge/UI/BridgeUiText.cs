@@ -26,7 +26,7 @@ public static class BridgeUiText
                 0xD97706),
             BridgeApplicationPhase.PairingRequired => State(
                 "需要连接 AURUM 账号",
-                "点击“连接账号”，在浏览器中确认本机设备。",
+                "首次使用会自动打开浏览器登录，只需授权一次。",
                 0x7C3AED),
             BridgeApplicationPhase.Connecting => State(
                 "正在连接服务器",

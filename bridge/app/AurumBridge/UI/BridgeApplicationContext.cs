@@ -4,6 +4,15 @@ using AurumBridge.Update;
 
 namespace AurumBridge.UI;
 
+public sealed class BridgeFirstAuthorizationGate
+{
+    private int _started;
+
+    public bool TryStart(BridgeApplicationPhase phase) =>
+        phase == BridgeApplicationPhase.PairingRequired
+        && Interlocked.Exchange(ref _started, 1) == 0;
+}
+
 public sealed class BridgeApplicationContext : ApplicationContext
 {
     private readonly BridgeMainForm _form;
@@ -20,6 +29,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private Task? _healthTask;
     private BridgeLogViewerForm? _logViewer;
     private int _startupReadyWritten;
+    private readonly BridgeFirstAuthorizationGate _firstAuthorization = new();
     private int _latestPhase = (int)BridgeApplicationPhase.Starting;
     private int _latestTerminalCount;
     private bool _shuttingDown;
@@ -143,6 +153,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _notifyIcon.Text = status.Phase == BridgeApplicationPhase.Online
                 ? "AURUM Bridge · 运行中"
                 : "AURUM Bridge";
+            if (_firstAuthorization.TryStart(status.Phase))
+            {
+                _logger.Info("automatic_pairing_started");
+                HandlePairRequested(_form, EventArgs.Empty);
+            }
         });
     }
 
