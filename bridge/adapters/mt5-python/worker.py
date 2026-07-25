@@ -161,6 +161,8 @@ class Mt5Adapter:
             tick = self.mt5.symbol_info_tick(symbol)
             if tick is None:
                 raise WorkerError("symbol_tick_unavailable")
+            info = self.mt5.symbol_info(symbol)
+            terminal = self.mt5.terminal_info()
             bid = float(tick.bid)
             ask = float(tick.ask)
             last = float(getattr(tick, "last", 0.0) or 0.0)
@@ -171,7 +173,11 @@ class Mt5Adapter:
             observed_at = int(getattr(tick, "time_msc", 0) or 0)
             if observed_at <= 0:
                 observed_at = int(time.time() * 1000)
-            return self._quote_result(request, "succeeded", observed_at, bid=bid, ask=ask, last=last)
+            return self._quote_result(
+                request, "succeeded", observed_at, bid=bid, ask=ask, last=last,
+                symbol_trade_mode=(int(getattr(info, "trade_mode", -1)) if info is not None else None),
+                terminal_connected=(bool(getattr(terminal, "connected", True)) if terminal is not None else None),
+            )
         except WorkerError as error:
             return self._quote_result(request, "rejected", int(time.time() * 1000), error_code=error.code)
         except Exception:
@@ -503,7 +509,9 @@ class Mt5Adapter:
 
     def _quote_result(self, request: dict[str, Any], status: str, observed_at: int,
                       bid: float | None = None, ask: float | None = None,
-                      last: float | None = None, error_code: str | None = None) -> dict[str, Any]:
+                      last: float | None = None, error_code: str | None = None,
+                      symbol_trade_mode: int | None = None,
+                      terminal_connected: bool | None = None) -> dict[str, Any]:
         result: dict[str, Any] = {
             "v": PROTOCOL_VERSION,
             "type": "quote",
@@ -519,6 +527,10 @@ class Mt5Adapter:
         }
         if status == "succeeded":
             result.update({"bid": bid, "ask": ask, "last": last})
+            if symbol_trade_mode is not None and 0 <= symbol_trade_mode <= 4:
+                result["symbol_trade_mode"] = symbol_trade_mode
+            if terminal_connected is not None:
+                result["terminal_connected"] = terminal_connected
         else:
             result["error_code"] = error_code or "quote_rejected"
         return result

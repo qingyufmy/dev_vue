@@ -3,7 +3,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { queryAll, queryOne } from '../db.js'
 
 const SYSTEM_MAGIC = 234000
-const READ_ACTIONS = new Set(['account', 'positions', 'pending_list', 'system_trade_inventory'])
+const READ_ACTIONS = new Set([
+  'account', 'positions', 'pending_list', 'system_trade_inventory', 'market_state',
+])
 const TRADE_ACTIONS = new Set([
   'open', 'pending', 'close', 'cancel_pending', 'close_system_position', 'cancel_system_pending',
   'modify_system_position_protection',
@@ -433,6 +435,48 @@ export function createBridgeV3BusinessAdapter({
       spread:result.ask - result.bid, last:result.last ?? null,
       observed_at_utc_msc:result.observed_at_utc_msc,
       time:new Date(result.observed_at_utc_msc).toISOString(), source:route.platform,
+      symbol_trade_mode:result.symbol_trade_mode ?? null,
+      terminal_connected:result.terminal_connected ?? true,
+    }
+  }
+
+  async function requestMarketState(userId, route, params, timeoutMs) {
+    const checkedAt = now()
+    const quote = await requestQuote(userId, route, params, timeoutMs)
+    const observedAt = Number(quote.observed_at_utc_msc || 0)
+    const tickAgeMs = observedAt > 0 ? Math.max(0, checkedAt - observedAt) : null
+    const terminalConnected = quote.terminal_connected !== false
+    const tradeMode = quote.symbol_trade_mode != null && Number.isInteger(Number(quote.symbol_trade_mode))
+      ? Number(quote.symbol_trade_mode) : null
+    let state = 'unknown'
+    let reason = quote.status === 'success' ? 'trade_mode_unavailable' : quote.error || 'quote_unavailable'
+    if (!terminalConnected) reason = 'terminal_disconnected'
+    else if (quote.status === 'success' && tickAgeMs > 120_000) {
+      state = 'stale'
+      reason = 'tick_stale'
+    } else if (quote.status === 'success' && tradeMode === 0) {
+      state = 'closed'
+      reason = 'symbol_trade_disabled'
+    } else if (quote.status === 'success' && [1, 2, 3].includes(tradeMode)) {
+      state = 'restricted'
+      reason = 'symbol_trade_restricted'
+    } else if (quote.status === 'success' && (tradeMode === 4 || route.platform === 'mt4')) {
+      state = 'open'
+      reason = 'quote_fresh'
+    }
+    return {
+      status:'success',
+      market_state_version:1,
+      market_state:state,
+      market_reason:reason,
+      market_checked_at_utc_msc:checkedAt,
+      symbol:String(quote.symbol || params.symbol || ''),
+      symbol_trade_mode:tradeMode,
+      terminal_connected:terminalConnected,
+      tick_progressing:state === 'open',
+      tick_unchanged_seconds:null,
+      tick_age_seconds:tickAgeMs == null ? null : tickAgeMs / 1000,
+      source:route.platform,
     }
   }
 
@@ -510,6 +554,7 @@ export function createBridgeV3BusinessAdapter({
       const route = selectRoute(userId, routeSelectionParams(params))
       if (action === 'account') return await readAccount(route)
       if (action === 'system_trade_inventory') return await readSystemInventory(route)
+      if (action === 'market_state') return await requestMarketState(userId, route, params, timeoutMs)
       if (READ_ACTIONS.has(action)) return await readCollection(route, action, params)
       if (action === 'quote') return await requestQuote(userId, route, params, timeoutMs)
       if (action === 'close_system_position' || action === 'cancel_system_pending'

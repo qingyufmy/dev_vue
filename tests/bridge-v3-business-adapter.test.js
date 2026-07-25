@@ -109,6 +109,30 @@ describe('Bridge v3 business compatibility adapter', () => {
     expect(queryOneFn).not.toHaveBeenCalled()
   })
 
+  it('derives a versioned market state from a fresh transient quote', async () => {
+    const { adapter } = setup({ quote:{
+      status:'succeeded', symbol:'XAUUSD', bid:2300, ask:2300.2,
+      observed_at_utc_msc:NOW - 500, symbol_trade_mode:4, terminal_connected:true,
+    } })
+
+    await expect(adapter.execute(42, 'market_state', { symbol:'XAUUSD' })).resolves.toMatchObject({
+      status:'success', market_state_version:1, market_state:'open',
+      market_reason:'quote_fresh', symbol_trade_mode:4,
+      terminal_connected:true, tick_progressing:true, tick_age_seconds:0.5,
+    })
+  })
+
+  it('fails market state closed when the last quote is stale', async () => {
+    const { adapter } = setup({ quote:{
+      status:'succeeded', symbol:'XAUUSD', bid:2300, ask:2300.2,
+      observed_at_utc_msc:NOW - 120_001, symbol_trade_mode:4, terminal_connected:true,
+    } })
+
+    await expect(adapter.execute(42, 'market_state', { symbol:'XAUUSD' })).resolves.toMatchObject({
+      status:'success', market_state:'stale', market_reason:'tick_stale', tick_progressing:false,
+    })
+  })
+
   it('maps a legacy market open into a durable v3 command and maps its receipt back', async () => {
     const { adapter, gateway } = setup()
 

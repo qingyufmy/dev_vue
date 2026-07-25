@@ -246,6 +246,12 @@ public sealed record QuoteMessage : BridgeEnvelope
     [JsonPropertyName("last")]
     public double? Last { get; init; }
 
+    [JsonPropertyName("symbol_trade_mode")]
+    public int? SymbolTradeMode { get; init; }
+
+    [JsonPropertyName("terminal_connected")]
+    public bool? TerminalConnected { get; init; }
+
     [JsonPropertyName("error_code")]
     public string? ErrorCode { get; init; }
 }

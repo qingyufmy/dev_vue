@@ -31,6 +31,8 @@
     "bid": { "type": "number", "exclusiveMinimum": 0 },
     "ask": { "type": "number", "exclusiveMinimum": 0 },
     "last": { "type": ["number", "null"], "minimum": 0 },
+    "symbol_trade_mode": { "type": ["integer", "null"], "minimum": 0, "maximum": 4 },
+    "terminal_connected": { "type": ["boolean", "null"] },
     "error_code": { "type": "string", "minLength": 1, "maxLength": 128 }
   },
   "oneOf": [

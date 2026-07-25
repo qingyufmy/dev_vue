@@ -32,6 +32,7 @@ const _bridgeInitGen = new Map() // userId -> generation number (防并发 init 
 let cmdCounter = 0
 let wss = null
 let bridgeV3Business = null
+const bridgeV3MarketStates = new Map()
 let adminEventSeq = 0
 const adminEventThrottle = new Map()
 
@@ -344,9 +345,15 @@ function applyBridgeMarketState(bridge, payload, userId, receivedAt = Date.now()
 }
 
 export function recordBridgeMarketState(userId, payload, receivedAt = Date.now()) {
-  const bridge = bridges.get(Number(userId))
-  if (!bridge || bridge.ws?.readyState !== 1) return null
-  return applyBridgeMarketState(bridge, payload, Number(userId), receivedAt)
+  const numericUserId = Number(userId)
+  const bridge = bridges.get(numericUserId)
+  if (bridge?.ws?.readyState === 1) {
+    return applyBridgeMarketState(bridge, payload, numericUserId, receivedAt)
+  }
+  if (!bridgeV3Business?.hasConnectedTerminal(numericUserId)) return null
+  const state = bridgeV3MarketStates.get(numericUserId) || { marketStates:new Map() }
+  bridgeV3MarketStates.set(numericUserId, state)
+  return applyBridgeMarketState(state, payload, numericUserId, receivedAt)
 }
 
 const _broadcastThrottle = new Map() // userId -> lastBroadcastTime (定期清理防内存泄漏)
@@ -2682,8 +2689,14 @@ const MARKET_TICK_STALE_MS = 120_000
 
 // Unified market state function
 export function getOwnBridgeMarketState(userId, symbol = null) {
-  const bridge = bridges.get(userId)
-  if (!bridge || bridge.ws.readyState !== 1) {
+  const numericUserId = Number(userId)
+  const legacy = bridges.get(numericUserId)
+  const bridge = legacy?.ws?.readyState === 1
+    ? legacy
+    : bridgeV3Business?.hasConnectedTerminal(numericUserId)
+      ? bridgeV3MarketStates.get(numericUserId) || {}
+      : null
+  if (!bridge) {
     return {
       alive: false, isOpen: false, tradeMode: -1,
       reason: 'bridge_offline', lastTickMs: null, tickAgeMs: null, mt5TimeStr: null,
@@ -2732,8 +2745,14 @@ export function getOwnBridgeMarketState(userId, symbol = null) {
 // Market status: bridge connected + tick time unchanged for 5 min → closed
 // Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
 export async function getBridgeTradeMode(userId) {
-  const bridge = bridges.get(userId)
-  if (!bridge || bridge.ws.readyState !== 1) return -1
+  const numericUserId = Number(userId)
+  const legacy = bridges.get(numericUserId)
+  const bridge = legacy?.ws?.readyState === 1
+    ? legacy
+    : bridgeV3Business?.hasConnectedTerminal(numericUserId)
+      ? bridgeV3MarketStates.get(numericUserId)
+      : null
+  if (!bridge) return -1
   // Use real-time trade mode detected from MT5 tick_time advancement
   if (typeof bridge.lastTradeMode === 'number') return bridge.lastTradeMode
   // No trade mode data yet → unknown

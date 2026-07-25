@@ -51,6 +51,7 @@ class FakeMt5:
     def orders_get(self, **kwargs): return ()
     def history_deals_get(self, *args): return ()
     def symbol_info_tick(self, symbol): return Tick(2300.0, 2300.2)
+    def symbol_info(self, symbol): return SimpleNamespace(trade_mode=4)
     def order_send(self, request):
         self.sent.append(request)
         return Result(10009, 1001, 2001, "done")
@@ -188,6 +189,8 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("succeeded", result["status"])
         self.assertEqual(2300.0, result["bid"])
         self.assertEqual(2300.2, result["ask"])
+        self.assertEqual(4, result["symbol_trade_mode"])
+        self.assertTrue(result["terminal_connected"])
         self.assertNotIn("command_id", result)
 
     def test_rejects_cross_account_quote_route(self):

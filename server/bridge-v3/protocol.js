@@ -137,6 +137,13 @@ function validateQuote(message) {
   }
   if (message.last !== undefined && message.last !== null
     && (!Number.isFinite(message.last) || message.last < 0)) errors.push('last:invalid')
+  if (message.symbol_trade_mode !== undefined && message.symbol_trade_mode !== null
+    && (!Number.isInteger(message.symbol_trade_mode)
+      || message.symbol_trade_mode < 0 || message.symbol_trade_mode > 4)) {
+    errors.push('symbol_trade_mode:invalid')
+  }
+  if (message.terminal_connected !== undefined && message.terminal_connected !== null
+    && typeof message.terminal_connected !== 'boolean') errors.push('terminal_connected:invalid')
   return errors
 }
 
