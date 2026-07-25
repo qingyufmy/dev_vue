@@ -16,7 +16,8 @@ function route(overrides = {}) {
   }
 }
 
-function setup({ routes = [route()], account, rows = [], revision, tradeRow, quote, commandResult } = {}) {
+function setup({ routes = [route()], account, rows = [], positionRows, orderRows,
+  revision, tradeRow, quote, commandResult } = {}) {
   const gateway = {
     listConnectedTerminals:vi.fn().mockReturnValue(routes),
     isTradeEnabled:vi.fn().mockReturnValue(true),
@@ -45,7 +46,10 @@ function setup({ routes = [route()], account, rows = [], revision, tradeRow, quo
     }
     throw new Error(`unexpected_query:${sql}`)
   })
-  const queryAllFn = vi.fn().mockResolvedValue(rows.map(item => ({ payload_json:JSON.stringify(item) })))
+  const queryAllFn = vi.fn(async sql => {
+    const selected = sql.includes('bridge_v3_positions_latest') ? positionRows ?? rows : orderRows ?? rows
+    return selected.map(item => ({ payload_json:JSON.stringify(item) }))
+  })
   return {
     gateway,
     queryOneFn,
@@ -200,6 +204,75 @@ describe('Bridge v3 business compatibility adapter', () => {
       error:'Bridge command write blocked: ledger unavailable',
     })
     expect(gateway.sendCommand).toHaveBeenCalledOnce()
+  })
+
+  it('serves a fresh system-only inventory for MT5 and derives hedging mode', async () => {
+    const { adapter } = setup({
+      account:{ login:12345678, server:'Broker-Demo', margin_mode:2 },
+      positionRows:[
+        { ticket:10, symbol:'XAUUSD', type:0, volume:0.1, magic:234000 },
+        { ticket:11, symbol:'EURUSD', type:1, volume:0.2, magic:7 },
+      ],
+      orderRows:[
+        { ticket:20, symbol:'XAUUSD', type:2, volume_current:0.1, magic:234000 },
+        { ticket:21, symbol:'EURUSD', type:3, volume_current:0.2, magic:7 },
+      ],
+    })
+
+    await expect(adapter.execute(42, 'system_trade_inventory')).resolves.toMatchObject({
+      status:'success', magic:234000, source:'mt5',
+      account:{ login:'12345678', server:'Broker-Demo', margin_mode:2, is_hedging:true },
+      positions:[{ ticket:'10', type:'buy', magic:234000 }],
+      pending_orders:[{ ticket:'20', side:'buy', pending_type:'buy_limit', magic:234000 }],
+    })
+  })
+
+  it('reports MT4 inventory as hedging without inventing an MT5 margin mode', async () => {
+    const { adapter } = setup({
+      routes:[route({ platform:'mt4' })],
+      account:{ login:'12345678', server:'Broker-Demo' },
+    })
+
+    await expect(adapter.execute(42, 'system_trade_inventory')).resolves.toMatchObject({
+      status:'success', source:'mt4', account:{ margin_mode:-1, is_hedging:true },
+    })
+  })
+
+  it('validates a system position snapshot before mapping the close command', async () => {
+    const beforeWrite = vi.fn().mockResolvedValue(true)
+    const { adapter, gateway } = setup({ positionRows:[{
+      ticket:10, symbol:'XAUUSD', type:0, volume:0.1, magic:234000,
+    }] })
+    const expectedState = {
+      broker_server_key:'BROKER-DEMO', login_account:'12345678', ticket:'10',
+      symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.1,
+    }
+
+    await expect(adapter.execute(42, 'close_system_position', {
+      ticket:'10', operation_id:'close-op-1', expected_state:expectedState,
+    }, { expectedGeneration:11, beforeWrite })).resolves.toMatchObject({ status:'success' })
+    expect(gateway.sendCommand).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'close_position',
+      params:{ ticket:'10', volume:0.1, magic:234000, symbol:'XAUUSD', side:'buy',
+        expected_state:expectedState },
+    }), { timeoutMs:5000 })
+  })
+
+  it('fails closed on changed system identity and treats an absent target as success', async () => {
+    const { adapter, gateway } = setup({ orderRows:[{
+      ticket:20, symbol:'XAUUSD', side:'buy', type:2, volume_current:0.1, magic:7,
+    }] })
+    const expectedState = {
+      ticket:'20', symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.1,
+    }
+
+    await expect(adapter.execute(42, 'cancel_system_pending', {
+      ticket:'20', expected_state:expectedState,
+    })).resolves.toMatchObject({ status:'rejected', error:'management_magic_mismatch' })
+    await expect(adapter.execute(42, 'cancel_system_pending', {
+      ticket:'99', expected_state:{ ...expectedState, ticket:'99' },
+    })).resolves.toEqual({ status:'success', ticket:'99', already_absent:true })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
   })
 
   it('applies the local trade switch without sending a terminal trade command', async () => {

@@ -4,6 +4,7 @@ import time
 import unittest
 from collections import namedtuple
 from pathlib import Path
+from types import SimpleNamespace
 import importlib.util
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "worker.py"
@@ -107,6 +108,35 @@ class WorkerTests(unittest.TestCase):
         result = adapter.execute(self.command(deadline_utc_msc=1))
         self.assertEqual("rejected", result["status"])
         self.assertEqual("command_expired", result["error_code"])
+        self.assertEqual([], adapter.mt5.sent)
+
+    def test_management_close_revalidates_target_immediately_before_send(self):
+        adapter = self.adapter()
+        adapter.mt5.positions_get = lambda **kwargs: (SimpleNamespace(
+            ticket=10, symbol="XAUUSD", type=0, volume=0.05, magic=234000),)
+        expected = {
+            "ticket": "10", "symbol": "XAUUSD", "direction": "buy",
+            "volume": 0.1, "magic": 234000,
+        }
+        result = adapter.execute(self.command(
+            action="close_position",
+            params={"ticket": "10", "volume": 0.1, "expected_state": expected},
+        ))
+        self.assertEqual("rejected", result["status"])
+        self.assertEqual("management_volume_mismatch", result["error_code"])
+        self.assertEqual([], adapter.mt5.sent)
+
+    def test_management_cancel_is_idempotent_when_target_is_absent(self):
+        adapter = self.adapter()
+        expected = {
+            "ticket": "20", "symbol": "XAUUSD", "direction": "buy",
+            "volume": 0.1, "magic": 234000,
+        }
+        result = adapter.execute(self.command(
+            action="cancel_order", params={"ticket": "20", "expected_state": expected},
+        ))
+        self.assertEqual("succeeded", result["status"])
+        self.assertTrue(result["raw_result"]["already_absent"])
         self.assertEqual([], adapter.mt5.sent)
 
     def test_returns_transient_quote_for_matching_route(self):

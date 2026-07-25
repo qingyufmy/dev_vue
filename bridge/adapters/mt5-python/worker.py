@@ -233,6 +233,15 @@ class Mt5Adapter:
 
     def _cancel_order(self, command: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         ticket = int(self._required_text(params, "ticket"))
+        if isinstance(params.get("expected_state"), dict):
+            orders = self.mt5.orders_get(ticket=ticket)
+            if orders is None:
+                raise WorkerError("orders_query_failed")
+            if len(orders) == 0:
+                return self._result(command, "succeeded", raw_result={"already_absent": True, "order": ticket})
+            if len(orders) != 1:
+                raise WorkerError("management_target_ambiguous")
+            self._validate_management_target(params["expected_state"], orders[0], "pending")
         return self._send_order(command, {"action": self.mt5.TRADE_ACTION_REMOVE, "order": ticket})
 
     def _modify_order(self, command: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
@@ -250,10 +259,16 @@ class Mt5Adapter:
 
     def _close_position(self, command: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         ticket = int(self._required_text(params, "ticket"))
-        positions = self.mt5.positions_get(ticket=ticket) or ()
+        positions = self.mt5.positions_get(ticket=ticket)
+        if positions is None:
+            raise WorkerError("positions_query_failed")
+        if len(positions) == 0 and isinstance(params.get("expected_state"), dict):
+            return self._result(command, "succeeded", raw_result={"already_absent": True, "position": ticket})
         if len(positions) != 1:
             raise WorkerError("position_not_found")
         position = positions[0]
+        if isinstance(params.get("expected_state"), dict):
+            self._validate_management_target(params["expected_state"], position, "position")
         volume = float(params.get("volume") or position.volume)
         if volume <= 0 or volume > float(position.volume):
             raise WorkerError("close_volume_invalid")
@@ -273,6 +288,37 @@ class Mt5Adapter:
             "comment": f"AURUM:{str(command['command_id'])[-20:]}",
         }
         return self._send_order(command, request)
+
+    def _validate_management_target(self, expected: dict[str, Any], target: Any, kind: str) -> None:
+        expected_server = str(expected.get("broker_server_key") or "").strip().upper()
+        expected_login = str(expected.get("login_account") or "").strip()
+        if expected_server and expected_server != self.identity.broker_server.strip().upper():
+            raise WorkerError("management_account_server_mismatch")
+        if expected_login and expected_login != self.identity.login:
+            raise WorkerError("management_account_login_mismatch")
+        if str(expected.get("ticket") or "").strip() != str(getattr(target, "ticket", "")):
+            raise WorkerError("management_ticket_mismatch")
+        if str(expected.get("symbol") or "").strip() != str(getattr(target, "symbol", "")):
+            raise WorkerError("management_symbol_mismatch")
+        if int(expected.get("magic") or 0) != int(getattr(target, "magic", 0) or 0):
+            raise WorkerError("management_magic_mismatch")
+        actual_volume = getattr(target, "volume", None)
+        if actual_volume is None:
+            actual_volume = getattr(target, "volume_current", None)
+        if kind == "pending" and float(actual_volume or 0) <= 0:
+            actual_volume = getattr(target, "volume_initial", actual_volume)
+        if abs(float(expected.get("volume") or 0) - float(actual_volume or 0)) > 1e-8:
+            raise WorkerError("management_volume_mismatch")
+        if kind == "position":
+            direction = "buy" if int(target.type) == int(self.mt5.POSITION_TYPE_BUY) else "sell"
+        else:
+            buy_types = {
+                int(self.mt5.ORDER_TYPE_BUY_LIMIT), int(self.mt5.ORDER_TYPE_BUY_STOP),
+                int(self.mt5.ORDER_TYPE_BUY_STOP_LIMIT),
+            }
+            direction = "buy" if int(target.type) in buy_types else "sell"
+        if str(expected.get("direction") or "").strip().lower() != direction:
+            raise WorkerError("management_direction_mismatch")
 
     def _query_execution(self, command: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         order_tickets: list[str] = []

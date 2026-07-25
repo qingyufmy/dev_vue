@@ -2,8 +2,11 @@ import { createHash, randomUUID } from 'node:crypto'
 
 import { queryAll, queryOne } from '../db.js'
 
-const READ_ACTIONS = new Set(['account', 'positions', 'pending_list'])
-const TRADE_ACTIONS = new Set(['open', 'pending', 'close', 'cancel_pending'])
+const SYSTEM_MAGIC = 234000
+const READ_ACTIONS = new Set(['account', 'positions', 'pending_list', 'system_trade_inventory'])
+const TRADE_ACTIONS = new Set([
+  'open', 'pending', 'close', 'cancel_pending', 'close_system_position', 'cancel_system_pending',
+])
 const SUPPORTED_ACTIONS = new Set([
   ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'toggle_trade', 'set_quote_symbol',
 ])
@@ -36,6 +39,16 @@ function routeMatchesParams(route, params) {
     !== String(route.account_ref.broker_server).trim().toLowerCase()) return false
   if (login && String(login).trim() !== String(route.account_ref.login).trim()) return false
   return true
+}
+
+function routeSelectionParams(params) {
+  const expected = params.expected_state && typeof params.expected_state === 'object'
+    ? params.expected_state : {}
+  return {
+    ...params,
+    broker_server:params.broker_server ?? expected.broker_server_key,
+    login:params.login ?? params.account_login ?? expected.login_account,
+  }
 }
 
 function routeParams(route) {
@@ -123,15 +136,33 @@ function tradeParams(action, params) {
       type_time:params.expiration ? 2 : undefined,
     })
   }
-  if (action === 'close') {
-    return cleanObject({ ticket:params.ticket, volume:params.volume, deviation:params.deviation })
+  if (action === 'close' || action === 'close_system_position') {
+    const expected = params.expected_state || {}
+    return cleanObject({
+      ticket:params.ticket,
+      volume:params.volume,
+      deviation:params.deviation,
+      magic:action === 'close_system_position' ? SYSTEM_MAGIC : undefined,
+      symbol:action === 'close_system_position' ? expected.symbol : undefined,
+      side:action === 'close_system_position' ? expected.direction : undefined,
+      expected_state:params.expected_state,
+    })
   }
-  return { ticket:params.ticket }
+  const expected = params.expected_state || {}
+  return cleanObject({
+    ticket:params.ticket,
+    volume:action === 'cancel_system_pending' ? expected.volume : undefined,
+    magic:action === 'cancel_system_pending' ? SYSTEM_MAGIC : undefined,
+    symbol:action === 'cancel_system_pending' ? expected.symbol : undefined,
+    side:action === 'cancel_system_pending' ? expected.direction : undefined,
+    expected_state:params.expected_state,
+  })
 }
 
 function v3Action(action) {
   return ({ open:'place_order', pending:'place_order', close:'close_position',
-    cancel_pending:'cancel_order' })[action]
+    cancel_pending:'cancel_order', close_system_position:'close_position',
+    cancel_system_pending:'cancel_order' })[action]
 }
 
 function commandId(userId, route, action, params) {
@@ -163,6 +194,8 @@ function legacyTradeResult(action, result) {
       status:'success', command_id:result.command_id, ticket,
       order:orderTicket, position_id:positionTicket, deal:dealTicket,
       price:raw.price, retcode,
+      already_absent:raw.already_absent === true || result?.error_message === 'already_absent'
+        ? true : undefined,
     })
   }
   return cleanObject({
@@ -172,6 +205,54 @@ function legacyTradeResult(action, result) {
     message:result?.error_message || result?.error_code || result?.error || 'bridge_command_failed',
     retcode,
   })
+}
+
+function rejectedManagementResult(code, ticket) {
+  return { status:'rejected', error:code, message:code, ticket:String(ticket || '') }
+}
+
+function requiredExpectedStateError(expected) {
+  if (!expected || typeof expected !== 'object' || Array.isArray(expected)) {
+    return 'management_expected_state_required'
+  }
+  if (!String(expected.ticket || '').trim()) return 'management_expected_ticket_required'
+  if (!String(expected.symbol || '').trim()) return 'management_expected_symbol_required'
+  const direction = String(expected.direction || '').trim().toLowerCase()
+  if (!['buy', 'sell'].includes(direction)) return 'management_expected_direction_invalid'
+  if (expected.magic == null) return 'management_expected_magic_required'
+  const volume = Number(expected.volume)
+  if (!Number.isFinite(volume) || volume <= 0 || !Number.isInteger(Number(expected.magic))) {
+    return 'management_expected_state_invalid'
+  }
+  return null
+}
+
+function targetDirection(target, kind) {
+  if (kind === 'position') return String(target.type || '').trim().toLowerCase()
+  return String(target.side || target.pending_type || target.type || '').trim().toLowerCase()
+    .replace(/_.*/, '')
+}
+
+function managementPreconditionError(expected, target, kind, route) {
+  const requiredError = requiredExpectedStateError(expected)
+  if (requiredError) return requiredError
+  if (expected.broker_server_key
+    && String(expected.broker_server_key).trim().toUpperCase()
+      !== String(route.account_ref.broker_server).trim().toUpperCase()) {
+    return 'management_account_server_mismatch'
+  }
+  if (expected.login_account
+    && String(expected.login_account).trim() !== String(route.account_ref.login).trim()) {
+    return 'management_account_login_mismatch'
+  }
+  if (String(expected.ticket).trim() !== String(target.ticket).trim()) return 'management_ticket_mismatch'
+  if (String(expected.symbol).trim() !== String(target.symbol).trim()) return 'management_symbol_mismatch'
+  if (Number(expected.magic) !== Number(target.magic)) return 'management_magic_mismatch'
+  if (Math.abs(Number(expected.volume) - Number(target.volume)) > 1e-8) return 'management_volume_mismatch'
+  if (String(expected.direction).trim().toLowerCase() !== targetDirection(target, kind)) {
+    return 'management_direction_mismatch'
+  }
+  return null
 }
 
 export function createBridgeV3BusinessAdapter({
@@ -232,6 +313,50 @@ export function createBridgeV3BusinessAdapter({
       return { status:'success', positions, count:positions.length, source:route.platform }
     }
     return { status:'success', orders:filtered.map(item => normalizeOrder(item, route.platform)), source:route.platform }
+  }
+
+  async function readSystemInventory(route) {
+    const [accountResult, positionsResult, pendingResult] = await Promise.all([
+      readAccount(route),
+      readCollection(route, 'positions', {}),
+      readCollection(route, 'pending_list', {}),
+    ])
+    const marginMode = route.platform === 'mt5' ? Number(accountResult.margin_mode ?? -1) : -1
+    return {
+      status:'success',
+      account:{
+        login:String(accountResult.login ?? route.account_ref.login),
+        server:String(accountResult.server ?? route.account_ref.broker_server),
+        margin_mode:marginMode,
+        is_hedging:route.platform === 'mt4' || marginMode === 2,
+      },
+      magic:SYSTEM_MAGIC,
+      positions:positionsResult.positions.filter(item => Number(item.magic || 0) === SYSTEM_MAGIC),
+      pending_orders:pendingResult.orders.filter(item => Number(item.magic || 0) === SYSTEM_MAGIC),
+      source:route.platform,
+    }
+  }
+
+  async function prepareSystemManagement(route, action, params) {
+    const expected = params.expected_state
+    const requiredError = requiredExpectedStateError(expected)
+    if (requiredError) return { result:rejectedManagementResult(requiredError, params.ticket) }
+    const kind = action === 'close_system_position' ? 'position' : 'pending'
+    const collection = await readCollection(route, kind === 'position' ? 'positions' : 'pending_list', {})
+    const items = kind === 'position' ? collection.positions : collection.orders
+    const target = items.find(item => String(item.ticket) === String(params.ticket))
+    if (!target) {
+      return { result:{ status:'success', ticket:String(params.ticket), already_absent:true } }
+    }
+    const preconditionError = managementPreconditionError(expected, target, kind, route)
+    if (preconditionError) {
+      return { result:rejectedManagementResult(preconditionError, target.ticket) }
+    }
+    if (Number(target.magic || 0) !== SYSTEM_MAGIC) {
+      return { result:rejectedManagementResult(
+        kind === 'position' ? 'position_magic_mismatch' : 'pending_magic_mismatch', target.ticket) }
+    }
+    return { params:{ ...params, ticket:target.ticket, volume:kind === 'position' ? target.volume : undefined } }
   }
 
   async function requestQuote(userId, route, params, timeoutMs) {
@@ -329,10 +454,16 @@ export function createBridgeV3BusinessAdapter({
         if (!connectedTerminals(userId).length) throw adapterError('bridge_terminal_not_connected')
         return { status:'success', symbol }
       }
-      const route = selectRoute(userId, params)
+      const route = selectRoute(userId, routeSelectionParams(params))
       if (action === 'account') return await readAccount(route)
+      if (action === 'system_trade_inventory') return await readSystemInventory(route)
       if (READ_ACTIONS.has(action)) return await readCollection(route, action, params)
       if (action === 'quote') return await requestQuote(userId, route, params, timeoutMs)
+      if (action === 'close_system_position' || action === 'cancel_system_pending') {
+        const prepared = await prepareSystemManagement(route, action, params)
+        if (prepared.result) return prepared.result
+        params = prepared.params
+      }
       return await executeTrade(userId, route, action, params, timeoutMs, options)
     } catch (error) {
       const code = error?.code || error?.message || 'bridge_v3_request_failed'

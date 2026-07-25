@@ -23,6 +23,7 @@ input string InpPipeName = "AURUMBridgeV3";
 #define ACTION_MODIFY    3
 #define ACTION_CLOSE     4
 #define ACTION_QUERY     5
+#define SIDE_NONE        0
 #define SIDE_BUY         1
 #define SIDE_SELL        2
 #define KIND_MARKET      1
@@ -249,7 +250,7 @@ void ExecuteCommand(uchar &payload[], int &offset)
      }
    if(action == ACTION_CANCEL)
      {
-      ExecuteCancel(command_id, (int)ticket_value);
+      ExecuteCancel(command_id, (int)ticket_value, symbol, side, volume, magic);
       return;
      }
    if(action == ACTION_MODIFY)
@@ -260,7 +261,7 @@ void ExecuteCommand(uchar &payload[], int &offset)
      }
    if(action == ACTION_CLOSE)
      {
-      ExecuteClose(command_id, (int)ticket_value, volume, deviation);
+      ExecuteClose(command_id, (int)ticket_value, symbol, side, volume, deviation, magic);
       return;
      }
    if(action == ACTION_QUERY)
@@ -303,17 +304,53 @@ void ExecutePlace(const string command_id, const string symbol, const int side,
       SendTradeFailure(command_id, "mt4_order_send_failed");
   }
 
-void ExecuteCancel(const string command_id, const int ticket)
+void ExecuteCancel(const string command_id, const int ticket, const string expected_symbol,
+   const int expected_side, const double expected_volume, const int expected_magic)
   {
+   bool guarded = expected_symbol != "" && expected_side != SIDE_NONE && expected_volume > 0;
    if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
      {
+      if(guarded)
+        {
+         SendCommandResult(command_id, 1, "", "already_absent", 0, ticket);
+         return;
+        }
       SendTradeFailure(command_id, "order_not_found");
+      return;
+     }
+   if(OrderCloseTime() > 0)
+     {
+      if(guarded)
+         SendCommandResult(command_id, 1, "", "already_absent", 0, ticket);
+      else
+         SendCommandResult(command_id, 2, "order_not_found", "", 0, ticket);
       return;
      }
    int order_type = OrderType();
    if(order_type == OP_BUY || order_type == OP_SELL)
      {
       SendCommandResult(command_id, 2, "order_not_pending", "", 0, ticket);
+      return;
+     }
+   int actual_side = (order_type == OP_BUYLIMIT || order_type == OP_BUYSTOP) ? SIDE_BUY : SIDE_SELL;
+   if(guarded && OrderSymbol() != expected_symbol)
+     {
+      SendCommandResult(command_id, 2, "management_symbol_mismatch", "", 0, ticket);
+      return;
+     }
+   if(guarded && actual_side != expected_side)
+     {
+      SendCommandResult(command_id, 2, "management_direction_mismatch", "", 0, ticket);
+      return;
+     }
+   if(guarded && OrderMagicNumber() != expected_magic)
+     {
+      SendCommandResult(command_id, 2, "management_magic_mismatch", "", 0, ticket);
+      return;
+     }
+   if(guarded && MathAbs(OrderLots() - expected_volume) > 0.00000001)
+     {
+      SendCommandResult(command_id, 2, "management_volume_mismatch", "", 0, ticket);
       return;
      }
    if(OrderDelete(ticket, clrNONE))
@@ -340,18 +377,53 @@ void ExecuteModify(const string command_id, const int ticket, const string price
       SendTradeFailure(command_id, "mt4_order_modify_failed");
   }
 
-void ExecuteClose(const string command_id, const int ticket, const double requested_volume,
-   const int deviation)
+void ExecuteClose(const string command_id, const int ticket, const string expected_symbol,
+   const int expected_side, const double requested_volume, const int deviation, const int expected_magic)
   {
+   bool guarded = expected_symbol != "" && expected_side != SIDE_NONE && requested_volume > 0;
    if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
      {
+      if(guarded)
+        {
+         SendCommandResult(command_id, 1, "", "already_absent", 0, ticket);
+         return;
+        }
       SendTradeFailure(command_id, "position_not_found");
+      return;
+     }
+   if(OrderCloseTime() > 0)
+     {
+      if(guarded)
+         SendCommandResult(command_id, 1, "", "already_absent", 0, ticket);
+      else
+         SendCommandResult(command_id, 2, "position_not_found", "", 0, ticket);
       return;
      }
    int order_type = OrderType();
    if(order_type != OP_BUY && order_type != OP_SELL)
      {
       SendCommandResult(command_id, 2, "position_not_found", "", 0, ticket);
+      return;
+     }
+   int actual_side = order_type == OP_BUY ? SIDE_BUY : SIDE_SELL;
+   if(guarded && OrderSymbol() != expected_symbol)
+     {
+      SendCommandResult(command_id, 2, "management_symbol_mismatch", "", 0, ticket);
+      return;
+     }
+   if(guarded && actual_side != expected_side)
+     {
+      SendCommandResult(command_id, 2, "management_direction_mismatch", "", 0, ticket);
+      return;
+     }
+   if(guarded && OrderMagicNumber() != expected_magic)
+     {
+      SendCommandResult(command_id, 2, "management_magic_mismatch", "", 0, ticket);
+      return;
+     }
+   if(guarded && MathAbs(OrderLots() - requested_volume) > 0.00000001)
+     {
+      SendCommandResult(command_id, 2, "management_volume_mismatch", "", 0, ticket);
       return;
      }
    double volume = (requested_volume <= 0) ? OrderLots() : requested_volume;
