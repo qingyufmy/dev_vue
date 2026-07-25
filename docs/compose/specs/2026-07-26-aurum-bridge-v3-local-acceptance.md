@@ -77,3 +77,10 @@ Acceptance 测试总数：8，全部通过。
 - 服务端进程重启后，同一终端可用新 WebSocket session 接管，旧连接后续消息会被围栏拒绝；终端 epoch 不因纯网络重连被强制重置。
 - 新构建在真实 MT5 demo 账户下以 connection epoch 16 完成 account、positions、orders 三条首次完整同步，服务端 revision 均为 1，`source_time_msc` 规范存为 `null`。
 - 该证据证明“授权一次、后续静默复用”和首次同步链路；不包含真实交易指令，也不替代 MT4 demo 交易矩阵与 72 小时/7 天持续运行验收。
+
+## 账户绑定与有界绩效同步实机证据
+
+- 2026-07-26 最新 Debug 构建再次重启后，connection epoch 17 直接经历 `DetectingTerminal → Connecting → Online`，日志没有进入 `PairingRequired`，没有打开浏览器，也没有要求二次登录。
+- 服务端在线会话识别终端 `mt5_93b55965fe14a572fa3594d3`，平台为 MT5，账户为 `596520 / DooTechnology-Demo`，并在首次完整快照就绪后把它绑定到用户 1 的交易账户 1；`identity_verified_at` 为 `2026-07-26 02:56:27`。
+- 服务器通过 V3 桥接按需请求有界日绩效汇总，账户 1 的同步状态为 `current`，区间从 `2026-07-16` 到 `2026-07-25`，`last_error` 为 `null`。
+- 本次只验证账户身份、完整快照与历史日汇总读取，没有下发任何交易指令；SQLite 和服务器汇总表均不是 broker 交易权威。
