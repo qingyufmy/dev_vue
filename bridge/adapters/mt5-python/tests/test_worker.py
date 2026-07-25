@@ -95,8 +95,9 @@ class WorkerTests(unittest.TestCase):
     def test_rejects_cross_account_route_before_order_send(self):
         adapter = self.adapter()
         command = self.command(account_ref={"broker_server": "Broker-Demo", "login": "999"})
-        with self.assertRaisesRegex(worker.WorkerError, "command_route_mismatch"):
-            adapter.execute(command)
+        result = adapter.execute(command)
+        self.assertEqual("rejected", result["status"])
+        self.assertEqual("command_route_mismatch", result["error_code"])
         self.assertEqual([], adapter.mt5.sent)
 
     def test_rejects_expired_command_without_order_send(self):

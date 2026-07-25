@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import struct
 import sys
@@ -117,16 +118,18 @@ class Mt5Adapter:
         command_id = str(command.get("command_id") or "")
         if command_id in self._receipts:
             return self._receipts[command_id]
-        self._validate_route(command)
-        deadline = int(command.get("deadline_utc_msc") or 0)
-        if deadline <= int(time.time() * 1000):
-            return self._remember(command_id, self._result(command, "rejected", "command_expired"))
-        self._ensure_identity()
-        action = command.get("action")
-        params = command.get("params")
-        if not isinstance(params, dict):
-            return self._remember(command_id, self._result(command, "rejected", "command_params_invalid"))
         try:
+            self._validate_route(command)
+            deadline = int(command.get("deadline_utc_msc") or 0)
+            if deadline <= int(time.time() * 1000):
+                result = self._result(command, "rejected", "command_expired")
+                return self._remember(command_id, result)
+            self._ensure_identity()
+            action = command.get("action")
+            params = command.get("params")
+            if not isinstance(params, dict):
+                result = self._result(command, "rejected", "command_params_invalid")
+                return self._remember(command_id, result)
             if action == "place_order":
                 result = self._place_order(command, params)
             elif action == "cancel_order":
@@ -253,7 +256,10 @@ class Mt5Adapter:
             position_tickets.extend(str(item.ticket) for item in (self.mt5.positions_get(ticket=int(ticket)) or ()))
         from_time = int(params.get("from_time") or (time.time() - 7 * 86400))
         to_time = int(params.get("to_time") or time.time())
-        deals = self.mt5.history_deals_get(from_time, to_time) or ()
+        deals = self.mt5.history_deals_get(
+            datetime.fromtimestamp(from_time, timezone.utc),
+            datetime.fromtimestamp(to_time, timezone.utc),
+        ) or ()
         expected_position = str(params.get("position_ticket") or "")
         expected_order = str(params.get("order_ticket") or ticket or "")
         for deal in deals:

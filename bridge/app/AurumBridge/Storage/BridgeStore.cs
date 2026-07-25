@@ -84,6 +84,27 @@ public sealed class BridgeStore : IAsyncDisposable
         return Convert.ToString(await command.ExecuteScalarAsync(cancellationToken)) ?? string.Empty;
     }
 
+    public async Task<long> GetStreamRevisionAsync(
+        string terminalInstanceId,
+        long connectionEpoch,
+        string stream,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT revision FROM stream_revisions
+            WHERE terminal_instance_id = $terminal_id
+              AND connection_epoch = $epoch
+              AND stream = $stream;
+            """;
+        command.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+        command.Parameters.AddWithValue("$epoch", connectionEpoch);
+        command.Parameters.AddWithValue("$stream", stream);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken) ?? 0L);
+    }
+
     public async Task<PersistDeltaResult> PersistDataDeltaAsync(
         DataDeltaMessage message,
         CancellationToken cancellationToken = default)

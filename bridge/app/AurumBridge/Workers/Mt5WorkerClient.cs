@@ -5,7 +5,15 @@ using AurumBridge.Protocol;
 
 namespace AurumBridge.Workers;
 
-public sealed class Mt5WorkerClient : IAsyncDisposable
+public interface IMt5WorkerClient : IAsyncDisposable
+{
+    bool IsConnected { get; }
+    JsonElement WorkerHello { get; }
+    Task StartAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
+    Task<JsonElement> RequestAsync<T>(T request, CancellationToken cancellationToken = default);
+}
+
+public sealed class Mt5WorkerClient : IMt5WorkerClient
 {
     private readonly string _pipeName;
     private readonly ProcessStartInfo _startInfo;
