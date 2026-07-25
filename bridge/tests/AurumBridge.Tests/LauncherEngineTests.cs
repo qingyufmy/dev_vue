@@ -73,6 +73,32 @@ public sealed class LauncherEngineTests
         Assert.AreEqual("rolled_back", pointer.Status);
         Assert.HasCount(1, runner.StartupChecks);
         StringAssert.Contains(runner.StartedExecutable!, Path.Combine("3.0.0", "AURUMBridge.exe"));
+        Assert.AreEqual(TimeSpan.FromSeconds(30), runner.StartupChecks[0].Timeout);
+        Assert.AreEqual(
+            TimeSpan.FromSeconds(50),
+            runner.HealthChecks.Aggregate(TimeSpan.Zero, (total, check) => total + check.Timeout)
+                + runner.StartupChecks[0].Timeout,
+            "Pending activation and rollback process budgets must remain below the 60 second acceptance limit.");
+    }
+
+    [TestMethod]
+    public async Task FailsClosedWhenTheLastKnownGoodVersionAlsoFailsHealthCheck()
+    {
+        CreateVersion("3.0.0");
+        CreateVersion("3.1.0");
+        await _store.SaveAsync(Pointer("3.1.0", "3.0.0", "pending"));
+        var runner = new FakeRunner(_ => false);
+        var engine = new LauncherEngine(_directory, _store, runner, () => 1_800_000_000_400);
+
+        var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => engine.LaunchAsync());
+        var pointer = await _store.LoadAsync();
+
+        Assert.AreEqual("launcher_rollback_health_check_failed", error.Message);
+        Assert.AreEqual("3.0.0", pointer.ActiveVersion);
+        Assert.AreEqual("rolled_back", pointer.Status);
+        Assert.IsNull(runner.StartedExecutable);
+        Assert.HasCount(2, runner.HealthChecks);
+        Assert.IsTrue(runner.HealthChecks.All(check => check.Timeout == TimeSpan.FromSeconds(10)));
     }
 
     [TestMethod]
@@ -103,15 +129,16 @@ public sealed class LauncherEngineTests
 
     private sealed class FakeRunner(Func<string, bool> health, bool startupReady = true) : IBridgeProcessRunner
     {
-        public List<string> HealthChecks { get; } = [];
-        public List<string> StartupChecks { get; } = [];
+        public List<(string ExecutablePath, TimeSpan Timeout)> HealthChecks { get; } = [];
+        public List<(string ExecutablePath, TimeSpan Timeout)> StartupChecks { get; } = [];
         public string? StartedExecutable { get; private set; }
 
         public Task<bool> RunHealthCheckAsync(
             string executablePath,
+            TimeSpan timeout,
             CancellationToken cancellationToken = default)
         {
-            HealthChecks.Add(executablePath);
+            HealthChecks.Add((executablePath, timeout));
             return Task.FromResult(health(executablePath));
         }
 
@@ -122,7 +149,7 @@ public sealed class LauncherEngineTests
             TimeSpan timeout,
             CancellationToken cancellationToken = default)
         {
-            StartupChecks.Add(executablePath);
+            StartupChecks.Add((executablePath, timeout));
             if (startupReady)
             {
                 StartedExecutable = executablePath;

@@ -4,7 +4,10 @@ namespace AurumBridge.Launcher;
 
 public interface IBridgeProcessRunner
 {
-    Task<bool> RunHealthCheckAsync(string executablePath, CancellationToken cancellationToken = default);
+    Task<bool> RunHealthCheckAsync(
+        string executablePath,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default);
     Task<bool> StartBridgeAndWaitReadyAsync(
         string executablePath,
         TimeSpan timeout,
@@ -18,6 +21,8 @@ public sealed class LauncherEngine(
     IBridgeProcessRunner processRunner,
     Func<long>? clock = null)
 {
+    private static readonly TimeSpan HealthCheckTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan PendingStartupTimeout = TimeSpan.FromSeconds(30);
     private readonly string _installRoot = Path.GetFullPath(installRoot);
     private readonly VersionPointerStore _pointerStore = pointerStore;
     private readonly IBridgeProcessRunner _processRunner = processRunner;
@@ -27,13 +32,16 @@ public sealed class LauncherEngine(
     {
         var pointer = await _pointerStore.LoadAsync(cancellationToken);
         var activeExecutable = ResolveExecutable(pointer.ActiveVersion);
-        if (await _processRunner.RunHealthCheckAsync(activeExecutable, cancellationToken))
+        if (await _processRunner.RunHealthCheckAsync(
+            activeExecutable,
+            HealthCheckTimeout,
+            cancellationToken))
         {
             if (pointer.Status == "pending")
             {
                 if (await _processRunner.StartBridgeAndWaitReadyAsync(
                     activeExecutable,
-                    TimeSpan.FromSeconds(60),
+                    PendingStartupTimeout,
                     cancellationToken))
                 {
                     await _pointerStore.SaveAsync(pointer with
@@ -74,7 +82,10 @@ public sealed class LauncherEngine(
             Status = "rolled_back",
             UpdatedAtUtcMsc = _clock(),
         }, cancellationToken);
-        if (!await _processRunner.RunHealthCheckAsync(rollbackExecutable, cancellationToken))
+        if (!await _processRunner.RunHealthCheckAsync(
+            rollbackExecutable,
+            HealthCheckTimeout,
+            cancellationToken))
         {
             throw new InvalidOperationException("launcher_rollback_health_check_failed");
         }
@@ -105,8 +116,13 @@ public sealed class BridgeProcessRunner(string installRoot) : IBridgeProcessRunn
 
     public async Task<bool> RunHealthCheckAsync(
         string executablePath,
+        TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        }
         Directory.CreateDirectory(_healthDirectory);
         var healthFile = Path.Combine(_healthDirectory, $"health-{Guid.NewGuid():N}.json");
         try
@@ -118,11 +134,11 @@ public sealed class BridgeProcessRunner(string installRoot) : IBridgeProcessRunn
                 CreateNoWindow = true,
                 ArgumentList = { "--health-check", "--health-file", healthFile },
             }) ?? throw new InvalidOperationException("launcher_health_process_start_failed");
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(60));
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(timeout);
             try
             {
-                await process.WaitForExitAsync(timeout.Token);
+                await process.WaitForExitAsync(deadline.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
