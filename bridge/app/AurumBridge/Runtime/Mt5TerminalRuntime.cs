@@ -188,9 +188,8 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         {
             throw new InvalidDataException("mt5_worker_snapshot_invalid");
         }
-        var observedAt = snapshot.TryGetProperty("observed_at_utc_msc", out var observed)
-            ? observed.GetInt64()
-            : _clock();
+        var sourceTimeMsc = ReadSourceTimeMsc(snapshot);
+        var observedAt = _clock();
         var persisted = 0;
         if (streams.TryGetProperty("account", out var account) && account.ValueKind == JsonValueKind.Object)
         {
@@ -198,7 +197,9 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
             var accountFullSnapshot = fullSnapshotStreams.Contains("account");
             if (accountFullSnapshot || !_account.TryGetValue("value", out var previous) || previous != raw)
             {
-                await PersistAsync("account", [account.Clone()], [], accountFullSnapshot, observedAt, cancellationToken);
+                await PersistAsync(
+                    "account", [account.Clone()], [], accountFullSnapshot,
+                    observedAt, sourceTimeMsc, cancellationToken);
                 _account["value"] = raw;
                 persisted++;
             }
@@ -229,7 +230,9 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
                     .Select(ticket => JsonSerializer.SerializeToElement(ticket)).ToArray();
             if (streamFullSnapshot || upserts.Length > 0 || deletes.Length > 0)
             {
-                await PersistAsync(stream, upserts, deletes, streamFullSnapshot, observedAt, cancellationToken);
+                await PersistAsync(
+                    stream, upserts, deletes, streamFullSnapshot,
+                    observedAt, sourceTimeMsc, cancellationToken);
                 persisted++;
             }
             _collections[stream] = current;
@@ -264,6 +267,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         IReadOnlyList<JsonElement> deletes,
         bool fullSnapshot,
         long observedAt,
+        long? sourceTimeMsc,
         CancellationToken cancellationToken)
     {
         var baseRevision = fullSnapshot ? 0 : _revisions[stream];
@@ -280,7 +284,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
             Revision = revision,
             BaseRevision = baseRevision,
             ObservedAtUtcMsc = observedAt,
-            SourceTimeMsc = null,
+            SourceTimeMsc = sourceTimeMsc,
             FullSnapshot = fullSnapshot,
             Upserts = upserts,
             Deletes = deletes,
@@ -291,6 +295,21 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
             throw new InvalidDataException("mt5_snapshot_revision_gap");
         }
         _revisions[stream] = revision;
+    }
+
+    private static long? ReadSourceTimeMsc(JsonElement snapshot)
+    {
+        foreach (var propertyName in new[] { "source_time_msc", "observed_at_utc_msc" })
+        {
+            if (snapshot.TryGetProperty(propertyName, out var value)
+                && value.ValueKind == JsonValueKind.Number
+                && value.TryGetInt64(out var timestamp)
+                && timestamp > 0)
+            {
+                return timestamp;
+            }
+        }
+        return null;
     }
 
     private static string ReadTicket(JsonElement item, string stream)

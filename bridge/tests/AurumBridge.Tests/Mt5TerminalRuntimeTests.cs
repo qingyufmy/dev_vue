@@ -44,9 +44,29 @@ public sealed class Mt5TerminalRuntimeTests
     {
         var snapshot = Snapshot("1001");
         Assert.AreEqual(3, await _runtime.IngestSnapshotAsync(snapshot, fullSnapshot: true));
-        Assert.HasCount(3, await _testStore.Store.GetPendingOutboxAsync());
+        var outbox = await _testStore.Store.GetPendingOutboxAsync();
+        Assert.HasCount(3, outbox);
+        foreach (var item in outbox)
+        {
+            var delta = JsonDocument.Parse(item.PayloadJson).RootElement;
+            Assert.AreEqual(1_800_000_000_000, delta.GetProperty("observed_at_utc_msc").GetInt64());
+            Assert.AreEqual(1_799_999_999_900, delta.GetProperty("source_time_msc").GetInt64());
+        }
         Assert.AreEqual(0, await _runtime.IngestSnapshotAsync(snapshot, fullSnapshot: false));
         Assert.HasCount(3, await _testStore.Store.GetPendingOutboxAsync());
+    }
+
+    [TestMethod]
+    public async Task LegacyWorkerSnapshotTimeRemainsSupportedAsSourceTime()
+    {
+        var snapshot = Snapshot("1001", legacyTimeField: true);
+
+        Assert.AreEqual(3, await _runtime.IngestSnapshotAsync(snapshot, fullSnapshot: true));
+
+        var outbox = await _testStore.Store.GetPendingOutboxAsync();
+        var delta = JsonDocument.Parse(outbox[0].PayloadJson).RootElement;
+        Assert.AreEqual(1_800_000_000_000, delta.GetProperty("observed_at_utc_msc").GetInt64());
+        Assert.AreEqual(1_799_999_999_900, delta.GetProperty("source_time_msc").GetInt64());
     }
 
     [TestMethod]
@@ -284,18 +304,22 @@ public sealed class Mt5TerminalRuntimeTests
         ConnectionEpoch = 7,
     };
 
-    private static JsonElement Snapshot(string positionTicket) => JsonSerializer.SerializeToElement(new
+    private static JsonElement Snapshot(string positionTicket, bool legacyTimeField = false)
     {
-        v = 3,
-        type = "snapshot",
-        observed_at_utc_msc = 1_800_000_000_000,
-        streams = new
+        var snapshot = new Dictionary<string, object?>
         {
-            account = new { login = 12345678, balance = 1000.0 },
-            positions = new[] { new { ticket = positionTicket, symbol = "XAUUSD" } },
-            orders = Array.Empty<object>(),
-        },
-    });
+            ["v"] = 3,
+            ["type"] = "snapshot",
+            [legacyTimeField ? "observed_at_utc_msc" : "source_time_msc"] = 1_799_999_999_900,
+            ["streams"] = new
+            {
+                account = new { login = 12345678, balance = 1000.0 },
+                positions = new[] { new { ticket = positionTicket, symbol = "XAUUSD" } },
+                orders = Array.Empty<object>(),
+            },
+        };
+        return JsonSerializer.SerializeToElement(snapshot);
+    }
 
     private static CommandResultMessage Result(CommandMessage command) => new()
     {

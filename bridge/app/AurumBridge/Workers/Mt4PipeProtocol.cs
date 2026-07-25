@@ -53,7 +53,7 @@ public sealed record Mt4Welcome(
     string ReconnectPipeName);
 
 public sealed record Mt4Snapshot(
-    long ObservedAtUtcMsc,
+    long SourceTimeMsc,
     JsonElement Account,
     IReadOnlyList<JsonElement> Positions,
     IReadOnlyList<JsonElement> Orders);
@@ -306,7 +306,7 @@ public static class Mt4PipeProtocol
     public static byte[] EncodeSnapshot(Mt4Snapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        if (snapshot.ObservedAtUtcMsc <= 0
+        if (snapshot.SourceTimeMsc <= 0
             || snapshot.Account.ValueKind != JsonValueKind.Object)
         {
             throw new InvalidDataException("mt4_snapshot_invalid");
@@ -314,7 +314,7 @@ public static class Mt4PipeProtocol
         return Encode(writer =>
         {
             writer.Write((int)Mt4MessageType.Snapshot);
-            writer.Write(snapshot.ObservedAtUtcMsc);
+            writer.Write(snapshot.SourceTimeMsc);
             WriteString(writer, snapshot.Account.GetRawText());
             WriteString(writer, JsonSerializer.Serialize(snapshot.Positions));
             WriteString(writer, JsonSerializer.Serialize(snapshot.Orders));
@@ -324,16 +324,16 @@ public static class Mt4PipeProtocol
     public static Mt4Snapshot DecodeSnapshot(ReadOnlySpan<byte> payload)
     {
         using var reader = CreateReader(payload, Mt4MessageType.Snapshot);
-        var observedAt = reader.ReadInt64();
+        var sourceTimeMsc = reader.ReadInt64();
         var account = ParseObject(ReadString(reader, MaxStringBytes), "mt4_account_snapshot_invalid");
         var positions = ParseArray(ReadString(reader, MaxStringBytes), "mt4_positions_snapshot_invalid");
         var orders = ParseArray(ReadString(reader, MaxStringBytes), "mt4_orders_snapshot_invalid");
         EnsureFullyRead(reader);
-        if (observedAt <= 0)
+        if (sourceTimeMsc <= 0)
         {
             throw new InvalidDataException("mt4_snapshot_time_invalid");
         }
-        return new(observedAt, account, positions, orders);
+        return new(sourceTimeMsc, account, positions, orders);
     }
 
     public static Mt4QuoteRequest CreateQuoteRequest(QuoteRequestMessage request)

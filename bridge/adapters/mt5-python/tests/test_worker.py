@@ -422,6 +422,17 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("12345678", result["account_ref"]["login"])
         self.assertEqual("Broker-Demo", result["account_ref"]["broker_server"])
 
+    def test_collect_snapshot_separates_source_capture_time_for_bridge(self):
+        result = worker.collect_snapshot(
+            {"request_id": "collect_01JWORKER", "streams": ["account", "positions"]},
+            self.adapter(),
+            1_799_999_999_900)
+
+        self.assertEqual(1_799_999_999_900, result["source_time_msc"])
+        self.assertEqual(1_799_999_999_900, result["observed_at_utc_msc"])
+        self.assertIn("account", result["streams"])
+        self.assertIn("positions", result["streams"])
+
     def test_probe_rejects_missing_terminal_before_initialize(self):
         with self.assertRaisesRegex(worker.WorkerError, "mt5_terminal_not_found"):
             worker.probe(FakeMt5(), str(Path(__file__).with_name("missing-terminal.exe")))

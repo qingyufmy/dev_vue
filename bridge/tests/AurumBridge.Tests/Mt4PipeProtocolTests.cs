@@ -41,6 +41,7 @@ public sealed class Mt4PipeProtocolTests
 
         var snapshot = Mt4PipeProtocol.DecodeSnapshot(payload);
 
+        Assert.AreEqual(1_800_000_000_000L, snapshot.SourceTimeMsc);
         Assert.AreEqual(1000.0, snapshot.Account.GetProperty("balance").GetDouble());
         Assert.HasCount(1, snapshot.Positions);
         Assert.IsEmpty(snapshot.Orders);

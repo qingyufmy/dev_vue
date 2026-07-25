@@ -1197,6 +1197,16 @@ class Mt5Adapter:
         return value
 
 
+def collect_snapshot(request: dict[str, Any], adapter: Mt5Adapter,
+                     source_time_msc: int | None = None) -> dict[str, Any]:
+    captured_at = source_time_msc if source_time_msc is not None else int(time.time() * 1000)
+    return {"v": 3, "type": "snapshot", "request_id": request.get("request_id"),
+            "source_time_msc": captured_at,
+            # Retained for rolling compatibility with Bridge Core 3.0.0.
+            "observed_at_utc_msc": captured_at,
+            "streams": adapter.collect(list(request.get("streams") or []))}
+
+
 def run(pipe_name: str, adapter: Mt5Adapter) -> int:
     pipe_path = rf"\\.\pipe\{pipe_name}"
     with open(pipe_path, "r+b", buffering=0) as stream:
@@ -1211,9 +1221,7 @@ def run(pipe_name: str, adapter: Mt5Adapter) -> int:
                 write_frame(stream, {"v": 3, "type": "shutdown_ack"})
                 return 0
             if request_type == "collect":
-                response = {"v": 3, "type": "snapshot", "request_id": request.get("request_id"),
-                            "observed_at_utc_msc": int(time.time() * 1000),
-                            "streams": adapter.collect(list(request.get("streams") or []))}
+                response = collect_snapshot(request, adapter)
             elif request_type == "command":
                 response = adapter.execute(request)
             elif request_type == "quote_request":

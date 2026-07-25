@@ -41,7 +41,14 @@ public sealed class Mt4TerminalRuntimeTests
         var quote = await runtime.GetQuoteAsync(QuoteRequest());
 
         Assert.AreEqual(3, persisted);
-        Assert.HasCount(3, await testStore.Store.GetPendingOutboxAsync());
+        var outbox = await testStore.Store.GetPendingOutboxAsync();
+        Assert.HasCount(3, outbox);
+        foreach (var item in outbox)
+        {
+            var delta = JsonDocument.Parse(item.PayloadJson).RootElement;
+            Assert.AreEqual(1_800_000_000_100, delta.GetProperty("observed_at_utc_msc").GetInt64());
+            Assert.AreEqual(1_800_000_000_000, delta.GetProperty("source_time_msc").GetInt64());
+        }
         Assert.AreEqual("succeeded", result.Status);
         CollectionAssert.Contains(result.Evidence.OrderTickets.ToArray(), "20");
         Assert.AreEqual(Terminal().ConnectionEpoch, connection.Welcome!.ConnectionEpoch);

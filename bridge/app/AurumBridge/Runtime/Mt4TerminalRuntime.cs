@@ -282,13 +282,14 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
+        var observedAt = _clock();
         var persisted = 0;
         persisted += await PersistIfChangedAsync(
-            "account", [snapshot.Account], snapshot.ObservedAtUtcMsc, cancellationToken);
+            "account", [snapshot.Account], observedAt, snapshot.SourceTimeMsc, cancellationToken);
         persisted += await PersistIfChangedAsync(
-            "positions", snapshot.Positions, snapshot.ObservedAtUtcMsc, cancellationToken);
+            "positions", snapshot.Positions, observedAt, snapshot.SourceTimeMsc, cancellationToken);
         persisted += await PersistIfChangedAsync(
-            "orders", snapshot.Orders, snapshot.ObservedAtUtcMsc, cancellationToken);
+            "orders", snapshot.Orders, observedAt, snapshot.SourceTimeMsc, cancellationToken);
         return persisted;
     }
 
@@ -298,6 +299,7 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         string stream,
         IReadOnlyList<JsonElement> values,
         long observedAt,
+        long sourceTimeMsc,
         CancellationToken cancellationToken)
     {
         var fullSnapshot = _fullSnapshots.TryRemove(stream, out _);
@@ -330,6 +332,7 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             Revision = revision,
             BaseRevision = fullSnapshot ? 0 : _revisions[stream],
             ObservedAtUtcMsc = observedAt,
+            SourceTimeMsc = sourceTimeMsc,
             FullSnapshot = fullSnapshot,
             Upserts = upserts,
             Deletes = deletes,
