@@ -14,8 +14,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly BridgeUpdateCoordinator? _updateCoordinator;
     private readonly string? _startupReadyFile;
     private readonly CancellationTokenSource _stop = new();
+    private readonly long _startedTimestamp = Stopwatch.GetTimestamp();
     private Task? _updateTask;
+    private Task? _healthTask;
     private int _startupReadyWritten;
+    private int _latestPhase = (int)BridgeApplicationPhase.Starting;
+    private int _latestTerminalCount;
     private bool _shuttingDown;
 
     public BridgeApplicationContext(
@@ -53,6 +57,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.Show();
         _logger.Info("bridge_started");
         _ = ObserveControllerAsync(_controller.RunAsync(_stop.Token));
+        _healthTask = ObserveHealthAsync(_stop.Token);
         if (_updateCoordinator is not null)
         {
             _updateTask = ObserveUpdatesAsync(_updateCoordinator, _stop.Token);
@@ -99,6 +104,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private void HandleStatusChanged(BridgeApplicationStatus status)
     {
+        Volatile.Write(ref _latestPhase, (int)status.Phase);
+        Volatile.Write(ref _latestTerminalCount, status.Terminals.Count);
         _logger.Info(
             "bridge_status_changed",
             $"phase={status.Phase}; terminals={status.Terminals.Count}; detail={status.DetailCode ?? "none"}");
@@ -225,6 +232,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
         {
             await IgnoreCancellationAsync(_updateTask);
         }
+        if (_healthTask is not null)
+        {
+            await IgnoreCancellationAsync(_healthTask);
+        }
         await _controller.DisposeAsync();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
@@ -272,6 +283,32 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
     }
 
+    private async Task ObserveHealthAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var sample = BridgeRuntimeHealthSampler.Capture(
+                        _startedTimestamp,
+                        (BridgeApplicationPhase)Volatile.Read(ref _latestPhase),
+                        Volatile.Read(ref _latestTerminalCount));
+                    _logger.Info("bridge_health_sample", BridgeRuntimeHealthSampler.Format(sample));
+                }
+                catch (Exception error)
+                {
+                    _logger.Error("bridge_health_sample_failed", error);
+                }
+                await Task.Delay(TimeSpan.FromMinutes(1), cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
     private async Task ApplyStagedUpdateAsync(
         BridgeUpdateCoordinator coordinator,
         StagedRelease staged)
@@ -291,6 +328,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _shuttingDown = true;
             _logger.Info("update_activation_prepared", $"version={staged.Version}");
             _stop.Cancel();
+            if (_healthTask is not null)
+            {
+                await IgnoreCancellationAsync(_healthTask);
+            }
             await _controller.DisposeAsync();
             _singleInstance.ActivationRequested -= HandleActivationRequested;
             _singleInstance.Dispose();
