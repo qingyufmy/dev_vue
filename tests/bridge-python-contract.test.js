@@ -38,7 +38,7 @@ describe('Python Bridge history contract', () => {
     expect(source).toContain('find_source_account_owner(CONFIG_ROOT, values["account"])')
     expect(source).toContain('"auto_start_bridge": True')
     expect(source).toContain('"mt5_portable": False')
-    expect(source).toContain('self.mt5.initialize(candidate, portable=portable)')
+    expect(source).toContain('self._mt5_call(self.mt5.initialize, candidate, portable=portable)')
     expect(source).toContain('f"{server.rstrip(\'/\')}/api/auth/me", timeout=5, token=token, parent=self')
     expect(source).toContain('def _show_observer_sources_menu(self):')
     expect(source).toContain('def _open_saved_observer_source(self, slug):')
@@ -176,6 +176,12 @@ describe('Python Bridge history contract', () => {
 
   it('serializes command and publisher access to the non-thread-safe MT5 extension', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    expect(source).toContain('ThreadPoolExecutor(')
+    expect(source).toContain('max_workers=1, thread_name_prefix="aurum-mt5"')
+    expect(source).toContain('self._mt5_call(self._import_mt5_module)')
+    expect(source).toContain('self._mt5_call(self.mt5.initialize')
+    expect(source).toContain('run_in_executor(self._mt5_executor, self._collect_mt5_data)')
+    expect(source).toContain('run_in_executor(self._mt5_executor, self._process_command, msg)')
     expect(source).toContain('self._mt5_lock = threading.RLock()')
     expect(source).toContain('with self._mt5_lock:')
     expect(source).toContain('result = self._process_command_locked(cmd)')

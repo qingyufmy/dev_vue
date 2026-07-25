@@ -17,6 +17,7 @@ from bridge_order_result import (
 )
 from bridge_order_idempotency import lookup_existing_execution
 import asyncio
+import concurrent.futures
 import threading
 import ctypes
 import ctypes.wintypes
@@ -48,7 +49,7 @@ from bridge_profile_runtime import (
     register_bridge_profile, write_profile_config, write_profile_runtime,
 )
 
-APP_VERSION = "v2.4.7"
+APP_VERSION = "v2.4.8"
 FULL_HISTORY_START = datetime(2000, 1, 1)
 APP_NAME = "AI交易实验室"
 MAX_LOG_LINES = 500
@@ -672,6 +673,8 @@ class BridgeWorker(QThread):
         self._resolved_symbol = "XAUUSD"
         self.mt5 = None
         self._ws = None
+        self._mt5_executor = None
+        self._mt5_owner_thread_id = None
         self._acc_lost_warned = False
         self._manual_mt5_path = mt5_path
         self.account_created_at = ""
@@ -706,6 +709,49 @@ class BridgeWorker(QThread):
         self._history_deals_cache = None
         self._market_observations = {}
         self._last_market_state = None
+
+    @staticmethod
+    def _import_mt5_module():
+        """Import MetaTrader5 on the same native thread that will own its IPC."""
+        import MetaTrader5 as mt5
+        return mt5
+
+    def _mt5_call(self, function, *args, **kwargs):
+        """Run every MT5 extension call on one stable native owner thread."""
+        executor = self._mt5_executor
+        if executor is None:
+            raise RuntimeError("MT5 executor is not running")
+        if threading.get_ident() == self._mt5_owner_thread_id:
+            return function(*args, **kwargs)
+        return executor.submit(self._invoke_mt5, function, args, kwargs).result()
+
+    def _invoke_mt5(self, function, args, kwargs):
+        self._mt5_owner_thread_id = threading.get_ident()
+        return function(*args, **kwargs)
+
+    def run(self):
+        # MetaTrader5 maintains process-global IPC state and isn't safe when
+        # initialize(), data reads and order commands hop between threads.
+        self._mt5_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="aurum-mt5",
+        )
+        try:
+            self._run_bridge()
+        except Exception as error:
+            self.log_signal.emit(f"桥接异常退出: {self._short_text(error, 500)}")
+            self.status_signal.emit("桥接异常", "#ef4444", "请停止后重试")
+        finally:
+            if self.mt5 is not None:
+                try:
+                    self._mt5_call(self.mt5.shutdown)
+                except Exception as error:
+                    self.log_signal.emit(f"MT5 关闭异常: {self._short_text(error, 300)}")
+            executor = self._mt5_executor
+            self._mt5_executor = None
+            self._mt5_owner_thread_id = None
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
+            self.log_signal.emit("MT5 已断开")
 
     @staticmethod
     def _token_expires_within(token, seconds=86400):
@@ -2750,7 +2796,7 @@ class BridgeWorker(QThread):
         result = sorted(found.values(), key=lambda x: (priority_order.get(x[1], 99), x[0].casefold()))
         return result
 
-    def run(self):
+    def _run_bridge(self):
         # ── 尝试探测 MT5 安装目录，加入 DLL 搜索路径 ──
         import traceback
 
@@ -2780,8 +2826,7 @@ class BridgeWorker(QThread):
 
         # Import MT5 — PyInstaller resolves all DLLs from its own bundle
         try:
-            import MetaTrader5 as mt5
-            self.mt5 = mt5
+            self.mt5 = self._mt5_call(self._import_mt5_module)
         except Exception as e:
             full_tb = traceback.format_exc().strip()
             self.log_signal.emit(f"错误: MetaTrader5 导入失败")
@@ -2806,31 +2851,30 @@ class BridgeWorker(QThread):
         for candidate in initialization_candidates:
             if candidate:
                 self.log_signal.emit(f"[探测] 尝试连接终端: {candidate}")
-                initialized = bool(self.mt5.initialize(candidate, portable=portable))
+                initialized = bool(self._mt5_call(self.mt5.initialize, candidate, portable=portable))
             else:
-                initialized = bool(self.mt5.initialize())
+                initialized = bool(self._mt5_call(self.mt5.initialize))
             if initialized:
                 terminal_path = candidate
                 break
             try:
-                self.mt5.shutdown()
+                self._mt5_call(self.mt5.shutdown)
             except Exception:
                 pass
         if not initialized:
-            self.log_signal.emit(f"MT5 初始化失败: {self.mt5.last_error()}")
+            self.log_signal.emit(f"MT5 初始化失败: {self._mt5_call(self.mt5.last_error)}")
             self.status_signal.emit("未检测到MT5", "#ef4444", "请先运行MT5并登录交易账户")
             return
 
-        info = self.mt5.account_info()
+        info = self._mt5_call(self.mt5.account_info)
         if not info:
             self.log_signal.emit("MT5 未登录，请在终端中登录账户")
             self.status_signal.emit("MT5未登录", "#ef4444", "请在MT5中登录交易账户后重试")
-            self.mt5.shutdown()
             return
 
         self.log_signal.emit(f"MT5 已连接: {info.login} @ {info.server}  余额: ${info.balance:,.2f}")
 
-        terminal = self.mt5.terminal_info()
+        terminal = self._mt5_call(self.mt5.terminal_info)
         if terminal and not terminal.trade_allowed:
             self.log_signal.emit("⚠️ 算法交易未开启：MT5 → 工具 → 选项 → EA交易 → 允许算法交易")
 
@@ -2838,7 +2882,6 @@ class BridgeWorker(QThread):
             import websockets
         except ImportError:
             self.log_signal.emit("错误: websockets 未安装")
-            self.mt5.shutdown()
             return
 
         # Check plan status before connecting
@@ -2847,7 +2890,6 @@ class BridgeWorker(QThread):
         if expired:
             self.log_signal.emit(f"❌ {reason}")
             self.plan_expired_signal.emit(reason)
-            self.mt5.shutdown()
             return
         if reason:
             self.log_signal.emit(f"⚠️ {reason}")
@@ -2857,7 +2899,7 @@ class BridgeWorker(QThread):
             self.log_signal.emit(f"账户创建时间: {self.account_created_at[:10]}")
 
         try:
-            self._resolved_symbol = self._resolve_symbol("XAUUSD")
+            self._resolved_symbol = self._mt5_call(self._resolve_symbol, "XAUUSD")
         except Exception:
             self._resolved_symbol = "XAUUSD"
 
@@ -2873,13 +2915,6 @@ class BridgeWorker(QThread):
                 self._loop = None
         except Exception as e:
             self.log_signal.emit(f"桥接异常退出: {self._short_text(e, 500)}")
-        finally:
-            if self.mt5:
-                # Never tear MT5 down while a collector or trade command still
-                # owns the extension's process-wide lock.
-                with self._mt5_lock:
-                    self.mt5.shutdown()
-            self.log_signal.emit("MT5 已断开")
 
     # ── Async core (websockets) ──────────────────────────────
 
@@ -3161,7 +3196,7 @@ class BridgeWorker(QThread):
                 # Collect MT5 data with timeout protection (asyncio.shield prevents cancel)
                 loop = asyncio.get_running_loop()
                 if mt5_future is None:
-                    mt5_future = loop.run_in_executor(None, self._collect_mt5_data)
+                    mt5_future = loop.run_in_executor(self._mt5_executor, self._collect_mt5_data)
                 try:
                     dm = await asyncio.wait_for(asyncio.shield(mt5_future), timeout=MT5_COLLECT_TIMEOUT_SEC)
                     mt5_future = None
@@ -3300,7 +3335,7 @@ class BridgeWorker(QThread):
                 self.log_signal.emit(f"执行: {action}")
                 loop = asyncio.get_running_loop()
                 try:
-                    resp = await loop.run_in_executor(None, self._process_command, msg)
+                    resp = await loop.run_in_executor(self._mt5_executor, self._process_command, msg)
                 except Exception as ce:
                     self.log_signal.emit(
                         f"命令执行器异常: {BridgeWorker._short_text(ce, 500)}"

@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import concurrent.futures
 import threading
 import unittest
 from unittest.mock import patch
@@ -127,6 +128,24 @@ def _worker(mt5):
 
 
 class BridgeManagementCommandTests(unittest.TestCase):
+    def test_mt5_calls_keep_one_native_owner_thread_and_allow_nested_helpers(self):
+        worker = BridgeWorker("http://localhost:3000", "test-token")
+        worker._mt5_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            caller_thread = threading.get_ident()
+            first_owner = worker._mt5_call(threading.get_ident)
+            second_owner = worker._mt5_call(threading.get_ident)
+            nested_owner = worker._mt5_call(
+                lambda: worker._mt5_call(threading.get_ident)
+            )
+        finally:
+            worker._mt5_executor.shutdown(wait=True)
+            worker._mt5_executor = None
+
+        self.assertNotEqual(first_owner, caller_thread)
+        self.assertEqual(second_owner, first_owner)
+        self.assertEqual(nested_owner, first_owner)
+
     def test_mt5_initialization_prefers_running_terminal_over_stale_registry(self):
         with tempfile.TemporaryDirectory() as root:
             registered = os.path.join(root, "registered")
