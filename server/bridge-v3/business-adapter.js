@@ -12,6 +12,7 @@ const TRADE_ACTIONS = new Set([
 ])
 const SUPPORTED_ACTIONS = new Set([
   ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'rates', 'symbol_snapshot', 'risk_snapshot',
+  'order_lookup',
   'toggle_trade', 'set_quote_symbol',
 ])
 const RATE_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
@@ -623,6 +624,52 @@ export function createBridgeV3BusinessAdapter({
     return legacyTradeResult(action, await gateway.sendCommand(userId, command, { timeoutMs }), params)
   }
 
+  async function executeOrderLookup(userId, route, params, timeoutMs) {
+    const symbol = String(params.symbol || '').trim()
+    const expectedKind = String(params.expected_kind || '').trim().toLowerCase()
+    const bridgeCommandRef = String(params.bridge_command_ref || params.comment || '').trim()
+    const tradeTicket = String(params.trade_ticket || '').trim()
+    const pendingTicket = String(params.pending_ticket || '').trim()
+    const ticket = String(params.ticket || '').trim()
+    const lookbackSeconds = Number(params.lookback_seconds || 172_800)
+    if (!symbol || symbol.length > 64) throw adapterError('symbol_invalid')
+    if (!['trade', 'pending'].includes(expectedKind)) throw adapterError('expected_kind_required')
+    if (!bridgeCommandRef && !tradeTicket && !pendingTicket && !ticket) {
+      throw adapterError('bridge_reference_required')
+    }
+    if (bridgeCommandRef.length > 64
+      || !Number.isSafeInteger(lookbackSeconds)
+      || lookbackSeconds < 3_600 || lookbackSeconds > 315_360_000) {
+      throw adapterError('order_lookup_params_invalid')
+    }
+    for (const value of [tradeTicket, pendingTicket, ticket]) {
+      if (value && !/^\d{1,32}$/.test(value)) throw adapterError('order_lookup_ticket_invalid')
+    }
+    const issuedAt = now()
+    const lookupTimeoutMs = Math.max(1_000, Math.min(timeoutMs, 30_000))
+    const command = {
+      v:3, type:'command', message_id:`message_${randomUUID()}`, sent_at_utc_msc:issuedAt,
+      command_id:`command_${randomUUID()}`, ...routeParams(route),
+      issued_at_utc_msc:issuedAt,
+      deadline_utc_msc:issuedAt + lookupTimeoutMs,
+      action:'query_execution',
+      params:cleanObject({ symbol, expected_kind:expectedKind,
+        bridge_command_ref:bridgeCommandRef || undefined,
+        trade_ticket:tradeTicket || undefined, pending_ticket:pendingTicket || undefined,
+        ticket:ticket || undefined, lookback_seconds:lookbackSeconds }),
+    }
+    const result = await gateway.sendCommand(userId, command, { timeoutMs:lookupTimeoutMs })
+    if (result?.status !== 'succeeded') {
+      const code = result?.error_code || result?.error || 'bridge_execution_lookup_failed'
+      return { status:result?.status === 'uncertain' ? 'uncertain' : 'error', error:code, message:code }
+    }
+    const raw = result.raw_result
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { status:'error', error:'bridge_execution_lookup_invalid', message:'bridge_execution_lookup_invalid' }
+    }
+    return { ...raw, status:'success' }
+  }
+
   async function execute(userId, action, params = {}, options = {}) {
     const timeoutMs = options.timeoutMs ?? 5_000
     if (!SUPPORTED_ACTIONS.has(action)) throw adapterError('bridge_v3_action_unsupported')
@@ -650,6 +697,7 @@ export function createBridgeV3BusinessAdapter({
         return await requestSymbolSnapshot(userId, route, params, timeoutMs)
       }
       if (action === 'risk_snapshot') return await requestRiskSnapshot(userId, route, params, timeoutMs)
+      if (action === 'order_lookup') return await executeOrderLookup(userId, route, params, timeoutMs)
       if (action === 'close_system_position' || action === 'cancel_system_pending'
         || action === 'modify_system_position_protection') {
         const prepared = await prepareSystemManagement(route, action, params)

@@ -175,6 +175,25 @@ describe('Bridge v3 business compatibility adapter', () => {
     expect(gateway.requestData).not.toHaveBeenCalled()
   })
 
+  it('maps order reconciliation to a durable query_execution command', async () => {
+    const { adapter, gateway } = setup({ commandResult:{
+      status:'succeeded', command_id:'command_01JLOOKUP01',
+      raw_result:{ found:true, kind:'trade', ticket:501, position_id:501,
+        symbol:'XAUUSD', lookback_seconds:3600 },
+      evidence:{ observed_at_utc_msc:NOW, position_tickets:['501'] },
+    } })
+    await expect(adapter.execute(42, 'order_lookup', {
+      symbol:'XAUUSD', expected_kind:'trade', bridge_command_ref:'intent:abc',
+      trade_ticket:'999', lookback_seconds:3600,
+    })).resolves.toMatchObject({
+      status:'success', found:true, kind:'trade', position_id:501,
+    })
+    expect(gateway.sendCommand).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'query_execution', params:{ symbol:'XAUUSD', expected_kind:'trade',
+        bridge_command_ref:'intent:abc', trade_ticket:'999', lookback_seconds:3600 },
+    }), { timeoutMs:5000 })
+  })
+
   it('derives a versioned market state from a fresh transient quote', async () => {
     const { adapter } = setup({ quote:{
       status:'succeeded', symbol:'XAUUSD', bid:2300, ask:2300.2,

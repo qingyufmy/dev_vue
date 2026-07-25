@@ -59,6 +59,7 @@ class FakeMt5:
     def positions_get(self, **kwargs): return ()
     def orders_get(self, **kwargs): return ()
     def history_deals_get(self, *args): return ()
+    def history_orders_get(self, *args): return ()
     def symbol_info_tick(self, symbol): return Tick(2300.0, 2300.2)
     def symbol_info(self, symbol): return SimpleNamespace(trade_mode=4)
     def symbol_select(self, symbol, enabled): return True
@@ -282,6 +283,24 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("utc_direct", snapshot["clock_status"])
         self.assertEqual(0, adapter.mt5.calculations[0][1])
         self.assertEqual(100.0, snapshot["broker_calculation"]["loss_to_sl"])
+
+    def test_query_execution_matches_exact_durable_comment(self):
+        adapter = self.adapter()
+        adapter.mt5.positions_get = lambda **kwargs: (
+            SimpleNamespace(ticket=501, position_id=501, symbol="XAUUSD", magic=234000,
+                            comment="intent:abc"),
+            SimpleNamespace(ticket=999, position_id=999, symbol="XAUUSD", magic=234000,
+                            comment="intent:other"),
+        )
+        result = adapter.execute(self.command(
+            command_id="command_01JWORKER_LOOKUP", action="query_execution",
+            params={"symbol": "XAUUSD", "expected_kind": "trade",
+                    "bridge_command_ref": "intent:abc", "trade_ticket": "999",
+                    "lookback_seconds": 3600}))
+        self.assertEqual("succeeded", result["status"])
+        self.assertTrue(result["raw_result"]["found"])
+        self.assertEqual(501, result["raw_result"]["position_id"])
+        self.assertEqual(["501"], result["evidence"]["position_tickets"])
 
     def test_probe_returns_read_only_account_identity(self):
         result = worker.probe(FakeMt5(), __file__)

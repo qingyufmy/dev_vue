@@ -816,31 +816,126 @@ class Mt5Adapter:
             raise WorkerError("management_direction_mismatch")
 
     def _query_execution(self, command: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
-        order_tickets: list[str] = []
-        position_tickets: list[str] = []
-        deal_tickets: list[str] = []
-        ticket = params.get("ticket")
-        if ticket is not None:
-            order_tickets.extend(str(item.ticket) for item in (self.mt5.orders_get(ticket=int(ticket)) or ()))
-            position_tickets.extend(str(item.ticket) for item in (self.mt5.positions_get(ticket=int(ticket)) or ()))
-        from_time = int(params.get("from_time") or (time.time() - 7 * 86400))
-        to_time = int(params.get("to_time") or time.time())
-        deals = self.mt5.history_deals_get(
-            datetime.fromtimestamp(from_time, timezone.utc),
-            datetime.fromtimestamp(to_time, timezone.utc),
-        ) or ()
-        expected_position = str(params.get("position_ticket") or "")
-        expected_order = str(params.get("order_ticket") or ticket or "")
-        for deal in deals:
-            if (expected_position and str(getattr(deal, "position_id", "")) == expected_position) or (
-                expected_order and str(getattr(deal, "order", "")) == expected_order
-            ):
-                deal_tickets.append(str(deal.ticket))
-        return self._result(command, "succeeded", raw_result={"query": "completed"}, evidence={
-            "order_tickets": order_tickets,
-            "position_tickets": position_tickets,
-            "deal_tickets": deal_tickets,
-        })
+        expected_kind = str(params.get("expected_kind") or "").strip().lower()
+        symbol = str(params.get("symbol") or "").strip()
+        command_ref = str(params.get("bridge_command_ref") or params.get("comment") or "").strip()
+        if expected_kind not in {"trade", "pending"}:
+            raise WorkerError("expected_kind_required")
+        if not symbol or len(symbol) > 64:
+            raise WorkerError("symbol_invalid")
+        expected_tickets = {str(params.get(key) or "").strip()
+                            for key in ("trade_ticket", "pending_ticket", "ticket")}
+        expected_tickets.discard("")
+        if not command_ref and not expected_tickets:
+            raise WorkerError("bridge_reference_required")
+        try:
+            lookback_seconds = int(params.get("lookback_seconds") or 172_800)
+        except (TypeError, ValueError) as error:
+            raise WorkerError("order_lookup_params_invalid") from error
+        if lookback_seconds < 3_600 or lookback_seconds > 315_360_000:
+            raise WorkerError("order_lookup_params_invalid")
+
+        def matches(row: Any) -> bool:
+            if str(getattr(row, "symbol", "") or "").strip() != symbol:
+                return False
+            if int(getattr(row, "magic", 0) or 0) != 234000:
+                return False
+            if command_ref:
+                return str(getattr(row, "comment", "") or "").strip() == command_ref
+            row_tickets = {str(getattr(row, field, "") or "").strip()
+                           for field in ("ticket", "order", "position_id")}
+            row_tickets.discard("")
+            return bool(row_tickets & expected_tickets)
+
+        def active_pending(row: Any) -> dict[str, Any]:
+            ticket = getattr(row, "ticket", None) or getattr(row, "order", None)
+            return {"found": True, "kind": "pending", "ticket": ticket, "order": ticket,
+                    "symbol": symbol, "comment": str(getattr(row, "comment", "") or "").strip(),
+                    "pending_state": "pending", "lookback_seconds": lookback_seconds}
+
+        def active_trade(row: Any) -> dict[str, Any]:
+            position_id = getattr(row, "ticket", None) or getattr(row, "position_id", None)
+            return {"found": True, "kind": "trade", "ticket": position_id,
+                    "position_id": position_id, "symbol": symbol,
+                    "comment": str(getattr(row, "comment", "") or "").strip(),
+                    "lookback_seconds": lookback_seconds}
+
+        def historical_order(row: Any) -> dict[str, Any]:
+            order_ticket = getattr(row, "ticket", None) or getattr(row, "order", None)
+            position_id = getattr(row, "position_id", None) or None
+            state = int(getattr(row, "state", -1) if getattr(row, "state", None) is not None else -1)
+            kind = expected_kind
+            result = {"found": True, "kind": kind,
+                      "ticket": order_ticket if kind == "pending" else (position_id or order_ticket),
+                      "order": order_ticket, "position_id": position_id, "symbol": symbol,
+                      "comment": str(getattr(row, "comment", "") or "").strip(),
+                      "order_state": state, "lookback_seconds": lookback_seconds}
+            if state == int(getattr(self.mt5, "ORDER_STATE_REJECTED", 5)):
+                result.update({"kind": "rejected", "final_state": "rejected"})
+            elif kind == "pending":
+                states = {
+                    int(getattr(self.mt5, "ORDER_STATE_FILLED", 4)): "filled",
+                    int(getattr(self.mt5, "ORDER_STATE_PARTIAL", 3)): "partially_filled",
+                    int(getattr(self.mt5, "ORDER_STATE_CANCELED", 2)): "cancelled",
+                    int(getattr(self.mt5, "ORDER_STATE_EXPIRED", 6)): "expired",
+                }
+                result["pending_state"] = states.get(state, "pending")
+            return result
+
+        def historical_deal(row: Any) -> dict[str, Any]:
+            order_ticket = getattr(row, "order", None) or getattr(row, "ticket", None)
+            position_id = getattr(row, "position_id", None) or None
+            result = {"found": True, "kind": expected_kind,
+                      "ticket": order_ticket if expected_kind == "pending" else (position_id or order_ticket),
+                      "order": order_ticket, "position_id": position_id,
+                      "deal": getattr(row, "ticket", None), "symbol": symbol,
+                      "comment": str(getattr(row, "comment", "") or "").strip(),
+                      "lookback_seconds": lookback_seconds}
+            if expected_kind == "pending":
+                result["pending_state"] = "filled"
+            return result
+
+        date_to = datetime.now(timezone.utc) + timedelta(minutes=5)
+        date_from = date_to - timedelta(seconds=lookback_seconds)
+        if expected_kind == "pending":
+            active = self.mt5.orders_get(symbol=symbol)
+            if active is None:
+                raise WorkerError("orders_query_failed")
+            found = next((active_pending(row) for row in active if matches(row)), None)
+            if found is None:
+                history_orders = self.mt5.history_orders_get(date_from, date_to)
+                if history_orders is None:
+                    raise WorkerError("history_orders_query_failed")
+                found = next((historical_order(row) for row in reversed(history_orders) if matches(row)), None)
+            if found is None:
+                history_deals = self.mt5.history_deals_get(date_from, date_to)
+                if history_deals is None:
+                    raise WorkerError("history_deals_query_failed")
+                found = next((historical_deal(row) for row in reversed(history_deals) if matches(row)), None)
+        else:
+            active = self.mt5.positions_get(symbol=symbol)
+            if active is None:
+                raise WorkerError("positions_query_failed")
+            found = next((active_trade(row) for row in active if matches(row)), None)
+            if found is None:
+                history_deals = self.mt5.history_deals_get(date_from, date_to)
+                if history_deals is None:
+                    raise WorkerError("history_deals_query_failed")
+                found = next((historical_deal(row) for row in reversed(history_deals) if matches(row)), None)
+            if found is None:
+                history_orders = self.mt5.history_orders_get(date_from, date_to)
+                if history_orders is None:
+                    raise WorkerError("history_orders_query_failed")
+                found = next((historical_order(row) for row in reversed(history_orders) if matches(row)), None)
+        lookup = found or {"found": False, "complete": True, "lookback_seconds": lookback_seconds}
+        evidence = {"order_tickets": [], "position_tickets": [], "deal_tickets": []}
+        if lookup.get("order"):
+            evidence["order_tickets"] = [str(lookup["order"])]
+        if lookup.get("position_id"):
+            evidence["position_tickets"] = [str(lookup["position_id"])]
+        if lookup.get("deal"):
+            evidence["deal_tickets"] = [str(lookup["deal"])]
+        return self._result(command, "succeeded", raw_result=lookup, evidence=evidence)
 
     def _send_order(self, command: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
         result = self.mt5.order_send(request)
