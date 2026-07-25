@@ -57,6 +57,28 @@ public sealed class ReleaseUpdateTests
     }
 
     [TestMethod]
+    public async Task FetchesAndVerifiesTheServerManifestBeforeReturningIt()
+    {
+        using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var unsigned = Manifest("00" + new string('a', 62), 100, string.Empty);
+        var signed = unsigned with
+        {
+            Signature = Convert.ToBase64String(signingKey.SignData(
+                Encoding.UTF8.GetBytes(ReleaseManifestVerifier.Canonicalize(unsigned)),
+                HashAlgorithmName.SHA256)),
+        };
+        using var http = new HttpClient(new StaticResponseHandler(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(signed))));
+        using var verifier = new ReleaseManifestVerifier(signingKey.ExportSubjectPublicKeyInfoPem());
+        var client = new ReleaseManifestClient(new Uri("https://www.cnfxtrade.com"), http);
+
+        var fetched = await client.FetchVerifiedAsync(verifier, new Version(1, 0, 0));
+
+        Assert.IsNotNull(fetched);
+        Assert.AreEqual("3.1.0", fetched.ReleaseVersion);
+    }
+
+    [TestMethod]
     public void RejectsZipTraversalBeforeExtractingAnyFile()
     {
         var package = Path.Combine(_directory, "malicious.zip");
