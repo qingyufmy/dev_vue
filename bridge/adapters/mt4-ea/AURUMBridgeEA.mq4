@@ -23,6 +23,7 @@ input string InpPipeName = "AURUMBridgeV3";
 #define ACTION_MODIFY    3
 #define ACTION_CLOSE     4
 #define ACTION_QUERY     5
+#define ACTION_MODIFY_POSITION 6
 #define SIDE_NONE        0
 #define SIDE_BUY         1
 #define SIDE_SELL        2
@@ -223,6 +224,8 @@ void ExecuteCommand(uchar &payload[], int &offset)
    int deviation = ReadInt32(payload, offset);
    int magic = ReadInt32(payload, offset);
    long expiration = ReadInt64(payload, offset);
+   string expected_stop_loss_value = ReadUtf8(payload, offset);
+   string expected_take_profit_value = ReadUtf8(payload, offset);
    if(command_id == "" || terminal_id != g_terminal_id
       || StringCompare(broker_server, AccountServer(), false) != 0
       || login != IntegerToString(AccountNumber())
@@ -262,6 +265,13 @@ void ExecuteCommand(uchar &payload[], int &offset)
    if(action == ACTION_CLOSE)
      {
       ExecuteClose(command_id, (int)ticket_value, symbol, side, volume, deviation, magic);
+      return;
+     }
+   if(action == ACTION_MODIFY_POSITION)
+     {
+      ExecuteModifyPosition(command_id, (int)ticket_value, symbol, side, volume,
+         stop_loss_value, take_profit_value, expected_stop_loss_value,
+         expected_take_profit_value, magic);
       return;
      }
    if(action == ACTION_QUERY)
@@ -438,6 +448,118 @@ void ExecuteClose(const string command_id, const int ticket, const string expect
       SendCommandResult(command_id, 1, "", "", 0, ticket);
    else
       SendTradeFailure(command_id, "mt4_order_close_failed");
+  }
+
+void ExecuteModifyPosition(const string command_id, const int ticket,
+   const string expected_symbol, const int expected_side, const double expected_volume,
+   const string stop_loss_value, const string take_profit_value,
+   const string expected_stop_loss_value, const string expected_take_profit_value,
+   const int expected_magic)
+  {
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES) || OrderCloseTime() > 0)
+     {
+      SendCommandResult(command_id, 2, "system_position_not_found", "", 0, ticket);
+      return;
+     }
+   int order_type = OrderType();
+   if(order_type != OP_BUY && order_type != OP_SELL)
+     {
+      SendCommandResult(command_id, 2, "system_position_not_found", "", 0, ticket);
+      return;
+     }
+   int actual_side = order_type == OP_BUY ? SIDE_BUY : SIDE_SELL;
+   if(OrderSymbol() != expected_symbol)
+     {
+      SendCommandResult(command_id, 2, "management_symbol_mismatch", "", 0, ticket);
+      return;
+     }
+   if(actual_side != expected_side)
+     {
+      SendCommandResult(command_id, 2, "management_direction_mismatch", "", 0, ticket);
+      return;
+     }
+   if(OrderMagicNumber() != expected_magic)
+     {
+      SendCommandResult(command_id, 2, "management_magic_mismatch", "", 0, ticket);
+      return;
+     }
+   if(MathAbs(OrderLots() - expected_volume) > 0.00000001)
+     {
+      SendCommandResult(command_id, 2, "management_volume_mismatch", "", 0, ticket);
+      return;
+     }
+   double point = MarketInfo(OrderSymbol(), MODE_POINT);
+   double tolerance = MathMax(point / 2.0, 0.00000001);
+   if(expected_stop_loss_value != ""
+      && MathAbs(OrderStopLoss() - StrToDouble(expected_stop_loss_value)) > tolerance)
+     {
+      SendCommandResult(command_id, 2, "position_stop_loss_changed", "", 0, ticket);
+      return;
+     }
+   if(expected_take_profit_value != ""
+      && MathAbs(OrderTakeProfit() - StrToDouble(expected_take_profit_value)) > tolerance)
+     {
+      SendCommandResult(command_id, 2, "position_take_profit_changed", "", 0, ticket);
+      return;
+     }
+   if(stop_loss_value == "" && take_profit_value == "")
+     {
+      SendCommandResult(command_id, 2, "protection_price_required", "", 0, ticket);
+      return;
+     }
+   int digits = (int)MarketInfo(OrderSymbol(), MODE_DIGITS);
+   double next_sl = stop_loss_value == "" ? OrderStopLoss()
+      : NormalizeDouble(StrToDouble(stop_loss_value), digits);
+   double next_tp = take_profit_value == "" ? OrderTakeProfit()
+      : NormalizeDouble(StrToDouble(take_profit_value), digits);
+   if((stop_loss_value != "" && next_sl <= 0) || (take_profit_value != "" && next_tp <= 0))
+     {
+      SendCommandResult(command_id, 2, "protection_price_invalid", "", 0, ticket);
+      return;
+     }
+   RefreshRates();
+   double bid = MarketInfo(OrderSymbol(), MODE_BID);
+   double ask = MarketInfo(OrderSymbol(), MODE_ASK);
+   int min_points = (int)MathMax(MarketInfo(OrderSymbol(), MODE_STOPLEVEL),
+      MarketInfo(OrderSymbol(), MODE_FREEZELEVEL));
+   double min_distance = min_points * point;
+   if(stop_loss_value != "")
+     {
+      bool valid_sl = order_type == OP_BUY ? next_sl < bid - min_distance : next_sl > ask + min_distance;
+      if(!valid_sl)
+        {
+         SendCommandResult(command_id, 2, "stop_loss_direction_or_distance_invalid", "", 0, ticket);
+         return;
+        }
+     }
+   if(take_profit_value != "")
+     {
+      bool valid_tp = order_type == OP_BUY ? next_tp > ask + min_distance : next_tp < bid - min_distance;
+      if(!valid_tp)
+        {
+         SendCommandResult(command_id, 2, "take_profit_direction_or_distance_invalid", "", 0, ticket);
+         return;
+        }
+     }
+   if(MathAbs(OrderStopLoss() - next_sl) <= tolerance
+      && MathAbs(OrderTakeProfit() - next_tp) <= tolerance)
+     {
+      SendCommandResult(command_id, 1, "", "already_applied", 0, ticket);
+      return;
+     }
+   if(!OrderModify(ticket, OrderOpenPrice(), next_sl, next_tp, 0, clrNONE))
+     {
+      SendTradeFailure(command_id, "mt4_position_modify_failed");
+      return;
+     }
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)
+      || MathAbs(OrderStopLoss() - next_sl) > tolerance
+      || MathAbs(OrderTakeProfit() - next_tp) > tolerance)
+     {
+      SendCommandResult(command_id, 3, "position_protection_verify_failed", "", GetLastError(), ticket);
+      return;
+     }
+   SendCommandResult(command_id, 1, "", "", 0, ticket);
   }
 
 void ExecuteQuery(const string command_id, const int ticket)

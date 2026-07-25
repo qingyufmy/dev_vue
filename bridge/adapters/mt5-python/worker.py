@@ -137,6 +137,8 @@ class Mt5Adapter:
                 result = self._cancel_order(command, params)
             elif action == "modify_order":
                 result = self._modify_order(command, params)
+            elif action == "modify_position":
+                result = self._modify_position(command, params)
             elif action == "close_position":
                 result = self._close_position(command, params)
             elif action == "query_execution":
@@ -256,6 +258,114 @@ class Mt5Adapter:
         if params.get("expiration") is not None:
             request["expiration"] = int(params["expiration"])
         return self._send_order(command, request)
+
+    def _modify_position(self, command: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
+        ticket = int(self._required_text(params, "ticket"))
+        positions = self.mt5.positions_get(ticket=ticket)
+        if positions is None:
+            raise WorkerError("positions_query_failed")
+        if len(positions) != 1:
+            raise WorkerError("system_position_not_found")
+        position = positions[0]
+        expected = params.get("expected_state")
+        if not isinstance(expected, dict):
+            raise WorkerError("management_expected_state_required")
+        self._validate_management_target(expected, position, "position")
+
+        info = self.mt5.symbol_info(position.symbol)
+        tick = self.mt5.symbol_info_tick(position.symbol)
+        if info is None or tick is None:
+            raise WorkerError("position_symbol_quote_unavailable")
+        point = float(getattr(info, "point", 0) or 0)
+        tick_size = float(getattr(info, "trade_tick_size", 0) or point or 0.00000001)
+        digits = max(0, int(getattr(info, "digits", 0) or 0))
+        tolerance = max(point / 2.0, tick_size / 2.0, 0.00000001)
+        for field, actual, code in (
+            ("stop_loss", float(position.sl or 0), "position_stop_loss_changed"),
+            ("take_profit", float(position.tp or 0), "position_take_profit_changed"),
+        ):
+            if expected.get(field) is None:
+                continue
+            try:
+                expected_value = float(expected[field])
+            except (TypeError, ValueError) as error:
+                raise WorkerError(f"position_expected_{field}_invalid") from error
+            if not math.isfinite(expected_value) or expected_value < 0:
+                raise WorkerError(f"position_expected_{field}_invalid")
+            if abs(actual - expected_value) > tolerance:
+                raise WorkerError(code)
+
+        requested_sl = params.get("stop_loss")
+        requested_tp = params.get("take_profit")
+        if requested_sl is None and requested_tp is None:
+            raise WorkerError("protection_price_required")
+
+        def normalize(value: Any, current: Any) -> float:
+            if value is None:
+                return float(current or 0)
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as error:
+                raise WorkerError("protection_price_invalid") from error
+            if not math.isfinite(number) or number <= 0:
+                raise WorkerError("protection_price_invalid")
+            normalized = round(round(number / tick_size) * tick_size, digits)
+            if normalized <= 0:
+                raise WorkerError("protection_price_invalid")
+            return normalized
+
+        next_sl = normalize(requested_sl, position.sl)
+        next_tp = normalize(requested_tp, position.tp)
+        min_points = max(int(getattr(info, "trade_stops_level", 0) or 0),
+                         int(getattr(info, "trade_freeze_level", 0) or 0))
+        min_distance = min_points * point
+        is_buy = int(position.type) == int(self.mt5.POSITION_TYPE_BUY)
+        if requested_sl is not None:
+            valid = next_sl < float(tick.bid) - min_distance if is_buy else next_sl > float(tick.ask) + min_distance
+            if not valid:
+                raise WorkerError("stop_loss_direction_or_distance_invalid")
+        if requested_tp is not None:
+            valid = next_tp > float(tick.ask) + min_distance if is_buy else next_tp < float(tick.bid) - min_distance
+            if not valid:
+                raise WorkerError("take_profit_direction_or_distance_invalid")
+
+        if abs(float(position.sl or 0) - next_sl) <= tolerance \
+                and abs(float(position.tp or 0) - next_tp) <= tolerance:
+            return self._result(command, "succeeded", raw_result={
+                "position": ticket, "stop_loss": next_sl, "take_profit": next_tp,
+                "already_applied": True,
+            }, evidence={"position_tickets": [str(ticket)]})
+
+        result = self.mt5.order_send({
+            "action": self.mt5.TRADE_ACTION_SLTP,
+            "position": ticket,
+            "symbol": position.symbol,
+            "sl": next_sl,
+            "tp": next_tp,
+            "magic": int(params.get("magic") or 234000),
+        })
+        verified = self.mt5.positions_get(ticket=ticket)
+        if verified is None:
+            return self._result(command, "uncertain", "position_protection_verify_failed",
+                                raw_result={"stop_loss": next_sl, "take_profit": next_tp})
+        if len(verified) != 1:
+            return self._result(command, "rejected", "position_closed_during_protection_update")
+        current = verified[0]
+        applied = abs(float(current.sl or 0) - next_sl) <= tolerance \
+            and abs(float(current.tp or 0) - next_tp) <= tolerance
+        retcode = int(getattr(result, "retcode", -1)) if result is not None else -1
+        if applied:
+            return self._result(command, "succeeded", raw_result={
+                "position": ticket,
+                "stop_loss": float(current.sl or 0),
+                "take_profit": float(current.tp or 0),
+                "retcode": retcode,
+            }, evidence={"position_tickets": [str(ticket)], "broker_retcode": retcode})
+        return self._result(command, "rejected", "position_protection_not_applied",
+                            getattr(result, "comment", None) if result is not None else None,
+                            raw_result={"stop_loss": float(current.sl or 0),
+                                        "take_profit": float(current.tp or 0), "retcode": retcode},
+                            evidence={"position_tickets": [str(ticket)], "broker_retcode": retcode})
 
     def _close_position(self, command: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         ticket = int(self._required_text(params, "ticket"))

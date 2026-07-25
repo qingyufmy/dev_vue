@@ -97,6 +97,31 @@ public sealed class Mt4PipeProtocolTests
     }
 
     [TestMethod]
+    public void PositionProtectionGuardFieldsRoundTripToMt4Ea()
+    {
+        var command = Command("modify_position", new
+        {
+            ticket = "10",
+            symbol = "XAUUSD",
+            side = "buy",
+            volume = 0.1,
+            magic = 234000,
+            stop_loss = 2295.0,
+            take_profit = 2320.0,
+            expected_stop_loss = 2290.0,
+            expected_take_profit = 2320.0,
+        });
+
+        var local = Mt4PipeProtocol.CreateTradeCommand(command);
+        var decoded = Mt4PipeProtocol.DecodeCommand(Mt4PipeProtocol.EncodeCommand(local));
+
+        Assert.AreEqual(Mt4TradeAction.ModifyPosition, decoded.Action);
+        Assert.AreEqual(2295.0, decoded.StopLoss);
+        Assert.AreEqual(2290.0, decoded.ExpectedStopLoss);
+        Assert.AreEqual(2320.0, decoded.ExpectedTakeProfit);
+    }
+
+    [TestMethod]
     public void QuoteRequestAndResponseRoundTripWithStrictRoute()
     {
         var request = Mt4PipeProtocol.CreateQuoteRequest(QuoteRequest());

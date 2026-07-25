@@ -26,6 +26,7 @@ class FakeMt5:
     TRADE_ACTION_PENDING = 5
     TRADE_ACTION_MODIFY = 7
     TRADE_ACTION_REMOVE = 8
+    TRADE_ACTION_SLTP = 6
     ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
     ORDER_TYPE_BUY_LIMIT = 2
@@ -137,6 +138,46 @@ class WorkerTests(unittest.TestCase):
         ))
         self.assertEqual("succeeded", result["status"])
         self.assertTrue(result["raw_result"]["already_absent"])
+        self.assertEqual([], adapter.mt5.sent)
+
+    def test_modify_position_revalidates_and_verifies_protection(self):
+        adapter = self.adapter()
+        before = SimpleNamespace(ticket=10, symbol="XAUUSD", type=0, volume=0.1,
+                                 magic=234000, sl=2290.0, tp=2320.0)
+        after = SimpleNamespace(ticket=10, symbol="XAUUSD", type=0, volume=0.1,
+                                magic=234000, sl=2295.0, tp=2320.0)
+        adapter.mt5.positions_get = lambda **kwargs: (after if adapter.mt5.sent else before,)
+        adapter.mt5.symbol_info = lambda symbol: SimpleNamespace(
+            point=0.01, trade_tick_size=0.01, digits=2,
+            trade_stops_level=10, trade_freeze_level=0)
+        expected = {
+            "ticket": "10", "symbol": "XAUUSD", "direction": "buy", "volume": 0.1,
+            "magic": 234000, "stop_loss": 2290.0, "take_profit": 2320.0,
+        }
+        result = adapter.execute(self.command(action="modify_position", params={
+            "ticket": "10", "stop_loss": 2295.0, "take_profit": None,
+            "magic": 234000, "expected_state": expected,
+        }))
+        self.assertEqual("succeeded", result["status"])
+        self.assertEqual(2295.0, result["raw_result"]["stop_loss"])
+        self.assertEqual(6, adapter.mt5.sent[0]["action"])
+
+    def test_modify_position_rejects_changed_protection_without_send(self):
+        adapter = self.adapter()
+        current = SimpleNamespace(ticket=10, symbol="XAUUSD", type=0, volume=0.1,
+                                  magic=234000, sl=2291.0, tp=2320.0)
+        adapter.mt5.positions_get = lambda **kwargs: (current,)
+        adapter.mt5.symbol_info = lambda symbol: SimpleNamespace(
+            point=0.01, trade_tick_size=0.01, digits=2,
+            trade_stops_level=10, trade_freeze_level=0)
+        result = adapter.execute(self.command(action="modify_position", params={
+            "ticket": "10", "stop_loss": 2295.0,
+            "expected_state": {"ticket": "10", "symbol": "XAUUSD", "direction": "buy",
+                               "volume": 0.1, "magic": 234000,
+                               "stop_loss": 2290.0, "take_profit": 2320.0},
+        }))
+        self.assertEqual("rejected", result["status"])
+        self.assertEqual("position_stop_loss_changed", result["error_code"])
         self.assertEqual([], adapter.mt5.sent)
 
     def test_returns_transient_quote_for_matching_route(self):

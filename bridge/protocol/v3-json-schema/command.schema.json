@@ -32,7 +32,7 @@
     "issued_at_utc_msc": { "type": "integer", "minimum": 1 },
     "deadline_utc_msc": { "type": "integer", "minimum": 1 },
     "action": {
-      "enum": ["place_order", "cancel_order", "modify_order", "close_position", "query_execution"]
+      "enum": ["place_order", "cancel_order", "modify_order", "modify_position", "close_position", "query_execution"]
     },
     "params": { "type": "object" }
   },

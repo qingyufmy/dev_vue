@@ -275,6 +275,59 @@ describe('Bridge v3 business compatibility adapter', () => {
     expect(gateway.sendCommand).not.toHaveBeenCalled()
   })
 
+  it('maps guarded system protection changes to the dedicated position action', async () => {
+    const { adapter, gateway } = setup({ positionRows:[{
+      ticket:10, symbol:'XAUUSD', type:0, volume:0.1, magic:234000, sl:2290, tp:2320,
+    }] })
+    const expectedState = {
+      ticket:'10', symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.1,
+      stop_loss:2290, take_profit:2320,
+    }
+
+    const result = await adapter.execute(42, 'modify_system_position_protection', {
+      ticket:'10', operation_id:'protect-op-1', stop_loss:2295, take_profit:null,
+      expected_state:expectedState,
+    })
+
+    expect(result).toMatchObject({ status:'success', stop_loss:2295, take_profit:2320 })
+    expect(gateway.sendCommand).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'modify_position',
+      params:{
+        ticket:'10', symbol:'XAUUSD', side:'buy', volume:0.1, magic:234000,
+        stop_loss:2295, take_profit:null, expected_stop_loss:2290,
+        expected_take_profit:2320, expected_state:expectedState,
+      },
+    }), { timeoutMs:5000 })
+  })
+
+  it('rejects a protection update when the current stop loss changed', async () => {
+    const { adapter, gateway } = setup({ positionRows:[{
+      ticket:10, symbol:'XAUUSD', type:0, volume:0.1, magic:234000, sl:2291, tp:2320,
+    }] })
+
+    await expect(adapter.execute(42, 'modify_system_position_protection', {
+      ticket:'10', stop_loss:2295,
+      expected_state:{
+        ticket:'10', symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.1,
+        stop_loss:2290, take_profit:2320,
+      },
+    })).resolves.toMatchObject({ status:'rejected', error:'position_stop_loss_changed' })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('rejects protection updates when the system position no longer exists', async () => {
+    const { adapter, gateway } = setup({ positionRows:[] })
+
+    await expect(adapter.execute(42, 'modify_system_position_protection', {
+      ticket:'10', stop_loss:2295,
+      expected_state:{
+        ticket:'10', symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.1,
+        stop_loss:2290, take_profit:2320,
+      },
+    })).resolves.toMatchObject({ status:'rejected', error:'system_position_not_found' })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
+  })
+
   it('applies the local trade switch without sending a terminal trade command', async () => {
     const { adapter, gateway } = setup()
 

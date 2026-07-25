@@ -105,7 +105,8 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
                 BrokerRetcode = localResult.BrokerRetcode,
                 OrderTickets = command.Action is "place_order" or "cancel_order" or "modify_order"
                     && ticket is not null ? [ticket] : [],
-                PositionTickets = command.Action is "close_position" && ticket is not null ? [ticket] : [],
+                PositionTickets = command.Action is "close_position" or "modify_position"
+                    && ticket is not null ? [ticket] : [],
             },
         };
     }

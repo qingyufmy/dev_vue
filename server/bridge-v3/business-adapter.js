@@ -6,6 +6,7 @@ const SYSTEM_MAGIC = 234000
 const READ_ACTIONS = new Set(['account', 'positions', 'pending_list', 'system_trade_inventory'])
 const TRADE_ACTIONS = new Set([
   'open', 'pending', 'close', 'cancel_pending', 'close_system_position', 'cancel_system_pending',
+  'modify_system_position_protection',
 ])
 const SUPPORTED_ACTIONS = new Set([
   ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'toggle_trade', 'set_quote_symbol',
@@ -148,6 +149,21 @@ function tradeParams(action, params) {
       expected_state:params.expected_state,
     })
   }
+  if (action === 'modify_system_position_protection') {
+    const expected = params.expected_state || {}
+    return cleanObject({
+      ticket:params.ticket,
+      symbol:expected.symbol,
+      side:expected.direction,
+      volume:expected.volume,
+      magic:SYSTEM_MAGIC,
+      stop_loss:params.stop_loss,
+      take_profit:params.take_profit,
+      expected_stop_loss:expected.stop_loss,
+      expected_take_profit:expected.take_profit,
+      expected_state:params.expected_state,
+    })
+  }
   const expected = params.expected_state || {}
   return cleanObject({
     ticket:params.ticket,
@@ -162,7 +178,7 @@ function tradeParams(action, params) {
 function v3Action(action) {
   return ({ open:'place_order', pending:'place_order', close:'close_position',
     cancel_pending:'cancel_order', close_system_position:'close_position',
-    cancel_system_pending:'cancel_order' })[action]
+    cancel_system_pending:'cancel_order', modify_system_position_protection:'modify_position' })[action]
 }
 
 function commandId(userId, route, action, params) {
@@ -174,7 +190,7 @@ function commandId(userId, route, action, params) {
   return `command_${hash}`
 }
 
-function legacyTradeResult(action, result) {
+function legacyTradeResult(action, result, params = {}) {
   if (result?.status === 'queued') {
     return { status:'error', error:result.error || 'bridge_command_queued', message:result.error || 'bridge_command_queued' }
   }
@@ -190,11 +206,18 @@ function legacyTradeResult(action, result) {
   const ticket = action === 'open' ? positionTicket : orderTicket ?? positionTicket
   const retcode = evidence.broker_retcode ?? raw.broker_retcode ?? raw.retcode ?? null
   if (result?.status === 'succeeded') {
+    const expected = params.expected_state || {}
     return cleanObject({
       status:'success', command_id:result.command_id, ticket,
       order:orderTicket, position_id:positionTicket, deal:dealTicket,
       price:raw.price, retcode,
       already_absent:raw.already_absent === true || result?.error_message === 'already_absent'
+        ? true : undefined,
+      stop_loss:action === 'modify_system_position_protection'
+        ? Number(raw.stop_loss ?? params.stop_loss ?? expected.stop_loss ?? 0) : undefined,
+      take_profit:action === 'modify_system_position_protection'
+        ? Number(raw.take_profit ?? params.take_profit ?? expected.take_profit ?? 0) : undefined,
+      already_applied:raw.already_applied === true || result?.error_message === 'already_applied'
         ? true : undefined,
     })
   }
@@ -251,6 +274,21 @@ function managementPreconditionError(expected, target, kind, route) {
   if (Math.abs(Number(expected.volume) - Number(target.volume)) > 1e-8) return 'management_volume_mismatch'
   if (String(expected.direction).trim().toLowerCase() !== targetDirection(target, kind)) {
     return 'management_direction_mismatch'
+  }
+  return null
+}
+
+function protectionPreconditionError(expected, target) {
+  for (const [field, code] of [
+    ['stop_loss', 'position_expected_stop_loss_invalid'],
+    ['take_profit', 'position_expected_take_profit_invalid'],
+  ]) {
+    if (expected[field] == null) continue
+    const value = Number(expected[field])
+    if (!Number.isFinite(value) || value < 0) return code
+    if (Math.abs(Number(target[field === 'stop_loss' ? 'sl' : 'tp'] || 0) - value) > 1e-8) {
+      return field === 'stop_loss' ? 'position_stop_loss_changed' : 'position_take_profit_changed'
+    }
   }
   return null
 }
@@ -341,11 +379,14 @@ export function createBridgeV3BusinessAdapter({
     const expected = params.expected_state
     const requiredError = requiredExpectedStateError(expected)
     if (requiredError) return { result:rejectedManagementResult(requiredError, params.ticket) }
-    const kind = action === 'close_system_position' ? 'position' : 'pending'
+    const kind = action === 'cancel_system_pending' ? 'pending' : 'position'
     const collection = await readCollection(route, kind === 'position' ? 'positions' : 'pending_list', {})
     const items = kind === 'position' ? collection.positions : collection.orders
     const target = items.find(item => String(item.ticket) === String(params.ticket))
     if (!target) {
+      if (action === 'modify_system_position_protection') {
+        return { result:rejectedManagementResult('system_position_not_found', params.ticket) }
+      }
       return { result:{ status:'success', ticket:String(params.ticket), already_absent:true } }
     }
     const preconditionError = managementPreconditionError(expected, target, kind, route)
@@ -355,6 +396,18 @@ export function createBridgeV3BusinessAdapter({
     if (Number(target.magic || 0) !== SYSTEM_MAGIC) {
       return { result:rejectedManagementResult(
         kind === 'position' ? 'position_magic_mismatch' : 'pending_magic_mismatch', target.ticket) }
+    }
+    if (action === 'modify_system_position_protection') {
+      const protectionError = protectionPreconditionError(expected, target)
+      if (protectionError) return { result:rejectedManagementResult(protectionError, target.ticket) }
+      if (params.stop_loss == null && params.take_profit == null) {
+        return { result:rejectedManagementResult('protection_price_required', target.ticket) }
+      }
+      for (const value of [params.stop_loss, params.take_profit]) {
+        if (value != null && (!Number.isFinite(Number(value)) || Number(value) <= 0)) {
+          return { result:rejectedManagementResult('protection_price_invalid', target.ticket) }
+        }
+      }
     }
     return { params:{ ...params, ticket:target.ticket, volume:kind === 'position' ? target.volume : undefined } }
   }
@@ -435,7 +488,7 @@ export function createBridgeV3BusinessAdapter({
       || Number(currentRoute.connection_epoch) !== Number(route.connection_epoch)) {
       throw adapterError('Bridge generation changed before command write')
     }
-    return legacyTradeResult(action, await gateway.sendCommand(userId, command, { timeoutMs }))
+    return legacyTradeResult(action, await gateway.sendCommand(userId, command, { timeoutMs }), params)
   }
 
   async function execute(userId, action, params = {}, options = {}) {
@@ -459,7 +512,8 @@ export function createBridgeV3BusinessAdapter({
       if (action === 'system_trade_inventory') return await readSystemInventory(route)
       if (READ_ACTIONS.has(action)) return await readCollection(route, action, params)
       if (action === 'quote') return await requestQuote(userId, route, params, timeoutMs)
-      if (action === 'close_system_position' || action === 'cancel_system_pending') {
+      if (action === 'close_system_position' || action === 'cancel_system_pending'
+        || action === 'modify_system_position_protection') {
         const prepared = await prepareSystemManagement(route, action, params)
         if (prepared.result) return prepared.result
         params = prepared.params

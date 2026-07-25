@@ -6,7 +6,7 @@ export const BRIDGE_V3_MESSAGE_TYPES = Object.freeze(new Set([
 ]))
 
 export const BRIDGE_V3_COMMAND_ACTIONS = Object.freeze(new Set([
-  'place_order', 'cancel_order', 'modify_order', 'close_position', 'query_execution',
+  'place_order', 'cancel_order', 'modify_order', 'modify_position', 'close_position', 'query_execution',
 ]))
 
 export const BRIDGE_V3_RESULT_STATUSES = Object.freeze(new Set([

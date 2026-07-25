@@ -73,6 +73,7 @@ public enum Mt4TradeAction
     ModifyOrder = 3,
     ClosePosition = 4,
     QueryExecution = 5,
+    ModifyPosition = 6,
 }
 
 public enum Mt4OrderSide
@@ -108,7 +109,9 @@ public sealed record Mt4TradeCommand(
     double? TakeProfit,
     int Deviation,
     int Magic,
-    long Expiration);
+    long Expiration,
+    double? ExpectedStopLoss,
+    double? ExpectedTakeProfit);
 
 public sealed record Mt4TradeResult(
     string CommandId,
@@ -346,6 +349,7 @@ public static class Mt4PipeProtocol
             "place_order" => Mt4TradeAction.PlaceOrder,
             "cancel_order" => Mt4TradeAction.CancelOrder,
             "modify_order" => Mt4TradeAction.ModifyOrder,
+            "modify_position" => Mt4TradeAction.ModifyPosition,
             "close_position" => Mt4TradeAction.ClosePosition,
             "query_execution" => Mt4TradeAction.QueryExecution,
             _ => throw new InvalidDataException("command_action_unsupported"),
@@ -384,7 +388,9 @@ public static class Mt4PipeProtocol
             ReadOptionalDouble(command.Params, "take_profit"),
             checked((int)(ReadOptionalInt64(command.Params, "deviation") ?? 20)),
             checked((int)(ReadOptionalInt64(command.Params, "magic") ?? 234000)),
-            ReadOptionalInt64(command.Params, "expiration") ?? 0);
+            ReadOptionalInt64(command.Params, "expiration") ?? 0,
+            ReadOptionalDouble(command.Params, "expected_stop_loss"),
+            ReadOptionalDouble(command.Params, "expected_take_profit"));
         ValidateTradeCommand(tradeCommand);
         return tradeCommand;
     }
@@ -414,6 +420,8 @@ public static class Mt4PipeProtocol
             writer.Write(command.Deviation);
             writer.Write(command.Magic);
             writer.Write(command.Expiration);
+            WriteNullableDouble(writer, command.ExpectedStopLoss);
+            WriteNullableDouble(writer, command.ExpectedTakeProfit);
         });
     }
 
@@ -438,7 +446,9 @@ public static class Mt4PipeProtocol
             ReadDoubleString(reader, required: false),
             reader.ReadInt32(),
             reader.ReadInt32(),
-            reader.ReadInt64());
+            reader.ReadInt64(),
+            ReadDoubleString(reader, required: false),
+            ReadDoubleString(reader, required: false));
         EnsureFullyRead(reader);
         ValidateTradeCommand(command);
         return command;
@@ -663,6 +673,7 @@ public static class Mt4PipeProtocol
         }
         if (command.Action is Mt4TradeAction.CancelOrder
                 or Mt4TradeAction.ModifyOrder
+                or Mt4TradeAction.ModifyPosition
                 or Mt4TradeAction.ClosePosition
                 or Mt4TradeAction.QueryExecution
             && command.Ticket <= 0)
@@ -672,6 +683,14 @@ public static class Mt4PipeProtocol
         if (command.Action == Mt4TradeAction.ClosePosition && command.Volume < 0)
         {
             throw new InvalidDataException("close_volume_invalid");
+        }
+        if (command.Action == Mt4TradeAction.ModifyPosition
+            && (string.IsNullOrWhiteSpace(command.Symbol)
+                || command.Side == Mt4OrderSide.None
+                || command.Volume <= 0
+                || command.StopLoss is null && command.TakeProfit is null))
+        {
+            throw new InvalidDataException("mt4_modify_position_params_invalid");
         }
     }
 

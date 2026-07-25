@@ -26,6 +26,7 @@ public sealed class BridgeCommandDispatcher
         "place_order",
         "cancel_order",
         "modify_order",
+        "modify_position",
         "close_position",
         "query_execution",
     };
