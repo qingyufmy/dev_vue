@@ -6,6 +6,7 @@ internal sealed class TestStore : IAsyncDisposable
 {
     private readonly string _directory;
     public BridgeStore Store { get; }
+    public string DataDirectory => _directory;
 
     private TestStore(string directory, BridgeStore store)
     {
