@@ -138,9 +138,12 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
             }, WorkerRequestPriority.Data, cancellationToken);
             await IngestSnapshotAsync(response, fullSnapshotStreams, cancellationToken);
             var active = _collections["positions"].Count > 0 || _collections["orders"].Count > 0;
-            await Task.Delay(active ? 250 : 750, cancellationToken);
+            await Task.Delay(CollectionDelay(active), cancellationToken);
         }
     }
+
+    public static TimeSpan CollectionDelay(bool hasActiveTrades) =>
+        TimeSpan.FromMilliseconds(hasActiveTrades ? 250 : 400);
 
     public async Task<int> IngestSnapshotAsync(
         JsonElement snapshot,

@@ -8,6 +8,17 @@ namespace AurumBridge.Tests;
 [TestClass]
 public sealed class Mt5TerminalRuntimeTests
 {
+    [TestMethod]
+    public void CollectionCadenceKeepsIdleTradeDetectionInsideTheLocalP95Budget()
+    {
+        Assert.IsLessThanOrEqualTo(
+            TimeSpan.FromMilliseconds(400),
+            Mt5TerminalRuntime.CollectionDelay(hasActiveTrades:false));
+        Assert.AreEqual(
+            TimeSpan.FromMilliseconds(250),
+            Mt5TerminalRuntime.CollectionDelay(hasActiveTrades:true));
+    }
+
     private TestStore _testStore = null!;
     private FakeWorker _worker = null!;
     private Mt5TerminalRuntime _runtime = null!;

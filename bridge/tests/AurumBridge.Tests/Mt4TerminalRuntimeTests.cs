@@ -9,6 +9,17 @@ namespace AurumBridge.Tests;
 public sealed class Mt4TerminalRuntimeTests
 {
     [TestMethod]
+    public void CollectionCadenceKeepsIdleTradeDetectionInsideTheLocalP95Budget()
+    {
+        Assert.IsLessThanOrEqualTo(
+            TimeSpan.FromMilliseconds(400),
+            Mt4TerminalRuntime.CollectionDelay(hasActiveTrades:false));
+        Assert.AreEqual(
+            TimeSpan.FromMilliseconds(250),
+            Mt4TerminalRuntime.CollectionDelay(hasActiveTrades:true));
+    }
+
+    [TestMethod]
     public async Task PersistsSnapshotAndMapsTradeResult()
     {
         await using var testStore = await TestStore.CreateAsync();

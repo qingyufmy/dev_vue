@@ -61,9 +61,12 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             var snapshot = await _connection.CollectAsync(Mt4CollectionStreams.All, cancellationToken);
             await IngestSnapshotAsync(snapshot, cancellationToken);
             var hasTrades = snapshot.Positions.Count > 0 || snapshot.Orders.Count > 0;
-            await Task.Delay(hasTrades ? 250 : 750, cancellationToken);
+            await Task.Delay(CollectionDelay(hasTrades), cancellationToken);
         }
     }
+
+    public static TimeSpan CollectionDelay(bool hasActiveTrades) =>
+        TimeSpan.FromMilliseconds(hasActiveTrades ? 250 : 400);
 
     public async Task<CommandResultMessage> ExecuteCommandAsync(
         CommandMessage command,
