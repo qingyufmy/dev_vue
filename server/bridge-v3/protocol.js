@@ -2,8 +2,11 @@ export const BRIDGE_PROTOCOL_VERSION = 3
 
 export const BRIDGE_V3_MESSAGE_TYPES = Object.freeze(new Set([
   'hello', 'hello_ack', 'command', 'command_result', 'quote_request', 'quote',
+  'data_request', 'data_response',
   'data_delta', 'data_ack', 'heartbeat', 'error',
 ]))
+
+export const BRIDGE_V3_DATA_REQUEST_ACTIONS = Object.freeze(new Set(['rates']))
 
 export const BRIDGE_V3_COMMAND_ACTIONS = Object.freeze(new Set([
   'place_order', 'cancel_order', 'modify_order', 'modify_position', 'close_position', 'query_execution',
@@ -147,6 +150,25 @@ function validateQuote(message) {
   return errors
 }
 
+function validateDataRequest(message) {
+  const errors = validateEnvelope(message)
+  validateId(errors, 'request_id', message.request_id)
+  validateTerminalRoute(errors, message)
+  if (!BRIDGE_V3_DATA_REQUEST_ACTIONS.has(message.action)) errors.push('action:unsupported')
+  if (!isRecord(message.params)) errors.push('params:required_object')
+  return errors
+}
+
+function validateDataResponse(message) {
+  const errors = validateDataRequest(message)
+  if (!isPositiveInteger(message.observed_at_utc_msc)) errors.push('observed_at_utc_msc:invalid')
+  if (!['succeeded', 'rejected'].includes(message.status)) errors.push('status:unsupported')
+  if (message.status === 'succeeded' && !isRecord(message.payload)) errors.push('payload:required_object')
+  if (message.status === 'rejected' && (typeof message.error_code !== 'string'
+    || !message.error_code.trim() || message.error_code.length > 128)) errors.push('error_code:invalid')
+  return errors
+}
+
 function validateDataDelta(message) {
   const errors = validateEnvelope(message)
   validateTerminalRoute(errors, message)
@@ -175,6 +197,8 @@ export function validateBridgeV3Message(message, { nowUtcMsc = Date.now() } = {}
   else if (message.type === 'command_result') errors = validateCommandResult(message)
   else if (message.type === 'quote_request') errors = validateQuoteRequest(message)
   else if (message.type === 'quote') errors = validateQuote(message)
+  else if (message.type === 'data_request') errors = validateDataRequest(message)
+  else if (message.type === 'data_response') errors = validateDataResponse(message)
   else if (message.type === 'data_delta') errors = validateDataDelta(message)
   else errors = envelopeErrors
 

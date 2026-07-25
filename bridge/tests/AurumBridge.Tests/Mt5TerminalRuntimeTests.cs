@@ -116,6 +116,32 @@ public sealed class Mt5TerminalRuntimeTests
     }
 
     [TestMethod]
+    public async Task DataRequestIsMechanicallyForwardedToWorker()
+    {
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "msg_data_runtime_01", SentAtUtcMsc = 1,
+            RequestId = "data_01JRUNTIME01", TerminalInstanceId = Terminal().TerminalInstanceId,
+            AccountRef = Terminal().AccountRef, ConnectionEpoch = Terminal().ConnectionEpoch,
+            Action = "rates",
+            Params = JsonSerializer.SerializeToElement(new { symbol = "XAUUSD", timeframe = "M30", count = 100 }),
+        };
+        _worker.Response = JsonSerializer.SerializeToElement(new DataResponseMessage
+        {
+            Type = "data_response", MessageId = "data_result_runtime_01", SentAtUtcMsc = 2,
+            RequestId = request.RequestId, TerminalInstanceId = request.TerminalInstanceId,
+            AccountRef = request.AccountRef, ConnectionEpoch = request.ConnectionEpoch,
+            Action = request.Action, Params = request.Params, ObservedAtUtcMsc = 2,
+            Status = "succeeded", Payload = JsonSerializer.SerializeToElement(new { rates = Array.Empty<object>() }),
+        });
+
+        var response = await _runtime.GetDataAsync(request);
+
+        Assert.AreEqual("rates", response.Action);
+        Assert.AreEqual(1, _worker.RequestCount);
+    }
+
+    [TestMethod]
     public async Task RestartWithinSameEpochContinuesRevisionFromSqlite()
     {
         await _runtime.IngestSnapshotAsync(Snapshot("1001"), fullSnapshot: true);

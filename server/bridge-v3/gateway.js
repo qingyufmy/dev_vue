@@ -22,6 +22,7 @@ export const BRIDGE_V3_CONNECTION_STALE_MS = 45_000
 const AUTH_QUEUE_MAX_MESSAGES = 16
 const AUTH_QUEUE_MAX_BYTES = 1024 * 1024
 const MAX_PENDING_QUOTES_PER_CONNECTION = 64
+const MAX_PENDING_DATA_REQUESTS_PER_CONNECTION = 32
 const REQUIRED_INITIAL_STREAMS = Object.freeze(['account', 'positions', 'orders'])
 
 function messageId(prefix) {
@@ -84,6 +85,7 @@ export function createBridgeV3Gateway({
   const connectionsByTerminal = new Map()
   const pendingResults = new Map()
   const pendingQuotes = new Map()
+  const pendingDataRequests = new Map()
   let connectionGeneration = 0
 
   function gatewayError(code) {
@@ -116,6 +118,12 @@ export function createBridgeV3Gateway({
       clearTimeout(pending.timer)
       pendingQuotes.delete(requestId)
       pending.reject(gatewayError('bridge_quote_disconnected'))
+    }
+    for (const [requestId, pending] of pendingDataRequests) {
+      if (pending.connection !== connection) continue
+      clearTimeout(pending.timer)
+      pendingDataRequests.delete(requestId)
+      pending.reject(gatewayError('bridge_data_request_disconnected'))
     }
   }
 
@@ -256,6 +264,19 @@ export function createBridgeV3Gateway({
       pending.resolve(message)
       return
     }
+    if (message.type === 'data_response') {
+      const pending = pendingDataRequests.get(message.request_id)
+      if (!pending) return
+      if (pending.connection !== connection || !sameBridgeRoute(pending.request, message)
+        || pending.request.action !== message.action
+        || JSON.stringify(pending.request.params) !== JSON.stringify(message.params)) {
+        throw gatewayError('bridge_data_response_mismatch')
+      }
+      clearTimeout(pending.timer)
+      pendingDataRequests.delete(message.request_id)
+      pending.resolve(message)
+      return
+    }
     throw Object.assign(new Error('bridge_message_type_unexpected'), { code:'bridge_message_type_unexpected' })
   }
 
@@ -391,6 +412,41 @@ export function createBridgeV3Gateway({
     })
   }
 
+  function requestData(userId, request, { timeoutMs = 15_000 } = {}) {
+    assertBridgeV3Message(request, { nowUtcMsc:now() })
+    if (request.type !== 'data_request') throw gatewayError('bridge_data_request_type_invalid')
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw gatewayError('bridge_data_request_timeout_invalid')
+    }
+    if (pendingDataRequests.has(request.request_id)) throw gatewayError('bridge_data_request_duplicate')
+    const routed = connectionsByTerminal.get(request.terminal_instance_id)
+    if (!routed || !connectionAlive(routed.connection) || routed.connection.userId !== Number(userId)
+      || !sameBridgeRoute(routeFromTerminal(routed.terminal), request)) {
+      throw gatewayError('bridge_terminal_not_connected')
+    }
+    let connectionPending = 0
+    for (const pending of pendingDataRequests.values()) {
+      if (pending.connection === routed.connection) connectionPending += 1
+    }
+    if (connectionPending >= MAX_PENDING_DATA_REQUESTS_PER_CONNECTION) {
+      throw gatewayError('bridge_data_request_capacity_exceeded')
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pendingDataRequests.delete(request.request_id)
+        reject(gatewayError('bridge_data_request_timeout'))
+      }, timeoutMs)
+      pendingDataRequests.set(request.request_id, {
+        resolve, reject, timer, connection:routed.connection, request,
+      })
+      if (!safeSend(routed.connection.ws, request)) {
+        clearTimeout(timer)
+        pendingDataRequests.delete(request.request_id)
+        reject(gatewayError('bridge_data_request_send_failed'))
+      }
+    })
+  }
+
   function listConnectedTerminals(userId) {
     const result = []
     for (const { connection, terminal } of connectionsByTerminal.values()) {
@@ -452,11 +508,13 @@ export function createBridgeV3Gateway({
     wss,
     connectionsByTerminal,
     pendingQuotes,
+    pendingDataRequests,
     handleUpgrade(req, socket, head) {
       wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req))
     },
     sendCommand,
     requestQuote,
+    requestData,
     listConnectedTerminals,
     listConnectedUsers,
     isTradeEnabled,

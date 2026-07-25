@@ -16,6 +16,7 @@ public sealed class BridgeWebSocketClient
     private readonly BridgeCommandDispatcher _dispatcher;
     private readonly Func<ClientWebSocket> _socketFactory;
     private readonly Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? _quoteHandler;
+    private readonly Func<DataRequestMessage, CancellationToken, Task<DataResponseMessage>>? _dataHandler;
     private readonly Func<Task>? _initialSnapshotHandler;
 
     public BridgeWebSocketClient(
@@ -23,12 +24,14 @@ public sealed class BridgeWebSocketClient
         BridgeCommandDispatcher dispatcher,
         Func<ClientWebSocket>? socketFactory = null,
         Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? quoteHandler = null,
+        Func<DataRequestMessage, CancellationToken, Task<DataResponseMessage>>? dataHandler = null,
         Func<Task>? initialSnapshotHandler = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _socketFactory = socketFactory ?? (() => new ClientWebSocket());
         _quoteHandler = quoteHandler;
+        _dataHandler = dataHandler;
         _initialSnapshotHandler = initialSnapshotHandler;
     }
 
@@ -56,7 +59,8 @@ public sealed class BridgeWebSocketClient
             await SendDirectAsync(socket, JsonSerializer.Serialize(attempt.Hello, BridgeJson.Options), cancellationToken);
 
             var outbound = new PriorityMessageQueue();
-            var router = new BridgeInboundRouter(_store, _dispatcher, outbound, quoteHandler:_quoteHandler);
+            var router = new BridgeInboundRouter(
+                _store, _dispatcher, outbound, quoteHandler:_quoteHandler, dataHandler:_dataHandler);
             var outbox = new BridgeOutboxPump(_store, outbound);
             var helloReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             router.HelloAcknowledged += sessionId =>

@@ -17,19 +17,22 @@ public sealed class BridgeInboundRouter
     private readonly PriorityMessageQueue _outbound;
     private readonly Func<long> _clock;
     private readonly Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? _quoteHandler;
+    private readonly Func<DataRequestMessage, CancellationToken, Task<DataResponseMessage>>? _dataHandler;
 
     public BridgeInboundRouter(
         BridgeStore store,
         BridgeCommandDispatcher dispatcher,
         PriorityMessageQueue outbound,
         Func<long>? clock = null,
-        Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? quoteHandler = null)
+        Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? quoteHandler = null,
+        Func<DataRequestMessage, CancellationToken, Task<DataResponseMessage>>? dataHandler = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _outbound = outbound ?? throw new ArgumentNullException(nameof(outbound));
         _clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         _quoteHandler = quoteHandler;
+        _dataHandler = dataHandler;
     }
 
     public event Func<FullSnapshotRequest, Task>? FullSnapshotRequired;
@@ -73,6 +76,9 @@ public sealed class BridgeInboundRouter
             case "quote_request":
                 await HandleQuoteRequestAsync(payloadJson, cancellationToken);
                 return;
+            case "data_request":
+                await HandleDataRequestAsync(payloadJson, cancellationToken);
+                return;
             case "heartbeat":
             case "error":
                 return;
@@ -103,6 +109,35 @@ public sealed class BridgeInboundRouter
         catch
         {
             response = RejectedQuote(request, "bridge_quote_unavailable");
+        }
+        await _outbound.EnqueueAsync(new(
+            response.MessageId,
+            JsonSerializer.Serialize(response, BridgeJson.Options),
+            BridgeMessagePriority.Trade), cancellationToken);
+    }
+
+    private async Task HandleDataRequestAsync(
+        string payloadJson,
+        CancellationToken cancellationToken)
+    {
+        var request = JsonSerializer.Deserialize<DataRequestMessage>(payloadJson, BridgeJson.Options)
+            ?? throw new InvalidDataException("bridge_data_request_invalid");
+        ValidateDataRequest(request);
+        DataResponseMessage response;
+        try
+        {
+            response = _dataHandler is null
+                ? RejectedData(request, "terminal_data_action_unavailable")
+                : await _dataHandler(request, cancellationToken);
+            ValidateDataResponse(request, response);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            response = RejectedData(request, "terminal_data_request_failed");
         }
         await _outbound.EnqueueAsync(new(
             response.MessageId,
@@ -239,6 +274,41 @@ public sealed class BridgeInboundRouter
         }
     }
 
+    private static void ValidateDataRequest(DataRequestMessage request)
+    {
+        if (request.Version != 3 || request.Type != "data_request"
+            || string.IsNullOrWhiteSpace(request.MessageId)
+            || string.IsNullOrWhiteSpace(request.RequestId)
+            || string.IsNullOrWhiteSpace(request.TerminalInstanceId)
+            || request.ConnectionEpoch <= 0
+            || string.IsNullOrWhiteSpace(request.AccountRef?.BrokerServer)
+            || string.IsNullOrWhiteSpace(request.AccountRef?.Login)
+            || request.Action != "rates"
+            || request.Params.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("bridge_data_request_invalid");
+        }
+    }
+
+    private static void ValidateDataResponse(DataRequestMessage request, DataResponseMessage response)
+    {
+        if (response.Version != 3 || response.Type != "data_response"
+            || response.RequestId != request.RequestId
+            || response.TerminalInstanceId != request.TerminalInstanceId
+            || response.ConnectionEpoch != request.ConnectionEpoch
+            || !string.Equals(response.AccountRef.BrokerServer, request.AccountRef.BrokerServer,
+                StringComparison.OrdinalIgnoreCase)
+            || response.AccountRef.Login != request.AccountRef.Login
+            || response.Action != request.Action
+            || response.ObservedAtUtcMsc <= 0
+            || response.Status is not ("succeeded" or "rejected")
+            || (response.Status == "succeeded" && response.Payload?.ValueKind != JsonValueKind.Object)
+            || (response.Status == "rejected" && string.IsNullOrWhiteSpace(response.ErrorCode)))
+        {
+            throw new InvalidDataException("bridge_data_response_invalid");
+        }
+    }
+
     private QuoteMessage RejectedQuote(QuoteRequestMessage request, string errorCode)
     {
         var now = _clock();
@@ -252,6 +322,26 @@ public sealed class BridgeInboundRouter
             AccountRef = request.AccountRef,
             ConnectionEpoch = request.ConnectionEpoch,
             Symbol = request.Symbol,
+            ObservedAtUtcMsc = now,
+            Status = "rejected",
+            ErrorCode = errorCode,
+        };
+    }
+
+    private DataResponseMessage RejectedData(DataRequestMessage request, string errorCode)
+    {
+        var now = _clock();
+        return new()
+        {
+            Type = "data_response",
+            MessageId = $"data_{request.RequestId}_{Guid.NewGuid():N}",
+            SentAtUtcMsc = now,
+            RequestId = request.RequestId,
+            TerminalInstanceId = request.TerminalInstanceId,
+            AccountRef = request.AccountRef,
+            ConnectionEpoch = request.ConnectionEpoch,
+            Action = request.Action,
+            Params = request.Params,
             ObservedAtUtcMsc = now,
             Status = "rejected",
             ErrorCode = errorCode,

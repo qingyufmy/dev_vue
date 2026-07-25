@@ -256,6 +256,60 @@ public sealed record QuoteMessage : BridgeEnvelope
     public string? ErrorCode { get; init; }
 }
 
+public sealed record DataRequestMessage : BridgeEnvelope
+{
+    [JsonPropertyName("request_id")]
+    public required string RequestId { get; init; }
+
+    [JsonPropertyName("terminal_instance_id")]
+    public required string TerminalInstanceId { get; init; }
+
+    [JsonPropertyName("account_ref")]
+    public required AccountRef AccountRef { get; init; }
+
+    [JsonPropertyName("connection_epoch")]
+    public required long ConnectionEpoch { get; init; }
+
+    [JsonPropertyName("action")]
+    public required string Action { get; init; }
+
+    [JsonPropertyName("params")]
+    public required JsonElement Params { get; init; }
+}
+
+public sealed record DataResponseMessage : BridgeEnvelope
+{
+    [JsonPropertyName("request_id")]
+    public required string RequestId { get; init; }
+
+    [JsonPropertyName("terminal_instance_id")]
+    public required string TerminalInstanceId { get; init; }
+
+    [JsonPropertyName("account_ref")]
+    public required AccountRef AccountRef { get; init; }
+
+    [JsonPropertyName("connection_epoch")]
+    public required long ConnectionEpoch { get; init; }
+
+    [JsonPropertyName("action")]
+    public required string Action { get; init; }
+
+    [JsonPropertyName("params")]
+    public required JsonElement Params { get; init; }
+
+    [JsonPropertyName("observed_at_utc_msc")]
+    public required long ObservedAtUtcMsc { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("payload")]
+    public JsonElement? Payload { get; init; }
+
+    [JsonPropertyName("error_code")]
+    public string? ErrorCode { get; init; }
+}
+
 public static class BridgeJson
 {
     public static JsonSerializerOptions Options { get; } = new(JsonSerializerDefaults.Web)

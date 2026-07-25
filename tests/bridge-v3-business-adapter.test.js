@@ -17,7 +17,7 @@ function route(overrides = {}) {
 }
 
 function setup({ routes = [route()], account, rows = [], positionRows, orderRows,
-  revision, tradeRow, quote, commandResult } = {}) {
+  revision, tradeRow, quote, dataResponse, commandResult } = {}) {
   const gateway = {
     listConnectedTerminals:vi.fn().mockReturnValue(routes),
     isTradeEnabled:vi.fn().mockReturnValue(true),
@@ -25,6 +25,10 @@ function setup({ routes = [route()], account, rows = [], positionRows, orderRows
     requestQuote:vi.fn().mockResolvedValue(quote || {
       status:'succeeded', symbol:'XAUUSD', bid:2300, ask:2300.2,
       observed_at_utc_msc:NOW,
+    }),
+    requestData:vi.fn().mockResolvedValue(dataResponse || {
+      status:'succeeded', payload:{ symbol:'XAUUSD', timeframe:'M30', count:1,
+        rates:[{ time_utc_msc:NOW, open:2300, high:2301, low:2299, close:2300.5 }] },
     }),
     sendCommand:vi.fn().mockResolvedValue(commandResult || {
       status:'succeeded', command_id:'command_01JBUSINESS01',
@@ -107,6 +111,27 @@ describe('Bridge v3 business compatibility adapter', () => {
       type:'quote_request', symbol:'XAUUSD', terminal_instance_id:'terminal_01JBUSINESS01',
     }), { timeoutMs:5000 })
     expect(queryOneFn).not.toHaveBeenCalled()
+  })
+
+  it('routes bounded rates through the transient data channel', async () => {
+    const { adapter, gateway, queryOneFn } = setup()
+    const result = await adapter.execute(42, 'rates', {
+      symbol:'XAUUSD', timeframe:'m30', count:100,
+    }, { timeoutMs:15_000 })
+    expect(result).toMatchObject({ status:'success', symbol:'XAUUSD', source:'mt5' })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      type:'data_request', action:'rates',
+      params:{ symbol:'XAUUSD', timeframe:'M30', count:100 },
+    }), { timeoutMs:15_000 })
+    expect(queryOneFn).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid rates bounds before contacting the terminal', async () => {
+    const { adapter, gateway } = setup()
+    await expect(adapter.execute(42, 'rates', {
+      symbol:'XAUUSD', timeframe:'S1', count:10_000,
+    })).resolves.toMatchObject({ status:'error', error:'rates_timeframe_invalid' })
+    expect(gateway.requestData).not.toHaveBeenCalled()
   })
 
   it('derives a versioned market state from a fresh transient quote', async () => {

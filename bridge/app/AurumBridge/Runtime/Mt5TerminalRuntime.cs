@@ -93,6 +93,28 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         return quote;
     }
 
+    public async Task<DataResponseMessage> GetDataAsync(
+        DataRequestMessage request,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        var response = await _worker.RequestAsync(request, cancellationToken);
+        var data = response.Deserialize<DataResponseMessage>(BridgeJson.Options)
+            ?? throw new InvalidDataException("mt5_worker_data_response_invalid");
+        if (data.Type != "data_response"
+            || data.RequestId != request.RequestId
+            || data.Action != request.Action
+            || data.TerminalInstanceId != _terminal.TerminalInstanceId
+            || data.ConnectionEpoch != _terminal.ConnectionEpoch
+            || !string.Equals(data.AccountRef.BrokerServer, _terminal.AccountRef.BrokerServer,
+                StringComparison.OrdinalIgnoreCase)
+            || data.AccountRef.Login != _terminal.AccountRef.Login)
+        {
+            throw new InvalidDataException("mt5_worker_data_response_route_mismatch");
+        }
+        return data;
+    }
+
     public async Task RunCollectionLoopAsync(CancellationToken cancellationToken = default)
     {
         EnsureInitialized();

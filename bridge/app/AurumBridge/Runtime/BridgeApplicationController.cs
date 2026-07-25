@@ -309,6 +309,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             _store,
             host.CommandDispatcher,
             quoteHandler:host.GetQuoteAsync,
+            dataHandler:host.GetDataAsync,
             initialSnapshotHandler:host.RequestAllFullSnapshotsAsync);
         var synchronizedTerminals = new HashSet<string>(StringComparer.Ordinal);
         var synchronizationLock = new object();

@@ -107,6 +107,23 @@ function quote(overrides = {}) {
   }
 }
 
+function dataRequest(overrides = {}) {
+  return {
+    v:3, type:'data_request', message_id:'msg_01JGATEWAY_DATA_REQUEST', sent_at_utc_msc:NOW,
+    request_id:'data_01JGATEWAY01', terminal_instance_id:'terminal_01JGATEWAY1',
+    account_ref:{ broker_server:'Broker-Demo', login:'12345678' }, connection_epoch:7,
+    action:'rates', params:{ symbol:'XAUUSD', timeframe:'M30', count:100 }, ...overrides,
+  }
+}
+
+function dataResponse(overrides = {}) {
+  return {
+    ...dataRequest(), type:'data_response', message_id:'msg_01JGATEWAY_DATA_RESULT',
+    sent_at_utc_msc:NOW + 50, observed_at_utc_msc:NOW + 50,
+    status:'succeeded', payload:{ symbol:'XAUUSD', rates:[] }, ...overrides,
+  }
+}
+
 async function flush() {
   for (let index = 0; index < 12; index++) await Promise.resolve()
 }
@@ -339,6 +356,22 @@ describe('Bridge v3 websocket gateway', () => {
     ws.emit('message', Buffer.from(JSON.stringify(quote())))
     await expect(pending).resolves.toMatchObject({ bid:2345.1, ask:2345.3 })
     expect(gateway.pendingQuotes.size).toBe(0)
+    expect(dependencies.createLedgerEntry).not.toHaveBeenCalled()
+  })
+
+  it('routes transient data without touching the command ledger', async () => {
+    const { gateway, dependencies } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    const pending = gateway.requestData(42, dataRequest())
+    await flush()
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'data_request', request_id:'data_01JGATEWAY01', action:'rates',
+    })
+    ws.emit('message', Buffer.from(JSON.stringify(dataResponse())))
+    await expect(pending).resolves.toMatchObject({ status:'succeeded', payload:{ rates:[] } })
+    expect(gateway.pendingDataRequests.size).toBe(0)
     expect(dependencies.createLedgerEntry).not.toHaveBeenCalled()
   })
 

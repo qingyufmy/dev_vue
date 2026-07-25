@@ -125,6 +125,24 @@ describe('Bridge v3 protocol contract', () => {
     })).toEqual({ ok:true, errors:[] })
   })
 
+  it('validates a bounded transient data request and its response envelope', () => {
+    const request = envelope('data_request', {
+      ...route(), request_id:'data_01JBRIDGE0001', action:'rates',
+      params:{ symbol:'XAUUSD', timeframe:'M30', count:100 },
+    })
+    expect(validateBridgeV3Message(request)).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({ ...request, action:'shell' })).toMatchObject({
+      ok:false, errors:expect.arrayContaining(['action:unsupported']),
+    })
+    expect(validateBridgeV3Message({
+      ...request, type:'data_response', observed_at_utc_msc:NOW,
+      status:'succeeded', payload:{ rates:[] },
+    })).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({
+      ...request, type:'data_response', observed_at_utc_msc:NOW, status:'rejected',
+    })).toMatchObject({ ok:false, errors:expect.arrayContaining(['error_code:invalid']) })
+  })
+
   it('enforces contiguous stream revisions so gaps trigger a full snapshot', () => {
     const delta = envelope('data_delta', {
       ...route(),

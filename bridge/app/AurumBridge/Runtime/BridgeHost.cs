@@ -64,6 +64,18 @@ public sealed class BridgeHost : IAsyncDisposable
         return terminal.GetQuoteAsync(request, cancellationToken);
     }
 
+    public Task<DataResponseMessage> GetDataAsync(
+        DataRequestMessage request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!_terminals.TryGetValue(request.TerminalInstanceId, out var terminal))
+        {
+            throw new InvalidOperationException("terminal_worker_unavailable");
+        }
+        return terminal.GetDataAsync(request, cancellationToken);
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var terminal in _terminals.Values)

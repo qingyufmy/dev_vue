@@ -22,6 +22,13 @@ Result = namedtuple("Result", "retcode order deal comment")
 
 
 class FakeMt5:
+    TIMEFRAME_M1 = 1
+    TIMEFRAME_M5 = 5
+    TIMEFRAME_M15 = 15
+    TIMEFRAME_M30 = 30
+    TIMEFRAME_H1 = 60
+    TIMEFRAME_H4 = 240
+    TIMEFRAME_D1 = 1440
     TRADE_ACTION_DEAL = 1
     TRADE_ACTION_PENDING = 5
     TRADE_ACTION_MODIFY = 7
@@ -52,6 +59,11 @@ class FakeMt5:
     def history_deals_get(self, *args): return ()
     def symbol_info_tick(self, symbol): return Tick(2300.0, 2300.2)
     def symbol_info(self, symbol): return SimpleNamespace(trade_mode=4)
+    def symbol_select(self, symbol, enabled): return True
+    def copy_rates_from_pos(self, symbol, timeframe, offset, count):
+        return [(1_700_000_000, 2300.0, 2301.0, 2299.0, 2300.5, 42, 12)]
+    def copy_rates_range(self, symbol, timeframe, start, end):
+        return self.copy_rates_from_pos(symbol, timeframe, 0, 1)
     def order_send(self, request):
         self.sent.append(request)
         return Result(10009, 1001, 2001, "done")
@@ -201,6 +213,27 @@ class WorkerTests(unittest.TestCase):
         result = adapter.quote(request)
         self.assertEqual("rejected", result["status"])
         self.assertEqual("command_route_mismatch", result["error_code"])
+
+    def test_returns_rates_over_transient_data_channel(self):
+        adapter = self.adapter()
+        request = self.command(
+            type="data_request", request_id="data_01JWORKER01", action="rates",
+            params={"symbol": "XAUUSD", "timeframe": "M30", "count": 100})
+        result = adapter.data(request)
+        self.assertEqual("succeeded", result["status"])
+        self.assertEqual("rates", result["action"])
+        self.assertEqual(1, result["payload"]["count"])
+        self.assertEqual(1_700_000_000_000, result["payload"]["rates"][0]["time_utc_msc"])
+        self.assertNotIn("command_id", result)
+
+    def test_rejects_invalid_rates_before_mt5_query(self):
+        adapter = self.adapter()
+        request = self.command(
+            type="data_request", request_id="data_01JWORKER02", action="rates",
+            params={"symbol": "XAUUSD", "timeframe": "S1", "count": 100})
+        result = adapter.data(request)
+        self.assertEqual("rejected", result["status"])
+        self.assertEqual("rates_timeframe_invalid", result["error_code"])
 
     def test_probe_returns_read_only_account_identity(self):
         result = worker.probe(FakeMt5(), __file__)

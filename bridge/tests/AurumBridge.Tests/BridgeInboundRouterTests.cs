@@ -150,6 +150,29 @@ public sealed class BridgeInboundRouterTests
     }
 
     [TestMethod]
+    public async Task DataRequestUsesTradePriorityWithoutPersistingOutbox()
+    {
+        var router = new BridgeInboundRouter(
+            _testStore.Store, Dispatcher(), _outbound, () => Now,
+            dataHandler:(request, _) => Task.FromResult(new DataResponseMessage
+            {
+                Type = "data_response", MessageId = "data_01JROUTER_RESULT", SentAtUtcMsc = Now,
+                RequestId = request.RequestId, TerminalInstanceId = request.TerminalInstanceId,
+                AccountRef = request.AccountRef, ConnectionEpoch = request.ConnectionEpoch,
+                Action = request.Action, Params = request.Params, ObservedAtUtcMsc = Now,
+                Status = "succeeded", Payload = JsonSerializer.SerializeToElement(new { rates = Array.Empty<object>() }),
+            }));
+
+        await router.RouteAsync(JsonSerializer.Serialize(DataRequest(), BridgeJson.Options));
+
+        var response = await _outbound.DequeueAsync();
+        Assert.AreEqual(BridgeMessagePriority.Trade, response.Priority);
+        Assert.AreEqual("data_response", JsonDocument.Parse(response.PayloadJson).RootElement
+            .GetProperty("type").GetString());
+        Assert.IsEmpty(await _testStore.Store.GetPendingOutboxAsync());
+    }
+
+    [TestMethod]
     public async Task OutboxPumpQueuesEachPendingMessageOncePerSession()
     {
         await _testStore.Store.PersistDataDeltaAsync(Delta());
@@ -224,6 +247,15 @@ public sealed class BridgeInboundRouterTests
         AccountRef = Terminal().AccountRef,
         ConnectionEpoch = Terminal().ConnectionEpoch,
         Symbol = "XAUUSD",
+    };
+
+    private static DataRequestMessage DataRequest() => new()
+    {
+        Type = "data_request", MessageId = "msg_01JROUTER_DATA", SentAtUtcMsc = Now,
+        RequestId = "data_01JROUTER_REQUEST", TerminalInstanceId = Terminal().TerminalInstanceId,
+        AccountRef = Terminal().AccountRef, ConnectionEpoch = Terminal().ConnectionEpoch,
+        Action = "rates",
+        Params = JsonSerializer.SerializeToElement(new { symbol = "XAUUSD", timeframe = "M30", count = 100 }),
     };
 
     private static CommandResultMessage Result(CommandMessage command) => new()

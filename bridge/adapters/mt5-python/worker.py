@@ -15,6 +15,7 @@ from typing import Any, BinaryIO
 PROTOCOL_VERSION = 3
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 ACCEPTED_RESULT_CACHE = 2_000
+RATE_TIMEFRAMES = {"M1", "M5", "M15", "M30", "H1", "H4", "D1"}
 
 
 class WorkerError(RuntimeError):
@@ -183,6 +184,78 @@ class Mt5Adapter:
         except Exception:
             return self._quote_result(
                 request, "rejected", int(time.time() * 1000), error_code="mt5_quote_exception")
+
+    def data(self, request: dict[str, Any]) -> dict[str, Any]:
+        try:
+            self._validate_route(request)
+            self._ensure_identity()
+            if request.get("action") != "rates":
+                raise WorkerError("terminal_data_action_unsupported")
+            params = request.get("params")
+            if not isinstance(params, dict):
+                raise WorkerError("rates_params_invalid")
+            payload = self._rates(params)
+            return self._data_result(request, "succeeded", payload=payload)
+        except WorkerError as error:
+            return self._data_result(request, "rejected", error_code=error.code)
+        except Exception:
+            return self._data_result(request, "rejected", error_code="mt5_data_request_exception")
+
+    def _rates(self, params: dict[str, Any]) -> dict[str, Any]:
+        symbol = str(params.get("symbol") or "").strip()
+        timeframe = str(params.get("timeframe") or "M30").strip().upper()
+        if not symbol or len(symbol) > 64:
+            raise WorkerError("symbol_invalid")
+        if timeframe not in RATE_TIMEFRAMES:
+            raise WorkerError("rates_timeframe_invalid")
+        try:
+            count = int(params.get("count", 100))
+            start_utc_msc = int(params.get("start_utc_msc") or 0)
+            end_utc_msc = int(params.get("end_utc_msc") or 0)
+        except (TypeError, ValueError) as error:
+            raise WorkerError("rates_params_invalid") from error
+        if count < 2 or count > 5_000:
+            raise WorkerError("rates_count_invalid")
+        if ((start_utc_msc or end_utc_msc)
+                and not (start_utc_msc > 0 and end_utc_msc > start_utc_msc)):
+            raise WorkerError("rates_range_invalid")
+        timeframe_value = getattr(self.mt5, f"TIMEFRAME_{timeframe}", None)
+        if timeframe_value is None:
+            raise WorkerError("rates_timeframe_unavailable")
+        select = getattr(self.mt5, "symbol_select", None)
+        if callable(select) and not select(symbol, True):
+            raise WorkerError("symbol_select_failed")
+        range_complete = bool(start_utc_msc and end_utc_msc)
+        if range_complete:
+            rates = self.mt5.copy_rates_range(
+                symbol, timeframe_value,
+                datetime.fromtimestamp(start_utc_msc / 1000.0, timezone.utc),
+                datetime.fromtimestamp(end_utc_msc / 1000.0, timezone.utc))
+            if rates is not None and len(rates) > count:
+                rates = rates[-count:]
+        else:
+            rates = self.mt5.copy_rates_from_pos(symbol, timeframe_value, 0, count)
+        if rates is None:
+            raise WorkerError("rates_unavailable", str(self.mt5.last_error()))
+        captured_at = int(time.time() * 1000)
+        output: list[dict[str, Any]] = []
+        for rate in rates:
+            epoch_msc = int(rate[0]) * 1000
+            output.append({
+                "time": datetime.fromtimestamp(epoch_msc / 1000.0, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "time_msc": epoch_msc,
+                "time_utc_msc": epoch_msc,
+                "open": float(rate[1]), "high": float(rate[2]),
+                "low": float(rate[3]), "close": float(rate[4]),
+                "tick_volume": int(rate[5]), "spread": int(rate[6]) if len(rate) > 6 else 0,
+                "captured_at_utc_msc": captured_at,
+            })
+        return {
+            "symbol": symbol, "timeframe": timeframe, "count": len(output),
+            "rates": output, "source": "mt5", "range_complete": range_complete,
+            "range_start_utc_msc": start_utc_msc or None,
+            "range_end_utc_msc": end_utc_msc or None,
+        }
 
     def _validate_route(self, command: dict[str, Any]) -> None:
         account_ref = command.get("account_ref") or {}
@@ -535,6 +608,26 @@ class Mt5Adapter:
             result["error_code"] = error_code or "quote_rejected"
         return result
 
+    def _data_result(self, request: dict[str, Any], status: str,
+                     payload: dict[str, Any] | None = None,
+                     error_code: str | None = None) -> dict[str, Any]:
+        now = int(time.time() * 1000)
+        result: dict[str, Any] = {
+            "v": PROTOCOL_VERSION, "type": "data_response",
+            "message_id": f"data_{request.get('request_id')}_{now}",
+            "sent_at_utc_msc": now, "request_id": request.get("request_id"),
+            "terminal_instance_id": self.identity.terminal_instance_id,
+            "account_ref": {"broker_server": self.identity.broker_server, "login": self.identity.login},
+            "connection_epoch": self.identity.connection_epoch,
+            "action": request.get("action"), "params": request.get("params") or {},
+            "observed_at_utc_msc": now, "status": status,
+        }
+        if status == "succeeded":
+            result["payload"] = payload or {}
+        else:
+            result["error_code"] = error_code or "terminal_data_request_rejected"
+        return result
+
     def _remember(self, command_id: str, result: dict[str, Any]) -> dict[str, Any]:
         self._receipts[command_id] = result
         self._receipts.move_to_end(command_id)
@@ -581,6 +674,8 @@ def run(pipe_name: str, adapter: Mt5Adapter) -> int:
                 response = adapter.execute(request)
             elif request_type == "quote_request":
                 response = adapter.quote(request)
+            elif request_type == "data_request":
+                response = adapter.data(request)
             else:
                 response = {"v": 3, "type": "worker_error", "request_id": request.get("request_id"),
                             "error_code": "worker_request_type_unsupported"}
