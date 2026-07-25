@@ -89,7 +89,9 @@ function validateDataDelta(message) {
   if (!isPositiveInteger(message.revision)) errors.push('revision:invalid')
   if (!Number.isSafeInteger(message.base_revision) || message.base_revision < 0) errors.push('base_revision:invalid')
   if (isPositiveInteger(message.revision) && Number.isSafeInteger(message.base_revision)
+    && message.full_snapshot !== true
     && message.revision !== message.base_revision + 1) errors.push('revision:not_next')
+  if (message.full_snapshot === true && message.base_revision !== 0) errors.push('base_revision:full_snapshot_requires_zero')
   if (!isPositiveInteger(message.observed_at_utc_msc)) errors.push('observed_at_utc_msc:invalid')
   if (message.source_time_msc !== null
     && (!Number.isSafeInteger(message.source_time_msc) || message.source_time_msc < 0)) errors.push('source_time_msc:invalid')

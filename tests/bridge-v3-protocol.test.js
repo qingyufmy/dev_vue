@@ -95,6 +95,10 @@ describe('Bridge v3 protocol contract', () => {
       ok:false,
       errors:expect.arrayContaining(['revision:not_next']),
     })
+    expect(validateBridgeV3Message({ ...delta, revision:20, base_revision:0, full_snapshot:true }))
+      .toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({ ...delta, revision:20, base_revision:11, full_snapshot:true }))
+      .toMatchObject({ ok:false, errors:expect.arrayContaining(['base_revision:full_snapshot_requires_zero']) })
   })
 
   it('compares the complete immutable route and normalizes broker case only', () => {

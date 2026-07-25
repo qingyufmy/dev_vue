@@ -4070,6 +4070,77 @@ const migrations = [
         KEY idx_bridge_v3_command_event_created (created_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '141_bridge_v3_incremental_read_model',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS bridge_v3_terminal_sessions (
+        terminal_instance_id VARCHAR(128) PRIMARY KEY,
+        user_id INT NOT NULL,
+        platform VARCHAR(8) NOT NULL,
+        broker_server VARCHAR(128) NOT NULL,
+        login_account VARCHAR(64) NOT NULL,
+        connection_epoch BIGINT UNSIGNED NOT NULL,
+        session_id VARCHAR(128) NOT NULL,
+        client_version VARCHAR(64) DEFAULT NULL,
+        connected TINYINT(1) NOT NULL DEFAULT 1,
+        last_seen_at_utc_msc BIGINT UNSIGNED NOT NULL,
+        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+        KEY idx_bridge_v3_terminal_user (user_id, connected, updated_at),
+        KEY idx_bridge_v3_terminal_account (broker_server, login_account, connected)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS bridge_v3_stream_revisions (
+        terminal_instance_id VARCHAR(128) NOT NULL,
+        connection_epoch BIGINT UNSIGNED NOT NULL,
+        stream VARCHAR(24) NOT NULL,
+        revision BIGINT UNSIGNED NOT NULL,
+        message_id VARCHAR(128) NOT NULL,
+        payload_hash CHAR(64) NOT NULL,
+        observed_at_utc_msc BIGINT UNSIGNED NOT NULL,
+        source_time_msc BIGINT UNSIGNED DEFAULT NULL,
+        updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+        PRIMARY KEY (terminal_instance_id, connection_epoch, stream),
+        KEY idx_bridge_v3_stream_freshness (stream, observed_at_utc_msc)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS bridge_v3_account_latest (
+        terminal_instance_id VARCHAR(128) PRIMARY KEY,
+        connection_epoch BIGINT UNSIGNED NOT NULL,
+        revision BIGINT UNSIGNED NOT NULL,
+        observed_at_utc_msc BIGINT UNSIGNED NOT NULL,
+        source_time_msc BIGINT UNSIGNED DEFAULT NULL,
+        payload_json LONGTEXT NOT NULL,
+        updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS bridge_v3_positions_latest (
+        terminal_instance_id VARCHAR(128) NOT NULL,
+        ticket VARCHAR(64) NOT NULL,
+        connection_epoch BIGINT UNSIGNED NOT NULL,
+        revision BIGINT UNSIGNED NOT NULL,
+        observed_at_utc_msc BIGINT UNSIGNED NOT NULL,
+        source_time_msc BIGINT UNSIGNED DEFAULT NULL,
+        payload_json LONGTEXT NOT NULL,
+        updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+        PRIMARY KEY (terminal_instance_id, ticket),
+        KEY idx_bridge_v3_position_updated (terminal_instance_id, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS bridge_v3_orders_latest (
+        terminal_instance_id VARCHAR(128) NOT NULL,
+        ticket VARCHAR(64) NOT NULL,
+        connection_epoch BIGINT UNSIGNED NOT NULL,
+        revision BIGINT UNSIGNED NOT NULL,
+        observed_at_utc_msc BIGINT UNSIGNED NOT NULL,
+        source_time_msc BIGINT UNSIGNED DEFAULT NULL,
+        payload_json LONGTEXT NOT NULL,
+        updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+        PRIMARY KEY (terminal_instance_id, ticket),
+        KEY idx_bridge_v3_order_updated (terminal_instance_id, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 
