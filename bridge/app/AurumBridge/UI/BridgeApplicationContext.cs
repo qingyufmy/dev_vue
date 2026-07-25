@@ -244,7 +244,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _logger.Error("open_logs_failed", error);
             MessageBox.Show(
                 _form,
-                "暂时无法打开日志目录，请稍后重试。",
+                "暂时无法显示日志，请稍后重试。",
                 "查看日志",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);

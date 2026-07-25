@@ -119,4 +119,17 @@ public sealed class BridgeUiTextTests
         StringAssert.Contains(text.Description, "浏览器");
         StringAssert.Contains(text.Description, "一次");
     }
+
+    [TestMethod]
+    public void RefreshFailuresDistinguishRetryFromExplicitReauthorization()
+    {
+        var unavailable = BridgeUiText.DescribeCode("bridge_refresh_unavailable", "fallback");
+        var revoked = BridgeUiText.DescribeCode("bridge_refresh_revoked", "fallback");
+        var membership = BridgeUiText.DescribeCode("bridge_membership_required", "fallback");
+
+        StringAssert.Contains(unavailable, "保留");
+        StringAssert.Contains(unavailable, "自动重试");
+        StringAssert.Contains(revoked, "重新连接");
+        StringAssert.Contains(membership, "无需重新授权");
+    }
 }

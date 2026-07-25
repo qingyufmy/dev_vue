@@ -90,7 +90,12 @@ public static class BridgeUiText
         "bridge_not_paired" => "需要先连接 AURUM 账号。",
         "bridge_server_unreachable" => "暂时无法连接服务器，程序会自动重试。",
         "bridge_connection_lost" => "服务器连接中断，程序正在自动恢复。",
-        "membership_required" => "当前账号需要有效的专业版会员。",
+        "membership_required" or "bridge_membership_required" =>
+            "当前账号暂时不能使用桥接；恢复有效会员后程序会自动重连，无需重新授权。",
+        "bridge_refresh_unavailable" =>
+            "服务器暂时不可用，程序会保留账号授权并自动重试。",
+        "bridge_refresh_revoked" =>
+            "当前设备授权已被撤销，需要重新连接 AURUM 账号。",
         _ => fallback,
     };
 

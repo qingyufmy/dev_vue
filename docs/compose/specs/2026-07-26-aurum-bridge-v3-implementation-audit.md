@@ -21,6 +21,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 后续启动静默复用授权，主动退出才清除 | 已实现 | DPAPI `FileBridgeCredentialStore`、`BridgeSessionClient`、授权与退出测试；真实重启复用同一 refresh session 且未进入配对流程 |
 | 设备授权无固定到期登录门槛 | 已实现 | 服务端只按 token hash、撤销状态和账号有效性校验，不再以 `expires_at` 拒绝或清理设备授权；主动退出、密码重置、退出所有设备和账号删除仍会安全撤销 |
 | 临时服务端故障不得清除本地授权 | 已实现 | refresh 路由仅对明确无效/撤销凭据返回 401；数据库或未知服务故障返回可重试 503，Bridge 保留 DPAPI 凭据并自动退避重连 |
+| 授权故障给出准确中文状态 | 已实现 | 会员状态、可重试服务故障和明确设备撤销分别提示；临时故障明确说明保留授权并自动重试 |
 | 日志在软件内直接查看 | 已实现 | `BridgeLogViewerForm`、`BridgeLogReader` |
 | 界面显示账户、状态、服务器、最近同步和版本 | 已实现 | `BridgeMainForm`、`BridgeUiText` |
 | Windows 登录后自动启动；关闭窗口只隐藏托盘 | 已实现 | `BridgeAutoStartRegistration`、`BridgeMainForm.HandleFormClosing` |
@@ -51,7 +52,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 | 验证 | 结果 | 边界 |
 |---|---|---|
-| .NET Bridge/Launcher 全量测试 | 163/163 通过 | 自动化功能、协议、存储、恢复、更新、MT4 有界历史汇总、交易后即时采集、空闲轮询降载、未确认执行回执保留、必填 nullable 字段序列化与 UI 文案 |
+| .NET Bridge/Launcher 全量测试 | 164/164 通过 | 自动化功能、协议、存储、恢复、更新、MT4 有界历史汇总、交易后即时采集、空闲轮询降载、未确认执行回执保留、必填 nullable 字段序列化与授权故障 UI 文案 |
 | Node 服务端全量测试 | 1685/1685 通过 | v3 Gateway、账户绑定与旧会话撤销、有界历史汇总、重连接管、旧 Outbox 兼容、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
 | MT5 Python Worker 测试 | 25/25 通过 | Python 适配器协议、MT5 调用封装、有界每日成交汇总与空快照失败关闭 |
 | MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |
