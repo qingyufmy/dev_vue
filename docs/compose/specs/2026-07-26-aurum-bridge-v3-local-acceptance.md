@@ -1,7 +1,9 @@
 # AURUM Bridge v3 本机验收记录
 
-日期：2026-07-26  
-分支：`refactor/aurum-bridge-v3`  
+日期：2026-07-26
+
+分支：`refactor/aurum-bridge-v3`
+
 代码提交：`4e87ae4`
 
 ## 测试环境
