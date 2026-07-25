@@ -156,11 +156,53 @@ public static class Mt4PipeProtocol
         });
     }
 
+    public static Mt4Welcome DecodeWelcome(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.Welcome);
+        var result = new Mt4Welcome(ReadString(reader, 128), reader.ReadInt64());
+        EnsureFullyRead(reader);
+        if (string.IsNullOrWhiteSpace(result.TerminalInstanceId) || result.ConnectionEpoch <= 0)
+        {
+            throw new InvalidDataException("mt4_welcome_invalid");
+        }
+        return result;
+    }
+
     public static byte[] EncodeCollect(Mt4CollectionStreams streams) => Encode(writer =>
     {
         writer.Write((int)Mt4MessageType.Collect);
         writer.Write((int)streams);
     });
+
+    public static Mt4CollectionStreams DecodeCollect(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.Collect);
+        var streams = (Mt4CollectionStreams)reader.ReadInt32();
+        EnsureFullyRead(reader);
+        if ((streams & ~Mt4CollectionStreams.All) != 0)
+        {
+            throw new InvalidDataException("mt4_collect_streams_invalid");
+        }
+        return streams;
+    }
+
+    public static byte[] EncodeSnapshot(Mt4Snapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.ObservedAtUtcMsc <= 0
+            || snapshot.Account.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("mt4_snapshot_invalid");
+        }
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.Snapshot);
+            writer.Write(snapshot.ObservedAtUtcMsc);
+            WriteString(writer, snapshot.Account.GetRawText());
+            WriteString(writer, JsonSerializer.Serialize(snapshot.Positions));
+            WriteString(writer, JsonSerializer.Serialize(snapshot.Orders));
+        });
+    }
 
     public static Mt4Snapshot DecodeSnapshot(ReadOnlySpan<byte> payload)
     {
@@ -257,6 +299,60 @@ public static class Mt4PipeProtocol
             writer.Write(command.Deviation);
             writer.Write(command.Magic);
             writer.Write(command.Expiration);
+        });
+    }
+
+    public static Mt4TradeCommand DecodeCommand(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.Command);
+        var command = new Mt4TradeCommand(
+            ReadString(reader, 128),
+            ReadString(reader, 128),
+            ReadString(reader, 128),
+            ReadString(reader, 64),
+            reader.ReadInt64(),
+            reader.ReadInt64(),
+            (Mt4TradeAction)reader.ReadInt32(),
+            ReadString(reader, 64),
+            (Mt4OrderSide)reader.ReadInt32(),
+            (Mt4OrderKind)reader.ReadInt32(),
+            reader.ReadInt64(),
+            ReadDoubleString(reader, required: true)!.Value,
+            ReadDoubleString(reader, required: false),
+            ReadDoubleString(reader, required: false),
+            ReadDoubleString(reader, required: false),
+            reader.ReadInt32(),
+            reader.ReadInt32(),
+            reader.ReadInt64());
+        EnsureFullyRead(reader);
+        ValidateTradeCommand(command);
+        return command;
+    }
+
+    public static byte[] EncodeCommandResult(Mt4TradeResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (string.IsNullOrWhiteSpace(result.CommandId) || result.ObservedAtUtcMsc <= 0)
+        {
+            throw new InvalidDataException("mt4_command_result_invalid");
+        }
+        var status = result.Status switch
+        {
+            "succeeded" => 1,
+            "rejected" => 2,
+            "uncertain" => 3,
+            _ => throw new InvalidDataException("mt4_command_result_status_invalid"),
+        };
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.CommandResult);
+            WriteString(writer, result.CommandId);
+            writer.Write(status);
+            WriteString(writer, result.ErrorCode ?? string.Empty);
+            WriteString(writer, result.ErrorMessage ?? string.Empty);
+            writer.Write(result.BrokerRetcode);
+            writer.Write(result.Ticket);
+            writer.Write(result.ObservedAtUtcMsc);
         });
     }
 
@@ -435,7 +531,10 @@ public static class Mt4PipeProtocol
             || string.IsNullOrWhiteSpace(command.Login)
             || command.ConnectionEpoch <= 0
             || command.DeadlineUtcMsc <= 0
-            || command.Deviation < 0)
+            || command.Deviation < 0
+            || !Enum.IsDefined(command.Action)
+            || !Enum.IsDefined(command.Side)
+            || !Enum.IsDefined(command.OrderKind))
         {
             throw new InvalidDataException("mt4_command_route_invalid");
         }
@@ -515,6 +614,25 @@ public static class Mt4PipeProtocol
     }
 
     private static string? NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;
+
+    private static double? ReadDoubleString(BinaryReader reader, bool required)
+    {
+        var value = ReadString(reader, 64);
+        if (string.IsNullOrEmpty(value))
+        {
+            return required ? throw new InvalidDataException("mt4_pipe_number_missing") : null;
+        }
+        if (!double.TryParse(
+                value,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var number)
+            || !double.IsFinite(number))
+        {
+            throw new InvalidDataException("mt4_pipe_number_invalid");
+        }
+        return number;
+    }
 
     private static async Task ReadExactlyAsync(
         Stream stream,

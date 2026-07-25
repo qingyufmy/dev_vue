@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using AurumBridge.Protocol;
@@ -93,6 +94,62 @@ public sealed class Mt4PipeProtocolTests
             Mt4PipeProtocol.CreateTradeCommand(command));
 
         Assert.AreEqual("mt4_stop_limit_unsupported", error.Message);
+    }
+
+    [TestMethod]
+    public async Task EaConnectionCompletesHandshakeAndSnapshotRequest()
+    {
+        var pipeName = $"aurum_mt4_test_{Guid.NewGuid():N}";
+        var accept = Mt4EaConnection.AcceptAsync(pipeName, TimeSpan.FromSeconds(5));
+        await using var client = new NamedPipeClientStream(
+            ".",
+            pipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+        await client.ConnectAsync(5_000);
+        await Mt4PipeProtocol.WriteFrameAsync(client, Mt4PipeProtocol.EncodeHello(new(
+            3,
+            "3.0.0-test",
+            @"C:\MT4\Data",
+            "Broker-Demo",
+            "12345678",
+            true,
+            true)));
+        await using var connection = await accept;
+
+        var welcomeTask = connection.SendWelcomeAsync(new("mt4_terminal_pipe_01", 7));
+        var welcome = Mt4PipeProtocol.DecodeWelcome(await Mt4PipeProtocol.ReadFrameAsync(client));
+        await welcomeTask;
+        Assert.AreEqual(7L, welcome.ConnectionEpoch);
+
+        var collectTask = connection.CollectAsync(Mt4CollectionStreams.All);
+        var streams = Mt4PipeProtocol.DecodeCollect(await Mt4PipeProtocol.ReadFrameAsync(client));
+        Assert.AreEqual(Mt4CollectionStreams.All, streams);
+        await Mt4PipeProtocol.WriteFrameAsync(client, Mt4PipeProtocol.EncodeSnapshot(new(
+            1_800_000_000_000,
+            JsonSerializer.SerializeToElement(new { balance = 1000.0 }),
+            [JsonSerializer.SerializeToElement(new { ticket = "1" })],
+            [])));
+        var snapshot = await collectTask;
+
+        Assert.AreEqual(1000.0, snapshot.Account.GetProperty("balance").GetDouble());
+        Assert.HasCount(1, snapshot.Positions);
+
+        var localCommand = Mt4PipeProtocol.CreateTradeCommand(Command("cancel_order", new { ticket = "99" }));
+        var executeTask = connection.ExecuteAsync(localCommand);
+        var receivedCommand = Mt4PipeProtocol.DecodeCommand(await Mt4PipeProtocol.ReadFrameAsync(client));
+        Assert.AreEqual(99L, receivedCommand.Ticket);
+        await Mt4PipeProtocol.WriteFrameAsync(client, Mt4PipeProtocol.EncodeCommandResult(new(
+            localCommand.CommandId,
+            "succeeded",
+            null,
+            null,
+            0,
+            99,
+            1_800_000_000_100)));
+        var result = await executeTask;
+        Assert.AreEqual("succeeded", result.Status);
+        Assert.AreEqual(99L, result.Ticket);
     }
 
     private static byte[] EncodeRaw(Action<BinaryWriter> write)
