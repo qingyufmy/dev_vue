@@ -26,6 +26,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 界面显示账户、状态、服务器、最近同步和版本 | 已实现 | `BridgeMainForm`、`BridgeUiText` |
 | Windows 登录后自动启动；关闭窗口只隐藏托盘 | 已实现 | `BridgeAutoStartRegistration`、`BridgeMainForm.HandleFormClosing` |
 | SQLite WAL 只保存最新读模型、Outbox、绑定和有限回执 | 已实现 | `BridgeStore` 及其测试 |
+| 数据同时区分 Bridge 接收时间与适配器源采集时间 | 已实现 | MT4 EA 帧时间映射为 `source_time_msc`；MT5 Worker 输出源时间并兼容 3.0.0 旧字段；SQLite 与服务端读模型同时保存两种时间 |
 | 数据 revision、缺口检测、完整快照恢复 | 已实现 | `BridgeInboundRouter`、`BridgeCommandDispatcher`、读模型测试 |
 | 数据 Outbox 有界并按终端/epoch/stream 合并 | 已实现 | `BridgeStore.PersistDataDeltaAsync` 及边界测试 |
 | MT5 查询失败不得伪装为空仓或空挂单 | 已实现 | Worker 对 `positions_get` / `orders_get` 的 `None` 结果失败关闭并保留旧读模型 |
@@ -52,9 +53,9 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 | 验证 | 结果 | 边界 |
 |---|---|---|
-| .NET Bridge/Launcher 全量测试 | 164/164 通过 | 自动化功能、协议、存储、恢复、更新、MT4 有界历史汇总、交易后即时采集、空闲轮询降载、未确认执行回执保留、必填 nullable 字段序列化与授权故障 UI 文案 |
-| Node 服务端全量测试 | 1685/1685 通过 | v3 Gateway、账户绑定与旧会话撤销、有界历史汇总、重连接管、旧 Outbox 兼容、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
-| MT5 Python Worker 测试 | 25/25 通过 | Python 适配器协议、MT5 调用封装、有界每日成交汇总与空快照失败关闭 |
+| .NET Bridge/Launcher 全量测试 | 165/165 通过 | 自动化功能、协议、存储、恢复、更新、MT4 有界历史汇总、交易后即时采集、空闲轮询降载、终端源时间分离、旧 MT5 Worker 字段兼容、未确认执行回执保留、必填 nullable 字段序列化与授权故障 UI 文案 |
+| Node 服务端全量测试 | 1687/1687 通过 | v3 Gateway、账户绑定与旧会话撤销、有界历史汇总、重连接管、旧 Outbox 兼容、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
+| MT5 Python Worker 测试 | 26/26 通过 | Python 适配器协议、MT5 调用封装、源采集时间、有界每日成交汇总与空快照失败关闭 |
 | MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |
 | Windows 主界面走查 | 已通过 | 平台选择、真实 MT5 账户探测、仅 MT5 Worker、内置日志查看 |
 | 浏览器授权页真实路由 | 已通过 | 登录态下显示当前账户、一次性短码、权限说明和确认按钮；JS/CSS 使用同一新缓存版本 |
@@ -62,6 +63,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 本机 Acceptance 验收组 | 8/8 通过 | 详见 [本机验收记录](./2026-07-26-aurum-bridge-v3-local-acceptance.md) |
 | 真实单 Worker 崩溃恢复 | 1.991 秒恢复 | MT5 未重启；当前仅覆盖单个 MT5 demo 终端 |
 | 真实 MT5 SQLite 读模型与离线 Outbox | 已通过 | 当前 epoch 的账户/持仓/挂单完整快照均持久化，旧 epoch 未残留 |
+| 真实 MT5 双时间戳贯通 | 已通过 | epoch 22 的 account/positions/orders 在 SQLite 与 MySQL 中均保存非空 `source_time_msc`；同批 Bridge 接收时间比适配器采集时间晚 4 ms |
 | 首次授权后静默重启 | 已通过 | 首次浏览器授权生成的同一 refresh session 在新构建重启后继续使用；日志未进入 `PairingRequired`，直接完成终端检测、连接和同步 |
 | 真实服务器重启与首次同步 | 已通过 | 保留 MT5 Worker 语义的重连可恢复；新构建在 epoch 16 下进入 `Online`，服务端 account/positions/orders revision 均为 1 |
 
@@ -92,7 +94,8 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 ## 6. 最新真实 MT5 只读联调证据
 
-- 最新 Debug 构建在 connection epoch 17 下静默复用首次浏览器授权，约 1 秒进入 `Online`；没有进入 `PairingRequired`、没有打开浏览器、没有二次登录。
+- 最新 Debug 构建于 `2026-07-25T19:21:06.679Z` 启动，在 connection epoch 22 下静默复用首次浏览器授权，并于 `19:21:07.225Z` 进入 `Online`，约 0.55 秒；没有进入 `PairingRequired`、没有打开浏览器、没有二次登录。
 - 服务端会话已识别并绑定 `596520 / DooTechnology-Demo`，终端实例为 `mt5_93b55965fe14a572fa3594d3`，交易账户身份校验时间为 `2026-07-26 02:56:27`。
 - V3 `performance_daily` 链路已在真实 MT5 demo 账户完成有界读取：服务器记录的同步区间为 `2026-07-16` 至 `2026-07-25`，状态为 `current`，`last_error` 为 `null`。
+- epoch 22 首次完整快照在本地 SQLite 与服务器 MySQL 中均包含 account、positions、orders 三条 revision 1；`observed_at_utc_msc=1785007267041`、`source_time_msc=1785007267037`，二者语义分离且相差 4 ms。
 - 本轮仅执行只读联调，没有发送下单、改单、撤单或平仓指令；该证据不替代真实 MT4 demo 交易矩阵和持续运行时间窗。

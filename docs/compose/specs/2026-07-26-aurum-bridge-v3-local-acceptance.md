@@ -104,3 +104,11 @@ Acceptance 测试总数：8，全部通过。
 - 空闲采集调整为 1 秒、交易后即时唤醒后，最新 Debug 构建于 `2026-07-25T19:10:54.929Z` 启动，并在 `19:10:55.456Z` 进入 `Online`，约 0.53 秒。
 - Bridge 进程为 13648，MT5 Worker 为 30288/13888，原 MT5 终端 PID 24056 未重启；服务端记录 connection epoch 20 且终端在线。
 - 启动日志没有 `PairingRequired` 或浏览器授权事件；本轮只验证启动、同步和进程隔离，没有发送交易指令。交易后即时唤醒由 MT4/MT5 Runtime 自动化测试覆盖。
+
+## 终端源时间与 Bridge 接收时间贯通证据
+
+- 加载双时间戳修复后的 Debug 构建于 `2026-07-25T19:21:06.679Z` 启动，在 `19:21:07.225Z` 进入 `Online`，约 0.55 秒；connection epoch 从 21 递增到 22。
+- 启动沿用首次授权生成的 DPAPI 凭证，没有 `PairingRequired`、`pairing_browser_opened` 或二次登录事件；MT5 终端 PID 24056 保持不变。
+- epoch 22 的 account、positions、orders 首次完整快照在本地 SQLite 和服务器 MySQL 中均为 revision 1，并保存 `observed_at_utc_msc=1785007267041` 与 `source_time_msc=1785007267037`；Bridge 接收时间比 MT5 Worker 源采集时间晚 4 ms。
+- MT4 保持原二进制帧布局，只把 EA 帧时间明确映射为源采集时间；MT5 新 Worker 同时保留 3.0.0 旧字段以支持模块交错升级。
+- 本轮只执行真实 MT5 只读启动和同步，没有发送任何交易指令；4 ms 是本机单次样本，不作为公网或生产延迟指标。
