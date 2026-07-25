@@ -91,3 +91,10 @@ Acceptance 测试总数：8，全部通过。
 - 最新服务端与 Bridge 受控重启后，Bridge 从 `DetectingTerminal` 到 `Online` 约 0.55 秒，connection epoch 为 19；启动日志没有 `PairingRequired`、`pairing_browser_opened` 或二次登录事件。
 - 服务端继续使用 refresh session 21；其 `created_at` 仍为 `2026-07-26 02:14:54`，只把 `last_used_at` 更新为 `2026-07-26 03:03:13`，没有因为升级创建新的授权。
 - 本轮仍为真实 MT5 demo 只读联调，没有发送任何交易指令。
+
+## 服务端临时故障不清除授权的重启证据
+
+- 加载 503/401 分类修复后，仅重启 Node 服务端；Bridge、MT5 Worker 和 MT5 终端进程均保持运行。
+- Bridge 在 `2026-07-25T19:05:41.754Z` 检测到 `bridge_connection_lost`，并在 `19:05:44.044Z` 恢复 `Online`，约 2.29 秒；connection epoch 保持 19，没有重置终端执行上下文。
+- 恢复期间没有 `PairingRequired` 或浏览器授权事件；refresh session 仍为 21，`last_used_at` 更新到 `2026-07-26 03:05:46`，`revoked_at` 仍为 `null`。
+- 本次故障恢复测试没有发送任何交易指令。
