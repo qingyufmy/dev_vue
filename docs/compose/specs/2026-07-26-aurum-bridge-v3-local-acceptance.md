@@ -68,3 +68,12 @@ Acceptance 测试总数：8，全部通过。
 - 同时报告 working set 增长和 Online 样本比例，但不拿短跑结果外推。
 
 合成 168 小时夹具验证结果：私有内存增长 4% 时通过；将门槛收紧到 3% 时正确失败；使用默认采样间隔门槛时正确拒绝大间隔夹具。当前真实日志跨度为 1.259 小时，因此按预期返回 `bridge_health_span_insufficient`，尚不能出具 7 天通过结论。
+
+## 首次授权、静默重启与服务端同步补充证据
+
+- 本机首次浏览器授权在 2026-07-26 02:14 完成，DPAPI 凭证只保存在当前 Windows 用户目录。
+- 之后多次启动没有再次进入 `PairingRequired`；2026-07-26 02:33:22 启动的新构建直接经历 `DetectingTerminal → Connecting → Online`，约 0.5 秒进入在线状态。
+- 服务端继续使用首次授权创建的同一条 refresh session（ID 21，`created_at` 保持 02:14:54），只更新 `last_used_at`，没有创建新的配对凭证。
+- 服务端进程重启后，同一终端可用新 WebSocket session 接管，旧连接后续消息会被围栏拒绝；终端 epoch 不因纯网络重连被强制重置。
+- 新构建在真实 MT5 demo 账户下以 connection epoch 16 完成 account、positions、orders 三条首次完整同步，服务端 revision 均为 1，`source_time_msc` 规范存为 `null`。
+- 该证据证明“授权一次、后续静默复用”和首次同步链路；不包含真实交易指令，也不替代 MT4 demo 交易矩阵与 72 小时/7 天持续运行验收。

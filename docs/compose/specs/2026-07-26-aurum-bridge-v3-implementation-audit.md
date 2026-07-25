@@ -18,7 +18,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 用户主动选择 MT4 或 MT5，只运行所选适配器 | 已实现 | `BridgeUserPreferences`、`BridgeApplicationController`、`BridgeMainForm` |
 | 单 MT5 自动使用；多个 MT5 必须选择具体账户，只启动所选 Worker | 已实现 | `BridgeApplicationController.ResolveMt5TerminalSelection`、`BridgeTerminalSelectionTests` |
 | 首次启动自动打开浏览器授权一次 | 已实现 | `BridgeFirstAuthorizationGate`、`BridgeApplicationContext`；本地真实启动记录 `pairing_browser_opened` |
-| 后续启动静默复用授权，主动退出才清除 | 已实现 | DPAPI `FileBridgeCredentialStore`、`BridgeSessionClient`、授权与退出测试 |
+| 后续启动静默复用授权，主动退出才清除 | 已实现 | DPAPI `FileBridgeCredentialStore`、`BridgeSessionClient`、授权与退出测试；真实重启复用同一 refresh session 且未进入配对流程 |
 | 日志在软件内直接查看 | 已实现 | `BridgeLogViewerForm`、`BridgeLogReader` |
 | 界面显示账户、状态、服务器、最近同步和版本 | 已实现 | `BridgeMainForm`、`BridgeUiText` |
 | Windows 登录后自动启动；关闭窗口只隐藏托盘 | 已实现 | `BridgeAutoStartRegistration`、`BridgeMainForm.HandleFormClosing` |
@@ -35,6 +35,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | Named Pipe 仅当前 Windows 用户 | 已实现 | MT4、MT5 管道均使用 `PipeOptions.CurrentUserOnly` |
 | WSS 一次性 ticket；长期凭证不进入 URL、日志或普通配置 | 已实现 | `BridgeSessionClient`、Gateway、凭证与日志脱敏测试 |
 | hello_ack 必须匹配消息、会话和全部终端，串线时失败关闭 | 已实现 | `BridgeInboundRouter`、`BridgeWebSocketClient` 及握手路由测试 |
+| 网络重连保留终端 epoch 和 revision，新会话接管后围栏旧连接 | 已实现 | Gateway 重连接管、旧连接拒绝测试及真实服务器重启恢复 |
 | C#/Node 运行时消息类型均有共享 JSON Schema | 已实现 | `bridge/contracts/v3`、`tests/bridge-v3-schema-contract.test.js` |
 | 日志轮转和脱敏；日志失败不阻断交易闭环 | 已实现 | `BridgeFileLogger` 及轮转/脱敏测试；交易回执独立保存在 SQLite Outbox |
 | 官方模块更新、兼容范围、Manifest/包签名、大小/hash、原子版本目录 | 已实现 | `ReleaseManifestVerifier`、`ReleaseStager`、`ReleaseInstaller` |
@@ -45,8 +46,8 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 | 验证 | 结果 | 边界 |
 |---|---|---|
-| .NET Bridge/Launcher 全量测试 | 156/156 通过 | 自动化功能、协议、存储、恢复、更新与 UI 文案 |
-| Node 服务端全量测试 | 1677/1677 通过 | v3 Gateway、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
+| .NET Bridge/Launcher 全量测试 | 157/157 通过 | 自动化功能、协议、存储、恢复、更新、必填 nullable 字段序列化与 UI 文案 |
+| Node 服务端全量测试 | 1681/1681 通过 | v3 Gateway、重连接管、旧 Outbox 兼容、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
 | MT5 Python Worker 测试 | 23/23 通过 | Python 适配器协议、MT5 调用封装与空快照失败关闭 |
 | MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |
 | Windows 主界面走查 | 已通过 | 平台选择、真实 MT5 账户探测、仅 MT5 Worker、内置日志查看 |
@@ -55,6 +56,8 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 本机 Acceptance 验收组 | 8/8 通过 | 详见 [本机验收记录](./2026-07-26-aurum-bridge-v3-local-acceptance.md) |
 | 真实单 Worker 崩溃恢复 | 1.991 秒恢复 | MT5 未重启；当前仅覆盖单个 MT5 demo 终端 |
 | 真实 MT5 SQLite 读模型与离线 Outbox | 已通过 | 当前 epoch 的账户/持仓/挂单完整快照均持久化，旧 epoch 未残留 |
+| 首次授权后静默重启 | 已通过 | 首次浏览器授权生成的同一 refresh session 在新构建重启后继续使用；日志未进入 `PairingRequired`，直接完成终端检测、连接和同步 |
+| 真实服务器重启与首次同步 | 已通过 | 保留 MT5 Worker 语义的重连可恢复；新构建在 epoch 16 下进入 `Online`，服务端 account/positions/orders revision 均为 1 |
 
 ## 4. 尚未完成或不能在本轮伪造的证据
 
@@ -75,7 +78,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 ## 5. 下一验收顺序
 
-1. 启动当前 Debug 构建，让用户验证首次浏览器授权、MT5 账户和内置日志。
+1. 保持当前 Debug 构建运行，让用户验证主界面状态、MT5 账户和内置日志查看体验。
 2. 用户挂载 MT4 EA 后执行真实 demo 交易矩阵。
 3. 持续收集 72 小时和 7 天健康样本；采样不足时验收工具保持失败关闭。
 4. 用户允许打包后再完成安装器、离线包、正式签名与干净 Windows 安装验收。
