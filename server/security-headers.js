@@ -20,8 +20,8 @@ export function securityHeaders(req, res, next) {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN')
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()')
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
   if (req.secure || String(req.get?.('x-forwarded-proto') || '').toLowerCase() === 'https') {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
   }
   res.removeHeader('X-Powered-By')

@@ -2,6 +2,9 @@
 import { config as dotenvConfig } from 'dotenv'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { parseCorsOrigins as splitCorsOrigins } from './cors-origin.js'
+
+export { isCorsOriginAllowed } from './cors-origin.js'
 
 // Load .env from server/ directory BEFORE any config reads
 if (process.env.NODE_ENV !== 'test') {
@@ -25,19 +28,17 @@ export const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '10mb'
 export const resolvePublicUploadDir = value => resolve(serverDirectory, value || 'uploads')
 export const PUBLIC_UPLOAD_DIR = resolvePublicUploadDir(process.env.UPLOAD_DIR)
 export const DEFAULT_CORS_ORIGINS = Object.freeze([
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:3005',
-  'http://localhost:8080',
-  'http://192.168.1.254',
-  'https://www.cnfxtrade.com',
-  'https://cnfxtrade.com',
-  'http://www.cnfxtrade.com',
-  'http://cnfxtrade.com',
+  'localhost:3000',
+  'localhost:3001',
+  'localhost:3005',
+  'localhost:8080',
+  '127.0.0.1:3000',
+  '192.168.1.254',
+  'cnfxtrade.com',
 ])
 export function parseCorsOrigins(value = process.env.CORS_ORIGINS) {
   const source = value === undefined ? DEFAULT_CORS_ORIGINS.join(',') : String(value)
-  return [...new Set(source.split(',').map(item => item.trim()).filter(Boolean))]
+  return splitCorsOrigins(source)
 }
 export const CORS_ORIGINS = Object.freeze(parseCorsOrigins())
 

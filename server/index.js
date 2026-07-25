@@ -4,7 +4,7 @@ import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import http from 'http'
-import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, API_RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, CORS_ORIGINS } from './config.js'
+import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, API_RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, CORS_ORIGINS, isCorsOriginAllowed } from './config.js'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
@@ -63,7 +63,7 @@ app.set('trust proxy', 1) // 仅信任第一级反向代理（Nginx等），避�
 // CORS: restrict to known origins
 app.use(cors({
   origin(origin, cb) {
-    if (!origin || CORS_ORIGINS.includes(origin) || CORS_ORIGINS.includes('*')) {
+    if (!origin || isCorsOriginAllowed(origin, CORS_ORIGINS)) {
       cb(null, true)
     } else {
       console.error(`[CORS] Rejected origin: "${origin}" — allowed: [${CORS_ORIGINS.join(', ')}]`)

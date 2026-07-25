@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing } from './db.js'
 import { ADMIN_CACHE_TTL_MS, CORS_ORIGINS } from './config.js'
+import { isCorsOriginAllowed } from './cors-origin.js'
 import { getRedis, isRedisAvailable } from './redis.js'
 import { stripBrokerSuffix, utcToMt5Time } from './routes/ai/utils.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './routes/ai/defaults.js'
@@ -52,7 +53,7 @@ export function isAllowedBrowserWsOrigin(req, type) {
   if (type !== 'browser' && type !== 'admin') return true
   const origin = String(req?.headers?.origin || '').trim()
   if (!origin) return false
-  return CORS_ORIGINS.includes('*') || CORS_ORIGINS.includes(origin)
+  return isCorsOriginAllowed(origin, CORS_ORIGINS)
 }
 
 export function createBridgeInitMessageQueue(ws) {

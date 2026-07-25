@@ -13,7 +13,7 @@ vi.mock('../server/config.js', () => ({
   JWT_SECRET: 'test-secret',
   DEFAULT_API_BASE_URL: 'https://api.deepseek.com',
   ADMIN_CACHE_TTL_MS: 300000,
-  CORS_ORIGINS: ['http://localhost:3000', 'https://cnfxtrade.com'],
+  CORS_ORIGINS: ['localhost:3000', '192.168.1.254', 'cnfxtrade.com'],
 }))
 
 vi.mock('../server/redis.js', () => ({
@@ -133,8 +133,11 @@ describe('browser websocket authentication transport', () => {
   it('accepts configured browser origins and rejects missing or foreign origins', () => {
     expect(isAllowedBrowserWsOrigin({ headers:{ origin:'http://localhost:3000' } }, 'browser')).toBe(true)
     expect(isAllowedBrowserWsOrigin({ headers:{ origin:'https://cnfxtrade.com' } }, 'admin')).toBe(true)
+    expect(isAllowedBrowserWsOrigin({ headers:{ origin:'http://192.168.1.254' } }, 'browser')).toBe(true)
+    expect(isAllowedBrowserWsOrigin({ headers:{ origin:'https://ai.cnfxtrade.com' } }, 'admin')).toBe(true)
     expect(isAllowedBrowserWsOrigin({ headers:{} }, 'browser')).toBe(false)
     expect(isAllowedBrowserWsOrigin({ headers:{ origin:'https://evil.example' } }, 'browser')).toBe(false)
+    expect(isAllowedBrowserWsOrigin({ headers:{ origin:'https://evil-cnfxtrade.com' } }, 'browser')).toBe(false)
     expect(isAllowedBrowserWsOrigin({ headers:{} }, 'bridge')).toBe(true)
   })
 

@@ -33,14 +33,16 @@ describe('security headers', () => {
     expect(headers.get('X-Content-Type-Options')).toBe('nosniff')
     expect(headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin')
     expect(headers.get('Permissions-Policy')).toContain('camera=()')
+    expect(headers.has('Cross-Origin-Opener-Policy')).toBe(false)
     expect(headers.has('Strict-Transport-Security')).toBe(false)
     expect(res.removeHeader).toHaveBeenCalledWith('X-Powered-By')
     expect(next).toHaveBeenCalledOnce()
   })
 
   it('enables HSTS only for HTTPS requests', () => {
-    expect(applyHeaders('/', { forwardedProto:'https' }).headers.get('Strict-Transport-Security'))
-      .toBe('max-age=31536000; includeSubDomains')
+    const { headers } = applyHeaders('/', { forwardedProto:'https' })
+    expect(headers.get('Cross-Origin-Opener-Policy')).toBe('same-origin')
+    expect(headers.get('Strict-Transport-Security')).toBe('max-age=31536000; includeSubDomains')
   })
 
   it('removes unsafe eval and bounds HTTP connection lifetimes', () => {
