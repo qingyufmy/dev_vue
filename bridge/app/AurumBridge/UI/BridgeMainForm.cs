@@ -89,8 +89,10 @@ public sealed class BridgeMainForm : Form
     public void SetPairingBusy(bool busy)
     {
         _pairButton.Enabled = !busy;
-        _pairButton.Text = busy ? "等待浏览器确认…" : "连接账号";
+        _pairButton.Text = busy ? "正在准备授权…" : "连接账号";
     }
+
+    public void SetPairingBrowserOpened() => _pairButton.Text = "等待浏览器确认…";
 
     public void ShowFromTray()
     {

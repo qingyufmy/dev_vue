@@ -187,10 +187,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
         {
             await _controller.PairAsync(prompt =>
             {
-                Process.Start(new ProcessStartInfo(prompt.VerificationUri.AbsoluteUri)
+                _ = Process.Start(new ProcessStartInfo(prompt.VerificationUri.AbsoluteUri)
                 {
                     UseShellExecute = true,
-                });
+                }) ?? throw new InvalidOperationException("pairing_browser_start_failed");
+                _form.SetPairingBrowserOpened();
+                _logger.Info("pairing_browser_opened");
                 return Task.CompletedTask;
             }, _stop.Token);
             _logger.Info("pairing_completed");

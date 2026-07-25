@@ -33,6 +33,7 @@
 | 单 Worker 崩溃隔离 | 1、5、20 终端规模全部通过 | 通过 |
 | 未确认 Outbox 跨进程恢复 | 全部恢复 | 通过 |
 | MT4 指令动作矩阵 | 模拟 EA 覆盖下单、改单、撤单、平仓等动作 | 通过协议测试 |
+| 真实 MT5 Worker 崩溃恢复 | 杀死 Worker 后 `1.991 s` 启动替代 Worker；MT5 进程未重启 | 通过 `≤ 30 s` 门槛 |
 
 Acceptance 测试总数：8，全部通过。
 
@@ -49,3 +50,4 @@ Acceptance 测试总数：8，全部通过。
 - 只启动一个选中的 MT5 Worker，connection epoch 为 9。
 - 无本地授权凭证时进入 `PairingRequired`。
 - 首次授权启动请求遇到服务器超时后保持后台退避重试，超过 60 秒未重复记录 `pairing_failed`，也未生成不完整凭证。
+- 实际终止 Python Worker 后，Host 在 1.991 秒内恢复同一终端的新 Worker；MT5 PID 与启动时间保持不变。
