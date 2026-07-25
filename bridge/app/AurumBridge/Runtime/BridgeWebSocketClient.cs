@@ -105,11 +105,12 @@ public sealed class BridgeWebSocketClient
                 var pumpTask = PumpLoopAsync(outbox, sessionCancellation.Token);
                 var heartbeatTask = HeartbeatLoopAsync(
                     outbound, attempt.Hello.SessionId, sessionCancellation.Token);
-                await receiveTask;
-                sessionCancellation.Cancel();
-                await IgnoreCancellationAsync(sendTask);
-                await IgnoreCancellationAsync(pumpTask);
-                await IgnoreCancellationAsync(heartbeatTask);
+                await BridgeSessionLoopMonitor.RunAsync(
+                    receiveTask,
+                    sendTask,
+                    pumpTask,
+                    heartbeatTask,
+                    sessionCancellation);
             }
             finally
             {
@@ -288,14 +289,4 @@ public sealed class BridgeWebSocketClient
         }
     }
 
-    private static async Task IgnoreCancellationAsync(Task task)
-    {
-        try
-        {
-            await task;
-        }
-        catch (OperationCanceledException)
-        {
-        }
-    }
 }
