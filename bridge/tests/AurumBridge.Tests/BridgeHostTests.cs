@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using AurumBridge.Protocol;
 using AurumBridge.Runtime;
@@ -56,6 +57,65 @@ public sealed class BridgeHostTests
         var second = new TerminalRuntimeSupervisor(terminal, () => new FakeRuntime(terminal));
 
         Assert.ThrowsExactly<ArgumentException>(() => new BridgeHost(testStore.Store, [first, second]));
+    }
+
+    [TestMethod]
+    [TestCategory("Acceptance")]
+    [DataRow(1)]
+    [DataRow(5)]
+    [DataRow(20)]
+    public async Task IsolatesOneWorkerCrashAcrossTerminalScale(int terminalCount)
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var terminals = Enumerable.Range(0, terminalCount)
+            .Select(index => Terminal($"terminal_scale_{index:D2}", $"20{index:D3}"))
+            .ToArray();
+        var creationCounts = new int[terminalCount];
+        var stableRuntimes = new IsolatedRuntime?[terminalCount];
+        var stableRunning = Enumerable.Range(0, terminalCount)
+            .Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously))
+            .ToArray();
+        var supervisors = terminals.Select((terminal, index) => new TerminalRuntimeSupervisor(
+            terminal,
+            () =>
+            {
+                var creation = Interlocked.Increment(ref creationCounts[index]);
+                var failCollection = index == 0 && creation == 1;
+                var runtime = new IsolatedRuntime(terminal, failCollection);
+                if (!failCollection)
+                {
+                    stableRuntimes[index] = runtime;
+                    runtime.Started += () => stableRunning[index].TrySetResult();
+                }
+                return runtime;
+            },
+            (_, _) => Task.CompletedTask)).ToArray();
+        await using var host = new BridgeHost(testStore.Store, supervisors);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = host.RunAsync(cancellation.Token);
+
+        await Task.WhenAll(stableRunning.Select(signal => signal.Task)).WaitAsync(TimeSpan.FromSeconds(5));
+        var results = await Task.WhenAll(terminals.Select((terminal, index) =>
+            host.CommandDispatcher.DispatchAsync(Command(terminal) with
+            {
+                MessageId = $"message_scale_{index:D2}",
+                CommandId = $"command_scale_{index:D2}",
+            })));
+
+        Assert.AreEqual(2, creationCounts[0], "Only the injected terminal should restart once.");
+        Assert.IsTrue(creationCounts.Skip(1).All(count => count == 1));
+        Assert.IsTrue(results.All(result => result.Status == "succeeded"));
+        for (var index = 0; index < terminalCount; index++)
+        {
+            Assert.IsNotNull(stableRuntimes[index]);
+            CollectionAssert.AreEqual(
+                new[] { $"command_scale_{index:D2}" },
+                stableRuntimes[index]!.CommandIds.ToArray(),
+                $"Terminal {index} received a command belonging to another terminal.");
+        }
+
+        cancellation.Cancel();
+        await run;
     }
 
     private static TerminalDescriptor Terminal(string terminalId, string login) => new()
@@ -153,6 +213,67 @@ public sealed class BridgeHostTests
         }
 
         public void RequestFullSnapshot(string stream) => FullSnapshotRequests.Add(stream);
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class IsolatedRuntime(
+        TerminalDescriptor terminal,
+        bool failCollection) : IBridgeTerminalRuntime
+    {
+        public TerminalDescriptor Terminal { get; } = terminal;
+        public ConcurrentQueue<string> CommandIds { get; } = new();
+        public event Action? Started;
+
+        public Task StartAsync(CancellationToken cancellationToken = default)
+        {
+            Started?.Invoke();
+            return Task.CompletedTask;
+        }
+
+        public async Task RunCollectionLoopAsync(CancellationToken cancellationToken = default)
+        {
+            if (failCollection)
+            {
+                throw new IOException("simulated_worker_crash");
+            }
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+
+        public Task<CommandResultMessage> ExecuteCommandAsync(
+            CommandMessage command,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.TerminalInstanceId != Terminal.TerminalInstanceId
+                || command.ConnectionEpoch != Terminal.ConnectionEpoch
+                || command.AccountRef != Terminal.AccountRef)
+            {
+                throw new InvalidDataException("cross_terminal_command");
+            }
+            CommandIds.Enqueue(command.CommandId);
+            return Task.FromResult(new CommandResultMessage
+            {
+                Type = "command_result",
+                MessageId = $"result_{command.CommandId}",
+                SentAtUtcMsc = 2,
+                CommandId = command.CommandId,
+                TerminalInstanceId = command.TerminalInstanceId,
+                AccountRef = command.AccountRef,
+                ConnectionEpoch = command.ConnectionEpoch,
+                Status = "succeeded",
+                CompletedAtUtcMsc = 2,
+                Evidence = new() { ObservedAtUtcMsc = 2 },
+            });
+        }
+
+        public Task<QuoteMessage> GetQuoteAsync(
+            QuoteRequestMessage request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public void RequestFullSnapshot(string stream)
+        {
+        }
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
