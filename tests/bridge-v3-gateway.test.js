@@ -156,6 +156,27 @@ async function connect(gateway, { ticket = 'ticket-value' } = {}) {
   return ws
 }
 
+async function completeInitialSync(ws) {
+  for (const [index, stream] of ['account', 'positions', 'orders'].entries()) {
+    ws.emit('message', Buffer.from(JSON.stringify({
+      ...hello().terminals[0],
+      v:3,
+      type:'data_delta',
+      message_id:`msg_01JGATEWAY_FULL_${stream}`,
+      sent_at_utc_msc:NOW,
+      stream,
+      revision:index + 1,
+      base_revision:0,
+      observed_at_utc_msc:NOW,
+      source_time_msc:NOW,
+      full_snapshot:true,
+      upserts:stream === 'account' ? [{ login:12345678 }] : [],
+      deletes:[],
+    })))
+    await flush()
+  }
+}
+
 describe('Bridge v3 websocket gateway', () => {
   it('authenticates with a one-time ticket and requires hello before data', async () => {
     const { gateway, dependencies } = setup()
@@ -275,26 +296,22 @@ describe('Bridge v3 websocket gateway', () => {
     await flush()
     expect(gateway.listConnectedTerminals(42)[0].initial_sync_ready).toBe(false)
 
-    for (const [index, stream] of ['account', 'positions', 'orders'].entries()) {
-      ws.emit('message', Buffer.from(JSON.stringify({
-        ...hello().terminals[0],
-        v:3,
-        type:'data_delta',
-        message_id:`msg_01JGATEWAY_FULL_${stream}`,
-        sent_at_utc_msc:NOW,
-        stream,
-        revision:index + 1,
-        base_revision:0,
-        observed_at_utc_msc:NOW,
-        source_time_msc:NOW,
-        full_snapshot:true,
-        upserts:stream === 'account' ? [{ login:12345678 }] : [],
-        deletes:[],
-      })))
-      await flush()
-    }
+    await completeInitialSync(ws)
 
     expect(gateway.listConnectedTerminals(42)[0].initial_sync_ready).toBe(true)
+  })
+
+  it('keeps commands queued until all initial snapshots are acknowledged', async () => {
+    const { gateway, dependencies } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    await expect(gateway.sendCommand(42, command())).resolves.toMatchObject({
+      status:'queued', error:'bridge_terminal_initial_sync_pending',
+    })
+    expect(dependencies.markDispatched).not.toHaveBeenCalled()
+    expect(ws.send.mock.calls.map(call => JSON.parse(call[0]).type)).not.toContain('command')
   })
 
   it('persists dispatch before writing and resolves only after a stored result', async () => {
@@ -307,6 +324,7 @@ describe('Bridge v3 websocket gateway', () => {
     const ws = await connect(gateway)
     ws.emit('message', Buffer.from(JSON.stringify(hello())))
     await flush()
+    await completeInitialSync(ws)
     ws.send.mockImplementation(payload => {
       if (JSON.parse(payload).type === 'command') order.push('send')
     })
@@ -425,6 +443,7 @@ describe('Bridge v3 websocket gateway', () => {
       const ws = await connect(gateway)
       ws.emit('message', Buffer.from(JSON.stringify(hello())))
       await vi.runAllTimersAsync()
+      await completeInitialSync(ws)
       const pending = gateway.sendCommand(42, command(), { timeoutMs:50 })
       await vi.advanceTimersByTimeAsync(50)
       await expect(pending).resolves.toMatchObject({ status:'uncertain', command_id:'command_01JGATEWAY01' })

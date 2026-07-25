@@ -97,6 +97,11 @@ export function createBridgeV3Gateway({
       && now() - Number(connection.lastSeen || 0) <= BRIDGE_V3_CONNECTION_STALE_MS
   }
 
+  function terminalInitialSyncReady(connection, terminalInstanceId) {
+    const synchronizedStreams = connection.initialSnapshotStreams.get(terminalInstanceId)
+    return REQUIRED_INITIAL_STREAMS.every(stream => synchronizedStreams?.has(stream))
+  }
+
   function unregisterConnection(connection) {
     for (const terminal of connection.terminals.values()) {
       const current = connectionsByTerminal.get(terminal.terminal_instance_id)
@@ -363,6 +368,9 @@ export function createBridgeV3Gateway({
       || !sameBridgeRoute(routeFromTerminal(routed.terminal), command)) {
       return { status:'queued', command_id:command.command_id, error:'bridge_terminal_not_connected' }
     }
+    if (!terminalInitialSyncReady(routed.connection, command.terminal_instance_id)) {
+      return { status:'queued', command_id:command.command_id, error:'bridge_terminal_initial_sync_pending' }
+    }
     await markDispatched(command.command_id, {
       connectionEpoch:command.connection_epoch,
       nowUtcMsc,
@@ -468,8 +476,7 @@ export function createBridgeV3Gateway({
         platform:terminal.platform,
         account_ref:{ ...terminal.account_ref },
         connection_epoch:terminal.connection_epoch,
-        initial_sync_ready:REQUIRED_INITIAL_STREAMS.every(stream =>
-          connection.initialSnapshotStreams.get(terminal.terminal_instance_id)?.has(stream)),
+        initial_sync_ready:terminalInitialSyncReady(connection, terminal.terminal_instance_id),
         connection_generation:connection.generation,
       })
     }
