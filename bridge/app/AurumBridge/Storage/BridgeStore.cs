@@ -414,6 +414,22 @@ public sealed class BridgeStore : IAsyncDisposable
                 AddTerminalBindingParameters(upsert, binding);
                 await upsert.ExecuteNonQueryAsync(cancellationToken);
             }
+            await using (var pruneStaleEpochState = connection.CreateCommand())
+            {
+                pruneStaleEpochState.Transaction = (SqliteTransaction)transaction;
+                pruneStaleEpochState.CommandText = """
+                    DELETE FROM outbox_messages
+                    WHERE terminal_instance_id = $terminal_id
+                      AND message_type = 'data_delta'
+                      AND connection_epoch < $epoch;
+                    DELETE FROM stream_revisions
+                    WHERE terminal_instance_id = $terminal_id
+                      AND connection_epoch < $epoch;
+                    """;
+                pruneStaleEpochState.Parameters.AddWithValue("$terminal_id", binding.TerminalInstanceId);
+                pruneStaleEpochState.Parameters.AddWithValue("$epoch", binding.ConnectionEpoch);
+                await pruneStaleEpochState.ExecuteNonQueryAsync(cancellationToken);
+            }
             await transaction.CommitAsync(cancellationToken);
             return binding;
         }

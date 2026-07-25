@@ -118,16 +118,10 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
     public async Task RunCollectionLoopAsync(CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        var lastCalibration = 0L;
         var lastAccountCollection = 0L;
         while (!cancellationToken.IsCancellationRequested)
         {
             var now = _clock();
-            if (now - lastCalibration >= 10_000)
-            {
-                RequestAllFullSnapshots();
-                lastCalibration = now;
-            }
             var fullSnapshotStreams = DrainFullSnapshotRequests();
             var requestedStreams = new List<string> { "positions", "orders" };
             if (fullSnapshotStreams.Contains("account") || now - lastAccountCollection >= 1_000)

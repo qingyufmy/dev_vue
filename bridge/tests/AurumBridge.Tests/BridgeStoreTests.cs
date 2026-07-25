@@ -163,6 +163,50 @@ public sealed class BridgeStoreTests
     }
 
     [TestMethod]
+    public async Task AdvancingTerminalBindingPrunesOnlyItsStaleDataOutbox()
+    {
+        var terminalPath = Path.Combine(_directory, "Broker MT5", "terminal64.exe");
+        var first = await _store.ActivateTerminalBindingAsync(
+            "mt5_terminal_01", "mt5", terminalPath, new("Broker-Demo", "12345678"), 10);
+        await _store.PersistDataDeltaAsync(Delta("positions", 1, 0,
+            [Json("""{"ticket":"1001"}""")]) with
+        {
+            MessageId = "msg_target_epoch_1",
+            TerminalInstanceId = first.TerminalInstanceId,
+            ConnectionEpoch = first.ConnectionEpoch,
+        });
+        await _store.PersistDataDeltaAsync(Delta("positions", 1, 0,
+            [Json("""{"ticket":"2001"}""")]) with
+        {
+            MessageId = "msg_other_terminal",
+            TerminalInstanceId = "mt5_terminal_02",
+            ConnectionEpoch = 1,
+        });
+
+        var second = await _store.ActivateTerminalBindingAsync(
+            first.TerminalInstanceId, "mt5", terminalPath, first.AccountRef, 20);
+
+        var afterActivation = await _store.GetPendingOutboxAsync();
+        Assert.HasCount(1, afterActivation);
+        Assert.AreEqual("msg_other_terminal", afterActivation[0].MessageId);
+        Assert.AreEqual(0L, await _store.GetStreamRevisionAsync(
+            first.TerminalInstanceId, first.ConnectionEpoch, "positions"));
+        Assert.AreEqual(1L, await _store.GetStreamRevisionAsync(
+            "mt5_terminal_02", 1, "positions"));
+
+        await _store.PersistDataDeltaAsync(Delta("positions", 1, 0,
+            [Json("""{"ticket":"1002"}""")]) with
+        {
+            MessageId = "msg_target_epoch_2",
+            TerminalInstanceId = second.TerminalInstanceId,
+            ConnectionEpoch = second.ConnectionEpoch,
+        });
+        var current = await _store.GetPendingOutboxAsync();
+        Assert.HasCount(2, current);
+        CollectionAssert.Contains(current.Select(message => message.MessageId).ToArray(), "msg_target_epoch_2");
+    }
+
+    [TestMethod]
     public async Task ListsLatestTerminalBindingsForStartupRecovery()
     {
         var firstPath = Path.Combine(_directory, "One", "terminal64.exe");

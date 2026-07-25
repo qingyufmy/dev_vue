@@ -201,6 +201,30 @@ public sealed class Mt5TerminalRuntimeTests
         Assert.IsTrue(refresh.GetProperty("full_snapshot").GetBoolean());
     }
 
+    [TestMethod]
+    public async Task UnchangedPollingDoesNotPeriodicallyForceFullSnapshots()
+    {
+        await _runtime.DisposeAsync();
+        var now = 1_800_000_000_000L;
+        _worker = new FakeWorker { Response = Snapshot("1001") };
+        _runtime = new Mt5TerminalRuntime(
+            Terminal(), _worker, _testStore.Store, () => Interlocked.Add(ref now, 11_000));
+        await _runtime.StartAsync();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var collection = _runtime.RunCollectionLoopAsync(cancellation.Token);
+
+        await _worker.WaitForRequestCountAsync(2).WaitAsync(TimeSpan.FromSeconds(3));
+        while ((await _testStore.Store.GetPendingOutboxAsync()).Count < 3)
+        {
+            await Task.Delay(10, cancellation.Token);
+        }
+        await Task.Delay(100, cancellation.Token);
+        cancellation.Cancel();
+        await Assert.ThrowsExactlyAsync<TaskCanceledException>(async () => await collection);
+
+        Assert.HasCount(3, await _testStore.Store.GetPendingOutboxAsync());
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "terminal_01JRUNTIME01",
