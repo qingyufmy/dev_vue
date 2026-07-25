@@ -17,7 +17,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | C# 主程序，Python 仅作为 MT5 Worker | 已实现 | `bridge/app/AurumBridge`、`bridge/adapters/mt5-python/worker.py` |
 | 用户主动选择 MT4 或 MT5，只运行所选适配器 | 已实现 | `BridgeUserPreferences`、`BridgeApplicationController`、`BridgeMainForm` |
 | 单 MT5 自动使用；多个 MT5 必须选择具体账户，只启动所选 Worker | 已实现 | `BridgeApplicationController.ResolveMt5TerminalSelection`、`BridgeTerminalSelectionTests` |
-| 首次启动自动打开浏览器授权一次 | 已实现 | `BridgeFirstAuthorizationGate`、`BridgeApplicationContext` |
+| 首次启动自动打开浏览器授权一次 | 已实现 | `BridgeFirstAuthorizationGate`、`BridgeApplicationContext`；本地真实启动记录 `pairing_browser_opened` |
 | 后续启动静默复用授权，主动退出才清除 | 已实现 | DPAPI `FileBridgeCredentialStore`、`BridgeSessionClient`、授权与退出测试 |
 | 日志在软件内直接查看 | 已实现 | `BridgeLogViewerForm`、`BridgeLogReader` |
 | 界面显示账户、状态、服务器、最近同步和版本 | 已实现 | `BridgeMainForm`、`BridgeUiText` |
@@ -44,10 +44,11 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 验证 | 结果 | 边界 |
 |---|---|---|
 | .NET Bridge/Launcher 全量测试 | 156/156 通过 | 自动化功能、协议、存储、恢复、更新与 UI 文案 |
-| Node 服务端全量测试 | 1674/1674 通过 | v3 Gateway、ledger、read model、共享 Schema、授权与发布清单等 |
+| Node 服务端全量测试 | 1675/1675 通过 | v3 Gateway、ledger、read model、共享 Schema、授权与发布清单等 |
 | MT5 Python Worker 测试 | 22/22 通过 | Python 适配器协议与 MT5 调用封装 |
 | MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |
 | Windows 主界面走查 | 已通过 | 平台选择、真实 MT5 账户探测、仅 MT5 Worker、内置日志查看 |
+| 浏览器授权页真实路由 | 已通过 | 登录态下显示当前账户、一次性短码、权限说明和确认按钮；JS/CSS 使用同一新缓存版本 |
 | 本机真实 MT5 只读探测 | 已通过 | demo 账户可识别；尚未把生产服务器交易指令作为测试单执行 |
 | 本机 Acceptance 验收组 | 8/8 通过 | 详见 [本机验收记录](./2026-07-26-aurum-bridge-v3-local-acceptance.md) |
 | 真实单 Worker 崩溃恢复 | 1.991 秒恢复 | MT5 未重启；当前仅覆盖单个 MT5 demo 终端 |
