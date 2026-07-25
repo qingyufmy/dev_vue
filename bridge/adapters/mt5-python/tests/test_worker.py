@@ -149,6 +149,26 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("management_volume_mismatch", result["error_code"])
         self.assertEqual([], adapter.mt5.sent)
 
+    def test_management_close_matching_position_sends_inverse_market_order(self):
+        adapter = self.adapter()
+        position = SimpleNamespace(ticket=10, symbol="XAUUSD", type=0, volume=0.1,
+                                   magic=234000)
+        adapter.mt5.positions_get = lambda **kwargs: (position,)
+        expected = {
+            "ticket": "10", "symbol": "XAUUSD", "direction": "buy",
+            "volume": 0.1, "magic": 234000,
+        }
+        result = adapter.execute(self.command(
+            action="close_position",
+            params={"ticket": "10", "volume": 0.1, "expected_state": expected},
+        ))
+        self.assertEqual("succeeded", result["status"])
+        request = adapter.mt5.sent[0]
+        self.assertEqual(1, request["action"])
+        self.assertEqual(10, request["position"])
+        self.assertEqual(1, request["type"])
+        self.assertEqual(2300.0, request["price"])
+
     def test_management_cancel_is_idempotent_when_target_is_absent(self):
         adapter = self.adapter()
         expected = {
@@ -161,6 +181,36 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("succeeded", result["status"])
         self.assertTrue(result["raw_result"]["already_absent"])
         self.assertEqual([], adapter.mt5.sent)
+
+    def test_management_cancel_existing_pending_order_sends_remove(self):
+        adapter = self.adapter()
+        order = SimpleNamespace(ticket=20, symbol="XAUUSD", type=2, volume_current=0.1,
+                                volume_initial=0.1, magic=234000)
+        adapter.mt5.orders_get = lambda **kwargs: (order,)
+        expected = {
+            "ticket": "20", "symbol": "XAUUSD", "direction": "buy",
+            "volume": 0.1, "magic": 234000,
+        }
+        result = adapter.execute(self.command(
+            action="cancel_order", params={"ticket": "20", "expected_state": expected},
+        ))
+        self.assertEqual("succeeded", result["status"])
+        self.assertEqual(8, adapter.mt5.sent[0]["action"])
+        self.assertEqual(20, adapter.mt5.sent[0]["order"])
+
+    def test_modify_pending_order_sends_requested_prices(self):
+        adapter = self.adapter()
+        result = adapter.execute(self.command(action="modify_order", params={
+            "ticket": "20", "price": 2299.0, "stop_loss": 2290.0,
+            "take_profit": 2320.0, "expiration": 1_900_000_000,
+        }))
+        self.assertEqual("succeeded", result["status"])
+        request = adapter.mt5.sent[0]
+        self.assertEqual(7, request["action"])
+        self.assertEqual(20, request["order"])
+        self.assertEqual(2299.0, request["price"])
+        self.assertEqual(2290.0, request["sl"])
+        self.assertEqual(2320.0, request["tp"])
 
     def test_modify_position_revalidates_and_verifies_protection(self):
         adapter = self.adapter()

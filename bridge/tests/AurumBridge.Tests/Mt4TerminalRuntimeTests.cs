@@ -83,6 +83,39 @@ public sealed class Mt4TerminalRuntimeTests
     }
 
     [TestMethod]
+    [TestCategory("Acceptance")]
+    public async Task ForwardsTheCompleteMt4TradeActionMatrix()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection();
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_matrix");
+        await runtime.StartAsync();
+        var commands = new (string Action, object Params, Mt4TradeAction Expected)[]
+        {
+            ("place_order", new { symbol = "XAUUSD", side = "buy", order_kind = "market", volume = 0.1 }, Mt4TradeAction.PlaceOrder),
+            ("cancel_order", new { ticket = "20" }, Mt4TradeAction.CancelOrder),
+            ("modify_order", new { ticket = "21", price = 2299.0, stop_loss = 2290.0 }, Mt4TradeAction.ModifyOrder),
+            ("modify_position", new { ticket = "22", symbol = "XAUUSD", side = "buy", volume = 0.1, stop_loss = 2295.0 }, Mt4TradeAction.ModifyPosition),
+            ("close_position", new { ticket = "22", symbol = "XAUUSD", side = "buy", volume = 0.1 }, Mt4TradeAction.ClosePosition),
+            ("query_execution", new { expected_kind = "trade", trade_ticket = "22" }, Mt4TradeAction.QueryExecution),
+        };
+
+        foreach (var item in commands)
+        {
+            var result = await runtime.ExecuteCommandAsync(Command(item.Action, item.Params) with
+            {
+                CommandId = $"command_mt4_matrix_{connection.Commands.Count:D2}",
+            });
+            Assert.AreEqual("succeeded", result.Status, $"MT4 action {item.Action} was not forwarded successfully.");
+        }
+
+        CollectionAssert.AreEqual(
+            commands.Select(item => item.Expected).ToArray(),
+            connection.Commands.Select(command => command.Action).ToArray());
+    }
+
+    [TestMethod]
     public async Task MapsRatesOverTheTransientMt4DataChannel()
     {
         await using var testStore = await TestStore.CreateAsync();
@@ -203,6 +236,7 @@ public sealed class Mt4TerminalRuntimeTests
         public Mt4Welcome? Welcome { get; private set; }
         public int ExecuteCount { get; private set; }
         public Mt4TradeCommand? LastCommand { get; private set; }
+        public List<Mt4TradeCommand> Commands { get; } = [];
         public JsonElement? NextRawResult { get; init; }
         public Mt4RatesRequest? LastRatesRequest { get; private set; }
         public Mt4SymbolSnapshotRequest? LastSymbolRequest { get; private set; }
@@ -224,6 +258,7 @@ public sealed class Mt4TerminalRuntimeTests
         {
             ExecuteCount++;
             LastCommand = command;
+            Commands.Add(command);
             return Task.FromResult(new Mt4TradeResult(
                 command.CommandId,
                 "succeeded",
@@ -232,7 +267,9 @@ public sealed class Mt4TerminalRuntimeTests
                 0,
                 command.Ticket,
                 1_800_000_000_050,
-                NextRawResult));
+                NextRawResult ?? (command.Action == Mt4TradeAction.QueryExecution
+                    ? Json("""{"found":true,"complete":true,"kind":"trade","ticket":"22","position_id":"22"}""")
+                    : null)));
         }
 
         public Task<Mt4Quote> GetQuoteAsync(
