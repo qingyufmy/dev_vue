@@ -5,19 +5,87 @@ using AurumBridge.Protocol;
 
 namespace AurumBridge.Workers;
 
+public enum WorkerRequestPriority
+{
+    Trade,
+    Data,
+}
+
 public interface IMt5WorkerClient : IAsyncDisposable
 {
     bool IsConnected { get; }
     JsonElement WorkerHello { get; }
     Task StartAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
-    Task<JsonElement> RequestAsync<T>(T request, CancellationToken cancellationToken = default);
+    Task<JsonElement> RequestAsync<T>(
+        T request,
+        WorkerRequestPriority priority,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class WorkerRequestGate
+{
+    private readonly object _sync = new();
+    private readonly Queue<TaskCompletionSource<IDisposable>> _trade = new();
+    private readonly Queue<TaskCompletionSource<IDisposable>> _data = new();
+    private bool _held;
+
+    public ValueTask<IDisposable> EnterAsync(
+        WorkerRequestPriority priority,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        TaskCompletionSource<IDisposable>? waiter = null;
+        lock (_sync)
+        {
+            if (!_held)
+            {
+                _held = true;
+                return ValueTask.FromResult<IDisposable>(new Lease(this));
+            }
+            waiter = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            (priority == WorkerRequestPriority.Trade ? _trade : _data).Enqueue(waiter);
+        }
+        return WaitAsync(waiter, cancellationToken);
+    }
+
+    private static async ValueTask<IDisposable> WaitAsync(
+        TaskCompletionSource<IDisposable> waiter,
+        CancellationToken cancellationToken)
+    {
+        using var registration = cancellationToken.Register(
+            () => waiter.TrySetCanceled(cancellationToken));
+        return await waiter.Task;
+    }
+
+    private void Release()
+    {
+        lock (_sync)
+        {
+            while (_trade.Count > 0 || _data.Count > 0)
+            {
+                var queue = _trade.Count > 0 ? _trade : _data;
+                var waiter = queue.Dequeue();
+                if (waiter.TrySetResult(new Lease(this)))
+                {
+                    return;
+                }
+            }
+            _held = false;
+        }
+    }
+
+    private sealed class Lease(WorkerRequestGate owner) : IDisposable
+    {
+        private WorkerRequestGate? _owner = owner;
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Release();
+    }
 }
 
 public sealed class Mt5WorkerClient : IMt5WorkerClient
 {
     private readonly string _pipeName;
     private readonly ProcessStartInfo _startInfo;
-    private readonly SemaphoreSlim _requestLock = new(1, 1);
+    private readonly WorkerRequestGate _requestGate = new();
     private NamedPipeServerStream? _pipe;
     private Process? _process;
     private bool _disposed;
@@ -69,6 +137,7 @@ public sealed class Mt5WorkerClient : IMt5WorkerClient
 
     public async Task<JsonElement> RequestAsync<T>(
         T request,
+        WorkerRequestPriority priority,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -76,17 +145,10 @@ public sealed class Mt5WorkerClient : IMt5WorkerClient
         {
             throw new InvalidOperationException("worker_not_connected");
         }
-        await _requestLock.WaitAsync(cancellationToken);
-        try
-        {
-            await WorkerPipeProtocol.WriteAsync(_pipe, request, cancellationToken);
-            using var response = await WorkerPipeProtocol.ReadAsync(_pipe, cancellationToken);
-            return response.RootElement.Clone();
-        }
-        finally
-        {
-            _requestLock.Release();
-        }
+        using var lease = await _requestGate.EnterAsync(priority, cancellationToken);
+        await WorkerPipeProtocol.WriteAsync(_pipe, request, cancellationToken);
+        using var response = await WorkerPipeProtocol.ReadAsync(_pipe, cancellationToken);
+        return response.RootElement.Clone();
     }
 
     public static ProcessStartInfo BuildStartInfo(
@@ -127,8 +189,7 @@ public sealed class Mt5WorkerClient : IMt5WorkerClient
             return;
         }
         _disposed = true;
-        await _requestLock.WaitAsync();
-        try
+        using (await _requestGate.EnterAsync(WorkerRequestPriority.Trade))
         {
             if (_pipe?.IsConnected == true)
             {
@@ -144,11 +205,6 @@ public sealed class Mt5WorkerClient : IMt5WorkerClient
             }
             await StopProcessAsync();
             _pipe?.Dispose();
-        }
-        finally
-        {
-            _requestLock.Release();
-            _requestLock.Dispose();
         }
     }
 

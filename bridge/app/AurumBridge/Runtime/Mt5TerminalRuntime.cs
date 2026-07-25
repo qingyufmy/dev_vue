@@ -66,7 +66,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        var response = await _worker.RequestAsync(command, cancellationToken);
+        var response = await _worker.RequestAsync(command, WorkerRequestPriority.Trade, cancellationToken);
         return response.Deserialize<CommandResultMessage>(BridgeJson.Options)
             ?? throw new InvalidDataException("mt5_worker_command_result_invalid");
     }
@@ -76,7 +76,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        var response = await _worker.RequestAsync(request, cancellationToken);
+        var response = await _worker.RequestAsync(request, WorkerRequestPriority.Trade, cancellationToken);
         var quote = response.Deserialize<QuoteMessage>(BridgeJson.Options)
             ?? throw new InvalidDataException("mt5_worker_quote_invalid");
         if (quote.Type != "quote"
@@ -98,7 +98,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        var response = await _worker.RequestAsync(request, cancellationToken);
+        var response = await _worker.RequestAsync(request, WorkerRequestPriority.Data, cancellationToken);
         var data = response.Deserialize<DataResponseMessage>(BridgeJson.Options)
             ?? throw new InvalidDataException("mt5_worker_data_response_invalid");
         if (data.Type != "data_response"
@@ -141,7 +141,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
                 type = "collect",
                 request_id = $"collect_{Guid.NewGuid():N}",
                 streams = requestedStreams,
-            }, cancellationToken);
+            }, WorkerRequestPriority.Data, cancellationToken);
             await IngestSnapshotAsync(response, fullSnapshotStreams, cancellationToken);
             var active = _collections["positions"].Count > 0 || _collections["orders"].Count > 0;
             await Task.Delay(active ? 250 : 750, cancellationToken);

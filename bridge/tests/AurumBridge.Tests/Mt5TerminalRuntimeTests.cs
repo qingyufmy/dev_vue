@@ -249,7 +249,10 @@ public sealed class Mt5TerminalRuntimeTests
             IsConnected = true;
             return Task.CompletedTask;
         }
-        public Task<JsonElement> RequestAsync<T>(T request, CancellationToken cancellationToken = default)
+        public Task<JsonElement> RequestAsync<T>(
+            T request,
+            WorkerRequestPriority priority,
+            CancellationToken cancellationToken = default)
         {
             RequestCount++;
             RequestObserved?.Invoke(RequestCount);
