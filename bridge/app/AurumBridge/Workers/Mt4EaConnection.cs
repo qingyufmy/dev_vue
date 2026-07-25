@@ -2,7 +2,18 @@ using System.IO.Pipes;
 
 namespace AurumBridge.Workers;
 
-public sealed class Mt4EaConnection : IAsyncDisposable
+public interface IMt4EaConnection : IAsyncDisposable
+{
+    Task SendWelcomeAsync(Mt4Welcome welcome, CancellationToken cancellationToken = default);
+    Task<Mt4Snapshot> CollectAsync(
+        Mt4CollectionStreams streams,
+        CancellationToken cancellationToken = default);
+    Task<Mt4TradeResult> ExecuteAsync(
+        Mt4TradeCommand command,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class Mt4EaConnection : IMt4EaConnection
 {
     private readonly NamedPipeServerStream _pipe;
     private readonly SemaphoreSlim _requestLock = new(1, 1);
