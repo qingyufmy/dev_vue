@@ -1,19 +1,24 @@
-using AurumBridge.Storage;
+using AurumBridge.UI;
 
 namespace AurumBridge;
 
 internal static class Program
 {
-    public static async Task Main()
+    [STAThread]
+    public static void Main()
     {
-        var dataDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "AURUM",
-            "BridgeV3");
-        Directory.CreateDirectory(dataDirectory);
-
-        await using var store = new BridgeStore(Path.Combine(dataDirectory, "bridge.db"));
-        await store.InitializeAsync();
-        Console.WriteLine("AURUM Bridge core initialized. UI and runtime wiring are not enabled yet.");
+        ApplicationConfiguration.Initialize();
+        try
+        {
+            Application.Run(new BridgeApplicationContext());
+        }
+        catch (Exception error)
+        {
+            MessageBox.Show(
+                BridgeUiText.DescribeError(error),
+                "AURUM Bridge 无法启动",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
     }
 }
