@@ -74,6 +74,34 @@ function result() {
   }
 }
 
+function quoteRequest(overrides = {}) {
+  return {
+    v:3,
+    type:'quote_request',
+    message_id:'msg_01JGATEWAY_QUOTE_REQUEST',
+    sent_at_utc_msc:NOW,
+    request_id:'quote_01JGATEWAY01',
+    terminal_instance_id:'terminal_01JGATEWAY1',
+    account_ref:{ broker_server:'Broker-Demo', login:'12345678' },
+    connection_epoch:7,
+    symbol:'XAUUSD',
+    ...overrides,
+  }
+}
+
+function quote(overrides = {}) {
+  return {
+    ...quoteRequest(),
+    type:'quote',
+    message_id:'msg_01JGATEWAY_QUOTE_RESULT',
+    sent_at_utc_msc:NOW + 50,
+    observed_at_utc_msc:NOW + 50,
+    bid:2345.1,
+    ask:2345.3,
+    ...overrides,
+  }
+}
+
 async function flush() {
   for (let index = 0; index < 12; index++) await Promise.resolve()
 }
@@ -212,6 +240,56 @@ describe('Bridge v3 websocket gateway', () => {
       status:'queued', error:'bridge_terminal_not_connected',
     })
     expect(dependencies.markDispatched).not.toHaveBeenCalled()
+  })
+
+  it('routes a quote transiently without touching the command ledger', async () => {
+    const { gateway, dependencies } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    const pending = gateway.requestQuote(42, quoteRequest())
+    await flush()
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'quote_request', request_id:'quote_01JGATEWAY01', symbol:'XAUUSD',
+    })
+    ws.emit('message', Buffer.from(JSON.stringify(quote())))
+    await expect(pending).resolves.toMatchObject({ bid:2345.1, ask:2345.3 })
+    expect(gateway.pendingQuotes.size).toBe(0)
+    expect(dependencies.createLedgerEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects an offline or timed-out transient quote without persisting it', async () => {
+    vi.useFakeTimers()
+    try {
+      const { gateway, dependencies } = setup()
+      expect(() => gateway.requestQuote(42, quoteRequest()))
+        .toThrowError(expect.objectContaining({ code:'bridge_terminal_not_connected' }))
+
+      const ws = await connect(gateway)
+      ws.emit('message', Buffer.from(JSON.stringify(hello())))
+      await vi.runAllTimersAsync()
+      const pending = gateway.requestQuote(42, quoteRequest(), { timeoutMs:50 })
+      const rejected = expect(pending).rejects.toMatchObject({ code:'bridge_quote_timeout' })
+      await vi.advanceTimersByTimeAsync(50)
+      await rejected
+      expect(gateway.pendingQuotes.size).toBe(0)
+      expect(dependencies.createLedgerEntry).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears pending transient quotes when the bridge disconnects', async () => {
+    const { gateway } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    const pending = gateway.requestQuote(42, quoteRequest())
+    const rejected = expect(pending).rejects.toMatchObject({ code:'bridge_quote_disconnected' })
+    ws.emit('close')
+    await rejected
+    expect(gateway.pendingQuotes.size).toBe(0)
   })
 
   it('marks a dispatched command uncertain on timeout and never retries it', async () => {

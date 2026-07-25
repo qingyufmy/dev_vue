@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/quote-request.schema.json",
+  "title": "AURUM Bridge v3 transient quote request",
+  "type": "object",
+  "required": [
+    "v", "type", "message_id", "sent_at_utc_msc", "request_id",
+    "terminal_instance_id", "account_ref", "connection_epoch", "symbol"
+  ],
+  "properties": {
+    "v": { "const": 3 },
+    "type": { "const": "quote_request" },
+    "message_id": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "sent_at_utc_msc": { "type": "integer", "minimum": 1 },
+    "request_id": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "terminal_instance_id": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "account_ref": {
+      "type": "object",
+      "required": ["broker_server", "login"],
+      "properties": {
+        "broker_server": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "login": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "additionalProperties": false
+    },
+    "connection_epoch": { "type": "integer", "minimum": 1 },
+    "symbol": { "type": "string", "minLength": 1, "maxLength": 64 }
+  },
+  "additionalProperties": false
+}

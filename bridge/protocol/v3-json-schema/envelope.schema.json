@@ -7,7 +7,7 @@
   "properties": {
     "v": { "const": 3 },
     "type": {
-      "enum": ["hello", "hello_ack", "command", "command_result", "data_delta", "data_ack", "heartbeat", "error"]
+      "enum": ["hello", "hello_ack", "command", "command_result", "quote_request", "quote", "data_delta", "data_ack", "heartbeat", "error"]
     },
     "message_id": {
       "type": "string",

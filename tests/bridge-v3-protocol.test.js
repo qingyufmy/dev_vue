@@ -93,6 +93,33 @@ describe('Bridge v3 protocol contract', () => {
     })
   })
 
+  it('validates routed transient quote requests and broker observations', () => {
+    const request = envelope('quote_request', {
+      ...route(),
+      request_id:'quote_01JBRIDGE0001',
+      symbol:'XAUUSD',
+    })
+    expect(validateBridgeV3Message(request)).toEqual({ ok:true, errors:[] })
+
+    const quote = {
+      ...request,
+      type:'quote',
+      observed_at_utc_msc:NOW,
+      bid:2345.1,
+      ask:2345.3,
+      last:2345.2,
+    }
+    expect(validateBridgeV3Message(quote)).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({ ...quote, ask:2345.0 })).toMatchObject({
+      ok:false,
+      errors:expect.arrayContaining(['ask:below_bid']),
+    })
+    expect(validateBridgeV3Message({ ...quote, symbol:' ' })).toMatchObject({
+      ok:false,
+      errors:expect.arrayContaining(['symbol:invalid']),
+    })
+  })
+
   it('enforces contiguous stream revisions so gaps trigger a full snapshot', () => {
     const delta = envelope('data_delta', {
       ...route(),

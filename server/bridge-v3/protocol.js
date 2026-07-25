@@ -1,7 +1,8 @@
 export const BRIDGE_PROTOCOL_VERSION = 3
 
 export const BRIDGE_V3_MESSAGE_TYPES = Object.freeze(new Set([
-  'hello', 'hello_ack', 'command', 'command_result', 'data_delta', 'data_ack', 'heartbeat', 'error',
+  'hello', 'hello_ack', 'command', 'command_result', 'quote_request', 'quote',
+  'data_delta', 'data_ack', 'heartbeat', 'error',
 ]))
 
 export const BRIDGE_V3_COMMAND_ACTIONS = Object.freeze(new Set([
@@ -107,6 +108,32 @@ function validateCommandResult(message) {
   return errors
 }
 
+function validateSymbol(errors, value) {
+  const symbol = String(value || '').trim()
+  if (!symbol || symbol.length > 64 || value !== symbol) errors.push('symbol:invalid')
+}
+
+function validateQuoteRequest(message) {
+  const errors = validateEnvelope(message)
+  validateId(errors, 'request_id', message.request_id)
+  validateTerminalRoute(errors, message)
+  validateSymbol(errors, message.symbol)
+  return errors
+}
+
+function validateQuote(message) {
+  const errors = validateQuoteRequest(message)
+  if (!isPositiveInteger(message.observed_at_utc_msc)) errors.push('observed_at_utc_msc:invalid')
+  if (!Number.isFinite(message.bid) || message.bid <= 0) errors.push('bid:invalid')
+  if (!Number.isFinite(message.ask) || message.ask <= 0) errors.push('ask:invalid')
+  if (Number.isFinite(message.bid) && Number.isFinite(message.ask) && message.ask < message.bid) {
+    errors.push('ask:below_bid')
+  }
+  if (message.last !== undefined && message.last !== null
+    && (!Number.isFinite(message.last) || message.last < 0)) errors.push('last:invalid')
+  return errors
+}
+
 function validateDataDelta(message) {
   const errors = validateEnvelope(message)
   validateTerminalRoute(errors, message)
@@ -133,6 +160,8 @@ export function validateBridgeV3Message(message, { nowUtcMsc = Date.now() } = {}
   if (message.type === 'hello') errors = validateHello(message)
   else if (message.type === 'command') errors = validateCommand(message, nowUtcMsc)
   else if (message.type === 'command_result') errors = validateCommandResult(message)
+  else if (message.type === 'quote_request') errors = validateQuoteRequest(message)
+  else if (message.type === 'quote') errors = validateQuote(message)
   else if (message.type === 'data_delta') errors = validateDataDelta(message)
   else errors = envelopeErrors
 

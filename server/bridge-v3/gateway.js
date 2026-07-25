@@ -20,6 +20,7 @@ export const BRIDGE_V3_WS_PATH = '/aurum-api/bridge/v3/ws'
 export const BRIDGE_V3_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 const AUTH_QUEUE_MAX_MESSAGES = 16
 const AUTH_QUEUE_MAX_BYTES = 1024 * 1024
+const MAX_PENDING_QUOTES_PER_CONNECTION = 64
 
 function messageId(prefix) {
   return `${prefix}_${randomUUID()}`
@@ -80,6 +81,11 @@ export function createBridgeV3Gateway({
   const wss = new WebSocketServerImpl({ noServer:true, maxPayload:BRIDGE_V3_MAX_PAYLOAD_BYTES })
   const connectionsByTerminal = new Map()
   const pendingResults = new Map()
+  const pendingQuotes = new Map()
+
+  function gatewayError(code) {
+    return Object.assign(new Error(code), { code })
+  }
 
   function unregisterConnection(connection) {
     for (const terminal of connection.terminals.values()) {
@@ -96,6 +102,12 @@ export function createBridgeV3Gateway({
       markUncertain(commandId, { reason:'bridge_disconnected', nowUtcMsc:now() })
         .then(({ command }) => pending.resolve({ status:'uncertain', command_id:commandId, evidence:command?.result || null }))
         .catch(error => pending.resolve({ status:'uncertain', command_id:commandId, error:error.code || error.message }))
+    }
+    for (const [requestId, pending] of pendingQuotes) {
+      if (pending.connection !== connection) continue
+      clearTimeout(pending.timer)
+      pendingQuotes.delete(requestId)
+      pending.reject(gatewayError('bridge_quote_disconnected'))
     }
   }
 
@@ -211,6 +223,18 @@ export function createBridgeV3Gateway({
       }
       return
     }
+    if (message.type === 'quote') {
+      const pending = pendingQuotes.get(message.request_id)
+      if (!pending) return
+      if (pending.connection !== connection || !sameBridgeRoute(pending.request, message)
+        || pending.request.symbol !== message.symbol) {
+        throw gatewayError('bridge_quote_response_mismatch')
+      }
+      clearTimeout(pending.timer)
+      pendingQuotes.delete(message.request_id)
+      pending.resolve(message)
+      return
+    }
     throw Object.assign(new Error('bridge_message_type_unexpected'), { code:'bridge_message_type_unexpected' })
   }
 
@@ -308,12 +332,49 @@ export function createBridgeV3Gateway({
     })
   }
 
+  function requestQuote(userId, request, { timeoutMs = 2_000 } = {}) {
+    assertBridgeV3Message(request, { nowUtcMsc:now() })
+    if (request.type !== 'quote_request') throw gatewayError('bridge_quote_request_type_invalid')
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+      throw gatewayError('bridge_quote_timeout_invalid')
+    }
+    if (pendingQuotes.has(request.request_id)) throw gatewayError('bridge_quote_request_duplicate')
+
+    const routed = connectionsByTerminal.get(request.terminal_instance_id)
+    if (!routed || routed.connection.userId !== Number(userId)
+      || !sameBridgeRoute(routeFromTerminal(routed.terminal), request)) {
+      throw gatewayError('bridge_terminal_not_connected')
+    }
+    let connectionPending = 0
+    for (const pending of pendingQuotes.values()) {
+      if (pending.connection === routed.connection) connectionPending += 1
+    }
+    if (connectionPending >= MAX_PENDING_QUOTES_PER_CONNECTION) {
+      throw gatewayError('bridge_quote_capacity_exceeded')
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pendingQuotes.delete(request.request_id)
+        reject(gatewayError('bridge_quote_timeout'))
+      }, timeoutMs)
+      pendingQuotes.set(request.request_id, { resolve, reject, timer, connection:routed.connection, request })
+      if (!safeSend(routed.connection.ws, request)) {
+        clearTimeout(timer)
+        pendingQuotes.delete(request.request_id)
+        reject(gatewayError('bridge_quote_send_failed'))
+      }
+    })
+  }
+
   return {
     wss,
     connectionsByTerminal,
+    pendingQuotes,
     handleUpgrade(req, socket, head) {
       wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req))
     },
     sendCommand,
+    requestQuote,
   }
 }
