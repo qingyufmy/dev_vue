@@ -8,7 +8,7 @@
 
 Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、恢复、SQLite、更新与 Worker 监管；MT5 仅由独立 Python Worker 调用官方库；MT4 使用不启用 DLL 的轻量 EA 和当前用户 Named Pipe。产品界面仍只暴露平台/账户选择、状态、重新检测、日志、退出账号和退出桥接。
 
-当前代码可以进入真实联调和持续运行验收，但不能据此宣称全部生产指标已经达标。安装包、Authenticode、72 小时/7 天运行、真实 MT4 demo 交易矩阵、公网延迟、10,000 次故障注入、多终端规模测试和灰度发布仍需对应环境与时间证据。
+当前代码可以进入真实联调和持续运行验收，但不能据此宣称全部生产指标已经达标。安装包、Authenticode、72 小时/7 天运行、真实 MT4 demo 交易矩阵、公网延迟、真实进程故障组合、多终端真实 MT 规模测试和灰度发布仍需对应环境与时间证据。
 
 ## 2. 已实现并有自动化证据的能力
 
@@ -32,6 +32,8 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 一终端一 Worker；单 Worker 连续失败只停止本终端 | 已实现 | `TerminalRuntimeSupervisor` 及隔离测试 |
 | Named Pipe 仅当前 Windows 用户 | 已实现 | MT4、MT5 管道均使用 `PipeOptions.CurrentUserOnly` |
 | WSS 一次性 ticket；长期凭证不进入 URL、日志或普通配置 | 已实现 | `BridgeSessionClient`、Gateway、凭证与日志脱敏测试 |
+| hello_ack 必须匹配消息、会话和全部终端，串线时失败关闭 | 已实现 | `BridgeInboundRouter`、`BridgeWebSocketClient` 及握手路由测试 |
+| C#/Node 运行时消息类型均有共享 JSON Schema | 已实现 | `bridge/contracts/v3`、`tests/bridge-v3-schema-contract.test.js` |
 | 日志轮转和脱敏；日志失败不阻断交易闭环 | 已实现 | `BridgeFileLogger` 及轮转/脱敏测试；交易回执独立保存在 SQLite Outbox |
 | 官方模块更新、兼容范围、Manifest/包签名、大小/hash、原子版本目录 | 已实现 | `ReleaseManifestVerifier`、`ReleaseStager`、`ReleaseInstaller` |
 | 更新前暂停新指令并等待在途指令；失败恢复当前运行 | 已实现 | `PauseForUpdateAsync`、Launcher last-known-good 与回滚测试 |
@@ -41,8 +43,8 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 | 验证 | 结果 | 边界 |
 |---|---|---|
-| .NET Bridge/Launcher 全量测试 | 152/152 通过 | 自动化功能、协议、存储、恢复、更新与 UI 文案 |
-| Node 服务端全量测试 | 1673/1673 通过 | v3 Gateway、ledger、read model、授权与发布清单等 |
+| .NET Bridge/Launcher 全量测试 | 156/156 通过 | 自动化功能、协议、存储、恢复、更新与 UI 文案 |
+| Node 服务端全量测试 | 1674/1674 通过 | v3 Gateway、ledger、read model、共享 Schema、授权与发布清单等 |
 | MT5 Python Worker 测试 | 22/22 通过 | Python 适配器协议与 MT5 调用封装 |
 | MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |
 | Windows 主界面走查 | 已通过 | 平台选择、真实 MT5 账户探测、仅 MT5 Worker、内置日志查看 |
@@ -63,7 +65,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | MT4 完整 demo 交易矩阵 | 协议模拟已通过，真实 broker 未执行 | 用户挂载 EA 后验证市价/挂单/改单/撤单/平仓、异常和重连 |
 | 正常网络数据 p95/p99 | 未测生产链路 | 在目标地区、真实服务器和 broker 采集订单/持仓变化端到端指标 |
 | IPC p99 与 Bridge 附加延迟 p99 | 本机基线通过 | Pipe p99 0.092 ms；Bridge p99 5.052 ms；仍需真实链路分位数 |
-| 10,000 次重复/超时/断线/重启故障注入 | 本地持久化模拟通过 | 仍需真实进程强退、Windows 重启和服务器断线组合报告 |
+| 10,000 次重复/超时/断线/重启故障注入 | 本地持久化模拟通过 | 228 ms 完成，Worker 实际调用 2 次、重启后重放 0 次；仍需真实进程强退、Windows 重启和服务器断线组合报告 |
 | 1/5/20 终端规模测试 | 模拟 Runtime 隔离通过 | 仍需真实 MT 实例的 CPU、内存、队列和 broker 行为报告 |
 | 90% 新用户 5 分钟完成连接 | 需要用户样本 | 真实安装漏斗和完成时间统计 |
 | internal→5%→25%→100% 灰度 | 尚未部署 | 每阶段观察停止线，满足后再扩大 |
@@ -72,6 +74,6 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 1. 启动当前 Debug 构建，让用户验证首次浏览器授权、MT5 账户和内置日志。
 2. 用户挂载 MT4 EA 后执行真实 demo 交易矩阵。
-3. 运行本机 IPC/故障注入基准，并开始 72 小时和 7 天采样。
+3. 持续收集 72 小时和 7 天健康样本；采样不足时验收工具保持失败关闭。
 4. 用户允许打包后再完成安装器、离线包、正式签名与干净 Windows 安装验收。
 5. 生产部署前执行灰度，不绕过任何停止线。
