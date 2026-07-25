@@ -42,7 +42,7 @@ export async function createBridgeRefreshSession(user, { userAgent = '', ip = ''
     String(userAgent || '').slice(0, 255), String(ip || '').slice(0, 64),
   ])
   await execute(`DELETE FROM bridge_refresh_sessions
-    WHERE user_id = ? AND (expires_at <= NOW() OR revoked_at IS NOT NULL)`, [user.id])
+    WHERE user_id = ? AND revoked_at IS NOT NULL`, [user.id])
   return { refreshToken, expiresInSeconds: BRIDGE_REFRESH_TTL_DAYS * 86400 }
 }
 
@@ -58,20 +58,18 @@ export async function useBridgeRefreshSession(refreshToken, { userAgent = '', ip
     FROM bridge_refresh_sessions sessions
     JOIN users ON users.id = sessions.user_id
     WHERE sessions.token_hash = ? AND sessions.revoked_at IS NULL
-      AND sessions.expires_at > NOW()
       AND users.deletion_status = 'active' AND users.deleted_at IS NULL`, [hashToken(refreshToken)])
   if (!session) {
-    const error = new Error('bridge_refresh_expired')
-    error.code = 'bridge_refresh_expired'
+    const error = new Error('bridge_refresh_revoked')
+    error.code = 'bridge_refresh_revoked'
     throw error
   }
   assertBridgeEligible(session)
   await queryRun(`UPDATE bridge_refresh_sessions
-    SET expires_at = DATE_ADD(NOW(), INTERVAL ? DAY), last_used_at = NOW(),
-      user_agent = ?, last_ip = ?, updated_at = NOW()
+    SET last_used_at = NOW(), user_agent = ?, last_ip = ?, updated_at = NOW()
     WHERE id = ?`, [
-    BRIDGE_REFRESH_TTL_DAYS, String(userAgent || '').slice(0, 255),
-    String(ip || '').slice(0, 64), session.session_id,
+    String(userAgent || '').slice(0, 255), String(ip || '').slice(0, 64),
+    session.session_id,
   ])
   return { user: session, expiresInSeconds: BRIDGE_REFRESH_TTL_DAYS * 86400 }
 }

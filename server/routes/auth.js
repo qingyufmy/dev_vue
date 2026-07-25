@@ -437,7 +437,7 @@ router.post('/auth/bridge-refresh', async (req, res) => {
     res.status(membershipBlocked ? 403 : 401).json({
       ok: false,
       code: err.code || 'bridge_refresh_invalid',
-      error: membershipBlocked ? '会员已过期或当前等级不能使用桥接软件' : '桥接登录已过期，请重新登录',
+      error: membershipBlocked ? '会员已过期或当前等级不能使用桥接软件' : '桥接授权已失效，请重新授权',
     })
   }
 })

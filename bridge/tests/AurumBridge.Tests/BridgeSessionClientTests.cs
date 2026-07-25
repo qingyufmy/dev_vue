@@ -139,12 +139,12 @@ public sealed class BridgeSessionClientTests
     }
 
     [TestMethod]
-    public async Task InvalidRefreshCredentialIsRemovedBeforeRePairing()
+    public async Task RevokedRefreshCredentialIsRemovedBeforeRePairing()
     {
         var handler = new QueueHandler(Response(HttpStatusCode.Unauthorized, new
         {
             ok = false,
-            code = "bridge_refresh_expired",
+            code = "bridge_refresh_revoked",
         }));
         var store = new MemoryCredentialStore
         {
@@ -157,7 +157,7 @@ public sealed class BridgeSessionClientTests
 
         var error = await Assert.ThrowsExactlyAsync<BridgeApiException>(
             async () => await client.AcquireConnectionAttemptAsync(Hello()));
-        Assert.AreEqual("bridge_refresh_expired", error.Code);
+        Assert.AreEqual("bridge_refresh_revoked", error.Code);
         Assert.IsNull(store.Credential);
     }
 

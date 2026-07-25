@@ -18,7 +18,7 @@ import {
 describe('bridge refresh sessions', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('creates a hashed sliding session for an eligible Bridge user', async () => {
+  it('creates a hashed durable device session for an eligible Bridge user', async () => {
     queryRun.mockResolvedValue({ changes: 1, insertId: 8 })
     const result = await createBridgeRefreshSession({ id: 7, role: 'user', plan: 'pro', plan_expires_at: null }, {
       userAgent: 'bridge-test', ip: '127.0.0.1',
@@ -30,6 +30,7 @@ describe('bridge refresh sessions', () => {
     expect(params[0]).toBe(7)
     expect(params[1]).toMatch(/^[a-f0-9]{64}$/)
     expect(params[1]).not.toBe(result.refreshToken)
+    expect(queryRun.mock.calls[1][0]).not.toContain('expires_at <= NOW()')
   })
 
   it('does not create a Bridge session for a non-Pro user', async () => {
@@ -38,7 +39,7 @@ describe('bridge refresh sessions', () => {
     expect(queryRun).not.toHaveBeenCalled()
   })
 
-  it('refreshes the sliding expiry after validating the stored hash', async () => {
+  it('keeps a device authorization active without a fixed expiry gate', async () => {
     queryOne.mockResolvedValue({
       session_id: 12, id: 4, role: 'user', plan: 'pro', plan_expires_at: null,
     })
@@ -46,13 +47,15 @@ describe('bridge refresh sessions', () => {
     const result = await useBridgeRefreshSession('x'.repeat(64), { userAgent: 'bridge', ip: '1.2.3.4' })
     expect(result.user.id).toBe(4)
     expect(queryOne.mock.calls[0][1][0]).toMatch(/^[a-f0-9]{64}$/)
-    expect(queryRun.mock.calls[0][0]).toContain('expires_at = DATE_ADD')
+    expect(queryOne.mock.calls[0][0]).not.toContain('sessions.expires_at > NOW()')
+    expect(queryRun.mock.calls[0][0]).not.toContain('expires_at =')
+    expect(queryRun.mock.calls[0][0]).toContain('last_used_at = NOW()')
   })
 
-  it('rejects missing and expired refresh credentials', async () => {
+  it('rejects missing and explicitly invalidated refresh credentials', async () => {
     await expect(useBridgeRefreshSession('short')).rejects.toMatchObject({ code: 'bridge_refresh_invalid' })
     queryOne.mockResolvedValue(null)
-    await expect(useBridgeRefreshSession('x'.repeat(64))).rejects.toMatchObject({ code: 'bridge_refresh_expired' })
+    await expect(useBridgeRefreshSession('x'.repeat(64))).rejects.toMatchObject({ code: 'bridge_refresh_revoked' })
   })
 
   it('revokes every active Bridge session after a password change or logout', async () => {
