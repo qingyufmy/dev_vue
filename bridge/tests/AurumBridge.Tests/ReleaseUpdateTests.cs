@@ -26,7 +26,9 @@ public sealed class ReleaseUpdateTests
     public void VerifiesCanonicalManifestAndRejectsTampering()
     {
         using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        var unsigned = Manifest("00" + new string('a', 62), 100, string.Empty);
+        var unsigned = SignPackages(
+            Manifest("00" + new string('a', 62), 100, string.Empty),
+            signingKey);
         var signature = Convert.ToBase64String(signingKey.SignData(
             Encoding.UTF8.GetBytes(ReleaseManifestVerifier.Canonicalize(unsigned)),
             HashAlgorithmName.SHA256));
@@ -40,6 +42,31 @@ public sealed class ReleaseUpdateTests
         };
 
         Assert.ThrowsExactly<InvalidDataException>(() => verifier.Verify(tampered, new Version(1, 0, 0)));
+    }
+
+    [TestMethod]
+    public void RejectsAPackageWithoutItsOwnValidSignature()
+    {
+        using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var packagesSigned = SignPackages(
+            Manifest("00" + new string('a', 62), 100, string.Empty),
+            signingKey);
+        var packageTampered = packagesSigned with
+        {
+            Packages = [packagesSigned.Packages[0] with { Signature = Convert.ToBase64String([1, 2, 3]) }],
+        };
+        var manifestSigned = packageTampered with
+        {
+            Signature = Convert.ToBase64String(signingKey.SignData(
+                Encoding.UTF8.GetBytes(ReleaseManifestVerifier.Canonicalize(packageTampered)),
+                HashAlgorithmName.SHA256)),
+        };
+        using var verifier = new ReleaseManifestVerifier(signingKey.ExportSubjectPublicKeyInfoPem());
+
+        var error = Assert.ThrowsExactly<InvalidDataException>(() =>
+            verifier.Verify(manifestSigned, new Version(1, 0, 0)));
+
+        Assert.AreEqual("update_package_signature_invalid", error.Message);
     }
 
     [TestMethod]
@@ -60,7 +87,9 @@ public sealed class ReleaseUpdateTests
     public async Task FetchesAndVerifiesTheServerManifestBeforeReturningIt()
     {
         using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        var unsigned = Manifest("00" + new string('a', 62), 100, string.Empty);
+        var unsigned = SignPackages(
+            Manifest("00" + new string('a', 62), 100, string.Empty),
+            signingKey);
         var signed = unsigned with
         {
             Signature = Convert.ToBase64String(signingKey.SignData(
@@ -267,6 +296,7 @@ public sealed class ReleaseUpdateTests
                 Url = new("https://updates.example.com/core-3.1.0.zip"),
                 SizeBytes = size,
                 Sha256 = sha256,
+                Signature = "dGVzdC1wYWNrYWdlLXNpZ25hdHVyZQ==",
             },
         ],
     };
@@ -286,8 +316,20 @@ public sealed class ReleaseUpdateTests
             Url = new($"https://updates.example.com/{pair.Key}.zip"),
             SizeBytes = pair.Value.Length,
             Sha256 = Convert.ToHexString(SHA256.HashData(pair.Value)).ToLowerInvariant(),
+            Signature = "dGVzdC1wYWNrYWdlLXNpZ25hdHVyZQ==",
         }).ToArray(),
     };
+
+    private static ReleaseManifest SignPackages(ReleaseManifest manifest, ECDsa signingKey) =>
+        manifest with
+        {
+            Packages = manifest.Packages.Select(package => package with
+            {
+                Signature = Convert.ToBase64String(signingKey.SignData(
+                    Encoding.UTF8.GetBytes(ReleaseManifestVerifier.CanonicalizePackage(package)),
+                    HashAlgorithmName.SHA256)),
+            }).ToArray(),
+        };
 
     private static byte[] Zip(params (string Path, string Content)[] files)
     {

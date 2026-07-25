@@ -18,7 +18,9 @@ function validPackage(pkg) {
     || !ALLOWED_MODULES.has(pkg.module_id)
     || !validVersion(pkg.version)
     || !Number.isSafeInteger(pkg.size_bytes) || pkg.size_bytes <= 0
-    || typeof pkg.sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(pkg.sha256)) return false
+    || typeof pkg.sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(pkg.sha256)
+    || typeof pkg.signature !== 'string' || pkg.signature.length < 1 || pkg.signature.length > 1024
+    || !/^[A-Za-z0-9+/]+={0,2}$/.test(pkg.signature)) return false
   try {
     const url = new URL(pkg.url)
     const localHttp = url.protocol === 'http:' && ['127.0.0.1', '::1', 'localhost'].includes(url.hostname)

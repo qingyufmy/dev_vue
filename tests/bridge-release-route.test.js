@@ -15,6 +15,7 @@ function manifest(overrides = {}) {
       url:'https://updates.example.com/core.zip',
       size_bytes:100,
       sha256:'a'.repeat(64),
+      signature:'cGFja2FnZS1zaWduYXR1cmU=',
     }],
     signature:'signed-value',
     ...overrides,
@@ -83,6 +84,9 @@ describe('bridge release manifest route', () => {
     }))).toBe(false)
     expect(validateBridgeReleaseManifest(manifest({
       packages:[{ ...manifest().packages[0], minimum_core_version:'next' }],
+    }))).toBe(false)
+    expect(validateBridgeReleaseManifest(manifest({
+      packages:[{ ...manifest().packages[0], signature:'' }],
     }))).toBe(false)
   })
 })
