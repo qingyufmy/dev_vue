@@ -18,6 +18,7 @@ import {
 
 export const BRIDGE_V3_WS_PATH = '/aurum-api/bridge/v3/ws'
 export const BRIDGE_V3_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
+export const BRIDGE_V3_CONNECTION_STALE_MS = 45_000
 const AUTH_QUEUE_MAX_MESSAGES = 16
 const AUTH_QUEUE_MAX_BYTES = 1024 * 1024
 const MAX_PENDING_QUOTES_PER_CONNECTION = 64
@@ -87,6 +88,11 @@ export function createBridgeV3Gateway({
 
   function gatewayError(code) {
     return Object.assign(new Error(code), { code })
+  }
+
+  function connectionAlive(connection) {
+    return !connection.closed && connection.ready
+      && now() - Number(connection.lastSeen || 0) <= BRIDGE_V3_CONNECTION_STALE_MS
   }
 
   function unregisterConnection(connection) {
@@ -192,13 +198,13 @@ export function createBridgeV3Gateway({
       throw Object.assign(new Error('bridge_json_invalid'), { code:'bridge_json_invalid' })
     }
     if (!connection.ready) return acceptHello(connection, message)
-    connection.lastSeen = now()
     assertBridgeV3Message(message, { nowUtcMsc:now() })
 
     if (message.type === 'heartbeat') {
       if (String(message.session_id || '') !== connection.sessionId) {
         throw Object.assign(new Error('bridge_heartbeat_session_mismatch'), { code:'bridge_heartbeat_session_mismatch' })
       }
+      connection.lastSeen = now()
       return
     }
 
@@ -206,6 +212,7 @@ export function createBridgeV3Gateway({
     if (!terminal || !sameBridgeRoute(routeFromTerminal(terminal), message)) {
       throw Object.assign(new Error('bridge_message_route_mismatch'), { code:'bridge_message_route_mismatch' })
     }
+    connection.lastSeen = now()
     if (message.type === 'data_delta') {
       const result = await applyDelta(message, { userId:connection.userId, nowUtcMsc:now() })
       if (message.full_snapshot === true && ['applied', 'duplicate'].includes(result.status)
@@ -319,7 +326,7 @@ export function createBridgeV3Gateway({
     }
 
     const routed = connectionsByTerminal.get(command.terminal_instance_id)
-    if (!routed || routed.connection.userId !== Number(userId)
+    if (!routed || !connectionAlive(routed.connection) || routed.connection.userId !== Number(userId)
       || !sameBridgeRoute(routeFromTerminal(routed.terminal), command)) {
       return { status:'queued', command_id:command.command_id, error:'bridge_terminal_not_connected' }
     }
@@ -358,7 +365,7 @@ export function createBridgeV3Gateway({
     if (pendingQuotes.has(request.request_id)) throw gatewayError('bridge_quote_request_duplicate')
 
     const routed = connectionsByTerminal.get(request.terminal_instance_id)
-    if (!routed || routed.connection.userId !== Number(userId)
+    if (!routed || !connectionAlive(routed.connection) || routed.connection.userId !== Number(userId)
       || !sameBridgeRoute(routeFromTerminal(routed.terminal), request)) {
       throw gatewayError('bridge_terminal_not_connected')
     }
@@ -387,7 +394,7 @@ export function createBridgeV3Gateway({
   function listConnectedTerminals(userId) {
     const result = []
     for (const { connection, terminal } of connectionsByTerminal.values()) {
-      if (connection.userId !== Number(userId) || connection.closed || !connection.ready) continue
+      if (connection.userId !== Number(userId) || !connectionAlive(connection)) continue
       result.push({
         terminal_instance_id:terminal.terminal_instance_id,
         platform:terminal.platform,
@@ -406,22 +413,25 @@ export function createBridgeV3Gateway({
     for (const { connection } of connectionsByTerminal.values()) {
       if (connection.closed || !connection.ready) continue
       const current = users.get(connection.userId)
-      if (!current || Number(connection.generation) > Number(current.generation)) {
-        users.set(connection.userId, {
-          userId:Number(connection.userId),
-          connected:true,
-          alive:true,
-          lastSeen:Number(connection.lastSeen || 0),
-          generation:Number(connection.generation || 0),
-        })
-      }
+      const alive = connectionAlive(connection)
+      users.set(connection.userId, {
+        userId:Number(connection.userId),
+        connected:true,
+        alive:Boolean(current?.alive) || alive,
+        lastSeen:Math.max(Number(current?.lastSeen || 0), Number(connection.lastSeen || 0)),
+        generation:alive
+          ? (current?.alive
+              ? Math.max(Number(current.generation || 0), Number(connection.generation || 0))
+              : Number(connection.generation || 0))
+          : Number(current?.generation || connection.generation || 0),
+      })
     }
     return Array.from(users.values())
   }
 
   function isTradeEnabled(userId) {
     for (const { connection } of connectionsByTerminal.values()) {
-      if (connection.userId === Number(userId) && !connection.closed && connection.ready) {
+      if (connection.userId === Number(userId) && connectionAlive(connection)) {
         return connection.tradeEnabled === true
       }
     }
@@ -431,7 +441,7 @@ export function createBridgeV3Gateway({
   function setTradeEnabled(userId, enabled) {
     let changed = false
     for (const { connection } of connectionsByTerminal.values()) {
-      if (connection.userId !== Number(userId) || connection.closed || !connection.ready) continue
+      if (connection.userId !== Number(userId) || !connectionAlive(connection)) continue
       connection.tradeEnabled = enabled === true
       changed = true
     }

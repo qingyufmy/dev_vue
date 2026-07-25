@@ -52,6 +52,12 @@ public sealed record HelloMessage : BridgeEnvelope
     public required IReadOnlyList<TerminalDescriptor> Terminals { get; init; }
 }
 
+public sealed record HeartbeatMessage : BridgeEnvelope
+{
+    [JsonPropertyName("session_id")]
+    public required string SessionId { get; init; }
+}
+
 public sealed record DataDeltaMessage : BridgeEnvelope
 {
     [JsonPropertyName("terminal_instance_id")]

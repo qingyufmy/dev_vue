@@ -95,10 +95,13 @@ public sealed class BridgeWebSocketClient
                 sessionReady?.Invoke();
                 var sendTask = SendLoopAsync(socket, outbound, sessionCancellation.Token);
                 var pumpTask = PumpLoopAsync(outbox, sessionCancellation.Token);
+                var heartbeatTask = HeartbeatLoopAsync(
+                    outbound, attempt.Hello.SessionId, sessionCancellation.Token);
                 await receiveTask;
                 sessionCancellation.Cancel();
                 await IgnoreCancellationAsync(sendTask);
                 await IgnoreCancellationAsync(pumpTask);
+                await IgnoreCancellationAsync(heartbeatTask);
             }
             finally
             {
@@ -144,6 +147,29 @@ public sealed class BridgeWebSocketClient
         {
             await outbox.PumpOnceAsync(cancellationToken);
             await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
+        }
+    }
+
+    private static async Task HeartbeatLoopAsync(
+        PriorityMessageQueue outbound,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var heartbeat = new HeartbeatMessage
+            {
+                Type = "heartbeat",
+                MessageId = $"heartbeat_{Guid.NewGuid():N}",
+                SentAtUtcMsc = now,
+                SessionId = sessionId,
+            };
+            await outbound.EnqueueAsync(new(
+                heartbeat.MessageId,
+                JsonSerializer.Serialize(heartbeat, BridgeJson.Options),
+                BridgeMessagePriority.Trade), cancellationToken);
         }
     }
 

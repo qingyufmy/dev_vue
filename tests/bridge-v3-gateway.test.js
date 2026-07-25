@@ -1,7 +1,11 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 
-import { BRIDGE_V3_WS_PATH, createBridgeV3Gateway } from '../server/bridge-v3/gateway.js'
+import {
+  BRIDGE_V3_CONNECTION_STALE_MS,
+  BRIDGE_V3_WS_PATH,
+  createBridgeV3Gateway,
+} from '../server/bridge-v3/gateway.js'
 
 const NOW = 1_800_000_000_000
 
@@ -152,6 +156,34 @@ describe('Bridge v3 websocket gateway', () => {
     expect(gateway.isTradeEnabled(42)).toBe(true)
     expect(gateway.setTradeEnabled(42, false)).toBe(true)
     expect(gateway.isTradeEnabled(42)).toBe(false)
+  })
+
+  it('removes stale sessions from routing until a valid heartbeat arrives', async () => {
+    let clock = NOW
+    const { gateway } = setup({ now:() => clock })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    clock += BRIDGE_V3_CONNECTION_STALE_MS + 1
+    expect(gateway.listConnectedTerminals(42)).toEqual([])
+    expect(gateway.listConnectedUsers()).toEqual([
+      expect.objectContaining({ userId:42, connected:true, alive:false }),
+    ])
+    expect(gateway.isTradeEnabled(42)).toBe(false)
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      v:3,
+      type:'heartbeat',
+      message_id:'heartbeat_01JGATEWAY01',
+      sent_at_utc_msc:clock,
+      session_id:'session_01JGATEWAY01',
+    })))
+    await flush()
+    expect(gateway.listConnectedTerminals(42)).toHaveLength(1)
+    expect(gateway.listConnectedUsers()).toEqual([
+      expect.objectContaining({ userId:42, connected:true, alive:true }),
+    ])
   })
 
   it('rejects missing tickets without registering a terminal', async () => {
