@@ -42,7 +42,8 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 网络重连保留终端 epoch 和 revision，新会话接管后围栏旧连接 | 已实现 | Gateway 重连接管、旧连接拒绝测试及真实服务器重启恢复 |
 | 首次同步完成后绑定服务器交易账户；账户转移时关闭旧用户执行会话 | 已实现 | Gateway `onTerminalReady`、`syncTradingAccountIdentity`；旧 V3/旧桥接先禁用交易再断开 |
 | C#/Node 运行时消息类型均有共享 JSON Schema | 已实现 | `bridge/protocol/v3-json-schema`、`tests/bridge-v3-schema-contract.test.js` |
-| MT4/MT5 成交历史按需分块聚合，不常驻全历史采集 | 已实现 | `performance_daily` 普通优先级数据请求；单次最多 31 个业务日，只返回每日汇总并由服务器持久化 |
+| MT4/MT5 成交历史按双游标增量读取并持久化 | 已实现 | 两端首次只回看 7 天、按 24 小时窗口且每批最多 250 条；MT5 使用 deal ticket，MT4 将历史订单 ticket 规范化为执行事件；SQLite 只保留持久游标和未确认负载，服务器 MySQL 保存成交事实 |
+| MT4/MT5 成交历史按需分块聚合，不常驻全历史报表 | 已实现 | `performance_daily` 普通优先级数据请求；单次最多 31 个业务日，只返回每日汇总并由服务器持久化 |
 | 空闲采集降载且交易后立即刷新 | 已实现 | MT4/MT5 空闲账户每 1 秒采集，存在持仓/挂单时 250 ms；交易或结果复核完成后唤醒下一轮采集，不等待空闲周期 |
 | 日志轮转和脱敏；日志失败不阻断交易闭环 | 已实现 | `BridgeFileLogger` 及轮转/脱敏测试；交易回执独立保存在 SQLite Outbox |
 | 官方模块更新、兼容范围、Manifest/包签名、大小/hash、原子版本目录 | 已实现 | `ReleaseManifestVerifier`、`ReleaseStager`、`ReleaseInstaller` |
@@ -53,10 +54,10 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 | 验证 | 结果 | 边界 |
 |---|---|---|
-| .NET Bridge/Launcher 全量测试 | 169/169 通过 | 自动化功能、协议、存储、恢复、更新、MT4 有界历史汇总、MT5 成交双游标与 Outbox、交易后即时采集、空闲轮询降载、终端源时间分离、旧 MT5 Worker 字段兼容、未确认执行回执保留、必填 nullable 字段序列化与授权故障 UI 文案 |
+| .NET Bridge/Launcher 全量测试 | 173/173 通过 | 自动化功能、协议、存储、恢复、更新、MT4/MT5 成交双游标与 Outbox、MT4 旧 EA 能力门控、有界历史汇总、交易后即时采集、空闲轮询降载、终端源时间分离、旧 MT5 Worker 字段兼容、未确认执行回执保留、必填 nullable 字段序列化与授权故障 UI 文案 |
 | Node 服务端全量测试 | 1690/1690 通过 | v3 Gateway、账户绑定与旧会话撤销、原始成交持久化、有界历史汇总、重连接管、旧 Outbox 兼容、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
 | MT5 Python Worker 测试 | 28/28 通过 | Python 适配器协议、MT5 调用封装、源采集时间、成交时间/ticket 双游标分块、有界每日成交汇总与空快照失败关闭 |
-| MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |
+| MT4 EA 3.1.0 官方 MetaEditor 编译 | 0 error，0 warning | 新增独立 DealsRequest/Deals 帧；编译成功不等同真实 broker 交易矩阵 |
 | Windows 主界面走查 | 已通过 | 平台选择、真实 MT5 账户探测、仅 MT5 Worker、内置日志查看 |
 | 浏览器授权页真实路由 | 已通过 | 登录态下显示当前账户、一次性短码、权限说明和确认按钮；JS/CSS 使用同一新缓存版本 |
 | 本机真实 MT5 只读探测 | 已通过 | demo 账户可识别；尚未把生产服务器交易指令作为测试单执行 |
