@@ -28,7 +28,7 @@ public interface IMt4EaConnection : IAsyncDisposable
 public sealed class Mt4EaConnection : IMt4EaConnection
 {
     private readonly NamedPipeServerStream _pipe;
-    private readonly SemaphoreSlim _requestLock = new(1, 1);
+    private readonly WorkerRequestGate _requestGate = new();
     private bool _welcomed;
     private bool _disposed;
 
@@ -96,6 +96,7 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         RequestAsync(
             Mt4PipeProtocol.EncodeCollect(streams),
             Mt4PipeProtocol.DecodeSnapshot,
+            WorkerRequestPriority.Data,
             cancellationToken);
 
     public Task<Mt4TradeResult> ExecuteAsync(
@@ -104,6 +105,7 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         RequestAsync(
             Mt4PipeProtocol.EncodeCommand(command),
             Mt4PipeProtocol.DecodeCommandResult,
+            WorkerRequestPriority.Trade,
             cancellationToken);
 
     public Task<Mt4Quote> GetQuoteAsync(
@@ -112,6 +114,7 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         RequestAsync(
             Mt4PipeProtocol.EncodeQuoteRequest(request),
             Mt4PipeProtocol.DecodeQuote,
+            WorkerRequestPriority.Trade,
             cancellationToken);
 
     public Task<Mt4Rates> GetRatesAsync(
@@ -120,6 +123,7 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         RequestAsync(
             Mt4PipeProtocol.EncodeRatesRequest(request),
             Mt4PipeProtocol.DecodeRates,
+            WorkerRequestPriority.Data,
             cancellationToken);
 
     public Task<Mt4SymbolSnapshot> GetSymbolSnapshotAsync(
@@ -128,13 +132,14 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         RequestAsync(
             Mt4PipeProtocol.EncodeSymbolSnapshotRequest(request),
             Mt4PipeProtocol.DecodeSymbolSnapshot,
+            WorkerRequestPriority.Data,
             cancellationToken);
 
     public Task<Mt4RiskSnapshot> GetRiskSnapshotAsync(
         Mt4RiskSnapshotRequest request,
         CancellationToken cancellationToken = default) =>
         RequestAsync(Mt4PipeProtocol.EncodeRiskSnapshotRequest(request),
-            Mt4PipeProtocol.DecodeRiskSnapshot, cancellationToken);
+            Mt4PipeProtocol.DecodeRiskSnapshot, WorkerRequestPriority.Data, cancellationToken);
 
     public async ValueTask DisposeAsync()
     {
@@ -143,8 +148,7 @@ public sealed class Mt4EaConnection : IMt4EaConnection
             return;
         }
         _disposed = true;
-        await _requestLock.WaitAsync();
-        try
+        using (await _requestGate.EnterAsync(WorkerRequestPriority.Trade))
         {
             if (_pipe.IsConnected)
             {
@@ -164,16 +168,12 @@ public sealed class Mt4EaConnection : IMt4EaConnection
             }
             await _pipe.DisposeAsync();
         }
-        finally
-        {
-            _requestLock.Release();
-            _requestLock.Dispose();
-        }
     }
 
     private async Task<T> RequestAsync<T>(
         byte[] request,
         Func<ReadOnlySpan<byte>, T> decode,
+        WorkerRequestPriority priority,
         CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -181,17 +181,10 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         {
             throw new InvalidOperationException("mt4_ea_not_ready");
         }
-        await _requestLock.WaitAsync(cancellationToken);
-        try
-        {
-            await Mt4PipeProtocol.WriteFrameAsync(_pipe, request, cancellationToken);
-            var response = await Mt4PipeProtocol.ReadFrameAsync(_pipe, cancellationToken);
-            return decode(response);
-        }
-        finally
-        {
-            _requestLock.Release();
-        }
+        using var lease = await _requestGate.EnterAsync(priority, cancellationToken);
+        await Mt4PipeProtocol.WriteFrameAsync(_pipe, request, cancellationToken);
+        var response = await Mt4PipeProtocol.ReadFrameAsync(_pipe, cancellationToken);
+        return decode(response);
     }
 
     private static byte[] EncodeMessageType(Mt4MessageType messageType)
