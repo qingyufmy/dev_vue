@@ -98,3 +98,9 @@ Acceptance 测试总数：8，全部通过。
 - Bridge 在 `2026-07-25T19:05:41.754Z` 检测到 `bridge_connection_lost`，并在 `19:05:44.044Z` 恢复 `Online`，约 2.29 秒；connection epoch 保持 19，没有重置终端执行上下文。
 - 恢复期间没有 `PairingRequired` 或浏览器授权事件；refresh session 仍为 21，`last_used_at` 更新到 `2026-07-26 03:05:46`，`revoked_at` 仍为 `null`。
 - 本次故障恢复测试没有发送任何交易指令。
+
+## 自适应采集优化后的真实 MT5 启动证据
+
+- 空闲采集调整为 1 秒、交易后即时唤醒后，最新 Debug 构建于 `2026-07-25T19:10:54.929Z` 启动，并在 `19:10:55.456Z` 进入 `Online`，约 0.53 秒。
+- Bridge 进程为 13648，MT5 Worker 为 30288/13888，原 MT5 终端 PID 24056 未重启；服务端记录 connection epoch 20 且终端在线。
+- 启动日志没有 `PairingRequired` 或浏览器授权事件；本轮只验证启动、同步和进程隔离，没有发送交易指令。交易后即时唤醒由 MT4/MT5 Runtime 自动化测试覆盖。
