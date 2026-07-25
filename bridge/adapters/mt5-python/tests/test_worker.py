@@ -53,6 +53,8 @@ class FakeMt5:
         self.sent.append(request)
         return Result(10009, 1001, 2001, "done")
     def last_error(self): return (0, "ok")
+    def initialize(self, **kwargs): return True
+    def shutdown(self): pass
 
 
 class WorkerTests(unittest.TestCase):
@@ -106,6 +108,16 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("rejected", result["status"])
         self.assertEqual("command_expired", result["error_code"])
         self.assertEqual([], adapter.mt5.sent)
+
+    def test_probe_returns_read_only_account_identity(self):
+        result = worker.probe(FakeMt5(), __file__)
+        self.assertEqual("mt5_probe", result["type"])
+        self.assertEqual("12345678", result["account_ref"]["login"])
+        self.assertEqual("Broker-Demo", result["account_ref"]["broker_server"])
+
+    def test_probe_rejects_missing_terminal_before_initialize(self):
+        with self.assertRaisesRegex(worker.WorkerError, "mt5_terminal_not_found"):
+            worker.probe(FakeMt5(), str(Path(__file__).with_name("missing-terminal.exe")))
 
 
 if __name__ == "__main__":

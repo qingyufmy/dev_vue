@@ -367,16 +367,58 @@ def run(pipe_name: str, adapter: Mt5Adapter) -> int:
             write_frame(stream, response)
 
 
+def probe(mt5: Any, terminal_path: str) -> dict[str, Any]:
+    resolved_path = str(Path(terminal_path).resolve())
+    if not Path(resolved_path).is_file():
+        raise WorkerError("mt5_terminal_not_found")
+    if not mt5.initialize(path=resolved_path, timeout=10_000, portable=False):
+        raise WorkerError("mt5_initialize_failed", str(mt5.last_error()))
+    account = mt5.account_info()
+    terminal = mt5.terminal_info()
+    if account is None or terminal is None:
+        raise WorkerError("mt5_account_unavailable")
+    if getattr(terminal, "connected", True) is False:
+        raise WorkerError("mt5_terminal_disconnected")
+    return {
+        "v": 3,
+        "type": "mt5_probe",
+        "terminal_path": resolved_path,
+        "account_ref": {
+            "broker_server": str(account.server).strip(),
+            "login": str(account.login),
+        },
+        "account": _plain(account),
+        "terminal": _plain(terminal),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pipe", required=True)
+    parser.add_argument("--probe", action="store_true")
+    parser.add_argument("--pipe")
     parser.add_argument("--terminal", required=True)
-    parser.add_argument("--terminal-id", required=True)
-    parser.add_argument("--broker-server", required=True)
-    parser.add_argument("--login", required=True)
-    parser.add_argument("--connection-epoch", required=True, type=int)
+    parser.add_argument("--terminal-id")
+    parser.add_argument("--broker-server")
+    parser.add_argument("--login")
+    parser.add_argument("--connection-epoch", type=int)
     args = parser.parse_args()
     import MetaTrader5 as mt5  # bundled module; intentionally imported only in the Worker entrypoint
+    if args.probe:
+        try:
+            print(json.dumps(probe(mt5, args.terminal), ensure_ascii=False, separators=(",", ":")))
+            return 0
+        finally:
+            mt5.shutdown()
+    required = {
+        "pipe": args.pipe,
+        "terminal-id": args.terminal_id,
+        "broker-server": args.broker_server,
+        "login": args.login,
+        "connection-epoch": args.connection_epoch,
+    }
+    missing = [name for name, value in required.items() if value is None or value == ""]
+    if missing:
+        parser.error(f"missing required arguments: {', '.join(missing)}")
     adapter = Mt5Adapter(mt5, args.terminal, WorkerIdentity(
         args.terminal_id, args.broker_server, args.login, args.connection_epoch))
     try:
