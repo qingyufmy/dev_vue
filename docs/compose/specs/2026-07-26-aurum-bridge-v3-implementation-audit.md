@@ -34,7 +34,9 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | command ID、deadline、账户/终端/epoch 路由与幂等 | 已实现 | v3 协议、`BridgeCommandDispatcher`、服务端 `command-ledger` |
 | 不明确结果返回 uncertain，不自动重放 | 已实现 | Host dispatcher 与服务端 ledger/reconcile 测试 |
 | 首次完整同步确认前禁止下发交易指令 | 已实现 | Gateway `terminalInitialSyncReady` 门禁；未同步交易保持 queued 且不标记 dispatched；`query_execution` 仍可用于结果复核 |
-| 交易优先于数据，内存队列和 MT5 Worker 等待队列均有界 | 已实现 | `PriorityMessageQueue`、`WorkerRequestGate` 及其测试 |
+| 交易优先于数据，全部入站/出站和 Worker 等待队列均有界 | 已实现 | WSS 入站使用 128 个交易容量和与服务器 64 报价 + 32 数据一致的 96 个普通容量；同终端交易严格保序、不同终端可并行，报价/历史不会阻止后续交易进入 Worker 高优先队列；`BridgeInboundRequestDispatcher`、`PriorityMessageQueue`、`WorkerRequestGate` 及其测试 |
+| Worker 请求有硬超时，超时后不得让迟到响应污染下一请求 | 已实现 | 交易默认 30 秒、数据默认 20 秒；MT5 超时终止 Worker 进程树，MT4 超时废弃 EA Pipe 并等待重连；已发往 MT 但超时的交易持久化为 `uncertain/worker_execution_timeout`，相同 command ID 不自动重放 |
+| WSS 接收、发送、Outbox 和心跳循环统一故障监管 | 已实现 | `BridgeSessionLoopMonitor`；任一关键循环异常都会取消完整会话并进入连接监管器自动重连，不允许“仍显示在线但结果无法上传” |
 | 一终端一 Worker；单 Worker 连续失败只停止本终端 | 已实现 | `TerminalRuntimeSupervisor` 及隔离测试 |
 | Named Pipe 仅当前 Windows 用户 | 已实现 | MT4、MT5 管道均使用 `PipeOptions.CurrentUserOnly` |
 | WSS 一次性 ticket；长期凭证不进入 URL、日志或普通配置 | 已实现 | `BridgeSessionClient`、Gateway、凭证与日志脱敏测试 |
@@ -54,7 +56,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 | 验证 | 结果 | 边界 |
 |---|---|---|
-| .NET Bridge/Launcher 全量测试 | 173/173 通过 | 自动化功能、协议、存储、恢复、更新、MT4/MT5 成交双游标与 Outbox、MT4 旧 EA 能力门控、有界历史汇总、交易后即时采集、空闲轮询降载、终端源时间分离、旧 MT5 Worker 字段兼容、未确认执行回执保留、必填 nullable 字段序列化与授权故障 UI 文案 |
+| .NET Bridge/Launcher 全量测试 | 185/185 通过 | 自动化功能、协议、存储、恢复、更新、MT4/MT5 成交双游标与 Outbox、MT4 旧 EA 能力门控、有界历史汇总、交易后即时采集、空闲轮询降载、终端源时间分离、旧 MT5 Worker 字段兼容、未确认执行回执保留、Worker 硬超时与迟到响应隔离、WSS 交易优先分流、同终端保序/跨终端隔离、全会话循环故障监管、必填 nullable 字段序列化与授权故障 UI 文案 |
 | Node 服务端全量测试 | 1690/1690 通过 | v3 Gateway、账户绑定与旧会话撤销、原始成交持久化、有界历史汇总、重连接管、旧 Outbox 兼容、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
 | MT5 Python Worker 测试 | 28/28 通过 | Python 适配器协议、MT5 调用封装、源采集时间、成交时间/ticket 双游标分块、有界每日成交汇总与空快照失败关闭 |
 | MT4 EA 3.1.0 官方 MetaEditor 编译 | 0 error，0 warning | 新增独立 DealsRequest/Deals 帧；编译成功不等同真实 broker 交易矩阵 |
@@ -96,11 +98,12 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 ## 6. 最新真实 MT5 只读联调证据
 
-- 最终 Debug 构建于 `2026-07-25T19:52:21.004Z` 启动，在 connection epoch 24 下静默复用首次浏览器授权，并于 `19:52:21.531Z` 进入 `Online`，约 0.53 秒；没有进入 `PairingRequired`、没有打开浏览器、没有二次登录，原 MT5 终端 PID 24056 未重启。
+- 最新 Debug 构建包含提交 `e9a6904`，于 `2026-07-25T20:17:08.600Z` 启动，在 connection epoch 25 下静默复用首次浏览器授权，并于 `20:17:09.149Z` 进入 `Online`，约 0.55 秒；启动区间内授权/配对事件计数为 0，没有进入 `PairingRequired`、没有打开浏览器、没有二次登录，原 MT5 终端 PID 24056 未重启。
 - 服务端会话已识别并绑定 `596520 / DooTechnology-Demo`，终端实例为 `mt5_93b55965fe14a572fa3594d3`，交易账户身份校验时间为 `2026-07-26 02:56:27`。
 - V3 `performance_daily` 链路已在真实 MT5 demo 账户完成有界读取：服务器记录的同步区间为 `2026-07-16` 至 `2026-07-25`，状态为 `current`，`last_error` 为 `null`。
 - epoch 22 首次完整快照在本地 SQLite 与服务器 MySQL 中均包含 account、positions、orders 三条 revision 1；`observed_at_utc_msc=1785007267041`、`source_time_msc=1785007267037`，二者语义分离且相差 4 ms。
 - epoch 23 使用 7 天首次回看、24 小时窗口、每批最多 250 条的时间/ticket 双游标完成真实成交流同步；服务器 `bridge_v3_deals` 保存 48 条记录且 48 个 ticket 均唯一，成交时间覆盖 `2026-07-20 05:32:23Z` 至 `2026-07-24 05:48:43Z`。
 - 成交游标已持久化至 `2026-07-25 19:38:06Z`；服务器确认后，本地 `deals_pending` 和未确认 deals Outbox 均为 0。SQLite 只保留游标和未确认负载，成交事实由服务器 MySQL 保存。
 - 最终重启后的 epoch 24 在 SQLite 与 MySQL 中均形成 account、positions、orders、deals 四条 revision 1，四条 `source_time_msc` 均为 `1785009141338`；成交游标连续推进至同一采集时刻，本地 `deals_pending=0`、未确认 Outbox=0，服务器仍保存 48 条且 48 个唯一 ticket。
+- 最新 epoch 25 在 SQLite 与 MySQL 中再次形成 account、positions、orders、deals 四条 revision 1；四条 `observed_at_utc_msc=1785010628961`、`source_time_msc=1785010628956`，本地 `deals_pending=0`、未确认 Outbox=0，服务器成交事实仍为 48 条且 48 个唯一 ticket。
 - 本轮仅执行只读联调，没有发送下单、改单、撤单或平仓指令；该证据不替代真实 MT4 demo 交易矩阵和持续运行时间窗。
