@@ -97,6 +97,35 @@ public sealed class BridgeStoreTests
     }
 
     [TestMethod]
+    [TestCategory("Acceptance")]
+    public async Task RecoversEveryUnacknowledgedOutboxMessageAfterProcessRestart()
+    {
+        const int messageCount = 200;
+        for (var revision = 1; revision <= messageCount; revision++)
+        {
+            await _store.PersistDataDeltaAsync(Delta(
+                "positions",
+                revision,
+                revision - 1,
+                [Json($$"""{"ticket":"{{revision:D8}}","symbol":"XAUUSD"}""")]));
+        }
+        var beforeRestart = await _store.GetPendingOutboxAsync(messageCount);
+        await _store.DisposeAsync();
+
+        _store = new BridgeStore(Path.Combine(_directory, "bridge.db"));
+        await _store.InitializeAsync();
+        var recovered = await _store.GetPendingOutboxAsync(messageCount);
+
+        Assert.AreEqual(messageCount, recovered.Count);
+        CollectionAssert.AreEqual(
+            beforeRestart.Select(message => message.MessageId).ToArray(),
+            recovered.Select(message => message.MessageId).ToArray());
+        CollectionAssert.AreEqual(
+            beforeRestart.Select(message => message.PayloadJson).ToArray(),
+            recovered.Select(message => message.PayloadJson).ToArray());
+    }
+
+    [TestMethod]
     public async Task KeepsExecutionReceiptsBoundedAndIdempotent()
     {
         for (var index = 1; index <= 5; index++)
