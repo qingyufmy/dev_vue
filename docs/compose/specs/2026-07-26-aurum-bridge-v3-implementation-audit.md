@@ -41,6 +41,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 首次同步完成后绑定服务器交易账户；账户转移时关闭旧用户执行会话 | 已实现 | Gateway `onTerminalReady`、`syncTradingAccountIdentity`；旧 V3/旧桥接先禁用交易再断开 |
 | C#/Node 运行时消息类型均有共享 JSON Schema | 已实现 | `bridge/protocol/v3-json-schema`、`tests/bridge-v3-schema-contract.test.js` |
 | MT4/MT5 成交历史按需分块聚合，不常驻全历史采集 | 已实现 | `performance_daily` 普通优先级数据请求；单次最多 31 个业务日，只返回每日汇总并由服务器持久化 |
+| 空闲采集降载且交易后立即刷新 | 已实现 | MT4/MT5 空闲账户每 1 秒采集，存在持仓/挂单时 250 ms；交易或结果复核完成后唤醒下一轮采集，不等待空闲周期 |
 | 日志轮转和脱敏；日志失败不阻断交易闭环 | 已实现 | `BridgeFileLogger` 及轮转/脱敏测试；交易回执独立保存在 SQLite Outbox |
 | 官方模块更新、兼容范围、Manifest/包签名、大小/hash、原子版本目录 | 已实现 | `ReleaseManifestVerifier`、`ReleaseStager`、`ReleaseInstaller` |
 | 更新前暂停新指令并等待在途指令；失败恢复当前运行 | 已实现 | `PauseForUpdateAsync`、Launcher last-known-good 与回滚测试 |
@@ -50,7 +51,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 | 验证 | 结果 | 边界 |
 |---|---|---|
-| .NET Bridge/Launcher 全量测试 | 161/161 通过 | 自动化功能、协议、存储、恢复、更新、MT4 有界历史汇总、未确认执行回执保留、必填 nullable 字段序列化与 UI 文案 |
+| .NET Bridge/Launcher 全量测试 | 163/163 通过 | 自动化功能、协议、存储、恢复、更新、MT4 有界历史汇总、交易后即时采集、空闲轮询降载、未确认执行回执保留、必填 nullable 字段序列化与 UI 文案 |
 | Node 服务端全量测试 | 1685/1685 通过 | v3 Gateway、账户绑定与旧会话撤销、有界历史汇总、重连接管、旧 Outbox 兼容、首次同步与复核门禁、ledger、read model、共享 Schema、授权与发布清单等 |
 | MT5 Python Worker 测试 | 25/25 通过 | Python 适配器协议、MT5 调用封装、有界每日成交汇总与空快照失败关闭 |
 | MT4 EA 官方 MetaEditor 编译 | 0 error，0 warning | 编译成功不等同真实 broker 交易矩阵 |

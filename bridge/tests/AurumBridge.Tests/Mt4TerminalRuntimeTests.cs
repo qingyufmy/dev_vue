@@ -9,10 +9,10 @@ namespace AurumBridge.Tests;
 public sealed class Mt4TerminalRuntimeTests
 {
     [TestMethod]
-    public void CollectionCadenceKeepsIdleTradeDetectionInsideTheLocalP95Budget()
+    public void CollectionCadenceUsesLowIdleLoadAndFastActivePolling()
     {
-        Assert.IsLessThanOrEqualTo(
-            TimeSpan.FromMilliseconds(400),
+        Assert.AreEqual(
+            TimeSpan.FromSeconds(1),
             Mt4TerminalRuntime.CollectionDelay(hasActiveTrades:false));
         Assert.AreEqual(
             TimeSpan.FromMilliseconds(250),
@@ -68,6 +68,34 @@ public sealed class Mt4TerminalRuntimeTests
         Assert.AreEqual("rejected", result.Status);
         Assert.AreEqual("mt4_stop_limit_unsupported", result.ErrorCode);
         Assert.AreEqual(0, connection.ExecuteCount);
+    }
+
+    [TestMethod]
+    public async Task CompletedCommandWakesIdleCollectionImmediately()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection();
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_wake");
+        await runtime.StartAsync();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var collection = runtime.RunCollectionLoopAsync(cancellation.Token);
+        await WaitUntilAsync(() => connection.CollectCount >= 1, TimeSpan.FromSeconds(2));
+
+        var started = DateTimeOffset.UtcNow;
+        await runtime.ExecuteCommandAsync(Command("cancel_order", new { ticket = "20" }), cancellation.Token);
+        await WaitUntilAsync(() => connection.CollectCount >= 2, TimeSpan.FromMilliseconds(500));
+
+        Assert.IsLessThan(TimeSpan.FromMilliseconds(500), DateTimeOffset.UtcNow - started);
+        cancellation.Cancel();
+        try
+        {
+            await collection;
+            Assert.Fail("Collection loop should stop through cancellation.");
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     [TestMethod]
@@ -267,10 +295,20 @@ public sealed class Mt4TerminalRuntimeTests
 
     private static JsonElement Json(string value) => JsonDocument.Parse(value).RootElement.Clone();
 
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        using var cancellation = new CancellationTokenSource(timeout);
+        while (!condition())
+        {
+            await Task.Delay(10, cancellation.Token);
+        }
+    }
+
     private sealed class FakeConnection : IMt4EaConnection
     {
         public Mt4Welcome? Welcome { get; private set; }
         public int ExecuteCount { get; private set; }
+        public int CollectCount { get; private set; }
         public Mt4TradeCommand? LastCommand { get; private set; }
         public List<Mt4TradeCommand> Commands { get; } = [];
         public JsonElement? NextRawResult { get; init; }
@@ -287,7 +325,15 @@ public sealed class Mt4TerminalRuntimeTests
 
         public Task<Mt4Snapshot> CollectAsync(
             Mt4CollectionStreams streams,
-            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            CancellationToken cancellationToken = default)
+        {
+            CollectCount++;
+            return Task.FromResult(new Mt4Snapshot(
+                1_800_000_000_000,
+                Json("""{"balance":1000.0}"""),
+                [],
+                []));
+        }
 
         public Task<Mt4TradeResult> ExecuteAsync(
             Mt4TradeCommand command,

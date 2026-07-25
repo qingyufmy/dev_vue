@@ -21,6 +21,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
     };
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _fullSnapshotRequests
         = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _collectionWake = new(0, 1);
     private bool _initialized;
 
     public Mt5TerminalRuntime(
@@ -66,9 +67,16 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        var response = await _worker.RequestAsync(command, WorkerRequestPriority.Trade, cancellationToken);
-        return response.Deserialize<CommandResultMessage>(BridgeJson.Options)
-            ?? throw new InvalidDataException("mt5_worker_command_result_invalid");
+        try
+        {
+            var response = await _worker.RequestAsync(command, WorkerRequestPriority.Trade, cancellationToken);
+            return response.Deserialize<CommandResultMessage>(BridgeJson.Options)
+                ?? throw new InvalidDataException("mt5_worker_command_result_invalid");
+        }
+        finally
+        {
+            WakeCollection();
+        }
     }
 
     public async Task<QuoteMessage> GetQuoteAsync(
@@ -138,12 +146,24 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
             }, WorkerRequestPriority.Data, cancellationToken);
             await IngestSnapshotAsync(response, fullSnapshotStreams, cancellationToken);
             var active = _collections["positions"].Count > 0 || _collections["orders"].Count > 0;
-            await Task.Delay(CollectionDelay(active), cancellationToken);
+            await _collectionWake.WaitAsync(CollectionDelay(active), cancellationToken);
         }
     }
 
     public static TimeSpan CollectionDelay(bool hasActiveTrades) =>
-        TimeSpan.FromMilliseconds(hasActiveTrades ? 250 : 400);
+        TimeSpan.FromMilliseconds(hasActiveTrades ? 250 : 1_000);
+
+    private void WakeCollection()
+    {
+        try
+        {
+            _collectionWake.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // Multiple commands can share one immediate follow-up collection.
+        }
+    }
 
     public async Task<int> IngestSnapshotAsync(
         JsonElement snapshot,

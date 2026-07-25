@@ -9,10 +9,10 @@ namespace AurumBridge.Tests;
 public sealed class Mt5TerminalRuntimeTests
 {
     [TestMethod]
-    public void CollectionCadenceKeepsIdleTradeDetectionInsideTheLocalP95Budget()
+    public void CollectionCadenceUsesLowIdleLoadAndFastActivePolling()
     {
-        Assert.IsLessThanOrEqualTo(
-            TimeSpan.FromMilliseconds(400),
+        Assert.AreEqual(
+            TimeSpan.FromSeconds(1),
             Mt5TerminalRuntime.CollectionDelay(hasActiveTrades:false));
         Assert.AreEqual(
             TimeSpan.FromMilliseconds(250),
@@ -88,6 +88,32 @@ public sealed class Mt5TerminalRuntimeTests
 
         Assert.AreEqual(command.CommandId, response.CommandId);
         Assert.AreEqual(1, _worker.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task CompletedCommandWakesIdleCollectionImmediately()
+    {
+        var command = new CommandMessage
+        {
+            Type = "command", MessageId = "msg_command_wake", SentAtUtcMsc = 1,
+            CommandId = "command_01JWAKE0001", TerminalInstanceId = Terminal().TerminalInstanceId,
+            AccountRef = Terminal().AccountRef, ConnectionEpoch = Terminal().ConnectionEpoch,
+            IssuedAtUtcMsc = 1, DeadlineUtcMsc = long.MaxValue, Action = "cancel_order",
+            Params = JsonSerializer.SerializeToElement(new { ticket = "1001" }),
+        };
+        _worker.ResponseFactory = request => request is CommandMessage ?
+            JsonSerializer.SerializeToElement(Result(command)) : Snapshot("1001");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var collection = _runtime.RunCollectionLoopAsync(cancellation.Token);
+        await WaitUntilAsync(() => _worker.RequestCount >= 1, TimeSpan.FromSeconds(2));
+
+        var started = DateTimeOffset.UtcNow;
+        await _runtime.ExecuteCommandAsync(command, cancellation.Token);
+        await WaitUntilAsync(() => _worker.RequestCount >= 3, TimeSpan.FromMilliseconds(500));
+
+        Assert.IsLessThan(TimeSpan.FromMilliseconds(500), DateTimeOffset.UtcNow - started);
+        cancellation.Cancel();
+        await AssertCollectionCancelledAsync(collection);
     }
 
     [TestMethod]
@@ -215,7 +241,7 @@ public sealed class Mt5TerminalRuntimeTests
             await Task.Delay(10, cancellation.Token);
         }
         cancellation.Cancel();
-        await Assert.ThrowsExactlyAsync<TaskCanceledException>(async () => await collection);
+        await AssertCollectionCancelledAsync(collection);
 
         var outbox = await _testStore.Store.GetPendingOutboxAsync();
         Assert.HasCount(3, outbox);
@@ -245,7 +271,7 @@ public sealed class Mt5TerminalRuntimeTests
         }
         await Task.Delay(100, cancellation.Token);
         cancellation.Cancel();
-        await Assert.ThrowsExactlyAsync<TaskCanceledException>(async () => await collection);
+        await AssertCollectionCancelledAsync(collection);
 
         Assert.HasCount(3, await _testStore.Store.GetPendingOutboxAsync());
     }
@@ -285,11 +311,33 @@ public sealed class Mt5TerminalRuntimeTests
         Evidence = new() { ObservedAtUtcMsc = 2 },
     };
 
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        using var cancellation = new CancellationTokenSource(timeout);
+        while (!condition())
+        {
+            await Task.Delay(10, cancellation.Token);
+        }
+    }
+
+    private static async Task AssertCollectionCancelledAsync(Task collection)
+    {
+        try
+        {
+            await collection;
+            Assert.Fail("Collection loop should stop through cancellation.");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     private sealed class FakeWorker : IMt5WorkerClient
     {
         public bool IsConnected { get; private set; }
         public JsonElement WorkerHello { get; private set; }
         public JsonElement Response { get; set; }
+        public Func<object, JsonElement>? ResponseFactory { get; set; }
         public int RequestCount { get; private set; }
         public Action<int>? RequestObserved { get; set; }
         private readonly TaskCompletionSource _secondRequest = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -309,7 +357,7 @@ public sealed class Mt5TerminalRuntimeTests
             {
                 _secondRequest.TrySetResult();
             }
-            return Task.FromResult(Response);
+            return Task.FromResult(ResponseFactory?.Invoke(request!) ?? Response);
         }
 
         public Task WaitForRequestCountAsync(int count) => count <= RequestCount || count < 2

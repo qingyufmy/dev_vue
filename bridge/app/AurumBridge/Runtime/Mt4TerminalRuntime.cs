@@ -17,6 +17,7 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     private readonly Dictionary<string, long> _revisions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _latest = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _fullSnapshots = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _collectionWake = new(0, 1);
     private bool _initialized;
 
     public Mt4TerminalRuntime(
@@ -61,12 +62,12 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             var snapshot = await _connection.CollectAsync(Mt4CollectionStreams.All, cancellationToken);
             await IngestSnapshotAsync(snapshot, cancellationToken);
             var hasTrades = snapshot.Positions.Count > 0 || snapshot.Orders.Count > 0;
-            await Task.Delay(CollectionDelay(hasTrades), cancellationToken);
+            await _collectionWake.WaitAsync(CollectionDelay(hasTrades), cancellationToken);
         }
     }
 
     public static TimeSpan CollectionDelay(bool hasActiveTrades) =>
-        TimeSpan.FromMilliseconds(hasActiveTrades ? 250 : 400);
+        TimeSpan.FromMilliseconds(hasActiveTrades ? 250 : 1_000);
 
     public async Task<CommandResultMessage> ExecuteCommandAsync(
         CommandMessage command,
@@ -82,7 +83,15 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         {
             return Rejected(command, error.Message);
         }
-        var localResult = await _connection.ExecuteAsync(localCommand, cancellationToken);
+        Mt4TradeResult localResult;
+        try
+        {
+            localResult = await _connection.ExecuteAsync(localCommand, cancellationToken);
+        }
+        finally
+        {
+            WakeCollection();
+        }
         if (!string.Equals(localResult.CommandId, command.CommandId, StringComparison.Ordinal))
         {
             throw new InvalidDataException("mt4_command_result_id_mismatch");
@@ -117,6 +126,18 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
                     && ticket is not null ? [ticket] : [],
             },
         };
+    }
+
+    private void WakeCollection()
+    {
+        try
+        {
+            _collectionWake.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // Multiple commands can share one immediate follow-up collection.
+        }
     }
 
     public async Task<QuoteMessage> GetQuoteAsync(
