@@ -1,6 +1,7 @@
 using AurumBridge.Security;
 using AurumBridge.Storage;
 using AurumBridge.Workers;
+using System.Collections.Concurrent;
 
 namespace AurumBridge.Runtime;
 
@@ -35,10 +36,12 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private readonly BridgeStore _store;
     private readonly HttpClient _httpClient;
     private readonly BridgeSessionClient _sessionClient;
-    private readonly Mt5RuntimeProvisioner _provisioner;
+    private readonly Mt5RuntimeProvisioner _mt5Provisioner;
+    private readonly Mt4RuntimeProvisioner _mt4Provisioner;
     private readonly CancellationTokenSource _stop = new();
     private readonly Lock _sync = new();
     private readonly Dictionary<string, BridgeTerminalStatus> _terminalStatuses = new(StringComparer.Ordinal);
+    private readonly ConcurrentQueue<Mt4EaConnection> _pendingMt4Registrations = new();
     private CancellationTokenSource? _cycleCancellation;
     private Task? _runTask;
     private BridgeApplicationPhase _phase = BridgeApplicationPhase.Starting;
@@ -58,10 +61,11 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             Path.Combine(paths.DataDirectory, "credential.dat"),
             new WindowsDpapiProtector());
         _sessionClient = new(paths.ServerBaseUri, _httpClient, credentials);
-        _provisioner = new(
+        _mt5Provisioner = new(
             _store,
             paths.PythonExecutable,
             paths.Mt5WorkerScript);
+        _mt4Provisioner = new(_store);
     }
 
     public event Action<BridgeApplicationStatus>? StatusChanged;
@@ -122,6 +126,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             {
             }
         }
+        while (_pendingMt4Registrations.TryDequeue(out var registration))
+        {
+            await registration.DisposeAsync();
+        }
         _httpClient.Dispose();
         await _store.DisposeAsync();
         _stop.Dispose();
@@ -181,26 +189,35 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             _terminalStatuses.Clear();
         }
         Publish(BridgeApplicationPhase.DetectingTerminal);
+        var mt4RegistrationsTask = Mt4RuntimeProvisioner.AcceptRegistrationsAsync(
+            TimeSpan.FromMilliseconds(1_500),
+            cancellationToken);
         var installations = Mt5TerminalDiscovery.DiscoverWindows();
-        if (installations.Count == 0)
+        var mt5 = await _mt5Provisioner.ProvisionAsync(installations, cancellationToken);
+        var registrations = new List<Mt4EaConnection>();
+        while (_pendingMt4Registrations.TryDequeue(out var pendingRegistration))
         {
-            Publish(BridgeApplicationPhase.TerminalNotFound, "mt5_terminal_not_found");
+            registrations.Add(pendingRegistration);
+        }
+        registrations.AddRange(await mt4RegistrationsTask);
+        var mt4 = await _mt4Provisioner.ProvisionAsync(registrations, cancellationToken);
+        var supervisors = mt5.Terminals.Select(terminal => terminal.Supervisor)
+            .Concat(mt4.Terminals.Select(terminal => terminal.Supervisor))
+            .ToArray();
+        if (supervisors.Length == 0)
+        {
+            Publish(
+                BridgeApplicationPhase.TerminalNotFound,
+                mt5.Failures.FirstOrDefault()?.ErrorCode
+                    ?? mt4.Failures.FirstOrDefault()?.ErrorCode
+                    ?? "trading_terminal_not_found");
             await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
             return;
         }
 
-        var result = await _provisioner.ProvisionAsync(installations, cancellationToken);
-        if (result.Terminals.Count == 0)
+        foreach (var supervisor in supervisors)
         {
-            Publish(
-                BridgeApplicationPhase.TerminalNotFound,
-                result.Failures.FirstOrDefault()?.ErrorCode ?? "mt5_account_unavailable");
-            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
-            return;
-        }
-        foreach (var terminal in result.Terminals)
-        {
-            var descriptor = terminal.Supervisor.Terminal;
+            var descriptor = supervisor.Terminal;
             lock (_sync)
             {
                 _terminalStatuses[descriptor.TerminalInstanceId] = new(
@@ -211,16 +228,16 @@ public sealed class BridgeApplicationController : IAsyncDisposable
                     TerminalRuntimeState.Starting,
                     null);
             }
-            terminal.Supervisor.StatusChanged += HandleTerminalStatus;
+            supervisor.StatusChanged += HandleTerminalStatus;
         }
-        if (result.Failures.Count > 0)
+        var firstFailure = mt5.Failures.FirstOrDefault()?.ErrorCode
+            ?? mt4.Failures.FirstOrDefault()?.ErrorCode;
+        if (firstFailure is not null)
         {
-            Publish(BridgeApplicationPhase.Degraded, result.Failures[0].ErrorCode);
+            Publish(BridgeApplicationPhase.Degraded, firstFailure);
         }
 
-        await using var host = new BridgeHost(
-            _store,
-            result.Terminals.Select(terminal => terminal.Supervisor));
+        await using var host = new BridgeHost(_store, supervisors);
         var webSocket = new BridgeWebSocketClient(_store, host.CommandDispatcher);
         webSocket.FullSnapshotRequired += host.HandleFullSnapshotRequestAsync;
         var connection = new BridgeConnectionSupervisor(
@@ -233,15 +250,39 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         using var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var hostTask = host.RunAsync(runCancellation.Token);
         var connectionTask = connection.RunAsync(runCancellation.Token);
+        var registrationTask = WatchMt4RegistrationsAsync(runCancellation.Token);
         try
         {
-            await Task.WhenAll(hostTask, connectionTask);
+            await Task.WhenAll(hostTask, connectionTask, registrationTask);
         }
         finally
         {
             runCancellation.Cancel();
             await IgnoreCancellationAsync(hostTask);
             await IgnoreCancellationAsync(connectionTask);
+            await IgnoreCancellationAsync(registrationTask);
+        }
+    }
+
+    private async Task WatchMt4RegistrationsAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            Mt4EaConnection registration;
+            try
+            {
+                registration = await Mt4EaConnection.AcceptAsync(
+                    Mt4TerminalIdentity.RegistrationPipeName,
+                    TimeSpan.FromSeconds(30),
+                    cancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                continue;
+            }
+            _pendingMt4Registrations.Enqueue(registration);
+            RequestRedetect();
+            return;
         }
     }
 
