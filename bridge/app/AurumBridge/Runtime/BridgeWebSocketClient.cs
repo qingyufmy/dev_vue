@@ -30,6 +30,7 @@ public sealed class BridgeWebSocketClient
 
     public async Task RunSessionAsync(
         BridgeConnectionAttempt attempt,
+        Action? sessionReady = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(attempt);
@@ -75,6 +76,7 @@ public sealed class BridgeWebSocketClient
                 throw new TimeoutException("Bridge hello acknowledgement timed out.");
             }
             await helloReady.Task;
+            sessionReady?.Invoke();
             var sendTask = SendLoopAsync(socket, outbound, sessionCancellation.Token);
             var pumpTask = PumpLoopAsync(outbox, sessionCancellation.Token);
             await receiveTask;
