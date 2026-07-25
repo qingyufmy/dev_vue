@@ -47,6 +47,9 @@ public/ai/aurum_updater.exe
 .mcp.json
 coverage/
 uploads/
+[Bb]in/
+[Oo]bj/
+TestResults/
 icon.o
 icon.rc
 test-mcp.js
