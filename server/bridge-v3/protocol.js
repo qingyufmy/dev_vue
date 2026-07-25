@@ -1,7 +1,7 @@
 export const BRIDGE_PROTOCOL_VERSION = 3
 
 export const BRIDGE_V3_MESSAGE_TYPES = Object.freeze(new Set([
-  'hello', 'hello_ack', 'command', 'command_result', 'quote_request', 'quote',
+  'hello', 'hello_ack', 'command', 'command_result', 'command_result_ack', 'quote_request', 'quote',
   'data_request', 'data_response',
   'data_delta', 'data_ack', 'heartbeat', 'error',
 ]))
@@ -113,6 +113,15 @@ function validateCommandResult(message) {
   return errors
 }
 
+function validateCommandResultAck(message) {
+  const errors = validateEnvelope(message)
+  validateId(errors, 'acked_message_id', message.acked_message_id)
+  validateId(errors, 'command_id', message.command_id)
+  validateTerminalRoute(errors, message)
+  if (!['applied', 'duplicate'].includes(message.status)) errors.push('status:unsupported')
+  return errors
+}
+
 function validateSymbol(errors, value) {
   const symbol = String(value || '').trim()
   if (!symbol || symbol.length > 64 || value !== symbol) errors.push('symbol:invalid')
@@ -197,6 +206,7 @@ export function validateBridgeV3Message(message, { nowUtcMsc = Date.now() } = {}
   if (message.type === 'hello') errors = validateHello(message)
   else if (message.type === 'command') errors = validateCommand(message, nowUtcMsc)
   else if (message.type === 'command_result') errors = validateCommandResult(message)
+  else if (message.type === 'command_result_ack') errors = validateCommandResultAck(message)
   else if (message.type === 'quote_request') errors = validateQuoteRequest(message)
   else if (message.type === 'quote') errors = validateQuote(message)
   else if (message.type === 'data_request') errors = validateDataRequest(message)

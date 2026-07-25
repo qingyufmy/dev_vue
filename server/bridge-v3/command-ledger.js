@@ -205,7 +205,11 @@ export async function recordCommandResult(message, {
         throw ledgerError('bridge_command_result_conflict')
       }
     }
-    if (row.status === 'uncertain' && !(allowUncertainResolution && FINAL_RESULTS.has(message.status))) {
+    const resolvesUncertain = row.status === 'uncertain'
+      && allowUncertainResolution && FINAL_RESULTS.has(message.status)
+    const recordsUncertainEvidence = row.status === 'uncertain'
+      && message.status === 'uncertain' && !row.result_hash
+    if (row.status === 'uncertain' && !resolvesUncertain && !recordsUncertainEvidence) {
       throw ledgerError('bridge_command_reconciliation_required')
     }
     if (row.status !== 'dispatched' && row.status !== 'uncertain') {
@@ -220,7 +224,7 @@ export async function recordCommandResult(message, {
       message.error_code || null, message.error_message || null, message.command_id,
     ])
     await appendEvent(run, message.command_id,
-      row.status === 'uncertain' ? 'reconciled' : 'result_received', row.status, message.status,
+      resolvesUncertain ? 'reconciled' : 'result_received', row.status, message.status,
       { result_hash:resultHash, received_at_utc_msc:nowUtcMsc })
     return { command:{ ...row, status:message.status, completed_at_utc_msc:message.completed_at_utc_msc,
       result_status:message.status, result:message, result_hash:resultHash }, duplicate:false }

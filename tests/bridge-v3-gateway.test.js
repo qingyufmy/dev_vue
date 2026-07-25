@@ -317,6 +317,16 @@ describe('Bridge v3 websocket gateway', () => {
     ws.emit('message', Buffer.from(JSON.stringify(result())))
     await expect(pending).resolves.toMatchObject({ status:'succeeded', command_id:'command_01JGATEWAY01' })
     expect(order).toEqual(['ledger', 'dispatch', 'send', 'result'])
+    expect(dependencies.recordResult).toHaveBeenCalledWith(
+      expect.objectContaining({ type:'command_result' }),
+      expect.objectContaining({ allowUncertainResolution:true, nowUtcMsc:NOW })
+    )
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'command_result_ack',
+      acked_message_id:'msg_01JGATEWAY_RESULT',
+      command_id:'command_01JGATEWAY01',
+      status:'applied',
+    })
     expect(dependencies.markUncertain).not.toHaveBeenCalled()
   })
 

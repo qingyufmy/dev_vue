@@ -112,6 +112,43 @@ public sealed class BridgeInboundRouterTests
     }
 
     [TestMethod]
+    public async Task CommandResultAckDeletesDurableTradeOutbox()
+    {
+        var pump = new BridgeOutboxPump(_testStore.Store, _outbound);
+        var router = new BridgeInboundRouter(
+            _testStore.Store, Dispatcher(), _outbound, () => Now, outboxPump:pump);
+        var command = Command();
+
+        await router.RouteAsync(JsonSerializer.Serialize(command, BridgeJson.Options));
+        var result = Result(command);
+        Assert.HasCount(1, await _testStore.Store.GetPendingOutboxAsync());
+
+        await router.RouteAsync(JsonSerializer.Serialize(ResultAck(result), BridgeJson.Options));
+
+        Assert.IsEmpty(await _testStore.Store.GetPendingOutboxAsync());
+        Assert.AreEqual(0, await pump.PumpOnceAsync());
+    }
+
+    [TestMethod]
+    public async Task DuplicateCommandReceiptCanBeAcknowledgedAfterOutboxWasCleared()
+    {
+        var pump = new BridgeOutboxPump(_testStore.Store, _outbound);
+        var router = new BridgeInboundRouter(
+            _testStore.Store, Dispatcher(), _outbound, () => Now, outboxPump:pump);
+        var command = Command();
+        var result = Result(command);
+
+        await router.RouteAsync(JsonSerializer.Serialize(command, BridgeJson.Options));
+        await router.RouteAsync(JsonSerializer.Serialize(ResultAck(result), BridgeJson.Options));
+        await router.RouteAsync(JsonSerializer.Serialize(command, BridgeJson.Options));
+        await router.RouteAsync(JsonSerializer.Serialize(
+            ResultAck(result) with { Status = "duplicate" }, BridgeJson.Options));
+
+        Assert.AreEqual(1, _workerCalls);
+        Assert.IsEmpty(await _testStore.Store.GetPendingOutboxAsync());
+    }
+
+    [TestMethod]
     public async Task QuoteRequestUsesTradePriorityWithoutPersistingOutbox()
     {
         var terminal = Terminal();
@@ -307,5 +344,18 @@ public sealed class BridgeInboundRouterTests
         Revision = delta.Revision,
         Status = status,
         ExpectedRevision = 2,
+    };
+
+    private static CommandResultAckMessage ResultAck(CommandResultMessage result) => new()
+    {
+        Type = "command_result_ack",
+        MessageId = "ack_01JROUTER_RESULT",
+        SentAtUtcMsc = Now + 2,
+        AckedMessageId = result.MessageId,
+        CommandId = result.CommandId,
+        TerminalInstanceId = result.TerminalInstanceId,
+        AccountRef = result.AccountRef,
+        ConnectionEpoch = result.ConnectionEpoch,
+        Status = "applied",
     };
 }

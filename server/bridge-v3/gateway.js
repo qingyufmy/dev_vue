@@ -243,13 +243,25 @@ export function createBridgeV3Gateway({
       return
     }
     if (message.type === 'command_result') {
-      const stored = await recordResult(message, { nowUtcMsc:now() })
+      const stored = await recordResult(message, { allowUncertainResolution:true, nowUtcMsc:now() })
       const pending = pendingResults.get(message.command_id)
       if (pending && pending.connection === connection) {
         clearTimeout(pending.timer)
         pendingResults.delete(message.command_id)
         pending.resolve(stored.command?.result || message)
       }
+      safeSend(connection.ws, {
+        v:3,
+        type:'command_result_ack',
+        message_id:messageId('command_result_ack'),
+        sent_at_utc_msc:now(),
+        acked_message_id:message.message_id,
+        command_id:message.command_id,
+        terminal_instance_id:message.terminal_instance_id,
+        account_ref:message.account_ref,
+        connection_epoch:message.connection_epoch,
+        status:stored.duplicate ? 'duplicate' : 'applied',
+      })
       return
     }
     if (message.type === 'quote') {

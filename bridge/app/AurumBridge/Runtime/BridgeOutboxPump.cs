@@ -21,12 +21,9 @@ public sealed class BridgeOutboxPump
         var queued = 0;
         foreach (var message in messages)
         {
-            lock (_sync)
+            if (!TryClaim(message.MessageId))
             {
-                if (!_queued.Add(message.MessageId))
-                {
-                    continue;
-                }
+                continue;
             }
             try
             {
@@ -39,14 +36,28 @@ public sealed class BridgeOutboxPump
             }
             catch
             {
-                lock (_sync)
-                {
-                    _queued.Remove(message.MessageId);
-                }
+                ReleaseClaim(message.MessageId);
                 throw;
             }
         }
         return queued;
+    }
+
+    public bool TryClaim(string messageId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        lock (_sync)
+        {
+            return _queued.Add(messageId);
+        }
+    }
+
+    public void ReleaseClaim(string messageId)
+    {
+        lock (_sync)
+        {
+            _queued.Remove(messageId);
+        }
     }
 
     public void HandleAcknowledgement(string messageId, string status)
@@ -57,9 +68,6 @@ public sealed class BridgeOutboxPump
         {
             return;
         }
-        lock (_sync)
-        {
-            _queued.Remove(messageId);
-        }
+        ReleaseClaim(messageId);
     }
 }

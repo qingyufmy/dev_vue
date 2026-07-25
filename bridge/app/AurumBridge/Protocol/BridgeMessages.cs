@@ -196,6 +196,27 @@ public sealed record CommandResultMessage : BridgeEnvelope
     public required ExecutionEvidence Evidence { get; init; }
 }
 
+public sealed record CommandResultAckMessage : BridgeEnvelope
+{
+    [JsonPropertyName("acked_message_id")]
+    public required string AckedMessageId { get; init; }
+
+    [JsonPropertyName("command_id")]
+    public required string CommandId { get; init; }
+
+    [JsonPropertyName("terminal_instance_id")]
+    public required string TerminalInstanceId { get; init; }
+
+    [JsonPropertyName("account_ref")]
+    public required AccountRef AccountRef { get; init; }
+
+    [JsonPropertyName("connection_epoch")]
+    public required long ConnectionEpoch { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+}
+
 public sealed record QuoteRequestMessage : BridgeEnvelope
 {
     [JsonPropertyName("request_id")]

@@ -93,6 +93,20 @@ describe('Bridge v3 protocol contract', () => {
     })
   })
 
+  it('accepts only routed command result acknowledgements', () => {
+    const acknowledgement = envelope('command_result_ack', {
+      ...route(),
+      acked_message_id:'result_01JBRIDGE0001',
+      command_id:'command_01JBRIDGE0003',
+      status:'applied',
+    })
+    expect(validateBridgeV3Message(acknowledgement)).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({ ...acknowledgement, status:'gap' })).toMatchObject({
+      ok:false,
+      errors:expect.arrayContaining(['status:unsupported']),
+    })
+  })
+
   it('validates routed transient quote requests and broker observations', () => {
     const request = envelope('quote_request', {
       ...route(),

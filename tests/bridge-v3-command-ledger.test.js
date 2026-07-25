@@ -187,4 +187,16 @@ describe('Bridge v3 durable command ledger', () => {
     })).resolves.toMatchObject({ duplicate:false, command:{ status:'succeeded' } })
     expect(reconciled.run.mock.calls[2][1][1]).toBe('reconciled')
   })
+
+  it('records delayed uncertain evidence idempotently after transport loss', async () => {
+    const uncertain = result({ status:'uncertain', evidence:{ observed_at_utc_msc:NOW + 100 } })
+    const first = transactionWith(ledgerRow(command(), {
+      status:'uncertain', result_status:'uncertain', result_hash:null, result_json:null,
+    }))
+
+    await expect(recordCommandResult(uncertain, {
+      nowUtcMsc:NOW + 300, allowUncertainResolution:true, transactionFn:first.transactionFn,
+    })).resolves.toMatchObject({ duplicate:false, command:{ status:'uncertain' } })
+    expect(first.run.mock.calls[2][1][1]).toBe('result_received')
+  })
 })

@@ -138,6 +138,21 @@ public sealed class BridgeStoreTests
     }
 
     [TestMethod]
+    public async Task PersistsExecutionReceiptAndTradeOutboxInOneTransaction()
+    {
+        var result = Result("command_00000001", 1);
+
+        await _store.SaveExecutionReceiptAsync(result);
+        var pending = await _store.GetPendingOutboxAsync();
+
+        Assert.HasCount(1, pending);
+        Assert.AreEqual(result.MessageId, pending[0].MessageId);
+        Assert.AreEqual("command_result", pending[0].MessageType);
+        Assert.AreEqual("trade", pending[0].Priority);
+        Assert.IsNotNull(await _store.GetExecutionReceiptAsync(result.CommandId));
+    }
+
+    [TestMethod]
     public async Task ActivatingTerminalBindingAdvancesDurableConnectionEpoch()
     {
         var terminalPath = Path.Combine(_directory, "Broker MT5", "terminal64.exe");

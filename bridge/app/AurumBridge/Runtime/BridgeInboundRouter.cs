@@ -18,6 +18,7 @@ public sealed class BridgeInboundRouter
     private readonly Func<long> _clock;
     private readonly Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? _quoteHandler;
     private readonly Func<DataRequestMessage, CancellationToken, Task<DataResponseMessage>>? _dataHandler;
+    private readonly BridgeOutboxPump? _outboxPump;
 
     public BridgeInboundRouter(
         BridgeStore store,
@@ -25,7 +26,8 @@ public sealed class BridgeInboundRouter
         PriorityMessageQueue outbound,
         Func<long>? clock = null,
         Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? quoteHandler = null,
-        Func<DataRequestMessage, CancellationToken, Task<DataResponseMessage>>? dataHandler = null)
+        Func<DataRequestMessage, CancellationToken, Task<DataResponseMessage>>? dataHandler = null,
+        BridgeOutboxPump? outboxPump = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
@@ -33,6 +35,7 @@ public sealed class BridgeInboundRouter
         _clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         _quoteHandler = quoteHandler;
         _dataHandler = dataHandler;
+        _outboxPump = outboxPump;
     }
 
     public event Func<FullSnapshotRequest, Task>? FullSnapshotRequired;
@@ -63,15 +66,30 @@ public sealed class BridgeInboundRouter
             case "data_ack":
                 await HandleDataAcknowledgementAsync(payloadJson, cancellationToken);
                 return;
+            case "command_result_ack":
+                await HandleCommandResultAcknowledgementAsync(payloadJson, cancellationToken);
+                return;
             case "command":
                 var command = JsonSerializer.Deserialize<CommandMessage>(payloadJson, BridgeJson.Options)
                     ?? throw new InvalidDataException("bridge_command_invalid");
                 var result = await _dispatcher.DispatchAsync(command, cancellationToken);
                 var resultJson = JsonSerializer.Serialize(result, BridgeJson.Options);
-                await _outbound.EnqueueAsync(new(
-                    result.MessageId,
-                    resultJson,
-                    BridgeMessagePriority.Trade), cancellationToken);
+                var claimed = _outboxPump?.TryClaim(result.MessageId) ?? true;
+                if (claimed)
+                {
+                    try
+                    {
+                        await _outbound.EnqueueAsync(new(
+                            result.MessageId,
+                            resultJson,
+                            BridgeMessagePriority.Trade), cancellationToken);
+                    }
+                    catch
+                    {
+                        _outboxPump?.ReleaseClaim(result.MessageId);
+                        throw;
+                    }
+                }
                 return;
             case "quote_request":
                 await HandleQuoteRequestAsync(payloadJson, cancellationToken);
@@ -85,6 +103,46 @@ public sealed class BridgeInboundRouter
             default:
                 throw new InvalidDataException("bridge_message_type_unexpected");
         }
+    }
+
+    private async Task HandleCommandResultAcknowledgementAsync(
+        string payloadJson,
+        CancellationToken cancellationToken)
+    {
+        var acknowledgement = JsonSerializer.Deserialize<CommandResultAckMessage>(payloadJson, BridgeJson.Options)
+            ?? throw new InvalidDataException("bridge_command_result_ack_invalid");
+        if (acknowledgement.Version != 3
+            || acknowledgement.Type != "command_result_ack"
+            || acknowledgement.Status is not ("applied" or "duplicate"))
+        {
+            throw new InvalidDataException("bridge_command_result_ack_invalid");
+        }
+        var pending = await _store.GetPendingOutboxMessageAsync(
+            acknowledgement.AckedMessageId, cancellationToken);
+        if (pending is not null && pending.MessageType != "command_result")
+        {
+            throw new InvalidDataException("bridge_command_result_ack_type_mismatch");
+        }
+        var result = pending is null
+            ? await _store.GetExecutionReceiptAsync(acknowledgement.CommandId, cancellationToken)
+            : JsonSerializer.Deserialize<CommandResultMessage>(pending.PayloadJson, BridgeJson.Options);
+        if (result is null || result.MessageId != acknowledgement.AckedMessageId)
+        {
+            throw new InvalidDataException("bridge_command_result_ack_unknown");
+        }
+        if (result.CommandId != acknowledgement.CommandId
+            || result.TerminalInstanceId != acknowledgement.TerminalInstanceId
+            || result.ConnectionEpoch != acknowledgement.ConnectionEpoch
+            || !SameAccount(result.AccountRef, acknowledgement.AccountRef))
+        {
+            throw new InvalidDataException("bridge_command_result_ack_route_mismatch");
+        }
+        if (pending is not null && !await _store.AcknowledgeOutboxAsync(
+            acknowledgement.AckedMessageId, acknowledgement.Status, _clock(), cancellationToken))
+        {
+            throw new InvalidDataException("bridge_command_result_ack_unknown");
+        }
+        _outboxPump?.HandleAcknowledgement(acknowledgement.AckedMessageId, acknowledgement.Status);
     }
 
     private async Task HandleQuoteRequestAsync(
@@ -347,4 +405,10 @@ public sealed class BridgeInboundRouter
             ErrorCode = errorCode,
         };
     }
+
+    private static bool SameAccount(AccountRef? left, AccountRef? right) =>
+        left is not null
+        && right is not null
+        && string.Equals(left.BrokerServer, right.BrokerServer, StringComparison.OrdinalIgnoreCase)
+        && left.Login == right.Login;
 }

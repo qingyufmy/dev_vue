@@ -321,6 +321,24 @@ public sealed class BridgeStore : IAsyncDisposable
                 trim.Parameters.AddWithValue("$receipt_limit", receiptLimit);
                 await trim.ExecuteNonQueryAsync(cancellationToken);
             }
+            await using (var outbox = connection.CreateCommand())
+            {
+                outbox.Transaction = (SqliteTransaction)transaction;
+                outbox.CommandText = """
+                    INSERT INTO outbox_messages
+                      (message_id, message_type, terminal_instance_id, connection_epoch, priority,
+                       payload_json, created_at_utc_msc)
+                    VALUES ($message_id, 'command_result', $terminal_id, $epoch, 'trade',
+                            $payload, $created_at)
+                    ON CONFLICT(message_id) DO NOTHING;
+                    """;
+                outbox.Parameters.AddWithValue("$message_id", result.MessageId);
+                outbox.Parameters.AddWithValue("$terminal_id", result.TerminalInstanceId);
+                outbox.Parameters.AddWithValue("$epoch", result.ConnectionEpoch);
+                outbox.Parameters.AddWithValue("$payload", payload);
+                outbox.Parameters.AddWithValue("$created_at", result.SentAtUtcMsc);
+                await outbox.ExecuteNonQueryAsync(cancellationToken);
+            }
             await transaction.CommitAsync(cancellationToken);
         }
         finally

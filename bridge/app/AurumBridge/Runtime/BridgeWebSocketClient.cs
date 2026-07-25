@@ -59,9 +59,10 @@ public sealed class BridgeWebSocketClient
             await SendDirectAsync(socket, JsonSerializer.Serialize(attempt.Hello, BridgeJson.Options), cancellationToken);
 
             var outbound = new PriorityMessageQueue();
-            var router = new BridgeInboundRouter(
-                _store, _dispatcher, outbound, quoteHandler:_quoteHandler, dataHandler:_dataHandler);
             var outbox = new BridgeOutboxPump(_store, outbound);
+            var router = new BridgeInboundRouter(
+                _store, _dispatcher, outbound, quoteHandler:_quoteHandler, dataHandler:_dataHandler,
+                outboxPump:outbox);
             var helloReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             router.HelloAcknowledged += sessionId =>
             {
