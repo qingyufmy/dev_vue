@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.01"
+#property version   "3.02"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -10,6 +10,8 @@ input string InpPipeName = "AURUMBridgeV3";
 #define MSG_SNAPSHOT     11
 #define MSG_QUOTE_REQUEST 12
 #define MSG_QUOTE        13
+#define MSG_RATES_REQUEST 14
+#define MSG_RATES        15
 #define MSG_COMMAND      20
 #define MSG_COMMAND_RESULT 21
 #define MSG_SHUTDOWN     90
@@ -92,6 +94,11 @@ void OnTimer()
       SendQuote(payload, offset);
       return;
      }
+   if(message_type == MSG_RATES_REQUEST && g_welcomed)
+     {
+      SendRates(payload, offset);
+      return;
+     }
    if(message_type == MSG_SHUTDOWN)
      {
       uchar response[];
@@ -112,7 +119,7 @@ bool ConnectPipe()
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
    AppendInt32(hello, 3);
-   AppendUtf8(hello, "3.0.0");
+   AppendUtf8(hello, "3.0.2");
    AppendUtf8(hello, TerminalInfoString(TERMINAL_DATA_PATH));
    AppendUtf8(hello, AccountServer());
    AppendUtf8(hello, IntegerToString(AccountNumber()));
@@ -202,6 +209,109 @@ void SendQuoteResult(const string request_id, const string symbol, const int sta
    AppendUtf8(response, error_code);
    if(!WriteFrame(response))
       DisconnectPipe();
+  }
+
+int ResolveTimeframe(const string timeframe)
+  {
+   if(timeframe == "M1") return(PERIOD_M1);
+   if(timeframe == "M5") return(PERIOD_M5);
+   if(timeframe == "M15") return(PERIOD_M15);
+   if(timeframe == "M30") return(PERIOD_M30);
+   if(timeframe == "H1") return(PERIOD_H1);
+   if(timeframe == "H4") return(PERIOD_H4);
+   if(timeframe == "D1") return(PERIOD_D1);
+   return(0);
+  }
+
+void SendRates(uchar &request[], int &offset)
+  {
+   string request_id = ReadUtf8(request, offset);
+   string terminal_id = ReadUtf8(request, offset);
+   string broker_server = ReadUtf8(request, offset);
+   string login = ReadUtf8(request, offset);
+   long connection_epoch = ReadInt64(request, offset);
+   string symbol = ReadUtf8(request, offset);
+   string timeframe_name = ReadUtf8(request, offset);
+   int requested_count = ReadInt32(request, offset);
+   long start_utc_msc = ReadInt64(request, offset);
+   long end_utc_msc = ReadInt64(request, offset);
+   if(request_id == "" || terminal_id != g_terminal_id
+      || StringCompare(broker_server, AccountServer(), false) != 0
+      || login != IntegerToString(AccountNumber())
+      || connection_epoch != g_connection_epoch)
+     {
+      SendRatesResult(request_id, 2, "", "rates_route_mismatch", 0);
+      return;
+     }
+   int timeframe = ResolveTimeframe(timeframe_name);
+   if(symbol == "" || timeframe <= 0 || requested_count < 2 || requested_count > 5000
+      || !SymbolSelect(symbol, true))
+     {
+      SendRatesResult(request_id, 2, "", "rates_params_invalid", 0);
+      return;
+     }
+   int available = iBars(symbol, timeframe);
+   if(available <= 0)
+     {
+      SendRatesResult(request_id, 2, "", "rates_unavailable", 0);
+      return;
+     }
+   int newest_shift = 0;
+   int oldest_shift = MathMin(requested_count - 1, available - 1);
+   if(start_utc_msc > 0 || end_utc_msc > 0)
+     {
+      if(start_utc_msc <= 0 || end_utc_msc <= start_utc_msc)
+        {
+         SendRatesResult(request_id, 2, "", "rates_range_invalid", 0);
+         return;
+        }
+      newest_shift = iBarShift(symbol, timeframe, (datetime)(end_utc_msc / 1000), false);
+      oldest_shift = iBarShift(symbol, timeframe, (datetime)(start_utc_msc / 1000), false);
+      if(newest_shift < 0 || oldest_shift < newest_shift)
+        {
+         SendRatesResult(request_id, 2, "", "rates_unavailable", 0);
+         return;
+        }
+      oldest_shift = MathMin(oldest_shift, newest_shift + requested_count - 1);
+     }
+   int spread = (int)MarketInfo(symbol, MODE_SPREAD);
+   string rates_json = "[";
+   int actual_count = 0;
+   for(int shift = oldest_shift; shift >= newest_shift; shift--)
+     {
+      datetime bar_time = iTime(symbol, timeframe, shift);
+      if(bar_time <= 0) continue;
+      if(actual_count > 0) rates_json += ",";
+      rates_json += "{\"time_utc_msc\":" + IntegerToString((int)bar_time) + "000"
+         + ",\"open\":" + JsonNumber(iOpen(symbol, timeframe, shift))
+         + ",\"high\":" + JsonNumber(iHigh(symbol, timeframe, shift))
+         + ",\"low\":" + JsonNumber(iLow(symbol, timeframe, shift))
+         + ",\"close\":" + JsonNumber(iClose(symbol, timeframe, shift))
+         + ",\"tick_volume\":" + IntegerToString((int)iVolume(symbol, timeframe, shift))
+         + ",\"spread\":" + IntegerToString(spread)
+         + ",\"real_volume\":0}";
+      actual_count++;
+     }
+   rates_json += "]";
+   string payload_json = "{\"symbol\":\"" + JsonEscape(symbol) + "\""
+      + ",\"timeframe\":\"" + timeframe_name + "\""
+      + ",\"count\":" + IntegerToString(actual_count)
+      + ",\"rates\":" + rates_json + "}";
+   long source_time = (long)iTime(symbol, timeframe, newest_shift) * 1000;
+   SendRatesResult(request_id, 1, payload_json, "", source_time);
+  }
+
+void SendRatesResult(const string request_id, const int status,
+   const string payload_json, const string error_code, const long observed_at)
+  {
+   uchar response[];
+   AppendInt32(response, MSG_RATES);
+   AppendUtf8(response, request_id);
+   AppendInt64(response, observed_at > 0 ? observed_at : ((long)TimeGMT()) * 1000);
+   AppendInt32(response, status);
+   AppendUtf8(response, payload_json);
+   AppendUtf8(response, error_code);
+   if(!WriteFrame(response)) DisconnectPipe();
   }
 
 void ExecuteCommand(uchar &payload[], int &offset)

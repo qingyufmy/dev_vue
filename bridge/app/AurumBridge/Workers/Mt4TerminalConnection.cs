@@ -84,6 +84,11 @@ public sealed class ReconnectableMt4EaConnection : IMt4EaConnection
         CancellationToken cancellationToken = default) =>
         ReadyConnection().GetQuoteAsync(request, cancellationToken);
 
+    public Task<Mt4Rates> GetRatesAsync(
+        Mt4RatesRequest request,
+        CancellationToken cancellationToken = default) =>
+        ReadyConnection().GetRatesAsync(request, cancellationToken);
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)

@@ -145,6 +145,40 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         };
     }
 
+    public async Task<DataResponseMessage> GetDataAsync(
+        DataRequestMessage request,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        if (request.Action != "rates")
+        {
+            return RejectedData(request, "terminal_data_action_unavailable");
+        }
+        Mt4RatesRequest localRequest;
+        try
+        {
+            localRequest = Mt4PipeProtocol.CreateRatesRequest(request);
+        }
+        catch (InvalidDataException error)
+        {
+            return RejectedData(request, error.Message);
+        }
+        var local = await _connection.GetRatesAsync(localRequest, cancellationToken);
+        if (local.RequestId != request.RequestId)
+        {
+            throw new InvalidDataException("mt4_rates_route_mismatch");
+        }
+        return new()
+        {
+            Type = "data_response", MessageId = $"data_{request.RequestId}_{Guid.NewGuid():N}",
+            SentAtUtcMsc = _clock(), RequestId = request.RequestId,
+            TerminalInstanceId = _terminal.TerminalInstanceId, AccountRef = _terminal.AccountRef,
+            ConnectionEpoch = _terminal.ConnectionEpoch, Action = request.Action, Params = request.Params,
+            ObservedAtUtcMsc = local.ObservedAtUtcMsc, Status = local.Status,
+            Payload = local.Payload, ErrorCode = local.ErrorCode,
+        };
+    }
+
     public void RequestFullSnapshot(string stream)
     {
         if (!Streams.Contains(stream, StringComparer.Ordinal))
@@ -262,6 +296,19 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             CompletedAtUtcMsc = now,
             ErrorCode = errorCode,
             Evidence = new() { ObservedAtUtcMsc = now },
+        };
+    }
+
+    private DataResponseMessage RejectedData(DataRequestMessage request, string errorCode)
+    {
+        var now = _clock();
+        return new()
+        {
+            Type = "data_response", MessageId = $"data_{request.RequestId}_{Guid.NewGuid():N}",
+            SentAtUtcMsc = now, RequestId = request.RequestId,
+            TerminalInstanceId = _terminal.TerminalInstanceId, AccountRef = _terminal.AccountRef,
+            ConnectionEpoch = _terminal.ConnectionEpoch, Action = request.Action, Params = request.Params,
+            ObservedAtUtcMsc = now, Status = "rejected", ErrorCode = errorCode,
         };
     }
 

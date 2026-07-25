@@ -82,6 +82,32 @@ public sealed class Mt4TerminalRuntimeTests
         Assert.AreEqual("AI-2F", connection.LastCommand.BridgeCommandRef);
     }
 
+    [TestMethod]
+    public async Task MapsRatesOverTheTransientMt4DataChannel()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection();
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_01");
+        await runtime.StartAsync();
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_rates_01", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_rates_01", TerminalInstanceId = Terminal().TerminalInstanceId,
+            AccountRef = Terminal().AccountRef, ConnectionEpoch = Terminal().ConnectionEpoch,
+            Action = "rates", Params = JsonSerializer.SerializeToElement(new
+            {
+                symbol = "XAUUSD", timeframe = "M30", count = 100,
+            }),
+        };
+
+        var response = await runtime.GetDataAsync(request);
+
+        Assert.AreEqual("succeeded", response.Status);
+        Assert.AreEqual("XAUUSD", response.Payload!.Value.GetProperty("symbol").GetString());
+        Assert.AreEqual(100, connection.LastRatesRequest!.Count);
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "mt4_terminal_runtime_01",
@@ -125,6 +151,7 @@ public sealed class Mt4TerminalRuntimeTests
         public int ExecuteCount { get; private set; }
         public Mt4TradeCommand? LastCommand { get; private set; }
         public JsonElement? NextRawResult { get; init; }
+        public Mt4RatesRequest? LastRatesRequest { get; private set; }
 
         public Task SendWelcomeAsync(Mt4Welcome welcome, CancellationToken cancellationToken = default)
         {
@@ -163,6 +190,17 @@ public sealed class Mt4TerminalRuntimeTests
                 2300.0,
                 2300.2,
                 null));
+
+        public Task<Mt4Rates> GetRatesAsync(
+            Mt4RatesRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            LastRatesRequest = request;
+            return Task.FromResult(new Mt4Rates(
+                request.RequestId, 1_800_000_000_060, "succeeded",
+                JsonSerializer.SerializeToElement(new { symbol = request.Symbol, rates = Array.Empty<object>() }),
+                null));
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

@@ -13,6 +13,8 @@ public enum Mt4MessageType
     Snapshot = 11,
     QuoteRequest = 12,
     Quote = 13,
+    RatesRequest = 14,
+    Rates = 15,
     Command = 20,
     CommandResult = 21,
     Shutdown = 90,
@@ -64,6 +66,25 @@ public sealed record Mt4Quote(
     string Status,
     double? Bid,
     double? Ask,
+    string? ErrorCode);
+
+public sealed record Mt4RatesRequest(
+    string RequestId,
+    string TerminalInstanceId,
+    string BrokerServer,
+    string Login,
+    long ConnectionEpoch,
+    string Symbol,
+    string Timeframe,
+    int Count,
+    long StartUtcMsc,
+    long EndUtcMsc);
+
+public sealed record Mt4Rates(
+    string RequestId,
+    long ObservedAtUtcMsc,
+    string Status,
+    JsonElement? Payload,
     string? ErrorCode);
 
 public enum Mt4TradeAction
@@ -339,6 +360,90 @@ public static class Mt4PipeProtocol
         EnsureFullyRead(reader);
         ValidateQuote(quote);
         return quote;
+    }
+
+    public static Mt4RatesRequest CreateRatesRequest(DataRequestMessage request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Version != 3 || request.Type != "data_request" || request.Action != "rates")
+        {
+            throw new InvalidDataException("mt4_rates_request_invalid");
+        }
+        var result = new Mt4RatesRequest(
+            request.RequestId, request.TerminalInstanceId, request.AccountRef.BrokerServer,
+            request.AccountRef.Login, request.ConnectionEpoch,
+            ReadOptionalString(request.Params, "symbol") ?? string.Empty,
+            (ReadOptionalString(request.Params, "timeframe") ?? "M30").ToUpperInvariant(),
+            checked((int)(ReadOptionalInt64(request.Params, "count") ?? 100)),
+            ReadOptionalInt64(request.Params, "start_utc_msc") ?? 0,
+            ReadOptionalInt64(request.Params, "end_utc_msc") ?? 0);
+        ValidateRatesRequest(result);
+        return result;
+    }
+
+    public static byte[] EncodeRatesRequest(Mt4RatesRequest request)
+    {
+        ValidateRatesRequest(request);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.RatesRequest);
+            WriteString(writer, request.RequestId);
+            WriteString(writer, request.TerminalInstanceId);
+            WriteString(writer, request.BrokerServer);
+            WriteString(writer, request.Login);
+            writer.Write(request.ConnectionEpoch);
+            WriteString(writer, request.Symbol);
+            WriteString(writer, request.Timeframe);
+            writer.Write(request.Count);
+            writer.Write(request.StartUtcMsc);
+            writer.Write(request.EndUtcMsc);
+        });
+    }
+
+    public static Mt4RatesRequest DecodeRatesRequest(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.RatesRequest);
+        var result = new Mt4RatesRequest(
+            ReadString(reader, 128), ReadString(reader, 128), ReadString(reader, 128),
+            ReadString(reader, 64), reader.ReadInt64(), ReadString(reader, 64),
+            ReadString(reader, 16), reader.ReadInt32(), reader.ReadInt64(), reader.ReadInt64());
+        EnsureFullyRead(reader);
+        ValidateRatesRequest(result);
+        return result;
+    }
+
+    public static byte[] EncodeRates(Mt4Rates result)
+    {
+        ValidateRates(result);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.Rates);
+            WriteString(writer, result.RequestId);
+            writer.Write(result.ObservedAtUtcMsc);
+            writer.Write(result.Status == "succeeded" ? 1 : 2);
+            WriteString(writer, result.Payload?.GetRawText() ?? string.Empty);
+            WriteString(writer, result.ErrorCode ?? string.Empty);
+        });
+    }
+
+    public static Mt4Rates DecodeRates(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.Rates);
+        var requestId = ReadString(reader, 128);
+        var observedAt = reader.ReadInt64();
+        var status = reader.ReadInt32() switch
+        {
+            1 => "succeeded",
+            2 => "rejected",
+            _ => throw new InvalidDataException("mt4_rates_status_invalid"),
+        };
+        var payloadText = ReadString(reader, MaxStringBytes);
+        var result = new Mt4Rates(requestId, observedAt, status,
+            string.IsNullOrEmpty(payloadText) ? null : ParseObject(payloadText, "mt4_rates_payload_invalid"),
+            NullIfEmpty(ReadString(reader, 128)));
+        EnsureFullyRead(reader);
+        ValidateRates(result);
+        return result;
     }
 
     public static Mt4TradeCommand CreateTradeCommand(CommandMessage command)
@@ -764,6 +869,36 @@ public static class Mt4PipeProtocol
         if (quote.Status == "rejected" && string.IsNullOrWhiteSpace(quote.ErrorCode))
         {
             throw new InvalidDataException("mt4_quote_error_missing");
+        }
+    }
+
+    private static void ValidateRatesRequest(Mt4RatesRequest request)
+    {
+        string[] timeframes = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
+        if (string.IsNullOrWhiteSpace(request.RequestId)
+            || string.IsNullOrWhiteSpace(request.TerminalInstanceId)
+            || string.IsNullOrWhiteSpace(request.BrokerServer)
+            || string.IsNullOrWhiteSpace(request.Login)
+            || request.ConnectionEpoch <= 0
+            || string.IsNullOrWhiteSpace(request.Symbol) || request.Symbol.Length > 64
+            || !timeframes.Contains(request.Timeframe, StringComparer.Ordinal)
+            || request.Count is < 2 or > 5_000
+            || request.StartUtcMsc < 0 || request.EndUtcMsc < 0
+            || (request.StartUtcMsc > 0 || request.EndUtcMsc > 0)
+                && !(request.StartUtcMsc > 0 && request.EndUtcMsc > request.StartUtcMsc))
+        {
+            throw new InvalidDataException("mt4_rates_request_invalid");
+        }
+    }
+
+    private static void ValidateRates(Mt4Rates result)
+    {
+        if (string.IsNullOrWhiteSpace(result.RequestId) || result.ObservedAtUtcMsc <= 0
+            || result.Status is not ("succeeded" or "rejected")
+            || result.Status == "succeeded" && result.Payload is null
+            || result.Status == "rejected" && string.IsNullOrWhiteSpace(result.ErrorCode))
+        {
+            throw new InvalidDataException("mt4_rates_invalid");
         }
     }
 

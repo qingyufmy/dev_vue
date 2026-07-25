@@ -158,6 +158,30 @@ public sealed class Mt4PipeProtocolTests
     }
 
     [TestMethod]
+    public void RatesRequestAndResponseRoundTripWithBoundedFields()
+    {
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_rates_01", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_rates_01", TerminalInstanceId = "mt4_terminal_codec_01",
+            AccountRef = new("Broker-Demo", "12345678"), ConnectionEpoch = 1,
+            Action = "rates", Params = JsonSerializer.SerializeToElement(new
+            {
+                symbol = "XAUUSD", timeframe = "m30", count = 100,
+            }),
+        };
+        var local = Mt4PipeProtocol.CreateRatesRequest(request);
+        var decodedRequest = Mt4PipeProtocol.DecodeRatesRequest(Mt4PipeProtocol.EncodeRatesRequest(local));
+        var decodedResponse = Mt4PipeProtocol.DecodeRates(Mt4PipeProtocol.EncodeRates(new(
+            request.RequestId, 1_800_000_000_100, "succeeded",
+            JsonSerializer.SerializeToElement(new { symbol = "XAUUSD", rates = Array.Empty<object>() }), null)));
+
+        Assert.AreEqual("M30", decodedRequest.Timeframe);
+        Assert.AreEqual(100, decodedRequest.Count);
+        Assert.AreEqual("XAUUSD", decodedResponse.Payload!.Value.GetProperty("symbol").GetString());
+    }
+
+    [TestMethod]
     public void QuoteRequestAndResponseRoundTripWithStrictRoute()
     {
         var request = Mt4PipeProtocol.CreateQuoteRequest(QuoteRequest());
@@ -242,6 +266,25 @@ public sealed class Mt4PipeProtocolTests
             2300.2,
             null)));
         Assert.AreEqual(2300.2, (await quoteTask).Ask);
+
+        var ratesRequest = Mt4PipeProtocol.CreateRatesRequest(new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_rates_pipe_01", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_rates_pipe_01", TerminalInstanceId = "mt4_terminal_pipe_01",
+            AccountRef = new("Broker-Demo", "12345678"), ConnectionEpoch = 7,
+            Action = "rates", Params = JsonSerializer.SerializeToElement(new
+            {
+                symbol = "XAUUSD", timeframe = "M30", count = 100,
+            }),
+        });
+        var ratesTask = connection.GetRatesAsync(ratesRequest);
+        var receivedRatesRequest = Mt4PipeProtocol.DecodeRatesRequest(
+            await Mt4PipeProtocol.ReadFrameAsync(client));
+        Assert.AreEqual(100, receivedRatesRequest.Count);
+        await Mt4PipeProtocol.WriteFrameAsync(client, Mt4PipeProtocol.EncodeRates(new(
+            ratesRequest.RequestId, 1_800_000_000_300, "succeeded",
+            JsonSerializer.SerializeToElement(new { symbol = "XAUUSD", rates = Array.Empty<object>() }), null)));
+        Assert.AreEqual("succeeded", (await ratesTask).Status);
     }
 
     private static byte[] EncodeRaw(Action<BinaryWriter> write)
