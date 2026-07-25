@@ -49,6 +49,7 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 | 本机真实 MT5 只读探测 | 已通过 | demo 账户可识别；尚未把生产服务器交易指令作为测试单执行 |
 | 本机 Acceptance 验收组 | 8/8 通过 | 详见 [本机验收记录](./2026-07-26-aurum-bridge-v3-local-acceptance.md) |
 | 真实单 Worker 崩溃恢复 | 1.991 秒恢复 | MT5 未重启；当前仅覆盖单个 MT5 demo 终端 |
+| 真实 MT5 SQLite 读模型与离线 Outbox | 已通过 | 当前 epoch 的账户/持仓/挂单完整快照均持久化，旧 epoch 未残留 |
 
 ## 4. 尚未完成或不能在本轮伪造的证据
 

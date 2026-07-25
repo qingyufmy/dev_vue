@@ -34,6 +34,8 @@
 | 未确认 Outbox 跨进程恢复 | 全部恢复 | 通过 |
 | MT4 指令动作矩阵 | 模拟 EA 覆盖下单、改单、撤单、平仓等动作 | 通过协议测试 |
 | 真实 MT5 Worker 崩溃恢复 | 杀死 Worker 后 `1.991 s` 启动替代 Worker；MT5 进程未重启 | 通过 `≤ 30 s` 门槛 |
+| 真实 MT5 → SQLite 读模型 | account/positions/orders revision 均为 1；当前空仓、无挂单 | 通过 |
+| 未授权离线 Outbox | 当前 epoch 仅保留 3 个完整快照；旧 epoch 无残留 | 通过有界恢复检查 |
 
 Acceptance 测试总数：8，全部通过。
 
@@ -51,3 +53,5 @@ Acceptance 测试总数：8，全部通过。
 - 无本地授权凭证时进入 `PairingRequired`。
 - 首次授权启动请求遇到服务器超时后保持后台退避重试，超过 60 秒未重复记录 `pairing_failed`，也未生成不完整凭证。
 - 实际终止 Python Worker 后，Host 在 1.991 秒内恢复同一终端的新 Worker；MT5 PID 与启动时间保持不变。
+- 重启后的 connection epoch 10 中，SQLite 写入账户快照和 account/positions/orders 三条 revision；由于 demo 账户为空仓且无挂单，两个集合 latest 表为 0 行。
+- 服务器不可达时 Outbox 只保留当前 epoch 的三个完整快照，execution receipts 为 0；这验证了 SQLite 的缓存/Outbox 边界，没有把它当作 broker 交易权威。
