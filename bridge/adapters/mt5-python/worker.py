@@ -111,9 +111,15 @@ class Mt5Adapter:
         if "account" in streams:
             result["account"] = identity["account"]
         if "positions" in streams:
-            result["positions"] = _plain(self.mt5.positions_get() or ())
+            positions = self.mt5.positions_get()
+            if positions is None:
+                raise WorkerError("mt5_positions_unavailable", str(self.mt5.last_error()))
+            result["positions"] = _plain(positions)
         if "orders" in streams:
-            result["orders"] = _plain(self.mt5.orders_get() or ())
+            orders = self.mt5.orders_get()
+            if orders is None:
+                raise WorkerError("mt5_orders_unavailable", str(self.mt5.last_error()))
+            result["orders"] = _plain(orders)
         return result
 
     def execute(self, command: dict[str, Any]) -> dict[str, Any]:

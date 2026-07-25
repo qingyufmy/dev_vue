@@ -108,6 +108,18 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(worker.WorkerError, "worker_frame_size_invalid"):
             worker.read_frame(stream)
 
+    def test_collection_failure_cannot_be_reported_as_an_empty_trade_snapshot(self):
+        for stream, method_name, error_code in (
+            ("positions", "positions_get", "mt5_positions_unavailable"),
+            ("orders", "orders_get", "mt5_orders_unavailable"),
+        ):
+            with self.subTest(stream=stream):
+                adapter = self.adapter()
+                setattr(adapter.mt5, method_name, lambda **kwargs: None)
+                with self.assertRaises(worker.WorkerError) as raised:
+                    adapter.collect([stream])
+                self.assertEqual(error_code, raised.exception.code)
+
     def test_executes_matching_command_and_caches_result(self):
         adapter = self.adapter()
         command = self.command()
