@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/data-delta.schema.json",
+  "title": "AURUM Bridge v3 data delta",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "required": [
+    "v", "type", "message_id", "sent_at_utc_msc", "terminal_instance_id",
+    "account_ref", "connection_epoch", "stream", "revision", "base_revision",
+    "observed_at_utc_msc", "source_time_msc", "upserts", "deletes"
+  ],
+  "properties": {
+    "v": { "const": 3 },
+    "type": { "const": "data_delta" },
+    "terminal_instance_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "account_ref": {
+      "type": "object",
+      "required": ["broker_server", "login"],
+      "properties": {
+        "broker_server": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "login": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "additionalProperties": false
+    },
+    "connection_epoch": { "type": "integer", "minimum": 1 },
+    "stream": { "enum": ["account", "positions", "orders", "deals", "symbols", "quotes", "rates"] },
+    "revision": { "type": "integer", "minimum": 1 },
+    "base_revision": { "type": "integer", "minimum": 0 },
+    "observed_at_utc_msc": { "type": "integer", "minimum": 1 },
+    "source_time_msc": { "type": ["integer", "null"], "minimum": 0 },
+    "full_snapshot": { "type": "boolean" },
+    "upserts": { "type": "array", "maxItems": 10000 },
+    "deletes": { "type": "array", "items": { "type": ["string", "integer"] }, "maxItems": 10000 }
+  },
+  "additionalProperties": false
+}

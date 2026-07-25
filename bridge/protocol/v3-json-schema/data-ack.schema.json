@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/data-ack.schema.json",
+  "title": "AURUM Bridge v3 data acknowledgement",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "required": [
+    "v", "type", "message_id", "sent_at_utc_msc", "acked_message_id",
+    "terminal_instance_id", "connection_epoch", "stream", "revision", "status"
+  ],
+  "properties": {
+    "v": { "const": 3 },
+    "type": { "const": "data_ack" },
+    "acked_message_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "terminal_instance_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "connection_epoch": { "type": "integer", "minimum": 1 },
+    "stream": { "enum": ["account", "positions", "orders", "deals", "symbols", "quotes", "rates"] },
+    "revision": { "type": "integer", "minimum": 1 },
+    "status": { "enum": ["applied", "duplicate", "gap", "rejected"] },
+    "expected_revision": { "type": ["integer", "null"], "minimum": 1 },
+    "error_code": { "type": ["string", "null"], "maxLength": 128 }
+  },
+  "additionalProperties": false
+}

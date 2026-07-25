@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/command.schema.json",
+  "title": "AURUM Bridge v3 command",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "required": [
+    "v", "type", "message_id", "sent_at_utc_msc", "command_id",
+    "terminal_instance_id", "account_ref", "connection_epoch",
+    "issued_at_utc_msc", "deadline_utc_msc", "action", "params"
+  ],
+  "properties": {
+    "v": { "const": 3 },
+    "type": { "const": "command" },
+    "command_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "terminal_instance_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "account_ref": {
+      "type": "object",
+      "required": ["broker_server", "login"],
+      "properties": {
+        "broker_server": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "login": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "additionalProperties": false
+    },
+    "connection_epoch": { "type": "integer", "minimum": 1 },
+    "issued_at_utc_msc": { "type": "integer", "minimum": 1 },
+    "deadline_utc_msc": { "type": "integer", "minimum": 1 },
+    "action": {
+      "enum": ["place_order", "cancel_order", "modify_order", "close_position", "query_execution"]
+    },
+    "params": { "type": "object" }
+  },
+  "additionalProperties": false
+}

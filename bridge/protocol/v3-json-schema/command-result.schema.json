@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/command-result.schema.json",
+  "title": "AURUM Bridge v3 command result",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "required": [
+    "v", "type", "message_id", "sent_at_utc_msc", "command_id",
+    "terminal_instance_id", "account_ref", "connection_epoch", "status",
+    "completed_at_utc_msc", "evidence"
+  ],
+  "properties": {
+    "v": { "const": 3 },
+    "type": { "const": "command_result" },
+    "command_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "terminal_instance_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "account_ref": {
+      "type": "object",
+      "required": ["broker_server", "login"],
+      "properties": {
+        "broker_server": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "login": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "additionalProperties": false
+    },
+    "connection_epoch": { "type": "integer", "minimum": 1 },
+    "status": { "enum": ["succeeded", "rejected", "failed", "uncertain"] },
+    "completed_at_utc_msc": { "type": "integer", "minimum": 1 },
+    "error_code": { "type": ["string", "null"], "maxLength": 128 },
+    "error_message": { "type": ["string", "null"], "maxLength": 1000 },
+    "raw_result": { "type": ["object", "null"] },
+    "evidence": {
+      "type": "object",
+      "required": ["observed_at_utc_msc"],
+      "properties": {
+        "observed_at_utc_msc": { "type": "integer", "minimum": 1 },
+        "order_tickets": { "type": "array", "items": { "type": "string", "maxLength": 64 }, "maxItems": 100 },
+        "position_tickets": { "type": "array", "items": { "type": "string", "maxLength": 64 }, "maxItems": 100 },
+        "deal_tickets": { "type": "array", "items": { "type": "string", "maxLength": 64 }, "maxItems": 100 },
+        "broker_retcode": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
