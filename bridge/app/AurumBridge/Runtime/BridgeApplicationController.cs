@@ -451,6 +451,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private static string NormalizeApplicationError(Exception error) => error switch
     {
         FileNotFoundException fileError => fileError.Message,
+        InvalidDataException dataError when dataError.Message is
+            "mt5_probe_identity_mismatch"
+            or "mt4_ea_identity_mismatch"
+            or "terminal_runtime_identity_mismatch" => dataError.Message,
         UnauthorizedAccessException => "bridge_data_directory_denied",
         IOException => "bridge_local_io_failed",
         _ => "bridge_start_failed",

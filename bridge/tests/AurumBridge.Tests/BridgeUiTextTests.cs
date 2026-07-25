@@ -30,4 +30,23 @@ public sealed class BridgeUiTextTests
         StringAssert.Contains(text.Description, "不会撤单");
         StringAssert.Contains(text.Description, "平仓");
     }
+
+    [TestMethod]
+    public void IdentityMismatchCodesExplainTheAccountAndTerminalProblemInChinese()
+    {
+        var codes = new[]
+        {
+            "mt5_probe_identity_mismatch",
+            "mt4_ea_identity_mismatch",
+            "terminal_runtime_identity_mismatch",
+        };
+
+        foreach (var code in codes)
+        {
+            var text = BridgeUiText.DescribeCode(code, "fallback");
+            Assert.AreNotEqual("fallback", text);
+            StringAssert.Contains(text, "不匹配");
+            StringAssert.Contains(text, "账号");
+        }
+    }
 }
