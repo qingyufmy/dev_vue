@@ -24,6 +24,24 @@ public sealed record OutboxMessage(
     int AttemptCount,
     long CreatedAtUtcMsc);
 
+public sealed record TerminalBinding(
+    string TerminalInstanceId,
+    string Platform,
+    string TerminalPath,
+    AccountRef AccountRef,
+    long ConnectionEpoch,
+    long UpdatedAtUtcMsc)
+{
+    public TerminalDescriptor ToDescriptor(string? workerVersion = null) => new()
+    {
+        TerminalInstanceId = TerminalInstanceId,
+        Platform = Platform,
+        AccountRef = AccountRef,
+        ConnectionEpoch = ConnectionEpoch,
+        WorkerVersion = workerVersion,
+    };
+}
+
 public sealed class BridgeStore : IAsyncDisposable
 {
     private const int DefaultReceiptLimit = 2_000;
@@ -310,6 +328,98 @@ public sealed class BridgeStore : IAsyncDisposable
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
     }
 
+    public async Task<TerminalBinding> ActivateTerminalBindingAsync(
+        string terminalInstanceId,
+        string platform,
+        string terminalPath,
+        AccountRef accountRef,
+        long updatedAtUtcMsc,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        var normalized = NormalizeTerminalBinding(
+            terminalInstanceId,
+            platform,
+            terminalPath,
+            accountRef,
+            updatedAtUtcMsc);
+        await _writer.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            long previousEpoch;
+            await using (var current = connection.CreateCommand())
+            {
+                current.Transaction = (SqliteTransaction)transaction;
+                current.CommandText = """
+                    SELECT connection_epoch FROM terminal_bindings
+                    WHERE terminal_instance_id = $terminal_id;
+                    """;
+                current.Parameters.AddWithValue("$terminal_id", normalized.TerminalInstanceId);
+                previousEpoch = Convert.ToInt64(await current.ExecuteScalarAsync(cancellationToken) ?? 0L);
+            }
+            if (previousEpoch == long.MaxValue)
+            {
+                throw new InvalidOperationException("terminal_connection_epoch_exhausted");
+            }
+            var binding = normalized with { ConnectionEpoch = previousEpoch + 1 };
+            await using (var upsert = connection.CreateCommand())
+            {
+                upsert.Transaction = (SqliteTransaction)transaction;
+                upsert.CommandText = """
+                    INSERT INTO terminal_bindings
+                      (terminal_instance_id, platform, terminal_path, broker_server, login_account,
+                       connection_epoch, updated_at_utc_msc)
+                    VALUES ($terminal_id, $platform, $terminal_path, $broker_server, $login,
+                            $epoch, $updated_at)
+                    ON CONFLICT(terminal_instance_id) DO UPDATE SET
+                      platform = excluded.platform,
+                      terminal_path = excluded.terminal_path,
+                      broker_server = excluded.broker_server,
+                      login_account = excluded.login_account,
+                      connection_epoch = excluded.connection_epoch,
+                      updated_at_utc_msc = excluded.updated_at_utc_msc;
+                    """;
+                AddTerminalBindingParameters(upsert, binding);
+                await upsert.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await transaction.CommitAsync(cancellationToken);
+            return binding;
+        }
+        finally
+        {
+            _writer.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<TerminalBinding>> GetTerminalBindingsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT terminal_instance_id, platform, terminal_path, broker_server, login_account,
+                   connection_epoch, updated_at_utc_msc
+            FROM terminal_bindings
+            ORDER BY terminal_instance_id;
+            """;
+        var bindings = new List<TerminalBinding>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            bindings.Add(new(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                new(reader.GetString(3), reader.GetString(4)),
+                reader.GetInt64(5),
+                reader.GetInt64(6)));
+        }
+        return bindings;
+    }
+
     private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
         var connection = new SqliteConnection(_connectionString);
@@ -318,6 +428,48 @@ public sealed class BridgeStore : IAsyncDisposable
         command.CommandText = "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;";
         await command.ExecuteNonQueryAsync(cancellationToken);
         return connection;
+    }
+
+    private static TerminalBinding NormalizeTerminalBinding(
+        string terminalInstanceId,
+        string platform,
+        string terminalPath,
+        AccountRef accountRef,
+        long updatedAtUtcMsc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(terminalInstanceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(platform);
+        ArgumentException.ThrowIfNullOrWhiteSpace(terminalPath);
+        ArgumentNullException.ThrowIfNull(accountRef);
+        var normalizedPlatform = platform.Trim().ToLowerInvariant();
+        if (normalizedPlatform is not ("mt4" or "mt5"))
+        {
+            throw new ArgumentOutOfRangeException(nameof(platform), platform, "Unsupported terminal platform.");
+        }
+        if (string.IsNullOrWhiteSpace(accountRef.BrokerServer)
+            || string.IsNullOrWhiteSpace(accountRef.Login)
+            || updatedAtUtcMsc <= 0)
+        {
+            throw new ArgumentException("Terminal binding identity is incomplete.");
+        }
+        return new(
+            terminalInstanceId.Trim(),
+            normalizedPlatform,
+            Path.GetFullPath(terminalPath.Trim()),
+            new(accountRef.BrokerServer.Trim(), accountRef.Login.Trim()),
+            ConnectionEpoch: 0,
+            updatedAtUtcMsc);
+    }
+
+    private static void AddTerminalBindingParameters(SqliteCommand command, TerminalBinding binding)
+    {
+        command.Parameters.AddWithValue("$terminal_id", binding.TerminalInstanceId);
+        command.Parameters.AddWithValue("$platform", binding.Platform);
+        command.Parameters.AddWithValue("$terminal_path", binding.TerminalPath);
+        command.Parameters.AddWithValue("$broker_server", binding.AccountRef.BrokerServer);
+        command.Parameters.AddWithValue("$login", binding.AccountRef.Login);
+        command.Parameters.AddWithValue("$epoch", binding.ConnectionEpoch);
+        command.Parameters.AddWithValue("$updated_at", binding.UpdatedAtUtcMsc);
     }
 
     private static async Task<LocalRevision?> GetCurrentRevisionAsync(

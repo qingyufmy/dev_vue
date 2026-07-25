@@ -108,6 +108,50 @@ public sealed class BridgeStoreTests
         Assert.AreEqual(3, await _store.CountExecutionReceiptsAsync());
     }
 
+    [TestMethod]
+    public async Task ActivatingTerminalBindingAdvancesDurableConnectionEpoch()
+    {
+        var terminalPath = Path.Combine(_directory, "Broker MT5", "terminal64.exe");
+        var first = await _store.ActivateTerminalBindingAsync(
+            "mt5_terminal_01",
+            "MT5",
+            terminalPath,
+            new(" Broker-Demo ", " 12345678 "),
+            1_800_000_000_001);
+        var second = await _store.ActivateTerminalBindingAsync(
+            "mt5_terminal_01",
+            "mt5",
+            terminalPath,
+            new("Broker-Live", "87654321"),
+            1_800_000_000_002);
+
+        Assert.AreEqual(1L, first.ConnectionEpoch);
+        Assert.AreEqual(2L, second.ConnectionEpoch);
+        Assert.AreEqual("Broker-Demo", first.AccountRef.BrokerServer);
+        Assert.AreEqual("12345678", first.AccountRef.Login);
+        Assert.AreEqual("Broker-Live", second.AccountRef.BrokerServer);
+        Assert.AreEqual("87654321", second.AccountRef.Login);
+    }
+
+    [TestMethod]
+    public async Task ListsLatestTerminalBindingsForStartupRecovery()
+    {
+        var firstPath = Path.Combine(_directory, "One", "terminal64.exe");
+        var secondPath = Path.Combine(_directory, "Two", "terminal64.exe");
+        await _store.ActivateTerminalBindingAsync(
+            "mt5_terminal_02", "mt5", secondPath, new("Broker-Two", "2"), 20);
+        await _store.ActivateTerminalBindingAsync(
+            "mt5_terminal_01", "mt5", firstPath, new("Broker-One", "1"), 10);
+
+        var bindings = await _store.GetTerminalBindingsAsync();
+
+        Assert.HasCount(2, bindings);
+        Assert.AreEqual("mt5_terminal_01", bindings[0].TerminalInstanceId);
+        Assert.AreEqual(Path.GetFullPath(firstPath), bindings[0].TerminalPath);
+        Assert.AreEqual(1L, bindings[0].ConnectionEpoch);
+        Assert.AreEqual("mt5", bindings[0].ToDescriptor("test-worker").Platform);
+    }
+
     private static DataDeltaMessage Delta(
         string stream,
         long revision,
