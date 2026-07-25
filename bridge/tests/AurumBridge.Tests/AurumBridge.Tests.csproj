@@ -14,5 +14,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../app/AurumBridge/AurumBridge.csproj" />
+    <ProjectReference Include="../../launcher/AurumBridge.Launcher/AurumBridge.Launcher.csproj" />
   </ItemGroup>
 </Project>

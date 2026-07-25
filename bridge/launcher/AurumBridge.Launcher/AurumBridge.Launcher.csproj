@@ -6,10 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <AssemblyName>AURUMBridge</AssemblyName>
-    <RootNamespace>AurumBridge</RootNamespace>
+    <AssemblyName>AURUMBridge.Launcher</AssemblyName>
+    <RootNamespace>AurumBridge.Launcher</RootNamespace>
   </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
-  </ItemGroup>
 </Project>
