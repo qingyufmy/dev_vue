@@ -96,6 +96,7 @@ function quote(overrides = {}) {
     message_id:'msg_01JGATEWAY_QUOTE_RESULT',
     sent_at_utc_msc:NOW + 50,
     observed_at_utc_msc:NOW + 50,
+    status:'succeeded',
     bid:2345.1,
     ask:2345.3,
     ...overrides,

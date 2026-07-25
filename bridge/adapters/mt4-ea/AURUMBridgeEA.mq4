@@ -8,6 +8,8 @@ input string InpPipeName = "AURUMBridgeV3";
 #define MSG_WELCOME      2
 #define MSG_COLLECT      10
 #define MSG_SNAPSHOT     11
+#define MSG_QUOTE_REQUEST 12
+#define MSG_QUOTE        13
 #define MSG_COMMAND      20
 #define MSG_COMMAND_RESULT 21
 #define MSG_SHUTDOWN     90
@@ -83,6 +85,11 @@ void OnTimer()
       ExecuteCommand(payload, offset);
       return;
      }
+   if(message_type == MSG_QUOTE_REQUEST && g_welcomed)
+     {
+      SendQuote(payload, offset);
+      return;
+     }
    if(message_type == MSG_SHUTDOWN)
      {
       uchar response[];
@@ -139,6 +146,59 @@ void SendSnapshot(const int streams)
    AppendUtf8(payload, positions_json);
    AppendUtf8(payload, orders_json);
    if(!WriteFrame(payload))
+     DisconnectPipe();
+  }
+
+void SendQuote(uchar &payload[], int &offset)
+  {
+   string request_id = ReadUtf8(payload, offset);
+   string terminal_id = ReadUtf8(payload, offset);
+   string broker_server = ReadUtf8(payload, offset);
+   string login = ReadUtf8(payload, offset);
+   long connection_epoch = ReadInt64(payload, offset);
+   string symbol = ReadUtf8(payload, offset);
+   if(request_id == "" || terminal_id != g_terminal_id
+      || StringCompare(broker_server, AccountServer(), false) != 0
+      || login != IntegerToString(AccountNumber())
+      || connection_epoch != g_connection_epoch)
+     {
+      SendQuoteResult(request_id, symbol, 2, 0, 0, "quote_route_mismatch");
+      return;
+     }
+   ResetLastError();
+   if(symbol == "" || !SymbolSelect(symbol, true))
+     {
+      SendQuoteResult(request_id, symbol, 2, 0, 0, "symbol_unavailable");
+      return;
+     }
+   RefreshRates();
+   double bid = MarketInfo(symbol, MODE_BID);
+   double ask = MarketInfo(symbol, MODE_ASK);
+   if(bid <= 0 || ask <= 0 || ask < bid)
+     {
+      SendQuoteResult(request_id, symbol, 2, 0, 0, "symbol_tick_unavailable");
+      return;
+     }
+   SendQuoteResult(request_id, symbol, 1, bid, ask, "");
+  }
+
+void SendQuoteResult(const string request_id, const string symbol, const int status,
+   const double bid, const double ask, const string error_code)
+  {
+   long source_time = (long)MarketInfo(symbol, MODE_TIME);
+   long observed_at = (source_time > 0 ? source_time : (long)TimeGMT()) * 1000;
+   int digits = (int)MarketInfo(symbol, MODE_DIGITS);
+   if(digits < 0 || digits > 16) digits = 8;
+   uchar response[];
+   AppendInt32(response, MSG_QUOTE);
+   AppendUtf8(response, request_id);
+   AppendUtf8(response, symbol);
+   AppendInt64(response, observed_at);
+   AppendInt32(response, status);
+   AppendUtf8(response, status == 1 ? DoubleToString(bid, digits) : "");
+   AppendUtf8(response, status == 1 ? DoubleToString(ask, digits) : "");
+   AppendUtf8(response, error_code);
+   if(!WriteFrame(response))
       DisconnectPipe();
   }
 

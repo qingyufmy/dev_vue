@@ -77,6 +77,44 @@ public sealed class BridgeInboundRouterTests
     }
 
     [TestMethod]
+    public async Task QuoteRequestUsesTradePriorityWithoutPersistingOutbox()
+    {
+        var terminal = Terminal();
+        var router = new BridgeInboundRouter(
+            _testStore.Store,
+            new BridgeCommandDispatcher(
+                _testStore.Store,
+                id => id == terminal.TerminalInstanceId ? terminal : null,
+                (command, _) => Task.FromResult(Result(command)),
+                () => Now),
+            _outbound,
+            () => Now,
+            (request, _) => Task.FromResult(new QuoteMessage
+            {
+                Type = "quote",
+                MessageId = "quote_01JROUTER_RESULT",
+                SentAtUtcMsc = Now,
+                RequestId = request.RequestId,
+                TerminalInstanceId = request.TerminalInstanceId,
+                AccountRef = request.AccountRef,
+                ConnectionEpoch = request.ConnectionEpoch,
+                Symbol = request.Symbol,
+                ObservedAtUtcMsc = Now,
+                Status = "succeeded",
+                Bid = 2300.0,
+                Ask = 2300.2,
+            }));
+
+        await router.RouteAsync(JsonSerializer.Serialize(QuoteRequest(), BridgeJson.Options));
+
+        var response = await _outbound.DequeueAsync();
+        Assert.AreEqual(BridgeMessagePriority.Trade, response.Priority);
+        Assert.AreEqual("quote", JsonDocument.Parse(response.PayloadJson).RootElement
+            .GetProperty("type").GetString());
+        Assert.IsEmpty(await _testStore.Store.GetPendingOutboxAsync());
+    }
+
+    [TestMethod]
     public async Task OutboxPumpQueuesEachPendingMessageOncePerSession()
     {
         await _testStore.Store.PersistDataDeltaAsync(Delta());
@@ -123,6 +161,18 @@ public sealed class BridgeInboundRouterTests
         DeadlineUtcMsc = Now + 10_000,
         Action = "place_order",
         Params = JsonSerializer.SerializeToElement(new { symbol = "XAUUSD", volume = "0.01" }),
+    };
+
+    private static QuoteRequestMessage QuoteRequest() => new()
+    {
+        Type = "quote_request",
+        MessageId = "msg_01JROUTER_QUOTE",
+        SentAtUtcMsc = Now,
+        RequestId = "quote_01JROUTER_REQUEST",
+        TerminalInstanceId = Terminal().TerminalInstanceId,
+        AccountRef = Terminal().AccountRef,
+        ConnectionEpoch = Terminal().ConnectionEpoch,
+        Symbol = "XAUUSD",
     };
 
     private static CommandResultMessage Result(CommandMessage command) => new()

@@ -190,6 +190,60 @@ public sealed record CommandResultMessage : BridgeEnvelope
     public required ExecutionEvidence Evidence { get; init; }
 }
 
+public sealed record QuoteRequestMessage : BridgeEnvelope
+{
+    [JsonPropertyName("request_id")]
+    public required string RequestId { get; init; }
+
+    [JsonPropertyName("terminal_instance_id")]
+    public required string TerminalInstanceId { get; init; }
+
+    [JsonPropertyName("account_ref")]
+    public required AccountRef AccountRef { get; init; }
+
+    [JsonPropertyName("connection_epoch")]
+    public required long ConnectionEpoch { get; init; }
+
+    [JsonPropertyName("symbol")]
+    public required string Symbol { get; init; }
+}
+
+public sealed record QuoteMessage : BridgeEnvelope
+{
+    [JsonPropertyName("request_id")]
+    public required string RequestId { get; init; }
+
+    [JsonPropertyName("terminal_instance_id")]
+    public required string TerminalInstanceId { get; init; }
+
+    [JsonPropertyName("account_ref")]
+    public required AccountRef AccountRef { get; init; }
+
+    [JsonPropertyName("connection_epoch")]
+    public required long ConnectionEpoch { get; init; }
+
+    [JsonPropertyName("symbol")]
+    public required string Symbol { get; init; }
+
+    [JsonPropertyName("observed_at_utc_msc")]
+    public required long ObservedAtUtcMsc { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("bid")]
+    public double? Bid { get; init; }
+
+    [JsonPropertyName("ask")]
+    public double? Ask { get; init; }
+
+    [JsonPropertyName("last")]
+    public double? Last { get; init; }
+
+    [JsonPropertyName("error_code")]
+    public string? ErrorCode { get; init; }
+}
+
 public static class BridgeJson
 {
     public static JsonSerializerOptions Options { get; } = new(JsonSerializerDefaults.Web)

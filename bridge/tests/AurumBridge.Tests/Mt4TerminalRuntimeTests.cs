@@ -27,12 +27,14 @@ public sealed class Mt4TerminalRuntimeTests
             [Json("""{"ticket":"10","symbol":"XAUUSD"}""")],
             []));
         var result = await runtime.ExecuteCommandAsync(Command("cancel_order", new { ticket = "20" }));
+        var quote = await runtime.GetQuoteAsync(QuoteRequest());
 
         Assert.AreEqual(3, persisted);
         Assert.HasCount(3, await testStore.Store.GetPendingOutboxAsync());
         Assert.AreEqual("succeeded", result.Status);
         CollectionAssert.Contains(result.Evidence.OrderTickets.ToArray(), "20");
         Assert.AreEqual(Terminal().ConnectionEpoch, connection.Welcome!.ConnectionEpoch);
+        Assert.AreEqual(2300.0, quote.Bid);
     }
 
     [TestMethod]
@@ -80,6 +82,18 @@ public sealed class Mt4TerminalRuntimeTests
         Params = JsonSerializer.SerializeToElement(parameters),
     };
 
+    private static QuoteRequestMessage QuoteRequest() => new()
+    {
+        Type = "quote_request",
+        MessageId = "message_quote_mt4_runtime_01",
+        SentAtUtcMsc = 1_800_000_000_000,
+        RequestId = "request_quote_mt4_runtime_01",
+        TerminalInstanceId = Terminal().TerminalInstanceId,
+        AccountRef = Terminal().AccountRef,
+        ConnectionEpoch = Terminal().ConnectionEpoch,
+        Symbol = "XAUUSD",
+    };
+
     private static JsonElement Json(string value) => JsonDocument.Parse(value).RootElement.Clone();
 
     private sealed class FakeConnection : IMt4EaConnection
@@ -111,6 +125,17 @@ public sealed class Mt4TerminalRuntimeTests
                 command.Ticket,
                 1_800_000_000_050));
         }
+
+        public Task<Mt4Quote> GetQuoteAsync(
+            Mt4QuoteRequest request,
+            CancellationToken cancellationToken = default) => Task.FromResult(new Mt4Quote(
+                request.RequestId,
+                request.Symbol,
+                1_800_000_000_060,
+                "succeeded",
+                2300.0,
+                2300.2,
+                null));
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

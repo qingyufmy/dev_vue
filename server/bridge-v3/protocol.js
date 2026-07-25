@@ -124,10 +124,16 @@ function validateQuoteRequest(message) {
 function validateQuote(message) {
   const errors = validateQuoteRequest(message)
   if (!isPositiveInteger(message.observed_at_utc_msc)) errors.push('observed_at_utc_msc:invalid')
-  if (!Number.isFinite(message.bid) || message.bid <= 0) errors.push('bid:invalid')
-  if (!Number.isFinite(message.ask) || message.ask <= 0) errors.push('ask:invalid')
-  if (Number.isFinite(message.bid) && Number.isFinite(message.ask) && message.ask < message.bid) {
-    errors.push('ask:below_bid')
+  if (!['succeeded', 'rejected'].includes(message.status)) errors.push('status:unsupported')
+  if (message.status === 'succeeded') {
+    if (!Number.isFinite(message.bid) || message.bid <= 0) errors.push('bid:invalid')
+    if (!Number.isFinite(message.ask) || message.ask <= 0) errors.push('ask:invalid')
+    if (Number.isFinite(message.bid) && Number.isFinite(message.ask) && message.ask < message.bid) {
+      errors.push('ask:below_bid')
+    }
+  } else if (typeof message.error_code !== 'string'
+    || !message.error_code.trim() || message.error_code.length > 128) {
+    errors.push('error_code:invalid')
   }
   if (message.last !== undefined && message.last !== null
     && (!Number.isFinite(message.last) || message.last < 0)) errors.push('last:invalid')

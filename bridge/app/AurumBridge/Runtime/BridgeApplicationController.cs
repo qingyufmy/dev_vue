@@ -238,7 +238,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         }
 
         await using var host = new BridgeHost(_store, supervisors);
-        var webSocket = new BridgeWebSocketClient(_store, host.CommandDispatcher);
+        var webSocket = new BridgeWebSocketClient(
+            _store,
+            host.CommandDispatcher,
+            quoteHandler:host.GetQuoteAsync);
         webSocket.FullSnapshotRequired += host.HandleFullSnapshotRequestAsync;
         var connection = new BridgeConnectionSupervisor(
             host.Terminals,

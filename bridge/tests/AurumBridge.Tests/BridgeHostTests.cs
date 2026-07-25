@@ -24,10 +24,13 @@ public sealed class BridgeHostTests
 
         var command = Command(second.Terminal);
         var result = await host.CommandDispatcher.DispatchAsync(command);
+        var quote = await host.GetQuoteAsync(QuoteRequest(second.Terminal));
 
         Assert.AreEqual("succeeded", result.Status);
         Assert.AreEqual(0, first.CommandCount);
         Assert.AreEqual(1, second.CommandCount);
+        Assert.AreEqual("XAUUSD", quote.Symbol);
+        Assert.AreEqual(1, second.QuoteCount);
         await host.HandleFullSnapshotRequestAsync(new(
             second.Terminal.TerminalInstanceId,
             second.Terminal.ConnectionEpoch,
@@ -73,10 +76,23 @@ public sealed class BridgeHostTests
         Params = JsonSerializer.SerializeToElement(new { original_command_id = "original_01" }),
     };
 
+    private static QuoteRequestMessage QuoteRequest(TerminalDescriptor terminal) => new()
+    {
+        Type = "quote_request",
+        MessageId = "message_quote_host_01",
+        SentAtUtcMsc = 1,
+        RequestId = "request_quote_host_01",
+        TerminalInstanceId = terminal.TerminalInstanceId,
+        AccountRef = terminal.AccountRef,
+        ConnectionEpoch = terminal.ConnectionEpoch,
+        Symbol = "XAUUSD",
+    };
+
     private sealed class FakeRuntime(TerminalDescriptor terminal) : IBridgeTerminalRuntime
     {
         public TerminalDescriptor Terminal { get; } = terminal;
         public int CommandCount { get; private set; }
+        public int QuoteCount { get; private set; }
         public List<string> FullSnapshotRequests { get; } = [];
         public TaskCompletionSource Running { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -106,6 +122,28 @@ public sealed class BridgeHostTests
                 Status = "succeeded",
                 CompletedAtUtcMsc = 2,
                 Evidence = new() { ObservedAtUtcMsc = 2 },
+            });
+        }
+
+        public Task<QuoteMessage> GetQuoteAsync(
+            QuoteRequestMessage request,
+            CancellationToken cancellationToken = default)
+        {
+            QuoteCount++;
+            return Task.FromResult(new QuoteMessage
+            {
+                Type = "quote",
+                MessageId = "result_quote_host_01",
+                SentAtUtcMsc = 2,
+                RequestId = request.RequestId,
+                TerminalInstanceId = request.TerminalInstanceId,
+                AccountRef = request.AccountRef,
+                ConnectionEpoch = request.ConnectionEpoch,
+                Symbol = request.Symbol,
+                ObservedAtUtcMsc = 2,
+                Status = "succeeded",
+                Bid = 2300.0,
+                Ask = 2300.2,
             });
         }
 

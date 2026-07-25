@@ -60,7 +60,9 @@ public sealed class TerminalRuntimeSupervisorTests
 
         var command = Command();
         var result = await supervisor.ExecuteCommandAsync(command);
+        var quote = await supervisor.GetQuoteAsync(QuoteRequest());
         Assert.AreEqual(command.CommandId, result.CommandId);
+        Assert.AreEqual("succeeded", quote.Status);
         Assert.IsTrue(supervisor.RequestFullSnapshot("positions", Terminal().ConnectionEpoch));
         Assert.HasCount(1, runtime.FullSnapshotRequests);
         Assert.IsFalse(supervisor.RequestFullSnapshot("orders", Terminal().ConnectionEpoch + 1));
@@ -91,6 +93,18 @@ public sealed class TerminalRuntimeSupervisorTests
         DeadlineUtcMsc = long.MaxValue,
         Action = "query_execution",
         Params = JsonSerializer.SerializeToElement(new { original_command_id = "original_01" }),
+    };
+
+    private static QuoteRequestMessage QuoteRequest() => new()
+    {
+        Type = "quote_request",
+        MessageId = "message_quote_supervisor_01",
+        SentAtUtcMsc = 1,
+        RequestId = "request_quote_supervisor_01",
+        TerminalInstanceId = Terminal().TerminalInstanceId,
+        AccountRef = Terminal().AccountRef,
+        ConnectionEpoch = Terminal().ConnectionEpoch,
+        Symbol = "XAUUSD",
     };
 
     private sealed class FakeRuntime : IBridgeTerminalRuntime
@@ -129,6 +143,24 @@ public sealed class TerminalRuntimeSupervisorTests
                 Status = "succeeded",
                 CompletedAtUtcMsc = 2,
                 Evidence = new() { ObservedAtUtcMsc = 2 },
+            });
+
+        public Task<QuoteMessage> GetQuoteAsync(
+            QuoteRequestMessage request,
+            CancellationToken cancellationToken = default) => Task.FromResult(new QuoteMessage
+            {
+                Type = "quote",
+                MessageId = "result_quote_supervisor_01",
+                SentAtUtcMsc = 2,
+                RequestId = request.RequestId,
+                TerminalInstanceId = request.TerminalInstanceId,
+                AccountRef = request.AccountRef,
+                ConnectionEpoch = request.ConnectionEpoch,
+                Symbol = request.Symbol,
+                ObservedAtUtcMsc = 2,
+                Status = "succeeded",
+                Bid = 2300.0,
+                Ask = 2300.2,
             });
 
         public async Task RunCollectionLoopAsync(CancellationToken cancellationToken = default)

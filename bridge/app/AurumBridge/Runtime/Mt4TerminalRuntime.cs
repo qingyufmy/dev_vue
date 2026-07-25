@@ -110,6 +110,35 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         };
     }
 
+    public async Task<QuoteMessage> GetQuoteAsync(
+        QuoteRequestMessage request,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        var localRequest = Mt4PipeProtocol.CreateQuoteRequest(request);
+        var local = await _connection.GetQuoteAsync(localRequest, cancellationToken);
+        if (local.RequestId != request.RequestId || local.Symbol != request.Symbol)
+        {
+            throw new InvalidDataException("mt4_quote_route_mismatch");
+        }
+        return new()
+        {
+            Type = "quote",
+            MessageId = $"quote_{request.RequestId}_{Guid.NewGuid():N}",
+            SentAtUtcMsc = _clock(),
+            RequestId = request.RequestId,
+            TerminalInstanceId = _terminal.TerminalInstanceId,
+            AccountRef = _terminal.AccountRef,
+            ConnectionEpoch = _terminal.ConnectionEpoch,
+            Symbol = request.Symbol,
+            ObservedAtUtcMsc = local.ObservedAtUtcMsc,
+            Status = local.Status,
+            Bid = local.Bid,
+            Ask = local.Ask,
+            ErrorCode = local.ErrorCode,
+        };
+    }
+
     public void RequestFullSnapshot(string stream)
     {
         if (!Streams.Contains(stream, StringComparer.Ordinal))

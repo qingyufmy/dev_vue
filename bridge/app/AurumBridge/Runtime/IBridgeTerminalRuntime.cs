@@ -9,6 +9,9 @@ public interface IBridgeTerminalRuntime : IAsyncDisposable
     Task<CommandResultMessage> ExecuteCommandAsync(
         CommandMessage command,
         CancellationToken cancellationToken = default);
+    Task<QuoteMessage> GetQuoteAsync(
+        QuoteRequestMessage request,
+        CancellationToken cancellationToken = default);
     Task RunCollectionLoopAsync(CancellationToken cancellationToken = default);
     void RequestFullSnapshot(string stream);
 }

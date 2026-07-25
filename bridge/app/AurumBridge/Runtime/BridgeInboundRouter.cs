@@ -16,17 +16,20 @@ public sealed class BridgeInboundRouter
     private readonly BridgeCommandDispatcher _dispatcher;
     private readonly PriorityMessageQueue _outbound;
     private readonly Func<long> _clock;
+    private readonly Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? _quoteHandler;
 
     public BridgeInboundRouter(
         BridgeStore store,
         BridgeCommandDispatcher dispatcher,
         PriorityMessageQueue outbound,
-        Func<long>? clock = null)
+        Func<long>? clock = null,
+        Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? quoteHandler = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _outbound = outbound ?? throw new ArgumentNullException(nameof(outbound));
         _clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        _quoteHandler = quoteHandler;
     }
 
     public event Func<FullSnapshotRequest, Task>? FullSnapshotRequired;
@@ -66,12 +69,44 @@ public sealed class BridgeInboundRouter
                     resultJson,
                     BridgeMessagePriority.Trade), cancellationToken);
                 return;
+            case "quote_request":
+                await HandleQuoteRequestAsync(payloadJson, cancellationToken);
+                return;
             case "heartbeat":
             case "error":
                 return;
             default:
                 throw new InvalidDataException("bridge_message_type_unexpected");
         }
+    }
+
+    private async Task HandleQuoteRequestAsync(
+        string payloadJson,
+        CancellationToken cancellationToken)
+    {
+        var request = JsonSerializer.Deserialize<QuoteRequestMessage>(payloadJson, BridgeJson.Options)
+            ?? throw new InvalidDataException("bridge_quote_request_invalid");
+        ValidateQuoteRequest(request);
+        QuoteMessage response;
+        try
+        {
+            response = _quoteHandler is null
+                ? RejectedQuote(request, "bridge_quote_unavailable")
+                : await _quoteHandler(request, cancellationToken);
+            ValidateQuoteResponse(request, response);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            response = RejectedQuote(request, "bridge_quote_unavailable");
+        }
+        await _outbound.EnqueueAsync(new(
+            response.MessageId,
+            JsonSerializer.Serialize(response, BridgeJson.Options),
+            BridgeMessagePriority.Trade), cancellationToken);
     }
 
     private async Task HandleDataAcknowledgementAsync(
@@ -118,5 +153,70 @@ public sealed class BridgeInboundRouter
             throw new InvalidDataException($"bridge_{propertyName}_invalid");
         }
         return value.GetString()!;
+    }
+
+    private static void ValidateQuoteRequest(QuoteRequestMessage request)
+    {
+        if (request.Version != 3 || request.Type != "quote_request"
+            || string.IsNullOrWhiteSpace(request.MessageId)
+            || string.IsNullOrWhiteSpace(request.RequestId)
+            || string.IsNullOrWhiteSpace(request.TerminalInstanceId)
+            || request.ConnectionEpoch <= 0
+            || string.IsNullOrWhiteSpace(request.AccountRef?.BrokerServer)
+            || string.IsNullOrWhiteSpace(request.AccountRef?.Login)
+            || string.IsNullOrWhiteSpace(request.Symbol)
+            || request.Symbol != request.Symbol.Trim()
+            || request.Symbol.Length > 64)
+        {
+            throw new InvalidDataException("bridge_quote_request_invalid");
+        }
+    }
+
+    private static void ValidateQuoteResponse(QuoteRequestMessage request, QuoteMessage response)
+    {
+        if (response.Version != 3 || response.Type != "quote"
+            || response.RequestId != request.RequestId
+            || response.TerminalInstanceId != request.TerminalInstanceId
+            || response.ConnectionEpoch != request.ConnectionEpoch
+            || !string.Equals(response.AccountRef.BrokerServer, request.AccountRef.BrokerServer,
+                StringComparison.OrdinalIgnoreCase)
+            || response.AccountRef.Login != request.AccountRef.Login
+            || response.Symbol != request.Symbol
+            || response.ObservedAtUtcMsc <= 0
+            || response.Status is not ("succeeded" or "rejected"))
+        {
+            throw new InvalidDataException("bridge_quote_response_invalid");
+        }
+        if (response.Status == "succeeded"
+            && (response.Bid is null || response.Ask is null
+                || !double.IsFinite(response.Bid.Value) || response.Bid <= 0
+                || !double.IsFinite(response.Ask.Value) || response.Ask <= 0
+                || response.Ask < response.Bid))
+        {
+            throw new InvalidDataException("bridge_quote_price_invalid");
+        }
+        if (response.Status == "rejected" && string.IsNullOrWhiteSpace(response.ErrorCode))
+        {
+            throw new InvalidDataException("bridge_quote_error_missing");
+        }
+    }
+
+    private QuoteMessage RejectedQuote(QuoteRequestMessage request, string errorCode)
+    {
+        var now = _clock();
+        return new()
+        {
+            Type = "quote",
+            MessageId = $"quote_{request.RequestId}_{Guid.NewGuid():N}",
+            SentAtUtcMsc = now,
+            RequestId = request.RequestId,
+            TerminalInstanceId = request.TerminalInstanceId,
+            AccountRef = request.AccountRef,
+            ConnectionEpoch = request.ConnectionEpoch,
+            Symbol = request.Symbol,
+            ObservedAtUtcMsc = now,
+            Status = "rejected",
+            ErrorCode = errorCode,
+        };
     }
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import math
 import struct
 import sys
 import time
@@ -147,6 +148,33 @@ class Mt5Adapter:
         except Exception as error:
             result = self._result(command, "uncertain", "mt5_execution_exception", str(error))
         return self._remember(command_id, result)
+
+    def quote(self, request: dict[str, Any]) -> dict[str, Any]:
+        try:
+            self._validate_route(request)
+            self._ensure_identity()
+            symbol = str(request.get("symbol") or "")
+            if not symbol or symbol != symbol.strip() or len(symbol) > 64:
+                raise WorkerError("symbol_invalid")
+            tick = self.mt5.symbol_info_tick(symbol)
+            if tick is None:
+                raise WorkerError("symbol_tick_unavailable")
+            bid = float(tick.bid)
+            ask = float(tick.ask)
+            last = float(getattr(tick, "last", 0.0) or 0.0)
+            if not math.isfinite(bid) or not math.isfinite(ask) or bid <= 0 or ask <= 0 or ask < bid:
+                raise WorkerError("symbol_tick_invalid")
+            if not math.isfinite(last) or last < 0:
+                last = 0.0
+            observed_at = int(getattr(tick, "time_msc", 0) or 0)
+            if observed_at <= 0:
+                observed_at = int(time.time() * 1000)
+            return self._quote_result(request, "succeeded", observed_at, bid=bid, ask=ask, last=last)
+        except WorkerError as error:
+            return self._quote_result(request, "rejected", int(time.time() * 1000), error_code=error.code)
+        except Exception:
+            return self._quote_result(
+                request, "rejected", int(time.time() * 1000), error_code="mt5_quote_exception")
 
     def _validate_route(self, command: dict[str, Any]) -> None:
         account_ref = command.get("account_ref") or {}
@@ -317,6 +345,28 @@ class Mt5Adapter:
             "evidence": proof,
         }
 
+    def _quote_result(self, request: dict[str, Any], status: str, observed_at: int,
+                      bid: float | None = None, ask: float | None = None,
+                      last: float | None = None, error_code: str | None = None) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "v": PROTOCOL_VERSION,
+            "type": "quote",
+            "message_id": f"quote_{request.get('request_id')}_{observed_at}",
+            "sent_at_utc_msc": int(time.time() * 1000),
+            "request_id": request.get("request_id"),
+            "terminal_instance_id": self.identity.terminal_instance_id,
+            "account_ref": {"broker_server": self.identity.broker_server, "login": self.identity.login},
+            "connection_epoch": self.identity.connection_epoch,
+            "symbol": request.get("symbol"),
+            "observed_at_utc_msc": observed_at,
+            "status": status,
+        }
+        if status == "succeeded":
+            result.update({"bid": bid, "ask": ask, "last": last})
+        else:
+            result["error_code"] = error_code or "quote_rejected"
+        return result
+
     def _remember(self, command_id: str, result: dict[str, Any]) -> dict[str, Any]:
         self._receipts[command_id] = result
         self._receipts.move_to_end(command_id)
@@ -361,6 +411,8 @@ def run(pipe_name: str, adapter: Mt5Adapter) -> int:
                             "streams": adapter.collect(list(request.get("streams") or []))}
             elif request_type == "command":
                 response = adapter.execute(request)
+            elif request_type == "quote_request":
+                response = adapter.quote(request)
             else:
                 response = {"v": 3, "type": "worker_error", "request_id": request.get("request_id"),
                             "error_code": "worker_request_type_unsupported"}

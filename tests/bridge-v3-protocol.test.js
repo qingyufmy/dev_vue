@@ -105,6 +105,7 @@ describe('Bridge v3 protocol contract', () => {
       ...request,
       type:'quote',
       observed_at_utc_msc:NOW,
+      status:'succeeded',
       bid:2345.1,
       ask:2345.3,
       last:2345.2,
@@ -118,6 +119,10 @@ describe('Bridge v3 protocol contract', () => {
       ok:false,
       errors:expect.arrayContaining(['symbol:invalid']),
     })
+    expect(validateBridgeV3Message({
+      ...quote, status:'rejected', bid:undefined, ask:undefined, last:undefined,
+      error_code:'symbol_tick_unavailable',
+    })).toEqual({ ok:true, errors:[] })
   })
 
   it('enforces contiguous stream revisions so gaps trigger a full snapshot', () => {

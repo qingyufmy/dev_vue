@@ -11,6 +11,9 @@ public interface IMt4EaConnection : IAsyncDisposable
     Task<Mt4TradeResult> ExecuteAsync(
         Mt4TradeCommand command,
         CancellationToken cancellationToken = default);
+    Task<Mt4Quote> GetQuoteAsync(
+        Mt4QuoteRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class Mt4EaConnection : IMt4EaConnection
@@ -92,6 +95,14 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         RequestAsync(
             Mt4PipeProtocol.EncodeCommand(command),
             Mt4PipeProtocol.DecodeCommandResult,
+            cancellationToken);
+
+    public Task<Mt4Quote> GetQuoteAsync(
+        Mt4QuoteRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestAsync(
+            Mt4PipeProtocol.EncodeQuoteRequest(request),
+            Mt4PipeProtocol.DecodeQuote,
             cancellationToken);
 
     public async ValueTask DisposeAsync()

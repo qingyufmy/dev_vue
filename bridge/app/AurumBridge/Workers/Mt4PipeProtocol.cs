@@ -11,6 +11,8 @@ public enum Mt4MessageType
     Welcome = 2,
     Collect = 10,
     Snapshot = 11,
+    QuoteRequest = 12,
+    Quote = 13,
     Command = 20,
     CommandResult = 21,
     Shutdown = 90,
@@ -46,6 +48,23 @@ public sealed record Mt4Snapshot(
     JsonElement Account,
     IReadOnlyList<JsonElement> Positions,
     IReadOnlyList<JsonElement> Orders);
+
+public sealed record Mt4QuoteRequest(
+    string RequestId,
+    string TerminalInstanceId,
+    string BrokerServer,
+    string Login,
+    long ConnectionEpoch,
+    string Symbol);
+
+public sealed record Mt4Quote(
+    string RequestId,
+    string Symbol,
+    long ObservedAtUtcMsc,
+    string Status,
+    double? Bid,
+    double? Ask,
+    string? ErrorCode);
 
 public enum Mt4TradeAction
 {
@@ -226,6 +245,93 @@ public static class Mt4PipeProtocol
             throw new InvalidDataException("mt4_snapshot_time_invalid");
         }
         return new(observedAt, account, positions, orders);
+    }
+
+    public static Mt4QuoteRequest CreateQuoteRequest(QuoteRequestMessage request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var local = new Mt4QuoteRequest(
+            request.RequestId,
+            request.TerminalInstanceId,
+            request.AccountRef.BrokerServer,
+            request.AccountRef.Login,
+            request.ConnectionEpoch,
+            request.Symbol);
+        ValidateQuoteRequest(local);
+        return local;
+    }
+
+    public static byte[] EncodeQuoteRequest(Mt4QuoteRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateQuoteRequest(request);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.QuoteRequest);
+            WriteString(writer, request.RequestId);
+            WriteString(writer, request.TerminalInstanceId);
+            WriteString(writer, request.BrokerServer);
+            WriteString(writer, request.Login);
+            writer.Write(request.ConnectionEpoch);
+            WriteString(writer, request.Symbol);
+        });
+    }
+
+    public static Mt4QuoteRequest DecodeQuoteRequest(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.QuoteRequest);
+        var request = new Mt4QuoteRequest(
+            ReadString(reader, 128),
+            ReadString(reader, 128),
+            ReadString(reader, 128),
+            ReadString(reader, 64),
+            reader.ReadInt64(),
+            ReadString(reader, 64));
+        EnsureFullyRead(reader);
+        ValidateQuoteRequest(request);
+        return request;
+    }
+
+    public static byte[] EncodeQuote(Mt4Quote quote)
+    {
+        ArgumentNullException.ThrowIfNull(quote);
+        ValidateQuote(quote);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.Quote);
+            WriteString(writer, quote.RequestId);
+            WriteString(writer, quote.Symbol);
+            writer.Write(quote.ObservedAtUtcMsc);
+            writer.Write(quote.Status == "succeeded" ? 1 : 2);
+            WriteNullableDouble(writer, quote.Bid);
+            WriteNullableDouble(writer, quote.Ask);
+            WriteString(writer, quote.ErrorCode ?? string.Empty);
+        });
+    }
+
+    public static Mt4Quote DecodeQuote(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.Quote);
+        var requestId = ReadString(reader, 128);
+        var symbol = ReadString(reader, 64);
+        var observedAt = reader.ReadInt64();
+        var status = reader.ReadInt32() switch
+        {
+            1 => "succeeded",
+            2 => "rejected",
+            _ => throw new InvalidDataException("mt4_quote_status_invalid"),
+        };
+        var quote = new Mt4Quote(
+            requestId,
+            symbol,
+            observedAt,
+            status,
+            ReadDoubleString(reader, required: false),
+            ReadDoubleString(reader, required: false),
+            NullIfEmpty(ReadString(reader, 128)));
+        EnsureFullyRead(reader);
+        ValidateQuote(quote);
+        return quote;
     }
 
     public static Mt4TradeCommand CreateTradeCommand(CommandMessage command)
@@ -566,6 +672,44 @@ public static class Mt4PipeProtocol
         if (command.Action == Mt4TradeAction.ClosePosition && command.Volume < 0)
         {
             throw new InvalidDataException("close_volume_invalid");
+        }
+    }
+
+    private static void ValidateQuoteRequest(Mt4QuoteRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.RequestId)
+            || string.IsNullOrWhiteSpace(request.TerminalInstanceId)
+            || string.IsNullOrWhiteSpace(request.BrokerServer)
+            || string.IsNullOrWhiteSpace(request.Login)
+            || request.ConnectionEpoch <= 0
+            || string.IsNullOrWhiteSpace(request.Symbol)
+            || request.Symbol != request.Symbol.Trim()
+            || request.Symbol.Length > 64)
+        {
+            throw new InvalidDataException("mt4_quote_request_invalid");
+        }
+    }
+
+    private static void ValidateQuote(Mt4Quote quote)
+    {
+        if (string.IsNullOrWhiteSpace(quote.RequestId)
+            || string.IsNullOrWhiteSpace(quote.Symbol)
+            || quote.ObservedAtUtcMsc <= 0
+            || quote.Status is not ("succeeded" or "rejected"))
+        {
+            throw new InvalidDataException("mt4_quote_invalid");
+        }
+        if (quote.Status == "succeeded"
+            && (quote.Bid is null || quote.Ask is null
+                || !double.IsFinite(quote.Bid.Value) || quote.Bid.Value <= 0
+                || !double.IsFinite(quote.Ask.Value) || quote.Ask.Value <= 0
+                || quote.Ask.Value < quote.Bid.Value))
+        {
+            throw new InvalidDataException("mt4_quote_price_invalid");
+        }
+        if (quote.Status == "rejected" && string.IsNullOrWhiteSpace(quote.ErrorCode))
+        {
+            throw new InvalidDataException("mt4_quote_error_missing");
         }
     }
 

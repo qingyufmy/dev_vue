@@ -97,6 +97,21 @@ public sealed class Mt4PipeProtocolTests
     }
 
     [TestMethod]
+    public void QuoteRequestAndResponseRoundTripWithStrictRoute()
+    {
+        var request = Mt4PipeProtocol.CreateQuoteRequest(QuoteRequest());
+        var decodedRequest = Mt4PipeProtocol.DecodeQuoteRequest(
+            Mt4PipeProtocol.EncodeQuoteRequest(request));
+        var quote = new Mt4Quote(
+            request.RequestId, request.Symbol, 1_800_000_000_100,
+            "succeeded", 2300.0, 2300.2, null);
+        var decodedQuote = Mt4PipeProtocol.DecodeQuote(Mt4PipeProtocol.EncodeQuote(quote));
+
+        Assert.AreEqual(request, decodedRequest);
+        Assert.AreEqual(quote, decodedQuote);
+    }
+
+    [TestMethod]
     public async Task EaConnectionCompletesHandshakeAndSnapshotRequest()
     {
         var pipeName = $"aurum_mt4_test_{Guid.NewGuid():N}";
@@ -151,6 +166,21 @@ public sealed class Mt4PipeProtocolTests
         var result = await executeTask;
         Assert.AreEqual("succeeded", result.Status);
         Assert.AreEqual(99L, result.Ticket);
+
+        var quoteRequest = Mt4PipeProtocol.CreateQuoteRequest(QuoteRequest());
+        var quoteTask = connection.GetQuoteAsync(quoteRequest);
+        var receivedQuoteRequest = Mt4PipeProtocol.DecodeQuoteRequest(
+            await Mt4PipeProtocol.ReadFrameAsync(client));
+        Assert.AreEqual("XAUUSD", receivedQuoteRequest.Symbol);
+        await Mt4PipeProtocol.WriteFrameAsync(client, Mt4PipeProtocol.EncodeQuote(new(
+            quoteRequest.RequestId,
+            quoteRequest.Symbol,
+            1_800_000_000_200,
+            "succeeded",
+            2300.0,
+            2300.2,
+            null)));
+        Assert.AreEqual(2300.2, (await quoteTask).Ask);
     }
 
     private static byte[] EncodeRaw(Action<BinaryWriter> write)
@@ -181,5 +211,17 @@ public sealed class Mt4PipeProtocolTests
         DeadlineUtcMsc = 1_800_000_030_000,
         Action = action,
         Params = JsonSerializer.SerializeToElement(parameters),
+    };
+
+    private static QuoteRequestMessage QuoteRequest() => new()
+    {
+        Type = "quote_request",
+        MessageId = "message_quote_mt4_codec_01",
+        SentAtUtcMsc = 1_800_000_000_000,
+        RequestId = "request_quote_mt4_codec_01",
+        TerminalInstanceId = "mt4_terminal_codec_01",
+        AccountRef = new("Broker-Demo", "12345678"),
+        ConnectionEpoch = 1,
+        Symbol = "XAUUSD",
     };
 }

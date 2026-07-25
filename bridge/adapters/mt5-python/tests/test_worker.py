@@ -109,6 +109,25 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("command_expired", result["error_code"])
         self.assertEqual([], adapter.mt5.sent)
 
+    def test_returns_transient_quote_for_matching_route(self):
+        adapter = self.adapter()
+        request = self.command(
+            type="quote_request", request_id="quote_01JWORKER01", symbol="XAUUSD")
+        result = adapter.quote(request)
+        self.assertEqual("succeeded", result["status"])
+        self.assertEqual(2300.0, result["bid"])
+        self.assertEqual(2300.2, result["ask"])
+        self.assertNotIn("command_id", result)
+
+    def test_rejects_cross_account_quote_route(self):
+        adapter = self.adapter()
+        request = self.command(
+            type="quote_request", request_id="quote_01JWORKER02", symbol="XAUUSD",
+            account_ref={"broker_server": "Broker-Demo", "login": "999"})
+        result = adapter.quote(request)
+        self.assertEqual("rejected", result["status"])
+        self.assertEqual("command_route_mismatch", result["error_code"])
+
     def test_probe_returns_read_only_account_identity(self):
         result = worker.probe(FakeMt5(), __file__)
         self.assertEqual("mt5_probe", result["type"])

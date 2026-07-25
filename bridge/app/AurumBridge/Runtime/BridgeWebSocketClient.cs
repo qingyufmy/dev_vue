@@ -15,15 +15,18 @@ public sealed class BridgeWebSocketClient
     private readonly BridgeStore _store;
     private readonly BridgeCommandDispatcher _dispatcher;
     private readonly Func<ClientWebSocket> _socketFactory;
+    private readonly Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? _quoteHandler;
 
     public BridgeWebSocketClient(
         BridgeStore store,
         BridgeCommandDispatcher dispatcher,
-        Func<ClientWebSocket>? socketFactory = null)
+        Func<ClientWebSocket>? socketFactory = null,
+        Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? quoteHandler = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _socketFactory = socketFactory ?? (() => new ClientWebSocket());
+        _quoteHandler = quoteHandler;
     }
 
     public event Func<FullSnapshotRequest, Task>? FullSnapshotRequired;
@@ -46,7 +49,7 @@ public sealed class BridgeWebSocketClient
         await SendDirectAsync(socket, JsonSerializer.Serialize(attempt.Hello, BridgeJson.Options), cancellationToken);
 
         var outbound = new PriorityMessageQueue();
-        var router = new BridgeInboundRouter(_store, _dispatcher, outbound);
+        var router = new BridgeInboundRouter(_store, _dispatcher, outbound, quoteHandler:_quoteHandler);
         var outbox = new BridgeOutboxPump(_store, outbound);
         var helloReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         router.HelloAcknowledged += sessionId =>

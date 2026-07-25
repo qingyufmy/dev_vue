@@ -116,6 +116,15 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
         return runtime.ExecuteCommandAsync(command, cancellationToken);
     }
 
+    public Task<QuoteMessage> GetQuoteAsync(
+        QuoteRequestMessage request,
+        CancellationToken cancellationToken = default)
+    {
+        var runtime = Volatile.Read(ref _current)
+            ?? throw new InvalidOperationException("terminal_worker_unavailable");
+        return runtime.GetQuoteAsync(request, cancellationToken);
+    }
+
     public bool RequestFullSnapshot(string stream, long connectionEpoch)
     {
         if (connectionEpoch != _terminal.ConnectionEpoch)

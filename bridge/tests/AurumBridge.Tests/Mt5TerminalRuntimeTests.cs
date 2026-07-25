@@ -80,6 +80,42 @@ public sealed class Mt5TerminalRuntimeTests
     }
 
     [TestMethod]
+    public async Task QuoteRequestIsMechanicallyForwardedToWorker()
+    {
+        var request = new QuoteRequestMessage
+        {
+            Type = "quote_request",
+            MessageId = "msg_quote_runtime_01",
+            SentAtUtcMsc = 1,
+            RequestId = "quote_01JRUNTIME01",
+            TerminalInstanceId = Terminal().TerminalInstanceId,
+            AccountRef = Terminal().AccountRef,
+            ConnectionEpoch = Terminal().ConnectionEpoch,
+            Symbol = "XAUUSD",
+        };
+        _worker.Response = JsonSerializer.SerializeToElement(new QuoteMessage
+        {
+            Type = "quote",
+            MessageId = "quote_result_runtime_01",
+            SentAtUtcMsc = 2,
+            RequestId = request.RequestId,
+            TerminalInstanceId = request.TerminalInstanceId,
+            AccountRef = request.AccountRef,
+            ConnectionEpoch = request.ConnectionEpoch,
+            Symbol = request.Symbol,
+            ObservedAtUtcMsc = 2,
+            Status = "succeeded",
+            Bid = 2300.0,
+            Ask = 2300.2,
+        });
+
+        var response = await _runtime.GetQuoteAsync(request);
+
+        Assert.AreEqual(2300.0, response.Bid);
+        Assert.AreEqual(1, _worker.RequestCount);
+    }
+
+    [TestMethod]
     public async Task RestartWithinSameEpochContinuesRevisionFromSqlite()
     {
         await _runtime.IngestSnapshotAsync(Snapshot("1001"), fullSnapshot: true);
