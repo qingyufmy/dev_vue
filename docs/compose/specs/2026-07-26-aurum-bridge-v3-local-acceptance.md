@@ -84,3 +84,10 @@ Acceptance 测试总数：8，全部通过。
 - 服务端在线会话识别终端 `mt5_93b55965fe14a572fa3594d3`，平台为 MT5，账户为 `596520 / DooTechnology-Demo`，并在首次完整快照就绪后把它绑定到用户 1 的交易账户 1；`identity_verified_at` 为 `2026-07-26 02:56:27`。
 - 服务器通过 V3 桥接按需请求有界日绩效汇总，账户 1 的同步状态为 `current`，区间从 `2026-07-16` 到 `2026-07-25`，`last_error` 为 `null`。
 - 本次只验证账户身份、完整快照与历史日汇总读取，没有下发任何交易指令；SQLite 和服务器汇总表均不是 broker 交易权威。
+
+## 长期设备授权改造后的重启证据
+
+- 服务端移除固定 `expires_at` 登录门槛后，既有 DPAPI 凭证未被清除，也没有要求重新配对；数据库中的 `expires_at` 仅为旧客户端兼容元数据，不再参与授权判定。
+- 最新服务端与 Bridge 受控重启后，Bridge 从 `DetectingTerminal` 到 `Online` 约 0.55 秒，connection epoch 为 19；启动日志没有 `PairingRequired`、`pairing_browser_opened` 或二次登录事件。
+- 服务端继续使用 refresh session 21；其 `created_at` 仍为 `2026-07-26 02:14:54`，只把 `last_used_at` 更新为 `2026-07-26 03:03:13`，没有因为升级创建新的授权。
+- 本轮仍为真实 MT5 demo 只读联调，没有发送任何交易指令。

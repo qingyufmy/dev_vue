@@ -7,6 +7,8 @@ import { getRedis, isRedisAvailable } from './redis.js'
 const hashToken = token => crypto.createHash('sha256').update(String(token || '')).digest('hex')
 const BRIDGE_TICKET_TTL_SECONDS = 30
 const bridgeTickets = new Map()
+// expires_at and expiresInSeconds remain for compatibility with deployed clients.
+// Device authorization is durable until an explicit security revocation.
 const CONSUME_TICKET_LUA = `
 local value = redis.call("get", KEYS[1])
 if value then redis.call("del", KEYS[1]) end
