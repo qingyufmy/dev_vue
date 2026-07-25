@@ -128,3 +128,10 @@ Acceptance 测试总数：8，全部通过。
 - MT4 Runtime 使用与 MT5 相同的 SQLite 持久游标、未确认 deals 负载和服务器确认清理边界；交易请求继续通过高优先级 `WorkerRequestGate` 抢占尚未开始的普通数据请求。
 - MT4 相关自动化测试 34/34、全量 .NET 测试 173/173 通过；`C:\Program Files (x86)\MetaTrader 4\metaeditor.exe` 官方编译结果为 0 error、0 warning。
 - 当前没有运行真实 MT4 demo 终端，因此这些证据只证明协议、运行时、持久化和官方编译闭环，不替代真实 broker 的历史读取、下单、改单、撤单、平仓与重连矩阵。
+
+## 最终 Debug 运行态
+
+- 当前运行的是提交 `011af3c` 对应的最新 Debug 构建；Bridge 在 `2026-07-25T19:52:21.004Z` 启动，于 `19:52:21.531Z` 进入 `Online`，connection epoch 为 24。
+- 启动静默复用首次浏览器授权，没有进入 `PairingRequired`、没有打开浏览器、没有二次登录；MT5 终端 PID 24056 保持不变。
+- epoch 24 的 account、positions、orders、deals 在本地 SQLite 与服务器 MySQL 中均为 revision 1；本地成交等待确认数和全部未确认 Outbox 均为 0，服务器成交表仍为 48 条记录、48 个唯一 ticket。
+- Bridge 与 MT5 Worker 已在可见 PowerShell 窗口中持续运行，Node 服务端继续监听本机 3000 端口，供用户开始界面与联调测试。

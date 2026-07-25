@@ -96,10 +96,11 @@ Bridge v3 的核心代码闭环已经形成：C# Host 负责界面、连接、�
 
 ## 6. 最新真实 MT5 只读联调证据
 
-- 最新 Debug 构建于 `2026-07-25T19:38:04.960Z` 启动，在 connection epoch 23 下静默复用首次浏览器授权，并于 `19:38:05.512Z` 进入 `Online`，约 0.55 秒；没有进入 `PairingRequired`、没有打开浏览器、没有二次登录。
+- 最终 Debug 构建于 `2026-07-25T19:52:21.004Z` 启动，在 connection epoch 24 下静默复用首次浏览器授权，并于 `19:52:21.531Z` 进入 `Online`，约 0.53 秒；没有进入 `PairingRequired`、没有打开浏览器、没有二次登录，原 MT5 终端 PID 24056 未重启。
 - 服务端会话已识别并绑定 `596520 / DooTechnology-Demo`，终端实例为 `mt5_93b55965fe14a572fa3594d3`，交易账户身份校验时间为 `2026-07-26 02:56:27`。
 - V3 `performance_daily` 链路已在真实 MT5 demo 账户完成有界读取：服务器记录的同步区间为 `2026-07-16` 至 `2026-07-25`，状态为 `current`，`last_error` 为 `null`。
 - epoch 22 首次完整快照在本地 SQLite 与服务器 MySQL 中均包含 account、positions、orders 三条 revision 1；`observed_at_utc_msc=1785007267041`、`source_time_msc=1785007267037`，二者语义分离且相差 4 ms。
 - epoch 23 使用 7 天首次回看、24 小时窗口、每批最多 250 条的时间/ticket 双游标完成真实成交流同步；服务器 `bridge_v3_deals` 保存 48 条记录且 48 个 ticket 均唯一，成交时间覆盖 `2026-07-20 05:32:23Z` 至 `2026-07-24 05:48:43Z`。
 - 成交游标已持久化至 `2026-07-25 19:38:06Z`；服务器确认后，本地 `deals_pending` 和未确认 deals Outbox 均为 0。SQLite 只保留游标和未确认负载，成交事实由服务器 MySQL 保存。
+- 最终重启后的 epoch 24 在 SQLite 与 MySQL 中均形成 account、positions、orders、deals 四条 revision 1，四条 `source_time_msc` 均为 `1785009141338`；成交游标连续推进至同一采集时刻，本地 `deals_pending=0`、未确认 Outbox=0，服务器仍保存 48 条且 48 个唯一 ticket。
 - 本轮仅执行只读联调，没有发送下单、改单、撤单或平仓指令；该证据不替代真实 MT4 demo 交易矩阵和持续运行时间窗。
