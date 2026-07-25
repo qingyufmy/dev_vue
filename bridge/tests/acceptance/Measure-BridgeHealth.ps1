@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$LogDirectory = (Join-Path $env:APPDATA 'AURUM\BridgeV3\logs'),
+    [string]$LogFilter = 'bridge-*.log',
     [double]$MinimumHours = 168,
     [double]$WarmupMinutes = 30,
     [double]$WindowMinutes = 60,
@@ -52,7 +53,7 @@ if (-not (Test-Path -LiteralPath $resolvedLogDirectory -PathType Container)) {
 }
 
 $samples = @(
-    Get-ChildItem -LiteralPath $resolvedLogDirectory -Filter 'bridge-*.log' -File |
+    Get-ChildItem -LiteralPath $resolvedLogDirectory -Filter $LogFilter -File |
         Sort-Object Name |
         ForEach-Object {
             foreach ($line in Get-Content -LiteralPath $_.FullName -Encoding UTF8) {
