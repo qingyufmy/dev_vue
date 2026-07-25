@@ -224,6 +224,49 @@ describe('Bridge v3 websocket gateway', () => {
     ])
   })
 
+  it('replaces a reconnected websocket and fences messages from the old connection', async () => {
+    const { gateway, dependencies } = setup()
+    const oldWs = await connect(gateway, { ticket:'old-ticket' })
+    oldWs.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    const newWs = await connect(gateway, { ticket:'new-ticket' })
+    const reconnectedHello = {
+      ...hello(),
+      message_id:'msg_01JGATEWAY_RECONNECT',
+      session_id:'session_01JGATEWAY02',
+    }
+    newWs.emit('message', Buffer.from(JSON.stringify(reconnectedHello)))
+    await flush()
+
+    expect(oldWs.close).toHaveBeenCalledWith(4001, 'bridge_connection_replaced')
+    const reconnectDelta = {
+      ...hello().terminals[0],
+      v:3,
+      type:'data_delta',
+      message_id:'msg_01JGATEWAY_RECONNECT_DELTA',
+      sent_at_utc_msc:NOW,
+      stream:'positions',
+      revision:1,
+      base_revision:0,
+      observed_at_utc_msc:NOW,
+      source_time_msc:NOW,
+      full_snapshot:false,
+      upserts:[],
+      deletes:[],
+    }
+    oldWs.emit('message', Buffer.from(JSON.stringify(reconnectDelta)))
+    await flush()
+    expect(JSON.parse(oldWs.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'error', error_code:'bridge_connection_replaced',
+    })
+    expect(dependencies.applyDelta).not.toHaveBeenCalled()
+
+    newWs.emit('message', Buffer.from(JSON.stringify(reconnectDelta)))
+    await flush()
+    expect(dependencies.applyDelta).toHaveBeenCalledOnce()
+  })
+
   it('rejects missing tickets without registering a terminal', async () => {
     const { gateway, dependencies } = setup()
     const ws = await connect(gateway, { ticket:'' })
@@ -286,6 +329,36 @@ describe('Bridge v3 websocket gateway', () => {
     expect(dependencies.applyDelta).toHaveBeenCalledOnce()
     expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
       type:'data_ack', status:'applied', acked_message_id:'msg_01JGATEWAY_DELTA', expected_revision:2,
+    })
+  })
+
+  it('canonicalizes legacy queued deltas that omitted a null source time', async () => {
+    const { gateway, dependencies } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    const legacyDelta = {
+      ...hello().terminals[0],
+      v:3,
+      type:'data_delta',
+      message_id:'msg_01JGATEWAY_LEGACY_DELTA',
+      sent_at_utc_msc:NOW,
+      stream:'positions',
+      revision:1,
+      base_revision:0,
+      observed_at_utc_msc:NOW,
+      full_snapshot:false,
+      upserts:[],
+      deletes:[],
+    }
+    ws.emit('message', Buffer.from(JSON.stringify(legacyDelta)))
+    await flush()
+    expect(dependencies.applyDelta).toHaveBeenCalledWith(
+      expect.objectContaining({ source_time_msc:null }),
+      expect.objectContaining({ userId:42 }),
+    )
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'data_ack', status:'applied', acked_message_id:'msg_01JGATEWAY_LEGACY_DELTA',
     })
   })
 

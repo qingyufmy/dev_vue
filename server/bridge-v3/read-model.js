@@ -134,8 +134,6 @@ export async function registerBridgeTerminalSession({
         && String(existing.login_account) === normalized.login
       if (!immutableMatch) throw readModelError('bridge_terminal_binding_mismatch')
       if (normalized.connectionEpoch < existing.connection_epoch) throw readModelError('bridge_connection_epoch_stale')
-      if (normalized.connectionEpoch === existing.connection_epoch
-        && String(existing.session_id) !== normalized.sessionId) throw readModelError('bridge_connection_epoch_reused')
     }
 
     await run(`INSERT INTO bridge_v3_terminal_sessions

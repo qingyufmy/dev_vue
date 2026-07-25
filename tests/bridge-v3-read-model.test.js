@@ -79,6 +79,28 @@ describe('Bridge v3 incremental read model', () => {
     }, { transactionFn:rebound.transactionFn })).rejects.toMatchObject({ code:'bridge_terminal_binding_mismatch' })
   })
 
+  it('resumes the same terminal epoch under a new websocket session', async () => {
+    const reconnect = transactionFor()
+    await expect(registerBridgeTerminalSession({
+      userId:42,
+      sessionId:'session_01JREADMODEL02',
+      terminalInstanceId:'terminal_01JREADMODEL1',
+      platform:'mt5',
+      brokerServer:'Broker-Demo',
+      login:'12345678',
+      connectionEpoch:7,
+      nowUtcMsc:NOW + 100,
+    }, { transactionFn:reconnect.transactionFn })).resolves.toMatchObject({
+      connected:true,
+      resumed:true,
+      connectionEpoch:7,
+      sessionId:'session_01JREADMODEL02',
+    })
+    expect(reconnect.run.mock.calls[1][1]).toEqual(expect.arrayContaining([
+      'terminal_01JREADMODEL1', 'session_01JREADMODEL02', 7,
+    ]))
+  })
+
   it('applies account latest state and advances its revision in one transaction', async () => {
     const message = delta('account')
     const { run, transactionFn } = transactionFor()

@@ -210,6 +210,13 @@ export function createBridgeV3Gateway({
     try { message = JSON.parse(raw.toString()) } catch {
       throw Object.assign(new Error('bridge_json_invalid'), { code:'bridge_json_invalid' })
     }
+    // Bridge 3.0.0 omitted nullable source_time_msc on the wire because its
+    // serializer ignored nulls. Canonicalize queued messages created by that
+    // build so an upgrade can drain the durable outbox without data loss.
+    if (message?.type === 'data_delta'
+      && !Object.prototype.hasOwnProperty.call(message, 'source_time_msc')) {
+      message.source_time_msc = null
+    }
     if (!connection.ready) return acceptHello(connection, message)
     assertBridgeV3Message(message, { nowUtcMsc:now() })
 
@@ -224,6 +231,10 @@ export function createBridgeV3Gateway({
     const terminal = connection.terminals.get(message.terminal_instance_id)
     if (!terminal || !sameBridgeRoute(routeFromTerminal(terminal), message)) {
       throw Object.assign(new Error('bridge_message_route_mismatch'), { code:'bridge_message_route_mismatch' })
+    }
+    const activeRoute = connectionsByTerminal.get(message.terminal_instance_id)
+    if (!activeRoute || activeRoute.connection !== connection) {
+      throw gatewayError('bridge_connection_replaced')
     }
     connection.lastSeen = now()
     if (message.type === 'data_delta') {
@@ -325,7 +336,11 @@ export function createBridgeV3Gateway({
         return
       }
       handleMessage(connection, raw).catch(error => {
-        protocolError(ws, error.code || 'bridge_message_rejected', error.message)
+        const validation = Array.isArray(error.details) ? ` details=${error.details.join('|')}` : ''
+        console.warn(`[BridgeV3] message rejected user=${connection.userId ?? 'unknown'} code=${error.code || 'bridge_message_rejected'}${validation}`)
+        protocolError(ws, error.code || 'bridge_message_rejected', error.message, {
+          closeCode:connection.ready ? null : 4002,
+        })
       })
     }
     ws.on('message', onMessage)
@@ -343,11 +358,16 @@ export function createBridgeV3Gateway({
       for (const raw of queued) {
         if (connection.closed) break
         try { await handleMessage(connection, raw) } catch (error) {
-          protocolError(ws, error.code || 'bridge_message_rejected', error.message)
+          const validation = Array.isArray(error.details) ? ` details=${error.details.join('|')}` : ''
+          console.warn(`[BridgeV3] queued message rejected user=${connection.userId ?? 'unknown'} code=${error.code || 'bridge_message_rejected'}${validation}`)
+          protocolError(ws, error.code || 'bridge_message_rejected', error.message, {
+            closeCode:connection.ready ? null : 4002,
+          })
           break
         }
       }
     }).catch(error => {
+      console.warn(`[BridgeV3] authentication rejected code=${error.code || 'bridge_auth_failed'}`)
       protocolError(ws, error.code || 'bridge_auth_failed', null, { closeCode:4002 })
     })
   })

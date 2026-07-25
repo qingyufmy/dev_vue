@@ -82,6 +82,7 @@ public sealed record DataDeltaMessage : BridgeEnvelope
     public required long ObservedAtUtcMsc { get; init; }
 
     [JsonPropertyName("source_time_msc")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public long? SourceTimeMsc { get; init; }
 
     [JsonPropertyName("full_snapshot")]
