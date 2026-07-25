@@ -9,6 +9,7 @@ public enum BridgeApplicationPhase
 {
     Starting,
     PlatformSelectionRequired,
+    TerminalSelectionRequired,
     DetectingTerminal,
     TerminalNotFound,
     PairingRequired,
@@ -26,12 +27,20 @@ public sealed record BridgeTerminalStatus(
     TerminalRuntimeState RuntimeState,
     string? ErrorCode);
 
+public sealed record BridgeTerminalCandidate(
+    string TerminalInstanceId,
+    string Platform,
+    string BrokerServer,
+    string Login);
+
 public sealed record BridgeApplicationStatus(
     BridgeApplicationPhase Phase,
     IReadOnlyList<BridgeTerminalStatus> Terminals,
     string? DetailCode)
 {
     public string? SelectedPlatform { get; init; }
+    public string? SelectedTerminalInstanceId { get; init; }
+    public IReadOnlyList<BridgeTerminalCandidate> TerminalCandidates { get; init; } = [];
 }
 
 public sealed class BridgeApplicationController : IAsyncDisposable
@@ -53,9 +62,15 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private BridgeCommandDispatcher? _activeCommandDispatcher;
     private bool _updatePreparation;
     private string? _selectedPlatform;
+    private string? _selectedMt5TerminalId;
+    private string? _activeMt5TerminalId;
+    private IReadOnlyList<BridgeTerminalCandidate> _terminalCandidates = [];
     private bool _disposed;
 
-    public BridgeApplicationController(BridgeRuntimePaths paths, string? selectedPlatform = null)
+    public BridgeApplicationController(
+        BridgeRuntimePaths paths,
+        string? selectedPlatform = null,
+        string? selectedMt5TerminalId = null)
     {
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         Directory.CreateDirectory(paths.DataDirectory);
@@ -76,6 +91,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         _selectedPlatform = string.IsNullOrWhiteSpace(selectedPlatform)
             ? null
             : BridgePlatform.Normalize(selectedPlatform);
+        _selectedMt5TerminalId = selectedMt5TerminalId;
     }
 
     public event Action<BridgeApplicationStatus>? StatusChanged;
@@ -101,6 +117,23 @@ public sealed class BridgeApplicationController : IAsyncDisposable
                 return;
             }
             _selectedPlatform = normalized;
+            _cycleCancellation?.Cancel();
+        }
+    }
+
+    public void SelectTerminal(string terminalInstanceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(terminalInstanceId);
+        lock (_sync)
+        {
+            if (!_terminalCandidates.Any(candidate =>
+                    candidate.TerminalInstanceId == terminalInstanceId))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(terminalInstanceId), terminalInstanceId, "Unknown terminal selection.");
+            }
+            _selectedMt5TerminalId = terminalInstanceId;
+            _activeMt5TerminalId = terminalInstanceId;
             _cycleCancellation?.Cancel();
         }
     }
@@ -281,6 +314,8 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         lock (_sync)
         {
             _terminalStatuses.Clear();
+            _terminalCandidates = [];
+            _activeMt5TerminalId = null;
         }
         var selectedPlatform = SelectedPlatform;
         if (selectedPlatform is null)
@@ -300,6 +335,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             }
             var installations = Mt5TerminalDiscovery.DiscoverWindows();
             mt5 = await _mt5Provisioner.ProvisionAsync(installations, cancellationToken);
+            if (mt5.Terminals.Count > 0)
+            {
+                mt5 = await SelectMt5TerminalAsync(mt5, cancellationToken);
+            }
         }
         else
         {
@@ -450,6 +489,68 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         }
     }
 
+    private async Task<Mt5ProvisioningResult> SelectMt5TerminalAsync(
+        Mt5ProvisioningResult result,
+        CancellationToken cancellationToken)
+    {
+        var candidates = result.Terminals
+            .Select(terminal => new BridgeTerminalCandidate(
+                terminal.Binding.TerminalInstanceId,
+                BridgePlatform.Mt5,
+                terminal.Binding.AccountRef.BrokerServer,
+                terminal.Binding.AccountRef.Login))
+            .OrderBy(candidate => candidate.Login, StringComparer.Ordinal)
+            .ThenBy(candidate => candidate.BrokerServer, StringComparer.Ordinal)
+            .ToArray();
+        string? preferred;
+        lock (_sync)
+        {
+            _terminalCandidates = candidates;
+            preferred = _selectedMt5TerminalId;
+        }
+        var selectedId = ResolveMt5TerminalSelection(candidates, preferred);
+        if (selectedId is null)
+        {
+            foreach (var terminal in result.Terminals)
+            {
+                await terminal.Supervisor.DisposeAsync();
+            }
+            Publish(BridgeApplicationPhase.TerminalSelectionRequired);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        var selected = result.Terminals.Single(terminal =>
+            terminal.Binding.TerminalInstanceId == selectedId);
+        foreach (var terminal in result.Terminals)
+        {
+            if (!ReferenceEquals(terminal, selected))
+            {
+                await terminal.Supervisor.DisposeAsync();
+            }
+        }
+        lock (_sync)
+        {
+            _activeMt5TerminalId = selectedId;
+        }
+        return new([selected], result.Failures);
+    }
+
+    public static string? ResolveMt5TerminalSelection(
+        IReadOnlyList<BridgeTerminalCandidate> candidates,
+        string? preferredTerminalInstanceId)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        if (candidates.Count == 1)
+        {
+            return candidates[0].TerminalInstanceId;
+        }
+        return candidates.Any(candidate =>
+                candidate.TerminalInstanceId == preferredTerminalInstanceId)
+            ? preferredTerminalInstanceId
+            : null;
+    }
+
     private void HandleTerminalStatus(TerminalRuntimeStatus status)
     {
         lock (_sync)
@@ -515,6 +616,8 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         _detailCode)
     {
         SelectedPlatform = _selectedPlatform,
+        SelectedTerminalInstanceId = _activeMt5TerminalId ?? _selectedMt5TerminalId,
+        TerminalCandidates = _terminalCandidates,
     };
 
     private static string NormalizeApplicationError(Exception error) => error switch

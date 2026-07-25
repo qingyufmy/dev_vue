@@ -19,7 +19,9 @@ public static class BridgePlatform
     public static string DisplayName(string value) => Normalize(value).ToUpperInvariant();
 }
 
-public sealed record BridgeUserPreferences(string? Platform);
+public sealed record BridgeUserPreferences(
+    string? Platform,
+    string? Mt5TerminalInstanceId = null);
 
 public sealed class BridgeUserPreferencesStore
 {
@@ -39,7 +41,7 @@ public sealed class BridgeUserPreferencesStore
         {
             if (!File.Exists(_path))
             {
-                return new(null);
+                return new(null, null);
             }
             try
             {
@@ -47,18 +49,12 @@ public sealed class BridgeUserPreferencesStore
                     _path, FileMode.Open, FileAccess.Read, FileShare.Read,
                     4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
                 var stored = await JsonSerializer.DeserializeAsync<BridgeUserPreferences>(
-                    stream, cancellationToken:cancellationToken) ?? new(null);
-                return string.IsNullOrWhiteSpace(stored.Platform)
-                    ? new(null)
-                    : new(BridgePlatform.Normalize(stored.Platform));
+                    stream, cancellationToken:cancellationToken) ?? new(null, null);
+                return Normalize(stored);
             }
             catch (JsonException)
             {
-                return new(null);
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-                return new(null);
+                return new(null, null);
             }
         }
         finally
@@ -69,35 +65,112 @@ public sealed class BridgeUserPreferencesStore
 
     public async Task SavePlatformAsync(string platform, CancellationToken cancellationToken = default)
     {
-        var preferences = new BridgeUserPreferences(BridgePlatform.Normalize(platform));
         await _access.WaitAsync(cancellationToken);
         try
         {
-            var directory = Path.GetDirectoryName(_path)!;
-            Directory.CreateDirectory(directory);
-            var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(_path)}.{Guid.NewGuid():N}.tmp");
-            try
-            {
-                await using (var stream = new FileStream(
-                    temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                    4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
-                {
-                    await JsonSerializer.SerializeAsync(stream, preferences, cancellationToken:cancellationToken);
-                    await stream.FlushAsync(cancellationToken);
-                }
-                File.Move(temporaryPath, _path, overwrite:true);
-            }
-            finally
-            {
-                if (File.Exists(temporaryPath))
-                {
-                    File.Delete(temporaryPath);
-                }
-            }
+            var current = await LoadCoreAsync(cancellationToken);
+            await SaveCoreAsync(
+                current with { Platform = BridgePlatform.Normalize(platform) },
+                cancellationToken);
         }
         finally
         {
             _access.Release();
         }
+    }
+
+    public async Task SaveMt5TerminalAsync(
+        string terminalInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeMt5TerminalId(terminalInstanceId)
+            ?? throw new ArgumentOutOfRangeException(
+                nameof(terminalInstanceId), terminalInstanceId, "Invalid MT5 terminal instance id.");
+        await _access.WaitAsync(cancellationToken);
+        try
+        {
+            var current = await LoadCoreAsync(cancellationToken);
+            await SaveCoreAsync(
+                current with { Mt5TerminalInstanceId = normalized },
+                cancellationToken);
+        }
+        finally
+        {
+            _access.Release();
+        }
+    }
+
+    private async Task<BridgeUserPreferences> LoadCoreAsync(CancellationToken cancellationToken)
+    {
+        if (!File.Exists(_path))
+        {
+            return new(null, null);
+        }
+        try
+        {
+            await using var stream = new FileStream(
+                _path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var stored = await JsonSerializer.DeserializeAsync<BridgeUserPreferences>(
+                stream, cancellationToken:cancellationToken) ?? new(null, null);
+            return Normalize(stored);
+        }
+        catch (JsonException)
+        {
+            return new(null, null);
+        }
+    }
+
+    private async Task SaveCoreAsync(
+        BridgeUserPreferences preferences,
+        CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(_path)!;
+        Directory.CreateDirectory(directory);
+        var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(_path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (var stream = new FileStream(
+                temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(stream, preferences, cancellationToken:cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+            }
+            File.Move(temporaryPath, _path, overwrite:true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    private static BridgeUserPreferences Normalize(BridgeUserPreferences preferences)
+    {
+        string? platform = null;
+        if (!string.IsNullOrWhiteSpace(preferences.Platform))
+        {
+            try
+            {
+                platform = BridgePlatform.Normalize(preferences.Platform);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+            }
+        }
+        return new(platform, NormalizeMt5TerminalId(preferences.Mt5TerminalInstanceId));
+    }
+
+    private static string? NormalizeMt5TerminalId(string? value)
+    {
+        var normalized = value?.Trim().ToLowerInvariant();
+        return normalized is { Length: 28 }
+            && normalized.StartsWith("mt5_", StringComparison.Ordinal)
+            && normalized[4..].All(Uri.IsHexDigit)
+                ? normalized
+                : null;
     }
 }

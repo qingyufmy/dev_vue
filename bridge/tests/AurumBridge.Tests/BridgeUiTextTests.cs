@@ -80,4 +80,15 @@ public sealed class BridgeUiTextTests
         StringAssert.Contains(description, "该终端");
         StringAssert.Contains(description, "重新检测");
     }
+
+    [TestMethod]
+    public void MultipleMt5TerminalsRequireAConciseAccountSelection()
+    {
+        var text = BridgeUiText.ForStatus(new(
+            BridgeApplicationPhase.TerminalSelectionRequired, [], null));
+
+        StringAssert.Contains(text.Title, "MT5");
+        StringAssert.Contains(text.Description, "多个");
+        StringAssert.Contains(text.Description, "选择");
+    }
 }

@@ -45,4 +45,37 @@ public sealed class BridgeUserPreferencesTests
         await File.WriteAllTextAsync(_path, "{\"Platform\":\"mt6\"}");
         Assert.IsNull((await new BridgeUserPreferencesStore(_path).LoadAsync()).Platform);
     }
+
+    [TestMethod]
+    public async Task PlatformAndMt5TerminalSelectionsArePreservedIndependently()
+    {
+        var store = new BridgeUserPreferencesStore(_path);
+        const string terminalId = "mt5_0123456789abcdef01234567";
+
+        await store.SaveMt5TerminalAsync(terminalId);
+        await store.SavePlatformAsync(BridgePlatform.Mt5);
+        var preferences = await store.LoadAsync();
+
+        Assert.AreEqual(BridgePlatform.Mt5, preferences.Platform);
+        Assert.AreEqual(terminalId, preferences.Mt5TerminalInstanceId);
+
+        await store.SavePlatformAsync(BridgePlatform.Mt4);
+        Assert.AreEqual(
+            terminalId,
+            (await store.LoadAsync()).Mt5TerminalInstanceId);
+    }
+
+    [TestMethod]
+    public async Task InvalidMt5TerminalSelectionIsIgnored()
+    {
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(
+            _path,
+            "{\"Platform\":\"mt5\",\"Mt5TerminalInstanceId\":\"../../unsafe\"}");
+
+        var preferences = await new BridgeUserPreferencesStore(_path).LoadAsync();
+
+        Assert.AreEqual(BridgePlatform.Mt5, preferences.Platform);
+        Assert.IsNull(preferences.Mt5TerminalInstanceId);
+    }
 }

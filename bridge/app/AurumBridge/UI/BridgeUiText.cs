@@ -14,6 +14,8 @@ public static class BridgeUiText
             BridgeApplicationPhase.Starting => State("正在启动", "正在准备安全连接。", 0x64748B),
             BridgeApplicationPhase.PlatformSelectionRequired => State(
                 "请选择交易平台", "选择 MT5 或 MT4 后，桥接会自动检测对应终端。", 0xD97706),
+            BridgeApplicationPhase.TerminalSelectionRequired => State(
+                "请选择 MT5 账户", "检测到多个已登录 MT5，请选择需要桥接的账户。", 0xD97706),
             BridgeApplicationPhase.DetectingTerminal => State(
                 $"正在检测 {PlatformName(status)}",
                 $"请保持 {PlatformName(status)} 已打开并登录交易账户。",

@@ -7,6 +7,11 @@ public sealed class BridgePlatformChangedEventArgs(string platform) : EventArgs
     public string Platform { get; } = platform;
 }
 
+public sealed class BridgeTerminalChangedEventArgs(string terminalInstanceId) : EventArgs
+{
+    public string TerminalInstanceId { get; } = terminalInstanceId;
+}
+
 public sealed class BridgeMainForm : Form
 {
     private readonly Label _statusTitle = new();
@@ -19,7 +24,10 @@ public sealed class BridgeMainForm : Form
     private readonly Button _exitButton = new();
     private readonly Button _logoutButton = new();
     private readonly ComboBox _platformSelector = new();
+    private readonly ComboBox _terminalSelector = new();
+    private readonly TableLayoutPanel _terminalSelectorBar = new();
     private bool _updatingPlatform;
+    private bool _updatingTerminal;
     private bool _allowClose;
 
     public BridgeMainForm()
@@ -43,6 +51,7 @@ public sealed class BridgeMainForm : Form
     public event EventHandler? LogoutRequested;
     public event EventHandler? ExitRequested;
     public event EventHandler<BridgePlatformChangedEventArgs>? PlatformChanged;
+    public event EventHandler<BridgeTerminalChangedEventArgs>? TerminalChanged;
 
     public void ApplyStatus(BridgeApplicationStatus status)
     {
@@ -55,6 +64,7 @@ public sealed class BridgeMainForm : Form
             && status.Phase is not (BridgeApplicationPhase.PairingRequired
                 or BridgeApplicationPhase.PlatformSelectionRequired);
         ApplyPlatform(status.SelectedPlatform);
+        ApplyTerminalCandidates(status);
         _terminalList.SuspendLayout();
         _terminalList.Controls.Clear();
         foreach (var terminal in status.Terminals)
@@ -96,7 +106,7 @@ public sealed class BridgeMainForm : Form
             Dock = DockStyle.Fill,
             Padding = new(28, 24, 28, 22),
             ColumnCount = 1,
-            RowCount = 7,
+            RowCount = 8,
         };
         root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.AutoSize));
@@ -162,6 +172,36 @@ public sealed class BridgeMainForm : Form
         _logoutButton.Click += (_, _) => LogoutRequested?.Invoke(this, EventArgs.Empty);
         platformBar.Controls.Add(_logoutButton, 3, 0);
         root.Controls.Add(platformBar);
+
+        _terminalSelectorBar.AutoSize = true;
+        _terminalSelectorBar.Dock = DockStyle.Fill;
+        _terminalSelectorBar.ColumnCount = 2;
+        _terminalSelectorBar.RowCount = 1;
+        _terminalSelectorBar.Margin = new Padding(0, 0, 0, 16);
+        _terminalSelectorBar.ColumnStyles.Add(new(SizeType.AutoSize));
+        _terminalSelectorBar.ColumnStyles.Add(new(SizeType.Percent, 100));
+        _terminalSelectorBar.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            ForeColor = Color.FromArgb(51, 65, 85),
+            Text = "MT5 账户",
+            Margin = new Padding(0, 8, 10, 0),
+        }, 0, 0);
+        _terminalSelector.Dock = DockStyle.Fill;
+        _terminalSelector.DropDownStyle = ComboBoxStyle.DropDownList;
+        _terminalSelector.AccessibleName = "选择需要桥接的 MT5 账户";
+        _terminalSelector.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_updatingTerminal
+                && _terminalSelector.SelectedItem is TerminalCandidateItem selected)
+            {
+                TerminalChanged?.Invoke(this, new(selected.TerminalInstanceId));
+            }
+        };
+        _terminalSelectorBar.Controls.Add(_terminalSelector, 1, 0);
+        _terminalSelectorBar.Visible = false;
+        root.Controls.Add(_terminalSelectorBar);
 
         var card = new TableLayoutPanel
         {
@@ -259,6 +299,44 @@ public sealed class BridgeMainForm : Form
         {
             _updatingPlatform = false;
         }
+    }
+
+    private void ApplyTerminalCandidates(BridgeApplicationStatus status)
+    {
+        var visible = status.SelectedPlatform == BridgePlatform.Mt5
+            && status.TerminalCandidates.Count > 1;
+        _terminalSelectorBar.Visible = visible;
+        _updatingTerminal = true;
+        try
+        {
+            _terminalSelector.Items.Clear();
+            foreach (var candidate in status.TerminalCandidates)
+            {
+                _terminalSelector.Items.Add(new TerminalCandidateItem(
+                    candidate.TerminalInstanceId,
+                    $"{candidate.Login}  ·  {candidate.BrokerServer}"));
+            }
+            var selectedIndex = -1;
+            for (var index = 0; index < _terminalSelector.Items.Count; index++)
+            {
+                if (_terminalSelector.Items[index] is TerminalCandidateItem item
+                    && item.TerminalInstanceId == status.SelectedTerminalInstanceId)
+                {
+                    selectedIndex = index;
+                    break;
+                }
+            }
+            _terminalSelector.SelectedIndex = selectedIndex;
+        }
+        finally
+        {
+            _updatingTerminal = false;
+        }
+    }
+
+    private sealed record TerminalCandidateItem(string TerminalInstanceId, string DisplayName)
+    {
+        public override string ToString() => DisplayName;
     }
 
     private Panel CreateTerminalRow(BridgeTerminalStatus terminal)

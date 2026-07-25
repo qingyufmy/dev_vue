@@ -34,9 +34,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _logger = new(Path.Combine(paths.DataDirectory, "logs"));
         _preferences = new(Path.Combine(paths.DataDirectory, "preferences.json"));
         string? selectedPlatform = null;
+        string? selectedMt5TerminalId = null;
         try
         {
-            selectedPlatform = _preferences.LoadAsync().GetAwaiter().GetResult().Platform;
+            var preferences = _preferences.LoadAsync().GetAwaiter().GetResult();
+            selectedPlatform = preferences.Platform;
+            selectedMt5TerminalId = preferences.Mt5TerminalInstanceId;
         }
         catch (Exception error)
         {
@@ -44,13 +47,14 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         EnsureAutoStart();
         _updateCoordinator = CreateUpdateCoordinator(paths.ServerBaseUri);
-        _controller = new(paths, selectedPlatform);
+        _controller = new(paths, selectedPlatform, selectedMt5TerminalId);
         _form = new();
         _form.PairRequested += HandlePairRequested;
         _form.RedetectRequested += (_, _) => _controller.RequestRedetect();
         _form.OpenLogsRequested += HandleOpenLogsRequested;
         _form.LogoutRequested += HandleLogoutRequested;
         _form.PlatformChanged += HandlePlatformChanged;
+        _form.TerminalChanged += HandleTerminalChanged;
         _form.ExitRequested += HandleExitRequested;
         _controller.StatusChanged += HandleStatusChanged;
         _singleInstance.ActivationRequested += HandleActivationRequested;
@@ -248,6 +252,31 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 _form,
                 "交易平台选择未能保存，请稍后重试。",
                 "选择交易平台",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private async void HandleTerminalChanged(object? sender, BridgeTerminalChangedEventArgs eventArgs)
+    {
+        try
+        {
+            await _preferences.SaveMt5TerminalAsync(eventArgs.TerminalInstanceId, _stop.Token);
+            _controller.SelectTerminal(eventArgs.TerminalInstanceId);
+            _logger.Info(
+                "bridge_terminal_selected",
+                $"terminal_id={eventArgs.TerminalInstanceId}");
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("terminal_preference_save_failed", error);
+            MessageBox.Show(
+                _form,
+                "MT5 账户选择未能保存，请重新选择。",
+                "选择 MT5 账户",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
