@@ -126,6 +126,59 @@ public sealed class BridgeStoreTests
     }
 
     [TestMethod]
+    public async Task CoalescesAnOfflineDataStreamIntoOneBoundedFullSnapshot()
+    {
+        await _store.PersistDataDeltaAsync(Delta(
+            "positions", 1, 0, [Json("""{"ticket":"1","volume":0.1}""")]),
+            dataOutboxLimitPerStream:3);
+        await _store.PersistDataDeltaAsync(Delta(
+            "positions", 2, 1, [Json("""{"ticket":"2","volume":0.2}""")]),
+            dataOutboxLimitPerStream:3);
+        await _store.PersistDataDeltaAsync(Delta(
+            "positions", 3, 2, [Json("""{"ticket":"1","volume":0.3}""")]),
+            dataOutboxLimitPerStream:3);
+
+        var pending = await _store.GetPendingOutboxAsync(20);
+
+        Assert.HasCount(1, pending);
+        var merged = JsonSerializer.Deserialize<DataDeltaMessage>(
+            pending[0].PayloadJson, BridgeJson.Options);
+        Assert.IsNotNull(merged);
+        Assert.IsTrue(merged.FullSnapshot);
+        Assert.AreEqual(0, merged.BaseRevision);
+        Assert.AreEqual(3, merged.Revision);
+        Assert.HasCount(2, merged.Upserts);
+        Assert.IsTrue(merged.Upserts.Any(item =>
+            item.GetProperty("ticket").GetString() == "1"
+            && item.GetProperty("volume").GetDouble() == 0.3));
+        Assert.IsTrue(merged.Upserts.Any(item =>
+            item.GetProperty("ticket").GetString() == "2"));
+    }
+
+    [TestMethod]
+    public async Task ARequestedFullSnapshotSupersedesOlderUnacknowledgedDeltasOnlyForItsStream()
+    {
+        await _store.PersistDataDeltaAsync(Delta(
+            "positions", 1, 0, [Json("""{"ticket":"1"}""")]));
+        await _store.PersistDataDeltaAsync(Delta(
+            "orders", 1, 0, [Json("""{"ticket":"9"}""")]));
+        await _store.PersistDataDeltaAsync(Delta(
+            "positions", 2, 0, [Json("""{"ticket":"1"}""")]) with
+        {
+            FullSnapshot = true,
+        });
+
+        var pending = await _store.GetPendingOutboxAsync(20);
+        var deltas = pending.Select(message => JsonSerializer.Deserialize<DataDeltaMessage>(
+            message.PayloadJson, BridgeJson.Options)!).ToArray();
+
+        Assert.HasCount(2, deltas);
+        Assert.HasCount(1, deltas.Where(delta => delta.Stream == "positions"));
+        Assert.AreEqual(2, deltas.Single(delta => delta.Stream == "positions").Revision);
+        Assert.HasCount(1, deltas.Where(delta => delta.Stream == "orders"));
+    }
+
+    [TestMethod]
     public async Task KeepsExecutionReceiptsBoundedAndIdempotent()
     {
         for (var index = 1; index <= 5; index++)

@@ -153,8 +153,8 @@ public sealed class Mt5TerminalRuntimeTests
         {
             await replacement.IngestSnapshotAsync(Snapshot("1001"), fullSnapshot: true);
             var outbox = await _testStore.Store.GetPendingOutboxAsync();
-            Assert.HasCount(6, outbox);
-            foreach (var payload in outbox.Skip(3))
+            Assert.HasCount(3, outbox);
+            foreach (var payload in outbox)
             {
                 Assert.AreEqual(2, JsonDocument.Parse(payload.PayloadJson).RootElement
                     .GetProperty("revision").GetInt64());
@@ -187,17 +187,31 @@ public sealed class Mt5TerminalRuntimeTests
         var collection = _runtime.RunCollectionLoopAsync(cancellation.Token);
 
         await _worker.WaitForRequestCountAsync(2).WaitAsync(TimeSpan.FromSeconds(3));
-        while ((await _testStore.Store.GetPendingOutboxAsync()).Count < 4)
+        IReadOnlyList<AurumBridge.Storage.OutboxMessage> pending;
+        while (true)
         {
+            pending = await _testStore.Store.GetPendingOutboxAsync();
+            if (pending.Any(message =>
+            {
+                var delta = JsonDocument.Parse(message.PayloadJson).RootElement;
+                return delta.GetProperty("stream").GetString() == "positions"
+                    && delta.GetProperty("revision").GetInt64() == 2
+                    && delta.GetProperty("full_snapshot").GetBoolean();
+            }))
+            {
+                break;
+            }
             await Task.Delay(10, cancellation.Token);
         }
         cancellation.Cancel();
         await Assert.ThrowsExactlyAsync<TaskCanceledException>(async () => await collection);
 
         var outbox = await _testStore.Store.GetPendingOutboxAsync();
-        Assert.HasCount(4, outbox);
-        var refresh = JsonDocument.Parse(outbox[^1].PayloadJson).RootElement;
+        Assert.HasCount(3, outbox);
+        var refresh = outbox.Select(message => JsonDocument.Parse(message.PayloadJson).RootElement.Clone())
+            .Single(delta => delta.GetProperty("stream").GetString() == "positions");
         Assert.AreEqual("positions", refresh.GetProperty("stream").GetString());
+        Assert.AreEqual(2, refresh.GetProperty("revision").GetInt64());
         Assert.IsTrue(refresh.GetProperty("full_snapshot").GetBoolean());
     }
 

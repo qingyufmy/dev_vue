@@ -45,6 +45,7 @@ public sealed record TerminalBinding(
 public sealed class BridgeStore : IAsyncDisposable
 {
     private const int DefaultReceiptLimit = 2_000;
+    private const int DefaultDataOutboxLimitPerStream = 256;
     private static readonly HashSet<string> SupportedStreams = new(StringComparer.Ordinal)
     {
         "account",
@@ -125,11 +126,13 @@ public sealed class BridgeStore : IAsyncDisposable
 
     public async Task<PersistDeltaResult> PersistDataDeltaAsync(
         DataDeltaMessage message,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int dataOutboxLimitPerStream = DefaultDataOutboxLimitPerStream)
     {
         ArgumentNullException.ThrowIfNull(message);
         ValidateDelta(message);
         EnsureInitialized();
+        dataOutboxLimitPerStream = Math.Clamp(dataOutboxLimitPerStream, 2, 10_000);
 
         await _writer.WaitAsync(cancellationToken);
         try
@@ -168,7 +171,29 @@ public sealed class BridgeStore : IAsyncDisposable
                 await PersistCollectionAsync(connection, transaction, message, cancellationToken);
             }
             await SetCurrentRevisionAsync(connection, transaction, message, payloadHash, cancellationToken);
-            await EnqueueOutboxAsync(connection, transaction, message, payloadJson, cancellationToken);
+            var pendingForStream = await CountPendingDataForStreamAsync(
+                connection, transaction, message, cancellationToken);
+            var outboxMessage = message;
+            if (message.FullSnapshot || pendingForStream >= dataOutboxLimitPerStream - 1)
+            {
+                if (!message.FullSnapshot)
+                {
+                    outboxMessage = message with
+                    {
+                        BaseRevision = 0,
+                        FullSnapshot = true,
+                        Upserts = await ReadLatestStreamAsync(
+                            connection, transaction, message.TerminalInstanceId, message.Stream,
+                            cancellationToken),
+                        Deletes = [],
+                    };
+                }
+                await DeletePendingDataForStreamAsync(
+                    connection, transaction, message, cancellationToken);
+                payloadJson = JsonSerializer.Serialize(outboxMessage, BridgeJson.Options);
+            }
+            await EnqueueOutboxAsync(
+                connection, transaction, outboxMessage, payloadJson, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new(PersistDeltaStatus.Applied, message.Revision, message.Revision + 1);
         }
@@ -693,6 +718,82 @@ public sealed class BridgeStore : IAsyncDisposable
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    private static async Task<int> CountPendingDataForStreamAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        DataDeltaMessage message,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = """
+            SELECT COUNT(*) FROM outbox_messages
+            WHERE acked_at_utc_msc IS NULL
+              AND message_type = 'data_delta'
+              AND terminal_instance_id = $terminal_id
+              AND connection_epoch = $epoch
+              AND json_valid(payload_json) = 1
+              AND json_extract(payload_json, '$.stream') = $stream;
+            """;
+        command.Parameters.AddWithValue("$terminal_id", message.TerminalInstanceId);
+        command.Parameters.AddWithValue("$epoch", message.ConnectionEpoch);
+        command.Parameters.AddWithValue("$stream", message.Stream);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken) ?? 0);
+    }
+
+    private static async Task DeletePendingDataForStreamAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        DataDeltaMessage message,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = """
+            DELETE FROM outbox_messages
+            WHERE acked_at_utc_msc IS NULL
+              AND message_type = 'data_delta'
+              AND terminal_instance_id = $terminal_id
+              AND connection_epoch = $epoch
+              AND json_valid(payload_json) = 1
+              AND json_extract(payload_json, '$.stream') = $stream;
+            """;
+        command.Parameters.AddWithValue("$terminal_id", message.TerminalInstanceId);
+        command.Parameters.AddWithValue("$epoch", message.ConnectionEpoch);
+        command.Parameters.AddWithValue("$stream", message.Stream);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<JsonElement>> ReadLatestStreamAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string terminalInstanceId,
+        string stream,
+        CancellationToken cancellationToken)
+    {
+        var table = stream switch
+        {
+            "account" => "account_latest",
+            "positions" => "positions_latest",
+            "orders" => "orders_latest",
+            _ => throw new InvalidDataException("bridge_data_stream_invalid"),
+        };
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = stream == "account"
+            ? $"SELECT payload_json FROM {table} WHERE terminal_instance_id = $terminal_id;"
+            : $"SELECT payload_json FROM {table} WHERE terminal_instance_id = $terminal_id ORDER BY ticket;";
+        command.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+        var items = new List<JsonElement>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            using var document = JsonDocument.Parse(reader.GetString(0));
+            items.Add(document.RootElement.Clone());
+        }
+        return items;
+    }
+
     private static void AddDeltaParameters(SqliteCommand command, DataDeltaMessage message)
     {
         command.Parameters.AddWithValue("$terminal_id", message.TerminalInstanceId);
@@ -851,6 +952,9 @@ public sealed class BridgeStore : IAsyncDisposable
         );
         CREATE INDEX IF NOT EXISTS idx_outbox_ready
           ON outbox_messages (acked_at_utc_msc, priority, id);
+        CREATE INDEX IF NOT EXISTS idx_outbox_stream_scope
+          ON outbox_messages
+            (terminal_instance_id, connection_epoch, message_type, acked_at_utc_msc);
         CREATE TABLE IF NOT EXISTS execution_receipts (
           command_id TEXT PRIMARY KEY,
           terminal_instance_id TEXT NOT NULL,
