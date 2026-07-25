@@ -70,6 +70,45 @@ public sealed class Mt5TerminalRuntimeTests
     }
 
     [TestMethod]
+    public async Task DealBatchesPersistAsImmutableDeltasAndAdvanceDurableCursor()
+    {
+        var first = DealSnapshot(
+            [new { ticket = 5001, time_msc = 1_799_999_999_800, symbol = "XAUUSD" }],
+            1_799_999_999_900,
+            "0",
+            hasMore:true);
+
+        Assert.AreEqual(1, await _runtime.IngestSnapshotAsync(first, fullSnapshot:true));
+
+        var pending = await _testStore.Store.GetPendingOutboxAsync();
+        var delta = JsonDocument.Parse(pending.Single().PayloadJson).RootElement;
+        Assert.AreEqual("deals", delta.GetProperty("stream").GetString());
+        Assert.IsTrue(delta.GetProperty("full_snapshot").GetBoolean());
+        Assert.AreEqual(0, delta.GetProperty("deletes").GetArrayLength());
+        Assert.AreEqual(5001, delta.GetProperty("upserts")[0].GetProperty("ticket").GetInt32());
+        Assert.AreEqual(
+            new AurumBridge.Storage.HistoryCursor(1_799_999_999_900, "0"),
+            await _testStore.Store.GetHistoryCursorAsync(Terminal().TerminalInstanceId, "deals"));
+
+        var emptyBackfill = DealSnapshot([], 1_800_000_000_000, "0", hasMore:true);
+        Assert.AreEqual(0, await _runtime.IngestSnapshotAsync(emptyBackfill, fullSnapshot:false));
+        Assert.AreEqual(
+            new AurumBridge.Storage.HistoryCursor(1_800_000_000_000, "0"),
+            await _testStore.Store.GetHistoryCursorAsync(Terminal().TerminalInstanceId, "deals"));
+    }
+
+    [TestMethod]
+    public async Task DealCollectorRejectsARegressingCursor()
+    {
+        await _runtime.IngestSnapshotAsync(
+            DealSnapshot([], 1_799_999_999_900, "0", hasMore:true), fullSnapshot:true);
+
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            _runtime.IngestSnapshotAsync(
+                DealSnapshot([], 1_799_999_999_800, "0", hasMore:false), fullSnapshot:false));
+    }
+
+    [TestMethod]
     public async Task ChangedCollectionProducesOnlyOneIncrementalStreamMessage()
     {
         await _runtime.IngestSnapshotAsync(Snapshot("1001"), fullSnapshot: true);
@@ -320,6 +359,26 @@ public sealed class Mt5TerminalRuntimeTests
         };
         return JsonSerializer.SerializeToElement(snapshot);
     }
+
+    private static JsonElement DealSnapshot(
+        IReadOnlyList<object> items,
+        long nextTimeMsc,
+        string nextTicket,
+        bool hasMore) => JsonSerializer.SerializeToElement(new
+        {
+            v = 3,
+            type = "snapshot",
+            source_time_msc = 1_799_999_999_900,
+            streams = new
+            {
+                deals = new
+                {
+                    items,
+                    next_cursor = new { time_msc = nextTimeMsc, ticket = nextTicket },
+                    has_more = hasMore,
+                },
+            },
+        });
 
     private static CommandResultMessage Result(CommandMessage command) => new()
     {

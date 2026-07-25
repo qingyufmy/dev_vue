@@ -136,7 +136,8 @@ public sealed class BridgeStore : IAsyncDisposable
     public async Task<PersistDeltaResult> PersistDataDeltaAsync(
         DataDeltaMessage message,
         CancellationToken cancellationToken = default,
-        int dataOutboxLimitPerStream = DefaultDataOutboxLimitPerStream)
+        int dataOutboxLimitPerStream = DefaultDataOutboxLimitPerStream,
+        HistoryCursor? historyCursor = null)
     {
         ArgumentNullException.ThrowIfNull(message);
         ValidateDelta(message);
@@ -177,7 +178,8 @@ public sealed class BridgeStore : IAsyncDisposable
             }
             else if (message.Stream == "deals")
             {
-                await PersistDealsAsync(connection, transaction, message, cancellationToken);
+                await PersistDealsAsync(
+                    connection, transaction, message, historyCursor, cancellationToken);
             }
             else
             {
@@ -376,19 +378,33 @@ public sealed class BridgeStore : IAsyncDisposable
             """;
         command.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
         command.Parameters.AddWithValue("$stream", stream);
-        var value = Convert.ToString(await command.ExecuteScalarAsync(cancellationToken));
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return HistoryCursor.Empty;
-        }
+        return ParseHistoryCursor(Convert.ToString(await command.ExecuteScalarAsync(cancellationToken)));
+    }
+
+    public async Task AdvanceHistoryCursorAsync(
+        string terminalInstanceId,
+        string stream,
+        HistoryCursor cursor,
+        long updatedAtUtcMsc,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        ArgumentException.ThrowIfNullOrWhiteSpace(terminalInstanceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stream);
+        ValidateHistoryCursor(cursor);
+        await _writer.WaitAsync(cancellationToken);
         try
         {
-            return JsonSerializer.Deserialize<HistoryCursor>(value, BridgeJson.Options)
-                ?? HistoryCursor.Empty;
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            await SetHistoryCursorAsync(
+                connection, transaction, terminalInstanceId, stream, cursor, updatedAtUtcMsc,
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
         }
-        catch (JsonException)
+        finally
         {
-            throw new InvalidDataException("bridge_history_cursor_invalid");
+            _writer.Release();
         }
     }
 
@@ -821,6 +837,7 @@ public sealed class BridgeStore : IAsyncDisposable
         SqliteConnection connection,
         System.Data.Common.DbTransaction transaction,
         DataDeltaMessage message,
+        HistoryCursor? historyCursor,
         CancellationToken cancellationToken)
     {
         if (message.Deletes.Count != 0)
@@ -858,24 +875,91 @@ public sealed class BridgeStore : IAsyncDisposable
             upsert.Parameters.AddWithValue("$payload", item.GetRawText());
             await upsert.ExecuteNonQueryAsync(cancellationToken);
         }
-        if (cursor.TimeMsc <= 0)
+        var nextCursor = historyCursor ?? cursor;
+        if (cursor.TimeMsc > 0 && CompareCursor(nextCursor.TimeMsc, nextCursor.Ticket, cursor) < 0)
+        {
+            throw new InvalidDataException("bridge_history_cursor_before_deals");
+        }
+        if (nextCursor.TimeMsc <= 0)
         {
             return;
         }
-        await using var updateCursor = connection.CreateCommand();
-        updateCursor.Transaction = (SqliteTransaction)transaction;
-        updateCursor.CommandText = """
+        await SetHistoryCursorAsync(
+            connection, transaction, message.TerminalInstanceId, "deals", nextCursor,
+            message.ObservedAtUtcMsc, cancellationToken);
+    }
+
+    private static async Task SetHistoryCursorAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string terminalInstanceId,
+        string stream,
+        HistoryCursor cursor,
+        long updatedAtUtcMsc,
+        CancellationToken cancellationToken)
+    {
+        ValidateHistoryCursor(cursor);
+        await using (var read = connection.CreateCommand())
+        {
+            read.Transaction = (SqliteTransaction)transaction;
+            read.CommandText = """
+                SELECT cursor_value FROM history_cursors
+                WHERE terminal_instance_id = $terminal_id AND stream = $stream
+                LIMIT 1;
+                """;
+            read.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+            read.Parameters.AddWithValue("$stream", stream);
+            var current = ParseHistoryCursor(Convert.ToString(
+                await read.ExecuteScalarAsync(cancellationToken)));
+            if (CompareCursor(cursor.TimeMsc, cursor.Ticket, current) < 0)
+            {
+                throw new InvalidDataException("bridge_history_cursor_regression");
+            }
+        }
+        await using var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText = """
             INSERT INTO history_cursors
               (terminal_instance_id, stream, cursor_value, updated_at_utc_msc)
-            VALUES ($terminal_id, 'deals', $cursor, $updated_at)
+            VALUES ($terminal_id, $stream, $cursor, $updated_at)
             ON CONFLICT(terminal_instance_id, stream) DO UPDATE SET
               cursor_value = excluded.cursor_value,
               updated_at_utc_msc = excluded.updated_at_utc_msc;
             """;
-        updateCursor.Parameters.AddWithValue("$terminal_id", message.TerminalInstanceId);
-        updateCursor.Parameters.AddWithValue("$cursor", JsonSerializer.Serialize(cursor, BridgeJson.Options));
-        updateCursor.Parameters.AddWithValue("$updated_at", message.ObservedAtUtcMsc);
-        await updateCursor.ExecuteNonQueryAsync(cancellationToken);
+        update.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+        update.Parameters.AddWithValue("$stream", stream);
+        update.Parameters.AddWithValue("$cursor", JsonSerializer.Serialize(cursor, BridgeJson.Options));
+        update.Parameters.AddWithValue("$updated_at", updatedAtUtcMsc);
+        await update.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static HistoryCursor ParseHistoryCursor(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return HistoryCursor.Empty;
+        }
+        try
+        {
+            var cursor = JsonSerializer.Deserialize<HistoryCursor>(value, BridgeJson.Options)
+                ?? throw new InvalidDataException("bridge_history_cursor_invalid");
+            ValidateHistoryCursor(cursor);
+            return cursor;
+        }
+        catch (JsonException)
+        {
+            throw new InvalidDataException("bridge_history_cursor_invalid");
+        }
+    }
+
+    private static void ValidateHistoryCursor(HistoryCursor cursor)
+    {
+        ArgumentNullException.ThrowIfNull(cursor);
+        if (cursor.TimeMsc < 0 || string.IsNullOrWhiteSpace(cursor.Ticket) || cursor.Ticket.Length > 64
+            || cursor.Ticket.Any(character => !char.IsAsciiDigit(character)))
+        {
+            throw new InvalidDataException("bridge_history_cursor_invalid");
+        }
     }
 
     private static async Task EnqueueOutboxAsync(

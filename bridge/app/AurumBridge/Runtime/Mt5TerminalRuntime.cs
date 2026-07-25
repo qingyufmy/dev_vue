@@ -7,7 +7,9 @@ namespace AurumBridge.Runtime;
 
 public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
 {
-    private static readonly string[] CollectionStreams = ["account", "positions", "orders"];
+    private const long InitialDealLookbackMsc = 7L * 24 * 60 * 60 * 1_000;
+    private const long DealPollIntervalMsc = 5_000;
+    private static readonly string[] CollectionStreams = ["account", "positions", "orders", "deals"];
     private readonly TerminalDescriptor _terminal;
     private readonly IMt5WorkerClient _worker;
     private readonly BridgeStore _store;
@@ -22,6 +24,8 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _fullSnapshotRequests
         = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _collectionWake = new(0, 1);
+    private HistoryCursor _dealCursor = HistoryCursor.Empty;
+    private bool _dealBackfillPending;
     private bool _initialized;
 
     public Mt5TerminalRuntime(
@@ -48,6 +52,12 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
                 _terminal.ConnectionEpoch,
                 stream,
                 cancellationToken);
+        }
+        _dealCursor = await _store.GetHistoryCursorAsync(
+            _terminal.TerminalInstanceId, "deals", cancellationToken);
+        if (_dealCursor == HistoryCursor.Empty)
+        {
+            _dealCursor = new(Math.Max(1, _clock() - InitialDealLookbackMsc), "0");
         }
         _initialized = true;
         RequestAllFullSnapshots();
@@ -127,6 +137,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
     {
         EnsureInitialized();
         var lastAccountCollection = 0L;
+        var lastDealCollection = 0L;
         while (!cancellationToken.IsCancellationRequested)
         {
             var now = _clock();
@@ -137,12 +148,26 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
                 requestedStreams.Insert(0, "account");
                 lastAccountCollection = now;
             }
+            var collectDeals = fullSnapshotStreams.Contains("deals")
+                || _dealBackfillPending
+                || now - lastDealCollection >= DealPollIntervalMsc;
+            if (collectDeals)
+            {
+                requestedStreams.Add("deals");
+                lastDealCollection = now;
+            }
             var response = await _worker.RequestAsync(new
             {
                 v = 3,
                 type = "collect",
                 request_id = $"collect_{Guid.NewGuid():N}",
                 streams = requestedStreams,
+                deal_cursor = collectDeals ? new
+                {
+                    time_msc = _dealCursor.TimeMsc,
+                    ticket = _dealCursor.Ticket,
+                    limit = 250,
+                } : null,
             }, WorkerRequestPriority.Data, cancellationToken);
             await IngestSnapshotAsync(response, fullSnapshotStreams, cancellationToken);
             var active = _collections["positions"].Count > 0 || _collections["orders"].Count > 0;
@@ -237,6 +262,65 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
             }
             _collections[stream] = current;
         }
+        if (streams.TryGetProperty("deals", out var deals))
+        {
+            persisted += await IngestDealsAsync(
+                deals, fullSnapshotStreams.Contains("deals"), observedAt, sourceTimeMsc,
+                cancellationToken);
+        }
+        return persisted;
+    }
+
+    private async Task<int> IngestDealsAsync(
+        JsonElement payload,
+        bool fullSnapshot,
+        long observedAt,
+        long? sourceTimeMsc,
+        CancellationToken cancellationToken)
+    {
+        if (payload.ValueKind != JsonValueKind.Object
+            || !payload.TryGetProperty("items", out var items)
+            || items.ValueKind != JsonValueKind.Array
+            || items.GetArrayLength() > 250
+            || !payload.TryGetProperty("next_cursor", out var cursor)
+            || cursor.ValueKind != JsonValueKind.Object
+            || !payload.TryGetProperty("has_more", out var hasMore)
+            || hasMore.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new InvalidDataException("mt5_deals_snapshot_invalid");
+        }
+        var nextCursor = ReadHistoryCursor(cursor);
+        if (CompareCursor(nextCursor, _dealCursor) < 0)
+        {
+            throw new InvalidDataException("mt5_deals_cursor_regression");
+        }
+        var values = items.EnumerateArray().Select(item =>
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException("mt5_deals_item_invalid");
+            }
+            return item.Clone();
+        }).ToArray();
+        var persisted = 0;
+        if (fullSnapshot || values.Length > 0)
+        {
+            await PersistAsync(
+                "deals", values, [], fullSnapshot, observedAt, sourceTimeMsc,
+                cancellationToken, nextCursor);
+            persisted = 1;
+        }
+        else if (hasMore.GetBoolean())
+        {
+            await _store.AdvanceHistoryCursorAsync(
+                _terminal.TerminalInstanceId, "deals", nextCursor, observedAt, cancellationToken);
+        }
+        _dealCursor = nextCursor;
+        _dealBackfillPending = hasMore.GetBoolean();
+        if (_dealBackfillPending)
+        {
+            WakeCollection();
+        }
         return persisted;
     }
 
@@ -268,7 +352,8 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         bool fullSnapshot,
         long observedAt,
         long? sourceTimeMsc,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HistoryCursor? historyCursor = null)
     {
         var baseRevision = fullSnapshot ? 0 : _revisions[stream];
         var revision = _revisions[stream] + 1;
@@ -289,7 +374,8 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
             Upserts = upserts,
             Deletes = deletes,
         };
-        var result = await _store.PersistDataDeltaAsync(message, cancellationToken);
+        var result = await _store.PersistDataDeltaAsync(
+            message, cancellationToken, historyCursor: historyCursor);
         if (result.Status is not (PersistDeltaStatus.Applied or PersistDeltaStatus.Duplicate))
         {
             throw new InvalidDataException("mt5_snapshot_revision_gap");
@@ -310,6 +396,38 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
             }
         }
         return null;
+    }
+
+    private static HistoryCursor ReadHistoryCursor(JsonElement cursor)
+    {
+        if (!cursor.TryGetProperty("time_msc", out var time)
+            || time.ValueKind != JsonValueKind.Number
+            || !time.TryGetInt64(out var timeMsc)
+            || timeMsc <= 0
+            || !cursor.TryGetProperty("ticket", out var ticket))
+        {
+            throw new InvalidDataException("mt5_deals_cursor_invalid");
+        }
+        var ticketValue = ticket.ValueKind switch
+        {
+            JsonValueKind.String => ticket.GetString(),
+            JsonValueKind.Number => ticket.GetRawText(),
+            _ => null,
+        };
+        if (string.IsNullOrWhiteSpace(ticketValue) || ticketValue.Length > 64
+            || ticketValue.Any(character => !char.IsAsciiDigit(character)))
+        {
+            throw new InvalidDataException("mt5_deals_cursor_invalid");
+        }
+        return new(timeMsc, ticketValue);
+    }
+
+    private static int CompareCursor(HistoryCursor left, HistoryCursor right)
+    {
+        var timeComparison = left.TimeMsc.CompareTo(right.TimeMsc);
+        return timeComparison != 0
+            ? timeComparison
+            : string.CompareOrdinal(left.Ticket.PadLeft(64, '0'), right.Ticket.PadLeft(64, '0'));
     }
 
     private static string ReadTicket(JsonElement item, string stream)

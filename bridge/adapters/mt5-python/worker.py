@@ -17,6 +17,8 @@ PROTOCOL_VERSION = 3
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 ACCEPTED_RESULT_CACHE = 2_000
 RATE_TIMEFRAMES = {"M1", "M5", "M15", "M30", "H1", "H4", "D1"}
+DEAL_BATCH_LIMIT = 250
+DEAL_WINDOW_MSC = 24 * 60 * 60 * 1000
 
 
 class WorkerError(RuntimeError):
@@ -106,7 +108,8 @@ class Mt5Adapter:
             raise WorkerError("mt5_terminal_disconnected")
         return {"account": _plain(account), "terminal": _plain(terminal)}
 
-    def collect(self, streams: list[str]) -> dict[str, Any]:
+    def collect(self, streams: list[str], deal_cursor: dict[str, Any] | None = None,
+                now_utc_msc: int | None = None) -> dict[str, Any]:
         identity = self._ensure_identity()
         result: dict[str, Any] = {}
         if "account" in streams:
@@ -121,7 +124,59 @@ class Mt5Adapter:
             if orders is None:
                 raise WorkerError("mt5_orders_unavailable", str(self.mt5.last_error()))
             result["orders"] = _plain(orders)
+        if "deals" in streams:
+            result["deals"] = self._collect_deals(
+                deal_cursor or {}, now_utc_msc=now_utc_msc)
         return result
+
+    def _collect_deals(self, cursor: dict[str, Any],
+                       now_utc_msc: int | None = None) -> dict[str, Any]:
+        try:
+            cursor_time = int(cursor.get("time_msc") or cursor.get("from_utc_msc") or 0)
+            cursor_ticket = int(cursor.get("ticket") or 0)
+            limit = int(cursor.get("limit") or DEAL_BATCH_LIMIT)
+        except (TypeError, ValueError) as error:
+            raise WorkerError("mt5_deals_cursor_invalid") from error
+        now_msc = int(now_utc_msc if now_utc_msc is not None else time.time() * 1000)
+        if cursor_time <= 0 or cursor_time > now_msc or cursor_ticket < 0:
+            raise WorkerError("mt5_deals_cursor_invalid")
+        if limit < 1 or limit > DEAL_BATCH_LIMIT:
+            raise WorkerError("mt5_deals_limit_invalid")
+        window_end = min(cursor_time + DEAL_WINDOW_MSC, now_msc)
+        if window_end <= cursor_time:
+            return {"items": [], "next_cursor": {"time_msc": cursor_time,
+                    "ticket": str(cursor_ticket)}, "has_more": False}
+        date_from = datetime.fromtimestamp(max(0, cursor_time - 1_000) / 1000, tz=timezone.utc)
+        date_to = datetime.fromtimestamp((window_end + 999) / 1000, tz=timezone.utc)
+        deals = self.mt5.history_deals_get(date_from, date_to)
+        if deals is None:
+            raise WorkerError("mt5_deals_unavailable", str(self.mt5.last_error()))
+        rows: list[tuple[int, int, dict[str, Any]]] = []
+        for item in deals:
+            raw = _plain(item)
+            if not isinstance(raw, dict):
+                raise WorkerError("mt5_deals_invalid")
+            try:
+                ticket = int(raw.get("ticket") or 0)
+                event_msc = int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000)
+            except (TypeError, ValueError) as error:
+                raise WorkerError("mt5_deals_invalid") from error
+            if ticket <= 0 or event_msc <= 0:
+                raise WorkerError("mt5_deals_invalid")
+            if (event_msc, ticket) > (cursor_time, cursor_ticket) and event_msc <= window_end:
+                rows.append((event_msc, ticket, raw))
+        rows.sort(key=lambda value: (value[0], value[1]))
+        selected = rows[:limit]
+        if len(rows) > limit:
+            next_cursor = {"time_msc": selected[-1][0], "ticket": str(selected[-1][1])}
+            has_more = True
+        else:
+            boundary_ticket = (str(selected[-1][1])
+                               if selected and selected[-1][0] == window_end else "0")
+            next_cursor = {"time_msc": window_end, "ticket": boundary_ticket}
+            has_more = window_end < now_msc
+        return {"items": [value[2] for value in selected],
+                "next_cursor": next_cursor, "has_more": has_more}
 
     def execute(self, command: dict[str, Any]) -> dict[str, Any]:
         command_id = str(command.get("command_id") or "")
@@ -1204,7 +1259,10 @@ def collect_snapshot(request: dict[str, Any], adapter: Mt5Adapter,
             "source_time_msc": captured_at,
             # Retained for rolling compatibility with Bridge Core 3.0.0.
             "observed_at_utc_msc": captured_at,
-            "streams": adapter.collect(list(request.get("streams") or []))}
+            "streams": adapter.collect(
+                list(request.get("streams") or []),
+                request.get("deal_cursor"),
+                now_utc_msc=captured_at)}
 
 
 def run(pipe_name: str, adapter: Mt5Adapter) -> int:

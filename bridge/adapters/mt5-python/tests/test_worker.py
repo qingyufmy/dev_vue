@@ -120,6 +120,48 @@ class WorkerTests(unittest.TestCase):
                     adapter.collect([stream])
                 self.assertEqual(error_code, raised.exception.code)
 
+    def test_collects_deals_in_bounded_cursor_order_without_skipping_same_millisecond(self):
+        adapter = self.adapter()
+        event_ms = 1_800_000_000_000
+        adapter.mt5.history_deals_get = lambda *args: (
+            Deal(103, event_ms + 1, event_ms + 1, 0, 1, 7001, 3.0, 0.0, 0.0, 0.0),
+            Deal(102, event_ms, event_ms, 0, 1, 7001, 2.0, 0.0, 0.0, 0.0),
+            Deal(101, event_ms, event_ms, 0, 1, 7001, 1.0, 0.0, 0.0, 0.0),
+        )
+        first = adapter.collect(
+            ["deals"],
+            {"time_msc": event_ms - 1, "ticket": "0", "limit": 2},
+            now_utc_msc=event_ms + 5_000)["deals"]
+        second = adapter.collect(
+            ["deals"], {**first["next_cursor"], "limit": 2},
+            now_utc_msc=event_ms + 5_000)["deals"]
+
+        self.assertEqual([101, 102], [item["ticket"] for item in first["items"]])
+        self.assertTrue(first["has_more"])
+        self.assertEqual({"time_msc": event_ms, "ticket": "102"}, first["next_cursor"])
+        self.assertEqual([103], [item["ticket"] for item in second["items"]])
+        self.assertFalse(second["has_more"])
+
+    def test_empty_deal_window_advances_scan_cursor_and_query_failure_fails_closed(self):
+        adapter = self.adapter()
+        cursor_time = 1_700_000_000_000
+        adapter.mt5.history_deals_get = lambda *args: ()
+
+        result = adapter.collect(
+            ["deals"], {"time_msc": cursor_time, "ticket": "0"},
+            now_utc_msc=cursor_time + worker.DEAL_WINDOW_MSC * 2)["deals"]
+
+        self.assertEqual([], result["items"])
+        self.assertEqual(cursor_time + worker.DEAL_WINDOW_MSC, result["next_cursor"]["time_msc"])
+        self.assertTrue(result["has_more"])
+
+        adapter.mt5.history_deals_get = lambda *args: None
+        with self.assertRaises(worker.WorkerError) as raised:
+            adapter.collect(
+                ["deals"], result["next_cursor"],
+                now_utc_msc=cursor_time + worker.DEAL_WINDOW_MSC * 2)
+        self.assertEqual("mt5_deals_unavailable", raised.exception.code)
+
     def test_returns_bounded_daily_performance_without_exporting_raw_deals(self):
         adapter = self.adapter()
         event_ms = 1_767_312_000_000  # 2026-01-02T12:00:00Z
