@@ -332,20 +332,6 @@ public sealed class BridgeStore : IAsyncDisposable
                 command.Parameters.AddWithValue("$completed_at", result.CompletedAtUtcMsc);
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
-            await using (var trim = connection.CreateCommand())
-            {
-                trim.Transaction = (SqliteTransaction)transaction;
-                trim.CommandText = """
-                    DELETE FROM execution_receipts
-                    WHERE command_id IN (
-                      SELECT command_id FROM execution_receipts
-                      ORDER BY completed_at_utc_msc DESC, command_id DESC
-                      LIMIT -1 OFFSET $receipt_limit
-                    );
-                    """;
-                trim.Parameters.AddWithValue("$receipt_limit", receiptLimit);
-                await trim.ExecuteNonQueryAsync(cancellationToken);
-            }
             await using (var outbox = connection.CreateCommand())
             {
                 outbox.Transaction = (SqliteTransaction)transaction;
@@ -363,6 +349,29 @@ public sealed class BridgeStore : IAsyncDisposable
                 outbox.Parameters.AddWithValue("$payload", payload);
                 outbox.Parameters.AddWithValue("$created_at", result.SentAtUtcMsc);
                 await outbox.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await using (var trim = connection.CreateCommand())
+            {
+                trim.Transaction = (SqliteTransaction)transaction;
+                trim.CommandText = """
+                    DELETE FROM execution_receipts
+                    WHERE command_id IN (
+                      SELECT command_id
+                      FROM execution_receipts
+                      ORDER BY completed_at_utc_msc DESC, command_id DESC
+                      LIMIT -1 OFFSET $receipt_limit
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM outbox_messages pending
+                      WHERE pending.acked_at_utc_msc IS NULL
+                        AND pending.message_type = 'command_result'
+                        AND json_valid(pending.payload_json) = 1
+                        AND json_extract(pending.payload_json, '$.command_id') = execution_receipts.command_id
+                    );
+                    """;
+                trim.Parameters.AddWithValue("$receipt_limit", receiptLimit);
+                await trim.ExecuteNonQueryAsync(cancellationToken);
             }
             await transaction.CommitAsync(cancellationToken);
         }

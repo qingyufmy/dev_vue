@@ -183,11 +183,40 @@ public sealed class BridgeStoreTests
     {
         for (var index = 1; index <= 5; index++)
         {
-            await _store.SaveExecutionReceiptAsync(Result($"command_{index:00000000}", index), receiptLimit: 3);
+            var result = Result($"command_{index:00000000}", index);
+            await _store.SaveExecutionReceiptAsync(result, receiptLimit: 3);
+            Assert.IsTrue(await _store.AcknowledgeOutboxAsync(
+                result.MessageId, "applied", result.CompletedAtUtcMsc + 1));
         }
         await _store.SaveExecutionReceiptAsync(Result("command_00000005", 5), receiptLimit: 3);
 
         Assert.AreEqual(3, await _store.CountExecutionReceiptsAsync());
+    }
+
+    [TestMethod]
+    public async Task NeverTrimsAnExecutionReceiptWhoseTradeResultIsUnacknowledged()
+    {
+        var first = Result("command_00000001", 1);
+        var second = Result("command_00000002", 2);
+        var third = Result("command_00000003", 3);
+        await _store.SaveExecutionReceiptAsync(first, receiptLimit: 2);
+        await _store.SaveExecutionReceiptAsync(second, receiptLimit: 2);
+        await _store.SaveExecutionReceiptAsync(third, receiptLimit: 2);
+
+        Assert.AreEqual(3, await _store.CountExecutionReceiptsAsync());
+        Assert.IsNotNull(await _store.GetExecutionReceiptAsync(first.CommandId));
+        Assert.IsNotNull(await _store.GetExecutionReceiptAsync(second.CommandId));
+        Assert.IsNotNull(await _store.GetExecutionReceiptAsync(third.CommandId));
+
+        Assert.IsTrue(await _store.AcknowledgeOutboxAsync(
+            first.MessageId, "applied", first.CompletedAtUtcMsc + 1));
+        var fourth = Result("command_00000004", 4);
+        await _store.SaveExecutionReceiptAsync(fourth, receiptLimit: 2);
+
+        Assert.IsNull(await _store.GetExecutionReceiptAsync(first.CommandId));
+        Assert.IsNotNull(await _store.GetExecutionReceiptAsync(second.CommandId));
+        Assert.IsNotNull(await _store.GetExecutionReceiptAsync(third.CommandId));
+        Assert.IsNotNull(await _store.GetExecutionReceiptAsync(fourth.CommandId));
     }
 
     [TestMethod]
