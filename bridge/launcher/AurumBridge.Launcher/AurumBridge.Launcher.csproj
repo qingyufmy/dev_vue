@@ -8,6 +8,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>AURUMBridge.Launcher</AssemblyName>
     <RootNamespace>AurumBridge.Launcher</RootNamespace>
+    <ApplicationIcon>..\..\assets\liangjian-bridge.ico</ApplicationIcon>
     <AssemblyTitle>量见智桥启动器</AssemblyTitle>
     <Product>量见智桥</Product>
     <Description>量见智桥启动与自动恢复程序</Description>

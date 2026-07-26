@@ -42,6 +42,7 @@ public sealed class BridgeMainForm : Form
         Text = isDefaultProfile
             ? BridgeBrand.ProductName
             : $"{BridgeBrand.ProductName} · 观摩源 {validatedProfileId}";
+        Icon = BridgeBrandIcon.ApplicationIcon;
         AccessibleName = $"{BridgeBrand.ProductName}状态窗口";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new(560, 470);

@@ -88,7 +88,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         menu.Items.Add("退出桥接", null, HandleExitRequested);
         _notifyIcon = new()
         {
-            Icon = SystemIcons.Shield,
+            Icon = BridgeBrandIcon.ApplicationIcon,
             Text = BridgeBrand.ProductName,
             ContextMenuStrip = menu,
             Visible = true,

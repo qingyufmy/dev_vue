@@ -14,6 +14,7 @@ public sealed class BridgeLogViewerForm : Form
     {
         _reader = new(logDirectory);
         Text = $"{BridgeBrand.ProductName}日志";
+        Icon = BridgeBrandIcon.ApplicationIcon;
         AccessibleName = $"{BridgeBrand.ProductName}日志窗口";
         StartPosition = FormStartPosition.CenterParent;
         MinimumSize = new(640, 420);

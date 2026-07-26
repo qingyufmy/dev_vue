@@ -13,6 +13,7 @@ public sealed class BridgeObserverProfileDialog : Form
     {
         var editingExisting = !string.IsNullOrWhiteSpace(existingProfileId);
         Text = editingExisting ? "设置观摩源 MT5" : "新增观摩源";
+        Icon = BridgeBrandIcon.ApplicationIcon;
         StartPosition = FormStartPosition.CenterParent;
         ClientSize = new(520, 290);
         MinimumSize = new(520, 290);
