@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AurumBridge.Protocol;
 using AurumBridge.Storage;
+using Microsoft.Data.Sqlite;
 
 namespace AurumBridge.Tests;
 
@@ -170,18 +171,22 @@ public sealed class BridgeStoreTests
 
         var pending = await _store.GetPendingOutboxAsync(20);
         var merged = JsonSerializer.Deserialize<DataDeltaMessage>(pending.Single().PayloadJson, BridgeJson.Options);
-        var cursor = await _store.GetHistoryCursorAsync("terminal_01JSTORE0001", "deals");
+        var cursor = await _store.GetHistoryCursorAsync(
+            "terminal_01JSTORE0001", new("Broker-Demo", "12345678"), "deals");
 
         Assert.IsNotNull(merged);
         Assert.IsTrue(merged.FullSnapshot);
         Assert.HasCount(3, merged.Upserts);
         Assert.AreEqual(3_000, cursor.TimeMsc);
         Assert.AreEqual("103", cursor.Ticket);
-        Assert.AreEqual(3, await _store.CountPendingDealsAsync("terminal_01JSTORE0001"));
+        Assert.AreEqual(3, await _store.CountPendingDealsAsync(
+            "terminal_01JSTORE0001", new("Broker-Demo", "12345678")));
 
         Assert.IsTrue(await _store.AcknowledgeOutboxAsync(latest.MessageId, "applied", 4_000));
-        Assert.AreEqual(0, await _store.CountPendingDealsAsync("terminal_01JSTORE0001"));
-        Assert.AreEqual(cursor, await _store.GetHistoryCursorAsync("terminal_01JSTORE0001", "deals"));
+        Assert.AreEqual(0, await _store.CountPendingDealsAsync(
+            "terminal_01JSTORE0001", new("Broker-Demo", "12345678")));
+        Assert.AreEqual(cursor, await _store.GetHistoryCursorAsync(
+            "terminal_01JSTORE0001", new("Broker-Demo", "12345678"), "deals"));
     }
 
     [TestMethod]
@@ -340,6 +345,113 @@ public sealed class BridgeStoreTests
         var current = await _store.GetPendingOutboxAsync();
         Assert.HasCount(2, current);
         CollectionAssert.Contains(current.Select(message => message.MessageId).ToArray(), "msg_target_epoch_2");
+    }
+
+    [TestMethod]
+    public async Task KeepsDealHistoryIsolatedWhenOneTerminalSwitchesAccounts()
+    {
+        const string terminalId = "mt5_terminal_shared";
+        var terminalPath = Path.Combine(_directory, "Shared MT5", "terminal64.exe");
+        var accountA = new AccountRef("Broker-Demo", "10001");
+        var accountB = new AccountRef("Broker-Demo", "20002");
+        var first = await _store.ActivateTerminalBindingAsync(
+            terminalId, "mt5", terminalPath, accountA, 10);
+        await _store.PersistDataDeltaAsync(Delta(
+            "deals", 1, 0, [Json("""{"ticket":"101","time_msc":1000}""")]) with
+        {
+            MessageId = "msg_account_a_deal",
+            TerminalInstanceId = terminalId,
+            AccountRef = accountA,
+            ConnectionEpoch = first.ConnectionEpoch,
+        });
+
+        var second = await _store.ActivateTerminalBindingAsync(
+            terminalId, "mt5", terminalPath, accountB, 20);
+
+        Assert.AreEqual(HistoryCursor.Empty,
+            await _store.GetHistoryCursorAsync(terminalId, accountB, "deals"));
+        Assert.AreEqual(0, await _store.CountPendingDealsAsync(terminalId, accountB));
+
+        await _store.PersistDataDeltaAsync(Delta(
+            "deals", 1, 0, [Json("""{"ticket":"101","time_msc":2000}""")]) with
+        {
+            MessageId = "msg_account_b_deal",
+            TerminalInstanceId = terminalId,
+            AccountRef = accountB,
+            ConnectionEpoch = second.ConnectionEpoch,
+        });
+
+        Assert.AreEqual(new HistoryCursor(1_000, "101"),
+            await _store.GetHistoryCursorAsync(terminalId, accountA, "deals"));
+        Assert.AreEqual(new HistoryCursor(2_000, "101"),
+            await _store.GetHistoryCursorAsync(terminalId, accountB, "deals"));
+        Assert.AreEqual(1, await _store.CountPendingDealsAsync(terminalId, accountA));
+        Assert.AreEqual(1, await _store.CountPendingDealsAsync(terminalId, accountB));
+    }
+
+    [TestMethod]
+    public async Task MigratesLegacyDealHistoryIntoTheBoundAccountScope()
+    {
+        var databasePath = Path.Combine(_directory, "legacy.db");
+        const string terminalId = "mt5_terminal_legacy";
+        var account = new AccountRef("Legacy-Broker", "7654321");
+        await using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE terminal_bindings (
+                  terminal_instance_id TEXT PRIMARY KEY,
+                  platform TEXT NOT NULL,
+                  terminal_path TEXT NOT NULL,
+                  broker_server TEXT NOT NULL,
+                  login_account TEXT NOT NULL,
+                  connection_epoch INTEGER NOT NULL,
+                  updated_at_utc_msc INTEGER NOT NULL
+                );
+                CREATE TABLE deals_pending (
+                  terminal_instance_id TEXT NOT NULL,
+                  ticket TEXT NOT NULL,
+                  connection_epoch INTEGER NOT NULL,
+                  revision INTEGER NOT NULL,
+                  deal_time_msc INTEGER NOT NULL,
+                  observed_at_utc_msc INTEGER NOT NULL,
+                  source_time_msc INTEGER,
+                  payload_json TEXT NOT NULL,
+                  PRIMARY KEY (terminal_instance_id, ticket)
+                );
+                CREATE TABLE history_cursors (
+                  terminal_instance_id TEXT NOT NULL,
+                  stream TEXT NOT NULL,
+                  cursor_value TEXT NOT NULL,
+                  updated_at_utc_msc INTEGER NOT NULL,
+                  PRIMARY KEY (terminal_instance_id, stream)
+                );
+                INSERT INTO terminal_bindings VALUES
+                  ($terminal_id, 'mt5', $terminal_path, $broker_server, $login, 4, 1000);
+                INSERT INTO deals_pending VALUES
+                  ($terminal_id, '9001', 4, 12, 12345, 12346, 12345, $payload);
+                INSERT INTO history_cursors VALUES
+                  ($terminal_id, 'deals', $cursor, 12346);
+                """;
+            command.Parameters.AddWithValue("$terminal_id", terminalId);
+            command.Parameters.AddWithValue("$terminal_path", Path.Combine(_directory, "Legacy", "terminal64.exe"));
+            command.Parameters.AddWithValue("$broker_server", account.BrokerServer);
+            command.Parameters.AddWithValue("$login", account.Login);
+            command.Parameters.AddWithValue("$payload", "{\"ticket\":\"9001\",\"time_msc\":12345}");
+            command.Parameters.AddWithValue("$cursor", "{\"time_msc\":12345,\"ticket\":\"9001\"}");
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await using var migrated = new BridgeStore(databasePath);
+        await migrated.InitializeAsync();
+        await migrated.InitializeAsync();
+
+        Assert.AreEqual(new HistoryCursor(12_345, "9001"),
+            await migrated.GetHistoryCursorAsync(terminalId, account, "deals"));
+        Assert.AreEqual(1, await migrated.CountPendingDealsAsync(terminalId, account));
+        Assert.AreEqual(0, await migrated.CountPendingDealsAsync(
+            terminalId, new AccountRef(account.BrokerServer, "other-account")));
     }
 
     [TestMethod]

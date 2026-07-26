@@ -66,7 +66,7 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             _revisions["deals"] = await _store.GetStreamRevisionAsync(
                 _terminal.TerminalInstanceId, _terminal.ConnectionEpoch, "deals", cancellationToken);
             _dealCursor = await _store.GetHistoryCursorAsync(
-                _terminal.TerminalInstanceId, "deals", cancellationToken);
+                _terminal.TerminalInstanceId, _terminal.AccountRef, "deals", cancellationToken);
             if (_dealCursor == HistoryCursor.Empty)
             {
                 _dealCursor = new(Math.Max(1, _clock() - InitialDealLookbackMsc), "0");
@@ -373,7 +373,8 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         else if (batch.HasMore)
         {
             await _store.AdvanceHistoryCursorAsync(
-                _terminal.TerminalInstanceId, "deals", nextCursor, observedAt, cancellationToken);
+                _terminal.TerminalInstanceId, _terminal.AccountRef, "deals", nextCursor,
+                observedAt, cancellationToken);
         }
         _dealCursor = nextCursor;
         _dealBackfillPending = batch.HasMore;

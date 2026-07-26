@@ -95,6 +95,7 @@ public sealed class BridgeStore : IAsyncDisposable
             await using var command = connection.CreateCommand();
             command.CommandText = SchemaSql;
             await command.ExecuteNonQueryAsync(cancellationToken);
+            await MigrateAccountScopedHistoryAsync(connection, cancellationToken);
             _initialized = true;
         }
         finally
@@ -198,7 +199,8 @@ public sealed class BridgeStore : IAsyncDisposable
                         BaseRevision = 0,
                         FullSnapshot = true,
                         Upserts = await ReadLatestStreamAsync(
-                            connection, transaction, message.TerminalInstanceId, message.Stream,
+                            connection, transaction, message.TerminalInstanceId, message.AccountRef,
+                            message.Stream,
                             cancellationToken),
                         Deletes = [],
                     };
@@ -345,9 +347,14 @@ public sealed class BridgeStore : IAsyncDisposable
                     prune.Transaction = (SqliteTransaction)transaction;
                     prune.CommandText = """
                         DELETE FROM deals_pending
-                        WHERE terminal_instance_id = $terminal_id AND ticket = $ticket;
+                        WHERE terminal_instance_id = $terminal_id
+                          AND broker_server = $broker_server COLLATE NOCASE
+                          AND login_account = $login
+                          AND ticket = $ticket;
                         """;
                     prune.Parameters.AddWithValue("$terminal_id", acknowledgedDelta.TerminalInstanceId);
+                    prune.Parameters.AddWithValue("$broker_server", acknowledgedDelta.AccountRef.BrokerServer);
+                    prune.Parameters.AddWithValue("$login", acknowledgedDelta.AccountRef.Login);
                     prune.Parameters.AddWithValue("$ticket", ReadTicket(item, "deals"));
                     await prune.ExecuteNonQueryAsync(cancellationToken);
                 }
@@ -363,26 +370,34 @@ public sealed class BridgeStore : IAsyncDisposable
 
     public async Task<HistoryCursor> GetHistoryCursorAsync(
         string terminalInstanceId,
+        AccountRef accountRef,
         string stream,
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
         ArgumentException.ThrowIfNullOrWhiteSpace(terminalInstanceId);
+        ArgumentNullException.ThrowIfNull(accountRef);
         ArgumentException.ThrowIfNullOrWhiteSpace(stream);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT cursor_value FROM history_cursors
-            WHERE terminal_instance_id = $terminal_id AND stream = $stream
+            WHERE terminal_instance_id = $terminal_id
+              AND broker_server = $broker_server COLLATE NOCASE
+              AND login_account = $login
+              AND stream = $stream
             LIMIT 1;
             """;
         command.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+        command.Parameters.AddWithValue("$broker_server", accountRef.BrokerServer);
+        command.Parameters.AddWithValue("$login", accountRef.Login);
         command.Parameters.AddWithValue("$stream", stream);
         return ParseHistoryCursor(Convert.ToString(await command.ExecuteScalarAsync(cancellationToken)));
     }
 
     public async Task AdvanceHistoryCursorAsync(
         string terminalInstanceId,
+        AccountRef accountRef,
         string stream,
         HistoryCursor cursor,
         long updatedAtUtcMsc,
@@ -390,6 +405,7 @@ public sealed class BridgeStore : IAsyncDisposable
     {
         EnsureInitialized();
         ArgumentException.ThrowIfNullOrWhiteSpace(terminalInstanceId);
+        ArgumentNullException.ThrowIfNull(accountRef);
         ArgumentException.ThrowIfNullOrWhiteSpace(stream);
         ValidateHistoryCursor(cursor);
         await _writer.WaitAsync(cancellationToken);
@@ -398,7 +414,7 @@ public sealed class BridgeStore : IAsyncDisposable
             await using var connection = await OpenConnectionAsync(cancellationToken);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
             await SetHistoryCursorAsync(
-                connection, transaction, terminalInstanceId, stream, cursor, updatedAtUtcMsc,
+                connection, transaction, terminalInstanceId, accountRef, stream, cursor, updatedAtUtcMsc,
                 cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
@@ -410,17 +426,23 @@ public sealed class BridgeStore : IAsyncDisposable
 
     public async Task<int> CountPendingDealsAsync(
         string terminalInstanceId,
+        AccountRef accountRef,
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
         ArgumentException.ThrowIfNullOrWhiteSpace(terminalInstanceId);
+        ArgumentNullException.ThrowIfNull(accountRef);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT COUNT(*) FROM deals_pending
-            WHERE terminal_instance_id = $terminal_id;
+            WHERE terminal_instance_id = $terminal_id
+              AND broker_server = $broker_server COLLATE NOCASE
+              AND login_account = $login;
             """;
         command.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+        command.Parameters.AddWithValue("$broker_server", accountRef.BrokerServer);
+        command.Parameters.AddWithValue("$login", accountRef.Login);
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken) ?? 0);
     }
 
@@ -857,11 +879,13 @@ public sealed class BridgeStore : IAsyncDisposable
             upsert.Transaction = (SqliteTransaction)transaction;
             upsert.CommandText = """
                 INSERT INTO deals_pending
-                  (terminal_instance_id, ticket, connection_epoch, revision, deal_time_msc,
+                  (terminal_instance_id, broker_server, login_account, ticket,
+                   connection_epoch, revision, deal_time_msc,
                    observed_at_utc_msc, source_time_msc, payload_json)
-                VALUES ($terminal_id, $ticket, $epoch, $revision, $deal_time,
+                VALUES ($terminal_id, $broker_server, $login, $ticket,
+                        $epoch, $revision, $deal_time,
                         $observed_at, $source_time, $payload)
-                ON CONFLICT(terminal_instance_id, ticket) DO UPDATE SET
+                ON CONFLICT(terminal_instance_id, broker_server, login_account, ticket) DO UPDATE SET
                   connection_epoch = excluded.connection_epoch,
                   revision = excluded.revision,
                   deal_time_msc = excluded.deal_time_msc,
@@ -870,6 +894,8 @@ public sealed class BridgeStore : IAsyncDisposable
                   payload_json = excluded.payload_json;
                 """;
             AddDeltaParameters(upsert, message);
+            upsert.Parameters.AddWithValue("$broker_server", message.AccountRef.BrokerServer);
+            upsert.Parameters.AddWithValue("$login", message.AccountRef.Login);
             upsert.Parameters.AddWithValue("$ticket", ticket);
             upsert.Parameters.AddWithValue("$deal_time", timeMsc);
             upsert.Parameters.AddWithValue("$payload", item.GetRawText());
@@ -885,7 +911,7 @@ public sealed class BridgeStore : IAsyncDisposable
             return;
         }
         await SetHistoryCursorAsync(
-            connection, transaction, message.TerminalInstanceId, "deals", nextCursor,
+            connection, transaction, message.TerminalInstanceId, message.AccountRef, "deals", nextCursor,
             message.ObservedAtUtcMsc, cancellationToken);
     }
 
@@ -893,6 +919,7 @@ public sealed class BridgeStore : IAsyncDisposable
         SqliteConnection connection,
         System.Data.Common.DbTransaction transaction,
         string terminalInstanceId,
+        AccountRef accountRef,
         string stream,
         HistoryCursor cursor,
         long updatedAtUtcMsc,
@@ -904,10 +931,15 @@ public sealed class BridgeStore : IAsyncDisposable
             read.Transaction = (SqliteTransaction)transaction;
             read.CommandText = """
                 SELECT cursor_value FROM history_cursors
-                WHERE terminal_instance_id = $terminal_id AND stream = $stream
+                WHERE terminal_instance_id = $terminal_id
+                  AND broker_server = $broker_server COLLATE NOCASE
+                  AND login_account = $login
+                  AND stream = $stream
                 LIMIT 1;
                 """;
             read.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+            read.Parameters.AddWithValue("$broker_server", accountRef.BrokerServer);
+            read.Parameters.AddWithValue("$login", accountRef.Login);
             read.Parameters.AddWithValue("$stream", stream);
             var current = ParseHistoryCursor(Convert.ToString(
                 await read.ExecuteScalarAsync(cancellationToken)));
@@ -920,13 +952,15 @@ public sealed class BridgeStore : IAsyncDisposable
         update.Transaction = (SqliteTransaction)transaction;
         update.CommandText = """
             INSERT INTO history_cursors
-              (terminal_instance_id, stream, cursor_value, updated_at_utc_msc)
-            VALUES ($terminal_id, $stream, $cursor, $updated_at)
-            ON CONFLICT(terminal_instance_id, stream) DO UPDATE SET
+              (terminal_instance_id, broker_server, login_account, stream, cursor_value, updated_at_utc_msc)
+            VALUES ($terminal_id, $broker_server, $login, $stream, $cursor, $updated_at)
+            ON CONFLICT(terminal_instance_id, broker_server, login_account, stream) DO UPDATE SET
               cursor_value = excluded.cursor_value,
               updated_at_utc_msc = excluded.updated_at_utc_msc;
             """;
         update.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+        update.Parameters.AddWithValue("$broker_server", accountRef.BrokerServer);
+        update.Parameters.AddWithValue("$login", accountRef.Login);
         update.Parameters.AddWithValue("$stream", stream);
         update.Parameters.AddWithValue("$cursor", JsonSerializer.Serialize(cursor, BridgeJson.Options));
         update.Parameters.AddWithValue("$updated_at", updatedAtUtcMsc);
@@ -960,6 +994,109 @@ public sealed class BridgeStore : IAsyncDisposable
         {
             throw new InvalidDataException("bridge_history_cursor_invalid");
         }
+    }
+
+    private static async Task MigrateAccountScopedHistoryAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var dealsAreScoped = await TableHasColumnAsync(
+            connection, "deals_pending", "broker_server", cancellationToken);
+        var cursorsAreScoped = await TableHasColumnAsync(
+            connection, "history_cursors", "broker_server", cancellationToken);
+        if (!dealsAreScoped || !cursorsAreScoped)
+        {
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            if (!dealsAreScoped)
+            {
+                await using var migrateDeals = connection.CreateCommand();
+                migrateDeals.Transaction = (SqliteTransaction)transaction;
+                migrateDeals.CommandText = """
+                ALTER TABLE deals_pending RENAME TO deals_pending_legacy;
+                CREATE TABLE deals_pending (
+                  terminal_instance_id TEXT NOT NULL,
+                  broker_server TEXT COLLATE NOCASE NOT NULL,
+                  login_account TEXT NOT NULL,
+                  ticket TEXT NOT NULL,
+                  connection_epoch INTEGER NOT NULL,
+                  revision INTEGER NOT NULL,
+                  deal_time_msc INTEGER NOT NULL,
+                  observed_at_utc_msc INTEGER NOT NULL,
+                  source_time_msc INTEGER,
+                  payload_json TEXT NOT NULL,
+                  PRIMARY KEY (terminal_instance_id, broker_server, login_account, ticket)
+                );
+                INSERT INTO deals_pending
+                  (terminal_instance_id, broker_server, login_account, ticket,
+                   connection_epoch, revision, deal_time_msc, observed_at_utc_msc,
+                   source_time_msc, payload_json)
+                SELECT legacy.terminal_instance_id, binding.broker_server, binding.login_account,
+                       legacy.ticket, legacy.connection_epoch, legacy.revision,
+                       legacy.deal_time_msc, legacy.observed_at_utc_msc,
+                       legacy.source_time_msc, legacy.payload_json
+                FROM deals_pending_legacy AS legacy
+                INNER JOIN terminal_bindings AS binding
+                  ON binding.terminal_instance_id = legacy.terminal_instance_id;
+                DROP TABLE deals_pending_legacy;
+                """;
+                await migrateDeals.ExecuteNonQueryAsync(cancellationToken);
+            }
+            if (!cursorsAreScoped)
+            {
+                await using var migrateCursors = connection.CreateCommand();
+                migrateCursors.Transaction = (SqliteTransaction)transaction;
+                migrateCursors.CommandText = """
+                ALTER TABLE history_cursors RENAME TO history_cursors_legacy;
+                CREATE TABLE history_cursors (
+                  terminal_instance_id TEXT NOT NULL,
+                  broker_server TEXT COLLATE NOCASE NOT NULL,
+                  login_account TEXT NOT NULL,
+                  stream TEXT NOT NULL,
+                  cursor_value TEXT NOT NULL,
+                  updated_at_utc_msc INTEGER NOT NULL,
+                  PRIMARY KEY (terminal_instance_id, broker_server, login_account, stream)
+                );
+                INSERT INTO history_cursors
+                  (terminal_instance_id, broker_server, login_account, stream,
+                   cursor_value, updated_at_utc_msc)
+                SELECT legacy.terminal_instance_id, binding.broker_server, binding.login_account,
+                       legacy.stream, legacy.cursor_value, legacy.updated_at_utc_msc
+                FROM history_cursors_legacy AS legacy
+                INNER JOIN terminal_bindings AS binding
+                  ON binding.terminal_instance_id = legacy.terminal_instance_id;
+                DROP TABLE history_cursors_legacy;
+                """;
+                await migrateCursors.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        await using var ensureIndex = connection.CreateCommand();
+        ensureIndex.CommandText = """
+            CREATE INDEX IF NOT EXISTS idx_deals_pending_cursor
+              ON deals_pending
+                (terminal_instance_id, broker_server, login_account, deal_time_msc, ticket);
+            """;
+        await ensureIndex.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<bool> TableHasColumnAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName});";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static async Task EnqueueOutboxAsync(
@@ -1035,6 +1172,7 @@ public sealed class BridgeStore : IAsyncDisposable
         SqliteConnection connection,
         System.Data.Common.DbTransaction transaction,
         string terminalInstanceId,
+        AccountRef accountRef,
         string stream,
         CancellationToken cancellationToken)
     {
@@ -1051,9 +1189,14 @@ public sealed class BridgeStore : IAsyncDisposable
         command.CommandText = stream == "account"
             ? $"SELECT payload_json FROM {table} WHERE terminal_instance_id = $terminal_id;"
             : stream == "deals"
-                ? $"SELECT payload_json FROM {table} WHERE terminal_instance_id = $terminal_id ORDER BY deal_time_msc, ticket;"
+                ? $"SELECT payload_json FROM {table} WHERE terminal_instance_id = $terminal_id AND broker_server = $broker_server COLLATE NOCASE AND login_account = $login ORDER BY deal_time_msc, ticket;"
                 : $"SELECT payload_json FROM {table} WHERE terminal_instance_id = $terminal_id ORDER BY ticket;";
         command.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+        if (stream == "deals")
+        {
+            command.Parameters.AddWithValue("$broker_server", accountRef.BrokerServer);
+            command.Parameters.AddWithValue("$login", accountRef.Login);
+        }
         var items = new List<JsonElement>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
@@ -1240,6 +1383,8 @@ public sealed class BridgeStore : IAsyncDisposable
         );
         CREATE TABLE IF NOT EXISTS deals_pending (
           terminal_instance_id TEXT NOT NULL,
+          broker_server TEXT COLLATE NOCASE NOT NULL,
+          login_account TEXT NOT NULL,
           ticket TEXT NOT NULL,
           connection_epoch INTEGER NOT NULL,
           revision INTEGER NOT NULL,
@@ -1247,16 +1392,16 @@ public sealed class BridgeStore : IAsyncDisposable
           observed_at_utc_msc INTEGER NOT NULL,
           source_time_msc INTEGER,
           payload_json TEXT NOT NULL,
-          PRIMARY KEY (terminal_instance_id, ticket)
+          PRIMARY KEY (terminal_instance_id, broker_server, login_account, ticket)
         );
-        CREATE INDEX IF NOT EXISTS idx_deals_pending_cursor
-          ON deals_pending (terminal_instance_id, deal_time_msc, ticket);
         CREATE TABLE IF NOT EXISTS history_cursors (
           terminal_instance_id TEXT NOT NULL,
+          broker_server TEXT COLLATE NOCASE NOT NULL,
+          login_account TEXT NOT NULL,
           stream TEXT NOT NULL,
           cursor_value TEXT NOT NULL,
           updated_at_utc_msc INTEGER NOT NULL,
-          PRIMARY KEY (terminal_instance_id, stream)
+          PRIMARY KEY (terminal_instance_id, broker_server, login_account, stream)
         );
         CREATE TABLE IF NOT EXISTS outbox_messages (
           id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -109,13 +109,15 @@ public sealed class Mt5TerminalRuntimeTests
         Assert.AreEqual(5001, delta.GetProperty("upserts")[0].GetProperty("ticket").GetInt32());
         Assert.AreEqual(
             new AurumBridge.Storage.HistoryCursor(1_799_999_999_900, "0"),
-            await _testStore.Store.GetHistoryCursorAsync(Terminal().TerminalInstanceId, "deals"));
+            await _testStore.Store.GetHistoryCursorAsync(
+                Terminal().TerminalInstanceId, Terminal().AccountRef, "deals"));
 
         var emptyBackfill = DealSnapshot([], 1_800_000_000_000, "0", hasMore:true);
         Assert.AreEqual(0, await _runtime.IngestSnapshotAsync(emptyBackfill, fullSnapshot:false));
         Assert.AreEqual(
             new AurumBridge.Storage.HistoryCursor(1_800_000_000_000, "0"),
-            await _testStore.Store.GetHistoryCursorAsync(Terminal().TerminalInstanceId, "deals"));
+            await _testStore.Store.GetHistoryCursorAsync(
+                Terminal().TerminalInstanceId, Terminal().AccountRef, "deals"));
     }
 
     [TestMethod]

@@ -59,7 +59,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
                 cancellationToken);
         }
         _dealCursor = await _store.GetHistoryCursorAsync(
-            _terminal.TerminalInstanceId, "deals", cancellationToken);
+            _terminal.TerminalInstanceId, _terminal.AccountRef, "deals", cancellationToken);
         if (_dealCursor == HistoryCursor.Empty)
         {
             _dealCursor = new(Math.Max(1, _clock() - InitialDealLookbackMsc), "0");
@@ -321,7 +321,8 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         else if (hasMore.GetBoolean())
         {
             await _store.AdvanceHistoryCursorAsync(
-                _terminal.TerminalInstanceId, "deals", nextCursor, observedAt, cancellationToken);
+                _terminal.TerminalInstanceId, _terminal.AccountRef, "deals", nextCursor,
+                observedAt, cancellationToken);
         }
         _dealCursor = nextCursor;
         _dealBackfillPending = hasMore.GetBoolean();

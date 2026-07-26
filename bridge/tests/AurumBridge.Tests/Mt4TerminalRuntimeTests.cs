@@ -289,7 +289,8 @@ public sealed class Mt4TerminalRuntimeTests
         Assert.AreEqual(1, persisted);
         Assert.AreEqual(
             new AurumBridge.Storage.HistoryCursor(1_800_000_000_000, "102"),
-            await testStore.Store.GetHistoryCursorAsync(Terminal().TerminalInstanceId, "deals"));
+            await testStore.Store.GetHistoryCursorAsync(
+                Terminal().TerminalInstanceId, Terminal().AccountRef, "deals"));
         var outbox = await testStore.Store.GetPendingOutboxAsync();
         var delta = JsonDocument.Parse(outbox.Single().PayloadJson).RootElement;
         Assert.AreEqual("deals", delta.GetProperty("stream").GetString());
