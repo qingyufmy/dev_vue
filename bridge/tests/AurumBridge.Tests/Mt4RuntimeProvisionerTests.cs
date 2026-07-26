@@ -49,4 +49,27 @@ public sealed class Mt4RuntimeProvisionerTests
         Assert.HasCount(1, result.Failures);
         Assert.AreEqual("mt4_terminal_data_path_not_found", result.Failures[0].ErrorCode);
     }
+
+    [TestMethod]
+    public async Task SelectedMt4TerminalDoesNotRestoreAnotherTerminalBinding()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var selectedPath = Path.Combine(testStore.DataDirectory, "Selected MT4");
+        var otherPath = Path.Combine(testStore.DataDirectory, "Other MT4");
+        Directory.CreateDirectory(selectedPath);
+        Directory.CreateDirectory(otherPath);
+        var selectedId = Workers.Mt4TerminalIdentity.CreateTerminalInstanceId(selectedPath);
+        var otherId = Workers.Mt4TerminalIdentity.CreateTerminalInstanceId(otherPath);
+        await testStore.Store.ActivateTerminalBindingAsync(
+            selectedId, "mt4", selectedPath, new("Broker-One", "1001"), 1_800_000_000_000);
+        await testStore.Store.ActivateTerminalBindingAsync(
+            otherId, "mt4", otherPath, new("Broker-Two", "1002"), 1_800_000_000_000);
+        var provisioner = new Mt4RuntimeProvisioner(testStore.Store);
+
+        var result = await provisioner.ProvisionAsync([], selectedId);
+
+        Assert.HasCount(1, result.Terminals);
+        Assert.AreEqual(selectedId, result.Terminals[0].Binding.TerminalInstanceId);
+        await result.Terminals[0].Supervisor.DisposeAsync();
+    }
 }

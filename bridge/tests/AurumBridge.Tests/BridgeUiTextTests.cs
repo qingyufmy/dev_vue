@@ -126,6 +126,30 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
+    public void MultipleMt4TerminalsExplainTheOneTimeInstallationChoice()
+    {
+        var text = BridgeUiText.ForStatus(new(
+            BridgeApplicationPhase.TerminalSelectionRequired, [], null)
+        {
+            SelectedPlatform = BridgePlatform.Mt4,
+        });
+
+        StringAssert.Contains(text.Title, "MT4");
+        StringAssert.Contains(text.Description, "安装 EA");
+        StringAssert.Contains(text.Description, "选择");
+    }
+
+    [TestMethod]
+    public void InstalledMt4ExpertExplainsTheOnlyRemainingManualStep()
+    {
+        var description = BridgeUiText.DescribeCode("mt4_ea_attach_required", "fallback");
+
+        StringAssert.Contains(description, "已安装");
+        StringAssert.Contains(description, "任意图表");
+        StringAssert.Contains(description, "一次");
+    }
+
+    [TestMethod]
     public void RuntimeSummaryShowsServerSynchronizationAndVersion()
     {
         var status = new BridgeApplicationStatus(

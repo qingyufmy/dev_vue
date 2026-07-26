@@ -5,6 +5,7 @@ public sealed record BridgeRuntimePaths(
     string CredentialPath,
     string PythonExecutable,
     string Mt5WorkerScript,
+    string? Mt4ExpertPath,
     Uri ServerBaseUri);
 
 public static class BridgeRuntimePathResolver
@@ -44,6 +45,22 @@ public static class BridgeRuntimePathResolver
                 .. FindDevelopmentWorkerCandidates(applicationDirectory),
             ],
             "mt5_worker_script_not_found");
+        var configuredMt4Expert = getEnvironmentVariable("AURUM_BRIDGE_MT4_EA");
+        string[] mt4ExpertCandidates =
+        [
+            Path.Combine(
+                applicationDirectory,
+                "modules",
+                "adapter.mt4",
+                Mt4ExpertInstaller.ExpertFileName),
+            .. FindDevelopmentMt4ExpertCandidates(applicationDirectory),
+        ];
+        var mt4Expert = IsInstalledVersionDirectory(applicationDirectory)
+            ? ResolveRequiredFile(
+                configuredMt4Expert,
+                mt4ExpertCandidates,
+                "mt4_ea_package_not_found")
+            : ResolveOptionalFile(configuredMt4Expert, mt4ExpertCandidates);
         var serverValue = getEnvironmentVariable("AURUM_BRIDGE_SERVER_URL");
         if (!Uri.TryCreate(
                 string.IsNullOrWhiteSpace(serverValue) ? DefaultServerUrl : serverValue.Trim(),
@@ -57,7 +74,41 @@ public static class BridgeRuntimePathResolver
             Path.Combine(rootDataDirectory, "credential.dat"),
             python,
             worker,
+            mt4Expert,
             serverUri);
+    }
+
+    private static string? ResolveOptionalFile(
+        string? configuredPath,
+        IEnumerable<string> candidates)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+        {
+            var configured = Path.GetFullPath(configuredPath.Trim());
+            if (!File.Exists(configured))
+            {
+                throw new FileNotFoundException("mt4_ea_package_not_found", configured);
+            }
+            return configured;
+        }
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                return Path.GetFullPath(candidate);
+            }
+        }
+        return null;
+    }
+
+    private static bool IsInstalledVersionDirectory(string applicationDirectory)
+    {
+        var directory = new DirectoryInfo(applicationDirectory);
+        return Version.TryParse(directory.Name, out _)
+            && string.Equals(
+                directory.Parent?.Name,
+                "versions",
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ResolveRequiredFile(
@@ -123,6 +174,21 @@ public static class BridgeRuntimePathResolver
         for (var depth = 0; current is not null && depth < 8; depth++, current = current.Parent)
         {
             yield return Path.Combine(current.FullName, ".venv-bridge", "Scripts", "python.exe");
+        }
+    }
+
+    private static IEnumerable<string> FindDevelopmentMt4ExpertCandidates(
+        string applicationDirectory)
+    {
+        var current = new DirectoryInfo(applicationDirectory);
+        for (var depth = 0; current is not null && depth < 8; depth++, current = current.Parent)
+        {
+            yield return Path.Combine(
+                current.FullName,
+                "bridge",
+                "adapters",
+                "mt4-ea",
+                Mt4ExpertInstaller.ExpertFileName);
         }
     }
 }

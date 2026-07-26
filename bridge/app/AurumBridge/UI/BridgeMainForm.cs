@@ -27,6 +27,7 @@ public sealed class BridgeMainForm : Form
     private readonly Button _observerSourcesButton = new();
     private readonly PlatformComboBox _platformSelector = new();
     private readonly ComboBox _terminalSelector = new();
+    private readonly Label _terminalSelectorLabel = new();
     private readonly TableLayoutPanel _terminalSelectorBar = new();
     private readonly bool _isDefaultProfile;
     private ContextMenuStrip? _observerSourcesMenu;
@@ -267,14 +268,12 @@ public sealed class BridgeMainForm : Form
         _terminalSelectorBar.Margin = new Padding(0, 0, 0, 16);
         _terminalSelectorBar.ColumnStyles.Add(new(SizeType.AutoSize));
         _terminalSelectorBar.ColumnStyles.Add(new(SizeType.Percent, 100));
-        _terminalSelectorBar.Controls.Add(new Label
-        {
-            AutoSize = true,
-            Anchor = AnchorStyles.Left,
-            ForeColor = Color.FromArgb(51, 65, 85),
-            Text = "MT5 账户",
-            Margin = new Padding(0, 8, 10, 0),
-        }, 0, 0);
+        _terminalSelectorLabel.AutoSize = true;
+        _terminalSelectorLabel.Anchor = AnchorStyles.Left;
+        _terminalSelectorLabel.ForeColor = Color.FromArgb(51, 65, 85);
+        _terminalSelectorLabel.Text = "MT5 账户";
+        _terminalSelectorLabel.Margin = new Padding(0, 8, 10, 0);
+        _terminalSelectorBar.Controls.Add(_terminalSelectorLabel, 0, 0);
         _terminalSelector.Dock = DockStyle.Fill;
         _terminalSelector.DropDownStyle = ComboBoxStyle.DropDownList;
         _terminalSelector.AccessibleName = "选择需要桥接的 MT5 账户";
@@ -395,9 +394,13 @@ public sealed class BridgeMainForm : Form
 
     private void ApplyTerminalCandidates(BridgeApplicationStatus status)
     {
-        var visible = status.SelectedPlatform == BridgePlatform.Mt5
-            && status.TerminalCandidates.Count > 1;
+        var visible = status.TerminalCandidates.Count > 1;
         _terminalSelectorBar.Visible = visible;
+        var isMt4 = status.SelectedPlatform == BridgePlatform.Mt4;
+        _terminalSelectorLabel.Text = isMt4 ? "MT4 终端" : "MT5 账户";
+        _terminalSelector.AccessibleName = isMt4
+            ? "选择需要安装量见智桥 EA 的 MT4 终端"
+            : "选择需要桥接的 MT5 账户";
         _updatingTerminal = true;
         try
         {
@@ -406,7 +409,8 @@ public sealed class BridgeMainForm : Form
             {
                 _terminalSelector.Items.Add(new TerminalCandidateItem(
                     candidate.TerminalInstanceId,
-                    $"{candidate.Login}  ·  {candidate.BrokerServer}"));
+                    candidate.DisplayName
+                        ?? $"{candidate.Login}  ·  {candidate.BrokerServer}"));
             }
             var selectedIndex = -1;
             for (var index = 0; index < _terminalSelector.Items.Count; index++)

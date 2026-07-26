@@ -106,4 +106,19 @@ public sealed class BridgeUserPreferencesTests
         Assert.AreEqual(BridgePlatform.Mt5, preferences.Platform);
         Assert.IsNull(preferences.Mt5TerminalPath);
     }
+
+    [TestMethod]
+    public async Task Mt4AndMt5TerminalSelectionsArePreservedIndependently()
+    {
+        var store = new BridgeUserPreferencesStore(_path);
+        const string mt4Id = "mt4_0123456789abcdef01234567";
+        const string mt5Id = "mt5_89abcdef0123456701234567";
+
+        await store.SaveMt4TerminalAsync(mt4Id);
+        await store.SaveMt5TerminalAsync(mt5Id);
+        var preferences = await store.LoadAsync();
+
+        Assert.AreEqual(mt4Id, preferences.Mt4TerminalInstanceId);
+        Assert.AreEqual(mt5Id, preferences.Mt5TerminalInstanceId);
+    }
 }

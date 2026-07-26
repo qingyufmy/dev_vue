@@ -31,7 +31,8 @@ public sealed record BridgeTerminalCandidate(
     string TerminalInstanceId,
     string Platform,
     string BrokerServer,
-    string Login);
+    string Login,
+    string? DisplayName = null);
 
 public sealed record BridgeApplicationStatus(
     BridgeApplicationPhase Phase,
@@ -55,6 +56,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private readonly BridgeSessionClient _sessionClient;
     private readonly Mt5RuntimeProvisioner _mt5Provisioner;
     private readonly Mt4RuntimeProvisioner _mt4Provisioner;
+    private readonly Mt4ExpertInstaller? _mt4ExpertInstaller;
     private readonly CancellationTokenSource _stop = new();
     private readonly Lock _sync = new();
     private readonly Dictionary<string, BridgeTerminalStatus> _terminalStatuses = new(StringComparer.Ordinal);
@@ -67,8 +69,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private bool _updatePreparation;
     private string? _selectedPlatform;
     private string? _selectedMt5TerminalId;
+    private string? _selectedMt4TerminalId;
     private readonly string? _selectedMt5TerminalPath;
     private string? _activeMt5TerminalId;
+    private string? _activeMt4TerminalId;
     private IReadOnlyList<BridgeTerminalCandidate> _terminalCandidates = [];
     private bool _serverConnected;
     private bool _canManageObserverSources;
@@ -79,7 +83,8 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         BridgeRuntimePaths paths,
         string? selectedPlatform = null,
         string? selectedMt5TerminalId = null,
-        string? selectedMt5TerminalPath = null)
+        string? selectedMt5TerminalPath = null,
+        string? selectedMt4TerminalId = null)
     {
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         Directory.CreateDirectory(paths.DataDirectory);
@@ -98,10 +103,14 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             paths.PythonExecutable,
             paths.Mt5WorkerScript);
         _mt4Provisioner = new(_store);
+        _mt4ExpertInstaller = paths.Mt4ExpertPath is null
+            ? null
+            : new(paths.Mt4ExpertPath);
         _selectedPlatform = string.IsNullOrWhiteSpace(selectedPlatform)
             ? null
             : BridgePlatform.Normalize(selectedPlatform);
         _selectedMt5TerminalId = selectedMt5TerminalId;
+        _selectedMt4TerminalId = selectedMt4TerminalId;
         _selectedMt5TerminalPath = string.IsNullOrWhiteSpace(selectedMt5TerminalPath)
             ? null
             : Path.GetFullPath(selectedMt5TerminalPath);
@@ -140,14 +149,23 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(terminalInstanceId);
         lock (_sync)
         {
-            if (!_terminalCandidates.Any(candidate =>
-                    candidate.TerminalInstanceId == terminalInstanceId))
+            var selected = _terminalCandidates.SingleOrDefault(candidate =>
+                candidate.TerminalInstanceId == terminalInstanceId);
+            if (selected is null)
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(terminalInstanceId), terminalInstanceId, "Unknown terminal selection.");
             }
-            _selectedMt5TerminalId = terminalInstanceId;
-            _activeMt5TerminalId = terminalInstanceId;
+            if (selected.Platform == BridgePlatform.Mt5)
+            {
+                _selectedMt5TerminalId = terminalInstanceId;
+                _activeMt5TerminalId = terminalInstanceId;
+            }
+            else
+            {
+                _selectedMt4TerminalId = terminalInstanceId;
+                _activeMt4TerminalId = terminalInstanceId;
+            }
             _cycleCancellation?.Cancel();
         }
     }
@@ -330,6 +348,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             _terminalStatuses.Clear();
             _terminalCandidates = [];
             _activeMt5TerminalId = null;
+            _activeMt4TerminalId = null;
             _serverConnected = false;
         }
         var selectedPlatform = SelectedPlatform;
@@ -342,6 +361,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         Publish(BridgeApplicationPhase.DetectingTerminal);
         var mt5 = new Mt5ProvisioningResult([], []);
         var mt4 = new Mt4ProvisioningResult([], []);
+        string? mt4SetupDetail = null;
         if (selectedPlatform == BridgePlatform.Mt5)
         {
             while (_pendingMt4Registrations.TryDequeue(out var unusedRegistration))
@@ -359,6 +379,24 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         }
         else
         {
+            var installation = await SelectMt4InstallationAsync(
+                Mt4TerminalDiscovery.DiscoverWindows(),
+                cancellationToken);
+            if (installation is not null)
+            {
+                if (_mt4ExpertInstaller is null)
+                {
+                    mt4SetupDetail = "mt4_ea_package_not_found";
+                }
+                else
+                {
+                    var deployment = await _mt4ExpertInstaller.DeployAsync(
+                        [installation],
+                        cancellationToken);
+                    mt4SetupDetail = deployment.Failures.FirstOrDefault()?.ErrorCode
+                        ?? "mt4_ea_attach_required";
+                }
+            }
             var registrations = new List<Mt4EaConnection>();
             while (_pendingMt4Registrations.TryDequeue(out var pendingRegistration))
             {
@@ -366,7 +404,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             }
             registrations.AddRange(await Mt4RuntimeProvisioner.AcceptRegistrationsAsync(
                 TimeSpan.FromMilliseconds(1_500), cancellationToken));
-            mt4 = await _mt4Provisioner.ProvisionAsync(registrations, cancellationToken);
+            mt4 = await _mt4Provisioner.ProvisionAsync(
+                registrations,
+                installation?.TerminalInstanceId,
+                cancellationToken);
         }
         var supervisors = mt5.Terminals.Select(terminal => terminal.Supervisor)
             .Concat(mt4.Terminals.Select(terminal => terminal.Supervisor))
@@ -377,7 +418,9 @@ public sealed class BridgeApplicationController : IAsyncDisposable
                 BridgeApplicationPhase.TerminalNotFound,
                 selectedPlatform == BridgePlatform.Mt5
                     ? mt5.Failures.FirstOrDefault()?.ErrorCode ?? "mt5_terminal_not_found"
-                    : mt4.Failures.FirstOrDefault()?.ErrorCode ?? "mt4_registration_invalid");
+                    : mt4.Failures.FirstOrDefault()?.ErrorCode
+                        ?? mt4SetupDetail
+                        ?? "mt4_terminal_not_found");
             await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
             return;
         }
@@ -581,7 +624,50 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         return new([selected], result.Failures);
     }
 
+    private async Task<Mt4Installation?> SelectMt4InstallationAsync(
+        IReadOnlyList<Mt4Installation> installations,
+        CancellationToken cancellationToken)
+    {
+        var candidates = installations
+            .Select(installation => new BridgeTerminalCandidate(
+                installation.TerminalInstanceId,
+                BridgePlatform.Mt4,
+                string.Empty,
+                string.Empty,
+                installation.DisplayName))
+            .OrderBy(candidate => candidate.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
+        string? preferred;
+        lock (_sync)
+        {
+            _terminalCandidates = candidates;
+            preferred = _selectedMt4TerminalId;
+        }
+        var selectedId = ResolveTerminalSelection(candidates, preferred);
+        if (selectedId is null && candidates.Length > 0)
+        {
+            Publish(BridgeApplicationPhase.TerminalSelectionRequired);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new OperationCanceledException(cancellationToken);
+        }
+        if (selectedId is null)
+        {
+            return null;
+        }
+        lock (_sync)
+        {
+            _activeMt4TerminalId = selectedId;
+        }
+        return installations.Single(installation =>
+            installation.TerminalInstanceId == selectedId);
+    }
+
     public static string? ResolveMt5TerminalSelection(
+        IReadOnlyList<BridgeTerminalCandidate> candidates,
+        string? preferredTerminalInstanceId) =>
+        ResolveTerminalSelection(candidates, preferredTerminalInstanceId);
+
+    public static string? ResolveTerminalSelection(
         IReadOnlyList<BridgeTerminalCandidate> candidates,
         string? preferredTerminalInstanceId)
     {
@@ -674,7 +760,9 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         _detailCode)
     {
         SelectedPlatform = _selectedPlatform,
-        SelectedTerminalInstanceId = _activeMt5TerminalId ?? _selectedMt5TerminalId,
+        SelectedTerminalInstanceId = _selectedPlatform == BridgePlatform.Mt4
+            ? _activeMt4TerminalId ?? _selectedMt4TerminalId
+            : _activeMt5TerminalId ?? _selectedMt5TerminalId,
         TerminalCandidates = _terminalCandidates,
         ServerConnected = _serverConnected,
         LastDataSyncUtcMsc = _lastDataSyncUtcMsc,

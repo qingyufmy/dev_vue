@@ -21,6 +21,7 @@ public sealed class BridgeHealthCheckTests
                 Path.Combine(root, "data", "credential.dat"),
                 runtime,
                 worker,
+                null,
                 new("https://www.cnfxtrade.com"));
 
             await BridgeHealthCheck.RunAsync(paths, healthFile, healthRoot);

@@ -14,6 +14,11 @@ public static class BridgeUiText
             BridgeApplicationPhase.Starting => State("正在启动", "正在准备安全连接。", 0x64748B),
             BridgeApplicationPhase.PlatformSelectionRequired => State(
                 "请选择交易平台", "选择 MT5 或 MT4 后，桥接会自动检测对应终端。", 0xD97706),
+            BridgeApplicationPhase.TerminalSelectionRequired when
+                status.SelectedPlatform == BridgePlatform.Mt4 => State(
+                    "请选择 MT4 终端",
+                    "检测到多个 MT4，请选择需要安装 EA 并连接的终端。",
+                    0xD97706),
             BridgeApplicationPhase.TerminalSelectionRequired => State(
                 "请选择 MT5 账户", "检测到多个已登录 MT5，请选择需要桥接的账户。", 0xD97706),
             BridgeApplicationPhase.DetectingTerminal => State(
@@ -50,6 +55,8 @@ public static class BridgeUiText
             $"未找到 MT5 Python 运行组件，请重新安装或修复{BridgeBrand.ProductName}。",
         FileNotFoundException fileError when fileError.Message == "mt5_worker_script_not_found" =>
             $"未找到 MT5 桥接模块，请重新安装或修复{BridgeBrand.ProductName}。",
+        FileNotFoundException fileError when fileError.Message == "mt4_ea_package_not_found" =>
+            $"未找到 MT4 EA，请重新安装或修复{BridgeBrand.ProductName}。",
         BridgeApiException apiError => DescribeCode(apiError.Code, "服务器暂时无法完成请求，请稍后重试。"),
         _ => $"{BridgeBrand.ProductName}启动失败，请重新启动；若问题持续，请联系支持。",
     };
@@ -80,7 +87,16 @@ public static class BridgeUiText
         "mt5_account_unavailable" => "已发现 MT5，但尚未登录交易账户。",
         "mt5_terminal_disconnected" => "MT5 当前未连接交易服务器。",
         "trading_terminal_not_found" => "未发现 MT5，也未收到 MT4 EA 连接；程序会自动重试。",
+        "mt4_terminal_not_found" => "未发现 MT4，请先打开一次 MT4，程序会自动安装 EA。",
         "mt4_terminal_data_path_not_found" => "一个已绑定的 MT4 已不存在，请重新挂载 EA。",
+        "mt4_ea_attach_required" =>
+            "EA 已安装。请在 MT4 的导航器中刷新，然后将 AURUMBridgeEA 挂到任意图表一次。",
+        "mt4_ea_package_not_found" or "mt4_ea_package_invalid" =>
+            $"MT4 EA 组件不完整，请重新安装或修复{BridgeBrand.ProductName}。",
+        "mt4_ea_install_access_denied" =>
+            "无法写入 MT4 数据目录，请关闭 MT4 后重试，或检查当前 Windows 账户权限。",
+        "mt4_ea_install_io_failed" or "mt4_ea_install_failed" =>
+            "MT4 EA 暂时无法安装，请关闭 MT4 后点击“重新检测”。",
         "mt4_registration_invalid" => "MT4 EA 尚未连接或账户信息不完整。",
         "mt5_probe_identity_mismatch" => "MT5 账号、Server 或终端与已绑定信息不匹配，请登录正确账号后重试。",
         "mt4_ea_identity_mismatch" => "MT4 EA 的账号、Server 或终端与已绑定信息不匹配，请确认账号后重新挂载 EA。",

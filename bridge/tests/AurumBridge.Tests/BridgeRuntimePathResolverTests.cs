@@ -22,11 +22,13 @@ public sealed class BridgeRuntimePathResolverTests
     {
         var python = CreateFile("runtime", "python", "python.exe");
         var worker = CreateFile("modules", "adapter.mt5.python", "worker.py");
+        var mt4Expert = CreateFile("modules", "adapter.mt4", "AURUMBridgeEA.ex4");
 
         var paths = BridgeRuntimePathResolver.Resolve(_directory, _ => null);
 
         Assert.AreEqual(python, paths.PythonExecutable);
         Assert.AreEqual(worker, paths.Mt5WorkerScript);
+        Assert.AreEqual(mt4Expert, paths.Mt4ExpertPath);
         Assert.AreEqual(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "AURUM", "BridgeV3", "credential.dat"),
@@ -113,6 +115,32 @@ public sealed class BridgeRuntimePathResolverTests
             BridgeRuntimePathResolver.Resolve(_directory, name => values.GetValueOrDefault(name)));
 
         Assert.AreEqual("mt5_python_runtime_not_found", error.Message);
+    }
+
+    [TestMethod]
+    public void InstalledVersionRejectsAMissingMt4ExpertPackage()
+    {
+        var applicationDirectory = Path.Combine(_directory, "versions", "3.0.0");
+        Directory.CreateDirectory(Path.Combine(applicationDirectory, "runtime", "python"));
+        Directory.CreateDirectory(Path.Combine(
+            applicationDirectory,
+            "modules",
+            "adapter.mt5.python"));
+        File.WriteAllBytes(Path.Combine(
+            applicationDirectory,
+            "runtime",
+            "python",
+            "python.exe"), []);
+        File.WriteAllBytes(Path.Combine(
+            applicationDirectory,
+            "modules",
+            "adapter.mt5.python",
+            "worker.py"), []);
+
+        var error = Assert.ThrowsExactly<FileNotFoundException>(() =>
+            BridgeRuntimePathResolver.Resolve(applicationDirectory, _ => null));
+
+        Assert.AreEqual("mt4_ea_package_not_found", error.Message);
     }
 
     private string CreateFile(params string[] parts)

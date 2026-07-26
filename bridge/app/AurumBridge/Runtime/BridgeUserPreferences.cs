@@ -22,7 +22,8 @@ public static class BridgePlatform
 public sealed record BridgeUserPreferences(
     string? Platform,
     string? Mt5TerminalInstanceId = null,
-    string? Mt5TerminalPath = null);
+    string? Mt5TerminalPath = null,
+    string? Mt4TerminalInstanceId = null);
 
 public sealed class BridgeUserPreferencesStore
 {
@@ -122,6 +123,27 @@ public sealed class BridgeUserPreferencesStore
         }
     }
 
+    public async Task SaveMt4TerminalAsync(
+        string terminalInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeMt4TerminalId(terminalInstanceId)
+            ?? throw new ArgumentOutOfRangeException(
+                nameof(terminalInstanceId), terminalInstanceId, "Invalid MT4 terminal instance id.");
+        await _access.WaitAsync(cancellationToken);
+        try
+        {
+            var current = await LoadCoreAsync(cancellationToken);
+            await SaveCoreAsync(
+                current with { Mt4TerminalInstanceId = normalized },
+                cancellationToken);
+        }
+        finally
+        {
+            _access.Release();
+        }
+    }
+
     private async Task<BridgeUserPreferences> LoadCoreAsync(CancellationToken cancellationToken)
     {
         if (!File.Exists(_path))
@@ -186,7 +208,8 @@ public sealed class BridgeUserPreferencesStore
         return new(
             platform,
             NormalizeMt5TerminalId(preferences.Mt5TerminalInstanceId),
-            NormalizeMt5TerminalPath(preferences.Mt5TerminalPath));
+            NormalizeMt5TerminalPath(preferences.Mt5TerminalPath),
+            NormalizeMt4TerminalId(preferences.Mt4TerminalInstanceId));
     }
 
     private static string? NormalizeMt5TerminalId(string? value)
@@ -220,5 +243,15 @@ public sealed class BridgeUserPreferencesStore
         {
             return null;
         }
+    }
+
+    private static string? NormalizeMt4TerminalId(string? value)
+    {
+        var normalized = value?.Trim().ToLowerInvariant();
+        return normalized is { Length: 28 }
+            && normalized.StartsWith("mt4_", StringComparison.Ordinal)
+            && normalized[4..].All(Uri.IsHexDigit)
+                ? normalized
+                : null;
     }
 }

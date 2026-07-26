@@ -46,12 +46,14 @@ public sealed class BridgeApplicationContext : ApplicationContext
         string? selectedPlatform = null;
         string? selectedMt5TerminalId = null;
         string? selectedMt5TerminalPath = null;
+        string? selectedMt4TerminalId = null;
         try
         {
             var preferences = _preferences.LoadAsync().GetAwaiter().GetResult();
             selectedPlatform = preferences.Platform;
             selectedMt5TerminalId = preferences.Mt5TerminalInstanceId;
             selectedMt5TerminalPath = preferences.Mt5TerminalPath;
+            selectedMt4TerminalId = preferences.Mt4TerminalInstanceId;
         }
         catch (Exception error)
         {
@@ -66,7 +68,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
             paths,
             selectedPlatform,
             selectedMt5TerminalId,
-            selectedMt5TerminalPath);
+            selectedMt5TerminalPath,
+            selectedMt4TerminalId);
         _form = new(_profileId);
         _form.PairRequested += HandlePairRequested;
         _form.ObserverSourcesRequested += HandleObserverSourcesRequested;
@@ -419,7 +422,19 @@ public sealed class BridgeApplicationContext : ApplicationContext
     {
         try
         {
-            await _preferences.SaveMt5TerminalAsync(eventArgs.TerminalInstanceId, _stop.Token);
+            var platform = _controller.SelectedPlatform;
+            if (platform == BridgePlatform.Mt4)
+            {
+                await _preferences.SaveMt4TerminalAsync(
+                    eventArgs.TerminalInstanceId,
+                    _stop.Token);
+            }
+            else
+            {
+                await _preferences.SaveMt5TerminalAsync(
+                    eventArgs.TerminalInstanceId,
+                    _stop.Token);
+            }
             _controller.SelectTerminal(eventArgs.TerminalInstanceId);
             _logger.Info(
                 "bridge_terminal_selected",
@@ -431,10 +446,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
         catch (Exception error)
         {
             _logger.Error("terminal_preference_save_failed", error);
+            var platformName = BridgePlatform.DisplayName(
+                _controller.SelectedPlatform ?? BridgePlatform.Mt5);
             MessageBox.Show(
                 _form,
-                "MT5 账户选择未能保存，请重新选择。",
-                "选择 MT5 账户",
+                $"{platformName} 终端选择未能保存，请重新选择。",
+                $"选择 {platformName} 终端",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
