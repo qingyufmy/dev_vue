@@ -54,6 +54,27 @@ public sealed class BridgeRuntimePathResolverTests
     }
 
     [TestMethod]
+    public void DevelopmentLayoutPrefersTheBridgeVirtualEnvironmentOverPathPython()
+    {
+        var applicationDirectory = Path.Combine(
+            _directory, "bridge", "app", "AurumBridge", "bin", "Debug", "net10.0-windows");
+        Directory.CreateDirectory(applicationDirectory);
+        var bridgePython = CreateFile(".venv-bridge", "Scripts", "python.exe");
+        var pathPython = CreateFile("system-python", "python.exe");
+        CreateFile("bridge", "adapters", "mt5-python", "worker.py");
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["PATH"] = Path.GetDirectoryName(pathPython)!,
+        };
+
+        var paths = BridgeRuntimePathResolver.Resolve(
+            applicationDirectory,
+            name => values.GetValueOrDefault(name));
+
+        Assert.AreEqual(bridgePython, paths.PythonExecutable);
+    }
+
+    [TestMethod]
     public void RejectsConfiguredRuntimeFileThatDoesNotExist()
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal)

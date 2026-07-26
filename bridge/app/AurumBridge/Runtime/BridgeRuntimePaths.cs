@@ -30,6 +30,7 @@ public static class BridgeRuntimePathResolver
             getEnvironmentVariable("AURUM_BRIDGE_PYTHON"),
             [
                 Path.Combine(applicationDirectory, "runtime", "python", "python.exe"),
+                .. FindDevelopmentPythonCandidates(applicationDirectory),
                 .. ExecutablesOnPath(getEnvironmentVariable("PATH"), "python.exe", "python3.exe"),
             ],
             "mt5_python_runtime_not_found");
@@ -109,6 +110,15 @@ public static class BridgeRuntimePathResolver
         for (var depth = 0; current is not null && depth < 8; depth++, current = current.Parent)
         {
             yield return Path.Combine(current.FullName, "bridge", "adapters", "mt5-python", "worker.py");
+        }
+    }
+
+    private static IEnumerable<string> FindDevelopmentPythonCandidates(string applicationDirectory)
+    {
+        var current = new DirectoryInfo(applicationDirectory);
+        for (var depth = 0; current is not null && depth < 8; depth++, current = current.Parent)
+        {
+            yield return Path.Combine(current.FullName, ".venv-bridge", "Scripts", "python.exe");
         }
     }
 }
