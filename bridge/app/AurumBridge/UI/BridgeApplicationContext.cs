@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using AurumBridge.Runtime;
 using AurumBridge.Update;
+using AurumBridge.Workers;
 
 namespace AurumBridge.UI;
 
@@ -43,11 +44,13 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _preferences = new(Path.Combine(paths.DataDirectory, "preferences.json"));
         string? selectedPlatform = null;
         string? selectedMt5TerminalId = null;
+        string? selectedMt5TerminalPath = null;
         try
         {
             var preferences = _preferences.LoadAsync().GetAwaiter().GetResult();
             selectedPlatform = preferences.Platform;
             selectedMt5TerminalId = preferences.Mt5TerminalInstanceId;
+            selectedMt5TerminalPath = preferences.Mt5TerminalPath;
         }
         catch (Exception error)
         {
@@ -58,7 +61,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
             EnsureAutoStart();
             _updateCoordinator = CreateUpdateCoordinator(paths.ServerBaseUri);
         }
-        _controller = new(paths, selectedPlatform, selectedMt5TerminalId);
+        _controller = new(
+            paths,
+            selectedPlatform,
+            selectedMt5TerminalId,
+            selectedMt5TerminalPath);
         _form = new(_profileId);
         _form.PairRequested += HandlePairRequested;
         _form.ObserverSourcesRequested += HandleObserverSourcesRequested;
@@ -182,7 +189,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
     }
 
-    private void CreateObserverProfile()
+    private async void CreateObserverProfile()
     {
         using var dialog = new BridgeObserverProfileDialog();
         if (dialog.ShowDialog(_form) != DialogResult.OK)
@@ -191,7 +198,23 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         try
         {
-            BridgeRuntimeProfile.CreateObserverProfile(_rootDataDirectory, dialog.ProfileId);
+            if (BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory)
+                .Contains(dialog.ProfileId, StringComparer.Ordinal))
+            {
+                MessageBox.Show(
+                    _form,
+                    "该观摩源名称已经存在，请更换名称，或从观摩源菜单直接打开已有档案。",
+                    "观摩源已存在",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+            var profileDirectory = BridgeRuntimeProfile.CreateObserverProfile(
+                _rootDataDirectory,
+                dialog.ProfileId);
+            await SaveObserverProfilePreferencesAsync(
+                profileDirectory,
+                dialog.Mt5ExecutablePath);
             _logger.Info("observer_profile_created", $"profile={dialog.ProfileId}");
             LaunchObserverProfile(dialog.ProfileId);
         }
@@ -207,11 +230,30 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
     }
 
-    private void LaunchObserverProfile(string profileId)
+    private async void LaunchObserverProfile(string profileId)
     {
         try
         {
-            BridgeRuntimeProfile.CreateObserverProfile(_rootDataDirectory, profileId);
+            var profileDirectory = BridgeRuntimeProfile.CreateObserverProfile(
+                _rootDataDirectory,
+                profileId);
+            var preferences = new BridgeUserPreferencesStore(
+                Path.Combine(profileDirectory, "preferences.json"));
+            var current = await preferences.LoadAsync(_stop.Token);
+            if (string.IsNullOrWhiteSpace(current.Mt5TerminalPath))
+            {
+                using var dialog = new BridgeObserverProfileDialog(profileId);
+                if (dialog.ShowDialog(_form) != DialogResult.OK)
+                {
+                    return;
+                }
+                await SaveObserverProfilePreferencesAsync(
+                    profileDirectory,
+                    dialog.Mt5ExecutablePath);
+                _logger.Info(
+                    "observer_profile_mt5_configured",
+                    $"profile={profileId}; terminal_id={Mt5TerminalDiscovery.CreateTerminalInstanceId(dialog.Mt5ExecutablePath)}");
+            }
             _ = Process.Start(BridgeRuntimeProfile.BuildLaunchInfo(profileId))
                 ?? throw new InvalidOperationException("observer_profile_start_failed");
             _logger.Info("observer_profile_started", $"profile={profileId}");
@@ -226,6 +268,19 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
+    }
+
+    private async Task SaveObserverProfilePreferencesAsync(
+        string profileDirectory,
+        string terminalExecutablePath)
+    {
+        var preferences = new BridgeUserPreferencesStore(
+            Path.Combine(profileDirectory, "preferences.json"));
+        var terminalId = Mt5TerminalDiscovery.CreateTerminalInstanceId(
+            terminalExecutablePath);
+        await preferences.SavePlatformAsync(BridgePlatform.Mt5, _stop.Token);
+        await preferences.SaveMt5TerminalAsync(terminalId, _stop.Token);
+        await preferences.SaveMt5TerminalPathAsync(terminalExecutablePath, _stop.Token);
     }
 
     private async Task WriteStartupReadyAsync(string path)

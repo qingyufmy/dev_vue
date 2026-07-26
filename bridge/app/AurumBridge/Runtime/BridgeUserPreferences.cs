@@ -21,7 +21,8 @@ public static class BridgePlatform
 
 public sealed record BridgeUserPreferences(
     string? Platform,
-    string? Mt5TerminalInstanceId = null);
+    string? Mt5TerminalInstanceId = null,
+    string? Mt5TerminalPath = null);
 
 public sealed class BridgeUserPreferencesStore
 {
@@ -41,7 +42,7 @@ public sealed class BridgeUserPreferencesStore
         {
             if (!File.Exists(_path))
             {
-                return new(null, null);
+                return new(null, null, null);
             }
             try
             {
@@ -49,12 +50,12 @@ public sealed class BridgeUserPreferencesStore
                     _path, FileMode.Open, FileAccess.Read, FileShare.Read,
                     4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
                 var stored = await JsonSerializer.DeserializeAsync<BridgeUserPreferences>(
-                    stream, cancellationToken:cancellationToken) ?? new(null, null);
+                    stream, cancellationToken:cancellationToken) ?? new(null, null, null);
                 return Normalize(stored);
             }
             catch (JsonException)
             {
-                return new(null, null);
+                return new(null, null, null);
             }
         }
         finally
@@ -100,11 +101,32 @@ public sealed class BridgeUserPreferencesStore
         }
     }
 
+    public async Task SaveMt5TerminalPathAsync(
+        string terminalExecutablePath,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeMt5TerminalPath(terminalExecutablePath)
+            ?? throw new ArgumentOutOfRangeException(
+                nameof(terminalExecutablePath), terminalExecutablePath, "Invalid MT5 terminal path.");
+        await _access.WaitAsync(cancellationToken);
+        try
+        {
+            var current = await LoadCoreAsync(cancellationToken);
+            await SaveCoreAsync(
+                current with { Mt5TerminalPath = normalized },
+                cancellationToken);
+        }
+        finally
+        {
+            _access.Release();
+        }
+    }
+
     private async Task<BridgeUserPreferences> LoadCoreAsync(CancellationToken cancellationToken)
     {
         if (!File.Exists(_path))
         {
-            return new(null, null);
+            return new(null, null, null);
         }
         try
         {
@@ -112,12 +134,12 @@ public sealed class BridgeUserPreferencesStore
                 _path, FileMode.Open, FileAccess.Read, FileShare.Read,
                 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
             var stored = await JsonSerializer.DeserializeAsync<BridgeUserPreferences>(
-                stream, cancellationToken:cancellationToken) ?? new(null, null);
+                stream, cancellationToken:cancellationToken) ?? new(null, null, null);
             return Normalize(stored);
         }
         catch (JsonException)
         {
-            return new(null, null);
+            return new(null, null, null);
         }
     }
 
@@ -161,7 +183,10 @@ public sealed class BridgeUserPreferencesStore
             {
             }
         }
-        return new(platform, NormalizeMt5TerminalId(preferences.Mt5TerminalInstanceId));
+        return new(
+            platform,
+            NormalizeMt5TerminalId(preferences.Mt5TerminalInstanceId),
+            NormalizeMt5TerminalPath(preferences.Mt5TerminalPath));
     }
 
     private static string? NormalizeMt5TerminalId(string? value)
@@ -172,5 +197,28 @@ public sealed class BridgeUserPreferencesStore
             && normalized[4..].All(Uri.IsHexDigit)
                 ? normalized
                 : null;
+    }
+
+    private static string? NormalizeMt5TerminalPath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value))
+        {
+            return null;
+        }
+        try
+        {
+            var path = Path.GetFullPath(value.Trim());
+            var fileName = Path.GetFileName(path);
+            return fileName.Equals("terminal64.exe", StringComparison.OrdinalIgnoreCase)
+                || fileName.Equals("terminal.exe", StringComparison.OrdinalIgnoreCase)
+                    ? path
+                    : null;
+        }
+        catch (Exception error) when (error is ArgumentException
+            or NotSupportedException
+            or PathTooLongException)
+        {
+            return null;
+        }
     }
 }

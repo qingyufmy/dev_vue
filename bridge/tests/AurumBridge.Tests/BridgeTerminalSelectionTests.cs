@@ -1,4 +1,5 @@
 using AurumBridge.Runtime;
+using AurumBridge.Workers;
 
 namespace AurumBridge.Tests;
 
@@ -29,5 +30,38 @@ public sealed class BridgeTerminalSelectionTests
             Second.TerminalInstanceId,
             BridgeApplicationController.ResolveMt5TerminalSelection(
                 [First, Second], Second.TerminalInstanceId));
+    }
+
+    [TestMethod]
+    public void ObserverProfileUsesOnlyItsConfiguredMt5Installation()
+    {
+        var discovered = new Mt5Installation(
+            Path.Combine(Path.GetTempPath(), "auto", "terminal64.exe"),
+            "registry_hkcu",
+            IsRunning:true);
+        var configuredPath = Path.Combine(
+            Path.GetTempPath(), "observer", "terminal64.exe");
+
+        var result = BridgeApplicationController.ResolveMt5Installations(
+            [discovered],
+            configuredPath);
+
+        Assert.HasCount(1, result);
+        Assert.AreEqual(Path.GetFullPath(configuredPath), result[0].ExecutablePath);
+        Assert.AreEqual("observer_profile", result[0].Source);
+        Assert.IsFalse(result[0].IsRunning);
+    }
+
+    [TestMethod]
+    public void DefaultProfileKeepsAutomaticMt5Discovery()
+    {
+        IReadOnlyList<Mt5Installation> discovered = [new(
+            Path.Combine(Path.GetTempPath(), "auto", "terminal64.exe"),
+            "registry_hkcu",
+            IsRunning:true)];
+
+        Assert.AreSame(
+            discovered,
+            BridgeApplicationController.ResolveMt5Installations(discovered, null));
     }
 }

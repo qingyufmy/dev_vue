@@ -66,6 +66,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private bool _updatePreparation;
     private string? _selectedPlatform;
     private string? _selectedMt5TerminalId;
+    private readonly string? _selectedMt5TerminalPath;
     private string? _activeMt5TerminalId;
     private IReadOnlyList<BridgeTerminalCandidate> _terminalCandidates = [];
     private bool _serverConnected;
@@ -75,7 +76,8 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     public BridgeApplicationController(
         BridgeRuntimePaths paths,
         string? selectedPlatform = null,
-        string? selectedMt5TerminalId = null)
+        string? selectedMt5TerminalId = null,
+        string? selectedMt5TerminalPath = null)
     {
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         Directory.CreateDirectory(paths.DataDirectory);
@@ -97,6 +99,9 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             ? null
             : BridgePlatform.Normalize(selectedPlatform);
         _selectedMt5TerminalId = selectedMt5TerminalId;
+        _selectedMt5TerminalPath = string.IsNullOrWhiteSpace(selectedMt5TerminalPath)
+            ? null
+            : Path.GetFullPath(selectedMt5TerminalPath);
     }
 
     public event Action<BridgeApplicationStatus>? StatusChanged;
@@ -340,7 +345,9 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             {
                 await unusedRegistration.DisposeAsync();
             }
-            var installations = Mt5TerminalDiscovery.DiscoverWindows();
+            var installations = ResolveMt5Installations(
+                Mt5TerminalDiscovery.DiscoverWindows(),
+                _selectedMt5TerminalPath);
             mt5 = await _mt5Provisioner.ProvisionAsync(installations, cancellationToken);
             if (mt5.Terminals.Count > 0)
             {
@@ -485,6 +492,21 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             await IgnoreCancellationAsync(connectionTask);
             await IgnoreCancellationAsync(registrationTask);
         }
+    }
+
+    public static IReadOnlyList<Mt5Installation> ResolveMt5Installations(
+        IReadOnlyList<Mt5Installation> discovered,
+        string? configuredTerminalPath)
+    {
+        ArgumentNullException.ThrowIfNull(discovered);
+        if (string.IsNullOrWhiteSpace(configuredTerminalPath))
+        {
+            return discovered;
+        }
+        return [new(
+            Path.GetFullPath(configuredTerminalPath),
+            "observer_profile",
+            IsRunning:false)];
     }
 
     private async Task WatchMt4RegistrationsAsync(CancellationToken cancellationToken)

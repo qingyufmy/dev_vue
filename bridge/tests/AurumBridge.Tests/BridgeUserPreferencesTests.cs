@@ -66,6 +66,20 @@ public sealed class BridgeUserPreferencesTests
     }
 
     [TestMethod]
+    public async Task ObserverProfilePersistsItsDedicatedMt5ExecutablePath()
+    {
+        var store = new BridgeUserPreferencesStore(_path);
+        var terminalPath = Path.Combine(_directory, "Broker MT5", "terminal64.exe");
+
+        await store.SaveMt5TerminalPathAsync(terminalPath);
+        await store.SavePlatformAsync(BridgePlatform.Mt5);
+        var preferences = await new BridgeUserPreferencesStore(_path).LoadAsync();
+
+        Assert.AreEqual(BridgePlatform.Mt5, preferences.Platform);
+        Assert.AreEqual(Path.GetFullPath(terminalPath), preferences.Mt5TerminalPath);
+    }
+
+    [TestMethod]
     public async Task InvalidMt5TerminalSelectionIsIgnored()
     {
         Directory.CreateDirectory(_directory);
@@ -77,5 +91,19 @@ public sealed class BridgeUserPreferencesTests
 
         Assert.AreEqual(BridgePlatform.Mt5, preferences.Platform);
         Assert.IsNull(preferences.Mt5TerminalInstanceId);
+    }
+
+    [TestMethod]
+    public async Task UnsafeOrNonTerminalMt5PathIsIgnored()
+    {
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(
+            _path,
+            "{\"Platform\":\"mt5\",\"Mt5TerminalPath\":\"../../unsafe.exe\"}");
+
+        var preferences = await new BridgeUserPreferencesStore(_path).LoadAsync();
+
+        Assert.AreEqual(BridgePlatform.Mt5, preferences.Platform);
+        Assert.IsNull(preferences.Mt5TerminalPath);
     }
 }
