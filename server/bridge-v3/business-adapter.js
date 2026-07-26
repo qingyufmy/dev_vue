@@ -36,6 +36,13 @@ function cleanObject(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined))
 }
 
+function durableOrderComment(value) {
+  if (value == null) return undefined
+  const normalized = String(value).trim()
+  if (!normalized || normalized.length > 31) throw adapterError('order_comment_invalid')
+  return normalized
+}
+
 function routeMatchesParams(route, params) {
   if (params.terminal_instance_id && params.terminal_instance_id !== route.terminal_instance_id) return false
   const requested = params.account_ref || {}
@@ -129,6 +136,7 @@ function tradeParams(action, params) {
       take_profit:params.take_profit ?? params.tp,
       deviation:params.deviation,
       magic:params.magic,
+      comment:durableOrderComment(params.comment),
     })
   }
   if (action === 'pending') {
@@ -147,6 +155,7 @@ function tradeParams(action, params) {
       magic:params.magic,
       expiration:params.expiration,
       type_time:params.expiration ? 2 : undefined,
+      comment:durableOrderComment(params.comment),
     })
   }
   if (action === 'close' || action === 'close_system_position') {

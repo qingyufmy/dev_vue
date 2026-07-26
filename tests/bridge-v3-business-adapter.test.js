@@ -416,6 +416,29 @@ describe('Bridge v3 business compatibility adapter', () => {
     const second = gateway.sendCommand.mock.calls[1][1].command_id
     expect(first).toBe(second)
     expect(first).toMatch(/^command_[a-f0-9]{64}$/)
+    expect(gateway.sendCommand.mock.calls[0][1].params.comment).toBe('AI-2S')
+    expect(gateway.sendCommand.mock.calls[1][1].params.comment).toBe('AI-2S')
+  })
+
+  it('preserves the durable order-intent comment for pending-order reconciliation', async () => {
+    const { adapter, gateway } = setup()
+
+    await adapter.execute(42, 'pending', {
+      symbol:'XAUUSD', order_type:'buy_limit', volume:0.1, price:2300, comment:'AI-PENDING-7',
+    })
+
+    expect(gateway.sendCommand.mock.calls[0][1].params).toMatchObject({
+      side:'buy', order_kind:'limit', comment:'AI-PENDING-7',
+    })
+  })
+
+  it('rejects comments that the terminal cannot preserve for reconciliation', async () => {
+    const { adapter, gateway } = setup()
+
+    await expect(adapter.execute(42, 'open', {
+      symbol:'XAUUSD', order_type:'buy', volume:0.1, comment:'x'.repeat(32),
+    })).resolves.toMatchObject({ status:'error', error:'order_comment_invalid' })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
   })
 
   it('blocks v3 trades from the server-side setting before creating a ledger command', async () => {
