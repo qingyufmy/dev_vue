@@ -48,3 +48,15 @@ describe('MT4 EA extended data contract', () => {
     expect(source).toContain('mt4_account_history_tab_range')
   })
 })
+
+describe('MT4 EA snapshot performance contract', () => {
+  it('scans active orders once when publishing positions and pending orders', () => {
+    const sendBlock = functionBlock('void SendSnapshot', 'void SendQuote')
+    const buildBlock = functionBlock('void BuildOrderSnapshots', 'string BuildSelectedOrderJson')
+
+    expect(sendBlock).toContain('BuildOrderSnapshots(streams, positions_json, orders_json)')
+    expect(buildBlock.match(/OrdersTotal\(\)/g)).toHaveLength(1)
+    expect(buildBlock).toContain('include_positions')
+    expect(buildBlock).toContain('include_orders')
+  })
+})

@@ -192,8 +192,8 @@ void DisconnectPipe()
 void SendSnapshot(const int streams)
   {
    string account_json = ((streams & STREAM_ACCOUNT) != 0) ? BuildAccountJson() : "{}";
-   string positions_json = ((streams & STREAM_POSITIONS) != 0) ? BuildOrdersJson(true) : "[]";
-   string orders_json = ((streams & STREAM_ORDERS) != 0) ? BuildOrdersJson(false) : "[]";
+   string positions_json = "[]", orders_json = "[]";
+   BuildOrderSnapshots(streams, positions_json, orders_json);
    uchar payload[];
    AppendInt32(payload, MSG_SNAPSHOT);
    AppendInt64(payload, ((long)TimeGMT()) * 1000);
@@ -1933,25 +1933,40 @@ string BuildAccountJson()
       + "}");
   }
 
-string BuildOrdersJson(const bool market_positions)
+void BuildOrderSnapshots(const int streams, string &positions_json, string &orders_json)
   {
-   string json = "[";
-   bool first = true;
+   bool include_positions = ((streams & STREAM_POSITIONS) != 0);
+   bool include_orders = ((streams & STREAM_ORDERS) != 0);
+   if(!include_positions && !include_orders)
+      return;
+   positions_json = "[";
+   orders_json = "[";
+   bool first_position = true, first_order = true;
    int total = OrdersTotal();
    for(int index = 0; index < total; index++)
      {
       if(!OrderSelect(index, SELECT_BY_POS, MODE_TRADES))
          continue;
-      int order_type = OrderType();
-      bool is_market = (order_type == OP_BUY || order_type == OP_SELL);
-      if(is_market != market_positions)
-         continue;
-      if(!first)
-         json += ",";
-      json += BuildSelectedOrderJson();
-      first = false;
+       int order_type = OrderType();
+       bool is_market = (order_type == OP_BUY || order_type == OP_SELL);
+       if((is_market && !include_positions) || (!is_market && !include_orders))
+          continue;
+       string item = BuildSelectedOrderJson();
+       if(is_market)
+         {
+          if(!first_position) positions_json += ",";
+          positions_json += item;
+          first_position = false;
+         }
+       else
+         {
+          if(!first_order) orders_json += ",";
+          orders_json += item;
+          first_order = false;
+         }
      }
-   return(json + "]");
+   positions_json += "]";
+   orders_json += "]";
   }
 
 string BuildSelectedOrderJson()

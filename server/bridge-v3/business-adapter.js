@@ -807,18 +807,15 @@ export function createBridgeV3BusinessAdapter({
       }
       const route = selectRoute(userId, routeSelectionParams(params))
       if (action === 'status') {
-        const diagnostics = await requestTerminalData(userId, route, 'diagnostics', {}, timeoutMs)
-        if (diagnostics.status !== 'success' || !diagnostics.account) {
-          return { mode:'mock', mt5_package_available:true, live_trading_enabled:false }
-        }
+        const account = await readAccount(route)
         return {
           mode:'live', mt5_package_available:true,
           live_trading_enabled:gateway.isTradeEnabled(Number(userId)),
-          terminal_trade_allowed:Boolean(diagnostics.terminal?.trade_allowed),
-          account_trade_allowed:Boolean(diagnostics.account.trade_allowed),
-          account_trade_expert:Boolean(diagnostics.account.trade_expert),
-          login:diagnostics.account.login, server:diagnostics.account.server,
-          balance:diagnostics.account.balance, equity:diagnostics.account.equity,
+          terminal_trade_allowed:Boolean(account.trade_allowed),
+          account_trade_allowed:Boolean(account.trade_allowed),
+          account_trade_expert:Boolean(account.trade_expert ?? account.trade_allowed),
+          login:account.login, server:account.server,
+          balance:account.balance, equity:account.equity,
           source:route.platform,
         }
       }

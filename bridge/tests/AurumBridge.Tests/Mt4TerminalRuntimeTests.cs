@@ -94,6 +94,10 @@ public sealed class Mt4TerminalRuntimeTests
         await WaitUntilAsync(() => connection.CollectCount >= 2, TimeSpan.FromMilliseconds(500));
 
         Assert.IsLessThan(TimeSpan.FromMilliseconds(500), DateTimeOffset.UtcNow - started);
+        Assert.IsTrue(connection.CollectedStreams[0].HasFlag(Mt4CollectionStreams.Account));
+        Assert.IsFalse(connection.CollectedStreams[1].HasFlag(Mt4CollectionStreams.Account));
+        Assert.IsTrue(connection.CollectedStreams[1].HasFlag(Mt4CollectionStreams.Positions));
+        Assert.IsTrue(connection.CollectedStreams[1].HasFlag(Mt4CollectionStreams.Orders));
         cancellation.Cancel();
         try
         {
@@ -426,6 +430,7 @@ public sealed class Mt4TerminalRuntimeTests
         public Mt4Welcome? Welcome { get; private set; }
         public int ExecuteCount { get; private set; }
         public int CollectCount { get; private set; }
+        public List<Mt4CollectionStreams> CollectedStreams { get; } = [];
         public int DealsCollectCount { get; private set; }
         public Mt4TradeCommand? LastCommand { get; private set; }
         public List<Mt4TradeCommand> Commands { get; } = [];
@@ -447,6 +452,7 @@ public sealed class Mt4TerminalRuntimeTests
             CancellationToken cancellationToken = default)
         {
             CollectCount++;
+            CollectedStreams.Add(streams);
             return Task.FromResult(new Mt4Snapshot(
                 1_800_000_000_000,
                 Json("""{"balance":1000.0}"""),

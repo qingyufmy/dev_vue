@@ -79,12 +79,19 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     public async Task RunCollectionLoopAsync(CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
+        var lastAccountCollection = 0L;
         var lastDealCollection = 0L;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var snapshot = await _connection.CollectAsync(Mt4CollectionStreams.All, cancellationToken);
-            await IngestSnapshotAsync(snapshot, cancellationToken);
             var now = _clock();
+            var requestedStreams = Mt4CollectionStreams.Positions | Mt4CollectionStreams.Orders;
+            if (_fullSnapshots.ContainsKey("account") || now - lastAccountCollection >= 1_000)
+            {
+                requestedStreams |= Mt4CollectionStreams.Account;
+                lastAccountCollection = now;
+            }
+            var snapshot = await _connection.CollectAsync(requestedStreams, cancellationToken);
+            await IngestSnapshotAsync(snapshot, requestedStreams, cancellationToken);
             if (_dealsEnabled
                 && (_fullSnapshots.ContainsKey("deals")
                     || _dealBackfillPending
@@ -412,19 +419,34 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     public async Task<int> IngestSnapshotAsync(
         Mt4Snapshot snapshot,
         CancellationToken cancellationToken = default)
+        => await IngestSnapshotAsync(snapshot, Mt4CollectionStreams.All, cancellationToken);
+
+    private async Task<int> IngestSnapshotAsync(
+        Mt4Snapshot snapshot,
+        Mt4CollectionStreams streams,
+        CancellationToken cancellationToken)
     {
         EnsureInitialized();
         var observedAt = _clock();
         var persisted = 0;
-        persisted += await PersistIfChangedAsync(
-            "account", [snapshot.Account], observedAt, snapshot.SourceTimeMsc, cancellationToken);
-        _streamFreshness["account"] = observedAt;
-        persisted += await PersistIfChangedAsync(
-            "positions", snapshot.Positions, observedAt, snapshot.SourceTimeMsc, cancellationToken);
-        _streamFreshness["positions"] = observedAt;
-        persisted += await PersistIfChangedAsync(
-            "orders", snapshot.Orders, observedAt, snapshot.SourceTimeMsc, cancellationToken);
-        _streamFreshness["orders"] = observedAt;
+        if (streams.HasFlag(Mt4CollectionStreams.Account))
+        {
+            persisted += await PersistIfChangedAsync(
+                "account", [snapshot.Account], observedAt, snapshot.SourceTimeMsc, cancellationToken);
+            _streamFreshness["account"] = observedAt;
+        }
+        if (streams.HasFlag(Mt4CollectionStreams.Positions))
+        {
+            persisted += await PersistIfChangedAsync(
+                "positions", snapshot.Positions, observedAt, snapshot.SourceTimeMsc, cancellationToken);
+            _streamFreshness["positions"] = observedAt;
+        }
+        if (streams.HasFlag(Mt4CollectionStreams.Orders))
+        {
+            persisted += await PersistIfChangedAsync(
+                "orders", snapshot.Orders, observedAt, snapshot.SourceTimeMsc, cancellationToken);
+            _streamFreshness["orders"] = observedAt;
+        }
         return persisted;
     }
 

@@ -43,6 +43,7 @@ function setup({ routes = [route()], account, rows = [], positionRows, orderRows
     if (sql.includes('bridge_v3_account_latest')) {
       return account === null ? null : { payload_json:JSON.stringify(account || {
         login:12345678, server:'Broker-Demo', balance:1000, equity:1005,
+        trade_allowed:true, trade_expert:true,
       }) }
     }
     if (sql.includes('FROM users u LEFT JOIN')) {
@@ -199,16 +200,12 @@ describe('Bridge v3 business compatibility adapter', () => {
       action:'diagnostics', params:{},
     }), { timeoutMs:5000 })
 
-    gateway.requestData.mockResolvedValueOnce({ status:'succeeded', payload:{
-      account:{ login:12345678, server:'Broker-Demo', balance:1000, equity:1005,
-        trade_allowed:true, trade_expert:true },
-      terminal:{ connected:true, trade_allowed:true }, source:'mt5',
-    } })
     await expect(adapter.execute(42, 'status')).resolves.toMatchObject({
       mode:'live', mt5_package_available:true, live_trading_enabled:true,
       terminal_trade_allowed:true, account_trade_allowed:true,
       login:12345678, server:'Broker-Demo', balance:1000, equity:1005,
     })
+    expect(gateway.requestData).toHaveBeenCalledTimes(2)
   })
 
   it('rejects invalid rates bounds before contacting the terminal', async () => {
