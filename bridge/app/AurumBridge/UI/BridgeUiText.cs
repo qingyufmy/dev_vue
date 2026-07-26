@@ -26,7 +26,7 @@ public static class BridgeUiText
                 0xD97706),
             BridgeApplicationPhase.PairingRequired => State(
                 "需要连接 AURUM 账号",
-                "首次使用会自动打开浏览器登录，只需授权一次。",
+                "请手动点击“连接账号”；浏览器授权成功后会长期保持登录。",
                 0x7C3AED),
             BridgeApplicationPhase.Connecting => State(
                 "正在连接服务器",
@@ -86,7 +86,8 @@ public static class BridgeUiText
         "mt4_ea_identity_mismatch" => "MT4 EA 的账号、Server 或终端与已绑定信息不匹配，请确认账号后重新挂载 EA。",
         "terminal_runtime_identity_mismatch" => "交易终端身份与绑定信息不匹配，桥接已拒绝连接，请确认账号和 Server。",
         "terminal_worker_failure_limit" => "交易终端连续恢复失败，已暂停该终端；请确认 MT 正常后点击“重新检测”。",
-        "mt5_probe_timeout" => "MT5 响应超时，程序会自动重试。",
+            "mt5_probe_timeout" => "MT5 响应超时，程序会自动重试。",
+            "mt5_terminal_already_in_use" => "该 MT5 已被另一个桥接档案使用；每个观摩源需要独立的 MT5 安装目录。",
         "bridge_not_paired" => "需要先连接 AURUM 账号。",
         "bridge_server_unreachable" => "暂时无法连接服务器，程序会自动重试。",
         "bridge_connection_lost" => "服务器连接中断，程序正在自动恢复。",

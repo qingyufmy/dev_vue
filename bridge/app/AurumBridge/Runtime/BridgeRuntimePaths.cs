@@ -12,7 +12,8 @@ public static class BridgeRuntimePathResolver
 
     public static BridgeRuntimePaths Resolve(
         string baseDirectory,
-        Func<string, string?>? getEnvironmentVariable = null)
+        Func<string, string?>? getEnvironmentVariable = null,
+        string profileId = BridgeRuntimeProfile.DefaultId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
         var applicationDirectory = Path.GetFullPath(baseDirectory);
@@ -50,7 +51,7 @@ public static class BridgeRuntimePathResolver
             throw new InvalidDataException("bridge_server_url_invalid");
         }
         return new(
-            Path.GetFullPath(dataDirectory),
+            BridgeRuntimeProfile.ResolveDataDirectory(dataDirectory, profileId),
             python,
             worker,
             serverUri);

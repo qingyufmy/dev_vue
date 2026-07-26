@@ -24,16 +24,20 @@ public sealed class BridgeMainForm : Form
     private readonly Button _logButton = new();
     private readonly Button _exitButton = new();
     private readonly Button _logoutButton = new();
+    private readonly Button _observerSourcesButton = new();
     private readonly ComboBox _platformSelector = new();
     private readonly ComboBox _terminalSelector = new();
     private readonly TableLayoutPanel _terminalSelectorBar = new();
+    private ContextMenuStrip? _observerSourcesMenu;
     private bool _updatingPlatform;
     private bool _updatingTerminal;
     private bool _allowClose;
 
-    public BridgeMainForm()
+    public BridgeMainForm(string profileId = BridgeRuntimeProfile.DefaultId)
     {
-        Text = "AURUM Bridge";
+        var validatedProfileId = BridgeRuntimeProfile.Validate(profileId);
+        var isDefaultProfile = BridgeRuntimeProfile.IsDefault(validatedProfileId);
+        Text = isDefaultProfile ? "AURUM Bridge" : $"AURUM Bridge · 观摩源 {validatedProfileId}";
         AccessibleName = "AURUM Bridge 状态窗口";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new(560, 470);
@@ -42,11 +46,12 @@ public sealed class BridgeMainForm : Form
         Font = new("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Dpi;
         MaximizeBox = false;
-        BuildLayout();
+        BuildLayout(validatedProfileId, isDefaultProfile);
         FormClosing += HandleFormClosing;
     }
 
     public event EventHandler? PairRequested;
+    public event EventHandler? ObserverSourcesRequested;
     public event EventHandler? RedetectRequested;
     public event EventHandler? OpenLogsRequested;
     public event EventHandler? LogoutRequested;
@@ -103,7 +108,35 @@ public sealed class BridgeMainForm : Form
 
     public void AllowClose() => _allowClose = true;
 
-    private void BuildLayout()
+    public void ShowObserverSourcesMenu(
+        IReadOnlyList<string> profileIds,
+        Action<string> openProfile,
+        Action createProfile)
+    {
+        ArgumentNullException.ThrowIfNull(profileIds);
+        ArgumentNullException.ThrowIfNull(openProfile);
+        ArgumentNullException.ThrowIfNull(createProfile);
+        _observerSourcesMenu?.Dispose();
+        var menu = new ContextMenuStrip();
+        _observerSourcesMenu = menu;
+        if (profileIds.Count == 0)
+        {
+            menu.Items.Add("尚未添加观摩源").Enabled = false;
+        }
+        else
+        {
+            foreach (var profileId in profileIds)
+            {
+                var captured = profileId;
+                menu.Items.Add($"打开 {captured}", null, (_, _) => openProfile(captured));
+            }
+        }
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("新增观摩源…", null, (_, _) => createProfile());
+        menu.Show(_observerSourcesButton, new Point(0, _observerSourcesButton.Height));
+    }
+
+    private void BuildLayout(string profileId, bool isDefaultProfile)
     {
         var root = new TableLayoutPanel
         {
@@ -125,14 +158,16 @@ public sealed class BridgeMainForm : Form
             AutoSize = true,
             Font = new(Font.FontFamily, 18F, FontStyle.Bold),
             ForeColor = Color.FromArgb(15, 23, 42),
-            Text = "AURUM Bridge",
+            Text = isDefaultProfile ? "AURUM Bridge" : $"AURUM Bridge · {profileId}",
             Margin = new Padding(0, 0, 0, 4),
         };
         var subheading = new Label
         {
             AutoSize = true,
             ForeColor = Color.FromArgb(71, 85, 105),
-            Text = "自动连接交易终端与 AURUM 服务器",
+            Text = isDefaultProfile
+                ? "自动连接交易终端与 AURUM 服务器"
+                : "独立观摩源 · 单独授权、终端选择与数据存储",
             Margin = new Padding(0, 0, 0, 22),
         };
         root.Controls.Add(heading);
@@ -142,13 +177,14 @@ public sealed class BridgeMainForm : Form
         {
             AutoSize = true,
             Dock = DockStyle.Fill,
-            ColumnCount = 4,
+            ColumnCount = 5,
             RowCount = 1,
             Margin = new Padding(0, 0, 0, 16),
         };
         platformBar.ColumnStyles.Add(new(SizeType.AutoSize));
         platformBar.ColumnStyles.Add(new(SizeType.Absolute, 120));
         platformBar.ColumnStyles.Add(new(SizeType.Percent, 100));
+        platformBar.ColumnStyles.Add(new(SizeType.AutoSize));
         platformBar.ColumnStyles.Add(new(SizeType.AutoSize));
         platformBar.Controls.Add(new Label
         {
@@ -170,11 +206,16 @@ public sealed class BridgeMainForm : Form
             }
         };
         platformBar.Controls.Add(_platformSelector, 1, 0);
+        ConfigureButton(_observerSourcesButton, "观摩源", primary:false);
+        _observerSourcesButton.MinimumSize = new(88, 34);
+        _observerSourcesButton.Visible = isDefaultProfile;
+        _observerSourcesButton.Click += (_, _) => ObserverSourcesRequested?.Invoke(this, EventArgs.Empty);
+        platformBar.Controls.Add(_observerSourcesButton, 3, 0);
         ConfigureButton(_logoutButton, "退出账号", primary:false);
         _logoutButton.MinimumSize = new(88, 34);
         _logoutButton.Visible = false;
         _logoutButton.Click += (_, _) => LogoutRequested?.Invoke(this, EventArgs.Empty);
-        platformBar.Controls.Add(_logoutButton, 3, 0);
+        platformBar.Controls.Add(_logoutButton, 4, 0);
         root.Controls.Add(platformBar);
 
         _terminalSelectorBar.AutoSize = true;
@@ -398,5 +439,14 @@ public sealed class BridgeMainForm : Form
         }
         eventArgs.Cancel = true;
         Hide();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _observerSourcesMenu?.Dispose();
+        }
+        base.Dispose(disposing);
     }
 }

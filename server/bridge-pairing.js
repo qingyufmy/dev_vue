@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { queryRun, withTransaction } from './db.js'
+import { queryOne, queryRun, withTransaction } from './db.js'
 import { assertBridgeEligible, createBridgeRefreshSession } from './bridge-auth-session.js'
 
 const PAIRING_TTL_MINUTES = 10
@@ -58,7 +58,7 @@ export async function startBridgePairing({ deviceName = '', ip = '', run = query
       return {
         deviceCode,
         userCode,
-        verificationPath: '/bridge/pair',
+        verificationPath: '/ai/bridge/pair',
         expiresInSeconds: PAIRING_TTL_MINUTES * 60,
         intervalSeconds: PAIRING_POLL_INTERVAL_SECONDS,
       }
@@ -69,18 +69,39 @@ export async function startBridgePairing({ deviceName = '', ip = '', run = query
   throw pairingError('bridge_pair_start_failed')
 }
 
-export async function approveBridgePairing(user, userCode, { ip = '', run = queryRun } = {}) {
-  assertBridgeEligible(user)
+async function resolvePairingUser(actor, bridgeUserId, query = queryOne) {
+  const targetId = Number(bridgeUserId || 0)
+  if (!targetId || targetId === Number(actor?.id)) return actor
+  if (String(actor?.role || '').toLowerCase() !== 'admin') throw pairingError('bridge_pair_source_forbidden')
+  const target = await query(`SELECT users.* FROM users
+    WHERE users.id = ? AND users.deletion_status = 'active' AND users.deleted_at IS NULL
+      AND (users.plan_source = 'observer_source' OR EXISTS (
+        SELECT 1 FROM ai_observer_sources sources WHERE sources.bridge_user_id = users.id
+      )) LIMIT 1`, [targetId])
+  if (!target) throw pairingError('bridge_pair_source_invalid')
+  return target
+}
+
+export async function approveBridgePairing(user, userCode, {
+  ip = '', bridgeUserId = null, run = queryRun, query = queryOne,
+} = {}) {
+  const pairingUser = await resolvePairingUser(user, bridgeUserId, query)
+  assertBridgeEligible(pairingUser)
   const normalized = normalizeUserCode(userCode)
   if (normalized.length !== 8) throw pairingError('bridge_pair_code_invalid')
   const result = await run(`UPDATE bridge_device_pairings
     SET status = 'approved', user_id = ?, approved_token_version = ?,
       approved_at = NOW(), approved_ip = ?, updated_at = NOW()
     WHERE user_code_hash = ? AND status = 'pending' AND expires_at > NOW()`, [
-    user.id, Number(user.token_version || 0), String(ip || '').slice(0, 64), hashToken(normalized),
+    pairingUser.id, Number(pairingUser.token_version || 0), String(ip || '').slice(0, 64), hashToken(normalized),
   ])
   if (transactionChanges(result) !== 1) throw pairingError('bridge_pair_code_invalid')
-  return { approved: true }
+  return {
+    approved:true,
+    bridgeUserId:Number(pairingUser.id),
+    bridgeRole:String(pairingUser.role || 'user'),
+    bridgePlanSource:String(pairingUser.plan_source || ''),
+  }
 }
 
 export async function consumeBridgePairing(

@@ -54,6 +54,27 @@ public sealed class BridgeRuntimePathResolverTests
     }
 
     [TestMethod]
+    public void ResolvesObserverProfileIntoAnIsolatedStateDirectory()
+    {
+        var python = CreateFile("tools", "python.exe");
+        var worker = CreateFile("source", "worker.py");
+        var root = Path.Combine(_directory, "state");
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["AURUM_BRIDGE_PYTHON"] = python,
+            ["AURUM_BRIDGE_MT5_WORKER"] = worker,
+            ["AURUM_BRIDGE_DATA_DIR"] = root,
+        };
+
+        var paths = BridgeRuntimePathResolver.Resolve(
+            _directory,
+            name => values.GetValueOrDefault(name),
+            "source-1");
+
+        Assert.AreEqual(Path.Combine(root, "profiles", "source-1"), paths.DataDirectory);
+    }
+
+    [TestMethod]
     public void DevelopmentLayoutPrefersTheBridgeVirtualEnvironmentOverPathPython()
     {
         var applicationDirectory = Path.Combine(

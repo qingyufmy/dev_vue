@@ -378,15 +378,22 @@ router.post('/auth/bridge-pair/start', async (req, res) => {
 
 router.post('/auth/bridge-pair/approve', authMiddleware, async (req, res) => {
   try {
-    await approveBridgePairing(req.user, req.body?.userCode, { ip: req.ip })
-    res.json({ ok: true, approved: true })
+    const approved = await approveBridgePairing(req.user, req.body?.userCode, {
+      ip:req.ip,
+      bridgeUserId:req.body?.bridgeUserId,
+    })
+    res.json({ ok:true, ...approved })
   } catch (err) {
     const membershipBlocked = err.code === 'bridge_membership_required'
-    res.status(membershipBlocked ? 403 : 400).json({
+    const sourceBlocked = err.code === 'bridge_pair_source_forbidden'
+      || err.code === 'bridge_pair_source_invalid'
+    res.status(membershipBlocked || sourceBlocked ? 403 : 400).json({
       ok: false,
       code: err.code || 'bridge_pair_code_invalid',
       error: membershipBlocked
         ? 'The current membership cannot use Bridge.'
+        : sourceBlocked
+          ? 'The selected observer source cannot be authorized.'
         : 'The authorization code is invalid or expired.',
     })
   }

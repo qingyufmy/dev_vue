@@ -25,6 +25,7 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly TimeSpan _stableRunThreshold;
     private readonly int _maximumConsecutiveFailures;
+    private readonly IDisposable? _lifetimeLease;
     private readonly CancellationTokenSource _stop = new();
     private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private IBridgeTerminalRuntime? _current;
@@ -36,7 +37,8 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
         Func<IBridgeTerminalRuntime> runtimeFactory,
         Func<TimeSpan, CancellationToken, Task>? delay = null,
         TimeSpan? stableRunThreshold = null,
-        int maximumConsecutiveFailures = DefaultMaximumConsecutiveFailures)
+        int maximumConsecutiveFailures = DefaultMaximumConsecutiveFailures,
+        IDisposable? lifetimeLease = null)
     {
         _terminal = terminal ?? throw new ArgumentNullException(nameof(terminal));
         _runtimeFactory = runtimeFactory ?? throw new ArgumentNullException(nameof(runtimeFactory));
@@ -51,6 +53,7 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(maximumConsecutiveFailures));
         }
         _maximumConsecutiveFailures = maximumConsecutiveFailures;
+        _lifetimeLease = lifetimeLease;
     }
 
     public TerminalDescriptor Terminal => _terminal;
@@ -203,6 +206,7 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
         {
             await _stopped.Task;
         }
+        _lifetimeLease?.Dispose();
         _stop.Dispose();
     }
 

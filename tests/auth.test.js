@@ -28,7 +28,7 @@ vi.mock('../server/bridge-auth-session.js', () => ({
 }))
 vi.mock('../server/bridge-pairing.js', () => ({
   startBridgePairing: vi.fn(async () => ({
-    deviceCode: 'device-code', userCode: 'ABCD-2345', verificationPath: '/bridge/pair',
+    deviceCode: 'device-code', userCode: 'ABCD-2345', verificationPath: '/ai/bridge/pair',
     expiresInSeconds: 600, intervalSeconds: 2,
   })),
   approveBridgePairing: vi.fn(async () => ({ approved: true })),
@@ -204,14 +204,18 @@ describe('auth.js — Bridge sessions', () => {
   it('starts, approves, and polls browser pairing without putting a refresh token in the URL', async () => {
     const started = await callRoute('post', '/auth/bridge-pair/start', { deviceName: 'Desk PC' })
     expect(started.status).toBe(201)
-    expect(started.json).toMatchObject({ ok: true, verificationPath: '/bridge/pair' })
+    expect(started.json).toMatchObject({ ok: true, verificationPath: '/ai/bridge/pair' })
     expect(startBridgePairing).toHaveBeenCalled()
 
     const approved = await callRoute('post', '/auth/bridge-pair/approve', { userCode: 'ABCD-2345' }, {
       id: 3, role: 'user', plan: 'pro',
     })
     expect(approved.json).toMatchObject({ ok: true, approved: true })
-    expect(approveBridgePairing).toHaveBeenCalled()
+    expect(approveBridgePairing).toHaveBeenCalledWith(
+      expect.objectContaining({ id:3 }),
+      'ABCD-2345',
+      expect.objectContaining({ bridgeUserId:undefined }),
+    )
 
     const polled = await callRoute('post', '/auth/bridge-pair/token', { deviceCode: 'device-code' })
     expect(polled.status).toBe(202)

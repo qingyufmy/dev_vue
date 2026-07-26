@@ -211,6 +211,13 @@ app.use(express.static(publicDir, {
 
 // API routes — no-cache to prevent stale responses across user sessions
 const noCache = (req, res, next) => { res.set('Cache-Control', 'no-store, no-cache, must-revalidate'); res.set('Pragma', 'no-cache'); next() }
+app.get('/bridge/pair', noCache, (req, res) => {
+  const code = String(req.query?.code || '').trim()
+  res.redirect(308, `/ai/bridge/pair${code ? `?code=${encodeURIComponent(code)}` : ''}`)
+})
+app.get('/ai/bridge/pair', noCache, (req, res) => {
+  res.sendFile(join(publicDir, 'ai', 'bridge-pair.html'))
+})
 app.use('/api', noCache, authRoutes)
 app.use('/api', courseRoutes)
 app.use('/api', commentRoutes)

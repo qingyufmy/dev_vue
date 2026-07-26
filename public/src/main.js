@@ -683,7 +683,6 @@ const LOGIN_REQUIRED_APP_PREFIXES = [
   '/account',
   '/membership',
   '/quotes',
-  '/bridge/pair',
   '/admin',
   '/ai',
 ]
@@ -1788,7 +1787,6 @@ function renderView() {
     case 'knowledge': renderKnowledge(); break
     case 'mindmap': renderMindmap(); break
     case 'quotes': renderQuotes(); break
-    case 'bridgePair': renderBridgePairing(); break
     case 'tools': renderTools(); break
     case 'tos': renderTos(); break
     case 'profile': renderProfile(); break
@@ -1901,7 +1899,6 @@ function viewToPath(view, episode) {
     case 'profile': return '/account'
     case 'membership': return '/membership'
     case 'quotes': return '/quotes'
-    case 'bridgePair': return '/bridge/pair'
     case 'tos': return '/tos'
     default: return '/'
   }
@@ -1922,7 +1919,6 @@ function pathToRoute(path) {
   if (clean === '/auth/register') return { view:'home', authMode:'register' }
   if (clean === '/membership') return { view: 'membership' }
   if (clean === '/quotes') return { view: 'quotes' }
-  if (clean === '/bridge/pair') return { view: 'bridgePair' }
   if (clean === '/tos') return { view: 'tos' }
 
   const articleMatch = clean.match(/^\/article\/(\d+)$/)
@@ -3719,130 +3715,6 @@ function renderTos() {
       </div>
     </div>
   `
-}
-
-// ===== AURUM Bridge browser pairing =====
-function normalizeBridgePairUserCode(value) {
-  const normalized = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
-  if (!/^[A-HJ-NP-Z2-9]{8}$/.test(normalized)) return ''
-  return `${normalized.slice(0, 4)}-${normalized.slice(4)}`
-}
-
-function renderBridgePairing() {
-  const userCode = normalizeBridgePairUserCode(new URLSearchParams(window.location.search).get('code'))
-  const accountName = state.user?.name || state.user?.nickname || state.user?.email || '当前账户'
-  const eligible = isAdmin() || getEffectivePlan() === 'pro'
-  const initialState = !userCode
-    ? {
-        kind: 'error',
-        title: '授权码无效或已过期',
-        detail: '请返回 AURUM Bridge，重新点击“连接账户”。',
-      }
-    : !eligible
-      ? {
-          kind: 'warning',
-          title: '当前账户暂不能连接',
-          detail: 'AURUM Bridge 需要有效的 Pro 会员。升级后可直接重新确认。',
-        }
-      : {
-          kind: 'ready',
-          title: '等待您的确认',
-          detail: '请确认下方账户无误，然后完成首次连接。',
-        }
-
-  mainContent.innerHTML = `
-    <main class="bridge-pair-page fade-in" aria-labelledby="bridgePairTitle">
-      <section class="bridge-pair-shell">
-        <header class="bridge-pair-header">
-          <div class="bridge-pair-product" aria-hidden="true">A</div>
-          <div>
-            <h1 id="bridgePairTitle">连接 AURUM Bridge</h1>
-            <p>允许桌面桥接软件使用您的量见账户建立安全连接。</p>
-          </div>
-        </header>
-
-        <div class="bridge-pair-code" aria-label="本次授权码">
-          <span>本次授权码</span>
-          <strong>${escapeHtml(userCode || '---- ----')}</strong>
-          <small>由 AURUM Bridge 自动带入，仅本次授权有效</small>
-        </div>
-
-        <div class="bridge-pair-account">
-          <span>将要连接的账户</span>
-          <strong>${escapeHtml(accountName)}</strong>
-        </div>
-
-        <ul class="bridge-pair-safety" aria-label="连接权限说明">
-          <li><span aria-hidden="true">✓</span> 桥接软件不会读取或保存您的登录密码</li>
-          <li><span aria-hidden="true">✓</span> 本次授权码 10 分钟内有效，并且只能使用一次</li>
-          <li><span aria-hidden="true">✓</span> 如果不是您刚刚启动的连接，请不要确认</li>
-        </ul>
-
-        <div class="bridge-pair-status bridge-pair-status-${initialState.kind}" id="bridgePairStatus" role="status" aria-live="polite">
-          <span class="bridge-pair-status-mark" aria-hidden="true">${initialState.kind === 'error' ? '!' : 'i'}</span>
-          <div>
-            <strong id="bridgePairStatusTitle">${initialState.title}</strong>
-            <p id="bridgePairStatusDetail">${initialState.detail}</p>
-          </div>
-        </div>
-
-        <div class="bridge-pair-actions">
-          ${userCode && eligible ? '<button class="btn btn-primary" id="bridgePairApprove" type="button">确认连接</button>' : ''}
-          ${!eligible ? '<a class="btn btn-outline" href="/membership">查看 Pro 会员</a>' : ''}
-          <button class="btn btn-outline" id="bridgePairRelogin" type="button" hidden>重新登录</button>
-        </div>
-      </section>
-    </main>
-  `
-
-  const status = document.getElementById('bridgePairStatus')
-  const statusTitle = document.getElementById('bridgePairStatusTitle')
-  const statusDetail = document.getElementById('bridgePairStatusDetail')
-  const approveButton = document.getElementById('bridgePairApprove')
-  const reloginButton = document.getElementById('bridgePairRelogin')
-  const updateStatus = (kind, title, detail) => {
-    if (!status || !statusTitle || !statusDetail) return
-    status.className = `bridge-pair-status bridge-pair-status-${kind}`
-    status.querySelector('.bridge-pair-status-mark').textContent = kind === 'success' ? '✓' : kind === 'pending' ? '…' : '!'
-    statusTitle.textContent = title
-    statusDetail.textContent = detail
-  }
-
-  approveButton?.addEventListener('click', async () => {
-    approveButton.disabled = true
-    approveButton.textContent = '正在确认…'
-    updateStatus('pending', '正在建立安全连接', '请保持此页面打开，通常只需几秒。')
-    try {
-      const result = await api.post('/api/auth/bridge-pair/approve', { userCode })
-      if (result.ok && result.approved) {
-        updateStatus('success', '连接已确认', '现在可以关闭此页面并返回 AURUM Bridge。')
-        approveButton.hidden = true
-        window.history.replaceState({ view: 'bridgePair' }, '', '/bridge/pair')
-        return
-      }
-      if (result.httpStatus === 401) {
-        updateStatus('error', '登录状态已失效', '请重新登录后再次确认连接。')
-        reloginButton.hidden = false
-      } else if (result.code === 'bridge_membership_required') {
-        updateStatus('error', '当前账户暂不能连接', 'AURUM Bridge 需要有效的 Pro 会员。')
-      } else {
-        updateStatus('error', '授权码无效或已过期', '请返回 AURUM Bridge 重新发起连接。')
-      }
-      approveButton.hidden = true
-    } catch {
-      updateStatus('error', '暂时无法连接服务器', '请检查网络后重试；本次授权码仍在 10 分钟内有效。')
-      approveButton.disabled = false
-      approveButton.textContent = '重新确认'
-    }
-  })
-
-  reloginButton?.addEventListener('click', () => {
-    showAuthModal('login_password', {
-      message: '请重新登录后确认桥接连接',
-      messageType: 'err',
-      nextUrl: `/bridge/pair?code=${encodeURIComponent(userCode)}`,
-    })
-  })
 }
 
 // ===== USDT Crypto Payment =====

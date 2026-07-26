@@ -9,10 +9,11 @@ internal static class Program
     public static async Task Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
-        var healthMode = args.Contains("--health-check", StringComparer.Ordinal);
+        var (profileId, runtimeArgs) = ReadProfileArgument(args);
+        var healthMode = runtimeArgs.Contains("--health-check", StringComparer.Ordinal);
         try
         {
-            if (TryReadHealthArguments(args, out var healthFile))
+            if (TryReadHealthArguments(runtimeArgs, out var healthFile))
             {
                 var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
                 var versionDirectory = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(
@@ -23,13 +24,16 @@ internal static class Program
                 await BridgeHealthCheck.RunAsync(paths, healthFile, Path.Combine(installRoot, "health"));
                 return;
             }
-            var startupReadyFile = ReadStartupReadyFile(args);
-            using var singleInstance = BridgeSingleInstanceGuard.TryAcquire("AURUMBridge.v3");
+            var startupReadyFile = ReadStartupReadyFile(runtimeArgs);
+            var instanceId = BridgeRuntimeProfile.IsDefault(profileId)
+                ? "AURUMBridge.v3"
+                : $"AURUMBridge.v3.profile.{profileId}";
+            using var singleInstance = BridgeSingleInstanceGuard.TryAcquire(instanceId);
             if (singleInstance is null)
             {
                 return;
             }
-            Application.Run(new BridgeApplicationContext(singleInstance, startupReadyFile));
+            Application.Run(new BridgeApplicationContext(singleInstance, startupReadyFile, profileId));
         }
         catch (Exception error)
         {
@@ -44,6 +48,29 @@ internal static class Program
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
+    }
+
+    internal static (string ProfileId, string[] RuntimeArgs) ReadProfileArgument(string[] args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        var profileId = BridgeRuntimeProfile.DefaultId;
+        var runtimeArgs = new List<string>();
+        var profileSeen = false;
+        for (var index = 0; index < args.Length; index++)
+        {
+            if (args[index] != "--profile")
+            {
+                runtimeArgs.Add(args[index]);
+                continue;
+            }
+            if (++index >= args.Length || profileSeen)
+            {
+                throw new ArgumentException("bridge_arguments_invalid", nameof(args));
+            }
+            profileSeen = true;
+            profileId = BridgeRuntimeProfile.Validate(args[index]);
+        }
+        return (profileId, runtimeArgs.ToArray());
     }
 
     private static string? ReadStartupReadyFile(string[] args)

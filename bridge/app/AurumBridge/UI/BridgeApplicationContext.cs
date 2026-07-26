@@ -4,15 +4,6 @@ using AurumBridge.Update;
 
 namespace AurumBridge.UI;
 
-public sealed class BridgeFirstAuthorizationGate
-{
-    private int _started;
-
-    public bool TryStart(BridgeApplicationPhase phase) =>
-        phase == BridgeApplicationPhase.PairingRequired
-        && Interlocked.Exchange(ref _started, 1) == 0;
-}
-
 public sealed class BridgeApplicationContext : ApplicationContext
 {
     private readonly BridgeMainForm _form;
@@ -23,24 +14,31 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly BridgeSingleInstanceGuard _singleInstance;
     private readonly BridgeUpdateCoordinator? _updateCoordinator;
     private readonly string? _startupReadyFile;
+    private readonly string _profileId;
+    private readonly string _rootDataDirectory;
     private readonly CancellationTokenSource _stop = new();
     private readonly long _startedTimestamp = Stopwatch.GetTimestamp();
     private Task? _updateTask;
     private Task? _healthTask;
     private BridgeLogViewerForm? _logViewer;
     private int _startupReadyWritten;
-    private readonly BridgeFirstAuthorizationGate _firstAuthorization = new();
     private int _latestPhase = (int)BridgeApplicationPhase.Starting;
     private int _latestTerminalCount;
     private bool _shuttingDown;
 
     public BridgeApplicationContext(
         BridgeSingleInstanceGuard singleInstance,
-        string? startupReadyFile = null)
+        string? startupReadyFile = null,
+        string profileId = BridgeRuntimeProfile.DefaultId)
     {
         _singleInstance = singleInstance ?? throw new ArgumentNullException(nameof(singleInstance));
         _startupReadyFile = startupReadyFile;
-        var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
+        _profileId = BridgeRuntimeProfile.Validate(profileId);
+        var rootPaths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
+        _rootDataDirectory = rootPaths.DataDirectory;
+        var paths = BridgeRuntimePathResolver.Resolve(
+            AppContext.BaseDirectory,
+            profileId:_profileId);
         _logger = new(Path.Combine(paths.DataDirectory, "logs"));
         _preferences = new(Path.Combine(paths.DataDirectory, "preferences.json"));
         string? selectedPlatform = null;
@@ -55,11 +53,15 @@ public sealed class BridgeApplicationContext : ApplicationContext
         {
             _logger.Error("preferences_load_failed", error);
         }
-        EnsureAutoStart();
-        _updateCoordinator = CreateUpdateCoordinator(paths.ServerBaseUri);
+        if (BridgeRuntimeProfile.IsDefault(_profileId))
+        {
+            EnsureAutoStart();
+            _updateCoordinator = CreateUpdateCoordinator(paths.ServerBaseUri);
+        }
         _controller = new(paths, selectedPlatform, selectedMt5TerminalId);
-        _form = new();
+        _form = new(_profileId);
         _form.PairRequested += HandlePairRequested;
+        _form.ObserverSourcesRequested += HandleObserverSourcesRequested;
         _form.RedetectRequested += (_, _) => _controller.RequestRedetect();
         _form.OpenLogsRequested += HandleOpenLogsRequested;
         _form.LogoutRequested += HandleLogoutRequested;
@@ -155,12 +157,75 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _notifyIcon.Text = status.Phase == BridgeApplicationPhase.Online
                 ? "AURUM Bridge · 运行中"
                 : "AURUM Bridge";
-            if (_firstAuthorization.TryStart(status.Phase))
-            {
-                _logger.Info("automatic_pairing_started");
-                HandlePairRequested(_form, EventArgs.Empty);
-            }
         });
+    }
+
+    private void HandleObserverSourcesRequested(object? sender, EventArgs eventArgs)
+    {
+        try
+        {
+            var profiles = BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory);
+            _form.ShowObserverSourcesMenu(
+                profiles,
+                LaunchObserverProfile,
+                CreateObserverProfile);
+        }
+        catch (Exception error)
+        {
+            _logger.Error("observer_profiles_load_failed", error);
+            MessageBox.Show(
+                _form,
+                "暂时无法读取观摩源，请稍后重试。",
+                "观摩源",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private void CreateObserverProfile()
+    {
+        using var dialog = new BridgeObserverProfileDialog();
+        if (dialog.ShowDialog(_form) != DialogResult.OK)
+        {
+            return;
+        }
+        try
+        {
+            BridgeRuntimeProfile.CreateObserverProfile(_rootDataDirectory, dialog.ProfileId);
+            _logger.Info("observer_profile_created", $"profile={dialog.ProfileId}");
+            LaunchObserverProfile(dialog.ProfileId);
+        }
+        catch (Exception error)
+        {
+            _logger.Error("observer_profile_create_failed", error);
+            MessageBox.Show(
+                _form,
+                "观摩源名称无效或无法创建。请使用 1-40 位英文字母、数字、横线或下划线。",
+                "新增观摩源",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private void LaunchObserverProfile(string profileId)
+    {
+        try
+        {
+            BridgeRuntimeProfile.CreateObserverProfile(_rootDataDirectory, profileId);
+            _ = Process.Start(BridgeRuntimeProfile.BuildLaunchInfo(profileId))
+                ?? throw new InvalidOperationException("observer_profile_start_failed");
+            _logger.Info("observer_profile_started", $"profile={profileId}");
+        }
+        catch (Exception error)
+        {
+            _logger.Error("observer_profile_start_failed", error);
+            MessageBox.Show(
+                _form,
+                "观摩源暂时无法启动，请稍后重试。",
+                "观摩源",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
     }
 
     private async Task WriteStartupReadyAsync(string path)

@@ -82,6 +82,17 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
+    public void DuplicateTerminalUseExplainsThatObserverProfilesNeedSeparateMt5Directories()
+    {
+        var description = BridgeUiText.DescribeCode(
+            "mt5_terminal_already_in_use", "fallback");
+
+        StringAssert.Contains(description, "另一个桥接档案");
+        StringAssert.Contains(description, "独立");
+        StringAssert.Contains(description, "MT5");
+    }
+
+    [TestMethod]
     public void MultipleMt5TerminalsRequireAConciseAccountSelection()
     {
         var text = BridgeUiText.ForStatus(new(
@@ -111,13 +122,14 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
-    public void FirstAuthorizationCopyExplainsTheOneTimeBrowserLogin()
+    public void FirstAuthorizationCopyExplainsTheManualOneTimeBrowserLogin()
     {
         var text = BridgeUiText.ForStatus(new(
             BridgeApplicationPhase.PairingRequired, [], null));
 
         StringAssert.Contains(text.Description, "浏览器");
-        StringAssert.Contains(text.Description, "一次");
+        StringAssert.Contains(text.Description, "手动点击");
+        StringAssert.Contains(text.Description, "长期保持登录");
     }
 
     [TestMethod]

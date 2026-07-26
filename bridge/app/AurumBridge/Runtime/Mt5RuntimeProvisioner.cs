@@ -71,6 +71,16 @@ public sealed class Mt5RuntimeProvisioner
             {
                 continue;
             }
+            var terminalLease = BridgeTerminalExclusiveLease.TryAcquire(
+                installation.TerminalInstanceId);
+            if (terminalLease is null)
+            {
+                failures.Add(new(
+                    installation.TerminalInstanceId,
+                    installation.ExecutablePath,
+                    "mt5_terminal_already_in_use"));
+                continue;
+            }
             try
             {
                 var probe = await _probe(installation, cancellationToken);
@@ -85,15 +95,18 @@ public sealed class Mt5RuntimeProvisioner
                 var descriptor = binding.ToDescriptor(WorkerVersion);
                 var supervisor = new TerminalRuntimeSupervisor(
                     descriptor,
-                    () => CreateRuntime(installation.ExecutablePath, descriptor));
+                    () => CreateRuntime(installation.ExecutablePath, descriptor),
+                    lifetimeLease:terminalLease);
                 provisioned.Add(new(installation, binding, supervisor));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                terminalLease.Dispose();
                 throw;
             }
             catch (Exception error)
             {
+                terminalLease.Dispose();
                 failures.Add(new(
                     installation.TerminalInstanceId,
                     installation.ExecutablePath,

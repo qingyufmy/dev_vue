@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../server/db.js', () => ({
+  queryOne: vi.fn(),
   queryRun: vi.fn(),
   withTransaction: vi.fn(),
 }))
@@ -11,7 +12,7 @@ vi.mock('../server/bridge-auth-session.js', () => ({
   createBridgeRefreshSession: vi.fn(),
 }))
 
-import { queryRun, withTransaction } from '../server/db.js'
+import { queryOne, queryRun, withTransaction } from '../server/db.js'
 import { assertBridgeEligible, createBridgeRefreshSession } from '../server/bridge-auth-session.js'
 import {
   approveBridgePairing, consumeBridgePairing, startBridgePairing,
@@ -26,7 +27,7 @@ describe('bridge device pairing', () => {
 
     expect(result.deviceCode.length).toBeGreaterThan(40)
     expect(result.userCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
-    expect(result.verificationPath).toBe('/bridge/pair')
+    expect(result.verificationPath).toBe('/ai/bridge/pair')
     const [sql, params] = queryRun.mock.calls[0]
     expect(sql).toContain('INSERT INTO bridge_device_pairings')
     expect(params[0]).toMatch(/^[a-f0-9]{64}$/)
@@ -41,11 +42,37 @@ describe('bridge device pairing', () => {
       { id: 7, role: 'user', plan: 'pro' },
       'ABCD-2345',
       { ip: '1.2.3.4' },
-    )).resolves.toEqual({ approved: true })
+    )).resolves.toMatchObject({ approved:true, bridgeUserId:7 })
 
     expect(assertBridgeEligible).toHaveBeenCalled()
     expect(queryRun.mock.calls[0][0]).toContain("status = 'approved'")
     expect(queryRun.mock.calls[0][1][3]).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('lets an administrator pair an isolated profile to an observer-source account', async () => {
+    queryRun.mockResolvedValue({ changes:1 })
+    queryOne.mockResolvedValue({
+      id:42, role:'user', plan:'pro', plan_source:'observer_source', token_version:2,
+    })
+
+    await expect(approveBridgePairing(
+      { id:1, role:'admin', plan:'pro' },
+      'ABCD-2345',
+      { bridgeUserId:42, ip:'1.2.3.4' },
+    )).resolves.toMatchObject({ approved:true, bridgeUserId:42, bridgePlanSource:'observer_source' })
+
+    expect(queryOne.mock.calls[0][0]).toContain("plan_source = 'observer_source'")
+    expect(queryRun.mock.calls[0][1][0]).toBe(42)
+  })
+
+  it('does not let a non-admin pair a profile to another account', async () => {
+    await expect(approveBridgePairing(
+      { id:7, role:'user', plan:'pro' },
+      'ABCD-2345',
+      { bridgeUserId:42 },
+    )).rejects.toMatchObject({ code:'bridge_pair_source_forbidden' })
+    expect(queryOne).not.toHaveBeenCalled()
+    expect(queryRun).not.toHaveBeenCalled()
   })
 
   it('returns pending without issuing a refresh credential', async () => {
