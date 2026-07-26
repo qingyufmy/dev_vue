@@ -114,16 +114,16 @@ describe('rollout hardening contract', () => {
     expect(bridge).toContain('resolveObserverBridgeContext(userId, user, params.observer_channel_id)')
     expect(bridge).toContain("const dataUserId = access.mode === 'observer' ? observerContext.bridgeUserId : userId")
     expect(bridge).toContain("observerWsActionAllowed(access, action)")
-    expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'account', {}, { noFallback:true })")
-    expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'positions', {}, { noFallback:true })")
-    expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'pending_list', { symbol }, { noFallback:true })")
+    expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'account', routedParams(), { noFallback:true })")
+    expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'positions', routedParams(), { noFallback:true })")
+    expect(bridge).toContain("ai.mt5Bridge(dataUserId, 'pending_list', routedParams({ symbol }), { noFallback:true })")
     expect(bridge).toContain("ai.mt5Bridge(userId, 'toggle_trade'")
     expect(bridge).toContain("ai.executeOrderCore(userId")
   })
 
   it('gives complete history queries a queue-aware Bridge timeout', () => {
-    expect(bridge).toContain("'history', bridgeParams, { timeoutMs: 30000, noFallback: true }")
-    expect(bridge).toContain("'chart_data', chartParams, { timeoutMs: 30000, noFallback: true }")
+    expect(bridge).toContain("'history', routedParams(bridgeParams), { timeoutMs: 30000, noFallback: true }")
+    expect(bridge).toContain("'chart_data', routedParams(chartParams), { timeoutMs: 30000, noFallback: true }")
   })
 
   it('keeps full MT5 history out of the real-time risk path', () => {
