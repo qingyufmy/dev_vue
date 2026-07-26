@@ -30,6 +30,8 @@ public sealed class BridgeSessionClient
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly Func<long> _clock;
 
+    public event Action<bool>? ObserverSourceManagementChanged;
+
     public BridgeSessionClient(
         Uri serverBaseUri,
         HttpClient httpClient,
@@ -122,6 +124,7 @@ public sealed class BridgeSessionClient
         catch (BridgeApiException error) when (error.StatusCode == HttpStatusCode.Unauthorized)
         {
             await _credentialStore.ClearAsync(CancellationToken.None);
+            PublishObserverSourceManagement(false);
             throw;
         }
         if (string.IsNullOrWhiteSpace(refresh.Token))
@@ -131,6 +134,10 @@ public sealed class BridgeSessionClient
         await _credentialStore.SaveAsync(new(
             credential.RefreshToken,
             checked(_clock() + (long)refresh.RefreshExpiresInSeconds * 1_000)), cancellationToken);
+        PublishObserverSourceManagement(String.Equals(
+            refresh.BridgeRole,
+            "admin",
+            StringComparison.OrdinalIgnoreCase));
         var ticket = await PostAsync<TicketResponse>(
             "/api/auth/bridge-ticket",
             new { },
@@ -173,8 +180,21 @@ public sealed class BridgeSessionClient
         finally
         {
             await _credentialStore.ClearAsync(CancellationToken.None);
+            PublishObserverSourceManagement(false);
         }
         return revoked;
+    }
+
+    private void PublishObserverSourceManagement(bool allowed)
+    {
+        try
+        {
+            ObserverSourceManagementChanged?.Invoke(allowed);
+        }
+        catch
+        {
+            // UI capability updates must never interrupt authentication or reconnects.
+        }
     }
 
     private async Task<TResponse> PostAsync<TResponse>(
@@ -328,6 +348,9 @@ public sealed class BridgeSessionClient
 
         [JsonPropertyName("refreshExpiresInSeconds")]
         public int RefreshExpiresInSeconds { get; init; }
+
+        [JsonPropertyName("bridgeRole")]
+        public string BridgeRole { get; init; } = string.Empty;
     }
 
     private sealed record TicketResponse : ApiResponse

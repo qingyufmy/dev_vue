@@ -7,6 +7,20 @@ namespace AurumBridge.Tests;
 public sealed class BridgeUiTextTests
 {
     [TestMethod]
+    public void ObserverSourcesAreVisibleOnlyForAnAuthenticatedAdministratorDefaultProfile()
+    {
+        Assert.IsTrue(BridgeMainForm.CanShowObserverSources(
+            isDefaultProfile:true,
+            canManageObserverSources:true));
+        Assert.IsFalse(BridgeMainForm.CanShowObserverSources(
+            isDefaultProfile:true,
+            canManageObserverSources:false));
+        Assert.IsFalse(BridgeMainForm.CanShowObserverSources(
+            isDefaultProfile:false,
+            canManageObserverSources:true));
+    }
+
+    [TestMethod]
     public void OnlineStateUsesConciseOperationalCopy()
     {
         var text = BridgeUiText.ForStatus(new(

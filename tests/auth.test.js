@@ -167,8 +167,19 @@ describe('auth.js — Bridge sessions', () => {
 
   it('returns a new short-lived token for a valid refresh credential', async () => {
     const { json } = await callRoute('post', '/auth/bridge-refresh', { refreshToken: 'refresh-token' })
-    expect(json).toMatchObject({ ok: true, token: 'mock-token-123' })
+    expect(json).toMatchObject({ ok: true, token: 'mock-token-123', bridgeRole:'user' })
     expect(useBridgeRefreshSession).toHaveBeenCalledWith('refresh-token', expect.any(Object))
+  })
+
+  it('returns the authoritative administrator capability with a refreshed Bridge session', async () => {
+    useBridgeRefreshSession.mockResolvedValueOnce({
+      user:{ id:3, role:'admin', token_version:0 },
+      expiresInSeconds:7776000,
+    })
+
+    const { json } = await callRoute('post', '/auth/bridge-refresh', { refreshToken:'refresh-token' })
+
+    expect(json).toMatchObject({ ok:true, bridgeRole:'admin' })
   })
 
   it('returns 401 only when the device authorization was explicitly invalidated', async () => {

@@ -438,6 +438,7 @@ router.post('/auth/bridge-refresh', async (req, res) => {
       ok: true,
       token: generateToken(session.user.id, session.user.token_version),
       refreshExpiresInSeconds: session.expiresInSeconds,
+      bridgeRole:String(session.user.role || 'user'),
     })
   } catch (err) {
     const code = String(err.code || '')

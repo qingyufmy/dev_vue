@@ -113,6 +113,7 @@ public sealed class BridgeSessionClientTests
                 ok = true,
                 token = "short-jwt",
                 refreshExpiresInSeconds = 7_776_000,
+                bridgeRole = "admin",
             }),
             Response(HttpStatusCode.OK, new
             {
@@ -129,6 +130,8 @@ public sealed class BridgeSessionClientTests
             new HttpClient(handler),
             store,
             clock: () => 1_800_000_000_000);
+        var observerManagement = new List<bool>();
+        client.ObserverSourceManagementChanged += observerManagement.Add;
 
         var attempt = await client.AcquireConnectionAttemptAsync(Hello());
 
@@ -136,6 +139,37 @@ public sealed class BridgeSessionClientTests
         Assert.AreEqual(new string('t', 48), attempt.Ticket);
         Assert.AreEqual("Bearer short-jwt", handler.Requests[1].Authorization);
         Assert.DoesNotContain(new string('r', 64), handler.Requests[1].Body);
+        CollectionAssert.AreEqual(new[] { true }, observerManagement);
+    }
+
+    [TestMethod]
+    public async Task MissingOrNonAdminRoleFailsObserverManagementClosed()
+    {
+        var handler = new QueueHandler(
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true,
+                token = "short-jwt",
+                refreshExpiresInSeconds = 7_776_000,
+            }),
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true,
+                ticket = new string('t', 48),
+                expiresInSeconds = 30,
+            }));
+        var store = new MemoryCredentialStore
+        {
+            Credential = new(new string('r', 64), 1_900_000_000_000),
+        };
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"), new HttpClient(handler), store);
+        var observerManagement = new List<bool>();
+        client.ObserverSourceManagementChanged += observerManagement.Add;
+
+        await client.AcquireConnectionAttemptAsync(Hello());
+
+        CollectionAssert.AreEqual(new[] { false }, observerManagement);
     }
 
     [TestMethod]
@@ -154,11 +188,14 @@ public sealed class BridgeSessionClientTests
             new Uri("https://bridge.example"),
             new HttpClient(handler),
             store);
+        var observerManagement = new List<bool>();
+        client.ObserverSourceManagementChanged += observerManagement.Add;
 
         var error = await Assert.ThrowsExactlyAsync<BridgeApiException>(
             async () => await client.AcquireConnectionAttemptAsync(Hello()));
         Assert.AreEqual("bridge_refresh_revoked", error.Code);
         Assert.IsNull(store.Credential);
+        CollectionAssert.AreEqual(new[] { false }, observerManagement);
     }
 
     [TestMethod]
@@ -199,6 +236,8 @@ public sealed class BridgeSessionClientTests
         };
         var client = new BridgeSessionClient(
             new Uri("https://bridge.example"), new HttpClient(handler), store);
+        var observerManagement = new List<bool>();
+        client.ObserverSourceManagementChanged += observerManagement.Add;
 
         Assert.IsTrue(await client.LogoutAsync());
 
@@ -206,6 +245,7 @@ public sealed class BridgeSessionClientTests
         Assert.AreEqual("https://bridge.example/api/auth/bridge-revoke", handler.Requests[1].Uri);
         Assert.AreEqual("Bearer short-jwt", handler.Requests[1].Authorization);
         StringAssert.Contains(handler.Requests[1].Body, refreshToken);
+        CollectionAssert.AreEqual(new[] { false }, observerManagement);
     }
 
     [TestMethod]

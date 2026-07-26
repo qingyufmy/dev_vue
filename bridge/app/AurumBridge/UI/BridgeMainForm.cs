@@ -25,9 +25,10 @@ public sealed class BridgeMainForm : Form
     private readonly Button _exitButton = new();
     private readonly Button _logoutButton = new();
     private readonly Button _observerSourcesButton = new();
-    private readonly ComboBox _platformSelector = new();
+    private readonly PlatformComboBox _platformSelector = new();
     private readonly ComboBox _terminalSelector = new();
     private readonly TableLayoutPanel _terminalSelectorBar = new();
+    private readonly bool _isDefaultProfile;
     private ContextMenuStrip? _observerSourcesMenu;
     private bool _updatingPlatform;
     private bool _updatingTerminal;
@@ -37,6 +38,7 @@ public sealed class BridgeMainForm : Form
     {
         var validatedProfileId = BridgeRuntimeProfile.Validate(profileId);
         var isDefaultProfile = BridgeRuntimeProfile.IsDefault(validatedProfileId);
+        _isDefaultProfile = isDefaultProfile;
         Text = isDefaultProfile
             ? BridgeBrand.ProductName
             : $"{BridgeBrand.ProductName} · 观摩源 {validatedProfileId}";
@@ -72,6 +74,9 @@ public sealed class BridgeMainForm : Form
         _logoutButton.Visible = status.SelectedPlatform is not null
             && status.Phase is not (BridgeApplicationPhase.PairingRequired
                 or BridgeApplicationPhase.PlatformSelectionRequired);
+        _observerSourcesButton.Visible = CanShowObserverSources(
+            _isDefaultProfile,
+            status.CanManageObserverSources);
         ApplyPlatform(status.SelectedPlatform);
         ApplyTerminalCandidates(status);
         _terminalList.SuspendLayout();
@@ -110,6 +115,10 @@ public sealed class BridgeMainForm : Form
 
     public void AllowClose() => _allowClose = true;
 
+    public static bool CanShowObserverSources(
+        bool isDefaultProfile,
+        bool canManageObserverSources) => isDefaultProfile && canManageObserverSources;
+
     public void ShowObserverSourcesMenu(
         IReadOnlyList<string> profileIds,
         Action<string> openProfile,
@@ -143,7 +152,7 @@ public sealed class BridgeMainForm : Form
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new(28, 24, 28, 22),
+            Padding = new(32, 24, 32, 24),
             ColumnCount = 1,
             RowCount = 8,
         };
@@ -172,7 +181,7 @@ public sealed class BridgeMainForm : Form
             Text = isDefaultProfile
                 ? BridgeBrand.Subtitle
                 : "连接观摩终端与量见 AI交易实验室",
-            Margin = new Padding(0, 0, 0, 22),
+            Margin = new Padding(0, 0, 0, 24),
         };
         root.Controls.Add(heading);
         root.Controls.Add(subheading);
@@ -181,25 +190,40 @@ public sealed class BridgeMainForm : Form
         {
             AutoSize = true,
             Dock = DockStyle.Fill,
-            ColumnCount = 5,
+            ColumnCount = 3,
             RowCount = 1,
             Margin = new Padding(0, 0, 0, 16),
         };
         platformBar.ColumnStyles.Add(new(SizeType.AutoSize));
-        platformBar.ColumnStyles.Add(new(SizeType.Absolute, 120));
         platformBar.ColumnStyles.Add(new(SizeType.Percent, 100));
         platformBar.ColumnStyles.Add(new(SizeType.AutoSize));
-        platformBar.ColumnStyles.Add(new(SizeType.AutoSize));
-        platformBar.Controls.Add(new Label
+
+        var platformField = new TableLayoutPanel
+        {
+            AutoSize = true,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = Padding.Empty,
+        };
+        platformField.ColumnStyles.Add(new(SizeType.AutoSize));
+        platformField.ColumnStyles.Add(new(SizeType.Absolute, 136));
+        platformField.Controls.Add(new Label
         {
             AutoSize = true,
             Anchor = AnchorStyles.Left,
+            Font = new(Font.FontFamily, 9F, FontStyle.Bold),
             ForeColor = Color.FromArgb(51, 65, 85),
-            Text = "交易平台",
-            Margin = new Padding(0, 8, 10, 0),
+            Text = "选择交易平台",
+            Margin = new Padding(0, 0, 12, 0),
         }, 0, 0);
         _platformSelector.Dock = DockStyle.Fill;
         _platformSelector.DropDownStyle = ComboBoxStyle.DropDownList;
+        _platformSelector.FlatStyle = FlatStyle.Flat;
+        _platformSelector.BackColor = Color.White;
+        _platformSelector.ForeColor = Color.FromArgb(30, 41, 59);
+        _platformSelector.Font = new(Font.FontFamily, 9.5F);
+        _platformSelector.MinimumSize = new(136, 36);
+        _platformSelector.Margin = Padding.Empty;
         _platformSelector.AccessibleName = "选择 MT4 或 MT5";
         _platformSelector.Items.AddRange(["MT5", "MT4"]);
         _platformSelector.SelectedIndexChanged += (_, _) =>
@@ -209,17 +233,30 @@ public sealed class BridgeMainForm : Form
                 PlatformChanged?.Invoke(this, new(selected.ToLowerInvariant()));
             }
         };
-        platformBar.Controls.Add(_platformSelector, 1, 0);
+        platformField.Controls.Add(_platformSelector, 1, 0);
+        platformBar.Controls.Add(platformField, 0, 0);
+
+        var platformActions = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Anchor = AnchorStyles.Right,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = Padding.Empty,
+        };
         ConfigureButton(_observerSourcesButton, "观摩源", primary:false);
-        _observerSourcesButton.MinimumSize = new(88, 34);
-        _observerSourcesButton.Visible = isDefaultProfile;
+        _observerSourcesButton.MinimumSize = new(96, 36);
+        _observerSourcesButton.Margin = Padding.Empty;
+        _observerSourcesButton.Visible = false;
         _observerSourcesButton.Click += (_, _) => ObserverSourcesRequested?.Invoke(this, EventArgs.Empty);
-        platformBar.Controls.Add(_observerSourcesButton, 3, 0);
+        platformActions.Controls.Add(_observerSourcesButton);
         ConfigureButton(_logoutButton, "退出账号", primary:false);
-        _logoutButton.MinimumSize = new(88, 34);
+        _logoutButton.MinimumSize = new(96, 36);
+        _logoutButton.Margin = new Padding(8, 0, 0, 0);
         _logoutButton.Visible = false;
         _logoutButton.Click += (_, _) => LogoutRequested?.Invoke(this, EventArgs.Empty);
-        platformBar.Controls.Add(_logoutButton, 4, 0);
+        platformActions.Controls.Add(_logoutButton);
+        platformBar.Controls.Add(platformActions, 2, 0);
         root.Controls.Add(platformBar);
 
         _terminalSelectorBar.AutoSize = true;
@@ -259,17 +296,17 @@ public sealed class BridgeMainForm : Form
             Padding = new(20),
             ColumnCount = 2,
             RowCount = 5,
-            Margin = new Padding(0, 0, 0, 18),
+            Margin = new Padding(0, 0, 0, 16),
         };
-        card.ColumnStyles.Add(new(SizeType.Absolute, 18));
+        card.ColumnStyles.Add(new(SizeType.Absolute, 16));
         card.ColumnStyles.Add(new(SizeType.Percent, 100));
         card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.Percent, 100));
-        _statusMarker.Size = new(10, 10);
-        _statusMarker.Margin = new(0, 7, 8, 0);
+        _statusMarker.Size = new(8, 8);
+        _statusMarker.Margin = new(0, 8, 8, 0);
         _statusTitle.AutoSize = true;
         _statusTitle.Font = new(Font.FontFamily, 12F, FontStyle.Bold);
         _statusTitle.ForeColor = Color.FromArgb(15, 23, 42);
@@ -294,7 +331,7 @@ public sealed class BridgeMainForm : Form
             Font = new(Font.FontFamily, 9F, FontStyle.Bold),
             ForeColor = Color.FromArgb(51, 65, 85),
             Text = "已识别账户",
-            Margin = new(0, 0, 0, 5),
+            Margin = new(0, 0, 0, 4),
         }, 1, 3);
         card.Controls.Add(_terminalList, 1, 4);
         root.Controls.Add(card);
@@ -393,6 +430,47 @@ public sealed class BridgeMainForm : Form
         public override string ToString() => DisplayName;
     }
 
+    private sealed class PlatformComboBox : ComboBox
+    {
+        public PlatformComboBox()
+        {
+            DrawMode = DrawMode.OwnerDrawFixed;
+            ItemHeight = 28;
+            DropDownStyle = ComboBoxStyle.DropDownList;
+            FlatStyle = FlatStyle.Flat;
+        }
+
+        protected override void OnDrawItem(DrawItemEventArgs eventArgs)
+        {
+            var isEditSurface = (eventArgs.State & DrawItemState.ComboBoxEdit) != 0;
+            var isSelected = !isEditSurface
+                && (eventArgs.State & DrawItemState.Selected) != 0;
+            var background = isSelected ? SystemColors.Highlight : BackColor;
+            var foreground = isSelected ? SystemColors.HighlightText : ForeColor;
+            using var brush = new SolidBrush(background);
+            eventArgs.Graphics.FillRectangle(brush, eventArgs.Bounds);
+            if (eventArgs.Index >= 0)
+            {
+                var textBounds = new Rectangle(
+                    eventArgs.Bounds.X + 8,
+                    eventArgs.Bounds.Y,
+                    Math.Max(0, eventArgs.Bounds.Width - 12),
+                    eventArgs.Bounds.Height);
+                TextRenderer.DrawText(
+                    eventArgs.Graphics,
+                    GetItemText(Items[eventArgs.Index]),
+                    Font,
+                    textBounds,
+                    foreground,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+            }
+            if ((eventArgs.State & DrawItemState.Focus) != 0 && !isEditSurface)
+            {
+                eventArgs.DrawFocusRectangle();
+            }
+        }
+    }
+
     private Panel CreateTerminalRow(BridgeTerminalStatus terminal)
     {
         var state = BridgeUiText.DescribeTerminalState(terminal);
@@ -424,7 +502,7 @@ public sealed class BridgeMainForm : Form
     private static void ConfigureButton(Button button, string text, bool primary)
     {
         button.AutoSize = true;
-        button.MinimumSize = new(104, 38);
+        button.MinimumSize = new(104, 36);
         button.FlatStyle = FlatStyle.Flat;
         button.FlatAppearance.BorderSize = primary ? 0 : 1;
         button.FlatAppearance.BorderColor = Color.FromArgb(203, 213, 225);

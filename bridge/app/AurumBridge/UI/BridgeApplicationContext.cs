@@ -25,6 +25,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private int _startupReadyWritten;
     private int _latestPhase = (int)BridgeApplicationPhase.Starting;
     private int _latestTerminalCount;
+    private int _canManageObserverSources;
     private bool _shuttingDown;
 
     public BridgeApplicationContext(
@@ -145,6 +146,9 @@ public sealed class BridgeApplicationContext : ApplicationContext
     {
         Volatile.Write(ref _latestPhase, (int)status.Phase);
         Volatile.Write(ref _latestTerminalCount, status.Terminals.Count);
+        Volatile.Write(
+            ref _canManageObserverSources,
+            status.CanManageObserverSources ? 1 : 0);
         _logger.Info(
             "bridge_status_changed",
             $"phase={status.Phase}; terminals={status.Terminals.Count}; detail={status.DetailCode ?? "none"}");
@@ -169,6 +173,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private void HandleObserverSourcesRequested(object? sender, EventArgs eventArgs)
     {
+        if (Volatile.Read(ref _canManageObserverSources) != 1)
+        {
+            _logger.Info("observer_profiles_access_rejected");
+            return;
+        }
         try
         {
             var profiles = BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory);

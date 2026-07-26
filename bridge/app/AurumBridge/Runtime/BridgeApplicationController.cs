@@ -44,6 +44,7 @@ public sealed record BridgeApplicationStatus(
     public bool ServerConnected { get; init; }
     public long? LastDataSyncUtcMsc { get; init; }
     public string BridgeVersion { get; init; } = "3.0.0";
+    public bool CanManageObserverSources { get; init; }
 }
 
 public sealed class BridgeApplicationController : IAsyncDisposable
@@ -70,6 +71,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     private string? _activeMt5TerminalId;
     private IReadOnlyList<BridgeTerminalCandidate> _terminalCandidates = [];
     private bool _serverConnected;
+    private bool _canManageObserverSources;
     private long? _lastDataSyncUtcMsc;
     private bool _disposed;
 
@@ -90,6 +92,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             Path.Combine(paths.DataDirectory, "credential.dat"),
             new WindowsDpapiProtector());
         _sessionClient = new(paths.ServerBaseUri, _httpClient, credentials);
+        _sessionClient.ObserverSourceManagementChanged += HandleObserverSourceManagementChanged;
         _mt5Provisioner = new(
             _store,
             paths.PythonExecutable,
@@ -656,6 +659,15 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         StatusChanged?.Invoke(snapshot);
     }
 
+    private void HandleObserverSourceManagementChanged(bool allowed)
+    {
+        lock (_sync)
+        {
+            _canManageObserverSources = allowed;
+        }
+        PublishCurrent();
+    }
+
     private BridgeApplicationStatus Snapshot() => new(
         _phase,
         _terminalStatuses.Values.OrderBy(value => value.TerminalInstanceId).ToArray(),
@@ -668,6 +680,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         LastDataSyncUtcMsc = _lastDataSyncUtcMsc,
         BridgeVersion = typeof(BridgeApplicationController).Assembly.GetName().Version?.ToString(3)
             ?? "3.0.0",
+        CanManageObserverSources = _canManageObserverSources,
     };
 
     private static string NormalizeApplicationError(Exception error) => error switch
