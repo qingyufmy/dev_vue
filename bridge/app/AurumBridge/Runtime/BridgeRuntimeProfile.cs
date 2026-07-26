@@ -23,6 +23,14 @@ public static class BridgeRuntimeProfile
     public static bool IsDefault(string profileId) =>
         string.Equals(Validate(profileId), DefaultId, StringComparison.Ordinal);
 
+    public static string InstanceId(string profileId)
+    {
+        var validated = Validate(profileId);
+        return IsDefault(validated)
+            ? "AURUMBridge.v3"
+            : $"AURUMBridge.v3.profile.{validated}";
+    }
+
     public static string ResolveDataDirectory(string rootDataDirectory, string profileId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootDataDirectory);

@@ -52,4 +52,21 @@ public sealed class BridgeSingleInstanceGuardTests
 
         Assert.IsTrue(replacementAcquired);
     }
+
+    [TestMethod]
+    public async Task OwnerReceivesACoordinatedShutdownRequest()
+    {
+        var instanceId = $"AURUMBridge.test.{Guid.NewGuid():N}";
+        var directory = Path.Combine(Path.GetTempPath(), instanceId);
+        _directories.Add(directory);
+        using var owner = BridgeSingleInstanceGuard.TryAcquire(instanceId, directory);
+        Assert.IsNotNull(owner);
+        var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        owner.ShutdownRequested += () => requested.TrySetResult();
+        owner.StartActivationListener();
+
+        await Task.Run(() => BridgeSingleInstanceGuard.RequestShutdown(instanceId));
+
+        await requested.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    }
 }

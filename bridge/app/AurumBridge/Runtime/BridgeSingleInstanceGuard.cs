@@ -4,18 +4,23 @@ public sealed class BridgeSingleInstanceGuard : IDisposable
 {
     private readonly FileStream _lockStream;
     private readonly EventWaitHandle _activationEvent;
+    private readonly EventWaitHandle _shutdownEvent;
     private RegisteredWaitHandle? _activationWait;
+    private RegisteredWaitHandle? _shutdownWait;
     private bool _disposed;
 
     private BridgeSingleInstanceGuard(
         FileStream lockStream,
-        EventWaitHandle activationEvent)
+        EventWaitHandle activationEvent,
+        EventWaitHandle shutdownEvent)
     {
         _lockStream = lockStream;
         _activationEvent = activationEvent;
+        _shutdownEvent = shutdownEvent;
     }
 
     public event Action? ActivationRequested;
+    public event Action? ShutdownRequested;
 
     public static BridgeSingleInstanceGuard? TryAcquire(
         string instanceId,
@@ -31,6 +36,10 @@ public sealed class BridgeSingleInstanceGuard : IDisposable
             initialState:false,
             EventResetMode.AutoReset,
             $"Local\\{instanceId}.activate");
+        var shutdownEvent = new EventWaitHandle(
+            initialState:false,
+            EventResetMode.AutoReset,
+            $"Local\\{instanceId}.shutdown");
         try
         {
             var lockPath = Path.Combine(directory, $"{instanceId}.lock");
@@ -41,19 +50,31 @@ public sealed class BridgeSingleInstanceGuard : IDisposable
                 FileShare.None,
                 bufferSize:1,
                 FileOptions.WriteThrough);
-            return new(lockStream, activationEvent);
+            return new(lockStream, activationEvent, shutdownEvent);
         }
         catch (IOException error) when ((error.HResult & 0xFFFF) is 32 or 33)
         {
             activationEvent.Set();
             activationEvent.Dispose();
+            shutdownEvent.Dispose();
             return null;
         }
         catch
         {
             activationEvent.Dispose();
+            shutdownEvent.Dispose();
             throw;
         }
+    }
+
+    public static void RequestShutdown(string instanceId)
+    {
+        ValidateInstanceId(instanceId);
+        using var shutdownEvent = new EventWaitHandle(
+            initialState:false,
+            EventResetMode.AutoReset,
+            $"Local\\{instanceId}.shutdown");
+        shutdownEvent.Set();
     }
 
     public void StartActivationListener()
@@ -75,6 +96,18 @@ public sealed class BridgeSingleInstanceGuard : IDisposable
             state:null,
             Timeout.InfiniteTimeSpan,
             executeOnlyOnce:false);
+        _shutdownWait = ThreadPool.RegisterWaitForSingleObject(
+            _shutdownEvent,
+            (_, timedOut) =>
+            {
+                if (!timedOut && !_disposed)
+                {
+                    ShutdownRequested?.Invoke();
+                }
+            },
+            state:null,
+            Timeout.InfiniteTimeSpan,
+            executeOnlyOnce:false);
     }
 
     public void Dispose()
@@ -85,7 +118,9 @@ public sealed class BridgeSingleInstanceGuard : IDisposable
         }
         _disposed = true;
         _activationWait?.Unregister(waitObject:null);
+        _shutdownWait?.Unregister(waitObject:null);
         _activationEvent.Dispose();
+        _shutdownEvent.Dispose();
         _lockStream.Dispose();
     }
 

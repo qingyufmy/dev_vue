@@ -80,6 +80,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _controller.ConnectionFailureObserved += error =>
             _logger.Error("bridge_connection_failure", error);
         _singleInstance.ActivationRequested += HandleActivationRequested;
+        _singleInstance.ShutdownRequested += HandleShutdownRequested;
         _singleInstance.StartActivationListener();
 
         var menu = new ContextMenuStrip();
@@ -140,6 +141,15 @@ public sealed class BridgeApplicationContext : ApplicationContext
             return;
         }
         _form.BeginInvoke(_form.ShowFromTray);
+    }
+
+    private void HandleShutdownRequested()
+    {
+        if (_form.IsDisposed || _shuttingDown)
+        {
+            return;
+        }
+        _form.BeginInvoke(() => _ = ShutdownAsync(stopObserverProfiles:false));
     }
 
     private void HandleStatusChanged(BridgeApplicationStatus status)
@@ -446,6 +456,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         try
         {
             var revoked = await _controller.LogoutAsync(_stop.Token);
+            SignalObserverProfilesShutdown();
             _logger.Info("bridge_account_logged_out", $"server_revoked={revoked}");
             MessageBox.Show(
                 _form,
@@ -488,8 +499,21 @@ public sealed class BridgeApplicationContext : ApplicationContext
         {
             return;
         }
+        await ShutdownAsync(stopObserverProfiles:BridgeRuntimeProfile.IsDefault(_profileId));
+    }
+
+    private async Task ShutdownAsync(bool stopObserverProfiles)
+    {
+        if (_shuttingDown)
+        {
+            return;
+        }
         _shuttingDown = true;
         _logger.Info("bridge_stopping");
+        if (stopObserverProfiles)
+        {
+            SignalObserverProfilesShutdown();
+        }
         _stop.Cancel();
         if (_updateTask is not null)
         {
@@ -509,9 +533,32 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.Dispose();
         _stop.Dispose();
         _singleInstance.ActivationRequested -= HandleActivationRequested;
+        _singleInstance.ShutdownRequested -= HandleShutdownRequested;
         _updateCoordinator?.Dispose();
         _logger.Dispose();
         ExitThread();
+    }
+
+    private void SignalObserverProfilesShutdown()
+    {
+        if (!BridgeRuntimeProfile.IsDefault(_profileId))
+        {
+            return;
+        }
+        foreach (var profileId in BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory))
+        {
+            try
+            {
+                BridgeSingleInstanceGuard.RequestShutdown(
+                    BridgeRuntimeProfile.InstanceId(profileId));
+            }
+            catch (Exception error)
+            {
+                _logger.Error(
+                    "observer_profile_shutdown_signal_failed",
+                    new InvalidOperationException($"profile={profileId}", error));
+            }
+        }
     }
 
     private async Task ObserveUpdatesAsync(
@@ -592,6 +639,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             activationPrepared = true;
             _shuttingDown = true;
             _logger.Info("update_activation_prepared", $"version={staged.Version}");
+            SignalObserverProfilesShutdown();
             _stop.Cancel();
             if (_healthTask is not null)
             {
@@ -599,6 +647,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             }
             await _controller.DisposeAsync();
             _singleInstance.ActivationRequested -= HandleActivationRequested;
+            _singleInstance.ShutdownRequested -= HandleShutdownRequested;
             _singleInstance.Dispose();
             coordinator.StartLauncher();
             _notifyIcon.Visible = false;

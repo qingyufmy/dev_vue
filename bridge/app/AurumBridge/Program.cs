@@ -25,9 +25,7 @@ internal static class Program
                 return;
             }
             var startupReadyFile = ReadStartupReadyFile(runtimeArgs);
-            var instanceId = BridgeRuntimeProfile.IsDefault(profileId)
-                ? "AURUMBridge.v3"
-                : $"AURUMBridge.v3.profile.{profileId}";
+            var instanceId = BridgeRuntimeProfile.InstanceId(profileId);
             using var singleInstance = BridgeSingleInstanceGuard.TryAcquire(instanceId);
             if (singleInstance is null)
             {

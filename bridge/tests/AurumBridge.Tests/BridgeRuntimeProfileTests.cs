@@ -24,6 +24,10 @@ public sealed class BridgeRuntimeProfileTests
         Assert.AreEqual(
             Path.Combine(_directory, "profiles", "source-1"),
             BridgeRuntimeProfile.ResolveDataDirectory(_directory, "SOURCE-1"));
+        Assert.AreEqual("AURUMBridge.v3", BridgeRuntimeProfile.InstanceId("default"));
+        Assert.AreEqual(
+            "AURUMBridge.v3.profile.source-1",
+            BridgeRuntimeProfile.InstanceId("SOURCE-1"));
     }
 
     [TestMethod]
