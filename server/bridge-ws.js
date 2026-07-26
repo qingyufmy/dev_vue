@@ -1542,6 +1542,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'quote': {
         if (dataUserId && isBridgeAlive(dataUserId)) {
           result = await ai.mt5Bridge(dataUserId, 'quote', routedParams({ symbol: params.symbol }), { noFallback:true })
+          if (result?.status === 'success') recordBridgeMarketState(dataUserId, result)
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
