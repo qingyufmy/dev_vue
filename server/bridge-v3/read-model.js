@@ -105,9 +105,10 @@ function dealTimeMsc(item) {
   throw readModelError('bridge_deals_time_invalid')
 }
 
-function optionalDealText(value, code, maxLength = 64) {
+function optionalDealText(value, code, maxLength = 64, { allowEmpty = false } = {}) {
   if (value == null) return null
   const normalized = String(value).trim()
+  if (!normalized && allowEmpty) return null
   if (!normalized || normalized.length > maxLength) throw readModelError(code)
   return normalized
 }
@@ -118,7 +119,10 @@ async function applyDeals(run, message, userId) {
     ticket:itemTicket(item, 'deals'),
     orderTicket:optionalDealText(item.order ?? item.order_ticket, 'bridge_deals_order_ticket_invalid'),
     positionId:optionalDealText(item.position_id, 'bridge_deals_position_id_invalid'),
-    symbol:optionalDealText(item.symbol, 'bridge_deals_symbol_invalid'),
+    // Balance, credit and other account-history events legitimately have no
+    // trading symbol. The database column is nullable, so preserve that
+    // distinction instead of rejecting the entire immutable deals revision.
+    symbol:optionalDealText(item.symbol, 'bridge_deals_symbol_invalid', 64, { allowEmpty:true }),
     timeMsc:dealTimeMsc(item),
     payload:stableJson(item),
   }))

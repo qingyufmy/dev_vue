@@ -151,6 +151,23 @@ describe('Bridge v3 incremental read model', () => {
       .toEqual(expect.arrayContaining(['5001', 42, '4001', '3001', 'XAUUSD', NOW - 100]))
   })
 
+  it('accepts symbol-less balance events without poisoning the deals revision', async () => {
+    const message = delta('deals', {
+      upserts:[{
+        ticket:'5002', deal_ticket:'5002', order_ticket:'5002', position_id:'5002',
+        symbol:'', category:'balance', time_msc:NOW - 50,
+      }],
+      deletes:[],
+    })
+    const { run, transactionFn } = transactionFor()
+
+    await expect(applyBridgeDataDelta(message, { userId:42, nowUtcMsc:NOW, transactionFn }))
+      .resolves.toMatchObject({ status:'applied', stream:'deals', revision:1 })
+
+    expect(run.mock.calls.find(([value]) => value.includes('INSERT INTO bridge_v3_deals'))[1])
+      .toEqual(expect.arrayContaining(['5002', 42, '5002', '5002', null, NOW - 50]))
+  })
+
   it('rejects deletes and missing source times in the deals stream', async () => {
     const deleted = transactionFor()
     await expect(applyBridgeDataDelta(delta('deals', {
