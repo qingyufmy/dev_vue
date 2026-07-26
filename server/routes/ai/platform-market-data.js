@@ -34,6 +34,21 @@ function normalizedUtcMs(rate, offsetMinutes) {
   return Number.isFinite(parsed) && Number.isFinite(Number(offsetMinutes)) ? parsed - Number(offsetMinutes) * 60000 : null
 }
 
+function normalizedBrokerTime(rate, offsetMinutes, utcMs) {
+  const direct = String(rate?.time || '').trim()
+  if (direct) return direct.slice(0, 32)
+  const serverMs = Number(rate?.time_server_msc)
+  const offset = Number(offsetMinutes)
+  const derivedMs = Number.isFinite(serverMs) && serverMs > 0
+    ? serverMs
+    : Number.isFinite(offset)
+      ? utcMs + offset * 60000
+      : utcMs
+  if (!Number.isFinite(derivedMs) || derivedMs <= 0) return null
+  const iso = new Date(derivedMs).toISOString()
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)}`
+}
+
 function sourceIdentity(bridgeUserId, clock = {}) {
   const brokerServer = String(clock.broker_server || 'unknown').trim().slice(0, 150) || 'unknown'
   const accountLogin = String(clock.account_login || '0').trim().slice(0, 32) || '0'
@@ -56,9 +71,11 @@ function cacheKey(sourceId, standardSymbol, timeframe) {
 function validRate(rate, offsetMinutes) {
   const prices = [rate?.open, rate?.high, rate?.low, rate?.close].map(Number)
   const utcMs = normalizedUtcMs(rate, offsetMinutes)
-  if (!prices.every(Number.isFinite) || prices.some(value => value <= 0) || prices[1] < prices[2] || !utcMs) return null
+  const brokerTime = normalizedBrokerTime(rate, offsetMinutes, utcMs)
+  if (!prices.every(Number.isFinite) || prices.some(value => value <= 0) || prices[1] < prices[2] || !utcMs || !brokerTime) return null
   return {
     ...rate,
+    time: brokerTime,
     time_utc_msc: utcMs,
     open: prices[0],
     high: prices[1],
