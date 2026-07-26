@@ -27,7 +27,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260726marketfix" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260726mt4platform" />
     <link rel="stylesheet" href="/ai/responsive.css?v=20260724position3" />
   </head>
   <body>
@@ -141,7 +141,7 @@
           <span class="topbar-time">
             <i data-lucide="clock" size="15"></i>
             <span id="mt5ServerTime">--</span>
-            <span>MT5</span>
+            <span id="bridgePlatformClockLabel">MT5</span>
           </span>
           <button id="refreshAllBtn" class="icon-btn" title="刷新数据" aria-label="刷新数据">
             <i data-lucide="refresh-cw" size="16"></i>
@@ -340,7 +340,7 @@
                 <span id="marketStatusDot" class="market-dot market-dot-unknown"></span>
                 <span id="marketStatusText" class="market-status-text">--</span>
                 <span class="quote-divider">|</span>
-                <span>MT5服务器时间</span>
+                <span id="bridgePlatformTimeLabel">MT5服务器时间</span>
                 <span id="quoteTime" class="num">--</span>
               </div>
               <div class="kline-toolbar">
@@ -1167,7 +1167,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260726marketfix"></script>
+    <script src="/ai/app.js?v=20260726mt4platform"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

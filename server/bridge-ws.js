@@ -35,6 +35,7 @@ let wss = null
 let bridgeV3Business = null
 const bridgeV3MarketStates = new Map()
 const bridgeV3TradingAccounts = new Map()
+const bridgeV3PreferredTerminals = new Map()
 let adminEventSeq = 0
 const adminEventThrottle = new Map()
 
@@ -117,6 +118,33 @@ function bridgeV3RouteForAccount(userId, accountId) {
   const bindings = bridgeV3TradingAccounts.get(Number(userId))
   return (bridgeV3Business?.connectedTerminals(Number(userId)) || []).find(route =>
     Number(bindings?.get(route.terminal_instance_id) || 0) === Number(accountId)) || null
+}
+
+function bridgeV3RouteForContext(userId, tradingAccountId = null) {
+  const numericUserId = Number(userId)
+  if (tradingAccountId) {
+    const accountRoute = bridgeV3RouteForAccount(numericUserId, tradingAccountId)
+    if (accountRoute) return accountRoute
+  }
+  const routes = bridgeV3Business?.connectedTerminals(numericUserId) || []
+  if (routes.length === 1) return routes[0]
+  const preferredTerminal = bridgeV3PreferredTerminals.get(numericUserId)
+  return routes.find(route => route.terminal_instance_id === preferredTerminal) || null
+}
+
+function bridgeRouteParams(route) {
+  return route ? {
+    terminal_instance_id:route.terminal_instance_id,
+    account_ref:route.account_ref,
+  } : {}
+}
+
+function bridgePlatform(userId, tradingAccountId = null) {
+  const route = bridgeV3RouteForContext(userId, tradingAccountId)
+  if (route?.platform) return route.platform
+  const legacy = bridges.get(Number(userId))
+  if (legacy?.ws?.readyState === 1) return legacy._clientHeartbeat?.platform || 'mt5'
+  return null
 }
 
 function scheduleAccountPerformanceSync(userId, accountId, { recent = false, delayMs = 0 } = {}) {
@@ -212,6 +240,7 @@ async function synchronizeBridgeV3TerminalIdentity({ userId, terminal, connectio
     bridgeV3TradingAccounts.set(Number(userId), bindings)
   }
   bindings.set(terminal.terminal_instance_id, identity.accountId)
+  bridgeV3PreferredTerminals.set(Number(userId), terminal.terminal_instance_id)
   if (identity.verified) queueAccountPerformanceSync(userId, identity.accountId, { recent:false, delayMs:250 })
   sendToBrowsers(Number(userId), {
     type:'account_switched',
@@ -247,6 +276,12 @@ function forgetBridgeV3TerminalIdentity({ userId, terminal }) {
   const bindings = bridgeV3TradingAccounts.get(Number(userId))
   bindings?.delete(terminal.terminal_instance_id)
   if (bindings?.size === 0) bridgeV3TradingAccounts.delete(Number(userId))
+  if (bridgeV3PreferredTerminals.get(Number(userId)) === terminal.terminal_instance_id) {
+    const replacement = (bridgeV3Business?.connectedTerminals(Number(userId)) || [])
+      .find(route => route.terminal_instance_id !== terminal.terminal_instance_id)
+    if (replacement) bridgeV3PreferredTerminals.set(Number(userId), replacement.terminal_instance_id)
+    else bridgeV3PreferredTerminals.delete(Number(userId))
+  }
 }
 
 const TRADE_REF_KEYS = new Set([
@@ -504,7 +539,9 @@ async function resolveObserverBridgeContext(userId, user, requestedChannelId = n
     return {
       bridgeUserId:isBridgeAlive(bridgeUserId) ? bridgeUserId : null,
       channel:{ id:Number(channel.id), name:channel.name, slug:channel.slug,
-        source_id:Number(channel.source_id), source_name:channel.source_name },
+        source_id:Number(channel.source_id), source_name:channel.source_name,
+        trading_account_id:Number(channel.trading_account_id) || null,
+        strategy_id:Number(channel.strategy_id) || null },
     }
   }
   return { bridgeUserId:null, channel:null }
@@ -526,8 +563,7 @@ export function getPlatformMarketClockState(userId) {
       account_login:bridge.accountLogin || null,
     }
   }
-  const routes = bridgeV3Business?.connectedTerminals(numericUserId) || []
-  const route = routes.length === 1 ? routes[0] : null
+  const route = bridgeV3RouteForContext(numericUserId)
   const userConnection = bridgeV3Business?.connectedUsers?.()
     .find(item => Number(item.userId) === numericUserId)
   return {
@@ -739,6 +775,8 @@ async function handleBrowser(ws, url, req) {
       ws._observerStrategyId = access.mode === 'observer'
         ? Number(observerContext?.channel?.strategy_id || 0) || null : null
       const bridge = dataUserId ? bridges.get(dataUserId) : null
+      const dataRoute = dataUserId ? bridgeV3RouteForContext(
+        dataUserId, observerContext?.channel?.trading_account_id) : null
       const usingFallback = access.mode === 'observer'
       const connected = Boolean(dataUserId && isBridgeAlive(dataUserId))
       const alive = connected
@@ -753,6 +791,9 @@ async function handleBrowser(ws, url, req) {
         seq: msg.seq,
         mt5_connected: connected,
         mt5_alive: alive,
+        platform: dataRoute?.platform || bridgePlatform(
+          dataUserId, observerContext?.channel?.trading_account_id),
+        terminal_instance_id:dataRoute?.terminal_instance_id || null,
         using_fallback: usingFallback,
         trade_enabled: tradeEnabled,
         auto_reasoning_enabled: autoReasoningEnabled,
@@ -1009,7 +1050,9 @@ async function _initBridge(ws, userId, user, initQueue = null) {
   } catch (e) { console.error(`[BridgeWS] Failed to persist connect status user=${userId}:`, e.message) }
 
   // Notify browsers with current trade/auto state — use auto_scheduler.enabled as single source of truth
-  sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true, trade_enabled: defaultTrade, auto_reasoning_enabled: schedulerAutoEnabled, trade_mode: -1 })
+  sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true,
+    platform:'mt5', trade_enabled: defaultTrade,
+    auto_reasoning_enabled: schedulerAutoEnabled, trade_mode: -1 })
 
   // A bridge reconnecting during the weekend risk window must immediately
   // reconcile any system-owned positions left from the Friday session.
@@ -1103,6 +1146,8 @@ async function _initBridge(ws, userId, user, initQueue = null) {
       bridge._clientHeartbeat = {
         ts: msg.ts,
         client_version: msg.client_version,
+        platform:['mt4', 'mt5'].includes(String(msg.platform || '').toLowerCase())
+          ? String(msg.platform).toLowerCase() : 'mt5',
         mt5_collect_timeout_count: msg.mt5_collect_timeout_count || 0,
         last_data_sent_age_sec: msg.last_data_sent_age_sec ?? -1,
         last_quote_time: msg.last_quote_time || null,
@@ -1430,6 +1475,9 @@ async function handleBrowserCommand(ws, userId, msg) {
     const observerStrategyId = access.mode === 'observer'
       ? Number(observerContext?.channel?.strategy_id || 0) || null
       : null
+    const dataRoute = dataUserId ? bridgeV3RouteForContext(
+      dataUserId, observerContext?.channel?.trading_account_id) : null
+    const routedParams = value => ({ ...(value || {}), ...bridgeRouteParams(dataRoute) })
     ws._observerBridgeUserId = access.mode === 'observer' ? Number(dataUserId) || null : null
     ws._observerStrategyId = observerStrategyId
     if (access.mode === 'observer' && action !== 'health' && !dataUserId) {
@@ -1467,6 +1515,9 @@ async function handleBrowserCommand(ws, userId, msg) {
             mt5_package_available: true,
             live_trading_enabled: tradeEnabled,
             auto_reasoning_enabled: autoReasoningEnabled,
+            platform:dataRoute?.platform || bridgePlatform(
+              dataUserId, observerContext?.channel?.trading_account_id),
+            terminal_instance_id:dataRoute?.terminal_instance_id || null,
             using_fallback: usingFallback,
             trade_mode: dataUserId ? await getBridgeTradeMode(dataUserId) : -1,
             access:{ ...access, observer_source_available:Boolean(dataUserId),
@@ -1478,7 +1529,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'account': {
         const hasDataBridge = dataUserId && isBridgeAlive(dataUserId)
         if (hasDataBridge) {
-          result = await ai.mt5Bridge(dataUserId, 'account', {}, { noFallback:true })
+          result = await ai.mt5Bridge(dataUserId, 'account', routedParams(), { noFallback:true })
           if (access.read_only && result && typeof result === 'object') result.observer_source = true
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
@@ -1486,11 +1537,11 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'symbols':
-        result = await ai.mt5Bridge(dataUserId, 'symbols', {}, { noFallback:true })
+        result = await ai.mt5Bridge(dataUserId, 'symbols', routedParams(), { noFallback:true })
         break
       case 'quote': {
         if (dataUserId && isBridgeAlive(dataUserId)) {
-          result = await ai.mt5Bridge(dataUserId, 'quote', { symbol: params.symbol }, { noFallback:true })
+          result = await ai.mt5Bridge(dataUserId, 'quote', routedParams({ symbol: params.symbol }), { noFallback:true })
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
@@ -1498,7 +1549,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'positions': {
         if (dataUserId && isBridgeAlive(dataUserId)) {
-          result = await ai.mt5Bridge(dataUserId, 'positions', {}, { noFallback:true })
+          result = await ai.mt5Bridge(dataUserId, 'positions', routedParams(), { noFallback:true })
           if (access.read_only && result && typeof result === 'object') result.observer_source = true
         } else {
           result = { status: 'error', message: 'MT5桥接未连接' }
@@ -1589,7 +1640,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           if (range.date_from) bridgeParams.date_from = range.date_from
           if (range.date_to) bridgeParams.date_to = range.date_to
 
-          result = await ai.mt5Bridge(dataUserId, 'history', bridgeParams, { timeoutMs: 30000, noFallback: true })
+          result = await ai.mt5Bridge(dataUserId, 'history', routedParams(bridgeParams), { timeoutMs: 30000, noFallback: true })
           if (result && typeof result === 'object') {
             result.history_range = range
             result.observer_source = access.read_only
@@ -1609,7 +1660,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           if (range.date_to) chartParams.date_to = range.date_to
           if (params.direction) chartParams.direction = params.direction
           if (params.profit_filter) chartParams.profit_filter = params.profit_filter
-          result = await ai.mt5Bridge(dataUserId, 'chart_data', chartParams, { timeoutMs: 30000, noFallback: true })
+          result = await ai.mt5Bridge(dataUserId, 'chart_data', routedParams(chartParams), { timeoutMs: 30000, noFallback: true })
           if (result && typeof result === 'object') {
             result.history_range = range
             result.observer_source = access.read_only
@@ -1623,7 +1674,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.platformRates(userId, { symbol: params.symbol, timeframe: params.timeframe || 'M30', count: params.count || 100 })
         break
       case 'diagnostics':
-        result = await ai.mt5Bridge(userId, 'diagnostics', {})
+        result = await ai.mt5Bridge(dataUserId, 'diagnostics', routedParams(), { noFallback:true })
         break
       case 'analyze':
         result = await ai.handleAnalyze(userId, params)
@@ -2057,7 +2108,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         try {
           const symbol = params.symbol ? params.symbol : null
-          const listResult = await ai.mt5Bridge(dataUserId, 'pending_list', { symbol }, { noFallback:true })
+          const listResult = await ai.mt5Bridge(dataUserId, 'pending_list', routedParams({ symbol }), { noFallback:true })
           if (access.read_only && listResult && typeof listResult === 'object') listResult.observer_source = true
           result = listResult
         } catch (e) {
@@ -2784,6 +2835,7 @@ export async function applyBridgeRuntimeState(userId, { tradeEnabled, autoReason
   if (typeof tradeEnabled === 'boolean') {
     sendToBrowsers(numericUserId, {
       type:'hb', mt5_connected:connected, mt5_alive:connected,
+      platform:bridgePlatform(numericUserId),
       trade_enabled:connected ? isTradeEnabled(numericUserId) : tradeEnabled,
       auto_reasoning_enabled:typeof autoReasoningEnabled === 'boolean'
         ? autoReasoningEnabled : Boolean(bridge?.autoReasoningEnabled),

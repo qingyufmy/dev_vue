@@ -22,7 +22,18 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain("setText('mt5ServerTime'")
     expect(app).toContain("updateMarketStatusFromQuote(quote)")
     expect(app).toContain("loadStatus(), refreshQuote(), loadKlineData()")
-    expect(html).toContain('/ai/app.js?v=20260726marketfix')
+    expect(html).toContain('/ai/app.js?v=20260726mt4platform')
+  })
+
+  it('uses the connected bridge platform in status and terminal-time labels', () => {
+    expect(html).toContain('id="bridgePlatformClockLabel"')
+    expect(html).toContain('id="bridgePlatformTimeLabel"')
+    expect(app).toContain('function updateBridgePlatformUI(value)')
+    expect(app).toContain('if (msg.platform) updateBridgePlatformUI(msg.platform)')
+    expect(app).toContain('if (gateway.platform) updateBridgePlatformUI(gateway.platform)')
+    expect(app).toContain('`${platform} 已连接`')
+    expect(bridgeWs).toContain('terminal_instance_id:dataRoute?.terminal_instance_id || null')
+    expect(bridgeWs).toContain('trading_account_id:Number(channel.trading_account_id) || null')
   })
 
   it('renders automatic inference as an accessible live progress control', () => {

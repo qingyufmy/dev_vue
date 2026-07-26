@@ -286,10 +286,12 @@ describe('initBridgeWS', () => {
     vi.clearAllMocks()
     mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(false)
     mockBridgeV3Business.isTradeEnabled.mockReturnValue(false)
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([])
   })
   afterEach(() => {
     mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(false)
     mockBridgeV3Business.isTradeEnabled.mockReturnValue(false)
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([])
   })
 
   it('returns a WebSocketServer instance', () => {
@@ -350,6 +352,10 @@ describe('initBridgeWS', () => {
   it('answers browser heartbeats when only a V3 terminal is connected', async () => {
     mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
     mockBridgeV3Business.isTradeEnabled.mockReturnValue(true)
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([{
+      terminal_instance_id:'mt4_terminal_heartbeat_01', platform:'mt4',
+      account_ref:{ broker_server:'Broker-Demo', login:'12345678' },
+    }])
     queryOne.mockImplementation(async sql => {
       if (sql.includes('SELECT id FROM users WHERE role')) return { id:42 }
       if (sql.includes('SELECT id, token_version FROM users')) return { id:42, token_version:0 }
@@ -383,8 +389,11 @@ describe('initBridgeWS', () => {
       mt5_alive:true,
       trade_enabled:true,
       auto_reasoning_enabled:false,
+      platform:'mt4',
+      terminal_instance_id:'mt4_terminal_heartbeat_01',
     })
     browserWs.emit('close')
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([])
   })
 })
 

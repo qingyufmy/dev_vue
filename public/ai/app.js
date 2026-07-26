@@ -24,6 +24,7 @@ const state = {
   pendingManualOrder: null,
   accountBalance: 0,
   bridgeAccountIdentity: null,
+  bridgePlatform: "mt5",
   historyNetResult: 0,
 
   signalTableData: [],
@@ -78,6 +79,23 @@ const state = {
 let _historyCache = null;      // { filters: string, data: object }
 let _historyChartCache = null; // { filters: string, data: object }
 let _prevPositionCount = 0;
+
+function normalizeBridgePlatform(value) {
+  return String(value || "").trim().toLowerCase() === "mt4" ? "mt4" : "mt5";
+}
+
+function bridgePlatformLabel(value = state.bridgePlatform) {
+  return normalizeBridgePlatform(value).toUpperCase();
+}
+
+function updateBridgePlatformUI(value) {
+  state.bridgePlatform = normalizeBridgePlatform(value);
+  const label = bridgePlatformLabel();
+  setText("bridgePlatformClockLabel", label);
+  setText("bridgePlatformTimeLabel", `${label}服务器时间`);
+  const gateway = $("gatewayMode");
+  if (gateway) gateway.title = `打开 ${label} 连接设置`;
+}
 
 // ===== Global Symbol Management =====
 const SYMBOL_STORAGE_KEY = "aurum_selected_symbol";
@@ -2025,6 +2043,7 @@ function flashSignalMonitorUpdate() {
 // Handle heartbeat reply — MT5 connection status
 function handleHeartbeat(msg) {
   syncAiAccess(msg.access);
+  if (msg.platform) updateBridgePlatformUI(msg.platform);
   if (msg.observer_channel?.id) syncSelectedObserverChannel(msg.observer_channel.id);
   const isLive = msg.mt5_connected && msg.mt5_alive;
   const usingFallback = msg.using_fallback;
@@ -2039,7 +2058,8 @@ function handleHeartbeat(msg) {
       setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
     }
   } else {
-    setBadge("gatewayMode", isLive ? "MT5 已连接" : "MT5 未连接", isLive ? "connected" : "neutral");
+    const platform = bridgePlatformLabel();
+    setBadge("gatewayMode", isLive ? `${platform} 已连接` : `${platform} 未连接`, isLive ? "connected" : "neutral");
   }
 
   // Update market status from heartbeat
@@ -2098,7 +2118,7 @@ function handleHeartbeat(msg) {
 
 // Handle bridge disconnect notification
 function handleDisconnect(msg) {
-  setBadge("gatewayMode", "MT5 未连接", "neutral");
+  setBadge("gatewayMode", `${bridgePlatformLabel()} 未连接`, "neutral");
   setBadge("tradeMode", "请先启动桥接", "neutral");
   // Bridge connectivity pauses the runtime subscription but does not change
   // the persisted automatic-inference switch.
@@ -4019,6 +4039,7 @@ async function refreshAll() {
 async function loadStatus() {
   const health = await wsApi("health");
   const gateway = health.gateway || {};
+  if (gateway.platform) updateBridgePlatformUI(gateway.platform);
   state.gatewayStatus = gateway;
   syncAiAccess(gateway.access);
   const isLive = gateway.mode === "live";
@@ -4034,7 +4055,8 @@ async function loadStatus() {
       setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
     }
   } else {
-    setBadge("gatewayMode", isLive ? "MT5 已连接" : "MT5 未连接", isLive ? "connected" : "neutral");
+    const platform = bridgePlatformLabel();
+    setBadge("gatewayMode", isLive ? `${platform} 已连接` : `${platform} 未连接`, isLive ? "connected" : "neutral");
   }
 
   // Sync role-based UI (observation hint, button states, etc.)
@@ -4052,7 +4074,7 @@ async function loadStatus() {
     && (gateway.terminal_trade_allowed === false || gateway.account_trade_allowed === false || gateway.account_trade_expert === false);
   const tradeText = !isLive
     ? "请先启动桥接"
-    : mt5TradeBlocked ? "MT5 自动交易关闭"
+    : mt5TradeBlocked ? `${bridgePlatformLabel()} 自动交易关闭`
     : gateway.live_trading_enabled ? "交易已开启" : "交易已关闭";
   renderTradePermissionBadge(Boolean(gateway.live_trading_enabled), { blocked:mt5TradeBlocked, label:tradeText });
 
