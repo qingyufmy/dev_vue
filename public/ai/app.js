@@ -3993,8 +3993,11 @@ async function bootstrap() {
         resolve();
       });
     });
-    // Set default tab after WS connected
-    setTab('dashboard');
+    // Render the default tab without requesting terminal data yet. The MT4
+    // broker symbol (for example XAUUSD.s) is discovered by refreshAll first;
+    // requesting rates here with the generic XAUUSD fallback is invalid on
+    // suffix-only brokers and produces rates_params_invalid.
+    setTab('dashboard', { skipRefresh:true });
     startPresenceHeartbeat();
     await refreshAll();
     if (!isObserverMode()) {

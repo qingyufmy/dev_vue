@@ -22,7 +22,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain("setText('mt5ServerTime'")
     expect(app).toContain("updateMarketStatusFromQuote(quote)")
     expect(app).toContain("loadStatus(), refreshQuote(), loadKlineData()")
-    expect(html).toContain('/ai/app.js?v=20260726mt4ready')
+    expect(html).toContain('/ai/app.js?v=20260726mt4ready2')
   })
 
   it('uses the connected bridge platform in status and terminal-time labels', () => {
@@ -515,6 +515,12 @@ describe('AI governance navigation and DOM contract', () => {
   })
 
   it('waits for transient terminal symbol discovery before loading quotes and charts', () => {
+    const bootstrapStart = app.indexOf('async function bootstrap()')
+    const bootstrapEnd = app.indexOf('async function refreshAll()', bootstrapStart)
+    const bootstrap = app.slice(bootstrapStart, bootstrapEnd)
+    expect(bootstrap).toContain("setTab('dashboard', { skipRefresh:true })")
+    expect(bootstrap.indexOf("setTab('dashboard', { skipRefresh:true })")).toBeLessThan(bootstrap.indexOf('await refreshAll()'))
+
     const refreshStart = app.indexOf('async function refreshAll()')
     const refreshEnd = app.indexOf('async function loadStatus()', refreshStart)
     const refresh = app.slice(refreshStart, refreshEnd)
