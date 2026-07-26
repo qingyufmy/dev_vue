@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.10"
+#property version   "3.11"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -46,6 +46,17 @@ bool   g_welcomed = false;
 string g_terminal_id = "";
 long   g_connection_epoch = 0;
 string g_pipe_name = "";
+
+long CurrentServerOffsetMsc()
+  {
+   return(((long)TimeCurrent() - (long)TimeGMT()) * 1000);
+  }
+
+long ServerTimeToUtcMsc(const datetime server_time, const long server_offset_msc)
+  {
+   if(server_time <= 0) return(0);
+   return(((long)server_time) * 1000 - server_offset_msc);
+  }
 
 int OnInit()
   {
@@ -222,8 +233,9 @@ void SendQuote(uchar &payload[], int &offset)
 void SendQuoteResult(const string request_id, const string symbol, const int status,
    const double bid, const double ask, const string error_code)
   {
-   long source_time = (long)MarketInfo(symbol, MODE_TIME);
-   long observed_at = (source_time > 0 ? source_time : (long)TimeGMT()) * 1000;
+   datetime source_time = (datetime)MarketInfo(symbol, MODE_TIME);
+   long observed_at = ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc());
+   if(observed_at <= 0) observed_at = ((long)TimeGMT()) * 1000;
    int digits = (int)MarketInfo(symbol, MODE_DIGITS);
    if(digits < 0 || digits > 16) digits = 8;
    uchar response[];
@@ -286,6 +298,7 @@ void SendRates(uchar &request[], int &offset)
      }
    int newest_shift = 0;
    int oldest_shift = MathMin(requested_count - 1, available - 1);
+   long server_offset_msc = CurrentServerOffsetMsc();
    if(start_utc_msc > 0 || end_utc_msc > 0)
      {
       if(start_utc_msc <= 0 || end_utc_msc <= start_utc_msc)
@@ -293,8 +306,10 @@ void SendRates(uchar &request[], int &offset)
          SendRatesResult(request_id, 2, "", "rates_range_invalid", 0);
          return;
         }
-      newest_shift = iBarShift(symbol, timeframe, (datetime)(end_utc_msc / 1000), false);
-      oldest_shift = iBarShift(symbol, timeframe, (datetime)(start_utc_msc / 1000), false);
+      newest_shift = iBarShift(symbol, timeframe,
+         (datetime)((end_utc_msc + server_offset_msc) / 1000), false);
+      oldest_shift = iBarShift(symbol, timeframe,
+         (datetime)((start_utc_msc + server_offset_msc) / 1000), false);
       if(newest_shift < 0 || oldest_shift < newest_shift)
         {
          SendRatesResult(request_id, 2, "", "rates_unavailable", 0);
@@ -310,7 +325,10 @@ void SendRates(uchar &request[], int &offset)
       datetime bar_time = iTime(symbol, timeframe, shift);
       if(bar_time <= 0) continue;
       if(actual_count > 0) rates_json += ",";
-      rates_json += "{\"time_utc_msc\":" + IntegerToString((int)bar_time) + "000"
+      long bar_server_msc = ((long)bar_time) * 1000;
+      long bar_utc_msc = bar_server_msc - server_offset_msc;
+      rates_json += "{\"time_utc_msc\":" + JsonLong(bar_utc_msc)
+         + ",\"time_server_msc\":" + JsonLong(bar_server_msc)
          + ",\"open\":" + JsonNumber(iOpen(symbol, timeframe, shift))
          + ",\"high\":" + JsonNumber(iHigh(symbol, timeframe, shift))
          + ",\"low\":" + JsonNumber(iLow(symbol, timeframe, shift))
@@ -323,9 +341,12 @@ void SendRates(uchar &request[], int &offset)
    rates_json += "]";
    string payload_json = "{\"symbol\":\"" + JsonEscape(symbol) + "\""
       + ",\"timeframe\":\"" + timeframe_name + "\""
+      + ",\"timezone_offset_minutes\":" + IntegerToString((int)(server_offset_msc / 60000))
+      + ",\"clock_status\":\"mt4_current_offset\""
       + ",\"count\":" + IntegerToString(actual_count)
       + ",\"rates\":" + rates_json + "}";
-   long source_time = (long)iTime(symbol, timeframe, newest_shift) * 1000;
+   long source_time = ServerTimeToUtcMsc(
+      iTime(symbol, timeframe, newest_shift), server_offset_msc);
    SendRatesResult(request_id, 1, payload_json, "", source_time);
   }
 
@@ -410,8 +431,12 @@ void SendSymbolSnapshot(uchar &request[], int &offset)
       + ",\"currency_base\":\"\",\"currency_profit\":\"\",\"currency_margin\":\"\"}";
    string payload_json = "{\"symbol\":\"" + JsonEscape(symbol)
       + "\",\"source\":\"mt4\",\"account\":" + account_json
+      + ",\"timezone_offset_minutes\":"
+      + IntegerToString((int)(CurrentServerOffsetMsc() / 60000))
+      + ",\"clock_status\":\"mt4_current_offset\""
       + ",\"instrument\":" + instrument_json + "}";
-   long source_time = (long)MarketInfo(symbol, MODE_TIME) * 1000;
+   long source_time = ServerTimeToUtcMsc(
+      (datetime)MarketInfo(symbol, MODE_TIME), CurrentServerOffsetMsc());
    SendSymbolSnapshotResult(request_id, 1, payload_json, "", source_time);
   }
 

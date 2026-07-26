@@ -1,0 +1,35 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+
+const source = readFileSync(new URL('../bridge/adapters/mt4-ea/AURUMBridgeEA.mq4', import.meta.url), 'utf8')
+
+function functionBlock(name, nextName) {
+  const start = source.indexOf(`${name}(`)
+  const end = nextName ? source.indexOf(`${nextName}(`, start + name.length) : source.length
+  return source.slice(start, end)
+}
+
+describe('MT4 EA time contract', () => {
+  it('normalizes broker quote time to UTC before publishing it', () => {
+    const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
+    expect(source).toContain('#property version   "3.11"')
+    expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
+    expect(block).not.toContain('(source_time > 0 ? source_time : (long)TimeGMT()) * 1000')
+  })
+
+  it('converts UTC range bounds to broker time and publishes normalized candle times', () => {
+    const block = functionBlock('void SendRates', 'void SendRatesResult')
+    expect(block).toContain('(end_utc_msc + server_offset_msc) / 1000')
+    expect(block).toContain('(start_utc_msc + server_offset_msc) / 1000')
+    expect(block).toContain('long bar_utc_msc = bar_server_msc - server_offset_msc')
+    expect(block).toContain('time_server_msc')
+    expect(block).toContain('clock_status')
+    expect(block).toContain('mt4_current_offset')
+  })
+
+  it('normalizes symbol-snapshot observation time as well', () => {
+    const block = functionBlock('void SendSymbolSnapshot', 'void SendSymbolSnapshotResult')
+    expect(block).toContain('ServerTimeToUtcMsc(')
+    expect(block).toContain('timezone_offset_minutes')
+  })
+})
