@@ -127,6 +127,28 @@ public sealed class BridgeStoreTests
     }
 
     [TestMethod]
+    public async Task PreservesOutboxRetryDeadlineAfterProcessRestart()
+    {
+        const long sentAt = 1_800_000_000_000;
+        const long retryAt = sentAt + 2_000;
+        var message = Delta("account", 1, 0,
+            [Json("""{"balance":1000,"equity":995}""")]);
+        await _store.PersistDataDeltaAsync(message);
+        Assert.IsTrue(await _store.RecordOutboxAttemptAsync(message.MessageId, 0, retryAt));
+        Assert.IsEmpty(await _store.GetReadyOutboxAsync(retryAt - 1));
+        await _store.DisposeAsync();
+
+        _store = new BridgeStore(Path.Combine(_directory, "bridge.db"));
+        await _store.InitializeAsync();
+
+        Assert.IsEmpty(await _store.GetReadyOutboxAsync(retryAt - 1));
+        var ready = await _store.GetReadyOutboxAsync(retryAt);
+        Assert.HasCount(1, ready);
+        Assert.AreEqual(message.MessageId, ready[0].MessageId);
+        Assert.AreEqual(1, ready[0].AttemptCount);
+    }
+
+    [TestMethod]
     public async Task CoalescesAnOfflineDataStreamIntoOneBoundedFullSnapshot()
     {
         await _store.PersistDataDeltaAsync(Delta(

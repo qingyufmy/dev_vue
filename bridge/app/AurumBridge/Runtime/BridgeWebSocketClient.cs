@@ -104,7 +104,7 @@ public sealed class BridgeWebSocketClient
                     await _initialSnapshotHandler();
                 }
                 sessionReady?.Invoke();
-                var sendTask = SendLoopAsync(socket, outbound, sessionCancellation.Token);
+                var sendTask = SendLoopAsync(socket, outbound, outbox, sessionCancellation.Token);
                 var pumpTask = PumpLoopAsync(outbox, sessionCancellation.Token);
                 var heartbeatTask = HeartbeatLoopAsync(
                     outbound, attempt.Hello.SessionId, _heartbeatTerminalsProvider,
@@ -143,12 +143,14 @@ public sealed class BridgeWebSocketClient
     private static async Task SendLoopAsync(
         ClientWebSocket socket,
         PriorityMessageQueue outbound,
+        BridgeOutboxPump outbox,
         CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested && socket.State == WebSocketState.Open)
         {
             var message = await outbound.DequeueAsync(cancellationToken);
             await SendDirectAsync(socket, message.PayloadJson, cancellationToken);
+            await outbox.RecordSuccessfulSendAsync(message.MessageId, cancellationToken);
         }
     }
 

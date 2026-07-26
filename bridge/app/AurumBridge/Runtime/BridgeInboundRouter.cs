@@ -83,7 +83,11 @@ public sealed class BridgeInboundRouter
                     ?? throw new InvalidDataException("bridge_command_invalid");
                 var result = await _dispatcher.DispatchAsync(command, cancellationToken);
                 var resultJson = JsonSerializer.Serialize(result, BridgeJson.Options);
-                var claimed = _outboxPump?.TryClaim(result.MessageId) ?? true;
+                var pendingResult = _outboxPump is null
+                    ? null
+                    : await _store.GetPendingOutboxMessageAsync(result.MessageId, cancellationToken);
+                var claimed = _outboxPump?.TryClaim(
+                    result.MessageId, pendingResult?.AttemptCount ?? 0) ?? true;
                 if (claimed)
                 {
                     try

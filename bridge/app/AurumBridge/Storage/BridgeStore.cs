@@ -252,6 +252,86 @@ public sealed class BridgeStore : IAsyncDisposable
         return result;
     }
 
+    public async Task<IReadOnlyList<OutboxMessage>> GetReadyOutboxAsync(
+        long nowUtcMsc,
+        int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        if (nowUtcMsc <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(nowUtcMsc));
+        }
+        limit = Math.Clamp(limit, 1, 1_000);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, message_id, message_type, priority, payload_json, attempt_count, created_at_utc_msc
+            FROM outbox_messages
+            WHERE acked_at_utc_msc IS NULL
+              AND (next_attempt_at_utc_msc IS NULL OR next_attempt_at_utc_msc <= $now)
+            ORDER BY CASE priority WHEN 'trade' THEN 0 ELSE 1 END, id
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$now", nowUtcMsc);
+        command.Parameters.AddWithValue("$limit", limit);
+        var result = new List<OutboxMessage>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetInt32(5),
+                reader.GetInt64(6)));
+        }
+        return result;
+    }
+
+    public async Task<bool> RecordOutboxAttemptAsync(
+        string messageId,
+        int expectedAttemptCount,
+        long nextAttemptAtUtcMsc,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        if (expectedAttemptCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(expectedAttemptCount));
+        }
+        if (nextAttemptAtUtcMsc <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(nextAttemptAtUtcMsc));
+        }
+
+        await _writer.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE outbox_messages
+                SET attempt_count = attempt_count + 1,
+                    next_attempt_at_utc_msc = $next_attempt
+                WHERE message_id = $message_id
+                  AND acked_at_utc_msc IS NULL
+                  AND attempt_count = $expected_attempt_count;
+                """;
+            command.Parameters.AddWithValue("$message_id", messageId);
+            command.Parameters.AddWithValue("$expected_attempt_count", expectedAttemptCount);
+            command.Parameters.AddWithValue("$next_attempt", nextAttemptAtUtcMsc);
+            return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        }
+        finally
+        {
+            _writer.Release();
+        }
+    }
+
     public async Task<OutboxMessage?> GetPendingOutboxMessageAsync(
         string messageId,
         CancellationToken cancellationToken = default)
@@ -1418,6 +1498,9 @@ public sealed class BridgeStore : IAsyncDisposable
         );
         CREATE INDEX IF NOT EXISTS idx_outbox_ready
           ON outbox_messages (acked_at_utc_msc, priority, id);
+        CREATE INDEX IF NOT EXISTS idx_outbox_retry_ready
+          ON outbox_messages
+            (acked_at_utc_msc, next_attempt_at_utc_msc, priority, id);
         CREATE INDEX IF NOT EXISTS idx_outbox_stream_scope
           ON outbox_messages
             (terminal_instance_id, connection_epoch, message_type, acked_at_utc_msc);
