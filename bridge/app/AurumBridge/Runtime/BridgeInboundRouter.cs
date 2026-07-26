@@ -378,7 +378,7 @@ public sealed class BridgeInboundRouter
             || string.IsNullOrWhiteSpace(request.AccountRef?.BrokerServer)
             || string.IsNullOrWhiteSpace(request.AccountRef?.Login)
             || request.Action is not ("rates" or "symbol_snapshot" or "risk_snapshot" or "performance_daily"
-                or "symbols" or "history" or "chart_data")
+                or "symbols" or "history" or "chart_data" or "pending_order_state" or "diagnostics")
             || request.Params.ValueKind != JsonValueKind.Object)
         {
             throw new InvalidDataException("bridge_data_request_invalid");

@@ -24,6 +24,10 @@ HistoryDeal = namedtuple(
     "HistoryDeal",
     "ticket order time time_msc type entry position_id symbol volume price profit commission swap fee comment",
 )
+HistoryOrder = namedtuple(
+    "HistoryOrder",
+    "ticket position_id symbol type state magic reason comment volume_initial volume_current price_open price_current sl tp time_setup time_done",
+)
 
 
 class FakeMt5:
@@ -65,7 +69,7 @@ class FakeMt5:
     def positions_get(self, **kwargs): return ()
     def orders_get(self, **kwargs): return ()
     def history_deals_get(self, *args): return ()
-    def history_orders_get(self, *args): return ()
+    def history_orders_get(self, *args, **kwargs): return ()
     def symbols_get(self):
         self.symbols_calls += 1
         return (SimpleNamespace(name="XAUUSD"),)
@@ -256,7 +260,8 @@ class WorkerTests(unittest.TestCase):
         adapter = self.adapter()
         position = SimpleNamespace(ticket=10, symbol="XAUUSD", type=0, volume=0.1,
                                    magic=234000)
-        adapter.mt5.positions_get = lambda **kwargs: (position,)
+        position_queries = iter(((position,), ()))
+        adapter.mt5.positions_get = lambda **kwargs: next(position_queries)
         expected = {
             "ticket": "10", "symbol": "XAUUSD", "direction": "buy",
             "volume": 0.1, "magic": 234000,
@@ -289,7 +294,8 @@ class WorkerTests(unittest.TestCase):
         adapter = self.adapter()
         order = SimpleNamespace(ticket=20, symbol="XAUUSD", type=2, volume_current=0.1,
                                 volume_initial=0.1, magic=234000)
-        adapter.mt5.orders_get = lambda **kwargs: (order,)
+        order_queries = iter(((order,), ()))
+        adapter.mt5.orders_get = lambda **kwargs: next(order_queries)
         expected = {
             "ticket": "20", "symbol": "XAUUSD", "direction": "buy",
             "volume": 0.1, "magic": 234000,
@@ -401,6 +407,33 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("XAUUSD.s", result["payload"]["symbol"])
         self.assertEqual(("XAUUSD.s", True), adapter.mt5.selected[-1])
 
+    def test_resolves_broker_suffix_before_sending_market_order(self):
+        adapter = self.adapter()
+        adapter.mt5.symbols_get = lambda: (SimpleNamespace(name="XAUUSD.s"),)
+
+        result = adapter.execute(self.command(params={
+            "symbol": "XAUUSD", "side": "buy", "volume": 0.01,
+        }))
+
+        self.assertEqual("succeeded", result["status"])
+        self.assertEqual("XAUUSD.s", adapter.mt5.sent[0]["symbol"])
+        self.assertEqual(("XAUUSD.s", True), adapter.mt5.selected[-1])
+
+    def test_retries_only_quote_refresh_rejections_and_uses_latest_price(self):
+        adapter = self.adapter()
+        responses = iter((Result(10004, 0, 0, "requote"), Result(10009, 1001, 2001, "done")))
+        ticks = iter((Tick(2300.0, 2300.2), Tick(2301.0, 2301.2)))
+        adapter.mt5.symbol_info_tick = lambda symbol: next(ticks)
+        adapter.mt5.order_send = lambda request: adapter.mt5.sent.append(dict(request)) or next(responses)
+
+        result = adapter.execute(self.command(params={
+            "symbol": "XAUUSD", "side": "buy", "volume": 0.01,
+        }))
+
+        self.assertEqual("succeeded", result["status"])
+        self.assertEqual(2, len(adapter.mt5.sent))
+        self.assertEqual(2301.2, adapter.mt5.sent[1]["price"])
+
     def test_reuses_resolved_symbol_without_rescanning_all_mt5_symbols(self):
         adapter = self.adapter()
         first = self.command(
@@ -445,6 +478,60 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(1, history["payload"]["pagination"]["total_count"])
         self.assertEqual(11.0, chart["payload"]["daily"][0]["profit"])
         self.assertEqual(1, chart["payload"]["stats"]["total_trades"])
+
+    def test_history_preserves_visible_protection_and_full_evidence_contract(self):
+        adapter = self.adapter()
+        event_time = 1_767_312_000
+        adapter.mt5.history_deals_get = lambda *args: (
+            HistoryDeal(600, 500, event_time - 60, 0, 0, 0, 700, "XAUUSD",
+                        0.1, 2300.0, 0.0, 0.0, 0.0, 0.0, "open"),
+            HistoryDeal(601, 501, event_time, 0, 1, 1, 700, "XAUUSD",
+                        0.1, 2310.0, 12.0, -0.5, -0.25, -0.25, "close"),
+        )
+        order = HistoryOrder(500, 700, "XAUUSD", 2, 4, 234000, 0, "AI-1",
+                             0.1, 0.0, 2300.0, 2310.0, 2290.0, 2320.0,
+                             event_time - 60, event_time)
+        adapter.mt5.history_orders_get = lambda *args, **kwargs: (order,)
+        base = self.command(type="data_request", action="history",
+                            request_id="data_01JWORKER_HISTORY_EVIDENCE")
+
+        visible = adapter.data({**base, "params": {
+            "date_from": "2026-01-02", "date_to": "2026-01-02",
+            "page": 1, "page_size": 20,
+        }})
+        evidence = adapter.data({**base, "request_id": "data_01JWORKER_HISTORY_FULL",
+                                 "params": {"date_from": "2026-01-02",
+                                            "date_to": "2026-01-02", "page": 1,
+                                            "page_size": 5000, "include_deals": True}})
+
+        self.assertEqual(2290.0, visible["payload"]["orders"][0]["stop_loss"])
+        self.assertEqual(2320.0, visible["payload"]["orders"][0]["take_profit"])
+        self.assertEqual(2, len(evidence["payload"]["deals"]))
+        self.assertEqual(2290.0, evidence["payload"]["history_orders"][0]["sl"])
+
+    def test_returns_pending_terminal_state_and_diagnostics(self):
+        adapter = self.adapter()
+        historical = SimpleNamespace(
+            ticket=5001, position_id=7001, symbol="XAUUSD", type=2, state=2,
+            volume_initial=0.1, volume_current=0.0, price_open=2290.0,
+            magic=234000, comment="AI-1")
+        adapter.mt5.history_orders_get = lambda *args, **kwargs: (historical,)
+        expected = {"ticket": "5001", "symbol": "XAUUSD", "direction": "buy",
+                    "volume": 0.1, "magic": 234000}
+        base = self.command(type="data_request", params={})
+
+        state = adapter.data({**base, "request_id": "data_01JWORKER_PENDING_STATE",
+                              "action": "pending_order_state",
+                              "params": {"ticket": "5001", "expected_state": expected}})
+        diagnostics = adapter.data({**base, "request_id": "data_01JWORKER_DIAGNOSTICS",
+                                    "action": "diagnostics"})
+
+        self.assertEqual("succeeded", state["status"])
+        self.assertEqual("cancelled", state["payload"]["final_state"])
+        self.assertEqual(7001, state["payload"]["position_id"])
+        self.assertEqual("succeeded", diagnostics["status"])
+        self.assertTrue(diagnostics["payload"]["mt5_connected"])
+        self.assertEqual(12345678, diagnostics["payload"]["account"]["login"])
 
     def test_rejects_invalid_rates_before_mt5_query(self):
         adapter = self.adapter()

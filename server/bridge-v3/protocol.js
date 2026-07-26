@@ -8,7 +8,7 @@ export const BRIDGE_V3_MESSAGE_TYPES = Object.freeze(new Set([
 
 export const BRIDGE_V3_DATA_REQUEST_ACTIONS = Object.freeze(new Set([
   'rates', 'symbol_snapshot', 'risk_snapshot', 'performance_daily',
-  'symbols', 'history', 'chart_data',
+  'symbols', 'history', 'chart_data', 'pending_order_state', 'diagnostics',
 ]))
 
 export const BRIDGE_V3_COMMAND_ACTIONS = Object.freeze(new Set([
@@ -159,6 +159,12 @@ function validateQuote(message) {
   }
   if (message.terminal_connected !== undefined && message.terminal_connected !== null
     && typeof message.terminal_connected !== 'boolean') errors.push('terminal_connected:invalid')
+  if (message.digits !== undefined && message.digits !== null
+    && (!Number.isInteger(message.digits) || message.digits < 0 || message.digits > 16)) {
+    errors.push('digits:invalid')
+  }
+  if (message.point !== undefined && message.point !== null
+    && (!Number.isFinite(message.point) || message.point <= 0)) errors.push('point:invalid')
   return errors
 }
 

@@ -272,6 +272,8 @@ public sealed class BridgeInboundRouterTests
     [DataRow("symbols")]
     [DataRow("history")]
     [DataRow("chart_data")]
+    [DataRow("pending_order_state")]
+    [DataRow("diagnostics")]
     public async Task LegacyWebsiteDataActionsUseTheV3DataChannel(string action)
     {
         var router = new BridgeInboundRouter(

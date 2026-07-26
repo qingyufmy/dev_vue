@@ -34,6 +34,8 @@
     "last": { "type": ["number", "null"], "minimum": 0 },
     "symbol_trade_mode": { "type": ["integer", "null"], "minimum": 0, "maximum": 4 },
     "terminal_connected": { "type": ["boolean", "null"] },
+    "digits": { "type": ["integer", "null"], "minimum": 0, "maximum": 16 },
+    "point": { "type": ["number", "null"], "exclusiveMinimum": 0 },
     "error_code": { "type": "string", "minLength": 1, "maxLength": 128 }
   },
   "oneOf": [

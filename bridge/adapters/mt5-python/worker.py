@@ -271,6 +271,8 @@ class Mt5Adapter:
                 request, "succeeded", observed_at, bid=bid, ask=ask, last=last,
                 symbol_trade_mode=(int(getattr(info, "trade_mode", -1)) if info is not None else None),
                 terminal_connected=(bool(getattr(terminal, "connected", True)) if terminal is not None else None),
+                digits=(int(getattr(info, "digits", 0)) if info is not None else None),
+                point=(float(getattr(info, "point", 0.0)) if info is not None else None),
             )
         except WorkerError as error:
             return self._quote_result(request, "rejected", int(time.time() * 1000), error_code=error.code)
@@ -284,7 +286,8 @@ class Mt5Adapter:
             self._ensure_identity()
             action = request.get("action")
             if action not in {"rates", "symbol_snapshot", "risk_snapshot", "performance_daily",
-                              "symbols", "history", "chart_data"}:
+                              "symbols", "history", "chart_data", "pending_order_state",
+                              "diagnostics"}:
                 raise WorkerError("terminal_data_action_unsupported")
             params = request.get("params")
             if not isinstance(params, dict):
@@ -301,6 +304,10 @@ class Mt5Adapter:
                 payload = self._symbols()
             elif action == "history":
                 payload = self._history(params)
+            elif action == "pending_order_state":
+                payload = self._pending_order_state(params)
+            elif action == "diagnostics":
+                payload = self._diagnostics()
             else:
                 payload = self._chart_data(params)
             return self._data_result(request, "succeeded", payload=payload)
@@ -598,18 +605,74 @@ class Mt5Adapter:
             page_size = int(params.get("page_size") or 20)
         except (TypeError, ValueError) as error:
             raise WorkerError("history_pagination_invalid") from error
-        if page < 1 or page_size < 1 or page_size > 100:
+        if page < 1 or page_size < 1 or page_size > 10_000:
             raise WorkerError("history_pagination_invalid")
         rows, capital = self._closed_history_rows(params)
+        if params.get("compact") is True:
+            compact_rows = [{
+                "t": row["close_time"], "p": row["profit"], "y": row["type"],
+            } for row in rows]
+            return {"orders": compact_rows, "total_count": len(compact_rows), "source": "mt5"}
         total = len(rows)
         start = (page - 1) * page_size
         visible = rows[start:start + page_size]
+        include_deals = params.get("include_deals") is True
+        history_orders: list[dict[str, Any]] = []
+        raw_deals: list[dict[str, Any]] = []
+        if include_deals:
+            date_from, date_to = self._history_range(params)
+            orders = self.mt5.history_orders_get(date_from, date_to)
+            if orders is None:
+                raise WorkerError("history_orders_unavailable", str(self.mt5.last_error()))
+            for item in orders:
+                row = _plain(item)
+                if not isinstance(row, dict):
+                    raise WorkerError("history_orders_invalid")
+                history_orders.append({
+                    "ticket": row.get("ticket"), "position_id": row.get("position_id"),
+                    "symbol": row.get("symbol"), "type": row.get("type"),
+                    "state": row.get("state"), "magic": row.get("magic"),
+                    "reason": row.get("reason"), "comment": row.get("comment"),
+                    "volume_initial": row.get("volume_initial"),
+                    "volume_current": row.get("volume_current"),
+                    "price_open": row.get("price_open"),
+                    "price_current": row.get("price_current"),
+                    "sl": float(row.get("sl") or 0.0), "tp": float(row.get("tp") or 0.0),
+                    "time_setup": self._history_time(row.get("time_setup")),
+                    "time_done": self._history_time(row.get("time_done")),
+                })
+            for row in self._history_deals(params):
+                raw_deals.append({
+                    "deal_ticket": row.get("ticket"), "ticket": row.get("ticket"),
+                    "order": row.get("order"), "position_id": row.get("position_id"),
+                    "symbol": row.get("symbol"), "type": row.get("type"),
+                    "entry": row.get("entry"), "magic": row.get("magic"),
+                    "reason": row.get("reason"), "comment": row.get("comment"),
+                    "volume": row.get("volume"), "price": row.get("price"),
+                    "profit": row.get("profit"), "commission": row.get("commission"),
+                    "swap": row.get("swap"), "fee": row.get("fee"),
+                    "sl": row.get("sl"), "tp": row.get("tp"),
+                    "time": self._history_time(row.get("time")), "time_msc": row.get("time_msc"),
+                })
+        else:
+            for row in visible:
+                try:
+                    orders = self.mt5.history_orders_get(ticket=int(row.get("ticket") or 0))
+                except (TypeError, ValueError):
+                    orders = None
+                if not orders:
+                    continue
+                order = orders[-1]
+                row["take_profit"] = float(getattr(order, "tp", 0.0) or 0.0)
+                row["stop_loss"] = float(getattr(order, "sl", 0.0) or 0.0)
         total_profit = sum(row["net_profit"] for row in rows)
         net_result = total_profit + capital["credit"] + capital["deposit"] - capital["withdrawal"]
         account = self.mt5.account_info()
         balance = float(getattr(account, "balance", 0.0) or 0.0) if account else 0.0
         return {
             "orders": visible,
+            "deals": raw_deals,
+            "history_orders": history_orders,
             "statistics": {
                 "account_principal": round(balance - net_result, 2),
                 "account_balance": round(balance, 2),
@@ -627,6 +690,98 @@ class Mt5Adapter:
                 "total_count": total,
                 "total_pages": max(math.ceil(total / page_size), 1),
             },
+            "source": "mt5",
+        }
+
+    def _pending_order_state(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            ticket = int(str(params.get("ticket") or ""))
+        except (TypeError, ValueError) as error:
+            raise WorkerError("ticket_required") from error
+        if ticket <= 0:
+            raise WorkerError("ticket_required")
+        account = self.mt5.account_info()
+        if account is None:
+            raise WorkerError("mt5_account_unavailable")
+        account_row = {"login": getattr(account, "login", None),
+                       "server": getattr(account, "server", None)}
+        current = self.mt5.orders_get(ticket=ticket)
+        if current is None:
+            raise WorkerError("orders_query_failed", str(self.mt5.last_error()))
+        expected = params.get("expected_state")
+        if expected is not None and not isinstance(expected, dict):
+            raise WorkerError("management_expected_state_invalid")
+        if current:
+            order = current[0]
+            order_row = self._pending_order_state_row(order)
+            if expected:
+                try:
+                    self._validate_management_target(expected, order, "pending")
+                except WorkerError as error:
+                    return {"account": account_row, "current_state": "identity_changed",
+                            "final_state": "unknown", "order": order_row,
+                            "precondition_error": error.code, "source": "mt5"}
+            return {"account": account_row, "current_state": "pending", "final_state": None,
+                    "order": order_row, "source": "mt5"}
+        history = self.mt5.history_orders_get(ticket=ticket)
+        if history is None:
+            raise WorkerError("history_orders_query_failed", str(self.mt5.last_error()))
+        if not history:
+            return {"account": account_row, "current_state": "absent", "final_state": "unknown",
+                    "order": None, "source": "mt5"}
+        order = history[-1]
+        order_row = self._pending_order_state_row(order)
+        if expected:
+            try:
+                self._validate_management_target(expected, order, "pending")
+            except WorkerError as error:
+                return {"account": account_row, "current_state": "history",
+                        "final_state": "unknown", "order": order_row,
+                        "precondition_error": error.code, "source": "mt5"}
+        states = {
+            int(getattr(self.mt5, "ORDER_STATE_FILLED", 4)): "filled",
+            int(getattr(self.mt5, "ORDER_STATE_PARTIAL", 3)): "partially_filled",
+            int(getattr(self.mt5, "ORDER_STATE_CANCELED", 2)): "cancelled",
+            int(getattr(self.mt5, "ORDER_STATE_EXPIRED", 6)): "expired",
+            int(getattr(self.mt5, "ORDER_STATE_REJECTED", 5)): "rejected",
+        }
+        final_state = states.get(int(getattr(order, "state", -1)), "unknown")
+        return {"account": account_row, "current_state": "history", "final_state": final_state,
+                "position_id": order_row.get("position_id"), "order": order_row, "source": "mt5"}
+
+    def _pending_order_state_row(self, order: Any) -> dict[str, Any]:
+        buy_types = {int(self.mt5.ORDER_TYPE_BUY_LIMIT), int(self.mt5.ORDER_TYPE_BUY_STOP),
+                     int(self.mt5.ORDER_TYPE_BUY_STOP_LIMIT)}
+        order_type = int(getattr(order, "type", -1))
+        return {
+            "ticket": getattr(order, "ticket", None),
+            "position_id": getattr(order, "position_id", 0) or None,
+            "symbol": str(getattr(order, "symbol", "") or ""),
+            "side": "buy" if order_type in buy_types else "sell",
+            "type": order_type, "state": int(getattr(order, "state", -1)),
+            "volume_initial": float(getattr(order, "volume_initial", 0.0) or 0.0),
+            "volume": float(getattr(order, "volume_current", 0.0) or 0.0),
+            "price": float(getattr(order, "price_open", 0.0) or 0.0),
+            "magic": int(getattr(order, "magic", 0) or 0),
+            "comment": str(getattr(order, "comment", "") or ""),
+        }
+
+    def _diagnostics(self) -> dict[str, Any]:
+        account = self.mt5.account_info()
+        terminal = self.mt5.terminal_info()
+        if account is None or terminal is None:
+            raise WorkerError("mt5_account_unavailable")
+        return {
+            "mt5_connected": bool(getattr(terminal, "connected", True)),
+            "account": {"login": getattr(account, "login", None),
+                        "server": getattr(account, "server", None),
+                        "balance": float(getattr(account, "balance", 0.0) or 0.0),
+                        "equity": float(getattr(account, "equity", 0.0) or 0.0),
+                        "trade_allowed": bool(getattr(account, "trade_allowed", False)),
+                        "trade_expert": bool(getattr(account, "trade_expert", False))},
+            "terminal": {"build": int(getattr(terminal, "build", 0) or 0),
+                         "connected": bool(getattr(terminal, "connected", True)),
+                         "trade_allowed": bool(getattr(terminal, "trade_allowed", False))},
             "source": "mt5",
         }
 
@@ -1037,12 +1192,19 @@ class Mt5Adapter:
             raise WorkerError("command_route_mismatch")
 
     def _place_order(self, command: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
-        symbol = self._required_text(params, "symbol")
+        symbol = self._resolve_symbol(params.get("symbol"))
+        select = getattr(self.mt5, "symbol_select", None)
+        if callable(select) and not select(symbol, True):
+            raise WorkerError("symbol_select_failed")
         side = self._required_text(params, "side").lower()
         if side not in {"buy", "sell"}:
             raise WorkerError("order_side_invalid")
         volume = self._positive_float(params, "volume")
         kind = str(params.get("order_kind") or "market").lower()
+        info = self.mt5.symbol_info(symbol)
+        if info is None:
+            raise WorkerError("symbol_info_unavailable")
+        self._validate_order_volume(info, volume)
         tick = self.mt5.symbol_info_tick(symbol)
         if tick is None:
             raise WorkerError("symbol_tick_unavailable")
@@ -1060,7 +1222,8 @@ class Mt5Adapter:
         if order_type is None:
             raise WorkerError("order_kind_invalid")
         is_market = kind == "market"
-        price = float(params.get("price") or (tick.ask if side == "buy" else tick.bid))
+        price = self._positive_price(params.get("price") or (tick.ask if side == "buy" else tick.bid),
+                                     "price")
         request = {
             "action": self.mt5.TRADE_ACTION_DEAL if is_market else self.mt5.TRADE_ACTION_PENDING,
             "symbol": symbol,
@@ -1071,11 +1234,12 @@ class Mt5Adapter:
             "magic": int(params.get("magic") or 234000),
             "comment": f"AURUM:{str(command['command_id'])[-20:]}",
             "type_time": int(params.get("type_time") or self.mt5.ORDER_TIME_GTC),
-            "type_filling": int(params.get("type_filling") or self.mt5.ORDER_FILLING_RETURN),
+            "type_filling": int(params.get("type_filling") if params.get("type_filling") is not None
+                                else self._filling_mode(info, pending=not is_market)),
         }
         for source, target in (("stop_loss", "sl"), ("take_profit", "tp"), ("stop_limit_price", "stoplimit")):
             if params.get(source) is not None:
-                request[target] = float(params[source])
+                request[target] = self._positive_price(params[source], source)
         if params.get("expiration") is not None:
             request["expiration"] = int(params["expiration"])
         return self._send_order(command, request)
@@ -1091,7 +1255,20 @@ class Mt5Adapter:
             if len(orders) != 1:
                 raise WorkerError("management_target_ambiguous")
             self._validate_management_target(params["expected_state"], orders[0], "pending")
-        return self._send_order(command, {"action": self.mt5.TRADE_ACTION_REMOVE, "order": ticket})
+        result = self._send_order(command, {"action": self.mt5.TRADE_ACTION_REMOVE, "order": ticket})
+        remaining = self.mt5.orders_get(ticket=ticket)
+        if remaining is None:
+            return self._result(command, "uncertain", "cancel_order_verify_failed",
+                                raw_result=result.get("raw_result"))
+        if len(remaining) == 0:
+            raw = dict(result.get("raw_result") or {})
+            raw.update({"already_absent": False, "order": ticket})
+            return self._result(command, "succeeded", raw_result=raw,
+                                evidence=result.get("evidence"))
+        if result.get("status") == "rejected":
+            return result
+        return self._result(command, "uncertain", "pending_order_still_active",
+                            raw_result=result.get("raw_result"), evidence=result.get("evidence"))
 
     def _modify_order(self, command: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         request: dict[str, Any] = {
@@ -1101,7 +1278,7 @@ class Mt5Adapter:
         for source, target in (("price", "price"), ("stop_loss", "sl"), ("take_profit", "tp"),
                                ("stop_limit_price", "stoplimit")):
             if params.get(source) is not None:
-                request[target] = float(params[source])
+                request[target] = self._positive_price(params[source], source)
         if params.get("expiration") is not None:
             request["expiration"] = int(params["expiration"])
         return self._send_order(command, request)
@@ -1243,8 +1420,28 @@ class Mt5Adapter:
             "deviation": int(params.get("deviation") or 20),
             "magic": int(params.get("magic") or 234000),
             "comment": f"AURUM:{str(command['command_id'])[-20:]}",
+            "type_filling": self._filling_mode(self.mt5.symbol_info(position.symbol), pending=False),
         }
-        return self._send_order(command, request)
+        result = self._send_order(command, request)
+        remaining = self.mt5.positions_get(ticket=ticket)
+        if remaining is None:
+            return self._result(command, "uncertain", "close_position_verify_failed",
+                                raw_result=result.get("raw_result"), evidence=result.get("evidence"))
+        if len(remaining) == 0:
+            raw = dict(result.get("raw_result") or {})
+            raw["position"] = ticket
+            return self._result(command, "succeeded", raw_result=raw,
+                                evidence=result.get("evidence"))
+        remaining_volume = float(getattr(remaining[0], "volume", 0.0) or 0.0)
+        raw = dict(result.get("raw_result") or {})
+        raw.update({"position": ticket, "remaining_volume": remaining_volume})
+        if remaining_volume < float(position.volume):
+            return self._result(command, "uncertain", "close_position_partial",
+                                raw_result=raw, evidence=result.get("evidence"))
+        if result.get("status") == "rejected":
+            return result
+        return self._result(command, "uncertain", "position_still_open",
+                            raw_result=raw, evidence=result.get("evidence"))
 
     def _validate_management_target(self, expected: dict[str, Any], target: Any, kind: str) -> None:
         expected_server = str(expected.get("broker_server_key") or "").strip().upper()
@@ -1280,6 +1477,8 @@ class Mt5Adapter:
     def _query_execution(self, command: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         expected_kind = str(params.get("expected_kind") or "").strip().lower()
         symbol = str(params.get("symbol") or "").strip()
+        if symbol:
+            symbol = self._resolve_symbol(symbol)
         command_ref = str(params.get("bridge_command_ref") or params.get("comment") or "").strip()
         if expected_kind not in {"trade", "pending"}:
             raise WorkerError("expected_kind_required")
@@ -1409,24 +1608,85 @@ class Mt5Adapter:
         return self._result(command, "succeeded", raw_result=lookup, evidence=evidence)
 
     def _send_order(self, command: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
-        result = self.mt5.order_send(request)
+        retryable = {
+            int(getattr(self.mt5, "TRADE_RETCODE_REQUOTE", 10004)),
+            int(getattr(self.mt5, "TRADE_RETCODE_PRICE_CHANGED", 10020)),
+            int(getattr(self.mt5, "TRADE_RETCODE_PRICE_OFF", 10021)),
+        }
+        result = None
+        for attempt in range(4):
+            result = self.mt5.order_send(request)
+            retcode = int(getattr(result, "retcode", -1)) if result is not None else -1
+            if retcode not in retryable or attempt == 3:
+                break
+            symbol = str(request.get("symbol") or "")
+            tick = self.mt5.symbol_info_tick(symbol) if symbol else None
+            if tick is None:
+                break
+            buy_types = {int(self.mt5.ORDER_TYPE_BUY), int(self.mt5.ORDER_TYPE_BUY_LIMIT),
+                         int(self.mt5.ORDER_TYPE_BUY_STOP), int(self.mt5.ORDER_TYPE_BUY_STOP_LIMIT)}
+            if int(request.get("action") or -1) == int(self.mt5.TRADE_ACTION_DEAL):
+                request = dict(request)
+                raw_order_type = request.get("type")
+                order_type = int(raw_order_type if raw_order_type is not None else -1)
+                request["price"] = float(tick.ask if order_type in buy_types
+                                         else tick.bid)
+            time.sleep(0.15)
         if result is None:
             return self._result(command, "uncertain", "mt5_order_result_missing", str(self.mt5.last_error()),
                                 raw_result={"request": request})
         raw = _plain(result)
-        accepted = {
-            int(getattr(self.mt5, "TRADE_RETCODE_DONE", 10009)),
-            int(getattr(self.mt5, "TRADE_RETCODE_PLACED", 10008)),
-            int(getattr(self.mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)),
-        }
-        status = "succeeded" if int(result.retcode) in accepted else "rejected"
-        error_code = None if status == "succeeded" else f"mt5_retcode_{int(result.retcode)}"
+        retcode = int(result.retcode)
+        is_pending = int(request.get("action") or -1) == int(self.mt5.TRADE_ACTION_PENDING)
+        if retcode == int(getattr(self.mt5, "TRADE_RETCODE_DONE", 10009)) \
+                or (is_pending and retcode == int(getattr(self.mt5, "TRADE_RETCODE_PLACED", 10008))):
+            status, error_code = "succeeded", None
+        elif retcode == int(getattr(self.mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)) \
+                or int(getattr(result, "order", 0) or 0) > 0 \
+                or int(getattr(result, "deal", 0) or 0) > 0:
+            status, error_code = "uncertain", "mt5_execution_requires_reconciliation"
+        else:
+            status, error_code = "rejected", f"mt5_retcode_{retcode}"
         evidence = {
-            "broker_retcode": int(result.retcode),
+            "broker_retcode": retcode,
             "order_tickets": [str(result.order)] if getattr(result, "order", 0) else [],
             "deal_tickets": [str(result.deal)] if getattr(result, "deal", 0) else [],
         }
         return self._result(command, status, error_code, getattr(result, "comment", None), raw, evidence)
+
+    def _filling_mode(self, info: Any, pending: bool) -> int:
+        if pending:
+            return int(getattr(self.mt5, "ORDER_FILLING_RETURN", 2))
+        filling = int(getattr(info, "filling_mode", 0) or 0) if info is not None else 0
+        if filling & 2:
+            return int(getattr(self.mt5, "ORDER_FILLING_IOC", 1))
+        if filling & 1:
+            return int(getattr(self.mt5, "ORDER_FILLING_FOK", 0))
+        return int(getattr(self.mt5, "ORDER_FILLING_IOC",
+                           getattr(self.mt5, "ORDER_FILLING_RETURN", 2)))
+
+    @staticmethod
+    def _validate_order_volume(info: Any, volume: float) -> None:
+        volume_min = float(getattr(info, "volume_min", 0.0) or 0.0)
+        volume_max = float(getattr(info, "volume_max", 0.0) or 0.0)
+        volume_step = float(getattr(info, "volume_step", 0.0) or 0.0)
+        epsilon = max(1e-9, volume_step * 1e-6)
+        if volume_min > 0 and volume < volume_min - epsilon:
+            raise WorkerError("order_volume_below_minimum")
+        if volume_max > 0 and volume > volume_max + epsilon:
+            raise WorkerError("order_volume_above_maximum")
+        if volume_step > 0 and abs(round(volume / volume_step) * volume_step - volume) > epsilon:
+            raise WorkerError("order_volume_step_invalid")
+
+    @staticmethod
+    def _positive_price(value: Any, field: str) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise WorkerError(f"{field}_invalid") from error
+        if not math.isfinite(number) or number <= 0:
+            raise WorkerError(f"{field}_invalid")
+        return number
 
     def _result(self, command: dict[str, Any], status: str, error_code: str | None = None,
                 error_message: str | None = None, raw_result: dict[str, Any] | None = None,
@@ -1456,7 +1716,8 @@ class Mt5Adapter:
                       bid: float | None = None, ask: float | None = None,
                       last: float | None = None, error_code: str | None = None,
                       symbol_trade_mode: int | None = None,
-                      terminal_connected: bool | None = None) -> dict[str, Any]:
+                      terminal_connected: bool | None = None,
+                      digits: int | None = None, point: float | None = None) -> dict[str, Any]:
         result: dict[str, Any] = {
             "v": PROTOCOL_VERSION,
             "type": "quote",
@@ -1476,6 +1737,10 @@ class Mt5Adapter:
                 result["symbol_trade_mode"] = symbol_trade_mode
             if terminal_connected is not None:
                 result["terminal_connected"] = terminal_connected
+            if digits is not None and digits >= 0:
+                result["digits"] = digits
+            if point is not None and math.isfinite(point) and point > 0:
+                result["point"] = point
         else:
             result["error_code"] = error_code or "quote_rejected"
         return result

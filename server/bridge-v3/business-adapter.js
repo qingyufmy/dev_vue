@@ -13,7 +13,7 @@ const TRADE_ACTIONS = new Set([
 const SUPPORTED_ACTIONS = new Set([
   ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'rates', 'symbol_snapshot', 'risk_snapshot',
   'performance_daily', 'symbols', 'history', 'chart_data', 'order_lookup',
-  'toggle_trade', 'set_quote_symbol',
+  'pending_order_state', 'diagnostics', 'status', 'toggle_trade', 'set_quote_symbol',
 ])
 const RATE_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
 const DEFAULT_FRESHNESS_MS = 30_000
@@ -96,6 +96,11 @@ function pendingKind(type) {
 function normalizeOrder(item, platform) {
   const kind = item.pending_type || pendingKind(item.type)
   const side = item.side || (String(kind).startsWith('buy') ? 'buy' : 'sell')
+  const formatTime = value => {
+    const seconds = Number(value || 0)
+    if (!Number.isFinite(seconds) || seconds <= 0) return null
+    return new Date(seconds * 1000).toISOString().slice(0, 19).replace('T', ' ')
+  }
   return {
     ...item,
     ticket:String(item.ticket ?? item.order_id ?? ''),
@@ -107,6 +112,8 @@ function normalizeOrder(item, platform) {
     tp:Number(item.tp ?? item.take_profit ?? 0),
     mt5_ticket:String(item.ticket ?? item.order_id ?? ''),
     state:'pending',
+    valid_until:item.valid_until ?? formatTime(item.time_expiration),
+    created_at:item.created_at ?? formatTime(item.time_setup),
     source:platform,
   }
 }
@@ -439,6 +446,7 @@ export function createBridgeV3BusinessAdapter({
     return {
       status:'success', symbol:result.symbol, bid:result.bid, ask:result.ask,
       spread:result.ask - result.bid, last:result.last ?? null,
+      digits:result.digits ?? null, point:result.point ?? null,
       observed_at_utc_msc:result.observed_at_utc_msc,
       time:new Date(result.observed_at_utc_msc).toISOString(), source:route.platform,
       symbol_trade_mode:result.symbol_trade_mode ?? null,
@@ -474,8 +482,14 @@ export function createBridgeV3BusinessAdapter({
   }
 
   async function requestTerminalData(userId, route, action, params, timeoutMs) {
-    const allowed = action === 'symbols'
+    const allowed = ['symbols', 'diagnostics'].includes(action)
       ? {}
+      : action === 'pending_order_state'
+        ? cleanObject({
+            ticket:String(params.ticket || '').trim() || undefined,
+            expected_state:params.expected_state && typeof params.expected_state === 'object'
+              && !Array.isArray(params.expected_state) ? params.expected_state : undefined,
+          })
       : cleanObject({
           page:action === 'history' ? Number(params.page || 1) : undefined,
           page_size:action === 'history' ? Number(params.page_size || 20) : undefined,
@@ -486,10 +500,15 @@ export function createBridgeV3BusinessAdapter({
           direction:params.direction || undefined,
           profit_filter:params.profit_filter || undefined,
           force_refresh:params.force_refresh === true || undefined,
+          include_deals:action === 'history' && params.include_deals === true || undefined,
+          compact:action === 'history' && params.compact === true || undefined,
         })
     if (action === 'history' && (!Number.isSafeInteger(allowed.page) || allowed.page < 1
-      || !Number.isSafeInteger(allowed.page_size) || allowed.page_size < 1 || allowed.page_size > 100)) {
+      || !Number.isSafeInteger(allowed.page_size) || allowed.page_size < 1 || allowed.page_size > 10_000)) {
       throw adapterError('history_pagination_invalid')
+    }
+    if (action === 'pending_order_state' && !/^\d{1,32}$/.test(allowed.ticket || '')) {
+      throw adapterError('ticket_required')
     }
     for (const key of ['date_from', 'date_to', 'entry_from', 'entry_to']) {
       if (allowed[key] && !/^\d{4}-\d{2}-\d{2}$/.test(String(allowed[key]))) {
@@ -757,13 +776,29 @@ export function createBridgeV3BusinessAdapter({
         return { status:'success', symbol }
       }
       const route = selectRoute(userId, routeSelectionParams(params))
+      if (action === 'status') {
+        const diagnostics = await requestTerminalData(userId, route, 'diagnostics', {}, timeoutMs)
+        if (diagnostics.status !== 'success' || !diagnostics.account) {
+          return { mode:'mock', mt5_package_available:true, live_trading_enabled:false }
+        }
+        return {
+          mode:'live', mt5_package_available:true,
+          live_trading_enabled:gateway.isTradeEnabled(Number(userId)),
+          terminal_trade_allowed:Boolean(diagnostics.terminal?.trade_allowed),
+          account_trade_allowed:Boolean(diagnostics.account.trade_allowed),
+          account_trade_expert:Boolean(diagnostics.account.trade_expert),
+          login:diagnostics.account.login, server:diagnostics.account.server,
+          balance:diagnostics.account.balance, equity:diagnostics.account.equity,
+          source:route.platform,
+        }
+      }
       if (action === 'account') return await readAccount(route)
       if (action === 'system_trade_inventory') return await readSystemInventory(route)
       if (action === 'market_state') return await requestMarketState(userId, route, params, timeoutMs)
       if (READ_ACTIONS.has(action)) return await readCollection(route, action, params)
       if (action === 'quote') return await requestQuote(userId, route, params, timeoutMs)
       if (action === 'rates') return await requestRates(userId, route, params, timeoutMs)
-      if (['symbols', 'history', 'chart_data'].includes(action)) {
+      if (['symbols', 'history', 'chart_data', 'pending_order_state', 'diagnostics'].includes(action)) {
         return await requestTerminalData(userId, route, action, params, timeoutMs)
       }
       if (action === 'symbol_snapshot') {

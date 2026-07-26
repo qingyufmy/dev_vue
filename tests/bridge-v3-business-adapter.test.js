@@ -159,6 +159,58 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('preserves the legacy full-history evidence request used by outcome attribution', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ orders:[], deals:[], history_orders:[], source:'mt5' },
+    } })
+
+    await expect(adapter.execute(42, 'history', {
+      page:1, page_size:5000, include_deals:true, date_from:'2026-01-01',
+    }, { timeoutMs:30_000 })).resolves.toMatchObject({
+      status:'success', deals:[], history_orders:[],
+    })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'history', params:{
+        page:1, page_size:5000, date_from:'2026-01-01', include_deals:true,
+      },
+    }), { timeoutMs:30_000 })
+  })
+
+  it('routes pending terminal-state reconciliation and diagnostics through v3', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ current_state:'history', final_state:'cancelled', source:'mt5' },
+    } })
+    const expectedState = { ticket:'5001', symbol:'XAUUSD', direction:'buy', volume:0.1, magic:234000 }
+
+    await expect(adapter.execute(42, 'pending_order_state', {
+      ticket:'5001', expected_state:expectedState,
+    })).resolves.toMatchObject({ status:'success', final_state:'cancelled' })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'pending_order_state', params:{ ticket:'5001', expected_state:expectedState },
+    }), { timeoutMs:5000 })
+
+    gateway.requestData.mockResolvedValueOnce({
+      status:'succeeded', payload:{ mt5_connected:true, terminal:{ connected:true }, source:'mt5' },
+    })
+    await expect(adapter.execute(42, 'diagnostics')).resolves.toMatchObject({
+      status:'success', mt5_connected:true,
+    })
+    expect(gateway.requestData).toHaveBeenLastCalledWith(42, expect.objectContaining({
+      action:'diagnostics', params:{},
+    }), { timeoutMs:5000 })
+
+    gateway.requestData.mockResolvedValueOnce({ status:'succeeded', payload:{
+      account:{ login:12345678, server:'Broker-Demo', balance:1000, equity:1005,
+        trade_allowed:true, trade_expert:true },
+      terminal:{ connected:true, trade_allowed:true }, source:'mt5',
+    } })
+    await expect(adapter.execute(42, 'status')).resolves.toMatchObject({
+      mode:'live', mt5_package_available:true, live_trading_enabled:true,
+      terminal_trade_allowed:true, account_trade_allowed:true,
+      login:12345678, server:'Broker-Demo', balance:1000, equity:1005,
+    })
+  })
+
   it('rejects invalid rates bounds before contacting the terminal', async () => {
     const { adapter, gateway } = setup()
     await expect(adapter.execute(42, 'rates', {

@@ -289,6 +289,12 @@ public sealed record QuoteMessage : BridgeEnvelope
     [JsonPropertyName("terminal_connected")]
     public bool? TerminalConnected { get; init; }
 
+    [JsonPropertyName("digits")]
+    public int? Digits { get; init; }
+
+    [JsonPropertyName("point")]
+    public double? Point { get; init; }
+
     [JsonPropertyName("error_code")]
     public string? ErrorCode { get; init; }
 }
