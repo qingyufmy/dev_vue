@@ -27,6 +27,10 @@ public sealed class BridgeRuntimePathResolverTests
 
         Assert.AreEqual(python, paths.PythonExecutable);
         Assert.AreEqual(worker, paths.Mt5WorkerScript);
+        Assert.AreEqual(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "AURUM", "BridgeV3", "credential.dat"),
+            paths.CredentialPath);
         Assert.AreEqual(new Uri("https://www.cnfxtrade.com"), paths.ServerBaseUri);
     }
 
@@ -49,6 +53,7 @@ public sealed class BridgeRuntimePathResolverTests
 
         Assert.AreEqual(python, paths.PythonExecutable);
         Assert.AreEqual(worker, paths.Mt5WorkerScript);
+        Assert.AreEqual(Path.Combine(_directory, "state", "credential.dat"), paths.CredentialPath);
         Assert.AreEqual(new Uri("http://localhost:3000"), paths.ServerBaseUri);
         Assert.AreEqual(Path.Combine(_directory, "state"), paths.DataDirectory);
     }
@@ -72,6 +77,7 @@ public sealed class BridgeRuntimePathResolverTests
             "source-1");
 
         Assert.AreEqual(Path.Combine(root, "profiles", "source-1"), paths.DataDirectory);
+        Assert.AreEqual(Path.Combine(root, "credential.dat"), paths.CredentialPath);
     }
 
     [TestMethod]

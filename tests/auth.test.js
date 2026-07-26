@@ -35,6 +35,7 @@ vi.mock('../server/bridge-pairing.js', () => ({
   consumeBridgePairing: vi.fn(async () => ({ status: 'pending' })),
 }))
 vi.mock('../server/bridge-ws.js', () => ({
+  disconnectUserBridgeConnections:vi.fn(),
   disconnectUserSockets:vi.fn(),
 }))
 
@@ -45,7 +46,7 @@ import {
   createBridgeRefreshSession, useBridgeRefreshSession,
   revokeBridgeRefreshSession, revokeBridgeRefreshSessions,
 } from '../server/bridge-auth-session.js'
-import { disconnectUserSockets } from '../server/bridge-ws.js'
+import { disconnectUserBridgeConnections, disconnectUserSockets } from '../server/bridge-ws.js'
 import { approveBridgePairing, consumeBridgePairing, startBridgePairing } from '../server/bridge-pairing.js'
 
 withTransaction.mockImplementation(callback => callback(async (sql, params = []) => {
@@ -209,6 +210,7 @@ describe('auth.js — Bridge sessions', () => {
 
     expect(json).toEqual({ ok:true })
     expect(revokeBridgeRefreshSession).toHaveBeenCalledWith(3, 'current-device-refresh-token')
+    expect(disconnectUserBridgeConnections).toHaveBeenCalledWith(3, 'Bridge signed out')
     expect(revokeBridgeRefreshSessions).not.toHaveBeenCalled()
   })
 

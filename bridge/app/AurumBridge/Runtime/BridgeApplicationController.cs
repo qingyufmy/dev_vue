@@ -89,7 +89,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             Timeout = TimeSpan.FromSeconds(20),
         };
         var credentials = new FileBridgeCredentialStore(
-            Path.Combine(paths.DataDirectory, "credential.dat"),
+            paths.CredentialPath,
             new WindowsDpapiProtector());
         _sessionClient = new(paths.ServerBaseUri, _httpClient, credentials);
         _sessionClient.ObserverSourceManagementChanged += HandleObserverSourceManagementChanged;

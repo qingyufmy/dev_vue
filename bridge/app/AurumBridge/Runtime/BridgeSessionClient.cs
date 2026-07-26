@@ -131,9 +131,15 @@ public sealed class BridgeSessionClient
         {
             throw new InvalidDataException("bridge_refresh_response_invalid");
         }
-        await _credentialStore.SaveAsync(new(
+        var refreshedCredential = new BridgeCredential(
             credential.RefreshToken,
-            checked(_clock() + (long)refresh.RefreshExpiresInSeconds * 1_000)), cancellationToken);
+            checked(_clock() + (long)refresh.RefreshExpiresInSeconds * 1_000));
+        if (!await _credentialStore.SaveIfCurrentAsync(
+                credential, refreshedCredential, cancellationToken))
+        {
+            PublishObserverSourceManagement(false);
+            throw new BridgeApiException("bridge_not_paired", HttpStatusCode.Unauthorized);
+        }
         PublishObserverSourceManagement(String.Equals(
             refresh.BridgeRole,
             "admin",

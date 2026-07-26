@@ -2,6 +2,7 @@ namespace AurumBridge.Runtime;
 
 public sealed record BridgeRuntimePaths(
     string DataDirectory,
+    string CredentialPath,
     string PythonExecutable,
     string Mt5WorkerScript,
     Uri ServerBaseUri);
@@ -27,6 +28,7 @@ public static class BridgeRuntimePathResolver
                 "BridgeV3");
         }
 
+        var rootDataDirectory = Path.GetFullPath(dataDirectory);
         var python = ResolveRequiredFile(
             getEnvironmentVariable("AURUM_BRIDGE_PYTHON"),
             [
@@ -51,7 +53,8 @@ public static class BridgeRuntimePathResolver
             throw new InvalidDataException("bridge_server_url_invalid");
         }
         return new(
-            BridgeRuntimeProfile.ResolveDataDirectory(dataDirectory, profileId),
+            BridgeRuntimeProfile.ResolveDataDirectory(rootDataDirectory, profileId),
+            Path.Combine(rootDataDirectory, "credential.dat"),
             python,
             worker,
             serverUri);

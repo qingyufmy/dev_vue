@@ -18,6 +18,7 @@ public sealed class BridgeHealthCheckTests
             var healthFile = Path.Combine(healthRoot, "health-test.json");
             var paths = new BridgeRuntimePaths(
                 Path.Combine(root, "data"),
+                Path.Combine(root, "data", "credential.dat"),
                 runtime,
                 worker,
                 new("https://www.cnfxtrade.com"));

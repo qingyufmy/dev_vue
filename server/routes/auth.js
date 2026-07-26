@@ -9,7 +9,7 @@ import { systemConfigRowsToMap } from '../system-config-secrets.js'
 import { sendVerificationSms } from '../sms.js'
 import { generateCaptcha, verifyCaptcha } from '../captcha.js'
 import { decorateMembership } from '../membership.js'
-import { disconnectUserSockets } from '../bridge-ws.js'
+import { disconnectUserBridgeConnections, disconnectUserSockets } from '../bridge-ws.js'
 import {
   createBridgeConnectionTicket, createBridgeRefreshSession,
   useBridgeRefreshSession, revokeBridgeRefreshSession, revokeBridgeRefreshSessions,
@@ -459,6 +459,7 @@ router.post('/auth/bridge-refresh', async (req, res) => {
 
 router.post('/auth/bridge-revoke', authMiddleware, async (req, res) => {
   await revokeBridgeRefreshSession(req.user.id, req.body?.refreshToken)
+  disconnectUserBridgeConnections(req.user.id, 'Bridge signed out')
   res.json({ ok: true })
 })
 

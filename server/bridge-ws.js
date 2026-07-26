@@ -1314,6 +1314,18 @@ export function sendToAdminBrowsers(data) {
   return delivered
 }
 
+export function disconnectUserBridgeConnections(userId, reason = 'Bridge session revoked') {
+  const id = Number(userId)
+  const bridge = bridges.get(id)
+  if (bridge) {
+    if (bridge._pingInterval) clearInterval(bridge._pingInterval)
+    if (bridge._performanceSyncTimer) clearTimeout(bridge._performanceSyncTimer)
+    try { bridge.ws?.close(4002, reason) } catch {}
+    bridges.delete(id)
+  }
+  bridgeV3Business?.disconnectUser(id, reason)
+}
+
 export function disconnectUserSockets(userId, reason = 'Session revoked') {
   const id = Number(userId)
   const browserSet = browsers.get(id)
@@ -1323,13 +1335,7 @@ export function disconnectUserSockets(userId, reason = 'Session revoked') {
     }
     browsers.delete(id)
   }
-  const bridge = bridges.get(id)
-  if (bridge) {
-    if (bridge._pingInterval) clearInterval(bridge._pingInterval)
-    if (bridge._performanceSyncTimer) clearTimeout(bridge._performanceSyncTimer)
-    try { bridge.ws?.close(4002, reason) } catch {}
-    bridges.delete(id)
-  }
+  disconnectUserBridgeConnections(id, reason)
   for (const ws of adminBrowsers) {
     if (Number(ws._userId) !== id) continue
     try { ws.close(4002, reason) } catch {}

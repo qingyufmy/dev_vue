@@ -41,6 +41,25 @@ public sealed class BridgeCredentialStoreTests
     }
 
     [TestMethod]
+    public async Task AStaleProfileCannotRecreateAuthorizationAfterLogout()
+    {
+        var firstProcess = new FileBridgeCredentialStore(_path, new ReversingProtector());
+        var logoutProcess = new FileBridgeCredentialStore(_path, new ReversingProtector());
+        var credential = new BridgeCredential("refresh_" + new string('x', 64), 1_900_000_000_000);
+        await firstProcess.SaveAsync(credential);
+        var staleCopy = await firstProcess.LoadAsync();
+        Assert.IsNotNull(staleCopy);
+
+        await logoutProcess.ClearAsync();
+        var saved = await firstProcess.SaveIfCurrentAsync(
+            staleCopy,
+            staleCopy with { ExpiresAtUtcMsc = staleCopy.ExpiresAtUtcMsc + 1_000 });
+
+        Assert.IsFalse(saved);
+        Assert.IsNull(await logoutProcess.LoadAsync());
+    }
+
+    [TestMethod]
     public void WindowsDpapiRoundTripsOnlyForTheCurrentUser()
     {
         if (!OperatingSystem.IsWindows())

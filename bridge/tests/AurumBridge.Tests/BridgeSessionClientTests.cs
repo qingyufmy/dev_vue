@@ -219,6 +219,34 @@ public sealed class BridgeSessionClientTests
     }
 
     [TestMethod]
+    public async Task ConcurrentLogoutPreventsARefreshingProfileFromRestoringAuthorization()
+    {
+        var handler = new QueueHandler(Response(HttpStatusCode.OK, new
+        {
+            ok = true,
+            token = "short-jwt",
+            refreshExpiresInSeconds = 7_776_000,
+            bridgeRole = "admin",
+        }));
+        var store = new MemoryCredentialStore
+        {
+            Credential = new(new string('r', 64), 1_900_000_000_000),
+            AllowConditionalSave = false,
+        };
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"), new HttpClient(handler), store);
+        var observerManagement = new List<bool>();
+        client.ObserverSourceManagementChanged += observerManagement.Add;
+
+        var error = await Assert.ThrowsExactlyAsync<BridgeApiException>(
+            async () => await client.AcquireConnectionAttemptAsync(Hello()));
+
+        Assert.AreEqual("bridge_not_paired", error.Code);
+        Assert.HasCount(1, handler.Requests);
+        CollectionAssert.AreEqual(new[] { false }, observerManagement);
+    }
+
+    [TestMethod]
     public async Task ExplicitLogoutRevokesOnlyThisSessionThenClearsLocalCredential()
     {
         var handler = new QueueHandler(
@@ -314,12 +342,25 @@ public sealed class BridgeSessionClientTests
     private sealed class MemoryCredentialStore : IBridgeCredentialStore
     {
         public BridgeCredential? Credential { get; set; }
+        public bool AllowConditionalSave { get; set; } = true;
         public Task<BridgeCredential?> LoadAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(Credential);
         public Task SaveAsync(BridgeCredential credential, CancellationToken cancellationToken = default)
         {
             Credential = credential;
             return Task.CompletedTask;
+        }
+        public Task<bool> SaveIfCurrentAsync(
+            BridgeCredential expected,
+            BridgeCredential credential,
+            CancellationToken cancellationToken = default)
+        {
+            if (!AllowConditionalSave || Credential?.RefreshToken != expected.RefreshToken)
+            {
+                return Task.FromResult(false);
+            }
+            Credential = credential;
+            return Task.FromResult(true);
         }
         public Task ClearAsync(CancellationToken cancellationToken = default)
         {
