@@ -22,7 +22,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain("setText('mt5ServerTime'")
     expect(app).toContain("updateMarketStatusFromQuote(quote)")
     expect(app).toContain("loadStatus(), refreshQuote(), loadKlineData()")
-    expect(html).toContain('/ai/app.js?v=20260726mt4platform')
+    expect(html).toContain('/ai/app.js?v=20260726mt4ready')
   })
 
   it('uses the connected bridge platform in status and terminal-time labels', () => {
@@ -512,6 +512,26 @@ describe('AI governance navigation and DOM contract', () => {
     expect(handler).toContain('clearAccountContextCaches()')
     expect(handler).toContain('refreshTabData(activeTabId())')
     expect(handler).not.toContain('loadHistory(), loadHistoryChart()')
+  })
+
+  it('waits for transient terminal symbol discovery before loading quotes and charts', () => {
+    const refreshStart = app.indexOf('async function refreshAll()')
+    const refreshEnd = app.indexOf('async function loadStatus()', refreshStart)
+    const refresh = app.slice(refreshStart, refreshEnd)
+    expect(refresh).toContain('if (_refreshAllPromise) return _refreshAllPromise')
+    expect(refresh).toContain('_refreshAllPromise = withBusy(button')
+    expect(refresh).toContain('_refreshAllPromise = null')
+    expect(refresh.indexOf('loadStatus()')).toBeLessThan(refresh.indexOf('loadSymbolsWhenReady()'))
+    expect(refresh.indexOf('loadSymbolsWhenReady()')).toBeLessThan(refresh.indexOf('refreshQuote()'))
+    expect(refresh.indexOf('loadSymbolsWhenReady()')).toBeLessThan(refresh.indexOf('loadKlineData()'))
+
+    const retryStart = app.indexOf('async function loadSymbolsWhenReady(')
+    const retryEnd = app.indexOf('function startKlineVolumeRefreshTimer()', retryStart)
+    const retry = app.slice(retryStart, retryEnd)
+    expect(retry).toContain('attempts = 4')
+    expect(retry).toContain('isTransientSymbolLoadError(error)')
+    expect(retry).toContain('state._lastGatewayLive === true')
+    expect(retry).toContain('setTimeout(resolve, baseDelayMs * attempt)')
   })
 
   it('shows risk units and hides retired observation and AI step settings', () => {

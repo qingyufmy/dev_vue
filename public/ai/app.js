@@ -4013,12 +4013,16 @@ async function bootstrap() {
   }
 }
 
+let _refreshAllPromise = null;
+
 async function refreshAll() {
+  if (_refreshAllPromise) return _refreshAllPromise;
   const button = $("refreshAllBtn");
-  await withBusy(button, async () => {
+  _refreshAllPromise = withBusy(button, async () => {
+    const results = [];
+    results.push(...await Promise.allSettled([loadStatus()]));
+    results.push(...await Promise.allSettled([loadSymbolsWhenReady()]));
     const tasks = [
-      loadStatus(),
-      loadSymbols(),
       loadAccount(),
       loadPositions(),
       loadSignals(),
@@ -4028,12 +4032,17 @@ async function refreshAll() {
       loadKlineData(),
     ];
     if (!isObserverMode()) tasks.push(loadStrategyCatalog());
-    const results = await Promise.allSettled(tasks);
+    results.push(...await Promise.allSettled(tasks));
     const rejected = results.find((item) => item.status === "rejected");
     if (rejected && state.token) {
       toast(`部分数据刷新失败：${rejected.reason.message || rejected.reason}`, "warning");
     }
   });
+  try {
+    return await _refreshAllPromise;
+  } finally {
+    _refreshAllPromise = null;
+  }
 }
 
 async function loadStatus() {
@@ -4044,7 +4053,6 @@ async function loadStatus() {
   syncAiAccess(gateway.access);
   const isLive = gateway.mode === "live";
   const usingFallback = gateway.using_fallback;
-  const wasLive = state._lastGatewayLive;
   state._usingFallback = usingFallback;
 
   // Gateway badge — bridge connection status
@@ -4062,10 +4070,6 @@ async function loadStatus() {
   // Sync role-based UI (observation hint, button states, etc.)
   applyRoleUI();
 
-  // Reload symbols when bridge just came online
-  if (isLive && !wasLive) {
-    loadSymbols().catch(() => {});
-  }
   state._lastGatewayLive = isLive;
 
   // Trade mode badge
@@ -4592,6 +4596,33 @@ function stopKlineRefreshTimers() {
     clearInterval(_klineVolRefreshTimer);
     _klineVolRefreshTimer = null;
   }
+}
+
+function isTransientSymbolLoadError(error) {
+  const message = String(error?.code || error?.message || error || '').toLowerCase();
+  return [
+    'symbol_unavailable',
+    'bridge_terminal_initializing',
+    'bridge_terminal_initial_sync_pending',
+    'terminal_data_action_unavailable',
+  ].some(code => message.includes(code));
+}
+
+async function loadSymbolsWhenReady({ attempts = 4, baseDelayMs = 300 } = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await loadSymbols();
+    } catch (error) {
+      lastError = error;
+      const shouldRetry = state._lastGatewayLive === true
+        && isTransientSymbolLoadError(error)
+        && attempt < attempts;
+      if (!shouldRetry) throw error;
+      await new Promise(resolve => setTimeout(resolve, baseDelayMs * attempt));
+    }
+  }
+  throw lastError;
 }
 
 function startKlineVolumeRefreshTimer() {
