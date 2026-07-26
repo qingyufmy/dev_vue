@@ -10,6 +10,23 @@ public sealed class ReleaseInstaller(
     ReleaseStager stager)
 {
     private const string ReleaseMarkerFileName = ".aurum-release.json";
+    private static readonly string[] RequiredPackageIds =
+    [
+        "core",
+        "adapter.mt5.python",
+        "adapter.mt4",
+    ];
+    private static readonly string[] RequiredCoreFiles =
+    [
+        "AURUMBridge.exe",
+        "AURUMBridge.dll",
+        "AURUMBridge.runtimeconfig.json",
+        "hostfxr.dll",
+        "coreclr.dll",
+        "e_sqlite3.dll",
+        "Microsoft.Data.Sqlite.dll",
+        "runtime/python/python.exe",
+    ];
     private readonly string _installRoot = Path.GetFullPath(installRoot);
     private readonly ReleaseStager _stager = stager ?? throw new ArgumentNullException(nameof(stager));
 
@@ -67,11 +84,7 @@ public sealed class ReleaseInstaller(
                     : Path.Combine(temporaryVersionDirectory, "modules", package.ModuleId);
                 ReleaseStager.ExtractPackage(downloads[package.ModuleId], destination);
             }
-            var executable = Path.Combine(temporaryVersionDirectory, "AURUMBridge.exe");
-            if (!File.Exists(executable))
-            {
-                throw new InvalidDataException("update_core_executable_missing");
-            }
+            ValidateStagedLayout(temporaryVersionDirectory);
             await using (var marker = new FileStream(
                 Path.Combine(temporaryVersionDirectory, ReleaseMarkerFileName),
                 FileMode.CreateNew,
@@ -107,6 +120,7 @@ public sealed class ReleaseInstaller(
         }
         try
         {
+            ValidateStagedLayout(versionDirectory);
             await using var marker = new FileStream(
                 markerPath,
                 FileMode.Open,
@@ -130,6 +144,13 @@ public sealed class ReleaseInstaller(
 
     private static void ValidatePackageSet(ReleaseManifest manifest, Version targetCoreVersion)
     {
+        var moduleIds = manifest.Packages
+            .Select(package => package.ModuleId)
+            .ToHashSet(StringComparer.Ordinal);
+        if (RequiredPackageIds.Any(moduleId => !moduleIds.Contains(moduleId)))
+        {
+            throw new InvalidDataException("update_required_package_missing");
+        }
         var core = manifest.Packages.SingleOrDefault(package => package.ModuleId == "core")
             ?? throw new InvalidDataException("update_core_package_missing");
         if (!Version.TryParse(core.Version, out var coreVersion) || coreVersion != targetCoreVersion)
@@ -150,6 +171,27 @@ public sealed class ReleaseInstaller(
             {
                 throw new InvalidDataException("update_package_core_incompatible");
             }
+        }
+    }
+
+    internal static void ValidateStagedLayout(string versionDirectory)
+    {
+        foreach (var relativePath in RequiredCoreFiles)
+        {
+            if (!File.Exists(Path.Combine(versionDirectory, relativePath)))
+            {
+                throw new InvalidDataException("update_core_component_missing");
+            }
+        }
+        if (!File.Exists(Path.Combine(
+                versionDirectory, "modules", "adapter.mt5.python", "worker.py")))
+        {
+            throw new InvalidDataException("update_mt5_adapter_missing");
+        }
+        if (!File.Exists(Path.Combine(
+                versionDirectory, "modules", "adapter.mt4", "AURUMBridgeEA.ex4")))
+        {
+            throw new InvalidDataException("update_mt4_adapter_missing");
         }
     }
 

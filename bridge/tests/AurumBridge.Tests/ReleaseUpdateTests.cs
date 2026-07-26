@@ -129,8 +129,9 @@ public sealed class ReleaseUpdateTests
     {
         var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
-            ["core"] = Zip(("AURUMBridge.exe", "core"), ("runtime/python/python.exe", "python")),
+            ["core"] = CompleteCoreZip(),
             ["adapter.mt5.python"] = Zip(("worker.py", "worker")),
+            ["adapter.mt4"] = Zip(("AURUMBridgeEA.ex4", "ea")),
         };
         using var http = new HttpClient(new PackageResponseHandler(packages));
         var manifest = ManifestForPackages("3.1.0", packages);
@@ -140,11 +141,17 @@ public sealed class ReleaseUpdateTests
 
         Assert.IsNotNull(staged);
         Assert.IsTrue(File.Exists(Path.Combine(staged.VersionDirectory, "AURUMBridge.exe")));
+        Assert.IsTrue(File.Exists(Path.Combine(staged.VersionDirectory, "e_sqlite3.dll")));
         Assert.IsTrue(File.Exists(Path.Combine(
             staged.VersionDirectory,
             "modules",
             "adapter.mt5.python",
             "worker.py")));
+        Assert.IsTrue(File.Exists(Path.Combine(
+            staged.VersionDirectory,
+            "modules",
+            "adapter.mt4",
+            "AURUMBridgeEA.ex4")));
         Assert.IsFalse(Directory.Exists(Path.Combine(_directory, "staging"))
             && Directory.EnumerateFileSystemEntries(Path.Combine(_directory, "staging")).Any());
     }
@@ -154,7 +161,9 @@ public sealed class ReleaseUpdateTests
     {
         var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
-            ["core"] = Zip(("AURUMBridge.exe", "core")),
+            ["core"] = CompleteCoreZip(),
+            ["adapter.mt5.python"] = Zip(("worker.py", "worker")),
+            ["adapter.mt4"] = Zip(("AURUMBridgeEA.ex4", "ea")),
         };
         var handler = new PackageResponseHandler(packages);
         using var http = new HttpClient(handler);
@@ -167,7 +176,45 @@ public sealed class ReleaseUpdateTests
         Assert.IsNotNull(first);
         Assert.IsNotNull(second);
         Assert.AreEqual(first.VersionDirectory, second.VersionDirectory);
-        Assert.AreEqual(1, handler.Requests);
+        Assert.AreEqual(3, handler.Requests);
+    }
+
+    [TestMethod]
+    public async Task RejectsAnUpdateWhoseCorePackageOmitsTheNativeSqliteRuntime()
+    {
+        var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["core"] = CompleteCoreZip(includeSqlite:false),
+            ["adapter.mt5.python"] = Zip(("worker.py", "worker")),
+            ["adapter.mt4"] = Zip(("AURUMBridgeEA.ex4", "ea")),
+        };
+        using var http = new HttpClient(new PackageResponseHandler(packages));
+        var installer = new ReleaseInstaller(_directory, new ReleaseStager(http));
+
+        var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            installer.StageAsync(ManifestForPackages("3.1.0", packages), new Version(3, 0, 0)));
+
+        Assert.AreEqual("update_core_component_missing", error.Message);
+        Assert.IsFalse(Directory.Exists(Path.Combine(_directory, "versions", "3.1.0")));
+    }
+
+    [TestMethod]
+    public async Task RejectsAManifestMissingEitherTradingPlatformAdapterBeforeDownload()
+    {
+        var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["core"] = CompleteCoreZip(),
+            ["adapter.mt5.python"] = Zip(("worker.py", "worker")),
+        };
+        var handler = new PackageResponseHandler(packages);
+        using var http = new HttpClient(handler);
+        var installer = new ReleaseInstaller(_directory, new ReleaseStager(http));
+
+        var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            installer.StageAsync(ManifestForPackages("3.1.0", packages), new Version(3, 0, 0)));
+
+        Assert.AreEqual("update_required_package_missing", error.Message);
+        Assert.AreEqual(0, handler.Requests);
     }
 
     [TestMethod]
@@ -215,8 +262,9 @@ public sealed class ReleaseUpdateTests
         await File.WriteAllTextAsync(currentExecutable, "current");
         var expectedPackages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
-            ["core"] = Zip(("AURUMBridge.exe", "next")),
+            ["core"] = CompleteCoreZip(),
             ["adapter.mt5.python"] = Zip(("worker.py", "expected")),
+            ["adapter.mt4"] = Zip(("AURUMBridgeEA.ex4", "ea")),
         };
         var servedPackages = new Dictionary<string, byte[]>(expectedPackages, StringComparer.Ordinal);
         servedPackages["adapter.mt5.python"] = Zip(("worker.py", "corrupt"));
@@ -344,6 +392,25 @@ public sealed class ReleaseUpdateTests
             }
         }
         return stream.ToArray();
+    }
+
+    private static byte[] CompleteCoreZip(bool includeSqlite = true)
+    {
+        var files = new List<(string Path, string Content)>
+        {
+            ("AURUMBridge.exe", "exe"),
+            ("AURUMBridge.dll", "app"),
+            ("AURUMBridge.runtimeconfig.json", "{}"),
+            ("hostfxr.dll", "host"),
+            ("coreclr.dll", "runtime"),
+            ("Microsoft.Data.Sqlite.dll", "managed-sqlite"),
+            ("runtime/python/python.exe", "python"),
+        };
+        if (includeSqlite)
+        {
+            files.Add(("e_sqlite3.dll", "native-sqlite"));
+        }
+        return Zip(files.ToArray());
     }
 
     private sealed class StaticResponseHandler(byte[] payload) : HttpMessageHandler
