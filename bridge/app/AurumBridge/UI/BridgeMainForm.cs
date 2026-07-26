@@ -37,8 +37,10 @@ public sealed class BridgeMainForm : Form
     {
         var validatedProfileId = BridgeRuntimeProfile.Validate(profileId);
         var isDefaultProfile = BridgeRuntimeProfile.IsDefault(validatedProfileId);
-        Text = isDefaultProfile ? "AURUM Bridge" : $"AURUM Bridge · 观摩源 {validatedProfileId}";
-        AccessibleName = "AURUM Bridge 状态窗口";
+        Text = isDefaultProfile
+            ? BridgeBrand.ProductName
+            : $"{BridgeBrand.ProductName} · 观摩源 {validatedProfileId}";
+        AccessibleName = $"{BridgeBrand.ProductName}状态窗口";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new(560, 470);
         ClientSize = new(600, 500);
@@ -158,7 +160,9 @@ public sealed class BridgeMainForm : Form
             AutoSize = true,
             Font = new(Font.FontFamily, 18F, FontStyle.Bold),
             ForeColor = Color.FromArgb(15, 23, 42),
-            Text = isDefaultProfile ? "AURUM Bridge" : $"AURUM Bridge · {profileId}",
+            Text = isDefaultProfile
+                ? BridgeBrand.ProductName
+                : $"{BridgeBrand.ProductName} · {profileId}",
             Margin = new Padding(0, 0, 0, 4),
         };
         var subheading = new Label
@@ -166,8 +170,8 @@ public sealed class BridgeMainForm : Form
             AutoSize = true,
             ForeColor = Color.FromArgb(71, 85, 105),
             Text = isDefaultProfile
-                ? "自动连接交易终端与 AURUM 服务器"
-                : "独立观摩源 · 单独授权、终端选择与数据存储",
+                ? BridgeBrand.Subtitle
+                : "连接观摩终端与量见 AI交易实验室",
             Margin = new Padding(0, 0, 0, 22),
         };
         root.Controls.Add(heading);

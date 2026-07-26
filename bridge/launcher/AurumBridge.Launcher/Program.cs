@@ -20,8 +20,8 @@ internal static class Program
         catch
         {
             MessageBox.Show(
-                "AURUM Bridge 启动失败，且无法自动恢复上一个版本。请运行修复安装。",
-                "AURUM Bridge",
+                "量见智桥启动失败，且无法自动恢复上一个版本。请运行修复安装。",
+                "量见智桥",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
             Environment.ExitCode = 1;

@@ -14,9 +14,17 @@ public sealed class BridgeUiTextTests
             [],
             null));
 
-        Assert.AreEqual("桥接运行中", text.Title);
+        Assert.AreEqual("量见智桥运行中", text.Title);
         StringAssert.Contains(text.Description, "数据");
         StringAssert.Contains(text.Description, "指令");
+    }
+
+    [TestMethod]
+    public void StartupErrorsUseTheProductBrand()
+    {
+        var description = BridgeUiText.DescribeError(new InvalidOperationException("failure"));
+
+        StringAssert.Contains(description, BridgeBrand.ProductName);
     }
 
     [TestMethod]

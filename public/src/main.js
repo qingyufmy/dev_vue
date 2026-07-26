@@ -1773,7 +1773,7 @@ function renderView() {
     courses: '课程体系 | 量见',
     courseCraft: '交易是一门手艺 | 量见',
     courseAi: 'AI铸剑 | 量见',
-    bridgePair: '连接 AURUM Bridge | 量见',
+    bridgePair: '连接量见智桥 | 量见',
   }
   document.title = pageTitles[state.currentView] || '量见'
   switch (state.currentView) {

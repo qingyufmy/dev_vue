@@ -13,8 +13,8 @@ public sealed class BridgeLogViewerForm : Form
     public BridgeLogViewerForm(string logDirectory)
     {
         _reader = new(logDirectory);
-        Text = "AURUM Bridge 日志";
-        AccessibleName = "AURUM Bridge 日志窗口";
+        Text = $"{BridgeBrand.ProductName}日志";
+        AccessibleName = $"{BridgeBrand.ProductName}日志窗口";
         StartPosition = FormStartPosition.CenterParent;
         MinimumSize = new(640, 420);
         ClientSize = new(780, 520);

@@ -82,13 +82,13 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _singleInstance.StartActivationListener();
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add("打开 AURUM Bridge", null, (_, _) => _form.ShowFromTray());
+        menu.Items.Add($"打开{BridgeBrand.ProductName}", null, (_, _) => _form.ShowFromTray());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出桥接", null, HandleExitRequested);
         _notifyIcon = new()
         {
             Icon = SystemIcons.Shield,
-            Text = "AURUM Bridge",
+            Text = BridgeBrand.ProductName,
             ContextMenuStrip = menu,
             Visible = true,
         };
@@ -162,8 +162,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
         {
             _form.ApplyStatus(status);
             _notifyIcon.Text = status.Phase == BridgeApplicationPhase.Online
-                ? "AURUM Bridge · 运行中"
-                : "AURUM Bridge";
+                ? $"{BridgeBrand.ProductName} · 运行中"
+                : BridgeBrand.ProductName;
         });
     }
 
@@ -470,7 +470,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         var answer = MessageBox.Show(
             _form,
-            "确定退出 AURUM Bridge？\n\n退出只会停止数据与指令转发，不会撤单、平仓或关闭 MT。",
+            $"确定退出{BridgeBrand.ProductName}？\n\n退出只会停止数据与指令转发，不会撤单、平仓或关闭 MT。",
             "退出桥接",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
@@ -617,7 +617,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             {
                 MessageBox.Show(
                     _form,
-                    "更新已准备完成，但自动重启失败。请手动重新打开 AURUM Bridge。",
+                    $"更新已准备完成，但自动重启失败。请手动重新打开{BridgeBrand.ProductName}。",
                     "更新等待重启",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);

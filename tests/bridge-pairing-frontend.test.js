@@ -16,7 +16,9 @@ describe('Bridge authorization in the AI trading lab', () => {
     expect(server).toContain("res.redirect(308, `/ai/bridge/pair")
     expect(main).not.toContain("if (clean === '/bridge/pair') return { view: 'bridgePair' }")
     expect(html).toContain('<strong>AI交易实验室</strong>')
-    expect(html).toContain('AURUM Bridge 授权')
+    expect(html).toContain('量见智桥授权')
+    expect(html).toContain('<h1 id="pairTitle">连接量见智桥</h1>')
+    expect(script).toContain('量见智桥已获得连接权限')
   })
 
   it('returns unauthenticated users to the AI page after login', () => {

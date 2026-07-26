@@ -25,7 +25,7 @@ public static class BridgeUiText
                 DescribeCode(status.DetailCode, $"未发现可用的已登录 {PlatformName(status)}，程序会自动重试。"),
                 0xD97706),
             BridgeApplicationPhase.PairingRequired => State(
-                "需要连接 AURUM 账号",
+                "需要连接量见账号",
                 "请手动点击“连接账号”；浏览器授权成功后会长期保持登录。",
                 0x7C3AED),
             BridgeApplicationPhase.Connecting => State(
@@ -33,7 +33,7 @@ public static class BridgeUiText
                 DescribeCode(status.DetailCode, "本地终端已就绪，正在建立安全连接。"),
                 0x2563EB),
             BridgeApplicationPhase.Online => State(
-                "桥接运行中",
+                "量见智桥运行中",
                 "账户数据与交易指令通道均已连接。",
                 0x15803D),
             BridgeApplicationPhase.Degraded => State(
@@ -47,11 +47,11 @@ public static class BridgeUiText
     public static string DescribeError(Exception error) => error switch
     {
         FileNotFoundException fileError when fileError.Message == "mt5_python_runtime_not_found" =>
-            "未找到 MT5 Python 运行组件，请重新安装或修复 AURUM Bridge。",
+            $"未找到 MT5 Python 运行组件，请重新安装或修复{BridgeBrand.ProductName}。",
         FileNotFoundException fileError when fileError.Message == "mt5_worker_script_not_found" =>
-            "未找到 MT5 桥接模块，请重新安装或修复 AURUM Bridge。",
+            $"未找到 MT5 桥接模块，请重新安装或修复{BridgeBrand.ProductName}。",
         BridgeApiException apiError => DescribeCode(apiError.Code, "服务器暂时无法完成请求，请稍后重试。"),
-        _ => "AURUM Bridge 启动失败，请重新启动；若问题持续，请联系支持。",
+        _ => $"{BridgeBrand.ProductName}启动失败，请重新启动；若问题持续，请联系支持。",
     };
 
     public static string DescribeTerminalState(BridgeTerminalStatus terminal) => terminal.RuntimeState switch
@@ -88,7 +88,7 @@ public static class BridgeUiText
         "terminal_worker_failure_limit" => "交易终端连续恢复失败，已暂停该终端；请确认 MT 正常后点击“重新检测”。",
             "mt5_probe_timeout" => "MT5 响应超时，程序会自动重试。",
             "mt5_terminal_already_in_use" => "该 MT5 已被另一个桥接档案使用；每个观摩源需要独立的 MT5 安装目录。",
-        "bridge_not_paired" => "需要先连接 AURUM 账号。",
+        "bridge_not_paired" => "需要先连接量见账号。",
         "bridge_server_unreachable" => "暂时无法连接服务器，程序会自动重试。",
         "bridge_connection_lost" => "服务器连接中断，程序正在自动恢复。",
         "membership_required" or "bridge_membership_required" =>
@@ -96,7 +96,7 @@ public static class BridgeUiText
         "bridge_refresh_unavailable" =>
             "服务器暂时不可用，程序会保留账号授权并自动重试。",
         "bridge_refresh_revoked" =>
-            "当前设备授权已被撤销，需要重新连接 AURUM 账号。",
+            "当前设备授权已被撤销，需要重新连接量见账号。",
         _ => fallback,
     };
 

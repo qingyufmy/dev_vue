@@ -87,7 +87,7 @@
       })
       setStatus('success', '连接已确认', result.bridgePlanSource === 'observer_source'
         ? '该桥接档案已连接到所选观摩源，可以关闭此页面。'
-        : 'AURUM Bridge 已获得连接权限，可以关闭此页面。')
+        : '量见智桥已获得连接权限，可以关闭此页面。')
       button.textContent = '已连接'
     } catch (error) {
       setStatus('error', '连接未完成', error.code === 'bridge_pair_source_invalid'

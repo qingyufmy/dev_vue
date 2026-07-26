@@ -44,7 +44,7 @@ internal static class Program
             }
             MessageBox.Show(
                 BridgeUiText.DescribeError(error),
-                "AURUM Bridge 无法启动",
+                $"{BridgeBrand.ProductName}无法启动",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
