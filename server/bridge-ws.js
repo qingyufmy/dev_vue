@@ -1567,7 +1567,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'history': {
-        const bridgeOk = dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1
+        const bridgeOk = dataUserId && isBridgeAlive(dataUserId)
         if (bridgeOk) {
           // 直接透传前端参数给桥接软件（含分页、过滤）
           const bridgeParams = {
@@ -1594,7 +1594,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'history_chart_data': {
-        const bridgeOk = dataUserId && bridges.get(dataUserId)?.ws?.readyState === 1
+        const bridgeOk = dataUserId && isBridgeAlive(dataUserId)
         if (bridgeOk) {
           // 直接调用桥接的 chart_data 命令，返回聚合后的图表数据
           const chartParams = { force_refresh: params.force_refresh === true }

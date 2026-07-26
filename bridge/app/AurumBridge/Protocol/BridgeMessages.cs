@@ -56,6 +56,21 @@ public sealed record HeartbeatMessage : BridgeEnvelope
 {
     [JsonPropertyName("session_id")]
     public required string SessionId { get; init; }
+
+    [JsonPropertyName("terminals")]
+    public IReadOnlyList<TerminalStreamFreshness> Terminals { get; init; } = [];
+}
+
+public sealed record TerminalStreamFreshness
+{
+    [JsonPropertyName("terminal_instance_id")]
+    public required string TerminalInstanceId { get; init; }
+
+    [JsonPropertyName("connection_epoch")]
+    public required long ConnectionEpoch { get; init; }
+
+    [JsonPropertyName("streams")]
+    public required IReadOnlyDictionary<string, long> Streams { get; init; }
 }
 
 public sealed record DataDeltaMessage : BridgeEnvelope

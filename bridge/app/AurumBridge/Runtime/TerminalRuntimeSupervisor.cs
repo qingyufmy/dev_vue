@@ -187,6 +187,10 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
         return true;
     }
 
+    public IReadOnlyDictionary<string, long> GetStreamFreshness() =>
+        Volatile.Read(ref _current)?.GetStreamFreshness()
+        ?? new Dictionary<string, long>(StringComparer.Ordinal);
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)

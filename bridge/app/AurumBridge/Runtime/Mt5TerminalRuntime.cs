@@ -23,6 +23,8 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
     };
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _fullSnapshotRequests
         = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _streamFreshness
+        = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _collectionWake = new(0, 1);
     private HistoryCursor _dealCursor = HistoryCursor.Empty;
     private bool _dealBackfillPending;
@@ -41,6 +43,9 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
     }
 
     public TerminalDescriptor Terminal => _terminal;
+
+    public IReadOnlyDictionary<string, long> GetStreamFreshness() =>
+        new Dictionary<string, long>(_streamFreshness, StringComparer.Ordinal);
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -228,6 +233,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
                 _account["value"] = raw;
                 persisted++;
             }
+            _streamFreshness["account"] = observedAt;
         }
         foreach (var stream in new[] { "positions", "orders" })
         {
@@ -261,6 +267,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
                 persisted++;
             }
             _collections[stream] = current;
+            _streamFreshness[stream] = observedAt;
         }
         if (streams.TryGetProperty("deals", out var deals))
         {
@@ -289,6 +296,7 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         {
             throw new InvalidDataException("mt5_deals_snapshot_invalid");
         }
+        _streamFreshness["deals"] = observedAt;
         var nextCursor = ReadHistoryCursor(cursor);
         if (CompareCursor(nextCursor, _dealCursor) < 0)
         {

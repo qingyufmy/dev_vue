@@ -57,6 +57,27 @@ public sealed class Mt5TerminalRuntimeTests
     }
 
     [TestMethod]
+    public async Task UnchangedPollAdvancesStreamFreshnessWithoutWritingAnotherDelta()
+    {
+        await _runtime.DisposeAsync();
+        var now = 1_800_000_000_000L;
+        _runtime = new Mt5TerminalRuntime(Terminal(), _worker, _testStore.Store,
+            () => Interlocked.Read(ref now));
+        await _runtime.StartAsync();
+        var snapshot = Snapshot("1001");
+
+        Assert.AreEqual(3, await _runtime.IngestSnapshotAsync(snapshot, fullSnapshot:true));
+        Interlocked.Exchange(ref now, 1_800_000_015_000L);
+        Assert.AreEqual(0, await _runtime.IngestSnapshotAsync(snapshot, fullSnapshot:false));
+
+        var freshness = _runtime.GetStreamFreshness();
+        Assert.AreEqual(1_800_000_015_000L, freshness["account"]);
+        Assert.AreEqual(1_800_000_015_000L, freshness["positions"]);
+        Assert.AreEqual(1_800_000_015_000L, freshness["orders"]);
+        Assert.HasCount(3, await _testStore.Store.GetPendingOutboxAsync());
+    }
+
+    [TestMethod]
     public async Task LegacyWorkerSnapshotTimeRemainsSupportedAsSourceTime()
     {
         var snapshot = Snapshot("1001", legacyTimeField: true);

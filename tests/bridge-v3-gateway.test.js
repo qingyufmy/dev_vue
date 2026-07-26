@@ -216,12 +216,45 @@ describe('Bridge v3 websocket gateway', () => {
       message_id:'heartbeat_01JGATEWAY01',
       sent_at_utc_msc:clock,
       session_id:'session_01JGATEWAY01',
+      terminals:[{
+        terminal_instance_id:'terminal_01JGATEWAY1',
+        connection_epoch:7,
+        streams:{ account:clock, positions:clock - 10, orders:clock - 20, deals:clock - 30 },
+      }],
     })))
     await flush()
-    expect(gateway.listConnectedTerminals(42)).toHaveLength(1)
+    expect(gateway.listConnectedTerminals(42)).toEqual([
+      expect.objectContaining({
+        last_seen_at_utc_msc:clock,
+        stream_observed_at_utc_msc:{
+          account:clock, positions:clock - 10, orders:clock - 20, deals:clock - 30,
+        },
+      }),
+    ])
     expect(gateway.listConnectedUsers()).toEqual([
       expect.objectContaining({ userId:42, connected:true, alive:true }),
     ])
+  })
+
+  it('rejects heartbeat freshness for an unknown terminal route', async () => {
+    const { gateway } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      v:3, type:'heartbeat', message_id:'heartbeat_01JGATEWAY_BAD',
+      sent_at_utc_msc:NOW, session_id:'session_01JGATEWAY01',
+      terminals:[{
+        terminal_instance_id:'terminal_01JUNKNOWN', connection_epoch:7,
+        streams:{ account:NOW },
+      }],
+    })))
+    await flush()
+
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'error', error_code:'bridge_heartbeat_terminal_route_invalid',
+    })
   })
 
   it('replaces a reconnected websocket and fences messages from the old connection', async () => {

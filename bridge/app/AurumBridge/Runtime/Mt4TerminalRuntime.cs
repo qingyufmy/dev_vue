@@ -19,6 +19,7 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     private readonly Dictionary<string, long> _revisions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _latest = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _fullSnapshots = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _streamFreshness = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _collectionWake = new(0, 1);
     private HistoryCursor _dealCursor = HistoryCursor.Empty;
     private bool _dealBackfillPending;
@@ -41,6 +42,9 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     }
 
     public TerminalDescriptor Terminal => _terminal;
+
+    public IReadOnlyDictionary<string, long> GetStreamFreshness() =>
+        new Dictionary<string, long>(_streamFreshness, StringComparer.Ordinal);
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -335,6 +339,7 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             previous = itemCursor;
         }
         var observedAt = _clock();
+        _streamFreshness["deals"] = observedAt;
         var persisted = 0;
         if (fullSnapshot || batch.Items.Count > 0)
         {
@@ -388,10 +393,13 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         var persisted = 0;
         persisted += await PersistIfChangedAsync(
             "account", [snapshot.Account], observedAt, snapshot.SourceTimeMsc, cancellationToken);
+        _streamFreshness["account"] = observedAt;
         persisted += await PersistIfChangedAsync(
             "positions", snapshot.Positions, observedAt, snapshot.SourceTimeMsc, cancellationToken);
+        _streamFreshness["positions"] = observedAt;
         persisted += await PersistIfChangedAsync(
             "orders", snapshot.Orders, observedAt, snapshot.SourceTimeMsc, cancellationToken);
+        _streamFreshness["orders"] = observedAt;
         return persisted;
     }
 

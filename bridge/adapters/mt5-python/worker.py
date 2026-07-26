@@ -84,6 +84,7 @@ class Mt5Adapter:
         self.terminal_path = str(Path(terminal_path).resolve())
         self.identity = identity
         self._receipts: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._resolved_symbols: dict[str, str] = {}
 
     def connect(self) -> dict[str, Any]:
         if not Path(self.terminal_path).is_file():
@@ -94,6 +95,38 @@ class Mt5Adapter:
 
     def shutdown(self) -> None:
         self.mt5.shutdown()
+
+    def _resolve_symbol(self, requested: Any) -> str:
+        symbol = str(requested or "").strip()
+        if not symbol or len(symbol) > 64:
+            raise WorkerError("symbol_invalid")
+        cache_key = symbol.upper()
+        if cache_key in self._resolved_symbols:
+            return self._resolved_symbols[cache_key]
+        symbols = self.mt5.symbols_get()
+        if symbols is None:
+            raise WorkerError("mt5_symbols_unavailable")
+        names = [str(getattr(item, "name", "") or "") for item in symbols]
+        exact = next((name for name in names if name == symbol), None)
+        if exact:
+            self._resolved_symbols[cache_key] = exact
+            return exact
+        folded = symbol.upper()
+        case_match = next((name for name in names if name.upper() == folded), None)
+        if case_match:
+            self._resolved_symbols[cache_key] = case_match
+            return case_match
+        suffixes = (".s", "m", ".c", "_", ".micro")
+        suffixed = next((name for suffix in suffixes for name in names
+                         if name.upper() == f"{folded}{suffix}".upper()), None)
+        if suffixed:
+            self._resolved_symbols[cache_key] = suffixed
+            return suffixed
+        prefix_match = next((name for name in names if name.upper().startswith(folded)), None)
+        if prefix_match:
+            self._resolved_symbols[cache_key] = prefix_match
+            return prefix_match
+        raise WorkerError("symbol_not_found")
 
     def _ensure_identity(self) -> dict[str, Any]:
         account = self.mt5.account_info()
@@ -218,9 +251,7 @@ class Mt5Adapter:
         try:
             self._validate_route(request)
             self._ensure_identity()
-            symbol = str(request.get("symbol") or "")
-            if not symbol or symbol != symbol.strip() or len(symbol) > 64:
-                raise WorkerError("symbol_invalid")
+            symbol = self._resolve_symbol(request.get("symbol"))
             tick = self.mt5.symbol_info_tick(symbol)
             if tick is None:
                 raise WorkerError("symbol_tick_unavailable")
@@ -252,7 +283,8 @@ class Mt5Adapter:
             self._validate_route(request)
             self._ensure_identity()
             action = request.get("action")
-            if action not in {"rates", "symbol_snapshot", "risk_snapshot", "performance_daily"}:
+            if action not in {"rates", "symbol_snapshot", "risk_snapshot", "performance_daily",
+                              "symbols", "history", "chart_data"}:
                 raise WorkerError("terminal_data_action_unsupported")
             params = request.get("params")
             if not isinstance(params, dict):
@@ -263,8 +295,14 @@ class Mt5Adapter:
                 payload = self._symbol_snapshot(params)
             elif action == "risk_snapshot":
                 payload = self._risk_snapshot(params)
-            else:
+            elif action == "performance_daily":
                 payload = self._performance_daily(params)
+            elif action == "symbols":
+                payload = self._symbols()
+            elif action == "history":
+                payload = self._history(params)
+            else:
+                payload = self._chart_data(params)
             return self._data_result(request, "succeeded", payload=payload)
         except WorkerError as error:
             return self._data_result(request, "rejected", error_code=error.code)
@@ -272,10 +310,8 @@ class Mt5Adapter:
             return self._data_result(request, "rejected", error_code="mt5_data_request_exception")
 
     def _rates(self, params: dict[str, Any]) -> dict[str, Any]:
-        symbol = str(params.get("symbol") or "").strip()
+        symbol = self._resolve_symbol(params.get("symbol"))
         timeframe = str(params.get("timeframe") or "M30").strip().upper()
-        if not symbol or len(symbol) > 64:
-            raise WorkerError("symbol_invalid")
         if timeframe not in RATE_TIMEFRAMES:
             raise WorkerError("rates_timeframe_invalid")
         try:
@@ -328,9 +364,7 @@ class Mt5Adapter:
         }
 
     def _symbol_snapshot(self, params: dict[str, Any]) -> dict[str, Any]:
-        symbol = str(params.get("symbol") or "").strip()
-        if not symbol or len(symbol) > 64:
-            raise WorkerError("symbol_invalid")
+        symbol = self._resolve_symbol(params.get("symbol"))
         select = getattr(self.mt5, "symbol_select", None)
         if callable(select) and not select(symbol, True):
             raise WorkerError("symbol_select_failed")
@@ -412,6 +446,247 @@ class Mt5Adapter:
                 "margin_so_so": float(getattr(account, "margin_so_so", 0.0) or 0.0),
             },
             "instrument": instrument,
+        }
+
+    def _symbols(self) -> dict[str, Any]:
+        symbols = self.mt5.symbols_get()
+        if symbols is None:
+            raise WorkerError("mt5_symbols_unavailable", str(self.mt5.last_error()))
+        rows = []
+        for item in symbols:
+            name = str(getattr(item, "name", "") or "").strip()
+            if not name:
+                continue
+            rows.append({
+                "name": name,
+                "description": str(getattr(item, "description", "") or ""),
+                "digits": int(getattr(item, "digits", 0) or 0),
+                "trade_mode": int(getattr(item, "trade_mode", 0) or 0),
+                "point": float(getattr(item, "point", 0.0) or 0.0),
+                "tick_size": float(getattr(item, "trade_tick_size", 0.0) or 0.0),
+                "tick_value": float(getattr(item, "trade_tick_value", 0.0) or 0.0),
+                "contract_size": float(getattr(item, "trade_contract_size", 0.0) or 0.0),
+                "volume_min": float(getattr(item, "volume_min", 0.0) or 0.0),
+                "volume_max": float(getattr(item, "volume_max", 0.0) or 0.0),
+                "volume_step": float(getattr(item, "volume_step", 0.0) or 0.0),
+            })
+        rows.sort(key=lambda row: row["name"].upper())
+        return {"symbols": rows, "count": len(rows), "source": "mt5"}
+
+    @staticmethod
+    def _history_time(value: Any) -> str:
+        try:
+            timestamp = int(value or 0)
+        except (TypeError, ValueError):
+            return ""
+        if timestamp <= 0:
+            return ""
+        return datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
+    def _history_range(params: dict[str, Any]) -> tuple[datetime, datetime]:
+        try:
+            start = (datetime.strptime(str(params.get("date_from") or "2000-01-01")[:10],
+                                       "%Y-%m-%d").replace(tzinfo=timezone.utc))
+            end = (datetime.strptime(str(params.get("date_to") or
+                                         datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10],
+                                     "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                   + timedelta(days=1))
+        except (TypeError, ValueError) as error:
+            raise WorkerError("history_date_range_invalid") from error
+        if end <= start:
+            raise WorkerError("history_date_range_invalid")
+        return start, end
+
+    def _history_deals(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        date_from, date_to = self._history_range(params)
+        deals = self.mt5.history_deals_get(date_from, date_to)
+        if deals is None:
+            raise WorkerError("history_deals_unavailable", str(self.mt5.last_error()))
+        rows = [_plain(item) for item in deals]
+        if not all(isinstance(item, dict) for item in rows):
+            raise WorkerError("history_deals_invalid")
+        return rows
+
+    def _closed_history_rows(self, params: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, float]]:
+        deal_rows = self._history_deals(params)
+        entry_in = int(getattr(self.mt5, "DEAL_ENTRY_IN", 0))
+        exit_entries = {
+            int(getattr(self.mt5, "DEAL_ENTRY_OUT", 1)),
+            int(getattr(self.mt5, "DEAL_ENTRY_INOUT", 2)),
+            int(getattr(self.mt5, "DEAL_ENTRY_OUT_BY", 3)),
+        }
+        buy_type = int(getattr(self.mt5, "DEAL_TYPE_BUY", 0))
+        balance_type = int(getattr(self.mt5, "DEAL_TYPE_BALANCE", 2))
+        credit_type = int(getattr(self.mt5, "DEAL_TYPE_CREDIT", 3))
+        grouped: dict[Any, list[dict[str, Any]]] = {}
+        deposit = withdrawal = credit = 0.0
+        for deal in deal_rows:
+            deal_type = int(deal.get("type") if deal.get("type") is not None else -1)
+            amount = float(deal.get("profit") or 0.0)
+            if deal_type == balance_type:
+                if amount >= 0:
+                    deposit += amount
+                else:
+                    withdrawal += abs(amount)
+            elif deal_type == credit_type:
+                credit += amount
+            key = deal.get("position_id") or deal.get("order") or deal.get("ticket")
+            grouped.setdefault(key, []).append(deal)
+
+        rows: list[dict[str, Any]] = []
+        for deal in deal_rows:
+            try:
+                entry = int(deal.get("entry") if deal.get("entry") is not None else -1)
+            except (TypeError, ValueError):
+                continue
+            if entry not in exit_entries:
+                continue
+            position_id = deal.get("position_id") or deal.get("order") or deal.get("ticket")
+            group = grouped.get(position_id, [])
+            opened = next((item for item in group
+                           if int(item.get("entry") if item.get("entry") is not None else -1)
+                           == entry_in), None)
+            origin = opened or deal
+            order_ticket = origin.get("order") or position_id
+            net_profit = sum(float(deal.get(field) or 0.0)
+                             for field in ("profit", "swap", "commission", "fee"))
+            rows.append({
+                "ticket": order_ticket,
+                "deal_ticket": deal.get("ticket"),
+                "order": order_ticket,
+                "position_id": position_id,
+                "symbol": deal.get("symbol") or origin.get("symbol") or "",
+                "type": "BUY" if int(origin.get("type") or 0) == buy_type else "SELL",
+                "volume": float(deal.get("volume") or 0.0),
+                "entry_price": float(origin.get("price") or 0.0),
+                "exit_price": float(deal.get("price") or 0.0),
+                "price": float(deal.get("price") or 0.0),
+                "profit": float(deal.get("profit") or 0.0),
+                "swap": float(deal.get("swap") or 0.0),
+                "commission": float(deal.get("commission") or 0.0),
+                "fee": float(deal.get("fee") or 0.0),
+                "net_profit": net_profit,
+                "entry_time": self._history_time(origin.get("time")),
+                "close_time": self._history_time(deal.get("time")),
+                "time": self._history_time(deal.get("time")),
+                "comment": str(deal.get("comment") or ""),
+                "take_profit": 0.0,
+                "stop_loss": 0.0,
+            })
+        rows.sort(key=lambda row: row.get("close_time") or row.get("entry_time") or "",
+                  reverse=True)
+        direction = str(params.get("direction") or "").upper()
+        profit_filter = str(params.get("profit_filter") or "").lower()
+        entry_from = str(params.get("entry_from") or "")[:10]
+        entry_to = str(params.get("entry_to") or "")[:10]
+        if direction:
+            rows = [row for row in rows if row["type"] == direction]
+        if profit_filter == "profit":
+            rows = [row for row in rows if row["profit"] > 0]
+        elif profit_filter == "loss":
+            rows = [row for row in rows if row["profit"] < 0]
+        if entry_from:
+            rows = [row for row in rows if row["entry_time"][:10] >= entry_from]
+        if entry_to:
+            rows = [row for row in rows if row["entry_time"][:10] <= entry_to]
+        return rows, {"deposit": deposit, "withdrawal": withdrawal, "credit": credit}
+
+    def _history(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            page = int(params.get("page") or 1)
+            page_size = int(params.get("page_size") or 20)
+        except (TypeError, ValueError) as error:
+            raise WorkerError("history_pagination_invalid") from error
+        if page < 1 or page_size < 1 or page_size > 100:
+            raise WorkerError("history_pagination_invalid")
+        rows, capital = self._closed_history_rows(params)
+        total = len(rows)
+        start = (page - 1) * page_size
+        visible = rows[start:start + page_size]
+        total_profit = sum(row["net_profit"] for row in rows)
+        net_result = total_profit + capital["credit"] + capital["deposit"] - capital["withdrawal"]
+        account = self.mt5.account_info()
+        balance = float(getattr(account, "balance", 0.0) or 0.0) if account else 0.0
+        return {
+            "orders": visible,
+            "statistics": {
+                "account_principal": round(balance - net_result, 2),
+                "account_balance": round(balance, 2),
+                "total_profit": round(total_profit, 2),
+                "credit": round(capital["credit"], 2),
+                "deposit": round(capital["deposit"], 2),
+                "withdrawal": round(capital["withdrawal"], 2),
+                "net_result": round(net_result, 2),
+                "trade_count": total,
+                "total_volume": round(sum(row["volume"] for row in rows), 2),
+            },
+            "pagination": {
+                "current_page": page,
+                "page_size": page_size,
+                "total_count": total,
+                "total_pages": max(math.ceil(total / page_size), 1),
+            },
+            "source": "mt5",
+        }
+
+    def _chart_data(self, params: dict[str, Any]) -> dict[str, Any]:
+        rows, _ = self._closed_history_rows(params)
+        rows.sort(key=lambda row: row.get("close_time") or "")
+        daily_map: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            day = str(row.get("close_time") or "")[:10]
+            if not day:
+                continue
+            entry = daily_map.setdefault(day, {
+                "date": day, "profit": 0.0, "trade_count": 0, "wins": 0, "losses": 0,
+            })
+            profit = float(row["net_profit"])
+            entry["profit"] += profit
+            entry["trade_count"] += 1
+            if profit > 0:
+                entry["wins"] += 1
+            elif profit < 0:
+                entry["losses"] += 1
+        daily = sorted(daily_map.values(), key=lambda item: item["date"])
+        for item in daily:
+            item["profit"] = round(item["profit"], 2)
+        account = self.mt5.account_info()
+        balance = float(getattr(account, "balance", 0.0) or 0.0) if account else 0.0
+        initial_capital = max(0.0, balance - sum(row["net_profit"] for row in rows))
+        cumulative: list[float] = []
+        drawdown: list[float] = []
+        running = 0.0
+        peak = initial_capital
+        max_drawdown = 0.0
+        for item in daily:
+            running = round(running + item["profit"], 2)
+            cumulative.append(running)
+            equity = initial_capital + running
+            peak = max(peak, equity)
+            value = round((1 - equity / peak) * 100, 2) if peak > 0 else 0.0
+            drawdown.append(value)
+            max_drawdown = max(max_drawdown, value)
+        wins = [row["net_profit"] for row in rows if row["net_profit"] > 0]
+        losses = [row["net_profit"] for row in rows if row["net_profit"] < 0]
+        gross_profit = sum(wins)
+        gross_loss = abs(sum(losses))
+        average_win = gross_profit / len(wins) if wins else 0.0
+        average_loss = gross_loss / len(losses) if losses else 0.0
+        return {
+            "daily": daily,
+            "cumulative": cumulative,
+            "drawdown": drawdown,
+            "stats": {
+                "total_trades": len(rows),
+                "win_rate": round(len(wins) / len(rows) * 100, 2) if rows else 0.0,
+                "profit_factor": (round(average_win / average_loss, 2)
+                                  if average_loss > 0 else (999 if average_win > 0 else 0)),
+                "max_drawdown": max_drawdown,
+                "gross_profit": round(gross_profit, 2),
+                "gross_loss": round(gross_loss, 2),
+            },
+            "source": "mt5",
         }
 
     def _performance_daily(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -540,9 +815,7 @@ class Mt5Adapter:
         }
 
     def _risk_snapshot(self, params: dict[str, Any]) -> dict[str, Any]:
-        symbol = str(params.get("symbol") or "").strip()
-        if not symbol or len(symbol) > 64:
-            raise WorkerError("symbol_invalid")
+        symbol = self._resolve_symbol(params.get("symbol"))
         try:
             requested_cursor_ms = int(params.get("last_deal_time_msc") or 0)
             requested_cursor_ticket = int(params.get("last_deal_ticket") or 0)

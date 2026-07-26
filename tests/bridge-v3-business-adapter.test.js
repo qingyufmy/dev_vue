@@ -101,6 +101,17 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('keeps an unchanged read-model stream fresh from terminal heartbeat evidence', async () => {
+    const { adapter } = setup({
+      routes:[route({ stream_observed_at_utc_msc:{ positions:NOW - 100 } })],
+      revision:{ revision:3, observed_at_utc_msc:NOW - 30_001 },
+    })
+
+    await expect(adapter.execute(42, 'positions')).resolves.toMatchObject({
+      status:'success', positions:[], source:'mt5',
+    })
+  })
+
   it('routes transient quotes without querying the read model', async () => {
     const { adapter, gateway, queryOneFn } = setup()
 
@@ -124,6 +135,28 @@ describe('Bridge v3 business compatibility adapter', () => {
       params:{ symbol:'XAUUSD', timeframe:'M30', count:100 },
     }), { timeoutMs:15_000 })
     expect(queryOneFn).not.toHaveBeenCalled()
+  })
+
+  it('routes symbols and legacy history views through the transient data channel', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ orders:[], pagination:{ total_count:0 }, source:'mt5' },
+    } })
+
+    await expect(adapter.execute(42, 'history', {
+      page:1, page_size:20, date_from:'2026-01-01', date_to:'2026-01-31',
+    }, { timeoutMs:30_000 })).resolves.toMatchObject({ status:'success', orders:[] })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      type:'data_request', action:'history', params:{
+        page:1, page_size:20, date_from:'2026-01-01', date_to:'2026-01-31',
+      },
+    }), { timeoutMs:30_000 })
+
+    gateway.requestData.mockResolvedValueOnce({
+      status:'succeeded', payload:{ symbols:[{ name:'XAUUSD.s' }], source:'mt5' },
+    })
+    await expect(adapter.execute(42, 'symbols')).resolves.toMatchObject({
+      status:'success', symbols:[{ name:'XAUUSD.s' }],
+    })
   })
 
   it('rejects invalid rates bounds before contacting the terminal', async () => {

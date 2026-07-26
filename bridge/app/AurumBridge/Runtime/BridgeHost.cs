@@ -52,6 +52,14 @@ public sealed class BridgeHost : IAsyncDisposable
         return Task.CompletedTask;
     }
 
+    public IReadOnlyList<TerminalStreamFreshness> GetTerminalStreamFreshness() =>
+        _terminals.Values.Select(terminal => new TerminalStreamFreshness
+        {
+            TerminalInstanceId = terminal.Terminal.TerminalInstanceId,
+            ConnectionEpoch = terminal.Terminal.ConnectionEpoch,
+            Streams = terminal.GetStreamFreshness(),
+        }).ToArray();
+
     public Task<QuoteMessage> GetQuoteAsync(
         QuoteRequestMessage request,
         CancellationToken cancellationToken = default)

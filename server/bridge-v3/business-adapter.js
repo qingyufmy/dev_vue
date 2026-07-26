@@ -12,7 +12,7 @@ const TRADE_ACTIONS = new Set([
 ])
 const SUPPORTED_ACTIONS = new Set([
   ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'rates', 'symbol_snapshot', 'risk_snapshot',
-  'performance_daily', 'order_lookup',
+  'performance_daily', 'symbols', 'history', 'chart_data', 'order_lookup',
   'toggle_trade', 'set_quote_symbol',
 ])
 const RATE_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
@@ -324,7 +324,10 @@ export function createBridgeV3BusinessAdapter({
       WHERE terminal_instance_id = ? AND connection_epoch = ? AND stream = ? LIMIT 1`,
     [route.terminal_instance_id, route.connection_epoch, stream])
     if (!revision) throw adapterError('bridge_snapshot_unavailable')
-    if (now() - Number(revision.observed_at_utc_msc || 0) > freshnessMs) {
+    const observedAt = Math.max(
+      Number(revision.observed_at_utc_msc || 0),
+      Number(route.stream_observed_at_utc_msc?.[stream] || 0))
+    if (now() - observedAt > freshnessMs) {
       throw adapterError('bridge_snapshot_stale')
     }
     return revision
@@ -468,6 +471,48 @@ export function createBridgeV3BusinessAdapter({
       return { status:'error', error:result.error_code, message:result.error_code }
     }
     return { ...result.payload, status:'success', source:result.payload.source || route.platform }
+  }
+
+  async function requestTerminalData(userId, route, action, params, timeoutMs) {
+    const allowed = action === 'symbols'
+      ? {}
+      : cleanObject({
+          page:action === 'history' ? Number(params.page || 1) : undefined,
+          page_size:action === 'history' ? Number(params.page_size || 20) : undefined,
+          date_from:params.date_from || undefined,
+          date_to:params.date_to || undefined,
+          entry_from:action === 'history' ? params.entry_from || undefined : undefined,
+          entry_to:action === 'history' ? params.entry_to || undefined : undefined,
+          direction:params.direction || undefined,
+          profit_filter:params.profit_filter || undefined,
+          force_refresh:params.force_refresh === true || undefined,
+        })
+    if (action === 'history' && (!Number.isSafeInteger(allowed.page) || allowed.page < 1
+      || !Number.isSafeInteger(allowed.page_size) || allowed.page_size < 1 || allowed.page_size > 100)) {
+      throw adapterError('history_pagination_invalid')
+    }
+    for (const key of ['date_from', 'date_to', 'entry_from', 'entry_to']) {
+      if (allowed[key] && !/^\d{4}-\d{2}-\d{2}$/.test(String(allowed[key]))) {
+        throw adapterError('history_date_invalid')
+      }
+    }
+    if (allowed.direction && !['BUY', 'SELL'].includes(String(allowed.direction))) {
+      throw adapterError('history_direction_invalid')
+    }
+    if (allowed.profit_filter && !['profit', 'loss'].includes(String(allowed.profit_filter))) {
+      throw adapterError('history_profit_filter_invalid')
+    }
+    const request = {
+      v:3, type:'data_request', message_id:`message_${randomUUID()}`, sent_at_utc_msc:now(),
+      request_id:`data_${randomUUID()}`, ...routeParams(route), action, params:allowed,
+    }
+    const result = await gateway.requestData(userId, request, {
+      timeoutMs:Math.min(Math.max(timeoutMs, 5_000), 30_000),
+    })
+    if (result.status !== 'succeeded') {
+      return { status:'error', error:result.error_code, message:result.error_code }
+    }
+    return { ...result.payload, status:'success', source:result.payload?.source || route.platform }
   }
 
   async function requestSymbolSnapshot(userId, route, params, timeoutMs) {
@@ -718,6 +763,9 @@ export function createBridgeV3BusinessAdapter({
       if (READ_ACTIONS.has(action)) return await readCollection(route, action, params)
       if (action === 'quote') return await requestQuote(userId, route, params, timeoutMs)
       if (action === 'rates') return await requestRates(userId, route, params, timeoutMs)
+      if (['symbols', 'history', 'chart_data'].includes(action)) {
+        return await requestTerminalData(userId, route, action, params, timeoutMs)
+      }
       if (action === 'symbol_snapshot') {
         return await requestSymbolSnapshot(userId, route, params, timeoutMs)
       }

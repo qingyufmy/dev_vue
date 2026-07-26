@@ -20,6 +20,10 @@ Terminal = namedtuple("Terminal", "connected")
 Tick = namedtuple("Tick", "bid ask")
 Result = namedtuple("Result", "retcode order deal comment")
 Deal = namedtuple("Deal", "ticket time time_msc type entry position_id profit commission swap fee")
+HistoryDeal = namedtuple(
+    "HistoryDeal",
+    "ticket order time time_msc type entry position_id symbol volume price profit commission swap fee comment",
+)
 
 
 class FakeMt5:
@@ -53,6 +57,8 @@ class FakeMt5:
     def __init__(self):
         self.sent = []
         self.calculations = []
+        self.selected = []
+        self.symbols_calls = 0
 
     def account_info(self): return Account(12345678, "Broker-Demo", 1000)
     def terminal_info(self): return Terminal(True)
@@ -60,9 +66,14 @@ class FakeMt5:
     def orders_get(self, **kwargs): return ()
     def history_deals_get(self, *args): return ()
     def history_orders_get(self, *args): return ()
+    def symbols_get(self):
+        self.symbols_calls += 1
+        return (SimpleNamespace(name="XAUUSD"),)
     def symbol_info_tick(self, symbol): return Tick(2300.0, 2300.2)
     def symbol_info(self, symbol): return SimpleNamespace(trade_mode=4)
-    def symbol_select(self, symbol, enabled): return True
+    def symbol_select(self, symbol, enabled):
+        self.selected.append((symbol, enabled))
+        return True
     def copy_rates_from_pos(self, symbol, timeframe, offset, count):
         return [(1_700_000_000, 2300.0, 2301.0, 2299.0, 2300.5, 42, 12)]
     def copy_rates_range(self, symbol, timeframe, start, end):
@@ -376,6 +387,64 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(1, result["payload"]["count"])
         self.assertEqual(1_700_000_000_000, result["payload"]["rates"][0]["time_utc_msc"])
         self.assertNotIn("command_id", result)
+
+    def test_resolves_requested_symbol_to_broker_suffix(self):
+        adapter = self.adapter()
+        adapter.mt5.symbols_get = lambda: (SimpleNamespace(name="XAUUSD.s"),)
+        request = self.command(
+            type="data_request", request_id="data_01JWORKER_SUFFIX", action="rates",
+            params={"symbol": "XAUUSD", "timeframe": "M30", "count": 100})
+
+        result = adapter.data(request)
+
+        self.assertEqual("succeeded", result["status"])
+        self.assertEqual("XAUUSD.s", result["payload"]["symbol"])
+        self.assertEqual(("XAUUSD.s", True), adapter.mt5.selected[-1])
+
+    def test_reuses_resolved_symbol_without_rescanning_all_mt5_symbols(self):
+        adapter = self.adapter()
+        first = self.command(
+            type="data_request", request_id="data_01JWORKER_CACHE1", action="rates",
+            params={"symbol": "XAUUSD", "timeframe": "M30", "count": 100})
+        second = {**first, "request_id": "data_01JWORKER_CACHE2"}
+
+        self.assertEqual("succeeded", adapter.data(first)["status"])
+        self.assertEqual("succeeded", adapter.data(second)["status"])
+        self.assertEqual(1, adapter.mt5.symbols_calls)
+
+    def test_returns_symbols_history_and_chart_over_transient_data_channel(self):
+        adapter = self.adapter()
+        adapter.mt5.symbols_get = lambda: (SimpleNamespace(
+            name="XAUUSD.s", description="Gold", digits=2, trade_mode=4,
+            point=0.01, trade_tick_size=0.01, trade_tick_value=1.0,
+            trade_contract_size=100.0, volume_min=0.01, volume_max=100.0,
+            volume_step=0.01),)
+        event_time = 1_767_312_000
+        adapter.mt5.history_deals_get = lambda *args: (
+            HistoryDeal(600, 500, event_time - 60, 0, 0, 0, 700, "XAUUSD.s",
+                        0.1, 2300.0, 0.0, 0.0, 0.0, 0.0, "open"),
+            HistoryDeal(601, 501, event_time, 0, 1, 1, 700, "XAUUSD.s",
+                        0.1, 2310.0, 12.0, -0.5, -0.25, -0.25, "close"),
+        )
+        base = self.command(type="data_request", params={})
+
+        symbols = adapter.data({**base, "request_id": "data_01JWORKER_SYMBOLS",
+                                "action": "symbols"})
+        history = adapter.data({**base, "request_id": "data_01JWORKER_HISTORY",
+                                "action": "history",
+                                "params": {"date_from": "2026-01-02",
+                                           "date_to": "2026-01-02", "page": 1,
+                                           "page_size": 20}})
+        chart = adapter.data({**base, "request_id": "data_01JWORKER_CHART",
+                              "action": "chart_data",
+                              "params": {"date_from": "2026-01-02",
+                                         "date_to": "2026-01-02"}})
+
+        self.assertEqual("XAUUSD.s", symbols["payload"]["symbols"][0]["name"])
+        self.assertEqual(11.0, history["payload"]["statistics"]["total_profit"])
+        self.assertEqual(1, history["payload"]["pagination"]["total_count"])
+        self.assertEqual(11.0, chart["payload"]["daily"][0]["profit"])
+        self.assertEqual(1, chart["payload"]["stats"]["total_trades"])
 
     def test_rejects_invalid_rates_before_mt5_query(self):
         adapter = self.adapter()

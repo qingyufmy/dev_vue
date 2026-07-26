@@ -18,6 +18,7 @@ public sealed class BridgeWebSocketClient
     private readonly Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? _quoteHandler;
     private readonly Func<DataRequestMessage, CancellationToken, Task<DataResponseMessage>>? _dataHandler;
     private readonly Func<Task>? _initialSnapshotHandler;
+    private readonly Func<IReadOnlyList<TerminalStreamFreshness>>? _heartbeatTerminalsProvider;
 
     public BridgeWebSocketClient(
         BridgeStore store,
@@ -25,7 +26,8 @@ public sealed class BridgeWebSocketClient
         Func<ClientWebSocket>? socketFactory = null,
         Func<QuoteRequestMessage, CancellationToken, Task<QuoteMessage>>? quoteHandler = null,
         Func<DataRequestMessage, CancellationToken, Task<DataResponseMessage>>? dataHandler = null,
-        Func<Task>? initialSnapshotHandler = null)
+        Func<Task>? initialSnapshotHandler = null,
+        Func<IReadOnlyList<TerminalStreamFreshness>>? heartbeatTerminalsProvider = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
@@ -33,6 +35,7 @@ public sealed class BridgeWebSocketClient
         _quoteHandler = quoteHandler;
         _dataHandler = dataHandler;
         _initialSnapshotHandler = initialSnapshotHandler;
+        _heartbeatTerminalsProvider = heartbeatTerminalsProvider;
     }
 
     public event Func<FullSnapshotRequest, Task>? FullSnapshotRequired;
@@ -104,7 +107,8 @@ public sealed class BridgeWebSocketClient
                 var sendTask = SendLoopAsync(socket, outbound, sessionCancellation.Token);
                 var pumpTask = PumpLoopAsync(outbox, sessionCancellation.Token);
                 var heartbeatTask = HeartbeatLoopAsync(
-                    outbound, attempt.Hello.SessionId, sessionCancellation.Token);
+                    outbound, attempt.Hello.SessionId, _heartbeatTerminalsProvider,
+                    sessionCancellation.Token);
                 await BridgeSessionLoopMonitor.RunAsync(
                     receiveTask,
                     sendTask,
@@ -162,6 +166,7 @@ public sealed class BridgeWebSocketClient
     private static async Task HeartbeatLoopAsync(
         PriorityMessageQueue outbound,
         string sessionId,
+        Func<IReadOnlyList<TerminalStreamFreshness>>? terminalsProvider,
         CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -174,6 +179,7 @@ public sealed class BridgeWebSocketClient
                 MessageId = $"heartbeat_{Guid.NewGuid():N}",
                 SentAtUtcMsc = now,
                 SessionId = sessionId,
+                Terminals = terminalsProvider?.Invoke() ?? [],
             };
             await outbound.EnqueueAsync(new(
                 heartbeat.MessageId,

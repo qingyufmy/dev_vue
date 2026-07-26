@@ -100,6 +100,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
     }
 
     public event Action<BridgeApplicationStatus>? StatusChanged;
+    public event Action<Exception>? ConnectionFailureObserved;
     public BridgeRuntimePaths Paths => _paths;
     public string? SelectedPlatform
     {
@@ -411,7 +412,8 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             host.CommandDispatcher,
             quoteHandler:host.GetQuoteAsync,
             dataHandler:host.GetDataAsync,
-            initialSnapshotHandler:host.RequestAllFullSnapshotsAsync);
+            initialSnapshotHandler:host.RequestAllFullSnapshotsAsync,
+            heartbeatTerminalsProvider:host.GetTerminalStreamFreshness);
         webSocket.DataAcknowledged += status =>
         {
             if (status is "applied" or "duplicate")
@@ -444,6 +446,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             typeof(BridgeApplicationController).Assembly.GetName().Version?.ToString() ?? "3.0.0",
             _sessionClient.AcquireConnectionAttemptAsync,
             (attempt, ready, token) => webSocket.RunSessionAsync(attempt, ready, token));
+        connection.FailureObserved += error => ConnectionFailureObserved?.Invoke(error);
         connection.StatusChanged += status =>
         {
             if (status.State is BridgeConnectionState.Connecting

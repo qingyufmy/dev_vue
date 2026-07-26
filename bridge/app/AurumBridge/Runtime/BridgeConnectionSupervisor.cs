@@ -50,6 +50,7 @@ public sealed class BridgeConnectionSupervisor
     }
 
     public event Action<BridgeConnectionStatus>? StatusChanged;
+    public event Action<Exception>? FailureObserved;
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
@@ -86,6 +87,14 @@ public sealed class BridgeConnectionSupervisor
                 }
                 catch (Exception error)
                 {
+                    try
+                    {
+                        FailureObserved?.Invoke(error);
+                    }
+                    catch
+                    {
+                        // Diagnostics must never interrupt the reconnect loop.
+                    }
                     failures++;
                     var errorCode = NormalizeError(error);
                     var state = errorCode == "bridge_not_paired"

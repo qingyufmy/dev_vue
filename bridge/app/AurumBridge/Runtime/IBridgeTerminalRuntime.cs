@@ -31,4 +31,6 @@ public interface IBridgeTerminalRuntime : IAsyncDisposable
         });
     Task RunCollectionLoopAsync(CancellationToken cancellationToken = default);
     void RequestFullSnapshot(string stream);
+    IReadOnlyDictionary<string, long> GetStreamFreshness() =>
+        new Dictionary<string, long>(StringComparer.Ordinal);
 }

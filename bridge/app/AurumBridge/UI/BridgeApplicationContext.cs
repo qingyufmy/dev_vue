@@ -67,6 +67,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.TerminalChanged += HandleTerminalChanged;
         _form.ExitRequested += HandleExitRequested;
         _controller.StatusChanged += HandleStatusChanged;
+        _controller.ConnectionFailureObserved += error =>
+            _logger.Error("bridge_connection_failure", error);
         _singleInstance.ActivationRequested += HandleActivationRequested;
         _singleInstance.StartActivationListener();
 

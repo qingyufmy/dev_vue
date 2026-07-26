@@ -89,6 +89,7 @@ export function createBridgeV3Gateway({
   const pendingQuotes = new Map()
   const pendingDataRequests = new Map()
   let connectionGeneration = 0
+  const heartbeatStreams = new Set(['account', 'positions', 'orders', 'deals'])
 
   function gatewayError(code) {
     return Object.assign(new Error(code), { code })
@@ -233,7 +234,29 @@ export function createBridgeV3Gateway({
       if (String(message.session_id || '') !== connection.sessionId) {
         throw Object.assign(new Error('bridge_heartbeat_session_mismatch'), { code:'bridge_heartbeat_session_mismatch' })
       }
-      connection.lastSeen = now()
+      const receivedAt = now()
+      if (message.terminals !== undefined && !Array.isArray(message.terminals)) {
+        throw gatewayError('bridge_heartbeat_terminals_invalid')
+      }
+      for (const freshness of message.terminals || []) {
+        const terminal = connection.terminals.get(String(freshness?.terminal_instance_id || ''))
+        if (!terminal || Number(freshness?.connection_epoch) !== Number(terminal.connection_epoch)
+          || !freshness.streams || typeof freshness.streams !== 'object'
+          || Array.isArray(freshness.streams)) {
+          throw gatewayError('bridge_heartbeat_terminal_route_invalid')
+        }
+        terminal.stream_observed_at_utc_msc ||= {}
+        for (const [stream, rawObservedAt] of Object.entries(freshness.streams)) {
+          const observedAt = Number(rawObservedAt)
+          if (!heartbeatStreams.has(stream) || !Number.isSafeInteger(observedAt)
+            || observedAt <= 0 || observedAt > receivedAt + 60_000) {
+            throw gatewayError('bridge_heartbeat_stream_freshness_invalid')
+          }
+          terminal.stream_observed_at_utc_msc[stream] = Math.max(
+            Number(terminal.stream_observed_at_utc_msc[stream] || 0), observedAt)
+        }
+      }
+      connection.lastSeen = receivedAt
       return
     }
 
@@ -518,6 +541,8 @@ export function createBridgeV3Gateway({
         connection_epoch:terminal.connection_epoch,
         initial_sync_ready:terminalInitialSyncReady(connection, terminal.terminal_instance_id),
         connection_generation:connection.generation,
+        last_seen_at_utc_msc:connection.lastSeen,
+        stream_observed_at_utc_msc:{ ...(terminal.stream_observed_at_utc_msc || {}) },
       })
     }
     return result

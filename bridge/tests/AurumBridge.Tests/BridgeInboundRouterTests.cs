@@ -269,6 +269,31 @@ public sealed class BridgeInboundRouterTests
     }
 
     [TestMethod]
+    [DataRow("symbols")]
+    [DataRow("history")]
+    [DataRow("chart_data")]
+    public async Task LegacyWebsiteDataActionsUseTheV3DataChannel(string action)
+    {
+        var router = new BridgeInboundRouter(
+            _testStore.Store, Dispatcher(), _outbound, () => Now,
+            dataHandler:(request, _) => Task.FromResult(new DataResponseMessage
+            {
+                Type = "data_response", MessageId = $"data_result_{action}", SentAtUtcMsc = Now,
+                RequestId = request.RequestId, TerminalInstanceId = request.TerminalInstanceId,
+                AccountRef = request.AccountRef, ConnectionEpoch = request.ConnectionEpoch,
+                Action = request.Action, Params = request.Params, ObservedAtUtcMsc = Now,
+                Status = "succeeded", Payload = JsonSerializer.SerializeToElement(new { source = "mt5" }),
+            }));
+        var request = DataRequest() with { Action = action };
+
+        await router.RouteAsync(JsonSerializer.Serialize(request, BridgeJson.Options));
+
+        var response = await _outbound.DequeueAsync();
+        Assert.AreEqual(action, JsonDocument.Parse(response.PayloadJson).RootElement
+            .GetProperty("action").GetString());
+    }
+
+    [TestMethod]
     public async Task OutboxPumpQueuesEachPendingMessageOncePerSession()
     {
         await _testStore.Store.PersistDataDeltaAsync(Delta());
