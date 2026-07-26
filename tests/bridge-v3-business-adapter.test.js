@@ -17,7 +17,7 @@ function route(overrides = {}) {
 }
 
 function setup({ routes = [route()], account, rows = [], positionRows, orderRows,
-  revision, tradeRow, quote, dataResponse, commandResult } = {}) {
+  revision, tradeRow, quote, dataResponse, commandResult, nowValue = NOW } = {}) {
   const gateway = {
     listConnectedTerminals:vi.fn().mockReturnValue(routes),
     isTradeEnabled:vi.fn().mockReturnValue(true),
@@ -58,7 +58,7 @@ function setup({ routes = [route()], account, rows = [], positionRows, orderRows
     gateway,
     queryOneFn,
     queryAllFn,
-    adapter:createBridgeV3BusinessAdapter({ gateway, queryOneFn, queryAllFn, now:() => NOW }),
+    adapter:createBridgeV3BusinessAdapter({ gateway, queryOneFn, queryAllFn, now:() => nowValue }),
   }
 }
 
@@ -334,6 +334,21 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('returns display-ready market metadata with a direct quote', async () => {
+    const { adapter } = setup({ quote:{
+      status:'succeeded', symbol:'XAUUSD.s', bid:4053.38, ask:4053.56,
+      observed_at_utc_msc:NOW - 500, symbol_trade_mode:4, terminal_connected:true,
+    } })
+
+    const result = await adapter.execute(42, 'quote', { symbol:'XAUUSD' })
+    expect(result).toMatchObject({
+      status:'success', symbol:'XAUUSD.s',
+      market_state_version:1, market_state:'open', market_reason:'quote_fresh',
+      symbol_trade_mode:4, tick_age_seconds:0.5,
+    })
+    expect(result.spread).toBeCloseTo(0.18, 8)
+  })
+
   it('fails market state closed when the last quote is stale', async () => {
     const { adapter } = setup({ quote:{
       status:'succeeded', symbol:'XAUUSD', bid:2300, ask:2300.2,
@@ -342,6 +357,20 @@ describe('Bridge v3 business compatibility adapter', () => {
 
     await expect(adapter.execute(42, 'market_state', { symbol:'XAUUSD' })).resolves.toMatchObject({
       status:'success', market_state:'stale', market_reason:'tick_stale', tick_progressing:false,
+    })
+  })
+
+  it('reports a stale weekend quote as a closed market', async () => {
+    const sunday = Date.UTC(2026, 6, 26, 3, 0, 0)
+    const { adapter } = setup({ nowValue:sunday, quote:{
+      status:'succeeded', symbol:'XAUUSD', bid:4053.38, ask:4053.56,
+      observed_at_utc_msc:Date.UTC(2026, 6, 24, 23, 54, 59),
+      symbol_trade_mode:4, terminal_connected:true,
+    } })
+
+    await expect(adapter.execute(42, 'market_state', { symbol:'XAUUSD' })).resolves.toMatchObject({
+      status:'success', market_state:'closed', market_reason:'weekend_tick_stale',
+      symbol_trade_mode:4, tick_progressing:false,
     })
   })
 

@@ -16,6 +16,15 @@ const adminCss = readFileSync(new URL('../../public/admin/styles.css', import.me
 const adminRoutes = readFileSync(new URL('../../server/routes/admin-console.js', import.meta.url), 'utf8')
 
 describe('AI governance navigation and DOM contract', () => {
+  it('keeps quote metadata consistent across push and refresh paths', () => {
+    expect(app).toContain("function renderQuoteStatusMeta(quote)")
+    expect(app).toContain("fmt(quote.spread, 2)")
+    expect(app).toContain("setText('mt5ServerTime'")
+    expect(app).toContain("updateMarketStatusFromQuote(quote)")
+    expect(app).toContain("loadStatus(), refreshQuote(), loadKlineData()")
+    expect(html).toContain('/ai/app.js?v=20260726marketfix')
+  })
+
   it('renders automatic inference as an accessible live progress control', () => {
     expect(html).toContain('class="status-badge status-neutral clickable-badge auto-runtime-control"')
     expect(html).toContain('role="progressbar"')

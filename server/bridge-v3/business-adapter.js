@@ -427,6 +427,37 @@ export function createBridgeV3BusinessAdapter({
     return { params:{ ...params, ticket:target.ticket, volume:kind === 'position' ? target.volume : undefined } }
   }
 
+  function classifyQuoteMarket(quote, checkedAt, platform) {
+    const observedAt = Number(quote?.observed_at_utc_msc || 0)
+    const tickAgeMs = observedAt > 0 ? Math.max(0, checkedAt - observedAt) : null
+    const terminalConnected = quote?.terminal_connected !== false
+    const tradeMode = quote?.symbol_trade_mode != null && Number.isInteger(Number(quote.symbol_trade_mode))
+      ? Number(quote.symbol_trade_mode) : null
+    let state = 'unknown'
+    let reason = quote?.status === 'success' ? 'trade_mode_unavailable' : quote?.error || 'quote_unavailable'
+    if (!terminalConnected) reason = 'terminal_disconnected'
+    else if (quote?.status === 'success' && tradeMode === 0) {
+      state = 'closed'
+      reason = 'symbol_trade_disabled'
+    } else if (quote?.status === 'success' && [1, 2, 3].includes(tradeMode)) {
+      state = 'restricted'
+      reason = 'symbol_trade_restricted'
+    } else if (quote?.status === 'success' && tickAgeMs > 120_000) {
+      const utcDay = new Date(checkedAt).getUTCDay()
+      if (utcDay === 0 || utcDay === 6) {
+        state = 'closed'
+        reason = 'weekend_tick_stale'
+      } else {
+        state = 'stale'
+        reason = 'tick_stale'
+      }
+    } else if (quote?.status === 'success' && (tradeMode === 4 || platform === 'mt4')) {
+      state = 'open'
+      reason = 'quote_fresh'
+    }
+    return { state, reason, tradeMode, terminalConnected, tickAgeMs }
+  }
+
   async function requestQuote(userId, route, params, timeoutMs) {
     const symbol = String(params.symbol || '').trim()
     if (!symbol || symbol.length > 64) throw adapterError('symbol_invalid')
@@ -443,7 +474,7 @@ export function createBridgeV3BusinessAdapter({
     if (result.status !== 'succeeded') {
       return { status:'error', error:result.error_code, message:result.error_code }
     }
-    return {
+    const response = {
       status:'success', symbol:result.symbol, bid:result.bid, ask:result.ask,
       spread:result.ask - result.bid, last:result.last ?? null,
       digits:result.digits ?? null, point:result.point ?? null,
@@ -451,6 +482,16 @@ export function createBridgeV3BusinessAdapter({
       time:new Date(result.observed_at_utc_msc).toISOString(), source:route.platform,
       symbol_trade_mode:result.symbol_trade_mode ?? null,
       terminal_connected:result.terminal_connected ?? true,
+    }
+    const checkedAt = now()
+    const market = classifyQuoteMarket(response, checkedAt, route.platform)
+    return {
+      ...response,
+      market_state_version:1,
+      market_state:market.state,
+      market_reason:market.reason,
+      market_checked_at_utc_msc:checkedAt,
+      tick_age_seconds:market.tickAgeMs == null ? null : market.tickAgeMs / 1000,
     }
   }
 
@@ -621,39 +662,19 @@ export function createBridgeV3BusinessAdapter({
   async function requestMarketState(userId, route, params, timeoutMs) {
     const checkedAt = now()
     const quote = await requestQuote(userId, route, params, timeoutMs)
-    const observedAt = Number(quote.observed_at_utc_msc || 0)
-    const tickAgeMs = observedAt > 0 ? Math.max(0, checkedAt - observedAt) : null
-    const terminalConnected = quote.terminal_connected !== false
-    const tradeMode = quote.symbol_trade_mode != null && Number.isInteger(Number(quote.symbol_trade_mode))
-      ? Number(quote.symbol_trade_mode) : null
-    let state = 'unknown'
-    let reason = quote.status === 'success' ? 'trade_mode_unavailable' : quote.error || 'quote_unavailable'
-    if (!terminalConnected) reason = 'terminal_disconnected'
-    else if (quote.status === 'success' && tickAgeMs > 120_000) {
-      state = 'stale'
-      reason = 'tick_stale'
-    } else if (quote.status === 'success' && tradeMode === 0) {
-      state = 'closed'
-      reason = 'symbol_trade_disabled'
-    } else if (quote.status === 'success' && [1, 2, 3].includes(tradeMode)) {
-      state = 'restricted'
-      reason = 'symbol_trade_restricted'
-    } else if (quote.status === 'success' && (tradeMode === 4 || route.platform === 'mt4')) {
-      state = 'open'
-      reason = 'quote_fresh'
-    }
+    const market = classifyQuoteMarket(quote, checkedAt, route.platform)
     return {
       status:'success',
       market_state_version:1,
-      market_state:state,
-      market_reason:reason,
+      market_state:market.state,
+      market_reason:market.reason,
       market_checked_at_utc_msc:checkedAt,
       symbol:String(quote.symbol || params.symbol || ''),
-      symbol_trade_mode:tradeMode,
-      terminal_connected:terminalConnected,
-      tick_progressing:state === 'open',
+      symbol_trade_mode:market.tradeMode,
+      terminal_connected:market.terminalConnected,
+      tick_progressing:market.state === 'open',
       tick_unchanged_seconds:null,
-      tick_age_seconds:tickAgeMs == null ? null : tickAgeMs / 1000,
+      tick_age_seconds:market.tickAgeMs == null ? null : market.tickAgeMs / 1000,
       source:route.platform,
     }
   }

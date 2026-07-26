@@ -1670,6 +1670,15 @@ function updateMarketStatus(tradeMode) {
   const text = document.getElementById('marketStatusText');
   if (!dot || !text) return;
   state.marketTradeMode = tradeMode;
+  if (tradeMode === -2) {
+    dot.className = 'market-dot market-dot-closeonly';
+    text.className = 'market-status-text market-status-text-closeonly';
+    text.textContent = '行情停滞';
+    setBadge('marketStatus', '行情停滞', 'warning');
+    const b = document.getElementById('marketStatus');
+    if (b) b.title = '市场状态：MT5 报价暂未更新，系统不会按开市处理';
+    return;
+  }
   if (tradeMode < 0) {
     dot.className = 'market-dot market-dot-unknown';
     text.className = 'market-status-text market-status-text-unknown';
@@ -1681,6 +1690,9 @@ function updateMarketStatus(tradeMode) {
   }
   const map = {
     0: ['closed', '休市', 'neutral', '休市 - 该品种已收盘，自动分析已暂停'],
+    1: ['closeonly', '仅做多', 'warning', '仅做多 - 当前品种限制为空单不可新开'],
+    2: ['closeonly', '仅做空', 'warning', '仅做空 - 当前品种限制为多单不可新开'],
+    3: ['closeonly', '仅平仓', 'warning', '仅平仓 - 当前品种不允许新开仓位'],
     4: ['open', '交易中', 'active', '交易中 - 市场正常开放，可双向交易'],
   };
   const [cls, label, badgeType, tip] = map[tradeMode] || ['unknown', '未知', 'neutral', '未知状态'];
@@ -1690,6 +1702,31 @@ function updateMarketStatus(tradeMode) {
   setBadge('marketStatus', label, badgeType);
   const badge = document.getElementById('marketStatus');
   if (badge) badge.title = '\u5E02\u573A\u72B6\u6001\uFF1A' + tip;
+}
+
+function updateMarketStatusFromQuote(quote) {
+  const explicitState = String(quote?.market_state || '').toLowerCase();
+  if (explicitState === 'open') return updateMarketStatus(4);
+  if (explicitState === 'closed') return updateMarketStatus(0);
+  if (explicitState === 'stale') return updateMarketStatus(-2);
+  if (explicitState === 'restricted') {
+    const restrictedMode = Number(quote?.symbol_trade_mode);
+    return updateMarketStatus([1, 2, 3].includes(restrictedMode) ? restrictedMode : 3);
+  }
+  const rawTradeMode = quote?.symbol_trade_mode;
+  if (rawTradeMode === null || rawTradeMode === undefined || rawTradeMode === '') return;
+  const symbolTradeMode = Number(rawTradeMode);
+  if (Number.isInteger(symbolTradeMode) && symbolTradeMode >= 0 && symbolTradeMode <= 4) {
+    updateMarketStatus(symbolTradeMode);
+  }
+}
+
+function renderQuoteStatusMeta(quote) {
+  setText('quoteSpread', Number.isFinite(Number(quote?.spread)) ? fmt(quote.spread, 2) : '--');
+  const quoteTime = formatTime(quote?.time);
+  setText('quoteTime', quoteTime);
+  setText('mt5ServerTime', quoteTime === '--' ? '--' : quoteTime.split(' ').pop() || '--');
+  updateMarketStatusFromQuote(quote);
 }
 
 // Handle data push from bridge (account + quote + positions)
@@ -1725,9 +1762,7 @@ function handleBridgeData(msg) {
       }
       setText("quoteBid", q.bid);
       setText("quoteAsk", q.ask);
-      setText("quoteSpread", q.spread);
-      setText("quoteTime", formatTime(q.time));
-      setText("mt5ServerTime", formatTime(q.time).split(" ").pop() || "--");
+      renderQuoteStatusMeta(q);
       setQuoteDirection("quoteBidDir", bidDir);
       setQuoteDirection("quoteAskDir", askDir);
       flashPrice("quoteBid", bidDir);
@@ -3631,7 +3666,7 @@ async function refreshTabData(tabId) {
   if (tabId === "trading") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadPendingOrders(), refreshQuote(), loadPositionManagement({ quiet:true, preserveSelection:true })]);
   } else if (tabId === "dashboard") {
-    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadKlineData()]);
+    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), refreshQuote(), loadKlineData()]);
     startKlineRefreshTimer();
   } else if (tabId === "history") {
     await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
@@ -3969,6 +4004,7 @@ async function refreshAll() {
       loadSignals(),
       loadHistory(),
       loadHistoryChart(),
+      refreshQuote(),
       loadKlineData(),
     ];
     if (!isObserverMode()) tasks.push(loadStrategyCatalog());
@@ -4273,8 +4309,7 @@ async function refreshQuote() {
 
   setText("quoteBid", data.bid);
   setText("quoteAsk", data.ask);
-  setText("quoteSpread", data.spread);
-  setText("quoteTime", formatTime(data.time));
+  renderQuoteStatusMeta(data);
   setQuoteDirection("quoteBidDir", bidDirection);
   setQuoteDirection("quoteAskDir", askDirection);
   flashPrice("quoteBid", bidDirection);
