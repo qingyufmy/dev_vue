@@ -12,7 +12,7 @@ function functionBlock(name, nextName) {
 describe('MT4 EA time contract', () => {
   it('normalizes broker quote time to UTC before publishing it', () => {
     const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
-    expect(source).toContain('#property version   "3.11"')
+    expect(source).toContain('#property version   "3.20"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
     expect(block).not.toContain('(source_time > 0 ? source_time : (long)TimeGMT()) * 1000')
   })
@@ -31,5 +31,20 @@ describe('MT4 EA time contract', () => {
     const block = functionBlock('void SendSymbolSnapshot', 'void SendSymbolSnapshotResult')
     expect(block).toContain('ServerTimeToUtcMsc(')
     expect(block).toContain('timezone_offset_minutes')
+  })
+})
+
+describe('MT4 EA extended data contract', () => {
+  it('advertises version 3.2 and handles every server data action', () => {
+    expect(source).toContain('AppendUtf8(hello, "3.2.0")')
+    const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')
+    for (const action of ['symbols', 'history', 'chart_data', 'pending_order_state', 'diagnostics']) {
+      expect(block).toContain(`action == "${action}"`)
+    }
+  })
+
+  it('reports the MT4 account-history range limitation explicitly', () => {
+    expect(source).toContain('\\"history_source_complete\\":false')
+    expect(source).toContain('mt4_account_history_tab_range')
   })
 })

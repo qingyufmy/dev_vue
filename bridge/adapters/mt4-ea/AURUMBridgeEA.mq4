@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.11"
+#property version   "3.20"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -22,6 +22,8 @@ input string InpPipeName = "AURUMBridgeV3";
 #define MSG_PERFORMANCE_DAILY 23
 #define MSG_DEALS_REQUEST 24
 #define MSG_DEALS        25
+#define MSG_EXTENDED_DATA_REQUEST 26
+#define MSG_EXTENDED_DATA 27
 #define MSG_SHUTDOWN     90
 #define MSG_SHUTDOWN_ACK 91
 #define STREAM_ACCOUNT   1
@@ -138,6 +140,11 @@ void OnTimer()
       SendDeals(payload, offset);
       return;
      }
+   if(message_type == MSG_EXTENDED_DATA_REQUEST && g_welcomed)
+     {
+      SendExtendedData(payload, offset);
+      return;
+     }
    if(message_type == MSG_SHUTDOWN)
      {
       uchar response[];
@@ -158,7 +165,7 @@ bool ConnectPipe()
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
    AppendInt32(hello, 3);
-   AppendUtf8(hello, "3.1.0");
+   AppendUtf8(hello, "3.2.0");
    AppendUtf8(hello, TerminalInfoString(TERMINAL_DATA_PATH));
    AppendUtf8(hello, AccountServer());
    AppendUtf8(hello, IntegerToString(AccountNumber()));
@@ -971,6 +978,474 @@ void SendDeals(uchar &request[], int &offset)
    AppendInt64(response, next_time);
    AppendInt64(response, next_ticket);
    AppendInt32(response, has_more ? 1 : 0);
+   if(!WriteFrame(response)) DisconnectPipe();
+  }
+
+string UtcDateTimeText(const datetime server_time, const long server_offset_msc)
+  {
+   if(server_time <= 0) return("");
+   string value = TimeToString((datetime)(ServerTimeToUtcMsc(server_time, server_offset_msc) / 1000),
+      TIME_DATE|TIME_SECONDS);
+   StringReplace(value, ".", "-");
+   return(value);
+  }
+
+string UtcDateText(const datetime server_time, const long server_offset_msc)
+  {
+   string value = UtcDateTimeText(server_time, server_offset_msc);
+   return(StringLen(value) >= 10 ? StringSubstr(value, 0, 10) : "");
+  }
+
+bool DateInRange(const string value, const string date_from, const string date_to)
+  {
+   if(value == "") return(false);
+   if(date_from != "" && StringCompare(value, date_from) < 0) return(false);
+   if(date_to != "" && StringCompare(value, date_to) > 0) return(false);
+   return(true);
+  }
+
+bool IsMarketHistoryOrder(const int order_type)
+  {
+   return(order_type == OP_BUY || order_type == OP_SELL);
+  }
+
+bool HistoryOrderMatches(const string date_from, const string date_to,
+   const string entry_from, const string entry_to, const string direction,
+   const string profit_filter, const long server_offset_msc)
+  {
+   int order_type = OrderType();
+   if(!IsMarketHistoryOrder(order_type) || OrderCloseTime() <= 0) return(false);
+   string close_date = UtcDateText(OrderCloseTime(), server_offset_msc);
+   string entry_date = UtcDateText(OrderOpenTime(), server_offset_msc);
+   if(!DateInRange(close_date, date_from, date_to)) return(false);
+   if(entry_from != "" && StringCompare(entry_date, entry_from) < 0) return(false);
+   if(entry_to != "" && StringCompare(entry_date, entry_to) > 0) return(false);
+   if(direction == "buy" && order_type != OP_BUY) return(false);
+   if(direction == "sell" && order_type != OP_SELL) return(false);
+   if(profit_filter == "profit" && OrderProfit() <= 0) return(false);
+   if(profit_filter == "loss" && OrderProfit() >= 0) return(false);
+   return(true);
+  }
+
+string BuildSelectedClosedOrderJson(const long server_offset_msc)
+  {
+   string type = OrderType() == OP_BUY ? "BUY" : "SELL";
+   double net_profit = OrderProfit() + OrderSwap() + OrderCommission();
+   return("{"
+      + "\"ticket\":\"" + IntegerToString(OrderTicket()) + "\","
+      + "\"deal_ticket\":\"" + IntegerToString(OrderTicket()) + "\","
+      + "\"order\":\"" + IntegerToString(OrderTicket()) + "\","
+      + "\"position_id\":\"" + IntegerToString(OrderTicket()) + "\","
+      + "\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\","
+      + "\"type\":\"" + type + "\","
+      + "\"volume\":" + JsonNumber(OrderLots()) + ","
+      + "\"entry_price\":" + JsonNumber(OrderOpenPrice()) + ","
+      + "\"exit_price\":" + JsonNumber(OrderClosePrice()) + ","
+      + "\"price\":" + JsonNumber(OrderClosePrice()) + ","
+      + "\"profit\":" + JsonNumber(OrderProfit()) + ","
+      + "\"swap\":" + JsonNumber(OrderSwap()) + ","
+      + "\"commission\":" + JsonNumber(OrderCommission()) + ","
+      + "\"fee\":0,"
+      + "\"net_profit\":" + JsonNumber(net_profit) + ","
+      + "\"entry_time\":\"" + UtcDateTimeText(OrderOpenTime(), server_offset_msc) + "\","
+      + "\"close_time\":\"" + UtcDateTimeText(OrderCloseTime(), server_offset_msc) + "\","
+      + "\"time\":\"" + UtcDateTimeText(OrderCloseTime(), server_offset_msc) + "\","
+      + "\"comment\":\"" + JsonEscape(OrderComment()) + "\","
+      + "\"take_profit\":" + JsonNumber(OrderTakeProfit()) + ","
+      + "\"stop_loss\":" + JsonNumber(OrderStopLoss()) + "}");
+  }
+
+void SortHistoryTicketsDescending(long &times[], int &tickets[])
+  {
+   int total = ArraySize(times);
+   for(int left = 0; left < total - 1; left++)
+     {
+      int best = left;
+      for(int right = left + 1; right < total; right++)
+        {
+         if(times[right] > times[best]
+            || (times[right] == times[best] && tickets[right] > tickets[best]))
+            best = right;
+        }
+      if(best != left)
+        {
+         long time_swap = times[left]; times[left] = times[best]; times[best] = time_swap;
+         int ticket_swap = tickets[left]; tickets[left] = tickets[best]; tickets[best] = ticket_swap;
+        }
+     }
+  }
+
+string BuildSymbolsPayload()
+  {
+   string rows = "[";
+   int count = 0;
+   int total = SymbolsTotal(false);
+   for(int index = 0; index < total; index++)
+     {
+      string symbol = SymbolName(index, false);
+      if(symbol == "") continue;
+      string description = SymbolInfoString(symbol, SYMBOL_DESCRIPTION);
+      if(count > 0) rows += ",";
+      rows += "{\"name\":\"" + JsonEscape(symbol) + "\","
+         + "\"description\":\"" + JsonEscape(description) + "\","
+         + "\"digits\":" + IntegerToString((int)MarketInfo(symbol, MODE_DIGITS)) + ","
+         + "\"trade_mode\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE)) + ","
+         + "\"point\":" + JsonNumber(MarketInfo(symbol, MODE_POINT)) + ","
+         + "\"tick_size\":" + JsonNumber(MarketInfo(symbol, MODE_TICKSIZE)) + ","
+         + "\"tick_value\":" + JsonNumber(MarketInfo(symbol, MODE_TICKVALUE)) + ","
+         + "\"contract_size\":" + JsonNumber(MarketInfo(symbol, MODE_LOTSIZE)) + ","
+         + "\"volume_min\":" + JsonNumber(MarketInfo(symbol, MODE_MINLOT)) + ","
+         + "\"volume_max\":" + JsonNumber(MarketInfo(symbol, MODE_MAXLOT)) + ","
+         + "\"volume_step\":" + JsonNumber(MarketInfo(symbol, MODE_LOTSTEP)) + "}";
+      count++;
+     }
+   return("{\"symbols\":" + rows + "],\"count\":" + IntegerToString(count)
+      + ",\"source\":\"mt4\"}");
+  }
+
+string BuildHistoryPayload(const string date_from, const string date_to,
+   const string entry_from, const string entry_to, const string direction,
+   const string profit_filter, const int page, const int page_size,
+   const bool include_deals, const bool compact)
+  {
+   long server_offset_msc = CurrentServerOffsetMsc();
+   long close_times[];
+   int tickets[];
+   double deposit = 0, withdrawal = 0, credit = 0;
+   int history_total = OrdersHistoryTotal();
+   for(int index = 0; index < history_total; index++)
+     {
+      if(!OrderSelect(index, SELECT_BY_POS, MODE_HISTORY)) continue;
+      int order_type = OrderType();
+      datetime event_time = OrderCloseTime() > 0 ? OrderCloseTime() : OrderOpenTime();
+      string event_date = UtcDateText(event_time, server_offset_msc);
+      if((order_type == 6 || order_type == 7) && DateInRange(event_date, date_from, date_to))
+        {
+         double amount = OrderProfit();
+         if(order_type == 6)
+           {
+            if(amount >= 0) deposit += amount; else withdrawal += MathAbs(amount);
+           }
+         else credit += amount;
+        }
+      if(!HistoryOrderMatches(date_from, date_to, entry_from, entry_to,
+         direction, profit_filter, server_offset_msc)) continue;
+      int size = ArraySize(tickets);
+      ArrayResize(tickets, size + 1); ArrayResize(close_times, size + 1);
+      tickets[size] = OrderTicket();
+      close_times[size] = ServerTimeToUtcMsc(OrderCloseTime(), server_offset_msc);
+     }
+   SortHistoryTicketsDescending(close_times, tickets);
+   int total = ArraySize(tickets);
+   double total_profit = 0, total_volume = 0;
+   for(int stat_index = 0; stat_index < total; stat_index++)
+     {
+      if(!OrderSelect(tickets[stat_index], SELECT_BY_TICKET, MODE_HISTORY)) continue;
+      total_profit += OrderProfit() + OrderSwap() + OrderCommission();
+      total_volume += OrderLots();
+     }
+
+   if(compact)
+     {
+      string compact_rows = "[";
+      for(int compact_index = 0; compact_index < total; compact_index++)
+        {
+         if(!OrderSelect(tickets[compact_index], SELECT_BY_TICKET, MODE_HISTORY)) continue;
+         if(compact_index > 0) compact_rows += ",";
+         compact_rows += "{\"t\":\"" + UtcDateTimeText(OrderCloseTime(), server_offset_msc)
+            + "\",\"p\":" + JsonNumber(OrderProfit())
+            + ",\"y\":\"" + (OrderType() == OP_BUY ? "BUY" : "SELL") + "\"}";
+        }
+      return("{\"orders\":" + compact_rows + "],\"total_count\":"
+         + IntegerToString(total) + ",\"source\":\"mt4\"}");
+     }
+
+   int start = (page - 1) * page_size;
+   int end = MathMin(total, start + page_size);
+   string rows = "[";
+   int visible_count = 0;
+   for(int row_index = start; row_index < end; row_index++)
+     {
+      if(!OrderSelect(tickets[row_index], SELECT_BY_TICKET, MODE_HISTORY)) continue;
+      if(visible_count > 0) rows += ",";
+      rows += BuildSelectedClosedOrderJson(server_offset_msc);
+      visible_count++;
+     }
+   double net_result = total_profit + credit + deposit - withdrawal;
+   double balance = AccountBalance();
+   int total_pages = MathMax(1, (int)MathCeil((double)total / page_size));
+   return("{\"orders\":" + rows + "],\"deals\":[],\"history_orders\":[],"
+      + "\"statistics\":{\"account_principal\":" + JsonNumber(balance - net_result)
+      + ",\"account_balance\":" + JsonNumber(balance)
+      + ",\"total_profit\":" + JsonNumber(total_profit)
+      + ",\"credit\":" + JsonNumber(credit)
+      + ",\"deposit\":" + JsonNumber(deposit)
+      + ",\"withdrawal\":" + JsonNumber(withdrawal)
+      + ",\"net_result\":" + JsonNumber(net_result)
+      + ",\"trade_count\":" + IntegerToString(total)
+      + ",\"total_volume\":" + JsonNumber(total_volume) + "},"
+      + "\"pagination\":{\"current_page\":" + IntegerToString(page)
+      + ",\"page_size\":" + IntegerToString(page_size)
+      + ",\"total_count\":" + IntegerToString(total)
+      + ",\"total_pages\":" + IntegerToString(total_pages) + "},"
+      + "\"history_source_complete\":false,"
+      + "\"history_source_note\":\"mt4_account_history_tab_range\","
+      + "\"source\":\"mt4\"}");
+  }
+
+int FindDayIndex(string &days[], const string day)
+  {
+   for(int index = 0; index < ArraySize(days); index++)
+      if(days[index] == day) return(index);
+   return(-1);
+  }
+
+void SortDailyAscending(string &days[], double &profits[], int &counts[], int &wins[], int &losses[])
+  {
+   int total = ArraySize(days);
+   for(int left = 0; left < total - 1; left++)
+     {
+      int best = left;
+      for(int right = left + 1; right < total; right++)
+         if(StringCompare(days[right], days[best]) < 0) best = right;
+      if(best == left) continue;
+      string day_swap = days[left]; days[left] = days[best]; days[best] = day_swap;
+      double profit_swap = profits[left]; profits[left] = profits[best]; profits[best] = profit_swap;
+      int count_swap = counts[left]; counts[left] = counts[best]; counts[best] = count_swap;
+      int win_swap = wins[left]; wins[left] = wins[best]; wins[best] = win_swap;
+      int loss_swap = losses[left]; losses[left] = losses[best]; losses[best] = loss_swap;
+     }
+  }
+
+string BuildChartPayload(const string date_from, const string date_to,
+   const string direction, const string profit_filter)
+  {
+   long server_offset_msc = CurrentServerOffsetMsc();
+   string days[]; double profits[]; int counts[]; int wins[]; int losses[];
+   int total_trades = 0, total_wins = 0, total_losses = 0;
+   double total_net = 0, gross_profit = 0, gross_loss = 0;
+   int history_total = OrdersHistoryTotal();
+   for(int index = 0; index < history_total; index++)
+     {
+      if(!OrderSelect(index, SELECT_BY_POS, MODE_HISTORY)
+         || !HistoryOrderMatches(date_from, date_to, "", "", direction,
+            profit_filter, server_offset_msc)) continue;
+      string day = UtcDateText(OrderCloseTime(), server_offset_msc);
+      double net = OrderProfit() + OrderSwap() + OrderCommission();
+      int day_index = FindDayIndex(days, day);
+      if(day_index < 0)
+        {
+         day_index = ArraySize(days);
+         ArrayResize(days, day_index + 1); ArrayResize(profits, day_index + 1);
+         ArrayResize(counts, day_index + 1); ArrayResize(wins, day_index + 1);
+         ArrayResize(losses, day_index + 1); days[day_index] = day;
+        }
+      profits[day_index] += net; counts[day_index]++;
+      total_trades++; total_net += net;
+      if(net > 0)
+        {
+         wins[day_index]++; total_wins++; gross_profit += net;
+        }
+      else if(net < 0)
+        {
+         losses[day_index]++; total_losses++; gross_loss += MathAbs(net);
+        }
+     }
+   SortDailyAscending(days, profits, counts, wins, losses);
+   double initial_capital = MathMax(0, AccountBalance() - total_net);
+   double running = 0, peak = initial_capital, max_drawdown = 0;
+   string daily = "[", cumulative = "[", drawdown = "[";
+   for(int day_index = 0; day_index < ArraySize(days); day_index++)
+     {
+      if(day_index > 0) { daily += ","; cumulative += ","; drawdown += ","; }
+      running += profits[day_index];
+      double equity = initial_capital + running;
+      if(equity > peak) peak = equity;
+      double value = peak > 0 ? (1 - equity / peak) * 100 : 0;
+      if(value > max_drawdown) max_drawdown = value;
+      daily += "{\"date\":\"" + days[day_index] + "\",\"profit\":"
+         + JsonNumber(profits[day_index]) + ",\"trade_count\":"
+         + IntegerToString(counts[day_index]) + ",\"wins\":"
+         + IntegerToString(wins[day_index]) + ",\"losses\":"
+         + IntegerToString(losses[day_index]) + "}";
+      cumulative += JsonNumber(running); drawdown += JsonNumber(value);
+     }
+   double average_win = total_wins > 0 ? gross_profit / total_wins : 0;
+   double average_loss = total_losses > 0 ? gross_loss / total_losses : 0;
+   double profit_factor = average_loss > 0 ? average_win / average_loss
+      : (average_win > 0 ? 999 : 0);
+   return("{\"daily\":" + daily + "],\"cumulative\":" + cumulative
+      + "],\"drawdown\":" + drawdown + "],\"stats\":{\"total_trades\":"
+      + IntegerToString(total_trades) + ",\"win_rate\":"
+      + JsonNumber(total_trades > 0 ? (double)total_wins / total_trades * 100 : 0)
+      + ",\"profit_factor\":" + JsonNumber(profit_factor)
+      + ",\"max_drawdown\":" + JsonNumber(max_drawdown)
+      + ",\"gross_profit\":" + JsonNumber(gross_profit)
+      + ",\"gross_loss\":" + JsonNumber(gross_loss) + "},"
+      + "\"history_source_complete\":false,"
+      + "\"history_source_note\":\"mt4_account_history_tab_range\","
+      + "\"source\":\"mt4\"}");
+  }
+
+string BuildSelectedPendingOrderStateJson()
+  {
+   int order_type = OrderType();
+   bool buy = order_type == OP_BUY || order_type == OP_BUYLIMIT || order_type == OP_BUYSTOP;
+   bool market = order_type == OP_BUY || order_type == OP_SELL;
+   return("{\"ticket\":\"" + IntegerToString(OrderTicket()) + "\","
+      + "\"position_id\":" + (market ? "\"" + IntegerToString(OrderTicket()) + "\"" : "null") + ","
+      + "\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\","
+      + "\"side\":\"" + (buy ? "buy" : "sell") + "\","
+      + "\"type\":" + IntegerToString(order_type) + ","
+      + "\"state\":" + IntegerToString(OrderCloseTime() == 0 ? 1 : 0) + ","
+      + "\"volume_initial\":" + JsonNumber(OrderLots()) + ","
+      + "\"volume\":" + JsonNumber(OrderLots()) + ","
+      + "\"price\":" + JsonNumber(OrderOpenPrice()) + ","
+      + "\"magic\":" + IntegerToString(OrderMagicNumber()) + ","
+      + "\"comment\":\"" + JsonEscape(OrderComment()) + "\"}");
+  }
+
+string PendingPreconditionError(const string expected_server, const string expected_login,
+   const long expected_ticket, const string expected_symbol, const string expected_direction,
+   const double expected_volume, const int expected_magic)
+  {
+   if(expected_server != "" && StringCompare(expected_server, AccountServer(), false) != 0)
+      return("management_account_server_mismatch");
+   if(expected_login != "" && expected_login != IntegerToString(AccountNumber()))
+      return("management_account_login_mismatch");
+   if(expected_ticket <= 0) return("");
+   if(expected_ticket != OrderTicket()) return("management_ticket_mismatch");
+   if(expected_symbol != OrderSymbol()) return("management_symbol_mismatch");
+   if(expected_magic != OrderMagicNumber()) return("management_magic_mismatch");
+   if(MathAbs(expected_volume - OrderLots()) > 0.00000001) return("management_volume_mismatch");
+   int order_type = OrderType();
+   string actual_direction = (order_type == OP_BUY || order_type == OP_BUYLIMIT || order_type == OP_BUYSTOP)
+      ? "buy" : "sell";
+   if(expected_direction != actual_direction) return("management_direction_mismatch");
+   return("");
+  }
+
+string BuildPendingStatePayload(const long ticket, const string expected_server,
+   const string expected_login, const long expected_ticket, const string expected_symbol,
+   const string expected_direction, const double expected_volume, const int expected_magic)
+  {
+   string account = "{\"login\":\"" + IntegerToString(AccountNumber())
+      + "\",\"server\":\"" + JsonEscape(AccountServer()) + "\"}";
+   bool active = OrderSelect((int)ticket, SELECT_BY_TICKET, MODE_TRADES) && OrderCloseTime() == 0;
+   if(active)
+     {
+      string error = PendingPreconditionError(expected_server, expected_login, expected_ticket,
+         expected_symbol, expected_direction, expected_volume, expected_magic);
+      bool active_market = OrderType() == OP_BUY || OrderType() == OP_SELL;
+      if(active_market)
+         return("{\"account\":" + account + ",\"current_state\":\"history\","
+            + "\"final_state\":\"" + (error == "" ? "filled" : "unknown") + "\","
+            + "\"position_id\":\"" + IntegerToString(OrderTicket()) + "\",\"order\":"
+            + BuildSelectedPendingOrderStateJson()
+            + (error == "" ? "" : ",\"precondition_error\":\"" + error + "\"")
+            + ",\"source\":\"mt4\"}");
+      return("{\"account\":" + account + ",\"current_state\":\""
+         + (error == "" ? "pending" : "identity_changed") + "\",\"final_state\":"
+         + (error == "" ? "null" : "\"unknown\"") + ",\"order\":"
+         + BuildSelectedPendingOrderStateJson()
+         + (error == "" ? "" : ",\"precondition_error\":\"" + error + "\"")
+         + ",\"source\":\"mt4\"}");
+     }
+   bool historical = OrderSelect((int)ticket, SELECT_BY_TICKET, MODE_HISTORY) && OrderCloseTime() > 0;
+   if(!historical)
+      return("{\"account\":" + account
+         + ",\"current_state\":\"absent\",\"final_state\":\"unknown\","
+         + "\"order\":null,\"source\":\"mt4\"}");
+   string precondition = PendingPreconditionError(expected_server, expected_login, expected_ticket,
+      expected_symbol, expected_direction, expected_volume, expected_magic);
+   int order_type = OrderType();
+   bool filled = order_type == OP_BUY || order_type == OP_SELL;
+   string final_state = precondition != "" ? "unknown"
+      : (filled ? "filled" : (OrderExpiration() > 0 && OrderCloseTime() >= OrderExpiration()
+         ? "expired" : "cancelled"));
+   return("{\"account\":" + account + ",\"current_state\":\"history\","
+      + "\"final_state\":\"" + final_state + "\",\"order\":"
+      + BuildSelectedPendingOrderStateJson()
+      + (filled ? ",\"position_id\":\"" + IntegerToString(OrderTicket()) + "\"" : "")
+      + (precondition == "" ? "" : ",\"precondition_error\":\"" + precondition + "\"")
+      + ",\"source\":\"mt4\"}");
+  }
+
+string BuildDiagnosticsPayload()
+  {
+   return("{\"mt4_connected\":" + (IsConnected() ? "true" : "false") + ","
+      + "\"account\":{\"login\":\"" + IntegerToString(AccountNumber()) + "\","
+      + "\"server\":\"" + JsonEscape(AccountServer()) + "\","
+      + "\"balance\":" + JsonNumber(AccountBalance()) + ","
+      + "\"equity\":" + JsonNumber(AccountEquity()) + ","
+      + "\"trade_allowed\":" + (IsTradeAllowed() ? "true" : "false") + ","
+      + "\"trade_expert\":" + (IsExpertEnabled() ? "true" : "false") + "},"
+      + "\"terminal\":{\"build\":" + IntegerToString((int)TerminalInfoInteger(TERMINAL_BUILD)) + ","
+      + "\"connected\":" + (IsConnected() ? "true" : "false") + ","
+      + "\"trade_allowed\":" + (IsTradeAllowed() ? "true" : "false") + "},"
+      + "\"source\":\"mt4\"}");
+  }
+
+void SendExtendedData(uchar &request[], int &offset)
+  {
+   string request_id = ReadUtf8(request, offset);
+   string terminal_id = ReadUtf8(request, offset);
+   string broker_server = ReadUtf8(request, offset);
+   string login = ReadUtf8(request, offset);
+   long connection_epoch = ReadInt64(request, offset);
+   string action = ReadUtf8(request, offset);
+   string date_from = ReadUtf8(request, offset);
+   string date_to = ReadUtf8(request, offset);
+   string entry_from = ReadUtf8(request, offset);
+   string entry_to = ReadUtf8(request, offset);
+   string direction = ReadUtf8(request, offset);
+   string profit_filter = ReadUtf8(request, offset);
+   int page = ReadInt32(request, offset);
+   int page_size = ReadInt32(request, offset);
+   bool include_deals = ReadInt32(request, offset) == 1;
+   bool compact = ReadInt32(request, offset) == 1;
+   long ticket = ReadInt64(request, offset);
+   string expected_server = ReadUtf8(request, offset);
+   string expected_login = ReadUtf8(request, offset);
+   long expected_ticket = ReadInt64(request, offset);
+   string expected_symbol = ReadUtf8(request, offset);
+   string expected_direction = ReadUtf8(request, offset);
+   string expected_volume_text = ReadUtf8(request, offset);
+   double expected_volume = expected_volume_text == "" ? 0 : StrToDouble(expected_volume_text);
+   int expected_magic = ReadInt32(request, offset);
+   long observed_at = ((long)TimeGMT()) * 1000;
+   if(request_id == "" || terminal_id != g_terminal_id
+      || StringCompare(broker_server, AccountServer(), false) != 0
+      || login != IntegerToString(AccountNumber()) || connection_epoch != g_connection_epoch)
+     {
+      SendExtendedDataResult(request_id, 2, "", "extended_data_route_mismatch", observed_at);
+      return;
+     }
+   string payload = "";
+   if(action == "symbols") payload = BuildSymbolsPayload();
+   else if(action == "history") payload = BuildHistoryPayload(date_from, date_to,
+      entry_from, entry_to, direction, profit_filter, page, page_size, include_deals, compact);
+   else if(action == "chart_data") payload = BuildChartPayload(date_from, date_to,
+      direction, profit_filter);
+   else if(action == "pending_order_state") payload = BuildPendingStatePayload(ticket,
+      expected_server, expected_login, expected_ticket, expected_symbol, expected_direction,
+      expected_volume, expected_magic);
+   else if(action == "diagnostics") payload = BuildDiagnosticsPayload();
+   else
+     {
+      SendExtendedDataResult(request_id, 2, "", "terminal_data_action_unsupported", observed_at);
+      return;
+     }
+   SendExtendedDataResult(request_id, 1, payload, "", observed_at);
+  }
+
+void SendExtendedDataResult(const string request_id, const int status,
+   const string payload_json, const string error_code, const long observed_at)
+  {
+   uchar response[];
+   AppendInt32(response, MSG_EXTENDED_DATA); AppendUtf8(response, request_id);
+   AppendInt64(response, observed_at > 0 ? observed_at : ((long)TimeGMT()) * 1000);
+   AppendInt32(response, status); AppendUtf8(response, payload_json); AppendUtf8(response, error_code);
    if(!WriteFrame(response)) DisconnectPipe();
   }
 

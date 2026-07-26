@@ -291,6 +291,38 @@ public sealed class Mt4PipeProtocolTests
     }
 
     [TestMethod]
+    public void ExtendedDataRoundTripsHistoryAndManagementGuards()
+    {
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_mt4_extended_01", SentAtUtcMsc = 1,
+            RequestId = "request_mt4_extended_01", TerminalInstanceId = "mt4_terminal_codec_01",
+            AccountRef = new("Broker-Demo", "12345678"), ConnectionEpoch = 7,
+            Action = "pending_order_state", Params = JsonSerializer.SerializeToElement(new
+            {
+                ticket = "5001", expected_state = new
+                {
+                    broker_server_key = "Broker-Demo", login_account = "12345678",
+                    ticket = "5001", symbol = "XAUUSD", direction = "buy",
+                    volume = 0.1, magic = 234000,
+                },
+            }),
+        };
+        var local = Mt4PipeProtocol.CreateExtendedDataRequest(request);
+        var decodedRequest = Mt4PipeProtocol.DecodeExtendedDataRequest(
+            Mt4PipeProtocol.EncodeExtendedDataRequest(local));
+        var decodedResponse = Mt4PipeProtocol.DecodeExtendedData(
+            Mt4PipeProtocol.EncodeExtendedData(new(
+                request.RequestId, 1_800_000_000_100, "succeeded",
+                JsonSerializer.SerializeToElement(new { current_state = "pending", source = "mt4" }), null)));
+
+        Assert.AreEqual(5001L, decodedRequest.Ticket);
+        Assert.AreEqual("XAUUSD", decodedRequest.ExpectedSymbol);
+        Assert.AreEqual(0.1, decodedRequest.ExpectedVolume);
+        Assert.AreEqual("pending", decodedResponse.Payload!.Value.GetProperty("current_state").GetString());
+    }
+
+    [TestMethod]
     public void DealsRequestAndBatchRoundTripWithBoundedDualCursor()
     {
         var request = new Mt4DealsRequest(
@@ -322,6 +354,15 @@ public sealed class Mt4PipeProtocolTests
         Assert.IsFalse(Mt4EaConnection.SupportsDealsAdapter("invalid"));
         Assert.IsTrue(Mt4EaConnection.SupportsDealsAdapter("3.1.0"));
         Assert.IsTrue(Mt4EaConnection.SupportsDealsAdapter("3.1.0-test"));
+    }
+
+    [TestMethod]
+    public void ExtendedDataCapabilityRequiresVersionThreePointTwoOrNewer()
+    {
+        Assert.IsFalse(Mt4EaConnection.SupportsExtendedDataAdapter("3.1.9"));
+        Assert.IsFalse(Mt4EaConnection.SupportsExtendedDataAdapter("invalid"));
+        Assert.IsTrue(Mt4EaConnection.SupportsExtendedDataAdapter("3.2.0"));
+        Assert.IsTrue(Mt4EaConnection.SupportsExtendedDataAdapter("3.2.1-test"));
     }
 
     [TestMethod]

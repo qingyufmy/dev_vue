@@ -206,9 +206,33 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        if (request.Action is not ("rates" or "symbol_snapshot" or "risk_snapshot" or "performance_daily"))
+        if (request.Action is not ("rates" or "symbol_snapshot" or "risk_snapshot" or "performance_daily"
+            or "symbols" or "history" or "chart_data" or "pending_order_state" or "diagnostics"))
         {
             return RejectedData(request, "terminal_data_action_unavailable");
+        }
+        if (request.Action is "symbols" or "history" or "chart_data" or "pending_order_state" or "diagnostics")
+        {
+            if (!_connection.SupportsExtendedData)
+            {
+                return RejectedData(request, "mt4_ea_update_required");
+            }
+            Mt4ExtendedDataRequest extendedRequest;
+            try
+            {
+                extendedRequest = Mt4PipeProtocol.CreateExtendedDataRequest(request);
+            }
+            catch (InvalidDataException error)
+            {
+                return RejectedData(request, error.Message);
+            }
+            var extended = await _connection.GetExtendedDataAsync(extendedRequest, cancellationToken);
+            if (extended.RequestId != request.RequestId)
+            {
+                throw new InvalidDataException("mt4_extended_data_route_mismatch");
+            }
+            return DataResponse(request, extended.ObservedAtUtcMsc, extended.Status,
+                extended.Payload, extended.ErrorCode);
         }
         if (request.Action == "risk_snapshot")
         {

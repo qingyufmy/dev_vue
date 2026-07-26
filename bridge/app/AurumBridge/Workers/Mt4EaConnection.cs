@@ -5,6 +5,7 @@ namespace AurumBridge.Workers;
 public interface IMt4EaConnection : IAsyncDisposable
 {
     bool SupportsDeals { get; }
+    bool SupportsExtendedData { get; }
     Task SendWelcomeAsync(Mt4Welcome welcome, CancellationToken cancellationToken = default);
     Task<Mt4Snapshot> CollectAsync(
         Mt4CollectionStreams streams,
@@ -26,6 +27,9 @@ public interface IMt4EaConnection : IAsyncDisposable
         CancellationToken cancellationToken = default);
     Task<Mt4PerformanceDaily> GetPerformanceDailyAsync(
         Mt4PerformanceDailyRequest request,
+        CancellationToken cancellationToken = default);
+    Task<Mt4ExtendedData> GetExtendedDataAsync(
+        Mt4ExtendedDataRequest request,
         CancellationToken cancellationToken = default);
     Task<Mt4DealsBatch> CollectDealsAsync(
         Mt4DealsRequest request,
@@ -54,12 +58,20 @@ public sealed class Mt4EaConnection : IMt4EaConnection
     public Mt4Hello Hello { get; }
     public bool IsConnected => !_disposed && !_faulted && _pipe.IsConnected;
     public bool SupportsDeals => SupportsDealsAdapter(Hello.AdapterVersion);
+    public bool SupportsExtendedData => SupportsExtendedDataAdapter(Hello.AdapterVersion);
 
     public static bool SupportsDealsAdapter(string adapterVersion)
     {
         var stableVersion = adapterVersion?.Split('-', 2)[0];
         return Version.TryParse(stableVersion, out var version)
             && version >= new Version(3, 1, 0);
+    }
+
+    public static bool SupportsExtendedDataAdapter(string adapterVersion)
+    {
+        var stableVersion = adapterVersion?.Split('-', 2)[0];
+        return Version.TryParse(stableVersion, out var version)
+            && version >= new Version(3, 2, 0);
     }
 
     public static async Task<Mt4EaConnection> AcceptAsync(
@@ -170,6 +182,12 @@ public sealed class Mt4EaConnection : IMt4EaConnection
         CancellationToken cancellationToken = default) =>
         RequestAsync(Mt4PipeProtocol.EncodePerformanceDailyRequest(request),
             Mt4PipeProtocol.DecodePerformanceDaily, WorkerRequestPriority.Data, cancellationToken);
+
+    public Task<Mt4ExtendedData> GetExtendedDataAsync(
+        Mt4ExtendedDataRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestAsync(Mt4PipeProtocol.EncodeExtendedDataRequest(request),
+            Mt4PipeProtocol.DecodeExtendedData, WorkerRequestPriority.Data, cancellationToken);
 
     public Task<Mt4DealsBatch> CollectDealsAsync(
         Mt4DealsRequest request,

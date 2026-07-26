@@ -266,6 +266,69 @@ public sealed class Mt4TerminalRuntimeTests
     }
 
     [TestMethod]
+    public async Task MapsAllExtendedMt4DataActionsThroughTheVersionedChannel()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection { SupportsExtendedData = true };
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_extended");
+        await runtime.StartAsync();
+        var actions = new[] { "symbols", "history", "chart_data", "pending_order_state", "diagnostics" };
+
+        foreach (var action in actions)
+        {
+            var parameters = action switch
+            {
+                "history" => new { page = 2, page_size = 25, date_from = "2026-01-01", direction = "BUY" },
+                "chart_data" => (object)new { date_from = "2026-01-01", date_to = "2026-01-31" },
+                "pending_order_state" => new
+                {
+                    ticket = "5001",
+                    expected_state = new { ticket = "5001", symbol = "XAUUSD", direction = "buy", volume = 0.1, magic = 234000 },
+                },
+                _ => new { },
+            };
+            var request = new DataRequestMessage
+            {
+                Type = "data_request", MessageId = $"message_{action}", SentAtUtcMsc = 1,
+                RequestId = $"request_{action}", TerminalInstanceId = Terminal().TerminalInstanceId,
+                AccountRef = Terminal().AccountRef, ConnectionEpoch = Terminal().ConnectionEpoch,
+                Action = action, Params = JsonSerializer.SerializeToElement(parameters),
+            };
+
+            var response = await runtime.GetDataAsync(request);
+
+            Assert.AreEqual("succeeded", response.Status);
+            Assert.AreEqual(action, response.Payload!.Value.GetProperty("action").GetString());
+            Assert.AreEqual(action, connection.LastExtendedRequest!.Action);
+            if (action == "history") Assert.AreEqual(2, connection.LastExtendedRequest.Page);
+        }
+    }
+
+    [TestMethod]
+    public async Task OldMt4AdapterRequiresAnEaUpdateForExtendedData()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection { SupportsExtendedData = false };
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_extended_old");
+        await runtime.StartAsync();
+        var request = new DataRequestMessage
+        {
+            Type = "data_request", MessageId = "message_diagnostics", SentAtUtcMsc = 1,
+            RequestId = "request_diagnostics", TerminalInstanceId = Terminal().TerminalInstanceId,
+            AccountRef = Terminal().AccountRef, ConnectionEpoch = Terminal().ConnectionEpoch,
+            Action = "diagnostics", Params = JsonSerializer.SerializeToElement(new { }),
+        };
+
+        var response = await runtime.GetDataAsync(request);
+
+        Assert.AreEqual("rejected", response.Status);
+        Assert.AreEqual("mt4_ea_update_required", response.ErrorCode);
+        Assert.IsNull(connection.LastExtendedRequest);
+    }
+
+    [TestMethod]
     public async Task PersistsImmutableMt4HistoryWithDualCursor()
     {
         await using var testStore = await TestStore.CreateAsync();
@@ -359,6 +422,7 @@ public sealed class Mt4TerminalRuntimeTests
     private sealed class FakeConnection : IMt4EaConnection
     {
         public bool SupportsDeals { get; init; }
+        public bool SupportsExtendedData { get; init; }
         public Mt4Welcome? Welcome { get; private set; }
         public int ExecuteCount { get; private set; }
         public int CollectCount { get; private set; }
@@ -370,6 +434,7 @@ public sealed class Mt4TerminalRuntimeTests
         public Mt4SymbolSnapshotRequest? LastSymbolRequest { get; private set; }
         public Mt4RiskSnapshotRequest? LastRiskRequest { get; private set; }
         public Mt4PerformanceDailyRequest? LastPerformanceRequest { get; private set; }
+        public Mt4ExtendedDataRequest? LastExtendedRequest { get; private set; }
 
         public Task SendWelcomeAsync(Mt4Welcome welcome, CancellationToken cancellationToken = default)
         {
@@ -472,6 +537,16 @@ public sealed class Mt4TerminalRuntimeTests
                     timezone_offset_minutes = 0, account = new { login = 12345678, server = "Broker-Demo" },
                     daily = Array.Empty<object>(), scanned_deal_count = 0, source = "mt4",
                 }), null));
+        }
+
+        public Task<Mt4ExtendedData> GetExtendedDataAsync(
+            Mt4ExtendedDataRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            LastExtendedRequest = request;
+            return Task.FromResult(new Mt4ExtendedData(
+                request.RequestId, 1_800_000_000_095, "succeeded",
+                JsonSerializer.SerializeToElement(new { action = request.Action, source = "mt4" }), null));
         }
 
         public Task<Mt4DealsBatch> CollectDealsAsync(

@@ -26,6 +26,8 @@ public enum Mt4MessageType
     PerformanceDaily = 23,
     DealsRequest = 24,
     Deals = 25,
+    ExtendedDataRequest = 26,
+    ExtendedData = 27,
     Shutdown = 90,
     ShutdownAck = 91,
 }
@@ -165,6 +167,39 @@ public sealed record Mt4DealsBatch(
     long NextTimeMsc,
     long NextTicket,
     bool HasMore);
+
+public sealed record Mt4ExtendedDataRequest(
+    string RequestId,
+    string TerminalInstanceId,
+    string BrokerServer,
+    string Login,
+    long ConnectionEpoch,
+    string Action,
+    string DateFrom,
+    string DateTo,
+    string EntryFrom,
+    string EntryTo,
+    string Direction,
+    string ProfitFilter,
+    int Page,
+    int PageSize,
+    bool IncludeDeals,
+    bool Compact,
+    long Ticket,
+    string ExpectedBrokerServer,
+    string ExpectedLogin,
+    long ExpectedTicket,
+    string ExpectedSymbol,
+    string ExpectedDirection,
+    double? ExpectedVolume,
+    int ExpectedMagic);
+
+public sealed record Mt4ExtendedData(
+    string RequestId,
+    long ObservedAtUtcMsc,
+    string Status,
+    JsonElement? Payload,
+    string? ErrorCode);
 
 public enum Mt4TradeAction
 {
@@ -750,6 +785,120 @@ public static class Mt4PipeProtocol
             string.IsNullOrEmpty(payloadText) ? null : ParseObject(payloadText, "mt4_performance_payload_invalid"),
             NullIfEmpty(ReadString(reader, 128)));
         EnsureFullyRead(reader); ValidatePerformanceDaily(result); return result;
+    }
+
+    public static Mt4ExtendedDataRequest CreateExtendedDataRequest(DataRequestMessage request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        string[] actions = ["symbols", "history", "chart_data", "pending_order_state", "diagnostics"];
+        if (request.Version != 3 || request.Type != "data_request"
+            || !actions.Contains(request.Action, StringComparer.Ordinal))
+        {
+            throw new InvalidDataException("mt4_extended_data_request_invalid");
+        }
+        var expected = request.Params.TryGetProperty("expected_state", out var expectedValue)
+            && expectedValue.ValueKind == JsonValueKind.Object
+                ? expectedValue
+                : default;
+        if (request.Params.TryGetProperty("expected_state", out expectedValue)
+            && expectedValue.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
+        {
+            throw new InvalidDataException("management_expected_state_invalid");
+        }
+        var result = new Mt4ExtendedDataRequest(
+            request.RequestId, request.TerminalInstanceId, request.AccountRef.BrokerServer,
+            request.AccountRef.Login, request.ConnectionEpoch, request.Action,
+            ReadOptionalString(request.Params, "date_from") ?? string.Empty,
+            ReadOptionalString(request.Params, "date_to") ?? string.Empty,
+            ReadOptionalString(request.Params, "entry_from") ?? string.Empty,
+            ReadOptionalString(request.Params, "entry_to") ?? string.Empty,
+            (ReadOptionalString(request.Params, "direction") ?? string.Empty).ToLowerInvariant(),
+            (ReadOptionalString(request.Params, "profit_filter") ?? string.Empty).ToLowerInvariant(),
+            checked((int)(ReadOptionalInt64(request.Params, "page") ?? 1)),
+            checked((int)(ReadOptionalInt64(request.Params, "page_size") ?? 20)),
+            ReadOptionalBoolean(request.Params, "include_deals") ?? false,
+            ReadOptionalBoolean(request.Params, "compact") ?? false,
+            ReadOptionalInt64(request.Params, "ticket") ?? 0,
+            expected.ValueKind == JsonValueKind.Object
+                ? ReadOptionalString(expected, "broker_server_key") ?? string.Empty : string.Empty,
+            expected.ValueKind == JsonValueKind.Object
+                ? ReadOptionalString(expected, "login_account") ?? string.Empty : string.Empty,
+            expected.ValueKind == JsonValueKind.Object
+                ? ReadOptionalInt64(expected, "ticket") ?? 0 : 0,
+            expected.ValueKind == JsonValueKind.Object
+                ? ReadOptionalString(expected, "symbol") ?? string.Empty : string.Empty,
+            expected.ValueKind == JsonValueKind.Object
+                ? (ReadOptionalString(expected, "direction") ?? string.Empty).ToLowerInvariant() : string.Empty,
+            expected.ValueKind == JsonValueKind.Object
+                ? ReadOptionalDouble(expected, "volume") : null,
+            expected.ValueKind == JsonValueKind.Object
+                ? checked((int)(ReadOptionalInt64(expected, "magic") ?? 0)) : 0);
+        ValidateExtendedDataRequest(result);
+        return result;
+    }
+
+    public static byte[] EncodeExtendedDataRequest(Mt4ExtendedDataRequest request)
+    {
+        ValidateExtendedDataRequest(request);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.ExtendedDataRequest);
+            WriteString(writer, request.RequestId); WriteString(writer, request.TerminalInstanceId);
+            WriteString(writer, request.BrokerServer); WriteString(writer, request.Login);
+            writer.Write(request.ConnectionEpoch); WriteString(writer, request.Action);
+            WriteString(writer, request.DateFrom); WriteString(writer, request.DateTo);
+            WriteString(writer, request.EntryFrom); WriteString(writer, request.EntryTo);
+            WriteString(writer, request.Direction); WriteString(writer, request.ProfitFilter);
+            writer.Write(request.Page); writer.Write(request.PageSize);
+            writer.Write(request.IncludeDeals ? 1 : 0); writer.Write(request.Compact ? 1 : 0);
+            writer.Write(request.Ticket); WriteString(writer, request.ExpectedBrokerServer);
+            WriteString(writer, request.ExpectedLogin); writer.Write(request.ExpectedTicket);
+            WriteString(writer, request.ExpectedSymbol); WriteString(writer, request.ExpectedDirection);
+            WriteNullableDouble(writer, request.ExpectedVolume); writer.Write(request.ExpectedMagic);
+        });
+    }
+
+    public static Mt4ExtendedDataRequest DecodeExtendedDataRequest(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.ExtendedDataRequest);
+        var result = new Mt4ExtendedDataRequest(
+            ReadString(reader, 128), ReadString(reader, 128), ReadString(reader, 128),
+            ReadString(reader, 64), reader.ReadInt64(), ReadString(reader, 32),
+            ReadString(reader, 10), ReadString(reader, 10), ReadString(reader, 10),
+            ReadString(reader, 10), ReadString(reader, 8), ReadString(reader, 16),
+            reader.ReadInt32(), reader.ReadInt32(), ReadBoolean(reader), ReadBoolean(reader),
+            reader.ReadInt64(), ReadString(reader, 128), ReadString(reader, 64), reader.ReadInt64(),
+            ReadString(reader, 64), ReadString(reader, 8), ReadDoubleString(reader, false),
+            reader.ReadInt32());
+        EnsureFullyRead(reader); ValidateExtendedDataRequest(result); return result;
+    }
+
+    public static byte[] EncodeExtendedData(Mt4ExtendedData result)
+    {
+        ValidateExtendedData(result);
+        return Encode(writer =>
+        {
+            writer.Write((int)Mt4MessageType.ExtendedData); WriteString(writer, result.RequestId);
+            writer.Write(result.ObservedAtUtcMsc); writer.Write(result.Status == "succeeded" ? 1 : 2);
+            WriteString(writer, result.Payload?.GetRawText() ?? string.Empty);
+            WriteString(writer, result.ErrorCode ?? string.Empty);
+        });
+    }
+
+    public static Mt4ExtendedData DecodeExtendedData(ReadOnlySpan<byte> payload)
+    {
+        using var reader = CreateReader(payload, Mt4MessageType.ExtendedData);
+        var requestId = ReadString(reader, 128); var observedAt = reader.ReadInt64();
+        var status = reader.ReadInt32() switch
+        {
+            1 => "succeeded", 2 => "rejected",
+            _ => throw new InvalidDataException("mt4_extended_data_status_invalid"),
+        };
+        var payloadText = ReadString(reader, MaxStringBytes);
+        var result = new Mt4ExtendedData(requestId, observedAt, status,
+            string.IsNullOrEmpty(payloadText) ? null : ParseObject(payloadText, "mt4_extended_data_payload_invalid"),
+            NullIfEmpty(ReadString(reader, 128)));
+        EnsureFullyRead(reader); ValidateExtendedData(result); return result;
     }
 
     public static byte[] EncodeDealsRequest(Mt4DealsRequest request)
@@ -1364,6 +1513,45 @@ public static class Mt4PipeProtocol
         }
     }
 
+    private static void ValidateExtendedDataRequest(Mt4ExtendedDataRequest request)
+    {
+        string[] actions = ["symbols", "history", "chart_data", "pending_order_state", "diagnostics"];
+        var historyAction = request.Action is "history" or "chart_data";
+        var validDates = new[] { request.DateFrom, request.DateTo, request.EntryFrom, request.EntryTo }
+            .All(value => string.IsNullOrEmpty(value) || DateOnly.TryParseExact(value, "yyyy-MM-dd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out _));
+        if (string.IsNullOrWhiteSpace(request.RequestId)
+            || string.IsNullOrWhiteSpace(request.TerminalInstanceId)
+            || string.IsNullOrWhiteSpace(request.BrokerServer)
+            || string.IsNullOrWhiteSpace(request.Login) || request.ConnectionEpoch <= 0
+            || !actions.Contains(request.Action, StringComparer.Ordinal)
+            || !validDates
+            || request.DateFrom.Length > 10 || request.DateTo.Length > 10
+            || request.EntryFrom.Length > 10 || request.EntryTo.Length > 10
+            || historyAction && (request.Page < 1 || request.PageSize is < 1 or > 10_000)
+            || request.Direction is not ("" or "buy" or "sell")
+            || request.ProfitFilter is not ("" or "profit" or "loss")
+            || request.Action == "pending_order_state" && request.Ticket <= 0
+            || request.ExpectedTicket < 0 || request.ExpectedSymbol.Length > 64
+            || request.ExpectedDirection is not ("" or "buy" or "sell")
+            || request.ExpectedVolume is <= 0
+            || request.ExpectedMagic < 0)
+        {
+            throw new InvalidDataException("mt4_extended_data_request_invalid");
+        }
+    }
+
+    private static void ValidateExtendedData(Mt4ExtendedData result)
+    {
+        if (string.IsNullOrWhiteSpace(result.RequestId) || result.ObservedAtUtcMsc <= 0
+            || result.Status is not ("succeeded" or "rejected")
+            || result.Status == "succeeded" && result.Payload is null
+            || result.Status == "rejected" && string.IsNullOrWhiteSpace(result.ErrorCode))
+        {
+            throw new InvalidDataException("mt4_extended_data_invalid");
+        }
+    }
+
     private static void ValidateDeals(Mt4DealsBatch result)
     {
         if (result.SourceTimeMsc <= 0
@@ -1439,6 +1627,20 @@ public static class Mt4PipeProtocol
             return double.IsFinite(number) ? number : throw new InvalidDataException($"{propertyName}_invalid");
         }
         throw new InvalidDataException($"{propertyName}_invalid");
+    }
+
+    private static bool? ReadOptionalBoolean(JsonElement value, string propertyName)
+    {
+        if (!value.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => throw new InvalidDataException($"{propertyName}_invalid"),
+        };
     }
 
     private static string? NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;

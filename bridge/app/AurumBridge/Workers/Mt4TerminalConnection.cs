@@ -57,6 +57,7 @@ public sealed class ReconnectableMt4EaConnection : IMt4EaConnection
     }
 
     public bool SupportsDeals => _connection?.SupportsDeals ?? false;
+    public bool SupportsExtendedData => _connection?.SupportsExtendedData ?? false;
 
     public async Task SendWelcomeAsync(
         Mt4Welcome welcome,
@@ -105,6 +106,11 @@ public sealed class ReconnectableMt4EaConnection : IMt4EaConnection
         Mt4PerformanceDailyRequest request,
         CancellationToken cancellationToken = default) =>
         ReadyConnection().GetPerformanceDailyAsync(request, cancellationToken);
+
+    public Task<Mt4ExtendedData> GetExtendedDataAsync(
+        Mt4ExtendedDataRequest request,
+        CancellationToken cancellationToken = default) =>
+        ReadyConnection().GetExtendedDataAsync(request, cancellationToken);
 
     public Task<Mt4DealsBatch> CollectDealsAsync(
         Mt4DealsRequest request,
