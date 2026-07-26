@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Win32;
 
 namespace AurumBridge.Workers;
 
@@ -7,13 +8,51 @@ public static class Mt4TerminalIdentity
 {
     public const string RegistrationPipeName = "AURUMBridgeV3";
 
-    public static string CreateTerminalInstanceId(string terminalDataPath)
+    public static string CreateTerminalInstanceId(string terminalDataPath, string? deviceNamespace = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(terminalDataPath);
         var normalized = Path.GetFullPath(terminalDataPath).ToUpperInvariant();
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)))
+        var device = string.IsNullOrWhiteSpace(deviceNamespace)
+            ? ResolveDeviceNamespace()
+            : deviceNamespace.Trim();
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{device}\n{normalized}")))
             .ToLowerInvariant();
         return $"mt4_{hash[..24]}";
+    }
+
+    private static string ResolveDeviceNamespace()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography", false);
+                if (key?.GetValue("MachineGuid") is string value && !string.IsNullOrWhiteSpace(value))
+                {
+                    return value.Trim();
+                }
+            }
+            catch (Exception error) when (error is UnauthorizedAccessException or IOException
+                or System.Security.SecurityException)
+            {
+            }
+        }
+        else
+        {
+            try
+            {
+                const string machineIdPath = "/etc/machine-id";
+                if (File.Exists(machineIdPath))
+                {
+                    var value = File.ReadAllText(machineIdPath).Trim();
+                    if (!string.IsNullOrWhiteSpace(value)) return value;
+                }
+            }
+            catch (Exception error) when (error is UnauthorizedAccessException or IOException)
+            {
+            }
+        }
+        return $"{Environment.MachineName}\n{Environment.UserName}";
     }
 
     public static string CreateReconnectPipeName(string terminalInstanceId)

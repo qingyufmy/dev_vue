@@ -26,4 +26,17 @@ public sealed class Mt4TerminalConnectionTests
         Assert.ThrowsExactly<ArgumentException>(() =>
             Mt4TerminalIdentity.CreateReconnectPipeName("mt4_bad\\pipe"));
     }
+
+    [TestMethod]
+    public void SeparatesTheSameTerminalPathAcrossDevicesWithoutExposingEitherValue()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "Broker MT4", "same-path");
+
+        var first = Mt4TerminalIdentity.CreateTerminalInstanceId(path, "device-a");
+        var second = Mt4TerminalIdentity.CreateTerminalInstanceId(path, "device-b");
+
+        Assert.AreNotEqual(first, second);
+        Assert.DoesNotContain("device-a", first);
+        Assert.DoesNotContain("same-path", first);
+    }
 }

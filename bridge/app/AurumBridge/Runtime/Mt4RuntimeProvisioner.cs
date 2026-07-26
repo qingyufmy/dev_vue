@@ -37,6 +37,7 @@ public sealed class Mt4RuntimeProvisioner
         var provisioned = new List<Mt4ProvisionedTerminal>();
         var failures = new List<Mt4ProvisioningFailure>();
         var registeredIds = new HashSet<string>(StringComparer.Ordinal);
+        var registeredPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var connection in registrations)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -51,6 +52,13 @@ public sealed class Mt4RuntimeProvisioner
             {
                 await connection.DisposeAsync();
                 continue;
+            }
+            try
+            {
+                registeredPaths.Add(Path.GetFullPath(connection.Hello.TerminalDataPath));
+            }
+            catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException)
+            {
             }
             try
             {
@@ -79,6 +87,13 @@ public sealed class Mt4RuntimeProvisioner
             }
             if (registeredIds.Contains(binding.TerminalInstanceId))
             {
+                continue;
+            }
+            if (registeredPaths.Contains(Path.GetFullPath(binding.TerminalPath)))
+            {
+                // Version 3.2 adds a device namespace to MT4 terminal IDs. Keep
+                // the previous binding for audit/history, but never launch a
+                // second runtime for the same terminal data directory.
                 continue;
             }
             try
