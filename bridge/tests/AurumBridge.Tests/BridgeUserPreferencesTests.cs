@@ -89,6 +89,24 @@ public sealed class BridgeUserPreferencesTests
     }
 
     [TestMethod]
+    public async Task ObserverTerminalClaimIsPersistedAndClearedWhenBindingChanges()
+    {
+        var store = new BridgeUserPreferencesStore(_path);
+        const string terminalId = "mt5_0123456789abcdef01234567";
+        await store.SaveObserverBindingAsync(new BridgeObserverSource(
+            42, "one@example.com", "Source One", null, null, null, null, null, null));
+        await store.SaveMt5TerminalAsync(terminalId);
+        await store.SaveObserverClaimedTerminalAsync(terminalId);
+
+        Assert.AreEqual(terminalId, (await store.LoadAsync()).ObserverClaimedTerminalInstanceId);
+
+        await store.SaveObserverBindingAsync(new BridgeObserverSource(
+            43, "two@example.com", "Source Two", null, null, null, null, null, null));
+
+        Assert.IsNull((await store.LoadAsync()).ObserverClaimedTerminalInstanceId);
+    }
+
+    [TestMethod]
     public async Task InvalidOrCorruptPreferenceFailsBackToSelection()
     {
         Directory.CreateDirectory(_directory);

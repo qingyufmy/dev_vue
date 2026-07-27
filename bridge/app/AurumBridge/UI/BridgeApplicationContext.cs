@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using AurumBridge.Runtime;
+using AurumBridge.Security;
 using AurumBridge.Update;
 using AurumBridge.Workers;
 
@@ -19,9 +20,13 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly string _rootDataDirectory;
     private readonly bool _backgroundMode;
     private readonly CancellationTokenSource _stop = new();
+    private readonly SemaphoreSlim _observerRuntimeReload = new(1, 1);
+    private readonly Lock _observerRuntimeSync = new();
+    private readonly Dictionary<string, ObserverRuntime> _observerRuntimes = new(StringComparer.Ordinal);
     private readonly long _startedTimestamp = Stopwatch.GetTimestamp();
     private Task? _updateTask;
     private Task? _healthTask;
+    private Task? _observerRuntimeTask;
     private BridgeLogViewerForm? _logViewer;
     private int _startupReadyWritten;
     private int _latestPhase = (int)BridgeApplicationPhase.Starting;
@@ -29,6 +34,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private int _canManageObserverSources;
     private string? _lastLoggedStatusFingerprint;
     private bool _shuttingDown;
+    private BridgeApplicationStatus? _primaryStatus;
 
     public BridgeApplicationContext(
         BridgeSingleInstanceGuard singleInstance,
@@ -55,7 +61,6 @@ public sealed class BridgeApplicationContext : ApplicationContext
         string? selectedMt5TerminalId = null;
         string? selectedMt5TerminalPath = null;
         string? selectedMt4TerminalId = null;
-        IReadOnlyList<BridgeObserverTerminalConfiguration> observerTerminals = [];
         IReadOnlyList<BridgeObserverProfileView> observerProfileViews = [];
         try
         {
@@ -76,14 +81,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
             SignalObserverProfilesShutdown();
             try
             {
-                observerTerminals = BridgeObserverTerminalCatalog.LoadAsync(
-                    _rootDataDirectory).GetAwaiter().GetResult();
                 observerProfileViews = LoadObserverProfileViewsAsync(
                     _rootDataDirectory,
                     CancellationToken.None).GetAwaiter().GetResult();
                 _logger.Info(
-                    "observer_terminal_catalog_loaded",
-                    $"count={observerTerminals.Count}; mode=single_host");
+                    "observer_profile_catalog_loaded",
+                    $"count={observerProfileViews.Count}; mode=isolated_sessions");
             }
             catch (Exception error)
             {
@@ -95,8 +98,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             selectedPlatform,
             selectedMt5TerminalId,
             selectedMt5TerminalPath,
-            selectedMt4TerminalId,
-            observerTerminals);
+            selectedMt4TerminalId);
         _form = new(_profileId);
         _form.PairRequested += HandlePairRequested;
         _form.ObserverSourcesRequested += HandleObserverSourcesRequested;
@@ -108,7 +110,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.PlatformChanged += HandlePlatformChanged;
         _form.TerminalChanged += HandleTerminalChanged;
         _form.ExitRequested += HandleExitRequested;
-        _controller.StatusChanged += HandleStatusChanged;
+        _controller.StatusChanged += HandlePrimaryStatusChanged;
         _controller.ConnectionFailureObserved += error =>
             _logger.Error("bridge_connection_failure", error);
         _singleInstance.ActivationRequested += HandleActivationRequested;
@@ -142,6 +144,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         _logger.Info("bridge_started");
         _ = ObserveControllerAsync(RunControllerAsync(_stop.Token));
+        if (BridgeRuntimeProfile.IsDefault(_profileId))
+        {
+            _observerRuntimeTask = InitializeObserverRuntimesAsync(_stop.Token);
+        }
         _healthTask = ObserveHealthAsync(_stop.Token);
         if (_updateCoordinator is not null)
         {
@@ -220,13 +226,57 @@ public sealed class BridgeApplicationContext : ApplicationContext
         TryBeginInvoke(() => _ = ShutdownAsync(stopObserverProfiles:false));
     }
 
-    private void HandleStatusChanged(BridgeApplicationStatus status)
+    private void HandlePrimaryStatusChanged(BridgeApplicationStatus status)
     {
-        Volatile.Write(ref _latestPhase, (int)status.Phase);
-        Volatile.Write(ref _latestTerminalCount, status.Terminals.Count);
+        lock (_observerRuntimeSync)
+        {
+            _primaryStatus = status;
+        }
         Volatile.Write(
             ref _canManageObserverSources,
             status.CanManageObserverSources ? 1 : 0);
+        PublishCombinedStatus();
+    }
+
+    private void HandleObserverStatus(
+        string profileId,
+        BridgeApplicationController controller,
+        BridgeApplicationStatus status)
+    {
+        lock (_observerRuntimeSync)
+        {
+            if (!_observerRuntimes.TryGetValue(profileId, out var runtime)
+                || !ReferenceEquals(runtime.Controller, controller))
+            {
+                return;
+            }
+            runtime.Status = status;
+        }
+        PublishCombinedStatus();
+        _ = RefreshObserverProfileViewsAsync(_stop.Token);
+    }
+
+    private void PublishCombinedStatus()
+    {
+        BridgeApplicationStatus? status;
+        lock (_observerRuntimeSync)
+        {
+            if (_primaryStatus is null)
+            {
+                return;
+            }
+            var observerTerminals = _observerRuntimes
+                .OrderBy(item => item.Key, StringComparer.Ordinal)
+                .SelectMany(item => (item.Value.Status?.Terminals ?? [])
+                    .Select(terminal => terminal with { ObserverProfileId = item.Key }))
+                .ToArray();
+            status = _primaryStatus with
+            {
+                Terminals = [.. _primaryStatus.Terminals, .. observerTerminals],
+            };
+        }
+        Volatile.Write(ref _latestPhase, (int)status.Phase);
+        Volatile.Write(ref _latestTerminalCount, status.Terminals.Count);
         var statusFingerprint = BridgeStatusFingerprint.ForLog(status);
         if (Interlocked.Exchange(
             ref _lastLoggedStatusFingerprint,
@@ -276,7 +326,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _logger.Info("observer_profiles_access_rejected");
             return;
         }
-        if (eventArgs.Action == BridgeObserverAction.Configure)
+        if (eventArgs.Action is BridgeObserverAction.Configure or BridgeObserverAction.Bind)
         {
             ConfigureObserverProfile(eventArgs.ProfileId);
             return;
@@ -305,11 +355,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
                         : "observer_profile_retried",
                     $"profile={eventArgs.ProfileId}");
             }
-            await ReloadObserverTerminalsAsync(_stop.Token);
-            if (eventArgs.Action == BridgeObserverAction.Retry)
-            {
-                _controller.RequestRedetect();
-            }
+            await ReloadObserverProfileRuntimeAsync(eventArgs.ProfileId, _stop.Token);
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
@@ -335,7 +381,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private async void CreateObserverProfile()
     {
-        using var dialog = new BridgeObserverProfileDialog();
+        var sources = await LoadObserverSourcesForDialogAsync();
+        if (sources is null)
+        {
+            return;
+        }
+        using var dialog = new BridgeObserverProfileDialog(sources);
         if (dialog.ShowDialog(_form) != DialogResult.OK)
         {
             return;
@@ -362,7 +413,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 dialog.ProfileId);
             await SaveObserverProfilePreferencesAsync(profileDirectory, dialog);
             _logger.Info("observer_profile_created", $"profile={dialog.ProfileId}");
-            await ReloadObserverTerminalsAsync(_stop.Token);
+            await ReloadObserverProfileRuntimeAsync(dialog.ProfileId, _stop.Token);
             ShowMt4ObserverInstructionsIfNeeded(dialog.Platform);
         }
         catch (InvalidOperationException error) when (
@@ -397,20 +448,28 @@ public sealed class BridgeApplicationContext : ApplicationContext
             var preferences = new BridgeUserPreferencesStore(
                 Path.Combine(profileDirectory, "preferences.json"));
             var current = await preferences.LoadAsync(_stop.Token);
+            var sources = await LoadObserverSourcesForDialogAsync();
+            if (sources is null)
+            {
+                return;
+            }
             using var dialog = new BridgeObserverProfileDialog(
+                sources,
                 profileId,
                 current.Platform,
                 current.Mt5TerminalPath,
-                current.Mt4TerminalPath);
+                current.Mt4TerminalPath,
+                current.ObserverBridgeUserId);
             if (dialog.ShowDialog(_form) != DialogResult.OK)
             {
                 return;
             }
+            await StopObserverRuntimeAsync(profileId);
             await SaveObserverProfilePreferencesAsync(profileDirectory, dialog);
             _logger.Info(
                 "observer_profile_terminal_configured",
                 $"profile={profileId}; platform={dialog.Platform}; terminal_id={dialog.TerminalInstanceId}");
-            await ReloadObserverTerminalsAsync(_stop.Token);
+            await ReloadObserverProfileRuntimeAsync(profileId, _stop.Token);
             ShowMt4ObserverInstructionsIfNeeded(dialog.Platform);
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
@@ -441,7 +500,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private static async Task<IReadOnlyList<BridgeObserverProfileView>>
         LoadObserverProfileViewsAsync(
             string rootDataDirectory,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            IReadOnlyDictionary<string, BridgeApplicationStatus>? runtimeStatuses = null)
     {
         var items = new List<BridgeObserverProfileView>();
         foreach (var profileId in BridgeRuntimeProfile.ListObserverProfiles(rootDataDirectory))
@@ -461,6 +521,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
                     && Directory.Exists(Path.Combine(current.Mt4TerminalPath, "MQL4")),
                 _ => false,
             };
+            BridgeApplicationStatus? runtimeStatus = null;
+            runtimeStatuses?.TryGetValue(profileId, out runtimeStatus);
             items.Add(new(
                 profileId,
                 current.Platform,
@@ -468,39 +530,235 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 current.ObserverEnabled,
                 current.Platform == BridgePlatform.Mt4
                     ? current.Mt4TerminalInstanceId
-                    : current.Mt5TerminalInstanceId));
+                    : current.Mt5TerminalInstanceId,
+                current.ObserverBridgeUserId,
+                current.ObserverAccountLabel,
+                current.ObserverTradingAccountLabel,
+                runtimeStatus?.Phase,
+                runtimeStatus?.DetailCode));
         }
         return items;
     }
 
-    private async Task ReloadObserverTerminalsAsync(
+    private async Task InitializeObserverRuntimesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            foreach (var profileId in BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory))
+            {
+                await BridgeSingleInstanceGuard.WaitForReleaseAsync(
+                    BridgeRuntimeProfile.InstanceId(profileId),
+                    TimeSpan.FromSeconds(10),
+                    cancellationToken:cancellationToken);
+                await ReloadObserverProfileRuntimeAsync(profileId, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("observer_runtime_initialization_failed", error);
+        }
+    }
+
+    private async Task ReloadObserverProfileRuntimeAsync(
+        string profileId,
         CancellationToken cancellationToken)
     {
-        var observerTerminals = await BridgeObserverTerminalCatalog.LoadAsync(
-            _rootDataDirectory,
-            cancellationToken);
-        _controller.SetObserverTerminals(observerTerminals);
+        await _observerRuntimeReload.WaitAsync(cancellationToken);
+        try
+        {
+            await StopObserverRuntimeCoreAsync(profileId);
+            var profileDirectory = BridgeRuntimeProfile.ResolveDataDirectory(
+                _rootDataDirectory,
+                profileId);
+            var preferences = await new BridgeUserPreferencesStore(
+                Path.Combine(profileDirectory, "preferences.json")).LoadAsync(cancellationToken);
+            if (!preferences.ObserverEnabled
+                || preferences.ObserverBridgeUserId is null
+                || preferences.Platform is null)
+            {
+                await RefreshObserverProfileViewsAsync(cancellationToken);
+                return;
+            }
+            var configured = preferences.Platform switch
+            {
+                BridgePlatform.Mt5 => !String.IsNullOrWhiteSpace(preferences.Mt5TerminalPath)
+                    && File.Exists(preferences.Mt5TerminalPath),
+                BridgePlatform.Mt4 => !String.IsNullOrWhiteSpace(preferences.Mt4TerminalPath)
+                    && !String.IsNullOrWhiteSpace(preferences.Mt4TerminalInstanceId)
+                    && Directory.Exists(Path.Combine(preferences.Mt4TerminalPath, "MQL4")),
+                _ => false,
+            };
+            if (!configured)
+            {
+                await RefreshObserverProfileViewsAsync(cancellationToken);
+                return;
+            }
+            var paths = BridgeRuntimePathResolver.Resolve(
+                AppContext.BaseDirectory,
+                profileId:profileId);
+            var terminalInstanceId = preferences.Platform == BridgePlatform.Mt4
+                ? preferences.Mt4TerminalInstanceId
+                : preferences.Mt5TerminalInstanceId;
+            if (String.IsNullOrWhiteSpace(terminalInstanceId))
+            {
+                await RefreshObserverProfileViewsAsync(cancellationToken);
+                return;
+            }
+            if (!String.Equals(
+                preferences.ObserverClaimedTerminalInstanceId,
+                terminalInstanceId,
+                StringComparison.Ordinal))
+            {
+                await RotateObserverCredentialAsync(
+                    profileId,
+                    preferences.ObserverBridgeUserId.Value,
+                    terminalInstanceId,
+                    paths,
+                    cancellationToken);
+                var preferencesStore = new BridgeUserPreferencesStore(
+                    Path.Combine(profileDirectory, "preferences.json"));
+                await preferencesStore.SaveObserverClaimedTerminalAsync(
+                    terminalInstanceId,
+                    cancellationToken);
+                preferences = await preferencesStore.LoadAsync(cancellationToken);
+                _logger.Info(
+                    "observer_terminal_claimed",
+                    $"profile={profileId}; terminal={terminalInstanceId}; bridge_user_id={preferences.ObserverBridgeUserId}");
+            }
+            var controller = new BridgeApplicationController(
+                paths,
+                preferences.Platform,
+                preferences.Mt5TerminalInstanceId,
+                preferences.Mt5TerminalPath,
+                preferences.Mt4TerminalInstanceId);
+            var runtime = new ObserverRuntime(controller);
+            controller.StatusChanged += status => HandleObserverStatus(profileId, controller, status);
+            controller.ConnectionFailureObserved += error => _logger.Error(
+                "observer_connection_failure",
+                new InvalidOperationException($"profile={profileId}; {error.Message}", error));
+            lock (_observerRuntimeSync)
+            {
+                _observerRuntimes[profileId] = runtime;
+            }
+            runtime.RunTask = ObserveObserverControllerAsync(profileId, controller, cancellationToken);
+            _logger.Info(
+                "observer_runtime_started",
+                $"profile={profileId}; bridge_user_id={preferences.ObserverBridgeUserId}; mode=isolated_session");
+            await RefreshObserverProfileViewsAsync(cancellationToken);
+        }
+        finally
+        {
+            _observerRuntimeReload.Release();
+        }
+    }
+
+    private async Task StopObserverRuntimeAsync(string profileId)
+    {
+        await _observerRuntimeReload.WaitAsync(_stop.Token);
+        try
+        {
+            await StopObserverRuntimeCoreAsync(profileId);
+        }
+        finally
+        {
+            _observerRuntimeReload.Release();
+        }
+    }
+
+    private async Task StopObserverRuntimeCoreAsync(string profileId)
+    {
+        ObserverRuntime? runtime;
+        lock (_observerRuntimeSync)
+        {
+            _observerRuntimes.Remove(profileId, out runtime);
+        }
+        if (runtime is null)
+        {
+            return;
+        }
+        await runtime.Controller.DisposeAsync();
+        if (runtime.RunTask is not null)
+        {
+            await IgnoreCancellationAsync(runtime.RunTask);
+        }
+        PublishCombinedStatus();
+    }
+
+    private async Task ObserveObserverControllerAsync(
+        string profileId,
+        BridgeApplicationController controller,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await controller.RunAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error(
+                "observer_runtime_failed",
+                new InvalidOperationException($"profile={profileId}; {error.Message}", error));
+        }
+    }
+
+    private async Task RefreshObserverProfileViewsAsync(CancellationToken cancellationToken)
+    {
+        Dictionary<string, BridgeApplicationStatus> statuses;
+        lock (_observerRuntimeSync)
+        {
+            statuses = _observerRuntimes
+                .Where(item => item.Value.Status is not null)
+                .ToDictionary(
+                    item => item.Key,
+                    item => item.Value.Status!,
+                    StringComparer.Ordinal);
+        }
         var profiles = await LoadObserverProfileViewsAsync(
             _rootDataDirectory,
-            cancellationToken);
-        void ApplyProfiles()
+            cancellationToken,
+            statuses);
+        TryBeginInvoke(() =>
         {
             if (!_shuttingDown)
             {
                 _form.ApplyObserverProfiles(profiles);
             }
-        }
-        if (_form.InvokeRequired)
+        });
+    }
+
+    private async Task<IReadOnlyList<BridgeObserverSource>?> LoadObserverSourcesForDialogAsync()
+    {
+        try
         {
-            _form.BeginInvoke(ApplyProfiles);
+            var sources = await _controller.ListManagedObserverSourcesAsync(_stop.Token);
+            if (sources.Count > 0)
+            {
+                return sources;
+            }
+            MessageBox.Show(
+                _form,
+                "后台还没有可绑定的观摩账户。请先在 AI 交易实验室管理端创建观摩源账户。",
+                "暂无观摩账户",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
         }
-        else
+        catch (Exception error)
         {
-            ApplyProfiles();
+            _logger.Error("observer_sources_load_failed", error);
+            MessageBox.Show(
+                _form,
+                "暂时无法读取观摩账户，请检查服务器连接后重试。",
+                "观摩账户不可用",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
-        _logger.Info(
-            "observer_terminals_reloaded",
-            $"count={observerTerminals.Count}; mode=single_host");
+        return null;
     }
 
     private async Task SaveObserverProfilePreferencesAsync(
@@ -513,6 +771,16 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _stop.Token);
         var preferences = new BridgeUserPreferencesStore(
             Path.Combine(profileDirectory, "preferences.json"));
+        var profilePaths = BridgeRuntimePathResolver.Resolve(
+            AppContext.BaseDirectory,
+            profileId:dialog.ProfileId);
+        await RotateObserverCredentialAsync(
+            dialog.ProfileId,
+            dialog.ObserverSource.BridgeUserId,
+            dialog.TerminalInstanceId,
+            profilePaths,
+            _stop.Token);
+        await preferences.SaveObserverBindingAsync(dialog.ObserverSource, _stop.Token);
         await preferences.SavePlatformAsync(dialog.Platform, _stop.Token);
         if (dialog.Platform == BridgePlatform.Mt4)
         {
@@ -524,12 +792,54 @@ public sealed class BridgeApplicationContext : ApplicationContext
             await preferences.SaveMt4TerminalPathAsync(
                 installation.TerminalDataPath,
                 _stop.Token);
+            await preferences.SaveObserverClaimedTerminalAsync(
+                dialog.TerminalInstanceId,
+                _stop.Token);
             return;
         }
         var terminalPath = dialog.Mt5ExecutablePath
             ?? throw new InvalidOperationException("observer_mt5_directory_not_selected");
         await preferences.SaveMt5TerminalAsync(dialog.TerminalInstanceId, _stop.Token);
         await preferences.SaveMt5TerminalPathAsync(terminalPath, _stop.Token);
+        await preferences.SaveObserverClaimedTerminalAsync(
+            dialog.TerminalInstanceId,
+            _stop.Token);
+    }
+
+    private async Task RotateObserverCredentialAsync(
+        string profileId,
+        long bridgeUserId,
+        string terminalInstanceId,
+        BridgeRuntimePaths profilePaths,
+        CancellationToken cancellationToken)
+    {
+        var credentialStore = new FileBridgeCredentialStore(
+            profilePaths.CredentialPath,
+            new WindowsDpapiProtector());
+        var existingCredential = await credentialStore.LoadAsync(cancellationToken);
+        var credential = await _controller.CreateManagedObserverCredentialAsync(
+            bridgeUserId,
+            terminalInstanceId,
+            cancellationToken);
+        if (existingCredential is not null)
+        {
+            try
+            {
+                using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+                var previousSession = new BridgeSessionClient(
+                    profilePaths.ServerBaseUri,
+                    httpClient,
+                    credentialStore);
+                await previousSession.LogoutAsync(cancellationToken);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                _logger.Warning(
+                    "observer_previous_session_revoke_failed",
+                    $"profile={profileId}; {error.Message}");
+            }
+        }
+        await credentialStore.SaveAsync(credential, cancellationToken);
     }
 
     private async Task EnsureObserverTerminalAvailableAsync(
@@ -796,6 +1106,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         try
         {
+            await LogoutObserverProfilesAsync(_stop.Token);
             var revoked = await _controller.LogoutAsync(_stop.Token);
             SignalObserverProfilesShutdown();
             _logger.Info("bridge_account_logged_out", $"server_revoked={revoked}");
@@ -856,6 +1167,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
             SignalObserverProfilesShutdown();
         }
         _stop.Cancel();
+        if (_observerRuntimeTask is not null)
+        {
+            await IgnoreCancellationAsync(_observerRuntimeTask);
+        }
+        await StopAllObserverRuntimesAsync();
         if (_updateTask is not null)
         {
             await IgnoreCancellationAsync(_updateTask);
@@ -982,6 +1298,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _logger.Info("update_activation_prepared", $"version={staged.Version}");
             SignalObserverProfilesShutdown();
             _stop.Cancel();
+            if (_observerRuntimeTask is not null)
+            {
+                await IgnoreCancellationAsync(_observerRuntimeTask);
+            }
+            await StopAllObserverRuntimesAsync();
             if (_healthTask is not null)
             {
                 await IgnoreCancellationAsync(_healthTask);
@@ -1036,6 +1357,42 @@ public sealed class BridgeApplicationContext : ApplicationContext
         catch (OperationCanceledException)
         {
         }
+    }
+
+    private async Task StopAllObserverRuntimesAsync()
+    {
+        ObserverRuntime[] runtimes;
+        lock (_observerRuntimeSync)
+        {
+            runtimes = _observerRuntimes.Values.ToArray();
+            _observerRuntimes.Clear();
+        }
+        foreach (var runtime in runtimes)
+        {
+            await runtime.Controller.DisposeAsync();
+            if (runtime.RunTask is not null)
+            {
+                await IgnoreCancellationAsync(runtime.RunTask);
+            }
+        }
+    }
+
+    private async Task LogoutObserverProfilesAsync(CancellationToken cancellationToken)
+    {
+        await StopAllObserverRuntimesAsync();
+        foreach (var profileId in BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory))
+        {
+            var paths = BridgeRuntimePathResolver.Resolve(
+                AppContext.BaseDirectory,
+                profileId:profileId);
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+            var credentials = new FileBridgeCredentialStore(
+                paths.CredentialPath,
+                new WindowsDpapiProtector());
+            var session = new BridgeSessionClient(paths.ServerBaseUri, httpClient, credentials);
+            await session.LogoutAsync(cancellationToken);
+        }
+        await RefreshObserverProfileViewsAsync(cancellationToken);
     }
 
     private async Task ObserveControllerAsync(Task runTask)
@@ -1093,5 +1450,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
         {
             return false;
         }
+    }
+
+    private sealed class ObserverRuntime(BridgeApplicationController controller)
+    {
+        public BridgeApplicationController Controller { get; } = controller;
+        public BridgeApplicationStatus? Status { get; set; }
+        public Task? RunTask { get; set; }
     }
 }

@@ -204,18 +204,23 @@ public sealed class BridgeUiTextTests
 
         Assert.AreEqual(
             BridgeObserverAction.Pause,
-            BridgeMainForm.ResolveObserverPrimaryAction(configured, running));
+            BridgeMainForm.ResolveObserverPrimaryAction(
+                configured with { BridgeUserId = 42 }, running));
         Assert.AreEqual(
             BridgeObserverAction.Retry,
-            BridgeMainForm.ResolveObserverPrimaryAction(configured, null));
+            BridgeMainForm.ResolveObserverPrimaryAction(
+                configured with { BridgeUserId = 42 }, null));
         Assert.AreEqual(
             BridgeObserverAction.Start,
             BridgeMainForm.ResolveObserverPrimaryAction(
-                configured with { Enabled = false },
+                configured with { Enabled = false, BridgeUserId = 42 },
                 null));
         Assert.IsNull(BridgeMainForm.ResolveObserverPrimaryAction(
-            configured with { Configured = false },
+            configured with { Configured = false, BridgeUserId = 42 },
             null));
+        Assert.AreEqual(
+            BridgeObserverAction.Bind,
+            BridgeMainForm.ResolveObserverPrimaryAction(configured, null));
     }
 
     [TestMethod]

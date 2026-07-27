@@ -158,19 +158,22 @@ public sealed class BridgeSessionClient
 
     public async Task<BridgeCredential> CreateManagedObserverCredentialAsync(
         long bridgeUserId,
+        string terminalInstanceId,
         CancellationToken cancellationToken = default)
     {
         if (bridgeUserId <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(bridgeUserId));
         }
+        ArgumentException.ThrowIfNullOrWhiteSpace(terminalInstanceId);
         var accessToken = await RefreshAccessTokenAsync(cancellationToken);
         var response = await PostAsync<ManagedObserverSessionResponse>(
             "/api/auth/bridge-observer-session",
-            new { bridgeUserId },
+            new { bridgeUserId, terminalInstanceId },
             accessToken,
             cancellationToken);
         if (response.BridgeUserId != bridgeUserId
+            || !String.Equals(response.TerminalInstanceId, terminalInstanceId, StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(response.RefreshToken))
         {
             throw new InvalidDataException("bridge_observer_session_response_invalid");
@@ -487,5 +490,8 @@ public sealed class BridgeSessionClient
 
         [JsonPropertyName("refreshExpiresInSeconds")]
         public int RefreshExpiresInSeconds { get; init; }
+
+        [JsonPropertyName("terminalInstanceId")]
+        public string TerminalInstanceId { get; init; } = string.Empty;
     }
 }

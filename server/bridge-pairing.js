@@ -123,20 +123,55 @@ export async function listManagedObserverSources(
 export async function createManagedObserverSession(
   actor,
   bridgeUserId,
-  { userAgent = '', ip = '', query = queryOne, run = queryRun } = {},
+  {
+    terminalInstanceId = '', userAgent = '', ip = '', query = queryOne,
+    run = null, transact = withTransaction,
+  } = {},
 ) {
   const target = await resolveManagedObserverUser(actor, bridgeUserId, query)
   assertBridgeEligible(target)
-  const session = await createBridgeRefreshSession(target, {
-    userAgent:String(userAgent || '').slice(0, 255),
-    ip:String(ip || '').slice(0, 64),
-    run,
-  })
-  return {
-    bridgeUserId:Number(target.id),
-    refreshToken:session.refreshToken,
-    refreshExpiresInSeconds:session.expiresInSeconds,
+  const terminalId = String(terminalInstanceId || '').trim()
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(terminalId)) {
+    throw pairingError('bridge_observer_terminal_invalid')
   }
+  const create = async execute => {
+    const existingRows = transactionRows(await execute(`SELECT sessions.*,
+      accounts.login_account AS expected_login_account,
+      accounts.broker_server AS expected_broker_server
+    FROM bridge_v3_terminal_sessions sessions
+    LEFT JOIN ai_observer_sources sources ON sources.bridge_user_id = ? AND sources.status = 'active'
+    LEFT JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
+      AND accounts.user_id = ? AND accounts.is_deleted = 0
+    WHERE sessions.terminal_instance_id = ?
+      FOR UPDATE`, [target.id, target.id, terminalId]))
+    const existing = existingRows[0]
+    if (existing) {
+      const expectedLogin = String(existing.expected_login_account || '').trim()
+      const expectedBroker = String(existing.expected_broker_server || '').trim().toLowerCase()
+      if ((expectedLogin && expectedLogin !== String(existing.login_account || '').trim())
+        || (expectedBroker && expectedBroker !== String(existing.broker_server || '').trim().toLowerCase())) {
+        throw pairingError('observer_source_account_mismatch')
+      }
+      await execute('DELETE FROM bridge_v3_stream_revisions WHERE terminal_instance_id = ?', [terminalId])
+      await execute('DELETE FROM bridge_v3_account_latest WHERE terminal_instance_id = ?', [terminalId])
+      await execute('DELETE FROM bridge_v3_positions_latest WHERE terminal_instance_id = ?', [terminalId])
+      await execute('DELETE FROM bridge_v3_orders_latest WHERE terminal_instance_id = ?', [terminalId])
+      await execute('UPDATE bridge_v3_deals SET user_id = ? WHERE terminal_instance_id = ?', [target.id, terminalId])
+      await execute('DELETE FROM bridge_v3_terminal_sessions WHERE terminal_instance_id = ?', [terminalId])
+    }
+    const session = await createBridgeRefreshSession(target, {
+      userAgent:String(userAgent || '').slice(0, 255),
+      ip:String(ip || '').slice(0, 64),
+      run:execute,
+    })
+    return {
+      bridgeUserId:Number(target.id),
+      terminalInstanceId:terminalId,
+      refreshToken:session.refreshToken,
+      refreshExpiresInSeconds:session.expiresInSeconds,
+    }
+  }
+  return run ? create(run) : transact(create)
 }
 
 export async function approveBridgePairing(user, userCode, {

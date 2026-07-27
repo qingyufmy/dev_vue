@@ -6,6 +6,7 @@ namespace AurumBridge.UI;
 public sealed class BridgeObserverProfileDialog : Form
 {
     private readonly TextBox _profileId = new();
+    private readonly ComboBox _observerAccountSelector = new();
     private readonly ComboBox _platformSelector = new();
     private readonly Label _directoryLabel = new();
     private readonly Label _directoryHelp = new();
@@ -14,21 +15,26 @@ public sealed class BridgeObserverProfileDialog : Form
     private readonly string? _existingMt4TerminalPath;
     private string? _mt5ExecutablePath;
     private Mt4Installation? _mt4Installation;
+    private readonly IReadOnlyList<BridgeObserverSource> _observerSources;
 
     public BridgeObserverProfileDialog(
+        IReadOnlyList<BridgeObserverSource> observerSources,
         string? existingProfileId = null,
         string? existingPlatform = null,
         string? existingMt5ExecutablePath = null,
-        string? existingMt4TerminalPath = null)
+        string? existingMt4TerminalPath = null,
+        long? existingBridgeUserId = null)
     {
+        ArgumentNullException.ThrowIfNull(observerSources);
+        _observerSources = observerSources;
         var editingExisting = !string.IsNullOrWhiteSpace(existingProfileId);
         _existingMt5ExecutablePath = existingMt5ExecutablePath;
         _existingMt4TerminalPath = existingMt4TerminalPath;
         Text = editingExisting ? "设置观摩源" : "新增观摩源";
         Icon = BridgeBrandIcon.ApplicationIcon;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new(540, 420);
-        MinimumSize = new(520, 400);
+        ClientSize = new(560, 500);
+        MinimumSize = new(540, 480);
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
@@ -40,7 +46,7 @@ public sealed class BridgeObserverProfileDialog : Form
             Dock = DockStyle.Fill,
             Padding = new(20),
             ColumnCount = 1,
-            RowCount = 10,
+            RowCount = 13,
         };
         layout.Controls.Add(CreateHeading("观摩源名称"));
         layout.Controls.Add(CreateHelp("例如 source-1。每个观摩源独立保存终端和账号数据。"));
@@ -53,6 +59,23 @@ public sealed class BridgeObserverProfileDialog : Form
             _profileId.ReadOnly = true;
         }
         layout.Controls.Add(_profileId);
+
+        layout.Controls.Add(CreateHeading("绑定观摩账户", topMargin:14));
+        layout.Controls.Add(CreateHelp("数据和服务器指令将归属于这个观摩账户。绑定后无需再次登录。"));
+        _observerAccountSelector.Dock = DockStyle.Top;
+        _observerAccountSelector.DropDownStyle = ComboBoxStyle.DropDownList;
+        foreach (var source in _observerSources)
+        {
+            _observerAccountSelector.Items.Add(new ObserverSourceItem(source));
+        }
+        var selectedSourceIndex = _observerSources
+            .Select((source, index) => (source, index))
+            .Where(item => item.source.BridgeUserId == existingBridgeUserId)
+            .Select(item => item.index)
+            .DefaultIfEmpty(_observerSources.Count == 1 ? 0 : -1)
+            .First();
+        _observerAccountSelector.SelectedIndex = selectedSourceIndex;
+        layout.Controls.Add(_observerAccountSelector);
 
         layout.Controls.Add(CreateHeading("交易平台", topMargin:14));
         _platformSelector.Dock = DockStyle.Top;
@@ -118,6 +141,9 @@ public sealed class BridgeObserverProfileDialog : Form
     }
 
     public string ProfileId => BridgeRuntimeProfile.Validate(_profileId.Text);
+    public BridgeObserverSource ObserverSource =>
+        (_observerAccountSelector.SelectedItem as ObserverSourceItem)?.Source
+        ?? throw new InvalidOperationException("observer_account_not_selected");
     public string Platform => _platformSelector.SelectedIndex == 1
         ? BridgePlatform.Mt4
         : BridgePlatform.Mt5;
@@ -155,6 +181,7 @@ public sealed class BridgeObserverProfileDialog : Form
                 throw new ArgumentException("bridge_profile_id_reserved", "profileId");
             }
             _profileId.Text = validated;
+            _ = ObserverSource;
             if (Platform == BridgePlatform.Mt4)
             {
                 _mt4Installation = Mt4TerminalDiscovery.ResolveDirectorySelection(
@@ -214,6 +241,13 @@ public sealed class BridgeObserverProfileDialog : Form
             ShowValidationError(
                 "该终端已被主账户或另一个观摩源使用，请选择独立终端。",
                 "终端已被占用");
+        }
+        catch (InvalidOperationException error) when (
+            error.Message == "observer_account_not_selected")
+        {
+            ShowValidationError(
+                "请选择该本地档案对应的观摩账户。",
+                "需要绑定观摩账户");
         }
     }
 
@@ -276,4 +310,9 @@ public sealed class BridgeObserverProfileDialog : Form
         Text = text,
         Margin = new Padding(0, 4, 0, 10),
     };
+
+    private sealed record ObserverSourceItem(BridgeObserverSource Source)
+    {
+        public override string ToString() => $"{Source.DisplayName}  ·  {Source.AccountSummary}";
+    }
 }

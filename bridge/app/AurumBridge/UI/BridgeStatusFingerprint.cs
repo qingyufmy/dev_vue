@@ -38,7 +38,12 @@ public static class BridgeStatusFingerprint
                 profile.Platform ?? string.Empty,
                 profile.Configured,
                 profile.Enabled,
-                profile.TerminalInstanceId ?? string.Empty))),
+                profile.TerminalInstanceId ?? string.Empty,
+                profile.BridgeUserId?.ToString() ?? string.Empty,
+                profile.ObserverAccountLabel ?? string.Empty,
+                profile.TradingAccountLabel ?? string.Empty,
+                profile.RuntimePhase?.ToString() ?? string.Empty,
+                profile.RuntimeDetailCode ?? string.Empty))),
             string.Join(",", busyObserverProfiles.Order(StringComparer.Ordinal)));
     }
 

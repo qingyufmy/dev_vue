@@ -101,11 +101,42 @@ describe('bridge device pairing', () => {
     })
 
     await expect(createManagedObserverSession(
-      { id:1, role:'admin' }, 42, { query, run, ip:'1.2.3.4' },
+      { id:1, role:'admin' }, 42, {
+        terminalInstanceId:'mt5_0123456789abcdef01234567', query, run, ip:'1.2.3.4',
+      },
     )).resolves.toMatchObject({ bridgeUserId:42, refreshToken:'o'.repeat(64) })
     expect(createBridgeRefreshSession).toHaveBeenCalledWith(
       target, expect.objectContaining({ run, ip:'1.2.3.4' }),
     )
+  })
+
+  it('clears the stale read model when an administrator moves a terminal to an observer account', async () => {
+    const query = vi.fn().mockResolvedValue({
+      id:42, role:'user', plan:'pro', plan_source:'observer_source', token_version:2,
+    })
+    const run = vi.fn()
+      .mockResolvedValueOnce([[
+        {
+          terminal_instance_id:'mt5_0123456789abcdef01234567', user_id:1,
+          login_account:'860058', broker_server:'Broker-Demo',
+          expected_login_account:'860058', expected_broker_server:'Broker-Demo',
+        },
+      ], []])
+      .mockResolvedValue({ affectedRows:1 })
+    createBridgeRefreshSession.mockResolvedValue({
+      refreshToken:'o'.repeat(64), expiresInSeconds:7_776_000,
+    })
+
+    await createManagedObserverSession(
+      { id:1, role:'admin' }, 42,
+      { terminalInstanceId:'mt5_0123456789abcdef01234567', query, run },
+    )
+
+    expect(run.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining([
+      expect.stringContaining('DELETE FROM bridge_v3_terminal_sessions'),
+      expect.stringContaining('DELETE FROM bridge_v3_stream_revisions'),
+      expect.stringContaining('UPDATE bridge_v3_deals SET user_id'),
+    ]))
   })
 
   it('fails managed observer authorization closed for non-administrators', async () => {

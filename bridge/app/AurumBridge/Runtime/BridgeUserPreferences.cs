@@ -29,7 +29,8 @@ public sealed record BridgeUserPreferences(
     long? ObserverBridgeUserId = null,
     string? ObserverAccountLabel = null,
     long? ObserverTradingAccountId = null,
-    string? ObserverTradingAccountLabel = null);
+    string? ObserverTradingAccountLabel = null,
+    string? ObserverClaimedTerminalInstanceId = null);
 
 public sealed class BridgeUserPreferencesStore
 {
@@ -127,7 +128,31 @@ public sealed class BridgeUserPreferencesStore
                 ObserverAccountLabel = NormalizeLabel(accountLabel, 220),
                 ObserverTradingAccountId = source.TradingAccountId,
                 ObserverTradingAccountLabel = NormalizeLabel(source.AccountSummary, 220),
+                ObserverClaimedTerminalInstanceId = current.ObserverBridgeUserId == source.BridgeUserId
+                    ? current.ObserverClaimedTerminalInstanceId
+                    : null,
             }, cancellationToken);
+        }
+        finally
+        {
+            _access.Release();
+        }
+    }
+
+    public async Task SaveObserverClaimedTerminalAsync(
+        string terminalInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeTerminalId(terminalInstanceId)
+            ?? throw new ArgumentOutOfRangeException(
+                nameof(terminalInstanceId), terminalInstanceId, "Invalid observer terminal instance id.");
+        await _access.WaitAsync(cancellationToken);
+        try
+        {
+            var current = await LoadCoreAsync(cancellationToken);
+            await SaveCoreAsync(
+                current with { ObserverClaimedTerminalInstanceId = normalized },
+                cancellationToken);
         }
         finally
         {
@@ -146,9 +171,13 @@ public sealed class BridgeUserPreferencesStore
         try
         {
             var current = await LoadCoreAsync(cancellationToken);
-            await SaveCoreAsync(
-                current with { Mt5TerminalInstanceId = normalized },
-                cancellationToken);
+            await SaveCoreAsync(current with
+            {
+                Mt5TerminalInstanceId = normalized,
+                ObserverClaimedTerminalInstanceId = current.Mt5TerminalInstanceId == normalized
+                    ? current.ObserverClaimedTerminalInstanceId
+                    : null,
+            }, cancellationToken);
         }
         finally
         {
@@ -188,9 +217,13 @@ public sealed class BridgeUserPreferencesStore
         try
         {
             var current = await LoadCoreAsync(cancellationToken);
-            await SaveCoreAsync(
-                current with { Mt4TerminalInstanceId = normalized },
-                cancellationToken);
+            await SaveCoreAsync(current with
+            {
+                Mt4TerminalInstanceId = normalized,
+                ObserverClaimedTerminalInstanceId = current.Mt4TerminalInstanceId == normalized
+                    ? current.ObserverClaimedTerminalInstanceId
+                    : null,
+            }, cancellationToken);
         }
         finally
         {
@@ -290,8 +323,12 @@ public sealed class BridgeUserPreferencesStore
             preferences.ObserverBridgeUserId is > 0 ? preferences.ObserverBridgeUserId : null,
             NormalizeLabel(preferences.ObserverAccountLabel, 220),
             preferences.ObserverTradingAccountId is > 0 ? preferences.ObserverTradingAccountId : null,
-            NormalizeLabel(preferences.ObserverTradingAccountLabel, 220));
+            NormalizeLabel(preferences.ObserverTradingAccountLabel, 220),
+            NormalizeTerminalId(preferences.ObserverClaimedTerminalInstanceId));
     }
+
+    private static string? NormalizeTerminalId(string? value) =>
+        NormalizeMt5TerminalId(value) ?? NormalizeMt4TerminalId(value);
 
     private static string? NormalizeLabel(string? value, int maxLength)
     {

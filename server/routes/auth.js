@@ -433,12 +433,15 @@ router.post('/auth/bridge-observer-sources', authMiddleware, async (req, res) =>
 router.post('/auth/bridge-observer-session', authMiddleware, async (req, res) => {
   try {
     const session = await createManagedObserverSession(req.user, req.body?.bridgeUserId, {
+      terminalInstanceId:req.body?.terminalInstanceId,
       userAgent:req.get('user-agent'), ip:req.ip,
     })
     res.json({ ok:true, ...session })
   } catch (err) {
     const forbidden = err.code === 'bridge_observer_management_forbidden'
       || err.code === 'bridge_pair_source_invalid'
+      || err.code === 'bridge_observer_terminal_invalid'
+      || err.code === 'observer_source_account_mismatch'
     const membershipBlocked = err.code === 'bridge_membership_required'
     res.status(forbidden || membershipBlocked ? 403 : 503).json({
       ok:false,

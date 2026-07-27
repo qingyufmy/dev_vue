@@ -201,6 +201,7 @@ public sealed class BridgeSessionClientTests
             {
                 ok = true, bridgeUserId = 42, refreshToken = new string('o', 64),
                 refreshExpiresInSeconds = 7_776_000,
+                terminalInstanceId = "mt5_0123456789abcdef01234567",
             }));
         var store = new MemoryCredentialStore
         {
@@ -211,7 +212,8 @@ public sealed class BridgeSessionClientTests
             clock:() => 1_800_000_000_000);
 
         var sources = await client.ListManagedObserverSourcesAsync();
-        var credential = await client.CreateManagedObserverCredentialAsync(42);
+        var credential = await client.CreateManagedObserverCredentialAsync(
+            42, "mt5_0123456789abcdef01234567");
 
         Assert.HasCount(1, sources);
         Assert.AreEqual("黄金默认行情", sources[0].DisplayName);
@@ -221,6 +223,7 @@ public sealed class BridgeSessionClientTests
         Assert.AreEqual("Bearer admin-jwt", handler.Requests[1].Authorization);
         Assert.AreEqual("https://bridge.example/api/auth/bridge-observer-session", handler.Requests[3].Uri);
         StringAssert.Contains(handler.Requests[3].Body, "42");
+        StringAssert.Contains(handler.Requests[3].Body, "mt5_0123456789abcdef01234567");
     }
 
     [TestMethod]

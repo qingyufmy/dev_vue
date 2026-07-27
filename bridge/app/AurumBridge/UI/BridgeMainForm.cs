@@ -17,13 +17,19 @@ public sealed record BridgeObserverProfileView(
     string? Platform,
     bool Configured,
     bool Enabled,
-    string? TerminalInstanceId);
+    string? TerminalInstanceId,
+    long? BridgeUserId = null,
+    string? ObserverAccountLabel = null,
+    string? TradingAccountLabel = null,
+    BridgeApplicationPhase? RuntimePhase = null,
+    string? RuntimeDetailCode = null);
 
 public enum BridgeObserverAction
 {
     Start,
     Pause,
     Retry,
+    Bind,
     Configure,
 }
 
@@ -688,9 +694,12 @@ public sealed class BridgeMainForm : Form
         var identity = terminal is null || string.IsNullOrWhiteSpace(terminal.Login)
             ? platform.ToUpperInvariant()
             : $"{platform.ToUpperInvariant()} · {terminal.Login}";
+        var observerIdentity = observerProfile?.ObserverAccountLabel;
         var title = observerProfile is null
             ? $"主账户  ·  {identity}"
-            : $"{role}  ·  {identity}";
+            : string.IsNullOrWhiteSpace(observerIdentity)
+                ? $"{role}  ·  {identity}"
+                : $"{observerIdentity}  ·  {identity}";
         copy.Controls.Add(new Label
         {
             AutoEllipsis = true,
@@ -741,7 +750,9 @@ public sealed class BridgeMainForm : Form
         if (primaryAction is not null)
         {
             var action = primaryAction.Value;
-            var emphasize = action is BridgeObserverAction.Start or BridgeObserverAction.Retry;
+            var emphasize = action is BridgeObserverAction.Start
+                or BridgeObserverAction.Retry
+                or BridgeObserverAction.Bind;
             var button = CreateCompactButton(
                 busy ? "处理中…" : DescribeObserverAction(action),
                 emphasize);
@@ -764,6 +775,10 @@ public sealed class BridgeMainForm : Form
         BridgeObserverProfileView profile,
         BridgeTerminalStatus? terminal)
     {
+        if (profile.BridgeUserId is null)
+        {
+            return BridgeObserverAction.Bind;
+        }
         if (!profile.Configured)
         {
             return null;
@@ -783,6 +798,7 @@ public sealed class BridgeMainForm : Form
         BridgeObserverAction.Start => "启动",
         BridgeObserverAction.Pause => "暂停",
         BridgeObserverAction.Retry => "重试",
+        BridgeObserverAction.Bind => "绑定",
         _ => "设置",
     };
 
@@ -790,6 +806,10 @@ public sealed class BridgeMainForm : Form
         BridgeTerminalStatus? terminal,
         BridgeObserverProfileView? profile)
     {
+        if (profile is { BridgeUserId: null })
+        {
+            return "待绑定观摩账户 · 点击“绑定”完成归属";
+        }
         if (profile is { Configured: false })
         {
             return "观摩源 · 需要设置交易终端";
@@ -800,7 +820,20 @@ public sealed class BridgeMainForm : Form
         }
         if (terminal is null)
         {
-            return profile is null ? "等待识别账户" : "观摩源 · 等待连接";
+            if (profile?.RuntimePhase == BridgeApplicationPhase.PairingRequired)
+            {
+                return "观摩源授权已失效 · 请重新绑定";
+            }
+            if (profile?.RuntimePhase == BridgeApplicationPhase.TerminalNotFound)
+            {
+                return "未找到配置的交易终端 · 请检查设置";
+            }
+            var account = profile?.TradingAccountLabel;
+            return profile is null
+                ? "等待识别账户"
+                : string.IsNullOrWhiteSpace(account)
+                    ? "观摩源 · 正在连接交易终端"
+                    : $"观摩源 · {account} · 正在连接";
         }
         var broker = string.IsNullOrWhiteSpace(terminal.BrokerServer)
             ? "交易终端"
@@ -816,6 +849,10 @@ public sealed class BridgeMainForm : Form
         if (profile is { Enabled: false })
         {
             return Color.FromArgb(100, 116, 139);
+        }
+        if (profile is { BridgeUserId: null })
+        {
+            return Color.FromArgb(217, 119, 6);
         }
         if (profile is { Configured: false } || terminal is null)
         {

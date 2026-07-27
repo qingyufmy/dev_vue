@@ -218,8 +218,12 @@ public sealed class BridgeApplicationController : IAsyncDisposable
 
     public Task<BridgeCredential> CreateManagedObserverCredentialAsync(
         long bridgeUserId,
+        string terminalInstanceId,
         CancellationToken cancellationToken = default) =>
-        _sessionClient.CreateManagedObserverCredentialAsync(bridgeUserId, cancellationToken);
+        _sessionClient.CreateManagedObserverCredentialAsync(
+            bridgeUserId,
+            terminalInstanceId,
+            cancellationToken);
 
     public void RequestRedetect()
     {
