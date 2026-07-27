@@ -50,6 +50,7 @@ public sealed class BridgeMainForm : Form
     private readonly Button _observerSourcesButton = new();
     private readonly Button _mt4ExpertButton = new();
     private readonly PlatformComboBox _platformSelector = new();
+    private readonly Label _platformSelectorLabel = new();
     private readonly ComboBox _terminalSelector = new();
     private readonly Label _terminalSelectorLabel = new();
     private readonly TableLayoutPanel _terminalSelectorBar = new();
@@ -59,6 +60,7 @@ public sealed class BridgeMainForm : Form
     private readonly HashSet<string> _busyObserverProfiles = new(StringComparer.Ordinal);
     private BridgeApplicationStatus? _lastStatus;
     private string? _lastAccountRenderFingerprint;
+    private string? _pendingPlatform;
     private bool _updatingPlatform;
     private bool _updatingTerminal;
     private bool _allowClose;
@@ -111,7 +113,14 @@ public sealed class BridgeMainForm : Form
             _isDefaultProfile,
             status.CanManageObserverSources);
         _mt4SetupBar.Visible = CanShowMt4ExpertSetup(status.SelectedPlatform);
-        ApplyPlatform(status.SelectedPlatform);
+        if (_pendingPlatform is null)
+        {
+            ApplyPlatform(status.SelectedPlatform);
+        }
+        else if (status.SelectedPlatform == _pendingPlatform)
+        {
+            CompletePlatformSwitch();
+        }
         ApplyTerminalCandidates(status);
         RenderAccountRows();
     }
@@ -148,6 +157,21 @@ public sealed class BridgeMainForm : Form
     {
         _mt4ExpertButton.Enabled = !busy;
         _mt4ExpertButton.Text = busy ? "正在安装…" : "安装 / 修复 EA";
+    }
+
+    public void BeginPlatformSwitch(string platform)
+    {
+        _pendingPlatform = BridgePlatform.Normalize(platform);
+        _platformSelector.Enabled = false;
+        _platformSelectorLabel.Text = "正在切换平台…";
+    }
+
+    public void CancelPlatformSwitch()
+    {
+        _pendingPlatform = null;
+        _platformSelector.Enabled = true;
+        _platformSelectorLabel.Text = "选择交易平台";
+        ApplyPlatform(_lastStatus?.SelectedPlatform);
     }
 
     public void ShowFromTray()
@@ -227,15 +251,13 @@ public sealed class BridgeMainForm : Form
         };
         platformField.ColumnStyles.Add(new(SizeType.AutoSize));
         platformField.ColumnStyles.Add(new(SizeType.Absolute, 136));
-        platformField.Controls.Add(new Label
-        {
-            AutoSize = true,
-            Anchor = AnchorStyles.Left,
-            Font = new(Font.FontFamily, 9F, FontStyle.Bold),
-            ForeColor = Color.FromArgb(51, 65, 85),
-            Text = "选择交易平台",
-            Margin = new Padding(0, 0, 12, 0),
-        }, 0, 0);
+        _platformSelectorLabel.AutoSize = true;
+        _platformSelectorLabel.Anchor = AnchorStyles.Left;
+        _platformSelectorLabel.Font = new(Font.FontFamily, 9F, FontStyle.Bold);
+        _platformSelectorLabel.ForeColor = Color.FromArgb(51, 65, 85);
+        _platformSelectorLabel.Text = "选择交易平台";
+        _platformSelectorLabel.Margin = new Padding(0, 0, 12, 0);
+        platformField.Controls.Add(_platformSelectorLabel, 0, 0);
         _platformSelector.Dock = DockStyle.Fill;
         _platformSelector.DropDownStyle = ComboBoxStyle.DropDownList;
         _platformSelector.FlatStyle = FlatStyle.Flat;
@@ -435,6 +457,13 @@ public sealed class BridgeMainForm : Form
         {
             _updatingPlatform = false;
         }
+    }
+
+    private void CompletePlatformSwitch()
+    {
+        _pendingPlatform = null;
+        _platformSelector.Enabled = true;
+        _platformSelectorLabel.Text = "选择交易平台";
     }
 
     private void ApplyTerminalCandidates(BridgeApplicationStatus status)

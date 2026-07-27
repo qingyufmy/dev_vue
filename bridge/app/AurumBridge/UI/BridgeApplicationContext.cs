@@ -715,6 +715,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private async void HandlePlatformChanged(object? sender, BridgePlatformChangedEventArgs eventArgs)
     {
+        _form.BeginPlatformSwitch(eventArgs.Platform);
         try
         {
             await _preferences.SavePlatformAsync(eventArgs.Platform, _stop.Token);
@@ -723,10 +724,15 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
+            if (!_form.IsDisposed)
+            {
+                _form.CancelPlatformSwitch();
+            }
         }
         catch (Exception error)
         {
             _logger.Error("preferences_save_failed", error);
+            _form.CancelPlatformSwitch();
             MessageBox.Show(
                 _form,
                 "交易平台选择未能保存，请稍后重试。",
