@@ -45,6 +45,8 @@ MT5 累计收益、入出金和平仓统计必须按 `mt5_account_ownership_hist
 
 桥接源账户由管理员在观摩源管理中创建，固定为 `role=user`、`plan=pro`、`plan_source=observer_source` 的专用身份，禁止赋予管理员权限或混入普通 Pro 客户候选列表。创建后只返回非敏感账户信息并自动选中；密码只保存哈希，审计记录不得包含明文密码。
 
+观摩源账户在保持 `role=user` 的前提下拥有独立的平台 AI 内容能力：只能新建和维护平台策略，复盘结论只能沉淀为平台记忆；不得因此获得用户管理、全局风控、平台模型或其他管理员权限。普通 Pro 用户仍使用私有策略与个人记忆。
+
 同一台 Windows 主机运行多个观摩源桥接时，每个进程必须使用独立配置档案启动，例如 `python public/ai/aurum_bridge_gui.py --profile source-a`；默认档案继续兼容 `%APPDATA%\\AURUM_Bridge`，命名档案存放在其 `profiles/<name>` 子目录。每个档案使用独立 Pro 源账号、MT5 路径、令牌和日志，禁止多个来源共用默认档案。
 
 管理员默认 Bridge 登录后提供“新增观摩源”入口；新来源必须先验证 `plan_source=observer_source` 的专用账户，并绑定未被其他档案使用的独立 MT5 安装目录。子 Bridge 自动登录、自动启动并将明确的 `terminal64.exe` 路径传给 Python MT5 初始化；同一档案仅允许一个进程，不同档案可以并行。普通 Pro Bridge 不显示新增入口。

@@ -96,6 +96,7 @@ describe('authMiddleware', () => {
     expect(next).toHaveBeenCalled()
     expect(req.user).toBeDefined()
     expect(req.user.id).toBe(1)
+    expect(queryOne.mock.calls[0][0]).toContain('plan_source')
   })
 
   it('rejects a token issued before the user session version changed', async () => {

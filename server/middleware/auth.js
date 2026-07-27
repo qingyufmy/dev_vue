@@ -20,7 +20,7 @@ export function authMiddleware(req, res, next) {
   const token = authHeader.slice(7)
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
-    queryOne(`SELECT id, email, phone, nickname, avatar, role, plan, plan_expires_at,
+    queryOne(`SELECT id, email, phone, nickname, avatar, role, plan, plan_source, plan_expires_at,
       (plan IN ('pro', 'plus') AND plan_expires_at IS NOT NULL AND plan_expires_at < NOW()) AS membership_expired,
       referral_code, referral_credit, telegram_id, token_version
       FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [decoded.userId])
@@ -48,7 +48,7 @@ export function optionalAuth(req, res, next) {
     try {
       const token = authHeader.slice(7)
       const decoded = jwt.verify(token, JWT_SECRET)
-        queryOne(`SELECT id, email, phone, nickname, avatar, role, plan, plan_expires_at,
+        queryOne(`SELECT id, email, phone, nickname, avatar, role, plan, plan_source, plan_expires_at,
           (plan IN ('pro', 'plus') AND plan_expires_at IS NOT NULL AND plan_expires_at < NOW()) AS membership_expired,
           referral_code, referral_credit, token_version
           FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [decoded.userId])

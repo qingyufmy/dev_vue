@@ -63,8 +63,10 @@ describe('daily review grouping', () => {
   it('preserves platform and private review privacy boundaries', () => {
     expect(periodReviewEligibility({ strategy_scope: 'platform', user_role: 'user' }).eligible).toBe(false)
     expect(periodReviewEligibility({ strategy_scope: 'platform', user_role: 'admin' }).eligible).toBe(true)
+    expect(periodReviewEligibility({ strategy_scope: 'platform', user_role: 'user', user_plan_source:'observer_source' }).eligible).toBe(true)
     expect(periodReviewEligibility({ strategy_scope: 'private', user_role: 'user' }).eligible).toBe(true)
     expect(periodReviewEligibility({ strategy_scope: 'private', user_role: 'admin' }).eligible).toBe(false)
+    expect(periodReviewEligibility({ strategy_scope: 'private', user_role: 'user', user_plan_source:'observer_source' }).eligible).toBe(false)
   })
 
   it('computes deterministic statistics outside the model', () => {

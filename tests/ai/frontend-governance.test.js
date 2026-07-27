@@ -26,7 +26,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('const LIVE_QUOTE_REFRESH_INTERVAL_MS = 1000')
     expect(app).toContain('void refreshLiveQuote();')
     expect(app).toContain('}, LIVE_QUOTE_REFRESH_INTERVAL_MS)')
-    expect(html).toContain('/ai/app.js?v=20260727platformlabels')
+    expect(html).toContain('/ai/app.js?v=20260727platformobserver1')
   })
 
   it('uses the connected bridge platform in status and terminal-time labels', () => {
@@ -337,7 +337,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('id="strategyModelHelp"')
     expect(html).toContain('id="strategyScopeField"')
     expect(app).toContain('新建平台策略')
-    expect(app).toContain("|| (item.scope === 'platform' && state.user?.role === 'admin')")
+    expect(app).toContain("|| (item.scope === 'platform' && canManagePlatformAiContent())")
     expect(adminApp).not.toContain('data-ai-tab="strategies"')
     expect(adminApp).toContain('id="platformStrategyVisibility"')
     expect(adminApp).toContain("scope:'platform'")
@@ -353,6 +353,8 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('if (state.user?.role === "admin") body.scope = "platform"')
     expect(app).toContain('api("/api/ai/admin/platform-experience")')
     expect(app).toContain('renderPlatformExperience(state.memoryItems')
+    expect(app).toContain('function isObserverSourceAccount()')
+    expect(app).toContain('function canManagePlatformAiContent()')
     expect(html).toContain('id="platformExperiencePolicies"')
     expect(html).toContain('id="platformExperienceEvaluation"')
   })

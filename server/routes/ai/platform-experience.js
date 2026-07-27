@@ -1,6 +1,7 @@
 import { beijingNow, queryAll, queryOne, queryRun } from '../../db.js'
 import { classifyMemoryText, sanitizeMemoryText } from './memory-system.js'
 import { sha256 } from './inference-snapshots.js'
+import { canManagePlatformAiContent } from './platform-content-access.js'
 
 const VALID_POLICY_MODES = new Set(['off', 'shadow', 'active'])
 const VALID_ITEM_STATUSES = new Set(['candidate', 'active', 'revoked'])
@@ -214,10 +215,10 @@ export async function createPlatformExperienceCandidateFromApprovedReview(caseId
 }
 
 export async function createPlatformExperienceCandidateFromApprovedPeriodReview(periodCaseId, adminUserId) {
-  const reviewCase = await queryOne(`SELECT cases.*, u.role AS user_role FROM period_review_cases cases
+  const reviewCase = await queryOne(`SELECT cases.*, u.role AS user_role, u.plan_source AS user_plan_source FROM period_review_cases cases
     JOIN users u ON u.id = cases.user_id WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, adminUserId])
   if (!reviewCase || reviewCase.status !== 'approved' || !reviewCase.approved_version_id) throw new Error('approved_period_review_required')
-  if (reviewCase.user_role !== 'admin' || reviewCase.strategy_scope !== 'platform') throw new Error('platform_period_review_required')
+  if (!canManagePlatformAiContent(reviewCase) || reviewCase.strategy_scope !== 'platform') throw new Error('platform_period_review_required')
   const version = await queryOne('SELECT * FROM period_review_versions WHERE id = ? AND period_case_id = ?', [reviewCase.approved_version_id, periodCaseId])
   if (!version) throw new Error('approved_period_review_version_missing')
   const existing = await queryOne('SELECT * FROM platform_strategy_experience_items WHERE period_review_version_id = ?', [version.id])

@@ -9,6 +9,7 @@ import { buildDailyPeriodMarketEvidence, monthlyPeriodMarketDigest } from './per
 import { isAiFeatureEnabled } from './rollout-governance.js'
 import { createMemoryFromApprovedPeriodReview } from './memory-system.js'
 import { createPlatformExperienceCandidateFromApprovedPeriodReview } from './platform-experience.js'
+import { canManagePlatformAiContent, platformAiContentManagerSql } from './platform-content-access.js'
 
 const DAY_MS = 86400000
 const DEFAULT_MT5_OFFSET_MINUTES = 180
@@ -185,10 +186,10 @@ export function outcomeCloseUtcMs(row, offsetMinutes = DEFAULT_MT5_OFFSET_MINUTE
 
 export function periodReviewEligibility(row) {
   const scope = String(row?.strategy_scope || '').toLowerCase()
-  const role = String(row?.user_role || '').toLowerCase()
-  if (scope === 'private' && role !== 'admin') return { eligible: true }
-  if (scope === 'platform' && role === 'admin') return { eligible: true }
-  return { eligible: false, reason: scope === 'platform' ? 'platform_strategy_user_review_disabled' : role === 'admin' ? 'admin_private_strategy_review_disabled' : 'review_strategy_scope_missing' }
+  const platformManager = canManagePlatformAiContent(row)
+  if (scope === 'private' && !platformManager) return { eligible: true }
+  if (scope === 'platform' && platformManager) return { eligible: true }
+  return { eligible: false, reason: scope === 'platform' ? 'platform_strategy_user_review_disabled' : platformManager ? 'platform_manager_private_strategy_review_disabled' : 'review_strategy_scope_missing' }
 }
 
 export function groupDailyReviewOutcomes(rows, { offsetMinutes = DEFAULT_MT5_OFFSET_MINUTES, asOfUtcMs = Date.now() } = {}) {
@@ -407,13 +408,15 @@ async function eligibleOutcomeRows(limit) {
   const backlogLimit = Math.max(1, Math.ceil(batchLimit * 0.7))
   const recentLimit = Math.max(1, batchLimit - backlogLimit)
   const select = `SELECT so.*, snap.strategy_id, snap.strategy_version, snap.strategy_scope,
-      u.role AS user_role,
+      u.role AS user_role, u.plan_source AS user_plan_source,
       (SELECT sod.raw_json FROM signal_outcome_deals sod WHERE sod.outcome_id = so.id ORDER BY sod.deal_time DESC, sod.id DESC LIMIT 1) AS last_deal_raw_json
     FROM signal_outcomes so
     JOIN users u ON u.id = so.user_id
     JOIN inference_snapshots snap ON snap.id = (SELECT MAX(s2.id) FROM inference_snapshots s2 WHERE s2.signal_id = so.signal_id)`
+  const platformManagerSql = platformAiContentManagerSql('u')
   const eligible = `so.status = 'closed' AND so.review_eligible_at IS NOT NULL
-    AND ((snap.strategy_scope = 'private' AND u.role <> 'admin') OR (snap.strategy_scope = 'platform' AND u.role = 'admin'))`
+    AND ((snap.strategy_scope = 'private' AND NOT ${platformManagerSql})
+      OR (snap.strategy_scope = 'platform' AND ${platformManagerSql}))`
   const [backlog, recent] = await Promise.all([
     queryAll(`${select} WHERE ${eligible} AND (
       NOT EXISTS (SELECT 1 FROM period_review_sources prs WHERE prs.outcome_id = so.id)

@@ -3,6 +3,7 @@ import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../..
 import { resolveAiTaskModel } from './model-profiles.js'
 import { requestJsonObject } from './llm.js'
 import { sha256 } from './inference-snapshots.js'
+import { canManagePlatformAiContent } from './platform-content-access.js'
 import { getEffectiveFeatureFlags, isAiFeatureEnabled } from './rollout-governance.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 
@@ -265,10 +266,10 @@ export async function createMemoryFromApprovedReview(caseId, userId) {
 }
 
 async function approvedPeriodReview(periodCaseId, userId) {
-  const reviewCase = await queryOne(`SELECT cases.*, u.role AS user_role FROM period_review_cases cases
+  const reviewCase = await queryOne(`SELECT cases.*, u.role AS user_role, u.plan_source AS user_plan_source FROM period_review_cases cases
     JOIN users u ON u.id = cases.user_id WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, userId])
   if (!reviewCase || reviewCase.status !== 'approved' || !reviewCase.approved_version_id) throw new Error('approved_period_review_required')
-  if (reviewCase.strategy_scope !== 'private' || reviewCase.user_role === 'admin') throw new Error('personal_memory_requires_private_period_review')
+  if (reviewCase.strategy_scope !== 'private' || canManagePlatformAiContent(reviewCase)) throw new Error('personal_memory_requires_private_period_review')
   const version = await queryOne('SELECT * FROM period_review_versions WHERE id = ? AND period_case_id = ?', [reviewCase.approved_version_id, periodCaseId])
   if (!version) throw new Error('approved_period_review_version_missing')
   return { reviewCase, version, content: parse(version.content_json, {}) }

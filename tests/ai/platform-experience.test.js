@@ -41,9 +41,9 @@ describe('platform strategy experience boundary', () => {
     expect(db.queryRun.mock.calls[0][0]).toContain('platform_strategy_experience_items')
   })
 
-  it('maps daily and monthly platform reviews to short and long memory tiers', async () => {
+  it('maps observer-source platform reviews to the shared platform memory tier', async () => {
     db.queryOne
-      .mockResolvedValueOnce({ id:21, user_id:1, user_role:'admin', strategy_scope:'platform', strategy_id:3,
+      .mockResolvedValueOnce({ id:21, user_id:1, user_role:'user', user_plan_source:'observer_source', strategy_scope:'platform', strategy_id:3,
         strategy_version:2, period_type:'monthly', period_key:'2026-07', status:'approved', approved_version_id:31 })
       .mockResolvedValueOnce({ id:31, content_json:JSON.stringify({ period_summary:'月度趋势等待确认', memory_candidates:[{
         lesson:'趋势回调确认后再入场', memory_category:'entry_setup', supporting_period_case_ids:[1, 2],

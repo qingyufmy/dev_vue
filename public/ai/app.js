@@ -2219,6 +2219,16 @@ function parseJsonField(value, fallback = {}) {
   try { return value ? JSON.parse(value) : fallback; } catch { return fallback; }
 }
 
+function isObserverSourceAccount() {
+  const role = String(state.user?.role || '').toLowerCase();
+  const planSource = String(state.user?.planSource || state.user?.plan_source || '').toLowerCase();
+  return role === 'user' && planSource === 'observer_source';
+}
+
+function canManagePlatformAiContent() {
+  return state.user?.role === 'admin' || isObserverSourceAccount();
+}
+
 function profileScopeQuery() {
   return state.user?.role === "admin" ? "?scope=platform" : "";
 }
@@ -2388,7 +2398,8 @@ async function savePlatformPolicy() {
 async function loadStrategyCatalog() {
   const host = $("strategyCatalog");
   if (!host) return;
-  const data = await api(`/api/ai/strategies${state.user?.role === 'admin' ? '?include_inactive=1' : ''}`);
+  const platformManager = canManagePlatformAiContent();
+  const data = await api(`/api/ai/strategies${platformManager ? '?include_inactive=1' : ''}`);
   const items = data.strategies || [];
   const subscriptions = data.subscriptions || [];
   state.strategies = items; state.strategySubscriptions = subscriptions; state.tradingAccounts = data.accounts || [];
@@ -2399,12 +2410,12 @@ async function loadStrategyCatalog() {
     summary.textContent = `${items.length} 个策略 · ${active} 个可用${privateCount ? ` · ${privateCount} 个私有` : ""}`;
   }
   const addStrategyButton = $("addPrivateStrategyBtn");
-  if (addStrategyButton && state.user?.role === "admin") {
+  if (addStrategyButton && platformManager) {
     addStrategyButton.disabled = false;
     addStrategyButton.title = "新建平台策略";
     addStrategyButton.innerHTML = '<i data-lucide="plus" size="15"></i>新建平台策略';
   }
-  if (addStrategyButton && state.user?.role !== "admin") {
+  if (addStrategyButton && !platformManager) {
     const ownPrivateCount = items.filter(item => item.scope === "private" && Number(item.owner_user_id) === Number(state.user?.id)).length;
     const reachedLimit = ownPrivateCount >= 1;
     addStrategyButton.disabled = reachedLimit;
@@ -2440,7 +2451,7 @@ async function loadStrategyCatalog() {
     const execution = linked.length ? `${linked.filter(sub => Number(sub.execution_enabled)).length}/${linked.length} 个订阅启用` : "未订阅";
     const memoryMode = linked.some(sub => sub.memory_mode === "off") ? "部分订阅关闭记忆" : memory;
     const canEdit = (item.scope === 'private' && Number(item.owner_user_id) === Number(state.user?.id))
-      || (item.scope === 'platform' && state.user?.role === 'admin');
+      || (item.scope === 'platform' && canManagePlatformAiContent());
     const subRows = linked.map(sub => `<div class="subscription-row"><div class="subscription-row-info"><strong>账户 #${sub.trading_account_id}</strong><span>订阅 #${sub.id} · ${sub.execution_enabled ? '自动分析已启用' : '自动分析未启用'} · ${escapeHtml(subscriptionTakeProfitModeLabel(sub.take_profit_mode))} · ${escapeHtml(subscriptionScheduleSummary(sub))} · ${escapeHtml(subscriptionMemoryModeLabel(sub.memory_mode))}</span></div><div class="subscription-row-actions"><button class="btn btn-secondary btn-sm" data-subscription-action="edit" data-subscription-id="${sub.id}"><i data-lucide="settings-2" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-subscription-action="delete" data-subscription-id="${sub.id}"><i data-lucide="trash-2" size="14"></i>删除</button></div></div>`).join("");
     const primarySubscription = linked.find(sub => Number(sub.execution_enabled)) || linked[0];
     const subscriptionButton = primarySubscription
@@ -2522,10 +2533,12 @@ function renderStrategyModelOptions(scope, selectedId = "") {
 function openStrategyEditor(strategy = null) {
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   const editor = $("strategyEditor"); editor.dataset.strategyId = strategy?.id || "";
-  const admin = state.user?.role === "admin";
-  $("strategyEditorTitle").textContent = strategy ? "编辑策略" : (admin ? "新建平台策略" : "新建自定义策略");
-  $("strategyEditorBoundary").textContent = admin
-    ? "平台策略对所有合资格用户可见；他人私有策略只允许审计查看，不能代替用户修改或执行。"
+  const platformManager = canManagePlatformAiContent();
+  $("strategyEditorTitle").textContent = strategy ? "编辑策略" : (platformManager ? "新建平台策略" : "新建自定义策略");
+  $("strategyEditorBoundary").textContent = platformManager
+    ? (isObserverSourceAccount()
+      ? "观摩源账号只能创建和维护平台策略，策略经验统一进入平台记忆。"
+      : "平台策略对所有合资格用户可见；他人私有策略只允许审计查看，不能代替用户修改或执行。")
     : "你创建的私有策略仅自己可见、可选和执行。";
   $("strategyTitle").value = strategy?.title || ""; $("strategySymbols").value = parseJsonField(strategy?.symbols_json, []).join(", ");
   $("strategyDescription").value = strategy?.description || "";
@@ -2537,15 +2550,15 @@ function openStrategyEditor(strategy = null) {
   const entryMethods = new Set(parseJsonField(strategy?.entry_methods_json, ["market","limit","stop","stop_limit"]));
   document.querySelectorAll("[data-strategy-entry-method]").forEach(input => { input.checked = entryMethods.has(input.dataset.strategyEntryMethod); });
   $("strategyUseChanAnalysis").checked = Boolean(Number(strategy?.use_chan_analysis || 0));
-  $("strategyIncludePortfolioContext").checked = !admin && Boolean(Number(strategy?.include_portfolio_context || 0));
-  $("strategyPortfolioContextField")?.classList.toggle("hidden", admin);
-  if (admin) {
+  $("strategyIncludePortfolioContext").checked = !platformManager && Boolean(Number(strategy?.include_portfolio_context || 0));
+  $("strategyPortfolioContextField")?.classList.toggle("hidden", platformManager);
+  if (platformManager) {
     $("strategyScope").value = "platform";
     $("strategyScopeField")?.classList.add("is-readonly");
     $("strategyVisibility").value = strategy?.visibility_status || "active";
     $("strategyVisibilityField").style.display = "";
   }
-  renderStrategyModelOptions(strategy?.scope || (admin ? "platform" : "private"), strategy?.model_profile_id || "");
+  renderStrategyModelOptions(strategy?.scope || (platformManager ? "platform" : "private"), strategy?.model_profile_id || "");
   openFormModal(editor);
 }
 
@@ -2557,8 +2570,8 @@ async function saveStrategyEditor() {
   const primaryTimeframe = timeframes.some(item => item.timeframe === primary) ? primary : timeframes[0].timeframe;
   const entryMethods = [...document.querySelectorAll("[data-strategy-entry-method]:checked")].map(input => input.dataset.strategyEntryMethod);
   if (!entryMethods.length) throw new Error("请至少允许一种入场方式");
-  const scope = state.user?.role === "admin" ? "platform" : "private";
-  const visibilityStatus = state.user?.role === "admin" ? $("strategyVisibility").value : "active";
+  const scope = canManagePlatformAiContent() ? "platform" : "private";
+  const visibilityStatus = canManagePlatformAiContent() ? $("strategyVisibility").value : "active";
   const body = { title:$("strategyTitle").value.trim(), symbols:$("strategySymbols").value.split(",").map(value => value.trim()).filter(Boolean),
     description:$("strategyDescription").value.trim(), system_prompt:$("strategyPrompt").value.trim(), interval_minutes:Number($("strategyInterval").value) || 5,
     market_data_plan:{ primary_timeframe:primaryTimeframe, timeframes }, entry_methods:entryMethods,
@@ -3158,8 +3171,8 @@ function stopReviewDetailPolling() {
 
 async function loadReviewMemory() {
   const query = state.reviewPeriodFilter ? `?periodType=${encodeURIComponent(state.reviewPeriodFilter)}` : "";
-  const isAdmin = state.user?.role === "admin";
-  const [reviewData, memoryData, profileData, featureData] = isAdmin
+  const platformManager = canManagePlatformAiContent();
+  const [reviewData, memoryData, profileData, featureData] = platformManager
     ? await Promise.all([api(`/api/ai/period-reviews${query}`), api("/api/ai/admin/platform-experience"), Promise.resolve({ profiles:[] }), Promise.resolve({ flags:{ user:{} } })])
     : await Promise.all([api(`/api/ai/period-reviews${query}`), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
   state.reviewCases = reviewData.cases || [];
@@ -3169,7 +3182,7 @@ async function loadReviewMemory() {
   state.platformMemoryPolicies = memoryData.policies || [];
   state.platformMemoryEvaluation = memoryData.evaluation || {};
   await loadReviewSummary({ announce:false });
-  $("sharedCredentialNotice")?.classList.toggle("hidden", isAdmin || (profileData.profiles || []).some(item => item.is_default && item.has_api_key));
+  $("sharedCredentialNotice")?.classList.toggle("hidden", platformManager || (profileData.profiles || []).some(item => item.is_default && item.has_api_key));
   const userFlags = featureData.flags?.user || {};
   const featureInputs = { userReviewGenerationFlag:"review_generation_enabled", userExperienceMemoryFlag:"experience_memory_enabled", userMemoryCompressionFlag:"memory_compression_enabled", userRetrievalShadowFlag:"retrieval_shadow_enabled" };
   for (const [id,key] of Object.entries(featureInputs)) if ($(id)) {
@@ -3180,7 +3193,7 @@ async function loadReviewMemory() {
 }
 
 function renderCachedMemoryWorkspace() {
-  if (state.user?.role === "admin") renderPlatformExperience(state.memoryItems, state.platformMemoryPolicies, state.platformMemoryEvaluation);
+  if (canManagePlatformAiContent()) renderPlatformExperience(state.memoryItems, state.platformMemoryPolicies, state.platformMemoryEvaluation);
   else renderMemoryItems(state.memoryItems, state.memorySettings, state.memorySummaries);
 }
 
@@ -5191,25 +5204,30 @@ function setObserverPanelLock(panel, locked) {
 
 function applyRoleUI() {
   const isAdmin = state.user?.role === "admin";
+  const observerSource = isObserverSourceAccount();
+  const platformManager = canManagePlatformAiContent();
   const observer = isObserverMode();
   const allowedTabs = new Set(state.aiAccess?.allowed_tabs || []);
 
   document.querySelectorAll('.admin-only').forEach(el => {
-    el.style.display = isAdmin ? '' : 'none';
+    el.style.display = isAdmin || (platformManager && el.classList.contains('platform-content-only')) ? '' : 'none';
   });
   document.querySelectorAll('.user-only').forEach(el => {
-    el.style.display = isAdmin ? 'none' : '';
+    const platformPersonalControl = el.classList.contains('personal-memory-only');
+    el.style.display = isAdmin || (platformManager && platformPersonalControl) ? 'none' : '';
   });
-  setText("memoryTabLabel", isAdmin ? "平台记忆" : "策略记忆");
-  setText("memoryActiveLabel", isAdmin ? "已发布记忆" : "有效记忆");
-  setText("memoryActiveHelp", isAdmin ? "可用于平台策略" : "可用于后续分析");
-  setText("memorySectionTitle", isAdmin ? "平台策略记忆" : "我的策略记忆");
-  setText("memorySectionDescription", isAdmin
+  setText("memoryTabLabel", platformManager ? "平台记忆" : "策略记忆");
+  setText("memoryActiveLabel", platformManager ? "已发布记忆" : "有效记忆");
+  setText("memoryActiveHelp", platformManager ? "可用于平台策略" : "可用于后续分析");
+  setText("memorySectionTitle", platformManager ? "平台策略记忆" : "我的策略记忆");
+  setText("memorySectionDescription", platformManager
     ? "来自观摩账户复盘的策略记忆先进入候选区，经发布后才会用于其绑定的平台策略。"
     : "这里只保留你已经确认的经验，可以随时暂停或撤销。");
   if ($("addPrivateStrategyBtn") && !$("addPrivateStrategyBtn").disabled) {
-    $("addPrivateStrategyBtn").textContent = isAdmin ? "新建平台策略" : "新建自定义策略";
+    $("addPrivateStrategyBtn").textContent = platformManager ? "新建平台策略" : "新建自定义策略";
   }
+  const privateFilter = document.querySelector('[data-strategy-filter="private"]');
+  if (privateFilter) privateFilter.style.display = observerSource ? 'none' : '';
 
   // Navigation is an explicit capability list in observer mode. Empty groups
   // are removed so the sidebar contains exactly the pages the user can open.

@@ -49,7 +49,9 @@ describe('trade review strategy boundary', () => {
 
   it('keeps administrator platform reviews and ordinary-user private reviews eligible', () => {
     expect(assessReviewStrategyEligibility({ snapshot_strategy_scope: 'platform', review_user_role: 'admin' }).eligible).toBe(true)
+    expect(assessReviewStrategyEligibility({ snapshot_strategy_scope: 'platform', review_user_role: 'user', review_user_plan_source:'observer_source' }).eligible).toBe(true)
     expect(assessReviewStrategyEligibility({ snapshot_strategy_scope: 'private', review_user_role: 'user' }).eligible).toBe(true)
+    expect(assessReviewStrategyEligibility({ snapshot_strategy_scope: 'private', review_user_role: 'user', review_user_plan_source:'observer_source' }).eligible).toBe(false)
   })
 
   it('fails closed when the immutable strategy scope is unavailable', () => {
@@ -91,8 +93,9 @@ describe('review durability and privacy guards', () => {
   })
 
   it('filters platform-strategy reviews for ordinary users at scan, queue and read boundaries', () => {
-    expect(service).toContain("snap.strategy_scope = 'platform' AND u.role <> 'admin'")
-    expect(service).toContain("eligibility_snap.strategy_scope = 'platform' AND eligibility_user.role = 'admin'")
+    expect(service).toContain("snap.strategy_scope = 'platform' AND NOT ${platformManagerSql}")
+    expect(service).toContain("eligibility_snap.strategy_scope = 'platform' AND ${platformManagerSql}")
+    expect(service).toContain("platformAiContentManagerSql('eligibility_user')")
     expect(service).toContain('platform_strategy_user_review_disabled')
   })
 

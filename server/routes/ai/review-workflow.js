@@ -6,6 +6,7 @@ import { parseSnapshotJson, sha256 } from './inference-snapshots.js'
 import { isAiFeatureEnabled } from './rollout-governance.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { buildReviewMarketPath } from './review-market-path.js'
+import { canManagePlatformAiContent, platformAiContentManagerSql } from './platform-content-access.js'
 
 const REVIEW_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidence'])
 const ISSUE_SEVERITIES = new Set(['low', 'medium', 'high', 'critical'])
@@ -28,27 +29,28 @@ function isTruePrompt(value) {
 
 export function assessReviewStrategyEligibility(row) {
   const strategyScope = String(row?.snapshot_strategy_scope || row?.strategy_scope || '').trim().toLowerCase()
-  const userRole = String(row?.review_user_role || row?.user_role || '').trim().toLowerCase()
+  const platformManager = canManagePlatformAiContent(row)
   if (strategyScope === 'platform') {
-    return userRole === 'admin'
+    return platformManager
       ? { eligible: true, reason: null }
       : { eligible: false, reason: 'platform_strategy_user_review_disabled' }
   }
   if (strategyScope === 'private') {
-    return userRole !== 'admin'
+    return !platformManager
       ? { eligible: true, reason: null }
-      : { eligible: false, reason: 'admin_private_strategy_review_disabled' }
+      : { eligible: false, reason: 'platform_manager_private_strategy_review_disabled' }
   }
   return { eligible: false, reason: 'review_strategy_scope_missing' }
 }
 
 function reviewEligibilitySql(caseAlias = 'rc') {
+  const platformManagerSql = platformAiContentManagerSql('eligibility_user')
   return `EXISTS (
     SELECT 1 FROM inference_snapshots eligibility_snap
     JOIN users eligibility_user ON eligibility_user.id = ${caseAlias}.user_id
     WHERE eligibility_snap.signal_id = ${caseAlias}.signal_id
-      AND ((eligibility_snap.strategy_scope = 'private' AND eligibility_user.role <> 'admin')
-        OR (eligibility_snap.strategy_scope = 'platform' AND eligibility_user.role = 'admin'))
+      AND ((eligibility_snap.strategy_scope = 'private' AND NOT ${platformManagerSql})
+        OR (eligibility_snap.strategy_scope = 'platform' AND ${platformManagerSql}))
   )`
 }
 
@@ -105,7 +107,7 @@ async function loadEvidence(outcomeId) {
       oi.request_json, oi.original_order_json, oi.approved_order_json, oi.bridge_payload_json,
       oi.result_json, oi.status AS execution_status, oi.bridge_command_ref,
       rd.policy_version_ids_json, rd.rule_results_json, rd.decision_status AS risk_decision_status,
-      rd.reject_code AS risk_reject_code, u.role AS review_user_role
+      rd.reject_code AS risk_reject_code, u.role AS review_user_role, u.plan_source AS review_user_plan_source
     FROM signal_outcomes so
     JOIN users u ON u.id = so.user_id
     LEFT JOIN ai_signals s ON s.id = so.signal_id
@@ -199,27 +201,28 @@ export async function ensureReviewCaseForOutcome(outcomeId, { queueGeneration = 
 }
 
 export async function enqueueEligibleReviewCases(limit = 50) {
+  const platformManagerSql = platformAiContentManagerSql('u')
   await queryRun(`UPDATE trade_review_jobs jobs
     JOIN trade_review_cases rc ON rc.id = jobs.case_id
     JOIN inference_snapshots snap ON snap.signal_id = rc.signal_id
     JOIN users u ON u.id = rc.user_id
     SET jobs.status = 'skipped', jobs.last_error_code = 'platform_strategy_user_review_disabled',
       jobs.lease_token = NULL, jobs.lease_expires_at = NULL, jobs.updated_at = ?
-    WHERE snap.strategy_scope = 'platform' AND u.role <> 'admin' AND jobs.status IN ('queued','leased')`, [beijingNow()])
+    WHERE snap.strategy_scope = 'platform' AND NOT ${platformManagerSql} AND jobs.status IN ('queued','leased')`, [beijingNow()])
   await queryRun(`UPDATE trade_review_cases rc
     JOIN inference_snapshots snap ON snap.signal_id = rc.signal_id
     JOIN users u ON u.id = rc.user_id
     SET rc.status = 'ineligible', rc.evidence_status = 'ineligible',
       rc.evidence_reason = 'platform_strategy_user_review_disabled', rc.updated_at = ?
-    WHERE snap.strategy_scope = 'platform' AND u.role <> 'admin' AND rc.current_version_id IS NULL
+    WHERE snap.strategy_scope = 'platform' AND NOT ${platformManagerSql} AND rc.current_version_id IS NULL
       AND rc.status NOT IN ('approved','deferred')`, [beijingNow()])
   const outcomes = await queryAll(`SELECT so.id FROM signal_outcomes so
     JOIN users u ON u.id = so.user_id
     LEFT JOIN trade_review_cases rc ON rc.outcome_id = so.id
     WHERE so.status = 'closed' AND so.review_eligible_at IS NOT NULL
       AND EXISTS (SELECT 1 FROM inference_snapshots snap WHERE snap.signal_id = so.signal_id
-        AND ((snap.strategy_scope = 'private' AND u.role <> 'admin')
-          OR (snap.strategy_scope = 'platform' AND u.role = 'admin')))
+        AND ((snap.strategy_scope = 'private' AND NOT ${platformManagerSql})
+          OR (snap.strategy_scope = 'platform' AND ${platformManagerSql})))
       AND (rc.id IS NULL OR rc.evidence_status <> 'complete') ORDER BY so.review_eligible_at LIMIT ?`, [Number(limit)])
   const result = { scanned: outcomes.length, ready: 0, incomplete: 0, skipped: 0 }
   for (const outcome of outcomes) {

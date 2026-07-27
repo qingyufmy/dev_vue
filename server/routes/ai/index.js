@@ -20,6 +20,7 @@ import { createObserverChannel, createObserverSource, deleteObserverChannel, del
   replaceObserverChannelAssignments, resolveObserverSourceForUser,
   updateObserverChannel, updateObserverSource } from './observer-channels.js'
 import { createObserverSourceAccount } from './observer-source-accounts.js'
+import { canManagePlatformAiContent, isObserverSourceAccount } from './platform-content-access.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 import { listMemoryItems, listMemorySummaries, revokeMemoryItem, activateDuplicateMemory,
   getMemorySettings, setMemorySettings, rollbackMemorySummary, confirmLongTermMemory,
@@ -521,8 +522,13 @@ router.get('/ai/model-source', authMiddleware, async (req, res) => {
 
 router.get('/ai/strategies', authMiddleware, async (req, res) => {
   try {
+    const observerSource = isObserverSourceAccount(req.user)
+    const strategyRole = canManagePlatformAiContent(req.user) ? 'admin' : req.user.role
     const [strategies, subscriptions, accounts] = await Promise.all([
-      listStrategies(req.user.id, req.user.role, { scope: req.query.scope || undefined, includeInactive: req.query.include_inactive === '1' }),
+      listStrategies(req.user.id, strategyRole, {
+        scope: observerSource ? 'platform' : (req.query.scope || undefined),
+        includeInactive: req.query.include_inactive === '1',
+      }),
       listSubscriptions(req.user.id, req.user.role),
       listTradingAccounts(req.user.id),
     ])
@@ -533,7 +539,9 @@ router.get('/ai/strategies', authMiddleware, async (req, res) => {
 
 router.get('/ai/strategies/:id', authMiddleware, async (req, res) => {
   try {
-    const strategy = await getStrategyById(Number(req.params.id), req.user.id, req.user.role)
+    const strategyRole = canManagePlatformAiContent(req.user) ? 'admin' : req.user.role
+    const strategy = await getStrategyById(Number(req.params.id), req.user.id, strategyRole)
+    if (isObserverSourceAccount(req.user) && strategy?.scope !== 'platform') return res.status(404).json({ ok:false, error:'strategy_not_found' })
     if (!strategy) return res.status(404).json({ ok:false, error:'strategy_not_found' })
     res.json({ ok:true, strategy })
   } catch (error) { reviewError(res, error) }
@@ -541,7 +549,9 @@ router.get('/ai/strategies/:id', authMiddleware, async (req, res) => {
 
 router.post('/ai/strategies', authMiddleware, async (req, res) => {
   try {
-    const strategy = await createStrategy(req.user.id, req.user.role, req.body || {})
+    const strategyRole = canManagePlatformAiContent(req.user) ? 'admin' : req.user.role
+    const payload = isObserverSourceAccount(req.user) ? { ...(req.body || {}), scope:'platform' } : (req.body || {})
+    const strategy = await createStrategy(req.user.id, strategyRole, payload)
     await auditAiMutation(req, 'ai_strategy_created', 'ai_strategy', strategy.id, {
       scope:strategy.scope, visibility_status:strategy.visibility_status,
     })
@@ -552,7 +562,12 @@ router.post('/ai/strategies', authMiddleware, async (req, res) => {
 
 router.put('/ai/strategies/:id', authMiddleware, async (req, res) => {
   try {
-    const strategy = await updateStrategy(Number(req.params.id), req.user.id, req.user.role, req.body || {})
+    const strategyRole = canManagePlatformAiContent(req.user) ? 'admin' : req.user.role
+    if (isObserverSourceAccount(req.user)) {
+      const existing = await getStrategyById(Number(req.params.id), req.user.id, strategyRole)
+      if (!existing || existing.scope !== 'platform') return res.status(404).json({ ok:false, error:'strategy_not_found' })
+    }
+    const strategy = await updateStrategy(Number(req.params.id), req.user.id, strategyRole, req.body || {})
     const runtime_sync = await reconcileAiRuntime()
     await auditAiMutation(req, 'ai_strategy_updated', 'ai_strategy', strategy.id, {
       scope:strategy.scope, visibility_status:strategy.visibility_status, version:strategy.version,
@@ -563,13 +578,25 @@ router.put('/ai/strategies/:id', authMiddleware, async (req, res) => {
 })
 
 router.get('/ai/strategies/:id/delete-preview', authMiddleware, async (req, res) => {
-  try { res.json({ ok:true, preview:await getStrategyDeletionPreview(Number(req.params.id), req.user.id, req.user.role) }) }
+  try {
+    const strategyRole = canManagePlatformAiContent(req.user) ? 'admin' : req.user.role
+    if (isObserverSourceAccount(req.user)) {
+      const existing = await getStrategyById(Number(req.params.id), req.user.id, strategyRole)
+      if (!existing || existing.scope !== 'platform') return res.status(404).json({ ok:false, error:'strategy_not_found' })
+    }
+    res.json({ ok:true, preview:await getStrategyDeletionPreview(Number(req.params.id), req.user.id, strategyRole) })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.delete('/ai/strategies/:id', authMiddleware, async (req, res) => {
   try {
-    const deleted = await deleteStrategy(Number(req.params.id), req.user.id, req.user.role, req.body || {})
+    const strategyRole = canManagePlatformAiContent(req.user) ? 'admin' : req.user.role
+    if (isObserverSourceAccount(req.user)) {
+      const existing = await getStrategyById(Number(req.params.id), req.user.id, strategyRole)
+      if (!existing || existing.scope !== 'platform') return res.status(404).json({ ok:false, error:'strategy_not_found' })
+    }
+    const deleted = await deleteStrategy(Number(req.params.id), req.user.id, strategyRole, req.body || {})
     const runtime_sync = await reconcileAiRuntime()
     res.json({ ok:true, deleted, runtime_sync })
   }
@@ -1101,7 +1128,7 @@ router.get('/ai/admin/reviews/health', authMiddleware, async (req, res) => {
 })
 
 router.get('/ai/memory', authMiddleware, async (req, res) => {
-  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
+  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try {
     const [items, summaries, settings] = await Promise.all([
       listMemoryItems(req.user.id, req.query), listMemorySummaries(req.user.id, req.query), getMemorySettings(req.user.id),
@@ -1112,43 +1139,43 @@ router.get('/ai/memory', authMiddleware, async (req, res) => {
 })
 
 router.put('/ai/memory/settings', authMiddleware, async (req, res) => {
-  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
+  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, settings: await setMemorySettings(req.user.id, req.body || {}) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/memory/:id/revoke', authMiddleware, async (req, res) => {
-  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
+  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, ...(await revokeMemoryItem(Number(req.params.id), req.user.id)) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/memory/:id/activate', authMiddleware, async (req, res) => {
-  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
+  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, item: await activateDuplicateMemory(Number(req.params.id), req.user.id) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/memory/long/:id/confirm', authMiddleware, async (req, res) => {
-  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
+  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, item: await confirmLongTermMemory(Number(req.params.id), req.user.id) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/memory/long/:id/revoke', authMiddleware, async (req, res) => {
-  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
+  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, ...(await revokeLongTermMemory(Number(req.params.id), req.user.id)) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/memory/summaries/:id/rollback', authMiddleware, async (req, res) => {
-  if (req.user.role === 'admin') return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
+  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
   try { res.json({ ok: true, ...(await rollbackMemorySummary(Number(req.params.id), req.user.id)) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.get('/ai/admin/platform-experience', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
+  if (!canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_only' })
   try {
     const [items, policies, evaluation] = await Promise.all([
       listPlatformExperience(req.query), getPlatformExperiencePolicies(), getPlatformExperienceEvaluation(req.query),
@@ -1158,13 +1185,13 @@ router.get('/ai/admin/platform-experience', authMiddleware, async (req, res) => 
 })
 
 router.put('/ai/admin/platform-experience/policies/:strategyId', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
+  if (!canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_only' })
   try { res.json({ ok: true, policy: await updatePlatformExperiencePolicy(Number(req.params.strategyId), req.user.id, req.body || {}) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/admin/platform-experience/:id/:action', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
+  if (!canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_only' })
   const status = req.params.action === 'publish' ? 'active' : req.params.action === 'revoke' ? 'revoked' : null
   if (!status) return res.status(400).json({ ok: false, error: 'invalid_platform_experience_action' })
   try { res.json({ ok: true, item: await updatePlatformExperienceItem(Number(req.params.id), req.user.id, status) }) }
@@ -1172,7 +1199,7 @@ router.post('/ai/admin/platform-experience/:id/:action', authMiddleware, async (
 })
 
 router.delete('/ai/admin/platform-experience/:id', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin_only' })
+  if (!canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_only' })
   try { res.json({ ok:true, ...(await deleteRevokedPlatformExperienceItem(Number(req.params.id))) }) }
   catch (error) { reviewError(res, error) }
 })
