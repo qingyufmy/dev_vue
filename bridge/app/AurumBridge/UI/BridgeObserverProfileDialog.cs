@@ -217,20 +217,40 @@ public sealed class BridgeObserverProfileDialog : Form
 
     private void BrowseForTerminalDirectory()
     {
-        using var picker = new FolderBrowserDialog
-        {
-            Description = $"选择观摩源专用的 {BridgePlatform.DisplayName(Platform)} 目录",
-            ShowNewFolderButton = false,
-            UseDescriptionForTitle = true,
-        };
-        if (Directory.Exists(_terminalDirectory.Text))
-        {
-            picker.InitialDirectory = _terminalDirectory.Text;
-        }
+        using var picker = new BridgeTerminalDirectoryDialog(
+            Platform,
+            _terminalDirectory.Text,
+            DiscoverSuggestedDirectories());
         if (picker.ShowDialog(this) == DialogResult.OK)
         {
             _terminalDirectory.Text = picker.SelectedPath;
         }
+    }
+
+    private IReadOnlyList<string> DiscoverSuggestedDirectories()
+    {
+        if (Platform == BridgePlatform.Mt4)
+        {
+            return Mt4TerminalDiscovery.DiscoverWindows()
+                .SelectMany(installation => new[]
+                {
+                    installation.InstallationPath,
+                    installation.TerminalDataPath,
+                })
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        var mt4InstallationPaths = Mt4TerminalDiscovery.DiscoverWindows()
+            .Select(installation => Path.GetFullPath(installation.InstallationPath))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return Mt5TerminalDiscovery.DiscoverWindows()
+            .Select(installation => Path.GetDirectoryName(installation.ExecutablePath))
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Cast<string>()
+            .Select(Path.GetFullPath)
+            .Where(path => !mt4InstallationPaths.Contains(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private void ShowValidationError(string message, string title)
