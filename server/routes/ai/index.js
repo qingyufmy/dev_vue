@@ -1226,7 +1226,7 @@ export { handleAnalyze } from './strategy.js'
 export { maybeAiSignal } from './llm.js'
 
 export { insertAudit, getAnalyzeApiKey,
-  getAutoConfig, signalOrderPayload, executeOrderCore,
+  getAutoConfig, signalOrderPayload, executeOrderCore, executeManualOrderCore,
   getGlobalAutoConfig,
   getExecuteRiskConfig, getAutoPromptTypes, getAutoPromptTypeById,
   getUnifiedAutoInferenceConfig,

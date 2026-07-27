@@ -1005,6 +1005,7 @@ describe('route permissions and credential redaction', () => {
     const manualOpen = bridgeWs.slice(bridgeWs.indexOf("case 'open':"), bridgeWs.indexOf("case 'close':"))
     expect(manualOpen).toContain('executeManualOrderCore')
     expect(manualOpen).not.toContain('executeOrderCore')
+    expect(routes).toContain('executeOrderCore, executeManualOrderCore')
     expect(bridgeWs).toContain('activeSubscriptions.length === 0')
     expect(app).toContain('Number(subscription?.execution_enabled) === 1')
     expect(app).not.toContain('volume > 0.05')
