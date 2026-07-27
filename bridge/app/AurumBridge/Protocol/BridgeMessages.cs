@@ -295,6 +295,12 @@ public sealed record QuoteMessage : BridgeEnvelope
     [JsonPropertyName("point")]
     public double? Point { get; init; }
 
+    [JsonPropertyName("timezone_offset_minutes")]
+    public int? TimezoneOffsetMinutes { get; init; }
+
+    [JsonPropertyName("clock_status")]
+    public string? ClockStatus { get; init; }
+
     [JsonPropertyName("error_code")]
     public string? ErrorCode { get; init; }
 }

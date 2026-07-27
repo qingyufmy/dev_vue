@@ -20,9 +20,10 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain("function renderQuoteStatusMeta(quote)")
     expect(app).toContain("fmt(quote.spread, 2)")
     expect(app).toContain("setText('mt5ServerTime'")
+    expect(app).toContain('observedAt + offsetMinutes * 60_000')
     expect(app).toContain("updateMarketStatusFromQuote(quote)")
     expect(app).toContain("loadStatus(), refreshQuote(), loadKlineData()")
-    expect(html).toContain('/ai/app.js?v=20260727subscriptionfix')
+    expect(html).toContain('/ai/app.js?v=20260727mt4clock')
   })
 
   it('uses the connected bridge platform in status and terminal-time labels', () => {

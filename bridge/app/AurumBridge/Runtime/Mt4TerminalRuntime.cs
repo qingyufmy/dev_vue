@@ -205,6 +205,8 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             Status = local.Status,
             Bid = local.Bid,
             Ask = local.Ask,
+            TimezoneOffsetMinutes = local.TimezoneOffsetMinutes,
+            ClockStatus = local.ClockStatus,
             ErrorCode = local.ErrorCode,
         };
     }

@@ -114,15 +114,32 @@ describe('Bridge v3 business compatibility adapter', () => {
   })
 
   it('routes transient quotes without querying the read model', async () => {
-    const { adapter, gateway, queryOneFn } = setup()
+    const { adapter, gateway, queryOneFn } = setup({ quote:{
+      status:'succeeded', symbol:'XAUUSD', bid:2300, ask:2300.2,
+      observed_at_utc_msc:NOW, timezone_offset_minutes:180, clock_status:'broker_time_derived',
+    } })
 
     const result = await adapter.execute(42, 'quote', { symbol:'XAUUSD' })
 
-    expect(result).toMatchObject({ status:'success', bid:2300, ask:2300.2, source:'mt5' })
+    expect(result).toMatchObject({
+      status:'success', bid:2300, ask:2300.2, source:'mt5',
+      timezone_offset_minutes:180, clock_status:'broker_time_derived',
+    })
     expect(gateway.requestQuote).toHaveBeenCalledWith(42, expect.objectContaining({
       type:'quote_request', symbol:'XAUUSD', terminal_instance_id:'terminal_01JBUSINESS01',
     }), { timeoutMs:5000 })
     expect(queryOneFn).not.toHaveBeenCalled()
+  })
+
+  it('does not coerce missing terminal clock metadata to UTC', async () => {
+    const { adapter } = setup({ quote:{
+      status:'succeeded', symbol:'XAUUSD', bid:2300, ask:2300.2,
+      observed_at_utc_msc:NOW, timezone_offset_minutes:null,
+    } })
+
+    const result = await adapter.execute(42, 'quote', { symbol:'XAUUSD' })
+
+    expect(result.timezone_offset_minutes).toBeNull()
   })
 
   it('routes bounded rates through the transient data channel', async () => {

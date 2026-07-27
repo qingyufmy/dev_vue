@@ -489,6 +489,12 @@ export function createBridgeV3BusinessAdapter({
       digits:result.digits ?? null, point:result.point ?? null,
       observed_at_utc_msc:result.observed_at_utc_msc,
       time:new Date(result.observed_at_utc_msc).toISOString(), source:route.platform,
+      timezone_offset_minutes:result.timezone_offset_minutes !== null
+        && result.timezone_offset_minutes !== undefined
+        && result.timezone_offset_minutes !== ''
+        && Number.isInteger(Number(result.timezone_offset_minutes))
+        ? Number(result.timezone_offset_minutes) : null,
+      clock_status:result.clock_status || null,
       symbol_trade_mode:result.symbol_trade_mode ?? null,
       terminal_connected:result.terminal_connected ?? true,
     }

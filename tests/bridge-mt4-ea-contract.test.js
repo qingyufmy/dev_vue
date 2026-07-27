@@ -12,8 +12,10 @@ function functionBlock(name, nextName) {
 describe('MT4 EA time contract', () => {
   it('normalizes broker quote time to UTC before publishing it', () => {
     const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
-    expect(source).toContain('#property version   "3.20"')
+    expect(source).toContain('#property version   "3.21"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
+    expect(block).toContain('AppendInt32(response, CurrentServerOffsetMinutes())')
+    expect(block).toContain('AppendUtf8(response, "broker_time_derived")')
     expect(block).not.toContain('(source_time > 0 ? source_time : (long)TimeGMT()) * 1000')
   })
 
@@ -36,7 +38,7 @@ describe('MT4 EA time contract', () => {
 
 describe('MT4 EA extended data contract', () => {
   it('advertises version 3.2 and handles every server data action', () => {
-    expect(source).toContain('AppendUtf8(hello, "3.2.0")')
+    expect(source).toContain('AppendUtf8(hello, "3.2.1")')
     const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')
     for (const action of ['symbols', 'history', 'chart_data', 'pending_order_state', 'diagnostics']) {
       expect(block).toContain(`action == "${action}"`)
@@ -70,6 +72,13 @@ describe('MT4 EA broker-symbol contract', () => {
 })
 
 describe('MT4 EA snapshot performance contract', () => {
+  it('uses a bounded millisecond timer instead of a one-second request ceiling', () => {
+    const initBlock = functionBlock('int OnInit', 'void OnDeinit')
+    expect(source).toContain('#define REQUEST_TIMER_MSC 200')
+    expect(initBlock).toContain('EventSetMillisecondTimer(REQUEST_TIMER_MSC)')
+    expect(initBlock).not.toContain('EventSetTimer(1)')
+  })
+
   it('scans active orders once when publishing positions and pending orders', () => {
     const sendBlock = functionBlock('void SendSnapshot', 'void SendQuote')
     const buildBlock = functionBlock('void BuildOrderSnapshots', 'string BuildSelectedOrderJson')
@@ -78,5 +87,14 @@ describe('MT4 EA snapshot performance contract', () => {
     expect(buildBlock.match(/OrdersTotal\(\)/g)).toHaveLength(1)
     expect(buildBlock).toContain('include_positions')
     expect(buildBlock).toContain('include_orders')
+  })
+})
+
+describe('MT4 EA uncertain execution contract', () => {
+  it('does not claim an absent order when the MT4 history range cannot be proven complete', () => {
+    const block = functionBlock('void ExecuteQuery', 'void SendTradeFailure')
+    expect(block).toContain('\\"found\\":false,\\"complete\\":false')
+    expect(block).toContain('mt4_history_range_unverified')
+    expect(block).not.toContain('\\"found\\":false,\\"complete\\":true')
   })
 })

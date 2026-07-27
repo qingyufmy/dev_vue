@@ -373,11 +373,27 @@ public sealed class Mt4PipeProtocolTests
             Mt4PipeProtocol.EncodeQuoteRequest(request));
         var quote = new Mt4Quote(
             request.RequestId, request.Symbol, 1_800_000_000_100,
-            "succeeded", 2300.0, 2300.2, null);
+            "succeeded", 2300.0, 2300.2, null, 180, "broker_time_derived");
         var decodedQuote = Mt4PipeProtocol.DecodeQuote(Mt4PipeProtocol.EncodeQuote(quote));
 
         Assert.AreEqual(request, decodedRequest);
         Assert.AreEqual(quote, decodedQuote);
+    }
+
+    [TestMethod]
+    public void QuoteResponseAcceptsTheLegacyFrameWithoutClockMetadata()
+    {
+        var quote = new Mt4Quote(
+            "request_mt4_quote_legacy_01", "XAUUSD", 1_800_000_000_100,
+            "succeeded", 2300.0, 2300.2, null);
+        var payload = Mt4PipeProtocol.EncodeQuote(quote);
+        var clockMetadataLength = sizeof(int) + sizeof(int);
+        var legacyPayload = payload[..(payload.Length - clockMetadataLength)];
+
+        var decoded = Mt4PipeProtocol.DecodeQuote(legacyPayload);
+
+        Assert.IsNull(decoded.TimezoneOffsetMinutes);
+        Assert.IsNull(decoded.ClockStatus);
     }
 
     [TestMethod]

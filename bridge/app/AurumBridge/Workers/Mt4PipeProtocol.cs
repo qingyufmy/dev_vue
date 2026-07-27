@@ -77,7 +77,9 @@ public sealed record Mt4Quote(
     string Status,
     double? Bid,
     double? Ask,
-    string? ErrorCode);
+    string? ErrorCode,
+    int? TimezoneOffsetMinutes = null,
+    string? ClockStatus = null);
 
 public sealed record Mt4RatesRequest(
     string RequestId,
@@ -448,6 +450,8 @@ public static class Mt4PipeProtocol
             WriteNullableDouble(writer, quote.Bid);
             WriteNullableDouble(writer, quote.Ask);
             WriteString(writer, quote.ErrorCode ?? string.Empty);
+            writer.Write(quote.TimezoneOffsetMinutes ?? int.MinValue);
+            WriteString(writer, quote.ClockStatus ?? string.Empty);
         });
     }
 
@@ -463,14 +467,27 @@ public static class Mt4PipeProtocol
             2 => "rejected",
             _ => throw new InvalidDataException("mt4_quote_status_invalid"),
         };
+        var bid = ReadDoubleString(reader, required: false);
+        var ask = ReadDoubleString(reader, required: false);
+        var errorCode = NullIfEmpty(ReadString(reader, 128));
+        int? timezoneOffsetMinutes = null;
+        string? clockStatus = null;
+        if (reader.BaseStream.Position < reader.BaseStream.Length)
+        {
+            var rawOffset = reader.ReadInt32();
+            timezoneOffsetMinutes = rawOffset == int.MinValue ? null : rawOffset;
+            clockStatus = NullIfEmpty(ReadString(reader, 64));
+        }
         var quote = new Mt4Quote(
             requestId,
             symbol,
             observedAt,
             status,
-            ReadDoubleString(reader, required: false),
-            ReadDoubleString(reader, required: false),
-            NullIfEmpty(ReadString(reader, 128)));
+            bid,
+            ask,
+            errorCode,
+            timezoneOffsetMinutes,
+            clockStatus);
         EnsureFullyRead(reader);
         ValidateQuote(quote);
         return quote;
@@ -1384,6 +1401,11 @@ public static class Mt4PipeProtocol
         if (quote.Status == "rejected" && string.IsNullOrWhiteSpace(quote.ErrorCode))
         {
             throw new InvalidDataException("mt4_quote_error_missing");
+        }
+        if (quote.TimezoneOffsetMinutes is < -840 or > 840
+            || quote.ClockStatus?.Length > 64)
+        {
+            throw new InvalidDataException("mt4_quote_clock_invalid");
         }
     }
 

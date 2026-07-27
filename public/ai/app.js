@@ -349,6 +349,23 @@ function formatTime(value) {
   return String(value).replace("T", " ").slice(0, 19);
 }
 
+function terminalQuoteTimezoneOffsetMinutes(quote) {
+  const rawOffset = quote?.timezone_offset_minutes;
+  if (rawOffset === null || rawOffset === undefined || rawOffset === '') return null;
+  const offsetMinutes = Number(rawOffset);
+  return Number.isFinite(offsetMinutes) && offsetMinutes >= -840 && offsetMinutes <= 840
+    ? offsetMinutes : null;
+}
+
+function formatTerminalQuoteTime(quote) {
+  const observedAt = Number(quote?.observed_at_utc_msc);
+  const offsetMinutes = terminalQuoteTimezoneOffsetMinutes(quote);
+  if (Number.isFinite(observedAt) && observedAt > 0 && offsetMinutes !== null) {
+    return fmtUtc(new Date(observedAt + offsetMinutes * 60_000));
+  }
+  return formatTime(quote?.time);
+}
+
 const fmtUtc = (d) => {
   if (!d || isNaN(d)) return "--";
   const p = (n) => String(n).padStart(2, "0");
@@ -1503,7 +1520,8 @@ function connectBridgeStatusWs(onReady) {
       const msg = JSON.parse(e.data);
       if (msg.type === 'platform_market_tick') {
         const quote = msg.quote || {};
-        if (Number.isFinite(Number(quote.timezone_offset_minutes))) state.mt5TimezoneOffsetMinutes = Number(quote.timezone_offset_minutes);
+        const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(quote);
+        if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
         const selected = String($("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || getGlobalSymbol()).toUpperCase();
         const brokerSymbol = String(quote.symbol || '').toUpperCase();
         if (brokerSymbol && (brokerSymbol === selected || brokerSymbol.startsWith(selected)) &&
@@ -1741,7 +1759,9 @@ function updateMarketStatusFromQuote(quote) {
 
 function renderQuoteStatusMeta(quote) {
   setText('quoteSpread', Number.isFinite(Number(quote?.spread)) ? fmt(quote.spread, 2) : '--');
-  const quoteTime = formatTime(quote?.time);
+  const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(quote);
+  if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
+  const quoteTime = formatTerminalQuoteTime(quote);
   setText('quoteTime', quoteTime);
   setText('mt5ServerTime', quoteTime === '--' ? '--' : quoteTime.split(' ').pop() || '--');
   updateMarketStatusFromQuote(quote);
@@ -1767,7 +1787,8 @@ function handleBridgeData(msg) {
 
   if (msg.quote) {
     const q = msg.quote;
-    if (Number.isFinite(Number(q.timezone_offset_minutes))) state.mt5TimezoneOffsetMinutes = Number(q.timezone_offset_minutes);
+    const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(q);
+    if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
     // Only update quote display if the pushed symbol matches the selected symbol
     if (q.symbol && q.symbol === selectedSymbol) {
       const prev = state.lastQuote && state.lastQuote.symbol === q.symbol ? state.lastQuote : null;

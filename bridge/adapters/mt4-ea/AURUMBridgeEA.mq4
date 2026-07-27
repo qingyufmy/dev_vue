@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.20"
+#property version   "3.21"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -42,6 +42,7 @@ input string InpPipeName = "AURUMBridgeV3";
 #define KIND_MARKET      1
 #define KIND_LIMIT       2
 #define KIND_STOP        3
+#define REQUEST_TIMER_MSC 200
 
 int    g_pipe = INVALID_HANDLE;
 bool   g_welcomed = false;
@@ -51,7 +52,13 @@ string g_pipe_name = "";
 
 long CurrentServerOffsetMsc()
   {
-   return(((long)TimeCurrent() - (long)TimeGMT()) * 1000);
+   return(((long)CurrentServerOffsetMinutes()) * 60000);
+  }
+
+int CurrentServerOffsetMinutes()
+  {
+   double raw_minutes = ((double)((long)TimeCurrent() - (long)TimeGMT())) / 60.0;
+   return((int)MathRound(raw_minutes));
   }
 
 long ServerTimeToUtcMsc(const datetime server_time, const long server_offset_msc)
@@ -63,7 +70,8 @@ long ServerTimeToUtcMsc(const datetime server_time, const long server_offset_msc
 int OnInit()
   {
    g_pipe_name = InpPipeName;
-   EventSetTimer(1);
+   if(!EventSetMillisecondTimer(REQUEST_TIMER_MSC))
+      return(INIT_FAILED);
    return(INIT_SUCCEEDED);
   }
 
@@ -165,7 +173,7 @@ bool ConnectPipe()
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
    AppendInt32(hello, 3);
-   AppendUtf8(hello, "3.2.0");
+   AppendUtf8(hello, "3.2.1");
    AppendUtf8(hello, TerminalInfoString(TERMINAL_DATA_PATH));
    AppendUtf8(hello, AccountServer());
    AppendUtf8(hello, IntegerToString(AccountNumber()));
@@ -290,6 +298,8 @@ void SendQuoteResult(const string request_id, const string symbol, const int sta
    AppendUtf8(response, status == 1 ? DoubleToString(bid, digits) : "");
    AppendUtf8(response, status == 1 ? DoubleToString(ask, digits) : "");
    AppendUtf8(response, error_code);
+   AppendInt32(response, CurrentServerOffsetMinutes());
+   AppendUtf8(response, "broker_time_derived");
    if(!WriteFrame(response))
       DisconnectPipe();
   }
@@ -1897,7 +1907,8 @@ void ExecuteQuery(const string command_id, const int ticket,
    if(!found)
      {
       SendCommandResult(command_id, 1, "", "", 0, 0,
-         "{\"found\":false,\"complete\":true}");
+         "{\"found\":false,\"complete\":false,"
+         "\"reason\":\"mt4_history_range_unverified\"}");
       return;
      }
    int selected_ticket = OrderTicket();
