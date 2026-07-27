@@ -44,6 +44,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('function updateBridgePlatformUI(value)')
     expect(app).toContain('[data-bridge-platform-template]')
     expect(html).toContain('data-bridge-platform-template="生成时间（{platform}）"')
+    expect(html).toContain('data-bridge-platform-template="实时读取 {platform}"')
     expect(html).toContain('data-bridge-platform-template="开仓时间（{platform}）"')
     expect(html).toContain('data-bridge-platform-template="时间（{platform}）"')
     expect(html).toContain('data-bridge-platform-template="决策 K 线（{platform}）"')
@@ -1046,6 +1047,11 @@ describe('route permissions and credential redaction', () => {
     expect(app).not.toContain('volume > 0.05')
     expect(app).not.toContain('submit.disabled = Number(meta.marginShortfall)')
     expect(html).not.toContain('id="tradeVolume" class="num" type="number" value="0.01" min="0.01" max="0.05"')
+  })
+
+  it('preserves merged position-protection progress in visual and accessible state', () => {
+    expect(app).toContain('progress.value = Number(mergedJob.progress_percent || 0)')
+    expect(app).toContain('progress.setAttribute("aria-valuenow", String(Number(mergedJob.progress_percent || 0)))')
   })
 
   it('refreshes incomplete risk snapshots on bridge identity recovery and labels historical accounts', () => {

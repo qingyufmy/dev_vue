@@ -101,7 +101,7 @@ describe('Bridge v3 incremental read model', () => {
     ]))
   })
 
-  it('rebinds a disconnected terminal profile to the newly authorized user on a newer epoch', async () => {
+  it('rebinds a disconnected terminal profile even when its isolated epoch is lower', async () => {
     const rebound = transactionFor({ terminal:terminalRow({
       user_id:29,
       connection_epoch:8,
@@ -115,7 +115,7 @@ describe('Bridge v3 incremental read model', () => {
       platform:'mt5',
       brokerServer:'Broker-Demo',
       login:'12345678',
-      connectionEpoch:9,
+      connectionEpoch:3,
       nowUtcMsc:NOW + 200,
     }, { transactionFn:rebound.transactionFn })).resolves.toMatchObject({
       connected:true,
@@ -123,21 +123,24 @@ describe('Bridge v3 incremental read model', () => {
       rebound:true,
       userId:42,
     })
-    expect(rebound.run.mock.calls[1][0]).toContain('user_id = VALUES(user_id)')
+    expect(rebound.run.mock.calls.some(([sql]) => sql.includes(
+      'DELETE FROM bridge_v3_stream_revisions WHERE terminal_instance_id = ?'
+    ))).toBe(true)
+    expect(rebound.run.mock.calls.some(([sql]) => sql.includes('user_id = VALUES(user_id)'))).toBe(true)
   })
 
-  it('does not rebind an active or non-advancing terminal session to another user', async () => {
+  it('does not rebind an active terminal session and keeps same-user epoch fencing', async () => {
     const active = transactionFor({ terminal:terminalRow({ user_id:29, connection_epoch:8, connected:1 }) })
     await expect(registerBridgeTerminalSession({
       userId:42, sessionId:'session_01JREADMODEL04', terminalInstanceId:'terminal_01JREADMODEL1',
       platform:'mt5', brokerServer:'Broker-Demo', login:'12345678', connectionEpoch:9,
     }, { transactionFn:active.transactionFn })).rejects.toMatchObject({ code:'bridge_terminal_binding_mismatch' })
 
-    const stale = transactionFor({ terminal:terminalRow({ user_id:29, connection_epoch:8, connected:0 }) })
+    const stale = transactionFor({ terminal:terminalRow({ user_id:42, connection_epoch:8, connected:0 }) })
     await expect(registerBridgeTerminalSession({
       userId:42, sessionId:'session_01JREADMODEL05', terminalInstanceId:'terminal_01JREADMODEL1',
-      platform:'mt5', brokerServer:'Broker-Demo', login:'12345678', connectionEpoch:8,
-    }, { transactionFn:stale.transactionFn })).rejects.toMatchObject({ code:'bridge_terminal_binding_mismatch' })
+      platform:'mt5', brokerServer:'Broker-Demo', login:'12345678', connectionEpoch:7,
+    }, { transactionFn:stale.transactionFn })).rejects.toMatchObject({ code:'bridge_connection_epoch_stale' })
   })
 
   it('applies account latest state and advances its revision in one transaction', async () => {

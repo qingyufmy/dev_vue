@@ -5048,8 +5048,8 @@ function renderPositionProtectionJob(job) {
   $("positionProtectionProgressStage")?.classList.remove("hidden");
   const progress = $("positionProtectionProgress");
   if (progress) {
-    progress.value = Number(job.progress_percent || 0);
-    progress.setAttribute("aria-valuenow", String(Number(job.progress_percent || 0)));
+    progress.value = Number(mergedJob.progress_percent || 0);
+    progress.setAttribute("aria-valuenow", String(Number(mergedJob.progress_percent || 0)));
   }
   job = mergedJob;
   const statusLabels = {

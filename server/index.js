@@ -4,7 +4,7 @@ import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import http from 'http'
-import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, API_RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, CORS_ORIGINS, isCorsOriginAllowed } from './config.js'
+import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, API_RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX, BRIDGE_AUTH_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, CORS_ORIGINS, isCorsOriginAllowed } from './config.js'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
@@ -120,6 +120,13 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
   message: { ok: false, code:'bridge_api_rate_limited', error: '操作过于频繁，请稍后再试' }
 })
+const bridgeAuthLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: BRIDGE_AUTH_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, code:'bridge_api_rate_limited', error: '操作过于频繁，请稍后再试' }
+})
 const writeLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: WRITE_RATE_LIMIT_MAX,
@@ -130,13 +137,13 @@ const writeLimiter = rateLimit({
 app.use('/api', apiLimiter)
 app.use('/aurum-api', apiLimiter)
 app.use('/api/login', authLimiter)
-app.use('/api/auth/bridge-refresh', authLimiter)
-app.use('/api/auth/bridge-session', authLimiter)
+app.use('/api/auth/bridge-refresh', bridgeAuthLimiter)
+app.use('/api/auth/bridge-session', bridgeAuthLimiter)
 app.use('/api/auth/bridge-revoke', authLimiter)
 app.use('/api/auth/bridge-pair/start', authLimiter)
-app.use('/api/auth/bridge-pair/token', authLimiter)
+app.use('/api/auth/bridge-pair/token', bridgeAuthLimiter)
 app.use('/api/auth/bridge-pair/approve', authLimiter)
-app.use('/api/auth/bridge-observer-session', authLimiter)
+app.use('/api/auth/bridge-observer-session', bridgeAuthLimiter)
 app.use('/api/register', authLimiter)
 app.use('/api/send-code', authLimiter)
 app.use('/api/verify-code', authLimiter)

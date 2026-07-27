@@ -180,16 +180,28 @@ export async function registerBridgeTerminalSession({
       [normalized.terminalInstanceId]
     )
     const existing = normalizeTerminalRow(rows?.[0])
+    const rebound = Boolean(existing && existing.user_id !== normalized.userId)
     if (existing) {
       const routeMatch = String(existing.platform) === normalized.platform
         && String(existing.broker_server).toLowerCase() === normalized.brokerServer.toLowerCase()
         && String(existing.login_account) === normalized.login
       if (!routeMatch) throw readModelError('bridge_terminal_binding_mismatch')
-      if (existing.user_id !== normalized.userId
-        && (existing.connected || normalized.connectionEpoch <= existing.connection_epoch)) {
+      if (rebound && existing.connected) {
         throw readModelError('bridge_terminal_binding_mismatch')
       }
-      if (normalized.connectionEpoch < existing.connection_epoch) throw readModelError('bridge_connection_epoch_stale')
+      if (!rebound && normalized.connectionEpoch < existing.connection_epoch) {
+        throw readModelError('bridge_connection_epoch_stale')
+      }
+    }
+    if (rebound) {
+      // Observer profiles keep an isolated SQLite store, so their local epoch
+      // counters are intentionally not comparable with the main profile. The
+      // disconnected route and account identity fence the transfer; discard
+      // server stream cursors so the new owner can establish a fresh snapshot
+      // even when its local epoch is numerically lower.
+      await run('DELETE FROM bridge_v3_stream_revisions WHERE terminal_instance_id = ?', [
+        normalized.terminalInstanceId,
+      ])
     }
 
     await run(`INSERT INTO bridge_v3_terminal_sessions
@@ -206,7 +218,7 @@ export async function registerBridgeTerminalSession({
     return { ...normalized, connected:true, lastSeenAtUtcMsc:nowUtcMsc,
       resumed:Boolean(existing && existing.user_id === normalized.userId
         && normalized.connectionEpoch === existing.connection_epoch),
-      rebound:Boolean(existing && existing.user_id !== normalized.userId) }
+      rebound }
   })
 }
 
