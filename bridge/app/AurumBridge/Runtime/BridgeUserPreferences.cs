@@ -24,7 +24,8 @@ public sealed record BridgeUserPreferences(
     string? Mt5TerminalInstanceId = null,
     string? Mt5TerminalPath = null,
     string? Mt4TerminalInstanceId = null,
-    string? Mt4TerminalPath = null);
+    string? Mt4TerminalPath = null,
+    bool ObserverEnabled = true);
 
 public sealed class BridgeUserPreferencesStore
 {
@@ -74,6 +75,24 @@ public sealed class BridgeUserPreferencesStore
             var current = await LoadCoreAsync(cancellationToken);
             await SaveCoreAsync(
                 current with { Platform = BridgePlatform.Normalize(platform) },
+                cancellationToken);
+        }
+        finally
+        {
+            _access.Release();
+        }
+    }
+
+    public async Task SaveObserverEnabledAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        await _access.WaitAsync(cancellationToken);
+        try
+        {
+            var current = await LoadCoreAsync(cancellationToken);
+            await SaveCoreAsync(
+                current with { ObserverEnabled = enabled },
                 cancellationToken);
         }
         finally
@@ -232,7 +251,8 @@ public sealed class BridgeUserPreferencesStore
             NormalizeMt5TerminalId(preferences.Mt5TerminalInstanceId),
             NormalizeMt5TerminalPath(preferences.Mt5TerminalPath),
             NormalizeMt4TerminalId(preferences.Mt4TerminalInstanceId),
-            NormalizeMt4TerminalPath(preferences.Mt4TerminalPath));
+            NormalizeMt4TerminalPath(preferences.Mt4TerminalPath),
+            preferences.ObserverEnabled);
     }
 
     private static string? NormalizeMt5TerminalId(string? value)

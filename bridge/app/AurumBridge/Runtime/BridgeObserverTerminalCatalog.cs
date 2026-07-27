@@ -25,6 +25,10 @@ public static class BridgeObserverTerminalCatalog
             var preferences = new BridgeUserPreferencesStore(
                 Path.Combine(profileDirectory, "preferences.json"));
             var current = await preferences.LoadAsync(cancellationToken);
+            if (!current.ObserverEnabled)
+            {
+                continue;
+            }
             BridgeObserverTerminalConfiguration? terminal = current.Platform switch
             {
                 BridgePlatform.Mt5 => ResolveMt5(profileId, current),

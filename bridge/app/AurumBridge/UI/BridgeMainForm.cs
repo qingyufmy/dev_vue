@@ -12,7 +12,28 @@ public sealed class BridgeTerminalChangedEventArgs(string terminalInstanceId) : 
     public string TerminalInstanceId { get; } = terminalInstanceId;
 }
 
-public sealed record BridgeObserverProfileMenuItem(string ProfileId, string State);
+public sealed record BridgeObserverProfileView(
+    string ProfileId,
+    string? Platform,
+    bool Configured,
+    bool Enabled,
+    string? TerminalInstanceId);
+
+public enum BridgeObserverAction
+{
+    Start,
+    Pause,
+    Retry,
+    Configure,
+}
+
+public sealed class BridgeObserverActionEventArgs(
+    string profileId,
+    BridgeObserverAction action) : EventArgs
+{
+    public string ProfileId { get; } = profileId;
+    public BridgeObserverAction Action { get; } = action;
+}
 
 public sealed class BridgeMainForm : Form
 {
@@ -34,7 +55,9 @@ public sealed class BridgeMainForm : Form
     private readonly TableLayoutPanel _terminalSelectorBar = new();
     private readonly TableLayoutPanel _mt4SetupBar = new();
     private readonly bool _isDefaultProfile;
-    private ContextMenuStrip? _observerSourcesMenu;
+    private IReadOnlyList<BridgeObserverProfileView> _observerProfiles = [];
+    private readonly HashSet<string> _busyObserverProfiles = new(StringComparer.Ordinal);
+    private BridgeApplicationStatus? _lastStatus;
     private bool _updatingPlatform;
     private bool _updatingTerminal;
     private bool _allowClose;
@@ -50,8 +73,8 @@ public sealed class BridgeMainForm : Form
         Icon = BridgeBrandIcon.ApplicationIcon;
         AccessibleName = $"{BridgeBrand.ProductName}状态窗口";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new(560, 520);
-        ClientSize = new(600, 550);
+        MinimumSize = new(580, 620);
+        ClientSize = new(620, 660);
         BackColor = Color.FromArgb(248, 250, 252);
         Font = new("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -62,6 +85,7 @@ public sealed class BridgeMainForm : Form
 
     public event EventHandler? PairRequested;
     public event EventHandler? ObserverSourcesRequested;
+    public event EventHandler<BridgeObserverActionEventArgs>? ObserverActionRequested;
     public event EventHandler? InstallMt4ExpertRequested;
     public event EventHandler? RedetectRequested;
     public event EventHandler? OpenLogsRequested;
@@ -72,6 +96,7 @@ public sealed class BridgeMainForm : Form
 
     public void ApplyStatus(BridgeApplicationStatus status)
     {
+        _lastStatus = status;
         var text = BridgeUiText.ForStatus(status);
         _statusTitle.Text = text.Title;
         _statusDescription.Text = text.Description;
@@ -87,23 +112,27 @@ public sealed class BridgeMainForm : Form
         _mt4SetupBar.Visible = CanShowMt4ExpertSetup(status.SelectedPlatform);
         ApplyPlatform(status.SelectedPlatform);
         ApplyTerminalCandidates(status);
-        _terminalList.SuspendLayout();
-        _terminalList.Controls.Clear();
-        foreach (var terminal in status.Terminals)
+        RenderAccountRows();
+    }
+
+    public void ApplyObserverProfiles(IReadOnlyList<BridgeObserverProfileView> profiles)
+    {
+        ArgumentNullException.ThrowIfNull(profiles);
+        _observerProfiles = profiles;
+        RenderAccountRows();
+    }
+
+    public void SetObserverActionBusy(string profileId, bool busy)
+    {
+        if (busy)
         {
-            _terminalList.Controls.Add(CreateTerminalRow(terminal));
+            _busyObserverProfiles.Add(profileId);
         }
-        if (status.Terminals.Count == 0)
+        else
         {
-            _terminalList.Controls.Add(new Label
-            {
-                AutoSize = true,
-                ForeColor = Color.FromArgb(100, 116, 139),
-                Text = "尚未识别到交易账户",
-                Margin = new Padding(0, 8, 0, 8),
-            });
+            _busyObserverProfiles.Remove(profileId);
         }
-        _terminalList.ResumeLayout();
+        RenderAccountRows();
     }
 
     public void SetPairingBusy(bool busy)
@@ -135,41 +164,6 @@ public sealed class BridgeMainForm : Form
 
     public static bool CanShowMt4ExpertSetup(string? selectedPlatform) =>
         selectedPlatform == BridgePlatform.Mt4;
-
-    public static string DescribeObserverProfileMenuItem(
-        BridgeObserverProfileMenuItem profile) =>
-        $"{profile.ProfileId}  ·  {profile.State}";
-
-    public void ShowObserverSourcesMenu(
-        IReadOnlyList<BridgeObserverProfileMenuItem> profiles,
-        Action<string> configureProfile,
-        Action createProfile)
-    {
-        ArgumentNullException.ThrowIfNull(profiles);
-        ArgumentNullException.ThrowIfNull(configureProfile);
-        ArgumentNullException.ThrowIfNull(createProfile);
-        _observerSourcesMenu?.Dispose();
-        var menu = new ContextMenuStrip();
-        _observerSourcesMenu = menu;
-        if (profiles.Count == 0)
-        {
-            menu.Items.Add("尚未添加观摩源").Enabled = false;
-        }
-        else
-        {
-            foreach (var profile in profiles)
-            {
-                var captured = profile.ProfileId;
-                menu.Items.Add(
-                    DescribeObserverProfileMenuItem(profile),
-                    null,
-                    (_, _) => configureProfile(captured));
-            }
-        }
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("新增观摩源…", null, (_, _) => createProfile());
-        menu.Show(_observerSourcesButton, new Point(0, _observerSourcesButton.Height));
-    }
 
     private void BuildLayout(string profileId, bool isDefaultProfile)
     {
@@ -208,8 +202,8 @@ public sealed class BridgeMainForm : Form
                 : "连接观摩终端与量见 AI交易实验室",
             Margin = new Padding(0, 0, 0, 24),
         };
-        root.Controls.Add(heading);
-        root.Controls.Add(subheading);
+        root.Controls.Add(heading, 0, 0);
+        root.Controls.Add(subheading, 0, 1);
 
         var platformBar = new TableLayoutPanel
         {
@@ -269,8 +263,8 @@ public sealed class BridgeMainForm : Form
             WrapContents = false,
             Margin = Padding.Empty,
         };
-        ConfigureButton(_observerSourcesButton, "观摩源", primary:false);
-        _observerSourcesButton.MinimumSize = new(96, 36);
+        ConfigureButton(_observerSourcesButton, "添加观摩源", primary:false);
+        _observerSourcesButton.MinimumSize = new(108, 36);
         _observerSourcesButton.Margin = Padding.Empty;
         _observerSourcesButton.Visible = false;
         _observerSourcesButton.Click += (_, _) => ObserverSourcesRequested?.Invoke(this, EventArgs.Empty);
@@ -282,7 +276,7 @@ public sealed class BridgeMainForm : Form
         _logoutButton.Click += (_, _) => LogoutRequested?.Invoke(this, EventArgs.Empty);
         platformActions.Controls.Add(_logoutButton);
         platformBar.Controls.Add(platformActions, 2, 0);
-        root.Controls.Add(platformBar);
+        root.Controls.Add(platformBar, 0, 2);
 
         _terminalSelectorBar.AutoSize = true;
         _terminalSelectorBar.Dock = DockStyle.Fill;
@@ -310,7 +304,7 @@ public sealed class BridgeMainForm : Form
         };
         _terminalSelectorBar.Controls.Add(_terminalSelector, 1, 0);
         _terminalSelectorBar.Visible = false;
-        root.Controls.Add(_terminalSelectorBar);
+        root.Controls.Add(_terminalSelectorBar, 0, 3);
 
         _mt4SetupBar.AutoSize = true;
         _mt4SetupBar.Dock = DockStyle.Fill;
@@ -337,7 +331,7 @@ public sealed class BridgeMainForm : Form
             InstallMt4ExpertRequested?.Invoke(this, EventArgs.Empty);
         _mt4SetupBar.Controls.Add(_mt4ExpertButton, 1, 0);
         _mt4SetupBar.Visible = false;
-        root.Controls.Add(_mt4SetupBar);
+        root.Controls.Add(_mt4SetupBar, 0, 4);
 
         var card = new TableLayoutPanel
         {
@@ -380,11 +374,11 @@ public sealed class BridgeMainForm : Form
             AutoSize = true,
             Font = new(Font.FontFamily, 9F, FontStyle.Bold),
             ForeColor = Color.FromArgb(51, 65, 85),
-            Text = "已识别账户",
+            Text = "桥接账户",
             Margin = new(0, 0, 0, 4),
         }, 1, 3);
         card.Controls.Add(_terminalList, 1, 4);
-        root.Controls.Add(card);
+        root.Controls.Add(card, 0, 5);
 
         var safety = new Label
         {
@@ -393,7 +387,7 @@ public sealed class BridgeMainForm : Form
             Text = "关闭窗口后仍会在托盘运行。退出桥接不会撤单、平仓或关闭 MT。",
             Margin = new Padding(0, 0, 0, 16),
         };
-        root.Controls.Add(safety);
+        root.Controls.Add(safety, 0, 6);
 
         var actions = new FlowLayoutPanel
         {
@@ -415,7 +409,7 @@ public sealed class BridgeMainForm : Form
         actions.Controls.Add(_detectButton);
         actions.Controls.Add(_logButton);
         actions.Controls.Add(_exitButton);
-        root.Controls.Add(actions);
+        root.Controls.Add(actions, 0, 7);
         Controls.Add(root);
     }
 
@@ -526,32 +520,208 @@ public sealed class BridgeMainForm : Form
         }
     }
 
-    private Panel CreateTerminalRow(BridgeTerminalStatus terminal)
+    private void RenderAccountRows()
     {
-        var state = BridgeUiText.DescribeTerminalState(terminal);
-        var row = new Panel
+        if (_lastStatus is null || _terminalList.IsDisposed)
         {
-            Width = 430,
-            Height = 46,
+            return;
+        }
+        _terminalList.SuspendLayout();
+        _terminalList.Controls.Clear();
+        var mainTerminals = _lastStatus.Terminals
+            .Where(terminal => terminal.ObserverProfileId is null)
+            .ToArray();
+        foreach (var terminal in mainTerminals)
+        {
+            _terminalList.Controls.Add(CreateAccountRow(
+                terminal,
+                "主账户",
+                observerProfile:null));
+        }
+        if (_lastStatus.CanManageObserverSources)
+        {
+            foreach (var profile in _observerProfiles)
+            {
+                var terminal = _lastStatus.Terminals.FirstOrDefault(candidate =>
+                    candidate.ObserverProfileId == profile.ProfileId);
+                _terminalList.Controls.Add(CreateAccountRow(
+                    terminal,
+                    $"观摩源 · {profile.ProfileId}",
+                    profile));
+            }
+        }
+        if (_terminalList.Controls.Count == 0)
+        {
+            _terminalList.Controls.Add(new Label
+            {
+                AutoSize = true,
+                ForeColor = Color.FromArgb(100, 116, 139),
+                Text = "尚未识别到交易账户",
+                Margin = new Padding(0, 8, 0, 8),
+            });
+        }
+        _terminalList.ResumeLayout();
+    }
+
+    private Control CreateAccountRow(
+        BridgeTerminalStatus? terminal,
+        string role,
+        BridgeObserverProfileView? observerProfile)
+    {
+        var row = new TableLayoutPanel
+        {
+            Width = 456,
+            Height = 64,
             BackColor = Color.FromArgb(248, 250, 252),
             Margin = new Padding(0, 4, 0, 4),
+            Padding = new Padding(12, 7, 8, 7),
+            ColumnCount = 2,
+            RowCount = 1,
         };
-        row.Controls.Add(new Label
+        row.ColumnStyles.Add(new(SizeType.Percent, 100));
+        row.ColumnStyles.Add(new(SizeType.AutoSize));
+        var copy = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty,
+            ColumnCount = 1,
+            RowCount = 2,
+        };
+        var platform = terminal?.Platform
+            ?? observerProfile?.Platform
+            ?? "terminal";
+        var identity = terminal is null || string.IsNullOrWhiteSpace(terminal.Login)
+            ? platform.ToUpperInvariant()
+            : $"{platform.ToUpperInvariant()}  ·  {terminal.Login}";
+        copy.Controls.Add(new Label
         {
             AutoSize = true,
-            Location = new(12, 7),
             Font = new(Font.FontFamily, 9F, FontStyle.Bold),
             ForeColor = Color.FromArgb(30, 41, 59),
-            Text = $"{terminal.Platform.ToUpperInvariant()}  ·  {terminal.Login}",
+            Text = $"{role}    {identity}",
+            Margin = Padding.Empty,
         });
-        row.Controls.Add(new Label
+        copy.Controls.Add(new Label
+        {
+            AutoEllipsis = true,
+            Dock = DockStyle.Fill,
+            ForeColor = ResolveAccountStateColor(terminal, observerProfile),
+            Text = DescribeAccountState(terminal, observerProfile),
+            Margin = new Padding(0, 4, 8, 0),
+        });
+        row.Controls.Add(copy, 0, 0);
+        if (observerProfile is not null)
+        {
+            row.Controls.Add(CreateObserverActions(observerProfile, terminal), 1, 0);
+        }
+        return row;
+    }
+
+    private Control CreateObserverActions(
+        BridgeObserverProfileView profile,
+        BridgeTerminalStatus? terminal)
+    {
+        var actions = new FlowLayoutPanel
         {
             AutoSize = true,
-            Location = new(12, 25),
-            ForeColor = Color.FromArgb(100, 116, 139),
-            Text = $"{terminal.BrokerServer}  ·  {state}",
-        });
-        return row;
+            Anchor = AnchorStyles.Right,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = Padding.Empty,
+        };
+        var busy = _busyObserverProfiles.Contains(profile.ProfileId);
+        var primaryAction = ResolveObserverPrimaryAction(profile, terminal);
+        if (primaryAction is not null)
+        {
+            var action = primaryAction.Value;
+            var button = CreateCompactButton(busy ? "处理中…" : DescribeObserverAction(action));
+            button.Enabled = !busy;
+            button.Click += (_, _) => ObserverActionRequested?.Invoke(
+                this,
+                new(profile.ProfileId, action));
+            actions.Controls.Add(button);
+        }
+        var settings = CreateCompactButton("设置");
+        settings.Enabled = !busy;
+        settings.Click += (_, _) => ObserverActionRequested?.Invoke(
+            this,
+            new(profile.ProfileId, BridgeObserverAction.Configure));
+        actions.Controls.Add(settings);
+        return actions;
+    }
+
+    public static BridgeObserverAction? ResolveObserverPrimaryAction(
+        BridgeObserverProfileView profile,
+        BridgeTerminalStatus? terminal)
+    {
+        if (!profile.Configured)
+        {
+            return null;
+        }
+        if (!profile.Enabled)
+        {
+            return BridgeObserverAction.Start;
+        }
+        return terminal is null
+            || terminal.RuntimeState == TerminalRuntimeState.Stopped
+            ? BridgeObserverAction.Retry
+            : BridgeObserverAction.Pause;
+    }
+
+    private static string DescribeObserverAction(BridgeObserverAction action) => action switch
+    {
+        BridgeObserverAction.Start => "启动",
+        BridgeObserverAction.Pause => "暂停",
+        BridgeObserverAction.Retry => "重试",
+        _ => "设置",
+    };
+
+    private static string DescribeAccountState(
+        BridgeTerminalStatus? terminal,
+        BridgeObserverProfileView? profile)
+    {
+        if (profile is { Configured: false })
+        {
+            return "需要设置交易终端";
+        }
+        if (profile is { Enabled: false })
+        {
+            return "已暂停 · 配置已保留";
+        }
+        if (terminal is null)
+        {
+            return profile is null ? "等待识别账户" : "等待连接";
+        }
+        var broker = string.IsNullOrWhiteSpace(terminal.BrokerServer)
+            ? "交易终端"
+            : terminal.BrokerServer;
+        return $"{broker} · {BridgeUiText.DescribeTerminalState(terminal)}";
+    }
+
+    private static Color ResolveAccountStateColor(
+        BridgeTerminalStatus? terminal,
+        BridgeObserverProfileView? profile)
+    {
+        if (profile is { Enabled: false })
+        {
+            return Color.FromArgb(100, 116, 139);
+        }
+        return terminal?.RuntimeState == TerminalRuntimeState.Running
+            ? Color.FromArgb(5, 150, 105)
+            : terminal?.RuntimeState == TerminalRuntimeState.Stopped
+                ? Color.FromArgb(220, 38, 38)
+                : Color.FromArgb(100, 116, 139);
+    }
+
+    private static Button CreateCompactButton(string text)
+    {
+        var button = new Button();
+        ConfigureButton(button, text, primary:false);
+        button.AutoSize = false;
+        button.Size = new(64, 30);
+        button.MinimumSize = new(64, 30);
+        button.Margin = new Padding(4, 9, 0, 0);
+        return button;
     }
 
     private static void ConfigureButton(Button button, string text, bool primary)
@@ -578,12 +748,4 @@ public sealed class BridgeMainForm : Form
         Hide();
     }
 
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            _observerSourcesMenu?.Dispose();
-        }
-        base.Dispose(disposing);
-    }
 }

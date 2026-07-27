@@ -36,6 +36,33 @@ public sealed class BridgeUserPreferencesTests
     }
 
     [TestMethod]
+    public async Task ExistingPreferencesDefaultObserverSourcesToEnabled()
+    {
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(_path, "{\"Platform\":\"mt5\"}");
+
+        var preferences = await new BridgeUserPreferencesStore(_path).LoadAsync();
+
+        Assert.IsTrue(preferences.ObserverEnabled);
+    }
+
+    [TestMethod]
+    public async Task ObserverEnabledStateIsPersistedWithoutLosingTerminalSelection()
+    {
+        var store = new BridgeUserPreferencesStore(_path);
+        const string terminalId = "mt5_0123456789abcdef01234567";
+        await store.SaveMt5TerminalAsync(terminalId);
+
+        await store.SaveObserverEnabledAsync(false);
+        var paused = await new BridgeUserPreferencesStore(_path).LoadAsync();
+        Assert.IsFalse(paused.ObserverEnabled);
+        Assert.AreEqual(terminalId, paused.Mt5TerminalInstanceId);
+
+        await store.SaveObserverEnabledAsync(true);
+        Assert.IsTrue((await store.LoadAsync()).ObserverEnabled);
+    }
+
+    [TestMethod]
     public async Task InvalidOrCorruptPreferenceFailsBackToSelection()
     {
         Directory.CreateDirectory(_directory);

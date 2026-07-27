@@ -188,14 +188,34 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
-    public void ObserverSourceMenuShowsStateWithoutSuggestingAnotherWindow()
+    public void ObserverControlsChooseSafeActionsFromPersistentAndRuntimeState()
     {
-        var label = BridgeMainForm.DescribeObserverProfileMenuItem(
-            new("source-1", "运行中"));
+        var configured = new BridgeObserverProfileView(
+            "source-1", BridgePlatform.Mt5, true, true,
+            "mt5_0123456789abcdef01234567");
+        var running = new BridgeTerminalStatus(
+            "mt5_0123456789abcdef01234567",
+            BridgePlatform.Mt5,
+            "Broker-Demo",
+            "12345678",
+            TerminalRuntimeState.Running,
+            null,
+            "source-1");
 
-        StringAssert.Contains(label, "source-1");
-        StringAssert.Contains(label, "运行中");
-        Assert.IsFalse(label.Contains("打开", StringComparison.Ordinal));
+        Assert.AreEqual(
+            BridgeObserverAction.Pause,
+            BridgeMainForm.ResolveObserverPrimaryAction(configured, running));
+        Assert.AreEqual(
+            BridgeObserverAction.Retry,
+            BridgeMainForm.ResolveObserverPrimaryAction(configured, null));
+        Assert.AreEqual(
+            BridgeObserverAction.Start,
+            BridgeMainForm.ResolveObserverPrimaryAction(
+                configured with { Enabled = false },
+                null));
+        Assert.IsNull(BridgeMainForm.ResolveObserverPrimaryAction(
+            configured with { Configured = false },
+            null));
     }
 
     [TestMethod]

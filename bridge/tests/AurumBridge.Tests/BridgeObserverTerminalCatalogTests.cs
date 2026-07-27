@@ -50,6 +50,24 @@ public sealed class BridgeObserverTerminalCatalogTests
     }
 
     [TestMethod]
+    public async Task PausedProfileKeepsItsConfigurationButIsExcludedFromRuntimeCatalog()
+    {
+        var terminalPath = CreateFile("terminals", "paused", "terminal64.exe");
+        await SaveProfileAsync("paused", terminalPath);
+        var profileDirectory = BridgeRuntimeProfile.ResolveDataDirectory(_directory, "paused");
+        var preferences = new BridgeUserPreferencesStore(
+            Path.Combine(profileDirectory, "preferences.json"));
+        await preferences.SaveObserverEnabledAsync(false);
+
+        var terminals = await BridgeObserverTerminalCatalog.LoadAsync(_directory);
+        var stored = await preferences.LoadAsync();
+
+        Assert.IsEmpty(terminals);
+        Assert.IsFalse(stored.ObserverEnabled);
+        Assert.AreEqual(Path.GetFullPath(terminalPath), stored.Mt5TerminalPath);
+    }
+
+    [TestMethod]
     public async Task LoadsAnMt4ObserverFromItsDedicatedTerminalDataPath()
     {
         var terminalDataPath = Path.Combine(_directory, "mt4-data");
