@@ -63,7 +63,11 @@ public sealed class BridgeWebSocketClient
             await SendDirectAsync(socket, JsonSerializer.Serialize(attempt.Hello, BridgeJson.Options), cancellationToken);
 
             var outbound = new PriorityMessageQueue();
-            var outbox = new BridgeOutboxPump(_store, outbound);
+            var sessionTerminalIds = attempt.Hello.Terminals
+                .Select(terminal => terminal.TerminalInstanceId)
+                .ToHashSet(StringComparer.Ordinal);
+            var outbox = new BridgeOutboxPump(
+                _store, outbound, terminalInstanceIds:sessionTerminalIds);
             var router = new BridgeInboundRouter(
                 _store, _dispatcher, outbound, quoteHandler:_quoteHandler, dataHandler:_dataHandler,
                 outboxPump:outbox);

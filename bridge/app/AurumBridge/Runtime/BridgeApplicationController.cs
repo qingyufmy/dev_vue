@@ -568,6 +568,19 @@ public sealed class BridgeApplicationController : IAsyncDisposable
                 registrations,
                 allowedMt4TerminalIds,
                 cancellationToken);
+            foreach (var terminal in mt4.Terminals)
+            {
+                var observer = observerTerminals.FirstOrDefault(configuration =>
+                    configuration.Platform == BridgePlatform.Mt4
+                    && TerminalPathsEqual(
+                        configuration.TerminalPath,
+                        terminal.Binding.TerminalPath));
+                if (observer is not null)
+                {
+                    observerProfileByTerminalId[terminal.Binding.TerminalInstanceId] =
+                        observer.ProfileId;
+                }
+            }
         }
         else
         {
@@ -596,16 +609,19 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             ? _activeMt5TerminalId is not null
                 && mt5.Terminals.Any(terminal =>
                     terminal.Binding.TerminalInstanceId == _activeMt5TerminalId)
-            : _activeMt4TerminalId is not null
+            : primaryMt4Installation is not null
                 && mt4.Terminals.Any(terminal =>
-                    terminal.Binding.TerminalInstanceId == _activeMt4TerminalId);
+                    TerminalPathsEqual(
+                        terminal.Binding.TerminalPath,
+                        primaryMt4Installation.TerminalDataPath));
         var mainFailure = mainTerminalAvailable
             ? null
             : selectedPlatform == BridgePlatform.Mt5
                 ? mt5.Failures.FirstOrDefault(failure =>
                     primaryMt5TerminalIds.Contains(failure.TerminalInstanceId))?.ErrorCode
                     ?? "mt5_terminal_not_found"
-                : mt4.Failures.FirstOrDefault()?.ErrorCode
+                : mt4.Failures.FirstOrDefault(failure =>
+                    failure.TerminalInstanceId == primaryMt4Installation?.TerminalInstanceId)?.ErrorCode
                     ?? mt4SetupDetail
                     ?? "mt4_terminal_not_found";
         var observerFailure = mt5.Failures.FirstOrDefault(failure =>
@@ -909,6 +925,16 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             }
         }
         return merged;
+    }
+
+    public static bool TerminalPathsEqual(string first, string second)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(first);
+        ArgumentException.ThrowIfNullOrWhiteSpace(second);
+        return string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(first)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(second)),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<Mt4Installation?> SelectMt4InstallationAsync(

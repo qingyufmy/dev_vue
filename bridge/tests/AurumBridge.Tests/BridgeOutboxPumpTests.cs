@@ -88,6 +88,28 @@ public sealed class BridgeOutboxPumpTests
         Assert.AreEqual(1, await replacementPump.PumpOnceAsync());
     }
 
+    [TestMethod]
+    public async Task IsolatedSessionOnlyPumpsMessagesForItsOwnTerminalRoutes()
+    {
+        var primary = Delta();
+        var observer = Delta() with
+        {
+            MessageId = "msg_retry_observer_01",
+            TerminalInstanceId = "terminal_observer_01",
+        };
+        await _testStore.Store.PersistDataDeltaAsync(primary);
+        await _testStore.Store.PersistDataDeltaAsync(observer);
+        var outbound = new PriorityMessageQueue();
+        var pump = new BridgeOutboxPump(
+            _testStore.Store,
+            outbound,
+            () => StartTime,
+            new HashSet<string>(StringComparer.Ordinal) { primary.TerminalInstanceId });
+
+        Assert.AreEqual(1, await pump.PumpOnceAsync());
+        Assert.AreEqual(primary.MessageId, (await outbound.DequeueAsync()).MessageId);
+    }
+
     private static DataDeltaMessage Delta() => new()
     {
         Type = "data_delta",

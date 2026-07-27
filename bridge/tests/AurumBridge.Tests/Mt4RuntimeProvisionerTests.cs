@@ -24,7 +24,11 @@ public sealed class Mt4RuntimeProvisionerTests
 
         Assert.HasCount(1, result.Terminals);
         Assert.IsEmpty(result.Failures);
-        Assert.AreEqual(2L, result.Terminals[0].Binding.ConnectionEpoch);
+        Assert.AreEqual(1L, result.Terminals[0].Binding.ConnectionEpoch);
+        Assert.AreEqual(
+            Workers.Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+                dataPath, "Broker-Demo", "12345678"),
+            result.Terminals[0].Binding.TerminalInstanceId);
         Assert.AreEqual("mt4", result.Terminals[0].Supervisor.Terminal.Platform);
         await result.Terminals[0].Supervisor.DisposeAsync();
     }
@@ -69,7 +73,10 @@ public sealed class Mt4RuntimeProvisionerTests
         var result = await provisioner.ProvisionAsync([], selectedId);
 
         Assert.HasCount(1, result.Terminals);
-        Assert.AreEqual(selectedId, result.Terminals[0].Binding.TerminalInstanceId);
+        Assert.AreEqual(
+            Workers.Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+                selectedPath, "Broker-One", "1001"),
+            result.Terminals[0].Binding.TerminalInstanceId);
         await result.Terminals[0].Supervisor.DisposeAsync();
     }
 
@@ -102,11 +109,44 @@ public sealed class Mt4RuntimeProvisionerTests
             new HashSet<string>(StringComparer.Ordinal) { ids[0], ids[1] });
 
         CollectionAssert.AreEquivalent(
-            new[] { ids[0], ids[1] },
+            new[]
+            {
+                Workers.Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+                    paths[0], "Broker", "1000"),
+                Workers.Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+                    paths[1], "Broker", "1001"),
+            },
             result.Terminals.Select(value => value.Binding.TerminalInstanceId).ToArray());
         foreach (var terminal in result.Terminals)
         {
             await terminal.Supervisor.DisposeAsync();
         }
+    }
+
+    [TestMethod]
+    public async Task MigratesAChangedAccountToAnAccountScopedRouteAndRemovesTheOldBinding()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var dataPath = Path.Combine(testStore.DataDirectory, "Switched MT4");
+        Directory.CreateDirectory(dataPath);
+        var installationId = Workers.Mt4TerminalIdentity.CreateTerminalInstanceId(dataPath);
+        await testStore.Store.ActivateTerminalBindingAsync(
+            installationId,
+            "mt4",
+            dataPath,
+            new("Broker-Demo", "1002"),
+            1_800_000_000_000);
+        var expectedRouteId = Workers.Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+            dataPath, "Broker-Demo", "1002");
+        var provisioner = new Mt4RuntimeProvisioner(testStore.Store, () => 1_800_000_000_100);
+
+        var result = await provisioner.ProvisionAsync([], installationId);
+
+        Assert.HasCount(1, result.Terminals);
+        Assert.AreEqual(expectedRouteId, result.Terminals[0].Binding.TerminalInstanceId);
+        var bindings = await testStore.Store.GetTerminalBindingsAsync();
+        Assert.HasCount(1, bindings);
+        Assert.AreEqual(expectedRouteId, bindings[0].TerminalInstanceId);
+        await result.Terminals[0].Supervisor.DisposeAsync();
     }
 }

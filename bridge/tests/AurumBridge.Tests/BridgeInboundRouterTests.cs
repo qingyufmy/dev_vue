@@ -84,6 +84,22 @@ public sealed class BridgeInboundRouterTests
     }
 
     [TestMethod]
+    public async Task ServerProtocolErrorPreservesItsStableErrorCode()
+    {
+        var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => Router().RouteAsync(
+            JsonSerializer.Serialize(new
+            {
+                v = 3,
+                type = "error",
+                message_id = "error_01JROUTER01",
+                sent_at_utc_msc = Now,
+                error_code = "bridge_terminal_binding_mismatch",
+            })));
+
+        Assert.AreEqual("bridge_terminal_binding_mismatch", error.Message);
+    }
+
+    [TestMethod]
     public async Task AppliedAckDeletesTheExactOutboxMessage()
     {
         var delta = Delta();

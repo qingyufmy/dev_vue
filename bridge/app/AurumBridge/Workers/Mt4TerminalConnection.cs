@@ -12,10 +12,33 @@ public static class Mt4TerminalIdentity
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(terminalDataPath);
         var normalized = Path.GetFullPath(terminalDataPath).ToUpperInvariant();
-        var device = string.IsNullOrWhiteSpace(deviceNamespace)
+        return HashIdentity($"{ResolveDevice(deviceNamespace)}\n{normalized}");
+    }
+
+    public static string CreateAccountTerminalInstanceId(
+        string terminalDataPath,
+        string brokerServer,
+        string login,
+        string? deviceNamespace = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(terminalDataPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(brokerServer);
+        ArgumentException.ThrowIfNullOrWhiteSpace(login);
+        var normalizedPath = Path.GetFullPath(terminalDataPath).ToUpperInvariant();
+        var normalizedServer = brokerServer.Trim().ToUpperInvariant();
+        var normalizedLogin = login.Trim();
+        return HashIdentity(
+            $"{ResolveDevice(deviceNamespace)}\n{normalizedPath}\n{normalizedServer}\n{normalizedLogin}");
+    }
+
+    private static string ResolveDevice(string? deviceNamespace) =>
+        string.IsNullOrWhiteSpace(deviceNamespace)
             ? ResolveDeviceNamespace()
             : deviceNamespace.Trim();
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{device}\n{normalized}")))
+
+    private static string HashIdentity(string identity)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
             .ToLowerInvariant();
         return $"mt4_{hash[..24]}";
     }

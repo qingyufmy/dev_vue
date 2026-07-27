@@ -176,4 +176,17 @@ public sealed class BridgeTerminalSelectionTests
             new[] { primary.TerminalInstanceId, observer.TerminalInstanceId },
             hostInstallations.Select(value => value.TerminalInstanceId).ToArray());
     }
+
+    [TestMethod]
+    public void AccountScopedMt4RouteStillMatchesItsSelectedInstallationPath()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "MT4 Selected");
+
+        Assert.IsTrue(BridgeApplicationController.TerminalPathsEqual(
+            path + Path.DirectorySeparatorChar,
+            path.ToUpperInvariant()));
+        Assert.IsFalse(BridgeApplicationController.TerminalPathsEqual(
+            path,
+            Path.Combine(Path.GetTempPath(), "MT4 Other")));
+    }
 }

@@ -39,4 +39,22 @@ public sealed class Mt4TerminalConnectionTests
         Assert.DoesNotContain("device-a", first);
         Assert.DoesNotContain("same-path", first);
     }
+
+    [TestMethod]
+    public void SeparatesAccountsInTheSameTerminalWhileNormalizingBrokerServerCase()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "Broker MT4", "account-switch");
+
+        var first = Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+            path, "Broker-Demo", "1001", "device-a");
+        var same = Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+            path, "broker-demo", "1001", "device-a");
+        var switched = Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+            path, "Broker-Demo", "1002", "device-a");
+
+        Assert.AreEqual(first, same);
+        Assert.AreNotEqual(first, switched);
+        Assert.DoesNotContain("1001", first);
+        Assert.DoesNotContain("Broker-Demo", first);
+    }
 }

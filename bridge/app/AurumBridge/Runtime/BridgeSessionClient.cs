@@ -289,7 +289,11 @@ public sealed class BridgeSessionClient
             cancellationToken) ?? throw new InvalidDataException("bridge_api_response_invalid");
         if (!response.IsSuccessStatusCode || !result.Ok)
         {
-            throw new BridgeApiException(result.Code ?? "bridge_api_request_failed", response.StatusCode);
+            var code = result.Code
+                ?? (response.StatusCode == HttpStatusCode.TooManyRequests
+                    ? "bridge_api_rate_limited"
+                    : "bridge_api_request_failed");
+            throw new BridgeApiException(code, response.StatusCode);
         }
         return result;
     }

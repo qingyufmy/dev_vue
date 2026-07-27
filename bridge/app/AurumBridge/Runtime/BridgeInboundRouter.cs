@@ -111,8 +111,9 @@ public sealed class BridgeInboundRouter
                 await HandleDataRequestAsync(payloadJson, cancellationToken);
                 return;
             case "heartbeat":
-            case "error":
                 return;
+            case "error":
+                throw new InvalidDataException(ReadRequiredString(root, "error_code"));
             default:
                 throw new InvalidDataException("bridge_message_type_unexpected");
         }

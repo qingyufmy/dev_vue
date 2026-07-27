@@ -371,6 +371,14 @@ public sealed class BridgeStore : IAsyncDisposable
         long nowUtcMsc,
         int limit = 100,
         CancellationToken cancellationToken = default)
+        => await GetReadyOutboxForTerminalsAsync(
+            nowUtcMsc, terminalInstanceIds: null, limit, cancellationToken);
+
+    public async Task<IReadOnlyList<OutboxMessage>> GetReadyOutboxForTerminalsAsync(
+        long nowUtcMsc,
+        IReadOnlySet<string>? terminalInstanceIds,
+        int limit = 100,
+        CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
         if (nowUtcMsc <= 0)
@@ -378,13 +386,31 @@ public sealed class BridgeStore : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(nowUtcMsc));
         }
         limit = Math.Clamp(limit, 1, 1_000);
+        if (terminalInstanceIds is { Count: 0 })
+        {
+            return [];
+        }
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = """
+        var terminalFilter = string.Empty;
+        if (terminalInstanceIds is not null)
+        {
+            var parameters = terminalInstanceIds
+                .Select((_, index) => $"$terminal_{index}")
+                .ToArray();
+            terminalFilter = $" AND terminal_instance_id IN ({string.Join(", ", parameters)})";
+            var index = 0;
+            foreach (var terminalId in terminalInstanceIds)
+            {
+                command.Parameters.AddWithValue($"$terminal_{index++}", terminalId);
+            }
+        }
+        command.CommandText = $"""
             SELECT id, message_id, message_type, priority, payload_json, attempt_count, created_at_utc_msc
             FROM outbox_messages
             WHERE acked_at_utc_msc IS NULL
               AND (next_attempt_at_utc_msc IS NULL OR next_attempt_at_utc_msc <= $now)
+              {terminalFilter}
             ORDER BY CASE priority WHEN 'trade' THEN 0 ELSE 1 END, id
             LIMIT $limit;
             """;
@@ -862,6 +888,40 @@ public sealed class BridgeStore : IAsyncDisposable
                 reader.GetInt64(6)));
         }
         return bindings;
+    }
+
+    public async Task<int> RemoveOtherTerminalBindingsForPathAsync(
+        string platform,
+        string terminalPath,
+        string retainedTerminalInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        ArgumentException.ThrowIfNullOrWhiteSpace(platform);
+        ArgumentException.ThrowIfNullOrWhiteSpace(terminalPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(retainedTerminalInstanceId);
+        var normalizedPlatform = platform.Trim().ToLowerInvariant();
+        var normalizedPath = Path.GetFullPath(terminalPath.Trim());
+        await _writer.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                DELETE FROM terminal_bindings
+                WHERE platform = $platform
+                  AND terminal_path = $terminal_path COLLATE NOCASE
+                  AND terminal_instance_id <> $retained_terminal_id;
+                """;
+            command.Parameters.AddWithValue("$platform", normalizedPlatform);
+            command.Parameters.AddWithValue("$terminal_path", normalizedPath);
+            command.Parameters.AddWithValue("$retained_terminal_id", retainedTerminalInstanceId.Trim());
+            return await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        finally
+        {
+            _writer.Release();
+        }
     }
 
     private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)

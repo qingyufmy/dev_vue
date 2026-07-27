@@ -273,6 +273,28 @@ public sealed class BridgeSessionClientTests
     }
 
     [TestMethod]
+    public async Task RateLimitedResponseWithoutServerCodeGetsAStableClientCode()
+    {
+        var handler = new QueueHandler(Response(HttpStatusCode.TooManyRequests, new
+        {
+            ok = false,
+            error = "too frequent",
+        }));
+        var store = new MemoryCredentialStore
+        {
+            Credential = new(new string('r', 64), 1_900_000_000_000),
+        };
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"), new HttpClient(handler), store);
+
+        var error = await Assert.ThrowsExactlyAsync<BridgeApiException>(
+            async () => await client.AcquireConnectionAttemptAsync(Hello()));
+
+        Assert.AreEqual("bridge_api_rate_limited", error.Code);
+        Assert.AreEqual(HttpStatusCode.TooManyRequests, error.StatusCode);
+    }
+
+    [TestMethod]
     public async Task ConcurrentLogoutPreventsARefreshingProfileFromRestoringAuthorization()
     {
         var handler = new QueueHandler(Response(HttpStatusCode.OK, new

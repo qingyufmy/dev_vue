@@ -55,11 +55,26 @@ public sealed class Mt4RuntimeProvisioner
         foreach (var connection in registrations)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var terminalId = SafeTerminalId(connection.Hello.TerminalDataPath);
+            var installationId = SafeTerminalId(connection.Hello.TerminalDataPath);
             if (allowedTerminalInstanceIds is not null
-                && !allowedTerminalInstanceIds.Contains(terminalId))
+                && !allowedTerminalInstanceIds.Contains(installationId))
             {
                 await connection.DisposeAsync();
+                continue;
+            }
+            string terminalId;
+            try
+            {
+                ValidateRegistration(connection.Hello);
+                terminalId = Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+                    connection.Hello.TerminalDataPath,
+                    connection.Hello.BrokerServer,
+                    connection.Hello.Login);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                await connection.DisposeAsync();
+                failures.Add(new(installationId, NormalizeError(error)));
                 continue;
             }
             if (!registeredIds.Add(terminalId))
@@ -76,26 +91,31 @@ public sealed class Mt4RuntimeProvisioner
             }
             try
             {
-                ValidateRegistration(connection.Hello);
                 var binding = await ActivateAsync(
                     terminalId,
                     connection.Hello.TerminalDataPath,
                     new(connection.Hello.BrokerServer, connection.Hello.Login),
+                    cancellationToken);
+                await _store.RemoveOtherTerminalBindingsForPathAsync(
+                    "mt4",
+                    binding.TerminalPath,
+                    binding.TerminalInstanceId,
                     cancellationToken);
                 provisioned.Add(Create(binding, connection));
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
                 await connection.DisposeAsync();
-                failures.Add(new(terminalId, NormalizeError(error)));
+                failures.Add(new(installationId, NormalizeError(error)));
             }
         }
 
         var existing = await _store.GetTerminalBindingsAsync(cancellationToken);
-        foreach (var binding in existing.Where(value => value.Platform == "mt4"))
+        foreach (var binding in LatestBindingsByPath(existing.Where(value => value.Platform == "mt4")))
         {
+            var installationId = SafeTerminalId(binding.TerminalPath);
             if (allowedTerminalInstanceIds is not null
-                && !allowedTerminalInstanceIds.Contains(binding.TerminalInstanceId))
+                && !allowedTerminalInstanceIds.Contains(installationId))
             {
                 continue;
             }
@@ -116,16 +136,28 @@ public sealed class Mt4RuntimeProvisioner
                 {
                     throw new DirectoryNotFoundException("mt4_terminal_data_path_not_found");
                 }
+                var accountTerminalId = Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+                    binding.TerminalPath,
+                    binding.AccountRef.BrokerServer,
+                    binding.AccountRef.Login);
                 var activated = await ActivateAsync(
-                    binding.TerminalInstanceId,
+                    accountTerminalId,
                     binding.TerminalPath,
                     binding.AccountRef,
                     cancellationToken);
-                provisioned.Add(Create(activated, initialConnection: null));
+                await _store.RemoveOtherTerminalBindingsForPathAsync(
+                    "mt4",
+                    activated.TerminalPath,
+                    activated.TerminalInstanceId,
+                    cancellationToken);
+                provisioned.Add(Create(
+                    activated,
+                    initialConnection: null,
+                    firstReconnectTerminalId: binding.TerminalInstanceId));
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
-                failures.Add(new(binding.TerminalInstanceId, NormalizeError(error)));
+                failures.Add(new(installationId, NormalizeError(error)));
             }
         }
         return new(provisioned, failures);
@@ -174,15 +206,21 @@ public sealed class Mt4RuntimeProvisioner
 
     private Mt4ProvisionedTerminal Create(
         TerminalBinding binding,
-        Mt4EaConnection? initialConnection)
+        Mt4EaConnection? initialConnection,
+        string? firstReconnectTerminalId = null)
     {
         var descriptor = binding.ToDescriptor(WorkerVersion);
         var reconnectPipe = Mt4TerminalIdentity.CreateReconnectPipeName(binding.TerminalInstanceId);
         var firstConnection = initialConnection;
+        var firstPipe = initialConnection is null
+            && !string.IsNullOrWhiteSpace(firstReconnectTerminalId)
+            && !string.Equals(firstReconnectTerminalId, binding.TerminalInstanceId, StringComparison.Ordinal)
+                ? Mt4TerminalIdentity.CreateReconnectPipeName(firstReconnectTerminalId)
+                : null;
         var supervisor = new TerminalRuntimeSupervisor(descriptor, () =>
         {
             var connection = new ReconnectableMt4EaConnection(
-                reconnectPipe,
+                Interlocked.Exchange(ref firstPipe, null) ?? reconnectPipe,
                 binding.TerminalPath,
                 binding.AccountRef.BrokerServer,
                 binding.AccountRef.Login,
@@ -191,6 +229,16 @@ public sealed class Mt4RuntimeProvisioner
         });
         return new(binding, supervisor);
     }
+
+    private static IReadOnlyList<TerminalBinding> LatestBindingsByPath(
+        IEnumerable<TerminalBinding> bindings) => bindings
+        .GroupBy(
+            binding => Path.GetFullPath(binding.TerminalPath),
+            StringComparer.OrdinalIgnoreCase)
+        .Select(group => group
+            .OrderByDescending(binding => binding.UpdatedAtUtcMsc)
+            .First())
+        .ToArray();
 
     private static void ValidateRegistration(Mt4Hello hello)
     {

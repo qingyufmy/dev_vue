@@ -92,7 +92,14 @@ const AUTH_RATE_LIMIT_PATHS = new Set([
   '/api/reset-password',
   '/api/send-bind-code',
   '/api/bind-phone',
-  '/api/bind-email'
+  '/api/bind-email',
+  '/api/auth/bridge-refresh',
+  '/api/auth/bridge-session',
+  '/api/auth/bridge-revoke',
+  '/api/auth/bridge-pair/start',
+  '/api/auth/bridge-pair/token',
+  '/api/auth/bridge-pair/approve',
+  '/api/auth/bridge-observer-session'
 ])
 
 const apiLimiter = rateLimit({
@@ -104,14 +111,14 @@ const apiLimiter = rateLimit({
   // the general API quota, background requests from the trading dashboard can
   // make login and account recovery unavailable for the rest of the window.
   skip: req => AUTH_RATE_LIMIT_PATHS.has(req.originalUrl.split('?')[0]),
-  message: { ok: false, error: '请求过于频繁，请稍后再试' }
+  message: { ok: false, code:'api_rate_limited', error: '请求过于频繁，请稍后再试' }
 })
 const authLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
   max: AUTH_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { ok: false, error: '操作过于频繁，请稍后再试' }
+  message: { ok: false, code:'bridge_api_rate_limited', error: '操作过于频繁，请稍后再试' }
 })
 const writeLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -127,6 +134,7 @@ app.use('/api/auth/bridge-refresh', authLimiter)
 app.use('/api/auth/bridge-session', authLimiter)
 app.use('/api/auth/bridge-revoke', authLimiter)
 app.use('/api/auth/bridge-pair/start', authLimiter)
+app.use('/api/auth/bridge-pair/token', authLimiter)
 app.use('/api/auth/bridge-pair/approve', authLimiter)
 app.use('/api/auth/bridge-observer-session', authLimiter)
 app.use('/api/register', authLimiter)

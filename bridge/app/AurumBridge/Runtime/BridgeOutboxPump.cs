@@ -9,6 +9,7 @@ public sealed class BridgeOutboxPump
     private readonly BridgeStore _store;
     private readonly PriorityMessageQueue _outbound;
     private readonly Func<long> _clock;
+    private readonly IReadOnlySet<string>? _terminalInstanceIds;
     private readonly Dictionary<string, ClaimState> _queued = new(StringComparer.Ordinal);
     private readonly object _sync = new();
     private sealed record ClaimState(int AttemptCount, long RetryAtUtcMsc);
@@ -16,17 +17,20 @@ public sealed class BridgeOutboxPump
     public BridgeOutboxPump(
         BridgeStore store,
         PriorityMessageQueue outbound,
-        Func<long>? clock = null)
+        Func<long>? clock = null,
+        IReadOnlySet<string>? terminalInstanceIds = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _outbound = outbound ?? throw new ArgumentNullException(nameof(outbound));
         _clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        _terminalInstanceIds = terminalInstanceIds;
     }
 
     public async Task<int> PumpOnceAsync(CancellationToken cancellationToken = default)
     {
         var now = _clock();
-        var messages = await _store.GetReadyOutboxAsync(now, 200, cancellationToken);
+        var messages = await _store.GetReadyOutboxForTerminalsAsync(
+            now, _terminalInstanceIds, 200, cancellationToken);
         var queued = 0;
         foreach (var message in messages)
         {
