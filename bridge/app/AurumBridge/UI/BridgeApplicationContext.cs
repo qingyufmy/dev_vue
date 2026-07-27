@@ -19,6 +19,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly string _profileId;
     private readonly string _rootDataDirectory;
     private readonly bool _backgroundMode;
+    private readonly BridgeFailureLogThrottle _failureLogThrottle = new(TimeSpan.FromMinutes(1));
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _observerRuntimeReload = new(1, 1);
     private readonly Lock _observerRuntimeSync = new();
@@ -112,7 +113,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.ExitRequested += HandleExitRequested;
         _controller.StatusChanged += HandlePrimaryStatusChanged;
         _controller.ConnectionFailureObserved += error =>
-            _logger.Error("bridge_connection_failure", error);
+            LogConnectionFailure("bridge_connection_failure", "primary", error);
         _singleInstance.ActivationRequested += HandleActivationRequested;
         _singleInstance.ShutdownRequested += HandleShutdownRequested;
         _singleInstance.StartActivationListener();
@@ -228,6 +229,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private void HandlePrimaryStatusChanged(BridgeApplicationStatus status)
     {
+        if (status.ServerConnected)
+        {
+            _failureLogThrottle.Reset("primary");
+        }
         lock (_observerRuntimeSync)
         {
             _primaryStatus = status;
@@ -243,6 +248,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
         BridgeApplicationController controller,
         BridgeApplicationStatus status)
     {
+        if (status.ServerConnected)
+        {
+            _failureLogThrottle.Reset($"observer:{profileId}");
+        }
         lock (_observerRuntimeSync)
         {
             if (!_observerRuntimes.TryGetValue(profileId, out var runtime)
@@ -637,9 +646,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 preferences.Mt4TerminalInstanceId);
             var runtime = new ObserverRuntime(controller);
             controller.StatusChanged += status => HandleObserverStatus(profileId, controller, status);
-            controller.ConnectionFailureObserved += error => _logger.Error(
+            controller.ConnectionFailureObserved += error => LogConnectionFailure(
                 "observer_connection_failure",
-                new InvalidOperationException($"profile={profileId}; {error.Message}", error));
+                $"observer:{profileId}",
+                error);
             lock (_observerRuntimeSync)
             {
                 _observerRuntimes[profileId] = runtime;
@@ -706,6 +716,23 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 "observer_runtime_failed",
                 new InvalidOperationException($"profile={profileId}; {error.Message}", error));
         }
+    }
+
+    private void LogConnectionFailure(string eventName, string scope, Exception error)
+    {
+        var decision = _failureLogThrottle.Observe(scope, error);
+        if (!decision.ShouldLog)
+        {
+            return;
+        }
+        if (decision.SuppressedCount > 0)
+        {
+            _logger.Warning(
+                $"{eventName}_repeated",
+                $"scope={scope}; code={decision.ErrorCode}; suppressed={decision.SuppressedCount}");
+            return;
+        }
+        _logger.Error(eventName, error);
     }
 
     private async Task RefreshObserverProfileViewsAsync(CancellationToken cancellationToken)

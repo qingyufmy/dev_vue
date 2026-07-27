@@ -362,4 +362,18 @@ public sealed class BridgeUiTextTests
         StringAssert.Contains(revoked, "重新连接");
         StringAssert.Contains(membership, "无需重新授权");
     }
+
+    [TestMethod]
+    public void ServerEndpointAndProtocolFailuresHaveActionableChineseCopy()
+    {
+        var endpoint = BridgeUiText.DescribeCode(
+            "bridge_server_endpoint_unavailable", "fallback");
+        var protocol = BridgeUiText.DescribeCode(
+            "bridge_server_protocol_error", "fallback");
+
+        StringAssert.Contains(endpoint, "服务器地址");
+        StringAssert.Contains(endpoint, "服务恢复");
+        StringAssert.Contains(protocol, "响应格式");
+        StringAssert.Contains(protocol, "自动重试");
+    }
 }

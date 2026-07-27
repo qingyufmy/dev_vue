@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using AurumBridge.Protocol;
 using AurumBridge.Security;
@@ -242,7 +243,7 @@ public sealed class BridgeSessionClient
                 new { refreshToken = credential.RefreshToken },
                 cancellationToken: cancellationToken);
         }
-        catch (BridgeApiException error) when (error.StatusCode == HttpStatusCode.Unauthorized)
+        catch (BridgeApiException error) when (ShouldClearCredential(error))
         {
             await _credentialStore.ClearAsync(CancellationToken.None);
             PublishObserverSourceManagement(false);
@@ -284,9 +285,27 @@ public sealed class BridgeSessionClient
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
         }
         using var response = await _httpClient.SendAsync(request, cancellationToken);
-        var result = await response.Content.ReadFromJsonAsync<TResponse>(
-            BridgeJson.Options,
-            cancellationToken) ?? throw new InvalidDataException("bridge_api_response_invalid");
+        var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (LooksLikeHtml(response, payload))
+        {
+            throw new BridgeApiException(
+                "bridge_server_endpoint_unavailable",
+                response.StatusCode);
+        }
+        TResponse result;
+        try
+        {
+            result = JsonSerializer.Deserialize<TResponse>(payload, BridgeJson.Options)
+                ?? throw new JsonException("bridge_api_response_empty");
+        }
+        catch (JsonException)
+        {
+            throw new BridgeApiException(
+                response.IsSuccessStatusCode
+                    ? "bridge_server_protocol_error"
+                    : StableHttpErrorCode(response.StatusCode),
+                response.StatusCode);
+        }
         if (!response.IsSuccessStatusCode || !result.Ok)
         {
             var code = result.Code
@@ -326,6 +345,29 @@ public sealed class BridgeSessionClient
         BridgeApiException apiError when apiError.StatusCode == HttpStatusCode.TooManyRequests
             || (int)apiError.StatusCode >= 500 => true,
         _ => false,
+    };
+
+    private static bool ShouldClearCredential(BridgeApiException error) =>
+        error.Code is "bridge_refresh_invalid" or "bridge_refresh_revoked";
+
+    private static bool LooksLikeHtml(HttpResponseMessage response, string payload)
+    {
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+        if (String.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase)
+            || String.Equals(mediaType, "application/xhtml+xml", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        return payload.AsSpan().TrimStart().StartsWith("<", StringComparison.Ordinal);
+    }
+
+    private static string StableHttpErrorCode(HttpStatusCode statusCode) => statusCode switch
+    {
+        HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed =>
+            "bridge_server_endpoint_unavailable",
+        HttpStatusCode.TooManyRequests => "bridge_api_rate_limited",
+        _ when (int)statusCode >= 500 => "bridge_server_unavailable",
+        _ => "bridge_api_request_failed",
     };
 
     private static TimeSpan RetryDelay(int failures) => TimeSpan.FromSeconds(failures switch

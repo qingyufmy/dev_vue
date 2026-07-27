@@ -273,6 +273,44 @@ public sealed class BridgeSessionClientTests
     }
 
     [TestMethod]
+    public async Task HtmlResponseBecomesAStableEndpointErrorWithoutClearingAuthorization()
+    {
+        var credential = new BridgeCredential(new string('r', 64), 1_900_000_000_000);
+        var store = new MemoryCredentialStore { Credential = credential };
+        var handler = new QueueHandler(TextResponse(
+            HttpStatusCode.Unauthorized,
+            "<html><body>reverse proxy login</body></html>",
+            "text/html"));
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"), new HttpClient(handler), store);
+
+        var error = await Assert.ThrowsExactlyAsync<BridgeApiException>(
+            async () => await client.AcquireConnectionAttemptAsync(Hello()));
+
+        Assert.AreEqual("bridge_server_endpoint_unavailable", error.Code);
+        Assert.AreEqual(credential, store.Credential);
+    }
+
+    [TestMethod]
+    public async Task InvalidSuccessfulJsonBecomesAStableProtocolError()
+    {
+        var credential = new BridgeCredential(new string('r', 64), 1_900_000_000_000);
+        var store = new MemoryCredentialStore { Credential = credential };
+        var handler = new QueueHandler(TextResponse(
+            HttpStatusCode.OK,
+            "this is not json",
+            "application/json"));
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"), new HttpClient(handler), store);
+
+        var error = await Assert.ThrowsExactlyAsync<BridgeApiException>(
+            async () => await client.AcquireConnectionAttemptAsync(Hello()));
+
+        Assert.AreEqual("bridge_server_protocol_error", error.Code);
+        Assert.AreEqual(credential, store.Credential);
+    }
+
+    [TestMethod]
     public async Task RateLimitedResponseWithoutServerCodeGetsAStableClientCode()
     {
         var handler = new QueueHandler(Response(HttpStatusCode.TooManyRequests, new
@@ -386,6 +424,14 @@ public sealed class BridgeSessionClientTests
     private static HttpResponseMessage Response(HttpStatusCode status, object body) => new(status)
     {
         Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"),
+    };
+
+    private static HttpResponseMessage TextResponse(
+        HttpStatusCode status,
+        string body,
+        string mediaType) => new(status)
+    {
+        Content = new StringContent(body, Encoding.UTF8, mediaType),
     };
 
     private sealed record CapturedRequest(string Uri, string? Authorization, string Body);

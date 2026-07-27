@@ -116,6 +116,9 @@ public static class BridgeUiText
             "mt5_terminal_already_in_use" => "该 MT5 已被另一个桥接档案使用；每个观摩源需要独立的 MT5 安装目录。",
         "bridge_not_paired" => "需要先连接量见账号。",
         "bridge_server_unreachable" => "暂时无法连接服务器，程序会自动重试。",
+        "bridge_server_unavailable" => "服务器正在启动或维护，程序会保留授权并自动重试。",
+        "bridge_server_endpoint_unavailable" => "服务器桥接接口暂不可用，请检查服务器地址或等待服务恢复。",
+        "bridge_server_protocol_error" => "服务器响应格式异常，程序会自动重试；若持续出现请联系支持。",
         "bridge_connection_lost" => "服务器连接中断，程序正在自动恢复。",
         "membership_required" or "bridge_membership_required" =>
             "当前账号暂时不能使用桥接；恢复有效会员后程序会自动重连，无需重新授权。",
