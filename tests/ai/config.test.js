@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { RiskReject, signalOrderPayload, buildBridgeOrderCall, enrichOrderRequest, isAiPendingOrderRequest, projectPendingRiskSnapshot } from '../../server/routes/ai/config.js'
+import { RiskReject, signalOrderPayload, buildBridgeOrderCall, enrichOrderRequest, isAiPendingOrderRequest, projectPendingRiskSnapshot, validateManualOrderRequest } from '../../server/routes/ai/config.js'
 
 describe('RiskReject', () => {
   it('创建风险拒绝错误', () => {
@@ -16,6 +16,23 @@ describe('AI pending-order platform control', () => {
     expect(isAiPendingOrderRequest({ entry_method:'stop' }, 'manual_ai')).toBe(true)
     expect(isAiPendingOrderRequest({ entry_method:'market' }, 'auto_delivery')).toBe(false)
     expect(isAiPendingOrderRequest({ entry_method:'limit' }, 'manual')).toBe(false)
+  })
+})
+
+describe('manual order validation without AI risk sizing', () => {
+  it('accepts an explicitly confirmed order without imposing an AI volume ceiling', () => {
+    expect(validateManualOrderRequest({
+      confirm:true, symbol:'XAUUSD', order_type:'buy', entry_method:'market', volume:2.5,
+    })).toBe(true)
+  })
+
+  it('keeps structural and confirmation validation before sending to the terminal', () => {
+    expect(() => validateManualOrderRequest({
+      confirm:false, symbol:'XAUUSD', order_type:'buy', entry_method:'market', volume:0.01,
+    })).toThrow('manual_confirmation_required')
+    expect(() => validateManualOrderRequest({
+      confirm:true, symbol:'XAUUSD', order_type:'buy', entry_method:'limit', volume:0.01,
+    })).toThrow('pending_price_invalid')
   })
 })
 

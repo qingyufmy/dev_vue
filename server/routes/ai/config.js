@@ -635,3 +635,52 @@ export async function executeOrderCore(userId, config, request, action, options 
   await insertAudit(null, userId, action, request.symbol, request, result, result.status)
   return result
 }
+
+export function validateManualOrderRequest(request = {}) {
+  if (request.confirm !== true) throw new RiskReject('manual_confirmation_required')
+  if (!String(request.symbol || '').trim()) throw new RiskReject('symbol_required')
+  if (!['buy', 'sell'].includes(String(request.order_type || '').toLowerCase())) {
+    throw new RiskReject('order_type_invalid')
+  }
+  const volume = Number(request.volume)
+  if (!Number.isFinite(volume) || volume <= 0) throw new RiskReject('volume_invalid')
+  const entryMethod = String(request.entry_method || 'market').toLowerCase()
+  if (!['market', 'limit', 'stop', 'stop_limit'].includes(entryMethod)) {
+    throw new RiskReject('entry_method_invalid')
+  }
+  if (entryMethod !== 'market' && !(Number(request.limit_price) > 0)) {
+    throw new RiskReject('pending_price_invalid')
+  }
+  return true
+}
+
+// Manual trading is user-directed. Keep confirmation, durable idempotency,
+// account ownership and broker-result reconciliation, but do not apply the AI
+// strategy/risk policy that may resize or reject an explicitly entered order.
+export async function executeManualOrderCore(userId, request, action = 'manual_open', options = {}) {
+  const result = await prepareAndExecuteOrderIntent({
+    userId,
+    tradingAccountId: options.tradingAccountId ?? request.trading_account_id ?? null,
+    clientRequestId: options.clientRequestId ?? request.client_request_id ?? request.request_id ?? null,
+    sourceType: 'manual',
+    action,
+    request,
+    options: { ...options, noFallback:true },
+    validateRequest: async (_config, _account, prepared) => {
+      validateManualOrderRequest(prepared)
+      return {
+        approved_order:{ ...prepared },
+        original_order:{ ...prepared },
+        rule_results:[],
+        risk_amount:null,
+        policy_version_ids:[],
+      }
+    },
+    buildBridgeCall:buildBridgeOrderCall,
+    resolveTradingAccount: ({ actorId, account, requestedAccountId }) =>
+      syncTradingAccountIdentity(actorId, account, requestedAccountId),
+    enrichRequest:enrichOrderRequest,
+  })
+  await insertAudit(null, userId, action, request.symbol, request, result, result.status)
+  return result
+}

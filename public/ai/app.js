@@ -2617,7 +2617,7 @@ function openSubscriptionEditor(strategy, subscription = null) {
   $("subscriptionMemoryModeField")?.classList.toggle("hidden", !isPrivate);
   $("platformMemoryNotice")?.classList.toggle("hidden", isPrivate);
   $("subscriptionMemoryMode").value = isPrivate ? (subscription?.memory_mode || "personal") : "personal";
-  $("subscriptionExecutionEnabled").checked = Boolean(subscription?.execution_enabled);
+  $("subscriptionExecutionEnabled").checked = Number(subscription?.execution_enabled) === 1;
   $("subscriptionTakeProfitMode").value = subscription?.take_profit_mode || "ai_recommended";
   $("subscriptionScheduleEnabled").checked = Boolean(Number(subscription?.schedule_enabled || 0));
   const defaultScheduleTimezone = syncMt5ScheduleTimezoneOption();
@@ -6479,7 +6479,6 @@ function buildManualOrder(orderType) {
   const volume = Number($("tradeVolume").value);
   if (!symbol) throw new Error("请选择交易品种");
   if (!Number.isFinite(volume) || volume <= 0) throw new Error("交易手数必须大于 0");
-  if (volume > 0.05) throw new Error("交易手数不能超过 0.05 手");
   const quote = state.lastQuote;
   if (!quote || quote.symbol !== symbol || !Number.isFinite(quote.bid) || !Number.isFinite(quote.ask)) {
     throw new Error("当前品种报价未就绪，请先刷新报价");
@@ -6750,14 +6749,14 @@ function renderManualOrderModal(order) {
   title.textContent = meta.orderType === "buy" ? "↗ 确认买入" : "↘ 确认卖出";
   title.className = meta.orderType === "buy" ? "buy" : "sell";
   submit.textContent = "确认发送";
-  submit.disabled = Number(meta.marginShortfall) > 0;
-  submit.title = submit.disabled ? "预估保证金不足，已阻止提交" : "发送前后端会再次执行风控校验";
+  submit.disabled = false;
+  submit.title = `按填写参数发送到 ${bridgePlatformLabel()}，由交易终端执行最终校验`;
   const marginKnown = Number.isFinite(Number(meta.estimatedMargin)) && Number.isFinite(Number(meta.freeMargin));
   const riskMessage = !marginKnown
-    ? "保证金数据不完整，后台提交时仍会重新校验账户状态。"
+    ? "不套用 AI 风控手数调整；保证金数据不完整，由交易终端校验账户状态和可用保证金。"
     : meta.marginShortfall > 0
-      ? `可用保证金不足，缺口约 ${fmt(meta.marginShortfall)} USD。`
-      : "保证金预检通过，最终结果以 MT5 返回为准。";
+      ? `不套用 AI 风控手数调整；预估保证金缺口约 ${fmt(meta.marginShortfall)} USD，仍可发送并以交易终端结果为准。`
+      : `不套用 AI 风控手数调整；保证金预检通过，最终结果以 ${bridgePlatformLabel()} 返回为准。`;
   const entryMethod = meta.entryMethod || "market";
   const entryMethodLabel = { market: "市价", limit: "限价", stop: "止损", stop_limit: "止损限价" }[entryMethod] || entryMethod;
   const isPending = entryMethod !== "market" && entryMethod !== "observe";
@@ -6772,13 +6771,13 @@ function renderManualOrderModal(order) {
     <div><span>止盈价格</span><strong>${meta.takeProfitPrice ? `${priceDisplay(meta.takeProfitPrice)}（约 ${meta.takeProfitPoints} 点）` : "未设置"}</strong></div>
     <div><span>止损价格</span><strong>${meta.stopLossPrice ? `${priceDisplay(meta.stopLossPrice)}（约 ${meta.stopLossPoints} 点）` : "未设置"}</strong></div>
     <section class="confirm-risk-section">
-      <span class="confirm-risk-title">保证金预检</span>
+      <span class="confirm-risk-title">手动订单校验</span>
       <div class="confirm-risk-grid">
         <div><span>预估占用</span><strong>${marginKnown ? `${fmt(meta.estimatedMargin)} USD` : "--"}</strong></div>
         <div><span>可用保证金</span><strong>${Number.isFinite(Number(meta.freeMargin)) ? `${fmt(meta.freeMargin)} USD` : "--"}</strong></div>
         <div><span>杠杆</span><strong>1:${escapeHtml(raw(parseDisplayNumber("accountLeverage")))}</strong></div>
       </div>
-      <div class="confirm-risk-warning ${Number(meta.marginShortfall) > 0 ? "blocking" : ""}">${escapeHtml(riskMessage)}</div>
+      <div class="confirm-risk-warning">${escapeHtml(riskMessage)}</div>
     </section>
   `;
   $("orderConfirmModal")?.classList.remove("hidden");

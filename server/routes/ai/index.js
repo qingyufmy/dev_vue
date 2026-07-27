@@ -169,8 +169,19 @@ function auditAiMutation(req, action, targetType, targetId, detail = {}) {
   })
 }
 
-async function reconcileAiRuntime() {
-  try { return { ok:true, scheduler:await reconcileAutoSchedulers() } }
+async function reconcileAiRuntime(userId = null) {
+  try {
+    const scheduler = await reconcileAutoSchedulers()
+    let bridge = null
+    if (Number(userId) > 0) {
+      const active = await queryOne(`SELECT id FROM strategy_subscriptions
+        WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1 LIMIT 1`, [Number(userId)])
+      bridge = await applyBridgeRuntimeState(Number(userId), {
+        autoReasoningEnabled:Boolean(active),
+      })
+    }
+    return { ok:true, scheduler, bridge }
+  }
   catch (error) {
     console.error('[AI Runtime] reconcile failed:', error)
     return { ok:false, degraded:true, error:'scheduler_runtime_sync_pending' }
@@ -643,7 +654,7 @@ router.delete('/ai/trading-accounts/:id', authMiddleware, async (req, res) => {
 router.post('/ai/subscriptions', authMiddleware, async (req, res) => {
   try {
     const subscription = await createSubscription(req.user.id, req.user.role, req.body || {})
-    const runtime_sync = await reconcileAiRuntime()
+    const runtime_sync = await reconcileAiRuntime(req.user.id)
     await auditAiMutation(req, 'ai_strategy_subscription_created', 'strategy_subscription', subscription.id, {
       strategy_id:subscription.strategy_id, trading_account_id:subscription.trading_account_id,
       execution_enabled:Boolean(subscription.execution_enabled),
@@ -656,7 +667,7 @@ router.post('/ai/subscriptions', authMiddleware, async (req, res) => {
 router.put('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
   try {
     const subscription = await updateSubscription(Number(req.params.id), req.user.id, req.user.role, req.body || {})
-    const runtime_sync = await reconcileAiRuntime()
+    const runtime_sync = await reconcileAiRuntime(req.user.id)
     await auditAiMutation(req, 'ai_strategy_subscription_updated', 'strategy_subscription', subscription.id, {
       strategy_id:subscription.strategy_id, trading_account_id:subscription.trading_account_id,
       execution_enabled:Boolean(subscription.execution_enabled),
@@ -671,7 +682,7 @@ router.delete('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
     await deleteSubscription(Number(req.params.id), req.user.id)
     const scheduler = await getUserAutoRuntimeStatus(req.user.id)
     if (!scheduler.enabled) await removeUserRuntimeAutoSubscription(req.user.id)
-    const runtime_sync = await reconcileAiRuntime()
+    const runtime_sync = await reconcileAiRuntime(req.user.id)
     await auditAiMutation(req, 'ai_strategy_subscription_deleted', 'strategy_subscription', Number(req.params.id))
     res.json({ ok:true, scheduler, runtime_sync })
   }
@@ -996,7 +1007,7 @@ router.put('/ai/admin/users/:userId/subscriptions/:subscriptionId', authMiddlewa
     const target = await queryOne('SELECT id, role FROM users WHERE id = ?', [targetUserId])
     if (!target) return res.status(404).json({ ok:false, error:'user_not_found' })
     const subscription = await updateSubscription(subscriptionId, targetUserId, target.role || 'user', req.body || {})
-    const runtime_sync = await reconcileAiRuntime()
+    const runtime_sync = await reconcileAiRuntime(targetUserId)
     await logAudit({ userId:req.user.id, action:'admin_user_subscription_updated', targetType:'strategy_subscription',
       targetId:subscriptionId, detail:JSON.stringify({ target_user_id:targetUserId, changes:req.body || {} }) })
     res.json({ ok:true, subscription, runtime_sync })

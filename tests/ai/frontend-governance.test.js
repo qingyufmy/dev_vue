@@ -1001,6 +1001,17 @@ describe('route permissions and credential redaction', () => {
     expect(routes).toContain('res.json({ ok:true, scheduler, runtime_sync })')
   })
 
+  it('uses subscription state for the automatic-analysis badge and bypasses AI risk for manual orders', () => {
+    const manualOpen = bridgeWs.slice(bridgeWs.indexOf("case 'open':"), bridgeWs.indexOf("case 'close':"))
+    expect(manualOpen).toContain('executeManualOrderCore')
+    expect(manualOpen).not.toContain('executeOrderCore')
+    expect(bridgeWs).toContain('activeSubscriptions.length === 0')
+    expect(app).toContain('Number(subscription?.execution_enabled) === 1')
+    expect(app).not.toContain('volume > 0.05')
+    expect(app).not.toContain('submit.disabled = Number(meta.marginShortfall)')
+    expect(html).not.toContain('id="tradeVolume" class="num" type="number" value="0.01" min="0.01" max="0.05"')
+  })
+
   it('fails closed when no observer channel is authorized and scopes signals to the bound strategy', () => {
     expect(bridgeWs).toContain('return { bridgeUserId:null, channel:null }')
     expect(bridgeWs).not.toContain('return { bridgeUserId:await getActivePlatformBridgeUserId(), channel:null }')

@@ -84,7 +84,7 @@ vi.mock('../../server/redis.js', () => ({
   isRedisAvailable: vi.fn(() => false),
 }))
 
-import { getSubscriptionIndexHealth, isAutoSchedulerRunning, rebuildRedisSubscriptions } from '../../server/routes/ai/scheduler.js'
+import { getSubscriptionIndexHealth, getUserAutoRuntimeStatus, isAutoSchedulerRunning, rebuildRedisSubscriptions } from '../../server/routes/ai/scheduler.js'
 import * as db from '../../server/db.js'
 import * as marketData from '../../server/routes/ai/market-data.js'
 import * as bridgeWs from '../../server/bridge-ws.js'
@@ -92,6 +92,30 @@ import * as bridgeWs from '../../server/bridge-ws.js'
 describe('isAutoSchedulerRunning', () => {
   it('未启动的调度器返回 false', () => {
     expect(isAutoSchedulerRunning(999)).toBe(false)
+  })
+})
+
+describe('automatic-analysis control state', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('reports disabled when no subscription has automatic analysis enabled', async () => {
+    db.queryOne.mockResolvedValueOnce(null)
+
+    await expect(getUserAutoRuntimeStatus(42)).resolves.toMatchObject({
+      enabled:false, running:false, paused_reason:'disabled',
+    })
+    expect(db.queryOne).toHaveBeenCalledTimes(1)
+    expect(db.queryOne.mock.calls[0][0]).toContain('strategy_subscriptions')
+  })
+
+  it('shows a runtime synchronization warning only when the subscription is enabled', async () => {
+    db.queryOne
+      .mockResolvedValueOnce({ strategy_id:7, symbols_json:null })
+      .mockResolvedValueOnce(null)
+
+    await expect(getUserAutoRuntimeStatus(42)).resolves.toMatchObject({
+      enabled:true, running:false, paused_reason:'no_runtime_scheduler', prompt_type_id:7,
+    })
   })
 })
 

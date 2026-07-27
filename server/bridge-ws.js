@@ -5,7 +5,6 @@ import { ADMIN_CACHE_TTL_MS, CORS_ORIGINS } from './config.js'
 import { isCorsOriginAllowed } from './cors-origin.js'
 import { getRedis, isRedisAvailable } from './redis.js'
 import { stripBrokerSuffix, utcToMt5Time } from './routes/ai/utils.js'
-import { DEFAULT_MAX_POSITION_SIZE } from './routes/ai/defaults.js'
 import { getRegisteredAutoSchedulerState } from './routes/ai/runtime-state-registry.js'
 import { setWeeklyMarketTimezoneOffset, weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
@@ -1005,12 +1004,13 @@ async function _initBridge(ws, userId, user, initQueue = null) {
       const ai = await import('./routes/ai/index.js')
       await ai.stopAutoScheduler(userId)
       await ai.removeUserRuntimeAutoSubscription(userId)
-      // Query actual DB state instead of hardcoding enabled: false
+      // Preserve the configured subscription state while runtime execution is paused.
       let schedulerEnabled = false
       try {
-        const schedRow = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [userId])
-        schedulerEnabled = !!schedRow?.enabled
-      } catch (e) { console.warn('[BridgeWS] Failed to read scheduler state on disconnect:', e.message) }
+        const schedRow = await queryOne(`SELECT id FROM strategy_subscriptions
+          WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1 LIMIT 1`, [userId])
+        schedulerEnabled = Boolean(schedRow)
+      } catch (e) { console.warn('[BridgeWS] Failed to read subscription state on disconnect:', e.message) }
       sendToBrowsers(userId, { type: 'auto_state', enabled: schedulerEnabled, runtime_subscribed: false, reason: 'user_bridge_offline' })
     } catch (e) {
       console.error('[BridgeWS] Failed to stop auto-reasoning on disconnect:', e.message)
@@ -1044,13 +1044,15 @@ async function _initBridge(ws, userId, user, initQueue = null) {
   } catch (e) {
     console.error(`[BridgeWS] Failed to read user_bridge_settings for user ${userId}:`, e.message)
   }
-  // Read auto_scheduler.enabled as the source of truth (must match auto_status endpoint)
+  // The subscription switch is the user-owned source of truth. auto_scheduler
+  // is a derived runtime row and may temporarily lag during reconciliation.
   let schedulerAutoEnabled = false
   try {
-    const schedRow = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [userId])
+    const schedRow = await queryOne(`SELECT id FROM strategy_subscriptions
+      WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1 LIMIT 1`, [userId])
     if (_bridgeInitGen.get(userId) !== gen) { abortStaleInit(); return }
-    schedulerAutoEnabled = !!(schedRow?.enabled)
-  } catch (e) { console.error('[BridgeWS] Failed to read auto_scheduler:', e.message) }
+    schedulerAutoEnabled = Boolean(schedRow)
+  } catch (e) { console.error('[BridgeWS] Failed to read automatic-analysis subscription:', e.message) }
 
   if (initQueue?.overflowed || ws.readyState !== 1) {
     initQueue?.detach()
@@ -1083,7 +1085,7 @@ async function _initBridge(ws, userId, user, initQueue = null) {
     )
   } catch (e) { console.error(`[BridgeWS] Failed to persist connect status user=${userId}:`, e.message) }
 
-  // Notify browsers with current trade/auto state — use auto_scheduler.enabled as single source of truth
+  // Notify browsers with the current user-owned subscription state.
   sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true,
     platform:'mt5', trade_enabled: defaultTrade,
     auto_reasoning_enabled: schedulerAutoEnabled, trade_mode: -1 })
@@ -1094,7 +1096,7 @@ async function _initBridge(ws, userId, user, initQueue = null) {
     .then(({ triggerWeeklySystemFlattenForUser }) => triggerWeeklySystemFlattenForUser(userId))
     .catch(e => console.error(`[WeeklyFlatten] Reconnect trigger failed user=${userId}:`, e.message))
 
-  // Restore auto-reasoning — use auto_scheduler.enabled as source of truth
+  // Restore automatic analysis only when a subscription explicitly enables it.
   if (process.env.DEBUG_BRIDGE_WS === '1') {
     console.log(`[BridgeWS] _initBridge user ${userId}: autoScheduler=${schedulerAutoEnabled} hasDbRow=${hasDbRow}`)
   }
@@ -1604,11 +1606,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, 'rejected')
           break
         }
-        const manualConfig = await ai.getInferencePreference(userId, params.session_id || 'default')
-        result = await ai.executeOrderCore(userId, {
-          ...manualConfig,
-          max_position_size: manualConfig.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
-        }, params, 'manual_open', { sourceType: 'manual' })
+        result = await ai.executeManualOrderCore(userId, params, 'manual_open')
         break
       }
       case 'close': {
@@ -2025,8 +2023,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'toggle_auto': {
-        const cfg = await ai.getAutoConfig(null, userId)
-        const newEnabled = !cfg?.enabled
+        const activeSubscriptions = await queryAll(`SELECT id FROM strategy_subscriptions
+          WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1
+          ORDER BY updated_at DESC, id DESC`, [userId])
+        const newEnabled = activeSubscriptions.length === 0
 
         // Check bridge connection when enabling
         if (newEnabled) {
@@ -2041,8 +2041,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         const subscriptions = newEnabled
           ? [await queryOne(`SELECT id FROM strategy_subscriptions
               WHERE user_id = ? AND is_deleted = 0 ORDER BY updated_at DESC, id DESC LIMIT 1`, [userId])].filter(Boolean)
-          : await queryAll(`SELECT id FROM strategy_subscriptions
-              WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1 ORDER BY updated_at DESC, id DESC`, [userId])
+          : activeSubscriptions
         if (!subscriptions.length) {
           result = { status: 'error', message: '请先在“推理策略”中创建订阅，再开启自动推理' }
           break
@@ -2726,13 +2725,14 @@ async function handleBrowserCommand(ws, userId, msg) {
           const bridge = bridges.get(r.id)
           const connected = !!(bridge && bridge.ws?.readyState === 1)
           const settings = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [r.id])
-          const scheduler = await queryOne('SELECT enabled FROM auto_scheduler WHERE user_id = ?', [r.id])
+          const scheduler = await queryOne(`SELECT id FROM strategy_subscriptions
+            WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1 LIMIT 1`, [r.id])
           return {
             ...r,
             bridgeConnected: connected,
             autoReasoning: !!(settings?.auto_reasoning_enabled),
             tradeEnabled: !!(settings?.trade_send_enabled),
-            schedulerEnabled: !!(scheduler?.enabled)
+            schedulerEnabled: Boolean(scheduler)
           }
         }))
 

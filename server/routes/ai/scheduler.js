@@ -326,9 +326,16 @@ export async function removeUserRuntimeAutoSubscription(userId) {
 
 // === User Auto Runtime Status ===
 export async function getUserAutoRuntimeStatus(userId) {
+  const activeSubscription = await queryOne(`SELECT strategy_id, symbols_json
+    FROM strategy_subscriptions
+    WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1
+    ORDER BY updated_at DESC, id DESC LIMIT 1`, [userId])
+  if (!activeSubscription) {
+    return { enabled: false, running: false, paused_reason: 'disabled', prompt_type_id: null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'idle', last_error: '', next_run_in_seconds: 0, last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
+  }
   const scheduler = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
   if (!scheduler || !scheduler.enabled) {
-    return { enabled: false, running: false, paused_reason: 'disabled', prompt_type_id: null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'idle', last_error: '', next_run_in_seconds: 0, last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
+    return { enabled: true, running: false, paused_reason: 'no_runtime_scheduler', prompt_type_id: Number(activeSubscription.strategy_id) || null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'paused', last_error: '', next_run_in_seconds: 0, last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
   }
 
   let selectedSymbols = []
@@ -771,6 +778,13 @@ export async function reconcileAutoSchedulers({ suppressErrors = false } = {}) {
       JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
       JOIN users u ON u.id = s.user_id
       WHERE s.enabled = 1
+        AND EXISTS (
+          SELECT 1 FROM strategy_subscriptions subscription
+          WHERE subscription.user_id = s.user_id
+            AND subscription.strategy_id = s.prompt_type_id
+            AND subscription.execution_enabled = 1
+            AND subscription.is_deleted = 0
+        )
         AND apt.is_active = 1
         AND apt.deleted_at IS NULL
         AND (apt.scope = 'platform' OR (apt.scope = 'private' AND apt.owner_user_id = s.user_id))
