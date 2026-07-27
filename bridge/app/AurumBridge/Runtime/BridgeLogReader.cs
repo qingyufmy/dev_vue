@@ -22,12 +22,20 @@ public sealed class BridgeLogReader
         {
             return "暂无日志。";
         }
-        var lines = new Queue<string>(maxLines);
+        var blocks = new List<string[]>();
+        var collectedLineCount = 0;
         var files = Directory.EnumerateFiles(_logDirectory, "bridge-*.log", SearchOption.TopDirectoryOnly)
-            .OrderBy(File.GetLastWriteTimeUtc)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .ThenByDescending(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         foreach (var path in files)
         {
+            var remainingLineCount = maxLines - collectedLineCount;
+            if (remainingLineCount <= 0)
+            {
+                break;
+            }
+            var fileLines = new Queue<string>(remainingLineCount);
             await using var stream = new FileStream(
                 path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
                 16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
@@ -38,14 +46,24 @@ public sealed class BridgeLogReader
                 {
                     continue;
                 }
-                if (lines.Count == maxLines)
+                if (fileLines.Count == remainingLineCount)
                 {
-                    lines.Dequeue();
+                    fileLines.Dequeue();
                 }
-                lines.Enqueue(FormatLine(line));
+                fileLines.Enqueue(FormatLine(line));
             }
+            if (fileLines.Count == 0)
+            {
+                continue;
+            }
+            blocks.Add(fileLines.ToArray());
+            collectedLineCount += fileLines.Count;
         }
-        return lines.Count == 0 ? "暂无日志。" : string.Join(Environment.NewLine, lines);
+        return collectedLineCount == 0
+            ? "暂无日志。"
+            : string.Join(
+                Environment.NewLine,
+                blocks.AsEnumerable().Reverse().SelectMany(block => block));
     }
 
     private static string FormatLine(string line)

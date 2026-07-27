@@ -139,20 +139,22 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private void HandleActivationRequested()
     {
-        if (_form.IsDisposed)
+        TryBeginInvoke(() =>
         {
-            return;
-        }
-        _form.BeginInvoke(_form.ShowFromTray);
+            if (!_shuttingDown)
+            {
+                _form.ShowFromTray();
+            }
+        });
     }
 
     private void HandleShutdownRequested()
     {
-        if (_form.IsDisposed || _shuttingDown)
+        if (_shuttingDown)
         {
             return;
         }
-        _form.BeginInvoke(() => _ = ShutdownAsync(stopObserverProfiles:false));
+        TryBeginInvoke(() => _ = ShutdownAsync(stopObserverProfiles:false));
     }
 
     private void HandleStatusChanged(BridgeApplicationStatus status)
@@ -171,12 +173,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
         {
             _ = WriteStartupReadyAsync(_startupReadyFile);
         }
-        if (_form.IsDisposed)
+        TryBeginInvoke(() =>
         {
-            return;
-        }
-        _form.BeginInvoke(() =>
-        {
+            if (_shuttingDown)
+            {
+                return;
+            }
             _form.ApplyStatus(status);
             _notifyIcon.Text = status.Phase == BridgeApplicationPhase.Online
                 ? $"{BridgeBrand.ProductName} · 运行中"
@@ -592,7 +594,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
                     var staged = await coordinator.CheckAndStageAsync(cancellationToken);
                     if (staged is not null)
                     {
-                        _form.BeginInvoke(() => _ = ApplyStagedUpdateAsync(coordinator, staged));
+                        TryBeginInvoke(() => _ = ApplyStagedUpdateAsync(coordinator, staged));
                         return;
                     }
                 }
@@ -726,15 +728,43 @@ public sealed class BridgeApplicationContext : ApplicationContext
         catch (Exception error)
         {
             _logger.Error("bridge_runtime_failed", error);
-            if (!_form.IsDisposed)
+            TryBeginInvoke(() =>
             {
-                _form.BeginInvoke(() => MessageBox.Show(
+                if (_shuttingDown)
+                {
+                    return;
+                }
+                MessageBox.Show(
                     _form,
                     BridgeUiText.DescribeError(error),
                     "桥接运行异常",
                     MessageBoxButtons.OK,
-                    MessageBoxIcon.Error));
-            }
+                    MessageBoxIcon.Error);
+            });
+        }
+    }
+
+    private bool TryBeginInvoke(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        if (_form.IsDisposed || _form.Disposing || !_form.IsHandleCreated)
+        {
+            return false;
+        }
+        try
+        {
+            _form.BeginInvoke(() =>
+            {
+                if (!_form.IsDisposed && !_form.Disposing)
+                {
+                    action();
+                }
+            });
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 }

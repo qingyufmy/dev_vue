@@ -9,6 +9,8 @@ public sealed class BridgeLogViewerForm : Form
     private readonly Button _refreshButton = new();
     private readonly Button _copyButton = new();
     private CancellationTokenSource? _refreshCancellation;
+    private int _refreshVersion;
+    private bool _closing;
 
     public BridgeLogViewerForm(string logDirectory)
     {
@@ -24,39 +26,78 @@ public sealed class BridgeLogViewerForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         BuildLayout();
         Shown += async (_, _) => await ReloadAsync();
-        FormClosed += (_, _) => _refreshCancellation?.Cancel();
     }
 
     public async Task ReloadAsync()
     {
-        _refreshCancellation?.Cancel();
-        _refreshCancellation?.Dispose();
-        _refreshCancellation = new();
+        if (_closing || IsDisposed || Disposing)
+        {
+            return;
+        }
+        var version = Interlocked.Increment(ref _refreshVersion);
+        var refreshCancellation = new CancellationTokenSource();
+        var previous = Interlocked.Exchange(ref _refreshCancellation, refreshCancellation);
+        previous?.Cancel();
         _refreshButton.Enabled = false;
         _refreshButton.Text = "正在刷新…";
         try
         {
-            _content.Text = await _reader.ReadRecentTextAsync(
-                cancellationToken:_refreshCancellation.Token);
+            var text = await _reader.ReadRecentTextAsync(
+                cancellationToken:refreshCancellation.Token);
+            if (!CanApplyRefresh(version, refreshCancellation))
+            {
+                return;
+            }
+            _content.Text = text;
             _content.SelectionStart = _content.TextLength;
             _content.ScrollToCaret();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (refreshCancellation.IsCancellationRequested)
         {
         }
         catch (Exception)
         {
-            _content.Text = "暂时无法读取日志，请稍后重试。";
+            if (CanApplyRefresh(version, refreshCancellation))
+            {
+                _content.Text = "暂时无法读取日志，请稍后重试。";
+            }
         }
         finally
         {
-            if (!IsDisposed)
+            if (CanApplyRefresh(version, refreshCancellation))
             {
                 _refreshButton.Enabled = true;
                 _refreshButton.Text = "刷新";
             }
+            Interlocked.CompareExchange(
+                ref _refreshCancellation,
+                null,
+                refreshCancellation);
+            refreshCancellation.Dispose();
         }
     }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && !_closing)
+        {
+            _closing = true;
+            Interlocked.Increment(ref _refreshVersion);
+            Interlocked.Exchange(ref _refreshCancellation, null)?.Cancel();
+        }
+        base.Dispose(disposing);
+    }
+
+    private bool CanApplyRefresh(
+        int version,
+        CancellationTokenSource refreshCancellation) =>
+        !_closing
+        && !IsDisposed
+        && !Disposing
+        && version == Volatile.Read(ref _refreshVersion)
+        && ReferenceEquals(
+            Volatile.Read(ref _refreshCancellation),
+            refreshCancellation);
 
     private void BuildLayout()
     {

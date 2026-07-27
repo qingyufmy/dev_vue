@@ -33,4 +33,41 @@ public sealed class BridgeLogReaderTests
             Directory.Delete(directory, recursive:true);
         }
     }
+
+    [TestMethod]
+    public async Task StopsBeforeOpeningOlderFilesWhenNewestLogsFillTheLimit()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "aurum-log-reader-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        FileStream? lockedOlderLog = null;
+        try
+        {
+            var olderPath = Path.Combine(directory, "bridge-20260725.log");
+            var newestPath = Path.Combine(directory, "bridge-20260726.log");
+            await File.WriteAllTextAsync(olderPath, "older");
+            await File.WriteAllLinesAsync(newestPath,
+            [
+                "newest-one",
+                "newest-two",
+            ]);
+            File.SetLastWriteTimeUtc(olderPath, new DateTime(2026, 7, 25, 0, 0, 0, DateTimeKind.Utc));
+            File.SetLastWriteTimeUtc(newestPath, new DateTime(2026, 7, 26, 0, 0, 0, DateTimeKind.Utc));
+            lockedOlderLog = new FileStream(
+                olderPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.None);
+
+            var text = await new BridgeLogReader(directory).ReadRecentTextAsync(maxLines:2);
+
+            Assert.IsFalse(text.Contains("older", StringComparison.Ordinal));
+            StringAssert.Contains(text, "newest-one");
+            StringAssert.Contains(text, "newest-two");
+        }
+        finally
+        {
+            lockedOlderLog?.Dispose();
+            Directory.Delete(directory, recursive:true);
+        }
+    }
 }
