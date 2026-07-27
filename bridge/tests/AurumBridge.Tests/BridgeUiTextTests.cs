@@ -295,12 +295,22 @@ public sealed class BridgeUiTextTests
         };
 
         var mt4Text = BridgeMainForm.DescribeTradingPermissions(mt4);
-        StringAssert.Contains(mt4Text, "MT4 自动交易 已开启");
-        StringAssert.Contains(mt4Text, "EA 实时交易 已开启");
-        StringAssert.Contains(mt4Text, "账户 EA 已关闭");
+        StringAssert.Contains(mt4Text, "MT4 顶部“自动交易”：已开启");
+        StringAssert.Contains(mt4Text, "EA“允许实时自动交易”：已开启");
+        StringAssert.Contains(mt4Text, "账户 EA 权限：已关闭");
+        Assert.AreEqual(
+            "交易权限异常",
+            BridgeMainForm.DescribeTradingPermissionSummary(mt4));
         var mt5Text = BridgeMainForm.DescribeTradingPermissions(mt5);
-        StringAssert.Contains(mt5Text, "MT5 算法交易 已开启");
-        Assert.IsFalse(mt5Text.Contains("EA 实时交易", StringComparison.Ordinal));
+        StringAssert.Contains(mt5Text, "MT5 工具栏“算法交易”：已开启");
+        Assert.IsFalse(mt5Text.Contains("允许实时自动交易", StringComparison.Ordinal));
+        Assert.AreEqual(
+            "交易权限正常",
+            BridgeMainForm.DescribeTradingPermissionSummary(mt5));
+        Assert.AreEqual(
+            "权限检测中",
+            BridgeMainForm.DescribeTradingPermissionSummary(
+                mt5 with { TerminalTradingAllowed = null }));
     }
 
     [TestMethod]

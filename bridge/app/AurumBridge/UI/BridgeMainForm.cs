@@ -93,6 +93,11 @@ public sealed class BridgeMainForm : Form
         Font = new("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Dpi;
         MaximizeBox = false;
+        _accountPermissionToolTip.InitialDelay = 250;
+        _accountPermissionToolTip.ReshowDelay = 100;
+        _accountPermissionToolTip.AutoPopDelay = 15_000;
+        _accountPermissionToolTip.ShowAlways = true;
+        _accountPermissionToolTip.ToolTipTitle = "交易权限详情";
         BuildLayout(validatedProfileId, isDefaultProfile);
         FormClosing += HandleFormClosing;
     }
@@ -666,7 +671,7 @@ public sealed class BridgeMainForm : Form
         var row = new TableLayoutPanel
         {
             Width = AccountCardMinimumWidth,
-            Height = terminal is null ? 70 : 106,
+            Height = terminal is null ? 70 : 88,
             BackColor = Color.FromArgb(248, 250, 252),
             Margin = new Padding(0, 4, AccountCardGap, 4),
             Padding = new Padding(12, 8, 8, 8),
@@ -724,21 +729,24 @@ public sealed class BridgeMainForm : Form
             Text = DescribeAccountState(terminal, observerProfile),
             Margin = new Padding(0, 4, 8, 0),
         });
-        var permissionText = DescribeTradingPermissions(terminal);
-        var permissionLabel = new Label
+        var permissionDetails = DescribeTradingPermissions(terminal);
+        var permissionBadge = new Label
         {
-            AutoEllipsis = false,
-            Dock = DockStyle.Fill,
-            Font = new(Font.FontFamily, 8.5F),
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Font = new(Font.FontFamily, 8.5F, FontStyle.Bold),
             ForeColor = ResolveTradingPermissionColor(terminal),
-            Text = permissionText,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Margin = new Padding(0, 4, 8, 0),
+            BackColor = ResolveTradingPermissionBackground(terminal),
+            Text = DescribeTradingPermissionSummary(terminal),
+            Padding = new Padding(8, 3, 8, 3),
+            Margin = new Padding(0, 3, 8, 0),
             Visible = terminal is not null,
-            AccessibleName = permissionText,
+            Cursor = Cursors.Help,
+            AccessibleName = DescribeTradingPermissionSummary(terminal),
+            AccessibleDescription = permissionDetails,
         };
-        _accountPermissionToolTip.SetToolTip(permissionLabel, permissionText);
-        copy.Controls.Add(permissionLabel);
+        _accountPermissionToolTip.SetToolTip(permissionBadge, permissionDetails);
+        copy.Controls.Add(permissionBadge);
         row.Controls.Add(copy, 1, 0);
         if (observerProfile is not null)
         {
@@ -793,23 +801,30 @@ public sealed class BridgeMainForm : Form
     {
         if (terminal is null)
         {
-            return "交易权限：检测中";
+            return "交易权限正在检测";
         }
-        var accountTrading = terminal.AccountTradingAllowed == false
-            ? " · 账户交易 已关闭"
-            : string.Empty;
         if (terminal.Platform == BridgePlatform.Mt4)
         {
-            return "交易权限："
-                + $"MT4 自动交易 {DescribePermission(terminal.TerminalTradingAllowed)}"
-                + $" · EA 实时交易 {DescribePermission(terminal.ProgramTradingAllowed)}\n"
-                + $"账户 EA {DescribePermission(terminal.AccountExpertTradingAllowed)}"
-                + accountTrading;
+            return $"MT4 顶部“自动交易”：{DescribePermission(terminal.TerminalTradingAllowed)}\n"
+                + $"EA“允许实时自动交易”：{DescribePermission(terminal.ProgramTradingAllowed)}\n"
+                + $"账户 EA 权限：{DescribePermission(terminal.AccountExpertTradingAllowed)}\n"
+                + $"账户交易权限：{DescribePermission(terminal.AccountTradingAllowed)}";
         }
-        return "交易权限："
-            + $"MT5 算法交易 {DescribePermission(terminal.TerminalTradingAllowed)}"
-            + $" · 账户 EA {DescribePermission(terminal.AccountExpertTradingAllowed)}"
-            + accountTrading;
+        return $"MT5 工具栏“算法交易”：{DescribePermission(terminal.TerminalTradingAllowed)}\n"
+            + $"账户 EA 权限：{DescribePermission(terminal.AccountExpertTradingAllowed)}\n"
+            + $"账户交易权限：{DescribePermission(terminal.AccountTradingAllowed)}";
+    }
+
+    public static string DescribeTradingPermissionSummary(BridgeTerminalStatus? terminal)
+    {
+        var values = RelevantTradingPermissions(terminal);
+        if (terminal is null || values.Any(value => value is null))
+        {
+            return "权限检测中";
+        }
+        return values.Any(value => value == false)
+            ? "交易权限异常"
+            : "交易权限正常";
     }
 
     private static string DescribePermission(bool? allowed) => allowed switch
@@ -821,11 +836,33 @@ public sealed class BridgeMainForm : Form
 
     private static Color ResolveTradingPermissionColor(BridgeTerminalStatus? terminal)
     {
+        var summary = DescribeTradingPermissionSummary(terminal);
+        return summary switch
+        {
+            "交易权限异常" => Color.FromArgb(153, 27, 27),
+            "交易权限正常" => Color.FromArgb(4, 120, 87),
+            _ => Color.FromArgb(146, 64, 14),
+        };
+    }
+
+    private static Color ResolveTradingPermissionBackground(BridgeTerminalStatus? terminal)
+    {
+        var summary = DescribeTradingPermissionSummary(terminal);
+        return summary switch
+        {
+            "交易权限异常" => Color.FromArgb(254, 226, 226),
+            "交易权限正常" => Color.FromArgb(209, 250, 229),
+            _ => Color.FromArgb(254, 243, 199),
+        };
+    }
+
+    private static bool?[] RelevantTradingPermissions(BridgeTerminalStatus? terminal)
+    {
         if (terminal is null)
         {
-            return Color.FromArgb(100, 116, 139);
+            return [];
         }
-        var values = terminal.Platform == BridgePlatform.Mt4
+        return terminal.Platform == BridgePlatform.Mt4
             ? new[]
             {
                 terminal.TerminalTradingAllowed,
@@ -839,13 +876,6 @@ public sealed class BridgeMainForm : Form
                 terminal.AccountTradingAllowed,
                 terminal.AccountExpertTradingAllowed,
             };
-        if (values.Any(value => value == false))
-        {
-            return Color.FromArgb(185, 28, 28);
-        }
-        return values.All(value => value == true)
-            ? Color.FromArgb(4, 120, 87)
-            : Color.FromArgb(161, 98, 7);
     }
 
     private Control CreateObserverActions(
