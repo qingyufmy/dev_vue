@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.22"
+#property version   "3.23"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -65,6 +65,61 @@ long ServerTimeToUtcMsc(const datetime server_time, const long server_offset_msc
   {
    if(server_time <= 0) return(0);
    return(((long)server_time) * 1000 - server_offset_msc);
+  }
+
+bool AccountTradeAllowed()
+  {
+   return(AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) != 0);
+  }
+
+bool AccountExpertTradeAllowed()
+  {
+   return(AccountInfoInteger(ACCOUNT_TRADE_EXPERT) != 0);
+  }
+
+bool TerminalTradeAllowed()
+  {
+   return(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) != 0);
+  }
+
+bool ProgramTradeAllowed()
+  {
+   return(MQLInfoInteger(MQL_TRADE_ALLOWED) != 0);
+  }
+
+bool SendTradePermissionFailure(const string command_id)
+  {
+   if(!IsConnected())
+     {
+      SendCommandResult(command_id, 2, "mt4_error_6", "mt4_terminal_not_connected", 6, 0);
+      return(true);
+     }
+   if(!TerminalTradeAllowed())
+     {
+      SendCommandResult(command_id, 2, "mt4_error_4109", "mt4_terminal_trade_not_allowed", 4109, 0);
+      return(true);
+     }
+   if(!ProgramTradeAllowed())
+     {
+      SendCommandResult(command_id, 2, "mt4_error_4109", "mt4_program_trade_not_allowed", 4109, 0);
+      return(true);
+     }
+   if(!AccountTradeAllowed())
+     {
+      SendCommandResult(command_id, 2, "mt4_error_133", "mt4_account_trade_not_allowed", 133, 0);
+      return(true);
+     }
+   if(!AccountExpertTradeAllowed())
+     {
+      SendCommandResult(command_id, 2, "mt4_error_4112", "mt4_account_expert_trade_disabled", 4112, 0);
+      return(true);
+     }
+   if(IsTradeContextBusy())
+     {
+      SendCommandResult(command_id, 2, "mt4_error_146", "mt4_trade_context_busy", 146, 0);
+      return(true);
+     }
+   return(false);
   }
 
 int OnInit()
@@ -173,7 +228,7 @@ bool ConnectPipe()
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
    AppendInt32(hello, 3);
-   AppendUtf8(hello, "3.2.2");
+   AppendUtf8(hello, "3.2.3");
    AppendUtf8(hello, TerminalInfoString(TERMINAL_DATA_PATH));
    AppendUtf8(hello, AccountServer());
    AppendUtf8(hello, IntegerToString(AccountNumber()));
@@ -1426,11 +1481,13 @@ string BuildDiagnosticsPayload()
       + "\"server\":\"" + JsonEscape(AccountServer()) + "\","
       + "\"balance\":" + JsonNumber(AccountBalance()) + ","
       + "\"equity\":" + JsonNumber(AccountEquity()) + ","
-      + "\"trade_allowed\":" + (IsTradeAllowed() ? "true" : "false") + ","
-      + "\"trade_expert\":" + (IsExpertEnabled() ? "true" : "false") + "},"
+      + "\"trade_allowed\":" + (AccountTradeAllowed() ? "true" : "false") + ","
+      + "\"trade_expert\":" + (AccountExpertTradeAllowed() ? "true" : "false") + "},"
       + "\"terminal\":{\"build\":" + IntegerToString((int)TerminalInfoInteger(TERMINAL_BUILD)) + ","
       + "\"connected\":" + (IsConnected() ? "true" : "false") + ","
-      + "\"trade_allowed\":" + (IsTradeAllowed() ? "true" : "false") + "},"
+      + "\"trade_allowed\":" + (TerminalTradeAllowed() ? "true" : "false") + ","
+      + "\"expert_enabled\":" + (IsExpertEnabled() ? "true" : "false") + ","
+      + "\"program_trade_allowed\":" + (ProgramTradeAllowed() ? "true" : "false") + "},"
       + "\"source\":\"mt4\"}");
   }
 
@@ -1535,12 +1592,10 @@ void ExecuteCommand(uchar &payload[], int &offset)
       SendCommandResult(command_id, 2, "command_expired", "", 0, 0);
       return;
      }
-   if(action != ACTION_QUERY && !IsTradeAllowed())
+   if(action != ACTION_QUERY && SendTradePermissionFailure(command_id))
      {
-      SendCommandResult(command_id, 2, "mt4_trade_not_allowed", "", 0, 0);
       return;
      }
-   ResetLastError();
    if(action == ACTION_PLACE)
      {
       ExecutePlace(command_id, symbol, side, order_kind, volume, price_value,
@@ -1606,12 +1661,14 @@ void ExecutePlace(const string command_id, const string symbol, const int side,
    double take_profit = (take_profit_value == "") ? 0 : StrToDouble(take_profit_value);
    string suffix = StringSubstr(command_id, MathMax(0, StringLen(command_id) - 20));
    string durable_comment = order_comment == "" ? "AURUM:" + suffix : order_comment;
+   ResetLastError();
    int ticket = OrderSend(broker_symbol, operation, volume, price, deviation, stop_loss, take_profit,
       durable_comment, magic, (datetime)expiration, clrNONE);
+   int trade_error = ticket > 0 ? 0 : GetLastError();
    if(ticket > 0)
       SendCommandResult(command_id, 1, "", "", 0, ticket);
    else
-      SendTradeFailure(command_id, "mt4_order_send_failed");
+      SendTradeFailure(command_id, "mt4_order_send_failed", trade_error);
   }
 
 void ExecuteCancel(const string command_id, const int ticket, const string expected_symbol,
@@ -1663,10 +1720,13 @@ void ExecuteCancel(const string command_id, const int ticket, const string expec
       SendCommandResult(command_id, 2, "management_volume_mismatch", "", 0, ticket);
       return;
      }
-   if(OrderDelete(ticket, clrNONE))
+   ResetLastError();
+   bool deleted = OrderDelete(ticket, clrNONE);
+   int trade_error = deleted ? 0 : GetLastError();
+   if(deleted)
       SendCommandResult(command_id, 1, "", "", 0, ticket);
    else
-      SendTradeFailure(command_id, "mt4_order_delete_failed");
+      SendTradeFailure(command_id, "mt4_order_delete_failed", trade_error);
   }
 
 void ExecuteModify(const string command_id, const int ticket, const string price_value,
@@ -1681,10 +1741,13 @@ void ExecuteModify(const string command_id, const int ticket, const string price
    double stop_loss = (stop_loss_value == "") ? OrderStopLoss() : StrToDouble(stop_loss_value);
    double take_profit = (take_profit_value == "") ? OrderTakeProfit() : StrToDouble(take_profit_value);
    datetime expiry = (expiration == 0) ? OrderExpiration() : (datetime)expiration;
-   if(OrderModify(ticket, price, stop_loss, take_profit, expiry, clrNONE))
+   ResetLastError();
+   bool modified = OrderModify(ticket, price, stop_loss, take_profit, expiry, clrNONE);
+   int trade_error = modified ? 0 : GetLastError();
+   if(modified)
       SendCommandResult(command_id, 1, "", "", 0, ticket);
    else
-      SendTradeFailure(command_id, "mt4_order_modify_failed");
+      SendTradeFailure(command_id, "mt4_order_modify_failed", trade_error);
   }
 
 void ExecuteClose(const string command_id, const int ticket, const string expected_symbol,
@@ -1744,10 +1807,13 @@ void ExecuteClose(const string command_id, const int ticket, const string expect
      }
    RefreshRates();
    double price = MarketInfo(OrderSymbol(), order_type == OP_BUY ? MODE_BID : MODE_ASK);
-   if(OrderClose(ticket, volume, price, deviation, clrNONE))
+   ResetLastError();
+   bool closed = OrderClose(ticket, volume, price, deviation, clrNONE);
+   int trade_error = closed ? 0 : GetLastError();
+   if(closed)
       SendCommandResult(command_id, 1, "", "", 0, ticket);
    else
-      SendTradeFailure(command_id, "mt4_order_close_failed");
+      SendTradeFailure(command_id, "mt4_order_close_failed", trade_error);
   }
 
 void ExecuteModifyPosition(const string command_id, const int ticket,
@@ -1847,9 +1913,12 @@ void ExecuteModifyPosition(const string command_id, const int ticket,
       SendCommandResult(command_id, 1, "", "already_applied", 0, ticket);
       return;
      }
-   if(!OrderModify(ticket, OrderOpenPrice(), next_sl, next_tp, 0, clrNONE))
+   ResetLastError();
+   bool modified = OrderModify(ticket, OrderOpenPrice(), next_sl, next_tp, 0, clrNONE);
+   int trade_error = modified ? 0 : GetLastError();
+   if(!modified)
      {
-      SendTradeFailure(command_id, "mt4_position_modify_failed");
+      SendTradeFailure(command_id, "mt4_position_modify_failed", trade_error);
       return;
      }
    if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)
@@ -1937,9 +2006,10 @@ void ExecuteQuery(const string command_id, const int ticket,
    SendCommandResult(command_id, 1, "", "", 0, selected_ticket, raw);
   }
 
-void SendTradeFailure(const string command_id, const string fallback_code)
+void SendTradeFailure(const string command_id, const string fallback_code,
+   const int captured_error = 0)
   {
-   int error_code = GetLastError();
+   int error_code = captured_error > 0 ? captured_error : GetLastError();
    string code = (error_code > 0)
       ? "mt4_error_" + IntegerToString(error_code)
       : fallback_code;
@@ -1979,7 +2049,10 @@ string BuildAccountJson()
       + "\"margin_free\":" + JsonNumber(AccountFreeMargin()) + ","
       + "\"profit\":" + JsonNumber(AccountProfit()) + ","
       + "\"connected\":" + (IsConnected() ? "true" : "false") + ","
-      + "\"trade_allowed\":" + (IsTradeAllowed() ? "true" : "false")
+      + "\"trade_allowed\":" + (AccountTradeAllowed() ? "true" : "false") + ","
+      + "\"trade_expert\":" + (AccountExpertTradeAllowed() ? "true" : "false") + ","
+      + "\"terminal_trade_allowed\":" + (TerminalTradeAllowed() ? "true" : "false") + ","
+      + "\"program_trade_allowed\":" + (ProgramTradeAllowed() ? "true" : "false")
       + "}");
   }
 

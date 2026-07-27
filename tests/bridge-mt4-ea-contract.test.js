@@ -12,7 +12,7 @@ function functionBlock(name, nextName) {
 describe('MT4 EA time contract', () => {
   it('normalizes broker quote time to UTC before publishing it', () => {
     const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
-    expect(source).toContain('#property version   "3.22"')
+    expect(source).toContain('#property version   "3.23"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
     expect(block).toContain('AppendInt32(response, CurrentServerOffsetMinutes())')
     expect(block).toContain('AppendUtf8(response, "broker_time_derived")')
@@ -38,7 +38,7 @@ describe('MT4 EA time contract', () => {
 
 describe('MT4 EA extended data contract', () => {
   it('advertises version 3.2 and handles every server data action', () => {
-    expect(source).toContain('AppendUtf8(hello, "3.2.2")')
+    expect(source).toContain('AppendUtf8(hello, "3.2.3")')
     const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')
     for (const action of ['symbols', 'history', 'chart_data', 'pending_order_state', 'diagnostics']) {
       expect(block).toContain(`action == "${action}"`)
@@ -48,6 +48,21 @@ describe('MT4 EA extended data contract', () => {
   it('reports the MT4 account-history range limitation explicitly', () => {
     expect(source).toContain('\\"history_source_complete\\":false')
     expect(source).toContain('mt4_account_history_tab_range')
+  })
+
+  it('reports every independent trading-permission layer', () => {
+    const diagnostics = functionBlock('string BuildDiagnosticsPayload', 'void SendExtendedData')
+    const account = functionBlock('string BuildAccountJson', 'void BuildOrderSnapshots')
+    const command = functionBlock('void ExecuteCommand', 'void ExecutePlace')
+
+    expect(diagnostics).toContain('AccountTradeAllowed()')
+    expect(diagnostics).toContain('AccountExpertTradeAllowed()')
+    expect(diagnostics).toContain('TerminalTradeAllowed()')
+    expect(diagnostics).toContain('ProgramTradeAllowed()')
+    expect(account).toContain('\\"trade_expert\\"')
+    expect(account).toContain('\\"terminal_trade_allowed\\"')
+    expect(account).toContain('\\"program_trade_allowed\\"')
+    expect(command).toContain('SendTradePermissionFailure(command_id)')
   })
 })
 
@@ -97,5 +112,22 @@ describe('MT4 EA uncertain execution contract', () => {
     expect(block).toContain('\\"found\\":false,\\"complete\\":false')
     expect(block).toContain('mt4_history_range_unverified')
     expect(block).not.toContain('\\"found\\":false,\\"complete\\":true')
+  })
+})
+
+describe('MT4 EA trade error contract', () => {
+  it('clears and captures the terminal error immediately around OrderSend', () => {
+    const block = functionBlock('void ExecutePlace', 'void ExecuteCancel')
+    expect(block).toContain('ResetLastError();')
+    expect(block).toContain('int ticket = OrderSend(')
+    expect(block).toContain('int trade_error = ticket > 0 ? 0 : GetLastError();')
+    expect(block).toContain('SendTradeFailure(command_id, "mt4_order_send_failed", trade_error)')
+  })
+
+  it('maps the server-side EA permission to native MT4 error 4112 before sending', () => {
+    const block = functionBlock('bool SendTradePermissionFailure', 'int OnInit')
+    expect(source).toContain('AccountInfoInteger(ACCOUNT_TRADE_EXPERT)')
+    expect(block).toContain('"mt4_error_4112"')
+    expect(block).toContain('"mt4_account_expert_trade_disabled"')
   })
 })

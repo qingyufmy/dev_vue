@@ -277,6 +277,15 @@ const REASON_MAP = {
   mt5_account_trade_disabled: "MT5 账户禁止交易",
   mt5_account_expert_trading_disabled: "MT5 账户禁止 EA/脚本交易",
   mt4_trade_not_allowed: "MT4 自动交易或 EA 实时交易权限未开启",
+  mt4_terminal_not_connected: "MT4 当前未连接交易服务器",
+  mt4_terminal_trade_not_allowed: "MT4 终端的自动交易总开关未开启",
+  mt4_program_trade_not_allowed: "MT4 EA 属性中的“允许实时自动交易”未开启",
+  mt4_account_trade_not_allowed: "当前 MT4 账户不允许交易，请确认使用交易密码登录且账户状态正常",
+  mt4_account_expert_trade_disabled: "MT4 交易服务器已禁止该账户使用 EA 自动交易，请联系经纪商或更换允许 EA 交易的账户",
+  mt4_trade_context_busy: "MT4 交易环境正忙，请稍后重试",
+  mt4_error_6: "MT4 当前未连接交易服务器",
+  mt4_error_133: "MT4 交易服务器已禁止当前账户交易",
+  mt4_error_146: "MT4 交易环境正忙，请稍后重试",
   mt4_error_4109: "MT4 EA 未允许实时自动交易，请检查 EA 属性设置",
   mt4_error_4112: "MT4 交易服务器已禁止该账户使用 EA 自动交易，请联系经纪商或更换允许 EA 交易的账户",
   hold_signal_cannot_execute: "已跳过（观望信号）",
@@ -4158,14 +4167,15 @@ async function loadStatus() {
   state._lastGatewayLive = isLive;
 
   // Trade mode badge
-  const mt5TradeBlocked = isLive
+  const terminalTradeBlocked = isLive
     && gateway.live_trading_enabled
-    && (gateway.terminal_trade_allowed === false || gateway.account_trade_allowed === false || gateway.account_trade_expert === false);
+    && (gateway.terminal_trade_allowed === false || gateway.program_trade_allowed === false
+      || gateway.account_trade_allowed === false || gateway.account_trade_expert === false);
   const tradeText = !isLive
     ? "请先启动桥接"
-    : mt5TradeBlocked ? `${bridgePlatformLabel()} 自动交易关闭`
+    : terminalTradeBlocked ? `${bridgePlatformLabel()} 自动交易关闭`
     : gateway.live_trading_enabled ? "交易已开启" : "交易已关闭";
-  renderTradePermissionBadge(Boolean(gateway.live_trading_enabled), { blocked:mt5TradeBlocked, label:tradeText });
+  renderTradePermissionBadge(Boolean(gateway.live_trading_enabled), { blocked:terminalTradeBlocked, label:tradeText });
 
   // Update market status from server (server now detects staleness via tick_time)
   if (typeof gateway.trade_mode === 'number') updateMarketStatus(gateway.trade_mode);
@@ -4267,37 +4277,38 @@ async function handleTradeModeClick() {
   if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
   const health = await wsApi("health").catch(() => null);
   if (!health?.gateway) {
-    toast("暂时无法核验 MT5 与交易权限，请稍后重试", "error");
+    toast(`暂时无法核验 ${bridgePlatformLabel()} 与交易权限，请稍后重试`, "error");
     return;
   }
   const gateway = health?.gateway || {};
   const currentlyEnabled = gateway.live_trading_enabled === true;
 
-  // Turning ON requires MT5 connection
+  // Turning on requires an active terminal connection.
   if (!currentlyEnabled && gateway.mode !== "live") {
-    toast("请先连接 MT5 桥接，再开启真实交易发送", "warning");
+    toast(`请先连接 ${bridgePlatformLabel()} 桥接，再开启真实交易发送`, "warning");
     return;
   }
 
-  const mt5TradeBlocked = gateway.terminal_trade_allowed === false
+  const terminalTradeBlocked = gateway.terminal_trade_allowed === false
+    || gateway.program_trade_allowed === false
     || gateway.account_trade_allowed === false
     || gateway.account_trade_expert === false;
-  if (!currentlyEnabled && mt5TradeBlocked) {
-    toast("MT5 当前未开放自动交易权限，请先在终端和账户设置中允许自动交易", "warning");
+  if (!currentlyEnabled && terminalTradeBlocked) {
+    toast(`${bridgePlatformLabel()} 当前未开放自动交易权限，请检查终端、EA 属性和账户服务器权限`, "warning");
     return;
   }
 
   const account = state.tradingAccounts?.find(item => item.is_active) || state.tradingAccounts?.[0];
   const subscription = state.strategySubscriptions?.find(item => Number(item.execution_enabled));
   const detailRows = [
-    ["MT5 账户", account ? `${account.nickname || account.login_account || "当前账户"}${account.broker_server ? ` · ${account.broker_server}` : ""}` : "当前已连接账户"],
+    [`${bridgePlatformLabel()} 账户`, account ? `${account.nickname || account.login_account || "当前账户"}${account.broker_server ? ` · ${account.broker_server}` : ""}` : "当前已连接账户"],
     ["自动运行策略", subscription?.strategy_name || subscription?.prompt_type_name || "按当前订阅设置"],
     ["服务器风控", "每笔订单发送前强制校验"],
-    ["MT5 权限", mt5TradeBlocked ? "未开放" : "已核验"],
+    [`${bridgePlatformLabel()} 权限`, terminalTradeBlocked ? "未开放" : "已核验"],
   ];
   const confirmed = currentlyEnabled
-    ? await showConfirm("关闭交易发送", "关闭后，AI 仍会分析行情，但不会再向 MT5 发送新订单。", { confirmText:"确认关闭", danger:true, detailRows })
-    : await showConfirm("开启真实交易发送", "开启后，自动分析或人工复核可以向当前 MT5 账户发送真实订单；每笔订单仍须通过服务器风控。", { confirmText:"确认开启", danger:true, detailRows });
+    ? await showConfirm("关闭交易发送", `关闭后，AI 仍会分析行情，但不会再向 ${bridgePlatformLabel()} 发送新订单。`, { confirmText:"确认关闭", danger:true, detailRows })
+    : await showConfirm("开启真实交易发送", `开启后，自动分析或人工复核可以向当前 ${bridgePlatformLabel()} 账户发送真实订单；每笔订单仍须通过服务器风控。`, { confirmText:"确认开启", danger:true, detailRows });
   if (!confirmed) return;
 
   try {
@@ -7811,10 +7822,17 @@ function auditResultText(row) {
   const result = row?.result || {};
   const reason = auditReasonText(row);
   const retcode = result.retcode || result.mt5_result?.retcode;
+  const platformHint = String(result.platform || result.source || row?.platform
+    || result.error || result.message || "").toLowerCase();
+  const returnPlatform = platformHint.includes("mt4")
+    ? "MT4"
+    : platformHint.includes("mt5") || result.mt5_result
+      ? "MT5"
+      : bridgePlatformLabel();
   const quote = result.quote?.bid !== undefined && result.quote?.ask !== undefined
     ? `报价 ${result.quote.bid} / ${result.quote.ask}`
     : "";
-  return [reason, retcode ? `MT5 返回码 ${retcode}` : "", quote].filter(Boolean).join(" · ");
+  return [reason, retcode ? `${returnPlatform} 返回码 ${retcode}` : "", quote].filter(Boolean).join(" · ");
 }
 
 function renderAuditRows() {

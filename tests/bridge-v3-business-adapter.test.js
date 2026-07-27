@@ -44,6 +44,7 @@ function setup({ routes = [route()], account, rows = [], positionRows, orderRows
       return account === null ? null : { payload_json:JSON.stringify(account || {
         login:12345678, server:'Broker-Demo', balance:1000, equity:1005,
         trade_allowed:true, trade_expert:true,
+        terminal_trade_allowed:true, program_trade_allowed:true,
       }) }
     }
     if (sql.includes('FROM users u LEFT JOIN')) {
@@ -237,9 +238,26 @@ describe('Bridge v3 business compatibility adapter', () => {
     await expect(adapter.execute(42, 'status')).resolves.toMatchObject({
       mode:'live', mt5_package_available:true, live_trading_enabled:true,
       terminal_trade_allowed:true, account_trade_allowed:true,
+      account_trade_expert:true, program_trade_allowed:true,
       login:12345678, server:'Broker-Demo', balance:1000, equity:1005,
     })
     expect(gateway.requestData).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps MT4 terminal, program, account and server EA permissions independent', async () => {
+    const { adapter } = setup({
+      routes:[route({ platform:'mt4' })],
+      account:{
+        login:'8950701', server:'DPrimeVU-Demo 5', balance:9999.73, equity:10000,
+        trade_allowed:true, trade_expert:false,
+        terminal_trade_allowed:true, program_trade_allowed:true,
+      },
+    })
+
+    await expect(adapter.execute(42, 'status')).resolves.toMatchObject({
+      source:'mt4', terminal_trade_allowed:true, program_trade_allowed:true,
+      account_trade_allowed:true, account_trade_expert:false,
+    })
   })
 
   it('rejects invalid rates bounds before contacting the terminal', async () => {

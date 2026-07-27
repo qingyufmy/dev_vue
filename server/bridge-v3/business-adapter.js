@@ -827,9 +827,10 @@ export function createBridgeV3BusinessAdapter({
         return {
           mode:'live', mt5_package_available:true,
           live_trading_enabled:gateway.isTradeEnabled(Number(userId)),
-          terminal_trade_allowed:Boolean(account.trade_allowed),
+          terminal_trade_allowed:Boolean(account.terminal_trade_allowed ?? account.trade_allowed),
           account_trade_allowed:Boolean(account.trade_allowed),
           account_trade_expert:Boolean(account.trade_expert ?? account.trade_allowed),
+          program_trade_allowed:Boolean(account.program_trade_allowed ?? account.trade_allowed),
           login:account.login, server:account.server,
           balance:account.balance, equity:account.equity,
           source:route.platform,
