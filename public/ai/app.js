@@ -1497,9 +1497,13 @@ async function handleAccountSwitched(msg = {}) {
     toast(`已切换到 MT5 账户${login ? ` ${login}` : ""}，正在刷新账户数据`, "success");
   }
   const results = await Promise.allSettled([
-    loadStatus(), loadSymbols(), loadAccount(), loadPositions(),
+    loadStatus(), loadSymbols(), loadAccount(), loadPositions(), loadStrategyCatalog(),
   ]);
   if (generation !== state._accountContextGeneration) return;
+  const currentAccount = state.tradingAccounts?.find(account => Number(account.is_active) === 1);
+  if (currentAccount && !$('subscriptionEditor')?.classList.contains('hidden')) {
+    $('subscriptionAccount').value = String(currentAccount.id);
+  }
   // Heavy account data (history, chart, pending orders and risk details) stays
   // demand-driven: refresh only the page the user is currently viewing.
   await refreshTabData(activeTabId()).catch(() => {});
@@ -2612,8 +2616,11 @@ function openSubscriptionEditor(strategy, subscription = null) {
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   if (!state.tradingAccounts?.length) { toast("请先连接交易桥并完成账户登记", "warning"); return; }
   const editor = $("subscriptionEditor"); editor.dataset.strategyId = strategy.id; editor.dataset.subscriptionId = subscription?.id || "";
-  $("subscriptionAccount").innerHTML = state.tradingAccounts.map(account => `<option value="${Number(account.id)}">${escapeHtml(account.nickname || account.login_account)} · ${escapeHtml(account.broker_server)}</option>`).join("");
-  $("subscriptionAccount").value = subscription?.trading_account_id || state.tradingAccounts[0].id;
+  const currentAccount = state.tradingAccounts.find(account => Number(account.is_active) === 1)
+    || state.tradingAccounts.find(account => account.observe_status === "active")
+    || state.tradingAccounts[0];
+  $("subscriptionAccount").innerHTML = `<option value="${Number(currentAccount.id)}">${escapeHtml(currentAccount.nickname || currentAccount.login_account)} · ${escapeHtml(currentAccount.broker_server)}</option>`;
+  $("subscriptionAccount").value = String(currentAccount.id);
   populateSubscriptionSymbolOptions(strategy, subscription);
   $("subscriptionSymbolsDropdown").open = false;
   const isPrivate = strategy.scope === "private";

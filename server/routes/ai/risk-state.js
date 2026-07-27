@@ -296,7 +296,9 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
     if (activeDifferent.length) {
       const ids = activeDifferent.map(row => Number(row.id))
       await run(`UPDATE trading_accounts SET observe_status = 'switched', updated_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`, [now, ...ids])
-      await run(`UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ? WHERE trading_account_id IN (${ids.map(() => '?').join(',')})`, [now, ...ids])
+      await run(`UPDATE strategy_subscriptions SET trading_account_id = ?, updated_at = ?
+        WHERE user_id = ? AND trading_account_id IN (${ids.map(() => '?').join(',')}) AND is_deleted = 0`,
+      [matched.id, now, userId, ...ids])
       await run(`UPDATE trading_accounts SET review_status = ?, observe_status = ?,
         observed_until = NULL, anomaly_code = ?, updated_at = ? WHERE id = ?`,
       [reviewStatus, observeStatus, anomalyCode, now, matched.id])

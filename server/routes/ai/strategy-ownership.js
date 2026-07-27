@@ -356,7 +356,15 @@ export async function deleteStrategy(strategyId, userId, userRole, confirmation 
 // ─── Trading accounts ───
 
 export async function listTradingAccounts(userId) {
-  return queryAll('SELECT * FROM trading_accounts WHERE user_id = ? AND is_deleted = 0 ORDER BY created_at DESC', [toId(userId, 'user_id')])
+  return queryAll(`SELECT ta.*,
+      CASE WHEN bindings.current_user_id = ta.user_id
+        AND bindings.current_trading_account_id = ta.id THEN 1 ELSE 0 END AS is_active
+    FROM trading_accounts ta
+    LEFT JOIN mt5_account_bindings bindings
+      ON bindings.current_trading_account_id = ta.id
+    WHERE ta.user_id = ? AND ta.is_deleted = 0
+    ORDER BY is_active DESC, COALESCE(ta.identity_verified_at, ta.updated_at) DESC, ta.id DESC`,
+  [toId(userId, 'user_id')])
 }
 
 export async function getTradingAccountById(accountId, userId) {

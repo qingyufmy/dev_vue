@@ -26,7 +26,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('const LIVE_QUOTE_REFRESH_INTERVAL_MS = 1000')
     expect(app).toContain('void refreshLiveQuote();')
     expect(app).toContain('}, LIVE_QUOTE_REFRESH_INTERVAL_MS)')
-    expect(html).toContain('/ai/app.js?v=20260727manualorder1')
+    expect(html).toContain('/ai/app.js?v=20260727bridgeaccount1')
   })
 
   it('uses the connected bridge platform in status and terminal-time labels', () => {
@@ -527,12 +527,24 @@ describe('AI governance navigation and DOM contract', () => {
     const start = app.indexOf('async function handleAccountSwitched')
     const end = app.indexOf('async function handleAccountTransferred', start)
     const handler = app.slice(start, end)
-    for (const loader of ['loadStatus()', 'loadSymbols()', 'loadAccount()', 'loadPositions()']) {
+    for (const loader of ['loadStatus()', 'loadSymbols()', 'loadAccount()', 'loadPositions()', 'loadStrategyCatalog()']) {
       expect(handler).toContain(loader)
     }
     expect(handler).toContain('clearAccountContextCaches()')
     expect(handler).toContain('refreshTabData(activeTabId())')
     expect(handler).not.toContain('loadHistory(), loadHistoryChart()')
+  })
+
+  it('binds subscriptions to the current bridge account instead of a historical account choice', () => {
+    expect(html).toContain('<span>当前桥接账户</span>')
+    expect(html).toContain('id="subscriptionAccount" disabled')
+    expect(html).toContain('随桥接软件当前连接账户自动切换，无需手动选择。')
+    const start = app.indexOf('function openSubscriptionEditor')
+    const end = app.indexOf('function subscriptionScheduleSummary', start)
+    const editor = app.slice(start, end)
+    expect(editor).toContain('Number(account.is_active) === 1')
+    expect(editor).toContain('String(currentAccount.id)')
+    expect(editor).not.toContain('subscription?.trading_account_id ||')
   })
 
   it('waits for transient terminal symbol discovery before loading quotes and charts', () => {

@@ -290,21 +290,23 @@ describe('stateful gate', () => {
 describe('identity and platform permissions', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('auto-verifies a Bridge account without an artificial observation limit and pauses old subscriptions on identity switch', async () => {
+  it('auto-verifies a Bridge account and migrates existing subscriptions to the connected account', async () => {
     const writes = []
     db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {
       if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[{ id: 1, user_id:2, broker_server: 'Old', login_account: '1', is_deleted: 0 }], []]
       if (sql.startsWith('SELECT * FROM trading_accounts\n      WHERE UPPER')) return [[], []]
       if (sql.includes('FROM mt5_account_bindings')) return [[], []]
-      writes.push(sql)
+      writes.push({ sql, params })
       if (sql.startsWith('INSERT INTO trading_accounts')) return [{ insertId: 2 }, []]
       return [{ affectedRows: 1 }, []]
     }))
     const result = await syncTradingAccountIdentity(2, { server: 'New', login: 9, trade_allowed:true }, 1)
     expect(result).toEqual({ accountId: 2, switched: true, verified: true, anomalyCode: null,
       ownershipTransferred:false, previousOwnerUserIds:[] })
-    expect(writes.some(sql => sql.includes('strategy_subscriptions SET execution_enabled = 0'))).toBe(true)
-    expect(writes.some(sql => sql.includes('INSERT INTO trading_accounts') && sql.includes('first_verified_at') && sql.includes('NULL'))).toBe(true)
+    const subscriptionMigration = writes.find(write => write.sql.includes('strategy_subscriptions SET trading_account_id = ?'))
+    expect(subscriptionMigration?.params).toEqual([2, '2026-07-15 21:00:00', 2, 1])
+    expect(writes.some(write => write.sql.includes('strategy_subscriptions SET execution_enabled = 0'))).toBe(false)
+    expect(writes.some(write => write.sql.includes('INSERT INTO trading_accounts') && write.sql.includes('first_verified_at') && write.sql.includes('NULL'))).toBe(true)
   })
 
   it('automatically transfers a trade-authorized duplicate MT5 account to the latest user', async () => {
