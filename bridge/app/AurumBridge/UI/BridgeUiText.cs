@@ -81,6 +81,14 @@ public static class BridgeUiText
         return $"{server}  ·  {synchronization}  ·  版本 {status.BridgeVersion}";
     }
 
+    public static string Mt4ExpertSetupInstructions =>
+        "接下来请在 MT4 中完成：\n\n"
+        + "1. 打开“导航器 → 智能交易系统”，右键刷新。\n"
+        + "2. 将 AURUMBridgeEA 拖到任意一个保持打开的图表。\n"
+        + "3. 在 EA 属性的“常用”页勾选“允许实时自动交易”。\n"
+        + "4. 确认 MT4 顶部“自动交易”按钮已开启。\n\n"
+        + "无需开启 DLL 导入或 WebRequest。";
+
     public static string DescribeCode(string? code, string fallback) => code switch
     {
         "mt5_terminal_not_found" => "未发现 MT5，请先打开并登录 MT5。",
@@ -88,6 +96,8 @@ public static class BridgeUiText
         "mt5_terminal_disconnected" => "MT5 当前未连接交易服务器。",
         "trading_terminal_not_found" => "未发现 MT5，也未收到 MT4 EA 连接；程序会自动重试。",
         "mt4_terminal_not_found" => "未发现 MT4，请先打开一次 MT4，程序会自动安装 EA。",
+        "mt4_platform_not_selected" => "请先将交易平台切换为 MT4。",
+        "mt4_terminal_selection_required" => "检测到多个 MT4，请先选择需要安装 EA 的终端。",
         "mt4_terminal_data_path_not_found" => "一个已绑定的 MT4 已不存在，请重新挂载 EA。",
         "mt4_ea_attach_required" =>
             "EA 已安装。请在 MT4 的导航器中刷新，然后将 AURUMBridgeEA 挂到任意图表一次。",

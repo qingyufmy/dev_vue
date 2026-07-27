@@ -201,6 +201,46 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         }
     }
 
+    public async Task<Mt4ExpertDeployment> InstallOrRepairMt4ExpertAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        string? selectedTerminalId;
+        lock (_sync)
+        {
+            if (_selectedPlatform != BridgePlatform.Mt4)
+            {
+                throw new InvalidOperationException("mt4_platform_not_selected");
+            }
+            selectedTerminalId = _activeMt4TerminalId ?? _selectedMt4TerminalId;
+        }
+        var installations = Mt4TerminalDiscovery.DiscoverWindows();
+        if (installations.Count == 0)
+        {
+            throw new InvalidOperationException("mt4_terminal_not_found");
+        }
+        var installation = ResolveMt4InstallationSelection(
+            installations,
+            selectedTerminalId);
+        if (installation is null)
+        {
+            throw new InvalidOperationException("mt4_terminal_selection_required");
+        }
+        if (_mt4ExpertInstaller is null)
+        {
+            throw new FileNotFoundException("mt4_ea_package_not_found");
+        }
+        var result = await _mt4ExpertInstaller.DeployAsync(
+            [installation],
+            cancellationToken);
+        var failure = result.Failures.FirstOrDefault();
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(failure.ErrorCode);
+        }
+        return result.Deployments.Single();
+    }
+
     public async Task<bool> LogoutAsync(CancellationToken cancellationToken = default)
     {
         var revoked = await _sessionClient.LogoutAsync(cancellationToken);
@@ -666,6 +706,19 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         IReadOnlyList<BridgeTerminalCandidate> candidates,
         string? preferredTerminalInstanceId) =>
         ResolveTerminalSelection(candidates, preferredTerminalInstanceId);
+
+    public static Mt4Installation? ResolveMt4InstallationSelection(
+        IReadOnlyList<Mt4Installation> installations,
+        string? preferredTerminalInstanceId)
+    {
+        ArgumentNullException.ThrowIfNull(installations);
+        if (installations.Count == 1)
+        {
+            return installations[0];
+        }
+        return installations.SingleOrDefault(installation =>
+            installation.TerminalInstanceId == preferredTerminalInstanceId);
+    }
 
     public static string? ResolveTerminalSelection(
         IReadOnlyList<BridgeTerminalCandidate> candidates,

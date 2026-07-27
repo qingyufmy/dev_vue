@@ -73,6 +73,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form = new(_profileId);
         _form.PairRequested += HandlePairRequested;
         _form.ObserverSourcesRequested += HandleObserverSourcesRequested;
+        _form.InstallMt4ExpertRequested += HandleInstallMt4ExpertRequested;
         _form.RedetectRequested += (_, _) => _controller.RequestRedetect();
         _form.OpenLogsRequested += HandleOpenLogsRequested;
         _form.LogoutRequested += HandleLogoutRequested;
@@ -361,6 +362,52 @@ public sealed class BridgeApplicationContext : ApplicationContext
             if (!_form.IsDisposed)
             {
                 _form.SetPairingBusy(false);
+            }
+        }
+    }
+
+    private async void HandleInstallMt4ExpertRequested(object? sender, EventArgs eventArgs)
+    {
+        _form.SetMt4ExpertBusy(true);
+        try
+        {
+            var deployment = await _controller.InstallOrRepairMt4ExpertAsync(_stop.Token);
+            _logger.Info(
+                "mt4_ea_manual_deployment_completed",
+                $"terminal_id={deployment.Installation.TerminalInstanceId}; status={deployment.Status}");
+            var summary = deployment.Status == Mt4ExpertDeploymentStatus.Installed
+                ? "EA 已安装到当前 MT4。"
+                : "EA 已经是最新版本。";
+            MessageBox.Show(
+                _form,
+                $"{summary}\n\n{BridgeUiText.Mt4ExpertSetupInstructions}",
+                "安装 / 修复 MT4 EA",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("mt4_ea_manual_deployment_failed", error);
+            var description = error is FileNotFoundException
+                ? BridgeUiText.DescribeError(error)
+                : BridgeUiText.DescribeCode(
+                    error.Message,
+                    "MT4 EA 暂时无法安装，请稍后重试。");
+            MessageBox.Show(
+                _form,
+                description,
+                "安装 / 修复 MT4 EA",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            if (!_form.IsDisposed && !_form.Disposing)
+            {
+                _form.SetMt4ExpertBusy(false);
             }
         }
     }

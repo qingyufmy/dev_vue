@@ -150,6 +150,18 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
+    public void ManualMt4ExpertRepairExplainsEveryRequiredSwitchWithoutExtraPermissions()
+    {
+        var instructions = BridgeUiText.Mt4ExpertSetupInstructions;
+
+        StringAssert.Contains(instructions, "导航器");
+        StringAssert.Contains(instructions, "允许实时自动交易");
+        StringAssert.Contains(instructions, "顶部“自动交易”");
+        StringAssert.Contains(instructions, "无需开启 DLL");
+        StringAssert.Contains(instructions, "WebRequest");
+    }
+
+    [TestMethod]
     public void RuntimeSummaryShowsServerSynchronizationAndVersion()
     {
         var status = new BridgeApplicationStatus(
@@ -165,6 +177,14 @@ public sealed class BridgeUiTextTests
         StringAssert.Contains(summary, "服务器已连接");
         StringAssert.Contains(summary, "最近同步");
         StringAssert.Contains(summary, "3.2.1");
+    }
+
+    [TestMethod]
+    public void Mt4ExpertSetupActionIsOnlyVisibleForMt4()
+    {
+        Assert.IsTrue(BridgeMainForm.CanShowMt4ExpertSetup(BridgePlatform.Mt4));
+        Assert.IsFalse(BridgeMainForm.CanShowMt4ExpertSetup(BridgePlatform.Mt5));
+        Assert.IsFalse(BridgeMainForm.CanShowMt4ExpertSetup(null));
     }
 
     [TestMethod]

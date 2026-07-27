@@ -25,10 +25,12 @@ public sealed class BridgeMainForm : Form
     private readonly Button _exitButton = new();
     private readonly Button _logoutButton = new();
     private readonly Button _observerSourcesButton = new();
+    private readonly Button _mt4ExpertButton = new();
     private readonly PlatformComboBox _platformSelector = new();
     private readonly ComboBox _terminalSelector = new();
     private readonly Label _terminalSelectorLabel = new();
     private readonly TableLayoutPanel _terminalSelectorBar = new();
+    private readonly TableLayoutPanel _mt4SetupBar = new();
     private readonly bool _isDefaultProfile;
     private ContextMenuStrip? _observerSourcesMenu;
     private bool _updatingPlatform;
@@ -46,8 +48,8 @@ public sealed class BridgeMainForm : Form
         Icon = BridgeBrandIcon.ApplicationIcon;
         AccessibleName = $"{BridgeBrand.ProductName}状态窗口";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new(560, 470);
-        ClientSize = new(600, 500);
+        MinimumSize = new(560, 520);
+        ClientSize = new(600, 550);
         BackColor = Color.FromArgb(248, 250, 252);
         Font = new("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -58,6 +60,7 @@ public sealed class BridgeMainForm : Form
 
     public event EventHandler? PairRequested;
     public event EventHandler? ObserverSourcesRequested;
+    public event EventHandler? InstallMt4ExpertRequested;
     public event EventHandler? RedetectRequested;
     public event EventHandler? OpenLogsRequested;
     public event EventHandler? LogoutRequested;
@@ -79,6 +82,7 @@ public sealed class BridgeMainForm : Form
         _observerSourcesButton.Visible = CanShowObserverSources(
             _isDefaultProfile,
             status.CanManageObserverSources);
+        _mt4SetupBar.Visible = CanShowMt4ExpertSetup(status.SelectedPlatform);
         ApplyPlatform(status.SelectedPlatform);
         ApplyTerminalCandidates(status);
         _terminalList.SuspendLayout();
@@ -108,6 +112,12 @@ public sealed class BridgeMainForm : Form
 
     public void SetPairingBrowserOpened() => _pairButton.Text = "等待浏览器确认…";
 
+    public void SetMt4ExpertBusy(bool busy)
+    {
+        _mt4ExpertButton.Enabled = !busy;
+        _mt4ExpertButton.Text = busy ? "正在安装…" : "安装 / 修复 EA";
+    }
+
     public void ShowFromTray()
     {
         Show();
@@ -120,6 +130,9 @@ public sealed class BridgeMainForm : Form
     public static bool CanShowObserverSources(
         bool isDefaultProfile,
         bool canManageObserverSources) => isDefaultProfile && canManageObserverSources;
+
+    public static bool CanShowMt4ExpertSetup(string? selectedPlatform) =>
+        selectedPlatform == BridgePlatform.Mt4;
 
     public void ShowObserverSourcesMenu(
         IReadOnlyList<string> profileIds,
@@ -161,8 +174,9 @@ public sealed class BridgeMainForm : Form
         root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.AutoSize));
-        root.RowStyles.Add(new(SizeType.Percent, 100));
         root.RowStyles.Add(new(SizeType.AutoSize));
+        root.RowStyles.Add(new(SizeType.AutoSize));
+        root.RowStyles.Add(new(SizeType.Percent, 100));
         root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.AutoSize));
 
@@ -288,6 +302,33 @@ public sealed class BridgeMainForm : Form
         _terminalSelectorBar.Controls.Add(_terminalSelector, 1, 0);
         _terminalSelectorBar.Visible = false;
         root.Controls.Add(_terminalSelectorBar);
+
+        _mt4SetupBar.AutoSize = true;
+        _mt4SetupBar.Dock = DockStyle.Fill;
+        _mt4SetupBar.BackColor = Color.FromArgb(239, 246, 255);
+        _mt4SetupBar.Padding = new(12, 10, 12, 10);
+        _mt4SetupBar.ColumnCount = 2;
+        _mt4SetupBar.RowCount = 1;
+        _mt4SetupBar.Margin = new Padding(0, 0, 0, 16);
+        _mt4SetupBar.ColumnStyles.Add(new(SizeType.Percent, 100));
+        _mt4SetupBar.ColumnStyles.Add(new(SizeType.AutoSize));
+        _mt4SetupBar.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            ForeColor = Color.FromArgb(30, 64, 175),
+            Text = "MT4 重装或 EA 丢失时，可随时重新安装。",
+            Margin = new Padding(0, 8, 12, 0),
+        }, 0, 0);
+        ConfigureButton(_mt4ExpertButton, "安装 / 修复 EA", primary:false);
+        _mt4ExpertButton.MinimumSize = new(124, 36);
+        _mt4ExpertButton.Margin = Padding.Empty;
+        _mt4ExpertButton.AccessibleName = "安装或修复 MT4 EA";
+        _mt4ExpertButton.Click += (_, _) =>
+            InstallMt4ExpertRequested?.Invoke(this, EventArgs.Empty);
+        _mt4SetupBar.Controls.Add(_mt4ExpertButton, 1, 0);
+        _mt4SetupBar.Visible = false;
+        root.Controls.Add(_mt4SetupBar);
 
         var card = new TableLayoutPanel
         {

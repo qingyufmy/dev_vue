@@ -64,4 +64,31 @@ public sealed class BridgeTerminalSelectionTests
             discovered,
             BridgeApplicationController.ResolveMt5Installations(discovered, null));
     }
+
+    [TestMethod]
+    public void Mt4ExpertRepairUsesTheOnlyInstallationOrTheExplicitSelection()
+    {
+        var first = new Mt4Installation(
+            Path.Combine(Path.GetTempPath(), "mt4-one"),
+            Path.Combine(Path.GetTempPath(), "broker-one"),
+            "test",
+            IsRunning:true);
+        var second = new Mt4Installation(
+            Path.Combine(Path.GetTempPath(), "mt4-two"),
+            Path.Combine(Path.GetTempPath(), "broker-two"),
+            "test",
+            IsRunning:false);
+
+        Assert.AreSame(
+            first,
+            BridgeApplicationController.ResolveMt4InstallationSelection([first], null));
+        Assert.IsNull(BridgeApplicationController.ResolveMt4InstallationSelection(
+            [first, second],
+            null));
+        Assert.AreSame(
+            second,
+            BridgeApplicationController.ResolveMt4InstallationSelection(
+                [first, second],
+                second.TerminalInstanceId));
+    }
 }
