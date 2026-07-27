@@ -4823,6 +4823,10 @@ input:checked + .slider::before { transform: translateX(18px); }
   background: rgba(148, 163, 184, 0.035);
 }
 
+.order-type-btn[hidden] {
+  display: none;
+}
+
 .audit-row.row-needs_confirmation td {
   background: rgba(59, 130, 246, 0.045);
 }

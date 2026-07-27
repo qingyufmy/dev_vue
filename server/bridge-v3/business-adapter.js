@@ -621,6 +621,9 @@ export function createBridgeV3BusinessAdapter({
         || Array.isArray(params.proposed_order)) throw adapterError('risk_snapshot_proposed_order_invalid')
       const proposedSymbol = String(params.proposed_order.symbol || '').trim()
       const orderType = String(params.proposed_order.order_type || '').trim().toLowerCase()
+      if (route.platform === 'mt4' && orderType.endsWith('_stop_limit')) {
+        throw adapterError('mt4_stop_limit_unsupported')
+      }
       const volume = Number(params.proposed_order.volume)
       const entryPrice = Number(params.proposed_order.entry_price)
       const stopLoss = Number(params.proposed_order.sl)
@@ -710,6 +713,10 @@ export function createBridgeV3BusinessAdapter({
       && Number(route.connection_generation) !== Number(options.expectedGeneration)) {
       throw adapterError('Bridge generation changed before command write')
     }
+    const normalizedParams = tradeParams(action, params)
+    if (route.platform === 'mt4' && normalizedParams.order_kind === 'stop_limit') {
+      throw adapterError('mt4_stop_limit_unsupported')
+    }
     await assertTradeEnabled(userId)
     const issuedAt = now()
     const command = {
@@ -722,7 +729,7 @@ export function createBridgeV3BusinessAdapter({
       issued_at_utc_msc:issuedAt,
       deadline_utc_msc:issuedAt + Math.max(1_000, Math.min(timeoutMs, 30_000)),
       action:v3Action(action),
-      params:tradeParams(action, params),
+      params:normalizedParams,
     }
     if (typeof options.beforeWrite === 'function') {
       let allowed
@@ -823,6 +830,7 @@ export function createBridgeV3BusinessAdapter({
           login:account.login, server:account.server,
           balance:account.balance, equity:account.equity,
           source:route.platform,
+          capabilities:{ stop_limit_orders:route.platform === 'mt5' },
         }
       }
       if (action === 'account') return await readAccount(route)

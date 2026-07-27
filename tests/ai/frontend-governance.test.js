@@ -26,7 +26,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('const LIVE_QUOTE_REFRESH_INTERVAL_MS = 1000')
     expect(app).toContain('void refreshLiveQuote();')
     expect(app).toContain('}, LIVE_QUOTE_REFRESH_INTERVAL_MS)')
-    expect(html).toContain('/ai/app.js?v=20260727mt4live')
+    expect(html).toContain('/ai/app.js?v=20260727mt4cap')
   })
 
   it('uses the connected bridge platform in status and terminal-time labels', () => {
@@ -38,6 +38,9 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('`${platform} 已连接`')
     expect(bridgeWs).toContain('terminal_instance_id:dataRoute?.terminal_instance_id || null')
     expect(bridgeWs).toContain('trading_account_id:Number(channel.trading_account_id) || null')
+    expect(app).toContain('function syncManualOrderPlatformCapabilities()')
+    expect(app).toContain('state.bridgePlatform === "mt4"')
+    expect(css).toContain('.order-type-btn[hidden]')
   })
 
   it('renders automatic inference as an accessible live progress control', () => {

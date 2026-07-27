@@ -88,8 +88,28 @@ function bridgePlatformLabel(value = state.bridgePlatform) {
   return normalizeBridgePlatform(value).toUpperCase();
 }
 
+function syncManualOrderPlatformCapabilities() {
+  const stopLimitButton = document.querySelector('.order-type-btn[data-type="stop_limit"]');
+  if (!stopLimitButton) return;
+  const unsupported = state.bridgePlatform === "mt4";
+  stopLimitButton.hidden = unsupported;
+  stopLimitButton.disabled = unsupported;
+  stopLimitButton.setAttribute("aria-hidden", String(unsupported));
+  stopLimitButton.title = unsupported ? "MT4 不支持止损限价单" : "";
+  if (!unsupported || state.selectedOrderType !== "stop_limit") return;
+  state.selectedOrderType = "market";
+  document.querySelectorAll(".order-type-btn").forEach((button) => {
+    button.classList.toggle("active", button.dataset.type === "market");
+  });
+  const pendingRow = $("pendingPriceRow");
+  const stopLimitWrap = $("stopLimitPriceWrap");
+  if (pendingRow) pendingRow.style.display = "none";
+  if (stopLimitWrap) stopLimitWrap.style.display = "none";
+}
+
 function updateBridgePlatformUI(value) {
   state.bridgePlatform = normalizeBridgePlatform(value);
+  syncManualOrderPlatformCapabilities();
   const label = bridgePlatformLabel();
   setText("bridgePlatformClockLabel", label);
   setText("bridgePlatformTimeLabel", `${label}服务器时间`);
@@ -1278,6 +1298,7 @@ const API_ERROR_MESSAGES = {
   pending_price_direction_invalid: "挂单触发价方向与当前价格不符",
   stop_limit_price_required: "Stop Limit 缺少触发后的限价",
   stop_limit_price_relation_invalid: "Stop Limit 触发价与限价关系无效",
+  mt4_stop_limit_unsupported: "MT4 不支持止损限价单，请改用市价、限价或止损挂单",
   invalid_signal_type: "模型返回了不支持的信号类型",
   invalid_entry_method: "模型返回了不支持的入场方式",
   signal_entry_mismatch: "信号类型与入场方式不一致",
@@ -6455,6 +6476,9 @@ function buildManualOrder(orderType) {
 
   // Pending order fields
   const entryMethod = state.selectedOrderType || "market";
+  if (state.bridgePlatform === "mt4" && entryMethod === "stop_limit") {
+    throw new Error("MT4 不支持止损限价单，请改用市价、限价或止损挂单");
+  }
   let limitPrice = null;
   let pendingValidMinutes = null;
   if (entryMethod !== "market") {

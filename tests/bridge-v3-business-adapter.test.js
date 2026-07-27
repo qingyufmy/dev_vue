@@ -419,6 +419,26 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('rejects stop-limit before command dispatch when the selected terminal is MT4', async () => {
+    const { adapter, gateway } = setup({ routes:[route({ platform:'mt4' })] })
+
+    const result = await adapter.execute(42, 'pending', {
+      symbol:'XAUUSD', order_type:'buy_stop_limit', volume:0.1, price:2310,
+      stoplimit_price:2308,
+    })
+
+    expect(result).toMatchObject({ status:'error', error:'mt4_stop_limit_unsupported' })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('reports platform order capabilities with bridge status', async () => {
+    const { adapter } = setup({ routes:[route({ platform:'mt4' })] })
+
+    await expect(adapter.execute(42, 'status')).resolves.toMatchObject({
+      source:'mt4', capabilities:{ stop_limit_orders:false },
+    })
+  })
+
   it('derives a stable command id from the durable order-intent comment', async () => {
     const { adapter, gateway } = setup()
     const params = { symbol:'XAUUSD', order_type:'buy', volume:0.1, comment:'AI-2S' }
