@@ -40,6 +40,7 @@ public sealed class BridgeMainForm : Form
     private readonly Label _statusTitle = new();
     private readonly Label _statusDescription = new();
     private readonly Label _runtimeSummary = new();
+    private readonly Label _accountCountLabel = new();
     private readonly Panel _statusMarker = new();
     private readonly FlowLayoutPanel _terminalList = new();
     private readonly Button _pairButton = new();
@@ -361,46 +362,87 @@ public sealed class BridgeMainForm : Form
             Dock = DockStyle.Fill,
             BackColor = Color.White,
             Padding = new(20),
-            ColumnCount = 2,
-            RowCount = 5,
+            ColumnCount = 1,
+            RowCount = 6,
             Margin = new Padding(0, 0, 0, 16),
         };
-        card.ColumnStyles.Add(new(SizeType.Absolute, 16));
         card.ColumnStyles.Add(new(SizeType.Percent, 100));
         card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.AutoSize));
+        card.RowStyles.Add(new(SizeType.AutoSize));
         card.RowStyles.Add(new(SizeType.Percent, 100));
+
+        var statusHeader = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = Padding.Empty,
+        };
+        statusHeader.ColumnStyles.Add(new(SizeType.Absolute, 20));
+        statusHeader.ColumnStyles.Add(new(SizeType.Percent, 100));
         _statusMarker.Size = new(8, 8);
-        _statusMarker.Margin = new(0, 8, 8, 0);
+        _statusMarker.Anchor = AnchorStyles.Left;
+        _statusMarker.Margin = new(0, 0, 8, 0);
         _statusTitle.AutoSize = true;
         _statusTitle.Font = new(Font.FontFamily, 12F, FontStyle.Bold);
         _statusTitle.ForeColor = Color.FromArgb(15, 23, 42);
+        _statusTitle.Margin = Padding.Empty;
+        statusHeader.Controls.Add(_statusMarker, 0, 0);
+        statusHeader.Controls.Add(_statusTitle, 1, 0);
         _statusDescription.AutoSize = true;
-        _statusDescription.MaximumSize = new(430, 0);
+        _statusDescription.MaximumSize = new(500, 0);
         _statusDescription.ForeColor = Color.FromArgb(71, 85, 105);
-        _statusDescription.Margin = new(0, 4, 0, 8);
+        _statusDescription.Margin = new(20, 4, 0, 8);
         _runtimeSummary.AutoSize = true;
         _runtimeSummary.ForeColor = Color.FromArgb(100, 116, 139);
-        _runtimeSummary.Margin = new(0, 0, 0, 16);
-        _terminalList.AutoScroll = true;
-        _terminalList.Dock = DockStyle.Fill;
-        _terminalList.FlowDirection = FlowDirection.TopDown;
-        _terminalList.WrapContents = false;
-        card.Controls.Add(_statusMarker, 0, 0);
-        card.Controls.Add(_statusTitle, 1, 0);
-        card.Controls.Add(_statusDescription, 1, 1);
-        card.Controls.Add(_runtimeSummary, 1, 2);
-        card.Controls.Add(new Label
+        _runtimeSummary.Margin = new(20, 0, 0, 12);
+
+        var divider = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 1,
+            BackColor = Color.FromArgb(226, 232, 240),
+            Margin = new Padding(0, 0, 0, 12),
+        };
+
+        var accountsHeader = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = new Padding(0, 0, 0, 4),
+        };
+        accountsHeader.ColumnStyles.Add(new(SizeType.Percent, 100));
+        accountsHeader.ColumnStyles.Add(new(SizeType.AutoSize));
+        accountsHeader.Controls.Add(new Label
         {
             AutoSize = true,
             Font = new(Font.FontFamily, 9F, FontStyle.Bold),
             ForeColor = Color.FromArgb(51, 65, 85),
-            Text = "桥接账户",
-            Margin = new(0, 0, 0, 4),
-        }, 1, 3);
-        card.Controls.Add(_terminalList, 1, 4);
+            Text = "账户连接",
+            Margin = Padding.Empty,
+        }, 0, 0);
+        _accountCountLabel.AutoSize = true;
+        _accountCountLabel.Anchor = AnchorStyles.Right;
+        _accountCountLabel.ForeColor = Color.FromArgb(100, 116, 139);
+        _accountCountLabel.Margin = Padding.Empty;
+        accountsHeader.Controls.Add(_accountCountLabel, 1, 0);
+
+        _terminalList.AutoScroll = true;
+        _terminalList.Dock = DockStyle.Fill;
+        _terminalList.FlowDirection = FlowDirection.TopDown;
+        _terminalList.WrapContents = false;
+        card.Controls.Add(statusHeader, 0, 0);
+        card.Controls.Add(_statusDescription, 0, 1);
+        card.Controls.Add(_runtimeSummary, 0, 2);
+        card.Controls.Add(divider, 0, 3);
+        card.Controls.Add(accountsHeader, 0, 4);
+        card.Controls.Add(_terminalList, 0, 5);
         root.Controls.Add(card, 0, 5);
 
         var safety = new Label
@@ -585,10 +627,12 @@ public sealed class BridgeMainForm : Form
                     candidate.ObserverProfileId == profile.ProfileId);
                 _terminalList.Controls.Add(CreateAccountRow(
                     terminal,
-                    $"观摩源 · {profile.ProfileId}",
+                    profile.ProfileId,
                     profile));
             }
         }
+        var accountCount = _terminalList.Controls.Count;
+        _accountCountLabel.Text = accountCount == 0 ? "暂无账户" : $"{accountCount} 个";
         if (_terminalList.Controls.Count == 0)
         {
             _terminalList.Controls.Add(new Label
@@ -609,16 +653,26 @@ public sealed class BridgeMainForm : Form
     {
         var row = new TableLayoutPanel
         {
-            Width = 456,
-            Height = 64,
+            Width = 468,
+            Height = 70,
             BackColor = Color.FromArgb(248, 250, 252),
-            Margin = new Padding(0, 4, 0, 4),
-            Padding = new Padding(12, 7, 8, 7),
-            ColumnCount = 2,
+            Margin = new Padding(0, 3, 0, 3),
+            Padding = new Padding(12, 8, 8, 8),
+            ColumnCount = 3,
             RowCount = 1,
         };
+        row.ColumnStyles.Add(new(SizeType.Absolute, 18));
         row.ColumnStyles.Add(new(SizeType.Percent, 100));
         row.ColumnStyles.Add(new(SizeType.AutoSize));
+        row.RowStyles.Add(new(SizeType.Percent, 100));
+        var statusDot = new Panel
+        {
+            Size = new(8, 8),
+            Anchor = AnchorStyles.None,
+            BackColor = ResolveAccountStateColor(terminal, observerProfile),
+            Margin = Padding.Empty,
+        };
+        row.Controls.Add(statusDot, 0, 0);
         var copy = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -633,28 +687,31 @@ public sealed class BridgeMainForm : Form
             ?? "terminal";
         var identity = terminal is null || string.IsNullOrWhiteSpace(terminal.Login)
             ? platform.ToUpperInvariant()
-            : $"{platform.ToUpperInvariant()}  ·  {terminal.Login}";
+            : $"{platform.ToUpperInvariant()} · {terminal.Login}";
+        var title = observerProfile is null
+            ? $"主账户  ·  {identity}"
+            : $"{role}  ·  {identity}";
         copy.Controls.Add(new Label
         {
             AutoEllipsis = true,
             Dock = DockStyle.Fill,
             Font = new(Font.FontFamily, 9F, FontStyle.Bold),
             ForeColor = Color.FromArgb(30, 41, 59),
-            Text = $"{role}    {identity}",
+            Text = title,
             Margin = Padding.Empty,
         });
         copy.Controls.Add(new Label
         {
             AutoEllipsis = true,
             Dock = DockStyle.Fill,
-            ForeColor = ResolveAccountStateColor(terminal, observerProfile),
+            ForeColor = Color.FromArgb(71, 85, 105),
             Text = DescribeAccountState(terminal, observerProfile),
             Margin = new Padding(0, 4, 8, 0),
         });
-        row.Controls.Add(copy, 0, 0);
+        row.Controls.Add(copy, 1, 0);
         if (observerProfile is not null)
         {
-            row.Controls.Add(CreateObserverActions(observerProfile, terminal), 1, 0);
+            row.Controls.Add(CreateObserverActions(observerProfile, terminal), 2, 0);
         }
         return row;
     }
@@ -663,32 +720,43 @@ public sealed class BridgeMainForm : Form
         BridgeObserverProfileView profile,
         BridgeTerminalStatus? terminal)
     {
-        var actions = new FlowLayoutPanel
+        var primaryAction = ResolveObserverPrimaryAction(profile, terminal);
+        var actionCount = primaryAction is null ? 1 : 2;
+        var actions = new TableLayoutPanel
         {
-            AutoSize = true,
-            Anchor = AnchorStyles.Right,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            Width = actionCount * 76,
+            Height = 54,
+            MinimumSize = new(actionCount * 76, 54),
+            ColumnCount = actionCount,
+            RowCount = 1,
             Margin = Padding.Empty,
         };
+        for (var index = 0; index < actionCount; index++)
+        {
+            actions.ColumnStyles.Add(new(SizeType.Absolute, 76));
+        }
         var busy = _busyObserverProfiles.Contains(profile.ProfileId);
-        var primaryAction = ResolveObserverPrimaryAction(profile, terminal);
         if (primaryAction is not null)
         {
             var action = primaryAction.Value;
-            var button = CreateCompactButton(busy ? "处理中…" : DescribeObserverAction(action));
+            var emphasize = action is BridgeObserverAction.Start or BridgeObserverAction.Retry;
+            var button = CreateCompactButton(
+                busy ? "处理中…" : DescribeObserverAction(action),
+                emphasize);
             button.Enabled = !busy;
             button.Click += (_, _) => ObserverActionRequested?.Invoke(
                 this,
                 new(profile.ProfileId, action));
-            actions.Controls.Add(button);
+            actions.Controls.Add(button, 0, 0);
         }
-        var settings = CreateCompactButton("设置");
+        var settings = CreateCompactButton("设置", primary:false);
         settings.Enabled = !busy;
         settings.Click += (_, _) => ObserverActionRequested?.Invoke(
             this,
             new(profile.ProfileId, BridgeObserverAction.Configure));
-        actions.Controls.Add(settings);
+        actions.Controls.Add(settings, actionCount - 1, 0);
         return actions;
     }
 
@@ -724,20 +792,21 @@ public sealed class BridgeMainForm : Form
     {
         if (profile is { Configured: false })
         {
-            return "需要设置交易终端";
+            return "观摩源 · 需要设置交易终端";
         }
         if (profile is { Enabled: false })
         {
-            return "已暂停 · 配置已保留";
+            return "观摩源 · 已暂停，终端配置已保留";
         }
         if (terminal is null)
         {
-            return profile is null ? "等待识别账户" : "等待连接";
+            return profile is null ? "等待识别账户" : "观摩源 · 等待连接";
         }
         var broker = string.IsNullOrWhiteSpace(terminal.BrokerServer)
             ? "交易终端"
             : terminal.BrokerServer;
-        return $"{broker} · {BridgeUiText.DescribeTerminalState(terminal)}";
+        var prefix = profile is null ? string.Empty : "观摩源 · ";
+        return $"{prefix}{broker} · {BridgeUiText.DescribeTerminalState(terminal)}";
     }
 
     private static Color ResolveAccountStateColor(
@@ -748,21 +817,26 @@ public sealed class BridgeMainForm : Form
         {
             return Color.FromArgb(100, 116, 139);
         }
+        if (profile is { Configured: false } || terminal is null)
+        {
+            return Color.FromArgb(217, 119, 6);
+        }
         return terminal?.RuntimeState == TerminalRuntimeState.Running
             ? Color.FromArgb(5, 150, 105)
             : terminal?.RuntimeState == TerminalRuntimeState.Stopped
                 ? Color.FromArgb(220, 38, 38)
-                : Color.FromArgb(100, 116, 139);
+                : Color.FromArgb(37, 99, 235);
     }
 
-    private static Button CreateCompactButton(string text)
+    private static Button CreateCompactButton(string text, bool primary)
     {
         var button = new Button();
-        ConfigureButton(button, text, primary:false);
+        ConfigureButton(button, text, primary);
         button.AutoSize = false;
-        button.Size = new(64, 30);
-        button.MinimumSize = new(64, 30);
-        button.Margin = new Padding(4, 9, 0, 0);
+        button.Anchor = AnchorStyles.None;
+        button.Size = new(70, 34);
+        button.MinimumSize = new(70, 34);
+        button.Margin = Padding.Empty;
         return button;
     }
 
