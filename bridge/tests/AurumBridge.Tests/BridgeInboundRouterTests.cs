@@ -208,7 +208,7 @@ public sealed class BridgeInboundRouterTests
     }
 
     [TestMethod]
-    public async Task QuoteRequestUsesDataPriorityWithoutPersistingOutbox()
+    public async Task QuoteRequestAcceptsResolvedBrokerSymbolWithoutPersistingOutbox()
     {
         var terminal = Terminal();
         var router = new BridgeInboundRouter(
@@ -229,7 +229,7 @@ public sealed class BridgeInboundRouterTests
                 TerminalInstanceId = request.TerminalInstanceId,
                 AccountRef = request.AccountRef,
                 ConnectionEpoch = request.ConnectionEpoch,
-                Symbol = request.Symbol,
+                Symbol = request.Symbol + ".s",
                 ObservedAtUtcMsc = Now,
                 Status = "succeeded",
                 Bid = 2300.0,
@@ -240,8 +240,9 @@ public sealed class BridgeInboundRouterTests
 
         var response = await _outbound.DequeueAsync();
         Assert.AreEqual(BridgeMessagePriority.Data, response.Priority);
-        Assert.AreEqual("quote", JsonDocument.Parse(response.PayloadJson).RootElement
-            .GetProperty("type").GetString());
+        var payload = JsonDocument.Parse(response.PayloadJson).RootElement;
+        Assert.AreEqual("quote", payload.GetProperty("type").GetString());
+        Assert.AreEqual("XAUUSD.s", payload.GetProperty("symbol").GetString());
         Assert.IsEmpty(await _testStore.Store.GetPendingOutboxAsync());
     }
 

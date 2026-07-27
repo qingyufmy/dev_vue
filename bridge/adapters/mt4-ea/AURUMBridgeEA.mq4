@@ -204,6 +204,41 @@ void SendSnapshot(const int streams)
      DisconnectPipe();
   }
 
+string StandardSymbolName(const string value)
+  {
+   int separator = StringFind(value, ".");
+   if(separator <= 0) return(value);
+   string suffix = StringSubstr(value, separator + 1);
+   if(StringCompare(suffix, "a", false) == 0
+      || StringCompare(suffix, "s", false) == 0
+      || StringCompare(suffix, "c", false) == 0
+      || StringCompare(suffix, "pro", false) == 0
+      || StringCompare(suffix, "std", false) == 0
+      || StringCompare(suffix, "z", false) == 0
+      || StringCompare(suffix, "ecn", false) == 0
+      || StringCompare(suffix, "m", false) == 0
+      || StringCompare(suffix, "raw", false) == 0
+      || StringCompare(suffix, "mini", false) == 0)
+      return(StringSubstr(value, 0, separator));
+   return(value);
+  }
+
+string ResolveBrokerSymbol(const string requested)
+  {
+   if(requested == "") return("");
+   if(SymbolSelect(requested, true)) return(requested);
+   string standard = StandardSymbolName(requested);
+   int total = SymbolsTotal(false);
+   for(int index = 0; index < total; index++)
+     {
+      string candidate = SymbolName(index, false);
+      if(candidate == "" || StringCompare(StandardSymbolName(candidate), standard, false) != 0)
+         continue;
+      if(SymbolSelect(candidate, true)) return(candidate);
+     }
+   return("");
+  }
+
 void SendQuote(uchar &payload[], int &offset)
   {
    string request_id = ReadUtf8(payload, offset);
@@ -211,17 +246,18 @@ void SendQuote(uchar &payload[], int &offset)
    string broker_server = ReadUtf8(payload, offset);
    string login = ReadUtf8(payload, offset);
    long connection_epoch = ReadInt64(payload, offset);
-   string symbol = ReadUtf8(payload, offset);
+   string requested_symbol = ReadUtf8(payload, offset);
    if(request_id == "" || terminal_id != g_terminal_id
       || StringCompare(broker_server, AccountServer(), false) != 0
       || login != IntegerToString(AccountNumber())
       || connection_epoch != g_connection_epoch)
      {
-      SendQuoteResult(request_id, symbol, 2, 0, 0, "quote_route_mismatch");
+      SendQuoteResult(request_id, requested_symbol, 2, 0, 0, "quote_route_mismatch");
       return;
      }
    ResetLastError();
-   if(symbol == "" || !SymbolSelect(symbol, true))
+   string symbol = ResolveBrokerSymbol(requested_symbol);
+   if(symbol == "")
      {
       SendQuoteResult(request_id, symbol, 2, 0, 0, "symbol_unavailable");
       return;
@@ -277,7 +313,7 @@ void SendRates(uchar &request[], int &offset)
    string broker_server = ReadUtf8(request, offset);
    string login = ReadUtf8(request, offset);
    long connection_epoch = ReadInt64(request, offset);
-   string symbol = ReadUtf8(request, offset);
+   string requested_symbol = ReadUtf8(request, offset);
    string timeframe_name = ReadUtf8(request, offset);
    int requested_count = ReadInt32(request, offset);
    long start_utc_msc = ReadInt64(request, offset);
@@ -291,8 +327,8 @@ void SendRates(uchar &request[], int &offset)
       return;
      }
    int timeframe = ResolveTimeframe(timeframe_name);
-   if(symbol == "" || timeframe <= 0 || requested_count < 2 || requested_count > 5000
-      || !SymbolSelect(symbol, true))
+   string symbol = ResolveBrokerSymbol(requested_symbol);
+   if(symbol == "" || timeframe <= 0 || requested_count < 2 || requested_count > 5000)
      {
       SendRatesResult(request_id, 2, "", "rates_params_invalid", 0);
       return;
@@ -377,7 +413,7 @@ void SendSymbolSnapshot(uchar &request[], int &offset)
    string broker_server = ReadUtf8(request, offset);
    string login = ReadUtf8(request, offset);
    long connection_epoch = ReadInt64(request, offset);
-   string symbol = ReadUtf8(request, offset);
+   string requested_symbol = ReadUtf8(request, offset);
    if(request_id == "" || terminal_id != g_terminal_id
       || StringCompare(broker_server, AccountServer(), false) != 0
       || login != IntegerToString(AccountNumber())
@@ -386,7 +422,8 @@ void SendSymbolSnapshot(uchar &request[], int &offset)
       SendSymbolSnapshotResult(request_id, 2, "", "symbol_snapshot_route_mismatch", 0);
       return;
      }
-   if(symbol == "" || !SymbolSelect(symbol, true))
+   string symbol = ResolveBrokerSymbol(requested_symbol);
+   if(symbol == "")
      {
       SendSymbolSnapshotResult(request_id, 2, "", "symbol_unavailable", 0);
       return;
@@ -537,8 +574,9 @@ void SendRiskSnapshot(uchar &request[], int &offset)
       SendRiskSnapshotResult(request_id, 2, "", "risk_snapshot_route_mismatch", 0);
       return;
      }
-   if(requested_symbol == "" || requested_cursor_time < 0 || requested_cursor_ticket < 0
-      || baseline_utc_msc < 0 || !SymbolSelect(requested_symbol, true))
+   string broker_symbol = ResolveBrokerSymbol(requested_symbol);
+   if(broker_symbol == "" || requested_cursor_time < 0 || requested_cursor_ticket < 0
+      || baseline_utc_msc < 0)
      {
       SendRiskSnapshotResult(request_id, 2, "", "risk_snapshot_params_invalid", 0);
       return;
@@ -553,7 +591,7 @@ void SendRiskSnapshot(uchar &request[], int &offset)
    long through_ticket = cursor_ticket;
    string positions = "[", pending = "[", instruments = "", seen_symbols = "";
    bool first_position = true, first_pending = true;
-   AddRiskInstrument(requested_symbol, instruments, seen_symbols);
+   AddRiskInstrument(broker_symbol, instruments, seen_symbols);
    int active_total = OrdersTotal();
    for(int active_index = 0; active_index < active_total; active_index++)
      {
@@ -642,7 +680,7 @@ void SendRiskSnapshot(uchar &request[], int &offset)
       && proposed_entry_value != "" && proposed_sl_value != "")
       warnings = "[\"mt4_broker_calculation_unavailable\"]";
 
-   long observed_at = ((long)MarketInfo(requested_symbol, MODE_TIME)) * 1000 - server_offset_msc;
+   long observed_at = ((long)MarketInfo(broker_symbol, MODE_TIME)) * 1000 - server_offset_msc;
    if(observed_at <= 0) observed_at = captured_at;
    int offset_minutes = (int)(server_offset_msc / 60000);
    string account = "{\"login\":" + IntegerToString(AccountNumber())
@@ -1544,20 +1582,21 @@ void ExecutePlace(const string command_id, const string symbol, const int side,
    else if(order_kind == KIND_LIMIT && side == SIDE_SELL) operation = OP_SELLLIMIT;
    else if(order_kind == KIND_STOP && side == SIDE_BUY) operation = OP_BUYSTOP;
    else if(order_kind == KIND_STOP && side == SIDE_SELL) operation = OP_SELLSTOP;
-   if(operation < 0 || symbol == "" || volume <= 0)
+   string broker_symbol = ResolveBrokerSymbol(symbol);
+   if(operation < 0 || broker_symbol == "" || volume <= 0)
      {
       SendCommandResult(command_id, 2, "mt4_place_order_params_invalid", "", 0, 0);
       return;
      }
    RefreshRates();
    double price = (price_value == "")
-      ? MarketInfo(symbol, side == SIDE_BUY ? MODE_ASK : MODE_BID)
+      ? MarketInfo(broker_symbol, side == SIDE_BUY ? MODE_ASK : MODE_BID)
       : StrToDouble(price_value);
    double stop_loss = (stop_loss_value == "") ? 0 : StrToDouble(stop_loss_value);
    double take_profit = (take_profit_value == "") ? 0 : StrToDouble(take_profit_value);
    string suffix = StringSubstr(command_id, MathMax(0, StringLen(command_id) - 20));
    string durable_comment = order_comment == "" ? "AURUM:" + suffix : order_comment;
-   int ticket = OrderSend(symbol, operation, volume, price, deviation, stop_loss, take_profit,
+   int ticket = OrderSend(broker_symbol, operation, volume, price, deviation, stop_loss, take_profit,
       durable_comment, magic, (datetime)expiration, clrNONE);
    if(ticket > 0)
       SendCommandResult(command_id, 1, "", "", 0, ticket);

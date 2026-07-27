@@ -186,7 +186,8 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         EnsureInitialized();
         var localRequest = Mt4PipeProtocol.CreateQuoteRequest(request);
         var local = await _connection.GetQuoteAsync(localRequest, cancellationToken);
-        if (local.RequestId != request.RequestId || local.Symbol != request.Symbol)
+        if (local.RequestId != request.RequestId
+            || !BridgeSymbolIdentity.Equivalent(request.Symbol, local.Symbol))
         {
             throw new InvalidDataException("mt4_quote_route_mismatch");
         }
@@ -199,7 +200,7 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             TerminalInstanceId = _terminal.TerminalInstanceId,
             AccountRef = _terminal.AccountRef,
             ConnectionEpoch = _terminal.ConnectionEpoch,
-            Symbol = request.Symbol,
+            Symbol = local.Symbol,
             ObservedAtUtcMsc = local.ObservedAtUtcMsc,
             Status = local.Status,
             Bid = local.Bid,

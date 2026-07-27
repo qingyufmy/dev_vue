@@ -56,6 +56,21 @@ public sealed class Mt4TerminalRuntimeTests
     }
 
     [TestMethod]
+    public async Task ReturnsTheResolvedBrokerSymbolForAStandardQuoteRequest()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var connection = new FakeConnection { QuoteSymbol = "XAUUSD.s" };
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_quote_suffix");
+        await runtime.StartAsync();
+
+        var quote = await runtime.GetQuoteAsync(QuoteRequest());
+
+        Assert.AreEqual("XAUUSD.s", quote.Symbol);
+        Assert.AreEqual(2300.0, quote.Bid);
+    }
+
+    [TestMethod]
     public async Task RejectsUnsupportedCommandWithoutCallingEa()
     {
         await using var testStore = await TestStore.CreateAsync();
@@ -435,6 +450,7 @@ public sealed class Mt4TerminalRuntimeTests
         public Mt4TradeCommand? LastCommand { get; private set; }
         public List<Mt4TradeCommand> Commands { get; } = [];
         public JsonElement? NextRawResult { get; init; }
+        public string? QuoteSymbol { get; init; }
         public Mt4RatesRequest? LastRatesRequest { get; private set; }
         public Mt4SymbolSnapshotRequest? LastSymbolRequest { get; private set; }
         public Mt4RiskSnapshotRequest? LastRiskRequest { get; private set; }
@@ -484,7 +500,7 @@ public sealed class Mt4TerminalRuntimeTests
             Mt4QuoteRequest request,
             CancellationToken cancellationToken = default) => Task.FromResult(new Mt4Quote(
                 request.RequestId,
-                request.Symbol,
+                QuoteSymbol ?? request.Symbol,
                 1_800_000_000_060,
                 "succeeded",
                 2300.0,

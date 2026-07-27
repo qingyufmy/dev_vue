@@ -546,8 +546,8 @@ describe('Bridge v3 websocket gateway', () => {
     expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
       type:'quote_request', request_id:'quote_01JGATEWAY01', symbol:'XAUUSD',
     })
-    ws.emit('message', Buffer.from(JSON.stringify(quote())))
-    await expect(pending).resolves.toMatchObject({ bid:2345.1, ask:2345.3 })
+    ws.emit('message', Buffer.from(JSON.stringify(quote({ symbol:'XAUUSD.s' }))))
+    await expect(pending).resolves.toMatchObject({ symbol:'XAUUSD.s', bid:2345.1, ask:2345.3 })
     expect(gateway.pendingQuotes.size).toBe(0)
     expect(dependencies.createLedgerEntry).not.toHaveBeenCalled()
   })

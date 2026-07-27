@@ -24,6 +24,7 @@ const AUTH_QUEUE_MAX_BYTES = 1024 * 1024
 const MAX_PENDING_QUOTES_PER_CONNECTION = 64
 const MAX_PENDING_DATA_REQUESTS_PER_CONNECTION = 32
 const REQUIRED_INITIAL_STREAMS = Object.freeze(['account', 'positions', 'orders'])
+const BROKER_SYMBOL_SUFFIX_RE = /\.(a|s|c|pro|std|z|ecn|m|raw|mini)$/i
 
 function messageId(prefix) {
   return `${prefix}_${randomUUID()}`
@@ -66,6 +67,11 @@ function routeFromTerminal(terminal) {
     account_ref:terminal.account_ref,
     connection_epoch:terminal.connection_epoch,
   }
+}
+
+function sameBrokerSymbol(left, right) {
+  const standard = value => String(value || '').replace(BROKER_SYMBOL_SUFFIX_RE, '').toUpperCase()
+  return standard(left) === standard(right)
 }
 
 export function createBridgeV3Gateway({
@@ -326,7 +332,7 @@ export function createBridgeV3Gateway({
       const pending = pendingQuotes.get(message.request_id)
       if (!pending) return
       if (pending.connection !== connection || !sameBridgeRoute(pending.request, message)
-        || pending.request.symbol !== message.symbol) {
+        || !sameBrokerSymbol(pending.request.symbol, message.symbol)) {
         throw gatewayError('bridge_quote_response_mismatch')
       }
       clearTimeout(pending.timer)

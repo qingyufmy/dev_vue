@@ -352,7 +352,7 @@ public sealed class BridgeInboundRouter
             || !string.Equals(response.AccountRef.BrokerServer, request.AccountRef.BrokerServer,
                 StringComparison.OrdinalIgnoreCase)
             || response.AccountRef.Login != request.AccountRef.Login
-            || response.Symbol != request.Symbol
+            || !BridgeSymbolIdentity.Equivalent(response.Symbol, request.Symbol)
             || response.ObservedAtUtcMsc <= 0
             || response.Status is not ("succeeded" or "rejected"))
         {

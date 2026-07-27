@@ -49,6 +49,26 @@ describe('MT4 EA extended data contract', () => {
   })
 })
 
+describe('MT4 EA broker-symbol contract', () => {
+  it('resolves standard symbols to the broker suffix before terminal access', () => {
+    const resolver = functionBlock('string StandardSymbolName', 'void SendQuote')
+    expect(resolver).toContain('string ResolveBrokerSymbol')
+    expect(resolver).toContain('SymbolsTotal(false)')
+    expect(resolver).toContain('StandardSymbolName(candidate)')
+    expect(resolver).toContain('SymbolSelect(candidate, true)')
+
+    for (const [name, next] of [
+      ['void SendQuote', 'void SendQuoteResult'],
+      ['void SendRates', 'void SendRatesResult'],
+      ['void SendSymbolSnapshot', 'void SendSymbolSnapshotResult'],
+      ['void SendRiskSnapshot', 'void SendRiskSnapshotResult'],
+      ['void ExecutePlace', 'void ExecuteCancel'],
+    ]) {
+      expect(functionBlock(name, next)).toContain('ResolveBrokerSymbol(')
+    }
+  })
+})
+
 describe('MT4 EA snapshot performance contract', () => {
   it('scans active orders once when publishing positions and pending orders', () => {
     const sendBlock = functionBlock('void SendSnapshot', 'void SendQuote')
