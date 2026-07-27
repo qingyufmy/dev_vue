@@ -1,4 +1,5 @@
 using AurumBridge.Runtime;
+using System.Runtime.InteropServices;
 
 namespace AurumBridge.UI;
 
@@ -8,6 +9,12 @@ public sealed class BridgeLogViewerForm : Form
     private readonly RichTextBox _content = new();
     private readonly Button _refreshButton = new();
     private readonly Button _copyButton = new();
+    private readonly CheckBox _autoRefresh = new();
+    private readonly Label _refreshStatus = new();
+    private readonly System.Windows.Forms.Timer _autoRefreshTimer = new()
+    {
+        Interval = 3_000,
+    };
     private CancellationTokenSource? _refreshCancellation;
     private int _refreshVersion;
     private bool _closing;
@@ -25,7 +32,13 @@ public sealed class BridgeLogViewerForm : Form
         Font = new("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Dpi;
         BuildLayout();
-        Shown += async (_, _) => await ReloadAsync();
+        Shown += async (_, _) =>
+        {
+            UpdateAutoRefreshTimer();
+            await ReloadAsync();
+        };
+        VisibleChanged += (_, _) => UpdateAutoRefreshTimer();
+        _autoRefreshTimer.Tick += async (_, _) => await ReloadAsync();
     }
 
     public async Task ReloadAsync()
@@ -49,8 +62,11 @@ public sealed class BridgeLogViewerForm : Form
                 return;
             }
             _content.Text = text;
-            _content.SelectionStart = _content.TextLength;
+            _content.SelectionStart = FindLastLineStart(_content.Text);
+            _content.SelectionLength = 0;
             _content.ScrollToCaret();
+            NativeMethods.ScrollHorizontallyToStart(_content.Handle);
+            _refreshStatus.Text = $"已更新 {DateTime.Now:HH:mm:ss}";
         }
         catch (OperationCanceledException) when (refreshCancellation.IsCancellationRequested)
         {
@@ -60,6 +76,7 @@ public sealed class BridgeLogViewerForm : Form
             if (CanApplyRefresh(version, refreshCancellation))
             {
                 _content.Text = "暂时无法读取日志，请稍后重试。";
+                _refreshStatus.Text = "刷新失败";
             }
         }
         finally
@@ -84,6 +101,8 @@ public sealed class BridgeLogViewerForm : Form
             _closing = true;
             Interlocked.Increment(ref _refreshVersion);
             Interlocked.Exchange(ref _refreshCancellation, null)?.Cancel();
+            _autoRefreshTimer.Stop();
+            _autoRefreshTimer.Dispose();
         }
         base.Dispose(disposing);
     }
@@ -111,14 +130,31 @@ public sealed class BridgeLogViewerForm : Form
         root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.Percent, 100));
         root.RowStyles.Add(new(SizeType.AutoSize));
-        root.Controls.Add(new Label
+        var heading = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = new Padding(0, 0, 0, 12),
+        };
+        heading.ColumnStyles.Add(new(SizeType.Percent, 100));
+        heading.ColumnStyles.Add(new(SizeType.AutoSize));
+        heading.Controls.Add(new Label
         {
             AutoSize = true,
             Font = new(Font.FontFamily, 12F, FontStyle.Bold),
             ForeColor = Color.FromArgb(15, 23, 42),
             Text = "运行日志",
-            Margin = new Padding(0, 0, 0, 12),
-        });
+            Margin = Padding.Empty,
+        }, 0, 0);
+        _refreshStatus.AutoSize = true;
+        _refreshStatus.Anchor = AnchorStyles.Right;
+        _refreshStatus.ForeColor = Color.FromArgb(100, 116, 139);
+        _refreshStatus.Text = "等待刷新";
+        _refreshStatus.Margin = Padding.Empty;
+        heading.Controls.Add(_refreshStatus, 1, 0);
+        root.Controls.Add(heading);
         _content.Dock = DockStyle.Fill;
         _content.ReadOnly = true;
         _content.WordWrap = false;
@@ -138,6 +174,12 @@ public sealed class BridgeLogViewerForm : Form
         };
         ConfigureButton(_refreshButton, "刷新");
         ConfigureButton(_copyButton, "复制全部");
+        _autoRefresh.AutoSize = true;
+        _autoRefresh.Checked = true;
+        _autoRefresh.Text = "自动刷新";
+        _autoRefresh.Anchor = AnchorStyles.Left;
+        _autoRefresh.Margin = new Padding(12, 9, 0, 0);
+        _autoRefresh.CheckedChanged += (_, _) => UpdateAutoRefreshTimer();
         _refreshButton.Click += async (_, _) => await ReloadAsync();
         _copyButton.Click += (_, _) =>
         {
@@ -148,8 +190,23 @@ public sealed class BridgeLogViewerForm : Form
         };
         actions.Controls.Add(_refreshButton);
         actions.Controls.Add(_copyButton);
+        actions.Controls.Add(_autoRefresh);
         root.Controls.Add(actions);
         Controls.Add(root);
+    }
+
+    private void UpdateAutoRefreshTimer()
+    {
+        _autoRefreshTimer.Enabled = !_closing
+            && Visible
+            && _autoRefresh.Checked;
+    }
+
+    public static int FindLastLineStart(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var lineBreak = text.LastIndexOf('\n');
+        return lineBreak < 0 ? 0 : lineBreak + 1;
     }
 
     private static void ConfigureButton(Button button, string text)
@@ -164,5 +221,25 @@ public sealed class BridgeLogViewerForm : Form
         button.Text = text;
         button.Margin = new Padding(8, 0, 0, 0);
         button.Cursor = Cursors.Hand;
+    }
+
+    private static class NativeMethods
+    {
+        private const uint WmHorizontalScroll = 0x0114;
+        private const int ScrollToStart = 6;
+
+        [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+        private static extern nint SendMessage(
+            nint windowHandle,
+            uint message,
+            nint wordParameter,
+            nint longParameter);
+
+        public static void ScrollHorizontallyToStart(nint windowHandle) =>
+            SendMessage(
+                windowHandle,
+                WmHorizontalScroll,
+                ScrollToStart,
+                0);
     }
 }

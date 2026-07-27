@@ -27,12 +27,13 @@ public sealed class BridgeObserverProfileDialog : Form
         Text = editingExisting ? "设置观摩源" : "新增观摩源";
         Icon = BridgeBrandIcon.ApplicationIcon;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new(520, 380);
-        MinimumSize = new(520, 380);
+        ClientSize = new(540, 420);
+        MinimumSize = new(520, 400);
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
         Font = new("Microsoft YaHei UI", 9F);
+        AutoScaleMode = AutoScaleMode.Dpi;
 
         var layout = new TableLayoutPanel
         {
@@ -66,6 +67,7 @@ public sealed class BridgeObserverProfileDialog : Form
         _directoryLabel.Margin = new Padding(0, 14, 0, 0);
         layout.Controls.Add(_directoryLabel);
         _directoryHelp.AutoSize = true;
+        _directoryHelp.MaximumSize = new(480, 0);
         _directoryHelp.ForeColor = Color.FromArgb(71, 85, 105);
         _directoryHelp.Margin = new Padding(0, 4, 0, 8);
         layout.Controls.Add(_directoryHelp);

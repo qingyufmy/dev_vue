@@ -626,6 +626,8 @@ public sealed class BridgeMainForm : Form
             ColumnCount = 1,
             RowCount = 2,
         };
+        copy.RowStyles.Add(new(SizeType.Percent, 50));
+        copy.RowStyles.Add(new(SizeType.Percent, 50));
         var platform = terminal?.Platform
             ?? observerProfile?.Platform
             ?? "terminal";
@@ -634,7 +636,8 @@ public sealed class BridgeMainForm : Form
             : $"{platform.ToUpperInvariant()}  ·  {terminal.Login}";
         copy.Controls.Add(new Label
         {
-            AutoSize = true,
+            AutoEllipsis = true,
+            Dock = DockStyle.Fill,
             Font = new(Font.FontFamily, 9F, FontStyle.Bold),
             ForeColor = Color.FromArgb(30, 41, 59),
             Text = $"{role}    {identity}",

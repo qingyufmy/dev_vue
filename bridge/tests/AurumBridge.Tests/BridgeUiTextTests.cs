@@ -255,6 +255,14 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
+    public void LogViewerScrollsToTheStartOfTheNewestLine()
+    {
+        Assert.AreEqual(0, BridgeLogViewerForm.FindLastLineStart("single line"));
+        Assert.AreEqual(6, BridgeLogViewerForm.FindLastLineStart("first\nnewest line"));
+        Assert.AreEqual(7, BridgeLogViewerForm.FindLastLineStart("first\r\nnewest line"));
+    }
+
+    [TestMethod]
     public void FirstAuthorizationCopyExplainsTheManualOneTimeBrowserLogin()
     {
         var text = BridgeUiText.ForStatus(new(
