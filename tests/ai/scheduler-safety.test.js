@@ -273,27 +273,27 @@ describe('scheduler wait cadence', () => {
   })
 })
 
-describe('fixed-slot scheduler cooldown', () => {
+describe('post-completion scheduler cooldown', () => {
   const at = (minute, second = 0, ms = 0) => Date.UTC(2026, 6, 24, 12, minute, second, ms)
 
-  it('aligns a slow five-minute cycle to the next wall-clock slot', () => {
-    expect(__schedulerTest.nextFixedSlotDeadlineMs(5, at(2))).toBe(at(5))
-    expect(__schedulerTest.fixedSlotCooldownSeconds(5, at(2))).toBe(180)
+  it('starts the full five-minute interval after a slow inference completes', () => {
+    expect(__schedulerTest.nextCompletionIntervalDeadlineMs(5, at(2))).toBe(at(7))
+    expect(__schedulerTest.completionIntervalCooldownSeconds(5, at(2))).toBe(300)
   })
 
-  it('skips elapsed slots instead of replaying or accumulating drift', () => {
-    expect(__schedulerTest.nextFixedSlotDeadlineMs(5, at(7))).toBe(at(10))
-    expect(__schedulerTest.fixedSlotCooldownSeconds(5, at(7))).toBe(180)
+  it('does not align completion to a wall-clock slot', () => {
+    expect(__schedulerTest.nextCompletionIntervalDeadlineMs(5, at(7))).toBe(at(12))
+    expect(__schedulerTest.completionIntervalCooldownSeconds(5, at(7))).toBe(300)
   })
 
-  it('chooses a future slot at the boundary and rounds the final fraction up', () => {
-    expect(__schedulerTest.fixedSlotCooldownSeconds(5, at(5))).toBe(300)
-    expect(__schedulerTest.fixedSlotCooldownSeconds(5, at(4, 59, 500))).toBe(1)
+  it('keeps the full interval at wall-clock boundaries and fractional seconds', () => {
+    expect(__schedulerTest.completionIntervalCooldownSeconds(5, at(5))).toBe(300)
+    expect(__schedulerTest.completionIntervalCooldownSeconds(5, at(4, 59, 500))).toBe(300)
   })
 
-  it('uses the same default alignment after a restart with an invalid interval', () => {
-    expect(__schedulerTest.nextFixedSlotDeadlineMs(null, at(2))).toBe(at(5))
-    expect(__schedulerTest.nextFixedSlotDeadlineMs(0, at(2))).toBe(at(5))
+  it('uses the same five-minute completion interval for invalid configuration', () => {
+    expect(__schedulerTest.nextCompletionIntervalDeadlineMs(null, at(2))).toBe(at(7))
+    expect(__schedulerTest.nextCompletionIntervalDeadlineMs(0, at(2))).toBe(at(7))
   })
 })
 

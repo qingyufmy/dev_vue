@@ -674,14 +674,17 @@ function schedulerWaitLabel(reason) {
   return labels[reason] || `等待条件恢复（${reason}）`
 }
 
-function nextFixedSlotDeadlineMs(intervalMinutes, nowMs = Date.now()) {
+function nextCompletionIntervalDeadlineMs(intervalMinutes, completedAtMs = Date.now()) {
   const normalizedMinutes = Math.max(1, Number(intervalMinutes) || 5)
   const intervalMs = Math.ceil(normalizedMinutes * 60_000)
-  return (Math.floor(nowMs / intervalMs) + 1) * intervalMs
+  return completedAtMs + intervalMs
 }
 
-function fixedSlotCooldownSeconds(intervalMinutes, nowMs = Date.now()) {
-  return calculateRecoverySeconds(nextFixedSlotDeadlineMs(intervalMinutes, nowMs), nowMs)
+function completionIntervalCooldownSeconds(intervalMinutes, completedAtMs = Date.now()) {
+  return calculateRecoverySeconds(
+    nextCompletionIntervalDeadlineMs(intervalMinutes, completedAtMs),
+    completedAtMs,
+  )
 }
 
 function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, cycleSnapshot) {
@@ -1059,14 +1062,15 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     } finally {
       // Stop lock renewal timer
       if (lockGuard.renewTimer) clearInterval(lockGuard.renewTimer)
-      // Successful cycles align to the next fixed wall-clock slot. A slow
-      // inference skips elapsed slots instead of shifting every later cycle.
+      // A successful cycle receives the full configured interval after all
+      // inference, persistence and delivery work has completed. Model runtime
+      // must not consume any part of the interval before the next cycle.
       const finalizedAtMs = Date.now()
       const recoveryDeadlineMs = cycleStatus === 'success'
-        ? nextFixedSlotDeadlineMs(st.intervalMinutes, finalizedAtMs)
+        ? nextCompletionIntervalDeadlineMs(st.intervalMinutes, finalizedAtMs)
         : finalizedAtMs + retryDelayMs(cycleReason, st._consecutiveModelFailures)
       const cooldownSecs = cycleStatus === 'success'
-        ? fixedSlotCooldownSeconds(st.intervalMinutes, finalizedAtMs)
+        ? completionIntervalCooldownSeconds(st.intervalMinutes, finalizedAtMs)
         : calculateRecoverySeconds(recoveryDeadlineMs, finalizedAtMs)
       st.nextRunInSeconds = cooldownSecs
       const finalized = await finalizeLock(key, lockToken, cooldownSecs)
@@ -1115,7 +1119,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
           if (isCurrent()) recoveryState.timer = setTimeout(tick, 0)
         }
         // Recovery polls Redis state only. It resumes normal tick after the
-        // original cooldown deadline instead of extending that deadline.
+        // original post-completion cooldown deadline instead of extending it.
         const _recoveryFn = async () => {
           if (!isCurrent()) return
           const redis = getRedis()
@@ -2413,6 +2417,6 @@ export const __schedulerTest = {
   shouldLogSchedulerWait,
   schedulerWaitLabel,
   schedulerLockWaitSeconds,
-  nextFixedSlotDeadlineMs,
-  fixedSlotCooldownSeconds,
+  nextCompletionIntervalDeadlineMs,
+  completionIntervalCooldownSeconds,
 }
