@@ -373,7 +373,8 @@ public sealed class Mt4PipeProtocolTests
             Mt4PipeProtocol.EncodeQuoteRequest(request));
         var quote = new Mt4Quote(
             request.RequestId, request.Symbol, 1_800_000_000_100,
-            "succeeded", 2300.0, 2300.2, null, 180, "broker_time_derived");
+            "succeeded", 2300.0, 2300.2, null, 180, "broker_time_derived",
+            2, 0.01, 4);
         var decodedQuote = Mt4PipeProtocol.DecodeQuote(Mt4PipeProtocol.EncodeQuote(quote));
 
         Assert.AreEqual(request, decodedRequest);
@@ -387,13 +388,35 @@ public sealed class Mt4PipeProtocolTests
             "request_mt4_quote_legacy_01", "XAUUSD", 1_800_000_000_100,
             "succeeded", 2300.0, 2300.2, null);
         var payload = Mt4PipeProtocol.EncodeQuote(quote);
-        var clockMetadataLength = sizeof(int) + sizeof(int);
-        var legacyPayload = payload[..(payload.Length - clockMetadataLength)];
+        var clockAndSymbolMetadataLength = sizeof(int) * 5;
+        var legacyPayload = payload[..(payload.Length - clockAndSymbolMetadataLength)];
 
         var decoded = Mt4PipeProtocol.DecodeQuote(legacyPayload);
 
         Assert.IsNull(decoded.TimezoneOffsetMinutes);
         Assert.IsNull(decoded.ClockStatus);
+        Assert.IsNull(decoded.Digits);
+        Assert.IsNull(decoded.Point);
+        Assert.IsNull(decoded.SymbolTradeMode);
+    }
+
+    [TestMethod]
+    public void QuoteResponseAcceptsThePreviousFrameWithoutSymbolMetadata()
+    {
+        var quote = new Mt4Quote(
+            "request_mt4_quote_clock_only_01", "XAUUSD", 1_800_000_000_100,
+            "succeeded", 2300.0, 2300.2, null, 180, "broker_time_derived");
+        var payload = Mt4PipeProtocol.EncodeQuote(quote);
+        var symbolMetadataLength = sizeof(int) + sizeof(int) + sizeof(int);
+        var previousPayload = payload[..(payload.Length - symbolMetadataLength)];
+
+        var decoded = Mt4PipeProtocol.DecodeQuote(previousPayload);
+
+        Assert.AreEqual(180, decoded.TimezoneOffsetMinutes);
+        Assert.AreEqual("broker_time_derived", decoded.ClockStatus);
+        Assert.IsNull(decoded.Digits);
+        Assert.IsNull(decoded.Point);
+        Assert.IsNull(decoded.SymbolTradeMode);
     }
 
     [TestMethod]

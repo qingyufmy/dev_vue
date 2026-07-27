@@ -65,6 +65,10 @@ public sealed class Mt4TerminalRuntimeTests
         CollectionAssert.Contains(result.Evidence.OrderTickets.ToArray(), "20");
         Assert.AreEqual(Terminal().ConnectionEpoch, connection.Welcome!.ConnectionEpoch);
         Assert.AreEqual(2300.0, quote.Bid);
+        Assert.AreEqual(2, quote.Digits);
+        Assert.AreEqual(0.01, quote.Point);
+        Assert.AreEqual(4, quote.SymbolTradeMode);
+        Assert.IsTrue(quote.TerminalConnected);
     }
 
     [TestMethod]
@@ -580,7 +584,12 @@ public sealed class Mt4TerminalRuntimeTests
                 "succeeded",
                 2300.0,
                 2300.2,
-                null));
+                null,
+                180,
+                "broker_time_derived",
+                2,
+                0.01,
+                4));
 
         public Task<Mt4Rates> GetRatesAsync(
             Mt4RatesRequest request,

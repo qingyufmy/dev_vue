@@ -12,10 +12,13 @@ function functionBlock(name, nextName) {
 describe('MT4 EA time contract', () => {
   it('normalizes broker quote time to UTC before publishing it', () => {
     const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
-    expect(source).toContain('#property version   "3.23"')
+    expect(source).toContain('#property version   "3.24"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
     expect(block).toContain('AppendInt32(response, CurrentServerOffsetMinutes())')
     expect(block).toContain('AppendUtf8(response, "broker_time_derived")')
+    expect(block).toContain('MarketInfo(symbol, MODE_DIGITS)')
+    expect(block).toContain('MarketInfo(symbol, MODE_POINT)')
+    expect(block).toContain('MarketInfo(symbol, MODE_TRADEALLOWED)')
     expect(block).not.toContain('(source_time > 0 ? source_time : (long)TimeGMT()) * 1000')
   })
 
@@ -38,7 +41,7 @@ describe('MT4 EA time contract', () => {
 
 describe('MT4 EA extended data contract', () => {
   it('advertises version 3.2 and handles every server data action', () => {
-    expect(source).toContain('AppendUtf8(hello, "3.2.3")')
+    expect(source).toContain('AppendUtf8(hello, "3.2.4")')
     const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')
     for (const action of ['symbols', 'history', 'chart_data', 'pending_order_state', 'diagnostics']) {
       expect(block).toContain(`action == "${action}"`)

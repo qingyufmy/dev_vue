@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.23"
+#property version   "3.24"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -228,7 +228,7 @@ bool ConnectPipe()
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
    AppendInt32(hello, 3);
-   AppendUtf8(hello, "3.2.3");
+   AppendUtf8(hello, "3.2.4");
    AppendUtf8(hello, TerminalInfoString(TERMINAL_DATA_PATH));
    AppendUtf8(hello, AccountServer());
    AppendUtf8(hello, IntegerToString(AccountNumber()));
@@ -355,6 +355,11 @@ void SendQuoteResult(const string request_id, const string symbol, const int sta
    AppendUtf8(response, error_code);
    AppendInt32(response, CurrentServerOffsetMinutes());
    AppendUtf8(response, "broker_time_derived");
+   double point = MarketInfo(symbol, MODE_POINT);
+   int trade_mode = MarketInfo(symbol, MODE_TRADEALLOWED) > 0 ? 4 : 0;
+   AppendInt32(response, status == 1 ? digits : -2147483647 - 1);
+   AppendUtf8(response, status == 1 && point > 0 ? JsonNumber(point) : "");
+   AppendInt32(response, status == 1 ? trade_mode : -2147483647 - 1);
    if(!WriteFrame(response))
       DisconnectPipe();
   }

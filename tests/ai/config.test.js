@@ -56,6 +56,36 @@ describe('order request enrichment', () => {
     expect(request.quote_price).toBe(1.1)
     expect(request).not.toHaveProperty('mt5_timezone_offset_minutes')
   })
+
+  it('normalizes point-based protection to the broker symbol precision', () => {
+    const request = {
+      symbol:'EURUSD', order_type:'buy', stop_loss_points:15, take_profit_points:25,
+    }
+    enrichOrderRequest({
+      request,
+      quote:{ ask:1.08642, bid:1.0864, point:0.00001, digits:5 },
+    })
+    expect(request).toMatchObject({
+      quote_price:1.08642,
+      sl:1.08627,
+      tp:1.08667,
+    })
+  })
+
+  it('derives precision from point size for an older adapter without digits', () => {
+    const request = {
+      symbol:'USDJPY', order_type:'sell', stop_loss_points:10, take_profit_points:20,
+    }
+    enrichOrderRequest({
+      request,
+      quote:{ ask:154.324, bid:154.321, point:0.001 },
+    })
+    expect(request).toMatchObject({
+      quote_price:154.321,
+      sl:154.331,
+      tp:154.301,
+    })
+  })
 })
 
 describe('replacement risk projection', () => {

@@ -79,7 +79,10 @@ public sealed record Mt4Quote(
     double? Ask,
     string? ErrorCode,
     int? TimezoneOffsetMinutes = null,
-    string? ClockStatus = null);
+    string? ClockStatus = null,
+    int? Digits = null,
+    double? Point = null,
+    int? SymbolTradeMode = null);
 
 public sealed record Mt4RatesRequest(
     string RequestId,
@@ -452,6 +455,9 @@ public static class Mt4PipeProtocol
             WriteString(writer, quote.ErrorCode ?? string.Empty);
             writer.Write(quote.TimezoneOffsetMinutes ?? int.MinValue);
             WriteString(writer, quote.ClockStatus ?? string.Empty);
+            writer.Write(quote.Digits ?? int.MinValue);
+            WriteNullableDouble(writer, quote.Point);
+            writer.Write(quote.SymbolTradeMode ?? int.MinValue);
         });
     }
 
@@ -472,11 +478,22 @@ public static class Mt4PipeProtocol
         var errorCode = NullIfEmpty(ReadString(reader, 128));
         int? timezoneOffsetMinutes = null;
         string? clockStatus = null;
+        int? digits = null;
+        double? point = null;
+        int? symbolTradeMode = null;
         if (reader.BaseStream.Position < reader.BaseStream.Length)
         {
             var rawOffset = reader.ReadInt32();
             timezoneOffsetMinutes = rawOffset == int.MinValue ? null : rawOffset;
             clockStatus = NullIfEmpty(ReadString(reader, 64));
+        }
+        if (reader.BaseStream.Position < reader.BaseStream.Length)
+        {
+            var rawDigits = reader.ReadInt32();
+            digits = rawDigits == int.MinValue ? null : rawDigits;
+            point = ReadDoubleString(reader, required: false);
+            var rawTradeMode = reader.ReadInt32();
+            symbolTradeMode = rawTradeMode == int.MinValue ? null : rawTradeMode;
         }
         var quote = new Mt4Quote(
             requestId,
@@ -487,7 +504,10 @@ public static class Mt4PipeProtocol
             ask,
             errorCode,
             timezoneOffsetMinutes,
-            clockStatus);
+            clockStatus,
+            digits,
+            point,
+            symbolTradeMode);
         EnsureFullyRead(reader);
         ValidateQuote(quote);
         return quote;
@@ -1406,6 +1426,12 @@ public static class Mt4PipeProtocol
             || quote.ClockStatus?.Length > 64)
         {
             throw new InvalidDataException("mt4_quote_clock_invalid");
+        }
+        if (quote.Digits is < 0 or > 16
+            || quote.Point is { } point && (!double.IsFinite(point) || point <= 0)
+            || quote.SymbolTradeMode is < 0 or > 4)
+        {
+            throw new InvalidDataException("mt4_quote_symbol_metadata_invalid");
         }
     }
 

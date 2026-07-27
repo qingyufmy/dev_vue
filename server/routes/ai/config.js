@@ -1,7 +1,7 @@
 // ai/config.js — 配置管理 + 风控 + 审计
 
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing } from '../../db.js'
-import { round2, stripBrokerSuffix } from './utils.js'
+import { stripBrokerSuffix } from './utils.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { mt5Bridge, computeAtr14 } from './market-data.js'
 import { prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localization.js'
@@ -155,15 +155,28 @@ export function enrichOrderRequest({ request:prepared, quote } = {}) {
   if (!prepared.symbol) return
   prepared.quote_price = parseFloat(prepared.order_type === 'buy' ? quote.ask : quote.bid)
   const pointSize = quote.point || (prepared.quote_price > 1000 ? 0.01 : 0.0001)
+  const explicitDigits = Number(quote.digits)
+  const pointText = Number(pointSize).toString().toLowerCase()
+  const [pointCoefficient, pointExponentText] = pointText.split('e')
+  const pointFractionDigits = (pointCoefficient.split('.')[1] || '').length
+  const pointExponent = pointExponentText == null ? 0 : Number(pointExponentText)
+  const hasExplicitDigits = quote.digits !== null && quote.digits !== undefined && quote.digits !== ''
+  const quoteDigits = hasExplicitDigits && Number.isInteger(explicitDigits) && explicitDigits >= 0 && explicitDigits <= 16
+    ? explicitDigits
+    : Math.min(16, Math.max(0, pointFractionDigits - pointExponent))
+  const normalizePrice = value => {
+    const factor = 10 ** quoteDigits
+    return Math.round((Number(value) + Number.EPSILON) * factor) / factor
+  }
   if (prepared.stop_loss_points && !prepared.sl) {
     prepared.sl = prepared.order_type === 'buy'
-      ? round2(prepared.quote_price - prepared.stop_loss_points * pointSize)
-      : round2(prepared.quote_price + prepared.stop_loss_points * pointSize)
+      ? normalizePrice(prepared.quote_price - prepared.stop_loss_points * pointSize)
+      : normalizePrice(prepared.quote_price + prepared.stop_loss_points * pointSize)
   }
   if (prepared.take_profit_points && !prepared.tp) {
     prepared.tp = prepared.order_type === 'buy'
-      ? round2(prepared.quote_price + prepared.take_profit_points * pointSize)
-      : round2(prepared.quote_price - prepared.take_profit_points * pointSize)
+      ? normalizePrice(prepared.quote_price + prepared.take_profit_points * pointSize)
+      : normalizePrice(prepared.quote_price - prepared.take_profit_points * pointSize)
   }
 }
 
