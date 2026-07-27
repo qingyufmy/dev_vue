@@ -283,7 +283,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
             statusFingerprint) != statusFingerprint)
         {
             var terminalStates = string.Join(",", status.Terminals.Select(terminal =>
-                $"{terminal.ObserverProfileId ?? "main"}:{terminal.RuntimeState}"));
+                $"{terminal.ObserverProfileId ?? "main"}:{terminal.RuntimeState}"
+                + (terminal.ErrorCode is null ? string.Empty : $"[{terminal.ErrorCode}]")));
             _logger.Info(
                 "bridge_status_changed",
                 $"phase={status.Phase}; terminals={status.Terminals.Count}; states={terminalStates}; detail={status.DetailCode ?? "none"}");

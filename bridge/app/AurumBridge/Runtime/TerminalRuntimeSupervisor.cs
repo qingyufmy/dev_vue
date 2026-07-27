@@ -73,7 +73,6 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
             _stop.Token);
         var runCancellation = linkedCancellation.Token;
         var failures = 0;
-        string? terminalStopError = null;
         try
         {
             while (!runCancellation.IsCancellationRequested)
@@ -107,16 +106,9 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
                 }
                 catch (Exception error)
                 {
-                    failures++;
+                    failures = Math.Min(failures + 1, _maximumConsecutiveFailures);
                     var errorCode = NormalizeError(error);
-                    if (failures >= _maximumConsecutiveFailures)
-                    {
-                        terminalStopError = "terminal_worker_failure_limit";
-                    }
-                    else
-                    {
-                        Publish(TerminalRuntimeState.Restarting, failures, errorCode);
-                    }
+                    Publish(TerminalRuntimeState.Restarting, failures, errorCode);
                 }
                 finally
                 {
@@ -125,11 +117,6 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
                     {
                         await TryDisposeAsync(runtime);
                     }
-                }
-
-                if (terminalStopError is not null)
-                {
-                    break;
                 }
 
                 if (!runCancellation.IsCancellationRequested)
@@ -143,7 +130,7 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
         }
         finally
         {
-            Publish(TerminalRuntimeState.Stopped, failures, terminalStopError);
+            Publish(TerminalRuntimeState.Stopped, failures);
             _stopped.TrySetResult();
         }
     }

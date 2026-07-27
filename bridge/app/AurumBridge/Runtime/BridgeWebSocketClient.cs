@@ -66,6 +66,11 @@ public sealed class BridgeWebSocketClient
             var sessionTerminalIds = attempt.Hello.Terminals
                 .Select(terminal => terminal.TerminalInstanceId)
                 .ToHashSet(StringComparer.Ordinal);
+            var sessionTerminalEpochs = attempt.Hello.Terminals.ToDictionary(
+                terminal => terminal.TerminalInstanceId,
+                terminal => terminal.ConnectionEpoch,
+                StringComparer.Ordinal);
+            await _store.PruneObsoleteDataOutboxAsync(sessionTerminalEpochs, cancellationToken);
             var outbox = new BridgeOutboxPump(
                 _store, outbound, terminalInstanceIds:sessionTerminalIds);
             var router = new BridgeInboundRouter(

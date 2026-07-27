@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.21"
+#property version   "3.22"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -173,7 +173,7 @@ bool ConnectPipe()
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
    AppendInt32(hello, 3);
-   AppendUtf8(hello, "3.2.1");
+   AppendUtf8(hello, "3.2.2");
    AppendUtf8(hello, TerminalInfoString(TERMINAL_DATA_PATH));
    AppendUtf8(hello, AccountServer());
    AppendUtf8(hello, IntegerToString(AccountNumber()));
@@ -2024,6 +2024,11 @@ string BuildSelectedOrderJson()
    int order_type = OrderType();
    string side = (order_type == OP_BUY || order_type == OP_BUYLIMIT || order_type == OP_BUYSTOP)
       ? "buy" : "sell";
+   double current_price = 0;
+   if(order_type == OP_BUY)
+      current_price = MarketInfo(OrderSymbol(), MODE_BID);
+   else if(order_type == OP_SELL)
+      current_price = MarketInfo(OrderSymbol(), MODE_ASK);
    return("{"
       + "\"ticket\":\"" + IntegerToString(OrderTicket()) + "\","
       + "\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\","
@@ -2031,6 +2036,7 @@ string BuildSelectedOrderJson()
       + "\"side\":\"" + side + "\","
       + "\"volume\":" + JsonNumber(OrderLots()) + ","
       + "\"price_open\":" + JsonNumber(OrderOpenPrice()) + ","
+      + "\"price_current\":" + JsonNumber(current_price) + ","
       + "\"stop_loss\":" + JsonNumber(OrderStopLoss()) + ","
       + "\"take_profit\":" + JsonNumber(OrderTakeProfit()) + ","
       + "\"profit\":" + JsonNumber(OrderProfit()) + ","

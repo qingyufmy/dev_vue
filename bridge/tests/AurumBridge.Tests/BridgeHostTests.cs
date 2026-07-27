@@ -119,24 +119,26 @@ public sealed class BridgeHostTests
     }
 
     [TestMethod]
-    public async Task ATerminalThatExhaustsRecoveryDoesNotStopAnotherTerminal()
+    public async Task ATerminalThatKeepsRecoveringDoesNotStopAnotherTerminal()
     {
         await using var testStore = await TestStore.CreateAsync();
         var failedTerminal = Terminal("terminal_failed_01", "3001");
         var stableTerminal = Terminal("terminal_stable_01", "3002");
-        var failedStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failedRetriedPastThreshold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cappedFailureEvents = 0;
         var stableRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var failedSupervisor = new TerminalRuntimeSupervisor(
             failedTerminal,
             () => new IsolatedRuntime(failedTerminal, failCollection:true),
-            (_, _) => Task.CompletedTask,
+            (_, token) => Task.Delay(1, token),
             maximumConsecutiveFailures:2);
         failedSupervisor.StatusChanged += status =>
         {
-            if (status.State == TerminalRuntimeState.Stopped
-                && status.ErrorCode == "terminal_worker_failure_limit")
+            if (status.State == TerminalRuntimeState.Restarting
+                && status.ConsecutiveFailures == 2
+                && Interlocked.Increment(ref cappedFailureEvents) >= 2)
             {
-                failedStopped.TrySetResult();
+                failedRetriedPastThreshold.TrySetResult();
             }
         };
         var stableRuntime = new IsolatedRuntime(stableTerminal, failCollection:false);
@@ -146,12 +148,12 @@ public sealed class BridgeHostTests
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var run = host.RunAsync(cancellation.Token);
 
-        await Task.WhenAll(failedStopped.Task, stableRunning.Task).WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.WhenAll(failedRetriedPastThreshold.Task, stableRunning.Task).WaitAsync(TimeSpan.FromSeconds(2));
         var result = await host.CommandDispatcher.DispatchAsync(Command(stableTerminal));
 
         Assert.AreEqual("succeeded", result.Status);
-        Assert.IsFalse(failedSupervisor.IsRunning);
         Assert.IsTrue(stableSupervisor.IsRunning);
+        Assert.IsTrue(cappedFailureEvents >= 2);
         CollectionAssert.AreEqual(
             new[] { Command(stableTerminal).CommandId },
             stableRuntime.CommandIds.ToArray());

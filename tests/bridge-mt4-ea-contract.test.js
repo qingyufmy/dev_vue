@@ -12,7 +12,7 @@ function functionBlock(name, nextName) {
 describe('MT4 EA time contract', () => {
   it('normalizes broker quote time to UTC before publishing it', () => {
     const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
-    expect(source).toContain('#property version   "3.21"')
+    expect(source).toContain('#property version   "3.22"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
     expect(block).toContain('AppendInt32(response, CurrentServerOffsetMinutes())')
     expect(block).toContain('AppendUtf8(response, "broker_time_derived")')
@@ -38,7 +38,7 @@ describe('MT4 EA time contract', () => {
 
 describe('MT4 EA extended data contract', () => {
   it('advertises version 3.2 and handles every server data action', () => {
-    expect(source).toContain('AppendUtf8(hello, "3.2.1")')
+    expect(source).toContain('AppendUtf8(hello, "3.2.2")')
     const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')
     for (const action of ['symbols', 'history', 'chart_data', 'pending_order_state', 'diagnostics']) {
       expect(block).toContain(`action == "${action}"`)
@@ -87,6 +87,7 @@ describe('MT4 EA snapshot performance contract', () => {
     expect(buildBlock.match(/OrdersTotal\(\)/g)).toHaveLength(1)
     expect(buildBlock).toContain('include_positions')
     expect(buildBlock).toContain('include_orders')
+    expect(functionBlock('string BuildSelectedOrderJson', 'string JsonNumber')).toContain('\\"price_current\\"')
   })
 })
 

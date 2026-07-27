@@ -26,7 +26,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('const LIVE_QUOTE_REFRESH_INTERVAL_MS = 1000')
     expect(app).toContain('void refreshLiveQuote();')
     expect(app).toContain('}, LIVE_QUOTE_REFRESH_INTERVAL_MS)')
-    expect(html).toContain('/ai/app.js?v=20260727bridgeaccount1')
+    expect(html).toContain('/ai/app.js?v=20260727bridgefix3')
   })
 
   it('uses the connected bridge platform in status and terminal-time labels', () => {
@@ -301,6 +301,8 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('history_scope: scope')
     expect(app.match(/\?\.value \|\| "platform"/g)?.length).toBeGreaterThanOrEqual(2)
     expect(app).toContain('从当前 ${bridgePlatformLabel()} 账户本次接入平台之日开始。')
+    expect(app).toContain('MT4 历史范围取决于终端“账户历史”页已加载的时间范围')
+    expect(app).toContain('} else if (tabId === "history") {\n    updateHistoryRangeUI();')
     expect(bridgeWs).toContain("AS platform_connected_date")
     expect(bridgeWs).toContain('FROM trading_accounts ta')
     expect(bridgeWs).toContain('ownership.started_at')
@@ -533,6 +535,11 @@ describe('AI governance navigation and DOM contract', () => {
     expect(handler).toContain('clearAccountContextCaches()')
     expect(handler).toContain('refreshTabData(activeTabId())')
     expect(handler).not.toContain('loadHistory(), loadHistoryChart()')
+  })
+
+  it('formats numeric MT terminal timestamps instead of exposing raw epoch values', () => {
+    expect(app).toContain('const milliseconds = numeric > 10_000_000_000 ? numeric : numeric * 1000')
+    expect(app).toContain('date.toISOString().replace("T", " ").slice(0, 19)')
   })
 
   it('binds subscriptions to the current bridge account instead of a historical account choice', () => {

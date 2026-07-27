@@ -1010,6 +1010,8 @@ public sealed class BridgeApplicationController : IAsyncDisposable
 
     private void HandleTerminalStatus(TerminalRuntimeStatus status)
     {
+        bool allRunning;
+        bool serverConnected;
         lock (_sync)
         {
             if (_terminalStatuses.TryGetValue(status.TerminalInstanceId, out var current))
@@ -1020,11 +1022,18 @@ public sealed class BridgeApplicationController : IAsyncDisposable
                     ErrorCode = status.ErrorCode,
                 };
             }
+            allRunning = _terminalStatuses.Count > 0
+                && _terminalStatuses.Values.All(terminal =>
+                    terminal.RuntimeState == TerminalRuntimeState.Running);
+            serverConnected = _serverConnected;
         }
-        if (status.State == TerminalRuntimeState.Stopped
-            && status.ErrorCode == "terminal_worker_failure_limit")
+        if (status.State == TerminalRuntimeState.Restarting)
         {
             Publish(BridgeApplicationPhase.Degraded, status.ErrorCode);
+        }
+        else if (status.State == TerminalRuntimeState.Running && allRunning && serverConnected)
+        {
+            Publish(BridgeApplicationPhase.Online);
         }
         else
         {

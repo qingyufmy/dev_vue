@@ -86,6 +86,23 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('normalizes MT4 open time and current price for the shared positions UI', async () => {
+    const { adapter } = setup({
+      routes:[route({ platform:'mt4' })],
+      rows:[{
+        ticket:'307526062', symbol:'XAUUSD.s', type:0, volume:0.01,
+        price_open:4091.74, price_current:4095.31, open_time:1785152761,
+      }],
+    })
+
+    const result = await adapter.execute(42, 'positions')
+
+    expect(result.positions[0]).toMatchObject({
+      ticket:'307526062', source:'mt4', price_current:4095.31,
+      time:1785152761, open_time:1785152761,
+    })
+  })
+
   it('uses stream revision evidence to return a valid empty pending list', async () => {
     const { adapter } = setup({ rows:[] })
 

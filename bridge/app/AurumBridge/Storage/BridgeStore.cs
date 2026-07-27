@@ -367,6 +367,51 @@ public sealed class BridgeStore : IAsyncDisposable
         return result;
     }
 
+    public async Task<int> PruneObsoleteDataOutboxAsync(
+        IReadOnlyDictionary<string, long> activeTerminalEpochs,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        ArgumentNullException.ThrowIfNull(activeTerminalEpochs);
+        if (activeTerminalEpochs.Count == 0)
+        {
+            return 0;
+        }
+        if (activeTerminalEpochs.Any(item =>
+                string.IsNullOrWhiteSpace(item.Key) || item.Value <= 0))
+        {
+            throw new ArgumentException("active_terminal_epochs_invalid", nameof(activeTerminalEpochs));
+        }
+
+        await _writer.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            var activePredicates = new List<string>(activeTerminalEpochs.Count);
+            var index = 0;
+            foreach (var terminal in activeTerminalEpochs.OrderBy(item => item.Key, StringComparer.Ordinal))
+            {
+                activePredicates.Add(
+                    $"(terminal_instance_id = $terminal_{index} AND connection_epoch = $epoch_{index})");
+                command.Parameters.AddWithValue($"$terminal_{index}", terminal.Key.Trim());
+                command.Parameters.AddWithValue($"$epoch_{index}", terminal.Value);
+                index++;
+            }
+            command.CommandText = $"""
+                DELETE FROM outbox_messages
+                WHERE acked_at_utc_msc IS NULL
+                  AND message_type = 'data_delta'
+                  AND NOT ({string.Join(" OR ", activePredicates)});
+                """;
+            return await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        finally
+        {
+            _writer.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<OutboxMessage>> GetReadyOutboxAsync(
         long nowUtcMsc,
         int limit = 100,

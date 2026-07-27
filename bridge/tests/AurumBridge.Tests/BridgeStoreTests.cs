@@ -404,6 +404,40 @@ public sealed class BridgeStoreTests
     }
 
     [TestMethod]
+    public async Task SessionPruningRemovesOnlyObsoleteDataAndPreservesTradeReceipts()
+    {
+        var current = Delta("positions", 1, 0, [Json("""{"ticket":"1001"}""")]) with
+        {
+            MessageId = "msg_current_data",
+            TerminalInstanceId = "terminal_current",
+            ConnectionEpoch = 3,
+        };
+        var obsolete = Delta("positions", 1, 0, [Json("""{"ticket":"2001"}""")]) with
+        {
+            MessageId = "msg_obsolete_data",
+            TerminalInstanceId = "terminal_obsolete",
+            ConnectionEpoch = 8,
+        };
+        var tradeReceipt = Result("command_obsolete_terminal", 99) with
+        {
+            TerminalInstanceId = "terminal_obsolete",
+            ConnectionEpoch = 8,
+        };
+        await _store.PersistDataDeltaAsync(current);
+        await _store.PersistDataDeltaAsync(obsolete);
+        await _store.SaveExecutionReceiptAsync(tradeReceipt);
+
+        var removed = await _store.PruneObsoleteDataOutboxAsync(
+            new Dictionary<string, long> { ["terminal_current"] = 3 });
+
+        Assert.AreEqual(1, removed);
+        var pending = await _store.GetPendingOutboxAsync();
+        CollectionAssert.AreEquivalent(
+            new[] { current.MessageId, tradeReceipt.MessageId },
+            pending.Select(message => message.MessageId).ToArray());
+    }
+
+    [TestMethod]
     public async Task KeepsDealHistoryIsolatedWhenOneTerminalSwitchesAccounts()
     {
         const string terminalId = "mt5_terminal_shared";

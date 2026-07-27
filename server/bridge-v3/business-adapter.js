@@ -78,6 +78,7 @@ function normalizePosition(item, platform) {
     ? item.type
     : Number(item.type) === 0 ? 'buy' : 'sell'
   const identifier = String(item.identifier ?? item.position_id ?? ticket)
+  const openTime = Number(item.time ?? item.open_time ?? item.time_open ?? 0)
   return {
     ...item,
     ticket,
@@ -88,6 +89,8 @@ function normalizePosition(item, platform) {
     open_price:Number(item.open_price ?? item.price_open ?? 0),
     price_open:Number(item.price_open ?? item.open_price ?? 0),
     price_current:Number(item.price_current ?? 0),
+    time:Number.isFinite(openTime) && openTime > 0 ? openTime : 0,
+    open_time:Number.isFinite(openTime) && openTime > 0 ? openTime : 0,
     sl:Number(item.sl ?? item.stop_loss ?? 0),
     tp:Number(item.tp ?? item.take_profit ?? 0),
     source:platform,

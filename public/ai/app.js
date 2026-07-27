@@ -372,6 +372,12 @@ function fmt(value, digits = 2) {
 
 function formatTime(value) {
   if (!value) return "--";
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 1_000_000_000) {
+    const milliseconds = numeric > 10_000_000_000 ? numeric : numeric * 1000;
+    const date = new Date(milliseconds);
+    if (!Number.isNaN(date.getTime())) return date.toISOString().replace("T", " ").slice(0, 19);
+  }
   return String(value).replace("T", " ").slice(0, 19);
 }
 
@@ -3763,6 +3769,7 @@ async function refreshTabData(tabId) {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), refreshQuote(), loadKlineData()]);
     startKlineRefreshTimer();
   } else if (tabId === "history") {
+    updateHistoryRangeUI();
     await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
   } else if (tabId === "audit") {
     await loadAudit();
@@ -7137,7 +7144,10 @@ function updateHistoryRangeUI() {
     platform: `从当前 ${bridgePlatformLabel()} 账户本次接入平台之日开始。`,
     custom: "按平仓日期统计；入金、提款和信用也按同一日期范围计算。",
   };
-  setText("historyRangeHint", hints[scope] || hints.all);
+  const mt4RangeWarning = bridgePlatformLabel() === "MT4"
+    ? " MT4 历史范围取决于终端“账户历史”页已加载的时间范围；需要完整历史时，请先在 MT4 中选择“全部历史记录”。"
+    : "";
+  setText("historyRangeHint", `${hints[scope] || hints.all}${mt4RangeWarning}`);
 }
 
 async function loadHistory(forceRefresh) {

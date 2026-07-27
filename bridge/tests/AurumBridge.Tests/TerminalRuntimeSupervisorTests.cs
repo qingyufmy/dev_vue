@@ -73,27 +73,34 @@ public sealed class TerminalRuntimeSupervisorTests
     }
 
     [TestMethod]
-    public async Task StopsOnlyThisTerminalAfterTheConsecutiveFailureLimit()
+    public async Task KeepsRetryingAfterTheConsecutiveFailureCounterIsCapped()
     {
         var statuses = new List<TerminalRuntimeStatus>();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var creations = 0;
         var supervisor = new TerminalRuntimeSupervisor(
             Terminal(),
             () =>
             {
                 creations++;
-                return new FakeRuntime(Terminal(), failCollection:true);
+                return creations <= 5
+                    ? new FakeRuntime(Terminal(), failCollection:true)
+                    : new FakeRuntime(Terminal(), stopWhenStarted:stop);
             },
             (_, _) => Task.CompletedTask,
             maximumConsecutiveFailures:3);
         supervisor.StatusChanged += statuses.Add;
 
-        await supervisor.RunAsync();
+        await supervisor.RunAsync(stop.Token);
 
-        Assert.AreEqual(3, creations);
+        Assert.AreEqual(6, creations);
         Assert.AreEqual(TerminalRuntimeState.Stopped, statuses[^1].State);
         Assert.AreEqual(3, statuses[^1].ConsecutiveFailures);
-        Assert.AreEqual("terminal_worker_failure_limit", statuses[^1].ErrorCode);
+        Assert.IsNull(statuses[^1].ErrorCode);
+        Assert.IsTrue(statuses.Count(status =>
+            status.State == TerminalRuntimeState.Restarting
+            && status.ConsecutiveFailures == 3
+            && status.ErrorCode == "terminal_worker_io_error") >= 3);
         Assert.IsFalse(supervisor.IsRunning);
     }
 
