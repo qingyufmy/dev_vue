@@ -15,7 +15,8 @@ vi.mock('../server/bridge-auth-session.js', () => ({
 import { queryOne, queryRun, withTransaction } from '../server/db.js'
 import { assertBridgeEligible, createBridgeRefreshSession } from '../server/bridge-auth-session.js'
 import {
-  approveBridgePairing, consumeBridgePairing, startBridgePairing,
+  approveBridgePairing, consumeBridgePairing, createManagedObserverSession,
+  listManagedObserverSources, startBridgePairing,
 } from '../server/bridge-pairing.js'
 
 describe('bridge device pairing', () => {
@@ -73,6 +74,44 @@ describe('bridge device pairing', () => {
     )).rejects.toMatchObject({ code:'bridge_pair_source_forbidden' })
     expect(queryOne).not.toHaveBeenCalled()
     expect(queryRun).not.toHaveBeenCalled()
+  })
+
+  it('lists only administrator-managed observer-source identities', async () => {
+    const query = vi.fn().mockResolvedValue([{
+      bridge_user_id:42, email:'observer@example.com', source_name:'黄金默认行情',
+      trading_account_id:9, login_account:'860058', broker_server:'Broker-Demo',
+    }])
+
+    const result = await listManagedObserverSources(
+      { id:1, role:'admin' }, { query },
+    )
+
+    expect(result[0]).toMatchObject({ bridge_user_id:42, trading_account_id:9 })
+    expect(query.mock.calls[0][0]).toContain("users.plan_source = 'observer_source'")
+  })
+
+  it('issues a dedicated refresh credential for an administrator-selected observer account', async () => {
+    const target = {
+      id:42, role:'user', plan:'pro', plan_source:'observer_source', token_version:2,
+    }
+    const query = vi.fn().mockResolvedValue(target)
+    const run = vi.fn()
+    createBridgeRefreshSession.mockResolvedValue({
+      refreshToken:'o'.repeat(64), expiresInSeconds:7_776_000,
+    })
+
+    await expect(createManagedObserverSession(
+      { id:1, role:'admin' }, 42, { query, run, ip:'1.2.3.4' },
+    )).resolves.toMatchObject({ bridgeUserId:42, refreshToken:'o'.repeat(64) })
+    expect(createBridgeRefreshSession).toHaveBeenCalledWith(
+      target, expect.objectContaining({ run, ip:'1.2.3.4' }),
+    )
+  })
+
+  it('fails managed observer authorization closed for non-administrators', async () => {
+    await expect(createManagedObserverSession(
+      { id:7, role:'user' }, 42,
+    )).rejects.toMatchObject({ code:'bridge_observer_management_forbidden' })
   })
 
   it('returns pending without issuing a refresh credential', async () => {

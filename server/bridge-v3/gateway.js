@@ -152,8 +152,16 @@ export function createBridgeV3Gateway({
     const ticket = url.searchParams.get('ticket')
     if (!ticket) throw Object.assign(new Error('bridge_ticket_required'), { code:'bridge_ticket_required' })
     const credential = await consumeTicket(ticket)
-    const user = await queryOneFn(`SELECT id, role, plan, plan_expires_at, token_version,
+    const user = await queryOneFn(`SELECT id, role, plan, plan_source, plan_expires_at, token_version,
       (SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = users.id LIMIT 1) AS trade_send_enabled,
+      (SELECT accounts.login_account FROM ai_observer_sources sources
+        JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
+          AND accounts.user_id = users.id AND accounts.is_deleted = 0
+        WHERE sources.bridge_user_id = users.id AND sources.status = 'active' LIMIT 1) AS observer_login_account,
+      (SELECT accounts.broker_server FROM ai_observer_sources sources
+        JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
+          AND accounts.user_id = users.id AND accounts.is_deleted = 0
+        WHERE sources.bridge_user_id = users.id AND sources.status = 'active' LIMIT 1) AS observer_broker_server,
       (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
       FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [credential.userId])
     if (!user || Number(user.token_version || 0) !== Number(credential.tokenVersion || 0)) {
@@ -166,6 +174,10 @@ export function createBridgeV3Gateway({
     connection.tradeEnabled = String(user.role || '').toLowerCase() === 'admin'
       ? user.trade_send_enabled == null || Number(user.trade_send_enabled) === 1
       : Number(user.trade_send_enabled) === 1
+    connection.observerAccountRef = String(user.plan_source || '') === 'observer_source'
+      && user.observer_login_account && user.observer_broker_server
+      ? { login:String(user.observer_login_account), broker_server:String(user.observer_broker_server) }
+      : null
     connection.authenticated = true
   }
 
@@ -178,6 +190,12 @@ export function createBridgeV3Gateway({
     connection.sessionId = message.session_id
     try {
       for (const terminal of message.terminals) {
+        if (connection.observerAccountRef
+          && (String(terminal.account_ref.login).trim() !== connection.observerAccountRef.login.trim()
+            || String(terminal.account_ref.broker_server).trim().toLowerCase()
+              !== connection.observerAccountRef.broker_server.trim().toLowerCase())) {
+          throw gatewayError('observer_source_account_mismatch')
+        }
         await registerTerminal({
           userId:connection.userId,
           sessionId:message.session_id,

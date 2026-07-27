@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { queryOne, queryRun, withTransaction } from './db.js'
+import { queryAll, queryOne, queryRun, withTransaction } from './db.js'
 import { assertBridgeEligible, createBridgeRefreshSession } from './bridge-auth-session.js'
 
 const PAIRING_TTL_MINUTES = 10
@@ -80,6 +80,63 @@ async function resolvePairingUser(actor, bridgeUserId, query = queryOne) {
       )) LIMIT 1`, [targetId])
   if (!target) throw pairingError('bridge_pair_source_invalid')
   return target
+}
+
+function assertObserverManager(actor) {
+  if (String(actor?.role || '').toLowerCase() !== 'admin') {
+    throw pairingError('bridge_observer_management_forbidden')
+  }
+}
+
+async function resolveManagedObserverUser(actor, bridgeUserId, query = queryOne) {
+  assertObserverManager(actor)
+  const targetId = Number(bridgeUserId || 0)
+  if (!Number.isInteger(targetId) || targetId <= 0 || targetId === Number(actor?.id)) {
+    throw pairingError('bridge_pair_source_invalid')
+  }
+  const target = await query(`SELECT users.* FROM users
+    WHERE users.id = ? AND users.deletion_status = 'active' AND users.deleted_at IS NULL
+      AND users.plan_source = 'observer_source'
+    LIMIT 1`, [targetId])
+  if (!target) throw pairingError('bridge_pair_source_invalid')
+  return target
+}
+
+export async function listManagedObserverSources(
+  actor,
+  { query = queryAll } = {},
+) {
+  assertObserverManager(actor)
+  return query(`SELECT users.id AS bridge_user_id, users.email, users.nickname,
+      sources.id AS source_id, sources.name AS source_name, sources.status AS source_status,
+      sources.trading_account_id, accounts.login_account, accounts.broker_server
+    FROM users
+    LEFT JOIN ai_observer_sources sources ON sources.bridge_user_id = users.id
+    LEFT JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
+      AND accounts.user_id = users.id AND accounts.is_deleted = 0
+    WHERE users.plan_source = 'observer_source'
+      AND users.deletion_status = 'active' AND users.deleted_at IS NULL
+      AND users.plan = 'pro' AND (users.plan_expires_at IS NULL OR users.plan_expires_at >= NOW())
+    ORDER BY sources.status = 'active' DESC, sources.name, users.nickname, users.id`)
+}
+
+export async function createManagedObserverSession(
+  actor,
+  bridgeUserId,
+  { userAgent = '', ip = '', query = queryOne, run = queryRun } = {},
+) {
+  const target = await resolveManagedObserverUser(actor, bridgeUserId, query)
+  assertBridgeEligible(target)
+  const session = await createBridgeRefreshSession(target, {
+    userAgent:String(userAgent || '').slice(0, 255),
+    ip:String(ip || '').slice(0, 64),
+    run,
+  })
+  return {
+    bridgeUserId:Number(target.id),
+    refreshToken:session.refreshToken,
+    refreshExpiresInSeconds:session.expiresInSeconds,
+  }
 }
 
 export async function approveBridgePairing(user, userCode, {

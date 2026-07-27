@@ -316,6 +316,24 @@ describe('Bridge v3 websocket gateway', () => {
     expect(dependencies.registerTerminal).not.toHaveBeenCalled()
   })
 
+  it('rejects an observer terminal whose MT account differs from its configured source account', async () => {
+    const { gateway, dependencies } = setup({
+      queryOneFn:vi.fn().mockResolvedValue({
+        id:42, role:'user', plan_source:'observer_source', token_version:3, has_pro_access:1,
+        trade_send_enabled:1, observer_login_account:'860058', observer_broker_server:'Broker-Demo',
+      }),
+    })
+    const ws = await connect(gateway)
+
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    expect(dependencies.registerTerminal).not.toHaveBeenCalled()
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'error', error_code:'observer_source_account_mismatch',
+    })
+  })
+
   it('cleans up a partially registered multi-terminal hello', async () => {
     const registerTerminal = vi.fn()
       .mockResolvedValueOnce({ connected:true })

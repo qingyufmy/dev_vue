@@ -15,7 +15,8 @@ import {
   useBridgeRefreshSession, revokeBridgeRefreshSession, revokeBridgeRefreshSessions,
 } from '../bridge-auth-session.js'
 import {
-  approveBridgePairing, consumeBridgePairing, startBridgePairing,
+  approveBridgePairing, consumeBridgePairing, createManagedObserverSession,
+  listManagedObserverSources, startBridgePairing,
 } from '../bridge-pairing.js'
 
 const router = Router()
@@ -411,6 +412,42 @@ router.post('/auth/bridge-pair/token', async (req, res) => {
       ok: false,
       code: err.code || 'bridge_pair_failed',
       error: 'Bridge authorization expired. Please start again.',
+    })
+  }
+})
+
+router.post('/auth/bridge-observer-sources', authMiddleware, async (req, res) => {
+  try {
+    const sources = await listManagedObserverSources(req.user)
+    res.json({ ok:true, sources })
+  } catch (err) {
+    const forbidden = err.code === 'bridge_observer_management_forbidden'
+    res.status(forbidden ? 403 : 503).json({
+      ok:false,
+      code:err.code || 'bridge_observer_sources_unavailable',
+      error:forbidden ? 'Only administrators can manage observer sources.' : 'Observer sources are temporarily unavailable.',
+    })
+  }
+})
+
+router.post('/auth/bridge-observer-session', authMiddleware, async (req, res) => {
+  try {
+    const session = await createManagedObserverSession(req.user, req.body?.bridgeUserId, {
+      userAgent:req.get('user-agent'), ip:req.ip,
+    })
+    res.json({ ok:true, ...session })
+  } catch (err) {
+    const forbidden = err.code === 'bridge_observer_management_forbidden'
+      || err.code === 'bridge_pair_source_invalid'
+    const membershipBlocked = err.code === 'bridge_membership_required'
+    res.status(forbidden || membershipBlocked ? 403 : 503).json({
+      ok:false,
+      code:err.code || 'bridge_observer_session_failed',
+      error:forbidden
+        ? 'The selected observer source cannot be managed.'
+        : membershipBlocked
+          ? 'The selected observer source cannot use Bridge.'
+          : 'Observer source authorization could not be created.',
     })
   }
 })
