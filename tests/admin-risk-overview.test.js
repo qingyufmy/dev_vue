@@ -29,6 +29,8 @@ describe('admin risk overview account pagination', () => {
 
     expect(accountQuery[0]).toContain('LIMIT ? OFFSET ?')
     expect(accountQuery[0]).not.toContain('LIMIT 500')
+    expect(accountQuery[0]).toContain('accounts.observe_status')
+    expect(accountQuery[0]).toContain("'transferred'")
     expect(accountQuery[1]).toEqual([8,16])
     expect(queryAll.mock.calls.some(([sql]) => sql.includes('FROM risk_decisions decisions'))).toBe(false)
     expect(result.accounts[0]).toMatchObject({ id:17, user_id:9, user_kill_switch:false, data_complete:true })

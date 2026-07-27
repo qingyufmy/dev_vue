@@ -17,12 +17,18 @@ export async function getAdminRiskAuditOverview({ accountPage = 1, accountPageSi
       (SELECT COUNT(*) FROM risk_decisions WHERE created_at >= CURDATE()) AS decisions_today,
       (SELECT COUNT(*) FROM risk_decisions WHERE created_at >= CURDATE() AND decision_status = 'reject') AS rejected_today,
       (SELECT COUNT(*) FROM risk_decisions WHERE created_at >= CURDATE() AND decision_status = 'adjust') AS adjusted_today,
-      (SELECT COUNT(*) FROM risk_account_state WHERE halt_status <> 'active' OR user_kill_switch = 1 OR data_complete = 0) AS paused_accounts,
+      (SELECT COUNT(*) FROM trading_accounts account
+        LEFT JOIN risk_account_state state ON state.trading_account_id = account.id
+        WHERE account.is_deleted = 0 AND (
+          account.observe_status IN ('paused','switched','frozen','transferred')
+          OR state.halt_status <> 'active' OR state.user_kill_switch = 1 OR state.data_complete = 0
+        )) AS paused_accounts,
       (SELECT COUNT(*) FROM trading_accounts WHERE is_deleted = 0) AS trading_accounts,
       (SELECT COUNT(*) FROM audit_logs WHERE created_at >= CURDATE()) AS admin_actions_today`),
     queryOne('SELECT global_kill_switch, reason, changed_by, updated_at FROM global_risk_control WHERE id = 1'),
     queryOne('SELECT COUNT(*) AS total FROM trading_accounts WHERE is_deleted = 0'),
     queryAll(`SELECT accounts.id, accounts.login_account, accounts.nickname, accounts.broker_server,
+      accounts.observe_status, accounts.anomaly_code,
       users.id AS user_id, users.nickname AS user_nickname, users.email AS user_email,
       states.halt_status, states.halt_reason, states.drawdown_pct, states.consecutive_losses,
       states.cooldown_until, states.user_kill_switch, states.data_complete, states.data_incomplete_reason,
@@ -30,7 +36,9 @@ export async function getAdminRiskAuditOverview({ accountPage = 1, accountPageSi
       FROM trading_accounts accounts JOIN users ON users.id = accounts.user_id
       LEFT JOIN risk_account_state states ON states.trading_account_id = accounts.id
       WHERE accounts.is_deleted = 0
-      ORDER BY (COALESCE(states.halt_status, 'active') <> 'active' OR COALESCE(states.user_kill_switch, 0) = 1 OR COALESCE(states.data_complete, 0) = 0) DESC,
+      ORDER BY (accounts.observe_status IN ('paused','switched','frozen','transferred')
+        OR COALESCE(states.halt_status, 'active') <> 'active'
+        OR COALESCE(states.user_kill_switch, 0) = 1 OR COALESCE(states.data_complete, 0) = 0) DESC,
         accounts.updated_at DESC LIMIT ? OFFSET ?`, [safeAccountPageSize, (safeAccountPage - 1) * safeAccountPageSize]),
   ])
   const accountTotal = number(accountTotalRow?.total)

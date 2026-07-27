@@ -1260,6 +1260,7 @@ export { RISK_RULES, DEFAULT_RISK_POLICY, resolveEffectiveRiskPolicy, submitRisk
   evaluateCoreRisk } from './risk-policy.js'
 export { calculateAccountRiskMetrics, aggregateClosedPositions,
   setUserKillSwitch, setGlobalKillSwitch, syncTradingAccountIdentity } from './risk-state.js'
+export { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
 export { normalizePerformanceDay, nextPerformanceWindow, recentPerformanceWindow,
   getAccountPerformanceSyncWindow, saveAccountPerformanceChunk,
   recordAccountPerformanceSyncFailure, getAccountPerformanceSummary } from './account-performance.js'

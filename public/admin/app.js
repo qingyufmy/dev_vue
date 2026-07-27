@@ -1409,9 +1409,15 @@ async function renderAiOperations() {
 
 function riskTabs() { return `<nav class="segment-tabs risk-audit-tabs" role="tablist" aria-label="风控管理分类"><button class="segment-tab ${state.riskTab === 'status' ? 'is-active' : ''}" role="tab" aria-selected="${state.riskTab === 'status'}" aria-controls="riskContent" data-risk-tab="status" type="button">风险状态</button><button class="segment-tab ${state.riskTab === 'rules' ? 'is-active' : ''}" role="tab" aria-selected="${state.riskTab === 'rules'}" aria-controls="riskContent" data-risk-tab="rules" type="button">平台规则</button></nav>` }
 function accountRiskStatus(account) {
-  const stopped = account.user_kill_switch || (account.halt_status && account.halt_status !== 'active') || !account.data_complete
-  const reason = account.user_kill_switch ? '账户紧急停止已开启' : !account.data_complete ? (account.data_incomplete_reason || '风控数据尚不完整') : account.halt_status && account.halt_status !== 'active' ? (account.halt_reason || '账户已暂停新开仓') : '当前允许交易'
-  const statusLabel = account.user_kill_switch ? '紧急停止' : !account.data_complete ? '数据待补齐' : stopped ? '暂停交易' : '允许交易'
+  const lifecycle = {
+    transferred:{ label:'已转移', reason:'该 MT5 账户已归属其他平台账号' },
+    switched:{ label:'已切换', reason:'该用户当前 Bridge 已切换到其他交易账户' },
+    frozen:{ label:'已冻结', reason:'账户身份或交易权限尚未通过校验' },
+    paused:{ label:'已暂停', reason:'该账户当前已暂停使用' },
+  }[String(account.observe_status || '').toLowerCase()] || null
+  const stopped = Boolean(lifecycle) || account.user_kill_switch || (account.halt_status && account.halt_status !== 'active') || !account.data_complete
+  const reason = lifecycle?.reason || (account.user_kill_switch ? '账户紧急停止已开启' : !account.data_complete ? (account.data_incomplete_reason || '风控数据尚不完整') : account.halt_status && account.halt_status !== 'active' ? (account.halt_reason || '账户已暂停新开仓') : '当前允许交易')
+  const statusLabel = lifecycle?.label || (account.user_kill_switch ? '紧急停止' : !account.data_complete ? '数据待补齐' : stopped ? '暂停交易' : '允许交易')
   const drawdown = account.drawdown_pct === null || account.drawdown_pct === undefined || account.drawdown_pct === '' ? null : Number(account.drawdown_pct)
   const losses = account.consecutive_losses === null || account.consecutive_losses === undefined || account.consecutive_losses === '' ? null : Number(account.consecutive_losses)
   const owner = account.user_nickname || account.user_email || `用户 #${account.user_id}`

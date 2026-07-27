@@ -1012,6 +1012,14 @@ describe('route permissions and credential redaction', () => {
     expect(html).not.toContain('id="tradeVolume" class="num" type="number" value="0.01" min="0.01" max="0.05"')
   })
 
+  it('refreshes incomplete risk snapshots on bridge identity recovery and labels historical accounts', () => {
+    expect(bridgeWs).toContain('queueIncompleteRiskSnapshotRefresh(userId, ai)')
+    expect(routes).toContain("export { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'")
+    expect(adminApp).toContain("transferred:{ label:'已转移'")
+    expect(adminApp).toContain("switched:{ label:'已切换'")
+    expect(adminApp).toContain("String(account.observe_status || '').toLowerCase()")
+  })
+
   it('fails closed when no observer channel is authorized and scopes signals to the bound strategy', () => {
     expect(bridgeWs).toContain('return { bridgeUserId:null, channel:null }')
     expect(bridgeWs).not.toContain('return { bridgeUserId:await getActivePlatformBridgeUserId(), channel:null }')

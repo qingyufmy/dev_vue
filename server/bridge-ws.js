@@ -24,6 +24,7 @@ const adminBrowsers = new Set() // authenticated admin console sockets
 const pendingCommands = new Map() // commandId -> { resolve, timer, userId }
 const performanceSyncJobs = new Set()
 const performanceSyncTimers = new Map()
+const riskSnapshotRefreshTimers = new Map()
 let adminUserId = null          // cached admin userId for fallback
 let adminUserIdLastCheck = 0
 const ADMIN_CACHE_TTL = ADMIN_CACHE_TTL_MS
@@ -219,6 +220,26 @@ export function queueAccountPerformanceSync(userId, accountId, options = {}) {
   scheduleAccountPerformanceSync(Number(userId), Number(accountId), options)
 }
 
+function queueIncompleteRiskSnapshotRefresh(userId, ai, delayMs = 250) {
+  const numericUserId = Number(userId)
+  const existing = riskSnapshotRefreshTimers.get(numericUserId)
+  if (existing) clearTimeout(existing)
+  const timer = setTimeout(() => {
+    riskSnapshotRefreshTimers.delete(numericUserId)
+    ai.refreshIncompleteRiskAccounts(numericUserId).then(result => {
+      if (Number(result?.refreshed || 0) <= 0) return
+      broadcastAdminEvent('risk', 'snapshot_refreshed', {
+        user_id:numericUserId,
+        refreshed:Number(result.refreshed),
+      }, { scopes:['risk-audit'], refresh:true })
+    }).catch(error => {
+      console.warn(`[RiskSnapshot] Background refresh failed user=${numericUserId}:`, error.message)
+    })
+  }, Math.max(0, Number(delayMs) || 0))
+  timer.unref?.()
+  riskSnapshotRefreshTimers.set(numericUserId, timer)
+}
+
 async function synchronizeBridgeV3TerminalIdentity({ userId, terminal, connectionGeneration }) {
   const route = (bridgeV3Business?.connectedTerminals(Number(userId)) || [])
     .find(item => item.terminal_instance_id === terminal.terminal_instance_id
@@ -247,7 +268,10 @@ async function synchronizeBridgeV3TerminalIdentity({ userId, terminal, connectio
   }
   bindings.set(terminal.terminal_instance_id, identity.accountId)
   bridgeV3PreferredTerminals.set(Number(userId), terminal.terminal_instance_id)
-  if (identity.verified) queueAccountPerformanceSync(userId, identity.accountId, { recent:false, delayMs:250 })
+  if (identity.verified) {
+    queueAccountPerformanceSync(userId, identity.accountId, { recent:false, delayMs:250 })
+    queueIncompleteRiskSnapshotRefresh(userId, ai)
+  }
   sendToBrowsers(Number(userId), {
     type:'account_switched',
     account:{ id:identity.accountId, server:account.server, login:account.login },
@@ -1312,7 +1336,10 @@ async function _initBridge(ws, userId, user, initQueue = null) {
       const ai = await import('./routes/ai/index.js')
       const identity = await ai.syncTradingAccountIdentity(userId, account)
       if (currentBridge?.ws === ws) currentBridge.tradingAccountId = identity.accountId
-      if (identity.verified) queueAccountPerformanceSync(userId, identity.accountId, { recent:false, delayMs:250 })
+      if (identity.verified) {
+        queueAccountPerformanceSync(userId, identity.accountId, { recent:false, delayMs:250 })
+        queueIncompleteRiskSnapshotRefresh(userId, ai)
+      }
       sendToBrowsers(userId, {
         type: 'account_switched',
         account: { id:identity.accountId, server:account.server, login:account.login },

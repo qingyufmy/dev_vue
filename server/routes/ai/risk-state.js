@@ -319,8 +319,10 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
     [serverKey, login, userId, matched.id, now, now, now, String(snapshot?.currency || '').trim().toUpperCase().slice(0, 16) || null, now, now])
     await run(`INSERT INTO risk_account_state (trading_account_id, user_id, halt_status, data_complete, created_at, updated_at)
       VALUES (?, ?, 'active', 0, ?, ?) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id),
-        halt_status = CASE WHEN halt_reason = 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED' THEN 'active' ELSE halt_status END,
-        halt_reason = CASE WHEN halt_reason = 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED' THEN NULL ELSE halt_reason END,
+        data_complete = CASE WHEN halt_reason IN ('R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 'R6_ACCOUNT_TRANSFERRED') THEN 0 ELSE data_complete END,
+        data_incomplete_reason = CASE WHEN halt_reason IN ('R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 'R6_ACCOUNT_TRANSFERRED') THEN NULL ELSE data_incomplete_reason END,
+        halt_status = CASE WHEN halt_reason IN ('R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 'R6_ACCOUNT_TRANSFERRED') THEN 'active' ELSE halt_status END,
+        halt_reason = CASE WHEN halt_reason IN ('R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 'R6_ACCOUNT_TRANSFERRED') THEN NULL ELSE halt_reason END,
         updated_at = VALUES(updated_at)`,
     [matched.id, userId, now, now])
     return {

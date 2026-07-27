@@ -360,6 +360,28 @@ describe('identity and platform permissions', () => {
     expect(accountUpdate.params[1]).toBe('active')
   })
 
+  it('clears a stale ownership-transfer halt when the authorized account reconnects', async () => {
+    const writes = []
+    db.withTransaction.mockImplementation(async fn => fn(async sql => {
+      if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[{
+        id:7, user_id:2, broker_server:'Demo', login_account:'123', is_deleted:0,
+        review_status:'approved', observe_status:'transferred', anomaly_code:'account_transferred',
+      }], []]
+      if (sql.startsWith('SELECT * FROM trading_accounts\n      WHERE UPPER')) return [[{
+        id:7, user_id:2, broker_server:'Demo', login_account:'123', observe_status:'transferred',
+      }], []]
+      if (sql.includes('FROM mt5_account_bindings')) return [[{ current_user_id:2, current_trading_account_id:7 }], []]
+      writes.push(sql)
+      return [{ affectedRows:1 }, []]
+    }))
+
+    await expect(syncTradingAccountIdentity(2, { server:'Demo', login:123, trade_allowed:true }))
+      .resolves.toMatchObject({ accountId:7, verified:true })
+    const stateWrite = writes.find(sql => sql.includes('INSERT INTO risk_account_state'))
+    expect(stateWrite).toContain("halt_reason IN ('R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 'R6_ACCOUNT_TRANSFERRED')")
+    expect(stateWrite).toContain('data_incomplete_reason = CASE')
+  })
+
   it('only admins can clear the global kill switch', async () => {
     await expect(setGlobalKillSwitch(2, 'user', false, 'ok')).rejects.toThrow('admin_required')
   })
