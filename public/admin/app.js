@@ -835,6 +835,8 @@ function aiHealthContent(data) {
   const latencySeconds = Number(summary.avg_model_latency_ms || 0) / 1000
   const signalErrors = Number(summary.signal_errors_today || 0)
   const connectedBridges = Number(summary.connected_bridges || 0)
+  const connectedMt4Bridges = Number(summary.connected_mt4_bridges || 0)
+  const connectedMt5Bridges = Number(summary.connected_mt5_bridges || 0)
   const queueCount = alerts.length + pendingReviews + failedReviews
   const mt5Time = formatMt5Time(state.realtime.mt5Time)
   return `<section class="ai-command-status ${healthy ? 'is-healthy' : 'needs-attention'}">
@@ -847,7 +849,7 @@ function aiHealthContent(data) {
       <article class="ai-kpi-card ${successRate >= 98 ? 'is-good' : successRate >= 95 ? 'is-watch' : 'is-critical'}"><div class="ai-kpi-head"><span>模型成功率</span><em>${failures ? `${failures} 次失败` : '稳定'}</em></div><strong>${successRate.toFixed(1)}%</strong><small>${requests.toLocaleString('zh-CN')} 次模型请求</small><div class="ai-kpi-track"><span style="width:${Math.max(4,Math.min(100,successRate))}%"></span></div></article>
       <article class="ai-kpi-card ${latencySeconds > 30 ? 'is-watch' : 'is-good'}"><div class="ai-kpi-head"><span>平均响应</span><em>${latencySeconds > 30 ? '需关注' : '正常'}</em></div><strong>${summary.avg_model_latency_ms ? `${latencySeconds.toFixed(1)} 秒` : '--'}</strong><small>仅统计成功请求</small><div class="ai-kpi-track"><span style="width:${latencySeconds ? Math.max(8,Math.min(100,latencySeconds / 60 * 100)) : 0}%"></span></div></article>
       <article class="ai-kpi-card ${signalErrors ? 'is-critical' : 'is-good'}"><div class="ai-kpi-head"><span>推理信号</span><em>${signalErrors ? `${signalErrors} 条异常` : '零异常'}</em></div><strong>${Number(summary.signals_today || 0).toLocaleString('zh-CN')}</strong><small>今日已生成信号</small><div class="ai-kpi-track"><span style="width:${signalErrors ? 54 : 100}%"></span></div></article>
-      <article class="ai-kpi-card ${connectedBridges ? 'is-good' : 'is-critical'}"><div class="ai-kpi-head"><span>在线桥接</span><em>${connectedBridges ? '实时在线' : '全部离线'}</em></div><strong>${connectedBridges}</strong><small>90 秒内活跃连接</small><div class="ai-kpi-track"><span style="width:${connectedBridges ? 100 : 4}%"></span></div></article>
+      <article class="ai-kpi-card ${connectedBridges ? 'is-good' : 'is-critical'}"><div class="ai-kpi-head"><span>在线桥接</span><em>${connectedBridges ? '实时在线' : '全部离线'}</em></div><strong>${connectedBridges}</strong><small>MT4 ${connectedMt4Bridges} · MT5 ${connectedMt5Bridges}</small><div class="ai-kpi-track"><span style="width:${connectedBridges ? 100 : 4}%"></span></div></article>
     </section>
     <section class="ai-overview-grid">
       <article class="panel ai-action-queue"><header class="section-head"><div><span class="eyebrow">治理队列</span><h2>需要处理</h2><p>只列出需要人工关注或继续跟进的事项。</p></div><span class="badge ${queueCount ? 'expired' : 'active'}">${queueCount} 项</span></header><div class="ai-action-list">

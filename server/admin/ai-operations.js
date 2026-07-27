@@ -3,7 +3,7 @@ import { getRedis, isRedisAvailable } from '../redis.js'
 import { getAiRolloutHealth } from '../routes/ai/rollout-governance.js'
 import { getReviewAdminHealth } from '../routes/ai/review-workflow.js'
 import { listObserverChannels, listObserverSources } from '../routes/ai/observer-channels.js'
-import { getLatestBridgeMt5Clock, isBridgeAlive } from '../bridge-ws.js'
+import { getConnectedBridgeStats, getLatestBridgeMt5Clock, isBridgeAlive } from '../bridge-ws.js'
 
 function number(value) {
   return Number(value || 0)
@@ -50,6 +50,7 @@ async function readSchedulerRuntime(dbRows) {
 }
 
 export async function getAdminAiOperationsOverview() {
+  const bridgeStats = getConnectedBridgeStats()
   const [summary, modelUsage, schedulerRows, rollout, reviewHealth, sources, channels] = await Promise.all([
     queryOne(`SELECT
       (SELECT COUNT(*) FROM ai_signals WHERE created_at >= CURDATE()) AS signals_today,
@@ -63,9 +64,7 @@ export async function getAdminAiOperationsOverview() {
       (SELECT ROUND(AVG(duration_ms)) FROM ai_model_usage_logs WHERE created_at >= CURDATE()
         AND request_status = 'success') AS avg_model_latency_ms,
       (SELECT COUNT(*) FROM risk_decisions WHERE created_at >= CURDATE()
-        AND decision_status = 'reject') AS risk_rejections_today,
-      (SELECT COUNT(*) FROM bridge_connection_status WHERE connected = 1
-        AND updated_at >= DATE_SUB(NOW(), INTERVAL 90 SECOND)) AS connected_bridges`),
+        AND decision_status = 'reject') AS risk_rejections_today`),
     queryAll(`SELECT COALESCE(profiles.model_name, usage_logs.credential_source) AS model_name,
       usage_logs.credential_source, COUNT(*) AS requests,
       SUM(usage_logs.request_status = 'error') AS failures,
@@ -94,7 +93,12 @@ export async function getAdminAiOperationsOverview() {
   return {
     generated_at:new Date().toISOString(),
     mt5_clock:getLatestBridgeMt5Clock(),
-    summary:Object.fromEntries(Object.entries(summary || {}).map(([key, value]) => [key, number(value)])),
+    summary:{
+      ...Object.fromEntries(Object.entries(summary || {}).map(([key, value]) => [key, number(value)])),
+      connected_bridges:bridgeStats.total,
+      connected_mt4_bridges:bridgeStats.mt4,
+      connected_mt5_bridges:bridgeStats.mt5,
+    },
     model_usage:modelUsage.map(row => ({ ...row, requests:number(row.requests), failures:number(row.failures), tokens:number(row.tokens), avg_latency_ms:number(row.avg_latency_ms) })),
     scheduler:{ runtime_available:runtime.available, runtime:runtime.schedulers, configured:schedulerRows.map(row => ({ ...row, strategy_id:number(row.strategy_id), subscriber_count:number(row.subscriber_count), interval_minutes:number(row.interval_minutes) })) },
     rollout,

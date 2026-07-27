@@ -505,7 +505,10 @@ router.get('/admin/users', authMiddleware, adminOnly, async (req, res) => {
       (SELECT COUNT(*) FROM auto_prompt_types apt WHERE apt.owner_user_id = u.id AND apt.deleted_at IS NULL) AS strategy_count
       FROM users u WHERE ${clause} ORDER BY u.created_at DESC LIMIT ? OFFSET ?`, [...params, pageSize, offset])
     const total = Number(totalRow?.total || 0)
-    res.json({ ok:true, users:rows.map(serializeUser), pagination:{
+    res.json({ ok:true, users:rows.map(row => serializeUser({
+      ...row,
+      bridge_connected:isBridgeAlive(Number(row.id)) ? 1 : 0,
+    })), pagination:{
       page, page_size:pageSize, total, total_pages:Math.max(1, Math.ceil(total / pageSize)),
     } })
   } catch (error) {

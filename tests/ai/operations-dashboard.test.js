@@ -4,8 +4,17 @@ import { readFileSync } from 'node:fs'
 const bridgeWs = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
 const adminApp = readFileSync(new URL('../../public/admin/app.js', import.meta.url), 'utf8')
 const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
+const aiOperations = readFileSync(new URL('../../server/admin/ai-operations.js', import.meta.url), 'utf8')
 
 describe('operations dashboard data contracts', () => {
+  it('counts live MT4 and MT5 terminals instead of legacy user status rows', () => {
+    expect(aiOperations).toContain('getConnectedBridgeStats()')
+    expect(aiOperations).toContain('connected_mt4_bridges:bridgeStats.mt4')
+    expect(aiOperations).toContain('connected_mt5_bridges:bridgeStats.mt5')
+    expect(aiOperations).not.toContain('FROM bridge_connection_status WHERE connected = 1')
+    expect(adminApp).toContain('MT4 ${connectedMt4Bridges} · MT5 ${connectedMt5Bridges}')
+  })
+
   it('counts only the canonical actionable period review', () => {
     expect(bridgeWs).toContain("review_case.status IN ('draft', 'edited')")
     expect(bridgeWs).toContain("ORDER BY (candidate.status = 'approved') DESC, candidate.id DESC LIMIT 1")

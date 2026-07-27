@@ -225,6 +225,13 @@ async function synchronizeBridgeV3TerminalIdentity({ userId, terminal, connectio
     .find(item => item.terminal_instance_id === terminal.terminal_instance_id
       && Number(item.connection_generation) === Number(connectionGeneration))
   if (!route) return
+  broadcastAdminEvent('bridge', 'connected', {
+    user_id:Number(userId),
+    connected:true,
+    alive:true,
+    platform:route.platform,
+    terminal_instance_id:route.terminal_instance_id,
+  }, { scopes:['overview', 'users', 'ai-operations', 'risk-audit'] })
   const account = await bridgeV3Business.execute(Number(userId), 'account', {
     terminal_instance_id:terminal.terminal_instance_id,
     account_ref:terminal.account_ref,
@@ -282,6 +289,13 @@ function forgetBridgeV3TerminalIdentity({ userId, terminal }) {
     if (replacement) bridgeV3PreferredTerminals.set(Number(userId), replacement.terminal_instance_id)
     else bridgeV3PreferredTerminals.delete(Number(userId))
   }
+  broadcastAdminEvent('bridge', 'disconnected', {
+    user_id:Number(userId),
+    connected:isBridgeAlive(Number(userId)),
+    alive:isBridgeAlive(Number(userId)),
+    platform:terminal.platform,
+    terminal_instance_id:terminal.terminal_instance_id,
+  }, { scopes:['overview', 'users', 'ai-operations', 'risk-audit'] })
 }
 
 const TRADE_REF_KEYS = new Set([
@@ -2947,6 +2961,29 @@ export function getAllBridges() {
       : item)
   }
   return Array.from(byUser.values())
+}
+
+// Count live terminal connections rather than users. One user may connect an
+// MT4 terminal and an MT5 terminal at the same time, and both must be visible
+// in the administrator runtime summary.
+export function getConnectedBridgeStats() {
+  const stats = { total:0, mt4:0, mt5:0 }
+  const add = platform => {
+    const normalized = String(platform || '').toLowerCase() === 'mt4' ? 'mt4' : 'mt5'
+    stats[normalized]++
+    stats.total++
+  }
+
+  const now = Date.now()
+  for (const bridge of bridges.values()) {
+    if (bridge.ws?.readyState === 1 && now - Number(bridge.lastSeen || 0) < 20_000) {
+      add(bridge._clientHeartbeat?.platform)
+    }
+  }
+  for (const item of bridgeV3Business?.connectedUsers?.() || []) {
+    for (const route of bridgeV3Business.connectedTerminals(Number(item.userId))) add(route.platform)
+  }
+  return stats
 }
 
 export function getBridgeDiagnostics() {

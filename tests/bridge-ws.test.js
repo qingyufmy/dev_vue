@@ -77,6 +77,7 @@ import {
   getOwnBridgeMarketState,
   getBridgeTradeMode,
   getAllBridges,
+  getConnectedBridgeStats,
   getBridgeDiagnostics,
   sendToBrowsers,
   collectTradeRefs,
@@ -287,17 +288,31 @@ describe('initBridgeWS', () => {
     mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(false)
     mockBridgeV3Business.isTradeEnabled.mockReturnValue(false)
     mockBridgeV3Business.connectedTerminals.mockReturnValue([])
+    mockBridgeV3Business.connectedUsers.mockReturnValue([])
   })
   afterEach(() => {
     mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(false)
     mockBridgeV3Business.isTradeEnabled.mockReturnValue(false)
     mockBridgeV3Business.connectedTerminals.mockReturnValue([])
+    mockBridgeV3Business.connectedUsers.mockReturnValue([])
   })
 
   it('returns a WebSocketServer instance', () => {
     const server = new EventEmitter()
     const result = initBridgeWS(server)
     expect(result).toBeDefined()
+  })
+
+  it('counts connected MT4 and MT5 terminals together with platform totals', () => {
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    mockBridgeV3Business.connectedUsers.mockReturnValue([{ userId:42, connected:true, alive:true }])
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([
+      { terminal_instance_id:'terminal_mt4_01', platform:'mt4' },
+      { terminal_instance_id:'terminal_mt5_01', platform:'mt5' },
+    ])
+
+    expect(getConnectedBridgeStats()).toEqual({ total:2, mt4:1, mt5:1 })
   })
 
   it('registers upgrade handler on the server', () => {
