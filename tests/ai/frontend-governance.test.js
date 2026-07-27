@@ -22,7 +22,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain("setText('mt5ServerTime'")
     expect(app).toContain("updateMarketStatusFromQuote(quote)")
     expect(app).toContain("loadStatus(), refreshQuote(), loadKlineData()")
-    expect(html).toContain('/ai/app.js?v=20260726mt4ready2')
+    expect(html).toContain('/ai/app.js?v=20260727subscriptionfix')
   })
 
   it('uses the connected bridge platform in status and terminal-time labels', () => {
@@ -388,6 +388,11 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('const defaultScheduleTimezone = syncMt5ScheduleTimezoneOption();')
     expect(app).toContain('subscription?.schedule_timezone || defaultScheduleTimezone')
     expect(app).toContain('return "Etc/GMT-3"')
+  })
+
+  it('uses platform-neutral account errors for MT4 and MT5 subscriptions', () => {
+    expect(app).toContain('trading_account_not_active: "当前交易账户不是活动账户')
+    expect(app).not.toContain('当前 MT5 账户不是活动账户')
   })
 
   it('uses one strategy control plane and removes the legacy manual preference editor', () => {

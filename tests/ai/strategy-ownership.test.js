@@ -422,8 +422,27 @@ describe('subscription transaction and V1 execution constraint', () => {
       return defaultTx(sql)
     })
     await updateSubscription(20, 2, 'user', { strategy_id:1, execution_enabled:false })
-    const update = txRun.mock.calls.find(([sql]) => sql.includes('UPDATE strategy_subscriptions SET strategy_id'))
-    expect(update[1][0]).toBe(1)
+    const update = txRun.mock.calls.find(([sql]) => sql.includes('UPDATE strategy_subscriptions SET trading_account_id'))
+    expect(update[1][0]).toBe(10)
+    expect(update[1][1]).toBe(1)
+  })
+
+  it('rebinds an existing subscription to the selected active trading account', async () => {
+    txRun.mockImplementation((sql, params = []) => {
+      if (sql.includes('FROM trading_accounts')) {
+        return [[{ ...ACCOUNT, id:Number(params[0]), broker_server:'MT4-Demo', login_account:'456' }], []]
+      }
+      return defaultTx(sql)
+    })
+
+    await updateSubscription(20, 2, 'user', {
+      trading_account_id:11, execution_enabled:true,
+    })
+
+    const accountLock = txRun.mock.calls.find(([sql]) => sql.includes('FROM trading_accounts'))
+    expect(accountLock[1][0]).toBe(11)
+    const update = txRun.mock.calls.find(([sql]) => sql.includes('UPDATE strategy_subscriptions SET trading_account_id'))
+    expect(update[1][0]).toBe(11)
   })
 
   it('rejects a private strategy that does not belong to the subscribing user', async () => {

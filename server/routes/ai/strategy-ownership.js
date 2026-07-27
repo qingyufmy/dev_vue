@@ -581,7 +581,9 @@ export async function updateSubscription(subscriptionId, userId, userRole, paylo
   const actorId = toId(userId, 'user_id')
   const locator = await queryOne('SELECT trading_account_id FROM strategy_subscriptions WHERE id = ? AND user_id = ? AND is_deleted = 0', [id, actorId])
   if (!locator) throw new Error('subscription_not_found')
-  const accountId = Number(locator.trading_account_id)
+  const accountId = payload.trading_account_id === undefined
+    ? Number(locator.trading_account_id)
+    : toId(payload.trading_account_id, 'trading_account_id')
   await withTransaction(async run => {
     await assertTxProAccess(run, actorId, userRole)
     const account = await txOne(run, 'SELECT * FROM trading_accounts WHERE id = ? AND user_id = ? AND is_deleted = 0 FOR UPDATE', [accountId, actorId])
@@ -606,12 +608,12 @@ export async function updateSubscription(subscriptionId, userId, userRole, paylo
       await assertNoExecutionConflictTx(run, accountId, effectiveSymbols(symbolsJson, strategy.symbols_json), id)
     }
     await run(
-      `UPDATE strategy_subscriptions SET strategy_id = ?, risk_profile_id = ?, symbols_json = ?, execution_enabled = ?,
+      `UPDATE strategy_subscriptions SET trading_account_id = ?, strategy_id = ?, risk_profile_id = ?, symbols_json = ?, execution_enabled = ?,
          memory_mode = ?, conflicting_strategy_id = ?, schedule_enabled = ?, schedule_timezone = ?,
          schedule_weekdays_json = ?, schedule_windows_json = ?, outside_window_behavior = ?, take_profit_mode = ?, updated_at = ?
        WHERE id = ? AND user_id = ? AND is_deleted = 0`,
       [
-        Number(strategy.id), payload.risk_profile_id !== undefined ? payload.risk_profile_id : existing.risk_profile_id,
+        accountId, Number(strategy.id), payload.risk_profile_id !== undefined ? payload.risk_profile_id : existing.risk_profile_id,
         symbolsJson, executionEnabled, memoryMode,
         payload.conflicting_strategy_id !== undefined ? payload.conflicting_strategy_id : existing.conflicting_strategy_id,
         schedule.enabled ? 1 : 0, schedule.timezone, JSON.stringify(schedule.weekdays),
