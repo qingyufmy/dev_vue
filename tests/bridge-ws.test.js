@@ -84,6 +84,8 @@ import {
   buildSignalRefIndex,
   buildSignalPendingActions,
   normalizeBridgeMarketState,
+  recordBridgeMarketState,
+  getPlatformMarketClockState,
   sendToAdminBrowsers,
   broadcastAdminEvent,
   browserSessionToken,
@@ -463,6 +465,28 @@ describe('bridge-reported market state', () => {
     expect(normalizeBridgeMarketState({ market_state_version: 1, market_state: 'halted' })).toBeNull()
     expect(normalizeBridgeMarketState({ market_state_version: 1, market_state: 'unknown', tick_age_seconds: null })).toMatchObject({
       reason: 'market_unknown', tradeMode: -1, tickAgeSeconds: null,
+    })
+  })
+
+  it('retains MT4 quote clock metadata for platform market-data consumers', () => {
+    initBridgeWS(new EventEmitter())
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([{
+      terminal_instance_id:'terminal_clock_01', platform:'mt4',
+      account_ref:{ broker_server:'Broker-Demo', login:'12345678' },
+    }])
+
+    recordBridgeMarketState(77, {
+      market_state_version:1, market_state:'open', market_reason:'quote_fresh',
+      symbol:'XAUUSD', symbol_trade_mode:4, tick_progressing:true,
+      timezone_offset_minutes:180, clock_status:'mt4_current_offset',
+      clock_residual_ms:0,
+    }, 1_800_000_000_000)
+
+    expect(getPlatformMarketClockState(77)).toMatchObject({
+      connected:true, timezone_offset_minutes:180,
+      clock_status:'mt4_current_offset', clock_residual_ms:0,
+      broker_server:'Broker-Demo', account_login:'12345678',
     })
   })
 })

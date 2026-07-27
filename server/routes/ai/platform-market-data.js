@@ -89,6 +89,18 @@ function validRate(rate, offsetMinutes) {
   }
 }
 
+function effectiveResponseClock(clock, response, rates) {
+  const sample = Array.isArray(rates) ? rates.at(-1) : null
+  return {
+    ...clock,
+    timezone_offset_minutes:response?.timezone_offset_minutes
+      ?? sample?.timezone_offset_minutes ?? clock.timezone_offset_minutes,
+    clock_status:response?.clock_status || sample?.clock_status || clock.clock_status,
+    clock_residual_ms:response?.clock_residual_ms
+      ?? sample?.clock_residual_ms ?? clock.clock_residual_ms,
+  }
+}
+
 async function findSource(bridgeUserId, clock) {
   const identity = sourceIdentity(bridgeUserId, clock)
   if (!hasStableSourceIdentity(identity)) return { id: null, ...identity }
@@ -316,12 +328,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       const response = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count,
         start_utc_msc:rangeStartUtcMs, end_utc_msc:rangeEndUtcMs }, { timeoutMs:30000, noFallback:true })
       if (response?.status === 'success' && Array.isArray(response.rates) && response.rates.length) {
-        const effectiveClock = {
-          ...clock,
-          timezone_offset_minutes:response.rates.at(-1)?.timezone_offset_minutes ?? clock.timezone_offset_minutes,
-          clock_status:response.rates.at(-1)?.clock_status || clock.clock_status,
-          clock_residual_ms:response.rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
-        }
+        const effectiveClock = effectiveResponseClock(clock, response, response.rates)
         const closureCutoffUtcMs = Math.min(rangeEndUtcMs, Date.now())
         const intervalMs = timeframeIntervalMs(timeframe)
         const closedRates = response.rates.map(rate => validRate(rate, effectiveClock.timezone_offset_minutes))
@@ -356,12 +363,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     let response = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count: fetchCount }, { timeoutMs: 15000, noFallback: true })
     if (response?.status === 'success' && Array.isArray(response.rates) && response.rates.length) {
       let rates = response.rates
-      let effectiveClock = {
-        ...clock,
-        timezone_offset_minutes: rates.at(-1)?.timezone_offset_minutes ?? clock.timezone_offset_minutes,
-        clock_status: rates.at(-1)?.clock_status || clock.clock_status,
-        clock_residual_ms: rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
-      }
+      let effectiveClock = effectiveResponseClock(clock, response, rates)
       let split = splitRatesByClosure(rates, timeframe, effectiveClock.timezone_offset_minutes)
       if (!split.closedRates.length && !split.liveRates.length) {
         return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
@@ -379,12 +381,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         }
         response = refill
         rates = refill.rates
-        effectiveClock = {
-          ...clock,
-          timezone_offset_minutes: rates.at(-1)?.timezone_offset_minutes ?? clock.timezone_offset_minutes,
-          clock_status: rates.at(-1)?.clock_status || clock.clock_status,
-          clock_residual_ms: rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
-        }
+        effectiveClock = effectiveResponseClock(clock, response, rates)
         split = splitRatesByClosure(rates, timeframe, effectiveClock.timezone_offset_minutes)
         if (!split.closedRates.length && !split.liveRates.length) {
           return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
@@ -430,14 +427,15 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       ? { start_utc_msc:Number(params.start_utc_msc), end_utc_msc:Number(params.end_utc_msc) } : {}) },
   { timeoutMs: params.review_window === true ? 30000 : 15000, noFallback: true })
   if (fallback && typeof fallback === 'object') {
-    const fallbackOffset = fallback.rates?.at(-1)?.timezone_offset_minutes ?? null
+    const fallbackOffset = fallback.timezone_offset_minutes
+      ?? fallback.rates?.at(-1)?.timezone_offset_minutes ?? null
     const fallbackSplit = splitRatesByClosure(fallback.rates, timeframe, fallbackOffset)
     const fallbackIntegrity = inspectRateContinuity(fallbackSplit.closedRates, timeframe)
     fallback.rates = mergeRates(fallbackSplit.closedRates, fallbackSplit.liveRates, count)
     fallback.market_meta = {
       source: 'user_bridge_fallback', source_user_id: requestUserId, broker_symbol: fallback.symbol || symbol,
       timeframe, timezone_offset_minutes: fallbackOffset,
-      clock_status: fallback.rates?.at(-1)?.clock_status || 'unknown', closed_candles_persisted: 0,
+      clock_status: fallback.clock_status || fallback.rates?.at(-1)?.clock_status || 'unknown', closed_candles_persisted: 0,
       cache_layer: 'none', live_candle_cached: false, last_bar_closed:fallbackSplit.lastBarClosed,
       cache_internal_gap_detected:fallbackIntegrity.status === 'suspicious_gap',
       cache_internal_gap_unresolved:fallbackIntegrity.status === 'suspicious_gap',

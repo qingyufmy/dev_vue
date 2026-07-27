@@ -93,16 +93,22 @@ describe('platform market data', () => {
   })
 
   it('derives broker time for MT4 rates that only expose server and UTC milliseconds', async () => {
+    bridge.clock.mockReturnValue({ connected:true, timezone_offset_minutes:null,
+      clock_status:'unknown', broker_server:'Demo', account_login:123456 })
     const mt4Rates = [rate(0, 2000), rate(1, 2001), rate(2, 2002)].map(item => {
       const { time, time_msc, timezone_offset_minutes, ...withoutLegacyTime } = item
       return { ...withoutLegacyTime, time_server_msc:item.time_utc_msc + 180 * 60000 }
     })
-    mt5Bridge.mockResolvedValue({ status:'success', source:'mt4', symbol:'XAUUSD', rates:mt4Rates })
-    await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:3 })
+    mt5Bridge.mockResolvedValue({ status:'success', source:'mt4', symbol:'XAUUSD',
+      timezone_offset_minutes:180, clock_status:'mt4_current_offset', rates:mt4Rates })
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:3 })
     const candleWrite = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO market_candles'))
     expect(candleWrite).toBeTruthy()
     expect(candleWrite[1][5]).toBe('2026-07-16 10:00:00')
     expect(candleWrite[1][17]).toBe('2026-07-16 10:01:00')
+    expect(result.market_meta).toMatchObject({
+      timezone_offset_minutes:180, clock_status:'mt4_current_offset',
+    })
   })
 
   it('keeps the final completed bar during a closed market instead of treating it as live', async () => {

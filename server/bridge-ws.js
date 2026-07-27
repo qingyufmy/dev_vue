@@ -464,6 +464,19 @@ function applyBridgeMarketState(bridge, payload, userId, receivedAt = Date.now()
   if (!bridge.marketStates) bridge.marketStates = new Map()
   if (normalized.symbol) bridge.marketStates.set(stripBrokerSuffix(normalized.symbol), normalized)
   bridge.lastTradeMode = normalized.tradeMode
+  const offsetValue = payload.timezone_offset_minutes
+  const offset = offsetValue !== null && offsetValue !== undefined && offsetValue !== ''
+    && Number.isFinite(Number(offsetValue)) ? Number(offsetValue) : null
+  if (Number.isInteger(offset) && offset >= -840 && offset <= 840) {
+    bridge.timezoneOffsetMinutes = offset
+  }
+  if (typeof payload.clock_status === 'string' && payload.clock_status.trim()) {
+    bridge.clockStatus = payload.clock_status.trim().slice(0, 64)
+  }
+  const residualValue = payload.clock_residual_ms
+  const residual = residualValue !== null && residualValue !== undefined && residualValue !== ''
+    && Number.isFinite(Number(residualValue)) ? Number(residualValue) : null
+  if (residual !== null) bridge.clockResidualMs = residual
   if (previous && previous !== normalized.state) {
     console.log(`[BridgeWS] User ${userId}: market ${previous} -> ${normalized.state} (${normalized.detailReason || normalized.reason})`)
     broadcastAdminEvent('market', 'state_changed', {
@@ -580,12 +593,13 @@ export function getPlatformMarketClockState(userId) {
   const route = bridgeV3RouteForContext(numericUserId)
   const userConnection = bridgeV3Business?.connectedUsers?.()
     .find(item => Number(item.userId) === numericUserId)
+  const marketState = bridgeV3MarketStates.get(numericUserId) || {}
   return {
     bridge_user_id:numericUserId || null,
     connected:Boolean(route),
-    timezone_offset_minutes:null,
-    clock_status:route ? 'utc_direct' : 'unknown',
-    clock_residual_ms:route ? 0 : null,
+    timezone_offset_minutes:marketState.timezoneOffsetMinutes ?? null,
+    clock_status:marketState.clockStatus || 'unknown',
+    clock_residual_ms:marketState.clockResidualMs ?? null,
     last_seen_at_utc_msc:userConnection?.lastSeen || null,
     broker_server:route?.account_ref?.broker_server || null,
     account_login:route?.account_ref?.login || null,
