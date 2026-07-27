@@ -1846,8 +1846,8 @@ function handleBridgeData(msg) {
         if (Number(q.ask) > prev.ask) askDir = "up";
         if (Number(q.ask) < prev.ask) askDir = "down";
       }
-      setText("quoteBid", q.bid);
-      setText("quoteAsk", q.ask);
+      setText("quoteBid", priceDisplay(q.bid));
+      setText("quoteAsk", priceDisplay(q.ask));
       renderQuoteStatusMeta(q);
       setQuoteDirection("quoteBidDir", bidDir);
       setQuoteDirection("quoteAskDir", askDir);
@@ -4467,8 +4467,8 @@ async function refreshQuote() {
     if (Number.isFinite(ask) && ask < previousQuote.ask) askDirection = "down";
   }
 
-  setText("quoteBid", data.bid);
-  setText("quoteAsk", data.ask);
+  setText("quoteBid", priceDisplay(data.bid));
+  setText("quoteAsk", priceDisplay(data.ask));
   renderQuoteStatusMeta(data);
   setQuoteDirection("quoteBidDir", bidDirection);
   setQuoteDirection("quoteAskDir", askDirection);
@@ -4807,7 +4807,7 @@ function renderPositionRows(positions = [], withAction) {
         ${withAction ? `<td data-label="止损" class="num">${Number(position.sl) ? fmt(position.sl, priceDigits) : "--"}</td><td data-label="止盈" class="num">${Number(position.tp) ? fmt(position.tp, priceDigits) : "--"}</td>` : ""}
         <td data-label="浮动盈亏" class="${profitClass(position.profit)}">${fmt(position.profit)}</td>
         ${withAction ? `<td data-label="操作" class="position-row-actions-cell">
-          ${state.user?.role === "admin" && Number(position.magic) === 234000 ? `<button class="btn small position-protection-edit" type="button" data-edit-protection-ticket="${escapeHtml(position.ticket)}"><i data-lucide="shield-pen" size="13"></i>编辑保护</button>` : ""}
+          ${state.user?.role === "admin" && Number(position.magic) === 234000 ? `<button class="btn small position-protection-edit" type="button" data-edit-protection-ticket="${escapeHtml(position.ticket)}"><i data-lucide="pencil" size="13"></i>编辑保护</button>` : ""}
           <button class="btn small" type="button" data-close-ticket="${escapeHtml(position.ticket)}"><i data-lucide="x" size="12"></i>平仓</button>
         </td>` : ""}
       </tr>
