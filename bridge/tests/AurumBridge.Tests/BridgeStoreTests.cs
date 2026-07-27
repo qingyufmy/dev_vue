@@ -36,6 +36,40 @@ public sealed class BridgeStoreTests
     }
 
     [TestMethod]
+    public async Task PersistsAccountScopedTerminalDataCacheWithFreshnessAndParameterIsolation()
+    {
+        var account = new AccountRef("Broker-Demo", "12345678");
+        var parameters = Json("""{"symbol":"XAUUSD","timeframe":"M30","count":100}""");
+        var payload = Json("""{"symbol":"XAUUSD","rates":[{"close":2300.5}]}""");
+        await _store.PutTerminalDataCacheAsync(
+            "mt4_terminal_cache_01", account, 3, "rates", parameters,
+            1_800_000_000_000, 1_800_000_000_100, payload);
+
+        var cached = await _store.GetTerminalDataCacheAsync(
+            "mt4_terminal_cache_01", account, 3, "rates", parameters, 1_800_000_000_000);
+        var stale = await _store.GetTerminalDataCacheAsync(
+            "mt4_terminal_cache_01", account, 3, "rates", parameters, 1_800_000_000_100);
+        var otherParams = await _store.GetTerminalDataCacheAsync(
+            "mt4_terminal_cache_01", account, 3, "rates",
+            Json("""{"symbol":"EURUSD","timeframe":"M30","count":100}"""),
+            1_800_000_000_000);
+        var otherAccount = await _store.GetTerminalDataCacheAsync(
+            "mt4_terminal_cache_01", new("Broker-Demo", "87654321"), 3, "rates",
+            parameters, 1_800_000_000_000);
+        var otherEpoch = await _store.GetTerminalDataCacheAsync(
+            "mt4_terminal_cache_01", account, 4, "rates", parameters, 1_800_000_000_000);
+
+        Assert.IsNotNull(cached);
+        Assert.AreEqual(1_800_000_000_000, cached.ObservedAtUtcMsc);
+        Assert.AreEqual(2300.5,
+            cached.Payload.GetProperty("rates")[0].GetProperty("close").GetDouble());
+        Assert.IsNull(stale);
+        Assert.IsNull(otherParams);
+        Assert.IsNull(otherAccount);
+        Assert.IsNull(otherEpoch);
+    }
+
+    [TestMethod]
     public async Task PersistsLatestStateAndOutboxInOneTransaction()
     {
         var message = Delta("positions", revision: 1, baseRevision: 0,

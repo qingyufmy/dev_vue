@@ -50,6 +50,11 @@ public sealed record TerminalBinding(
     };
 }
 
+public sealed record TerminalDataCacheEntry(
+    long ObservedAtUtcMsc,
+    long CachedAtUtcMsc,
+    JsonElement Payload);
+
 public sealed class BridgeStore : IAsyncDisposable
 {
     private const int DefaultReceiptLimit = 2_000;
@@ -111,6 +116,116 @@ public sealed class BridgeStore : IAsyncDisposable
         await using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA journal_mode;";
         return Convert.ToString(await command.ExecuteScalarAsync(cancellationToken)) ?? string.Empty;
+    }
+
+    public async Task<TerminalDataCacheEntry?> GetTerminalDataCacheAsync(
+        string terminalInstanceId,
+        AccountRef accountRef,
+        long connectionEpoch,
+        string action,
+        JsonElement parameters,
+        long cachedAfterUtcMsc,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateTerminalDataCacheKey(
+            terminalInstanceId, accountRef, connectionEpoch, action, cachedAfterUtcMsc);
+        EnsureInitialized();
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT observed_at_utc_msc, cached_at_utc_msc, payload_json
+            FROM terminal_data_cache
+            WHERE terminal_instance_id = $terminal_id
+              AND broker_server = $broker_server
+              AND login_account = $login
+              AND connection_epoch = $epoch
+              AND action = $action
+              AND params_hash = $params_hash
+              AND cached_at_utc_msc > $cached_after;
+            """;
+        AddTerminalDataCacheKeyParameters(
+            command, terminalInstanceId, accountRef, connectionEpoch, action, parameters);
+        command.Parameters.AddWithValue("$cached_after", cachedAfterUtcMsc);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+        try
+        {
+            return new(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                JsonDocument.Parse(reader.GetString(2)).RootElement.Clone());
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    public async Task PutTerminalDataCacheAsync(
+        string terminalInstanceId,
+        AccountRef accountRef,
+        long connectionEpoch,
+        string action,
+        JsonElement parameters,
+        long observedAtUtcMsc,
+        long cachedAtUtcMsc,
+        JsonElement payload,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateTerminalDataCacheKey(
+            terminalInstanceId, accountRef, connectionEpoch, action, cachedAtUtcMsc);
+        if (observedAtUtcMsc <= 0 || payload.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            throw new ArgumentOutOfRangeException(nameof(observedAtUtcMsc));
+        }
+        EnsureInitialized();
+        await _writer.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            await using (var command = connection.CreateCommand())
+            {
+                command.Transaction = (SqliteTransaction)transaction;
+                command.CommandText = """
+                    INSERT INTO terminal_data_cache (
+                      terminal_instance_id, broker_server, login_account, connection_epoch, action, params_hash,
+                      observed_at_utc_msc, cached_at_utc_msc, payload_json
+                    ) VALUES (
+                      $terminal_id, $broker_server, $login, $epoch, $action, $params_hash,
+                      $observed_at, $cached_at, $payload_json
+                    )
+                    ON CONFLICT (
+                      terminal_instance_id, broker_server, login_account, connection_epoch, action, params_hash
+                    )
+                    DO UPDATE SET
+                      observed_at_utc_msc = excluded.observed_at_utc_msc,
+                      cached_at_utc_msc = excluded.cached_at_utc_msc,
+                      payload_json = excluded.payload_json;
+                    """;
+                AddTerminalDataCacheKeyParameters(
+                    command, terminalInstanceId, accountRef, connectionEpoch, action, parameters);
+                command.Parameters.AddWithValue("$observed_at", observedAtUtcMsc);
+                command.Parameters.AddWithValue("$cached_at", cachedAtUtcMsc);
+                command.Parameters.AddWithValue("$payload_json", payload.GetRawText());
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await using (var prune = connection.CreateCommand())
+            {
+                prune.Transaction = (SqliteTransaction)transaction;
+                prune.CommandText = "DELETE FROM terminal_data_cache WHERE cached_at_utc_msc < $cutoff;";
+                prune.Parameters.AddWithValue("$cutoff", cachedAtUtcMsc - 24L * 60 * 60 * 1_000);
+                await prune.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await transaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            _writer.Release();
+        }
     }
 
     public async Task<long> GetStreamRevisionAsync(
@@ -1368,6 +1483,43 @@ public sealed class BridgeStore : IAsyncDisposable
         return ticket;
     }
 
+    private static void AddTerminalDataCacheKeyParameters(
+        SqliteCommand command,
+        string terminalInstanceId,
+        AccountRef accountRef,
+        long connectionEpoch,
+        string action,
+        JsonElement parameters)
+    {
+        command.Parameters.AddWithValue("$terminal_id", terminalInstanceId);
+        command.Parameters.AddWithValue("$broker_server", accountRef.BrokerServer);
+        command.Parameters.AddWithValue("$login", accountRef.Login);
+        command.Parameters.AddWithValue("$epoch", connectionEpoch);
+        command.Parameters.AddWithValue("$action", action);
+        command.Parameters.AddWithValue("$params_hash", Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(parameters.GetRawText()))).ToLowerInvariant());
+    }
+
+    private static void ValidateTerminalDataCacheKey(
+        string terminalInstanceId,
+        AccountRef accountRef,
+        long connectionEpoch,
+        string action,
+        long timestampUtcMsc)
+    {
+        ArgumentNullException.ThrowIfNull(accountRef);
+        if (string.IsNullOrWhiteSpace(terminalInstanceId)
+            || string.IsNullOrWhiteSpace(accountRef.BrokerServer)
+            || string.IsNullOrWhiteSpace(accountRef.Login)
+            || connectionEpoch <= 0
+            || string.IsNullOrWhiteSpace(action)
+            || action.Length > 64
+            || timestampUtcMsc < 0)
+        {
+            throw new ArgumentException("terminal_data_cache_key_invalid");
+        }
+    }
+
     private static void ValidateDelta(DataDeltaMessage message)
     {
         if (message.Version != 3 || message.Type != "data_delta")
@@ -1514,6 +1666,22 @@ public sealed class BridgeStore : IAsyncDisposable
         );
         CREATE INDEX IF NOT EXISTS idx_execution_receipts_completed
           ON execution_receipts (completed_at_utc_msc DESC);
+        CREATE TABLE IF NOT EXISTS terminal_data_cache (
+          terminal_instance_id TEXT NOT NULL,
+          broker_server TEXT COLLATE NOCASE NOT NULL,
+          login_account TEXT NOT NULL,
+          connection_epoch INTEGER NOT NULL,
+          action TEXT NOT NULL,
+          params_hash TEXT NOT NULL,
+          observed_at_utc_msc INTEGER NOT NULL,
+          cached_at_utc_msc INTEGER NOT NULL,
+          payload_json TEXT NOT NULL,
+          PRIMARY KEY (
+            terminal_instance_id, broker_server, login_account, connection_epoch, action, params_hash
+          )
+        );
+        CREATE INDEX IF NOT EXISTS idx_terminal_data_cache_freshness
+          ON terminal_data_cache (cached_at_utc_msc);
         CREATE TABLE IF NOT EXISTS module_versions (
           module_id TEXT PRIMARY KEY,
           version TEXT NOT NULL,

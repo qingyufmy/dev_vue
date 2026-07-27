@@ -21,7 +21,9 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     private readonly ConcurrentDictionary<string, byte> _fullSnapshots = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _streamFreshness = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _collectionWake = new(0, 1);
+    private readonly SemaphoreSlim _dataCacheGate = new(1, 1);
     private HistoryCursor _dealCursor = HistoryCursor.Empty;
+    private long _dataCacheInvalidatedAtUtcMsc;
     private bool _dealBackfillPending;
     private bool _dealsEnabled;
     private bool _initialized;
@@ -108,6 +110,15 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     public static TimeSpan CollectionDelay(bool hasActiveTrades) =>
         TimeSpan.FromMilliseconds(hasActiveTrades ? 250 : 1_000);
 
+    public static TimeSpan? DataCacheMaxAge(string action) => action switch
+    {
+        "rates" => TimeSpan.FromSeconds(2),
+        "history" or "chart_data" => TimeSpan.FromSeconds(5),
+        "performance_daily" => TimeSpan.FromSeconds(30),
+        "symbols" => TimeSpan.FromMinutes(5),
+        _ => null,
+    };
+
     public async Task<CommandResultMessage> ExecuteCommandAsync(
         CommandMessage command,
         CancellationToken cancellationToken = default)
@@ -138,6 +149,10 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         if (command.Action == "query_execution" && localResult.RawResult is null)
         {
             return Rejected(command, "mt4_query_result_invalid");
+        }
+        if (localResult.Status == "succeeded" && command.Action != "query_execution")
+        {
+            Interlocked.Exchange(ref _dataCacheInvalidatedAtUtcMsc, _clock());
         }
         var ticket = localResult.Ticket > 0 ? localResult.Ticket.ToString() : null;
         return new()
@@ -236,13 +251,16 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             {
                 return RejectedData(request, error.Message);
             }
-            var extended = await _connection.GetExtendedDataAsync(extendedRequest, cancellationToken);
-            if (extended.RequestId != request.RequestId)
+            return await WithDataCacheAsync(request, async token =>
             {
-                throw new InvalidDataException("mt4_extended_data_route_mismatch");
-            }
-            return DataResponse(request, extended.ObservedAtUtcMsc, extended.Status,
-                extended.Payload, extended.ErrorCode);
+                var extended = await _connection.GetExtendedDataAsync(extendedRequest, token);
+                if (extended.RequestId != request.RequestId)
+                {
+                    throw new InvalidDataException("mt4_extended_data_route_mismatch");
+                }
+                return DataResponse(request, extended.ObservedAtUtcMsc, extended.Status,
+                    extended.Payload, extended.ErrorCode);
+            }, cancellationToken);
         }
         if (request.Action == "risk_snapshot")
         {
@@ -273,13 +291,16 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             {
                 return RejectedData(request, error.Message);
             }
-            var performance = await _connection.GetPerformanceDailyAsync(performanceRequest, cancellationToken);
-            if (performance.RequestId != request.RequestId)
+            return await WithDataCacheAsync(request, async token =>
             {
-                throw new InvalidDataException("mt4_performance_route_mismatch");
-            }
-            return DataResponse(request, performance.ObservedAtUtcMsc, performance.Status,
-                performance.Payload, performance.ErrorCode);
+                var performance = await _connection.GetPerformanceDailyAsync(performanceRequest, token);
+                if (performance.RequestId != request.RequestId)
+                {
+                    throw new InvalidDataException("mt4_performance_route_mismatch");
+                }
+                return DataResponse(request, performance.ObservedAtUtcMsc, performance.Status,
+                    performance.Payload, performance.ErrorCode);
+            }, cancellationToken);
         }
         if (request.Action == "symbol_snapshot")
         {
@@ -308,20 +329,82 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         {
             return RejectedData(request, error.Message);
         }
-        var local = await _connection.GetRatesAsync(localRequest, cancellationToken);
-        if (local.RequestId != request.RequestId)
+        return await WithDataCacheAsync(request, async token =>
         {
-            throw new InvalidDataException("mt4_rates_route_mismatch");
+            var local = await _connection.GetRatesAsync(localRequest, token);
+            if (local.RequestId != request.RequestId)
+            {
+                throw new InvalidDataException("mt4_rates_route_mismatch");
+            }
+            return DataResponse(request, local.ObservedAtUtcMsc, local.Status,
+                local.Payload, local.ErrorCode);
+        }, cancellationToken);
+    }
+
+    private async Task<DataResponseMessage> WithDataCacheAsync(
+        DataRequestMessage request,
+        Func<CancellationToken, Task<DataResponseMessage>> fetch,
+        CancellationToken cancellationToken)
+    {
+        var maxAge = DataCacheMaxAge(request.Action);
+        if (maxAge is null)
+        {
+            return await fetch(cancellationToken);
         }
-        return new()
+        await _dataCacheGate.WaitAsync(cancellationToken);
+        try
         {
-            Type = "data_response", MessageId = $"data_{request.RequestId}_{Guid.NewGuid():N}",
-            SentAtUtcMsc = _clock(), RequestId = request.RequestId,
-            TerminalInstanceId = _terminal.TerminalInstanceId, AccountRef = _terminal.AccountRef,
-            ConnectionEpoch = _terminal.ConnectionEpoch, Action = request.Action, Params = request.Params,
-            ObservedAtUtcMsc = local.ObservedAtUtcMsc, Status = local.Status,
-            Payload = local.Payload, ErrorCode = local.ErrorCode,
-        };
+            var now = _clock();
+            var cachedAfter = Math.Max(
+                Math.Max(0, now - (long)maxAge.Value.TotalMilliseconds),
+                Interlocked.Read(ref _dataCacheInvalidatedAtUtcMsc));
+            try
+            {
+                var cached = await _store.GetTerminalDataCacheAsync(
+                    _terminal.TerminalInstanceId,
+                    _terminal.AccountRef,
+                    _terminal.ConnectionEpoch,
+                    request.Action,
+                    request.Params,
+                    cachedAfter,
+                    cancellationToken);
+                if (cached is not null)
+                {
+                    return DataResponse(request, cached.ObservedAtUtcMsc, "succeeded", cached.Payload, null);
+                }
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // The cache accelerates MT4 reads only; EA data remains authoritative on cache failure.
+            }
+
+            var response = await fetch(cancellationToken);
+            if (response.Status == "succeeded" && response.Payload is { } payload)
+            {
+                try
+                {
+                    await _store.PutTerminalDataCacheAsync(
+                        _terminal.TerminalInstanceId,
+                        _terminal.AccountRef,
+                        _terminal.ConnectionEpoch,
+                        request.Action,
+                        request.Params,
+                        response.ObservedAtUtcMsc,
+                        _clock(),
+                        payload,
+                        cancellationToken);
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    // Do not turn an optional cache write into a terminal data failure.
+                }
+            }
+            return response;
+        }
+        finally
+        {
+            _dataCacheGate.Release();
+        }
     }
 
     private DataResponseMessage DataResponse(

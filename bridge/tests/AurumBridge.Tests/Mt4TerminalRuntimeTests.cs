@@ -20,6 +20,18 @@ public sealed class Mt4TerminalRuntimeTests
     }
 
     [TestMethod]
+    public void CachesOnlyBoundedReadHeavyMt4Actions()
+    {
+        Assert.AreEqual(TimeSpan.FromSeconds(2), Mt4TerminalRuntime.DataCacheMaxAge("rates"));
+        Assert.AreEqual(TimeSpan.FromSeconds(5), Mt4TerminalRuntime.DataCacheMaxAge("history"));
+        Assert.AreEqual(TimeSpan.FromSeconds(5), Mt4TerminalRuntime.DataCacheMaxAge("chart_data"));
+        Assert.AreEqual(TimeSpan.FromSeconds(30), Mt4TerminalRuntime.DataCacheMaxAge("performance_daily"));
+        Assert.AreEqual(TimeSpan.FromMinutes(5), Mt4TerminalRuntime.DataCacheMaxAge("symbols"));
+        Assert.IsNull(Mt4TerminalRuntime.DataCacheMaxAge("risk_snapshot"));
+        Assert.IsNull(Mt4TerminalRuntime.DataCacheMaxAge("pending_order_state"));
+    }
+
+    [TestMethod]
     public async Task PersistsSnapshotAndMapsTradeResult()
     {
         await using var testStore = await TestStore.CreateAsync();
@@ -204,6 +216,52 @@ public sealed class Mt4TerminalRuntimeTests
         Assert.AreEqual("succeeded", response.Status);
         Assert.AreEqual("XAUUSD", response.Payload!.Value.GetProperty("symbol").GetString());
         Assert.AreEqual(100, connection.LastRatesRequest!.Count);
+    }
+
+    [TestMethod]
+    public async Task ReusesFreshRatesFromSqliteAcrossMt4RuntimeRestarts()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var now = 1_800_000_000_100L;
+        var firstConnection = new FakeConnection();
+        var firstRuntime = new Mt4TerminalRuntime(
+            Terminal(), firstConnection, testStore.Store, "aurum_mt4_runtime_cache_first", () => now);
+        await firstRuntime.StartAsync();
+        var firstRequest = RatesRequest("request_mt4_rates_cache_01");
+
+        var first = await firstRuntime.GetDataAsync(firstRequest);
+        await firstRuntime.DisposeAsync();
+        now += 1_000;
+        var secondConnection = new FakeConnection();
+        await using var secondRuntime = new Mt4TerminalRuntime(
+            Terminal(), secondConnection, testStore.Store, "aurum_mt4_runtime_cache_second", () => now);
+        await secondRuntime.StartAsync();
+        var second = await secondRuntime.GetDataAsync(RatesRequest("request_mt4_rates_cache_02"));
+
+        Assert.AreEqual("succeeded", first.Status);
+        Assert.AreEqual("succeeded", second.Status);
+        Assert.AreEqual("request_mt4_rates_cache_02", second.RequestId);
+        Assert.AreEqual(1, firstConnection.RatesRequestCount);
+        Assert.AreEqual(0, secondConnection.RatesRequestCount);
+    }
+
+    [TestMethod]
+    public async Task SuccessfulTradeInvalidatesEarlierMt4ReadCache()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var now = 1_800_000_000_100L;
+        var connection = new FakeConnection();
+        await using var runtime = new Mt4TerminalRuntime(
+            Terminal(), connection, testStore.Store, "aurum_mt4_runtime_cache_invalidation", () => now);
+        await runtime.StartAsync();
+
+        await runtime.GetDataAsync(RatesRequest("request_mt4_rates_before_trade_01"));
+        now += 1_000;
+        await runtime.GetDataAsync(RatesRequest("request_mt4_rates_before_trade_02"));
+        await runtime.ExecuteCommandAsync(Command("cancel_order", new { ticket = "20" }));
+        await runtime.GetDataAsync(RatesRequest("request_mt4_rates_after_trade_01"));
+
+        Assert.AreEqual(2, connection.RatesRequestCount);
     }
 
     [TestMethod]
@@ -427,6 +485,22 @@ public sealed class Mt4TerminalRuntimeTests
         Symbol = "XAUUSD",
     };
 
+    private static DataRequestMessage RatesRequest(string requestId) => new()
+    {
+        Type = "data_request",
+        MessageId = $"message_{requestId}",
+        SentAtUtcMsc = 1_800_000_000_000,
+        RequestId = requestId,
+        TerminalInstanceId = Terminal().TerminalInstanceId,
+        AccountRef = Terminal().AccountRef,
+        ConnectionEpoch = Terminal().ConnectionEpoch,
+        Action = "rates",
+        Params = JsonSerializer.SerializeToElement(new
+        {
+            symbol = "XAUUSD", timeframe = "M30", count = 100,
+        }),
+    };
+
     private static JsonElement Json(string value) => JsonDocument.Parse(value).RootElement.Clone();
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
@@ -451,6 +525,7 @@ public sealed class Mt4TerminalRuntimeTests
         public List<Mt4TradeCommand> Commands { get; } = [];
         public JsonElement? NextRawResult { get; init; }
         public string? QuoteSymbol { get; init; }
+        public int RatesRequestCount { get; private set; }
         public Mt4RatesRequest? LastRatesRequest { get; private set; }
         public Mt4SymbolSnapshotRequest? LastSymbolRequest { get; private set; }
         public Mt4RiskSnapshotRequest? LastRiskRequest { get; private set; }
@@ -511,6 +586,7 @@ public sealed class Mt4TerminalRuntimeTests
             Mt4RatesRequest request,
             CancellationToken cancellationToken = default)
         {
+            RatesRequestCount++;
             LastRatesRequest = request;
             return Task.FromResult(new Mt4Rates(
                 request.RequestId, 1_800_000_000_060, "succeeded",
