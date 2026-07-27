@@ -98,6 +98,8 @@ public sealed class BridgeMainForm : Form
         _accountPermissionToolTip.AutoPopDelay = 15_000;
         _accountPermissionToolTip.ShowAlways = true;
         _accountPermissionToolTip.ToolTipTitle = "交易权限详情";
+        _accountPermissionToolTip.UseAnimation = true;
+        _accountPermissionToolTip.UseFading = true;
         BuildLayout(validatedProfileId, isDefaultProfile);
         FormClosing += HandleFormClosing;
     }
@@ -745,7 +747,7 @@ public sealed class BridgeMainForm : Form
             AccessibleName = DescribeTradingPermissionSummary(terminal),
             AccessibleDescription = permissionDetails,
         };
-        _accountPermissionToolTip.SetToolTip(permissionBadge, permissionDetails);
+        AttachTradingPermissionToolTip(permissionBadge, permissionDetails);
         copy.Controls.Add(permissionBadge);
         row.Controls.Add(copy, 1, 0);
         if (observerProfile is not null)
@@ -803,16 +805,41 @@ public sealed class BridgeMainForm : Form
         {
             return "交易权限正在检测";
         }
+        var action = DescribeTradingPermissionAction(terminal);
         if (terminal.Platform == BridgePlatform.Mt4)
         {
             return $"MT4 顶部“自动交易”：{DescribePermission(terminal.TerminalTradingAllowed)}\n"
                 + $"EA“允许实时自动交易”：{DescribePermission(terminal.ProgramTradingAllowed)}\n"
                 + $"账户 EA 权限：{DescribePermission(terminal.AccountExpertTradingAllowed)}\n"
-                + $"账户交易权限：{DescribePermission(terminal.AccountTradingAllowed)}";
+                + $"账户交易权限：{DescribePermission(terminal.AccountTradingAllowed)}\n\n"
+                + action;
         }
         return $"MT5 工具栏“算法交易”：{DescribePermission(terminal.TerminalTradingAllowed)}\n"
             + $"账户 EA 权限：{DescribePermission(terminal.AccountExpertTradingAllowed)}\n"
-            + $"账户交易权限：{DescribePermission(terminal.AccountTradingAllowed)}";
+            + $"账户交易权限：{DescribePermission(terminal.AccountTradingAllowed)}\n\n"
+            + action;
+    }
+
+    public static string DescribeTradingPermissionAction(BridgeTerminalStatus terminal)
+    {
+        ArgumentNullException.ThrowIfNull(terminal);
+        var values = RelevantTradingPermissions(terminal);
+        if (values.Any(value => value is null))
+        {
+            return "权限仍在检测，请稍后点击“重新检测”。";
+        }
+        if (values.All(value => value == true))
+        {
+            return "交易所需开关均已开启。";
+        }
+        if (terminal.AccountTradingAllowed == false
+            || terminal.AccountExpertTradingAllowed == false)
+        {
+            return "账户级权限已关闭；请检查账户设置，必要时联系经纪商，然后点击“重新检测”。";
+        }
+        return terminal.Platform == BridgePlatform.Mt4
+            ? "请在 MT4 和 EA 中开启上方关闭的开关，然后点击“重新检测”。"
+            : "请在 MT5 中开启上方关闭的开关，然后点击“重新检测”。";
     }
 
     public static string DescribeTradingPermissionSummary(BridgeTerminalStatus? terminal)
@@ -876,6 +903,38 @@ public sealed class BridgeMainForm : Form
                 terminal.AccountTradingAllowed,
                 terminal.AccountExpertTradingAllowed,
             };
+    }
+
+    private void AttachTradingPermissionToolTip(Control control, string details)
+    {
+        _accountPermissionToolTip.SetToolTip(control, details);
+        control.MouseEnter += (_, _) =>
+        {
+            if (!control.IsDisposed && control.Visible)
+            {
+                _accountPermissionToolTip.Show(
+                    details,
+                    control,
+                    new Point(0, control.Height + 4),
+                    _accountPermissionToolTip.AutoPopDelay);
+            }
+        };
+        control.MouseLeave += (_, _) =>
+        {
+            if (!control.IsDisposed)
+            {
+                _accountPermissionToolTip.Hide(control);
+            }
+        };
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _accountPermissionToolTip.Dispose();
+        }
+        base.Dispose(disposing);
     }
 
     private Control CreateObserverActions(

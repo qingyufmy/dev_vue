@@ -298,12 +298,15 @@ public sealed class BridgeUiTextTests
         StringAssert.Contains(mt4Text, "MT4 顶部“自动交易”：已开启");
         StringAssert.Contains(mt4Text, "EA“允许实时自动交易”：已开启");
         StringAssert.Contains(mt4Text, "账户 EA 权限：已关闭");
+        StringAssert.Contains(mt4Text, "账户级权限已关闭");
+        StringAssert.Contains(mt4Text, "重新检测");
         Assert.AreEqual(
             "交易权限异常",
             BridgeMainForm.DescribeTradingPermissionSummary(mt4));
         var mt5Text = BridgeMainForm.DescribeTradingPermissions(mt5);
         StringAssert.Contains(mt5Text, "MT5 工具栏“算法交易”：已开启");
         Assert.IsFalse(mt5Text.Contains("允许实时自动交易", StringComparison.Ordinal));
+        StringAssert.Contains(mt5Text, "交易所需开关均已开启");
         Assert.AreEqual(
             "交易权限正常",
             BridgeMainForm.DescribeTradingPermissionSummary(mt5));
@@ -311,6 +314,31 @@ public sealed class BridgeUiTextTests
             "权限检测中",
             BridgeMainForm.DescribeTradingPermissionSummary(
                 mt5 with { TerminalTradingAllowed = null }));
+    }
+
+    [TestMethod]
+    public void TradingPermissionGuidanceDistinguishesLocalSwitchesFromAccountRestrictions()
+    {
+        var localSwitch = new BridgeTerminalStatus(
+            "mt5_terminal", BridgePlatform.Mt5, "Broker-Demo", "596520",
+            TerminalRuntimeState.Running, null)
+        {
+            TerminalTradingAllowed = false,
+            AccountTradingAllowed = true,
+            AccountExpertTradingAllowed = true,
+        };
+        var accountRestriction = localSwitch with
+        {
+            TerminalTradingAllowed = true,
+            AccountExpertTradingAllowed = false,
+        };
+
+        StringAssert.Contains(
+            BridgeMainForm.DescribeTradingPermissionAction(localSwitch),
+            "MT5");
+        StringAssert.Contains(
+            BridgeMainForm.DescribeTradingPermissionAction(accountRestriction),
+            "经纪商");
     }
 
     [TestMethod]
