@@ -1,6 +1,6 @@
 const state = {
   view:'overview', profile:null, overview:null, users:[], pagination:null, search:'', membership:'all', page:1, selectedUser:null,
-  realtime:{ ws:null, reconnectTimer:null, heartbeatTimer:null, schedulerTimer:null, reconnectAttempts:0, lastEventAt:0, mt5Time:'', mt5UserId:0, pendingRefresh:false, refreshTimer:null, authFailed:false },
+  realtime:{ ws:null, reconnectTimer:null, heartbeatTimer:null, schedulerTimer:null, reconnectAttempts:0, lastEventAt:0, terminalTime:'', terminalUserId:0, terminalPlatform:'mt5', terminalTimezoneOffsetMinutes:null, pendingRefresh:false, refreshTimer:null, authFailed:false },
   commercialTab:'orders', commercialOverview:null,
   orderPage:1, orderSearch:'', orderStatus:'all',
   notificationPage:1, notificationSearch:'', notificationStatus:'all', notificationChannel:'all',
@@ -126,21 +126,40 @@ function formatRealtimeTime(value) {
   return new Intl.DateTimeFormat('zh-CN', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).format(date)
 }
 
-function formatMt5Time(value) {
+function formatTerminalTime(value, timezoneOffsetMinutes = state.realtime.terminalTimezoneOffsetMinutes) {
   const raw = String(value || '').trim()
   if (!raw) return '--:--:--'
   const match = raw.match(/(?:^|\s)(\d{1,2}:\d{2}:\d{2})(?:\.\d+)?$/)
-  return match?.[1]?.padStart(8, '0') || raw
+  if (match?.[1]) return match[1].padStart(8, '0')
+  const timestamp = Date.parse(raw)
+  const offset = Number(timezoneOffsetMinutes)
+  if (!Number.isFinite(timestamp) || !Number.isFinite(offset)) return raw
+  const shifted = new Date(timestamp + offset * 60_000)
+  return [shifted.getUTCHours(), shifted.getUTCMinutes(), shifted.getUTCSeconds()]
+    .map(value => String(value).padStart(2, '0')).join(':')
 }
 
-function updateAiOpsMt5Clock(value, userId = 0) {
+function normalizeTerminalPlatform(value) {
+  return String(value || '').trim().toLowerCase() === 'mt4' ? 'mt4' : 'mt5'
+}
+
+function terminalPlatformLabel(value = state.realtime.terminalPlatform) {
+  return normalizeTerminalPlatform(value).toUpperCase()
+}
+
+function updateAiOpsTerminalClock(value, userId = 0, platform = '', timezoneOffsetMinutes = null) {
+  if (platform) state.realtime.terminalPlatform = normalizeTerminalPlatform(platform)
+  const offset = Number(timezoneOffsetMinutes)
+  if (Number.isFinite(offset)) state.realtime.terminalTimezoneOffsetMinutes = offset
+  const label = terminalPlatformLabel()
+  document.querySelectorAll('[data-terminal-platform-label]').forEach(node => { node.textContent = label })
   if (!value) return
-  state.realtime.mt5Time = String(value)
-  state.realtime.mt5UserId = Number(userId || state.realtime.mt5UserId || 0)
+  state.realtime.terminalTime = String(value)
+  state.realtime.terminalUserId = Number(userId || state.realtime.terminalUserId || 0)
   const node = document.querySelector('#aiOpsRealtimeLastAt')
   if (node) {
-    node.textContent = formatMt5Time(value)
-    node.title = `MT5 原始时间：${String(value)}`
+    node.textContent = formatTerminalTime(value, state.realtime.terminalTimezoneOffsetMinutes)
+    node.title = `${label} 原始时间：${String(value)}`
   }
 }
 
@@ -208,8 +227,8 @@ function handleAdminRealtimeMessage(message) {
   const clock = formatRealtimeTime(state.realtime.lastEventAt)
   const lastAt = document.querySelector('#adminRealtimeLastAt')
   if (lastAt) lastAt.textContent = clock
-  if (message.reason === 'tick') updateAiOpsMt5Clock(message.data?.quote?.time, message.data?.user_id)
-  if (message.reason === 'heartbeat') updateAiOpsMt5Clock(message.data?.mt5_time, message.data?.user_id)
+  if (message.reason === 'tick') updateAiOpsTerminalClock(message.data?.quote?.time, message.data?.user_id, message.data?.platform, message.data?.timezone_offset_minutes)
+  if (message.reason === 'heartbeat') updateAiOpsTerminalClock(message.data?.mt5_time, message.data?.user_id, message.data?.platform, message.data?.timezone_offset_minutes)
   patchSchedulerRealtime(message)
   adminRealtimeStatus('live', '实时在线', `已接收服务器实时推送，最近更新 ${clock}`)
   if (message.refresh !== false && realtimeEventAffectsView(message)) scheduleAdminRealtimeRefresh()
@@ -838,11 +857,12 @@ function aiHealthContent(data) {
   const connectedMt4Bridges = Number(summary.connected_mt4_bridges || 0)
   const connectedMt5Bridges = Number(summary.connected_mt5_bridges || 0)
   const queueCount = alerts.length + pendingReviews + failedReviews
-  const mt5Time = formatMt5Time(state.realtime.mt5Time)
+  const terminalTime = formatTerminalTime(state.realtime.terminalTime)
+  const terminalLabel = terminalPlatformLabel()
   return `<section class="ai-command-status ${healthy ? 'is-healthy' : 'needs-attention'}">
       <div class="ai-command-signal"><span data-icon="activity" aria-hidden="true"></span></div>
       <div class="ai-command-copy"><span class="eyebrow">实时运行结论</span><h2>${healthy ? 'AI 核心链路运行稳定' : '核心链路存在待处置事项'}</h2><p>${healthy ? '模型、调度、信号与复盘链路均未发现阻断性异常。' : `今日模型失败 ${failures} 次，治理告警 ${alerts.length} 项，失败复盘 ${failedReviews} 条。`}</p></div>
-      <div class="ai-command-meta"><span>MT5 时间 <strong>${mt5Time}</strong></span><span>待办队列 <strong>${queueCount}</strong></span></div>
+      <div class="ai-command-meta"><span><span data-terminal-platform-label>${terminalLabel}</span> 时间 <strong>${terminalTime}</strong></span><span>待办队列 <strong>${queueCount}</strong></span></div>
       <button class="secondary-button" type="button" data-ai-jump="scheduler">查看调度</button>
     </section>
     <section class="ai-kpi-grid" aria-label="今日 AI 核心指标">
@@ -1241,7 +1261,12 @@ async function loadAiOperations(silent = false) {
   if (!silent) document.querySelector('#aiOperationsContent').innerHTML = '<div class="panel"><div class="empty-state">正在汇总 AI 运行数据…</div></div>'
   const data = await api('/api/admin/ai/overview')
   state.aiOperations = data.operations
-  updateAiOpsMt5Clock(data.operations?.mt5_clock?.time, data.operations?.mt5_clock?.user_id)
+  const clock = data.operations?.mt5_clock || {}
+  const summary = data.operations?.summary || {}
+  const connectedMt4 = Number(summary.connected_mt4_bridges || 0)
+  const connectedMt5 = Number(summary.connected_mt5_bridges || 0)
+  const connectedPlatform = clock.platform || (connectedMt4 > 0 && connectedMt5 === 0 ? 'mt4' : connectedMt5 > 0 && connectedMt4 === 0 ? 'mt5' : '')
+  updateAiOpsTerminalClock(clock.time, clock.user_id, connectedPlatform, clock.timezone_offset_minutes)
   renderAiOperationsContent()
 }
 function positionManagementModeLabel(mode) {
@@ -1367,8 +1392,9 @@ function renderAiGovernanceContent(){
 async function renderAiOperations() {
   const main = document.querySelector('#adminMain')
   const realtimeLive = state.realtime.ws?.readyState === WebSocket.OPEN
-  const mt5Time = formatMt5Time(state.realtime.mt5Time)
-  main.innerHTML = `<header class="ai-ops-masthead"><div class="ai-ops-title-lockup"><span class="ai-ops-title-icon" data-icon="activity" aria-hidden="true"></span><div><span class="eyebrow">智能交易运营中枢</span><h1>AI 运营</h1><p>集中查看运行健康、自动调度、观摩分发、模型评测与平台治理。</p></div></div><div class="ai-ops-toolbar"><div class="ai-ops-realtime ${realtimeLive ? 'is-live' : ''}" aria-label="AI 运营实时数据状态"><span class="provider-dot ${realtimeLive ? 'ok' : ''}"></span><div><strong id="aiOpsRealtimeState">${realtimeLive ? 'WSS 实时推送' : '实时通道重连中'}</strong><small>MT5 时间 <span id="aiOpsRealtimeLastAt">${mt5Time}</span></small></div></div><button class="secondary-button ai-ops-refresh" type="button" data-ai-refresh><span data-icon="refresh" aria-hidden="true"></span><span>刷新当前模块</span></button></div></header>${aiTabs()}<div id="aiOperationsContent" class="ai-ops-content" data-ai-panel="${state.aiTab}"></div>`
+  const terminalTime = formatTerminalTime(state.realtime.terminalTime)
+  const terminalLabel = terminalPlatformLabel()
+  main.innerHTML = `<header class="ai-ops-masthead"><div class="ai-ops-title-lockup"><span class="ai-ops-title-icon" data-icon="activity" aria-hidden="true"></span><div><span class="eyebrow">智能交易运营中枢</span><h1>AI 运营</h1><p>集中查看运行健康、自动调度、观摩分发、模型评测与平台治理。</p></div></div><div class="ai-ops-toolbar"><div class="ai-ops-realtime ${realtimeLive ? 'is-live' : ''}" aria-label="AI 运营实时数据状态"><span class="provider-dot ${realtimeLive ? 'ok' : ''}"></span><div><strong id="aiOpsRealtimeState">${realtimeLive ? 'WSS 实时推送' : '实时通道重连中'}</strong><small><span data-terminal-platform-label>${terminalLabel}</span> 时间 <span id="aiOpsRealtimeLastAt">${terminalTime}</span></small></div></div><button class="secondary-button ai-ops-refresh" type="button" data-ai-refresh><span data-icon="refresh" aria-hidden="true"></span><span>刷新当前模块</span></button></div></header>${aiTabs()}<div id="aiOperationsContent" class="ai-ops-content" data-ai-panel="${state.aiTab}"></div>`
   renderIcons(main)
   bindAiTabs()
   main.querySelector('[data-ai-refresh]').addEventListener('click', async event => {

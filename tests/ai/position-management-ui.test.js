@@ -14,8 +14,8 @@ describe('AI position management workspace', () => {
     expect(html).not.toContain('data-tab="position-management"')
   })
 
-  it('shows durable decision evidence with MT5 bar time and no manual execution control', () => {
-    expect(html).toContain('决策K线(MT5)')
+  it('shows durable decision evidence with the connected terminal bar time and no manual execution control', () => {
+    expect(html).toContain('data-bridge-platform-template="决策 K 线（{platform}）"')
     expect(html).toContain('positionManagementDetail')
     expect(app).toContain('model_evaluation_json')
     expect(app).toContain('evidence_validation_json')

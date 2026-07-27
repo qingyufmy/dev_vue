@@ -457,13 +457,7 @@ export function normalizeBridgeMarketState(payload, receivedAt = Date.now()) {
 }
 
 function applyBridgeMarketState(bridge, payload, userId, receivedAt = Date.now()) {
-  const normalized = normalizeBridgeMarketState(payload, receivedAt)
-  if (!bridge || !normalized) return null
-  const previous = bridge.marketState?.state
-  bridge.marketState = normalized
-  if (!bridge.marketStates) bridge.marketStates = new Map()
-  if (normalized.symbol) bridge.marketStates.set(stripBrokerSuffix(normalized.symbol), normalized)
-  bridge.lastTradeMode = normalized.tradeMode
+  if (!bridge) return null
   const offsetValue = payload.timezone_offset_minutes
   const offset = offsetValue !== null && offsetValue !== undefined && offsetValue !== ''
     && Number.isFinite(Number(offsetValue)) ? Number(offsetValue) : null
@@ -477,6 +471,18 @@ function applyBridgeMarketState(bridge, payload, userId, receivedAt = Date.now()
   const residual = residualValue !== null && residualValue !== undefined && residualValue !== ''
     && Number.isFinite(Number(residualValue)) ? Number(residualValue) : null
   if (residual !== null) bridge.clockResidualMs = residual
+  const terminalTime = payload?.quote?.time || payload?.time || payload?.last_quote_time || null
+  if (terminalTime) {
+    bridge.mt5TimeStr = String(terminalTime)
+    bridge.lastTickMs = receivedAt
+  }
+  const normalized = normalizeBridgeMarketState(payload, receivedAt)
+  if (!normalized) return null
+  const previous = bridge.marketState?.state
+  bridge.marketState = normalized
+  if (!bridge.marketStates) bridge.marketStates = new Map()
+  if (normalized.symbol) bridge.marketStates.set(stripBrokerSuffix(normalized.symbol), normalized)
+  bridge.lastTradeMode = normalized.tradeMode
   if (previous && previous !== normalized.state) {
     console.log(`[BridgeWS] User ${userId}: market ${previous} -> ${normalized.state} (${normalized.detailReason || normalized.reason})`)
     broadcastAdminEvent('market', 'state_changed', {
@@ -1189,6 +1195,7 @@ async function _initBridge(ws, userId, user, initQueue = null) {
         user_id:Number(userId),
         connected:true,
         alive:Boolean(bridge.ws?.readyState === 1 && Date.now() - bridge.lastSeen < 20_000),
+        platform:bridge._clientHeartbeat?.platform || 'mt5',
         last_seen_at_utc_msc:bridge.lastSeen || null,
         mt5_time:bridge.mt5TimeStr || msg.last_quote_time || null,
         timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? msg.timezone_offset_minutes ?? null,
@@ -1240,6 +1247,8 @@ async function _initBridge(ws, userId, user, initQueue = null) {
       sendToBrowsers(userId, { type: 'data', trade_mode: tradeMode, ...msg })
       broadcastAdminEvent('market', 'tick', {
         user_id:Number(userId),
+        platform:bridge?._clientHeartbeat?.platform || 'mt5',
+        timezone_offset_minutes:bridge?.timezoneOffsetMinutes ?? bridge?._clientHeartbeat?.timezone_offset_minutes ?? null,
         trade_mode:tradeMode,
         quote:msg.quote ? {
           symbol:msg.quote.symbol || null,
@@ -3044,9 +3053,24 @@ export function getLatestBridgeMt5Clock() {
       latest = {
         time:String(time),
         user_id:Number(userId),
+        platform:bridge._clientHeartbeat?.platform || 'mt5',
         received_at:receivedAt || null,
         timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? bridge._clientHeartbeat?.timezone_offset_minutes ?? null,
       }
+    }
+  }
+  for (const [userId, marketState] of bridgeV3MarketStates.entries()) {
+    if (!bridgeV3Business?.hasConnectedTerminal(Number(userId))) continue
+    const time = marketState?.mt5TimeStr || null
+    const receivedAt = Number(marketState?.lastTickMs || marketState?.marketState?.receivedAt || 0)
+    if (!time || (latest && receivedAt <= Number(latest.received_at || 0))) continue
+    const route = bridgeV3RouteForContext(Number(userId))
+    latest = {
+      time:String(time),
+      user_id:Number(userId),
+      platform:route?.platform || 'mt5',
+      received_at:receivedAt || null,
+      timezone_offset_minutes:marketState.timezoneOffsetMinutes ?? null,
     }
   }
   return latest

@@ -86,6 +86,7 @@ import {
   normalizeBridgeMarketState,
   recordBridgeMarketState,
   getPlatformMarketClockState,
+  getLatestBridgeMt5Clock,
   sendToAdminBrowsers,
   broadcastAdminEvent,
   browserSessionToken,
@@ -477,16 +478,18 @@ describe('bridge-reported market state', () => {
     }])
 
     recordBridgeMarketState(77, {
-      market_state_version:1, market_state:'open', market_reason:'quote_fresh',
-      symbol:'XAUUSD', symbol_trade_mode:4, tick_progressing:true,
       timezone_offset_minutes:180, clock_status:'mt4_current_offset',
-      clock_residual_ms:0,
+      clock_residual_ms:0, time:'2026-07-27 09:12:34',
     }, 1_800_000_000_000)
 
     expect(getPlatformMarketClockState(77)).toMatchObject({
       connected:true, timezone_offset_minutes:180,
       clock_status:'mt4_current_offset', clock_residual_ms:0,
       broker_server:'Broker-Demo', account_login:'12345678',
+    })
+    expect(getLatestBridgeMt5Clock()).toMatchObject({
+      time:'2026-07-27 09:12:34', user_id:77, platform:'mt4',
+      received_at:1_800_000_000_000, timezone_offset_minutes:180,
     })
   })
 })

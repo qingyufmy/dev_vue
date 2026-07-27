@@ -113,6 +113,9 @@ function updateBridgePlatformUI(value) {
   const label = bridgePlatformLabel();
   setText("bridgePlatformClockLabel", label);
   setText("bridgePlatformTimeLabel", `${label}服务器时间`);
+  document.querySelectorAll("[data-bridge-platform-template]").forEach((node) => {
+    node.textContent = String(node.dataset.bridgePlatformTemplate || "").replaceAll("{platform}", label);
+  });
   const gateway = $("gatewayMode");
   if (gateway) gateway.title = `打开 ${label} 连接设置`;
 }
@@ -5834,7 +5837,7 @@ function inferenceChartShell(signal) {
   ].map(([key, label]) => `<button type="button" class="inference-layer-btn ${state.inferenceChartLayers[key] ? "active" : ""}" data-inference-layer="${key}" aria-pressed="${state.inferenceChartLayers[key]}">${label}</button>`).join("");
   return `<section id="inferenceChartPanel" class="inference-chart-panel" aria-labelledby="inferenceChartTitle">
     <div class="inference-chart-header">
-      <div><span class="analysis-section-title"><i data-lucide="candlestick-chart" size="15"></i><strong id="inferenceChartTitle">K 线与结构证据</strong></span><small>${escapeHtml(sourceLabel)} · ${escapeHtml(evidenceLabel)} · 仅展示推理发生时的数据 · MT5 时间 · 最后一根为推理时未收盘 K 线</small></div>
+      <div><span class="analysis-section-title"><i data-lucide="candlestick-chart" size="15"></i><strong id="inferenceChartTitle">K 线与结构证据</strong></span><small>${escapeHtml(sourceLabel)} · ${escapeHtml(evidenceLabel)} · 仅展示推理发生时的数据 · ${bridgePlatformLabel()} 时间 · 最后一根为推理时未收盘 K 线</small></div>
       <button id="inferenceChartFullscreen" type="button" class="chart-icon-btn" aria-label="全屏查看 K 线图" title="全屏查看"><i data-lucide="maximize-2" size="15"></i></button>
     </div>
     <div class="inference-chart-toolbar">
@@ -7101,8 +7104,8 @@ function updateHistoryRangeUI() {
   if ($("historyRangeFrom")) $("historyRangeFrom").disabled = !custom;
   if ($("historyRangeTo")) $("historyRangeTo").disabled = !custom;
   const hints = {
-    all: "包含该 MT5 账户的完整交易、入金、提款和信用记录。",
-    platform: "从当前 MT5 账户本次接入平台之日开始。",
+    all: `包含该 ${bridgePlatformLabel()} 账户的完整交易、入金、提款和信用记录。`,
+    platform: `从当前 ${bridgePlatformLabel()} 账户本次接入平台之日开始。`,
     custom: "按平仓日期统计；入金、提款和信用也按同一日期范围计算。",
   };
   setText("historyRangeHint", hints[scope] || hints.all);
@@ -7525,7 +7528,7 @@ function renderPositionManagementTasks(tasks = [], pagination = {}) {
         <td><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></td>
         <td><span class="management-state ${evidenceMeta.tone}">${evidenceMeta.label}</span></td>
         <td><span class="management-mode ${escapeHtml(task.execution_mode || "display")}">${escapeHtml(positionManagementTaskMode(task))}</span></td>
-        <td class="num" title="收盘K线时间（MT5）">${escapeHtml(compactTimeText(positionManagementBarTime(task)))}</td>
+        <td class="num" title="收盘 K 线时间（${bridgePlatformLabel()}）">${escapeHtml(compactTimeText(positionManagementBarTime(task)))}</td>
         <td><button class="management-detail-btn" type="button" data-position-management-id="${Number(task.id)}" aria-label="查看 ${escapeHtml(task.standard_symbol || task.original_symbol || "任务")} 管理详情">查看</button></td>
       </tr>`;
     }).join("");
@@ -7596,7 +7599,7 @@ async function loadPositionManagementDetail(taskId, options = {}) {
     const events = Array.isArray(result.events) ? result.events : [];
     const commands = Array.isArray(result.commands) ? result.commands : [];
     host.innerHTML = `
-      <header class="management-detail-head"><div><span class="section-kicker">任务 #${id}</span><h3>${escapeHtml(task.standard_symbol || task.original_symbol || "管理任务")}</h3><p>${escapeHtml(positionManagementTaskLabel(task.task_type))} · ${escapeHtml(positionManagementBarTime(task))} MT5</p></div><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(status.label)}</span></header>
+      <header class="management-detail-head"><div><span class="section-kicker">任务 #${id}</span><h3>${escapeHtml(task.standard_symbol || task.original_symbol || "管理任务")}</h3><p>${escapeHtml(positionManagementTaskLabel(task.task_type))} · ${escapeHtml(positionManagementBarTime(task))} ${bridgePlatformLabel()}</p></div><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(status.label)}</span></header>
       <section class="management-detail-section"><header><h4>AI 评估结论</h4><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></header><p>${escapeHtml(evaluation.reason || "本任务由服务端安全规则生成，暂无模型说明。")}</p></section>
       <section class="management-detail-section"><header><h4>证据与安全校验</h4><span class="management-state ${evidence.status === "confirmed" ? "confirmed" : "candidate"}">${evidence.status === "confirmed" ? "证据已确认" : "等待证据"}</span></header><div class="management-detail-grid"><div><span>命中条件</span><strong>${escapeHtml(evaluation.matched_condition_id || evidence.condition_id || "未命中冻结条件")}</strong></div><div><span>校验来源</span><strong>${escapeHtml(evidence.source || "awaiting_evidence_confirmation")}</strong></div><div><span>策略版本</span><strong>v${Number(task.strategy_version || 1)}</strong></div><div><span>运行方式</span><strong>${escapeHtml(positionManagementTaskMode(task))}</strong></div></div>${refs.length ? `<ul>${refs.map(ref => `<li>${escapeHtml(ref)}</li>`).join("")}</ul>` : `<p>暂无可用于真实执行的完整证据链。</p>`}</section>
       <section class="management-detail-section"><header><h4>执行隔离</h4><span>${commands.length} 条命令</span></header><p>${commands.length ? "已有持久化命令记录，请结合状态时间线核对；页面不提供重发入口。" : "未创建 MT5 指令。该任务没有进入自动执行阶段。"}</p></section>
@@ -7802,7 +7805,7 @@ function renderAuditRows() {
     const resultText = auditResultText(row);
     const reasonText = auditReasonText(row);
     return `<tr class="audit-row row-${statusTone}">
-      <td data-label="时间（MT5）">${compactTimeHtml(row?.created_at_mt5 || row?.created_at)}</td>
+      <td data-label="时间（${bridgePlatformLabel()}）">${compactTimeHtml(row?.created_at_mt5 || row?.created_at)}</td>
       <td data-label="动作"><span class="action-badge ${actionType}">${escapeHtml(auditActionText(row))}</span></td>
       <td data-label="品种"><strong class="num">${escapeHtml(row?.symbol || "--")}</strong></td>
       <td data-label="状态"><span class="audit-status ${statusTone}">${escapeHtml(auditStatusText(row))}</span></td>
