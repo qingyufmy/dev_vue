@@ -136,6 +136,35 @@ public sealed class TerminalRuntimeSupervisorTests
         Assert.IsNull(statuses[^1].ErrorCode);
     }
 
+    [TestMethod]
+    public async Task ReportsTheOriginalFailureWithoutLettingDiagnosticsStopRecovery()
+    {
+        var reported = new List<TerminalRuntimeFailure>();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var creations = 0;
+        var supervisor = new TerminalRuntimeSupervisor(
+            Terminal(),
+            () => ++creations == 1
+                ? new FakeRuntime(Terminal(), failCollection:true)
+                : new FakeRuntime(Terminal(), stopWhenStarted:stop),
+            (_, _) => Task.CompletedTask);
+        supervisor.FailureObserved += failure =>
+        {
+            reported.Add(failure);
+            throw new InvalidOperationException("diagnostics failed");
+        };
+
+        await supervisor.RunAsync(stop.Token);
+
+        Assert.HasCount(1, reported);
+        Assert.AreEqual(Terminal().TerminalInstanceId, reported[0].TerminalInstanceId);
+        Assert.AreEqual(1, reported[0].ConsecutiveFailures);
+        Assert.AreEqual("terminal_worker_io_error", reported[0].ErrorCode);
+        Assert.IsInstanceOfType<IOException>(reported[0].Error);
+        Assert.AreEqual("test failure", reported[0].Error.Message);
+        Assert.AreEqual(2, creations, "A diagnostic listener must not stop runtime recovery.");
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "terminal_supervisor_01",

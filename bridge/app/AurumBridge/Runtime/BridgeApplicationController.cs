@@ -130,6 +130,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
 
     public event Action<BridgeApplicationStatus>? StatusChanged;
     public event Action<Exception>? ConnectionFailureObserved;
+    public event Action<TerminalRuntimeFailure>? TerminalFailureObserved;
     public BridgeRuntimePaths Paths => _paths;
     public string? SelectedPlatform
     {
@@ -658,6 +659,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
                         descriptor.TerminalInstanceId));
             }
             supervisor.StatusChanged += HandleTerminalStatus;
+            supervisor.FailureObserved += failure => TerminalFailureObserved?.Invoke(failure);
         }
         if (cycleDegraded)
         {

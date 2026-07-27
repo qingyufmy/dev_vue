@@ -61,4 +61,22 @@ public sealed class BridgeFileLoggerTests
         Assert.IsGreaterThanOrEqualTo(2, files.Length);
         Assert.IsLessThanOrEqualTo(3, files.Length);
     }
+
+    [TestMethod]
+    public void PreservesBoundedInnerExceptionDiagnostics()
+    {
+        var now = new DateTimeOffset(2026, 7, 25, 12, 0, 0, TimeSpan.Zero);
+        using var logger = new BridgeFileLogger(_directory, clock:() => now);
+        var error = new InvalidOperationException(
+            "terminal_worker_failure",
+            new IOException("pipe disconnected"));
+
+        logger.Error("terminal_worker_failure", error);
+
+        var text = File.ReadAllText(Directory.GetFiles(_directory).Single());
+        using var document = JsonDocument.Parse(text);
+        Assert.AreEqual(
+            "InvalidOperationException: terminal_worker_failure --> IOException: pipe disconnected",
+            document.RootElement.GetProperty("message").GetString());
+    }
 }

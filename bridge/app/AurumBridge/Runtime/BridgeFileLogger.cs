@@ -45,7 +45,7 @@ public sealed partial class BridgeFileLogger : IDisposable
     public void Error(string eventName, Exception error)
     {
         ArgumentNullException.ThrowIfNull(error);
-        Write("error", eventName, $"{error.GetType().Name}: {error.Message}");
+        Write("error", eventName, FormatException(error));
     }
 
     public void Dispose()
@@ -65,6 +65,23 @@ public sealed partial class BridgeFileLogger : IDisposable
         var redacted = BearerPattern().Replace(value, "Bearer [REDACTED]");
         return SecretPattern().Replace(redacted, match =>
             $"{match.Groups[1].Value}{match.Groups[2].Value}[REDACTED]");
+    }
+
+    internal static string FormatException(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        var parts = new List<string>(4);
+        Exception? current = error;
+        while (current is not null && parts.Count < 4)
+        {
+            parts.Add($"{current.GetType().Name}: {current.Message}");
+            current = current.InnerException;
+        }
+        if (current is not null)
+        {
+            parts.Add("inner_exception_chain_truncated");
+        }
+        return string.Join(" --> ", parts);
     }
 
     private void Write(string level, string eventName, string? message)

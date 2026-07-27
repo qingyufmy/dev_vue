@@ -114,6 +114,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _controller.StatusChanged += HandlePrimaryStatusChanged;
         _controller.ConnectionFailureObserved += error =>
             LogConnectionFailure("bridge_connection_failure", "primary", error);
+        _controller.TerminalFailureObserved += failure =>
+            LogTerminalFailure("primary", failure);
         _singleInstance.ActivationRequested += HandleActivationRequested;
         _singleInstance.ShutdownRequested += HandleShutdownRequested;
         _singleInstance.StartActivationListener();
@@ -650,6 +652,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 "observer_connection_failure",
                 $"observer:{profileId}",
                 error);
+            controller.TerminalFailureObserved += failure =>
+                LogTerminalFailure($"observer:{profileId}", failure);
             lock (_observerRuntimeSync)
             {
                 _observerRuntimes[profileId] = runtime;
@@ -733,6 +737,28 @@ public sealed class BridgeApplicationContext : ApplicationContext
             return;
         }
         _logger.Error(eventName, error);
+    }
+
+    private void LogTerminalFailure(string scope, TerminalRuntimeFailure failure)
+    {
+        var failureScope = $"{scope}:terminal:{failure.TerminalInstanceId}";
+        var decision = _failureLogThrottle.Observe(failureScope, failure.Error);
+        if (!decision.ShouldLog)
+        {
+            return;
+        }
+        if (decision.SuppressedCount > 0)
+        {
+            _logger.Warning(
+                "terminal_worker_failure_repeated",
+                $"scope={failureScope}; code={failure.ErrorCode}; failures={failure.ConsecutiveFailures}; suppressed={decision.SuppressedCount}");
+            return;
+        }
+        _logger.Error(
+            "terminal_worker_failure",
+            new InvalidOperationException(
+                $"scope={failureScope}; code={failure.ErrorCode}; failures={failure.ConsecutiveFailures}",
+                failure.Error));
     }
 
     private async Task RefreshObserverProfileViewsAsync(CancellationToken cancellationToken)

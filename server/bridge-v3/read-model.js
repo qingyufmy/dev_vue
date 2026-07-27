@@ -17,6 +17,7 @@ function normalizeTerminalRow(row) {
     ...row,
     user_id:Number(row.user_id),
     connection_epoch:Number(row.connection_epoch),
+    connected:Number(row.connected),
   }
 }
 
@@ -180,11 +181,14 @@ export async function registerBridgeTerminalSession({
     )
     const existing = normalizeTerminalRow(rows?.[0])
     if (existing) {
-      const immutableMatch = existing.user_id === normalized.userId
-        && String(existing.platform) === normalized.platform
+      const routeMatch = String(existing.platform) === normalized.platform
         && String(existing.broker_server).toLowerCase() === normalized.brokerServer.toLowerCase()
         && String(existing.login_account) === normalized.login
-      if (!immutableMatch) throw readModelError('bridge_terminal_binding_mismatch')
+      if (!routeMatch) throw readModelError('bridge_terminal_binding_mismatch')
+      if (existing.user_id !== normalized.userId
+        && (existing.connected || normalized.connectionEpoch <= existing.connection_epoch)) {
+        throw readModelError('bridge_terminal_binding_mismatch')
+      }
       if (normalized.connectionEpoch < existing.connection_epoch) throw readModelError('bridge_connection_epoch_stale')
     }
 
@@ -192,14 +196,17 @@ export async function registerBridgeTerminalSession({
       (terminal_instance_id, user_id, platform, broker_server, login_account, connection_epoch,
        session_id, client_version, connected, last_seen_at_utc_msc)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-      ON DUPLICATE KEY UPDATE connection_epoch = VALUES(connection_epoch), session_id = VALUES(session_id),
+      ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), connection_epoch = VALUES(connection_epoch),
+        session_id = VALUES(session_id),
         client_version = VALUES(client_version), connected = 1,
         last_seen_at_utc_msc = VALUES(last_seen_at_utc_msc)`, [
       normalized.terminalInstanceId, normalized.userId, normalized.platform, normalized.brokerServer,
       normalized.login, normalized.connectionEpoch, normalized.sessionId, normalized.clientVersion, nowUtcMsc,
     ])
     return { ...normalized, connected:true, lastSeenAtUtcMsc:nowUtcMsc,
-      resumed:Boolean(existing && normalized.connectionEpoch === existing.connection_epoch) }
+      resumed:Boolean(existing && existing.user_id === normalized.userId
+        && normalized.connectionEpoch === existing.connection_epoch),
+      rebound:Boolean(existing && existing.user_id !== normalized.userId) }
   })
 }
 

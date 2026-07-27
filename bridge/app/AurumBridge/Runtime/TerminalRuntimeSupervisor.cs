@@ -16,6 +16,12 @@ public sealed record TerminalRuntimeStatus(
     int ConsecutiveFailures,
     string? ErrorCode);
 
+public sealed record TerminalRuntimeFailure(
+    string TerminalInstanceId,
+    int ConsecutiveFailures,
+    string ErrorCode,
+    Exception Error);
+
 public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
 {
     private const int DefaultMaximumConsecutiveFailures = 8;
@@ -59,6 +65,7 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
     public TerminalDescriptor Terminal => _terminal;
     public bool IsRunning => Volatile.Read(ref _current) is not null;
     public event Action<TerminalRuntimeStatus>? StatusChanged;
+    public event Action<TerminalRuntimeFailure>? FailureObserved;
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
@@ -108,6 +115,18 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
                 {
                     failures = Math.Min(failures + 1, _maximumConsecutiveFailures);
                     var errorCode = NormalizeError(error);
+                    try
+                    {
+                        FailureObserved?.Invoke(new(
+                            _terminal.TerminalInstanceId,
+                            failures,
+                            errorCode,
+                            error));
+                    }
+                    catch
+                    {
+                        // Diagnostics must never interrupt terminal recovery.
+                    }
                     Publish(TerminalRuntimeState.Restarting, failures, errorCode);
                 }
                 finally
