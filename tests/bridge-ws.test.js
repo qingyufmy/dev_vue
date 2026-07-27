@@ -96,6 +96,7 @@ import {
   normalizeBridgePage,
   normalizeBridgePageSize,
   wsMessageByteLength,
+  buildBrowserCommandResult,
 } from '../server/bridge-ws.js'
 import { queryOne } from '../server/db.js'
 
@@ -106,6 +107,14 @@ describe('bridge-ws.js — exported API shape', () => {
 
   it('sendBridgeCommand is exported as function', () => {
     expect(typeof sendBridgeCommand).toBe('function')
+  })
+
+  it('preserves the browser correlation id when bridge results contain their own command id', () => {
+    expect(buildBrowserCommandResult('ws_42', {
+      type:'command_result',
+      command_id:'command_v3',
+      status:'rejected',
+    })).toEqual({ type:'result', command_id:'ws_42', status:'rejected' })
   })
 
   it('isBridgeAlive is exported as function', () => {

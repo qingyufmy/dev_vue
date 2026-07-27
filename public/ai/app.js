@@ -276,6 +276,9 @@ const REASON_MAP = {
   mt5_terminal_autotrading_disabled: "MT5 终端自动交易关闭",
   mt5_account_trade_disabled: "MT5 账户禁止交易",
   mt5_account_expert_trading_disabled: "MT5 账户禁止 EA/脚本交易",
+  mt4_trade_not_allowed: "MT4 自动交易或 EA 实时交易权限未开启",
+  mt4_error_4109: "MT4 EA 未允许实时自动交易，请检查 EA 属性设置",
+  mt4_error_4112: "MT4 交易服务器已禁止该账户使用 EA 自动交易，请联系经纪商或更换允许 EA 交易的账户",
   hold_signal_cannot_execute: "已跳过（观望信号）",
   signal_expired: "已跳过（信号已过期）",
   signal_already_executed_or_pending: "该信号已经执行或已有挂单，不能重复执行",
@@ -6803,9 +6806,10 @@ async function submitManualOrder() {
   const submit = $("orderConfirmSubmit");
   if (submit) submit.disabled = true;
   try {
-    const result = await wsApi("open", order.payload);
+    const result = await wsApi("open", order.payload, 30000);
     closeManualOrderModal();
-    toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
+    const resultMessage = localizeReason(result.error) || localizeReason(result.message);
+    toast(resultMessage || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadStatus(), loadPendingOrders()]);
   } catch (error) {
     toast(error.message, "error");
@@ -6827,8 +6831,9 @@ async function closePosition(ticket) {
       ticket: String(ticket),
       confirm: true,
       expected_state: managementExpectedState(position, ticket, "position"),
-    });
-    toast(result.message || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
+    }, 30000);
+    const resultMessage = localizeReason(result.error) || localizeReason(result.message);
+    toast(resultMessage || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadStatus()]);
   } catch (error) {
     toast(error.message, "error");

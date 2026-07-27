@@ -26,7 +26,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('const LIVE_QUOTE_REFRESH_INTERVAL_MS = 1000')
     expect(app).toContain('void refreshLiveQuote();')
     expect(app).toContain('}, LIVE_QUOTE_REFRESH_INTERVAL_MS)')
-    expect(html).toContain('/ai/app.js?v=20260727platformobserver1')
+    expect(html).toContain('/ai/app.js?v=20260727manualorder1')
   })
 
   it('uses the connected bridge platform in status and terminal-time labels', () => {
@@ -1006,6 +1006,10 @@ describe('route permissions and credential redaction', () => {
     expect(manualOpen).toContain('executeManualOrderCore')
     expect(manualOpen).not.toContain('executeOrderCore')
     expect(routes).toContain('executeOrderCore, executeManualOrderCore')
+    expect(bridgeWs).toContain("return { ...data, type:'result', command_id:commandId }")
+    expect(app).toContain('await wsApi("open", order.payload, 30000)')
+    expect(app).toContain('mt4_error_4112: "MT4 交易服务器已禁止该账户使用 EA 自动交易')
+    expect(app).toContain('localizeReason(result.error) || localizeReason(result.message)')
     expect(bridgeWs).toContain('activeSubscriptions.length === 0')
     expect(app).toContain('Number(subscription?.execution_enabled) === 1')
     expect(app).not.toContain('volume > 0.05')

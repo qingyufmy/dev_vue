@@ -1518,11 +1518,17 @@ function sendToBrowsers(userId, data) {
 }
 
 // Handle browser commands — route to bridge
+export function buildBrowserCommandResult(commandId, data = {}) {
+  return { ...data, type:'result', command_id:commandId }
+}
+
 async function handleBrowserCommand(ws, userId, msg) {
   const { command_id, action, params = {} } = msg
   const reply = (data) => {
     if (ws.readyState === 1) {
-      try { ws.send(JSON.stringify({ type: 'result', command_id, ...data })) } catch {}
+      try { ws.send(JSON.stringify(buildBrowserCommandResult(command_id, data))) } catch (error) {
+        console.error(`[BridgeWS] browser command reply failed command=${command_id}:`, error.message)
+      }
     }
   }
 
