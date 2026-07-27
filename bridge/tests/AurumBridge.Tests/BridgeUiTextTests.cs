@@ -188,6 +188,17 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
+    public void ObserverSourceMenuShowsStateWithoutSuggestingAnotherWindow()
+    {
+        var label = BridgeMainForm.DescribeObserverProfileMenuItem(
+            new("source-1", "运行中"));
+
+        StringAssert.Contains(label, "source-1");
+        StringAssert.Contains(label, "运行中");
+        Assert.IsFalse(label.Contains("打开", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void FirstAuthorizationCopyExplainsTheManualOneTimeBrowserLogin()
     {
         var text = BridgeUiText.ForStatus(new(

@@ -10,10 +10,16 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
         var (profileId, runtimeArgs) = ReadProfileArgument(args);
-        var healthMode = runtimeArgs.Contains("--health-check", StringComparer.Ordinal);
+        var (backgroundMode, foregroundArgs) =
+            BridgeRuntimeProfile.ReadBackgroundArgument(runtimeArgs);
+        if (backgroundMode && BridgeRuntimeProfile.IsDefault(profileId))
+        {
+            throw new ArgumentException("bridge_arguments_invalid", nameof(args));
+        }
+        var healthMode = foregroundArgs.Contains("--health-check", StringComparer.Ordinal);
         try
         {
-            if (TryReadHealthArguments(runtimeArgs, out var healthFile))
+            if (TryReadHealthArguments(foregroundArgs, out var healthFile))
             {
                 var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
                 var versionDirectory = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(
@@ -24,18 +30,27 @@ internal static class Program
                 await BridgeHealthCheck.RunAsync(paths, healthFile, Path.Combine(installRoot, "health"));
                 return;
             }
-            var startupReadyFile = ReadStartupReadyFile(runtimeArgs);
+            var startupReadyFile = ReadStartupReadyFile(foregroundArgs);
             var instanceId = BridgeRuntimeProfile.InstanceId(profileId);
             using var singleInstance = BridgeSingleInstanceGuard.TryAcquire(instanceId);
             if (singleInstance is null)
             {
                 return;
             }
-            Application.Run(new BridgeApplicationContext(singleInstance, startupReadyFile, profileId));
+            Application.Run(new BridgeApplicationContext(
+                singleInstance,
+                startupReadyFile,
+                profileId,
+                backgroundMode));
         }
         catch (Exception error)
         {
             if (healthMode)
+            {
+                Environment.ExitCode = 1;
+                return;
+            }
+            if (backgroundMode)
             {
                 Environment.ExitCode = 1;
                 return;

@@ -27,10 +27,7 @@ public sealed class BridgeSingleInstanceGuard : IDisposable
         string? lockDirectory = null)
     {
         ValidateInstanceId(instanceId);
-        var directory = Path.GetFullPath(lockDirectory ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AURUMBridge",
-            "locks"));
+        var directory = ResolveLockDirectory(lockDirectory);
         Directory.CreateDirectory(directory);
         var activationEvent = new EventWaitHandle(
             initialState:false,
@@ -75,6 +72,50 @@ public sealed class BridgeSingleInstanceGuard : IDisposable
             EventResetMode.AutoReset,
             $"Local\\{instanceId}.shutdown");
         shutdownEvent.Set();
+    }
+
+    public static bool IsRunning(string instanceId, string? lockDirectory = null)
+    {
+        ValidateInstanceId(instanceId);
+        var directory = ResolveLockDirectory(lockDirectory);
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var stream = new FileStream(
+                Path.Combine(directory, $"{instanceId}.lock"),
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize:1,
+                FileOptions.WriteThrough);
+            return false;
+        }
+        catch (IOException error) when ((error.HResult & 0xFFFF) is 32 or 33)
+        {
+            return true;
+        }
+    }
+
+    public static async Task<bool> WaitForReleaseAsync(
+        string instanceId,
+        TimeSpan timeout,
+        string? lockDirectory = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        }
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (IsRunning(instanceId, lockDirectory))
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                return false;
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+        return true;
     }
 
     public void StartActivationListener()
@@ -134,4 +175,10 @@ public sealed class BridgeSingleInstanceGuard : IDisposable
             throw new ArgumentException("bridge_instance_id_invalid", nameof(instanceId));
         }
     }
+
+    private static string ResolveLockDirectory(string? lockDirectory) =>
+        Path.GetFullPath(lockDirectory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AURUMBridge",
+            "locks"));
 }

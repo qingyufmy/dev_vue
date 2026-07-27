@@ -50,4 +50,31 @@ public sealed class BridgeRuntimeProfileTests
             BridgeRuntimeProfile.CreateObserverProfile(_directory, "../outside"));
         Assert.IsFalse(Directory.Exists(Path.Combine(_directory, "outside")));
     }
+
+    [TestMethod]
+    public void ObserverProfilesLaunchAsBackgroundWorkers()
+    {
+        var info = BridgeRuntimeProfile.BuildLaunchInfo("source-1");
+
+        CollectionAssert.AreEqual(
+            new[] { "--profile", "source-1", "--background" },
+            info.ArgumentList.TakeLast(3).ToArray());
+    }
+
+    [TestMethod]
+    public void BackgroundArgumentIsRemovedBeforeOtherRuntimeArgumentsAreParsed()
+    {
+        var parsed = BridgeRuntimeProfile.ReadBackgroundArgument([
+            "--ready-file",
+            @"C:\temp\ready.json",
+            "--background",
+        ]);
+
+        Assert.IsTrue(parsed.BackgroundMode);
+        CollectionAssert.AreEqual(
+            new[] { "--ready-file", @"C:\temp\ready.json" },
+            parsed.RuntimeArgs);
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            BridgeRuntimeProfile.ReadBackgroundArgument(["--background", "--background"]));
+    }
 }

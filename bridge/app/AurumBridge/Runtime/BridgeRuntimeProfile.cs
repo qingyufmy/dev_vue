@@ -89,6 +89,29 @@ public static class BridgeRuntimeProfile
         }
         info.ArgumentList.Add("--profile");
         info.ArgumentList.Add(validated);
+        info.ArgumentList.Add("--background");
         return info;
+    }
+
+    public static (bool BackgroundMode, string[] RuntimeArgs) ReadBackgroundArgument(
+        IReadOnlyList<string> args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        var runtimeArgs = new List<string>(args.Count);
+        var backgroundMode = false;
+        foreach (var argument in args)
+        {
+            if (argument != "--background")
+            {
+                runtimeArgs.Add(argument);
+                continue;
+            }
+            if (backgroundMode)
+            {
+                throw new ArgumentException("bridge_arguments_invalid", nameof(args));
+            }
+            backgroundMode = true;
+        }
+        return (backgroundMode, runtimeArgs.ToArray());
     }
 }

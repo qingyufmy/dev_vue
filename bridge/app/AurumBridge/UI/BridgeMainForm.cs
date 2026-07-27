@@ -12,6 +12,8 @@ public sealed class BridgeTerminalChangedEventArgs(string terminalInstanceId) : 
     public string TerminalInstanceId { get; } = terminalInstanceId;
 }
 
+public sealed record BridgeObserverProfileMenuItem(string ProfileId, string State);
+
 public sealed class BridgeMainForm : Form
 {
     private readonly Label _statusTitle = new();
@@ -134,27 +136,34 @@ public sealed class BridgeMainForm : Form
     public static bool CanShowMt4ExpertSetup(string? selectedPlatform) =>
         selectedPlatform == BridgePlatform.Mt4;
 
+    public static string DescribeObserverProfileMenuItem(
+        BridgeObserverProfileMenuItem profile) =>
+        $"{profile.ProfileId}  ·  {profile.State}";
+
     public void ShowObserverSourcesMenu(
-        IReadOnlyList<string> profileIds,
-        Action<string> openProfile,
+        IReadOnlyList<BridgeObserverProfileMenuItem> profiles,
+        Action<string> configureProfile,
         Action createProfile)
     {
-        ArgumentNullException.ThrowIfNull(profileIds);
-        ArgumentNullException.ThrowIfNull(openProfile);
+        ArgumentNullException.ThrowIfNull(profiles);
+        ArgumentNullException.ThrowIfNull(configureProfile);
         ArgumentNullException.ThrowIfNull(createProfile);
         _observerSourcesMenu?.Dispose();
         var menu = new ContextMenuStrip();
         _observerSourcesMenu = menu;
-        if (profileIds.Count == 0)
+        if (profiles.Count == 0)
         {
             menu.Items.Add("尚未添加观摩源").Enabled = false;
         }
         else
         {
-            foreach (var profileId in profileIds)
+            foreach (var profile in profiles)
             {
-                var captured = profileId;
-                menu.Items.Add($"打开 {captured}", null, (_, _) => openProfile(captured));
+                var captured = profile.ProfileId;
+                menu.Items.Add(
+                    DescribeObserverProfileMenuItem(profile),
+                    null,
+                    (_, _) => configureProfile(captured));
             }
         }
         menu.Items.Add(new ToolStripSeparator());

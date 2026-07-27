@@ -9,7 +9,9 @@ public sealed class BridgeObserverProfileDialog : Form
     private readonly TextBox _mt5Directory = new();
     private string? _mt5ExecutablePath;
 
-    public BridgeObserverProfileDialog(string? existingProfileId = null)
+    public BridgeObserverProfileDialog(
+        string? existingProfileId = null,
+        string? existingMt5ExecutablePath = null)
     {
         var editingExisting = !string.IsNullOrWhiteSpace(existingProfileId);
         Text = editingExisting ? "设置观摩源 MT5" : "新增观摩源";
@@ -77,6 +79,10 @@ public sealed class BridgeObserverProfileDialog : Form
         pathRow.ColumnStyles.Add(new(SizeType.AutoSize));
         _mt5Directory.Dock = DockStyle.Fill;
         _mt5Directory.PlaceholderText = @"例如 C:\Program Files\Broker MT5";
+        if (!string.IsNullOrWhiteSpace(existingMt5ExecutablePath))
+        {
+            _mt5Directory.Text = Path.GetDirectoryName(existingMt5ExecutablePath) ?? string.Empty;
+        }
         var browse = new Button
         {
             AutoSize = true,

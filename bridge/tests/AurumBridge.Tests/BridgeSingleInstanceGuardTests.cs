@@ -69,4 +69,26 @@ public sealed class BridgeSingleInstanceGuardTests
 
         await requested.Task.WaitAsync(TimeSpan.FromSeconds(2));
     }
+
+    [TestMethod]
+    public async Task BackgroundRestartWaitsUntilTheExistingOwnerReleasesItsLock()
+    {
+        var instanceId = $"AURUMBridge.test.{Guid.NewGuid():N}";
+        var directory = Path.Combine(Path.GetTempPath(), instanceId);
+        _directories.Add(directory);
+        var owner = BridgeSingleInstanceGuard.TryAcquire(instanceId, directory);
+        Assert.IsNotNull(owner);
+        Assert.IsTrue(BridgeSingleInstanceGuard.IsRunning(instanceId, directory));
+
+        var released = BridgeSingleInstanceGuard.WaitForReleaseAsync(
+            instanceId,
+            TimeSpan.FromSeconds(2),
+            directory);
+        await Task.Delay(100);
+        Assert.IsFalse(released.IsCompleted);
+        owner.Dispose();
+
+        Assert.IsTrue(await released);
+        Assert.IsFalse(BridgeSingleInstanceGuard.IsRunning(instanceId, directory));
+    }
 }

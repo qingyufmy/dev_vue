@@ -17,6 +17,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly string? _startupReadyFile;
     private readonly string _profileId;
     private readonly string _rootDataDirectory;
+    private readonly bool _backgroundMode;
     private readonly CancellationTokenSource _stop = new();
     private readonly long _startedTimestamp = Stopwatch.GetTimestamp();
     private Task? _updateTask;
@@ -31,11 +32,17 @@ public sealed class BridgeApplicationContext : ApplicationContext
     public BridgeApplicationContext(
         BridgeSingleInstanceGuard singleInstance,
         string? startupReadyFile = null,
-        string profileId = BridgeRuntimeProfile.DefaultId)
+        string profileId = BridgeRuntimeProfile.DefaultId,
+        bool backgroundMode = false)
     {
         _singleInstance = singleInstance ?? throw new ArgumentNullException(nameof(singleInstance));
         _startupReadyFile = startupReadyFile;
         _profileId = BridgeRuntimeProfile.Validate(profileId);
+        _backgroundMode = backgroundMode;
+        if (_backgroundMode && BridgeRuntimeProfile.IsDefault(_profileId))
+        {
+            throw new ArgumentException("bridge_background_profile_required", nameof(profileId));
+        }
         var rootPaths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
         _rootDataDirectory = rootPaths.DataDirectory;
         var paths = BridgeRuntimePathResolver.Resolve(
@@ -96,16 +103,28 @@ public sealed class BridgeApplicationContext : ApplicationContext
             Icon = BridgeBrandIcon.ApplicationIcon,
             Text = BridgeBrand.ProductName,
             ContextMenuStrip = menu,
-            Visible = true,
+            Visible = !_backgroundMode,
         };
         _notifyIcon.DoubleClick += (_, _) => _form.ShowFromTray();
-        _form.Show();
+        if (_backgroundMode)
+        {
+            _ = _form.Handle;
+        }
+        else
+        {
+            _form.Show();
+        }
         _logger.Info("bridge_started");
         _ = ObserveControllerAsync(_controller.RunAsync(_stop.Token));
         _healthTask = ObserveHealthAsync(_stop.Token);
         if (_updateCoordinator is not null)
         {
             _updateTask = ObserveUpdatesAsync(_updateCoordinator, _stop.Token);
+        }
+        if (BridgeRuntimeProfile.IsDefault(_profileId))
+        {
+            SignalObserverProfilesShutdown();
+            _ = StartConfiguredObserverProfilesAsync(_stop.Token);
         }
     }
 
@@ -140,6 +159,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private void HandleActivationRequested()
     {
+        if (_backgroundMode)
+        {
+            return;
+        }
         TryBeginInvoke(() =>
         {
             if (!_shuttingDown)
@@ -187,7 +210,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         });
     }
 
-    private void HandleObserverSourcesRequested(object? sender, EventArgs eventArgs)
+    private async void HandleObserverSourcesRequested(object? sender, EventArgs eventArgs)
     {
         if (Volatile.Read(ref _canManageObserverSources) != 1)
         {
@@ -196,10 +219,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         try
         {
-            var profiles = BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory);
+            var profiles = await LoadObserverProfileMenuItemsAsync(_stop.Token);
             _form.ShowObserverSourcesMenu(
                 profiles,
-                LaunchObserverProfile,
+                ConfigureObserverProfile,
                 CreateObserverProfile);
         }
         catch (Exception error)
@@ -241,21 +264,21 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 profileDirectory,
                 dialog.Mt5ExecutablePath);
             _logger.Info("observer_profile_created", $"profile={dialog.ProfileId}");
-            LaunchObserverProfile(dialog.ProfileId);
+            await RestartObserverProfileAsync(dialog.ProfileId, _stop.Token);
         }
         catch (Exception error)
         {
             _logger.Error("observer_profile_create_failed", error);
             MessageBox.Show(
                 _form,
-                "观摩源名称无效或无法创建。请使用 1-40 位英文字母、数字、横线或下划线。",
+                "观摩源无法创建或启动。名称请使用 1-40 位英文字母、数字、横线或下划线。",
                 "新增观摩源",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
     }
 
-    private async void LaunchObserverProfile(string profileId)
+    private async void ConfigureObserverProfile(string profileId)
     {
         try
         {
@@ -265,23 +288,23 @@ public sealed class BridgeApplicationContext : ApplicationContext
             var preferences = new BridgeUserPreferencesStore(
                 Path.Combine(profileDirectory, "preferences.json"));
             var current = await preferences.LoadAsync(_stop.Token);
-            if (string.IsNullOrWhiteSpace(current.Mt5TerminalPath))
+            using var dialog = new BridgeObserverProfileDialog(
+                profileId,
+                current.Mt5TerminalPath);
+            if (dialog.ShowDialog(_form) != DialogResult.OK)
             {
-                using var dialog = new BridgeObserverProfileDialog(profileId);
-                if (dialog.ShowDialog(_form) != DialogResult.OK)
-                {
-                    return;
-                }
-                await SaveObserverProfilePreferencesAsync(
-                    profileDirectory,
-                    dialog.Mt5ExecutablePath);
-                _logger.Info(
-                    "observer_profile_mt5_configured",
-                    $"profile={profileId}; terminal_id={Mt5TerminalDiscovery.CreateTerminalInstanceId(dialog.Mt5ExecutablePath)}");
+                return;
             }
-            _ = Process.Start(BridgeRuntimeProfile.BuildLaunchInfo(profileId))
-                ?? throw new InvalidOperationException("observer_profile_start_failed");
-            _logger.Info("observer_profile_started", $"profile={profileId}");
+            await SaveObserverProfilePreferencesAsync(
+                profileDirectory,
+                dialog.Mt5ExecutablePath);
+            _logger.Info(
+                "observer_profile_mt5_configured",
+                $"profile={profileId}; terminal_id={Mt5TerminalDiscovery.CreateTerminalInstanceId(dialog.Mt5ExecutablePath)}");
+            await RestartObserverProfileAsync(profileId, _stop.Token);
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
         }
         catch (Exception error)
         {
@@ -293,6 +316,98 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
+    }
+
+    private async Task<IReadOnlyList<BridgeObserverProfileMenuItem>>
+        LoadObserverProfileMenuItemsAsync(CancellationToken cancellationToken)
+    {
+        var items = new List<BridgeObserverProfileMenuItem>();
+        foreach (var profileId in BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory))
+        {
+            var profileDirectory = BridgeRuntimeProfile.ResolveDataDirectory(
+                _rootDataDirectory,
+                profileId);
+            var preferences = new BridgeUserPreferencesStore(
+                Path.Combine(profileDirectory, "preferences.json"));
+            var current = await preferences.LoadAsync(cancellationToken);
+            var configured = !string.IsNullOrWhiteSpace(current.Mt5TerminalPath)
+                && File.Exists(current.Mt5TerminalPath);
+            var running = configured && BridgeSingleInstanceGuard.IsRunning(
+                BridgeRuntimeProfile.InstanceId(profileId));
+            items.Add(new(
+                profileId,
+                !configured ? "需要设置" : running ? "运行中" : "已停止"));
+        }
+        return items;
+    }
+
+    private async Task StartConfiguredObserverProfilesAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var profiles = BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory);
+            await Task.WhenAll(profiles.Select(profileId =>
+                StartConfiguredObserverProfileAsync(profileId, cancellationToken)));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("observer_profiles_autostart_failed", error);
+        }
+    }
+
+    private async Task StartConfiguredObserverProfileAsync(
+        string profileId,
+        CancellationToken cancellationToken)
+    {
+        var profileDirectory = BridgeRuntimeProfile.ResolveDataDirectory(
+            _rootDataDirectory,
+            profileId);
+        var preferences = new BridgeUserPreferencesStore(
+            Path.Combine(profileDirectory, "preferences.json"));
+        var current = await preferences.LoadAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(current.Mt5TerminalPath)
+            || !File.Exists(current.Mt5TerminalPath))
+        {
+            _logger.Info("observer_profile_autostart_skipped", $"profile={profileId}; reason=not_configured");
+            return;
+        }
+        var released = await BridgeSingleInstanceGuard.WaitForReleaseAsync(
+            BridgeRuntimeProfile.InstanceId(profileId),
+            TimeSpan.FromSeconds(10),
+            cancellationToken:cancellationToken);
+        if (!released)
+        {
+            throw new TimeoutException($"observer_profile_stop_timeout:{profileId}");
+        }
+        StartObserverProfileProcess(profileId);
+    }
+
+    private async Task RestartObserverProfileAsync(
+        string profileId,
+        CancellationToken cancellationToken)
+    {
+        var instanceId = BridgeRuntimeProfile.InstanceId(profileId);
+        BridgeSingleInstanceGuard.RequestShutdown(instanceId);
+        var released = await BridgeSingleInstanceGuard.WaitForReleaseAsync(
+            instanceId,
+            TimeSpan.FromSeconds(10),
+            cancellationToken:cancellationToken);
+        if (!released)
+        {
+            throw new TimeoutException("observer_profile_stop_timeout");
+        }
+        StartObserverProfileProcess(profileId);
+    }
+
+    private void StartObserverProfileProcess(string profileId)
+    {
+        _ = Process.Start(BridgeRuntimeProfile.BuildLaunchInfo(profileId))
+            ?? throw new InvalidOperationException("observer_profile_start_failed");
+        _logger.Info("observer_profile_started", $"profile={profileId}; mode=background");
     }
 
     private async Task SaveObserverProfilePreferencesAsync(
@@ -775,6 +890,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
         catch (Exception error)
         {
             _logger.Error("bridge_runtime_failed", error);
+            if (_backgroundMode)
+            {
+                TryBeginInvoke(() => _ = ShutdownAsync(stopObserverProfiles:false));
+                return;
+            }
             TryBeginInvoke(() =>
             {
                 if (_shuttingDown)
