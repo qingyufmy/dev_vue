@@ -1,0 +1,89 @@
+using AurumBridge.Runtime;
+using AurumBridge.Workers;
+
+namespace AurumBridge.Tests;
+
+[TestClass]
+public sealed class BridgeObserverTerminalCatalogTests
+{
+    private string _directory = null!;
+
+    [TestInitialize]
+    public void Initialize()
+    {
+        _directory = Path.Combine(Path.GetTempPath(), $"aurum-observers-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_directory);
+    }
+
+    [TestCleanup]
+    public void Cleanup() => Directory.Delete(_directory, recursive:true);
+
+    [TestMethod]
+    public async Task LoadsConfiguredMt5ProfilesAndIgnoresIncompleteProfiles()
+    {
+        var terminalPath = CreateFile("terminals", "source-a", "terminal64.exe");
+        await SaveProfileAsync("source-a", terminalPath);
+        BridgeRuntimeProfile.CreateObserverProfile(_directory, "incomplete");
+
+        var terminals = await BridgeObserverTerminalCatalog.LoadAsync(_directory);
+
+        Assert.HasCount(1, terminals);
+        Assert.AreEqual("source-a", terminals[0].ProfileId);
+        Assert.AreEqual(BridgePlatform.Mt5, terminals[0].Platform);
+        Assert.AreEqual(Path.GetFullPath(terminalPath), terminals[0].TerminalPath);
+        Assert.AreEqual(
+            Mt5TerminalDiscovery.CreateTerminalInstanceId(terminalPath),
+            terminals[0].TerminalInstanceId);
+    }
+
+    [TestMethod]
+    public async Task ASharedTerminalPathIsNeverLoadedIntoTwoObserverWorkers()
+    {
+        var terminalPath = CreateFile("terminals", "shared", "terminal64.exe");
+        await SaveProfileAsync("source-a", terminalPath);
+        await SaveProfileAsync("source-b", terminalPath);
+
+        var terminals = await BridgeObserverTerminalCatalog.LoadAsync(_directory);
+
+        Assert.HasCount(1, terminals);
+        Assert.AreEqual("source-a", terminals[0].ProfileId);
+    }
+
+    [TestMethod]
+    public void ControllerRejectsDuplicateOrMismatchedObserverRoutes()
+    {
+        var terminalPath = Path.Combine(_directory, "terminal64.exe");
+        var terminalId = Mt5TerminalDiscovery.CreateTerminalInstanceId(terminalPath);
+        var first = new BridgeObserverTerminalConfiguration(
+            "source-a", BridgePlatform.Mt5, terminalId, terminalPath);
+        var duplicate = first with { ProfileId = "source-b" };
+        var mismatched = first with
+        {
+            TerminalInstanceId = "mt5_0123456789abcdef01234567",
+        };
+
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            BridgeApplicationController.NormalizeObserverTerminals([first, duplicate]));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            BridgeApplicationController.NormalizeObserverTerminals([mismatched]));
+    }
+
+    private async Task SaveProfileAsync(string profileId, string terminalPath)
+    {
+        var profileDirectory = BridgeRuntimeProfile.CreateObserverProfile(_directory, profileId);
+        var preferences = new BridgeUserPreferencesStore(
+            Path.Combine(profileDirectory, "preferences.json"));
+        await preferences.SavePlatformAsync(BridgePlatform.Mt5);
+        await preferences.SaveMt5TerminalAsync(
+            Mt5TerminalDiscovery.CreateTerminalInstanceId(terminalPath));
+        await preferences.SaveMt5TerminalPathAsync(terminalPath);
+    }
+
+    private string CreateFile(params string[] parts)
+    {
+        var path = Path.Combine([_directory, .. parts]);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, []);
+        return path;
+    }
+}

@@ -66,6 +66,57 @@ public sealed class BridgeTerminalSelectionTests
     }
 
     [TestMethod]
+    public void ObserverMt5InstallationsAreExcludedFromPrimarySelectionButKeptInTheHost()
+    {
+        var primary = new Mt5Installation(
+            Path.Combine(Path.GetTempPath(), "primary", "terminal64.exe"),
+            "registry",
+            IsRunning:true);
+        var observer = new Mt5Installation(
+            Path.Combine(Path.GetTempPath(), "observer", "terminal64.exe"),
+            "observer_profile:source-1",
+            IsRunning:false);
+        var observerIds = new HashSet<string>(StringComparer.Ordinal)
+        {
+            observer.TerminalInstanceId,
+        };
+
+        var primaryChoices = BridgeApplicationController.ResolvePrimaryMt5Installations(
+            [primary, observer],
+            configuredTerminalPath:null,
+            observerIds,
+            selectedTerminalId:null);
+        var hostInstallations = BridgeApplicationController.MergeMt5Installations(
+            primaryChoices,
+            [observer, observer]);
+
+        CollectionAssert.AreEqual(
+            new[] { primary.TerminalInstanceId },
+            primaryChoices.Select(value => value.TerminalInstanceId).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { primary.TerminalInstanceId, observer.TerminalInstanceId },
+            hostInstallations.Select(value => value.TerminalInstanceId).ToArray());
+    }
+
+    [TestMethod]
+    public void ExplicitlySelectedObserverTerminalCanAlsoServeAsThePrimaryAccount()
+    {
+        var observer = new Mt5Installation(
+            Path.Combine(Path.GetTempPath(), "shared", "terminal64.exe"),
+            "observer_profile:source-1",
+            IsRunning:false);
+
+        var primaryChoices = BridgeApplicationController.ResolvePrimaryMt5Installations(
+            [observer],
+            configuredTerminalPath:null,
+            new HashSet<string>(StringComparer.Ordinal) { observer.TerminalInstanceId },
+            observer.TerminalInstanceId);
+
+        Assert.HasCount(1, primaryChoices);
+        Assert.AreEqual(observer.TerminalInstanceId, primaryChoices[0].TerminalInstanceId);
+    }
+
+    [TestMethod]
     public void Mt4ExpertRepairUsesTheOnlyInstallationOrTheExplicitSelection()
     {
         var first = new Mt4Installation(

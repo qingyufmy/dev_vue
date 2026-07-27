@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using AurumBridge.Runtime;
 using AurumBridge.Update;
@@ -18,6 +19,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly string _profileId;
     private readonly string _rootDataDirectory;
     private readonly bool _backgroundMode;
+    private readonly ConcurrentDictionary<string, BridgeTerminalStatus>
+        _observerTerminalStatuses = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _stop = new();
     private readonly long _startedTimestamp = Stopwatch.GetTimestamp();
     private Task? _updateTask;
@@ -54,6 +57,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         string? selectedMt5TerminalId = null;
         string? selectedMt5TerminalPath = null;
         string? selectedMt4TerminalId = null;
+        IReadOnlyList<BridgeObserverTerminalConfiguration> observerTerminals = [];
         try
         {
             var preferences = _preferences.LoadAsync().GetAwaiter().GetResult();
@@ -70,13 +74,27 @@ public sealed class BridgeApplicationContext : ApplicationContext
         {
             EnsureAutoStart();
             _updateCoordinator = CreateUpdateCoordinator(paths.ServerBaseUri);
+            SignalObserverProfilesShutdown();
+            try
+            {
+                observerTerminals = BridgeObserverTerminalCatalog.LoadAsync(
+                    _rootDataDirectory).GetAwaiter().GetResult();
+                _logger.Info(
+                    "observer_terminal_catalog_loaded",
+                    $"count={observerTerminals.Count}; mode=single_host");
+            }
+            catch (Exception error)
+            {
+                _logger.Error("observer_terminal_catalog_load_failed", error);
+            }
         }
         _controller = new(
             paths,
             selectedPlatform,
             selectedMt5TerminalId,
             selectedMt5TerminalPath,
-            selectedMt4TerminalId);
+            selectedMt4TerminalId,
+            observerTerminals);
         _form = new(_profileId);
         _form.PairRequested += HandlePairRequested;
         _form.ObserverSourcesRequested += HandleObserverSourcesRequested;
@@ -115,16 +133,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _form.Show();
         }
         _logger.Info("bridge_started");
-        _ = ObserveControllerAsync(_controller.RunAsync(_stop.Token));
+        _ = ObserveControllerAsync(RunControllerAsync(_stop.Token));
         _healthTask = ObserveHealthAsync(_stop.Token);
         if (_updateCoordinator is not null)
         {
             _updateTask = ObserveUpdatesAsync(_updateCoordinator, _stop.Token);
-        }
-        if (BridgeRuntimeProfile.IsDefault(_profileId))
-        {
-            SignalObserverProfilesShutdown();
-            _ = StartConfiguredObserverProfilesAsync(_stop.Token);
         }
     }
 
@@ -139,6 +152,24 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _logger.Error("update_initialization_failed", error);
             return null;
         }
+    }
+
+    private async Task RunControllerAsync(CancellationToken cancellationToken)
+    {
+        if (BridgeRuntimeProfile.IsDefault(_profileId))
+        {
+            var profiles = BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory);
+            var releases = await Task.WhenAll(profiles.Select(profileId =>
+                BridgeSingleInstanceGuard.WaitForReleaseAsync(
+                    BridgeRuntimeProfile.InstanceId(profileId),
+                    TimeSpan.FromSeconds(10),
+                    cancellationToken:cancellationToken)));
+            if (releases.Any(released => !released))
+            {
+                _logger.Info("legacy_observer_profile_stop_timeout");
+            }
+        }
+        await _controller.RunAsync(cancellationToken);
     }
 
     private void EnsureAutoStart()
@@ -188,6 +219,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
         Volatile.Write(
             ref _canManageObserverSources,
             status.CanManageObserverSources ? 1 : 0);
+        _observerTerminalStatuses.Clear();
+        foreach (var terminal in status.Terminals.Where(terminal =>
+            terminal.ObserverProfileId is not null))
+        {
+            _observerTerminalStatuses[terminal.ObserverProfileId!] = terminal;
+        }
         _logger.Info(
             "bridge_status_changed",
             $"phase={status.Phase}; terminals={status.Terminals.Count}; detail={status.DetailCode ?? "none"}");
@@ -264,7 +301,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 profileDirectory,
                 dialog.Mt5ExecutablePath);
             _logger.Info("observer_profile_created", $"profile={dialog.ProfileId}");
-            await RestartObserverProfileAsync(dialog.ProfileId, _stop.Token);
+            await ReloadObserverTerminalsAsync(_stop.Token);
         }
         catch (Exception error)
         {
@@ -301,7 +338,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _logger.Info(
                 "observer_profile_mt5_configured",
                 $"profile={profileId}; terminal_id={Mt5TerminalDiscovery.CreateTerminalInstanceId(dialog.Mt5ExecutablePath)}");
-            await RestartObserverProfileAsync(profileId, _stop.Token);
+            await ReloadObserverTerminalsAsync(_stop.Token);
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
@@ -332,82 +369,31 @@ public sealed class BridgeApplicationContext : ApplicationContext
             var current = await preferences.LoadAsync(cancellationToken);
             var configured = !string.IsNullOrWhiteSpace(current.Mt5TerminalPath)
                 && File.Exists(current.Mt5TerminalPath);
-            var running = configured && BridgeSingleInstanceGuard.IsRunning(
-                BridgeRuntimeProfile.InstanceId(profileId));
+            _observerTerminalStatuses.TryGetValue(profileId, out var terminalStatus);
             items.Add(new(
                 profileId,
-                !configured ? "需要设置" : running ? "运行中" : "已停止"));
+                !configured
+                    ? "需要设置"
+                    : terminalStatus?.RuntimeState == TerminalRuntimeState.Running
+                        ? "运行中"
+                        : terminalStatus?.RuntimeState is TerminalRuntimeState.Starting
+                            or TerminalRuntimeState.Restarting
+                            ? "连接中"
+                            : "等待连接"));
         }
         return items;
     }
 
-    private async Task StartConfiguredObserverProfilesAsync(
+    private async Task ReloadObserverTerminalsAsync(
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var profiles = BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory);
-            await Task.WhenAll(profiles.Select(profileId =>
-                StartConfiguredObserverProfileAsync(profileId, cancellationToken)));
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception error)
-        {
-            _logger.Error("observer_profiles_autostart_failed", error);
-        }
-    }
-
-    private async Task StartConfiguredObserverProfileAsync(
-        string profileId,
-        CancellationToken cancellationToken)
-    {
-        var profileDirectory = BridgeRuntimeProfile.ResolveDataDirectory(
+        var observerTerminals = await BridgeObserverTerminalCatalog.LoadAsync(
             _rootDataDirectory,
-            profileId);
-        var preferences = new BridgeUserPreferencesStore(
-            Path.Combine(profileDirectory, "preferences.json"));
-        var current = await preferences.LoadAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(current.Mt5TerminalPath)
-            || !File.Exists(current.Mt5TerminalPath))
-        {
-            _logger.Info("observer_profile_autostart_skipped", $"profile={profileId}; reason=not_configured");
-            return;
-        }
-        var released = await BridgeSingleInstanceGuard.WaitForReleaseAsync(
-            BridgeRuntimeProfile.InstanceId(profileId),
-            TimeSpan.FromSeconds(10),
-            cancellationToken:cancellationToken);
-        if (!released)
-        {
-            throw new TimeoutException($"observer_profile_stop_timeout:{profileId}");
-        }
-        StartObserverProfileProcess(profileId);
-    }
-
-    private async Task RestartObserverProfileAsync(
-        string profileId,
-        CancellationToken cancellationToken)
-    {
-        var instanceId = BridgeRuntimeProfile.InstanceId(profileId);
-        BridgeSingleInstanceGuard.RequestShutdown(instanceId);
-        var released = await BridgeSingleInstanceGuard.WaitForReleaseAsync(
-            instanceId,
-            TimeSpan.FromSeconds(10),
-            cancellationToken:cancellationToken);
-        if (!released)
-        {
-            throw new TimeoutException("observer_profile_stop_timeout");
-        }
-        StartObserverProfileProcess(profileId);
-    }
-
-    private void StartObserverProfileProcess(string profileId)
-    {
-        _ = Process.Start(BridgeRuntimeProfile.BuildLaunchInfo(profileId))
-            ?? throw new InvalidOperationException("observer_profile_start_failed");
-        _logger.Info("observer_profile_started", $"profile={profileId}; mode=background");
+            cancellationToken);
+        _controller.SetObserverTerminals(observerTerminals);
+        _logger.Info(
+            "observer_terminals_reloaded",
+            $"count={observerTerminals.Count}; mode=single_host");
     }
 
     private async Task SaveObserverProfilePreferencesAsync(
