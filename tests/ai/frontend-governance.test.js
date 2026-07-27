@@ -23,7 +23,10 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('observedAt + offsetMinutes * 60_000')
     expect(app).toContain("updateMarketStatusFromQuote(quote)")
     expect(app).toContain("loadStatus(), refreshQuote(), loadKlineData()")
-    expect(html).toContain('/ai/app.js?v=20260727mt4clock')
+    expect(app).toContain('const LIVE_QUOTE_REFRESH_INTERVAL_MS = 1000')
+    expect(app).toContain('void refreshLiveQuote();')
+    expect(app).toContain('}, LIVE_QUOTE_REFRESH_INTERVAL_MS)')
+    expect(html).toContain('/ai/app.js?v=20260727mt4live')
   })
 
   it('uses the connected bridge platform in status and terminal-time labels', () => {
@@ -104,7 +107,7 @@ describe('AI governance navigation and DOM contract', () => {
     const tickStart = app.indexOf('function updateKlineTick')
     const tickEnd = app.indexOf('// Periodic refresh for higher timeframes', tickStart)
     const tickBlock = app.slice(tickStart, tickEnd)
-    expect(tickBlock).toContain('mt5BrokerTimeSeconds(quote?.time)')
+    expect(tickBlock).toContain('mt5BrokerTimeSeconds(formatTerminalQuoteTime(quote))')
     expect(tickBlock).not.toContain('Date.now()')
     expect(app).toContain('updateKlineTick(q.bid, q.ask, q)')
     expect(app).toContain('updateKlineTick(data.bid, data.ask, data)')

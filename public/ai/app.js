@@ -1678,6 +1678,7 @@ function connectBridgeStatusWs(onReady) {
   ws.onclose = (e) => {
     if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }
     if (state.bridgeWs === ws) state.bridgeWs = null;
+    stopLiveQuoteRefreshTimer();
     for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
     _wsPending.clear();
     _fireReady(); // ensure bootstrap() doesn't hang when WS fails to connect
@@ -1973,9 +1974,11 @@ function stopUiTimer() {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     stopUiTimer();
+    stopLiveQuoteRefreshTimer();
     stopKlineRefreshTimers();
   } else {
     startUiTimer();
+    startLiveQuoteRefreshTimer();
     if (activeTabId() === "dashboard") {
       loadKlineData().catch(() => {});
       startKlineRefreshTimer();
@@ -2118,6 +2121,8 @@ function handleHeartbeat(msg) {
 
   state._lastGatewayLive = isLive;
   state._lastUsingFallback = usingFallback;
+  if (isLive) startLiveQuoteRefreshTimer();
+  else stopLiveQuoteRefreshTimer();
 
   // Bridge state changed → update role-based UI
   if (isLive !== wasLive || usingFallback !== wasFallback) {
@@ -2152,6 +2157,7 @@ function handleDisconnect(msg) {
     renderAutoAnalyzeBadge({ enabled: !!state.autoEnabled, paused_reason: state.autoEnabled ? 'user_bridge_offline' : 'disabled' });
   }
   state._lastGatewayLive = false;
+  stopLiveQuoteRefreshTimer();
   if (state.user?.role !== "admin" && state.user?.plan === "pro") {
     state._usingFallback = true;
     setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
@@ -4021,6 +4027,7 @@ async function bootstrap() {
     setTab('dashboard', { skipRefresh:true });
     startPresenceHeartbeat();
     await refreshAll();
+    startLiveQuoteRefreshTimer();
     if (!isObserverMode()) {
       await loadReviewSummary({ announce:false });
       startReviewSummaryPolling();
@@ -4340,6 +4347,44 @@ function updateTradingQuotePreview(quote) {
   validatePendingPrice();
 }
 
+const LIVE_QUOTE_REFRESH_INTERVAL_MS = 1000;
+let _liveQuoteRefreshTimer = null;
+let _liveQuoteRefreshInFlight = false;
+
+function stopLiveQuoteRefreshTimer() {
+  if (_liveQuoteRefreshTimer) {
+    clearInterval(_liveQuoteRefreshTimer);
+    _liveQuoteRefreshTimer = null;
+  }
+}
+
+async function refreshLiveQuote() {
+  if (_liveQuoteRefreshInFlight
+      || document.hidden
+      || state._lastGatewayLive !== true
+      || state.bridgeWs?.readyState !== WebSocket.OPEN) return;
+  _liveQuoteRefreshInFlight = true;
+  try {
+    await refreshQuote();
+  } catch {
+    // A reconnect or terminal switch can invalidate one poll. The next tick
+    // retries without surfacing a repeated toast to the user.
+  } finally {
+    _liveQuoteRefreshInFlight = false;
+  }
+}
+
+function startLiveQuoteRefreshTimer() {
+  stopLiveQuoteRefreshTimer();
+  if (document.hidden
+      || state._lastGatewayLive !== true
+      || state.bridgeWs?.readyState !== WebSocket.OPEN) return;
+  void refreshLiveQuote();
+  _liveQuoteRefreshTimer = setInterval(() => {
+    void refreshLiveQuote();
+  }, LIVE_QUOTE_REFRESH_INTERVAL_MS);
+}
+
 async function refreshQuote() {
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   if (!symbol) return;
@@ -4586,7 +4631,7 @@ function updateKlineTick(bid, ask, quote = {}) {
   // Always anchor the live candle to the broker quote timestamp. During a
   // closed market the last quote is stale; using the browser clock would create
   // synthetic weekend candles that never existed in MT5.
-  const quoteMt5Sec = mt5BrokerTimeSeconds(quote?.time);
+  const quoteMt5Sec = mt5BrokerTimeSeconds(formatTerminalQuoteTime(quote));
   if (!Number.isFinite(quoteMt5Sec)) return;
   const tfSeconds = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400 }[_klineTimeframe] || 300;
   const barTime = Math.floor(quoteMt5Sec / tfSeconds) * tfSeconds;
