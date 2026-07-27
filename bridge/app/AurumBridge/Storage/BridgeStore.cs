@@ -72,6 +72,8 @@ public sealed class BridgeStore : IAsyncDisposable
     private bool _initialized;
     private sealed record LocalRevision(long Revision, string MessageId, string PayloadHash);
 
+    public event Action<string, JsonElement>? AccountSnapshotPersisted;
+
     public BridgeStore(string databasePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
@@ -327,11 +329,36 @@ public sealed class BridgeStore : IAsyncDisposable
             await EnqueueOutboxAsync(
                 connection, transaction, outboxMessage, payloadJson, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            if (message.Stream == "account")
+            {
+                NotifyAccountSnapshotPersisted(
+                    message.TerminalInstanceId,
+                    message.Upserts[0]);
+            }
             return new(PersistDeltaStatus.Applied, message.Revision, message.Revision + 1);
         }
         finally
         {
             _writer.Release();
+        }
+    }
+
+    private void NotifyAccountSnapshotPersisted(
+        string terminalInstanceId,
+        JsonElement account)
+    {
+        foreach (Action<string, JsonElement> handler in
+            AccountSnapshotPersisted?.GetInvocationList()
+                .Cast<Action<string, JsonElement>>() ?? [])
+        {
+            try
+            {
+                handler(terminalInstanceId, account.Clone());
+            }
+            catch
+            {
+                // UI status projection must never invalidate an already committed snapshot.
+            }
         }
     }
 

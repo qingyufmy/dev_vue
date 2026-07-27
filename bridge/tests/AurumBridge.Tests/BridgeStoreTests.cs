@@ -86,6 +86,28 @@ public sealed class BridgeStoreTests
     }
 
     [TestMethod]
+    public async Task PublishesCommittedAccountSnapshotsForLocalStatusProjection()
+    {
+        string? terminalId = null;
+        JsonElement? account = null;
+        _store.AccountSnapshotPersisted += (id, value) =>
+        {
+            terminalId = id;
+            account = value;
+        };
+        var message = Delta("account", 1, 0,
+            [Json("""{"trade_allowed":true,"trade_expert":false}""")]);
+
+        var result = await _store.PersistDataDeltaAsync(message);
+
+        Assert.AreEqual(PersistDeltaStatus.Applied, result.Status);
+        Assert.AreEqual(message.TerminalInstanceId, terminalId);
+        Assert.IsNotNull(account);
+        Assert.IsTrue(account.Value.GetProperty("trade_allowed").GetBoolean());
+        Assert.IsFalse(account.Value.GetProperty("trade_expert").GetBoolean());
+    }
+
+    [TestMethod]
     public async Task RejectsRevisionGapWithoutAddingOutboxWork()
     {
         await _store.PersistDataDeltaAsync(Delta("orders", 1, 0,

@@ -2,6 +2,12 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 describe('Python Bridge history contract', () => {
+  it('publishes the MT5 terminal algorithm-trading switch with account snapshots', () => {
+    const source = readFileSync(new URL('../bridge/adapters/mt5-python/worker.py', import.meta.url), 'utf8')
+    expect(source).toContain('account["terminal_trade_allowed"] = bool(')
+    expect(source).toContain('identity["terminal"].get("trade_allowed", False)')
+  })
+
   it('isolates named Bridge profiles for multi-source operation', () => {
     const source = readFileSync(new URL('../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
     expect(source).toContain('def _resolve_bridge_profile(argv=None):')

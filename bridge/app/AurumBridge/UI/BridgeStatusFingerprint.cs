@@ -56,5 +56,9 @@ public static class BridgeStatusFingerprint
             terminal.Login,
             terminal.RuntimeState,
             terminal.ErrorCode ?? string.Empty,
-            terminal.ObserverProfileId ?? string.Empty)));
+            terminal.ObserverProfileId ?? string.Empty,
+            terminal.TerminalTradingAllowed?.ToString() ?? string.Empty,
+            terminal.ProgramTradingAllowed?.ToString() ?? string.Empty,
+            terminal.AccountTradingAllowed?.ToString() ?? string.Empty,
+            terminal.AccountExpertTradingAllowed?.ToString() ?? string.Empty)));
 }

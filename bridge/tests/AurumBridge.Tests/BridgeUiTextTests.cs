@@ -1,5 +1,6 @@
 using AurumBridge.Runtime;
 using AurumBridge.UI;
+using System.Text.Json;
 
 namespace AurumBridge.Tests;
 
@@ -257,6 +258,67 @@ public sealed class BridgeUiTextTests
         Assert.AreNotEqual(
             BridgeStatusFingerprint.ForAccounts(first, [], []),
             BridgeStatusFingerprint.ForAccounts(stopped, [], []));
+        var permissionChanged = first with
+        {
+            Terminals = [terminal with { TerminalTradingAllowed = false }],
+        };
+        Assert.AreNotEqual(
+            BridgeStatusFingerprint.ForAccounts(first, [], []),
+            BridgeStatusFingerprint.ForAccounts(permissionChanged, [], []));
+    }
+
+    [TestMethod]
+    public void AccountCardsFlowHorizontallyAndCollapseToOneColumnWhenNarrow()
+    {
+        Assert.AreEqual(1, BridgeMainForm.ResolveAccountColumnCount(600));
+        Assert.AreEqual(2, BridgeMainForm.ResolveAccountColumnCount(820));
+        Assert.AreEqual(3, BridgeMainForm.ResolveAccountColumnCount(1_220));
+    }
+
+    [TestMethod]
+    public void TradingPermissionCopyUsesPlatformSpecificSwitchNames()
+    {
+        var mt4 = new BridgeTerminalStatus(
+            "mt4_terminal", BridgePlatform.Mt4, "Broker-Demo", "8950701",
+            TerminalRuntimeState.Running, null)
+        {
+            TerminalTradingAllowed = true,
+            ProgramTradingAllowed = true,
+            AccountTradingAllowed = true,
+            AccountExpertTradingAllowed = false,
+        };
+        var mt5 = mt4 with
+        {
+            Platform = BridgePlatform.Mt5,
+            ProgramTradingAllowed = null,
+            AccountExpertTradingAllowed = true,
+        };
+
+        var mt4Text = BridgeMainForm.DescribeTradingPermissions(mt4);
+        StringAssert.Contains(mt4Text, "MT4 自动交易 已开启");
+        StringAssert.Contains(mt4Text, "EA 实时交易 已开启");
+        StringAssert.Contains(mt4Text, "账户 EA 已关闭");
+        var mt5Text = BridgeMainForm.DescribeTradingPermissions(mt5);
+        StringAssert.Contains(mt5Text, "MT5 算法交易 已开启");
+        Assert.IsFalse(mt5Text.Contains("EA 实时交易", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void AccountSnapshotsProjectIndependentTradingPermissionLayers()
+    {
+        var terminal = new BridgeTerminalStatus(
+            "mt4_terminal", BridgePlatform.Mt4, "Broker-Demo", "8950701",
+            TerminalRuntimeState.Running, null);
+        using var document = JsonDocument.Parse(
+            """{"trade_allowed":true,"trade_expert":false,"terminal_trade_allowed":true,"program_trade_allowed":true}""");
+
+        var projected = BridgeApplicationController.ApplyTradingPermissions(
+            terminal, document.RootElement);
+
+        Assert.IsTrue(projected.TerminalTradingAllowed);
+        Assert.IsTrue(projected.ProgramTradingAllowed);
+        Assert.IsTrue(projected.AccountTradingAllowed);
+        Assert.IsFalse(projected.AccountExpertTradingAllowed);
     }
 
     [TestMethod]

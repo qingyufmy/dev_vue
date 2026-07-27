@@ -2,6 +2,7 @@ using AurumBridge.Security;
 using AurumBridge.Storage;
 using AurumBridge.Workers;
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace AurumBridge.Runtime;
 
@@ -26,7 +27,13 @@ public sealed record BridgeTerminalStatus(
     string Login,
     TerminalRuntimeState RuntimeState,
     string? ErrorCode,
-    string? ObserverProfileId = null);
+    string? ObserverProfileId = null)
+{
+    public bool? TerminalTradingAllowed { get; init; }
+    public bool? ProgramTradingAllowed { get; init; }
+    public bool? AccountTradingAllowed { get; init; }
+    public bool? AccountExpertTradingAllowed { get; init; }
+}
 
 public sealed record BridgeTerminalCandidate(
     string TerminalInstanceId,
@@ -92,6 +99,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         Directory.CreateDirectory(paths.DataDirectory);
         _store = new(Path.Combine(paths.DataDirectory, "bridge.db"));
+        _store.AccountSnapshotPersisted += HandleAccountSnapshotPersisted;
         _httpClient = new HttpClient
         {
             Timeout = TimeSpan.FromSeconds(20),
@@ -351,6 +359,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         {
             await registration.DisposeAsync();
         }
+        _store.AccountSnapshotPersisted -= HandleAccountSnapshotPersisted;
         _httpClient.Dispose();
         await _store.DisposeAsync();
         _stop.Dispose();
@@ -1040,6 +1049,45 @@ public sealed class BridgeApplicationController : IAsyncDisposable
             PublishCurrent();
         }
     }
+
+    private void HandleAccountSnapshotPersisted(
+        string terminalInstanceId,
+        JsonElement account)
+    {
+        lock (_sync)
+        {
+            if (!_terminalStatuses.TryGetValue(terminalInstanceId, out var current))
+            {
+                return;
+            }
+            _terminalStatuses[terminalInstanceId] = ApplyTradingPermissions(current, account);
+        }
+        PublishCurrent();
+    }
+
+    public static BridgeTerminalStatus ApplyTradingPermissions(
+        BridgeTerminalStatus terminal,
+        JsonElement account)
+    {
+        ArgumentNullException.ThrowIfNull(terminal);
+        if (account.ValueKind != JsonValueKind.Object)
+        {
+            return terminal;
+        }
+        return terminal with
+        {
+            TerminalTradingAllowed = ReadOptionalBoolean(account, "terminal_trade_allowed"),
+            ProgramTradingAllowed = ReadOptionalBoolean(account, "program_trade_allowed"),
+            AccountTradingAllowed = ReadOptionalBoolean(account, "trade_allowed"),
+            AccountExpertTradingAllowed = ReadOptionalBoolean(account, "trade_expert"),
+        };
+    }
+
+    private static bool? ReadOptionalBoolean(JsonElement value, string propertyName) =>
+        value.TryGetProperty(propertyName, out var property)
+            && property.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? property.GetBoolean()
+                : null;
 
     private void HandleConnectionStatus(BridgeConnectionStatus status)
     {

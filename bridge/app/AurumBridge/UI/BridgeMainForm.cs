@@ -43,6 +43,8 @@ public sealed class BridgeObserverActionEventArgs(
 
 public sealed class BridgeMainForm : Form
 {
+    private const int AccountCardMinimumWidth = 400;
+    private const int AccountCardGap = 8;
     private readonly Label _statusTitle = new();
     private readonly Label _statusDescription = new();
     private readonly Label _runtimeSummary = new();
@@ -62,6 +64,7 @@ public sealed class BridgeMainForm : Form
     private readonly Label _terminalSelectorLabel = new();
     private readonly TableLayoutPanel _terminalSelectorBar = new();
     private readonly TableLayoutPanel _mt4SetupBar = new();
+    private readonly ToolTip _accountPermissionToolTip = new();
     private readonly bool _isDefaultProfile;
     private IReadOnlyList<BridgeObserverProfileView> _observerProfiles = [];
     private readonly HashSet<string> _busyObserverProfiles = new(StringComparer.Ordinal);
@@ -70,6 +73,7 @@ public sealed class BridgeMainForm : Form
     private string? _pendingPlatform;
     private bool _updatingPlatform;
     private bool _updatingTerminal;
+    private bool _layingOutAccountCards;
     private bool _allowClose;
 
     public BridgeMainForm(string profileId = BridgeRuntimeProfile.DefaultId)
@@ -84,7 +88,7 @@ public sealed class BridgeMainForm : Form
         AccessibleName = $"{BridgeBrand.ProductName}状态窗口";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new(580, 620);
-        ClientSize = new(620, 660);
+        ClientSize = new(620, 700);
         BackColor = Color.FromArgb(248, 250, 252);
         Font = new("Microsoft YaHei UI", 9F);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -441,8 +445,9 @@ public sealed class BridgeMainForm : Form
 
         _terminalList.AutoScroll = true;
         _terminalList.Dock = DockStyle.Fill;
-        _terminalList.FlowDirection = FlowDirection.TopDown;
-        _terminalList.WrapContents = false;
+        _terminalList.FlowDirection = FlowDirection.LeftToRight;
+        _terminalList.WrapContents = true;
+        _terminalList.Resize += (_, _) => LayoutAccountCards();
         card.Controls.Add(statusHeader, 0, 0);
         card.Controls.Add(_statusDescription, 0, 1);
         card.Controls.Add(_runtimeSummary, 0, 2);
@@ -650,6 +655,7 @@ public sealed class BridgeMainForm : Form
             });
         }
         _terminalList.ResumeLayout();
+        LayoutAccountCards();
     }
 
     private Control CreateAccountRow(
@@ -659,10 +665,10 @@ public sealed class BridgeMainForm : Form
     {
         var row = new TableLayoutPanel
         {
-            Width = 468,
-            Height = 70,
+            Width = AccountCardMinimumWidth,
+            Height = terminal is null ? 70 : 106,
             BackColor = Color.FromArgb(248, 250, 252),
-            Margin = new Padding(0, 3, 0, 3),
+            Margin = new Padding(0, 4, AccountCardGap, 4),
             Padding = new Padding(12, 8, 8, 8),
             ColumnCount = 3,
             RowCount = 1,
@@ -684,10 +690,11 @@ public sealed class BridgeMainForm : Form
             Dock = DockStyle.Fill,
             Margin = Padding.Empty,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 3,
         };
-        copy.RowStyles.Add(new(SizeType.Percent, 50));
-        copy.RowStyles.Add(new(SizeType.Percent, 50));
+        copy.RowStyles.Add(new(SizeType.Absolute, 22));
+        copy.RowStyles.Add(new(SizeType.Absolute, 24));
+        copy.RowStyles.Add(new(SizeType.Percent, 100));
         var platform = terminal?.Platform
             ?? observerProfile?.Platform
             ?? "terminal";
@@ -717,12 +724,128 @@ public sealed class BridgeMainForm : Form
             Text = DescribeAccountState(terminal, observerProfile),
             Margin = new Padding(0, 4, 8, 0),
         });
+        var permissionText = DescribeTradingPermissions(terminal);
+        var permissionLabel = new Label
+        {
+            AutoEllipsis = false,
+            Dock = DockStyle.Fill,
+            Font = new(Font.FontFamily, 8.5F),
+            ForeColor = ResolveTradingPermissionColor(terminal),
+            Text = permissionText,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(0, 4, 8, 0),
+            Visible = terminal is not null,
+            AccessibleName = permissionText,
+        };
+        _accountPermissionToolTip.SetToolTip(permissionLabel, permissionText);
+        copy.Controls.Add(permissionLabel);
         row.Controls.Add(copy, 1, 0);
         if (observerProfile is not null)
         {
             row.Controls.Add(CreateObserverActions(observerProfile, terminal), 2, 0);
         }
         return row;
+    }
+
+    private void LayoutAccountCards()
+    {
+        if (_layingOutAccountCards || _terminalList.IsDisposed)
+        {
+            return;
+        }
+        var availableWidth = Math.Max(0,
+            _terminalList.ClientSize.Width - SystemInformation.VerticalScrollBarWidth);
+        if (availableWidth == 0)
+        {
+            return;
+        }
+        var columns = ResolveAccountColumnCount(availableWidth);
+        var cardWidth = Math.Max(
+            240,
+            availableWidth / columns - AccountCardGap);
+        _layingOutAccountCards = true;
+        _terminalList.SuspendLayout();
+        try
+        {
+            foreach (Control control in _terminalList.Controls)
+            {
+                control.Width = cardWidth;
+            }
+        }
+        finally
+        {
+            _terminalList.ResumeLayout();
+            _layingOutAccountCards = false;
+        }
+    }
+
+    public static int ResolveAccountColumnCount(int availableWidth)
+    {
+        if (availableWidth <= 0)
+        {
+            return 1;
+        }
+        return Math.Max(1, (availableWidth + AccountCardGap)
+            / (AccountCardMinimumWidth + AccountCardGap));
+    }
+
+    public static string DescribeTradingPermissions(BridgeTerminalStatus? terminal)
+    {
+        if (terminal is null)
+        {
+            return "交易权限：检测中";
+        }
+        var accountTrading = terminal.AccountTradingAllowed == false
+            ? " · 账户交易 已关闭"
+            : string.Empty;
+        if (terminal.Platform == BridgePlatform.Mt4)
+        {
+            return "交易权限："
+                + $"MT4 自动交易 {DescribePermission(terminal.TerminalTradingAllowed)}"
+                + $" · EA 实时交易 {DescribePermission(terminal.ProgramTradingAllowed)}\n"
+                + $"账户 EA {DescribePermission(terminal.AccountExpertTradingAllowed)}"
+                + accountTrading;
+        }
+        return "交易权限："
+            + $"MT5 算法交易 {DescribePermission(terminal.TerminalTradingAllowed)}"
+            + $" · 账户 EA {DescribePermission(terminal.AccountExpertTradingAllowed)}"
+            + accountTrading;
+    }
+
+    private static string DescribePermission(bool? allowed) => allowed switch
+    {
+        true => "已开启",
+        false => "已关闭",
+        _ => "检测中",
+    };
+
+    private static Color ResolveTradingPermissionColor(BridgeTerminalStatus? terminal)
+    {
+        if (terminal is null)
+        {
+            return Color.FromArgb(100, 116, 139);
+        }
+        var values = terminal.Platform == BridgePlatform.Mt4
+            ? new[]
+            {
+                terminal.TerminalTradingAllowed,
+                terminal.ProgramTradingAllowed,
+                terminal.AccountTradingAllowed,
+                terminal.AccountExpertTradingAllowed,
+            }
+            : new[]
+            {
+                terminal.TerminalTradingAllowed,
+                terminal.AccountTradingAllowed,
+                terminal.AccountExpertTradingAllowed,
+            };
+        if (values.Any(value => value == false))
+        {
+            return Color.FromArgb(185, 28, 28);
+        }
+        return values.All(value => value == true)
+            ? Color.FromArgb(4, 120, 87)
+            : Color.FromArgb(161, 98, 7);
     }
 
     private Control CreateObserverActions(

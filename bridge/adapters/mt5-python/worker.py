@@ -258,7 +258,10 @@ class Mt5Adapter:
         identity = self._ensure_identity()
         result: dict[str, Any] = {}
         if "account" in streams:
-            result["account"] = identity["account"]
+            account = dict(identity["account"])
+            account["terminal_trade_allowed"] = bool(
+                identity["terminal"].get("trade_allowed", False))
+            result["account"] = account
         if "positions" in streams:
             positions = self.mt5.positions_get()
             if positions is None:
