@@ -219,6 +219,42 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
+    public void StatusFingerprintsIgnoreSynchronizationTicksButTrackVisibleAccountChanges()
+    {
+        var terminal = new BridgeTerminalStatus(
+            "mt5_0123456789abcdef01234567",
+            BridgePlatform.Mt5,
+            "Broker-Demo",
+            "12345678",
+            TerminalRuntimeState.Running,
+            null);
+        var first = new BridgeApplicationStatus(
+            BridgeApplicationPhase.Online, [terminal], null)
+        {
+            ServerConnected = true,
+            LastDataSyncUtcMsc = 1_000,
+        };
+        var laterSync = first with { LastDataSyncUtcMsc = 2_000 };
+        var stopped = first with
+        {
+            Terminals = [terminal with { RuntimeState = TerminalRuntimeState.Stopped }],
+        };
+
+        Assert.AreEqual(
+            BridgeStatusFingerprint.ForLog(first),
+            BridgeStatusFingerprint.ForLog(laterSync));
+        Assert.AreEqual(
+            BridgeStatusFingerprint.ForAccounts(first, [], []),
+            BridgeStatusFingerprint.ForAccounts(laterSync, [], []));
+        Assert.AreNotEqual(
+            BridgeStatusFingerprint.ForLog(first),
+            BridgeStatusFingerprint.ForLog(stopped));
+        Assert.AreNotEqual(
+            BridgeStatusFingerprint.ForAccounts(first, [], []),
+            BridgeStatusFingerprint.ForAccounts(stopped, [], []));
+    }
+
+    [TestMethod]
     public void FirstAuthorizationCopyExplainsTheManualOneTimeBrowserLogin()
     {
         var text = BridgeUiText.ForStatus(new(

@@ -27,6 +27,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private int _latestPhase = (int)BridgeApplicationPhase.Starting;
     private int _latestTerminalCount;
     private int _canManageObserverSources;
+    private string? _lastLoggedStatusFingerprint;
     private bool _shuttingDown;
 
     public BridgeApplicationContext(
@@ -226,9 +227,17 @@ public sealed class BridgeApplicationContext : ApplicationContext
         Volatile.Write(
             ref _canManageObserverSources,
             status.CanManageObserverSources ? 1 : 0);
-        _logger.Info(
-            "bridge_status_changed",
-            $"phase={status.Phase}; terminals={status.Terminals.Count}; detail={status.DetailCode ?? "none"}");
+        var statusFingerprint = BridgeStatusFingerprint.ForLog(status);
+        if (Interlocked.Exchange(
+            ref _lastLoggedStatusFingerprint,
+            statusFingerprint) != statusFingerprint)
+        {
+            var terminalStates = string.Join(",", status.Terminals.Select(terminal =>
+                $"{terminal.ObserverProfileId ?? "main"}:{terminal.RuntimeState}"));
+            _logger.Info(
+                "bridge_status_changed",
+                $"phase={status.Phase}; terminals={status.Terminals.Count}; states={terminalStates}; detail={status.DetailCode ?? "none"}");
+        }
         if (status.Phase == BridgeApplicationPhase.Online
             && _startupReadyFile is not null
             && Interlocked.Exchange(ref _startupReadyWritten, 1) == 0)

@@ -58,6 +58,7 @@ public sealed class BridgeMainForm : Form
     private IReadOnlyList<BridgeObserverProfileView> _observerProfiles = [];
     private readonly HashSet<string> _busyObserverProfiles = new(StringComparer.Ordinal);
     private BridgeApplicationStatus? _lastStatus;
+    private string? _lastAccountRenderFingerprint;
     private bool _updatingPlatform;
     private bool _updatingTerminal;
     private bool _allowClose;
@@ -526,6 +527,15 @@ public sealed class BridgeMainForm : Form
         {
             return;
         }
+        var fingerprint = BridgeStatusFingerprint.ForAccounts(
+            _lastStatus,
+            _observerProfiles,
+            _busyObserverProfiles);
+        if (_lastAccountRenderFingerprint == fingerprint)
+        {
+            return;
+        }
+        _lastAccountRenderFingerprint = fingerprint;
         _terminalList.SuspendLayout();
         _terminalList.Controls.Clear();
         var mainTerminals = _lastStatus.Terminals
