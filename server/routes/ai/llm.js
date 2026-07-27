@@ -340,6 +340,28 @@ async function emitProviderTelemetry(callback, payload) {
   }
 }
 
+function formatByteSize(bytes) {
+  const value = Math.max(0, Number(bytes) || 0)
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(2)} KiB`
+  return `${(value / (1024 * 1024)).toFixed(2)} MiB`
+}
+
+function logAutomaticModelRequest({ usageContext, phase, body, requestBytes }) {
+  const usage = String(usageContext?.usage || '')
+  if (usage !== 'auto_platform' && usage !== 'auto_private') return
+
+  const userId = Number(usageContext?.userId || 0) || '-'
+  const strategyId = Number(usageContext?.strategyId || 0) || '-'
+  const model = String(body?.model || 'unknown').replace(/\s+/g, '_')
+  const messageCount = Array.isArray(body?.messages) ? body.messages.length : 0
+  console.log(
+    `[AI Auto] Model request usage=${usage} phase=${phase || 'request'} user=${userId} `
+    + `strategy=${strategyId} model=${model} messages=${messageCount} `
+    + `request_bytes=${requestBytes} request_size=${formatByteSize(requestBytes)}`,
+  )
+}
+
 async function trackedModelRequest({
   url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider, signal,
   onProviderRequest, onProviderUsage,
@@ -370,6 +392,7 @@ async function trackedModelRequest({
     signal?.throwIfAborted()
     await emitProviderTelemetry(onProviderRequest, { phase })
     providerRequestStarted = true
+    logAutomaticModelRequest({ usageContext, phase, body, requestBytes })
     const response = await fetch(url, {
       method: 'POST',
       headers,

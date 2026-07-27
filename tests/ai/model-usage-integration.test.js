@@ -31,6 +31,43 @@ beforeEach(() => {
 })
 
 describe('provider-call usage integration', () => {
+  it('logs the exact UTF-8 request size for automatic provider calls without exposing content', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: '{"ok":true}' } }],
+        usage: { total_tokens: 21 },
+      }),
+    })
+
+    try {
+      await requestJsonObject({
+        url: 'https://api.test/v1/chat/completions', apiKey: 'secret-test-key', model: 'test-model',
+        temperature: 0.3, maxTokens: 500,
+        messages: [{ role: 'user', content: '敏感提示词-sensitive-marker' }],
+        usageContext: { ...usageContext, usage: 'auto_platform', strategyId: 19 },
+      })
+
+      const requestBody = mockFetch.mock.calls[0][1].body
+      const expectedBytes = Buffer.byteLength(requestBody, 'utf8')
+      const logLine = logSpy.mock.calls
+        .map(call => String(call[0]))
+        .find(line => line.startsWith('[AI Auto] Model request '))
+
+      expect(logLine).toContain('usage=auto_platform')
+      expect(logLine).toContain('phase=request')
+      expect(logLine).toContain('strategy=19')
+      expect(logLine).toContain(`request_bytes=${expectedBytes}`)
+      expect(logLine).toContain('request_size=')
+      expect(logLine).not.toContain('sensitive-marker')
+      expect(logLine).not.toContain('secret-test-key')
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
   it('records actual provider token usage after a successful call', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
