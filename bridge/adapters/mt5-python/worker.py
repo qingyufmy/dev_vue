@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
+import os
 import struct
 import sys
 import time
@@ -19,6 +20,12 @@ ACCEPTED_RESULT_CACHE = 2_000
 RATE_TIMEFRAMES = {"M1", "M5", "M15", "M30", "H1", "H4", "D1"}
 DEAL_BATCH_LIMIT = 250
 DEAL_WINDOW_MSC = 24 * 60 * 60 * 1000
+DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES = 180
+MT5_CLOCK_FRESHNESS_TOLERANCE_MS = 30_000
+MT5_CLOCK_STALE_AFTER_MS = 120_000
+MT5_CLOCK_OFFSET_STEP_MINUTES = 15
+MT5_CLOCK_MIN_OFFSET_MINUTES = -720
+MT5_CLOCK_MAX_OFFSET_MINUTES = 840
 
 
 class WorkerError(RuntimeError):
@@ -79,12 +86,117 @@ class WorkerIdentity:
 
 
 class Mt5Adapter:
-    def __init__(self, mt5: Any, terminal_path: str, identity: WorkerIdentity):
+    def __init__(self, mt5: Any, terminal_path: str, identity: WorkerIdentity,
+                 clock_msc: Any | None = None, clock_state_path: Path | None = None):
         self.mt5 = mt5
         self.terminal_path = str(Path(terminal_path).resolve())
         self.identity = identity
         self._receipts: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._resolved_symbols: dict[str, str] = {}
+        self._clock_msc = clock_msc or (lambda: int(time.time() * 1000))
+        self._clock_state_path = clock_state_path
+        self._timezone_offset_minutes = DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+        self._clock_status = "fallback"
+        self._clock_residual_ms: int | None = None
+        self._clock_trusted = False
+        self._last_raw_tick_msc = 0
+        self._last_host_tick_msc = 0
+        self._load_clock_state()
+
+    def _load_clock_state(self) -> None:
+        if self._clock_state_path is None or not self._clock_state_path.is_file():
+            return
+        try:
+            state = json.loads(self._clock_state_path.read_text(encoding="utf-8"))
+            offset = int(state.get("timezone_offset_minutes"))
+            if (int(state.get("version") or 0) == 1
+                    and MT5_CLOCK_MIN_OFFSET_MINUTES <= offset <= MT5_CLOCK_MAX_OFFSET_MINUTES):
+                self._timezone_offset_minutes = offset
+                self._clock_status = "persisted"
+                self._clock_trusted = True
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return
+
+    def _save_clock_state(self) -> None:
+        if self._clock_state_path is None or not self._clock_trusted:
+            return
+        try:
+            self._clock_state_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._clock_state_path.with_suffix(self._clock_state_path.suffix + ".tmp")
+            temporary.write_text(json.dumps({
+                "version": 1,
+                "timezone_offset_minutes": self._timezone_offset_minutes,
+                "verified_at_utc_msc": self._clock_msc(),
+            }, separators=(",", ":")), encoding="utf-8")
+            temporary.replace(self._clock_state_path)
+        except OSError:
+            # Clock persistence improves restart/weekend behavior, but a read-only
+            # profile must not stop the bridge while the live clock is verified.
+            return
+
+    def _clock_fields(self) -> dict[str, Any]:
+        return {
+            "timezone_offset_minutes": self._timezone_offset_minutes,
+            "clock_status": self._clock_status,
+            "clock_residual_ms": self._clock_residual_ms,
+        }
+
+    def _normalize_server_msc(self, raw_msc: int) -> int:
+        return int(raw_msc) - self._timezone_offset_minutes * 60_000
+
+    def _server_from_utc_msc(self, utc_msc: int) -> int:
+        return int(utc_msc) + self._timezone_offset_minutes * 60_000
+
+    def _calibrate_mt5_clock(self, tick: Any) -> None:
+        raw_msc = int(getattr(tick, "time_msc", 0) or 0)
+        host_msc = int(self._clock_msc())
+        if raw_msc <= 0:
+            self._clock_status = "unverified"
+            self._clock_residual_ms = None
+            return
+        normalized = self._normalize_server_msc(raw_msc)
+        residual = normalized - host_msc
+        self._clock_residual_ms = residual
+        if abs(residual) <= MT5_CLOCK_FRESHNESS_TOLERANCE_MS:
+            self._clock_status = "verified"
+            self._clock_trusted = True
+            self._last_raw_tick_msc = raw_msc
+            self._last_host_tick_msc = host_msc
+            self._save_clock_state()
+            return
+        if (raw_msc == self._last_raw_tick_msc
+                and self._last_host_tick_msc
+                and host_msc - self._last_host_tick_msc >= MT5_CLOCK_STALE_AFTER_MS):
+            self._clock_status = "stale"
+            return
+        if self._last_raw_tick_msc and raw_msc > self._last_raw_tick_msc:
+            raw_progress = raw_msc - self._last_raw_tick_msc
+            host_progress = host_msc - self._last_host_tick_msc
+            if abs(raw_progress - host_progress) <= MT5_CLOCK_FRESHNESS_TOLERANCE_MS:
+                candidate = round((raw_msc - host_msc) / 900_000) * MT5_CLOCK_OFFSET_STEP_MINUTES
+                candidate_residual = raw_msc - candidate * 60_000 - host_msc
+                if (MT5_CLOCK_MIN_OFFSET_MINUTES <= candidate <= MT5_CLOCK_MAX_OFFSET_MINUTES
+                        and abs(candidate_residual) <= MT5_CLOCK_FRESHNESS_TOLERANCE_MS):
+                    self._timezone_offset_minutes = candidate
+                    self._clock_residual_ms = candidate_residual
+                    self._clock_status = "verified"
+                    self._clock_trusted = True
+                    self._last_raw_tick_msc = raw_msc
+                    self._last_host_tick_msc = host_msc
+                    self._save_clock_state()
+                    return
+        self._clock_status = "calibrating"
+        self._last_raw_tick_msc = raw_msc
+        self._last_host_tick_msc = host_msc
+
+    def _calibrate_symbol_clock(self, symbol: str) -> Any:
+        tick = self.mt5.symbol_info_tick(symbol)
+        if tick is None:
+            raise WorkerError("symbol_tick_unavailable")
+        self._calibrate_mt5_clock(tick)
+        if not self._clock_trusted:
+            raise WorkerError("mt5_clock_unverified")
+        return tick
 
     def connect(self) -> dict[str, Any]:
         if not Path(self.terminal_path).is_file():
@@ -252,9 +364,7 @@ class Mt5Adapter:
             self._validate_route(request)
             self._ensure_identity()
             symbol = self._resolve_symbol(request.get("symbol"))
-            tick = self.mt5.symbol_info_tick(symbol)
-            if tick is None:
-                raise WorkerError("symbol_tick_unavailable")
+            tick = self._calibrate_symbol_clock(symbol)
             info = self.mt5.symbol_info(symbol)
             terminal = self.mt5.terminal_info()
             bid = float(tick.bid)
@@ -264,11 +374,11 @@ class Mt5Adapter:
                 raise WorkerError("symbol_tick_invalid")
             if not math.isfinite(last) or last < 0:
                 last = 0.0
-            observed_at = int(getattr(tick, "time_msc", 0) or 0)
-            if observed_at <= 0:
-                observed_at = int(time.time() * 1000)
+            raw_observed_at = int(getattr(tick, "time_msc", 0) or 0)
+            observed_at = self._normalize_server_msc(raw_observed_at)
             return self._quote_result(
                 request, "succeeded", observed_at, bid=bid, ask=ask, last=last,
+                raw_observed_at=raw_observed_at,
                 symbol_trade_mode=(int(getattr(info, "trade_mode", -1)) if info is not None else None),
                 terminal_connected=(bool(getattr(terminal, "connected", True)) if terminal is not None else None),
                 digits=(int(getattr(info, "digits", 0)) if info is not None else None),
@@ -318,6 +428,7 @@ class Mt5Adapter:
 
     def _rates(self, params: dict[str, Any]) -> dict[str, Any]:
         symbol = self._resolve_symbol(params.get("symbol"))
+        self._calibrate_symbol_clock(symbol)
         timeframe = str(params.get("timeframe") or "M30").strip().upper()
         if timeframe not in RATE_TIMEFRAMES:
             raise WorkerError("rates_timeframe_invalid")
@@ -340,34 +451,44 @@ class Mt5Adapter:
             raise WorkerError("symbol_select_failed")
         range_complete = bool(start_utc_msc and end_utc_msc)
         if range_complete:
+            raw_start_msc = self._server_from_utc_msc(start_utc_msc)
+            raw_end_msc = self._server_from_utc_msc(end_utc_msc)
             rates = self.mt5.copy_rates_range(
                 symbol, timeframe_value,
-                datetime.fromtimestamp(start_utc_msc / 1000.0, timezone.utc),
-                datetime.fromtimestamp(end_utc_msc / 1000.0, timezone.utc))
+                datetime.fromtimestamp(raw_start_msc / 1000.0, timezone.utc),
+                datetime.fromtimestamp(raw_end_msc / 1000.0, timezone.utc))
             if rates is not None and len(rates) > count:
                 rates = rates[-count:]
         else:
             rates = self.mt5.copy_rates_from_pos(symbol, timeframe_value, 0, count)
         if rates is None:
             raise WorkerError("rates_unavailable", str(self.mt5.last_error()))
-        captured_at = int(time.time() * 1000)
+        captured_at = int(self._clock_msc())
         output: list[dict[str, Any]] = []
         for rate in rates:
-            epoch_msc = int(rate[0]) * 1000
+            server_msc = int(rate[0]) * 1000
+            epoch_msc = self._normalize_server_msc(server_msc)
+            if epoch_msc > captured_at + MT5_CLOCK_FRESHNESS_TOLERANCE_MS:
+                continue
             output.append({
-                "time": datetime.fromtimestamp(epoch_msc / 1000.0, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                "time_msc": epoch_msc,
+                "time": datetime.fromtimestamp(server_msc / 1000.0, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "time_msc": server_msc,
+                "time_server_msc": server_msc,
                 "time_utc_msc": epoch_msc,
                 "open": float(rate[1]), "high": float(rate[2]),
                 "low": float(rate[3]), "close": float(rate[4]),
                 "tick_volume": int(rate[5]), "spread": int(rate[6]) if len(rate) > 6 else 0,
                 "captured_at_utc_msc": captured_at,
+                **self._clock_fields(),
             })
+        if rates is not None and len(rates) and not output:
+            raise WorkerError("rates_future_timestamp_invalid")
         return {
             "symbol": symbol, "timeframe": timeframe, "count": len(output),
             "rates": output, "source": "mt5", "range_complete": range_complete,
             "range_start_utc_msc": start_utc_msc or None,
             "range_end_utc_msc": end_utc_msc or None,
+            **self._clock_fields(),
         }
 
     def _symbol_snapshot(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -1715,6 +1836,7 @@ class Mt5Adapter:
     def _quote_result(self, request: dict[str, Any], status: str, observed_at: int,
                       bid: float | None = None, ask: float | None = None,
                       last: float | None = None, error_code: str | None = None,
+                      raw_observed_at: int | None = None,
                       symbol_trade_mode: int | None = None,
                       terminal_connected: bool | None = None,
                       digits: int | None = None, point: float | None = None) -> dict[str, Any]:
@@ -1733,6 +1855,9 @@ class Mt5Adapter:
         }
         if status == "succeeded":
             result.update({"bid": bid, "ask": ask, "last": last})
+            result.update(self._clock_fields())
+            if raw_observed_at is not None:
+                result["observed_at_server_msc"] = raw_observed_at
             if symbol_trade_mode is not None and 0 <= symbol_trade_mode <= 4:
                 result["symbol_trade_mode"] = symbol_trade_mode
             if terminal_connected is not None:
@@ -1882,8 +2007,13 @@ def main() -> int:
     missing = [name for name, value in required.items() if value is None or value == ""]
     if missing:
         parser.error(f"missing required arguments: {', '.join(missing)}")
-    adapter = Mt5Adapter(mt5, args.terminal, WorkerIdentity(
-        args.terminal_id, args.broker_server, args.login, args.connection_epoch))
+    identity = WorkerIdentity(
+        args.terminal_id, args.broker_server, args.login, args.connection_epoch)
+    clock_key = hashlib.sha256(
+        f"{identity.broker_server.strip().lower()}|{identity.login}".encode("utf-8")).hexdigest()[:24]
+    app_data = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming"))
+    adapter = Mt5Adapter(mt5, args.terminal, identity,
+                         clock_state_path=app_data / "AURUM" / "BridgeV3" / "clock" / f"mt5-{clock_key}.json")
     try:
         return run(args.pipe, adapter)
     finally:

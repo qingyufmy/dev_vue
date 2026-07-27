@@ -1,5 +1,6 @@
 import io
 import sys
+import tempfile
 import time
 import unittest
 from collections import namedtuple
@@ -17,7 +18,7 @@ SPEC.loader.exec_module(worker)
 
 Account = namedtuple("Account", "login server balance")
 Terminal = namedtuple("Terminal", "connected")
-Tick = namedtuple("Tick", "bid ask")
+Tick = namedtuple("Tick", "bid ask time_msc", defaults=(0,))
 Result = namedtuple("Result", "retcode order deal comment")
 Deal = namedtuple("Deal", "ticket time time_msc type entry position_id profit commission swap fee")
 HistoryDeal = namedtuple(
@@ -73,13 +74,14 @@ class FakeMt5:
     def symbols_get(self):
         self.symbols_calls += 1
         return (SimpleNamespace(name="XAUUSD"),)
-    def symbol_info_tick(self, symbol): return Tick(2300.0, 2300.2)
+    def symbol_info_tick(self, symbol):
+        return Tick(2300.0, 2300.2, int(time.time() * 1000) + 180 * 60_000)
     def symbol_info(self, symbol): return SimpleNamespace(trade_mode=4)
     def symbol_select(self, symbol, enabled):
         self.selected.append((symbol, enabled))
         return True
     def copy_rates_from_pos(self, symbol, timeframe, offset, count):
-        return [(1_700_000_000, 2300.0, 2301.0, 2299.0, 2300.5, 42, 12)]
+        return [(1_700_010_800, 2300.0, 2301.0, 2299.0, 2300.5, 42, 12)]
     def copy_rates_range(self, symbol, timeframe, start, end):
         return self.copy_rates_from_pos(symbol, timeframe, 0, 1)
     def order_send(self, request):
@@ -97,9 +99,10 @@ class FakeMt5:
 
 
 class WorkerTests(unittest.TestCase):
-    def adapter(self):
-        return worker.Mt5Adapter(FakeMt5(), __file__, worker.WorkerIdentity(
-            "terminal_01JWORKER01", "Broker-Demo", "12345678", 7))
+    def adapter(self, mt5=None, clock_msc=None, clock_state_path=None):
+        return worker.Mt5Adapter(mt5 or FakeMt5(), __file__, worker.WorkerIdentity(
+            "terminal_01JWORKER01", "Broker-Demo", "12345678", 7),
+            clock_msc=clock_msc, clock_state_path=clock_state_path)
 
     def command(self, **overrides):
         value = {
@@ -371,6 +374,9 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(2300.2, result["ask"])
         self.assertEqual(4, result["symbol_trade_mode"])
         self.assertTrue(result["terminal_connected"])
+        self.assertEqual(180, result["timezone_offset_minutes"])
+        self.assertEqual("verified", result["clock_status"])
+        self.assertLess(abs(result["observed_at_utc_msc"] - int(time.time() * 1000)), 30_000)
         self.assertNotIn("command_id", result)
 
     def test_rejects_cross_account_quote_route(self):
@@ -392,7 +398,53 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("rates", result["action"])
         self.assertEqual(1, result["payload"]["count"])
         self.assertEqual(1_700_000_000_000, result["payload"]["rates"][0]["time_utc_msc"])
+        self.assertEqual(1_700_010_800_000, result["payload"]["rates"][0]["time_server_msc"])
+        self.assertEqual(180, result["payload"]["timezone_offset_minutes"])
         self.assertNotIn("command_id", result)
+
+    def test_calibrates_non_default_broker_offset_after_advancing_tick(self):
+        now = [1_800_000_000_000]
+        mt5 = FakeMt5()
+        mt5.symbol_info_tick = lambda symbol: Tick(
+            2300.0, 2300.2, now[0] + 120 * 60_000)
+        adapter = self.adapter(mt5=mt5, clock_msc=lambda: now[0])
+        request = self.command(
+            type="quote_request", request_id="quote_01JCLOCK", symbol="XAUUSD")
+
+        first = adapter.quote(request)
+        now[0] += 1_000
+        second = adapter.quote({**request, "request_id": "quote_01JCLOCK2"})
+
+        self.assertEqual("rejected", first["status"])
+        self.assertEqual("mt5_clock_unverified", first["error_code"])
+        self.assertEqual("succeeded", second["status"])
+        self.assertEqual(120, second["timezone_offset_minutes"])
+        self.assertEqual(now[0], second["observed_at_utc_msc"])
+
+    def test_persists_verified_offset_for_restart_with_stale_market_tick(self):
+        now = [1_800_000_000_000]
+        mt5 = FakeMt5()
+        current_tick = [now[0] + 120 * 60_000]
+        mt5.symbol_info_tick = lambda symbol: Tick(2300.0, 2300.2, current_tick[0])
+        request = self.command(
+            type="quote_request", request_id="quote_01JPERSIST", symbol="XAUUSD")
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "clock.json"
+            adapter = self.adapter(mt5=mt5, clock_msc=lambda: now[0],
+                                   clock_state_path=state_path)
+            self.assertEqual("rejected", adapter.quote(request)["status"])
+            now[0] += 1_000
+            current_tick[0] += 1_000
+            self.assertEqual("succeeded", adapter.quote(request)["status"])
+            self.assertTrue(state_path.is_file())
+
+            now[0] += 300_000
+            restarted = self.adapter(mt5=mt5, clock_msc=lambda: now[0],
+                                     clock_state_path=state_path)
+            result = restarted.quote({**request, "request_id": "quote_01JPERSIST2"})
+
+            self.assertEqual("succeeded", result["status"])
+            self.assertEqual(120, result["timezone_offset_minutes"])
 
     def test_resolves_requested_symbol_to_broker_suffix(self):
         adapter = self.adapter()

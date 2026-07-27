@@ -134,6 +134,26 @@ describe('platform market data', () => {
     expect(result.rates.map(item => item.close)).toEqual([2000, 2002])
   })
 
+  it('rejects future-shifted MT5 candles before persistence or response', async () => {
+    const futureOpen = Date.now() + 3 * 60 * 60 * 1000
+    const futureRates = [0, 1, 2].map((index) => ({
+      ...rate(index, 2000 + index),
+      time_utc_msc: futureOpen + index * 60000,
+      time_msc: futureOpen + (180 + index) * 60000,
+    }))
+    mt5Bridge.mockResolvedValue({
+      status:'success', symbol:'XAUUSD.a', rates:futureRates,
+    })
+
+    const result = await getPlatformRates(7, {
+      symbol:'XAUUSD', timeframe:'M1', count:3,
+    })
+
+    expect(result).toMatchObject({ status:'error', error:'rates_timestamp_invalid' })
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('INSERT INTO market_candles'))).toBe(false)
+    expect(redis.set).not.toHaveBeenCalled()
+  })
+
   it('uses the Redis hot cache and only refreshes the newest MT5 bars', async () => {
     redis.get.mockResolvedValue([rate(0, 2000), rate(1, 2001)])
     mt5Bridge.mockResolvedValue({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(1, 2001), rate(2, 2002), rate(3, 2003)] })

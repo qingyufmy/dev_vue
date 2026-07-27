@@ -4189,6 +4189,14 @@ const migrations = [
         KEY idx_bridge_v3_deals_position (terminal_instance_id, position_id, deal_time_msc)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '144_remove_future_market_candles',
+    async up() {
+      // Broker-local epochs were briefly persisted as UTC by the modular MT5
+      // worker. A candle opening more than two minutes in the future is invalid.
+      await queryRun('DELETE FROM market_candles WHERE open_time_utc_msc > ?', [Date.now() + 120000])
+    }
   }
 ]
 

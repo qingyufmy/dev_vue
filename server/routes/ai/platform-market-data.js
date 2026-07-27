@@ -10,6 +10,7 @@ const WRITE_BATCH_SIZE = 250
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
 const INTERNAL_GAP_REFILL_COOLDOWN_MS = 6 * 60 * 60 * 1000
 const EXPECTED_LONG_CLOSURE_MS = 8 * 60 * 60 * 1000
+const FUTURE_RATE_TOLERANCE_MS = 2 * 60 * 1000
 const recentSampleAt = new Map()
 const inFlightRates = new Map()
 const internalGapRefillAttempts = new Map()
@@ -73,7 +74,8 @@ function validRate(rate, offsetMinutes) {
   const prices = [rate?.open, rate?.high, rate?.low, rate?.close].map(Number)
   const utcMs = normalizedUtcMs(rate, offsetMinutes)
   const brokerTime = normalizedBrokerTime(rate, offsetMinutes, utcMs)
-  if (!prices.every(Number.isFinite) || prices.some(value => value <= 0) || prices[1] < prices[2] || !utcMs || !brokerTime) return null
+  if (!prices.every(Number.isFinite) || prices.some(value => value <= 0) || prices[1] < prices[2]
+    || !utcMs || utcMs > Date.now() + FUTURE_RATE_TOLERANCE_MS || !brokerTime) return null
   return {
     ...rate,
     time: brokerTime,
@@ -222,14 +224,18 @@ async function persistClosedCandles(sourceId, brokerSymbol, timeframe, closedRat
 async function loadClosedCandles(sourceId, standardSymbol, timeframe, count) {
   if (!sourceId) return { rates: [], layer: 'none' }
   const key = cacheKey(sourceId, standardSymbol, timeframe)
-  const hot = await cacheGetJSON(key)
+  const hotRaw = await cacheGetJSON(key)
+  const hot = Array.isArray(hotRaw)
+    ? hotRaw.map(rate => validRate(rate, 0)).filter(Boolean)
+    : null
   const required = Math.max(1, count - 1)
   if (Array.isArray(hot) && hot.length >= required) return { rates: hot.slice(-count), layer: 'redis' }
   const rows = await queryAll(`SELECT broker_symbol, broker_time AS time, open_time_utc_msc AS time_utc_msc,
     open_price AS open, high_price AS high, low_price AS low, close_price AS close,
     tick_volume, spread FROM market_candles
-    WHERE source_id = ? AND standard_symbol = ? AND timeframe = ?
-    ORDER BY open_time_utc_msc DESC LIMIT ?`, [sourceId, standardSymbol, timeframe, Math.min(CACHE_LIMIT, count)])
+    WHERE source_id = ? AND standard_symbol = ? AND timeframe = ? AND open_time_utc_msc <= ?
+    ORDER BY open_time_utc_msc DESC LIMIT ?`, [sourceId, standardSymbol, timeframe,
+    Date.now() + FUTURE_RATE_TOLERANCE_MS, Math.min(CACHE_LIMIT, count)])
   const stored = rows.reverse().map(row => ({ ...row, open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), tick_volume: Number(row.tick_volume), spread: Number(row.spread) }))
   const rates = mergeRates(stored, Array.isArray(hot) ? hot : [], count)
   if (rates.length) await cacheSetJSON(key, rates, CACHE_TTL_SECONDS)
@@ -323,6 +329,9 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
             && rate.time_utc_msc >= rangeStartUtcMs
             && rate.time_utc_msc < rangeEndUtcMs
             && rate.time_utc_msc + intervalMs <= closureCutoffUtcMs)
+        if (!closedRates.length) {
+          return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
+        }
         const sourceId = await ensureSource(platformUserId, effectiveClock, response.rates.at(-1))
         const brokerSymbol = response.symbol || symbol
         const persistedCount = await persistClosedCandles(sourceId, brokerSymbol, timeframe, closedRates)
@@ -354,6 +363,9 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         clock_residual_ms: rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
       }
       let split = splitRatesByClosure(rates, timeframe, effectiveClock.timezone_offset_minutes)
+      if (!split.closedRates.length && !split.liveRates.length) {
+        return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
+      }
       let closedRates = split.closedRates
       const cachedIntegrity = inspectRateContinuity(cachedResult.rates, timeframe)
       const boundaryGapDetected = probeOnly && !ratesJoinAtCacheBoundary(cachedResult.rates, closedRates)
@@ -374,6 +386,9 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           clock_residual_ms: rates.at(-1)?.clock_residual_ms ?? clock.clock_residual_ms,
         }
         split = splitRatesByClosure(rates, timeframe, effectiveClock.timezone_offset_minutes)
+        if (!split.closedRates.length && !split.liveRates.length) {
+          return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
+        }
         closedRates = split.closedRates
       }
       const freshIntegrity = inspectRateContinuity(closedRates, timeframe)
