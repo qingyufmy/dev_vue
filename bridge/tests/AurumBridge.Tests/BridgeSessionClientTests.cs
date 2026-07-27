@@ -173,6 +173,57 @@ public sealed class BridgeSessionClientTests
     }
 
     [TestMethod]
+    public async Task AdministratorListsObserverSourcesAndIssuesAnIsolatedCredential()
+    {
+        var handler = new QueueHandler(
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true, token = "admin-jwt", refreshExpiresInSeconds = 7_776_000, bridgeRole = "admin",
+            }),
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true,
+                sources = new[]
+                {
+                    new
+                    {
+                        bridge_user_id = 42, email = "observer@example.com", nickname = "默认观摩",
+                        source_id = 3, source_name = "黄金默认行情", source_status = "active",
+                        trading_account_id = 9, login_account = "860058", broker_server = "Broker-Demo",
+                    },
+                },
+            }),
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true, token = "admin-jwt-2", refreshExpiresInSeconds = 7_776_000, bridgeRole = "admin",
+            }),
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true, bridgeUserId = 42, refreshToken = new string('o', 64),
+                refreshExpiresInSeconds = 7_776_000,
+            }));
+        var store = new MemoryCredentialStore
+        {
+            Credential = new(new string('r', 64), 1_900_000_000_000),
+        };
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"), new HttpClient(handler), store,
+            clock:() => 1_800_000_000_000);
+
+        var sources = await client.ListManagedObserverSourcesAsync();
+        var credential = await client.CreateManagedObserverCredentialAsync(42);
+
+        Assert.HasCount(1, sources);
+        Assert.AreEqual("黄金默认行情", sources[0].DisplayName);
+        Assert.AreEqual("860058 · Broker-Demo", sources[0].AccountSummary);
+        Assert.AreEqual(new string('o', 64), credential.RefreshToken);
+        Assert.AreEqual("https://bridge.example/api/auth/bridge-observer-sources", handler.Requests[1].Uri);
+        Assert.AreEqual("Bearer admin-jwt", handler.Requests[1].Authorization);
+        Assert.AreEqual("https://bridge.example/api/auth/bridge-observer-session", handler.Requests[3].Uri);
+        StringAssert.Contains(handler.Requests[3].Body, "42");
+    }
+
+    [TestMethod]
     public async Task RevokedRefreshCredentialIsRemovedBeforeRePairing()
     {
         var handler = new QueueHandler(Response(HttpStatusCode.Unauthorized, new

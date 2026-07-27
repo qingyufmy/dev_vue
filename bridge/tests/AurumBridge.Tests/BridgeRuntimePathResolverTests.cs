@@ -79,7 +79,9 @@ public sealed class BridgeRuntimePathResolverTests
             "source-1");
 
         Assert.AreEqual(Path.Combine(root, "profiles", "source-1"), paths.DataDirectory);
-        Assert.AreEqual(Path.Combine(root, "credential.dat"), paths.CredentialPath);
+        Assert.AreEqual(
+            Path.Combine(root, "profiles", "source-1", "credential.dat"),
+            paths.CredentialPath);
     }
 
     [TestMethod]

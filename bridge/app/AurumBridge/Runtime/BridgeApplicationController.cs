@@ -212,6 +212,15 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         RequestRedetect();
     }
 
+    public Task<IReadOnlyList<BridgeObserverSource>> ListManagedObserverSourcesAsync(
+        CancellationToken cancellationToken = default) =>
+        _sessionClient.ListManagedObserverSourcesAsync(cancellationToken);
+
+    public Task<BridgeCredential> CreateManagedObserverCredentialAsync(
+        long bridgeUserId,
+        CancellationToken cancellationToken = default) =>
+        _sessionClient.CreateManagedObserverCredentialAsync(bridgeUserId, cancellationToken);
+
     public void RequestRedetect()
     {
         lock (_sync)

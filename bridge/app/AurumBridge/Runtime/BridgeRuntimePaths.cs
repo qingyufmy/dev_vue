@@ -69,9 +69,10 @@ public static class BridgeRuntimePathResolver
         {
             throw new InvalidDataException("bridge_server_url_invalid");
         }
+        var profileDataDirectory = BridgeRuntimeProfile.ResolveDataDirectory(rootDataDirectory, profileId);
         return new(
-            BridgeRuntimeProfile.ResolveDataDirectory(rootDataDirectory, profileId),
-            Path.Combine(rootDataDirectory, "credential.dat"),
+            profileDataDirectory,
+            Path.Combine(profileDataDirectory, "credential.dat"),
             python,
             worker,
             mt4Expert,

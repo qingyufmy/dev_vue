@@ -9,6 +9,26 @@ namespace AurumBridge.Runtime;
 
 public sealed record BridgePairingPrompt(string UserCode, Uri VerificationUri, long ExpiresAtUtcMsc);
 
+public sealed record BridgeObserverSource(
+    long BridgeUserId,
+    string Email,
+    string? Nickname,
+    long? SourceId,
+    string? SourceName,
+    string? SourceStatus,
+    long? TradingAccountId,
+    string? LoginAccount,
+    string? BrokerServer)
+{
+    public string DisplayName => SourceName ?? Nickname ?? Email;
+
+    public string AccountSummary => LoginAccount is null
+        ? "首次连接后自动识别交易账户"
+        : String.IsNullOrWhiteSpace(BrokerServer)
+            ? LoginAccount
+            : $"{LoginAccount} · {BrokerServer}";
+}
+
 public sealed class BridgeApiException : Exception
 {
     public BridgeApiException(string code, HttpStatusCode statusCode)
@@ -111,49 +131,53 @@ public sealed class BridgeSessionClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(hello);
-        var credential = await _credentialStore.LoadAsync(cancellationToken)
-            ?? throw new BridgeApiException("bridge_not_paired", HttpStatusCode.Unauthorized);
-        RefreshResponse refresh;
-        try
-        {
-            refresh = await PostAsync<RefreshResponse>(
-                "/api/auth/bridge-refresh",
-                new { refreshToken = credential.RefreshToken },
-                cancellationToken: cancellationToken);
-        }
-        catch (BridgeApiException error) when (error.StatusCode == HttpStatusCode.Unauthorized)
-        {
-            await _credentialStore.ClearAsync(CancellationToken.None);
-            PublishObserverSourceManagement(false);
-            throw;
-        }
-        if (string.IsNullOrWhiteSpace(refresh.Token))
-        {
-            throw new InvalidDataException("bridge_refresh_response_invalid");
-        }
-        var refreshedCredential = new BridgeCredential(
-            credential.RefreshToken,
-            checked(_clock() + (long)refresh.RefreshExpiresInSeconds * 1_000));
-        if (!await _credentialStore.SaveIfCurrentAsync(
-                credential, refreshedCredential, cancellationToken))
-        {
-            PublishObserverSourceManagement(false);
-            throw new BridgeApiException("bridge_not_paired", HttpStatusCode.Unauthorized);
-        }
-        PublishObserverSourceManagement(String.Equals(
-            refresh.BridgeRole,
-            "admin",
-            StringComparison.OrdinalIgnoreCase));
+        var accessToken = await RefreshAccessTokenAsync(cancellationToken);
         var ticket = await PostAsync<TicketResponse>(
             "/api/auth/bridge-ticket",
             new { },
-            refresh.Token,
+            accessToken,
             cancellationToken);
         if (string.IsNullOrWhiteSpace(ticket.Ticket))
         {
             throw new InvalidDataException("bridge_ticket_response_invalid");
         }
         return new(BuildWebSocketUri(), ticket.Ticket, hello);
+    }
+
+    public async Task<IReadOnlyList<BridgeObserverSource>> ListManagedObserverSourcesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var accessToken = await RefreshAccessTokenAsync(cancellationToken);
+        var response = await PostAsync<ObserverSourcesResponse>(
+            "/api/auth/bridge-observer-sources",
+            new { },
+            accessToken,
+            cancellationToken);
+        return response.Sources;
+    }
+
+    public async Task<BridgeCredential> CreateManagedObserverCredentialAsync(
+        long bridgeUserId,
+        CancellationToken cancellationToken = default)
+    {
+        if (bridgeUserId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bridgeUserId));
+        }
+        var accessToken = await RefreshAccessTokenAsync(cancellationToken);
+        var response = await PostAsync<ManagedObserverSessionResponse>(
+            "/api/auth/bridge-observer-session",
+            new { bridgeUserId },
+            accessToken,
+            cancellationToken);
+        if (response.BridgeUserId != bridgeUserId
+            || string.IsNullOrWhiteSpace(response.RefreshToken))
+        {
+            throw new InvalidDataException("bridge_observer_session_response_invalid");
+        }
+        return new(
+            response.RefreshToken,
+            checked(_clock() + (long)response.RefreshExpiresInSeconds * 1_000));
     }
 
     public async Task<bool> LogoutAsync(CancellationToken cancellationToken = default)
@@ -201,6 +225,44 @@ public sealed class BridgeSessionClient
         {
             // UI capability updates must never interrupt authentication or reconnects.
         }
+    }
+
+    private async Task<string> RefreshAccessTokenAsync(CancellationToken cancellationToken)
+    {
+        var credential = await _credentialStore.LoadAsync(cancellationToken)
+            ?? throw new BridgeApiException("bridge_not_paired", HttpStatusCode.Unauthorized);
+        RefreshResponse refresh;
+        try
+        {
+            refresh = await PostAsync<RefreshResponse>(
+                "/api/auth/bridge-refresh",
+                new { refreshToken = credential.RefreshToken },
+                cancellationToken: cancellationToken);
+        }
+        catch (BridgeApiException error) when (error.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            await _credentialStore.ClearAsync(CancellationToken.None);
+            PublishObserverSourceManagement(false);
+            throw;
+        }
+        if (string.IsNullOrWhiteSpace(refresh.Token))
+        {
+            throw new InvalidDataException("bridge_refresh_response_invalid");
+        }
+        var refreshedCredential = new BridgeCredential(
+            credential.RefreshToken,
+            checked(_clock() + (long)refresh.RefreshExpiresInSeconds * 1_000));
+        if (!await _credentialStore.SaveIfCurrentAsync(
+                credential, refreshedCredential, cancellationToken))
+        {
+            PublishObserverSourceManagement(false);
+            throw new BridgeApiException("bridge_not_paired", HttpStatusCode.Unauthorized);
+        }
+        PublishObserverSourceManagement(String.Equals(
+            refresh.BridgeRole,
+            "admin",
+            StringComparison.OrdinalIgnoreCase));
+        return refresh.Token;
     }
 
     private async Task<TResponse> PostAsync<TResponse>(
@@ -366,4 +428,64 @@ public sealed class BridgeSessionClient
     }
 
     private sealed record RevokeResponse : ApiResponse;
+
+    private sealed record ObserverSourcesResponse : ApiResponse
+    {
+        [JsonPropertyName("sources")]
+        public IReadOnlyList<ObserverSourceResponse> SourcesRaw { get; init; } = [];
+
+        [JsonIgnore]
+        public IReadOnlyList<BridgeObserverSource> Sources => SourcesRaw.Select(source => new BridgeObserverSource(
+            source.BridgeUserId,
+            source.Email,
+            source.Nickname,
+            source.SourceId,
+            source.SourceName,
+            source.SourceStatus,
+            source.TradingAccountId,
+            source.LoginAccount,
+            source.BrokerServer)).ToArray();
+    }
+
+    private sealed record ObserverSourceResponse
+    {
+        [JsonPropertyName("bridge_user_id")]
+        public long BridgeUserId { get; init; }
+
+        [JsonPropertyName("email")]
+        public string Email { get; init; } = string.Empty;
+
+        [JsonPropertyName("nickname")]
+        public string? Nickname { get; init; }
+
+        [JsonPropertyName("source_id")]
+        public long? SourceId { get; init; }
+
+        [JsonPropertyName("source_name")]
+        public string? SourceName { get; init; }
+
+        [JsonPropertyName("source_status")]
+        public string? SourceStatus { get; init; }
+
+        [JsonPropertyName("trading_account_id")]
+        public long? TradingAccountId { get; init; }
+
+        [JsonPropertyName("login_account")]
+        public string? LoginAccount { get; init; }
+
+        [JsonPropertyName("broker_server")]
+        public string? BrokerServer { get; init; }
+    }
+
+    private sealed record ManagedObserverSessionResponse : ApiResponse
+    {
+        [JsonPropertyName("bridgeUserId")]
+        public long BridgeUserId { get; init; }
+
+        [JsonPropertyName("refreshToken")]
+        public string RefreshToken { get; init; } = string.Empty;
+
+        [JsonPropertyName("refreshExpiresInSeconds")]
+        public int RefreshExpiresInSeconds { get; init; }
+    }
 }

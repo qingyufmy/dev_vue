@@ -25,7 +25,11 @@ public sealed record BridgeUserPreferences(
     string? Mt5TerminalPath = null,
     string? Mt4TerminalInstanceId = null,
     string? Mt4TerminalPath = null,
-    bool ObserverEnabled = true);
+    bool ObserverEnabled = true,
+    long? ObserverBridgeUserId = null,
+    string? ObserverAccountLabel = null,
+    long? ObserverTradingAccountId = null,
+    string? ObserverTradingAccountLabel = null);
 
 public sealed class BridgeUserPreferencesStore
 {
@@ -94,6 +98,36 @@ public sealed class BridgeUserPreferencesStore
             await SaveCoreAsync(
                 current with { ObserverEnabled = enabled },
                 cancellationToken);
+        }
+        finally
+        {
+            _access.Release();
+        }
+    }
+
+    public async Task SaveObserverBindingAsync(
+        BridgeObserverSource source,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.BridgeUserId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(source));
+        }
+        await _access.WaitAsync(cancellationToken);
+        try
+        {
+            var current = await LoadCoreAsync(cancellationToken);
+            var accountLabel = String.IsNullOrWhiteSpace(source.Email)
+                ? source.DisplayName
+                : $"{source.DisplayName} · {source.Email}";
+            await SaveCoreAsync(current with
+            {
+                ObserverBridgeUserId = source.BridgeUserId,
+                ObserverAccountLabel = NormalizeLabel(accountLabel, 220),
+                ObserverTradingAccountId = source.TradingAccountId,
+                ObserverTradingAccountLabel = NormalizeLabel(source.AccountSummary, 220),
+            }, cancellationToken);
         }
         finally
         {
@@ -252,7 +286,22 @@ public sealed class BridgeUserPreferencesStore
             NormalizeMt5TerminalPath(preferences.Mt5TerminalPath),
             NormalizeMt4TerminalId(preferences.Mt4TerminalInstanceId),
             NormalizeMt4TerminalPath(preferences.Mt4TerminalPath),
-            preferences.ObserverEnabled);
+            preferences.ObserverEnabled,
+            preferences.ObserverBridgeUserId is > 0 ? preferences.ObserverBridgeUserId : null,
+            NormalizeLabel(preferences.ObserverAccountLabel, 220),
+            preferences.ObserverTradingAccountId is > 0 ? preferences.ObserverTradingAccountId : null,
+            NormalizeLabel(preferences.ObserverTradingAccountLabel, 220));
+    }
+
+    private static string? NormalizeLabel(string? value, int maxLength)
+    {
+        var normalized = String.Concat((value ?? string.Empty)
+            .Where(character => !Char.IsControl(character))).Trim();
+        if (normalized.Length == 0)
+        {
+            return null;
+        }
+        return normalized.Length <= maxLength ? normalized : normalized[..maxLength];
     }
 
     private static string? NormalizeMt5TerminalId(string? value)

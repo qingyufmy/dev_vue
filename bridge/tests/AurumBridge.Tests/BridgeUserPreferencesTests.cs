@@ -63,6 +63,32 @@ public sealed class BridgeUserPreferencesTests
     }
 
     [TestMethod]
+    public async Task ObserverBindingPersistsServerIdentityWithoutStoringASecret()
+    {
+        var store = new BridgeUserPreferencesStore(_path);
+        var source = new BridgeObserverSource(
+            42,
+            "observer@example.com",
+            "默认观摩",
+            3,
+            "黄金默认行情",
+            "active",
+            9,
+            "860058",
+            "Broker-Demo");
+
+        await store.SaveObserverBindingAsync(source);
+        var saved = await new BridgeUserPreferencesStore(_path).LoadAsync();
+
+        Assert.AreEqual(42, saved.ObserverBridgeUserId);
+        Assert.AreEqual("黄金默认行情 · observer@example.com", saved.ObserverAccountLabel);
+        Assert.AreEqual(9, saved.ObserverTradingAccountId);
+        Assert.AreEqual("860058 · Broker-Demo", saved.ObserverTradingAccountLabel);
+        var json = await File.ReadAllTextAsync(_path);
+        Assert.DoesNotContain("refreshToken", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
     public async Task InvalidOrCorruptPreferenceFailsBackToSelection()
     {
         Directory.CreateDirectory(_directory);
