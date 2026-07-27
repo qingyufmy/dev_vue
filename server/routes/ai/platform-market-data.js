@@ -13,6 +13,7 @@ const EXPECTED_LONG_CLOSURE_MS = 8 * 60 * 60 * 1000
 const recentSampleAt = new Map()
 const inFlightRates = new Map()
 const internalGapRefillAttempts = new Map()
+const closedCacheWrites = new Map()
 let lastCleanupAt = 0
 
 const RETENTION_DAYS = {
@@ -238,7 +239,23 @@ async function loadClosedCandles(sourceId, standardSymbol, timeframe, count) {
 
 async function saveClosedCache(sourceId, standardSymbol, timeframe, rates) {
   if (!sourceId || !rates.length) return
-  await cacheSetJSON(cacheKey(sourceId, standardSymbol, timeframe), rates.slice(-CACHE_LIMIT), CACHE_TTL_SECONDS)
+  const key = cacheKey(sourceId, standardSymbol, timeframe)
+  const previous = closedCacheWrites.get(key) || Promise.resolve()
+  const write = previous.catch(() => {}).then(async () => {
+    const existing = await cacheGetJSON(key)
+    // Lightweight count=3 probes share this cache with 200/1000-candle chart
+    // requests. Never let a smaller response truncate a larger hot history.
+    const next = Array.isArray(existing) && existing.length > rates.length
+      ? mergeRates(existing, rates, CACHE_LIMIT)
+      : rates.slice(-CACHE_LIMIT)
+    await cacheSetJSON(key, next, CACHE_TTL_SECONDS)
+  })
+  closedCacheWrites.set(key, write)
+  try {
+    await write
+  } finally {
+    if (closedCacheWrites.get(key) === write) closedCacheWrites.delete(key)
+  }
 }
 
 function mergeRates(closed, live, count) {

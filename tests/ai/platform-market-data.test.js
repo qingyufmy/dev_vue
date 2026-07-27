@@ -145,6 +145,22 @@ describe('platform market data', () => {
     expect(result.rates.at(-1).close).toBe(2003)
   })
 
+  it('does not let a three-bar probe truncate a larger chart cache', async () => {
+    const hot = Array.from({ length:200 }, (_, index) => rate(index, 2000 + index))
+    redis.get.mockResolvedValue(hot)
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', rates:[
+      rate(198, 2198), rate(199, 2199), rate(200, 2200),
+    ] })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:3 })
+
+    expect(result.rates.map(item => item.close)).toEqual([2198, 2199, 2200])
+    const saved = redis.set.mock.calls.at(-1)[1]
+    expect(saved).toHaveLength(200)
+    expect(saved[0].close).toBe(2000)
+    expect(saved.at(-1).close).toBe(2199)
+  })
+
   it('refills the requested window when a reconnect probe no longer overlaps the cache', async () => {
     redis.get.mockResolvedValue([rate(0, 2000), rate(1, 2001)])
     mt5Bridge
