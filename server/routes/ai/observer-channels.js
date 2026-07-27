@@ -1,4 +1,5 @@
 import { queryAll, queryOne, queryRun, withTransaction } from '../../db.js'
+import { SUBSCRIPTION_SCHEDULE_DEFAULTS } from './subscription-schedule.js'
 
 const SOURCE_STATUSES = new Set(['active', 'disabled'])
 const CHANNEL_STATUSES = new Set(['active', 'disabled'])
@@ -114,10 +115,18 @@ async function syncObserverSourceRuntime(bridgeUserId, tradingAccountId, strateg
       execution_enabled = ?, memory_mode = 'platform_only', updated_at = NOW() WHERE id = ?`,
     [tradingAccountId, strategy.symbols_json, autoInferenceEnabled ? 1 : 0, existing.id])
   } else {
+    const scheduleWeekdaysJson = JSON.stringify(SUBSCRIPTION_SCHEDULE_DEFAULTS.weekdays)
+    const scheduleWindowsJson = JSON.stringify(SUBSCRIPTION_SCHEDULE_DEFAULTS.windows)
     await db.execute(`INSERT INTO strategy_subscriptions
-      (user_id, trading_account_id, strategy_id, symbols_json, execution_enabled, memory_mode, is_deleted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'platform_only', 0, NOW(), NOW())`,
-    [bridgeUserId, tradingAccountId, strategyId, strategy.symbols_json, autoInferenceEnabled ? 1 : 0])
+      (user_id, trading_account_id, strategy_id, symbols_json, execution_enabled, memory_mode,
+       schedule_enabled, schedule_timezone, schedule_weekdays_json, schedule_windows_json,
+       outside_window_behavior, take_profit_mode, is_deleted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'platform_only', 0, ?, ?, ?, ?, 'ai_recommended', 0, NOW(), NOW())`,
+    [
+      bridgeUserId, tradingAccountId, strategyId, strategy.symbols_json, autoInferenceEnabled ? 1 : 0,
+      SUBSCRIPTION_SCHEDULE_DEFAULTS.timezone, scheduleWeekdaysJson, scheduleWindowsJson,
+      SUBSCRIPTION_SCHEDULE_DEFAULTS.outsideBehavior,
+    ])
   }
   await db.execute(`INSERT INTO auto_scheduler
     (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, selected_symbols_json, created_at, updated_at)

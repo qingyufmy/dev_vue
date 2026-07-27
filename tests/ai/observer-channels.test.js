@@ -93,7 +93,11 @@ describe('observer sources and channels', () => {
     const subscriptionCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))
     const schedulerCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO auto_scheduler'))
     const bridgeSettingsCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO user_bridge_settings'))
-    expect(subscriptionCall[1]).toEqual([7, 12, 3, '["XAUUSD"]', 0])
+    expect(subscriptionCall[0]).toContain('schedule_windows_json')
+    expect(subscriptionCall[1]).toEqual([
+      7, 12, 3, '["XAUUSD"]', 0,
+      'Etc/GMT-3', '[1,2,3,4,5]', '[{"start":"00:00","end":"23:59"}]', 'pause_all',
+    ])
     expect(schedulerCall[1]).toEqual([7, 0, 3, 0, '["XAUUSD"]'])
     expect(bridgeSettingsCall[1]).toEqual([7, 0, 0])
   })
