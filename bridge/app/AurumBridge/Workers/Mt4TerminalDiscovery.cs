@@ -123,6 +123,25 @@ public static class Mt4TerminalDiscovery
         return installations;
     }
 
+    public static Mt4Installation? ResolveDirectorySelection(
+        string selectedDirectory,
+        IReadOnlyList<Mt4Installation> discovered)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(selectedDirectory);
+        ArgumentNullException.ThrowIfNull(discovered);
+        var selectedPath = Path.GetFullPath(selectedDirectory);
+        var matched = discovered.FirstOrDefault(installation =>
+            PathsEqual(installation.TerminalDataPath, selectedPath)
+            || PathsEqual(installation.InstallationPath, selectedPath));
+        if (matched is not null)
+        {
+            return matched;
+        }
+        return ResolveCandidates([
+            new(selectedPath, selectedPath, "manual_directory"),
+        ]).SingleOrDefault();
+    }
+
     private static IReadOnlyList<string> DiscoverRunningExecutables()
     {
         var executables = new List<string>();

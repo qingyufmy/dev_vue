@@ -56,4 +56,28 @@ public sealed class Mt4TerminalDiscoveryTests
         Assert.IsTrue(result[0].IsRunning);
         Assert.AreEqual("running_portable", result[0].Source);
     }
+
+    [TestMethod]
+    public void ResolvesEitherTheInstallationDirectoryOrTerminalDataDirectory()
+    {
+        var dataPath = Path.Combine(_directory, "MT4 Data");
+        var installationPath = Path.Combine(_directory, "Broker MT4");
+        Directory.CreateDirectory(Path.Combine(dataPath, "MQL4"));
+        var installation = new Mt4Installation(
+            dataPath,
+            installationPath,
+            "terminal_data",
+            IsRunning:true);
+
+        Assert.AreSame(
+            installation,
+            Mt4TerminalDiscovery.ResolveDirectorySelection(
+                installationPath,
+                [installation]));
+        Assert.AreSame(
+            installation,
+            Mt4TerminalDiscovery.ResolveDirectorySelection(
+                dataPath,
+                [installation]));
+    }
 }

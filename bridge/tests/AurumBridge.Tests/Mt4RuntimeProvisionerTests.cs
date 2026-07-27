@@ -72,4 +72,41 @@ public sealed class Mt4RuntimeProvisionerTests
         Assert.AreEqual(selectedId, result.Terminals[0].Binding.TerminalInstanceId);
         await result.Terminals[0].Supervisor.DisposeAsync();
     }
+
+    [TestMethod]
+    public async Task RestoresOnlyTheMainAndObserverMt4BindingsAllowedByTheHost()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var paths = new[] { "Main MT4", "Observer MT4", "Unrelated MT4" }
+            .Select(name => Path.Combine(testStore.DataDirectory, name))
+            .ToArray();
+        foreach (var path in paths)
+        {
+            Directory.CreateDirectory(path);
+        }
+        var ids = paths.Select(path =>
+            Workers.Mt4TerminalIdentity.CreateTerminalInstanceId(path)).ToArray();
+        for (var index = 0; index < paths.Length; index++)
+        {
+            await testStore.Store.ActivateTerminalBindingAsync(
+                ids[index],
+                "mt4",
+                paths[index],
+                new("Broker", $"100{index}"),
+                1_800_000_000_000);
+        }
+        var provisioner = new Mt4RuntimeProvisioner(testStore.Store);
+
+        var result = await provisioner.ProvisionManyAsync(
+            [],
+            new HashSet<string>(StringComparer.Ordinal) { ids[0], ids[1] });
+
+        CollectionAssert.AreEquivalent(
+            new[] { ids[0], ids[1] },
+            result.Terminals.Select(value => value.Binding.TerminalInstanceId).ToArray());
+        foreach (var terminal in result.Terminals)
+        {
+            await terminal.Supervisor.DisposeAsync();
+        }
+    }
 }

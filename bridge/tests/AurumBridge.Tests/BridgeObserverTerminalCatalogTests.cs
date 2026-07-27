@@ -50,6 +50,30 @@ public sealed class BridgeObserverTerminalCatalogTests
     }
 
     [TestMethod]
+    public async Task LoadsAnMt4ObserverFromItsDedicatedTerminalDataPath()
+    {
+        var terminalDataPath = Path.Combine(_directory, "mt4-data");
+        Directory.CreateDirectory(Path.Combine(terminalDataPath, "MQL4"));
+        var profileDirectory = BridgeRuntimeProfile.CreateObserverProfile(
+            _directory,
+            "mt4-source");
+        var preferences = new BridgeUserPreferencesStore(
+            Path.Combine(profileDirectory, "preferences.json"));
+        var terminalId = Mt4TerminalIdentity.CreateTerminalInstanceId(terminalDataPath);
+        await preferences.SavePlatformAsync(BridgePlatform.Mt4);
+        await preferences.SaveMt4TerminalAsync(terminalId);
+        await preferences.SaveMt4TerminalPathAsync(terminalDataPath);
+
+        var terminals = await BridgeObserverTerminalCatalog.LoadAsync(_directory);
+
+        Assert.HasCount(1, terminals);
+        Assert.AreEqual("mt4-source", terminals[0].ProfileId);
+        Assert.AreEqual(BridgePlatform.Mt4, terminals[0].Platform);
+        Assert.AreEqual(terminalId, terminals[0].TerminalInstanceId);
+        Assert.AreEqual(Path.GetFullPath(terminalDataPath), terminals[0].TerminalPath);
+    }
+
+    [TestMethod]
     public void ControllerRejectsDuplicateOrMismatchedObserverRoutes()
     {
         var terminalPath = Path.Combine(_directory, "terminal64.exe");
@@ -66,6 +90,15 @@ public sealed class BridgeObserverTerminalCatalogTests
             BridgeApplicationController.NormalizeObserverTerminals([first, duplicate]));
         Assert.ThrowsExactly<ArgumentException>(() =>
             BridgeApplicationController.NormalizeObserverTerminals([mismatched]));
+
+        var mt4Path = Path.Combine(_directory, "mt4-data");
+        var mt4 = new BridgeObserverTerminalConfiguration(
+            "mt4-source",
+            BridgePlatform.Mt4,
+            Mt4TerminalIdentity.CreateTerminalInstanceId(mt4Path),
+            mt4Path);
+        var normalized = BridgeApplicationController.NormalizeObserverTerminals([mt4]);
+        Assert.AreEqual(BridgePlatform.Mt4, normalized[0].Platform);
     }
 
     private async Task SaveProfileAsync(string profileId, string terminalPath)

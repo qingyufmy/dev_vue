@@ -121,4 +121,18 @@ public sealed class BridgeUserPreferencesTests
         Assert.AreEqual(mt4Id, preferences.Mt4TerminalInstanceId);
         Assert.AreEqual(mt5Id, preferences.Mt5TerminalInstanceId);
     }
+
+    [TestMethod]
+    public async Task ObserverProfilePersistsItsDedicatedMt4DataPath()
+    {
+        var store = new BridgeUserPreferencesStore(_path);
+        var terminalDataPath = Path.Combine(_directory, "MetaQuotes", "Terminal", "ABC123");
+
+        await store.SaveMt4TerminalPathAsync(terminalDataPath);
+        await store.SavePlatformAsync(BridgePlatform.Mt4);
+        var preferences = await new BridgeUserPreferencesStore(_path).LoadAsync();
+
+        Assert.AreEqual(BridgePlatform.Mt4, preferences.Platform);
+        Assert.AreEqual(Path.GetFullPath(terminalDataPath), preferences.Mt4TerminalPath);
+    }
 }

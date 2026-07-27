@@ -294,14 +294,27 @@ public sealed class BridgeApplicationContext : ApplicationContext
                     MessageBoxIcon.Information);
                 return;
             }
+            await EnsureObserverTerminalAvailableAsync(
+                dialog.ProfileId,
+                dialog.TerminalInstanceId,
+                _stop.Token);
             var profileDirectory = BridgeRuntimeProfile.CreateObserverProfile(
                 _rootDataDirectory,
                 dialog.ProfileId);
-            await SaveObserverProfilePreferencesAsync(
-                profileDirectory,
-                dialog.Mt5ExecutablePath);
+            await SaveObserverProfilePreferencesAsync(profileDirectory, dialog);
             _logger.Info("observer_profile_created", $"profile={dialog.ProfileId}");
             await ReloadObserverTerminalsAsync(_stop.Token);
+            ShowMt4ObserverInstructionsIfNeeded(dialog.Platform);
+        }
+        catch (InvalidOperationException error) when (
+            error.Message == "observer_terminal_already_assigned")
+        {
+            MessageBox.Show(
+                _form,
+                "该终端已被主账户或另一个观摩源使用，请选择独立终端。",
+                "终端已被占用",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
         catch (Exception error)
         {
@@ -327,21 +340,32 @@ public sealed class BridgeApplicationContext : ApplicationContext
             var current = await preferences.LoadAsync(_stop.Token);
             using var dialog = new BridgeObserverProfileDialog(
                 profileId,
-                current.Mt5TerminalPath);
+                current.Platform,
+                current.Mt5TerminalPath,
+                current.Mt4TerminalPath);
             if (dialog.ShowDialog(_form) != DialogResult.OK)
             {
                 return;
             }
-            await SaveObserverProfilePreferencesAsync(
-                profileDirectory,
-                dialog.Mt5ExecutablePath);
+            await SaveObserverProfilePreferencesAsync(profileDirectory, dialog);
             _logger.Info(
-                "observer_profile_mt5_configured",
-                $"profile={profileId}; terminal_id={Mt5TerminalDiscovery.CreateTerminalInstanceId(dialog.Mt5ExecutablePath)}");
+                "observer_profile_terminal_configured",
+                $"profile={profileId}; platform={dialog.Platform}; terminal_id={dialog.TerminalInstanceId}");
             await ReloadObserverTerminalsAsync(_stop.Token);
+            ShowMt4ObserverInstructionsIfNeeded(dialog.Platform);
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
+        }
+        catch (InvalidOperationException error) when (
+            error.Message == "observer_terminal_already_assigned")
+        {
+            MessageBox.Show(
+                _form,
+                "该终端已被主账户或另一个观摩源使用，请选择独立终端。",
+                "终端已被占用",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
         catch (Exception error)
         {
@@ -367,19 +391,30 @@ public sealed class BridgeApplicationContext : ApplicationContext
             var preferences = new BridgeUserPreferencesStore(
                 Path.Combine(profileDirectory, "preferences.json"));
             var current = await preferences.LoadAsync(cancellationToken);
-            var configured = !string.IsNullOrWhiteSpace(current.Mt5TerminalPath)
-                && File.Exists(current.Mt5TerminalPath);
+            var configured = current.Platform switch
+            {
+                BridgePlatform.Mt5 => !string.IsNullOrWhiteSpace(current.Mt5TerminalPath)
+                    && File.Exists(current.Mt5TerminalPath),
+                BridgePlatform.Mt4 => !string.IsNullOrWhiteSpace(current.Mt4TerminalPath)
+                    && !string.IsNullOrWhiteSpace(current.Mt4TerminalInstanceId)
+                    && Directory.Exists(Path.Combine(current.Mt4TerminalPath, "MQL4")),
+                _ => false,
+            };
             _observerTerminalStatuses.TryGetValue(profileId, out var terminalStatus);
+            var state = !configured
+                ? "需要设置"
+                : terminalStatus?.RuntimeState == TerminalRuntimeState.Running
+                    ? "运行中"
+                    : terminalStatus?.RuntimeState is TerminalRuntimeState.Starting
+                        or TerminalRuntimeState.Restarting
+                        ? "连接中"
+                        : "等待连接";
+            var platform = current.Platform is BridgePlatform.Mt4 or BridgePlatform.Mt5
+                ? $"{BridgePlatform.DisplayName(current.Platform)} · "
+                : string.Empty;
             items.Add(new(
                 profileId,
-                !configured
-                    ? "需要设置"
-                    : terminalStatus?.RuntimeState == TerminalRuntimeState.Running
-                        ? "运行中"
-                        : terminalStatus?.RuntimeState is TerminalRuntimeState.Starting
-                            or TerminalRuntimeState.Restarting
-                            ? "连接中"
-                            : "等待连接"));
+                platform + state));
         }
         return items;
     }
@@ -398,15 +433,76 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private async Task SaveObserverProfilePreferencesAsync(
         string profileDirectory,
-        string terminalExecutablePath)
+        BridgeObserverProfileDialog dialog)
     {
+        await EnsureObserverTerminalAvailableAsync(
+            dialog.ProfileId,
+            dialog.TerminalInstanceId,
+            _stop.Token);
         var preferences = new BridgeUserPreferencesStore(
             Path.Combine(profileDirectory, "preferences.json"));
-        var terminalId = Mt5TerminalDiscovery.CreateTerminalInstanceId(
-            terminalExecutablePath);
-        await preferences.SavePlatformAsync(BridgePlatform.Mt5, _stop.Token);
-        await preferences.SaveMt5TerminalAsync(terminalId, _stop.Token);
-        await preferences.SaveMt5TerminalPathAsync(terminalExecutablePath, _stop.Token);
+        await preferences.SavePlatformAsync(dialog.Platform, _stop.Token);
+        if (dialog.Platform == BridgePlatform.Mt4)
+        {
+            var installation = dialog.Mt4Installation
+                ?? throw new InvalidOperationException("observer_mt4_directory_not_selected");
+            await preferences.SaveMt4TerminalAsync(
+                installation.TerminalInstanceId,
+                _stop.Token);
+            await preferences.SaveMt4TerminalPathAsync(
+                installation.TerminalDataPath,
+                _stop.Token);
+            return;
+        }
+        var terminalPath = dialog.Mt5ExecutablePath
+            ?? throw new InvalidOperationException("observer_mt5_directory_not_selected");
+        await preferences.SaveMt5TerminalAsync(dialog.TerminalInstanceId, _stop.Token);
+        await preferences.SaveMt5TerminalPathAsync(terminalPath, _stop.Token);
+    }
+
+    private async Task EnsureObserverTerminalAvailableAsync(
+        string profileId,
+        string terminalInstanceId,
+        CancellationToken cancellationToken)
+    {
+        var main = await _preferences.LoadAsync(cancellationToken);
+        var mainTerminalId = main.Platform == BridgePlatform.Mt4
+            ? main.Mt4TerminalInstanceId
+            : main.Mt5TerminalInstanceId;
+        if (mainTerminalId == terminalInstanceId)
+        {
+            throw new InvalidOperationException("observer_terminal_already_assigned");
+        }
+        foreach (var otherProfileId in BridgeRuntimeProfile.ListObserverProfiles(
+            _rootDataDirectory).Where(value => value != profileId))
+        {
+            var directory = BridgeRuntimeProfile.ResolveDataDirectory(
+                _rootDataDirectory,
+                otherProfileId);
+            var preferences = await new BridgeUserPreferencesStore(
+                Path.Combine(directory, "preferences.json")).LoadAsync(cancellationToken);
+            var otherTerminalId = preferences.Platform == BridgePlatform.Mt4
+                ? preferences.Mt4TerminalInstanceId
+                : preferences.Mt5TerminalInstanceId;
+            if (otherTerminalId == terminalInstanceId)
+            {
+                throw new InvalidOperationException("observer_terminal_already_assigned");
+            }
+        }
+    }
+
+    private void ShowMt4ObserverInstructionsIfNeeded(string platform)
+    {
+        if (platform != BridgePlatform.Mt4)
+        {
+            return;
+        }
+        MessageBox.Show(
+            _form,
+            "EA 将自动安装到该 MT4。\n\n" + BridgeUiText.Mt4ExpertSetupInstructions,
+            "完成 MT4 观摩源连接",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
     }
 
     private async Task WriteStartupReadyAsync(string path)

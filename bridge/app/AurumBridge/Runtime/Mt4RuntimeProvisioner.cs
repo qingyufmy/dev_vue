@@ -31,6 +31,20 @@ public sealed class Mt4RuntimeProvisioner
     public async Task<Mt4ProvisioningResult> ProvisionAsync(
         IEnumerable<Mt4EaConnection> registrations,
         string? selectedTerminalInstanceId = null,
+        CancellationToken cancellationToken = default) =>
+        await ProvisionManyAsync(
+            registrations,
+            selectedTerminalInstanceId is null
+                ? null
+                : new HashSet<string>(StringComparer.Ordinal)
+                {
+                    selectedTerminalInstanceId,
+                },
+            cancellationToken);
+
+    public async Task<Mt4ProvisioningResult> ProvisionManyAsync(
+        IEnumerable<Mt4EaConnection> registrations,
+        IReadOnlySet<string>? allowedTerminalInstanceIds,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(registrations);
@@ -42,8 +56,8 @@ public sealed class Mt4RuntimeProvisioner
         {
             cancellationToken.ThrowIfCancellationRequested();
             var terminalId = SafeTerminalId(connection.Hello.TerminalDataPath);
-            if (selectedTerminalInstanceId is not null
-                && terminalId != selectedTerminalInstanceId)
+            if (allowedTerminalInstanceIds is not null
+                && !allowedTerminalInstanceIds.Contains(terminalId))
             {
                 await connection.DisposeAsync();
                 continue;
@@ -80,8 +94,8 @@ public sealed class Mt4RuntimeProvisioner
         var existing = await _store.GetTerminalBindingsAsync(cancellationToken);
         foreach (var binding in existing.Where(value => value.Platform == "mt4"))
         {
-            if (selectedTerminalInstanceId is not null
-                && binding.TerminalInstanceId != selectedTerminalInstanceId)
+            if (allowedTerminalInstanceIds is not null
+                && !allowedTerminalInstanceIds.Contains(binding.TerminalInstanceId))
             {
                 continue;
             }

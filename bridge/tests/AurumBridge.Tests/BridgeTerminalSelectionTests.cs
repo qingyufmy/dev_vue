@@ -140,6 +140,40 @@ public sealed class BridgeTerminalSelectionTests
             second,
             BridgeApplicationController.ResolveMt4InstallationSelection(
                 [first, second],
-                second.TerminalInstanceId));
+            second.TerminalInstanceId));
+    }
+
+    [TestMethod]
+    public void ObserverMt4InstallationsAreExcludedFromPrimarySelectionButKeptInTheHost()
+    {
+        var primary = new Mt4Installation(
+            Path.Combine(Path.GetTempPath(), "mt4-primary"),
+            Path.Combine(Path.GetTempPath(), "broker-primary"),
+            "test",
+            IsRunning:true);
+        var observer = new Mt4Installation(
+            Path.Combine(Path.GetTempPath(), "mt4-observer"),
+            Path.Combine(Path.GetTempPath(), "broker-observer"),
+            "observer_profile:source-1",
+            IsRunning:true);
+        var observerIds = new HashSet<string>(StringComparer.Ordinal)
+        {
+            observer.TerminalInstanceId,
+        };
+
+        var primaryChoices = BridgeApplicationController.ResolvePrimaryMt4Installations(
+            [primary, observer],
+            observerIds,
+            selectedTerminalId:null);
+        var hostInstallations = BridgeApplicationController.MergeMt4Installations(
+            primaryChoices,
+            [observer, observer]);
+
+        CollectionAssert.AreEqual(
+            new[] { primary.TerminalInstanceId },
+            primaryChoices.Select(value => value.TerminalInstanceId).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { primary.TerminalInstanceId, observer.TerminalInstanceId },
+            hostInstallations.Select(value => value.TerminalInstanceId).ToArray());
     }
 }

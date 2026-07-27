@@ -25,24 +25,58 @@ public static class BridgeObserverTerminalCatalog
             var preferences = new BridgeUserPreferencesStore(
                 Path.Combine(profileDirectory, "preferences.json"));
             var current = await preferences.LoadAsync(cancellationToken);
-            if (current.Platform != BridgePlatform.Mt5
-                || string.IsNullOrWhiteSpace(current.Mt5TerminalPath)
-                || !File.Exists(current.Mt5TerminalPath))
+            BridgeObserverTerminalConfiguration? terminal = current.Platform switch
+            {
+                BridgePlatform.Mt5 => ResolveMt5(profileId, current),
+                BridgePlatform.Mt4 => ResolveMt4(profileId, current),
+                _ => null,
+            };
+            if (terminal is null || !seenTerminalIds.Add(terminal.TerminalInstanceId))
             {
                 continue;
             }
-            var path = Path.GetFullPath(current.Mt5TerminalPath);
-            var terminalId = Mt5TerminalDiscovery.CreateTerminalInstanceId(path);
-            if (!seenTerminalIds.Add(terminalId))
-            {
-                continue;
-            }
-            terminals.Add(new(
-                profileId,
-                BridgePlatform.Mt5,
-                terminalId,
-                path));
+            terminals.Add(terminal);
         }
         return terminals;
+    }
+
+    private static BridgeObserverTerminalConfiguration? ResolveMt5(
+        string profileId,
+        BridgeUserPreferences preferences)
+    {
+        if (string.IsNullOrWhiteSpace(preferences.Mt5TerminalPath)
+            || !File.Exists(preferences.Mt5TerminalPath))
+        {
+            return null;
+        }
+        var path = Path.GetFullPath(preferences.Mt5TerminalPath);
+        return new(
+            profileId,
+            BridgePlatform.Mt5,
+            Mt5TerminalDiscovery.CreateTerminalInstanceId(path),
+            path);
+    }
+
+    private static BridgeObserverTerminalConfiguration? ResolveMt4(
+        string profileId,
+        BridgeUserPreferences preferences)
+    {
+        if (string.IsNullOrWhiteSpace(preferences.Mt4TerminalPath)
+            || string.IsNullOrWhiteSpace(preferences.Mt4TerminalInstanceId)
+            || !Directory.Exists(Path.Combine(preferences.Mt4TerminalPath, "MQL4")))
+        {
+            return null;
+        }
+        var path = Path.GetFullPath(preferences.Mt4TerminalPath);
+        var terminalId = Mt4TerminalIdentity.CreateTerminalInstanceId(path);
+        if (terminalId != preferences.Mt4TerminalInstanceId)
+        {
+            return null;
+        }
+        return new(
+            profileId,
+            BridgePlatform.Mt4,
+            terminalId,
+            path);
     }
 }
