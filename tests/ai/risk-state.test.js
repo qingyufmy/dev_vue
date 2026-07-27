@@ -325,6 +325,41 @@ describe('identity and platform permissions', () => {
     expect(db.logAudit).toHaveBeenCalledWith(expect.objectContaining({ action:'mt5_account_ownership_acquired' }))
   })
 
+  it('does not repeat an ownership transfer when the bound owner reconnects beside a switched historical row', async () => {
+    const writes = []
+    db.withTransaction.mockImplementation(async fn => fn(async sql => {
+      if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[{
+        id:3, user_id:2, broker_server:'Demo', login_account:'123', is_deleted:0,
+        observe_status:'active',
+      }], []]
+      if (sql.startsWith('SELECT * FROM trading_accounts\n      WHERE UPPER')) return [[
+        { id:3, user_id:2, broker_server:'Demo', login_account:'123', observe_status:'active' },
+        { id:99, user_id:8, broker_server:'Demo', login_account:'123', observe_status:'switched' },
+      ], []]
+      if (sql.includes('FROM mt5_account_bindings')) {
+        return [[{ current_user_id:2, current_trading_account_id:3 }], []]
+      }
+      if (sql.includes('SELECT id FROM mt5_account_ownership_history')) return [[], []]
+      writes.push(sql)
+      return [{ affectedRows:1 }, []]
+    }))
+
+    const result = await syncTradingAccountIdentity(
+      2,
+      { server:'Demo', login:123, trade_allowed:true }
+    )
+
+    expect(result).toEqual({
+      accountId:3, switched:false, verified:true, anomalyCode:null,
+      ownershipTransferred:false, previousOwnerUserIds:[],
+    })
+    expect(writes.some(sql => sql.includes('UPDATE auto_scheduler SET enabled = 0'))).toBe(false)
+    expect(writes.some(sql => sql.includes('user_bridge_settings'))).toBe(false)
+    expect(db.logAudit).not.toHaveBeenCalledWith(expect.objectContaining({
+      action:'mt5_account_ownership_acquired',
+    }))
+  })
+
   it('does not transfer ownership from a bridge without account trading permission', async () => {
     db.withTransaction.mockImplementation(async fn => fn(async sql => {
       if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[], []]

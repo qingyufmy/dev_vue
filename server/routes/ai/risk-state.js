@@ -259,15 +259,22 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
       }
     }
 
-    const previousOwnerUserIds = identityRows
-      .filter(row => Number(row.user_id) !== Number(userId) && row.observe_status !== 'transferred')
-      .map(row => Number(row.user_id)).filter(Boolean)
-    if (binding?.current_user_id && Number(binding.current_user_id) !== Number(userId)) {
-      previousOwnerUserIds.push(Number(binding.current_user_id))
-    }
+    // The binding is the authoritative current owner. Historical account rows can
+    // remain "switched" after their user selects another terminal; treating those
+    // rows as a fresh transfer on every reconnect would repeatedly disable that
+    // user's bridge controls after a server restart.
+    const boundOwnerUserId = Number(binding?.current_user_id || 0)
+    const previousOwnerUserIds = boundOwnerUserId > 0
+      ? (boundOwnerUserId === Number(userId) ? [] : [boundOwnerUserId])
+      : identityRows
+        .filter(row => Number(row.user_id) !== Number(userId)
+          && !['transferred', 'switched'].includes(String(row.observe_status || '')))
+        .map(row => Number(row.user_id)).filter(Boolean)
     const uniquePreviousOwnerUserIds = [...new Set(previousOwnerUserIds)]
+    const previousOwnerUserIdSet = new Set(uniquePreviousOwnerUserIds)
     const previousAccountIds = identityRows
-      .filter(row => Number(row.user_id) !== Number(userId) && row.observe_status !== 'transferred')
+      .filter(row => previousOwnerUserIdSet.has(Number(row.user_id))
+        && row.observe_status !== 'transferred')
       .map(row => Number(row.id)).filter(Boolean)
     if (previousAccountIds.length) {
       const placeholders = previousAccountIds.map(() => '?').join(',')
