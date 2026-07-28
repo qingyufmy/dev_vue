@@ -48,9 +48,43 @@ public sealed record HelloMessage : BridgeEnvelope
     [JsonPropertyName("bridge_version")]
     public required string BridgeVersion { get; init; }
 
+    [JsonPropertyName("installation_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? InstallationId { get; init; }
+
+    [JsonPropertyName("update_report")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BridgeClientUpdateReport? UpdateReport { get; init; }
+
     [JsonPropertyName("terminals")]
     public required IReadOnlyList<TerminalDescriptor> Terminals { get; init; }
 }
+
+public sealed record BridgeClientUpdateReport
+{
+    [JsonPropertyName("release_id")]
+    public required string ReleaseId { get; init; }
+
+    [JsonPropertyName("target_version")]
+    public required string TargetVersion { get; init; }
+
+    [JsonPropertyName("state")]
+    public required string State { get; init; }
+
+    [JsonPropertyName("started_at_utc_msc")]
+    public long? StartedAtUtcMsc { get; init; }
+
+    [JsonPropertyName("updated_at_utc_msc")]
+    public required long UpdatedAtUtcMsc { get; init; }
+
+    [JsonPropertyName("error_code")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ErrorCode { get; init; }
+}
+
+public sealed record BridgeHelloMetadata(
+    string InstallationId,
+    BridgeClientUpdateReport? UpdateReport);
 
 public sealed record HeartbeatMessage : BridgeEnvelope
 {

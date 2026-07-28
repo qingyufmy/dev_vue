@@ -7,6 +7,7 @@ import path from 'node:path'
 import {
   createBridgeReleaseRouter,
   isInstallationInRollout,
+  summarizeBridgeReleaseHealth,
   validateBridgeReleaseManifest,
 } from '../server/routes/bridge-release.js'
 
@@ -67,6 +68,24 @@ function request(router, headers = {}) {
   })
 }
 
+function getRoute(router, routePath, headers = {}) {
+  const app = express()
+  app.use('/api', router)
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, () => {
+      const req = http.get({
+        hostname:'127.0.0.1', port:server.address().port,
+        path:`/api${routePath}`, headers,
+      }, res => {
+        let body = ''
+        res.on('data', chunk => { body += chunk })
+        res.on('end', () => { server.close(); resolve({ status:res.statusCode, body }) })
+      })
+      req.on('error', error => { server.close(); reject(error) })
+    })
+  })
+}
+
 function mutate(router, routePath, body, headers = {}) {
   const app = express()
   app.use(express.json({ limit:'256kb' }))
@@ -95,6 +114,69 @@ function mutate(router, routePath, body, headers = {}) {
 }
 
 describe('bridge release manifest route', () => {
+  it('counts connected installations once and recommends stopping on rollback', () => {
+    const value = summarizeBridgeReleaseHealth({
+      manifest:manifestV2({ rollout_percentage:50 }),
+      observedAtUtcMsc:1_800_000_100_000,
+      sessions:[
+        { terminal_instance_id:'main', installation_id:'install_0123456789abcdef0123456789abcdef', bridge_version:'3.1.0', last_seen_at_utc_msc:20 },
+        { terminal_instance_id:'observer', installation_id:'install_0123456789abcdef0123456789abcdef', bridge_version:'3.1.0', last_seen_at_utc_msc:10 },
+        { terminal_instance_id:'legacy', installation_id:null, bridge_version:'3.0.0', last_seen_at_utc_msc:20 },
+      ],
+      events:[{
+        installation_id:'install_0123456789abcdef0123456789abcdef',
+        state:'rolled_back', started_at_utc_msc:1000, updated_at_utc_msc:4000,
+      }],
+    })
+    expect(value.connected).toMatchObject({
+      terminal_count:3, installation_count:1, legacy_terminal_count:1,
+      versions:{ '3.1.0':1 }, target_version_connected:1,
+    })
+    expect(value.rollout).toMatchObject({
+      expected_installations:1, reporting_installations:1, rolled_back:1,
+      average_recovery_duration_msc:3000,
+    })
+    expect(value.stop_line).toMatchObject({
+      recommended:true, reasons:['client_rolled_back'],
+    })
+  })
+
+  it('serves authenticated installation coverage from fresh terminal sessions', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'bridge-release-health-'))
+    try {
+      const manifestPath = path.join(directory, 'current.json')
+      const value = manifestV2({ rollout_percentage:100 })
+      await writeFile(manifestPath, JSON.stringify(value))
+      const queryAllFn = vi.fn(async sql => sql.includes('bridge_v3_terminal_sessions')
+        ? [{
+            terminal_instance_id:'main',
+            installation_id:'install_0123456789abcdef0123456789abcdef',
+            bridge_version:'3.1.0', last_seen_at_utc_msc:1_800_000_000_000,
+          }]
+        : [{
+            installation_id:'install_0123456789abcdef0123456789abcdef',
+            state:'healthy', started_at_utc_msc:1_799_999_900_000,
+            updated_at_utc_msc:1_800_000_000_000,
+          }])
+      const router = createBridgeReleaseRouter({
+        manifestPath, authenticate:(req, res, next) => next(),
+        requireAdmin:(req, res, next) => next(), queryAllFn,
+        now:() => 1_800_000_000_000,
+      })
+      const response = await getRoute(router, '/admin/bridge/v3/releases/health?freshness_seconds=90')
+      expect(response.status).toBe(200)
+      expect(JSON.parse(response.body)).toMatchObject({
+        ok:true,
+        connected:{ installation_count:1, target_version_connected:1 },
+        rollout:{ healthy:1, pending:0 },
+        stop_line:{ recommended:false },
+      })
+      expect(queryAllFn.mock.calls[0][1]).toEqual([1_799_999_910_000])
+    } finally {
+      await rm(directory, { recursive:true, force:true })
+    }
+  })
+
   it('serves a bounded public manifest without caching', async () => {
     const value = manifest()
     const response = await request(createBridgeReleaseRouter({

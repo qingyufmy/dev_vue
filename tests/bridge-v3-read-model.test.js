@@ -65,6 +65,23 @@ describe('Bridge v3 incremental read model', () => {
     expect(run.mock.calls[1][0]).toContain('INSERT INTO bridge_v3_terminal_sessions')
   })
 
+  it('persists installation-level release telemetry idempotently with the terminal session', async () => {
+    const { run, transactionFn } = transactionFor({ terminal:null })
+    await registerBridgeTerminalSession({
+      userId:42, sessionId:'session_01JREADMODEL06', terminalInstanceId:'terminal_01JREADMODEL1',
+      platform:'mt5', brokerServer:'Broker-Demo', login:'12345678', connectionEpoch:7,
+      clientVersion:'5.0.5735', bridgeVersion:'3.1.0',
+      installationId:'install_0123456789abcdef0123456789abcdef',
+      updateReport:{
+        release_id:'bridge-3.1.0-20260728.1', target_version:'3.1.0', state:'healthy',
+        started_at_utc_msc:NOW - 60_000, updated_at_utc_msc:NOW,
+      },
+      nowUtcMsc:NOW,
+    }, { transactionFn })
+    expect(run.mock.calls.some(([sql]) => sql.includes('bridge_version, installation_id'))).toBe(true)
+    expect(run.mock.calls.some(([sql]) => sql.includes('INSERT IGNORE INTO bridge_update_events'))).toBe(true)
+  })
+
   it('rejects stale epochs and account rebinding hidden inside a reconnect', async () => {
     const stale = transactionFor({ terminal:terminalRow({ connection_epoch:8 }) })
     await expect(registerBridgeTerminalSession({

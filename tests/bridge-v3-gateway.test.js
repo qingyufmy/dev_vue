@@ -36,6 +36,11 @@ function hello() {
     sent_at_utc_msc:NOW,
     session_id:'session_01JGATEWAY01',
     bridge_version:'3.0.0',
+    installation_id:'install_0123456789abcdef0123456789abcdef',
+    update_report:{
+      release_id:'bridge-3.0.0-test', target_version:'3.0.0', state:'healthy',
+      started_at_utc_msc:NOW - 5_000, updated_at_utc_msc:NOW,
+    },
     terminals:[{
       terminal_instance_id:'terminal_01JGATEWAY1',
       platform:'mt5',
@@ -201,6 +206,8 @@ describe('Bridge v3 websocket gateway', () => {
     expect(dependencies.consumeTicket).toHaveBeenCalledWith('ticket-value')
     expect(dependencies.registerTerminal).toHaveBeenCalledWith(expect.objectContaining({
       userId:42, terminalInstanceId:'terminal_01JGATEWAY1', connectionEpoch:7,
+      installationId:'install_0123456789abcdef0123456789abcdef',
+      bridgeVersion:'3.0.0', updateReport:expect.objectContaining({ state:'healthy' }),
     }))
     expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({ type:'hello_ack', session_id:'session_01JGATEWAY01' })
     expect(gateway.connectionsByTerminal.has('terminal_01JGATEWAY1')).toBe(true)

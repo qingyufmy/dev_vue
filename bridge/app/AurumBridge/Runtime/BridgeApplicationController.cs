@@ -1,3 +1,4 @@
+using AurumBridge.Protocol;
 using AurumBridge.Security;
 using AurumBridge.Storage;
 using AurumBridge.Workers;
@@ -65,6 +66,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
     private readonly Mt5RuntimeProvisioner _mt5Provisioner;
     private readonly Mt4RuntimeProvisioner _mt4Provisioner;
     private readonly Mt4ExpertInstaller? _mt4ExpertInstaller;
+    private readonly BridgeHelloMetadata? _helloMetadata;
     private readonly CancellationTokenSource _stop = new();
     private readonly Lock _sync = new();
     private readonly Dictionary<string, BridgeTerminalStatus> _terminalStatuses = new(StringComparer.Ordinal);
@@ -94,7 +96,8 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
         string? selectedMt5TerminalId = null,
         string? selectedMt5TerminalPath = null,
         string? selectedMt4TerminalId = null,
-        IReadOnlyList<BridgeObserverTerminalConfiguration>? observerTerminals = null)
+        IReadOnlyList<BridgeObserverTerminalConfiguration>? observerTerminals = null,
+        BridgeHelloMetadata? helloMetadata = null)
     {
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         Directory.CreateDirectory(paths.DataDirectory);
@@ -126,6 +129,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
             ? null
             : Path.GetFullPath(selectedMt5TerminalPath);
         _observerTerminals = NormalizeObserverTerminals(observerTerminals ?? []);
+        _helloMetadata = helloMetadata;
     }
 
     public event Action<BridgeApplicationStatus>? StatusChanged;
@@ -736,7 +740,8 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
             host.Terminals,
             typeof(BridgeApplicationController).Assembly.GetName().Version?.ToString() ?? "3.0.0",
             _sessionClient.AcquireConnectionAttemptAsync,
-            (attempt, ready, token) => webSocket.RunSessionAsync(attempt, ready, token));
+            (attempt, ready, token) => webSocket.RunSessionAsync(attempt, ready, token),
+            helloMetadata:_helloMetadata);
         connection.FailureObserved += error => ConnectionFailureObserved?.Invoke(error);
         connection.StatusChanged += status =>
         {

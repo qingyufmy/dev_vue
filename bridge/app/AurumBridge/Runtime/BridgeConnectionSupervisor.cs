@@ -25,6 +25,7 @@ public sealed class BridgeConnectionSupervisor
     private readonly Func<BridgeConnectionAttempt, Action, CancellationToken, Task> _runSession;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly Func<long> _clock;
+    private readonly BridgeHelloMetadata? _helloMetadata;
     private int _runStarted;
 
     public BridgeConnectionSupervisor(
@@ -33,7 +34,8 @@ public sealed class BridgeConnectionSupervisor
         Func<HelloMessage, CancellationToken, Task<BridgeConnectionAttempt>> acquireAttempt,
         Func<BridgeConnectionAttempt, Action, CancellationToken, Task> runSession,
         Func<TimeSpan, CancellationToken, Task>? delay = null,
-        Func<long>? clock = null)
+        Func<long>? clock = null,
+        BridgeHelloMetadata? helloMetadata = null)
     {
         ArgumentNullException.ThrowIfNull(terminals);
         if (terminals.Count is < 1 or > 32)
@@ -47,6 +49,7 @@ public sealed class BridgeConnectionSupervisor
         _runSession = runSession ?? throw new ArgumentNullException(nameof(runSession));
         _delay = delay ?? Task.Delay;
         _clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        _helloMetadata = helloMetadata;
     }
 
     public event Action<BridgeConnectionStatus>? StatusChanged;
@@ -131,6 +134,8 @@ public sealed class BridgeConnectionSupervisor
             SentAtUtcMsc = now,
             SessionId = $"session_{Guid.NewGuid():N}",
             BridgeVersion = _bridgeVersion,
+            InstallationId = _helloMetadata?.InstallationId,
+            UpdateReport = _helloMetadata?.UpdateReport,
             Terminals = _terminals,
         };
     }

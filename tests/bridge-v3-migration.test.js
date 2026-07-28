@@ -43,4 +43,12 @@ describe('Bridge v3 schema migration', () => {
     expect(migrations).toContain('idx_bridge_v3_deals_user_time (user_id, deal_time_msc)')
     expect(migrations).toContain('idx_bridge_v3_deals_position (terminal_instance_id, position_id, deal_time_msc)')
   })
+
+  it('stores installation-level release health without counting observer terminals as installations', () => {
+    expect(migrations).toContain("id: '146_bridge_release_observability'")
+    expect(migrations).toContain('ADD COLUMN installation_id VARCHAR(64)')
+    expect(migrations).toContain('ADD COLUMN bridge_version VARCHAR(64)')
+    expect(migrations).toContain('CREATE TABLE IF NOT EXISTS bridge_update_events')
+    expect(migrations).toContain('uk_bridge_update_event (installation_id, release_id, state, updated_at_utc_msc)')
+  })
 })

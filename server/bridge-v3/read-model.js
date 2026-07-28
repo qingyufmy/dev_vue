@@ -29,6 +29,34 @@ function terminalRoute(row) {
   }
 }
 
+function normalizeUpdateReport(value, nowUtcMsc) {
+  if (value == null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw readModelError('bridge_update_report_invalid')
+  }
+  const report = {
+    release_id:String(value.release_id || '').trim(),
+    target_version:String(value.target_version || '').trim(),
+    state:String(value.state || '').trim(),
+    started_at_utc_msc:value.started_at_utc_msc == null ? null : Number(value.started_at_utc_msc),
+    updated_at_utc_msc:Number(value.updated_at_utc_msc),
+    error_code:value.error_code == null ? null : String(value.error_code).trim(),
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(report.release_id)
+    || !/^\d+\.\d+(?:\.\d+){0,2}$/.test(report.target_version)
+    || !['healthy', 'rolled_back', 'failed'].includes(report.state)
+    || report.started_at_utc_msc != null
+      && (!Number.isSafeInteger(report.started_at_utc_msc) || report.started_at_utc_msc <= 0)
+    || !Number.isSafeInteger(report.updated_at_utc_msc) || report.updated_at_utc_msc <= 0
+    || report.updated_at_utc_msc > nowUtcMsc + 10 * 60 * 1000
+    || report.started_at_utc_msc != null && report.updated_at_utc_msc < report.started_at_utc_msc
+    || report.error_code != null && !/^[A-Za-z0-9_]{1,128}$/.test(report.error_code)
+    || report.state === 'failed' && !report.error_code) {
+    throw readModelError('bridge_update_report_invalid')
+  }
+  return report
+}
+
 function itemTicket(item, stream) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     throw readModelError(`bridge_${stream}_item_invalid`)
@@ -155,6 +183,9 @@ export async function registerBridgeTerminalSession({
   login,
   connectionEpoch,
   clientVersion = null,
+  bridgeVersion = null,
+  installationId = null,
+  updateReport = null,
   nowUtcMsc = Date.now(),
 }, { transactionFn = withTransaction } = {}) {
   const normalized = {
@@ -166,6 +197,9 @@ export async function registerBridgeTerminalSession({
     login:String(login || '').trim(),
     connectionEpoch:Number(connectionEpoch),
     clientVersion:clientVersion == null ? null : String(clientVersion).trim(),
+    bridgeVersion:bridgeVersion == null ? null : String(bridgeVersion).trim(),
+    installationId:installationId == null ? null : String(installationId).trim(),
+    updateReport:normalizeUpdateReport(updateReport, nowUtcMsc),
   }
   if (!Number.isSafeInteger(normalized.userId) || normalized.userId <= 0) throw readModelError('bridge_terminal_user_invalid')
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(normalized.sessionId)) throw readModelError('bridge_session_id_invalid')
@@ -173,6 +207,12 @@ export async function registerBridgeTerminalSession({
   if (!['mt4', 'mt5'].includes(normalized.platform)) throw readModelError('bridge_platform_invalid')
   if (!normalized.brokerServer || !normalized.login) throw readModelError('bridge_account_ref_invalid')
   if (!Number.isSafeInteger(normalized.connectionEpoch) || normalized.connectionEpoch <= 0) throw readModelError('bridge_connection_epoch_invalid')
+  if (normalized.clientVersion && normalized.clientVersion.length > 64) throw readModelError('bridge_client_version_invalid')
+  if (normalized.bridgeVersion && normalized.bridgeVersion.length > 64) throw readModelError('bridge_version_invalid')
+  if (normalized.installationId && !/^install_[a-f0-9]{32}$/.test(normalized.installationId)) {
+    throw readModelError('bridge_installation_id_invalid')
+  }
+  if (normalized.updateReport && !normalized.installationId) throw readModelError('bridge_update_installation_required')
 
   return transactionFn(async run => {
     const [rows] = await run(
@@ -206,15 +246,39 @@ export async function registerBridgeTerminalSession({
 
     await run(`INSERT INTO bridge_v3_terminal_sessions
       (terminal_instance_id, user_id, platform, broker_server, login_account, connection_epoch,
-       session_id, client_version, connected, last_seen_at_utc_msc)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+       session_id, client_version, bridge_version, installation_id, update_release_id, update_target_version,
+       update_state, update_started_at_utc_msc, update_reported_at_utc_msc, update_error_code,
+       connected, last_seen_at_utc_msc)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
       ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), connection_epoch = VALUES(connection_epoch),
         session_id = VALUES(session_id),
-        client_version = VALUES(client_version), connected = 1,
+        client_version = VALUES(client_version), bridge_version = VALUES(bridge_version),
+        installation_id = VALUES(installation_id),
+        update_release_id = VALUES(update_release_id), update_target_version = VALUES(update_target_version),
+        update_state = VALUES(update_state), update_started_at_utc_msc = VALUES(update_started_at_utc_msc),
+        update_reported_at_utc_msc = VALUES(update_reported_at_utc_msc),
+        update_error_code = VALUES(update_error_code), connected = 1,
         last_seen_at_utc_msc = VALUES(last_seen_at_utc_msc)`, [
       normalized.terminalInstanceId, normalized.userId, normalized.platform, normalized.brokerServer,
-      normalized.login, normalized.connectionEpoch, normalized.sessionId, normalized.clientVersion, nowUtcMsc,
+      normalized.login, normalized.connectionEpoch, normalized.sessionId, normalized.clientVersion,
+      normalized.bridgeVersion, normalized.installationId, normalized.updateReport?.release_id || null,
+      normalized.updateReport?.target_version || null, normalized.updateReport?.state || null,
+      normalized.updateReport?.started_at_utc_msc || null,
+      normalized.updateReport?.updated_at_utc_msc || null,
+      normalized.updateReport?.error_code || null, nowUtcMsc,
     ])
+    if (normalized.updateReport) {
+      await run(`INSERT IGNORE INTO bridge_update_events
+        (installation_id, release_id, target_version, state, started_at_utc_msc,
+         updated_at_utc_msc, error_code, bridge_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [
+        normalized.installationId, normalized.updateReport.release_id,
+        normalized.updateReport.target_version, normalized.updateReport.state,
+        normalized.updateReport.started_at_utc_msc || null,
+        normalized.updateReport.updated_at_utc_msc,
+        normalized.updateReport.error_code || null, normalized.bridgeVersion,
+      ])
+    }
     return { ...normalized, connected:true, lastSeenAtUtcMsc:nowUtcMsc,
       resumed:Boolean(existing && existing.user_id === normalized.userId
         && normalized.connectionEpoch === existing.connection_epoch),

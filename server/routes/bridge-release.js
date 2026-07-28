@@ -3,6 +3,7 @@ import { createHash, createPublicKey, timingSafeEqual, verify } from 'node:crypt
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
+import { queryAll } from '../db.js'
 import { adminOnly, authMiddleware } from '../middleware/auth.js'
 
 const MAX_MANIFEST_BYTES = 128 * 1024
@@ -57,6 +58,96 @@ export function isInstallationInRollout(manifest, installationId, channel = 'sta
     .update(`${manifest.release_id}:${installationId}`, 'utf8')
     .digest()
   return digest.readUInt32BE(0) % 100 < manifest.rollout_percentage
+}
+
+export function summarizeBridgeReleaseHealth({ manifest, sessions = [], events = [], observedAtUtcMsc }) {
+  const installations = new Map()
+  let legacyTerminalCount = 0
+  for (const row of sessions) {
+    const installationId = String(row.installation_id || '')
+    if (!validInstallationId(installationId)) {
+      legacyTerminalCount++
+      continue
+    }
+    const previous = installations.get(installationId)
+    if (!previous || Number(row.last_seen_at_utc_msc) > Number(previous.last_seen_at_utc_msc)) {
+      installations.set(installationId, row)
+    }
+  }
+  const versionCounts = new Map()
+  for (const row of installations.values()) {
+    const version = String(row.bridge_version || 'unknown')
+    versionCounts.set(version, (versionCounts.get(version) || 0) + 1)
+  }
+  const versions = Object.fromEntries(versionCounts)
+  const latestEvents = new Map()
+  for (const event of events) {
+    const installationId = String(event.installation_id || '')
+    if (!validInstallationId(installationId) || latestEvents.has(installationId)) continue
+    latestEvents.set(installationId, event)
+  }
+  const states = { healthy:0, rolled_back:0, failed:0 }
+  const recoveryDurations = []
+  for (const event of latestEvents.values()) {
+    if (Object.hasOwn(states, event.state)) states[event.state]++
+    const started = Number(event.started_at_utc_msc)
+    const updated = Number(event.updated_at_utc_msc)
+    if (started > 0 && updated >= started) recoveryDurations.push(updated - started)
+  }
+  const installationCount = installations.size
+  const rolloutPercentage = Number(manifest?.rollout_percentage || 100)
+  const expectedRolloutInstallations = manifest
+    ? Math.ceil(installationCount * rolloutPercentage / 100)
+    : 0
+  const targetVersion = manifest?.release_version || null
+  const targetVersionConnected = targetVersion
+    ? Number(versions[targetVersion] || 0)
+    : 0
+  const pending = Math.max(
+    0,
+    expectedRolloutInstallations - states.healthy - states.rolled_back - states.failed
+  )
+  const reasons = []
+  if (states.failed > 0) reasons.push('update_failed')
+  if (states.rolled_back > 0) reasons.push('client_rolled_back')
+  return {
+    observed_at_utc_msc:observedAtUtcMsc,
+    release:manifest ? {
+      release_id:manifest.release_id,
+      release_version:manifest.release_version,
+      rollout_channel:manifest.rollout_channel || 'stable',
+      rollout_percentage:rolloutPercentage,
+    } : null,
+    connected:{
+      terminal_count:sessions.length,
+      installation_count:installationCount,
+      legacy_terminal_count:legacyTerminalCount,
+      versions,
+      target_version_connected:targetVersionConnected,
+    },
+    rollout:{
+      expected_installations:expectedRolloutInstallations,
+      reporting_installations:latestEvents.size,
+      healthy:states.healthy,
+      rolled_back:states.rolled_back,
+      failed:states.failed,
+      pending,
+      average_recovery_duration_msc:recoveryDurations.length
+        ? Math.round(recoveryDurations.reduce((sum, value) => sum + value, 0) / recoveryDurations.length)
+        : null,
+    },
+    stop_line:{
+      recommended:reasons.length > 0,
+      reasons,
+      externally_audited_checks:[
+        'duplicate_order',
+        'wrong_account_route',
+        'lost_command',
+        'maintenance_command_leak',
+        'signature_or_path_bypass',
+      ],
+    },
+  }
 }
 
 function canonicalPackage(pkg) {
@@ -126,6 +217,8 @@ export function createBridgeReleaseRouter({
   publicKeyPath = process.env.BRIDGE_RELEASE_PUBLIC_KEY_PATH,
   releaseToken = process.env.AURUM_BRIDGE_RELEASE_API_TOKEN,
   verifySignatures = verifyBridgeReleaseSignatures,
+  queryAllFn = queryAll,
+  now = () => Date.now(),
 } = {}) {
   const router = Router()
   const previousPath = manifestPath ? `${manifestPath}.previous` : ''
@@ -230,6 +323,50 @@ export function createBridgeReleaseRouter({
       })
     } catch {
       return res.status(503).json({ ok:false, error:'bridge_release_status_unavailable' })
+    }
+  })
+
+  router.get('/admin/bridge/v3/releases/health', authorizeRelease, async (req, res) => {
+    const freshnessSeconds = Number(req.query.freshness_seconds || 90)
+    if (!Number.isSafeInteger(freshnessSeconds) || freshnessSeconds < 30 || freshnessSeconds > 600) {
+      return res.status(400).json({ ok:false, error:'bridge_release_freshness_invalid' })
+    }
+    try {
+      const observedAtUtcMsc = now()
+      const current = await optionalManifest(manifestPath)
+      const sessions = await queryAllFn(`SELECT terminal_instance_id, installation_id, bridge_version,
+          last_seen_at_utc_msc
+        FROM bridge_v3_terminal_sessions
+        WHERE connected = 1 AND last_seen_at_utc_msc >= ?`, [
+        observedAtUtcMsc - freshnessSeconds * 1000,
+      ])
+      const events = current?.release_id
+        ? await queryAllFn(`SELECT event.installation_id, event.release_id, event.target_version,
+            event.state, event.started_at_utc_msc, event.updated_at_utc_msc,
+            event.error_code, event.bridge_version
+          FROM bridge_update_events event
+          WHERE event.release_id = ?
+            AND event.id = (
+              SELECT latest.id FROM bridge_update_events latest
+              WHERE latest.release_id = event.release_id
+                AND latest.installation_id = event.installation_id
+              ORDER BY latest.updated_at_utc_msc DESC, latest.id DESC
+              LIMIT 1
+            )
+          ORDER BY event.updated_at_utc_msc DESC, event.id DESC`, [current.release_id])
+        : []
+      return res.json({
+        ok:true,
+        ...summarizeBridgeReleaseHealth({
+          manifest:current,
+          sessions,
+          events,
+          observedAtUtcMsc,
+        }),
+      })
+    } catch (error) {
+      console.error('[BridgeRelease] health unavailable:', error?.message || 'unknown')
+      return res.status(503).json({ ok:false, error:'bridge_release_health_unavailable' })
     }
   })
 

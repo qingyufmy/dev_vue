@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('sign','verify-signatures','upload','verify-remote','verify-endpoint','publish','stop','rollback')][string]$Operation,
+  [Parameter(Mandatory=$true)][ValidateSet('sign','verify-signatures','upload','verify-remote','verify-endpoint','publish','stop','rollback','health')][string]$Operation,
   [string]$Manifest,
   [string]$Artifacts,
   [string]$Signer,
@@ -8,6 +8,7 @@ param(
   [string]$Server,
   [string]$InstallationId,
   [ValidateSet('internal','stable')][string]$ReleaseChannel,
+  [ValidateRange(30,600)][int]$FreshnessSeconds = 90,
   [switch]$DryRun,
   [string]$Result
 )
@@ -19,6 +20,7 @@ if ($Server) {
   $arguments += @('--server', $Server)
   if ($InstallationId) { $arguments += @('--installation-id', $InstallationId) }
   if ($ReleaseChannel) { $arguments += @('--release-channel', $ReleaseChannel) }
+  if ($Operation -eq 'health') { $arguments += @('--freshness-seconds', [string]$FreshnessSeconds) }
   if ($DryRun) { $arguments += @('--dry-run', 'true') }
   if ($Result) { $arguments += @('--result', [IO.Path]::GetFullPath($Result)) }
 } else {

@@ -24,6 +24,8 @@ export const BRIDGE_V3_DATA_STREAMS = Object.freeze(new Set([
 ]))
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/
+const INSTALLATION_ID_PATTERN = /^install_[a-f0-9]{32}$/
+const UPDATE_REPORT_STATES = new Set(['healthy', 'rolled_back', 'failed'])
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -78,11 +80,49 @@ function validateCommand(message, nowUtcMsc) {
   return errors
 }
 
-function validateHello(message) {
+function validateHello(message, nowUtcMsc) {
   const errors = validateEnvelope(message)
   validateId(errors, 'session_id', message.session_id)
   const bridgeVersion = String(message.bridge_version || '').trim()
   if (!bridgeVersion || bridgeVersion.length > 64) errors.push('bridge_version:invalid')
+  if (message.installation_id !== undefined && message.installation_id !== null
+    && (typeof message.installation_id !== 'string'
+      || !INSTALLATION_ID_PATTERN.test(message.installation_id))) {
+    errors.push('installation_id:invalid')
+  }
+  if (message.update_report !== undefined && message.update_report !== null) {
+    const report = message.update_report
+    if (!isRecord(report)) errors.push('update_report:invalid')
+    else {
+      if (!INSTALLATION_ID_PATTERN.test(message.installation_id || '')) {
+        errors.push('update_report:installation_required')
+      }
+      validateId(errors, 'update_report.release_id', report.release_id)
+      const targetVersion = String(report.target_version || '').trim()
+      if (!/^\d+\.\d+(?:\.\d+){0,2}$/.test(targetVersion)) {
+        errors.push('update_report.target_version:invalid')
+      }
+      if (!UPDATE_REPORT_STATES.has(report.state)) errors.push('update_report.state:invalid')
+      if (report.started_at_utc_msc !== undefined && report.started_at_utc_msc !== null
+        && !isPositiveInteger(report.started_at_utc_msc)) {
+        errors.push('update_report.started_at_utc_msc:invalid')
+      }
+      if (!isPositiveInteger(report.updated_at_utc_msc)) errors.push('update_report.updated_at_utc_msc:invalid')
+      if (isPositiveInteger(report.updated_at_utc_msc)
+        && report.updated_at_utc_msc > nowUtcMsc + 10 * 60 * 1000) {
+        errors.push('update_report.updated_at_utc_msc:future')
+      }
+      if (isPositiveInteger(report.started_at_utc_msc) && isPositiveInteger(report.updated_at_utc_msc)
+        && report.updated_at_utc_msc < report.started_at_utc_msc) {
+        errors.push('update_report.updated_at_utc_msc:before_start')
+      }
+      if (report.error_code !== undefined && report.error_code !== null
+        && (typeof report.error_code !== 'string' || !/^[A-Za-z0-9_]{1,128}$/.test(report.error_code))) {
+        errors.push('update_report.error_code:invalid')
+      }
+      if (report.state === 'failed' && !report.error_code) errors.push('update_report.error_code:required')
+    }
+  }
   if (!Array.isArray(message.terminals) || !message.terminals.length || message.terminals.length > 32) {
     errors.push('terminals:invalid')
     return errors
@@ -210,7 +250,7 @@ export function validateBridgeV3Message(message, { nowUtcMsc = Date.now() } = {}
   if (envelopeErrors.length || !isRecord(message)) return { ok:false, errors:envelopeErrors }
 
   let errors
-  if (message.type === 'hello') errors = validateHello(message)
+  if (message.type === 'hello') errors = validateHello(message, nowUtcMsc)
   else if (message.type === 'command') errors = validateCommand(message, nowUtcMsc)
   else if (message.type === 'command_result') errors = validateCommandResult(message)
   else if (message.type === 'command_result_ack') errors = validateCommandResultAck(message)

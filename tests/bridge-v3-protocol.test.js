@@ -38,9 +38,39 @@ describe('Bridge v3 protocol contract', () => {
         { ...route({ terminal_instance_id:'terminal_01JBRIDGE0002' }), platform:'mt4' },
       ],
     })
-    expect(validateBridgeV3Message(hello)).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message(hello, { nowUtcMsc:NOW })).toEqual({ ok:true, errors:[] })
     expect(validateBridgeV3Message({ ...hello, terminals:[hello.terminals[0], hello.terminals[0]] }))
       .toMatchObject({ ok:false, errors:expect.arrayContaining(['terminals.1.terminal_instance_id:duplicate']) })
+  })
+
+  it('accepts bounded installation update telemetry and rejects unsafe reports', () => {
+    const hello = envelope('hello', {
+      session_id:'session_01JBRIDGE02',
+      bridge_version:'3.1.0',
+      installation_id:'install_0123456789abcdef0123456789abcdef',
+      update_report:{
+        release_id:'bridge-3.1.0-20260728.1', target_version:'3.1.0', state:'healthy',
+        started_at_utc_msc:NOW - 60_000, updated_at_utc_msc:NOW,
+      },
+      terminals:[{ ...route(), platform:'mt5' }],
+    })
+    expect(validateBridgeV3Message(hello, { nowUtcMsc:NOW })).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({
+      ...hello, installation_id:undefined,
+    })).toMatchObject({
+      ok:false, errors:expect.arrayContaining(['update_report:installation_required']),
+    })
+    expect(validateBridgeV3Message({
+      ...hello, update_report:{ ...hello.update_report, state:'failed', error_code:null },
+    })).toMatchObject({
+      ok:false, errors:expect.arrayContaining(['update_report.error_code:required']),
+    })
+    expect(validateBridgeV3Message({
+      ...hello,
+      update_report:{ ...hello.update_report, updated_at_utc_msc:NOW + 10 * 60 * 1000 + 1 },
+    }, { nowUtcMsc:NOW })).toMatchObject({
+      ok:false, errors:expect.arrayContaining(['update_report.updated_at_utc_msc:future']),
+    })
   })
 
   it('accepts a routed, unexpired command', () => {

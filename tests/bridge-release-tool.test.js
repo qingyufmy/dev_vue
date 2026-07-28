@@ -139,6 +139,39 @@ describe('bridge release tooling', () => {
     }
   })
 
+  it('reads authenticated release health without mutating the rollout', async () => {
+    let receivedRequest
+    const server = createServer((request, response) => {
+      receivedRequest = request
+      response.writeHead(200, { 'Content-Type':'application/json' })
+      response.end(JSON.stringify({
+        ok:true,
+        connected:{ installation_count:2, target_version_connected:1 },
+        rollout:{ healthy:1, rolled_back:0, failed:0, pending:0 },
+        stop_line:{ recommended:false, reasons:[] },
+      }))
+    })
+    try {
+      server.listen(0, '127.0.0.1')
+      await once(server, 'listening')
+      const address = server.address()
+      const cli = path.resolve('scripts/bridge-release/release-cli.mjs')
+      const { stdout } = await execFileAsync(process.execPath, [
+        cli, 'health', '--server', `http://127.0.0.1:${address.port}`,
+        '--freshness-seconds', '120',
+      ], { env:{ ...process.env, AURUM_BRIDGE_RELEASE_API_TOKEN:'test-release-token' } })
+      expect(JSON.parse(stdout)).toMatchObject({
+        ok:true, operation:'health',
+        response:{ connected:{ installation_count:2 }, stop_line:{ recommended:false } },
+      })
+      expect(receivedRequest.url).toBe('/api/admin/bridge/v3/releases/health?freshness_seconds=120')
+      expect(receivedRequest.headers.authorization).toBe('Bearer test-release-token')
+      expect(receivedRequest.method).toBe('GET')
+    } finally {
+      server.close()
+    }
+  })
+
   it('produces signatures accepted by the server and C# P1363 contract', () => {
     const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve:'prime256v1' })
     const pkg = {

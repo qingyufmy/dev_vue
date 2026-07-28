@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AurumBridge.Protocol;
 using AurumBridge.Runtime;
 using AurumBridge.Security;
 using AurumBridge.Update;
@@ -71,6 +72,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         string? selectedMt5TerminalPath = null;
         string? selectedMt4TerminalId = null;
         IReadOnlyList<BridgeObserverProfileView> observerProfileViews = [];
+        BridgeHelloMetadata? helloMetadata = null;
         try
         {
             var preferences = _preferences.LoadAsync().GetAwaiter().GetResult();
@@ -92,6 +94,36 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 _installationIdentityStore = new(Path.Combine(
                     _updateCoordinator.Environment.InstallRoot,
                     "installation-id"));
+                try
+                {
+                    var installationId = _installationIdentityStore
+                        .LoadOrCreateAsync(CancellationToken.None).GetAwaiter().GetResult();
+                    var updateState = _updateCoordinator
+                        .LoadStateAsync(CancellationToken.None).GetAwaiter().GetResult();
+                    BridgeClientUpdateReport? updateReport = null;
+                    if (updateState is not null
+                        && updateState.State is BridgeUpdateStates.Healthy
+                            or BridgeUpdateStates.RolledBack
+                            or BridgeUpdateStates.Failed
+                        && !string.IsNullOrWhiteSpace(updateState.ReleaseId)
+                        && !string.IsNullOrWhiteSpace(updateState.TargetVersion))
+                    {
+                        updateReport = new()
+                        {
+                            ReleaseId = updateState.ReleaseId,
+                            TargetVersion = updateState.TargetVersion,
+                            State = updateState.State,
+                            StartedAtUtcMsc = updateState.StagedAtUtcMsc,
+                            UpdatedAtUtcMsc = updateState.UpdatedAtUtcMsc,
+                            ErrorCode = updateState.LastErrorCode,
+                        };
+                    }
+                    helloMetadata = new(installationId, updateReport);
+                }
+                catch (Exception error)
+                {
+                    _logger.Error("update_telemetry_initialization_failed", error);
+                }
             }
             SignalObserverProfilesShutdown();
             try
@@ -113,7 +145,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
             selectedPlatform,
             selectedMt5TerminalId,
             selectedMt5TerminalPath,
-            selectedMt4TerminalId);
+            selectedMt4TerminalId,
+            helloMetadata:helloMetadata);
         _form = new(_profileId);
         _form.PairRequested += HandlePairRequested;
         _form.ObserverSourcesRequested += HandleObserverSourcesRequested;

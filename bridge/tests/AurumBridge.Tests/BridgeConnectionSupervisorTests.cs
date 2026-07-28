@@ -34,7 +34,17 @@ public sealed class BridgeConnectionSupervisorTests
                 return Task.CompletedTask;
             },
             (_, cancellationToken) => Task.CompletedTask,
-            () => 1_800_000_000_000);
+            () => 1_800_000_000_000,
+            new(
+                "install_0123456789abcdef0123456789abcdef",
+                new()
+                {
+                    ReleaseId = "bridge-3.1.0-test",
+                    TargetVersion = "3.1.0",
+                    State = "healthy",
+                    StartedAtUtcMsc = 1_799_999_900_000,
+                    UpdatedAtUtcMsc = 1_800_000_000_000,
+                }));
         supervisor.StatusChanged += statuses.Add;
 
         await supervisor.RunAsync(stop.Token);
@@ -43,6 +53,9 @@ public sealed class BridgeConnectionSupervisorTests
         Assert.AreNotEqual(hellos[0].SessionId, hellos[1].SessionId);
         Assert.AreNotEqual(hellos[0].MessageId, hellos[1].MessageId);
         Assert.AreEqual("3.0.0-test", hellos[0].BridgeVersion);
+        Assert.AreEqual("install_0123456789abcdef0123456789abcdef", hellos[0].InstallationId);
+        Assert.AreEqual("bridge-3.1.0-test", hellos[0].UpdateReport?.ReleaseId);
+        Assert.AreEqual("healthy", hellos[0].UpdateReport?.State);
         Assert.IsTrue(statuses.Any(status => status.State == BridgeConnectionState.Connected));
         Assert.AreEqual(BridgeConnectionState.Stopped, statuses[^1].State);
     }

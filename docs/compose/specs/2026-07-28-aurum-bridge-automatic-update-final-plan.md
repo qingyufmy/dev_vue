@@ -619,6 +619,7 @@ scripts/bridge-release/
   upload-qiniu.ps1
   verify-remote-release.ps1
   publish-manifest.ps1
+  get-release-health.ps1
   expand-rollout.ps1
   stop-rollout.ps1
   rollback-manifest.ps1
@@ -678,6 +679,7 @@ Skill 负责按安全顺序调用脚本、解释结果和生成发布摘要；�
 #### E. 灰度与完成
 
 1. 检查下载成功率、激活成功率、回滚率和 Bridge 恢复时间。
+   当前实现由客户端在 Bridge V3 `hello` 中上报稳定安装 ID、核心版本与最终升级状态；服务端按安装实例去重，不会把同一安装中的主账户和多个观摩源重复计数。`get-release-health.ps1` 输出目标版本覆盖、healthy/failed/rolled_back/pending、平均恢复耗时及停止建议。
 2. 任一停止线触发时停止扩大灰度。
 3. 只有当前阶段通过验收，才执行 5% → 25% → 100%。
 4. 100% 发布完成后生成发布证据摘要，并记录版本、Git 提交、包 hash、Manifest 签名指纹、七牛云对象和接口响应。

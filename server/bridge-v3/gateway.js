@@ -248,6 +248,9 @@ export function createBridgeV3Gateway({
           login:terminal.account_ref.login,
           connectionEpoch:terminal.connection_epoch,
           clientVersion:terminal.worker_version || message.bridge_version,
+          bridgeVersion:message.bridge_version,
+          installationId:message.installation_id || null,
+          updateReport:message.update_report || null,
           nowUtcMsc:now(),
         })
         connection.terminals.set(terminal.terminal_instance_id, terminal)

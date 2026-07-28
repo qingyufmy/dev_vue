@@ -257,6 +257,24 @@ async function endpoint(args, operation) {
   return { operation, response:value }
 }
 
+async function releaseHealth(args) {
+  const baseUrl = serverUrl(args)
+  const token = process.env.AURUM_BRIDGE_RELEASE_API_TOKEN
+  if (!token) fail('release_endpoint_configuration_missing')
+  const freshnessSeconds = args.get('freshness-seconds') || '90'
+  if (!/^\d{2,3}$/.test(freshnessSeconds)
+    || Number(freshnessSeconds) < 30 || Number(freshnessSeconds) > 600) {
+    fail('release_freshness_seconds_invalid')
+  }
+  const response = await fetch(
+    `${baseUrl}/api/admin/bridge/v3/releases/health?freshness_seconds=${freshnessSeconds}`,
+    { cache:'no-store', headers:{ Authorization:`Bearer ${token}` } }
+  )
+  const value = await response.json().catch(() => ({}))
+  if (!response.ok || value.ok !== true) fail('release_endpoint_health_failed')
+  return { operation:'health', response:value }
+}
+
 async function verifyEndpoint(args) {
   const baseUrl = serverUrl(args)
   const manifest = JSON.parse(await readFile(path.resolve(required(args, 'manifest')), 'utf8'))
@@ -295,6 +313,7 @@ async function main() {
     publish:() => endpoint(args, 'publish'),
     stop:() => endpoint(args, 'stop'),
     rollback:() => endpoint(args, 'rollback'),
+    health:() => releaseHealth(args),
   }
   if (!handlers[command]) fail('release_command_invalid')
   const result = await handlers[command]()
