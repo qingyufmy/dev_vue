@@ -303,6 +303,40 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
+    public void FinalUpdateStateBecomesAReconnectHelloReportOnlyAfterLauncherVerification()
+    {
+        var verifying = new BridgeUpdateState
+        {
+            State = BridgeUpdateStates.Verifying,
+            TargetVersion = "3.1.0",
+            ReleaseId = "bridge-3.1.0-report-test",
+            Priority = "normal",
+            StagedAtUtcMsc = 1_800_000_000_000,
+            ActivationStartedAtUtcMsc = 1_800_000_010_000,
+            MaintenanceLeaseId = "lease_report_test",
+            MaintenanceLeaseExpiresAtUtcMsc = 1_800_000_090_000,
+            UpdatedAtUtcMsc = 1_800_000_010_000,
+        };
+
+        Assert.IsNull(BridgeApplicationContext.CreateClientUpdateReport(verifying));
+
+        var report = BridgeApplicationContext.CreateClientUpdateReport(verifying with
+        {
+            State = BridgeUpdateStates.Healthy,
+            MaintenanceLeaseId = null,
+            MaintenanceLeaseExpiresAtUtcMsc = null,
+            UpdatedAtUtcMsc = 1_800_000_020_000,
+        });
+
+        Assert.IsNotNull(report);
+        Assert.AreEqual("bridge-3.1.0-report-test", report.ReleaseId);
+        Assert.AreEqual("3.1.0", report.TargetVersion);
+        Assert.AreEqual(BridgeUpdateStates.Healthy, report.State);
+        Assert.AreEqual(1_800_000_010_000, report.StartedAtUtcMsc);
+        Assert.AreEqual(1_800_000_020_000, report.UpdatedAtUtcMsc);
+    }
+
+    [TestMethod]
     public void StartupReadinessRequiresTheServerAndEveryPreviouslyOnlineTerminal()
     {
         const string mainId = "mt5_0123456789abcdef01234567";

@@ -26,6 +26,9 @@ public sealed record LauncherUpdateState
     [JsonPropertyName("staged_at_utc_msc")]
     public long? StagedAtUtcMsc { get; init; }
 
+    [JsonPropertyName("activation_started_at_utc_msc")]
+    public long? ActivationStartedAtUtcMsc { get; init; }
+
     [JsonPropertyName("minimum_idle_seconds")]
     public int MinimumIdleSeconds { get; init; } = 120;
 
@@ -155,6 +158,7 @@ public sealed class LauncherUpdateStateStore(
             || !Version.TryParse(state.TargetVersion, out _)
             || state.Priority is not ("normal" or "urgent")
             || state.StagedAtUtcMsc is null or <= 0
+            || state.ActivationStartedAtUtcMsc is <= 0
             || state.MinimumIdleSeconds is < 30 or > 3600
             || state.UpdatedAtUtcMsc <= 0
             || (state.MaintenanceLeaseId is null)

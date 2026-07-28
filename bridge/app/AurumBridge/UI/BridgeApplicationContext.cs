@@ -17,6 +17,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly BridgeSingleInstanceGuard _singleInstance;
     private readonly BridgeUpdateCoordinator? _updateCoordinator;
     private readonly BridgeInstallationIdentityStore? _installationIdentityStore;
+    private readonly string? _installationId;
     private readonly string? _startupReadyFile;
     private readonly IReadOnlySet<string> _startupExpectedTerminalInstanceIds;
     private readonly string _profileId;
@@ -99,29 +100,13 @@ public sealed class BridgeApplicationContext : ApplicationContext
                     "installation-id"));
                 try
                 {
-                    var installationId = _installationIdentityStore
+                    _installationId = _installationIdentityStore
                         .LoadOrCreateAsync(CancellationToken.None).GetAwaiter().GetResult();
                     var updateState = _updateCoordinator
                         .LoadStateAsync(CancellationToken.None).GetAwaiter().GetResult();
-                    BridgeClientUpdateReport? updateReport = null;
-                    if (updateState is not null
-                        && updateState.State is BridgeUpdateStates.Healthy
-                            or BridgeUpdateStates.RolledBack
-                            or BridgeUpdateStates.Failed
-                        && !string.IsNullOrWhiteSpace(updateState.ReleaseId)
-                        && !string.IsNullOrWhiteSpace(updateState.TargetVersion))
-                    {
-                        updateReport = new()
-                        {
-                            ReleaseId = updateState.ReleaseId,
-                            TargetVersion = updateState.TargetVersion,
-                            State = updateState.State,
-                            StartedAtUtcMsc = updateState.StagedAtUtcMsc,
-                            UpdatedAtUtcMsc = updateState.UpdatedAtUtcMsc,
-                            ErrorCode = updateState.LastErrorCode,
-                        };
-                    }
-                    helloMetadata = new(installationId, updateReport);
+                    helloMetadata = new(
+                        _installationId,
+                        CreateClientUpdateReport(updateState));
                 }
                 catch (Exception error)
                 {
@@ -1502,6 +1487,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private void HandleUpdateStateChanged(BridgeUpdateState? state)
     {
         LogUpdateStateTransition(state);
+        RefreshClientUpdateReport(state);
         var notice = state?.State switch
         {
             BridgeUpdateStates.Downloading => new BridgeUpdateNoticeView(
@@ -1557,6 +1543,47 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 }
             }
         });
+    }
+
+    internal static BridgeClientUpdateReport? CreateClientUpdateReport(
+        BridgeUpdateState? state)
+    {
+        if (state?.State is not (BridgeUpdateStates.Healthy
+                or BridgeUpdateStates.RolledBack
+                or BridgeUpdateStates.Failed)
+            || string.IsNullOrWhiteSpace(state.ReleaseId)
+            || string.IsNullOrWhiteSpace(state.TargetVersion))
+        {
+            return null;
+        }
+        return new()
+        {
+            ReleaseId = state.ReleaseId,
+            TargetVersion = state.TargetVersion,
+            State = state.State,
+            StartedAtUtcMsc = state.ActivationStartedAtUtcMsc
+                ?? state.StagedAtUtcMsc,
+            UpdatedAtUtcMsc = state.UpdatedAtUtcMsc,
+            ErrorCode = state.LastErrorCode,
+        };
+    }
+
+    private void RefreshClientUpdateReport(BridgeUpdateState? state)
+    {
+        var report = CreateClientUpdateReport(state);
+        if (_installationId is null || report is null)
+        {
+            return;
+        }
+        var reconnect = report.State == BridgeUpdateStates.Healthy;
+        if (_controller.UpdateHelloMetadata(
+            new(_installationId, report),
+            reconnect))
+        {
+            _logger.Info(
+                "update_report_refreshed",
+                $"version={report.TargetVersion};state={report.State};reconnect={reconnect}");
+        }
     }
 
     private void LogUpdateStateTransition(BridgeUpdateState? state)

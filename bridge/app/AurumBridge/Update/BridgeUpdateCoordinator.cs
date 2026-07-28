@@ -23,9 +23,10 @@ public sealed class BridgeUpdateCoordinator : IDisposable
     private readonly BridgeUpdateStateStore _stateStore;
     private readonly BridgeInstallationIdentityStore _installationIdentityStore;
     private readonly string _rolloutChannel;
+    private readonly SemaphoreSlim _operationGate = new(1, 1);
     private bool _disposed;
 
-    private BridgeUpdateCoordinator(
+    internal BridgeUpdateCoordinator(
         BridgeUpdateEnvironment environment,
         Uri serverBaseUri,
         HttpClient httpClient,
@@ -107,6 +108,7 @@ public sealed class BridgeUpdateCoordinator : IDisposable
         bool retryRolledBackRelease = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        await _operationGate.WaitAsync(cancellationToken);
         try
         {
             var previous = await _stateStore.LoadAsync(cancellationToken);
@@ -197,6 +199,10 @@ public sealed class BridgeUpdateCoordinator : IDisposable
             await TrySaveFailureStateAsync(error);
             throw;
         }
+        finally
+        {
+            _operationGate.Release();
+        }
     }
 
     public Task<BridgeUpdateState?> LoadStateAsync(
@@ -210,6 +216,7 @@ public sealed class BridgeUpdateCoordinator : IDisposable
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        await _operationGate.WaitAsync(cancellationToken);
         try
         {
             var state = await _stateStore.LoadAsync(cancellationToken);
@@ -231,24 +238,36 @@ public sealed class BridgeUpdateCoordinator : IDisposable
             await TrySaveFailureStateAsync(error);
             throw;
         }
+        finally
+        {
+            _operationGate.Release();
+        }
     }
 
     public async Task<BridgeUpdateState?> RequestManualActivationAsync(
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var state = await _stateStore.LoadAsync(cancellationToken);
-        if (state?.State != BridgeUpdateStates.WaitingWindow)
+        await _operationGate.WaitAsync(cancellationToken);
+        try
         {
-            return null;
+            var state = await _stateStore.LoadAsync(cancellationToken);
+            if (state?.State != BridgeUpdateStates.WaitingWindow)
+            {
+                return null;
+            }
+            if (state.ManualActivationRequested)
+            {
+                return state;
+            }
+            return await SaveStateAsync(
+                state with { ManualActivationRequested = true },
+                cancellationToken);
         }
-        if (state.ManualActivationRequested)
+        finally
         {
-            return state;
+            _operationGate.Release();
         }
-        return await SaveStateAsync(
-            state with { ManualActivationRequested = true },
-            cancellationToken);
     }
 
     public Task PrepareActivationAsync(
@@ -283,26 +302,41 @@ public sealed class BridgeUpdateCoordinator : IDisposable
         {
             throw new ArgumentOutOfRangeException(nameof(phase));
         }
-        var previous = await _stateStore.LoadAsync(cancellationToken);
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        return await SaveStateAsync(new()
+        await _operationGate.WaitAsync(cancellationToken);
+        try
         {
-            State = phase,
-            TargetVersion = stagedRelease.Version,
-            ReleaseId = stagedRelease.ReleaseId,
-            Priority = stagedRelease.Priority,
-            ManualActivationRequested = manualActivationRequested,
-            StagedAtUtcMsc = previous?.TargetVersion == stagedRelease.Version
-                ? previous.StagedAtUtcMsc ?? now
-                : now,
-            MinimumIdleSeconds = stagedRelease.MinimumIdleSeconds,
-            ActivationDeadlineUtcMsc = stagedRelease.ActivationDeadlineUtcMsc,
-            MaintenanceLeaseId = leaseId,
-            MaintenanceLeaseExpiresAtUtcMsc = leaseExpiresAtUtcMsc,
-            NextRetryAtUtcMsc = nextRetryAtUtcMsc,
-            LastErrorCode = lastErrorCode,
-            UpdatedAtUtcMsc = now,
-        }, cancellationToken);
+            var previous = await _stateStore.LoadAsync(cancellationToken);
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            return await SaveStateAsync(new()
+            {
+                State = phase,
+                TargetVersion = stagedRelease.Version,
+                ReleaseId = stagedRelease.ReleaseId,
+                Priority = stagedRelease.Priority,
+                ManualActivationRequested = manualActivationRequested
+                    || previous?.ManualActivationRequested == true,
+                StagedAtUtcMsc = previous?.TargetVersion == stagedRelease.Version
+                    ? previous.StagedAtUtcMsc ?? now
+                    : now,
+                ActivationStartedAtUtcMsc = phase == BridgeUpdateStates.WaitingWindow
+                    ? null
+                    : previous?.TargetVersion == stagedRelease.Version
+                        && previous.State != BridgeUpdateStates.WaitingWindow
+                        ? previous.ActivationStartedAtUtcMsc ?? now
+                        : now,
+                MinimumIdleSeconds = stagedRelease.MinimumIdleSeconds,
+                ActivationDeadlineUtcMsc = stagedRelease.ActivationDeadlineUtcMsc,
+                MaintenanceLeaseId = leaseId,
+                MaintenanceLeaseExpiresAtUtcMsc = leaseExpiresAtUtcMsc,
+                NextRetryAtUtcMsc = nextRetryAtUtcMsc,
+                LastErrorCode = lastErrorCode,
+                UpdatedAtUtcMsc = now,
+            }, cancellationToken);
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
     }
 
     public void StartLauncher()
@@ -325,6 +359,7 @@ public sealed class BridgeUpdateCoordinator : IDisposable
         _disposed = true;
         _verifier.Dispose();
         _httpClient.Dispose();
+        _operationGate.Dispose();
     }
 
     private async Task<BridgeUpdateState> SaveStateAsync(

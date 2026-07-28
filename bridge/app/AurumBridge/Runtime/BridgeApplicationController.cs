@@ -67,7 +67,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
     private readonly Mt5RuntimeProvisioner _mt5Provisioner;
     private readonly Mt4RuntimeProvisioner _mt4Provisioner;
     private readonly Mt4ExpertInstaller? _mt4ExpertInstaller;
-    private readonly BridgeHelloMetadata? _helloMetadata;
+    private BridgeHelloMetadata? _helloMetadata;
     private readonly CancellationTokenSource _stop = new();
     private readonly Lock _sync = new();
     private readonly Dictionary<string, BridgeTerminalStatus> _terminalStatuses = new(StringComparer.Ordinal);
@@ -245,6 +245,26 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
         lock (_sync)
         {
             _cycleCancellation?.Cancel();
+        }
+    }
+
+    internal bool UpdateHelloMetadata(
+        BridgeHelloMetadata metadata,
+        bool reconnect)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        lock (_sync)
+        {
+            if (_helloMetadata == metadata)
+            {
+                return false;
+            }
+            _helloMetadata = metadata;
+            if (reconnect)
+            {
+                _cycleCancellation?.Cancel();
+            }
+            return true;
         }
     }
 
@@ -749,12 +769,17 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
         };
         webSocket.FullSnapshotRequired += host.HandleFullSnapshotRequestAsync;
         webSocket.ReleaseAvailable += notification => ReleaseAvailable?.Invoke(notification);
+        BridgeHelloMetadata? helloMetadata;
+        lock (_sync)
+        {
+            helloMetadata = _helloMetadata;
+        }
         var connection = new BridgeConnectionSupervisor(
             host.Terminals,
             typeof(BridgeApplicationController).Assembly.GetName().Version?.ToString() ?? "3.0.0",
             _sessionClient.AcquireConnectionAttemptAsync,
             (attempt, ready, token) => webSocket.RunSessionAsync(attempt, ready, token),
-            helloMetadata:_helloMetadata);
+            helloMetadata:helloMetadata);
         connection.FailureObserved += error => ConnectionFailureObserved?.Invoke(error);
         connection.StatusChanged += status =>
         {

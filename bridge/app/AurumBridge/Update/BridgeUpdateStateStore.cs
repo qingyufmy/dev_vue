@@ -54,6 +54,9 @@ public sealed record BridgeUpdateState
     [JsonPropertyName("staged_at_utc_msc")]
     public long? StagedAtUtcMsc { get; init; }
 
+    [JsonPropertyName("activation_started_at_utc_msc")]
+    public long? ActivationStartedAtUtcMsc { get; init; }
+
     [JsonPropertyName("minimum_idle_seconds")]
     public int MinimumIdleSeconds { get; init; } = 120;
 
@@ -184,6 +187,7 @@ public sealed class BridgeUpdateStateStore(
                 || state.Priority is not ("normal" or "urgent"))
             || state.ReleaseId is { Length: > 128 }
             || state.StagedAtUtcMsc is <= 0
+            || state.ActivationStartedAtUtcMsc is <= 0
             || state.MinimumIdleSeconds is < 30 or > 3600
             || state.ActivationDeadlineUtcMsc is < 0
             || state.MaintenanceLeaseId is { Length: > 128 }

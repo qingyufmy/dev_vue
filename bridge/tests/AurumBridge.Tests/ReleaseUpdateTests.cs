@@ -749,6 +749,55 @@ public sealed class ReleaseUpdateTests
     }
 
     [TestMethod]
+    public async Task CoalescesRepeatedManualActivationAndPreservesItAcrossPhaseChanges()
+    {
+        var statePath = Path.Combine(_directory, "update-state.json");
+        await new BridgeUpdateStateStore(statePath).SaveAsync(new()
+        {
+            State = BridgeUpdateStates.WaitingWindow,
+            TargetVersion = "3.1.0",
+            ReleaseId = "bridge-3.1.0-manual-test",
+            Priority = "normal",
+            StagedAtUtcMsc = 1_800_000_000_000,
+            UpdatedAtUtcMsc = 1,
+        });
+        using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var coordinator = new BridgeUpdateCoordinator(
+            new(
+                _directory,
+                Path.Combine(_directory, "AURUMBridge.Launcher.exe"),
+                Path.Combine(_directory, "release-public-key.pem"),
+                Path.Combine(_directory, "current.json"),
+                new Version(3, 0, 0),
+                new Version(1, 0, 0),
+                statePath),
+            new Uri("https://updates.example.com"),
+            new HttpClient(new StaticResponseHandler([])),
+            new ReleaseManifestVerifier(signingKey.ExportSubjectPublicKeyInfoPem()));
+        var changedCount = 0;
+        coordinator.StateChanged += _ => Interlocked.Increment(ref changedCount);
+
+        var requests = await Task.WhenAll(Enumerable.Range(0, 20)
+            .Select(_ => coordinator.RequestManualActivationAsync()));
+
+        Assert.IsTrue(requests.All(state => state?.ManualActivationRequested == true));
+        Assert.AreEqual(1, changedCount);
+
+        var transitioned = await coordinator.SaveActivationPhaseAsync(
+            new(
+                "3.1.0",
+                Path.Combine(_directory, "versions", "3.1.0"),
+                "normal",
+                "bridge-3.1.0-manual-test"),
+            BridgeUpdateStates.AcquiringLease,
+            manualActivationRequested:false);
+
+        Assert.AreEqual(BridgeUpdateStates.AcquiringLease, transitioned.State);
+        Assert.IsTrue(transitioned.ManualActivationRequested);
+        Assert.IsNotNull(transitioned.ActivationStartedAtUtcMsc);
+    }
+
+    [TestMethod]
     public void ResolvesUpdatesOnlyFromACompleteInstalledLayout()
     {
         var applicationDirectory = Path.Combine(_directory, "versions", "3.0.0");
