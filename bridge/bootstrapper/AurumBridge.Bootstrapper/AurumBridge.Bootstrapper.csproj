@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>LiangjianBridgeSetup</AssemblyName>
+    <RootNamespace>AurumBridge.Bootstrapper</RootNamespace>
+    <Version>1.0.0</Version>
+    <ApplicationIcon>..\..\assets\liangjian-bridge.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\app\AurumBridge\Update\ReleaseManifest.cs" Link="Update\ReleaseManifest.cs" />
+    <Compile Include="..\..\app\AurumBridge\Update\ReleaseManifestClient.cs" Link="Update\ReleaseManifestClient.cs" />
+    <Compile Include="..\..\app\AurumBridge\Update\ReleaseStager.cs" Link="Update\ReleaseStager.cs" />
+    <Compile Include="..\..\app\AurumBridge\Update\BridgeInstallationIdentityStore.cs" Link="Update\BridgeInstallationIdentityStore.cs" />
+    <EmbeddedResource Include="$(AurumBootstrapLauncherZip)" LogicalName="AurumBridge.Bootstrapper.launcher.zip" />
+    <EmbeddedResource Include="$(AurumBootstrapPublicKey)" LogicalName="AurumBridge.Bootstrapper.release-public-key.pem" />
+    <AssemblyMetadata Include="AurumServerUrl" Value="$(AurumServerUrl)" />
+    <AssemblyMetadata Include="AurumLauncherVersion" Value="$(AurumLauncherVersion)" />
+  </ItemGroup>
+
+  <Target Name="ValidateBootstrapInputs" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(AurumBootstrapLauncherZip)')" Text="bootstrap_launcher_zip_missing" />
+    <Error Condition="!Exists('$(AurumBootstrapPublicKey)')" Text="bootstrap_public_key_missing" />
+    <Error Condition="'$(AurumServerUrl)' == ''" Text="bootstrap_server_url_missing" />
+    <Error Condition="'$(AurumLauncherVersion)' == ''" Text="bootstrap_launcher_version_missing" />
+  </Target>
+</Project>

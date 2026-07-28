@@ -36,7 +36,10 @@ public sealed class VersionPointerStore(string pointerPath)
                 FileShare.Read,
                 4096,
                 FileOptions.Asynchronous);
-            var pointer = await JsonSerializer.DeserializeAsync<VersionPointer>(stream, cancellationToken: cancellationToken)
+            var pointer = await JsonSerializer.DeserializeAsync(
+                stream,
+                LauncherJsonContext.Default.VersionPointer,
+                cancellationToken)
                 ?? throw new InvalidDataException("launcher_version_pointer_invalid");
             Validate(pointer);
             return pointer;
@@ -63,7 +66,11 @@ public sealed class VersionPointerStore(string pointerPath)
                 4096,
                 FileOptions.Asynchronous | FileOptions.WriteThrough))
             {
-                await JsonSerializer.SerializeAsync(stream, pointer, cancellationToken: cancellationToken);
+                await JsonSerializer.SerializeAsync(
+                    stream,
+                    pointer,
+                    LauncherJsonContext.Default.VersionPointer,
+                    cancellationToken);
                 await stream.FlushAsync(cancellationToken);
             }
             File.Move(temporaryPath, _pointerPath, overwrite: true);

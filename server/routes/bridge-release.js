@@ -7,6 +7,8 @@ import { queryAll } from '../db.js'
 import { adminOnly, authMiddleware } from '../middleware/auth.js'
 
 const MAX_MANIFEST_BYTES = 128 * 1024
+const MIN_BOOTSTRAP_VALIDITY_MS = 90 * 24 * 60 * 60 * 1000
+const BOOTSTRAP_MODULES = new Set(['core', 'adapter.mt5.python', 'adapter.mt4'])
 const ALLOWED_MODULES = new Set([
   'core',
   'adapter.mt5.python',
@@ -210,6 +212,7 @@ export function validateBridgeReleaseManifest(manifest, nowUtcMsc = Date.now()) 
 
 export function createBridgeReleaseRouter({
   manifestPath = process.env.BRIDGE_RELEASE_MANIFEST_PATH,
+  bootstrapManifestPath = process.env.BRIDGE_BOOTSTRAP_MANIFEST_PATH,
   readManifest = readFile,
   authenticate = authMiddleware,
   requireAdmin = adminOnly,
@@ -223,7 +226,22 @@ export function createBridgeReleaseRouter({
   const router = Router()
   const previousPath = manifestPath ? `${manifestPath}.previous` : ''
   const disabledPath = manifestPath ? `${manifestPath}.disabled` : ''
+  const bootstrapPreviousPath = bootstrapManifestPath ? `${bootstrapManifestPath}.previous` : ''
   let mutation = Promise.resolve()
+
+  function isBootstrapManifest(manifest, minimumExpiryUtcMsc = now()) {
+    const packages = Array.isArray(manifest?.packages) ? manifest.packages : []
+    const modules = new Set(packages.map(value => value.module_id))
+    return validateBridgeReleaseManifest(manifest, now())
+      && manifest.schema_version === 2
+      && manifest.priority === 'normal'
+      && manifest.activation_deadline_utc_msc === null
+      && manifest.rollout_channel === 'stable'
+      && manifest.rollout_percentage === 100
+      && manifest.expires_at_utc_msc >= minimumExpiryUtcMsc
+      && modules.size === BOOTSTRAP_MODULES.size
+      && [...BOOTSTRAP_MODULES].every(value => modules.has(value))
+  }
 
   function authorizeRelease(req, res, next) {
     const provided = String(req.get('Authorization') || '').replace(/^Bearer\s+/i, '')
@@ -257,7 +275,7 @@ export function createBridgeReleaseRouter({
     if (!target) return null
     try {
       const value = JSON.parse((await fileOps.readFile(target)).toString('utf8'))
-      return validateBridgeReleaseManifest(value) ? value : null
+      return validateBridgeReleaseManifest(value, now()) ? value : null
     } catch (error) {
       if (error?.code === 'ENOENT') return null
       throw error
@@ -275,22 +293,25 @@ export function createBridgeReleaseRouter({
     }
   }
 
-  router.get('/bridge/v3/releases/current', async (req, res) => {
+  async function servePublicManifest(req, res, target, {
+    applyRollout = false,
+    requireBootstrap = false,
+  } = {}) {
     res.set('Cache-Control', 'no-store')
     res.set('X-Content-Type-Options', 'nosniff')
-    if (!manifestPath) return res.status(204).end()
+    if (!target) return res.status(204).end()
     try {
-      if (await markerExists(disabledPath)) return res.status(204).end()
-      const content = await readManifest(manifestPath)
+      const content = await readManifest(target)
       const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content)
       if (bytes.length === 0 || bytes.length > MAX_MANIFEST_BYTES) {
         throw new Error('bridge_release_manifest_size_invalid')
       }
       const manifest = JSON.parse(bytes.toString('utf8'))
-      if (!validateBridgeReleaseManifest(manifest)) {
+      if (!validateBridgeReleaseManifest(manifest, now())
+        || requireBootstrap && !isBootstrapManifest(manifest)) {
         throw new Error('bridge_release_manifest_invalid')
       }
-      if (!isInstallationInRollout(
+      if (applyRollout && !isInstallationInRollout(
         manifest,
         req.get('X-Aurum-Installation-Id'),
         String(req.get('X-Aurum-Release-Channel') || 'stable').toLowerCase())) {
@@ -306,13 +327,30 @@ export function createBridgeReleaseRouter({
       console.error('[BridgeRelease] manifest unavailable:', error?.message || 'unknown')
       return res.status(503).json({ ok:false, error:'bridge_release_unavailable' })
     }
+  }
+
+  router.get('/bridge/v3/releases/current', async (req, res) => {
+    res.set('Cache-Control', 'no-store')
+    res.set('X-Content-Type-Options', 'nosniff')
+    try {
+      if (await markerExists(disabledPath)) return res.status(204).end()
+      return servePublicManifest(req, res, manifestPath, { applyRollout:true })
+    } catch (error) {
+      console.error('[BridgeRelease] rollout marker unavailable:', error?.message || 'unknown')
+      return res.status(503).json({ ok:false, error:'bridge_release_unavailable' })
+    }
   })
+
+  router.get('/bridge/v3/releases/bootstrap', async (req, res) =>
+    servePublicManifest(req, res, bootstrapManifestPath, { requireBootstrap:true }))
 
   router.get('/admin/bridge/v3/releases/status', authorizeRelease, async (req, res) => {
     try {
-      const [current, previous, disabled] = await Promise.all([
+      const [current, previous, bootstrap, bootstrapPrevious, disabled] = await Promise.all([
         optionalManifest(manifestPath),
         optionalManifest(previousPath),
+        optionalManifest(bootstrapManifestPath),
+        optionalManifest(bootstrapPreviousPath),
         markerExists(disabledPath),
       ])
       return res.json({
@@ -320,6 +358,8 @@ export function createBridgeReleaseRouter({
         enabled:!disabled,
         current,
         previous,
+        bootstrap,
+        bootstrap_previous:bootstrapPrevious,
       })
     } catch {
       return res.status(503).json({ ok:false, error:'bridge_release_status_unavailable' })
@@ -396,6 +436,59 @@ export function createBridgeReleaseRouter({
       })
     } catch {
       return res.status(503).json({ ok:false, error:'bridge_release_publish_failed' })
+    }
+  })
+
+  router.post('/admin/bridge/v3/releases/promote-bootstrap', authorizeRelease, async (req, res) => {
+    const manifest = req.body?.manifest
+    if (!bootstrapManifestPath
+      || !isBootstrapManifest(manifest, now() + MIN_BOOTSTRAP_VALIDITY_MS)) {
+      return res.status(400).json({ ok:false, error:'bridge_bootstrap_manifest_invalid' })
+    }
+    try {
+      if (!publicKeyPath) {
+        return res.status(503).json({ ok:false, error:'bridge_release_signature_verifier_unavailable' })
+      }
+      const publicKey = await fileOps.readFile(publicKeyPath, 'utf8')
+      if (!verifySignatures(manifest, publicKey)) {
+        return res.status(400).json({ ok:false, error:'bridge_release_signature_invalid' })
+      }
+      await serialize(async () => {
+        const current = await optionalManifest(bootstrapManifestPath)
+        if (current) await atomicWrite(bootstrapPreviousPath, JSON.stringify(current))
+        await atomicWrite(bootstrapManifestPath, JSON.stringify(manifest))
+      })
+      return res.json({
+        ok:true,
+        release_id:manifest.release_id,
+        release_version:manifest.release_version,
+      })
+    } catch {
+      return res.status(503).json({ ok:false, error:'bridge_bootstrap_publish_failed' })
+    }
+  })
+
+  router.post('/admin/bridge/v3/releases/rollback-bootstrap', authorizeRelease, async (req, res) => {
+    try {
+      const previous = await serialize(async () => {
+        const value = await optionalManifest(bootstrapPreviousPath)
+        if (!value || !isBootstrapManifest(value)) return null
+        if (!publicKeyPath) throw new Error('bridge_release_signature_verifier_unavailable')
+        const publicKey = await fileOps.readFile(publicKeyPath, 'utf8')
+        if (!verifySignatures(value, publicKey)) throw new Error('bridge_release_signature_invalid')
+        const current = await optionalManifest(bootstrapManifestPath)
+        await atomicWrite(bootstrapManifestPath, JSON.stringify(value))
+        if (current) await atomicWrite(bootstrapPreviousPath, JSON.stringify(current))
+        return value
+      })
+      if (!previous) return res.status(404).json({ ok:false, error:'bridge_bootstrap_previous_not_found' })
+      return res.json({
+        ok:true,
+        release_id:previous.release_id,
+        release_version:previous.release_version,
+      })
+    } catch {
+      return res.status(503).json({ ok:false, error:'bridge_bootstrap_rollback_failed' })
     }
   })
 

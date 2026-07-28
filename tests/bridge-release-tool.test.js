@@ -7,7 +7,12 @@ import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { canonicalManifest, canonicalPackage, immutablePackageKey } from '../scripts/bridge-release/release-cli.mjs'
+import {
+  canonicalManifest,
+  canonicalPackage,
+  immutablePackageKey,
+  isBootstrapManifest,
+} from '../scripts/bridge-release/release-cli.mjs'
 import { verifyBridgeReleaseSignatures } from '../server/routes/bridge-release.js'
 
 const execFileAsync = promisify(execFile)
@@ -31,6 +36,17 @@ describe('bridge release tooling', () => {
     expect(releaseBuilder).toContain('release_python_runtime_metadata_missing')
   })
 
+  it('builds a self-contained bootstrapper with an embedded pinned launcher and public key', async () => {
+    const bootstrapBuilder = await readFile(new URL('../scripts/bridge-release/build-bootstrapper.ps1', import.meta.url), 'utf8')
+    const bootstrapProject = await readFile(new URL('../bridge/bootstrapper/AurumBridge.Bootstrapper/AurumBridge.Bootstrapper.csproj', import.meta.url), 'utf8')
+    const manifestClient = await readFile(new URL('../bridge/app/AurumBridge/Update/ReleaseManifestClient.cs', import.meta.url), 'utf8')
+    expect(bootstrapBuilder).toContain('-p:PublishSingleFile=true')
+    expect(bootstrapBuilder).toContain('bootstrap_authenticode_signing_required')
+    expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.launcher.zip')
+    expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.release-public-key.pem')
+    expect(manifestClient).toContain('/api/bridge/v3/releases/bootstrap')
+  })
+
   it('matches the signed package and Manifest V2 canonical contracts', () => {
     const pkg = {
       module_id:'core', version:'3.1.0', url:'https://qiniu.example/bridge/core.zip',
@@ -52,6 +68,19 @@ describe('bridge release tooling', () => {
     const manifest = { release_version:'3.1.0' }
     const pkg = { module_id:'adapter.mt4', sha256:'A'.repeat(64) }
     expect(immutablePackageKey(manifest, pkg)).toBe(`bridge/releases/3.1.0/${'a'.repeat(64)}/adapter.mt4.zip`)
+  })
+
+  it('rejects a normal rollout manifest as a bootstrap pointer candidate', () => {
+    const packages = ['core', 'adapter.mt5.python', 'adapter.mt4']
+      .map(module_id => ({ module_id, signature:'package-signature' }))
+    const candidate = {
+      schema_version:2, priority:'normal', activation_deadline_utc_msc:null,
+      rollout_channel:'stable', rollout_percentage:25,
+      expires_at_utc_msc:1_900_000_000_000,
+      packages, signature:'manifest-signature',
+    }
+    expect(isBootstrapManifest(candidate, 1_800_000_000_000)).toBe(false)
+    expect(isBootstrapManifest({ ...candidate, rollout_percentage:100 }, 1_800_000_000_000)).toBe(true)
   })
 
   it('dry-runs an upload without Qiniu credentials or remote writes', async () => {
@@ -96,6 +125,47 @@ describe('bridge release tooling', () => {
         ok:true, operation:'publish', dry_run:true,
         endpoint:'https://release.example/api/admin/bridge/v3/releases/publish',
       })
+    } finally {
+      await rm(temporary, { recursive:true, force:true })
+    }
+  })
+
+  it('derives a long-lived 100% bootstrap candidate without mutating the signed source', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'aurum-bootstrap-manifest-'))
+    try {
+      const sourcePath = path.join(temporary, 'source.json')
+      const outputPath = path.join(temporary, 'bootstrap.json')
+      const source = {
+        schema_version:2, release_id:'bridge-3.1.0-stable', release_version:'3.1.0',
+        generated_at_utc_msc:1, published_at_utc_msc:1, expires_at_utc_msc:2,
+        priority:'urgent', minimum_launcher_version:'1.0.0', minimum_idle_seconds:120,
+        activation_deadline_utc_msc:2, rollout_channel:'internal', rollout_percentage:25,
+        packages:[
+          { module_id:'core', signature:'package-signature' },
+          { module_id:'adapter.mt5.python', signature:'package-signature' },
+          { module_id:'adapter.mt4', signature:'package-signature' },
+        ],
+        signature:'manifest-signature',
+      }
+      await writeFile(sourcePath, JSON.stringify(source))
+      const cli = path.resolve('scripts/bridge-release/release-cli.mjs')
+      const { stdout } = await execFileAsync(process.execPath, [
+        cli, 'create-bootstrap-manifest', '--manifest', sourcePath,
+        '--output', outputPath, '--validity-days', '365',
+      ])
+      expect(JSON.parse(stdout)).toMatchObject({
+        ok:true, operation:'create-bootstrap-manifest',
+        release_id:'bridge-3.1.0-stable.bootstrap', release_version:'3.1.0',
+      })
+      const bootstrap = JSON.parse(await readFile(outputPath, 'utf8'))
+      expect(bootstrap).toMatchObject({
+        priority:'normal', activation_deadline_utc_msc:null,
+        rollout_channel:'stable', rollout_percentage:100, signature:'',
+      })
+      expect(bootstrap.packages).toEqual(source.packages)
+      expect(JSON.parse(await readFile(sourcePath, 'utf8'))).toEqual(source)
+      expect(bootstrap.expires_at_utc_msc - bootstrap.published_at_utc_msc)
+        .toBe(365 * 24 * 60 * 60 * 1000)
     } finally {
       await rm(temporary, { recursive:true, force:true })
     }

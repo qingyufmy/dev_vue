@@ -15,7 +15,10 @@ public sealed class ReleaseManifestClient
     private readonly Uri _endpoint;
     private readonly HttpClient _httpClient;
 
-    public ReleaseManifestClient(Uri serverBaseUri, HttpClient httpClient)
+    public ReleaseManifestClient(
+        Uri serverBaseUri,
+        HttpClient httpClient,
+        string endpointPath = "/api/bridge/v3/releases/current")
     {
         ArgumentNullException.ThrowIfNull(serverBaseUri);
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -24,7 +27,12 @@ public sealed class ReleaseManifestClient
         {
             throw new ArgumentException("update_server_uri_invalid", nameof(serverBaseUri));
         }
-        _endpoint = new(serverBaseUri, "/api/bridge/v3/releases/current");
+        if (endpointPath is not ("/api/bridge/v3/releases/current"
+                or "/api/bridge/v3/releases/bootstrap"))
+        {
+            throw new ArgumentException("update_endpoint_path_invalid", nameof(endpointPath));
+        }
+        _endpoint = new(serverBaseUri, endpointPath);
     }
 
     public async Task<ReleaseManifest?> FetchVerifiedAsync(

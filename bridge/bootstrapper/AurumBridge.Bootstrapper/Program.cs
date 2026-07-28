@@ -1,0 +1,425 @@
+using System.Diagnostics;
+using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using AurumBridge.Update;
+
+namespace AurumBridge.Bootstrapper;
+
+internal static class Program
+{
+    [STAThread]
+    private static void Main()
+    {
+        ApplicationConfiguration.Initialize();
+        Application.Run(new BootstrapperForm());
+    }
+}
+
+internal sealed class BootstrapperForm : Form
+{
+    private readonly Label _status = new()
+    {
+        AutoSize = false,
+        Left = 32,
+        Top = 76,
+        Width = 456,
+        Height = 52,
+        Text = "正在准备安装…",
+    };
+    private readonly ProgressBar _progress = new()
+    {
+        Left = 32,
+        Top = 138,
+        Width = 456,
+        Height = 10,
+        Style = ProgressBarStyle.Marquee,
+        MarqueeAnimationSpeed = 24,
+    };
+    private int _started;
+
+    public BootstrapperForm()
+    {
+        Text = "量见智桥安装程序";
+        Width = 536;
+        Height = 230;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        StartPosition = FormStartPosition.CenterScreen;
+        Font = new Font("Microsoft YaHei UI", 10F);
+        Controls.Add(new Label
+        {
+            AutoSize = true,
+            Left = 32,
+            Top = 24,
+            Font = new Font(Font.FontFamily, 17F, FontStyle.Bold),
+            Text = "量见智桥",
+        });
+        Controls.Add(_status);
+        Controls.Add(_progress);
+        Shown += async (_, _) => await InstallAsync();
+        FormClosing += (_, eventArgs) =>
+        {
+            if (Volatile.Read(ref _started) == 1) eventArgs.Cancel = true;
+        };
+    }
+
+    private async Task InstallAsync()
+    {
+        if (Interlocked.Exchange(ref _started, 1) != 0) return;
+        try
+        {
+            var installer = new BootstrapInstaller(UpdateStatus);
+            var version = await installer.InstallAsync();
+            _progress.Style = ProgressBarStyle.Blocks;
+            _progress.Value = 100;
+            _status.Text = $"安装完成，正在启动量见智桥 {version}…";
+            installer.StartLauncher();
+            await Task.Delay(800);
+            Interlocked.Exchange(ref _started, 0);
+            Close();
+        }
+        catch (Exception error)
+        {
+            _progress.Style = ProgressBarStyle.Blocks;
+            _progress.Value = 0;
+            _status.Text = BootstrapInstaller.DescribeError(error);
+            BootstrapInstaller.WriteFailureLog(error);
+            Interlocked.Exchange(ref _started, 0);
+            MessageBox.Show(this, _status.Text, "量见智桥安装失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void UpdateStatus(string value) => _status.Text = value;
+}
+
+internal sealed class BootstrapInstaller(Action<string> status)
+{
+    private const string PublicKeyResource = "AurumBridge.Bootstrapper.release-public-key.pem";
+    private const string LauncherResource = "AurumBridge.Bootstrapper.launcher.zip";
+    private static readonly string[] RequiredCoreFiles =
+    [
+        "AURUMBridge.exe",
+        "AURUMBridge.dll",
+        "AURUMBridge.runtimeconfig.json",
+        "hostfxr.dll",
+        "coreclr.dll",
+        "e_sqlite3.dll",
+        "Microsoft.Data.Sqlite.dll",
+        "runtime/python/python.exe",
+        "modules/adapter.mt5.python/worker.py",
+        "modules/adapter.mt4/AURUMBridgeEA.ex4",
+    ];
+    private readonly Assembly _assembly = typeof(BootstrapInstaller).Assembly;
+    private readonly Action<string> _status = status;
+    private readonly string _installRoot = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "AURUM",
+        "LiangjianBridge");
+
+    public async Task<string> InstallAsync(CancellationToken cancellationToken = default)
+    {
+        var serverUrl = Metadata("AurumServerUrl");
+        var launcherVersion = Version.Parse(Metadata("AurumLauncherVersion"));
+        if (!Uri.TryCreate(serverUrl, UriKind.Absolute, out var server)
+            || server.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidDataException("bootstrap_server_url_invalid");
+        }
+
+        Directory.CreateDirectory(_installRoot);
+        using var installationLock = new Mutex(false, "Local\\AURUM-LiangjianBridge-Installer");
+        var ownsInstallationLock = false;
+        try
+        {
+            ownsInstallationLock = installationLock.WaitOne(TimeSpan.Zero);
+        }
+        catch (AbandonedMutexException)
+        {
+            ownsInstallationLock = true;
+        }
+        if (!ownsInstallationLock)
+        {
+            throw new InvalidOperationException("bootstrap_installation_in_progress");
+        }
+        var operationRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"aurum-bootstrap-{Guid.NewGuid():N}");
+        try
+        {
+            EnsureBridgeIsStopped();
+            Directory.CreateDirectory(operationRoot);
+            _status("正在验证发布信息…");
+            var publicKey = ReadTextResource(PublicKeyResource);
+            var identityStore = new BridgeInstallationIdentityStore(Path.Combine(_installRoot, "installation-id"));
+            var installationId = await identityStore.LoadOrCreateAsync(cancellationToken);
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+            using var verifier = new ReleaseManifestVerifier(publicKey);
+            var manifestClient = new ReleaseManifestClient(
+                server,
+                http,
+                "/api/bridge/v3/releases/bootstrap");
+            var manifest = await manifestClient.FetchVerifiedAsync(
+                verifier,
+                launcherVersion,
+                installationId,
+                "stable",
+                cancellationToken)
+                ?? throw new InvalidOperationException("bootstrap_release_unavailable");
+            ValidateManifestPackageSet(manifest);
+
+            _status($"正在下载量见智桥 {manifest.ReleaseVersion}…");
+            var downloads = Path.Combine(operationRoot, "downloads");
+            var versionDirectory = Path.Combine(operationRoot, "version");
+            var stager = new ReleaseStager(http);
+            foreach (var package in manifest.Packages.OrderBy(value => value.ModuleId, StringComparer.Ordinal))
+            {
+                var archive = await stager.DownloadPackageAsync(package, downloads, cancellationToken);
+                var destination = package.ModuleId == "core"
+                    ? versionDirectory
+                    : Path.Combine(versionDirectory, "modules", package.ModuleId);
+                ReleaseStager.ExtractPackage(archive, destination);
+            }
+            ValidateVersionDirectory(versionDirectory);
+            await File.WriteAllTextAsync(
+                Path.Combine(versionDirectory, ".aurum-release.json"),
+                JsonSerializer.Serialize(manifest),
+                new UTF8Encoding(false),
+                cancellationToken);
+
+            _status("正在安装稳定启动组件…");
+            var launcherArchive = Path.Combine(operationRoot, "launcher.zip");
+            await CopyResourceAsync(LauncherResource, launcherArchive, cancellationToken);
+            var launcherDirectory = Path.Combine(operationRoot, "launcher");
+            ReleaseStager.ExtractPackage(launcherArchive, launcherDirectory);
+            if (!File.Exists(Path.Combine(launcherDirectory, "AURUMBridge.Launcher.exe")))
+            {
+                throw new InvalidDataException("bootstrap_launcher_invalid");
+            }
+
+            EnsureBridgeIsStopped();
+            InstallVersion(versionDirectory, manifest.ReleaseVersion);
+            CopyDirectoryFilesAtomically(launcherDirectory, _installRoot);
+            await WriteAtomicAsync(Path.Combine(_installRoot, "release-public-key.pem"), publicKey, cancellationToken);
+            await WriteAtomicAsync(Path.Combine(_installRoot, "rollout-channel"), "stable", cancellationToken);
+            await WriteAtomicAsync(
+                Path.Combine(_installRoot, "current.json"),
+                JsonSerializer.Serialize(new
+                {
+                    active_version = manifest.ReleaseVersion,
+                    last_known_good_version = manifest.ReleaseVersion,
+                    status = "healthy",
+                    expected_terminal_instance_ids = Array.Empty<string>(),
+                    updated_at_utc_msc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                }),
+                cancellationToken);
+            CreateDesktopShortcut();
+            return manifest.ReleaseVersion;
+        }
+        finally
+        {
+            if (ownsInstallationLock) installationLock.ReleaseMutex();
+            try { Directory.Delete(operationRoot, recursive:true); } catch { }
+        }
+    }
+
+    public void StartLauncher()
+    {
+        var launcher = Path.Combine(_installRoot, "AURUMBridge.Launcher.exe");
+        Process.Start(new ProcessStartInfo { FileName = launcher, UseShellExecute = true });
+    }
+
+    public static string DescribeError(Exception error) => error.Message switch
+    {
+        "bootstrap_running_process_detected" => "请先退出正在运行的量见智桥，再重新安装。",
+        "bootstrap_installation_in_progress" => "另一个安装程序正在运行，请稍后重试。",
+        "bootstrap_release_unavailable" => "当前没有可用于首次安装的稳定版本，请稍后重试。",
+        "update_manifest_signature_invalid" or "update_package_signature_invalid"
+            => "安装包安全校验失败，已停止安装。",
+        "update_package_integrity_failed" or "update_package_size_mismatch"
+            => "安装包下载不完整，请检查网络后重试。",
+        _ => "安装未完成，请检查网络后重试；如仍失败，请联系管理员。",
+    };
+
+    public static void WriteFailureLog(Exception error)
+    {
+        try
+        {
+            var root = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "AURUM",
+                "LiangjianBridge",
+                "logs");
+            Directory.CreateDirectory(root);
+            File.WriteAllText(
+                Path.Combine(root, "installer-last-error.log"),
+                $"{DateTimeOffset.UtcNow:O}{Environment.NewLine}{error}",
+                new UTF8Encoding(false));
+        }
+        catch
+        {
+            // Logging must never hide the installation error shown to the user.
+        }
+    }
+
+    private string Metadata(string key) => _assembly
+        .GetCustomAttributes<AssemblyMetadataAttribute>()
+        .SingleOrDefault(value => value.Key == key)?.Value
+        ?? throw new InvalidDataException("bootstrap_metadata_missing");
+
+    private string ReadTextResource(string name)
+    {
+        using var stream = _assembly.GetManifestResourceStream(name)
+            ?? throw new InvalidDataException("bootstrap_resource_missing");
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks:true);
+        return reader.ReadToEnd();
+    }
+
+    private async Task CopyResourceAsync(string name, string destination, CancellationToken cancellationToken)
+    {
+        await using var source = _assembly.GetManifestResourceStream(name)
+            ?? throw new InvalidDataException("bootstrap_resource_missing");
+        await using var target = new FileStream(
+            destination,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.WriteThrough);
+        await source.CopyToAsync(target, cancellationToken);
+        await target.FlushAsync(cancellationToken);
+    }
+
+    private static void ValidateManifestPackageSet(ReleaseManifest manifest)
+    {
+        var modules = manifest.Packages.Select(value => value.ModuleId).ToHashSet(StringComparer.Ordinal);
+        if (manifest.SchemaVersion != 2 || manifest.RolloutPercentage != 100
+            || manifest.RolloutChannel != "stable"
+            || !modules.SetEquals(["core", "adapter.mt5.python", "adapter.mt4"]))
+        {
+            throw new InvalidDataException("bootstrap_manifest_package_set_invalid");
+        }
+    }
+
+    private static void ValidateVersionDirectory(string directory)
+    {
+        if (RequiredCoreFiles.Any(relative => !File.Exists(Path.Combine(directory, relative))))
+        {
+            throw new InvalidDataException("bootstrap_version_layout_invalid");
+        }
+    }
+
+    private void InstallVersion(string source, string version)
+    {
+        if (!Version.TryParse(version, out _)) throw new InvalidDataException("bootstrap_version_invalid");
+        var versions = Path.Combine(_installRoot, "versions");
+        Directory.CreateDirectory(versions);
+        var destination = Path.GetFullPath(Path.Combine(versions, version));
+        var prefix = Path.GetFullPath(versions) + Path.DirectorySeparatorChar;
+        if (!destination.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("bootstrap_version_path_invalid");
+        }
+        if (Directory.Exists(destination))
+        {
+            var backup = Path.Combine(
+                versions,
+                $".repair-backup-{version}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}");
+            Directory.Move(destination, backup);
+            try
+            {
+                Directory.Move(source, destination);
+                ValidateVersionDirectory(destination);
+                return;
+            }
+            catch
+            {
+                if (!Directory.Exists(destination) && Directory.Exists(backup))
+                {
+                    Directory.Move(backup, destination);
+                }
+                throw;
+            }
+        }
+        Directory.Move(source, destination);
+        ValidateVersionDirectory(destination);
+    }
+
+    private static void CopyDirectoryFilesAtomically(string source, string destination)
+    {
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+        }
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            var temporary = Path.Combine(
+                Path.GetDirectoryName(target)!,
+                $".{Path.GetFileName(target)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.Copy(file, temporary, overwrite:false);
+                File.Move(temporary, target, overwrite:true);
+            }
+            finally
+            {
+                if (File.Exists(temporary)) File.Delete(temporary);
+            }
+        }
+    }
+
+    private static async Task WriteAtomicAsync(
+        string path,
+        string value,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temporary = Path.Combine(
+            Path.GetDirectoryName(path)!,
+            $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await File.WriteAllTextAsync(temporary, value, new UTF8Encoding(false), cancellationToken);
+            File.Move(temporary, path, overwrite:true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
+    }
+
+    private void CreateDesktopShortcut()
+    {
+        try
+        {
+            var shortcutPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                "量见智桥.lnk");
+            var shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType is null) return;
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic shortcut = shell.CreateShortcut(shortcutPath);
+            shortcut.TargetPath = Path.Combine(_installRoot, "AURUMBridge.Launcher.exe");
+            shortcut.WorkingDirectory = _installRoot;
+            shortcut.IconLocation = Path.Combine(_installRoot, "AURUMBridge.Launcher.exe");
+            shortcut.Description = "量见智桥 - 连接交易终端与量见 AI交易实验室";
+            shortcut.Save();
+        }
+        catch
+        {
+            // A shortcut is optional; the launcher also registers user startup.
+        }
+    }
+
+    private static void EnsureBridgeIsStopped()
+    {
+        if (Process.GetProcessesByName("AURUMBridge").Any()
+            || Process.GetProcessesByName("AURUMBridge.Launcher").Any())
+        {
+            throw new InvalidOperationException("bootstrap_running_process_detected");
+        }
+    }
+}

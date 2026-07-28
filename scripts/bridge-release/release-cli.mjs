@@ -62,6 +62,22 @@ export function immutablePackageKey(manifest, pkg) {
   return `bridge/releases/${manifest.release_version}/${pkg.sha256.toLowerCase()}/${pkg.module_id}.zip`
 }
 
+export function isBootstrapManifest(manifest, minimumExpiryUtcMsc = Date.now() + 90 * 24 * 60 * 60 * 1000) {
+  const packages = Array.isArray(manifest?.packages) ? manifest.packages : []
+  const modules = new Set(packages.map(value => value.module_id))
+  return manifest?.schema_version === 2
+    && manifest.priority === 'normal'
+    && manifest.activation_deadline_utc_msc === null
+    && manifest.rollout_channel === 'stable'
+    && manifest.rollout_percentage === 100
+    && Number.isSafeInteger(manifest.expires_at_utc_msc)
+    && manifest.expires_at_utc_msc >= minimumExpiryUtcMsc
+    && typeof manifest.signature === 'string' && manifest.signature.length > 0
+    && modules.size === 3
+    && ['core', 'adapter.mt5.python', 'adapter.mt4'].every(value => modules.has(value))
+    && packages.every(value => typeof value.signature === 'string' && value.signature.length > 0)
+}
+
 async function artifactPlan(manifest, artifactDirectory) {
   const planned = []
   let origin = null
@@ -115,6 +131,41 @@ async function sign(args) {
     return { operation:'sign', manifest:output, release_id:manifest.release_id }
   } finally {
     await rm(temporary, { recursive:true, force:true })
+  }
+}
+
+async function createBootstrapManifest(args) {
+  const source = JSON.parse(await readFile(path.resolve(required(args, 'manifest')), 'utf8'))
+  const output = path.resolve(required(args, 'output'))
+  const validityDays = Number(args.get('validity-days') || 365)
+  const packages = Array.isArray(source.packages) ? source.packages : []
+  const modules = new Set(packages.map(value => value.module_id))
+  if (source.schema_version !== 2 || !Array.isArray(source.packages) || !source.packages.length
+    || modules.size !== 3
+    || !['core', 'adapter.mt5.python', 'adapter.mt4'].every(value => modules.has(value))
+    || !Number.isSafeInteger(validityDays) || validityDays < 90 || validityDays > 730) {
+    fail('release_bootstrap_source_invalid')
+  }
+  const releaseId = args.get('release-id') || `${source.release_id}.bootstrap`
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(releaseId)) fail('release_release_id_invalid')
+  const now = Date.now()
+  const manifest = {
+    ...source,
+    release_id:releaseId,
+    generated_at_utc_msc:now,
+    published_at_utc_msc:now,
+    expires_at_utc_msc:now + validityDays * 24 * 60 * 60 * 1000,
+    priority:'normal',
+    activation_deadline_utc_msc:null,
+    rollout_channel:'stable',
+    rollout_percentage:100,
+    signature:'',
+  }
+  await writeFile(output, JSON.stringify(manifest, null, 2), { flag:'wx' })
+  return {
+    operation:'create-bootstrap-manifest', manifest:output,
+    release_id:releaseId, release_version:manifest.release_version,
+    expires_at_utc_msc:manifest.expires_at_utc_msc,
   }
 }
 
@@ -235,9 +286,12 @@ async function verifySignatures(args) {
 
 async function endpoint(args, operation) {
   const baseUrl = serverUrl(args)
-  const body = operation === 'publish'
+  const body = ['publish', 'promote-bootstrap'].includes(operation)
     ? { manifest:JSON.parse(await readFile(path.resolve(required(args, 'manifest')), 'utf8')) }
     : {}
+  if (operation === 'promote-bootstrap' && !isBootstrapManifest(body.manifest)) {
+    fail('release_bootstrap_manifest_invalid')
+  }
   if (isDryRun(args)) {
     return {
       operation, dry_run:true, endpoint:`${baseUrl}/api/admin/bridge/v3/releases/${operation}`,
@@ -255,6 +309,21 @@ async function endpoint(args, operation) {
   const value = await response.json().catch(() => ({}))
   if (!response.ok || value.ok !== true) fail(`release_endpoint_${operation}_failed`)
   return { operation, response:value }
+}
+
+async function verifyBootstrapEndpoint(args) {
+  const baseUrl = serverUrl(args)
+  const manifest = JSON.parse(await readFile(path.resolve(required(args, 'manifest')), 'utf8'))
+  if (!isBootstrapManifest(manifest, Date.now())) fail('release_bootstrap_manifest_invalid')
+  const response = await fetch(`${baseUrl}/api/bridge/v3/releases/bootstrap`, { cache:'no-store' })
+  if (!response.ok) fail('release_bootstrap_endpoint_failed')
+  const value = await response.json().catch(() => null)
+  if (!isDeepStrictEqual(value, manifest)) fail('release_bootstrap_manifest_mismatch')
+  return {
+    operation:'verify-bootstrap', release_id:value.release_id,
+    release_version:value.release_version,
+    manifest_signature_sha256:createHash('sha256').update(value.signature, 'utf8').digest('hex'),
+  }
 }
 
 async function releaseHealth(args) {
@@ -314,6 +383,10 @@ async function main() {
     stop:() => endpoint(args, 'stop'),
     rollback:() => endpoint(args, 'rollback'),
     health:() => releaseHealth(args),
+    'promote-bootstrap':() => endpoint(args, 'promote-bootstrap'),
+    'rollback-bootstrap':() => endpoint(args, 'rollback-bootstrap'),
+    'verify-bootstrap':() => verifyBootstrapEndpoint(args),
+    'create-bootstrap-manifest':() => createBootstrapManifest(args),
   }
   if (!handlers[command]) fail('release_command_invalid')
   const result = await handlers[command]()

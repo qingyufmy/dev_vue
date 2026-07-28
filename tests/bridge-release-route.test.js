@@ -45,6 +45,25 @@ function manifestV2(overrides = {}) {
   })
 }
 
+function bootstrapManifestV2(overrides = {}) {
+  const base = manifestV2({
+    priority:'normal',
+    activation_deadline_utc_msc:null,
+    rollout_channel:'stable',
+    rollout_percentage:100,
+  })
+  const core = base.packages[0]
+  return {
+    ...base,
+    packages:[
+      core,
+      { ...core, module_id:'adapter.mt5.python', url:'https://updates.example.com/mt5.zip' },
+      { ...core, module_id:'adapter.mt4', url:'https://updates.example.com/mt4.zip' },
+    ],
+    ...overrides,
+  }
+}
+
 function request(router, headers = {}) {
   const app = express()
   app.use('/api', router)
@@ -318,6 +337,40 @@ describe('bridge release manifest route', () => {
       const rollback = await mutate(router, '/admin/bridge/v3/releases/rollback')
       expect(rollback.status).toBe(200)
       expect(JSON.parse(rollback.body).release_id).toBe(first.release_id)
+    } finally {
+      await rm(directory, { recursive:true, force:true })
+    }
+  })
+
+  it('serves only an explicitly promoted 100% release to new installations and rolls it back', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'bridge-bootstrap-route-'))
+    try {
+      const bootstrapManifestPath = path.join(directory, 'bootstrap.json')
+      const publicKeyPath = path.join(directory, 'public-key.pem')
+      await writeFile(publicKeyPath, 'test-public-key')
+      const router = createBridgeReleaseRouter({
+        manifestPath:path.join(directory, 'current.json'),
+        bootstrapManifestPath,
+        authenticate:(req, res, next) => next(),
+        requireAdmin:(req, res, next) => next(),
+        publicKeyPath,
+        verifySignatures:() => true,
+      })
+      const canary = bootstrapManifestV2({ release_id:'bridge-3.1.0-canary', rollout_percentage:25 })
+      const first = bootstrapManifestV2({ release_id:'bridge-3.0.0-bootstrap', release_version:'3.0.0' })
+      const second = bootstrapManifestV2({ release_id:'bridge-3.1.0-bootstrap' })
+      expect((await mutate(router, '/admin/bridge/v3/releases/promote-bootstrap', { manifest:{ packages:{} } })).status).toBe(400)
+      expect((await mutate(router, '/admin/bridge/v3/releases/promote-bootstrap', { manifest:canary })).status).toBe(400)
+      await writeFile(bootstrapManifestPath, JSON.stringify(canary))
+      expect((await getRoute(router, '/bridge/v3/releases/bootstrap')).status).toBe(503)
+      expect((await mutate(router, '/admin/bridge/v3/releases/promote-bootstrap', { manifest:first })).status).toBe(200)
+      expect(JSON.parse((await getRoute(router, '/bridge/v3/releases/bootstrap')).body)).toEqual(first)
+      expect((await mutate(router, '/admin/bridge/v3/releases/promote-bootstrap', { manifest:second })).status).toBe(200)
+      expect(JSON.parse((await getRoute(router, '/bridge/v3/releases/bootstrap')).body)).toEqual(second)
+      const rollback = await mutate(router, '/admin/bridge/v3/releases/rollback-bootstrap')
+      expect(rollback.status).toBe(200)
+      expect(JSON.parse(rollback.body).release_id).toBe(first.release_id)
+      expect(JSON.parse((await getRoute(router, '/bridge/v3/releases/bootstrap')).body)).toEqual(first)
     } finally {
       await rm(directory, { recursive:true, force:true })
     }

@@ -72,9 +72,10 @@ public sealed class LauncherUpdateStateStore(
                 FileShare.Read,
                 4096,
                 FileOptions.Asynchronous);
-            var state = await JsonSerializer.DeserializeAsync<LauncherUpdateState>(
+            var state = await JsonSerializer.DeserializeAsync(
                 stream,
-                cancellationToken:cancellationToken)
+                LauncherJsonContext.Default.LauncherUpdateState,
+                cancellationToken)
                 ?? throw new InvalidDataException("launcher_update_state_invalid");
             Validate(state);
             return state;
@@ -132,7 +133,8 @@ public sealed class LauncherUpdateStateStore(
                 await JsonSerializer.SerializeAsync(
                     stream,
                     next,
-                    cancellationToken:cancellationToken);
+                    LauncherJsonContext.Default.LauncherUpdateState,
+                    cancellationToken);
                 await stream.FlushAsync(cancellationToken);
             }
             File.Move(temporaryPath, _statePath, overwrite:true);

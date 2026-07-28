@@ -156,6 +156,20 @@ public sealed class ReleaseUpdateTests
     }
 
     [TestMethod]
+    public void AcceptsOnlyTheCurrentAndBootstrapReleaseEndpoints()
+    {
+        using var http = new HttpClient(new StaticResponseHandler([]));
+        var server = new Uri("https://www.cnfxtrade.com");
+
+        _ = new ReleaseManifestClient(server, http, "/api/bridge/v3/releases/current");
+        _ = new ReleaseManifestClient(server, http, "/api/bridge/v3/releases/bootstrap");
+        var error = Assert.ThrowsExactly<ArgumentException>(() =>
+            new ReleaseManifestClient(server, http, "/api/admin/bridge/v3/releases/status"));
+
+        StringAssert.Contains(error.Message, "update_endpoint_path_invalid");
+    }
+
+    [TestMethod]
     public void RejectsZipTraversalBeforeExtractingAnyFile()
     {
         var package = Path.Combine(_directory, "malicious.zip");
