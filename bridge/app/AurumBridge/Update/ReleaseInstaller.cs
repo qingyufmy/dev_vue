@@ -7,7 +7,9 @@ public sealed record StagedRelease(
     string Version,
     string VersionDirectory,
     string Priority = "normal",
-    string? ReleaseId = null);
+    string? ReleaseId = null,
+    int MinimumIdleSeconds = 120,
+    long? ActivationDeadlineUtcMsc = null);
 
 public sealed class ReleaseInstaller(
     string installRoot,
@@ -117,7 +119,73 @@ public sealed class ReleaseInstaller(
             manifest.ReleaseVersion,
             versionDirectory,
             manifest.SchemaVersion == 2 ? manifest.Priority! : "normal",
-            manifest.ReleaseId);
+            manifest.ReleaseId,
+            manifest.SchemaVersion == 2 ? manifest.MinimumIdleSeconds!.Value : 120,
+            manifest.SchemaVersion == 2 ? manifest.ActivationDeadlineUtcMsc : null);
+
+    public async Task<StagedRelease?> RestoreAsync(
+        BridgeUpdateState state,
+        ReleaseManifestVerifier verifier,
+        Version launcherVersion,
+        Version currentVersion,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(verifier);
+        ArgumentNullException.ThrowIfNull(launcherVersion);
+        ArgumentNullException.ThrowIfNull(currentVersion);
+        if (state.State is not (BridgeUpdateStates.WaitingWindow
+                or BridgeUpdateStates.AcquiringLease
+                or BridgeUpdateStates.Draining
+                or BridgeUpdateStates.Activating)
+            || !Version.TryParse(state.TargetVersion, out var targetVersion)
+            || targetVersion <= currentVersion)
+        {
+            return null;
+        }
+        var versionDirectory = Path.GetFullPath(Path.Combine(
+            _installRoot,
+            "versions",
+            state.TargetVersion));
+        EnsureDescendant(Path.Combine(_installRoot, "versions"), versionDirectory);
+        var markerPath = Path.Combine(versionDirectory, ReleaseMarkerFileName);
+        if (!File.Exists(markerPath))
+        {
+            throw new InvalidDataException("update_staged_release_missing");
+        }
+        ReleaseManifest manifest;
+        try
+        {
+            await using var marker = new FileStream(
+                markerPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                4096,
+                FileOptions.Asynchronous);
+            manifest = await JsonSerializer.DeserializeAsync<ReleaseManifest>(
+                marker,
+                cancellationToken:cancellationToken)
+                ?? throw new InvalidDataException("update_staged_release_invalid");
+        }
+        catch (JsonException error)
+        {
+            throw new InvalidDataException("update_staged_release_invalid", error);
+        }
+        verifier.Verify(manifest, launcherVersion);
+        var priority = manifest.SchemaVersion == 2 ? manifest.Priority : "normal";
+        if (manifest.ReleaseVersion != state.TargetVersion
+            || manifest.ReleaseId != state.ReleaseId
+            || priority != state.Priority
+            || manifest.SchemaVersion == 2
+                && (manifest.MinimumIdleSeconds != state.MinimumIdleSeconds
+                    || manifest.ActivationDeadlineUtcMsc != state.ActivationDeadlineUtcMsc))
+        {
+            throw new InvalidDataException("update_staged_release_state_mismatch");
+        }
+        return await StageAsync(manifest, currentVersion, cancellationToken)
+            ?? throw new InvalidDataException("update_staged_release_invalid");
+    }
 
     private static async Task<bool> MatchesStagedReleaseAsync(
         string versionDirectory,

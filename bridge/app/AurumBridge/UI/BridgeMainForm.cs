@@ -28,6 +28,8 @@ public enum BridgeUpdateNoticePhase
 {
     Downloading,
     Ready,
+    Waiting,
+    Activating,
 }
 
 public sealed record BridgeUpdateNoticeView(
@@ -266,6 +268,24 @@ public sealed class BridgeMainForm : Form
                 "正在后台下载并校验，当前桥接和交易不受影响。",
                 "重启更新",
                 ButtonVisible:false,
+                ButtonEnabled:false);
+        }
+        if (notice.Phase == BridgeUpdateNoticePhase.Waiting)
+        {
+            return new(
+                $"正在为版本 {notice.Version} 申请安全更新窗口",
+                "桥接仍在运行；系统会等待当前交易指令和相关任务安全结束。",
+                "等待安全窗口",
+                ButtonVisible:true,
+                ButtonEnabled:false);
+        }
+        if (notice.Phase == BridgeUpdateNoticePhase.Activating)
+        {
+            return new(
+                $"正在更新到版本 {notice.Version}",
+                "正在排空交易通道并准备重启，请勿关闭程序或交易终端。",
+                "正在重启",
+                ButtonVisible:true,
                 ButtonEnabled:false);
         }
         return new(

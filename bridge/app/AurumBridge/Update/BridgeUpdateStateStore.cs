@@ -54,6 +54,18 @@ public sealed record BridgeUpdateState
     [JsonPropertyName("staged_at_utc_msc")]
     public long? StagedAtUtcMsc { get; init; }
 
+    [JsonPropertyName("minimum_idle_seconds")]
+    public int MinimumIdleSeconds { get; init; } = 120;
+
+    [JsonPropertyName("activation_deadline_utc_msc")]
+    public long? ActivationDeadlineUtcMsc { get; init; }
+
+    [JsonPropertyName("maintenance_lease_id")]
+    public string? MaintenanceLeaseId { get; init; }
+
+    [JsonPropertyName("maintenance_lease_expires_at_utc_msc")]
+    public long? MaintenanceLeaseExpiresAtUtcMsc { get; init; }
+
     [JsonPropertyName("next_retry_at_utc_msc")]
     public long? NextRetryAtUtcMsc { get; init; }
 
@@ -160,6 +172,8 @@ public sealed class BridgeUpdateStateStore(
             or BridgeUpdateStates.Draining
             or BridgeUpdateStates.Activating
             or BridgeUpdateStates.Verifying;
+        var requiresLease = state.State is BridgeUpdateStates.Draining
+            or BridgeUpdateStates.Activating;
         if (state.SchemaVersion != 1
             || !BridgeUpdateStates.All.Contains(state.State)
             || state.UpdatedAtUtcMsc <= 0
@@ -167,6 +181,15 @@ public sealed class BridgeUpdateStateStore(
                 || state.Priority is not ("normal" or "urgent"))
             || state.ReleaseId is { Length: > 128 }
             || state.StagedAtUtcMsc is <= 0
+            || state.MinimumIdleSeconds is < 30 or > 3600
+            || state.ActivationDeadlineUtcMsc is < 0
+            || state.MaintenanceLeaseId is { Length: > 128 }
+            || state.MaintenanceLeaseId is not null
+                && !state.MaintenanceLeaseId.StartsWith("lease_", StringComparison.Ordinal)
+            || state.MaintenanceLeaseExpiresAtUtcMsc is < 0
+            || (state.MaintenanceLeaseId is null)
+                != (state.MaintenanceLeaseExpiresAtUtcMsc is null)
+            || requiresLease != (state.MaintenanceLeaseId is not null)
             || state.NextRetryAtUtcMsc is < 0
             || state.LastErrorCode is { Length: > 256 }
             || state.State == BridgeUpdateStates.Failed

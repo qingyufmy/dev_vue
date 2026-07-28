@@ -1,5 +1,6 @@
 using AurumBridge.Runtime;
 using AurumBridge.UI;
+using AurumBridge.Update;
 using System.Drawing;
 using System.Text.Json;
 
@@ -213,11 +214,15 @@ public sealed class BridgeUiTextTests
         var ready = downloading with { Phase = BridgeUpdateNoticePhase.Ready };
         var requested = ready with { ManualActivationRequested = true };
         var urgent = ready with { Urgent = true };
+        var waiting = requested with { Phase = BridgeUpdateNoticePhase.Waiting };
+        var activating = requested with { Phase = BridgeUpdateNoticePhase.Activating };
 
         var downloadingText = BridgeMainForm.DescribeUpdateNotice(downloading);
         var readyText = BridgeMainForm.DescribeUpdateNotice(ready);
         var requestedText = BridgeMainForm.DescribeUpdateNotice(requested);
         var urgentText = BridgeMainForm.DescribeUpdateNotice(urgent);
+        var waitingText = BridgeMainForm.DescribeUpdateNotice(waiting);
+        var activatingText = BridgeMainForm.DescribeUpdateNotice(activating);
 
         StringAssert.Contains(downloadingText.Description, "不受影响");
         Assert.IsFalse(downloadingText.ButtonVisible);
@@ -227,6 +232,36 @@ public sealed class BridgeUiTextTests
         Assert.AreEqual("已请求", requestedText.ButtonText);
         Assert.IsFalse(requestedText.ButtonEnabled);
         StringAssert.Contains(urgentText.Title, "紧急修复");
+        Assert.AreEqual("等待安全窗口", waitingText.ButtonText);
+        Assert.IsFalse(waitingText.ButtonEnabled);
+        Assert.AreEqual("正在重启", activatingText.ButtonText);
+        Assert.IsFalse(activatingText.ButtonEnabled);
+    }
+
+    [TestMethod]
+    public void UpdateActivationPolicyUsesImmediateRequestsAndConservativeAutomaticWindows()
+    {
+        var state = new BridgeUpdateState
+        {
+            State = BridgeUpdateStates.WaitingWindow,
+            TargetVersion = "3.1.0",
+            Priority = "normal",
+            StagedAtUtcMsc = 1,
+            UpdatedAtUtcMsc = 1,
+        };
+
+        Assert.IsFalse(BridgeApplicationContext.ShouldAttemptUpdateActivation(
+            state,
+            new DateTimeOffset(2026, 7, 28, 12, 0, 0, TimeSpan.FromHours(8))));
+        Assert.IsTrue(BridgeApplicationContext.ShouldAttemptUpdateActivation(
+            state,
+            new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.FromHours(8))));
+        Assert.IsTrue(BridgeApplicationContext.ShouldAttemptUpdateActivation(
+            state with { ManualActivationRequested = true },
+            new DateTimeOffset(2026, 7, 28, 12, 0, 0, TimeSpan.FromHours(8))));
+        Assert.IsTrue(BridgeApplicationContext.ShouldAttemptUpdateActivation(
+            state with { Priority = "urgent" },
+            new DateTimeOffset(2026, 7, 28, 12, 0, 0, TimeSpan.FromHours(8))));
     }
 
     [TestMethod]

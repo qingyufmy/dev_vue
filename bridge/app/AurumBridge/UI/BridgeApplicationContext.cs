@@ -15,6 +15,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly BridgeUserPreferencesStore _preferences;
     private readonly BridgeSingleInstanceGuard _singleInstance;
     private readonly BridgeUpdateCoordinator? _updateCoordinator;
+    private readonly BridgeInstallationIdentityStore? _installationIdentityStore;
     private readonly string? _startupReadyFile;
     private readonly string _profileId;
     private readonly string _rootDataDirectory;
@@ -22,6 +23,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly BridgeFailureLogThrottle _failureLogThrottle = new(TimeSpan.FromMinutes(1));
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _observerRuntimeReload = new(1, 1);
+    private readonly SemaphoreSlim _updateActivationGate = new(1, 1);
+    private readonly SemaphoreSlim _updateWake = new(0, 1);
     private readonly Lock _observerRuntimeSync = new();
     private readonly Dictionary<string, ObserverRuntime> _observerRuntimes = new(StringComparer.Ordinal);
     private readonly long _startedTimestamp = Stopwatch.GetTimestamp();
@@ -79,6 +82,12 @@ public sealed class BridgeApplicationContext : ApplicationContext
         {
             EnsureAutoStart();
             _updateCoordinator = CreateUpdateCoordinator(paths.ServerBaseUri);
+            if (_updateCoordinator is not null)
+            {
+                _installationIdentityStore = new(Path.Combine(
+                    _updateCoordinator.Environment.InstallRoot,
+                    "installation-id"));
+            }
             SignalObserverProfilesShutdown();
             try
             {
@@ -653,7 +662,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 preferences.Mt5TerminalInstanceId,
                 preferences.Mt5TerminalPath,
                 preferences.Mt4TerminalInstanceId);
-            var runtime = new ObserverRuntime(controller);
+            var runtime = new ObserverRuntime(
+                controller,
+                preferences.ObserverBridgeUserId
+                    ?? throw new InvalidDataException("observer_bridge_user_required"));
             controller.StatusChanged += status => HandleObserverStatus(profileId, controller, status);
             controller.ConnectionFailureObserved += error => LogConnectionFailure(
                 "observer_connection_failure",
@@ -1285,32 +1297,91 @@ public sealed class BridgeApplicationContext : ApplicationContext
     {
         try
         {
-            HandleUpdateStateChanged(await coordinator.LoadStateAsync(cancellationToken));
-            await Task.Delay(TimeSpan.FromMinutes(1), cancellationToken);
+            var state = await coordinator.LoadStateAsync(cancellationToken);
+            HandleUpdateStateChanged(state);
+            if (state?.State is BridgeUpdateStates.WaitingWindow
+                or BridgeUpdateStates.AcquiringLease
+                or BridgeUpdateStates.Draining
+                or BridgeUpdateStates.Activating)
+            {
+                var restored = await coordinator.RestoreStagedReleaseAsync(cancellationToken);
+                if (restored is not null
+                    && state.State is not BridgeUpdateStates.WaitingWindow)
+                {
+                    state = await coordinator.SaveActivationPhaseAsync(
+                        restored,
+                        BridgeUpdateStates.WaitingWindow,
+                        state.ManualActivationRequested,
+                        lastErrorCode:"update_recovered_after_restart",
+                        cancellationToken:cancellationToken);
+                }
+                await TryApplyPendingUpdateAsync(coordinator, cancellationToken);
+            }
+            var nextCheckAt = DateTimeOffset.UtcNow.AddMinutes(1);
             while (!cancellationToken.IsCancellationRequested)
             {
-                try
+                if (DateTimeOffset.UtcNow >= nextCheckAt)
                 {
-                    var staged = await coordinator.CheckAndStageAsync(cancellationToken);
-                    if (staged is not null)
+                    try
                     {
-                        _logger.Info(
-                            "update_waiting_window",
-                            $"version={staged.Version};priority={staged.Priority}");
+                        var staged = await coordinator.CheckAndStageAsync(cancellationToken);
+                        if (staged is not null)
+                        {
+                            _logger.Info(
+                                "update_waiting_window",
+                                $"version={staged.Version};priority={staged.Priority}");
+                        }
                     }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception error)
+                    {
+                        _logger.Error("update_check_failed", error);
+                    }
+                    nextCheckAt = DateTimeOffset.UtcNow.Add(
+                        BridgeUpdateCoordinator.RegularCheckInterval);
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                var retryAfter = await TryApplyPendingUpdateAsync(
+                    coordinator,
+                    cancellationToken);
+                var untilCheck = nextCheckAt - DateTimeOffset.UtcNow;
+                var delay = untilCheck <= TimeSpan.Zero
+                    ? TimeSpan.Zero
+                    : retryAfter is { } retry && retry < untilCheck
+                        ? retry
+                        : untilCheck;
+                if (delay > TimeSpan.Zero)
                 {
-                    return;
+                    await WaitForUpdateWakeAsync(delay, cancellationToken);
                 }
-                catch (Exception error)
-                {
-                    _logger.Error("update_check_failed", error);
-                }
-                await Task.Delay(BridgeUpdateCoordinator.RegularCheckInterval, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task WaitForUpdateWakeAsync(
+        TimeSpan delay,
+        CancellationToken cancellationToken)
+    {
+        using var wakeCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken);
+        var delayTask = Task.Delay(delay, wakeCancellation.Token);
+        var wakeTask = _updateWake.WaitAsync(wakeCancellation.Token);
+        var completed = await Task.WhenAny(delayTask, wakeTask);
+        wakeCancellation.Cancel();
+        if (ReferenceEquals(completed, delayTask))
+        {
+            await delayTask;
+        }
+        try
+        {
+            await (ReferenceEquals(completed, delayTask) ? wakeTask : delayTask);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
         }
     }
@@ -1328,6 +1399,16 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 state.TargetVersion!,
                 state.Priority == "urgent",
                 BridgeUpdateNoticePhase.Ready,
+                state.ManualActivationRequested),
+            BridgeUpdateStates.AcquiringLease => new BridgeUpdateNoticeView(
+                state.TargetVersion!,
+                state.Priority == "urgent",
+                BridgeUpdateNoticePhase.Waiting,
+                state.ManualActivationRequested),
+            BridgeUpdateStates.Draining or BridgeUpdateStates.Activating => new BridgeUpdateNoticeView(
+                state.TargetVersion!,
+                state.Priority == "urgent",
+                BridgeUpdateNoticePhase.Activating,
                 state.ManualActivationRequested),
             _ => null,
         };
@@ -1358,6 +1439,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 "update_manual_activation_requested",
                 $"version={state.TargetVersion};priority={state.Priority}");
             HandleUpdateStateChanged(state);
+            if (_updateWake.CurrentCount == 0)
+            {
+                _updateWake.Release();
+            }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
@@ -1400,24 +1485,219 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
     }
 
-    private async Task ApplyStagedUpdateAsync(
+    private async Task<TimeSpan?> TryApplyPendingUpdateAsync(
         BridgeUpdateCoordinator coordinator,
-        StagedRelease staged)
+        CancellationToken cancellationToken)
     {
-        if (_shuttingDown)
+        if (_shuttingDown
+            || !await _updateActivationGate.WaitAsync(0, cancellationToken))
         {
-            return;
+            return TimeSpan.FromSeconds(1);
         }
-        var admissionPaused = false;
-        var activationPrepared = false;
         try
         {
-            await _controller.PauseForUpdateAsync(TimeSpan.FromSeconds(30), _stop.Token);
-            admissionPaused = true;
-            await coordinator.PrepareActivationAsync(staged, _stop.Token);
+            var state = await coordinator.LoadStateAsync(cancellationToken);
+            if (state?.State != BridgeUpdateStates.WaitingWindow)
+            {
+                return null;
+            }
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (state.NextRetryAtUtcMsc is { } nextRetry && nextRetry > now)
+            {
+                return TimeSpan.FromMilliseconds(nextRetry - now);
+            }
+            if (!ShouldAttemptUpdateActivation(state, DateTimeOffset.Now))
+            {
+                return null;
+            }
+            var staged = await coordinator.RestoreStagedReleaseAsync(cancellationToken);
+            return staged is null
+                ? null
+                : await ApplyStagedUpdateAsync(
+                    coordinator,
+                    staged,
+                    state,
+                    cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            _logger.Error("update_activation_attempt_failed", error);
+            return TimeSpan.FromSeconds(30);
+        }
+        finally
+        {
+            _updateActivationGate.Release();
+        }
+    }
+
+    public static bool ShouldAttemptUpdateActivation(
+        BridgeUpdateState state,
+        DateTimeOffset localNow)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (state.ManualActivationRequested || state.Priority == "urgent")
+        {
+            return true;
+        }
+        return localNow.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+    }
+
+    private UpdateRuntimeSnapshot CaptureUpdateRuntimeSnapshot()
+    {
+        lock (_observerRuntimeSync)
+        {
+            var targets = new List<IBridgeUpdateDrainTarget> { _controller };
+            var terminalIds = new HashSet<string>(StringComparer.Ordinal);
+            var observerUserIds = new HashSet<long>();
+            if (_primaryStatus?.ServerConnected == true)
+            {
+                foreach (var terminal in _primaryStatus.Terminals.Where(terminal =>
+                    terminal.RuntimeState == TerminalRuntimeState.Running))
+                {
+                    terminalIds.Add(terminal.TerminalInstanceId);
+                }
+            }
+            foreach (var runtime in _observerRuntimes.Values)
+            {
+                targets.Add(runtime.Controller);
+                if (runtime.Status?.ServerConnected != true)
+                {
+                    continue;
+                }
+                var included = false;
+                foreach (var terminal in runtime.Status.Terminals.Where(terminal =>
+                    terminal.RuntimeState == TerminalRuntimeState.Running))
+                {
+                    if (!terminalIds.Add(terminal.TerminalInstanceId))
+                    {
+                        throw new InvalidOperationException(
+                            "bridge_update_terminal_scope_conflict");
+                    }
+                    included = true;
+                }
+                if (included)
+                {
+                    observerUserIds.Add(runtime.BridgeUserId);
+                }
+            }
+            return new(
+                targets,
+                terminalIds.Order(StringComparer.Ordinal).ToArray(),
+                observerUserIds.Order().ToArray());
+        }
+    }
+
+    private async Task<TimeSpan?> ApplyStagedUpdateAsync(
+        BridgeUpdateCoordinator coordinator,
+        StagedRelease staged,
+        BridgeUpdateState state,
+        CancellationToken cancellationToken)
+    {
+        if (_shuttingDown || _installationIdentityStore is null)
+        {
+            return null;
+        }
+        var snapshot = CaptureUpdateRuntimeSnapshot();
+        if (snapshot.TerminalInstanceIds.Count == 0)
+        {
+            await coordinator.SaveActivationPhaseAsync(
+                staged,
+                BridgeUpdateStates.WaitingWindow,
+                state.ManualActivationRequested,
+                nextRetryAtUtcMsc:DateTimeOffset.UtcNow.AddSeconds(15).ToUnixTimeMilliseconds(),
+                lastErrorCode:"bridge_update_no_connected_terminal",
+                cancellationToken:cancellationToken);
+            return TimeSpan.FromSeconds(15);
+        }
+
+        string? leaseId = null;
+        var activationPrepared = false;
+        using var leaseRenewalStop = new CancellationTokenSource();
+        using var leaseLost = new CancellationTokenSource();
+        Task? leaseRenewalTask = null;
+        try
+        {
+            await coordinator.SaveActivationPhaseAsync(
+                staged,
+                BridgeUpdateStates.AcquiringLease,
+                state.ManualActivationRequested,
+                cancellationToken:cancellationToken);
+            var installationId = await _installationIdentityStore.LoadOrCreateAsync(
+                cancellationToken);
+            var decision = await _controller.AcquireMaintenanceLeaseAsync(new(
+                installationId,
+                staged.Version,
+                staged.Priority,
+                state.ManualActivationRequested,
+                snapshot.TerminalInstanceIds,
+                snapshot.ObserverBridgeUserIds,
+                ExpectedDowntimeSeconds:Math.Clamp(
+                    staged.MinimumIdleSeconds,
+                    30,
+                    300)), cancellationToken);
+            if (!decision.Acquired || decision.LeaseId is null
+                || decision.ExpiresAtUtcMsc is null)
+            {
+                var retry = TimeSpan.FromSeconds(Math.Clamp(
+                    decision.RetryAfterSeconds,
+                    1,
+                    300));
+                await coordinator.SaveActivationPhaseAsync(
+                    staged,
+                    BridgeUpdateStates.WaitingWindow,
+                    state.ManualActivationRequested,
+                    nextRetryAtUtcMsc:DateTimeOffset.UtcNow.Add(retry).ToUnixTimeMilliseconds(),
+                    lastErrorCode:decision.ReasonCode ?? "bridge_maintenance_denied",
+                    cancellationToken:cancellationToken);
+                _logger.Info(
+                    "update_maintenance_waiting",
+                    $"version={staged.Version};reason={decision.ReasonCode};retry={decision.RetryAfterSeconds}");
+                return retry;
+            }
+
+            leaseId = decision.LeaseId;
+            leaseRenewalTask = RenewMaintenanceLeaseAsync(
+                leaseId,
+                leaseRenewalStop.Token,
+                leaseLost);
+            await coordinator.SaveActivationPhaseAsync(
+                staged,
+                BridgeUpdateStates.Draining,
+                state.ManualActivationRequested,
+                leaseId,
+                decision.ExpiresAtUtcMsc,
+                cancellationToken:cancellationToken);
+            using var activation = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                leaseLost.Token);
+            using var drain = await BridgeUpdateDrainGroup.AcquireAsync(
+                snapshot.DrainTargets,
+                TimeSpan.FromSeconds(30),
+                activation.Token);
+            await coordinator.SaveActivationPhaseAsync(
+                staged,
+                BridgeUpdateStates.Activating,
+                state.ManualActivationRequested,
+                leaseId,
+                decision.ExpiresAtUtcMsc,
+                cancellationToken:activation.Token);
+            await coordinator.PrepareActivationAsync(staged, activation.Token);
+            drain.Commit();
             activationPrepared = true;
             _shuttingDown = true;
-            _logger.Info("update_activation_prepared", $"version={staged.Version}");
+            _logger.Info(
+                "update_activation_prepared",
+                $"version={staged.Version};terminals={snapshot.TerminalInstanceIds.Count}");
+
+            leaseRenewalStop.Cancel();
+            if (leaseRenewalTask is not null)
+            {
+                await IgnoreCancellationAsync(leaseRenewalTask);
+            }
             SignalObserverProfilesShutdown();
             _stop.Cancel();
             if (_observerRuntimeTask is not null)
@@ -1444,18 +1724,30 @@ public sealed class BridgeApplicationContext : ApplicationContext
             coordinator.Dispose();
             _logger.Dispose();
             ExitThread();
+            return null;
         }
-        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            throw;
         }
         catch (Exception error)
         {
             _logger.Error("update_activation_failed", error);
-            if (admissionPaused && !activationPrepared)
+            if (!activationPrepared)
             {
-                _controller.ResumeAfterFailedUpdate();
+                var errorCode = error is OperationCanceledException && leaseLost.IsCancellationRequested
+                    ? "bridge_maintenance_lease_lost"
+                    : "update_activation_failed";
+                await coordinator.SaveActivationPhaseAsync(
+                    staged,
+                    BridgeUpdateStates.WaitingWindow,
+                    state.ManualActivationRequested,
+                    nextRetryAtUtcMsc:DateTimeOffset.UtcNow.AddSeconds(15).ToUnixTimeMilliseconds(),
+                    lastErrorCode:errorCode,
+                    cancellationToken:CancellationToken.None);
+                return TimeSpan.FromSeconds(15);
             }
-            if (activationPrepared && !_form.IsDisposed)
+            if (!_form.IsDisposed)
             {
                 MessageBox.Show(
                     _form,
@@ -1467,6 +1759,52 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 _form.Close();
                 ExitThread();
             }
+            return null;
+        }
+        finally
+        {
+            leaseRenewalStop.Cancel();
+            if (!activationPrepared && leaseId is not null)
+            {
+                try
+                {
+                    await _controller.ReleaseMaintenanceLeaseAsync(
+                        leaseId,
+                        CancellationToken.None);
+                }
+                catch (Exception error)
+                {
+                    _logger.Error("update_maintenance_release_failed", error);
+                }
+            }
+        }
+    }
+
+    private async Task RenewMaintenanceLeaseAsync(
+        string leaseId,
+        CancellationToken cancellationToken,
+        CancellationTokenSource leaseLost)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(25), cancellationToken);
+                var expiresAt = await _controller.RenewMaintenanceLeaseAsync(
+                    leaseId,
+                    cancellationToken);
+                _logger.Info(
+                    "update_maintenance_renewed",
+                    $"lease={leaseId};expires={expiresAt}");
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("update_maintenance_renew_failed", error);
+            leaseLost.Cancel();
         }
     }
 
@@ -1574,9 +1912,17 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
     }
 
-    private sealed class ObserverRuntime(BridgeApplicationController controller)
+    private sealed record UpdateRuntimeSnapshot(
+        IReadOnlyList<IBridgeUpdateDrainTarget> DrainTargets,
+        IReadOnlyList<string> TerminalInstanceIds,
+        IReadOnlyList<long> ObserverBridgeUserIds);
+
+    private sealed class ObserverRuntime(
+        BridgeApplicationController controller,
+        long bridgeUserId)
     {
         public BridgeApplicationController Controller { get; } = controller;
+        public long BridgeUserId { get; } = bridgeUserId;
         public BridgeApplicationStatus? Status { get; set; }
         public Task? RunTask { get; set; }
     }

@@ -241,6 +241,7 @@ public sealed class ReleaseUpdateTests
             PublishedAtUtcMsc = 1_800_000_000_000,
             ExpiresAtUtcMsc = 1_800_086_400_000,
             MinimumIdleSeconds = 120,
+            ActivationDeadlineUtcMsc = 1_800_043_200_000,
             RolloutChannel = "stable",
             RolloutPercentage = 100,
         };
@@ -251,6 +252,62 @@ public sealed class ReleaseUpdateTests
         Assert.IsNotNull(staged);
         Assert.AreEqual("urgent", staged.Priority);
         Assert.AreEqual("bridge-3.1.0-20260728.1", staged.ReleaseId);
+        Assert.AreEqual(120, staged.MinimumIdleSeconds);
+        Assert.AreEqual(1_800_043_200_000, staged.ActivationDeadlineUtcMsc);
+    }
+
+    [TestMethod]
+    public async Task RestoresAndRevalidatesASignedStagedReleaseAfterAnInterruptedActivation()
+    {
+        var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["core"] = CompleteCoreZip(),
+            ["adapter.mt5.python"] = Zip(("worker.py", "worker")),
+            ["adapter.mt4"] = Zip(("AURUMBridgeEA.ex4", "ea")),
+        };
+        using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var unsigned = SignPackages(ManifestForPackages("3.1.0", packages) with
+        {
+            SchemaVersion = 2,
+            ReleaseId = "bridge-3.1.0-20260728.2",
+            Priority = "normal",
+            PublishedAtUtcMsc = 1_800_000_000_000,
+            ExpiresAtUtcMsc = 1_800_086_400_000,
+            MinimumIdleSeconds = 180,
+            ActivationDeadlineUtcMsc = 1_800_043_200_000,
+            RolloutChannel = "stable",
+            RolloutPercentage = 100,
+        }, signingKey);
+        var signed = unsigned with
+        {
+            Signature = Convert.ToBase64String(signingKey.SignData(
+                Encoding.UTF8.GetBytes(ReleaseManifestVerifier.Canonicalize(unsigned)),
+                HashAlgorithmName.SHA256)),
+        };
+        var handler = new PackageResponseHandler(packages);
+        using var http = new HttpClient(handler);
+        var installer = new ReleaseInstaller(_directory, new ReleaseStager(http));
+        await installer.StageAsync(signed, new Version(3, 0, 0));
+        using var verifier = new ReleaseManifestVerifier(
+            signingKey.ExportSubjectPublicKeyInfoPem(),
+            () => 1_800_000_000_100);
+
+        var restored = await installer.RestoreAsync(new()
+        {
+            State = BridgeUpdateStates.Activating,
+            TargetVersion = "3.1.0",
+            ReleaseId = signed.ReleaseId,
+            Priority = "normal",
+            StagedAtUtcMsc = 1_800_000_000_050,
+            MinimumIdleSeconds = 180,
+            ActivationDeadlineUtcMsc = 1_800_043_200_000,
+            UpdatedAtUtcMsc = 1_800_000_000_100,
+        }, verifier, new Version(1, 0, 0), new Version(3, 0, 0));
+
+        Assert.IsNotNull(restored);
+        Assert.AreEqual("bridge-3.1.0-20260728.2", restored.ReleaseId);
+        Assert.AreEqual(180, restored.MinimumIdleSeconds);
+        Assert.AreEqual(3, handler.Requests);
     }
 
     [TestMethod]
@@ -262,20 +319,27 @@ public sealed class ReleaseUpdateTests
 
         await store.SaveAsync(new()
         {
-            State = BridgeUpdateStates.WaitingWindow,
+            State = BridgeUpdateStates.Draining,
             TargetVersion = "3.1.0",
             ReleaseId = "bridge-3.1.0-20260728.1",
             Priority = "normal",
             ManualActivationRequested = true,
             StagedAtUtcMsc = now - 100,
+            MinimumIdleSeconds = 180,
+            ActivationDeadlineUtcMsc = now + 10_000,
+            MaintenanceLeaseId = "lease_test123",
+            MaintenanceLeaseExpiresAtUtcMsc = now + 90_000,
             UpdatedAtUtcMsc = 1,
         });
         var restored = await store.LoadAsync();
 
         Assert.IsNotNull(restored);
-        Assert.AreEqual(BridgeUpdateStates.WaitingWindow, restored.State);
+        Assert.AreEqual(BridgeUpdateStates.Draining, restored.State);
         Assert.AreEqual("3.1.0", restored.TargetVersion);
         Assert.IsTrue(restored.ManualActivationRequested);
+        Assert.AreEqual(180, restored.MinimumIdleSeconds);
+        Assert.AreEqual("lease_test123", restored.MaintenanceLeaseId);
+        Assert.AreEqual(now + 90_000, restored.MaintenanceLeaseExpiresAtUtcMsc);
         Assert.AreEqual(now, restored.UpdatedAtUtcMsc);
         Assert.IsFalse(Directory.EnumerateFiles(_directory, "*.tmp").Any());
     }
@@ -318,6 +382,18 @@ public sealed class ReleaseUpdateTests
             UpdatedAtUtcMsc = 1,
         }));
         Assert.AreEqual("update_state_invalid", incomplete.Message);
+
+        var unpairedLease = await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            store.SaveAsync(new()
+            {
+                State = BridgeUpdateStates.WaitingWindow,
+                TargetVersion = "3.1.0",
+                Priority = "normal",
+                StagedAtUtcMsc = 1,
+                MaintenanceLeaseId = "lease_test123",
+                UpdatedAtUtcMsc = 1,
+            }));
+        Assert.AreEqual("update_state_invalid", unpairedLease.Message);
     }
 
     [TestMethod]

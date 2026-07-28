@@ -126,6 +126,12 @@ public sealed class BridgeUpdateCoordinator : IDisposable
                     TargetVersion = manifest.ReleaseVersion,
                     ReleaseId = manifest.ReleaseId,
                     Priority = manifest.SchemaVersion == 2 ? manifest.Priority : "normal",
+                    MinimumIdleSeconds = manifest.SchemaVersion == 2
+                        ? manifest.MinimumIdleSeconds!.Value
+                        : 120,
+                    ActivationDeadlineUtcMsc = manifest.SchemaVersion == 2
+                        ? manifest.ActivationDeadlineUtcMsc
+                        : null,
                     ManualActivationRequested = sameRelease
                         && previous!.ManualActivationRequested,
                     StagedAtUtcMsc = sameRelease ? previous!.StagedAtUtcMsc : null,
@@ -150,6 +156,8 @@ public sealed class BridgeUpdateCoordinator : IDisposable
                 TargetVersion = staged.Version,
                 ReleaseId = staged.ReleaseId,
                 Priority = staged.Priority,
+                MinimumIdleSeconds = staged.MinimumIdleSeconds,
+                ActivationDeadlineUtcMsc = staged.ActivationDeadlineUtcMsc,
                 ManualActivationRequested = sameRelease
                     && previous!.ManualActivationRequested,
                 StagedAtUtcMsc = stagedAt,
@@ -173,6 +181,33 @@ public sealed class BridgeUpdateCoordinator : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         return _stateStore.LoadAsync(cancellationToken);
+    }
+
+    public async Task<StagedRelease?> RestoreStagedReleaseAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        try
+        {
+            var state = await _stateStore.LoadAsync(cancellationToken);
+            return state is null
+                ? null
+                : await _installer.RestoreAsync(
+                    state,
+                    _verifier,
+                    Environment.LauncherVersion,
+                    Environment.CurrentVersion,
+                    cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            await TrySaveFailureStateAsync(error);
+            throw;
+        }
     }
 
     public async Task<BridgeUpdateState?> RequestManualActivationAsync(
@@ -202,6 +237,47 @@ public sealed class BridgeUpdateCoordinator : IDisposable
             stagedRelease,
             Environment.CurrentVersion,
             cancellationToken);
+    }
+
+    public async Task<BridgeUpdateState> SaveActivationPhaseAsync(
+        StagedRelease stagedRelease,
+        string phase,
+        bool manualActivationRequested,
+        string? leaseId = null,
+        long? leaseExpiresAtUtcMsc = null,
+        long? nextRetryAtUtcMsc = null,
+        string? lastErrorCode = null,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(stagedRelease);
+        if (phase is not (BridgeUpdateStates.WaitingWindow
+            or BridgeUpdateStates.AcquiringLease
+            or BridgeUpdateStates.Draining
+            or BridgeUpdateStates.Activating))
+        {
+            throw new ArgumentOutOfRangeException(nameof(phase));
+        }
+        var previous = await _stateStore.LoadAsync(cancellationToken);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return await SaveStateAsync(new()
+        {
+            State = phase,
+            TargetVersion = stagedRelease.Version,
+            ReleaseId = stagedRelease.ReleaseId,
+            Priority = stagedRelease.Priority,
+            ManualActivationRequested = manualActivationRequested,
+            StagedAtUtcMsc = previous?.TargetVersion == stagedRelease.Version
+                ? previous.StagedAtUtcMsc ?? now
+                : now,
+            MinimumIdleSeconds = stagedRelease.MinimumIdleSeconds,
+            ActivationDeadlineUtcMsc = stagedRelease.ActivationDeadlineUtcMsc,
+            MaintenanceLeaseId = leaseId,
+            MaintenanceLeaseExpiresAtUtcMsc = leaseExpiresAtUtcMsc,
+            NextRetryAtUtcMsc = nextRetryAtUtcMsc,
+            LastErrorCode = lastErrorCode,
+            UpdatedAtUtcMsc = now,
+        }, cancellationToken);
     }
 
     public void StartLauncher()
