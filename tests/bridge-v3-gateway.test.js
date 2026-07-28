@@ -690,6 +690,34 @@ describe('Bridge v3 websocket gateway', () => {
     await expect(pending).resolves.toMatchObject({ status:'succeeded' })
   })
 
+  it.each([1, 5, 20])('isolates a maintenance lease across %i connected terminals', async terminalCount => {
+    const { gateway } = setup()
+    const ws = await connect(gateway)
+    const terminalIds = Array.from(
+      { length:terminalCount },
+      (_, index) => `terminal_scale_${String(index).padStart(2, '0')}`,
+    )
+    ws.emit('message', Buffer.from(JSON.stringify({
+      ...hello(),
+      terminals:terminalIds.map((terminalInstanceId, index) => ({
+        terminal_instance_id:terminalInstanceId,
+        platform:index % 2 === 0 ? 'mt5' : 'mt4',
+        account_ref:{ broker_server:'Broker-Demo', login:String(10_000 + index) },
+        connection_epoch:7,
+      })),
+    })))
+    await vi.waitFor(() => expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"type":"hello_ack"')))
+
+    const lease = await gateway.acquireMaintenanceLease(maintenanceRequest({
+      terminalInstanceIds:terminalIds,
+    }))
+
+    expect(lease).toMatchObject({ acquired:true, terminal_instance_ids:terminalIds })
+    expect(gateway.maintenanceByTerminal.size).toBe(terminalCount)
+    expect(gateway.releaseMaintenanceLease(42, lease.lease_id)).toMatchObject({ released:true })
+    expect(gateway.maintenanceByTerminal.size).toBe(0)
+  })
+
   it('denies a lease until both admission races and durable commands are drained', async () => {
     let releaseLedger
     const createLedgerEntry = vi.fn(() => new Promise(resolve => { releaseLedger = resolve }))

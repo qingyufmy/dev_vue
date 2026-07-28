@@ -479,21 +479,30 @@ public sealed class ReleaseUpdateTests
             signingKey.ExportSubjectPublicKeyInfoPem(),
             () => 1_800_000_000_100);
 
-        var restored = await installer.RestoreAsync(new()
+        foreach (var phase in new[]
         {
-            State = BridgeUpdateStates.Activating,
-            TargetVersion = "3.1.0",
-            ReleaseId = signed.ReleaseId,
-            Priority = "normal",
-            StagedAtUtcMsc = 1_800_000_000_050,
-            MinimumIdleSeconds = 180,
-            ActivationDeadlineUtcMsc = 1_800_043_200_000,
-            UpdatedAtUtcMsc = 1_800_000_000_100,
-        }, verifier, new Version(1, 0, 0), new Version(3, 0, 0));
+            BridgeUpdateStates.WaitingWindow,
+            BridgeUpdateStates.AcquiringLease,
+            BridgeUpdateStates.Draining,
+            BridgeUpdateStates.Activating,
+        })
+        {
+            var restored = await installer.RestoreAsync(new()
+            {
+                State = phase,
+                TargetVersion = "3.1.0",
+                ReleaseId = signed.ReleaseId,
+                Priority = "normal",
+                StagedAtUtcMsc = 1_800_000_000_050,
+                MinimumIdleSeconds = 180,
+                ActivationDeadlineUtcMsc = 1_800_043_200_000,
+                UpdatedAtUtcMsc = 1_800_000_000_100,
+            }, verifier, new Version(1, 0, 0), new Version(3, 0, 0));
 
-        Assert.IsNotNull(restored);
-        Assert.AreEqual("bridge-3.1.0-20260728.2", restored.ReleaseId);
-        Assert.AreEqual(180, restored.MinimumIdleSeconds);
+            Assert.IsNotNull(restored, $"phase={phase}");
+            Assert.AreEqual("bridge-3.1.0-20260728.2", restored.ReleaseId);
+            Assert.AreEqual(180, restored.MinimumIdleSeconds);
+        }
         Assert.AreEqual(3, handler.Requests);
     }
 

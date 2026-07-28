@@ -54,6 +54,38 @@ public sealed class BridgeUpdateDrainGroupTests
         CollectionAssert.AreEqual(new[] { "pause:main" }, events);
     }
 
+    [TestMethod]
+    [DataRow(1)]
+    [DataRow(5)]
+    [DataRow(20)]
+    public async Task DrainsAndRestoresEverySupportedAcceptanceScale(int terminalCount)
+    {
+        var events = new List<string>();
+        var targets = Enumerable.Range(0, terminalCount)
+            .Select(index => (IBridgeUpdateDrainTarget)new Target($"terminal-{index:D2}", events))
+            .ToArray();
+
+        using (await BridgeUpdateDrainGroup.AcquireAsync(
+            targets,
+            TimeSpan.FromSeconds(1)))
+        {
+            Assert.AreEqual(terminalCount, events.Count);
+            CollectionAssert.AreEqual(
+                Enumerable.Range(0, terminalCount)
+                    .Select(index => $"pause:terminal-{index:D2}")
+                    .ToArray(),
+                events);
+        }
+
+        CollectionAssert.AreEqual(
+            Enumerable.Range(0, terminalCount)
+                .Select(index => $"pause:terminal-{index:D2}")
+                .Concat(Enumerable.Range(0, terminalCount).Reverse()
+                    .Select(index => $"resume:terminal-{index:D2}"))
+                .ToArray(),
+            events);
+    }
+
     private sealed class Target(
         string name,
         List<string> events,

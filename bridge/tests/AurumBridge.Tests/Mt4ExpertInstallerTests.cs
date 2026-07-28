@@ -93,6 +93,29 @@ public sealed class Mt4ExpertInstallerTests
         Assert.AreEqual("mt4_ea_package_not_found", result.Failures[0].ErrorCode);
     }
 
+    [TestMethod]
+    public async Task BrokenTerminalDirectoryDoesNotBlockAnotherConfiguredMt4Installation()
+    {
+        var missingDataPath = Path.Combine(_directory, "missing-terminal-data");
+        var missing = new Mt4Installation(
+            missingDataPath,
+            Path.Combine(_directory, "Missing MT4"),
+            "test",
+            IsRunning:false);
+        var healthy = Installation();
+
+        var result = await new Mt4ExpertInstaller(_source).DeployAsync([missing, healthy]);
+
+        Assert.HasCount(1, result.Failures);
+        Assert.AreEqual(missing.TerminalInstanceId, result.Failures[0].TerminalInstanceId);
+        Assert.AreEqual("mt4_terminal_data_path_not_found", result.Failures[0].ErrorCode);
+        Assert.HasCount(1, result.Deployments);
+        Assert.AreEqual(healthy.TerminalInstanceId, result.Deployments[0].Installation.TerminalInstanceId);
+        CollectionAssert.AreEqual(
+            await File.ReadAllBytesAsync(_source),
+            await File.ReadAllBytesAsync(result.Deployments[0].DestinationPath));
+    }
+
     private Mt4Installation Installation() => new(
         _dataPath,
         Path.Combine(_directory, "Broker MT4"),
