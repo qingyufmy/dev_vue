@@ -14,9 +14,12 @@ public sealed record StagedRelease(
 
 public sealed class ReleaseInstaller(
     string installRoot,
-    ReleaseStager stager)
+    ReleaseStager stager,
+    Func<string, long>? availableFreeSpaceProvider = null)
 {
     private const string ReleaseMarkerFileName = ".aurum-release.json";
+    private const long DiskSafetyReserveBytes = 256L * 1024 * 1024;
+    private const int EstimatedExpansionMultiplier = 4;
     private static readonly string[] RequiredPackageIds =
     [
         "core",
@@ -37,6 +40,8 @@ public sealed class ReleaseInstaller(
     ];
     private readonly string _installRoot = Path.GetFullPath(installRoot);
     private readonly ReleaseStager _stager = stager ?? throw new ArgumentNullException(nameof(stager));
+    private readonly Func<string, long> _availableFreeSpaceProvider = availableFreeSpaceProvider
+        ?? ReadAvailableFreeSpace;
 
     public async Task<StagedRelease?> StageAsync(
         ReleaseManifest manifest,
@@ -70,9 +75,32 @@ public sealed class ReleaseInstaller(
 
         var operationId = Guid.NewGuid().ToString("N");
         var downloadDirectory = Path.Combine(_installRoot, "staging", $"{manifest.ReleaseVersion}-{operationId}");
+        var contentCacheDirectory = Path.Combine(_installRoot, "cache", "packages");
         var temporaryVersionDirectory = Path.Combine(versionsRoot, $".{manifest.ReleaseVersion}-{operationId}.tmp");
         EnsureDescendant(Path.Combine(_installRoot, "staging"), downloadDirectory);
+        EnsureDescendant(Path.Combine(_installRoot, "cache"), contentCacheDirectory);
         EnsureDescendant(versionsRoot, temporaryVersionDirectory);
+        DeleteStaleCacheParts(contentCacheDirectory);
+        var cachedPackages = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var package in manifest.Packages.OrderBy(value => value.ModuleId, StringComparer.Ordinal))
+        {
+            var cached = await _stager.FindVerifiedCachedPackageAsync(
+                package,
+                contentCacheDirectory,
+                cancellationToken);
+            if (cached is not null)
+            {
+                cachedPackages[package.ModuleId] = cached;
+            }
+        }
+        var downloadBytes = manifest.Packages
+            .Where(package => !cachedPackages.ContainsKey(package.ModuleId))
+            .Sum(package => package.SizeBytes);
+        var estimatedExpansionBytes = checked(
+            manifest.Packages.Sum(package => package.SizeBytes)
+            * EstimatedExpansionMultiplier);
+        EnsureSufficientDiskSpace(checked(
+            downloadBytes + estimatedExpansionBytes + DiskSafetyReserveBytes));
         Directory.CreateDirectory(downloadDirectory);
         Directory.CreateDirectory(temporaryVersionDirectory);
         try
@@ -80,11 +108,17 @@ public sealed class ReleaseInstaller(
             var downloads = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var package in manifest.Packages.OrderBy(value => value.ModuleId, StringComparer.Ordinal))
             {
-                downloads[package.ModuleId] = await _stager.DownloadPackageAsync(
-                    package,
-                    downloadDirectory,
-                    cancellationToken);
+                downloads[package.ModuleId] = cachedPackages.GetValueOrDefault(package.ModuleId)
+                    ?? await _stager.DownloadPackageAsync(
+                        package,
+                        downloadDirectory,
+                        contentCacheDirectory,
+                        cancellationToken);
             }
+            var exactExpansionBytes = manifest.Packages.Sum(package =>
+                ReleaseStager.GetExpandedSize(downloads[package.ModuleId]));
+            EnsureSufficientDiskSpace(checked(
+                exactExpansionBytes + DiskSafetyReserveBytes));
             foreach (var package in manifest.Packages.OrderBy(value => value.ModuleId, StringComparer.Ordinal))
             {
                 var destination = package.ModuleId == "core"
@@ -295,6 +329,49 @@ public sealed class ReleaseInstaller(
         if (!Path.GetFullPath(child).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("update_path_invalid");
+        }
+    }
+
+    private void EnsureSufficientDiskSpace(long requiredBytes)
+    {
+        long availableBytes;
+        try
+        {
+            availableBytes = _availableFreeSpaceProvider(_installRoot);
+        }
+        catch (Exception error) when (error is not InvalidDataException)
+        {
+            throw new InvalidDataException("update_disk_space_check_failed", error);
+        }
+        if (availableBytes < 0)
+        {
+            throw new InvalidDataException("update_disk_space_check_failed");
+        }
+        if (availableBytes < requiredBytes)
+        {
+            throw new IOException("update_disk_space_insufficient");
+        }
+    }
+
+    private static long ReadAvailableFreeSpace(string path)
+    {
+        var root = Path.GetPathRoot(Path.GetFullPath(path));
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            throw new InvalidDataException("update_disk_space_check_failed");
+        }
+        return new DriveInfo(root).AvailableFreeSpace;
+    }
+
+    private static void DeleteStaleCacheParts(string contentCacheDirectory)
+    {
+        Directory.CreateDirectory(contentCacheDirectory);
+        foreach (var part in Directory.EnumerateFiles(
+            contentCacheDirectory,
+            "*.part",
+            SearchOption.TopDirectoryOnly))
+        {
+            File.Delete(part);
         }
     }
 }

@@ -126,6 +126,9 @@ public sealed class ReleaseUpdateTests
         var path = await stager.DownloadPackageAsync(package, Path.Combine(_directory, "staging"));
 
         CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(path));
+        StringAssert.EndsWith(path, ".zip");
+        Assert.IsFalse(Directory.EnumerateFiles(
+            Path.GetDirectoryName(path)!, "*.part", SearchOption.TopDirectoryOnly).Any());
     }
 
     [TestMethod]
@@ -287,6 +290,124 @@ public sealed class ReleaseUpdateTests
         Assert.IsNotNull(second);
         Assert.AreEqual(first.VersionDirectory, second.VersionDirectory);
         Assert.AreEqual(3, handler.Requests);
+    }
+
+    [TestMethod]
+    public async Task ReusesUnchangedPackagesByVerifiedSha256AcrossVersions()
+    {
+        var adapters = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["adapter.mt5.python"] = Zip(("worker.py", "worker")),
+            ["adapter.mt4"] = Zip(("AURUMBridgeEA.ex4", "ea")),
+        };
+        var firstPackages = new Dictionary<string, byte[]>(adapters, StringComparer.Ordinal)
+        {
+            ["core"] = CompleteCoreZip(),
+        };
+        var secondPackages = new Dictionary<string, byte[]>(adapters, StringComparer.Ordinal)
+        {
+            ["core"] = CompleteCoreZip(extraFile:("release.txt", "3.2.0")),
+        };
+        var handler = new VersionedPackageResponseHandler(firstPackages, secondPackages);
+        using var http = new HttpClient(handler);
+        var installer = new ReleaseInstaller(_directory, new ReleaseStager(http));
+
+        await installer.StageAsync(
+            ManifestForPackages("3.1.0", firstPackages),
+            new Version(3, 0, 0));
+        handler.UseSecondVersion = true;
+        await installer.StageAsync(
+            ManifestForPackages("3.2.0", secondPackages),
+            new Version(3, 1, 0));
+
+        Assert.AreEqual(4, handler.Requests);
+        Assert.AreEqual(4, Directory.EnumerateFiles(
+            Path.Combine(_directory, "cache", "packages"),
+            "*.zip",
+            SearchOption.TopDirectoryOnly).Count());
+    }
+
+    [TestMethod]
+    public async Task RejectsAndReplacesACorruptedSameSizeCacheEntry()
+    {
+        var payload = CompleteCoreZip();
+        var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["core"] = payload,
+        };
+        var handler = new PackageResponseHandler(packages);
+        using var http = new HttpClient(handler);
+        var stager = new ReleaseStager(http);
+        var package = ManifestForPackages("3.1.0", packages).Packages.Single();
+        var cacheDirectory = Path.Combine(_directory, "cache", "packages");
+        var stagingDirectory = Path.Combine(_directory, "staging");
+        var cached = await stager.DownloadPackageAsync(
+            package,
+            stagingDirectory,
+            cacheDirectory);
+        var corrupted = payload.ToArray();
+        corrupted[0] ^= 0xff;
+        await File.WriteAllBytesAsync(cached, corrupted);
+
+        var replaced = await stager.DownloadPackageAsync(
+            package,
+            stagingDirectory,
+            cacheDirectory);
+
+        Assert.AreEqual(cached, replaced);
+        Assert.AreEqual(2, handler.Requests);
+        CollectionAssert.AreEqual(payload, await File.ReadAllBytesAsync(replaced));
+        Assert.IsFalse(Directory.EnumerateFiles(
+            cacheDirectory, "*.part", SearchOption.TopDirectoryOnly).Any());
+    }
+
+    [TestMethod]
+    public async Task RejectsInsufficientDiskSpaceBeforeDownloading()
+    {
+        var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["core"] = CompleteCoreZip(),
+            ["adapter.mt5.python"] = Zip(("worker.py", "worker")),
+            ["adapter.mt4"] = Zip(("AURUMBridgeEA.ex4", "ea")),
+        };
+        var handler = new PackageResponseHandler(packages);
+        using var http = new HttpClient(handler);
+        var installer = new ReleaseInstaller(
+            _directory,
+            new ReleaseStager(http),
+            _ => 1024);
+
+        var error = await Assert.ThrowsExactlyAsync<IOException>(() =>
+            installer.StageAsync(
+                ManifestForPackages("3.1.0", packages),
+                new Version(3, 0, 0)));
+
+        Assert.AreEqual("update_disk_space_insufficient", error.Message);
+        Assert.AreEqual(0, handler.Requests);
+        Assert.IsFalse(Directory.Exists(Path.Combine(_directory, "versions", "3.1.0")));
+    }
+
+    [TestMethod]
+    public async Task RemovesStaleInterruptedCachePartsBeforeStaging()
+    {
+        var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["core"] = CompleteCoreZip(),
+            ["adapter.mt5.python"] = Zip(("worker.py", "worker")),
+            ["adapter.mt4"] = Zip(("AURUMBridgeEA.ex4", "ea")),
+        };
+        var cacheDirectory = Path.Combine(_directory, "cache", "packages");
+        Directory.CreateDirectory(cacheDirectory);
+        var stalePart = Path.Combine(cacheDirectory, ".interrupted.part");
+        await File.WriteAllTextAsync(stalePart, "partial");
+        using var http = new HttpClient(new PackageResponseHandler(packages));
+        var installer = new ReleaseInstaller(_directory, new ReleaseStager(http));
+
+        await installer.StageAsync(
+            ManifestForPackages("3.1.0", packages),
+            new Version(3, 0, 0));
+
+        Assert.IsFalse(File.Exists(stalePart));
     }
 
     [TestMethod]
@@ -729,7 +850,8 @@ public sealed class ReleaseUpdateTests
 
     private static byte[] CompleteCoreZip(
         bool includeSqlite = true,
-        bool includeServerEndpoints = true)
+        bool includeServerEndpoints = true,
+        (string Path, string Content)? extraFile = null)
     {
         var files = new List<(string Path, string Content)>
         {
@@ -748,6 +870,10 @@ public sealed class ReleaseUpdateTests
         if (includeSqlite)
         {
             files.Add(("e_sqlite3.dll", "native-sqlite"));
+        }
+        if (extraFile is { } extra)
+        {
+            files.Add(extra);
         }
         return Zip(files.ToArray());
     }
@@ -807,6 +933,29 @@ public sealed class ReleaseUpdateTests
             {
                 Content = new ByteArrayContent(payload),
             });
+        }
+    }
+
+    private sealed class VersionedPackageResponseHandler(
+        IReadOnlyDictionary<string, byte[]> firstPackages,
+        IReadOnlyDictionary<string, byte[]> secondPackages) : HttpMessageHandler
+    {
+        public int Requests { get; private set; }
+        public bool UseSecondVersion { get; set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests++;
+            var packages = UseSecondVersion ? secondPackages : firstPackages;
+            var moduleId = Path.GetFileNameWithoutExtension(request.RequestUri!.AbsolutePath);
+            return packages.TryGetValue(moduleId, out var payload)
+                ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(payload),
+                })
+                : Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         }
     }
 }
