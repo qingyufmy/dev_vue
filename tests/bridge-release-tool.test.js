@@ -270,6 +270,9 @@ describe('bridge release tooling', () => {
     expect(fullInstallerBuilder).toContain('--offline-bundle-root')
     expect(fullInstallerBuilder).toContain("$manifest.rollout_channel -ne 'stable'")
     expect(fullInstallerBuilder).toContain('$MinimumOfflineValidityDays')
+    expect(fullInstallerBuilder).toContain('function ConvertFrom-CodePoints')
+    expect(fullInstallerBuilder).toContain('0x91CF,0x89C1,0x667A,0x6865')
+    expect([...fullInstallerBuilder].some(character => character.codePointAt(0) > 0x7f)).toBe(false)
     expect(bootstrapProgram).toContain('Text = "重试安装"')
     const launcherProgram = await readFile(
       new URL('../bridge/launcher/AurumBridge.Launcher/Program.cs', import.meta.url),

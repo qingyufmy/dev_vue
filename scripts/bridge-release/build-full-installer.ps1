@@ -41,6 +41,10 @@ function Escape-PascalString([string]$Value) {
   return $Value.Replace("'", "''")
 }
 
+function ConvertFrom-CodePoints([int[]]$CodePoints) {
+  return -join ($CodePoints | ForEach-Object { [char]$_ })
+}
+
 function Get-CodeSigningCertificate([string]$Thumbprint) {
   $normalized = ($Thumbprint -replace '[^a-fA-F0-9]', '').ToUpperInvariant()
   return Get-ChildItem Cert:\CurrentUser\My | Where-Object {
@@ -162,16 +166,26 @@ try {
     "  Arguments := '--offline-bundle-root `"' + ExpandConstant('{tmp}') +`r`n" +
       "    '`" --install-result `"' + ExpandConstant('{tmp}\install-result.json') + '`"';"
   }
+  $productName = ConvertFrom-CodePoints @(0x91CF,0x89C1,0x667A,0x6865)
   $runSection = if ($rehearsalInstallRoot) { '' } else {
 @"
 [Run]
-Filename: "{localappdata}\AURUM\LiangjianBridge\AURUMBridge.Launcher.exe"; Description: "{cm:LaunchProgram,量见智桥}"; Flags: nowait postinstall skipifsilent
+Filename: "{localappdata}\AURUM\LiangjianBridge\AURUMBridge.Launcher.exe"; Description: "{cm:LaunchProgram,$(Escape-Inno $productName)}"; Flags: nowait postinstall skipifsilent
 "@
   }
+  $publisherName = ConvertFrom-CodePoints @(0x91CF,0x89C1)
+  $installFailedMessage = ConvertFrom-CodePoints @(
+    0x91CF,0x89C1,0x667A,0x6865,0x6838,0x5FC3,0x7EC4,0x4EF6,
+    0x5B89,0x88C5,0x5931,0x8D25,0x3002,0x8BF7,0x9000,0x51FA,
+    0x6B63,0x5728,0x8FD0,0x884C,0x7684,0x91CF,0x89C1,0x667A,
+    0x6865,0x540E,0x91CD,0x8BD5,0xFF1B,0x5982,0x4ECD,0x5931,
+    0x8D25,0xFF0C,0x8BF7,0x8054,0x7CFB,0x7BA1,0x7406,0x5458,
+    0x3002
+  )
   $innoText = @"
-#define MyAppName "量见智桥"
+#define MyAppName "$(Escape-Inno $productName)"
 #define MyAppVersion "$(Escape-Inno ([string]$manifest.release_version))"
-#define MyAppPublisher "量见"
+#define MyAppPublisher "$(Escape-Inno $publisherName)"
 #define MyAppURL "https://www.cnfxtrade.com"
 
 [Setup]
@@ -204,7 +218,7 @@ UsePreviousAppDir=yes
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [CustomMessages]
-chinesesimplified.InstallFailed=量见智桥核心组件安装失败。请退出正在运行的量见智桥后重试；如仍失败，请联系管理员。
+chinesesimplified.InstallFailed=$(Escape-Inno $installFailedMessage)
 
 [Files]
 Source: "$(Escape-Inno $bootstrapper)"; Flags: dontcopy
