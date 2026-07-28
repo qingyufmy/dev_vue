@@ -129,4 +129,12 @@ public sealed class BridgeEndpointSettingsStore
         string realtimeUrl) => new(
             BridgeServerEndpointConfiguration.ParseServerUri(controlUrl),
             BridgeServerEndpointConfiguration.ParseRealtimeUri(realtimeUrl));
+
+    public static BridgeEndpointConfiguration FromServerUrl(string serverUrl)
+    {
+        var control = BridgeServerEndpointConfiguration.ParseServerUri(serverUrl);
+        return new(
+            control,
+            BridgeServerEndpointConfiguration.DeriveRealtimeUri(control));
+    }
 }

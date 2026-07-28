@@ -17,16 +17,15 @@ public sealed class BridgeSettingsForm : Form
     private readonly BridgeEndpointConnectivityTester _tester;
     private readonly RadioButton _officialMode = new();
     private readonly RadioButton _customMode = new();
-    private readonly TextBox _controlUrl = new();
-    private readonly TextBox _realtimeUrl = new();
+    private readonly TextBox _serverUrl = new();
+    private readonly Panel _serverUrlHost = new();
     private readonly Label _testStatus = new();
     private readonly Button _testButton = new();
     private readonly Button _saveButton = new();
     private readonly Button _restoreButton = new();
     private readonly CancellationTokenSource _stop = new();
     private string? _lastSuccessfulTest;
-    private string _customControlUrl = string.Empty;
-    private string _customRealtimeUrl = string.Empty;
+    private string _customServerUrl = string.Empty;
     private bool _lastModeCustom;
     private bool _updatingMode;
 
@@ -40,8 +39,8 @@ public sealed class BridgeSettingsForm : Form
         AccessibleName = "量见智桥管理员连接设置";
         Icon = BridgeBrandIcon.ApplicationIcon;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new(620, 540);
-        MinimumSize = new(580, 520);
+        ClientSize = new(620, 490);
+        MinimumSize = new(580, 470);
         MaximizeBox = false;
         MinimizeBox = false;
         BackColor = Color.FromArgb(248, 250, 252);
@@ -87,7 +86,7 @@ public sealed class BridgeSettingsForm : Form
         {
             AutoSize = true,
             MaximumSize = new(550, 0),
-            Text = "控制服务负责授权和配置，实时通道负责行情与交易指令。修改后将安全重启桥接。",
+            Text = "统一设置桥接服务器地址，行情、交易指令和授权通道会自动完成配置。",
             ForeColor = Color.FromArgb(71, 85, 105),
             Margin = new Padding(0, 0, 0, 18),
         }, 0, 1);
@@ -115,29 +114,23 @@ public sealed class BridgeSettingsForm : Form
             BackColor = Color.White,
             Padding = new(18, 16, 18, 16),
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 3,
             Margin = new Padding(0, 0, 0, 14),
         };
-        fields.Controls.Add(FieldLabel("控制服务地址（HTTPS）"), 0, 0);
-        ConfigureTextBox(_controlUrl, "控制服务地址");
-        fields.Controls.Add(_controlUrl, 0, 1);
+        fields.RowStyles.Add(new(SizeType.AutoSize));
+        fields.RowStyles.Add(new(SizeType.Absolute, 48));
+        fields.RowStyles.Add(new(SizeType.AutoSize));
+        fields.Controls.Add(FieldLabel("服务器地址"), 0, 0);
+        ConfigureTextBox(_serverUrl, _serverUrlHost, "服务器地址");
+        fields.Controls.Add(_serverUrlHost, 0, 1);
         fields.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "登录、授权、更新检查和管理接口始终通过该地址访问。",
-            ForeColor = Color.FromArgb(100, 116, 139),
-            Margin = new Padding(0, 4, 0, 14),
+            MaximumSize = new(510, 0),
+            Text = "远程地址需使用 HTTPS；本机测试可使用 HTTP。实时通道会自动配置。",
+            ForeColor = Color.FromArgb(71, 85, 105),
+            Margin = Padding.Empty,
         }, 0, 2);
-        fields.Controls.Add(FieldLabel("实时通信地址（WSS / WS）"), 0, 3);
-        ConfigureTextBox(_realtimeUrl, "实时通信地址");
-        fields.Controls.Add(_realtimeUrl, 0, 4);
-        fields.Controls.Add(new Label
-        {
-            AutoSize = true,
-            Text = "WS 仅传输短期连接票据、行情与指令，不发送长期登录凭据。",
-            ForeColor = Color.FromArgb(100, 116, 139),
-            Margin = new Padding(0, 4, 0, 0),
-        }, 0, 5);
         root.Controls.Add(fields, 0, 3);
 
         var testRow = new TableLayoutPanel
@@ -201,10 +194,8 @@ public sealed class BridgeSettingsForm : Form
         _updatingMode = true;
         try
         {
-            _controlUrl.Text = _view.Effective.ControlBaseUri.AbsoluteUri.TrimEnd('/');
-            _realtimeUrl.Text = _view.Effective.RealtimeBaseUri.AbsoluteUri.TrimEnd('/');
-            _customControlUrl = _controlUrl.Text;
-            _customRealtimeUrl = _realtimeUrl.Text;
+            _serverUrl.Text = _view.Effective.ControlBaseUri.AbsoluteUri.TrimEnd('/');
+            _customServerUrl = _serverUrl.Text;
             _customMode.Checked = _view.CustomActive;
             _officialMode.Checked = !_view.CustomActive;
             _lastModeCustom = _view.CustomActive;
@@ -229,19 +220,17 @@ public sealed class BridgeSettingsForm : Form
         var custom = _customMode.Checked;
         if (_lastModeCustom && !custom)
         {
-            _customControlUrl = _controlUrl.Text;
-            _customRealtimeUrl = _realtimeUrl.Text;
-            _controlUrl.Text = _view.Official.ControlBaseUri.AbsoluteUri.TrimEnd('/');
-            _realtimeUrl.Text = _view.Official.RealtimeBaseUri.AbsoluteUri.TrimEnd('/');
+            _customServerUrl = _serverUrl.Text;
+            _serverUrl.Text = _view.Official.ControlBaseUri.AbsoluteUri.TrimEnd('/');
         }
         else if (!_lastModeCustom && custom)
         {
-            _controlUrl.Text = _customControlUrl;
-            _realtimeUrl.Text = _customRealtimeUrl;
+            _serverUrl.Text = _customServerUrl;
         }
         _lastModeCustom = custom;
-        _controlUrl.Enabled = custom;
-        _realtimeUrl.Enabled = custom;
+        _serverUrl.Enabled = custom;
+        _serverUrlHost.BackColor = custom ? Color.White : Color.FromArgb(245, 247, 250);
+        _serverUrl.BackColor = _serverUrlHost.BackColor;
         _restoreButton.Enabled = custom;
         InvalidateTest();
     }
@@ -297,14 +286,12 @@ public sealed class BridgeSettingsForm : Form
     {
         try
         {
-            return BridgeEndpointSettingsStore.Normalize(_controlUrl.Text, _realtimeUrl.Text);
+            return BridgeEndpointSettingsStore.FromServerUrl(_serverUrl.Text);
         }
-        catch (InvalidDataException error)
+        catch (InvalidDataException)
         {
             _lastSuccessfulTest = null;
-            _testStatus.Text = error.Message == "bridge_realtime_url_invalid"
-                ? "! 实时通信地址必须使用 ws:// 或 wss://，且不能包含路径或参数。"
-                : "! 控制服务必须使用 HTTPS，且不能包含路径或参数。";
+            _testStatus.Text = "! 远程地址必须使用 HTTPS（本机测试可使用 HTTP），且不能包含路径或参数。";
             _testStatus.ForeColor = Color.FromArgb(185, 28, 28);
             return null;
         }
@@ -346,15 +333,39 @@ public sealed class BridgeSettingsForm : Form
         radio.Margin = new Padding(0, 0, 24, 0);
     }
 
-    private void ConfigureTextBox(TextBox input, string accessibleName)
+    private void ConfigureTextBox(
+        TextBox input,
+        Panel host,
+        string accessibleName)
     {
-        input.Dock = DockStyle.Top;
-        input.MinimumSize = new(0, 36);
-        input.BorderStyle = BorderStyle.FixedSingle;
+        host.Dock = DockStyle.Top;
+        host.Height = 36;
+        host.Margin = Padding.Empty;
+        host.BackColor = Color.White;
+        host.BorderStyle = BorderStyle.FixedSingle;
+        host.TabStop = false;
+        input.AutoSize = true;
+        input.Margin = Padding.Empty;
+        input.BorderStyle = BorderStyle.None;
         input.BackColor = Color.White;
         input.ForeColor = Color.FromArgb(15, 23, 42);
         input.AccessibleName = accessibleName;
+        input.Anchor = AnchorStyles.Left | AnchorStyles.Right;
         input.TextChanged += (_, _) => InvalidateTest();
+        host.Controls.Add(input);
+        host.Click += (_, _) => input.Focus();
+        void CenterInput(object? sender, EventArgs eventArgs)
+        {
+            var preferredHeight = input.PreferredHeight;
+            input.SetBounds(
+                10,
+                Math.Max(0, (host.ClientSize.Height - preferredHeight) / 2),
+                Math.Max(0, host.ClientSize.Width - 20),
+                preferredHeight);
+        }
+        host.Resize += CenterInput;
+        input.FontChanged += CenterInput;
+        CenterInput(null, EventArgs.Empty);
     }
 
     private static void ConfigureButton(Button button, string text, bool primary)

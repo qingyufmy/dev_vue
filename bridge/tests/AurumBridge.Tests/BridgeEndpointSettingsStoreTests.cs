@@ -57,6 +57,20 @@ public sealed class BridgeEndpointSettingsStoreTests
     }
 
     [TestMethod]
+    public void DerivesTheRealtimeEndpointFromOneServerAddress()
+    {
+        var remote = BridgeEndpointSettingsStore.FromServerUrl(
+            "https://control.example.com");
+        var local = BridgeEndpointSettingsStore.FromServerUrl(
+            "http://127.0.0.1:3000");
+
+        Assert.AreEqual("https://control.example.com/", remote.ControlBaseUri.AbsoluteUri);
+        Assert.AreEqual("wss://control.example.com/", remote.RealtimeBaseUri.AbsoluteUri);
+        Assert.AreEqual("http://127.0.0.1:3000/", local.ControlBaseUri.AbsoluteUri);
+        Assert.AreEqual("ws://127.0.0.1:3000/", local.RealtimeBaseUri.AbsoluteUri);
+    }
+
+    [TestMethod]
     public void RejectsUnknownFieldsInsteadOfSilentlyChangingTheirMeaning()
     {
         Directory.CreateDirectory(_directory);
