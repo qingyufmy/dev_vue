@@ -2443,15 +2443,28 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         // Fetch all orders from MT5 bridge
         const exportRange = await resolveHistoryRange(expUserId, params)
-        const exportBridgeParams = { page: 1, page_size: 9999 }
+        const exportBridgeParams = { page: 1, page_size: 200 }
         if (exportRange.date_from) exportBridgeParams.date_from = exportRange.date_from
         if (exportRange.date_to) exportBridgeParams.date_to = exportRange.date_to
-        const expRes = await ai.mt5Bridge(expUserId, 'history', exportBridgeParams, { timeoutMs: 30000, noFallback: true })
-        if (expRes?.status !== 'success' || !Array.isArray(expRes.orders)) {
+        let orders = []
+        let exportFailed = false
+        for (let page = 1; page <= 50; page += 1) {
+          const expRes = await ai.mt5Bridge(expUserId, 'history', {
+            ...exportBridgeParams, page,
+          }, { timeoutMs:30000, noFallback:true })
+          if (expRes?.status !== 'success' || !Array.isArray(expRes.orders)
+            || expRes.history_sync?.complete === false) {
+            exportFailed = true
+            break
+          }
+          orders.push(...expRes.orders)
+          const totalPages = Math.max(1, Math.min(50, Number(expRes.pagination?.total_pages || 1)))
+          if (page >= totalPages) break
+        }
+        if (exportFailed) {
           result = { status: 'error', message: '获取历史订单失败' }
           break
         }
-        let orders = [...expRes.orders]
         // Apply same filters as history page
         const _od = o => (o.close_time || o.time || '')
         const _ot = o => (o.type || '')

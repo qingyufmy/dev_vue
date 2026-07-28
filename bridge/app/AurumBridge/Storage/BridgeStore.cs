@@ -55,7 +55,7 @@ public sealed record TerminalDataCacheEntry(
     long CachedAtUtcMsc,
     JsonElement Payload);
 
-public sealed class BridgeStore : IAsyncDisposable
+public sealed partial class BridgeStore : IAsyncDisposable
 {
     private const int DefaultReceiptLimit = 2_000;
     private const int DefaultDataOutboxLimitPerStream = 256;
@@ -103,6 +103,7 @@ public sealed class BridgeStore : IAsyncDisposable
             command.CommandText = SchemaSql;
             await command.ExecuteNonQueryAsync(cancellationToken);
             await MigrateAccountScopedHistoryAsync(connection, cancellationToken);
+            await InitializeHistoryArchiveAsync(connection, cancellationToken);
             _initialized = true;
         }
         finally

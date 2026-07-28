@@ -7,6 +7,7 @@ namespace AurumBridge.Runtime;
 
 public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
 {
+    private const long HistoryArchiveStartMsc = 946_684_800_000L;
     private const long InitialDealLookbackMsc = 7L * 24 * 60 * 60 * 1_000;
     private const long DealPollIntervalMsc = 5_000;
     private static readonly string[] CollectionStreams = ["account", "positions", "orders", "deals"];
@@ -27,6 +28,9 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _collectionWake = new(0, 1);
     private HistoryCursor _dealCursor = HistoryCursor.Empty;
+    private HistoryCursor _historyArchiveCursor = HistoryCursor.Empty;
+    private long _lastHistoryArchiveSyncAt;
+    private bool _historyArchiveComplete;
     private bool _dealBackfillPending;
     private bool _initialized;
 
@@ -64,6 +68,13 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         {
             _dealCursor = new(Math.Max(1, _clock() - InitialDealLookbackMsc), "0");
         }
+        var historyState = await _store.GetHistoryArchiveStateAsync(
+            _terminal.TerminalInstanceId, _terminal.AccountRef, cancellationToken);
+        _historyArchiveCursor = historyState.Cursor == HistoryCursor.Empty
+            ? new(HistoryArchiveStartMsc, "0")
+            : historyState.Cursor;
+        _historyArchiveComplete = historyState.IsComplete;
+        _lastHistoryArchiveSyncAt = _clock();
         _initialized = true;
         RequestAllFullSnapshots();
     }
@@ -121,6 +132,19 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
+        if (request.Action == "history")
+        {
+            try
+            {
+                var payload = await _store.ReadHistoryArchivePageAsync(
+                    _terminal, request.Params, cancellationToken);
+                return DataResponse(request, _clock(), "succeeded", payload, null);
+            }
+            catch (InvalidDataException error)
+            {
+                return DataResponse(request, _clock(), "rejected", null, error.Message);
+            }
+        }
         var response = await _worker.RequestAsync(request, WorkerRequestPriority.Data, cancellationToken);
         var data = response.Deserialize<DataResponseMessage>(BridgeJson.Options)
             ?? throw new InvalidDataException("mt5_worker_data_response_invalid");
@@ -176,7 +200,55 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
             }, WorkerRequestPriority.Data, cancellationToken);
             await IngestSnapshotAsync(response, fullSnapshotStreams, cancellationToken);
             var active = _collections["positions"].Count > 0 || _collections["orders"].Count > 0;
+            var historyInterval = _historyArchiveComplete
+                ? (active ? 10_000L : 30_000L)
+                : (active ? 2_000L : 0L);
+            if (now - _lastHistoryArchiveSyncAt >= historyInterval)
+            {
+                try
+                {
+                    await SyncHistoryArchiveBatchAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    // History backfill must never interrupt quotes, snapshots, or trade execution.
+                }
+                _lastHistoryArchiveSyncAt = now;
+            }
             await _collectionWake.WaitAsync(CollectionDelay(active), cancellationToken);
+        }
+    }
+
+    public async Task SyncHistoryArchiveBatchAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        var response = await _worker.RequestAsync(new
+        {
+            v = 3,
+            type = "history_sync",
+            request_id = $"history_sync_{Guid.NewGuid():N}",
+            cursor = new
+            {
+                time_msc = _historyArchiveCursor.TimeMsc,
+                ticket = _historyArchiveCursor.Ticket,
+                limit = 250,
+            },
+        }, WorkerRequestPriority.Data, cancellationToken);
+        var batch = ParseHistoryArchiveBatch(response);
+        if (CompareCursor(batch.NextCursor, _historyArchiveCursor) < 0)
+        {
+            throw new InvalidDataException("mt5_history_archive_cursor_regression");
+        }
+        await _store.PersistHistoryArchiveBatchAsync(_terminal, batch, cancellationToken);
+        _historyArchiveCursor = batch.NextCursor;
+        _historyArchiveComplete = !batch.HasMore;
+        if (batch.HasMore)
+        {
+            WakeCollection();
         }
     }
 
@@ -391,6 +463,63 @@ public sealed class Mt5TerminalRuntime : IBridgeTerminalRuntime
         }
         _revisions[stream] = revision;
     }
+
+    private HistoryArchiveBatch ParseHistoryArchiveBatch(JsonElement response)
+    {
+        if (response.ValueKind != JsonValueKind.Object
+            || !response.TryGetProperty("v", out var version) || version.GetInt32() != 3
+            || !response.TryGetProperty("type", out var type) || type.GetString() != "history_sync_result"
+            || !response.TryGetProperty("observed_at_utc_msc", out var observedAt)
+            || !observedAt.TryGetInt64(out var observedAtMsc) || observedAtMsc <= 0
+            || !response.TryGetProperty("next_cursor", out var nextCursor)
+            || !response.TryGetProperty("has_more", out var hasMore)
+            || hasMore.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new InvalidDataException("mt5_history_archive_response_invalid");
+        }
+        return new(
+            ReadHistoryItems(response, "deals"),
+            ReadHistoryItems(response, "history_orders"),
+            ReadHistoryItems(response, "trades"),
+            ReadHistoryCursor(nextCursor),
+            hasMore.GetBoolean(),
+            observedAtMsc);
+    }
+
+    private static IReadOnlyList<JsonElement> ReadHistoryItems(JsonElement response, string property)
+    {
+        if (!response.TryGetProperty(property, out var items)
+            || items.ValueKind != JsonValueKind.Array
+            || items.GetArrayLength() > 250)
+        {
+            throw new InvalidDataException("mt5_history_archive_response_invalid");
+        }
+        return items.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.Object
+            ? item.Clone()
+            : throw new InvalidDataException("mt5_history_archive_response_invalid")).ToArray();
+    }
+
+    private DataResponseMessage DataResponse(
+        DataRequestMessage request,
+        long observedAt,
+        string status,
+        JsonElement? payload,
+        string? errorCode) => new()
+    {
+        Type = "data_response",
+        MessageId = $"data_{request.RequestId}_{Guid.NewGuid():N}",
+        SentAtUtcMsc = _clock(),
+        RequestId = request.RequestId,
+        TerminalInstanceId = _terminal.TerminalInstanceId,
+        AccountRef = _terminal.AccountRef,
+        ConnectionEpoch = _terminal.ConnectionEpoch,
+        Action = request.Action,
+        Params = request.Params,
+        ObservedAtUtcMsc = observedAt,
+        Status = status,
+        Payload = payload,
+        ErrorCode = errorCode,
+    };
 
     private static long? ReadSourceTimeMsc(JsonElement snapshot)
     {

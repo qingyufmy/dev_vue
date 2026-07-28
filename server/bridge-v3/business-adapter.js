@@ -563,7 +563,7 @@ export function createBridgeV3BusinessAdapter({
           compact:action === 'history' && params.compact === true || undefined,
         })
     if (action === 'history' && (!Number.isSafeInteger(allowed.page) || allowed.page < 1
-      || !Number.isSafeInteger(allowed.page_size) || allowed.page_size < 1 || allowed.page_size > 10_000)) {
+      || !Number.isSafeInteger(allowed.page_size) || allowed.page_size < 1 || allowed.page_size > 200)) {
       throw adapterError('history_pagination_invalid')
     }
     if (action === 'pending_order_state' && !/^\d{1,32}$/.test(allowed.ticket || '')) {

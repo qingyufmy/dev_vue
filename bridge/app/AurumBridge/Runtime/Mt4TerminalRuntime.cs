@@ -8,6 +8,7 @@ namespace AurumBridge.Runtime;
 
 public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
 {
+    private const long HistoryArchiveStartMsc = 946_684_800_000L;
     private const long InitialDealLookbackMsc = 7L * 24 * 60 * 60 * 1_000;
     private const long DealPollIntervalMsc = 5_000;
     private static readonly string[] SnapshotStreams = ["account", "positions", "orders"];
@@ -23,8 +24,11 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
     private readonly SemaphoreSlim _collectionWake = new(0, 1);
     private readonly SemaphoreSlim _dataCacheGate = new(1, 1);
     private HistoryCursor _dealCursor = HistoryCursor.Empty;
+    private HistoryCursor _historyArchiveCursor = HistoryCursor.Empty;
+    private long _lastHistoryArchiveSyncAt;
     private long _dataCacheInvalidatedAtUtcMsc;
     private bool _dealBackfillPending;
+    private bool _historyArchiveComplete;
     private bool _dealsEnabled;
     private bool _initialized;
 
@@ -74,6 +78,13 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
                 _dealCursor = new(Math.Max(1, _clock() - InitialDealLookbackMsc), "0");
             }
             _fullSnapshots["deals"] = 0;
+            var historyState = await _store.GetHistoryArchiveStateAsync(
+                _terminal.TerminalInstanceId, _terminal.AccountRef, cancellationToken);
+            _historyArchiveCursor = historyState.Cursor == HistoryCursor.Empty
+                ? new(HistoryArchiveStartMsc, "0")
+                : historyState.Cursor;
+            _historyArchiveComplete = historyState.IsComplete;
+            _lastHistoryArchiveSyncAt = _clock();
         }
         _initialized = true;
     }
@@ -103,6 +114,26 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
                 lastDealCollection = now;
             }
             var hasTrades = snapshot.Positions.Count > 0 || snapshot.Orders.Count > 0;
+            var historyInterval = _historyArchiveComplete
+                ? (hasTrades ? 15_000L : 60_000L)
+                : (hasTrades ? 15_000L : 3_000L);
+            if (_dealsEnabled
+                && now - _lastHistoryArchiveSyncAt >= historyInterval)
+            {
+                try
+                {
+                    await SyncHistoryArchiveBatchAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    // History backfill is optional to live trading and retries on the next interval.
+                }
+                _lastHistoryArchiveSyncAt = now;
+            }
             await _collectionWake.WaitAsync(CollectionDelay(hasTrades), cancellationToken);
         }
     }
@@ -239,6 +270,22 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
             or "symbols" or "history" or "chart_data" or "pending_order_state" or "diagnostics"))
         {
             return RejectedData(request, "terminal_data_action_unavailable");
+        }
+        if (request.Action == "history")
+        {
+            if (_dealsEnabled)
+            {
+                try
+                {
+                    var payload = await _store.ReadHistoryArchivePageAsync(
+                        _terminal, request.Params, cancellationToken);
+                    return DataResponse(request, _clock(), "succeeded", payload, null);
+                }
+                catch (InvalidDataException error)
+                {
+                    return RejectedData(request, error.Message);
+                }
+            }
         }
         if (request.Action is "symbols" or "history" or "chart_data" or "pending_order_state" or "diagnostics")
         {
@@ -615,6 +662,101 @@ public sealed class Mt4TerminalRuntime : IBridgeTerminalRuntime
         var fullSnapshot = _fullSnapshots.TryRemove("deals", out _);
         await IngestDealsAsync(batch, fullSnapshot, cancellationToken);
     }
+
+    public async Task SyncHistoryArchiveBatchAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureInitialized();
+        if (!_dealsEnabled)
+        {
+            return;
+        }
+        var batch = await _connection.CollectDealsAsync(new(
+            _terminal.TerminalInstanceId,
+            _terminal.AccountRef.BrokerServer,
+            _terminal.AccountRef.Login,
+            _terminal.ConnectionEpoch,
+            _historyArchiveCursor.TimeMsc,
+            ParseCursorTicket(_historyArchiveCursor.Ticket),
+            250,
+            30L * 24 * 60 * 60 * 1_000), cancellationToken);
+        var nextCursor = new HistoryCursor(
+            batch.NextTimeMsc,
+            batch.NextTicket.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (CompareCursor(nextCursor, _historyArchiveCursor) < 0)
+        {
+            throw new InvalidDataException("mt4_history_archive_cursor_regression");
+        }
+        var trades = batch.Items
+            .Where(item => !item.TryGetProperty("category", out var category)
+                || category.GetString() == "trade")
+            .Select(BuildMt4HistoryTrade)
+            .ToArray();
+        await _store.PersistHistoryArchiveBatchAsync(_terminal, new(
+            batch.Items,
+            batch.Items,
+            trades,
+            nextCursor,
+            batch.HasMore,
+            batch.SourceTimeMsc), cancellationToken);
+        _historyArchiveCursor = nextCursor;
+        _historyArchiveComplete = !batch.HasMore;
+    }
+
+    private static JsonElement BuildMt4HistoryTrade(JsonElement item)
+    {
+        var side = item.TryGetProperty("side", out var sideValue)
+            ? sideValue.GetString() ?? string.Empty
+            : string.Empty;
+        var profit = ReadOptionalDouble(item, "profit");
+        var commission = ReadOptionalDouble(item, "commission");
+        var swap = ReadOptionalDouble(item, "swap");
+        return JsonSerializer.SerializeToElement(new
+        {
+            ticket = ReadOptionalScalar(item, "ticket"),
+            deal_ticket = ReadOptionalScalar(item, "deal_ticket") ?? ReadOptionalScalar(item, "ticket"),
+            order = ReadOptionalScalar(item, "order_ticket") ?? ReadOptionalScalar(item, "ticket"),
+            position_id = ReadOptionalScalar(item, "position_id") ?? ReadOptionalScalar(item, "ticket"),
+            symbol = item.TryGetProperty("symbol", out var symbol) ? symbol.GetString() ?? string.Empty : string.Empty,
+            type = side.Equals("buy", StringComparison.OrdinalIgnoreCase) ? "BUY" : "SELL",
+            volume = ReadOptionalDouble(item, "volume"),
+            entry_price = ReadOptionalDouble(item, "price_open"),
+            exit_price = ReadOptionalDouble(item, "price_close"),
+            price = ReadOptionalDouble(item, "price_close"),
+            profit,
+            commission,
+            swap,
+            fee = 0.0,
+            net_profit = profit + commission + swap,
+            entry_time = item.TryGetProperty("entry_time", out var entryTime) ? entryTime.GetString() ?? string.Empty : string.Empty,
+            close_time = item.TryGetProperty("close_time", out var closeTime) ? closeTime.GetString() ?? string.Empty : string.Empty,
+            time = item.TryGetProperty("close_time", out closeTime) ? closeTime.GetString() ?? string.Empty : string.Empty,
+            time_msc = item.GetProperty("time_msc").GetInt64(),
+            comment = item.TryGetProperty("comment", out var comment) ? comment.GetString() ?? string.Empty : string.Empty,
+            take_profit = ReadOptionalDouble(item, "tp"),
+            stop_loss = ReadOptionalDouble(item, "sl"),
+        }, BridgeJson.Options);
+    }
+
+    private static string? ReadOptionalScalar(JsonElement item, string property)
+    {
+        if (!item.TryGetProperty(property, out var value))
+        {
+            return null;
+        }
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number => value.GetRawText(),
+            _ => null,
+        };
+    }
+
+    private static double ReadOptionalDouble(JsonElement item, string property) =>
+        item.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetDouble(out var result)
+            ? result
+            : 0.0;
 
     private static HistoryCursor ReadDealCursor(JsonElement item)
     {

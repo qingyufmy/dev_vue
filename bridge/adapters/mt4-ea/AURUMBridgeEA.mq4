@@ -957,7 +957,7 @@ void SendPerformanceDailyResult(const string request_id, const int status,
    if(!WriteFrame(response)) DisconnectPipe();
   }
 
-string BuildSelectedHistoryDealJson(const long event_utc_msc)
+string BuildSelectedHistoryDealJson(const long event_utc_msc, const long server_offset_msc)
   {
    int order_type = OrderType();
    string category = (order_type == OP_BUY || order_type == OP_SELL)
@@ -977,6 +977,11 @@ string BuildSelectedHistoryDealJson(const long event_utc_msc)
       + "\"price\":" + JsonNumber(OrderClosePrice()) + ","
       + "\"price_open\":" + JsonNumber(OrderOpenPrice()) + ","
       + "\"price_close\":" + JsonNumber(OrderClosePrice()) + ","
+      + "\"sl\":" + JsonNumber(OrderStopLoss()) + ","
+      + "\"tp\":" + JsonNumber(OrderTakeProfit()) + ","
+      + "\"entry_time\":\"" + JsonEscape(UtcDateTimeText(OrderOpenTime(), server_offset_msc)) + "\","
+      + "\"close_time\":\"" + JsonEscape(UtcDateTimeText(
+         OrderCloseTime() > 0 ? OrderCloseTime() : OrderOpenTime(), server_offset_msc)) + "\","
       + "\"profit\":" + JsonNumber(OrderProfit()) + ","
       + "\"commission\":" + JsonNumber(OrderCommission()) + ","
       + "\"swap\":" + JsonNumber(OrderSwap()) + ","
@@ -994,18 +999,21 @@ void SendDeals(uchar &request[], int &offset)
    long cursor_time = ReadInt64(request, offset);
    long cursor_ticket = ReadInt64(request, offset);
    int limit = ReadInt32(request, offset);
+   long window_msc = 86400000;
+   if(offset + 8 <= ArraySize(request)) window_msc = ReadInt64(request, offset);
    if(terminal_id != g_terminal_id
       || StringCompare(broker_server, AccountServer(), false) != 0
       || login != IntegerToString(AccountNumber())
       || connection_epoch != g_connection_epoch
-      || cursor_time <= 0 || cursor_ticket < 0 || limit < 1 || limit > 250)
+      || cursor_time <= 0 || cursor_ticket < 0 || limit < 1 || limit > 250
+      || window_msc < 86400000 || window_msc > 2592000000)
      {
       DisconnectPipe();
       return;
      }
 
    long captured_at = ((long)TimeGMT()) * 1000;
-   long window_end = cursor_time + 86400000;
+   long window_end = cursor_time + window_msc;
    if(window_end > captured_at) window_end = captured_at;
    if(window_end < cursor_time) window_end = cursor_time;
    long server_offset_msc = ((long)TimeCurrent() - (long)TimeGMT()) * 1000;
@@ -1066,7 +1074,7 @@ void SendDeals(uchar &request[], int &offset)
          return;
         }
       if(selected_index > 0) items += ",";
-      items += BuildSelectedHistoryDealJson(event_times[selected_index]);
+      items += BuildSelectedHistoryDealJson(event_times[selected_index], server_offset_msc);
      }
    items += "]";
 

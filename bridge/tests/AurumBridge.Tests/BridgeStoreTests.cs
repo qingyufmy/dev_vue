@@ -585,6 +585,67 @@ public sealed class BridgeStoreTests
         Assert.AreEqual("mt5", bindings[0].ToDescriptor("test-worker").Platform);
     }
 
+    [TestMethod]
+    public async Task ArchivesHistoryByAccountAndReturnsOnlyTheRequestedBoundedPage()
+    {
+        var terminal = new TerminalDescriptor
+        {
+            TerminalInstanceId = "terminal_history_01",
+            Platform = "mt5",
+            AccountRef = new("Broker-Demo", "10001"),
+            ConnectionEpoch = 3,
+        };
+        var other = terminal with { AccountRef = new("Broker-Demo", "20002") };
+        await _store.PersistHistoryArchiveBatchAsync(terminal, new(
+            [Json("""{"ticket":"501","deal_ticket":"501","order":"101","position_id":"P1","time_msc":1000}""")],
+            [Json("""{"ticket":"101","position_id":"P1","time_done":"1970-01-01 00:00:01"}""")],
+            [
+                Json("""{"ticket":"101","deal_ticket":"501","position_id":"P1","type":"BUY","volume":0.1,"profit":5,"net_profit":4.5,"time_msc":1000,"close_time":"1970-01-01 00:00:01"}"""),
+                Json("""{"ticket":"102","deal_ticket":"502","position_id":"P2","type":"SELL","volume":0.2,"profit":-2,"net_profit":-2.5,"time_msc":2000,"close_time":"1970-01-01 00:00:02"}"""),
+                Json("""{"ticket":"103","deal_ticket":"503","position_id":"P3","type":"BUY","volume":0.3,"profit":3,"net_profit":3,"time_msc":3000,"close_time":"1970-01-01 00:00:03"}"""),
+            ],
+            new HistoryCursor(3_000, "503"),
+            HasMore:false,
+            ObservedAtUtcMsc:4_000));
+        await _store.PersistHistoryArchiveBatchAsync(other, new(
+            [], [],
+            [Json("""{"ticket":"999","deal_ticket":"999","position_id":"PX","type":"BUY","profit":99,"time_msc":9000}""")],
+            new HistoryCursor(9_000, "999"), false, 10_000));
+
+        var payload = await _store.ReadHistoryArchivePageAsync(terminal,
+            JsonSerializer.SerializeToElement(new { page = 1, page_size = 2, include_deals = true }));
+
+        Assert.AreEqual(2, payload.GetProperty("orders").GetArrayLength());
+        Assert.AreEqual("503", payload.GetProperty("orders")[0].GetProperty("deal_ticket").GetString());
+        Assert.AreEqual(3, payload.GetProperty("pagination").GetProperty("total_count").GetInt32());
+        Assert.AreEqual(2, payload.GetProperty("pagination").GetProperty("total_pages").GetInt32());
+        Assert.IsTrue(payload.GetProperty("history_sync").GetProperty("complete").GetBoolean());
+        Assert.AreEqual("mt5_sqlite", payload.GetProperty("source").GetString());
+        Assert.AreEqual(0, payload.GetProperty("orders").EnumerateArray()
+            .Count(item => item.GetProperty("ticket").GetString() == "999"));
+    }
+
+    [TestMethod]
+    public async Task RejectsOversizedHistoryPagesAndRegressingArchiveCursors()
+    {
+        var terminal = new TerminalDescriptor
+        {
+            TerminalInstanceId = "terminal_history_guard",
+            Platform = "mt4",
+            AccountRef = new("Broker-Demo", "30003"),
+            ConnectionEpoch = 1,
+        };
+        await _store.PersistHistoryArchiveBatchAsync(terminal, new(
+            [], [], [], new HistoryCursor(2_000, "2"), true, 3_000));
+
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            _store.PersistHistoryArchiveBatchAsync(terminal, new(
+                [], [], [], new HistoryCursor(1_000, "1"), true, 4_000)));
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            _store.ReadHistoryArchivePageAsync(terminal,
+                JsonSerializer.SerializeToElement(new { page = 1, page_size = 201 })));
+    }
+
     private static DataDeltaMessage Delta(
         string stream,
         long revision,

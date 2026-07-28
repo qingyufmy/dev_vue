@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using AurumBridge.Protocol;
 using AurumBridge.Storage;
@@ -23,6 +24,7 @@ public sealed record BridgeReleaseAvailableNotification(
 
 public sealed class BridgeInboundRouter
 {
+    private const int MaximumOutboundDataBytes = 3 * 1024 * 1024;
     private readonly BridgeStore _store;
     private readonly BridgeCommandDispatcher _dispatcher;
     private readonly PriorityMessageQueue _outbound;
@@ -247,9 +249,15 @@ public sealed class BridgeInboundRouter
         {
             response = RejectedData(request, "terminal_data_request_failed");
         }
+        var responseJson = JsonSerializer.Serialize(response, BridgeJson.Options);
+        if (Encoding.UTF8.GetByteCount(responseJson) > MaximumOutboundDataBytes)
+        {
+            response = RejectedData(request, "bridge_result_too_large");
+            responseJson = JsonSerializer.Serialize(response, BridgeJson.Options);
+        }
         await _outbound.EnqueueAsync(new(
             response.MessageId,
-            JsonSerializer.Serialize(response, BridgeJson.Options),
+            responseJson,
             BridgeMessagePriority.Data), cancellationToken);
     }
 

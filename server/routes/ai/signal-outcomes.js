@@ -210,6 +210,38 @@ async function clearRecoveredProtectionIncidentTx(run, outcome) {
   return true
 }
 
+async function loadOutcomeHistory(bridge, userId, dateFrom) {
+  const deals = []
+  const historyOrders = []
+  const seenDeals = new Set()
+  const seenOrders = new Set()
+  for (let page = 1; page <= 25; page += 1) {
+    const history = await bridge(userId, 'history', {
+      page, page_size:200, include_deals:true, ...(dateFrom ? { date_from:dateFrom } : {}),
+    }, { noFallback:true })
+    if (history?.status !== 'success' || !Array.isArray(history.deals)) return null
+    if (history.history_sync?.complete === false) return null
+    if (history.history_sync?.evidence_truncated === true) return null
+    for (const deal of history.deals) {
+      const key = String(deal?.deal_ticket || deal?.ticket || '')
+      if (key && !seenDeals.has(key)) {
+        seenDeals.add(key)
+        deals.push(deal)
+      }
+    }
+    for (const order of Array.isArray(history.history_orders) ? history.history_orders : []) {
+      const key = String(order?.ticket || order?.order || '')
+      if (key && !seenOrders.has(key)) {
+        seenOrders.add(key)
+        historyOrders.push(order)
+      }
+    }
+    const totalPages = Math.max(1, Math.min(25, Number(history.pagination?.total_pages || 1)))
+    if (page >= totalPages) break
+  }
+  return { status:'success', deals, history_orders:historyOrders }
+}
+
 export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
   await reconcileTerminalPendingOutcomes()
   const outcomes = await queryAll(`SELECT so.*, oi.bridge_command_ref, oi.approved_order_json
@@ -226,7 +258,7 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
     const earliestCreated = userOutcomes.map(item => String(item.created_at || '').slice(0, 10)).filter(Boolean).sort()[0]
     try {
       ;[history, positions] = await Promise.all([
-        bridge(userId, 'history', { page: 1, page_size: 5000, include_deals: true, ...(earliestCreated ? { date_from: earliestCreated } : {}) }, { noFallback: true }),
+        loadOutcomeHistory(bridge, userId, earliestCreated),
         bridge(userId, 'positions', {}, { noFallback: true }),
       ])
     } catch { continue }

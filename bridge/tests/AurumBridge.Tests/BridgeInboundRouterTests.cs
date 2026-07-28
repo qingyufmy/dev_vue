@@ -333,6 +333,29 @@ public sealed class BridgeInboundRouterTests
     }
 
     [TestMethod]
+    public async Task OversizedDataResponseBecomesASmallStructuredError()
+    {
+        var router = new BridgeInboundRouter(
+            _testStore.Store, Dispatcher(), _outbound, () => Now,
+            dataHandler:(request, _) => Task.FromResult(new DataResponseMessage
+            {
+                Type = "data_response", MessageId = "data_oversized", SentAtUtcMsc = Now,
+                RequestId = request.RequestId, TerminalInstanceId = request.TerminalInstanceId,
+                AccountRef = request.AccountRef, ConnectionEpoch = request.ConnectionEpoch,
+                Action = request.Action, Params = request.Params, ObservedAtUtcMsc = Now,
+                Status = "succeeded",
+                Payload = JsonSerializer.SerializeToElement(new { value = new string('x', 3 * 1024 * 1024) }),
+            }));
+
+        await router.RouteAsync(JsonSerializer.Serialize(DataRequest(), BridgeJson.Options));
+
+        var response = JsonDocument.Parse((await _outbound.DequeueAsync()).PayloadJson).RootElement;
+        Assert.AreEqual("rejected", response.GetProperty("status").GetString());
+        Assert.AreEqual("bridge_result_too_large", response.GetProperty("error_code").GetString());
+        Assert.IsFalse(response.TryGetProperty("payload", out _));
+    }
+
+    [TestMethod]
     [DataRow("symbols")]
     [DataRow("history")]
     [DataRow("chart_data")]

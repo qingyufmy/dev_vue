@@ -180,6 +180,39 @@ class WorkerTests(unittest.TestCase):
                 now_utc_msc=cursor_time + worker.DEAL_WINDOW_MSC * 2)
         self.assertEqual("mt5_deals_unavailable", raised.exception.code)
 
+    def test_history_sync_returns_only_a_bounded_page_with_order_evidence(self):
+        adapter = self.adapter()
+        now_msc = int(time.time() * 1000)
+        opened = HistoryDeal(
+            500, 100, (now_msc - 2_000) // 1000, now_msc - 2_000,
+            0, 0, 7001, "XAUUSD", 0.1, 2300.0, 0.0, 0.0, 0.0, 0.0, "open")
+        closed = HistoryDeal(
+            501, 101, (now_msc - 1_000) // 1000, now_msc - 1_000,
+            1, 1, 7001, "XAUUSD", 0.1, 2310.0, 10.0, -0.5, -0.25, 0.0, "close")
+        order = HistoryOrder(
+            101, 7001, "XAUUSD", 0, 4, 234000, 0, "AURUM", 0.1, 0.0,
+            2300.0, 2310.0, 2290.0, 2320.0,
+            (now_msc - 2_000) // 1000, (now_msc - 1_000) // 1000)
+
+        def history_deals(*args, **kwargs):
+            return (opened, closed) if kwargs.get("position") else (closed,)
+
+        adapter.mt5.history_deals_get = history_deals
+        adapter.mt5.history_orders_get = lambda *args, **kwargs: (order,)
+
+        result = adapter.history_sync({
+            "request_id": "history_sync_01",
+            "cursor": {"time_msc": now_msc - 5_000, "ticket": "0", "limit": 250},
+        })
+
+        self.assertEqual("history_sync_result", result["type"])
+        self.assertEqual(1, len(result["deals"]))
+        self.assertEqual(1, len(result["history_orders"]))
+        self.assertEqual(1, len(result["trades"]))
+        self.assertEqual(7_001, result["trades"][0]["position_id"])
+        self.assertEqual(9.25, result["trades"][0]["net_profit"])
+        self.assertEqual(2290.0, result["trades"][0]["stop_loss"])
+
     def test_returns_bounded_daily_performance_without_exporting_raw_deals(self):
         adapter = self.adapter()
         event_ms = 1_767_312_000_000  # 2026-01-02T12:00:00Z

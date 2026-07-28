@@ -212,7 +212,7 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
-  it('preserves the legacy full-history evidence request used by outcome attribution', async () => {
+  it('rejects oversized history pages so evidence stays within the bridge frame budget', async () => {
     const { adapter, gateway } = setup({ dataResponse:{
       status:'succeeded', payload:{ orders:[], deals:[], history_orders:[], source:'mt5' },
     } })
@@ -220,13 +220,9 @@ describe('Bridge v3 business compatibility adapter', () => {
     await expect(adapter.execute(42, 'history', {
       page:1, page_size:5000, include_deals:true, date_from:'2026-01-01',
     }, { timeoutMs:30_000 })).resolves.toMatchObject({
-      status:'success', deals:[], history_orders:[],
+      status:'error', error:'history_pagination_invalid',
     })
-    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
-      action:'history', params:{
-        page:1, page_size:5000, date_from:'2026-01-01', include_deals:true,
-      },
-    }), { timeoutMs:30_000 })
+    expect(gateway.requestData).not.toHaveBeenCalled()
   })
 
   it('routes pending terminal-state reconciliation and diagnostics through v3', async () => {

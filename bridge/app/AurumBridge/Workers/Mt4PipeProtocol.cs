@@ -164,7 +164,8 @@ public sealed record Mt4DealsRequest(
     long ConnectionEpoch,
     long CursorTimeMsc,
     long CursorTicket,
-    int Limit);
+    int Limit,
+    long WindowMsc = 86_400_000L);
 
 public sealed record Mt4DealsBatch(
     long SourceTimeMsc,
@@ -967,6 +968,7 @@ public static class Mt4PipeProtocol
             writer.Write(request.CursorTimeMsc);
             writer.Write(request.CursorTicket);
             writer.Write(request.Limit);
+            writer.Write(request.WindowMsc);
         });
     }
 
@@ -980,7 +982,8 @@ public static class Mt4PipeProtocol
             reader.ReadInt64(),
             reader.ReadInt64(),
             reader.ReadInt64(),
-            reader.ReadInt32());
+            reader.ReadInt32(),
+            reader.ReadInt64());
         EnsureFullyRead(reader);
         ValidateDealsRequest(result);
         return result;
@@ -1571,7 +1574,8 @@ public static class Mt4PipeProtocol
             || request.ConnectionEpoch <= 0
             || request.CursorTimeMsc <= 0
             || request.CursorTicket < 0
-            || request.Limit is < 1 or > 250)
+            || request.Limit is < 1 or > 250
+            || request.WindowMsc is < 86_400_000L or > 2_592_000_000L)
         {
             throw new InvalidDataException("mt4_deals_request_invalid");
         }
