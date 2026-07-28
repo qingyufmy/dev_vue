@@ -58,35 +58,11 @@ New-Item -ItemType Directory -Path $work | Out-Null
 New-Item -ItemType Directory -Path $output | Out-Null
 $succeeded = $false
 try {
-  $launcher = Join-Path $work 'launcher'
-  & $dotnet publish (Join-Path $repo 'bridge\launcher\AurumBridge.Launcher\AurumBridge.Launcher.csproj') `
-    -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true `
-    -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:DebugType=None -p:DebugSymbols=false -p:Version=$LauncherVersion -o $launcher
-  if ($LASTEXITCODE -ne 0) { throw 'bootstrap_launcher_publish_failed' }
-  $launcherExecutable = Join-Path $launcher 'AURUMBridge.Launcher.exe'
-  if (-not (Test-Path -LiteralPath $launcherExecutable -PathType Leaf)) { throw 'bootstrap_launcher_publish_failed' }
-  $launcherProductVersion = (Get-Item -LiteralPath $launcherExecutable).VersionInfo.ProductVersion
-  $launcherFileVersion = $null
-  if (-not [Version]::TryParse(($launcherProductVersion -split '[+-]')[0], [ref]$launcherFileVersion) -or
-    $launcherFileVersion.Major -ne $parsedLauncherVersion.Major -or
-    $launcherFileVersion.Minor -ne $parsedLauncherVersion.Minor -or
-    $launcherFileVersion.Build -ne $parsedLauncherVersion.Build) {
-      throw 'bootstrap_launcher_version_mismatch'
-    }
-  Add-Type -AssemblyName System.IO.Compression.FileSystem
-  $launcherZip = Join-Path $work 'launcher.zip'
-  [IO.Compression.ZipFile]::CreateFromDirectory(
-    $launcher,
-    $launcherZip,
-    [IO.Compression.CompressionLevel]::Optimal,
-    $false)
-
   $publish = Join-Path $work 'bootstrapper'
   & $dotnet publish (Join-Path $repo 'bridge\bootstrapper\AurumBridge.Bootstrapper\AurumBridge.Bootstrapper.csproj') `
     -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true `
     -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-    "-p:AurumBootstrapLauncherZip=$launcherZip" `
+    -p:DebugType=None -p:DebugSymbols=false -p:Version=$LauncherVersion `
     "-p:AurumBootstrapPublicKey=$publicKeyPath" `
     "-p:AurumServerUrl=$($uri.GetLeftPart([UriPartial]::Authority))" `
     "-p:AurumLauncherVersion=$LauncherVersion" `
@@ -95,6 +71,14 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'bootstrap_publish_failed' }
   $executable = Join-Path $publish 'LiangjianBridgeSetup.exe'
   if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'bootstrap_publish_failed' }
+  $launcherProductVersion = (Get-Item -LiteralPath $executable).VersionInfo.ProductVersion
+  $launcherFileVersion = $null
+  if (-not [Version]::TryParse(($launcherProductVersion -split '[+-]')[0], [ref]$launcherFileVersion) -or
+    $launcherFileVersion.Major -ne $parsedLauncherVersion.Major -or
+    $launcherFileVersion.Minor -ne $parsedLauncherVersion.Minor -or
+    $launcherFileVersion.Build -ne $parsedLauncherVersion.Build) {
+      throw 'bootstrap_launcher_version_mismatch'
+    }
   $destination = Join-Path $output 'LiangjianBridgeSetup.exe'
   Copy-Item -LiteralPath $executable -Destination $destination
 
@@ -122,7 +106,7 @@ try {
     git_commit=(git -C $repo rev-parse HEAD)
     server=$uri.GetLeftPart([UriPartial]::Authority)
     launcher_version=$LauncherVersion
-    launcher_zip_sha256=(Get-FileHash -LiteralPath $launcherZip -Algorithm SHA256).Hash.ToLowerInvariant()
+    single_runtime_installer=$true
     public_key_sha256=(Get-FileHash -LiteralPath $publicKeyPath -Algorithm SHA256).Hash.ToLowerInvariant()
     installer_size_bytes=(Get-Item -LiteralPath $destination).Length
     installer_sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()

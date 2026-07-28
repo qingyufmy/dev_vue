@@ -222,7 +222,7 @@ describe('bridge release tooling', () => {
     expect(solution).toContain('tools/AurumBridge.UpdateRehearsal/AurumBridge.UpdateRehearsal.csproj')
   })
 
-  it('builds a self-contained bootstrapper with an embedded pinned launcher and public key', async () => {
+  it('builds one self-contained binary that installs itself as the pinned launcher', async () => {
     const bootstrapBuilder = await readFile(new URL('../scripts/bridge-release/build-bootstrapper.ps1', import.meta.url), 'utf8')
     const bootstrapUploader = await readFile(new URL('../scripts/bridge-release/upload-bootstrapper-qiniu.ps1', import.meta.url), 'utf8')
     const bootstrapProject = await readFile(new URL('../bridge/bootstrapper/AurumBridge.Bootstrapper/AurumBridge.Bootstrapper.csproj', import.meta.url), 'utf8')
@@ -235,10 +235,13 @@ describe('bridge release tooling', () => {
     expect(bootstrapUploader).toContain("$signature.Status -eq 'Valid'")
     expect(bootstrapUploader).toContain('bootstrap_authenticode_metadata_mismatch')
     expect(bootstrapUploader).toContain('-AllowUnsignedInstaller:$AllowUnsignedInstaller')
-    expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.launcher.zip')
+    expect(bootstrapProject).toContain('launcher\\AurumBridge.Launcher\\*.cs')
+    expect(bootstrapProject).not.toContain('AurumBridge.Bootstrapper.launcher.zip')
     expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.release-public-key.pem')
     expect(bootstrapProject).toContain('AurumTargetEnvironment')
     expect(bootstrapBuilder).toContain('-p:AurumTargetEnvironment=$TargetEnvironment')
+    expect(bootstrapBuilder).toContain('single_runtime_installer=$true')
+    expect(bootstrapBuilder).not.toContain('AurumBootstrapLauncherZip')
     expect(manifestClient).toContain('/api/bridge/v3/releases/bootstrap')
     const bootstrapProgram = await readFile(
       new URL('../bridge/bootstrapper/AurumBridge.Bootstrapper/Program.cs', import.meta.url),
@@ -249,6 +252,8 @@ describe('bridge release tooling', () => {
     expect(bootstrapProgram).toContain('if (!_rehearsal) EnsureBridgeIsStopped()')
     expect(bootstrapProgram).toContain('CreateShortcuts()')
     expect(bootstrapProgram).toContain('BridgeInstallationRegistration.Register(')
+    expect(bootstrapProgram).toContain('ResolveCurrentExecutable()')
+    expect(bootstrapProgram).toContain('BridgeInstallationRegistration.LauncherFileName')
     expect(bootstrapProgram).toContain('Text = "重试安装"')
     const launcherProgram = await readFile(
       new URL('../bridge/launcher/AurumBridge.Launcher/Program.cs', import.meta.url),

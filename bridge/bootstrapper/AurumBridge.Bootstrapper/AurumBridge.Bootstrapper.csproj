@@ -8,6 +8,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>LiangjianBridgeSetup</AssemblyName>
     <RootNamespace>AurumBridge.Bootstrapper</RootNamespace>
+    <StartupObject>AurumBridge.Bootstrapper.Program</StartupObject>
     <Version>1.0.0</Version>
     <ApplicationIcon>..\..\assets\liangjian-bridge.ico</ApplicationIcon>
   </PropertyGroup>
@@ -19,7 +20,7 @@
     <Compile Include="..\..\app\AurumBridge\Update\BridgeInstallationIdentityStore.cs" Link="Update\BridgeInstallationIdentityStore.cs" />
     <Compile Include="..\..\app\AurumBridge\Runtime\BridgeServerEndpointConfiguration.cs" Link="Runtime\BridgeServerEndpointConfiguration.cs" />
     <Compile Include="..\..\shared\BridgeInstallationRegistration.cs" Link="Installation\BridgeInstallationRegistration.cs" />
-    <EmbeddedResource Include="$(AurumBootstrapLauncherZip)" LogicalName="AurumBridge.Bootstrapper.launcher.zip" />
+    <Compile Include="..\..\launcher\AurumBridge.Launcher\*.cs" Link="Launcher\%(Filename)%(Extension)" />
     <EmbeddedResource Include="$(AurumBootstrapPublicKey)" LogicalName="AurumBridge.Bootstrapper.release-public-key.pem" />
     <AssemblyMetadata Include="AurumServerUrl" Value="$(AurumServerUrl)" />
     <AssemblyMetadata Include="AurumLauncherVersion" Value="$(AurumLauncherVersion)" />
@@ -27,7 +28,6 @@
   </ItemGroup>
 
   <Target Name="ValidateBootstrapInputs" BeforeTargets="BeforeBuild">
-    <Error Condition="!Exists('$(AurumBootstrapLauncherZip)')" Text="bootstrap_launcher_zip_missing" />
     <Error Condition="!Exists('$(AurumBootstrapPublicKey)')" Text="bootstrap_public_key_missing" />
     <Error Condition="'$(AurumServerUrl)' == ''" Text="bootstrap_server_url_missing" />
     <Error Condition="'$(AurumLauncherVersion)' == ''" Text="bootstrap_launcher_version_missing" />

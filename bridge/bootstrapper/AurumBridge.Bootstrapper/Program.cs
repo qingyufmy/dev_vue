@@ -13,6 +13,11 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (IsLauncherInvocation(args))
+        {
+            AurumBridge.Launcher.Program.Main(args).GetAwaiter().GetResult();
+            return Environment.ExitCode;
+        }
         if (args.Length > 0)
         {
             return RunRehearsalAsync(args).GetAwaiter().GetResult();
@@ -20,6 +25,17 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         Application.Run(new BootstrapperForm());
         return 0;
+    }
+
+    private static bool IsLauncherInvocation(IReadOnlyList<string> args)
+    {
+        var executableName = Path.GetFileName(Environment.ProcessPath);
+        return string.Equals(
+                executableName,
+                BridgeInstallationRegistration.LauncherFileName,
+                StringComparison.OrdinalIgnoreCase)
+            || args.Count > 0
+                && args[0] is "--autostart" or "--uninstall" or "--uninstall-worker";
     }
 
     private static async Task<int> RunRehearsalAsync(string[] args)
@@ -177,7 +193,6 @@ internal sealed class BootstrapperForm : Form
 internal sealed class BootstrapInstaller
 {
     private const string PublicKeyResource = "AurumBridge.Bootstrapper.release-public-key.pem";
-    private const string LauncherResource = "AurumBridge.Bootstrapper.launcher.zip";
     private static readonly string[] RequiredCoreFiles =
     [
         "AURUMBridge.exe",
@@ -282,18 +297,13 @@ internal sealed class BootstrapInstaller
                 cancellationToken);
 
             _status("正在安装稳定启动组件…");
-            var launcherArchive = Path.Combine(operationRoot, "launcher.zip");
-            await CopyResourceAsync(LauncherResource, launcherArchive, cancellationToken);
-            var launcherDirectory = Path.Combine(operationRoot, "launcher");
-            ReleaseStager.ExtractPackage(launcherArchive, launcherDirectory);
-            if (!File.Exists(Path.Combine(launcherDirectory, "AURUMBridge.Launcher.exe")))
-            {
-                throw new InvalidDataException("bootstrap_launcher_invalid");
-            }
+            var launcherExecutable = ResolveCurrentExecutable();
 
             if (!_rehearsal) EnsureBridgeIsStopped();
             InstallVersion(versionDirectory, manifest.ReleaseVersion);
-            CopyDirectoryFilesAtomically(launcherDirectory, _installRoot);
+            CopyFileAtomically(
+                launcherExecutable,
+                Path.Combine(_installRoot, BridgeInstallationRegistration.LauncherFileName));
             await WriteAtomicAsync(Path.Combine(_installRoot, "release-public-key.pem"), publicKey, cancellationToken);
             await WriteAtomicAsync(Path.Combine(_installRoot, "rollout-channel"), "stable", cancellationToken);
             await WriteAtomicAsync(
@@ -430,19 +440,16 @@ internal sealed class BootstrapInstaller
         return reader.ReadToEnd();
     }
 
-    private async Task CopyResourceAsync(string name, string destination, CancellationToken cancellationToken)
+    private static string ResolveCurrentExecutable()
     {
-        await using var source = _assembly.GetManifestResourceStream(name)
-            ?? throw new InvalidDataException("bootstrap_resource_missing");
-        await using var target = new FileStream(
-            destination,
-            FileMode.CreateNew,
-            FileAccess.Write,
-            FileShare.None,
-            64 * 1024,
-            FileOptions.Asynchronous | FileOptions.WriteThrough);
-        await source.CopyToAsync(target, cancellationToken);
-        await target.FlushAsync(cancellationToken);
+        var executable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executable)
+            || !string.Equals(Path.GetExtension(executable), ".exe", StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(executable))
+        {
+            throw new InvalidDataException("bootstrap_launcher_source_invalid");
+        }
+        return Path.GetFullPath(executable);
     }
 
     private static void ValidateManifestPackageSet(ReleaseManifest manifest)
@@ -554,6 +561,23 @@ internal sealed class BootstrapInstaller
             {
                 if (File.Exists(temporary)) File.Delete(temporary);
             }
+        }
+    }
+
+    private static void CopyFileAtomically(string source, string destination)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var temporary = Path.Combine(
+            Path.GetDirectoryName(destination)!,
+            $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.Copy(source, temporary, overwrite:false);
+            File.Move(temporary, destination, overwrite:true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
         }
     }
 

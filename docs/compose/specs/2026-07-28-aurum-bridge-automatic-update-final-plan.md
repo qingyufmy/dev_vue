@@ -103,7 +103,7 @@ Launcher 保持稳定，只负责版本指针、健康检查、启动和回滚�
 
 - 只允许提升已签名的 Manifest V2，且必须是 `stable`、`normal`、100% 覆盖、无强制激活截止时间。
 - 必须同时包含 `core`、`adapter.mt5.python` 和 `adapter.mt4`，剩余有效期不得少于 90 天。
-- 引导安装器内只固化服务器地址、稳定 Launcher 和发布公钥，不固化业务程序包。
+- 引导安装器与稳定 Launcher 使用同一个自包含二进制：首次运行时负责联网安装，并将自身原子复制为 `AURUMBridge.Launcher.exe`；安装器内只固化服务器地址、Launcher 代码和发布公钥，不固化业务程序包，也不再重复携带第二套 .NET 运行时。
 - 安装器实时读取 `bootstrap` 指针，下载并验签完整版本后安装到 `%LOCALAPPDATA%\AURUM\LiangjianBridge`。
 - 重装或修复同版本时不信任已有目录，改用刚下载并验签的版本替换，同时保留恢复备份。
 - `bootstrap` 与日常灰度指针分别保留上一版本，可独立回退，互不影响。
