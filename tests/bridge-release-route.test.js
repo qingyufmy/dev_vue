@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import express from 'express'
 import http from 'node:http'
+import { mkdtemp, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import {
   createBridgeReleaseRouter,
   isInstallationInRollout,
@@ -60,6 +63,33 @@ function request(router, headers = {}) {
         })
       })
       req.on('error', error => { server.close(); reject(error) })
+    })
+  })
+}
+
+function mutate(router, routePath, body) {
+  const app = express()
+  app.use(express.json({ limit:'256kb' }))
+  app.use('/api', router)
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, () => {
+      const payload = JSON.stringify(body || {})
+      const req = http.request({
+        hostname:'127.0.0.1',
+        port:server.address().port,
+        path:`/api${routePath}`,
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'Content-Length':Buffer.byteLength(payload) },
+      }, res => {
+        let responseBody = ''
+        res.on('data', chunk => { responseBody += chunk })
+        res.on('end', () => {
+          server.close()
+          resolve({ status:res.statusCode, body:responseBody })
+        })
+      })
+      req.on('error', error => { server.close(); reject(error) })
+      req.end(payload)
     })
   })
 }
@@ -138,5 +168,38 @@ describe('bridge release manifest route', () => {
       'X-Aurum-Release-Channel':'internal',
     })
     expect(response.status).toBe(204)
+  })
+
+  it('publishes, stops and rolls back signed manifest pointers atomically', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'bridge-release-route-'))
+    try {
+      const manifestPath = path.join(directory, 'current.json')
+      const router = createBridgeReleaseRouter({
+        manifestPath,
+        authenticate:(req, res, next) => next(),
+        requireAdmin:(req, res, next) => next(),
+      })
+      const first = manifestV2({
+        release_id:'bridge-3.1.0-first',
+        rollout_percentage:5,
+      })
+      const second = manifestV2({
+        release_id:'bridge-3.1.0-second',
+        rollout_percentage:25,
+      })
+
+      expect((await mutate(router, '/admin/bridge/v3/releases/publish', { manifest:first })).status).toBe(200)
+      expect((await mutate(router, '/admin/bridge/v3/releases/publish', { manifest:second })).status).toBe(200)
+      expect((await mutate(router, '/admin/bridge/v3/releases/stop')).status).toBe(200)
+      expect((await request(router, {
+        'X-Aurum-Installation-Id':'install_0123456789abcdef0123456789abcdef',
+        'X-Aurum-Release-Channel':'stable',
+      })).status).toBe(204)
+      const rollback = await mutate(router, '/admin/bridge/v3/releases/rollback')
+      expect(rollback.status).toBe(200)
+      expect(JSON.parse(rollback.body).release_id).toBe(first.release_id)
+    } finally {
+      await rm(directory, { recursive:true, force:true })
+    }
   })
 })

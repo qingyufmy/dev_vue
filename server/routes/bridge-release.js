@@ -1,6 +1,9 @@
 import { Router } from 'express'
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+
+import { adminOnly, authMiddleware } from '../middleware/auth.js'
 
 const MAX_MANIFEST_BYTES = 128 * 1024
 const ALLOWED_MODULES = new Set([
@@ -88,13 +91,61 @@ export function validateBridgeReleaseManifest(manifest, nowUtcMsc = Date.now()) 
 export function createBridgeReleaseRouter({
   manifestPath = process.env.BRIDGE_RELEASE_MANIFEST_PATH,
   readManifest = readFile,
+  authenticate = authMiddleware,
+  requireAdmin = adminOnly,
+  fileOps = { mkdir, readFile, rename, rm, writeFile },
 } = {}) {
   const router = Router()
+  const previousPath = manifestPath ? `${manifestPath}.previous` : ''
+  const disabledPath = manifestPath ? `${manifestPath}.disabled` : ''
+  let mutation = Promise.resolve()
+
+  function serialize(operation) {
+    const result = mutation.then(operation, operation)
+    mutation = result.catch(() => {})
+    return result
+  }
+
+  async function atomicWrite(target, content) {
+    const directory = path.dirname(target)
+    await fileOps.mkdir(directory, { recursive:true })
+    const temporary = path.join(directory, `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`)
+    try {
+      await fileOps.writeFile(temporary, content, { flag:'wx' })
+      await fileOps.rename(temporary, target)
+    } finally {
+      await fileOps.rm(temporary, { force:true }).catch(() => {})
+    }
+  }
+
+  async function optionalManifest(target) {
+    if (!target) return null
+    try {
+      const value = JSON.parse((await fileOps.readFile(target)).toString('utf8'))
+      return validateBridgeReleaseManifest(value) ? value : null
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null
+      throw error
+    }
+  }
+
+  async function markerExists(target) {
+    if (!target) return false
+    try {
+      await fileOps.readFile(target)
+      return true
+    } catch (error) {
+      if (error?.code === 'ENOENT') return false
+      throw error
+    }
+  }
+
   router.get('/bridge/v3/releases/current', async (req, res) => {
     res.set('Cache-Control', 'no-store')
     res.set('X-Content-Type-Options', 'nosniff')
     if (!manifestPath) return res.status(204).end()
     try {
+      if (await markerExists(disabledPath)) return res.status(204).end()
       const content = await readManifest(manifestPath)
       const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content)
       if (bytes.length === 0 || bytes.length > MAX_MANIFEST_BYTES) {
@@ -114,6 +165,77 @@ export function createBridgeReleaseRouter({
     } catch (error) {
       console.error('[BridgeRelease] manifest unavailable:', error?.message || 'unknown')
       return res.status(503).json({ ok:false, error:'bridge_release_unavailable' })
+    }
+  })
+
+  router.get('/admin/bridge/v3/releases/status', authenticate, requireAdmin, async (req, res) => {
+    try {
+      const [current, previous, disabled] = await Promise.all([
+        optionalManifest(manifestPath),
+        optionalManifest(previousPath),
+        markerExists(disabledPath),
+      ])
+      return res.json({
+        ok:true,
+        enabled:!disabled,
+        current,
+        previous,
+      })
+    } catch {
+      return res.status(503).json({ ok:false, error:'bridge_release_status_unavailable' })
+    }
+  })
+
+  router.post('/admin/bridge/v3/releases/publish', authenticate, requireAdmin, async (req, res) => {
+    if (!manifestPath || !validateBridgeReleaseManifest(req.body?.manifest)) {
+      return res.status(400).json({ ok:false, error:'bridge_release_manifest_invalid' })
+    }
+    try {
+      await serialize(async () => {
+        const current = await optionalManifest(manifestPath)
+        if (current) await atomicWrite(previousPath, JSON.stringify(current))
+        await atomicWrite(manifestPath, JSON.stringify(req.body.manifest))
+        await fileOps.rm(disabledPath, { force:true })
+      })
+      return res.json({
+        ok:true,
+        release_id:req.body.manifest.release_id || null,
+        release_version:req.body.manifest.release_version,
+        rollout_percentage:req.body.manifest.rollout_percentage || 100,
+      })
+    } catch {
+      return res.status(503).json({ ok:false, error:'bridge_release_publish_failed' })
+    }
+  })
+
+  router.post('/admin/bridge/v3/releases/stop', authenticate, requireAdmin, async (req, res) => {
+    try {
+      const current = await optionalManifest(manifestPath)
+      if (!current) return res.status(404).json({ ok:false, error:'bridge_release_not_found' })
+      await serialize(() => atomicWrite(disabledPath, JSON.stringify(current)))
+      return res.json({ ok:true, stopped_release_id:current.release_id || null })
+    } catch {
+      return res.status(503).json({ ok:false, error:'bridge_release_stop_failed' })
+    }
+  })
+
+  router.post('/admin/bridge/v3/releases/rollback', authenticate, requireAdmin, async (req, res) => {
+    try {
+      const previous = await optionalManifest(previousPath)
+      if (!previous) return res.status(404).json({ ok:false, error:'bridge_release_previous_not_found' })
+      await serialize(async () => {
+        const current = await optionalManifest(manifestPath)
+        await atomicWrite(manifestPath, JSON.stringify(previous))
+        if (current) await atomicWrite(previousPath, JSON.stringify(current))
+        await fileOps.rm(disabledPath, { force:true })
+      })
+      return res.json({
+        ok:true,
+        release_id:previous.release_id || null,
+        release_version:previous.release_version,
+      })
+    } catch {
+      return res.status(503).json({ ok:false, error:'bridge_release_rollback_failed' })
     }
   })
   return router
