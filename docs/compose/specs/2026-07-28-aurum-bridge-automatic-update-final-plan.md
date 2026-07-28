@@ -646,6 +646,7 @@ scripts/bridge-release/
   sign-release.ps1
   upload-qiniu.ps1
   upload-bootstrapper-qiniu.ps1
+  local-rehearsal-server.mjs
   verify-remote-release.ps1
   verify-bootstrapper-remote.ps1
   publish-manifest.ps1
@@ -667,6 +668,8 @@ Skill 负责按安全顺序调用脚本、解释结果和生成发布摘要；�
 - 支持 dry-run，并且 dry-run 不写远端状态。
 - 所有临时目录使用受控路径，结束后清理。
 - 不把 secret 写入命令行、产物、日志或结果 JSON。
+
+在连接七牛云或测试服务器前，先使用 `local-rehearsal-server.mjs` 启动仅绑定 `127.0.0.1` 的隔离发布 API 与静态包服务。该服务复用正式 Manifest 验签、原子指针、停止和回滚逻辑，但注入空的健康数据源，不加载完整业务服务器，因此不会启动数据库连接、调度器或交易网关。测试令牌只通过 `AURUM_BRIDGE_RELEASE_API_TOKEN` 环境变量传入，不出现在进程命令行或就绪输出中。
 
 ### 22.5 Skill 标准工作流
 

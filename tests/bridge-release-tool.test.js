@@ -13,6 +13,7 @@ import {
   immutablePackageKey,
   isBootstrapManifest,
 } from '../scripts/bridge-release/release-cli.mjs'
+import { startLocalReleaseRehearsal } from '../scripts/bridge-release/local-rehearsal-server.mjs'
 import { verifyBridgeReleaseSignatures } from '../server/routes/bridge-release.js'
 
 const execFileAsync = promisify(execFile)
@@ -62,6 +63,60 @@ describe('bridge release tooling', () => {
         stderr:expect.stringContaining('release_cdn_domain_invalid'),
       })
     } finally {
+      await rm(temporary, { recursive:true, force:true })
+    }
+  })
+
+  it('runs an isolated loopback release rehearsal without application services', async () => {
+    const source = await readFile(
+      new URL('../scripts/bridge-release/local-rehearsal-server.mjs', import.meta.url),
+      'utf8',
+    )
+    expect(source).toContain("process.env.AURUM_BRIDGE_RELEASE_API_TOKEN")
+    expect(source).not.toContain("required(args, 'release-token')")
+    expect(source).toContain("const LOOPBACK_HOST = '127.0.0.1'")
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'aurum-release-rehearsal-'))
+    const staticDirectory = path.join(temporary, 'static')
+    const stateDirectory = path.join(temporary, 'state')
+    const publicKeyPath = path.join(temporary, 'release-public-key.pem')
+    await mkdir(staticDirectory)
+    await writeFile(path.join(staticDirectory, 'probe.txt'), 'rehearsal-ready')
+    await writeFile(publicKeyPath, 'test-public-key')
+    const staleStateDirectory = path.join(temporary, 'stale-state')
+    await mkdir(staleStateDirectory)
+    await writeFile(path.join(staleStateDirectory, 'current.json'), '{}')
+    await expect(startLocalReleaseRehearsal({
+      stateDirectory:staleStateDirectory,
+      staticDirectory,
+      publicKeyPath,
+      releaseToken:'local-rehearsal-token-32-characters-minimum',
+      apiPort:0,
+      staticPort:0,
+    })).rejects.toThrow('local_rehearsal_state_directory_not_empty')
+    const rehearsal = await startLocalReleaseRehearsal({
+      stateDirectory,
+      staticDirectory,
+      publicKeyPath,
+      releaseToken:'local-rehearsal-token-32-characters-minimum',
+      apiPort:0,
+      staticPort:0,
+    })
+    try {
+      expect(new URL(rehearsal.apiUrl).hostname).toBe('127.0.0.1')
+      expect(new URL(rehearsal.staticUrl).hostname).toBe('127.0.0.1')
+      await expect(fetch(`${rehearsal.apiUrl}/health`).then(value => value.json()))
+        .resolves.toEqual({ ok:true, service:'bridge-release-api' })
+      await expect(fetch(`${rehearsal.staticUrl}/probe.txt`).then(value => value.text()))
+        .resolves.toBe('rehearsal-ready')
+      const unauthorized = await fetch(`${rehearsal.apiUrl}/api/admin/bridge/v3/releases/stop`, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body:'{}',
+      })
+      expect(unauthorized.status).toBe(401)
+      await expect(unauthorized.json()).resolves.toEqual({ ok:false, error:'unauthorized' })
+    } finally {
+      await rehearsal.close()
       await rm(temporary, { recursive:true, force:true })
     }
   })
