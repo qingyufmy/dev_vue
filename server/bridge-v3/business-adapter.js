@@ -874,6 +874,11 @@ export function createBridgeV3BusinessAdapter({
     disconnectUser:(userId, reason) => gateway.disconnectUser?.(Number(userId), reason) || 0,
     connectedTerminals,
     connectedUsers:() => gateway.listConnectedUsers?.() || [],
+    acquireMaintenanceLease:request => gateway.acquireMaintenanceLease(request),
+    renewMaintenanceLease:(actorUserId, leaseId, options) =>
+      gateway.renewMaintenanceLease(actorUserId, leaseId, options),
+    releaseMaintenanceLease:(actorUserId, leaseId) =>
+      gateway.releaseMaintenanceLease(actorUserId, leaseId),
     getGeneration:userId => {
       const generations = new Set(connectedTerminals(userId).map(route => Number(route.connection_generation)))
       return generations.size === 1 ? generations.values().next().value : null

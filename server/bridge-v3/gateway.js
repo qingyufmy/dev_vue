@@ -8,6 +8,7 @@ import {
   markCommandDeliveryUncertain,
   markCommandDispatched,
   recordCommandResult,
+  countOutstandingCommands,
 } from './command-ledger.js'
 import { assertBridgeV3Message, sameBridgeRoute } from './protocol.js'
 import {
@@ -85,6 +86,7 @@ export function createBridgeV3Gateway({
   markDispatched = markCommandDispatched,
   markUncertain = markCommandDeliveryUncertain,
   recordResult = recordCommandResult,
+  countOutstanding = countOutstandingCommands,
   onTerminalReady = async () => {},
   onTerminalDisconnected = async () => {},
   now = () => Date.now(),
@@ -94,11 +96,52 @@ export function createBridgeV3Gateway({
   const pendingResults = new Map()
   const pendingQuotes = new Map()
   const pendingDataRequests = new Map()
+  const maintenanceByTerminal = new Map()
+  const maintenanceLeases = new Map()
+  const activeCommandAdmissions = new Map()
   let connectionGeneration = 0
   const heartbeatStreams = new Set(['account', 'positions', 'orders', 'deals'])
 
   function gatewayError(code) {
     return Object.assign(new Error(code), { code })
+  }
+
+  function activeCommandCount(terminalInstanceIds) {
+    return terminalInstanceIds.reduce(
+      (total, terminalId) => total + Number(activeCommandAdmissions.get(terminalId) || 0),
+      0,
+    )
+  }
+
+  function releaseLeaseInternal(lease) {
+    if (!lease) return false
+    if (lease.timer) clearTimeout(lease.timer)
+    maintenanceLeases.delete(lease.lease_id)
+    for (const terminalId of lease.terminal_instance_ids) {
+      if (maintenanceByTerminal.get(terminalId)?.lease_id === lease.lease_id) {
+        maintenanceByTerminal.delete(terminalId)
+      }
+    }
+    return true
+  }
+
+  function purgeExpiredLeases() {
+    const current = now()
+    for (const lease of maintenanceLeases.values()) {
+      if (lease.expires_at_utc_msc <= current) releaseLeaseInternal(lease)
+    }
+  }
+
+  function scheduleLeaseExpiry(lease) {
+    if (lease.timer) clearTimeout(lease.timer)
+    lease.timer = setTimeout(() => releaseLeaseInternal(lease),
+      Math.max(1, lease.expires_at_utc_msc - now()))
+    lease.timer.unref?.()
+  }
+
+  function maintenanceBlock(terminalInstanceId) {
+    purgeExpiredLeases()
+    return maintenanceByTerminal.get(terminalInstanceId) || null
   }
 
   function connectionAlive(connection) {
@@ -442,46 +485,165 @@ export function createBridgeV3Gateway({
     const nowUtcMsc = now()
     assertBridgeV3Message(command, { nowUtcMsc })
     if (command.type !== 'command') throw Object.assign(new Error('bridge_command_type_invalid'), { code:'bridge_command_type_invalid' })
-    const ledger = await createLedgerEntry(command, { userId:Number(userId), nowUtcMsc })
-    if (!['queued'].includes(ledger.command.status)) {
-      return ledger.command.result
-        ? { ...ledger.command.result, duplicate:true }
-        : { status:ledger.command.status, command_id:command.command_id, duplicate:true }
+    if (maintenanceBlock(command.terminal_instance_id)) {
+      return { status:'rejected', command_id:command.command_id, error:'bridge_maintenance' }
     }
-
-    const routed = connectionsByTerminal.get(command.terminal_instance_id)
-    if (!routed || !connectionAlive(routed.connection) || routed.connection.userId !== Number(userId)
-      || !sameBridgeRoute(routeFromTerminal(routed.terminal), command)) {
-      return { status:'queued', command_id:command.command_id, error:'bridge_terminal_not_connected' }
-    }
-    if (command.action !== 'query_execution'
-      && !terminalInitialSyncReady(routed.connection, command.terminal_instance_id)) {
-      return { status:'queued', command_id:command.command_id, error:'bridge_terminal_initial_sync_pending' }
-    }
-    await markDispatched(command.command_id, {
-      connectionEpoch:command.connection_epoch,
-      nowUtcMsc,
-    })
-
-    return new Promise(resolve => {
-      const timer = setTimeout(() => {
-        pendingResults.delete(command.command_id)
-        markUncertain(command.command_id, { reason:'bridge_result_timeout', nowUtcMsc:now() })
-          .then(({ command:stored }) => resolve({ status:'uncertain', command_id:command.command_id,
-            evidence:stored?.result || null }))
-          .catch(error => resolve({ status:'uncertain', command_id:command.command_id,
-            error:error.code || error.message }))
-      }, timeoutMs)
-      pendingResults.set(command.command_id, { resolve, timer, connection:routed.connection })
-      if (!safeSend(routed.connection.ws, command)) {
-        clearTimeout(timer)
-        pendingResults.delete(command.command_id)
-        markUncertain(command.command_id, { reason:'bridge_send_failed', nowUtcMsc:now() })
-          .then(() => resolve({ status:'uncertain', command_id:command.command_id, error:'bridge_send_failed' }))
-          .catch(error => resolve({ status:'uncertain', command_id:command.command_id,
-            error:error.code || error.message }))
+    activeCommandAdmissions.set(
+      command.terminal_instance_id,
+      Number(activeCommandAdmissions.get(command.terminal_instance_id) || 0) + 1,
+    )
+    try {
+      const ledger = await createLedgerEntry(command, { userId:Number(userId), nowUtcMsc })
+      if (!['queued'].includes(ledger.command.status)) {
+        return ledger.command.result
+          ? { ...ledger.command.result, duplicate:true }
+          : { status:ledger.command.status, command_id:command.command_id, duplicate:true }
       }
-    })
+
+      const routed = connectionsByTerminal.get(command.terminal_instance_id)
+      if (!routed || !connectionAlive(routed.connection) || routed.connection.userId !== Number(userId)
+        || !sameBridgeRoute(routeFromTerminal(routed.terminal), command)) {
+        return { status:'queued', command_id:command.command_id, error:'bridge_terminal_not_connected' }
+      }
+      if (command.action !== 'query_execution'
+        && !terminalInitialSyncReady(routed.connection, command.terminal_instance_id)) {
+        return { status:'queued', command_id:command.command_id, error:'bridge_terminal_initial_sync_pending' }
+      }
+      await markDispatched(command.command_id, {
+        connectionEpoch:command.connection_epoch,
+        nowUtcMsc,
+      })
+
+      return new Promise(resolve => {
+        const timer = setTimeout(() => {
+          pendingResults.delete(command.command_id)
+          markUncertain(command.command_id, { reason:'bridge_result_timeout', nowUtcMsc:now() })
+            .then(({ command:stored }) => resolve({ status:'uncertain', command_id:command.command_id,
+              evidence:stored?.result || null }))
+            .catch(error => resolve({ status:'uncertain', command_id:command.command_id,
+              error:error.code || error.message }))
+        }, timeoutMs)
+        pendingResults.set(command.command_id, {
+          resolve, timer, connection:routed.connection,
+          terminalInstanceId:command.terminal_instance_id,
+        })
+        if (!safeSend(routed.connection.ws, command)) {
+          clearTimeout(timer)
+          pendingResults.delete(command.command_id)
+          markUncertain(command.command_id, { reason:'bridge_send_failed', nowUtcMsc:now() })
+            .then(() => resolve({ status:'uncertain', command_id:command.command_id, error:'bridge_send_failed' }))
+            .catch(error => resolve({ status:'uncertain', command_id:command.command_id,
+              error:error.code || error.message }))
+        }
+      })
+    } finally {
+      const remaining = Number(activeCommandAdmissions.get(command.terminal_instance_id) || 1) - 1
+      if (remaining > 0) activeCommandAdmissions.set(command.terminal_instance_id, remaining)
+      else activeCommandAdmissions.delete(command.terminal_instance_id)
+    }
+  }
+
+  async function acquireMaintenanceLease({
+    actorUserId,
+    authorizedUserIds,
+    installationId,
+    targetVersion,
+    priority,
+    manualRequest,
+    terminalInstanceIds,
+    expectedDowntimeSeconds = 60,
+    ttlSeconds = 90,
+  }) {
+    purgeExpiredLeases()
+    const actorId = Number(actorUserId)
+    const authorized = new Set((authorizedUserIds || []).map(Number))
+    const terminalIds = Array.isArray(terminalInstanceIds) ? terminalInstanceIds.map(String) : []
+    if (!Number.isSafeInteger(actorId) || actorId <= 0 || !authorized.has(actorId)
+      || typeof installationId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(installationId)
+      || typeof targetVersion !== 'string' || !/^\d+\.\d+(?:\.\d+){0,2}$/.test(targetVersion)
+      || !['normal', 'urgent'].includes(priority) || typeof manualRequest !== 'boolean'
+      || terminalIds.length < 1 || terminalIds.length > 64
+      || new Set(terminalIds).size !== terminalIds.length
+      || terminalIds.some(value => !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(value))
+      || !Number.isSafeInteger(expectedDowntimeSeconds)
+      || expectedDowntimeSeconds < 30 || expectedDowntimeSeconds > 300
+      || !Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 180) {
+      throw gatewayError('bridge_maintenance_request_invalid')
+    }
+    const routes = []
+    for (const terminalId of terminalIds) {
+      const routed = connectionsByTerminal.get(terminalId)
+      if (!routed || !connectionAlive(routed.connection)
+        || !authorized.has(Number(routed.connection.userId))) {
+        throw gatewayError('bridge_maintenance_terminal_forbidden')
+      }
+      if (maintenanceByTerminal.has(terminalId)) {
+        return { acquired:false, code:'bridge_maintenance_lease_conflict', retry_after_seconds:5 }
+      }
+      routes.push(routed)
+    }
+    const lease = {
+      lease_id:`lease_${randomUUID()}`,
+      actor_user_id:actorId,
+      installation_id:installationId,
+      target_version:targetVersion,
+      priority,
+      manual_request:manualRequest,
+      terminal_instance_ids:[...terminalIds],
+      expected_downtime_seconds:expectedDowntimeSeconds,
+      expires_at_utc_msc:now() + ttlSeconds * 1000,
+      timer:null,
+    }
+    maintenanceLeases.set(lease.lease_id, lease)
+    for (const terminalId of terminalIds) maintenanceByTerminal.set(terminalId, lease)
+    try {
+      const locallyActive = activeCommandCount(terminalIds)
+        + Array.from(pendingResults.values())
+          .filter(pending => terminalIds.includes(pending.terminalInstanceId)).length
+      const durableOutstanding = await countOutstanding(terminalIds)
+      if (locallyActive > 0 || durableOutstanding > 0) {
+        releaseLeaseInternal(lease)
+        return {
+          acquired:false,
+          code:'bridge_maintenance_commands_in_flight',
+          retry_after_seconds:5,
+        }
+      }
+      scheduleLeaseExpiry(lease)
+      return {
+        acquired:true,
+        lease_id:lease.lease_id,
+        expires_at_utc_msc:lease.expires_at_utc_msc,
+        terminal_instance_ids:[...lease.terminal_instance_ids],
+      }
+    } catch (error) {
+      releaseLeaseInternal(lease)
+      throw error
+    }
+  }
+
+  function renewMaintenanceLease(actorUserId, leaseId, { ttlSeconds = 90 } = {}) {
+    purgeExpiredLeases()
+    const lease = maintenanceLeases.get(String(leaseId || ''))
+    if (!lease || lease.actor_user_id !== Number(actorUserId)) {
+      throw gatewayError('bridge_maintenance_lease_not_found')
+    }
+    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 180) {
+      throw gatewayError('bridge_maintenance_request_invalid')
+    }
+    lease.expires_at_utc_msc = now() + ttlSeconds * 1000
+    scheduleLeaseExpiry(lease)
+    return { renewed:true, lease_id:lease.lease_id, expires_at_utc_msc:lease.expires_at_utc_msc }
+  }
+
+  function releaseMaintenanceLease(actorUserId, leaseId) {
+    purgeExpiredLeases()
+    const lease = maintenanceLeases.get(String(leaseId || ''))
+    if (!lease || lease.actor_user_id !== Number(actorUserId)) {
+      throw gatewayError('bridge_maintenance_lease_not_found')
+    }
+    releaseLeaseInternal(lease)
+    return { released:true, lease_id:lease.lease_id }
   }
 
   function requestQuote(userId, request, { timeoutMs = 2_000 } = {}) {
@@ -629,6 +791,7 @@ export function createBridgeV3Gateway({
     connectionsByTerminal,
     pendingQuotes,
     pendingDataRequests,
+    maintenanceByTerminal,
     handleUpgrade(req, socket, head) {
       wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req))
     },
@@ -640,5 +803,8 @@ export function createBridgeV3Gateway({
     isTradeEnabled,
     setTradeEnabled,
     disconnectUser,
+    acquireMaintenanceLease,
+    renewMaintenanceLease,
+    releaseMaintenanceLease,
   }
 }

@@ -246,3 +246,22 @@ export async function getCommandLedgerEntry(commandId, { queryOneFn = queryOne }
     [commandId]
   ))
 }
+
+export async function countOutstandingCommands(terminalInstanceIds, {
+  queryOneFn = queryOne,
+} = {}) {
+  if (!Array.isArray(terminalInstanceIds) || terminalInstanceIds.length < 1
+    || terminalInstanceIds.length > 64
+    || new Set(terminalInstanceIds).size !== terminalInstanceIds.length
+    || terminalInstanceIds.some(value => typeof value !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(value))) {
+    throw ledgerError('bridge_maintenance_terminal_scope_invalid')
+  }
+  const row = await queryOneFn(
+    `SELECT COUNT(*) AS count FROM bridge_v3_command_ledger
+      WHERE terminal_instance_id IN (${terminalInstanceIds.map(() => '?').join(', ')})
+        AND status IN ('queued', 'dispatched')`,
+    terminalInstanceIds,
+  )
+  return Number(row?.count || 0)
+}

@@ -3032,6 +3032,33 @@ export function isTradeEnabled(userId) {
   return bridgeV3Business?.isTradeEnabled(numericUserId) === true
 }
 
+export function acquireBridgeMaintenanceLease(request) {
+  if (!bridgeV3Business?.acquireMaintenanceLease) {
+    throw Object.assign(new Error('bridge_maintenance_unavailable'), {
+      code:'bridge_maintenance_unavailable',
+    })
+  }
+  return bridgeV3Business.acquireMaintenanceLease(request)
+}
+
+export function renewBridgeMaintenanceLease(actorUserId, leaseId, options = {}) {
+  if (!bridgeV3Business?.renewMaintenanceLease) {
+    throw Object.assign(new Error('bridge_maintenance_unavailable'), {
+      code:'bridge_maintenance_unavailable',
+    })
+  }
+  return bridgeV3Business.renewMaintenanceLease(actorUserId, leaseId, options)
+}
+
+export function releaseBridgeMaintenanceLease(actorUserId, leaseId) {
+  if (!bridgeV3Business?.releaseMaintenanceLease) {
+    throw Object.assign(new Error('bridge_maintenance_unavailable'), {
+      code:'bridge_maintenance_unavailable',
+    })
+  }
+  return bridgeV3Business.releaseMaintenanceLease(actorUserId, leaseId)
+}
+
 // Apply administrator-managed observer-source switches to an already connected
 // bridge. Database persistence is handled by the observer-source service so the
 // desired state also survives bridge restarts.

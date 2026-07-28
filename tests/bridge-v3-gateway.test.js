@@ -62,6 +62,20 @@ function command() {
   }
 }
 
+function maintenanceRequest(overrides = {}) {
+  return {
+    actorUserId:42,
+    authorizedUserIds:[42],
+    installationId:'install_01JGATEWAY01',
+    targetVersion:'3.1.0',
+    priority:'normal',
+    manualRequest:true,
+    terminalInstanceIds:['terminal_01JGATEWAY1'],
+    expectedDowntimeSeconds:60,
+    ...overrides,
+  }
+}
+
 function result() {
   return {
     v:3,
@@ -142,6 +156,7 @@ function setup(overrides = {}) {
     markDispatched:vi.fn().mockResolvedValue({ status:'dispatched' }),
     markUncertain:vi.fn().mockResolvedValue({ command:{ status:'uncertain' } }),
     recordResult:vi.fn().mockImplementation(message => Promise.resolve({ command:{ result:message } })),
+    countOutstanding:vi.fn().mockResolvedValue(0),
     now:() => NOW,
     ...overrides,
   }
@@ -606,6 +621,70 @@ describe('Bridge v3 websocket gateway', () => {
       status:'applied',
     })
     expect(dependencies.markUncertain).not.toHaveBeenCalled()
+  })
+
+  it('blocks new commands before ledger admission while a maintenance lease is active', async () => {
+    const { gateway, dependencies } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    await completeInitialSync(ws)
+
+    const lease = await gateway.acquireMaintenanceLease(maintenanceRequest())
+    expect(lease).toMatchObject({ acquired:true, terminal_instance_ids:['terminal_01JGATEWAY1'] })
+    await expect(gateway.sendCommand(42, command())).resolves.toMatchObject({
+      status:'rejected', error:'bridge_maintenance',
+    })
+    expect(dependencies.createLedgerEntry).not.toHaveBeenCalled()
+
+    expect(gateway.releaseMaintenanceLease(42, lease.lease_id)).toMatchObject({ released:true })
+    const pending = gateway.sendCommand(42, command())
+    await flush()
+    ws.emit('message', Buffer.from(JSON.stringify(result())))
+    await expect(pending).resolves.toMatchObject({ status:'succeeded' })
+  })
+
+  it('denies a lease until both admission races and durable commands are drained', async () => {
+    let releaseLedger
+    const createLedgerEntry = vi.fn(() => new Promise(resolve => { releaseLedger = resolve }))
+    const { gateway, dependencies } = setup({ createLedgerEntry })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    await completeInitialSync(ws)
+
+    const sending = gateway.sendCommand(42, command())
+    await flush()
+    await expect(gateway.acquireMaintenanceLease(maintenanceRequest())).resolves.toMatchObject({
+      acquired:false, code:'bridge_maintenance_commands_in_flight',
+    })
+    expect(gateway.maintenanceByTerminal.size).toBe(0)
+
+    releaseLedger({ command:{ status:'queued' } })
+    await flush()
+    ws.emit('message', Buffer.from(JSON.stringify(result())))
+    await expect(sending).resolves.toMatchObject({ status:'succeeded' })
+
+    dependencies.countOutstanding.mockResolvedValueOnce(1)
+    await expect(gateway.acquireMaintenanceLease(maintenanceRequest())).resolves.toMatchObject({
+      acquired:false, code:'bridge_maintenance_commands_in_flight',
+    })
+    expect(gateway.maintenanceByTerminal.size).toBe(0)
+  })
+
+  it('fails closed when a lease names a terminal outside the authorized users', async () => {
+    const { gateway } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    await expect(gateway.acquireMaintenanceLease(maintenanceRequest({
+      authorizedUserIds:[7],
+    }))).rejects.toMatchObject({ code:'bridge_maintenance_request_invalid' })
+    await expect(gateway.acquireMaintenanceLease(maintenanceRequest({
+      actorUserId:7,
+      authorizedUserIds:[7],
+    }))).rejects.toMatchObject({ code:'bridge_maintenance_terminal_forbidden' })
   })
 
   it('returns queued without dispatch when the exact terminal route is offline', async () => {

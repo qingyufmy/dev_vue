@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   commandPayloadHash,
+  countOutstandingCommands,
   createCommandLedgerEntry,
   markCommandDeliveryUncertain,
   markCommandDispatched,
@@ -72,6 +73,23 @@ function transactionWith(row) {
 }
 
 describe('Bridge v3 durable command ledger', () => {
+  it('counts only queued or dispatched commands in the exact maintenance scope', async () => {
+    const queryOneFn = vi.fn().mockResolvedValue({ count:2 })
+
+    await expect(countOutstandingCommands([
+      'terminal_01JLEDGER01',
+      'terminal_01JLEDGER02',
+    ], { queryOneFn })).resolves.toBe(2)
+
+    expect(queryOneFn.mock.calls[0][0]).toContain("status IN ('queued', 'dispatched')")
+    expect(queryOneFn.mock.calls[0][1]).toEqual([
+      'terminal_01JLEDGER01',
+      'terminal_01JLEDGER02',
+    ])
+    await expect(countOutstandingCommands(['short'], { queryOneFn }))
+      .rejects.toMatchObject({ code:'bridge_maintenance_terminal_scope_invalid' })
+  })
+
   it('creates one immutable command and returns an identical retry', async () => {
     const message = command()
     const queryRunFn = vi.fn().mockResolvedValue({ changes:1 })
