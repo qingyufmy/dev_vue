@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -36,6 +36,34 @@ describe('bridge release tooling', () => {
     expect(releaseBuilder).toContain('release_python_runtime_metadata_missing')
     expect(releaseBuilder).toContain("Join-Path $core 'server-endpoints.json'")
     expect(releaseBuilder).toContain('server_url=$serverUrlValue')
+    expect(releaseBuilder).toContain("$TargetEnvironment -eq 'test'")
+    expect(releaseBuilder).toContain('$domainUri.IsLoopback')
+  })
+
+  it('allows an HTTP CDN only for a loopback test rehearsal', async () => {
+    if (process.platform !== 'win32') return
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'aurum-release-builder-'))
+    const runtime = path.join(temporary, 'python-runtime')
+    await mkdir(runtime)
+    await writeFile(path.join(runtime, 'python.exe'), '')
+    const script = path.resolve('scripts/bridge-release/build-release.ps1')
+    const invoke = cdnDomain => execFileAsync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+      '-ReleaseVersion', '9.9.7', '-Priority', 'normal', '-RolloutChannel', 'internal',
+      '-RolloutPercentage', '100', '-PythonRuntimeDirectory', runtime,
+      '-CdnDomain', cdnDomain, '-ServerUrl', 'https://bridge.example',
+      '-OutputDirectory', path.join(temporary, 'release-output'),
+      '-TargetEnvironment', 'test', '-DryRun',
+    ])
+    try {
+      const { stdout } = await invoke('http://127.0.0.1:3102')
+      expect(JSON.parse(stdout)).toMatchObject({ ok:true, dry_run:true, environment:'test' })
+      await expect(invoke('http://cdn.example')).rejects.toMatchObject({
+        stderr:expect.stringContaining('release_cdn_domain_invalid'),
+      })
+    } finally {
+      await rm(temporary, { recursive:true, force:true })
+    }
   })
 
   it('builds a self-contained bootstrapper with an embedded pinned launcher and public key', async () => {

@@ -40,8 +40,11 @@ if ($TargetEnvironment -eq 'production') {
 if ($TargetEnvironment -eq 'production' -and (-not $MetaEditorExe -or -not (Test-Path -LiteralPath $MetaEditorExe -PathType Leaf))) { throw 'release_metaeditor_required' }
 $domain = $CdnDomain.TrimEnd('/')
 $domainUri = $null
-if (-not [Uri]::TryCreate($domain, [UriKind]::Absolute, [ref]$domainUri) -or
-  $domainUri.Scheme -ne 'https' -or
+if (-not [Uri]::TryCreate($domain, [UriKind]::Absolute, [ref]$domainUri)) { throw 'release_cdn_domain_invalid' }
+$localTestCdn = $TargetEnvironment -eq 'test' -and
+  $domainUri.Scheme -eq 'http' -and $domainUri.IsLoopback
+if (
+  ($domainUri.Scheme -ne 'https' -and -not $localTestCdn) -or
   $domainUri.UserInfo -or
   $domainUri.AbsolutePath -ne '/' -or
   $domainUri.Query -or
