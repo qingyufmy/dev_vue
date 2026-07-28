@@ -37,6 +37,26 @@ public sealed class BridgeRuntimePathResolverTests
     }
 
     [TestMethod]
+    public void ResolvesInstallRootFromTheActiveVersionDirectory()
+    {
+        var installed = Path.Combine(_directory, "versions", "3.2.5");
+        Directory.CreateDirectory(installed);
+
+        Assert.AreEqual(
+            _directory,
+            BridgeRuntimePathResolver.ResolveInstallRoot(installed + Path.DirectorySeparatorChar));
+    }
+
+    [TestMethod]
+    public void RejectsAnInstallRootOutsideTheVersionedLauncherLayout()
+    {
+        var error = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            BridgeRuntimePathResolver.ResolveInstallRoot(_directory));
+
+        Assert.AreEqual("bridge_install_root_invalid", error.Message);
+    }
+
+    [TestMethod]
     public void AllowsExplicitDevelopmentOverrides()
     {
         var python = CreateFile("tools", "python.exe");

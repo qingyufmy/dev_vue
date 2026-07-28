@@ -22,11 +22,8 @@ internal static class Program
             if (TryReadHealthArguments(foregroundArgs, out var healthFile))
             {
                 var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
-                var versionDirectory = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(
-                    Path.DirectorySeparatorChar,
-                    Path.AltDirectorySeparatorChar));
-                var installRoot = versionDirectory?.Parent?.Parent?.FullName
-                    ?? throw new InvalidOperationException("bridge_install_root_invalid");
+                var installRoot = BridgeRuntimePathResolver.ResolveInstallRoot(
+                    AppContext.BaseDirectory);
                 await BridgeHealthCheck.RunAsync(paths, healthFile, Path.Combine(installRoot, "health"));
                 return;
             }

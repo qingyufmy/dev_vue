@@ -121,6 +121,33 @@ describe('bridge release tooling', () => {
     }
   })
 
+  it('keeps the client activation rehearsal on loopback and reuses production update code', async () => {
+    const tool = await readFile(
+      new URL('../bridge/tools/AurumBridge.UpdateRehearsal/Program.cs', import.meta.url),
+      'utf8',
+    )
+    const wrapper = await readFile(
+      new URL('../scripts/bridge-release/test-local-client-update.ps1', import.meta.url),
+      'utf8',
+    )
+    const releaseTests = await readFile(
+      new URL('../scripts/bridge-release/test-release.ps1', import.meta.url),
+      'utf8',
+    )
+    const solution = await readFile(new URL('../bridge/AurumBridge.slnx', import.meta.url), 'utf8')
+    expect(tool).toContain('uri.IsLoopback')
+    expect(tool).toContain('new ReleaseManifestClient')
+    expect(tool).toContain('new ReleaseInstaller')
+    expect(tool).toContain('new LauncherEngine')
+    expect(tool).toContain('new BridgeProcessRunner')
+    expect(tool).toContain('AURUM_BRIDGE_RELEASE_API_TOKEN')
+    expect(tool).toContain('AURUM_BRIDGE_DATA_DIR')
+    expect(tool).toContain('update_rehearsal_second_health_check_failed')
+    expect(wrapper).not.toContain('-ReleaseToken')
+    expect(releaseTests).toContain('& $dotnet build $solution')
+    expect(solution).toContain('tools/AurumBridge.UpdateRehearsal/AurumBridge.UpdateRehearsal.csproj')
+  })
+
   it('builds a self-contained bootstrapper with an embedded pinned launcher and public key', async () => {
     const bootstrapBuilder = await readFile(new URL('../scripts/bridge-release/build-bootstrapper.ps1', import.meta.url), 'utf8')
     const bootstrapUploader = await readFile(new URL('../scripts/bridge-release/upload-bootstrapper-qiniu.ps1', import.meta.url), 'utf8')

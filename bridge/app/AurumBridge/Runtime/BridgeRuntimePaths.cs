@@ -12,6 +12,24 @@ public static class BridgeRuntimePathResolver
 {
     private const string DefaultServerUrl = "https://www.cnfxtrade.com";
 
+    public static string ResolveInstallRoot(string applicationDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(applicationDirectory);
+        var versionDirectory = new DirectoryInfo(Path.GetFullPath(applicationDirectory.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar)));
+        var versionsDirectory = versionDirectory.Parent;
+        var installRoot = versionsDirectory?.Parent;
+        if (!Version.TryParse(versionDirectory.Name, out _)
+            || versionsDirectory is null
+            || !string.Equals(versionsDirectory.Name, "versions", StringComparison.OrdinalIgnoreCase)
+            || installRoot is null)
+        {
+            throw new InvalidOperationException("bridge_install_root_invalid");
+        }
+        return installRoot.FullName;
+    }
+
     public static BridgeRuntimePaths Resolve(
         string baseDirectory,
         Func<string, string?>? getEnvironmentVariable = null,

@@ -647,6 +647,7 @@ scripts/bridge-release/
   upload-qiniu.ps1
   upload-bootstrapper-qiniu.ps1
   local-rehearsal-server.mjs
+  test-local-client-update.ps1
   verify-remote-release.ps1
   verify-bootstrapper-remote.ps1
   publish-manifest.ps1
@@ -670,6 +671,8 @@ Skill 负责按安全顺序调用脚本、解释结果和生成发布摘要；�
 - 不把 secret 写入命令行、产物、日志或结果 JSON。
 
 在连接七牛云或测试服务器前，先使用 `local-rehearsal-server.mjs` 启动仅绑定 `127.0.0.1` 的隔离发布 API 与静态包服务。该服务复用正式 Manifest 验签、原子指针、停止和回滚逻辑，但注入空的健康数据源，不加载完整业务服务器，因此不会启动数据库连接、调度器或交易网关。测试令牌只通过 `AURUM_BRIDGE_RELEASE_API_TOKEN` 环境变量传入，不出现在进程命令行或就绪输出中。
+
+发布侧演练通过后，使用 `test-local-client-update.ps1` 调用 .NET `AurumBridge.UpdateRehearsal`。该工具只接受回环服务器和空安装目录，直接复用正式客户端的 Manifest 验签、下载缓存、解压布局、版本激活与 Launcher 回滚代码；候选版本实际执行 `AURUMBridge.exe --health-check`，但不会启动主界面、连接交易账户或执行交易。工具先验证普通版本健康激活，再模拟后一紧急版本启动就绪失败并确认自动回滚到上一健康版本，同时核对签名 core 包携带的服务器地址。
 
 ### 22.5 Skill 标准工作流
 
