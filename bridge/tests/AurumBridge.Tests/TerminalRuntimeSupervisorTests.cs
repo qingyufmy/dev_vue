@@ -188,6 +188,31 @@ public sealed class TerminalRuntimeSupervisorTests
         Assert.AreEqual(2, creations);
     }
 
+    [TestMethod]
+    public async Task PreservesMt4ProtocolIncompatibilityAsAnActionableFailure()
+    {
+        var reported = new TaskCompletionSource<TerminalRuntimeFailure>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var creations = 0;
+        var terminal = Terminal() with { Platform = BridgePlatform.Mt4 };
+        var supervisor = new TerminalRuntimeSupervisor(
+            terminal,
+            () => ++creations == 1
+                ? new FakeRuntime(
+                    terminal,
+                    collectionFailure:new InvalidDataException("mt4_ea_protocol_incompatible"))
+                : new FakeRuntime(terminal, stopWhenStarted:stop),
+            (_, _) => Task.CompletedTask);
+        supervisor.FailureObserved += failure => reported.TrySetResult(failure);
+
+        await supervisor.RunAsync(stop.Token);
+
+        var failure = await reported.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.AreEqual("mt4_ea_protocol_incompatible", failure.ErrorCode);
+        Assert.AreEqual(2, creations);
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "terminal_supervisor_01",
@@ -226,18 +251,21 @@ public sealed class TerminalRuntimeSupervisorTests
     private sealed class FakeRuntime : IBridgeTerminalRuntime
     {
         private readonly bool _failCollection;
+        private readonly Exception? _collectionFailure;
         private readonly TimeSpan? _failAfter;
         private readonly CancellationTokenSource? _stopWhenStarted;
         public FakeRuntime(
             TerminalDescriptor terminal,
             bool failCollection = false,
             TimeSpan? failAfter = null,
-            CancellationTokenSource? stopWhenStarted = null)
+            CancellationTokenSource? stopWhenStarted = null,
+            Exception? collectionFailure = null)
         {
             Terminal = terminal;
             _failCollection = failCollection;
             _failAfter = failAfter;
             _stopWhenStarted = stopWhenStarted;
+            _collectionFailure = collectionFailure;
         }
 
         public TerminalDescriptor Terminal { get; }
@@ -290,6 +318,10 @@ public sealed class TerminalRuntimeSupervisorTests
 
         public async Task RunCollectionLoopAsync(CancellationToken cancellationToken = default)
         {
+            if (_collectionFailure is not null)
+            {
+                throw _collectionFailure;
+            }
             if (_failCollection)
             {
                 throw new IOException("test failure");

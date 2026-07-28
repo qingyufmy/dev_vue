@@ -252,6 +252,11 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
         {
             return "mt4_ea_reconnecting";
         }
+        if (_terminal.Platform == BridgePlatform.Mt4
+            && error is InvalidDataException { Message: "mt4_ea_protocol_incompatible" })
+        {
+            return error.Message;
+        }
         return error switch
         {
             TimeoutException => "terminal_worker_timeout",

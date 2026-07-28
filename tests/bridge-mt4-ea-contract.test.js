@@ -41,7 +41,10 @@ describe('MT4 EA time contract', () => {
 
 describe('MT4 EA extended data contract', () => {
   it('advertises version 3.2 and handles every server data action', () => {
-    expect(source).toContain('AppendUtf8(hello, "3.2.4")')
+    expect(source).toContain('#define BRIDGE_PROTOCOL_VERSION 3')
+    expect(source).toContain('#define ADAPTER_VERSION "3.2.4"')
+    expect(source).toContain('AppendInt32(hello, BRIDGE_PROTOCOL_VERSION)')
+    expect(source).toContain('AppendUtf8(hello, ADAPTER_VERSION)')
     const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')
     for (const action of ['symbols', 'history', 'chart_data', 'pending_order_state', 'diagnostics']) {
       expect(block).toContain(`action == "${action}"`)

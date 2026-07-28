@@ -40,6 +40,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private int _canManageObserverSources;
     private int _updateCheckRequested;
     private string? _lastLoggedStatusFingerprint;
+    private string? _lastLoggedUpdateStateFingerprint;
+    private string? _lastLoggedUpdateState;
     private bool _shuttingDown;
     private BridgeApplicationStatus? _primaryStatus;
 
@@ -1428,13 +1430,9 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 {
                     try
                     {
-                        var staged = await coordinator.CheckAndStageAsync(cancellationToken);
-                        if (staged is not null)
-                        {
-                            _logger.Info(
-                                "update_waiting_window",
-                                $"version={staged.Version};priority={staged.Priority}");
-                        }
+                        var staged = await CheckAndStageUpdateAsync(
+                            coordinator,
+                            cancellationToken);
                         consecutiveCheckFailures = 0;
                         nextCheckAt = DateTimeOffset.UtcNow.Add(
                             BridgeUpdateCoordinator.RegularCheckInterval);
@@ -1503,6 +1501,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private void HandleUpdateStateChanged(BridgeUpdateState? state)
     {
+        LogUpdateStateTransition(state);
         var notice = state?.State switch
         {
             BridgeUpdateStates.Downloading => new BridgeUpdateNoticeView(
@@ -1530,6 +1529,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 state.Priority == "urgent",
                 BridgeUpdateNoticePhase.Activating,
                 state.ManualActivationRequested),
+            BridgeUpdateStates.Failed => new BridgeUpdateNoticeView(
+                state.TargetVersion ?? string.Empty,
+                state.Priority == "urgent",
+                BridgeUpdateNoticePhase.Failed,
+                state.ManualActivationRequested),
             BridgeUpdateStates.RolledBack => new BridgeUpdateNoticeView(
                 state.TargetVersion!,
                 state.Priority == "urgent",
@@ -1553,6 +1557,79 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 }
             }
         });
+    }
+
+    private void LogUpdateStateTransition(BridgeUpdateState? state)
+    {
+        if (state is null)
+        {
+            return;
+        }
+        var fingerprint = string.Join(
+            "|",
+            state.State,
+            state.ReleaseId ?? string.Empty,
+            state.TargetVersion ?? string.Empty,
+            state.Priority ?? string.Empty,
+            state.ManualActivationRequested,
+            state.NextRetryAtUtcMsc?.ToString() ?? string.Empty,
+            state.LastErrorCode ?? string.Empty);
+        if (fingerprint == _lastLoggedUpdateStateFingerprint)
+        {
+            return;
+        }
+        var previousState = _lastLoggedUpdateState;
+        _lastLoggedUpdateStateFingerprint = fingerprint;
+        _lastLoggedUpdateState = state.State;
+        var details = $"release={state.ReleaseId};version={state.TargetVersion};priority={state.Priority}";
+        switch (state.State)
+        {
+            case BridgeUpdateStates.Downloading:
+                _logger.Info("update_release_discovered", details);
+                _logger.Info("update_download_started", details);
+                break;
+            case BridgeUpdateStates.WaitingWindow:
+                if (previousState == BridgeUpdateStates.Downloading)
+                {
+                    _logger.Info("update_download_completed", details);
+                }
+                _logger.Info(
+                    "update_waiting_window",
+                    $"{details};reason={state.LastErrorCode};retry_at={state.NextRetryAtUtcMsc}");
+                break;
+            case BridgeUpdateStates.Verifying:
+                _logger.Info("update_startup_verifying", details);
+                break;
+            case BridgeUpdateStates.Healthy:
+                _logger.Info("update_healthy", details);
+                break;
+            case BridgeUpdateStates.RolledBack:
+                _logger.Warning(
+                    "update_rolled_back",
+                    $"{details};reason={state.LastErrorCode}");
+                break;
+            case BridgeUpdateStates.Failed:
+                _logger.Warning(
+                    "update_failed",
+                    $"{details};reason={state.LastErrorCode}");
+                break;
+        }
+    }
+
+    private async Task<StagedRelease?> CheckAndStageUpdateAsync(
+        BridgeUpdateCoordinator coordinator,
+        CancellationToken cancellationToken,
+        bool retryRolledBackRelease = false)
+    {
+        var staged = await coordinator.CheckAndStageAsync(
+            cancellationToken,
+            retryRolledBackRelease);
+        _logger.Info(
+            "update_manifest_checked",
+            staged is null
+                ? "result=no_update"
+                : $"result=staged;release={staged.ReleaseId};version={staged.Version};priority={staged.Priority}");
+        return staged;
     }
 
     private void HandleReleaseAvailable(BridgeReleaseAvailableNotification notification)
@@ -1602,7 +1679,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
             var state = await _updateCoordinator.LoadStateAsync(_stop.Token);
             if (state?.State == BridgeUpdateStates.RolledBack)
             {
-                await _updateCoordinator.CheckAndStageAsync(
+                await CheckAndStageUpdateAsync(
+                    _updateCoordinator,
                     _stop.Token,
                     retryRolledBackRelease:true);
             }
@@ -1846,12 +1924,15 @@ public sealed class BridgeApplicationContext : ApplicationContext
                     lastErrorCode:decision.ReasonCode ?? "bridge_maintenance_denied",
                     cancellationToken:cancellationToken);
                 _logger.Info(
-                    "update_maintenance_waiting",
+                    "update_admission_denied",
                     $"version={staged.Version};reason={decision.ReasonCode};retry={decision.RetryAfterSeconds}");
                 return retry;
             }
 
             leaseId = decision.LeaseId;
+            _logger.Info(
+                "update_lease_acquired",
+                $"version={staged.Version};terminals={snapshot.TerminalInstanceIds.Count};expires={decision.ExpiresAtUtcMsc}");
             leaseRenewalTask = RenewMaintenanceLeaseAsync(
                 leaseId,
                 leaseRenewalStop.Token,
@@ -1866,10 +1947,16 @@ public sealed class BridgeApplicationContext : ApplicationContext
             using var activation = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
                 leaseLost.Token);
+            _logger.Info(
+                "update_drain_started",
+                $"version={staged.Version};targets={snapshot.DrainTargets.Count};terminals={snapshot.TerminalInstanceIds.Count}");
             using var drain = await BridgeUpdateDrainGroup.AcquireAsync(
                 snapshot.DrainTargets,
                 TimeSpan.FromSeconds(30),
                 activation.Token);
+            _logger.Info(
+                "update_drain_completed",
+                $"version={staged.Version};targets={snapshot.DrainTargets.Count};terminals={snapshot.TerminalInstanceIds.Count}");
             await coordinator.SaveActivationPhaseAsync(
                 staged,
                 BridgeUpdateStates.Activating,
@@ -1990,7 +2077,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
                     cancellationToken);
                 _logger.Info(
                     "update_maintenance_renewed",
-                    $"lease={leaseId};expires={expiresAt}");
+                    $"expires={expiresAt}");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

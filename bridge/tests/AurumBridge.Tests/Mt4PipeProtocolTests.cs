@@ -28,6 +28,28 @@ public sealed class Mt4PipeProtocolTests
     }
 
     [TestMethod]
+    public void ParsesAnOlderProtocolHelloSoTheProvisionerCanIsolateThatTerminal()
+    {
+        var hello = new Mt4Hello(
+            2,
+            "2.9.0",
+            @"C:\Users\Trader\AppData\Roaming\MetaQuotes\Terminal\legacy",
+            "Broker-Demo",
+            "12345678",
+            true,
+            true);
+
+        var decoded = Mt4PipeProtocol.DecodeHello(Mt4PipeProtocol.EncodeHello(hello));
+
+        Assert.AreEqual(2, decoded.ProtocolVersion);
+        Assert.IsFalse(Mt4PipeProtocol.IsCurrentAdapterVersion(decoded.AdapterVersion));
+        Assert.IsTrue(Mt4PipeProtocol.RequiresAdapterRestart(decoded.AdapterVersion));
+        Assert.IsTrue(Mt4PipeProtocol.IsCurrentAdapterVersion(
+            $"{Mt4PipeProtocol.CurrentAdapterVersion}-test"));
+        Assert.IsFalse(Mt4PipeProtocol.RequiresAdapterRestart("3.2.5"));
+    }
+
+    [TestMethod]
     public void DecodesSnapshotIntoValidatedJsonCollections()
     {
         var payload = EncodeRaw(writer =>

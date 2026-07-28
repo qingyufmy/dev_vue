@@ -114,6 +114,8 @@ public static class BridgeUiText
         "mt4_registration_invalid" => "MT4 EA 尚未连接或账户信息不完整。",
         "mt5_probe_identity_mismatch" => "MT5 账号、Server 或终端与已绑定信息不匹配，请登录正确账号后重试。",
         "mt4_ea_identity_mismatch" => "MT4 EA 的账号、Server 或终端与已绑定信息不匹配，请确认账号后重新挂载 EA。",
+        "mt4_ea_protocol_incompatible" =>
+            "当前 MT4 EA 版本与桥接不兼容。请点击“安装 / 修复 EA”，然后在 MT4 中重新加载 EA；其他账户不受影响。",
         "mt4_ea_reconnecting" =>
             "MT4 EA 连接短暂中断，程序正在等待 EA 自动重连；无需重新登录或退出桥接。",
         "terminal_runtime_identity_mismatch" => "交易终端身份与绑定信息不匹配，桥接已拒绝连接，请确认账号和 Server。",

@@ -216,6 +216,7 @@ public sealed class BridgeUiTextTests
         var urgent = ready with { Urgent = true };
         var waiting = requested with { Phase = BridgeUpdateNoticePhase.Waiting };
         var activating = requested with { Phase = BridgeUpdateNoticePhase.Activating };
+        var failed = requested with { Phase = BridgeUpdateNoticePhase.Failed };
         var rolledBack = requested with { Phase = BridgeUpdateNoticePhase.RolledBack };
         var healthy = requested with { Phase = BridgeUpdateNoticePhase.Healthy };
 
@@ -225,6 +226,7 @@ public sealed class BridgeUiTextTests
         var urgentText = BridgeMainForm.DescribeUpdateNotice(urgent);
         var waitingText = BridgeMainForm.DescribeUpdateNotice(waiting);
         var activatingText = BridgeMainForm.DescribeUpdateNotice(activating);
+        var failedText = BridgeMainForm.DescribeUpdateNotice(failed);
         var rolledBackText = BridgeMainForm.DescribeUpdateNotice(rolledBack);
         var healthyText = BridgeMainForm.DescribeUpdateNotice(healthy);
 
@@ -240,10 +242,35 @@ public sealed class BridgeUiTextTests
         Assert.IsFalse(waitingText.ButtonEnabled);
         Assert.AreEqual("正在重启", activatingText.ButtonText);
         Assert.IsFalse(activatingText.ButtonEnabled);
+        StringAssert.Contains(failedText.Description, "当前桥接和交易不受影响");
+        Assert.IsFalse(failedText.ButtonVisible);
         Assert.AreEqual("重新尝试", rolledBackText.ButtonText);
         Assert.IsTrue(rolledBackText.ButtonEnabled);
         StringAssert.Contains(healthyText.Title, "已更新到版本");
         Assert.IsFalse(healthyText.ButtonVisible);
+    }
+
+    [TestMethod]
+    public void Mt4ExpertUpdatePromptOnlyAppearsForAnOutdatedRunningEa()
+    {
+        var mt4 = new BridgeTerminalStatus(
+            "mt4_test",
+            BridgePlatform.Mt4,
+            "Broker-Demo",
+            "1001",
+            TerminalRuntimeState.Running,
+            null)
+        {
+            Mt4ExpertRestartRequired = true,
+        };
+
+        Assert.AreEqual(
+            "EA 已更新，重启 MT4 后生效",
+            BridgeMainForm.DescribeMt4ExpertUpdate(mt4));
+        Assert.IsNull(BridgeMainForm.DescribeMt4ExpertUpdate(
+            mt4 with { Platform = BridgePlatform.Mt5 }));
+        Assert.IsNull(BridgeMainForm.DescribeMt4ExpertUpdate(
+            mt4 with { Mt4ExpertRestartRequired = false }));
     }
 
     [TestMethod]
@@ -387,6 +414,13 @@ public sealed class BridgeUiTextTests
         Assert.AreNotEqual(
             BridgeStatusFingerprint.ForAccounts(first, [], []),
             BridgeStatusFingerprint.ForAccounts(permissionChanged, [], []));
+        var expertRestartChanged = first with
+        {
+            Terminals = [terminal with { Mt4ExpertRestartRequired = true }],
+        };
+        Assert.AreNotEqual(
+            BridgeStatusFingerprint.ForAccounts(first, [], []),
+            BridgeStatusFingerprint.ForAccounts(expertRestartChanged, [], []));
     }
 
     [TestMethod]

@@ -30,6 +30,7 @@ public enum BridgeUpdateNoticePhase
     Ready,
     Waiting,
     Activating,
+    Failed,
     RolledBack,
     Healthy,
 }
@@ -222,6 +223,30 @@ public sealed class BridgeMainForm : Form
         }
         _updateBanner.Visible = true;
         var text = DescribeUpdateNotice(notice);
+        var isFailure = notice.Phase is BridgeUpdateNoticePhase.Failed
+            or BridgeUpdateNoticePhase.RolledBack;
+        var isHealthy = notice.Phase == BridgeUpdateNoticePhase.Healthy;
+        _updateBanner.BackColor = isFailure
+            ? Color.FromArgb(254, 242, 242)
+            : isHealthy
+                ? Color.FromArgb(236, 253, 245)
+                : notice.Urgent
+                    ? Color.FromArgb(255, 251, 235)
+                    : Color.FromArgb(239, 246, 255);
+        _updateTitle.ForeColor = isFailure
+            ? Color.FromArgb(153, 27, 27)
+            : isHealthy
+                ? Color.FromArgb(4, 120, 87)
+                : notice.Urgent
+                    ? Color.FromArgb(120, 53, 15)
+                    : Color.FromArgb(30, 64, 175);
+        _updateDescription.ForeColor = isFailure
+            ? Color.FromArgb(185, 28, 28)
+            : isHealthy
+                ? Color.FromArgb(5, 150, 105)
+                : notice.Urgent
+                    ? Color.FromArgb(146, 64, 14)
+                    : Color.FromArgb(37, 99, 235);
         _updateTitle.Text = text.Title;
         _updateDescription.Text = text.Description;
         _updateButton.Text = text.ButtonText;
@@ -288,6 +313,17 @@ public sealed class BridgeMainForm : Form
                 "正在排空交易通道并准备重启，请勿关闭程序或交易终端。",
                 "正在重启",
                 ButtonVisible:true,
+                ButtonEnabled:false);
+        }
+        if (notice.Phase == BridgeUpdateNoticePhase.Failed)
+        {
+            return new(
+                string.IsNullOrWhiteSpace(notice.Version)
+                    ? "更新检查暂时失败"
+                    : $"版本 {notice.Version} 暂时无法准备",
+                "当前桥接和交易不受影响，系统会在稍后自动重新检查。",
+                string.Empty,
+                ButtonVisible:false,
                 ButtonEnabled:false);
         }
         if (notice.Phase == BridgeUpdateNoticePhase.RolledBack)
@@ -828,7 +864,9 @@ public sealed class BridgeMainForm : Form
         var row = new TableLayoutPanel
         {
             Width = AccountCardMinimumWidth,
-            Height = terminal is null ? 70 : 88,
+            Height = terminal is null
+                ? 70
+                : terminal.Mt4ExpertRestartRequired ? 112 : 88,
             BackColor = Color.FromArgb(248, 250, 252),
             Margin = new Padding(0, 4, AccountCardGap, 4),
             Padding = new Padding(12, 8, 8, 8),
@@ -852,10 +890,11 @@ public sealed class BridgeMainForm : Form
             Dock = DockStyle.Fill,
             Margin = Padding.Empty,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 4,
         };
         copy.RowStyles.Add(new(SizeType.Absolute, 22));
         copy.RowStyles.Add(new(SizeType.Absolute, 24));
+        copy.RowStyles.Add(new(SizeType.AutoSize));
         copy.RowStyles.Add(new(SizeType.Percent, 100));
         var platform = terminal?.Platform
             ?? observerProfile?.Platform
@@ -906,6 +945,20 @@ public sealed class BridgeMainForm : Form
         };
         AttachTradingPermissionToolTip(permissionBadge, permissionDetails);
         copy.Controls.Add(permissionBadge);
+        var expertUpdate = DescribeMt4ExpertUpdate(terminal);
+        copy.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Font = new(Font.FontFamily, 8.5F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(146, 64, 14),
+            BackColor = Color.FromArgb(254, 243, 199),
+            Text = expertUpdate ?? string.Empty,
+            Padding = new Padding(8, 3, 8, 3),
+            Margin = new Padding(0, 3, 8, 0),
+            Visible = expertUpdate is not null,
+            AccessibleName = expertUpdate,
+        });
         row.Controls.Add(copy, 1, 0);
         if (observerProfile is not null)
         {
@@ -1010,6 +1063,15 @@ public sealed class BridgeMainForm : Form
             ? "交易权限异常"
             : "交易权限正常";
     }
+
+    public static string? DescribeMt4ExpertUpdate(BridgeTerminalStatus? terminal) =>
+        terminal is
+        {
+            Platform:BridgePlatform.Mt4,
+            Mt4ExpertRestartRequired:true,
+        }
+            ? "EA 已更新，重启 MT4 后生效"
+            : null;
 
     private static string DescribePermission(bool? allowed) => allowed switch
     {

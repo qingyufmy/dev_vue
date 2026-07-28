@@ -34,6 +34,7 @@ public sealed record BridgeTerminalStatus(
     public bool? ProgramTradingAllowed { get; init; }
     public bool? AccountTradingAllowed { get; init; }
     public bool? AccountExpertTradingAllowed { get; init; }
+    public bool Mt4ExpertRestartRequired { get; init; }
 }
 
 public sealed record BridgeTerminalCandidate(
@@ -622,6 +623,10 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
         var supervisors = mt5.Terminals.Select(terminal => terminal.Supervisor)
             .Concat(mt4.Terminals.Select(terminal => terminal.Supervisor))
             .ToArray();
+        var mt4AdapterVersionByTerminalId = mt4.Terminals.ToDictionary(
+            terminal => terminal.Binding.TerminalInstanceId,
+            terminal => terminal.AdapterVersion,
+            StringComparer.Ordinal);
         if (supervisors.Length == 0)
         {
             Publish(
@@ -676,7 +681,13 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
                     TerminalRuntimeState.Starting,
                     null,
                     observerProfileByTerminalId.GetValueOrDefault(
-                        descriptor.TerminalInstanceId));
+                        descriptor.TerminalInstanceId))
+                {
+                    Mt4ExpertRestartRequired = descriptor.Platform == BridgePlatform.Mt4
+                        && mt4AdapterVersionByTerminalId.GetValueOrDefault(
+                            descriptor.TerminalInstanceId) is { } adapterVersion
+                        && Mt4PipeProtocol.RequiresAdapterRestart(adapterVersion),
+                };
             }
             supervisor.StatusChanged += HandleTerminalStatus;
             supervisor.FailureObserved += failure => TerminalFailureObserved?.Invoke(failure);

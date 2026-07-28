@@ -6,7 +6,8 @@ namespace AurumBridge.Runtime;
 
 public sealed record Mt4ProvisionedTerminal(
     TerminalBinding Binding,
-    TerminalRuntimeSupervisor Supervisor);
+    TerminalRuntimeSupervisor Supervisor,
+    string? AdapterVersion);
 
 public sealed record Mt4ProvisioningFailure(
     string TerminalInstanceId,
@@ -209,7 +210,10 @@ public sealed class Mt4RuntimeProvisioner
         Mt4EaConnection? initialConnection,
         string? firstReconnectTerminalId = null)
     {
-        var descriptor = binding.ToDescriptor(WorkerVersion);
+        var adapterVersion = initialConnection?.Hello.AdapterVersion;
+        var descriptor = binding.ToDescriptor(adapterVersion is null
+            ? WorkerVersion
+            : $"mt4-ea-{adapterVersion}");
         var reconnectPipe = Mt4TerminalIdentity.CreateReconnectPipeName(binding.TerminalInstanceId);
         var firstConnection = initialConnection;
         var firstPipe = initialConnection is null
@@ -227,7 +231,7 @@ public sealed class Mt4RuntimeProvisioner
                 Interlocked.Exchange(ref firstConnection, null));
             return new Mt4TerminalRuntime(descriptor, connection, _store, reconnectPipe);
         });
-        return new(binding, supervisor);
+        return new(binding, supervisor, adapterVersion);
     }
 
     private static IReadOnlyList<TerminalBinding> LatestBindingsByPath(
@@ -242,6 +246,10 @@ public sealed class Mt4RuntimeProvisioner
 
     private static void ValidateRegistration(Mt4Hello hello)
     {
+        if (hello.ProtocolVersion != Mt4PipeProtocol.CurrentProtocolVersion)
+        {
+            throw new InvalidDataException("mt4_ea_protocol_incompatible");
+        }
         if (!hello.Connected
             || string.IsNullOrWhiteSpace(hello.BrokerServer)
             || string.IsNullOrWhiteSpace(hello.Login)

@@ -60,5 +60,6 @@ public static class BridgeStatusFingerprint
             terminal.TerminalTradingAllowed?.ToString() ?? string.Empty,
             terminal.ProgramTradingAllowed?.ToString() ?? string.Empty,
             terminal.AccountTradingAllowed?.ToString() ?? string.Empty,
-            terminal.AccountExpertTradingAllowed?.ToString() ?? string.Empty)));
+            terminal.AccountExpertTradingAllowed?.ToString() ?? string.Empty,
+            terminal.Mt4ExpertRestartRequired)));
 }

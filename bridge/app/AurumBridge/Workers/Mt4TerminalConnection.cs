@@ -198,6 +198,10 @@ public sealed class ReconnectableMt4EaConnection : IMt4EaConnection
 
     private void ValidateHello(Mt4Hello hello)
     {
+        if (hello.ProtocolVersion != Mt4PipeProtocol.CurrentProtocolVersion)
+        {
+            throw new InvalidDataException("mt4_ea_protocol_incompatible");
+        }
         if (!hello.Connected
             || !string.Equals(
                 Path.GetFullPath(hello.TerminalDataPath),

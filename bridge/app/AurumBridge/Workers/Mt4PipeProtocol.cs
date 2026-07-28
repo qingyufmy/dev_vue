@@ -268,6 +268,8 @@ public sealed record Mt4TradeResult(
 
 public static class Mt4PipeProtocol
 {
+    public const int CurrentProtocolVersion = 3;
+    public const string CurrentAdapterVersion = "3.2.4";
     public const int MaxFrameBytes = 4 * 1024 * 1024;
     private const int MaxStringBytes = 2 * 1024 * 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -300,7 +302,7 @@ public static class Mt4PipeProtocol
             ReadBoolean(reader),
             ReadBoolean(reader));
         EnsureFullyRead(reader);
-        if (result.ProtocolVersion != 3
+        if (string.IsNullOrWhiteSpace(result.AdapterVersion)
             || string.IsNullOrWhiteSpace(result.TerminalDataPath)
             || string.IsNullOrWhiteSpace(result.BrokerServer)
             || string.IsNullOrWhiteSpace(result.Login))
@@ -308,6 +310,20 @@ public static class Mt4PipeProtocol
             throw new InvalidDataException("mt4_hello_invalid");
         }
         return result;
+    }
+
+    public static bool IsCurrentAdapterVersion(string? adapterVersion) =>
+        string.Equals(
+            adapterVersion?.Split('-', 2)[0],
+            CurrentAdapterVersion,
+            StringComparison.Ordinal);
+
+    public static bool RequiresAdapterRestart(string? adapterVersion)
+    {
+        var stableVersion = adapterVersion?.Split('-', 2)[0];
+        return Version.TryParse(stableVersion, out var running)
+            && Version.TryParse(CurrentAdapterVersion, out var packaged)
+            && running < packaged;
     }
 
     public static byte[] EncodeWelcome(Mt4Welcome welcome)

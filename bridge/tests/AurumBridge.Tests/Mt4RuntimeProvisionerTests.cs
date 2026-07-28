@@ -193,10 +193,50 @@ public sealed class Mt4RuntimeProvisionerTests
         await registration.DisposeAsync();
     }
 
+    [TestMethod]
+    public async Task RejectsOnlyTheIncompatibleEaAndKeepsAnotherMt4TerminalRunning()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var legacyPath = Path.Combine(testStore.DataDirectory, "Legacy MT4");
+        var currentPath = Path.Combine(testStore.DataDirectory, "Current MT4");
+        Directory.CreateDirectory(legacyPath);
+        Directory.CreateDirectory(currentPath);
+        var legacy = await RegisterEaAsync(
+            legacyPath,
+            "Broker-Demo",
+            "1001",
+            protocolVersion:2,
+            adapterVersion:"2.9.0");
+        var current = await RegisterEaAsync(
+            currentPath,
+            "Broker-Demo",
+            "1002");
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            Mt4TerminalIdentity.CreateTerminalInstanceId(legacyPath),
+            Mt4TerminalIdentity.CreateTerminalInstanceId(currentPath),
+        };
+        var provisioner = new Mt4RuntimeProvisioner(testStore.Store);
+
+        var result = await provisioner.ProvisionManyAsync([legacy, current], allowed);
+
+        Assert.HasCount(1, result.Terminals);
+        Assert.AreEqual(Mt4PipeProtocol.CurrentAdapterVersion, result.Terminals[0].AdapterVersion);
+        Assert.HasCount(1, result.Failures);
+        Assert.AreEqual(
+            Mt4TerminalIdentity.CreateTerminalInstanceId(legacyPath),
+            result.Failures[0].TerminalInstanceId);
+        Assert.AreEqual("mt4_ea_protocol_incompatible", result.Failures[0].ErrorCode);
+        await result.Terminals[0].Supervisor.DisposeAsync();
+        await current.DisposeAsync();
+    }
+
     private static async Task<Mt4EaConnection> RegisterEaAsync(
         string terminalDataPath,
         string brokerServer,
-        string login)
+        string login,
+        int protocolVersion = Mt4PipeProtocol.CurrentProtocolVersion,
+        string adapterVersion = Mt4PipeProtocol.CurrentAdapterVersion)
     {
         var pipeName = $"aurum_test_registration_{Guid.NewGuid():N}";
         var accept = Mt4EaConnection.AcceptAsync(
@@ -211,8 +251,8 @@ public sealed class Mt4RuntimeProvisionerTests
         await Mt4PipeProtocol.WriteFrameAsync(
             client,
             Mt4PipeProtocol.EncodeHello(new(
-                3,
-                "3.2.4",
+                protocolVersion,
+                adapterVersion,
                 terminalDataPath,
                 brokerServer,
                 login,

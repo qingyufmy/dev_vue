@@ -2,6 +2,9 @@
 #property version   "3.24"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
+#define BRIDGE_PROTOCOL_VERSION 3
+#define ADAPTER_VERSION "3.2.4"
+
 input string InpPipeName = "AURUMBridgeV3";
 
 #define MSG_HELLO        1
@@ -227,8 +230,8 @@ bool ConnectPipe()
    g_welcomed = false;
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
-   AppendInt32(hello, 3);
-   AppendUtf8(hello, "3.2.4");
+   AppendInt32(hello, BRIDGE_PROTOCOL_VERSION);
+   AppendUtf8(hello, ADAPTER_VERSION);
    AppendUtf8(hello, TerminalInfoString(TERMINAL_DATA_PATH));
    AppendUtf8(hello, AccountServer());
    AppendUtf8(hello, IntegerToString(AccountNumber()));
