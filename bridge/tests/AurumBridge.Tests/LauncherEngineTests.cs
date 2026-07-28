@@ -1,4 +1,5 @@
 using AurumBridge.Launcher;
+using System.Text.Json;
 
 namespace AurumBridge.Tests;
 
@@ -23,7 +24,12 @@ public sealed class LauncherEngineTests
     public async Task MarksHealthyVersionAsLastKnownGoodBeforeStarting()
     {
         CreateVersion("3.1.0");
-        await _store.SaveAsync(Pointer("3.1.0", "3.0.0", "pending"));
+        await _store.SaveAsync(Pointer(
+            "3.1.0",
+            "3.0.0",
+            "pending",
+            ["mt5_0123456789abcdef01234567"]));
+        await WriteUpdateStateAsync("3.1.0");
         var runner = new FakeRunner(_ => true, startupReady:true);
         var engine = new LauncherEngine(_directory, _store, runner, () => 1_800_000_000_100);
 
@@ -35,6 +41,16 @@ public sealed class LauncherEngineTests
         Assert.AreEqual("healthy", pointer.Status);
         StringAssert.Contains(runner.StartedExecutable!, Path.Combine("3.1.0", "AURUMBridge.exe"));
         Assert.HasCount(1, runner.StartupChecks);
+        Assert.AreEqual("3.1.0", runner.StartupChecks[0].ExpectedVersion);
+        CollectionAssert.AreEqual(
+            new[] { "mt5_0123456789abcdef01234567" },
+            runner.StartupChecks[0].ExpectedTerminalInstanceIds.ToArray());
+        Assert.IsEmpty(pointer.ExpectedTerminalInstanceIds);
+        var updateState = await new LauncherUpdateStateStore(
+            Path.Combine(_directory, "update-state.json")).LoadAsync();
+        Assert.IsNotNull(updateState);
+        Assert.AreEqual("healthy", updateState.State);
+        Assert.IsNull(updateState.MaintenanceLeaseId);
     }
 
     [TestMethod]
@@ -62,6 +78,7 @@ public sealed class LauncherEngineTests
         CreateVersion("3.0.0");
         CreateVersion("3.1.0");
         await _store.SaveAsync(Pointer("3.1.0", "3.0.0", "pending"));
+        await WriteUpdateStateAsync("3.1.0");
         var runner = new FakeRunner(_ => true, startupReady:false);
         var engine = new LauncherEngine(_directory, _store, runner, () => 1_800_000_000_300);
 
@@ -71,13 +88,20 @@ public sealed class LauncherEngineTests
         Assert.AreEqual("3.0.0", launched);
         Assert.AreEqual("3.0.0", pointer.ActiveVersion);
         Assert.AreEqual("rolled_back", pointer.Status);
-        Assert.HasCount(1, runner.StartupChecks);
         StringAssert.Contains(runner.StartedExecutable!, Path.Combine("3.0.0", "AURUMBridge.exe"));
-        Assert.AreEqual(TimeSpan.FromSeconds(30), runner.StartupChecks[0].Timeout);
+        Assert.HasCount(2, runner.StartupChecks);
+        Assert.AreEqual(TimeSpan.FromSeconds(20), runner.StartupChecks[0].Timeout);
+        Assert.AreEqual(TimeSpan.FromSeconds(25), runner.StartupChecks[1].Timeout);
+        var updateState = await new LauncherUpdateStateStore(
+            Path.Combine(_directory, "update-state.json")).LoadAsync();
+        Assert.IsNotNull(updateState);
+        Assert.AreEqual("rolled_back", updateState.State);
+        Assert.AreEqual("launcher_startup_readiness_failed", updateState.LastErrorCode);
+        Assert.IsNull(updateState.MaintenanceLeaseId);
         Assert.AreEqual(
-            TimeSpan.FromSeconds(50),
+            TimeSpan.FromSeconds(55),
             runner.HealthChecks.Aggregate(TimeSpan.Zero, (total, check) => total + check.Timeout)
-                + runner.StartupChecks[0].Timeout,
+                + runner.StartupChecks.Aggregate(TimeSpan.Zero, (total, check) => total + check.Timeout),
             "Pending activation and rollback process budgets must remain below the 60 second acceptance limit.");
     }
 
@@ -98,7 +122,60 @@ public sealed class LauncherEngineTests
         Assert.AreEqual("rolled_back", pointer.Status);
         Assert.IsNull(runner.StartedExecutable);
         Assert.HasCount(2, runner.HealthChecks);
-        Assert.IsTrue(runner.HealthChecks.All(check => check.Timeout == TimeSpan.FromSeconds(10)));
+        Assert.IsTrue(runner.HealthChecks.All(check => check.Timeout == TimeSpan.FromSeconds(5)));
+    }
+
+    [TestMethod]
+    public async Task FailsClosedWhenRollbackVersionCannotRestoreExpectedTerminals()
+    {
+        CreateVersion("3.0.0");
+        CreateVersion("3.1.0");
+        await _store.SaveAsync(Pointer("3.1.0", "3.0.0", "pending"));
+        await WriteUpdateStateAsync("3.1.0");
+        var runner = new FakeRunner(_ => true, startupReady:false, rollbackReady:false);
+        var engine = new LauncherEngine(_directory, _store, runner);
+
+        var error = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            engine.LaunchAsync());
+        var updateState = await new LauncherUpdateStateStore(
+            Path.Combine(_directory, "update-state.json")).LoadAsync();
+
+        Assert.AreEqual("launcher_rollback_startup_failed", error.Message);
+        Assert.IsNotNull(updateState);
+        Assert.AreEqual("rolled_back", updateState.State);
+        Assert.AreEqual("launcher_startup_readiness_failed", updateState.LastErrorCode);
+        Assert.AreEqual("lease_test123", updateState.MaintenanceLeaseId);
+        Assert.IsNull(runner.StartedExecutable);
+    }
+
+    [TestMethod]
+    public async Task ValidatesReadySignalVersionConnectionAndExpectedTerminals()
+    {
+        var path = Path.Combine(_directory, "ready.json");
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
+        {
+            ready = true,
+            version = "3.1.0",
+            server_connected = true,
+            running_terminal_instance_ids = new[]
+            {
+                "mt5_0123456789abcdef01234567",
+                "mt4_0123456789abcdef01234567",
+            },
+        }));
+
+        Assert.IsTrue(await BridgeProcessRunner.IsExpectedReadySignalAsync(
+            path,
+            "3.1.0",
+            ["mt4_0123456789abcdef01234567"]));
+        Assert.IsFalse(await BridgeProcessRunner.IsExpectedReadySignalAsync(
+            path,
+            "3.2.0",
+            ["mt4_0123456789abcdef01234567"]));
+        Assert.IsFalse(await BridgeProcessRunner.IsExpectedReadySignalAsync(
+            path,
+            "3.1.0",
+            ["mt5_missing"]));
     }
 
     [TestMethod]
@@ -119,18 +196,45 @@ public sealed class LauncherEngineTests
         File.WriteAllBytes(Path.Combine(directory, "AURUMBridge.exe"), []);
     }
 
-    private static VersionPointer Pointer(string active, string lastKnownGood, string status) => new()
+    private static VersionPointer Pointer(
+        string active,
+        string lastKnownGood,
+        string status,
+        IReadOnlyList<string>? expectedTerminalInstanceIds = null) => new()
     {
         ActiveVersion = active,
         LastKnownGoodVersion = lastKnownGood,
         Status = status,
+        ExpectedTerminalInstanceIds = expectedTerminalInstanceIds ?? [],
         UpdatedAtUtcMsc = 1_800_000_000_000,
     };
 
-    private sealed class FakeRunner(Func<string, bool> health, bool startupReady = true) : IBridgeProcessRunner
+    private async Task WriteUpdateStateAsync(string targetVersion)
+    {
+        await File.WriteAllTextAsync(
+            Path.Combine(_directory, "update-state.json"),
+            JsonSerializer.Serialize(new LauncherUpdateState
+            {
+                State = "activating",
+                TargetVersion = targetVersion,
+                ReleaseId = "bridge-test",
+                Priority = "normal",
+                StagedAtUtcMsc = 1_800_000_000_000,
+                MinimumIdleSeconds = 120,
+                MaintenanceLeaseId = "lease_test123",
+                MaintenanceLeaseExpiresAtUtcMsc = 1_800_000_090_000,
+                UpdatedAtUtcMsc = 1_800_000_000_000,
+            }));
+    }
+
+    private sealed class FakeRunner(
+        Func<string, bool> health,
+        bool startupReady = true,
+        bool rollbackReady = true) : IBridgeProcessRunner
     {
         public List<(string ExecutablePath, TimeSpan Timeout)> HealthChecks { get; } = [];
-        public List<(string ExecutablePath, TimeSpan Timeout)> StartupChecks { get; } = [];
+        public List<(string ExecutablePath, string ExpectedVersion,
+            IReadOnlyList<string> ExpectedTerminalInstanceIds, TimeSpan Timeout)> StartupChecks { get; } = [];
         public string? StartedExecutable { get; private set; }
 
         public Task<bool> RunHealthCheckAsync(
@@ -146,15 +250,24 @@ public sealed class LauncherEngineTests
 
         public Task<bool> StartBridgeAndWaitReadyAsync(
             string executablePath,
+            string expectedVersion,
+            IReadOnlyList<string> expectedTerminalInstanceIds,
             TimeSpan timeout,
             CancellationToken cancellationToken = default)
         {
-            StartupChecks.Add((executablePath, timeout));
-            if (startupReady)
+            StartupChecks.Add((
+                executablePath,
+                expectedVersion,
+                expectedTerminalInstanceIds,
+                timeout));
+            var ready = executablePath.Contains("3.0.0", StringComparison.Ordinal)
+                ? rollbackReady
+                : startupReady;
+            if (ready)
             {
                 StartedExecutable = executablePath;
             }
-            return Task.FromResult(startupReady);
+            return Task.FromResult(ready);
         }
     }
 }

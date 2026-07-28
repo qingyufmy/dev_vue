@@ -7,6 +7,8 @@ public static class BridgeStartupSignal
     public static async Task WriteAsync(
         string signalPath,
         string version,
+        IReadOnlyList<string>? runningTerminalInstanceIds = null,
+        bool serverConnected = true,
         Func<long>? clock = null,
         CancellationToken cancellationToken = default)
     {
@@ -34,6 +36,11 @@ public static class BridgeStartupSignal
                 {
                     ready = true,
                     version,
+                    server_connected = serverConnected,
+                    running_terminal_instance_ids = (runningTerminalInstanceIds ?? [])
+                        .Distinct(StringComparer.Ordinal)
+                        .Order(StringComparer.Ordinal)
+                        .ToArray(),
                     ready_at_utc_msc = (clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))(),
                 }, cancellationToken:cancellationToken);
                 await stream.FlushAsync(cancellationToken);

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace AurumBridge.Launcher;
 
@@ -10,6 +11,8 @@ public interface IBridgeProcessRunner
         CancellationToken cancellationToken = default);
     Task<bool> StartBridgeAndWaitReadyAsync(
         string executablePath,
+        string expectedVersion,
+        IReadOnlyList<string> expectedTerminalInstanceIds,
         TimeSpan timeout,
         CancellationToken cancellationToken = default);
     void StartBridge(string executablePath);
@@ -21,12 +24,16 @@ public sealed class LauncherEngine(
     IBridgeProcessRunner processRunner,
     Func<long>? clock = null)
 {
-    private static readonly TimeSpan HealthCheckTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan PendingStartupTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan HealthCheckTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PendingStartupTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan RollbackStartupTimeout = TimeSpan.FromSeconds(25);
     private readonly string _installRoot = Path.GetFullPath(installRoot);
     private readonly VersionPointerStore _pointerStore = pointerStore;
     private readonly IBridgeProcessRunner _processRunner = processRunner;
     private readonly Func<long> _clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    private readonly LauncherUpdateStateStore _updateStateStore = new(
+        Path.Combine(Path.GetFullPath(installRoot), "update-state.json"),
+        clock);
 
     public async Task<string> LaunchAsync(CancellationToken cancellationToken = default)
     {
@@ -39,8 +46,14 @@ public sealed class LauncherEngine(
         {
             if (pointer.Status == "pending")
             {
+                await _updateStateStore.MarkAsync(
+                    "verifying",
+                    pointer.ActiveVersion,
+                    cancellationToken:cancellationToken);
                 if (await _processRunner.StartBridgeAndWaitReadyAsync(
                     activeExecutable,
+                    pointer.ActiveVersion,
+                    pointer.ExpectedTerminalInstanceIds,
                     PendingStartupTimeout,
                     cancellationToken))
                 {
@@ -48,26 +61,40 @@ public sealed class LauncherEngine(
                     {
                         LastKnownGoodVersion = pointer.ActiveVersion,
                         Status = "healthy",
+                        ExpectedTerminalInstanceIds = [],
                         UpdatedAtUtcMsc = _clock(),
                     }, cancellationToken);
+                    await _updateStateStore.MarkAsync(
+                        "healthy",
+                        pointer.ActiveVersion,
+                        clearMaintenanceLease:true,
+                        cancellationToken:cancellationToken);
                     return pointer.ActiveVersion;
                 }
-                return await RollBackAsync(pointer, cancellationToken);
+                return await RollBackAsync(
+                    pointer,
+                    "launcher_startup_readiness_failed",
+                    cancellationToken);
             }
             await _pointerStore.SaveAsync(pointer with
             {
                 LastKnownGoodVersion = pointer.ActiveVersion,
                 Status = "healthy",
+                ExpectedTerminalInstanceIds = [],
                 UpdatedAtUtcMsc = _clock(),
             }, cancellationToken);
             _processRunner.StartBridge(activeExecutable);
             return pointer.ActiveVersion;
         }
-        return await RollBackAsync(pointer, cancellationToken);
+        return await RollBackAsync(
+            pointer,
+            "launcher_health_check_failed",
+            cancellationToken);
     }
 
     private async Task<string> RollBackAsync(
         VersionPointer pointer,
+        string failureCode,
         CancellationToken cancellationToken)
     {
         if (pointer.ActiveVersion == pointer.LastKnownGoodVersion)
@@ -76,12 +103,18 @@ public sealed class LauncherEngine(
         }
 
         var rollbackExecutable = ResolveExecutable(pointer.LastKnownGoodVersion);
-        await _pointerStore.SaveAsync(pointer with
+        var rollbackPointer = pointer with
         {
             ActiveVersion = pointer.LastKnownGoodVersion,
             Status = "rolled_back",
             UpdatedAtUtcMsc = _clock(),
-        }, cancellationToken);
+        };
+        await _pointerStore.SaveAsync(rollbackPointer, cancellationToken);
+        await _updateStateStore.MarkAsync(
+            "rolled_back",
+            pointer.ActiveVersion,
+            failureCode,
+            cancellationToken:cancellationToken);
         if (!await _processRunner.RunHealthCheckAsync(
             rollbackExecutable,
             HealthCheckTimeout,
@@ -89,7 +122,26 @@ public sealed class LauncherEngine(
         {
             throw new InvalidOperationException("launcher_rollback_health_check_failed");
         }
-        _processRunner.StartBridge(rollbackExecutable);
+        if (!await _processRunner.StartBridgeAndWaitReadyAsync(
+            rollbackExecutable,
+            pointer.LastKnownGoodVersion,
+            pointer.ExpectedTerminalInstanceIds,
+            RollbackStartupTimeout,
+            cancellationToken))
+        {
+            throw new InvalidOperationException("launcher_rollback_startup_failed");
+        }
+        await _pointerStore.SaveAsync(rollbackPointer with
+        {
+            ExpectedTerminalInstanceIds = [],
+            UpdatedAtUtcMsc = _clock(),
+        }, cancellationToken);
+        await _updateStateStore.MarkAsync(
+            "rolled_back",
+            pointer.ActiveVersion,
+            failureCode,
+            clearMaintenanceLease:true,
+            cancellationToken:cancellationToken);
         return pointer.LastKnownGoodVersion;
     }
 
@@ -168,6 +220,8 @@ public sealed class BridgeProcessRunner(string installRoot) : IBridgeProcessRunn
 
     public async Task<bool> StartBridgeAndWaitReadyAsync(
         string executablePath,
+        string expectedVersion,
+        IReadOnlyList<string> expectedTerminalInstanceIds,
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
@@ -177,12 +231,19 @@ public sealed class BridgeProcessRunner(string installRoot) : IBridgeProcessRunn
         }
         Directory.CreateDirectory(_healthDirectory);
         var readyFile = Path.Combine(_healthDirectory, $"ready-{Guid.NewGuid():N}.json");
-        using var process = Process.Start(new ProcessStartInfo
+        var startInfo = new ProcessStartInfo
         {
             FileName = executablePath,
             UseShellExecute = false,
             ArgumentList = { "--ready-file", readyFile },
-        }) ?? throw new InvalidOperationException("launcher_bridge_process_start_failed");
+        };
+        foreach (var terminalInstanceId in expectedTerminalInstanceIds)
+        {
+            startInfo.ArgumentList.Add("--expected-terminal");
+            startInfo.ArgumentList.Add(terminalInstanceId);
+        }
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("launcher_bridge_process_start_failed");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
         var ready = false;
@@ -194,7 +255,12 @@ public sealed class BridgeProcessRunner(string installRoot) : IBridgeProcessRunn
                 {
                     return false;
                 }
-                if (File.Exists(readyFile) && new FileInfo(readyFile).Length > 0)
+                if (File.Exists(readyFile)
+                    && await IsExpectedReadySignalAsync(
+                        readyFile,
+                        expectedVersion,
+                        expectedTerminalInstanceIds,
+                        deadline.Token))
                 {
                     await Task.Delay(TimeSpan.FromSeconds(2), deadline.Token);
                     ready = !process.HasExited;
@@ -219,6 +285,50 @@ public sealed class BridgeProcessRunner(string installRoot) : IBridgeProcessRunn
             {
                 File.Delete(readyFile);
             }
+        }
+    }
+
+    public static async Task<bool> IsExpectedReadySignalAsync(
+        string readyFile,
+        string expectedVersion,
+        IReadOnlyList<string> expectedTerminalInstanceIds,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await using var stream = new FileStream(
+                readyFile,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                4096,
+                FileOptions.Asynchronous);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("ready", out var ready)
+                || ready.ValueKind is not JsonValueKind.True
+                || !root.TryGetProperty("version", out var version)
+                || version.GetString() != expectedVersion
+                || !root.TryGetProperty("server_connected", out var connected)
+                || connected.ValueKind is not JsonValueKind.True
+                || !root.TryGetProperty("running_terminal_instance_ids", out var terminals)
+                || terminals.ValueKind is not JsonValueKind.Array)
+            {
+                return false;
+            }
+            var running = terminals.EnumerateArray()
+                .Where(value => value.ValueKind == JsonValueKind.String)
+                .Select(value => value.GetString()!)
+                .ToHashSet(StringComparer.Ordinal);
+            return expectedTerminalInstanceIds.All(running.Contains);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 }

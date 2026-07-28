@@ -98,24 +98,40 @@ public sealed class BridgeUpdateCoordinator : IDisposable
             Path.GetFullPath(updateStatePath));
     }
 
-    public async Task<StagedRelease?> CheckAndStageAsync(CancellationToken cancellationToken = default)
+    public async Task<StagedRelease?> CheckAndStageAsync(
+        CancellationToken cancellationToken = default,
+        bool retryRolledBackRelease = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         try
         {
+            var previous = await _stateStore.LoadAsync(cancellationToken);
             var manifest = await _manifestClient.FetchVerifiedAsync(
                 _verifier,
                 Environment.LauncherVersion,
                 cancellationToken);
             if (manifest is null)
             {
+                if (previous?.State != BridgeUpdateStates.RolledBack)
+                {
+                    await SaveCheckingStateAsync(cancellationToken);
+                }
+                return null;
+            }
+            if (Version.Parse(manifest.ReleaseVersion) <= Environment.CurrentVersion)
+            {
                 await SaveCheckingStateAsync(cancellationToken);
                 return null;
             }
-            var previous = await _stateStore.LoadAsync(cancellationToken);
             var sameRelease = previous is not null
                 && previous.TargetVersion == manifest.ReleaseVersion
                 && previous.ReleaseId == manifest.ReleaseId;
+            if (sameRelease
+                && previous!.State == BridgeUpdateStates.RolledBack
+                && !retryRolledBackRelease)
+            {
+                return null;
+            }
             var alreadyWaiting = sameRelease
                 && previous!.State == BridgeUpdateStates.WaitingWindow;
             if (!alreadyWaiting)
@@ -230,12 +246,14 @@ public sealed class BridgeUpdateCoordinator : IDisposable
 
     public Task PrepareActivationAsync(
         StagedRelease stagedRelease,
+        IReadOnlyList<string>? expectedTerminalInstanceIds = null,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         return _activationStore.PrepareActivationAsync(
             stagedRelease,
             Environment.CurrentVersion,
+            expectedTerminalInstanceIds,
             cancellationToken);
     }
 

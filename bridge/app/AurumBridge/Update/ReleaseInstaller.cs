@@ -307,6 +307,9 @@ public sealed record ReleaseActivationPointer
     [JsonPropertyName("status")]
     public required string Status { get; init; }
 
+    [JsonPropertyName("expected_terminal_instance_ids")]
+    public IReadOnlyList<string> ExpectedTerminalInstanceIds { get; init; } = [];
+
     [JsonPropertyName("updated_at_utc_msc")]
     public required long UpdatedAtUtcMsc { get; init; }
 }
@@ -321,6 +324,7 @@ public sealed class ReleaseActivationStore(
     public async Task PrepareActivationAsync(
         StagedRelease stagedRelease,
         Version runningVersion,
+        IReadOnlyList<string>? expectedTerminalInstanceIds = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stagedRelease);
@@ -346,6 +350,8 @@ public sealed class ReleaseActivationStore(
         {
             ActiveVersion = stagedRelease.Version,
             Status = "pending",
+            ExpectedTerminalInstanceIds = NormalizeTerminalInstanceIds(
+                expectedTerminalInstanceIds),
             UpdatedAtUtcMsc = _clock(),
         }, cancellationToken);
     }
@@ -408,9 +414,32 @@ public sealed class ReleaseActivationStore(
         if (!Version.TryParse(pointer.ActiveVersion, out _)
             || !Version.TryParse(pointer.LastKnownGoodVersion, out _)
             || pointer.Status is not ("pending" or "healthy" or "rolled_back")
+            || pointer.ExpectedTerminalInstanceIds is null
+            || NormalizeTerminalInstanceIds(pointer.ExpectedTerminalInstanceIds).Count
+                != pointer.ExpectedTerminalInstanceIds.Count
             || pointer.UpdatedAtUtcMsc <= 0)
         {
             throw new InvalidDataException("update_pointer_invalid");
         }
+    }
+
+    private static IReadOnlyList<string> NormalizeTerminalInstanceIds(
+        IReadOnlyList<string>? values)
+    {
+        if (values is null)
+        {
+            return [];
+        }
+        if (values.Count > 64
+            || values.Any(value => string.IsNullOrWhiteSpace(value)
+                || value.Length > 128
+                || value.Any(character => !char.IsAsciiLetterOrDigit(character)
+                    && character is not ('_' or '-'))))
+        {
+            throw new InvalidDataException("update_pointer_invalid");
+        }
+        return values.Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
     }
 }

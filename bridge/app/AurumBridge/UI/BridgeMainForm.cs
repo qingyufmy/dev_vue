@@ -30,6 +30,8 @@ public enum BridgeUpdateNoticePhase
     Ready,
     Waiting,
     Activating,
+    RolledBack,
+    Healthy,
 }
 
 public sealed record BridgeUpdateNoticeView(
@@ -286,6 +288,24 @@ public sealed class BridgeMainForm : Form
                 "正在排空交易通道并准备重启，请勿关闭程序或交易终端。",
                 "正在重启",
                 ButtonVisible:true,
+                ButtonEnabled:false);
+        }
+        if (notice.Phase == BridgeUpdateNoticePhase.RolledBack)
+        {
+            return new(
+                $"版本 {notice.Version} 启动失败，已恢复上一版本",
+                "账户连接已按上一稳定版本恢复；你可以稍后重新尝试更新。",
+                "重新尝试",
+                ButtonVisible:true,
+                ButtonEnabled:true);
+        }
+        if (notice.Phase == BridgeUpdateNoticePhase.Healthy)
+        {
+            return new(
+                $"已更新到版本 {notice.Version}",
+                "主账户与更新前在线的观摩源均已恢复。",
+                string.Empty,
+                ButtonVisible:false,
                 ButtonEnabled:false);
         }
         return new(

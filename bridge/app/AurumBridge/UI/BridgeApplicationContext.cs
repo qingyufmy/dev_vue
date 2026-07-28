@@ -17,6 +17,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly BridgeUpdateCoordinator? _updateCoordinator;
     private readonly BridgeInstallationIdentityStore? _installationIdentityStore;
     private readonly string? _startupReadyFile;
+    private readonly IReadOnlySet<string> _startupExpectedTerminalInstanceIds;
     private readonly string _profileId;
     private readonly string _rootDataDirectory;
     private readonly bool _backgroundMode;
@@ -43,11 +44,15 @@ public sealed class BridgeApplicationContext : ApplicationContext
     public BridgeApplicationContext(
         BridgeSingleInstanceGuard singleInstance,
         string? startupReadyFile = null,
+        IReadOnlyList<string>? startupExpectedTerminalInstanceIds = null,
         string profileId = BridgeRuntimeProfile.DefaultId,
         bool backgroundMode = false)
     {
         _singleInstance = singleInstance ?? throw new ArgumentNullException(nameof(singleInstance));
         _startupReadyFile = startupReadyFile;
+        _startupExpectedTerminalInstanceIds = new HashSet<string>(
+            startupExpectedTerminalInstanceIds ?? [],
+            StringComparer.Ordinal);
         _profileId = BridgeRuntimeProfile.Validate(profileId);
         _backgroundMode = backgroundMode;
         if (_backgroundMode && BridgeRuntimeProfile.IsDefault(_profileId))
@@ -314,11 +319,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 "bridge_status_changed",
                 $"phase={status.Phase}; terminals={status.Terminals.Count}; states={terminalStates}; detail={status.DetailCode ?? "none"}");
         }
-        if (status.Phase == BridgeApplicationPhase.Online
+        if (IsStartupReady(status, _startupExpectedTerminalInstanceIds)
             && _startupReadyFile is not null
             && Interlocked.Exchange(ref _startupReadyWritten, 1) == 0)
         {
-            _ = WriteStartupReadyAsync(_startupReadyFile);
+            _ = WriteStartupReadyAsync(_startupReadyFile, status);
         }
         TryBeginInvoke(() =>
         {
@@ -960,13 +965,41 @@ public sealed class BridgeApplicationContext : ApplicationContext
             MessageBoxIcon.Information);
     }
 
-    private async Task WriteStartupReadyAsync(string path)
+    public static bool IsStartupReady(
+        BridgeApplicationStatus status,
+        IReadOnlySet<string> expectedTerminalInstanceIds)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        ArgumentNullException.ThrowIfNull(expectedTerminalInstanceIds);
+        if (status.Phase != BridgeApplicationPhase.Online || !status.ServerConnected)
+        {
+            return false;
+        }
+        var runningTerminalIds = status.Terminals
+            .Where(terminal => terminal.RuntimeState == TerminalRuntimeState.Running)
+            .Select(terminal => terminal.TerminalInstanceId)
+            .ToHashSet(StringComparer.Ordinal);
+        return expectedTerminalInstanceIds.All(runningTerminalIds.Contains);
+    }
+
+    private async Task WriteStartupReadyAsync(
+        string path,
+        BridgeApplicationStatus status)
     {
         try
         {
             var version = typeof(BridgeApplicationContext).Assembly.GetName().Version?.ToString(3)
                 ?? "3.0.0";
-            await BridgeStartupSignal.WriteAsync(path, version, cancellationToken:_stop.Token);
+            await ReleaseStartupMaintenanceLeaseAsync();
+            await BridgeStartupSignal.WriteAsync(
+                path,
+                version,
+                status.Terminals
+                    .Where(terminal => terminal.RuntimeState == TerminalRuntimeState.Running)
+                    .Select(terminal => terminal.TerminalInstanceId)
+                    .ToArray(),
+                status.ServerConnected,
+                cancellationToken:_stop.Token);
             _logger.Info("startup_ready_confirmed", $"version={version}");
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
@@ -974,7 +1007,41 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         catch (Exception error)
         {
+            Interlocked.Exchange(ref _startupReadyWritten, 0);
             _logger.Error("startup_ready_signal_failed", error);
+        }
+    }
+
+    private async Task ReleaseStartupMaintenanceLeaseAsync()
+    {
+        if (_updateCoordinator is null)
+        {
+            return;
+        }
+        try
+        {
+            var state = await _updateCoordinator.LoadStateAsync(_stop.Token);
+            if (state?.State is not (BridgeUpdateStates.Verifying
+                    or BridgeUpdateStates.Activating
+                    or BridgeUpdateStates.RolledBack)
+                || state.MaintenanceLeaseId is not { } leaseId)
+            {
+                return;
+            }
+            using var releaseTimeout = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+            releaseTimeout.CancelAfter(TimeSpan.FromSeconds(2));
+            await _controller.ReleaseMaintenanceLeaseAsync(leaseId, releaseTimeout.Token);
+            _logger.Info(
+                "update_maintenance_released_after_startup",
+                $"lease={leaseId};version={state.TargetVersion}");
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            _logger.Error("update_maintenance_release_after_startup_failed", error);
         }
     }
 
@@ -1410,6 +1477,21 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 state.Priority == "urgent",
                 BridgeUpdateNoticePhase.Activating,
                 state.ManualActivationRequested),
+            BridgeUpdateStates.Verifying => new BridgeUpdateNoticeView(
+                state.TargetVersion!,
+                state.Priority == "urgent",
+                BridgeUpdateNoticePhase.Activating,
+                state.ManualActivationRequested),
+            BridgeUpdateStates.RolledBack => new BridgeUpdateNoticeView(
+                state.TargetVersion!,
+                state.Priority == "urgent",
+                BridgeUpdateNoticePhase.RolledBack,
+                state.ManualActivationRequested),
+            BridgeUpdateStates.Healthy => new BridgeUpdateNoticeView(
+                state.TargetVersion!,
+                state.Priority == "urgent",
+                BridgeUpdateNoticePhase.Healthy,
+                state.ManualActivationRequested),
             _ => null,
         };
         TryBeginInvoke(() =>
@@ -1417,6 +1499,22 @@ public sealed class BridgeApplicationContext : ApplicationContext
             if (!_shuttingDown)
             {
                 _form.ApplyUpdateNotice(notice);
+                if (notice?.Phase == BridgeUpdateNoticePhase.Healthy)
+                {
+                    _ = HideHealthyUpdateNoticeAsync();
+                }
+            }
+        });
+    }
+
+    private async Task HideHealthyUpdateNoticeAsync()
+    {
+        await Task.Delay(TimeSpan.FromSeconds(5));
+        TryBeginInvoke(() =>
+        {
+            if (!_shuttingDown)
+            {
+                _form.ApplyUpdateNotice(null);
             }
         });
     }
@@ -1429,7 +1527,14 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         try
         {
-            var state = await _updateCoordinator.RequestManualActivationAsync(_stop.Token);
+            var state = await _updateCoordinator.LoadStateAsync(_stop.Token);
+            if (state?.State == BridgeUpdateStates.RolledBack)
+            {
+                await _updateCoordinator.CheckAndStageAsync(
+                    _stop.Token,
+                    retryRolledBackRelease:true);
+            }
+            state = await _updateCoordinator.RequestManualActivationAsync(_stop.Token);
             if (state is null)
             {
                 _form.ApplyUpdateNotice(null);
@@ -1497,6 +1602,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
         try
         {
             var state = await coordinator.LoadStateAsync(cancellationToken);
+            HandleUpdateStateChanged(state);
+            if (state?.State == BridgeUpdateStates.Verifying)
+            {
+                return TimeSpan.FromSeconds(1);
+            }
             if (state?.State != BridgeUpdateStates.WaitingWindow)
             {
                 return null;
@@ -1553,14 +1663,24 @@ public sealed class BridgeApplicationContext : ApplicationContext
             var targets = new List<IBridgeUpdateDrainTarget> { _controller };
             var terminalIds = new HashSet<string>(StringComparer.Ordinal);
             var observerUserIds = new HashSet<long>();
+            var primaryReady = _primaryStatus is
+            {
+                Phase:BridgeApplicationPhase.Online,
+                ServerConnected:true,
+            };
             if (_primaryStatus?.ServerConnected == true)
             {
                 foreach (var terminal in _primaryStatus.Terminals.Where(terminal =>
                     terminal.RuntimeState == TerminalRuntimeState.Running))
                 {
-                    terminalIds.Add(terminal.TerminalInstanceId);
+                    if (!terminalIds.Add(terminal.TerminalInstanceId))
+                    {
+                        throw new InvalidOperationException(
+                            "bridge_update_terminal_scope_conflict");
+                    }
                 }
             }
+            primaryReady &= terminalIds.Count > 0;
             foreach (var runtime in _observerRuntimes.Values)
             {
                 targets.Add(runtime.Controller);
@@ -1587,7 +1707,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
             return new(
                 targets,
                 terminalIds.Order(StringComparer.Ordinal).ToArray(),
-                observerUserIds.Order().ToArray());
+                observerUserIds.Order().ToArray(),
+                primaryReady);
         }
     }
 
@@ -1602,14 +1723,16 @@ public sealed class BridgeApplicationContext : ApplicationContext
             return null;
         }
         var snapshot = CaptureUpdateRuntimeSnapshot();
-        if (snapshot.TerminalInstanceIds.Count == 0)
+        if (!snapshot.PrimaryReady || snapshot.TerminalInstanceIds.Count == 0)
         {
             await coordinator.SaveActivationPhaseAsync(
                 staged,
                 BridgeUpdateStates.WaitingWindow,
                 state.ManualActivationRequested,
                 nextRetryAtUtcMsc:DateTimeOffset.UtcNow.AddSeconds(15).ToUnixTimeMilliseconds(),
-                lastErrorCode:"bridge_update_no_connected_terminal",
+                lastErrorCode:snapshot.PrimaryReady
+                    ? "bridge_update_no_connected_terminal"
+                    : "bridge_update_primary_not_ready",
                 cancellationToken:cancellationToken);
             return TimeSpan.FromSeconds(15);
         }
@@ -1685,7 +1808,10 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 leaseId,
                 decision.ExpiresAtUtcMsc,
                 cancellationToken:activation.Token);
-            await coordinator.PrepareActivationAsync(staged, activation.Token);
+            await coordinator.PrepareActivationAsync(
+                staged,
+                snapshot.TerminalInstanceIds,
+                activation.Token);
             drain.Commit();
             activationPrepared = true;
             _shuttingDown = true;
@@ -1915,7 +2041,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private sealed record UpdateRuntimeSnapshot(
         IReadOnlyList<IBridgeUpdateDrainTarget> DrainTargets,
         IReadOnlyList<string> TerminalInstanceIds,
-        IReadOnlyList<long> ObserverBridgeUserIds);
+        IReadOnlyList<long> ObserverBridgeUserIds,
+        bool PrimaryReady);
 
     private sealed class ObserverRuntime(
         BridgeApplicationController controller,

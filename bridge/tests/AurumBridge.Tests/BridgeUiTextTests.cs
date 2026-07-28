@@ -216,6 +216,8 @@ public sealed class BridgeUiTextTests
         var urgent = ready with { Urgent = true };
         var waiting = requested with { Phase = BridgeUpdateNoticePhase.Waiting };
         var activating = requested with { Phase = BridgeUpdateNoticePhase.Activating };
+        var rolledBack = requested with { Phase = BridgeUpdateNoticePhase.RolledBack };
+        var healthy = requested with { Phase = BridgeUpdateNoticePhase.Healthy };
 
         var downloadingText = BridgeMainForm.DescribeUpdateNotice(downloading);
         var readyText = BridgeMainForm.DescribeUpdateNotice(ready);
@@ -223,6 +225,8 @@ public sealed class BridgeUiTextTests
         var urgentText = BridgeMainForm.DescribeUpdateNotice(urgent);
         var waitingText = BridgeMainForm.DescribeUpdateNotice(waiting);
         var activatingText = BridgeMainForm.DescribeUpdateNotice(activating);
+        var rolledBackText = BridgeMainForm.DescribeUpdateNotice(rolledBack);
+        var healthyText = BridgeMainForm.DescribeUpdateNotice(healthy);
 
         StringAssert.Contains(downloadingText.Description, "不受影响");
         Assert.IsFalse(downloadingText.ButtonVisible);
@@ -236,6 +240,10 @@ public sealed class BridgeUiTextTests
         Assert.IsFalse(waitingText.ButtonEnabled);
         Assert.AreEqual("正在重启", activatingText.ButtonText);
         Assert.IsFalse(activatingText.ButtonEnabled);
+        Assert.AreEqual("重新尝试", rolledBackText.ButtonText);
+        Assert.IsTrue(rolledBackText.ButtonEnabled);
+        StringAssert.Contains(healthyText.Title, "已更新到版本");
+        Assert.IsFalse(healthyText.ButtonVisible);
     }
 
     [TestMethod]
@@ -262,6 +270,41 @@ public sealed class BridgeUiTextTests
         Assert.IsTrue(BridgeApplicationContext.ShouldAttemptUpdateActivation(
             state with { Priority = "urgent" },
             new DateTimeOffset(2026, 7, 28, 12, 0, 0, TimeSpan.FromHours(8))));
+    }
+
+    [TestMethod]
+    public void StartupReadinessRequiresTheServerAndEveryPreviouslyOnlineTerminal()
+    {
+        const string mainId = "mt5_0123456789abcdef01234567";
+        const string observerId = "mt4_0123456789abcdef01234567";
+        var status = new BridgeApplicationStatus(
+            BridgeApplicationPhase.Online,
+            [
+                new(mainId, BridgePlatform.Mt5, "Broker", "1",
+                    TerminalRuntimeState.Running, null),
+                new(observerId, BridgePlatform.Mt4, "Broker", "2",
+                    TerminalRuntimeState.Restarting, "worker_failed", "source-1"),
+            ],
+            null)
+        {
+            ServerConnected = true,
+        };
+        var expected = new HashSet<string>([mainId, observerId], StringComparer.Ordinal);
+
+        Assert.IsFalse(BridgeApplicationContext.IsStartupReady(status, expected));
+        Assert.IsFalse(BridgeApplicationContext.IsStartupReady(
+            status with { ServerConnected = false },
+            new HashSet<string>([mainId], StringComparer.Ordinal)));
+        Assert.IsTrue(BridgeApplicationContext.IsStartupReady(
+            status with
+            {
+                Terminals = status.Terminals.Select(terminal => terminal with
+                {
+                    RuntimeState = TerminalRuntimeState.Running,
+                    ErrorCode = null,
+                }).ToArray(),
+            },
+            expected));
     }
 
     [TestMethod]

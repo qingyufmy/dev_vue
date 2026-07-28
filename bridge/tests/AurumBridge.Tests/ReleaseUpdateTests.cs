@@ -394,6 +394,18 @@ public sealed class ReleaseUpdateTests
                 UpdatedAtUtcMsc = 1,
             }));
         Assert.AreEqual("update_state_invalid", unpairedLease.Message);
+
+        var rollbackAwaitingLeaseRelease = await store.SaveAsync(new()
+        {
+            State = BridgeUpdateStates.RolledBack,
+            TargetVersion = "3.1.0",
+            Priority = "normal",
+            MaintenanceLeaseId = "lease_test123",
+            MaintenanceLeaseExpiresAtUtcMsc = 1_800_000_090_000,
+            LastErrorCode = "launcher_startup_readiness_failed",
+            UpdatedAtUtcMsc = 1,
+        });
+        Assert.AreEqual("lease_test123", rollbackAwaitingLeaseRelease.MaintenanceLeaseId);
     }
 
     [TestMethod]
@@ -517,7 +529,8 @@ public sealed class ReleaseUpdateTests
 
         await store.PrepareActivationAsync(
             new("3.1.0", versionDirectory),
-            new Version(3, 0, 0));
+            new Version(3, 0, 0),
+            ["mt5_0123456789abcdef01234567"]);
 
         var pointer = JsonSerializer.Deserialize<ReleaseActivationPointer>(
             await File.ReadAllTextAsync(pointerPath));
@@ -525,6 +538,9 @@ public sealed class ReleaseUpdateTests
         Assert.AreEqual("3.1.0", pointer.ActiveVersion);
         Assert.AreEqual("3.0.0", pointer.LastKnownGoodVersion);
         Assert.AreEqual("pending", pointer.Status);
+        CollectionAssert.AreEqual(
+            new[] { "mt5_0123456789abcdef01234567" },
+            pointer.ExpectedTerminalInstanceIds.ToArray());
     }
 
     [TestMethod]

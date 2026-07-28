@@ -174,6 +174,9 @@ public sealed class BridgeUpdateStateStore(
             or BridgeUpdateStates.Verifying;
         var requiresLease = state.State is BridgeUpdateStates.Draining
             or BridgeUpdateStates.Activating;
+        var allowsLease = requiresLease
+            || state.State is BridgeUpdateStates.Verifying
+                or BridgeUpdateStates.RolledBack;
         if (state.SchemaVersion != 1
             || !BridgeUpdateStates.All.Contains(state.State)
             || state.UpdatedAtUtcMsc <= 0
@@ -189,7 +192,8 @@ public sealed class BridgeUpdateStateStore(
             || state.MaintenanceLeaseExpiresAtUtcMsc is < 0
             || (state.MaintenanceLeaseId is null)
                 != (state.MaintenanceLeaseExpiresAtUtcMsc is null)
-            || requiresLease != (state.MaintenanceLeaseId is not null)
+            || requiresLease && state.MaintenanceLeaseId is null
+            || !allowsLease && state.MaintenanceLeaseId is not null
             || state.NextRetryAtUtcMsc is < 0
             || state.LastErrorCode is { Length: > 256 }
             || state.State == BridgeUpdateStates.Failed

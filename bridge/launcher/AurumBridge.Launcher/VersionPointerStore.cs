@@ -14,6 +14,9 @@ public sealed record VersionPointer
     [JsonPropertyName("status")]
     public required string Status { get; init; }
 
+    [JsonPropertyName("expected_terminal_instance_ids")]
+    public IReadOnlyList<string> ExpectedTerminalInstanceIds { get; init; } = [];
+
     [JsonPropertyName("updated_at_utc_msc")]
     public required long UpdatedAtUtcMsc { get; init; }
 }
@@ -80,6 +83,14 @@ public sealed class VersionPointerStore(string pointerPath)
         if (!Version.TryParse(pointer.ActiveVersion, out _)
             || !Version.TryParse(pointer.LastKnownGoodVersion, out _)
             || pointer.Status is not ("pending" or "healthy" or "rolled_back")
+            || pointer.ExpectedTerminalInstanceIds is null
+            || pointer.ExpectedTerminalInstanceIds.Count > 64
+            || pointer.ExpectedTerminalInstanceIds.Distinct(StringComparer.Ordinal).Count()
+                != pointer.ExpectedTerminalInstanceIds.Count
+            || pointer.ExpectedTerminalInstanceIds.Any(value => string.IsNullOrWhiteSpace(value)
+                || value.Length > 128
+                || value.Any(character => !char.IsAsciiLetterOrDigit(character)
+                    && character is not ('_' or '-')))
             || pointer.UpdatedAtUtcMsc <= 0)
         {
             throw new InvalidDataException("launcher_version_pointer_invalid");

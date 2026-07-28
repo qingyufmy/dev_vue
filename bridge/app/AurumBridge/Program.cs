@@ -30,7 +30,8 @@ internal static class Program
                 await BridgeHealthCheck.RunAsync(paths, healthFile, Path.Combine(installRoot, "health"));
                 return;
             }
-            var startupReadyFile = ReadStartupReadyFile(foregroundArgs);
+            var (startupReadyFile, expectedTerminalInstanceIds) =
+                ReadStartupReadyArguments(foregroundArgs);
             var instanceId = BridgeRuntimeProfile.InstanceId(profileId);
             using var singleInstance = BridgeSingleInstanceGuard.TryAcquire(instanceId);
             if (singleInstance is null)
@@ -40,6 +41,7 @@ internal static class Program
             Application.Run(new BridgeApplicationContext(
                 singleInstance,
                 startupReadyFile,
+                expectedTerminalInstanceIds,
                 profileId,
                 backgroundMode));
         }
@@ -86,20 +88,38 @@ internal static class Program
         return (profileId, runtimeArgs.ToArray());
     }
 
-    private static string? ReadStartupReadyFile(string[] args)
+    public static (string? ReadyFile, IReadOnlyList<string> ExpectedTerminalInstanceIds)
+        ReadStartupReadyArguments(string[] args)
     {
         if (args.Length == 0)
         {
-            return null;
+            return (null, []);
         }
-        if (args.Length != 2
+        if (args.Length < 2
+            || args.Length % 2 != 0
             || args[0] != "--ready-file"
             || string.IsNullOrWhiteSpace(args[1])
             || !Path.IsPathFullyQualified(args[1]))
         {
             throw new ArgumentException("bridge_arguments_invalid", nameof(args));
         }
-        return Path.GetFullPath(args[1]);
+        var expected = new List<string>();
+        for (var index = 2; index < args.Length; index += 2)
+        {
+            var value = args[index + 1];
+            if (args[index] != "--expected-terminal"
+                || string.IsNullOrWhiteSpace(value)
+                || value.Length > 128
+                || value.Any(character => !char.IsAsciiLetterOrDigit(character)
+                    && character is not ('_' or '-'))
+                || expected.Contains(value, StringComparer.Ordinal)
+                || expected.Count >= 64)
+            {
+                throw new ArgumentException("bridge_arguments_invalid", nameof(args));
+            }
+            expected.Add(value);
+        }
+        return (Path.GetFullPath(args[1]), expected);
     }
 
     private static bool TryReadHealthArguments(string[] args, out string healthFile)
