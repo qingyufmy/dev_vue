@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -14,6 +15,9 @@ public sealed class ReleaseManifestClient
     };
     private readonly Uri _endpoint;
     private readonly HttpClient _httpClient;
+    private string? _cacheKey;
+    private EntityTagHeaderValue? _etag;
+    private ReleaseManifest? _cachedManifest;
 
     public ReleaseManifestClient(
         Uri serverBaseUri,
@@ -52,13 +56,28 @@ public sealed class ReleaseManifestClient
         using var request = new HttpRequestMessage(HttpMethod.Get, _endpoint);
         request.Headers.Add("X-Aurum-Installation-Id", installationId);
         request.Headers.Add("X-Aurum-Release-Channel", rolloutChannel);
+        var cacheKey = $"{installationId}:{rolloutChannel}";
+        if (cacheKey == _cacheKey && _etag is not null && _cachedManifest is not null)
+        {
+            request.Headers.IfNoneMatch.Add(_etag);
+        }
         using var response = await _httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
         if (response.StatusCode == HttpStatusCode.NoContent)
         {
+            ClearCache();
             return null;
+        }
+        if (response.StatusCode == HttpStatusCode.NotModified)
+        {
+            if (cacheKey != _cacheKey || _cachedManifest is null)
+            {
+                throw new InvalidDataException("update_manifest_cache_missing");
+            }
+            verifier.Verify(_cachedManifest, launcherVersion);
+            return _cachedManifest;
         }
         response.EnsureSuccessStatusCode();
         if (response.Content.Headers.ContentLength is > MaxManifestBytes)
@@ -92,6 +111,16 @@ public sealed class ReleaseManifestClient
             throw new InvalidDataException("update_manifest_invalid", error);
         }
         verifier.Verify(manifest, launcherVersion);
+        _cacheKey = cacheKey;
+        _etag = response.Headers.ETag;
+        _cachedManifest = manifest;
         return manifest;
+    }
+
+    private void ClearCache()
+    {
+        _cacheKey = null;
+        _etag = null;
+        _cachedManifest = null;
     }
 }

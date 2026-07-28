@@ -206,6 +206,21 @@ describe('bridge release manifest route', () => {
     expect(response.status).toBe(200)
     expect(response.headers['cache-control']).toBe('no-store')
     expect(JSON.parse(response.body)).toEqual(value)
+    expect(response.headers.etag).toMatch(/^"[a-f0-9]{64}"$/)
+  })
+
+  it('returns not modified only after revalidating the selected manifest', async () => {
+    const value = manifest()
+    const router = createBridgeReleaseRouter({
+      manifestPath:'release.json',
+      readManifest:vi.fn().mockResolvedValue(Buffer.from(JSON.stringify(value))),
+    })
+    const first = await request(router)
+    const second = await request(router, { 'If-None-Match':first.headers.etag })
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(304)
+    expect(second.body).toBe('')
   })
 
   it('returns no content when releases are not configured', async () => {

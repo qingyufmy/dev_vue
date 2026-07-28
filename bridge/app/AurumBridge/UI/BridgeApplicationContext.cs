@@ -1420,6 +1420,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 await TryApplyPendingUpdateAsync(coordinator, cancellationToken);
             }
             var nextCheckAt = DateTimeOffset.UtcNow.AddMinutes(1);
+            var consecutiveCheckFailures = 0;
             while (!cancellationToken.IsCancellationRequested)
             {
                 if (DateTimeOffset.UtcNow >= nextCheckAt
@@ -1434,6 +1435,9 @@ public sealed class BridgeApplicationContext : ApplicationContext
                                 "update_waiting_window",
                                 $"version={staged.Version};priority={staged.Priority}");
                         }
+                        consecutiveCheckFailures = 0;
+                        nextCheckAt = DateTimeOffset.UtcNow.Add(
+                            BridgeUpdateCoordinator.RegularCheckInterval);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -1442,9 +1446,17 @@ public sealed class BridgeApplicationContext : ApplicationContext
                     catch (Exception error)
                     {
                         _logger.Error("update_check_failed", error);
+                        consecutiveCheckFailures = Math.Min(
+                            consecutiveCheckFailures + 1,
+                            32);
+                        var retryDelay = BridgeUpdateRetryPolicy.ComputeCheckDelay(
+                            consecutiveCheckFailures,
+                            Random.Shared.NextDouble());
+                        nextCheckAt = DateTimeOffset.UtcNow.Add(retryDelay);
+                        _logger.Info(
+                            "update_check_retry_scheduled",
+                            $"failures={consecutiveCheckFailures};retry_seconds={Math.Ceiling(retryDelay.TotalSeconds)}");
                     }
-                    nextCheckAt = DateTimeOffset.UtcNow.Add(
-                        BridgeUpdateCoordinator.RegularCheckInterval);
                 }
                 var retryAfter = await TryApplyPendingUpdateAsync(
                     coordinator,

@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -153,6 +154,53 @@ public sealed class ReleaseUpdateTests
 
         Assert.IsNotNull(fetched);
         Assert.AreEqual("3.1.0", fetched.ReleaseVersion);
+    }
+
+    [TestMethod]
+    public async Task ReusesOnlyAVerifiedManifestAfterAnEtagNotModifiedResponse()
+    {
+        using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var unsigned = SignPackages(
+            Manifest("00" + new string('a', 62), 100, string.Empty),
+            signingKey);
+        var signed = unsigned with
+        {
+            Signature = Convert.ToBase64String(signingKey.SignData(
+                Encoding.UTF8.GetBytes(ReleaseManifestVerifier.Canonicalize(unsigned)),
+                HashAlgorithmName.SHA256)),
+        };
+        var handler = new ConditionalManifestHandler(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(signed)));
+        using var http = new HttpClient(handler);
+        using var verifier = new ReleaseManifestVerifier(signingKey.ExportSubjectPublicKeyInfoPem());
+        var client = new ReleaseManifestClient(new Uri("https://www.cnfxtrade.com"), http);
+
+        var first = await client.FetchVerifiedAsync(
+            verifier, new Version(1, 0, 0),
+            "install_0123456789abcdef0123456789abcdef", "stable");
+        var second = await client.FetchVerifiedAsync(
+            verifier, new Version(1, 0, 0),
+            "install_0123456789abcdef0123456789abcdef", "stable");
+
+        Assert.AreSame(first, second);
+        Assert.AreEqual(2, handler.Requests);
+        Assert.IsTrue(handler.ConditionalRequestObserved);
+    }
+
+    [TestMethod]
+    public void BoundsManifestCheckBackoffAndJitter()
+    {
+        Assert.AreEqual(
+            TimeSpan.FromSeconds(24),
+            BridgeUpdateRetryPolicy.ComputeCheckDelay(1, 0));
+        Assert.AreEqual(
+            TimeSpan.FromSeconds(36),
+            BridgeUpdateRetryPolicy.ComputeCheckDelay(1, 1));
+        Assert.AreEqual(
+            TimeSpan.FromMinutes(15),
+            BridgeUpdateRetryPolicy.ComputeCheckDelay(32, 1));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            BridgeUpdateRetryPolicy.ComputeCheckDelay(0, 0.5));
     }
 
     [TestMethod]
@@ -712,6 +760,32 @@ public sealed class ReleaseUpdateTests
             {
                 Content = new ByteArrayContent(payload),
             });
+    }
+
+    private sealed class ConditionalManifestHandler(byte[] payload) : HttpMessageHandler
+    {
+        private static readonly EntityTagHeaderValue Etag = new("\"manifest-test\"");
+
+        public int Requests { get; private set; }
+        public bool ConditionalRequestObserved { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests++;
+            if (request.Headers.IfNoneMatch.Any(value => value.Tag == Etag.Tag))
+            {
+                ConditionalRequestObserved = true;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotModified));
+            }
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payload),
+            };
+            response.Headers.ETag = Etag;
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class PackageResponseHandler(IReadOnlyDictionary<string, byte[]> packages)

@@ -356,6 +356,13 @@ public sealed class BridgeUpdateCoordinator : IDisposable
             : "update_check_failed";
         try
         {
+            var previous = await _stateStore.LoadAsync(CancellationToken.None);
+            if (previous is not null && previous.State != BridgeUpdateStates.Downloading)
+            {
+                // A transient check failure must not erase a verified staged
+                // release or misreport a healthy/rolled-back runtime.
+                return;
+            }
             await SaveStateAsync(new()
             {
                 State = BridgeUpdateStates.Failed,

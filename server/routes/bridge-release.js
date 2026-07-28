@@ -338,6 +338,9 @@ export function createBridgeReleaseRouter({
         const publicKey = await fileOps.readFile(publicKeyPath, 'utf8')
         if (!verifySignatures(manifest, publicKey)) throw new Error('bridge_release_signature_invalid')
       }
+      const etag = `"${createHash('sha256').update(bytes).digest('hex')}"`
+      res.set('ETag', etag)
+      if (req.fresh) return res.status(304).end()
       return res.json(manifest)
     } catch (error) {
       console.error('[BridgeRelease] manifest unavailable:', error?.message || 'unknown')
