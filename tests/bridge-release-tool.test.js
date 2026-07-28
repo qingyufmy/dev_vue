@@ -12,6 +12,7 @@ import {
   canonicalPackage,
   immutablePackageKey,
   isBootstrapManifest,
+  validateQiniuUploadResult,
 } from '../scripts/bridge-release/release-cli.mjs'
 import { normalizeDatabaseQiniuConfig } from '../scripts/bridge-release/database-qiniu-config.mjs'
 import { startLocalReleaseRehearsal } from '../scripts/bridge-release/local-rehearsal-server.mjs'
@@ -34,6 +35,19 @@ describe('bridge release tooling', () => {
     })).toThrow('release_qiniu_database_domain_invalid')
     expect(() => normalizeDatabaseQiniuConfig({ domain:'cdn.example.com' }))
       .toThrow('release_qiniu_database_configuration_missing')
+  })
+
+  it('validates Qiniu upload responses without exposing provider response bodies', () => {
+    expect(validateQiniuUploadResult({
+      resp:{ statusCode:200 }, data:{ key:'bridge/releases/test.zip', hash:'etag' },
+    }, 'bridge/releases/test.zip')).toBe('etag')
+    expect(validateQiniuUploadResult({ resp:{ statusCode:614 }, data:{} }, 'existing')).toBeNull()
+    expect(() => validateQiniuUploadResult({
+      resp:{ statusCode:200 }, data:{ key:'wrong' },
+    }, 'expected')).toThrow('release_qiniu_upload_response_key_mismatch')
+    expect(() => validateQiniuUploadResult({
+      resp:{ statusCode:400 }, data:{ error:'must not be surfaced' },
+    }, 'expected')).toThrow('release_qiniu_upload_http_400')
   })
 
   it('reports exact missing release configuration names without exposing values', async () => {

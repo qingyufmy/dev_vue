@@ -232,9 +232,15 @@ async function uploadOne(localFile, key, qiniuContext) {
     if (status === 614) return null
     throw error
   }
-  const { data, resp } = result
-  if (resp.statusCode !== 200 || data.key !== key) fail('release_qiniu_upload_failed')
-  return data.hash
+  return validateQiniuUploadResult(result, key)
+}
+
+export function validateQiniuUploadResult(result, expectedKey) {
+  const statusCode = Number(result?.resp?.statusCode || 0)
+  if (statusCode === 614) return null
+  if (statusCode !== 200) fail(`release_qiniu_upload_http_${statusCode || 'unknown'}`)
+  if (result?.data?.key !== expectedKey) fail('release_qiniu_upload_response_key_mismatch')
+  return result.data.hash || null
 }
 
 async function upload(args) {
