@@ -486,7 +486,12 @@ export function createBridgeV3Gateway({
     assertBridgeV3Message(command, { nowUtcMsc })
     if (command.type !== 'command') throw Object.assign(new Error('bridge_command_type_invalid'), { code:'bridge_command_type_invalid' })
     if (maintenanceBlock(command.terminal_instance_id)) {
-      return { status:'rejected', command_id:command.command_id, error:'bridge_maintenance' }
+      return {
+        status:'rejected',
+        command_id:command.command_id,
+        error:'bridge_maintenance',
+        message:'量见智桥正在安全更新，请稍后重试',
+      }
     }
     activeCommandAdmissions.set(
       command.terminal_instance_id,

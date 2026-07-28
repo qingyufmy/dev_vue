@@ -41,6 +41,7 @@ let running = false
 let activeCycle = null
 const localCycleStates = new Map()
 const activeUserRuns = new Set()
+const activeUserRunCounts = new Map()
 
 function logTime() {
   return new Date().toISOString()
@@ -134,14 +135,34 @@ async function rememberCycleResult(cycle, userId, result) {
 function runTrackedUserFlatten(userId, now = new Date(), clock = () => new Date()) {
   const cycle = weeklyFlattenCycleId(now)
   activeCycle = cycle
+  const normalizedUserId = Number(userId)
+  activeUserRunCounts.set(normalizedUserId, Number(activeUserRunCounts.get(normalizedUserId) || 0) + 1)
   const run = (async () => {
-    const result = await runWeeklySystemFlattenForUser(userId, now, clock)
-    await rememberCycleResult(cycle, userId, result)
+    const result = await runWeeklySystemFlattenForUser(normalizedUserId, now, clock)
+    await rememberCycleResult(cycle, normalizedUserId, result)
     return result
   })()
   activeUserRuns.add(run)
-  run.finally(() => activeUserRuns.delete(run)).catch(() => {})
+  run.finally(() => {
+    activeUserRuns.delete(run)
+    const remaining = Number(activeUserRunCounts.get(normalizedUserId) || 1) - 1
+    if (remaining > 0) activeUserRunCounts.set(normalizedUserId, remaining)
+    else activeUserRunCounts.delete(normalizedUserId)
+  }).catch(() => {})
   return run
+}
+
+export function getWeeklySystemFlattenState(userIds = []) {
+  const requested = new Set((userIds || []).map(Number))
+  const activeUserIds = [...activeUserRunCounts.keys()]
+  const affectedUserIds = activeUserIds.filter(userId => requested.size === 0 || requested.has(userId))
+  return {
+    running,
+    active_cycle:activeCycle,
+    active_user_ids:activeUserIds,
+    affected_user_ids:affectedUserIds,
+    affected:affectedUserIds.length > 0,
+  }
 }
 
 async function audit(userId, action, symbol, request, result, status) {

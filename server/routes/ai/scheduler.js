@@ -21,6 +21,12 @@ import { loadPlatformReferencePortfolio } from './reference-portfolio.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
 import { registerAutoSchedulerState } from './runtime-state-registry.js'
+import {
+  beginBridgeDeliveryExecution,
+  isBridgeDeliveryMaintenancePaused,
+  isPlatformMarketMaintenancePaused,
+  isPrivateInferenceMaintenancePaused,
+} from '../../bridge-v3/update-maintenance-registry.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -558,6 +564,7 @@ function retryDelayMs(reason, consecutiveFailures = 1) {
     case 'redis_unavailable':
     case 'weekly_flatten_window':
     case 'lock_busy':
+    case 'bridge_update_maintenance':
       return 5000
     case 'market_closed':
     case 'market_restricted':
@@ -654,6 +661,13 @@ async function resolveStrategyMarketBridge(promptType) {
   return { userId:await getActiveAdminBridgeUserId(), source:null, configured:false }
 }
 
+function schedulerUpdateMaintenanceReason(promptType, marketUserId) {
+  const paused = promptType?.scope === 'private'
+    ? isPrivateInferenceMaintenancePaused(marketUserId)
+    : isPlatformMarketMaintenancePaused(marketUserId, promptType?.id)
+  return paused ? 'bridge_update_maintenance' : ''
+}
+
 const SCHEDULER_WAIT_LOG_HEARTBEAT_MS = 30 * 60_000
 
 function shouldLogSchedulerWait(state, reason, nowMs = Date.now()) {
@@ -667,6 +681,7 @@ function shouldLogSchedulerWait(state, reason, nowMs = Date.now()) {
 
 function schedulerWaitLabel(reason) {
   const labels = {
+    bridge_update_maintenance: '量见智桥正在安全更新，等待连接恢复',
     redis_unavailable: 'Redis 不可用，等待恢复',
     owner_bridge_offline: '策略所属账户桥接离线，等待重连',
     admin_bridge_offline: '管理员行情桥接离线，等待重连',
@@ -950,6 +965,16 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     }
     const marketBridge = await resolveStrategyMarketBridge(ptRow)
     const marketUserId = marketBridge.userId
+    const updateMaintenanceReason = schedulerUpdateMaintenanceReason(ptRow, marketUserId)
+    if (updateMaintenanceReason) {
+      st.lastError = null
+      st.waitReason = updateMaintenanceReason
+      const delay = retryDelayMs(st.waitReason)
+      st.nextRunInSeconds = Math.round(delay / 1000)
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      return
+    }
     if (!marketUserId || !isBridgeAlive(marketUserId)) {
       st._waitCount = (st._waitCount || 0) + 1
       st.lastError = null
@@ -1015,6 +1040,17 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.stageLabel = ''
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, Math.min(tickIntervalMs, st.nextRunInSeconds * 1000))
+      return
+    }
+    const maintenanceBeganWhileLocking = schedulerUpdateMaintenanceReason(ptRow, marketUserId)
+    if (maintenanceBeganWhileLocking) {
+      await finalizeLock(key, lockToken, 0)
+      st.lastError = null
+      st.waitReason = maintenanceBeganWhileLocking
+      const delay = retryDelayMs(st.waitReason)
+      st.nextRunInSeconds = Math.round(delay / 1000)
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
     }
     st.inFlight = true
@@ -1663,6 +1699,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
 
 // === Delivery execution for a single subscriber ===
 async function executeDelivery(userId, signalId, signal, unifiedConfig, market, promptTypeId, symbol, createdAt, lockGuard) {
+  const endDeliveryExecution = beginBridgeDeliveryExecution(userId)
   const l = (msg) => console.log(`[Delivery U${userId}] signal=${signalId} ${symbol}: ${msg}`)
   const setTerminalStatus = (status, reason, details = {}) => queryRun(
     'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
@@ -1684,6 +1721,10 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
   try {
     if (isWeeklyFlattenWindow()) {
       await setTerminalStatus('skipped', 'weekly_flatten_window')
+      return
+    }
+    if (isBridgeDeliveryMaintenancePaused(userId)) {
+      await setTerminalStatus('skipped', 'bridge_update_maintenance')
       return
     }
     // Lock check before claiming (Fix 2)
@@ -2153,6 +2194,8 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     broadcastAdminEvent('ai', 'signal_execution_updated', {
       user_id:Number(userId), signal_id:Number(signalId), status:'failed',
     }, { scopes:['ai-operations', 'risk-audit'], refresh:true })
+  } finally {
+    endDeliveryExecution()
   }
 }
 
@@ -2433,4 +2476,5 @@ export const __schedulerTest = {
   schedulerLockWaitSeconds,
   nextCompletionIntervalDeadlineMs,
   completionIntervalCooldownSeconds,
+  schedulerUpdateMaintenanceReason,
 }

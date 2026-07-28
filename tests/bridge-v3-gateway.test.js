@@ -633,7 +633,7 @@ describe('Bridge v3 websocket gateway', () => {
     const lease = await gateway.acquireMaintenanceLease(maintenanceRequest())
     expect(lease).toMatchObject({ acquired:true, terminal_instance_ids:['terminal_01JGATEWAY1'] })
     await expect(gateway.sendCommand(42, command())).resolves.toMatchObject({
-      status:'rejected', error:'bridge_maintenance',
+      status:'rejected', error:'bridge_maintenance', message:'量见智桥正在安全更新，请稍后重试',
     })
     expect(dependencies.createLedgerEntry).not.toHaveBeenCalled()
 
