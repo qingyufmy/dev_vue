@@ -23,6 +23,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly string _profileId;
     private readonly string _rootDataDirectory;
     private readonly bool _backgroundMode;
+    private readonly bool _startMinimized;
     private readonly BridgeFailureLogThrottle _failureLogThrottle = new(TimeSpan.FromMinutes(1));
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _observerRuntimeReload = new(1, 1);
@@ -35,6 +36,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private Task? _healthTask;
     private Task? _observerRuntimeTask;
     private BridgeLogViewerForm? _logViewer;
+    private ToolStripMenuItem? _autoStartMenuItem;
     private int _startupReadyWritten;
     private int _latestPhase = (int)BridgeApplicationPhase.Starting;
     private int _latestTerminalCount;
@@ -44,6 +46,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private string? _lastLoggedUpdateStateFingerprint;
     private string? _lastLoggedUpdateState;
     private bool _shuttingDown;
+    private bool _autoStartEnabled = true;
     private BridgeApplicationStatus? _primaryStatus;
 
     public BridgeApplicationContext(
@@ -51,7 +54,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
         string? startupReadyFile = null,
         IReadOnlyList<string>? startupExpectedTerminalInstanceIds = null,
         string profileId = BridgeRuntimeProfile.DefaultId,
-        bool backgroundMode = false)
+        bool backgroundMode = false,
+        bool startMinimized = false)
     {
         _singleInstance = singleInstance ?? throw new ArgumentNullException(nameof(singleInstance));
         _startupReadyFile = startupReadyFile;
@@ -60,9 +64,14 @@ public sealed class BridgeApplicationContext : ApplicationContext
             StringComparer.Ordinal);
         _profileId = BridgeRuntimeProfile.Validate(profileId);
         _backgroundMode = backgroundMode;
+        _startMinimized = startMinimized;
         if (_backgroundMode && BridgeRuntimeProfile.IsDefault(_profileId))
         {
             throw new ArgumentException("bridge_background_profile_required", nameof(profileId));
+        }
+        if (_startMinimized && (!BridgeRuntimeProfile.IsDefault(_profileId) || _backgroundMode))
+        {
+            throw new ArgumentException("bridge_start_minimized_profile_invalid", nameof(profileId));
         }
         var rootPaths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
         _rootDataDirectory = rootPaths.DataDirectory;
@@ -84,6 +93,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             selectedMt5TerminalId = preferences.Mt5TerminalInstanceId;
             selectedMt5TerminalPath = preferences.Mt5TerminalPath;
             selectedMt4TerminalId = preferences.Mt4TerminalInstanceId;
+            _autoStartEnabled = preferences.AutoStartEnabled;
         }
         catch (Exception error)
         {
@@ -91,7 +101,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         if (BridgeRuntimeProfile.IsDefault(_profileId))
         {
-            EnsureAutoStart();
+            EnsureAutoStart(_autoStartEnabled);
             _updateCoordinator = CreateUpdateCoordinator(paths.ServerBaseUri);
             if (_updateCoordinator is not null)
             {
@@ -166,8 +176,22 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _form.ApplyObserverProfiles(observerProfileViews);
         }
 
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip
+        {
+            ShowItemToolTips = true,
+        };
         menu.Items.Add($"打开{BridgeBrand.ProductName}", null, (_, _) => _form.ShowFromTray());
+        if (BridgeRuntimeProfile.IsDefault(_profileId))
+        {
+            menu.Items.Add(new ToolStripSeparator());
+            _autoStartMenuItem = new ToolStripMenuItem("开机自动启动（推荐）")
+            {
+                CheckOnClick = false,
+            };
+            _autoStartMenuItem.Click += HandleAutoStartToggleRequested;
+            menu.Items.Add(_autoStartMenuItem);
+            UpdateAutoStartMenuState();
+        }
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出桥接", null, HandleExitRequested);
         _notifyIcon = new()
@@ -178,7 +202,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             Visible = !_backgroundMode,
         };
         _notifyIcon.DoubleClick += (_, _) => _form.ShowFromTray();
-        if (_backgroundMode)
+        if (_backgroundMode || _startMinimized)
         {
             _ = _form.Handle;
         }
@@ -230,20 +254,91 @@ public sealed class BridgeApplicationContext : ApplicationContext
         await _controller.RunAsync(cancellationToken);
     }
 
-    private void EnsureAutoStart()
+    private void EnsureAutoStart(bool enabled)
     {
         try
         {
             var registration = new BridgeAutoStartRegistration(new WindowsAutoStartValueStore());
-            if (registration.EnsureForInstalledApplication(AppContext.BaseDirectory))
+            var changed = enabled
+                ? registration.EnsureForInstalledApplication(AppContext.BaseDirectory)
+                : registration.Disable();
+            if (changed)
             {
-                _logger.Info("autostart_registered");
+                _logger.Info(enabled ? "autostart_registered" : "autostart_removed");
             }
         }
         catch (Exception error)
         {
             _logger.Error("autostart_registration_failed", error);
         }
+    }
+
+    private async void HandleAutoStartToggleRequested(object? sender, EventArgs eventArgs)
+    {
+        if (_autoStartMenuItem is null || _shuttingDown)
+        {
+            return;
+        }
+        var previous = _autoStartEnabled;
+        var enabled = !previous;
+        _autoStartMenuItem.Enabled = false;
+        try
+        {
+            var registration = new BridgeAutoStartRegistration(new WindowsAutoStartValueStore());
+            registration.SetEnabledForInstalledApplication(AppContext.BaseDirectory, enabled);
+            try
+            {
+                await _preferences.SaveAutoStartEnabledAsync(enabled, _stop.Token);
+            }
+            catch
+            {
+                try
+                {
+                    registration.SetEnabledForInstalledApplication(AppContext.BaseDirectory, previous);
+                }
+                catch (Exception rollbackError)
+                {
+                    _logger.Error("autostart_preference_rollback_failed", rollbackError);
+                }
+                throw;
+            }
+            _autoStartEnabled = enabled;
+            UpdateAutoStartMenuState();
+            _logger.Info(enabled ? "autostart_enabled_by_user" : "autostart_disabled_by_user");
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("autostart_preference_update_failed", error);
+            UpdateAutoStartMenuState();
+            MessageBox.Show(
+                _form,
+                "开机自动启动设置未保存，请稍后重试。",
+                "设置失败",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            if (_autoStartMenuItem is not null)
+            {
+                _autoStartMenuItem.Enabled = true;
+            }
+        }
+    }
+
+    private void UpdateAutoStartMenuState()
+    {
+        if (_autoStartMenuItem is null)
+        {
+            return;
+        }
+        _autoStartMenuItem.Checked = _autoStartEnabled;
+        _autoStartMenuItem.ToolTipText = _autoStartEnabled
+            ? "已开启：登录 Windows 后自动启动，并静默驻留托盘。"
+            : "已关闭：需要手动打开量见智桥。";
     }
 
     private void HandleActivationRequested()

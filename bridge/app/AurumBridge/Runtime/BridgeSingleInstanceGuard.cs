@@ -24,7 +24,8 @@ public sealed class BridgeSingleInstanceGuard : IDisposable
 
     public static BridgeSingleInstanceGuard? TryAcquire(
         string instanceId,
-        string? lockDirectory = null)
+        string? lockDirectory = null,
+        bool activateExisting = true)
     {
         ValidateInstanceId(instanceId);
         var directory = ResolveLockDirectory(lockDirectory);
@@ -51,7 +52,10 @@ public sealed class BridgeSingleInstanceGuard : IDisposable
         }
         catch (IOException error) when ((error.HResult & 0xFFFF) is 32 or 33)
         {
-            activationEvent.Set();
+            if (activateExisting)
+            {
+                activationEvent.Set();
+            }
             activationEvent.Dispose();
             shutdownEvent.Dispose();
             return null;

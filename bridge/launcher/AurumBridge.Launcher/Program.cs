@@ -7,24 +7,29 @@ internal static class Program
     [STAThread]
     public static async Task Main(string[] args)
     {
+        var automaticStartup = args.Length == 1 && args[0] == "--autostart";
         try
         {
-            if (args.Length > 1 || args.Length == 1 && args[0] != "--autostart")
+            var startup = LauncherStartupOptions.Parse(args);
+            if (startup.Delay > TimeSpan.Zero)
             {
-                throw new ArgumentException("launcher_arguments_invalid", nameof(args));
+                await Task.Delay(startup.Delay);
             }
             var root = AppContext.BaseDirectory;
             var store = new VersionPointerStore(Path.Combine(root, "current.json"));
             var engine = new LauncherEngine(root, store, new BridgeProcessRunner(root));
-            await engine.LaunchAsync();
+            await engine.LaunchAsync(startup.StartMinimized);
         }
         catch
         {
-            MessageBoxW(
-                0,
-                "量见智桥启动失败，且无法自动恢复上一个版本。请运行修复安装。",
-                "量见智桥",
-                0x00000010);
+            if (!automaticStartup)
+            {
+                MessageBoxW(
+                    0,
+                    "量见智桥启动失败，且无法自动恢复上一个版本。请运行修复安装。",
+                    "量见智桥",
+                    0x00000010);
+            }
             Environment.ExitCode = 1;
         }
     }

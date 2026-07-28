@@ -345,7 +345,6 @@ public sealed class BridgeUpdateCoordinator : IDisposable
         _ = Process.Start(new ProcessStartInfo
         {
             FileName = Environment.LauncherPath,
-            ArgumentList = { "--autostart" },
             UseShellExecute = false,
         }) ?? throw new InvalidOperationException("update_launcher_start_failed");
     }

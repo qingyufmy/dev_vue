@@ -13,9 +13,10 @@ public interface IBridgeProcessRunner
         string executablePath,
         string expectedVersion,
         IReadOnlyList<string> expectedTerminalInstanceIds,
+        bool startMinimized,
         TimeSpan timeout,
         CancellationToken cancellationToken = default);
-    void StartBridge(string executablePath);
+    void StartBridge(string executablePath, bool startMinimized);
 }
 
 public sealed class LauncherEngine(
@@ -35,7 +36,9 @@ public sealed class LauncherEngine(
         Path.Combine(Path.GetFullPath(installRoot), "update-state.json"),
         clock);
 
-    public async Task<string> LaunchAsync(CancellationToken cancellationToken = default)
+    public async Task<string> LaunchAsync(
+        bool startMinimized = false,
+        CancellationToken cancellationToken = default)
     {
         var pointer = await _pointerStore.LoadAsync(cancellationToken);
         var activeExecutable = ResolveExecutable(pointer.ActiveVersion);
@@ -54,6 +57,7 @@ public sealed class LauncherEngine(
                     activeExecutable,
                     pointer.ActiveVersion,
                     pointer.ExpectedTerminalInstanceIds,
+                    startMinimized,
                     PendingStartupTimeout,
                     cancellationToken))
                 {
@@ -74,6 +78,7 @@ public sealed class LauncherEngine(
                 return await RollBackAsync(
                     pointer,
                     "launcher_startup_readiness_failed",
+                    startMinimized,
                     cancellationToken);
             }
             await _pointerStore.SaveAsync(pointer with
@@ -83,18 +88,20 @@ public sealed class LauncherEngine(
                 ExpectedTerminalInstanceIds = [],
                 UpdatedAtUtcMsc = _clock(),
             }, cancellationToken);
-            _processRunner.StartBridge(activeExecutable);
+            _processRunner.StartBridge(activeExecutable, startMinimized);
             return pointer.ActiveVersion;
         }
         return await RollBackAsync(
             pointer,
             "launcher_health_check_failed",
+            startMinimized,
             cancellationToken);
     }
 
     private async Task<string> RollBackAsync(
         VersionPointer pointer,
         string failureCode,
+        bool startMinimized,
         CancellationToken cancellationToken)
     {
         if (pointer.ActiveVersion == pointer.LastKnownGoodVersion)
@@ -126,6 +133,7 @@ public sealed class LauncherEngine(
             rollbackExecutable,
             pointer.LastKnownGoodVersion,
             pointer.ExpectedTerminalInstanceIds,
+            startMinimized,
             RollbackStartupTimeout,
             cancellationToken))
         {
@@ -212,16 +220,14 @@ public sealed class BridgeProcessRunner(string installRoot) : IBridgeProcessRunn
         }
     }
 
-    public void StartBridge(string executablePath) => Process.Start(new ProcessStartInfo
-    {
-        FileName = executablePath,
-        UseShellExecute = false,
-    });
+    public void StartBridge(string executablePath, bool startMinimized) =>
+        Process.Start(BuildStartInfo(executablePath, startMinimized));
 
     public async Task<bool> StartBridgeAndWaitReadyAsync(
         string executablePath,
         string expectedVersion,
         IReadOnlyList<string> expectedTerminalInstanceIds,
+        bool startMinimized,
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
@@ -237,6 +243,10 @@ public sealed class BridgeProcessRunner(string installRoot) : IBridgeProcessRunn
             UseShellExecute = false,
             ArgumentList = { "--ready-file", readyFile },
         };
+        if (startMinimized)
+        {
+            startInfo.ArgumentList.Insert(0, "--start-minimized");
+        }
         foreach (var terminalInstanceId in expectedTerminalInstanceIds)
         {
             startInfo.ArgumentList.Add("--expected-terminal");
@@ -330,5 +340,21 @@ public sealed class BridgeProcessRunner(string installRoot) : IBridgeProcessRunn
         {
             return false;
         }
+    }
+
+    private static ProcessStartInfo BuildStartInfo(
+        string executablePath,
+        bool startMinimized)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executablePath,
+            UseShellExecute = false,
+        };
+        if (startMinimized)
+        {
+            startInfo.ArgumentList.Add("--start-minimized");
+        }
+        return startInfo;
     }
 }

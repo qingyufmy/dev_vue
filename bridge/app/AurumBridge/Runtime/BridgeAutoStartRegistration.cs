@@ -6,6 +6,7 @@ public interface IAutoStartValueStore
 {
     string? Read(string valueName);
     void Write(string valueName, string command);
+    void Delete(string valueName);
 }
 
 public sealed class WindowsAutoStartValueStore : IAutoStartValueStore
@@ -24,6 +25,12 @@ public sealed class WindowsAutoStartValueStore : IAutoStartValueStore
             ?? throw new InvalidOperationException("bridge_autostart_registry_unavailable");
         key.SetValue(valueName, command, RegistryValueKind.String);
     }
+
+    public void Delete(string valueName)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable:true);
+        key?.DeleteValue(valueName, throwOnMissingValue:false);
+    }
 }
 
 public sealed class BridgeAutoStartRegistration(IAutoStartValueStore valueStore)
@@ -39,12 +46,41 @@ public sealed class BridgeAutoStartRegistration(IAutoStartValueStore valueStore)
         {
             return false;
         }
-        var command = $"\"{launcherPath}\" --autostart";
+        var command = BuildCommand(launcherPath);
         if (string.Equals(_valueStore.Read(ValueName), command, StringComparison.Ordinal))
         {
             return false;
         }
         _valueStore.Write(ValueName, command);
+        return true;
+    }
+
+    public bool SetEnabledForInstalledApplication(
+        string applicationDirectory,
+        bool enabled)
+    {
+        if (!enabled)
+        {
+            return Disable();
+        }
+        var launcherPath = ResolveStableLauncher(applicationDirectory)
+            ?? throw new InvalidOperationException("bridge_autostart_launcher_unavailable");
+        var command = BuildCommand(launcherPath);
+        if (string.Equals(_valueStore.Read(ValueName), command, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        _valueStore.Write(ValueName, command);
+        return true;
+    }
+
+    public bool Disable()
+    {
+        if (_valueStore.Read(ValueName) is null)
+        {
+            return false;
+        }
+        _valueStore.Delete(ValueName);
         return true;
     }
 
@@ -64,4 +100,7 @@ public sealed class BridgeAutoStartRegistration(IAutoStartValueStore valueStore)
         var launcherPath = Path.GetFullPath(Path.Combine(installRoot.FullName, "AURUMBridge.Launcher.exe"));
         return File.Exists(launcherPath) ? launcherPath : null;
     }
+
+    private static string BuildCommand(string launcherPath) =>
+        $"\"{launcherPath}\" --autostart";
 }

@@ -373,6 +373,7 @@ internal sealed class RehearsalProcessRunner(
         string executablePath,
         string expectedVersion,
         IReadOnlyList<string> expectedTerminalInstanceIds,
+        bool startMinimized,
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
@@ -386,5 +387,9 @@ internal sealed class RehearsalProcessRunner(
             StringComparison.Ordinal));
     }
 
-    public void StartBridge(string executablePath) => _ = executablePath;
+    public void StartBridge(string executablePath, bool startMinimized)
+    {
+        _ = executablePath;
+        _ = startMinimized;
+    }
 }

@@ -54,6 +54,28 @@ public sealed class BridgeSingleInstanceGuardTests
     }
 
     [TestMethod]
+    public async Task SilentAutoStartDoesNotBringAnExistingInstanceToTheForeground()
+    {
+        var instanceId = $"AURUMBridge.test.{Guid.NewGuid():N}";
+        var directory = Path.Combine(Path.GetTempPath(), instanceId);
+        _directories.Add(directory);
+        using var owner = BridgeSingleInstanceGuard.TryAcquire(instanceId, directory);
+        Assert.IsNotNull(owner);
+        var activated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        owner.ActivationRequested += () => activated.TrySetResult();
+        owner.StartActivationListener();
+
+        var duplicate = await Task.Run(() => BridgeSingleInstanceGuard.TryAcquire(
+            instanceId,
+            directory,
+            activateExisting:false));
+
+        Assert.IsNull(duplicate);
+        await Task.Delay(150);
+        Assert.IsFalse(activated.Task.IsCompleted);
+    }
+
+    [TestMethod]
     public async Task OwnerReceivesACoordinatedShutdownRequest()
     {
         var instanceId = $"AURUMBridge.test.{Guid.NewGuid():N}";

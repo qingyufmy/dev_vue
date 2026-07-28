@@ -47,6 +47,21 @@ public sealed class BridgeUserPreferencesTests
     }
 
     [TestMethod]
+    public async Task ExistingPreferencesDefaultAutoStartToEnabledAndPersistUserChoice()
+    {
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(_path, "{\"Platform\":\"mt5\"}");
+        var store = new BridgeUserPreferencesStore(_path);
+
+        Assert.IsTrue((await store.LoadAsync()).AutoStartEnabled);
+
+        await store.SaveAutoStartEnabledAsync(false);
+        var saved = await new BridgeUserPreferencesStore(_path).LoadAsync();
+        Assert.IsFalse(saved.AutoStartEnabled);
+        Assert.AreEqual(BridgePlatform.Mt5, saved.Platform);
+    }
+
+    [TestMethod]
     public async Task ObserverEnabledStateIsPersistedWithoutLosingTerminalSelection()
     {
         var store = new BridgeUserPreferencesStore(_path);

@@ -43,6 +43,7 @@ public sealed class LauncherEngineTests
         StringAssert.Contains(runner.StartedExecutable!, Path.Combine("3.1.0", "AURUMBridge.exe"));
         Assert.HasCount(1, runner.StartupChecks);
         Assert.AreEqual("3.1.0", runner.StartupChecks[0].ExpectedVersion);
+        Assert.IsFalse(runner.StartupChecks[0].StartMinimized);
         CollectionAssert.AreEqual(
             new[] { "mt5_0123456789abcdef01234567" },
             runner.StartupChecks[0].ExpectedTerminalInstanceIds.ToArray());
@@ -71,6 +72,23 @@ public sealed class LauncherEngineTests
         Assert.AreEqual("rolled_back", pointer.Status);
         Assert.HasCount(2, runner.HealthChecks);
         StringAssert.Contains(runner.StartedExecutable!, Path.Combine("3.0.0", "AURUMBridge.exe"));
+    }
+
+    [TestMethod]
+    public async Task PreservesMinimizedStartupAcrossHealthyPendingAndRollbackLaunches()
+    {
+        CreateVersion("3.0.0");
+        CreateVersion("3.1.0");
+        await _store.SaveAsync(Pointer("3.1.0", "3.0.0", "pending"));
+        await WriteUpdateStateAsync("3.1.0");
+        var runner = new FakeRunner(_ => true, startupReady:false, rollbackReady:true);
+        var engine = new LauncherEngine(_directory, _store, runner);
+
+        await engine.LaunchAsync(startMinimized:true);
+
+        Assert.HasCount(2, runner.StartupChecks);
+        Assert.IsTrue(runner.StartupChecks.All(check => check.StartMinimized));
+        Assert.IsTrue(runner.StartedMinimized);
     }
 
     [TestMethod]
@@ -275,8 +293,10 @@ public sealed class LauncherEngineTests
     {
         public List<(string ExecutablePath, TimeSpan Timeout)> HealthChecks { get; } = [];
         public List<(string ExecutablePath, string ExpectedVersion,
-            IReadOnlyList<string> ExpectedTerminalInstanceIds, TimeSpan Timeout)> StartupChecks { get; } = [];
+            IReadOnlyList<string> ExpectedTerminalInstanceIds, bool StartMinimized,
+            TimeSpan Timeout)> StartupChecks { get; } = [];
         public string? StartedExecutable { get; private set; }
+        public bool StartedMinimized { get; private set; }
 
         public Task<bool> RunHealthCheckAsync(
             string executablePath,
@@ -287,12 +307,17 @@ public sealed class LauncherEngineTests
             return Task.FromResult(health(executablePath));
         }
 
-        public void StartBridge(string executablePath) => StartedExecutable = executablePath;
+        public void StartBridge(string executablePath, bool startMinimized)
+        {
+            StartedExecutable = executablePath;
+            StartedMinimized = startMinimized;
+        }
 
         public Task<bool> StartBridgeAndWaitReadyAsync(
             string executablePath,
             string expectedVersion,
             IReadOnlyList<string> expectedTerminalInstanceIds,
+            bool startMinimized,
             TimeSpan timeout,
             CancellationToken cancellationToken = default)
         {
@@ -300,6 +325,7 @@ public sealed class LauncherEngineTests
                 executablePath,
                 expectedVersion,
                 expectedTerminalInstanceIds,
+                startMinimized,
                 timeout));
             var ready = executablePath.Contains("3.0.0", StringComparison.Ordinal)
                 ? rollbackReady
@@ -307,6 +333,7 @@ public sealed class LauncherEngineTests
             if (ready)
             {
                 StartedExecutable = executablePath;
+                StartedMinimized = startMinimized;
             }
             return Task.FromResult(ready);
         }

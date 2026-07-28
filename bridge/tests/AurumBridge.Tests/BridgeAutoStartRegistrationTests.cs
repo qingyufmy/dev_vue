@@ -47,6 +47,36 @@ public sealed class BridgeAutoStartRegistrationTests
         Assert.AreEqual(0, store.Writes);
     }
 
+    [TestMethod]
+    public void UserCanDisableAndReEnableAutoStartWithoutDuplicateRegistryWrites()
+    {
+        var applicationDirectory = CreateInstalledLayout("3.1.0");
+        var store = new MemoryValueStore();
+        var registration = new BridgeAutoStartRegistration(store);
+
+        Assert.IsTrue(registration.SetEnabledForInstalledApplication(applicationDirectory, true));
+        Assert.IsTrue(registration.SetEnabledForInstalledApplication(applicationDirectory, false));
+        Assert.IsNull(store.Value);
+        Assert.AreEqual(1, store.Deletes);
+        Assert.IsFalse(registration.SetEnabledForInstalledApplication(applicationDirectory, false));
+        Assert.AreEqual(1, store.Deletes);
+        Assert.IsTrue(registration.SetEnabledForInstalledApplication(applicationDirectory, true));
+        Assert.AreEqual(2, store.Writes);
+    }
+
+    [TestMethod]
+    public void EnablingFailsClearlyWhenTheStableLauncherIsUnavailable()
+    {
+        var registration = new BridgeAutoStartRegistration(new MemoryValueStore());
+        var developmentDirectory = Path.Combine(_directory, "bin", "Debug", "net10.0-windows");
+        Directory.CreateDirectory(developmentDirectory);
+
+        var error = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            registration.SetEnabledForInstalledApplication(developmentDirectory, true));
+
+        Assert.AreEqual("bridge_autostart_launcher_unavailable", error.Message);
+    }
+
     private string CreateInstalledLayout(string version)
     {
         var applicationDirectory = Path.Combine(_directory, "versions", version);
@@ -59,11 +89,17 @@ public sealed class BridgeAutoStartRegistrationTests
     {
         public string? Value { get; private set; }
         public int Writes { get; private set; }
+        public int Deletes { get; private set; }
         public string? Read(string valueName) => Value;
         public void Write(string valueName, string command)
         {
             Value = command;
             Writes++;
+        }
+        public void Delete(string valueName)
+        {
+            Value = null;
+            Deletes++;
         }
     }
 }

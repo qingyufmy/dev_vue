@@ -12,15 +12,21 @@ internal static class Program
         var (profileId, runtimeArgs) = ReadProfileArgument(args);
         var (backgroundMode, foregroundArgs) =
             BridgeRuntimeProfile.ReadBackgroundArgument(runtimeArgs);
-        if (backgroundMode && BridgeRuntimeProfile.IsDefault(profileId))
+        var (startMinimized, startupArgs) = ReadStartMinimizedArgument(foregroundArgs);
+        if ((backgroundMode && BridgeRuntimeProfile.IsDefault(profileId))
+            || startMinimized && (!BridgeRuntimeProfile.IsDefault(profileId) || backgroundMode))
         {
             throw new ArgumentException("bridge_arguments_invalid", nameof(args));
         }
-        var healthMode = foregroundArgs.Contains("--health-check", StringComparer.Ordinal);
+        var healthMode = startupArgs.Contains("--health-check", StringComparer.Ordinal);
         try
         {
-            if (TryReadHealthArguments(foregroundArgs, out var healthFile))
+            if (TryReadHealthArguments(startupArgs, out var healthFile))
             {
+                if (startMinimized)
+                {
+                    throw new ArgumentException("bridge_arguments_invalid", nameof(args));
+                }
                 var paths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
                 var installRoot = BridgeRuntimePathResolver.ResolveInstallRoot(
                     AppContext.BaseDirectory);
@@ -28,9 +34,11 @@ internal static class Program
                 return;
             }
             var (startupReadyFile, expectedTerminalInstanceIds) =
-                ReadStartupReadyArguments(foregroundArgs);
+                ReadStartupReadyArguments(startupArgs);
             var instanceId = BridgeRuntimeProfile.InstanceId(profileId);
-            using var singleInstance = BridgeSingleInstanceGuard.TryAcquire(instanceId);
+            using var singleInstance = BridgeSingleInstanceGuard.TryAcquire(
+                instanceId,
+                activateExisting:!startMinimized);
             if (singleInstance is null)
             {
                 return;
@@ -40,7 +48,8 @@ internal static class Program
                 startupReadyFile,
                 expectedTerminalInstanceIds,
                 profileId,
-                backgroundMode));
+                backgroundMode,
+                startMinimized));
         }
         catch (Exception error)
         {
@@ -49,7 +58,7 @@ internal static class Program
                 Environment.ExitCode = 1;
                 return;
             }
-            if (backgroundMode)
+            if (backgroundMode || startMinimized)
             {
                 Environment.ExitCode = 1;
                 return;
@@ -83,6 +92,28 @@ internal static class Program
             profileId = BridgeRuntimeProfile.Validate(args[index]);
         }
         return (profileId, runtimeArgs.ToArray());
+    }
+
+    internal static (bool StartMinimized, string[] RuntimeArgs)
+        ReadStartMinimizedArgument(IReadOnlyList<string> args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        var runtimeArgs = new List<string>(args.Count);
+        var startMinimized = false;
+        foreach (var argument in args)
+        {
+            if (argument != "--start-minimized")
+            {
+                runtimeArgs.Add(argument);
+                continue;
+            }
+            if (startMinimized)
+            {
+                throw new ArgumentException("bridge_arguments_invalid", nameof(args));
+            }
+            startMinimized = true;
+        }
+        return (startMinimized, runtimeArgs.ToArray());
     }
 
     public static (string? ReadyFile, IReadOnlyList<string> ExpectedTerminalInstanceIds)

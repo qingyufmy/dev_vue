@@ -30,7 +30,8 @@ public sealed record BridgeUserPreferences(
     string? ObserverAccountLabel = null,
     long? ObserverTradingAccountId = null,
     string? ObserverTradingAccountLabel = null,
-    string? ObserverClaimedTerminalInstanceId = null);
+    string? ObserverClaimedTerminalInstanceId = null,
+    bool AutoStartEnabled = true);
 
 public sealed class BridgeUserPreferencesStore
 {
@@ -98,6 +99,24 @@ public sealed class BridgeUserPreferencesStore
             var current = await LoadCoreAsync(cancellationToken);
             await SaveCoreAsync(
                 current with { ObserverEnabled = enabled },
+                cancellationToken);
+        }
+        finally
+        {
+            _access.Release();
+        }
+    }
+
+    public async Task SaveAutoStartEnabledAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        await _access.WaitAsync(cancellationToken);
+        try
+        {
+            var current = await LoadCoreAsync(cancellationToken);
+            await SaveCoreAsync(
+                current with { AutoStartEnabled = enabled },
                 cancellationToken);
         }
         finally
@@ -324,7 +343,8 @@ public sealed class BridgeUserPreferencesStore
             NormalizeLabel(preferences.ObserverAccountLabel, 220),
             preferences.ObserverTradingAccountId is > 0 ? preferences.ObserverTradingAccountId : null,
             NormalizeLabel(preferences.ObserverTradingAccountLabel, 220),
-            NormalizeTerminalId(preferences.ObserverClaimedTerminalInstanceId));
+            NormalizeTerminalId(preferences.ObserverClaimedTerminalInstanceId),
+            preferences.AutoStartEnabled);
     }
 
     private static string? NormalizeTerminalId(string? value) =>
