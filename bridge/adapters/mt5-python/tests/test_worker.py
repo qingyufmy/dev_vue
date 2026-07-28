@@ -228,6 +228,42 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(1, len(adapter.mt5.sent))
         self.assertEqual("AURUM:" + command["command_id"][-20:], adapter.mt5.sent[0]["comment"])
 
+    def test_places_every_supported_order_kind_for_both_sides(self):
+        cases = (
+            ("market", "buy", FakeMt5.TRADE_ACTION_DEAL, FakeMt5.ORDER_TYPE_BUY),
+            ("market", "sell", FakeMt5.TRADE_ACTION_DEAL, FakeMt5.ORDER_TYPE_SELL),
+            ("limit", "buy", FakeMt5.TRADE_ACTION_PENDING, FakeMt5.ORDER_TYPE_BUY_LIMIT),
+            ("limit", "sell", FakeMt5.TRADE_ACTION_PENDING, FakeMt5.ORDER_TYPE_SELL_LIMIT),
+            ("stop", "buy", FakeMt5.TRADE_ACTION_PENDING, FakeMt5.ORDER_TYPE_BUY_STOP),
+            ("stop", "sell", FakeMt5.TRADE_ACTION_PENDING, FakeMt5.ORDER_TYPE_SELL_STOP),
+            ("stop_limit", "buy", FakeMt5.TRADE_ACTION_PENDING, FakeMt5.ORDER_TYPE_BUY_STOP_LIMIT),
+            ("stop_limit", "sell", FakeMt5.TRADE_ACTION_PENDING, FakeMt5.ORDER_TYPE_SELL_STOP_LIMIT),
+        )
+        for index, (kind, side, action, order_type) in enumerate(cases):
+            with self.subTest(kind=kind, side=side):
+                adapter = self.adapter()
+                params = {
+                    "symbol": "XAUUSD", "side": side, "order_kind": kind,
+                    "volume": 0.01, "price": 2300.1,
+                    "stop_loss": 2290.0, "take_profit": 2320.0,
+                }
+                if kind == "stop_limit":
+                    params["stop_limit_price"] = 2300.0
+                command = self.command(
+                    command_id=f"command_01JORDERKIND{index:02d}", params=params)
+
+                result = adapter.execute(command)
+
+                self.assertEqual("succeeded", result["status"])
+                request = adapter.mt5.sent[0]
+                self.assertEqual(action, request["action"])
+                self.assertEqual(order_type, request["type"])
+                self.assertEqual(2300.1, request["price"])
+                self.assertEqual(2290.0, request["sl"])
+                self.assertEqual(2320.0, request["tp"])
+                if kind == "stop_limit":
+                    self.assertEqual(2300.0, request["stoplimit"])
+
     def test_rejects_cross_account_route_before_order_send(self):
         adapter = self.adapter()
         command = self.command(account_ref={"broker_server": "Broker-Demo", "login": "999"})

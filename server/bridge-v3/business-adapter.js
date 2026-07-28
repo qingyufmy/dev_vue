@@ -122,8 +122,8 @@ function normalizeOrder(item, platform) {
     tp:Number(item.tp ?? item.take_profit ?? 0),
     mt5_ticket:String(item.ticket ?? item.order_id ?? ''),
     state:'pending',
-    valid_until:item.valid_until ?? formatTime(item.time_expiration),
-    created_at:item.created_at ?? formatTime(item.time_setup),
+    valid_until:item.valid_until ?? formatTime(item.time_expiration ?? item.expiration),
+    created_at:item.created_at ?? formatTime(item.time_setup ?? item.open_time),
     source:platform,
   }
 }

@@ -173,6 +173,55 @@ public sealed class Mt5TerminalRuntimeTests
     }
 
     [TestMethod]
+    [DataRow("place_order")]
+    [DataRow("cancel_order")]
+    [DataRow("modify_order")]
+    [DataRow("modify_position")]
+    [DataRow("close_position")]
+    [DataRow("query_execution")]
+    public async Task ForwardsEveryVersionedTradeActionWithoutChangingItsRoute(string action)
+    {
+        var command = new CommandMessage
+        {
+            Type = "command",
+            MessageId = $"msg_matrix_{action}",
+            SentAtUtcMsc = 1,
+            CommandId = $"command_01JMATRIX_{action}",
+            TerminalInstanceId = Terminal().TerminalInstanceId,
+            AccountRef = Terminal().AccountRef,
+            ConnectionEpoch = Terminal().ConnectionEpoch,
+            IssuedAtUtcMsc = 1,
+            DeadlineUtcMsc = long.MaxValue,
+            Action = action,
+            Params = JsonSerializer.SerializeToElement(new
+            {
+                symbol = "XAUUSD",
+                ticket = "1001",
+                side = "buy",
+                order_kind = "market",
+                volume = 0.1,
+            }),
+        };
+        CommandMessage? forwarded = null;
+        _worker.ResponseFactory = request =>
+        {
+            forwarded = request as CommandMessage;
+            return JsonSerializer.SerializeToElement(Result(command));
+        };
+
+        var response = await _runtime.ExecuteCommandAsync(command);
+
+        Assert.IsNotNull(forwarded);
+        Assert.AreEqual(action, forwarded.Action);
+        Assert.AreEqual(command.CommandId, forwarded.CommandId);
+        Assert.AreEqual(command.TerminalInstanceId, forwarded.TerminalInstanceId);
+        Assert.AreEqual(command.AccountRef, forwarded.AccountRef);
+        Assert.AreEqual(command.ConnectionEpoch, forwarded.ConnectionEpoch);
+        Assert.AreEqual(command.Params.GetRawText(), forwarded.Params.GetRawText());
+        Assert.AreEqual(command.CommandId, response.CommandId);
+    }
+
+    [TestMethod]
     public async Task CompletedCommandWakesIdleCollectionImmediately()
     {
         var command = new CommandMessage

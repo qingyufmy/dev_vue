@@ -6765,6 +6765,33 @@ async function loadPendingOrders() {
   }
 }
 
+const TRADE_STATE_RETRY_DELAYS_MS = [500, 1200, 2500, 4500];
+let tradeStateRefreshGeneration = 0;
+
+function tradeMutationReflected({ kind, ticket, expectPresent }) {
+  const normalizedTicket = String(ticket || "");
+  if (!normalizedTicket) return true;
+  const items = kind === "pending" ? state.pendingOrders : state.positions;
+  const present = (items || []).some(item =>
+    String(item.mt5_ticket ?? item.ticket ?? item.id ?? "") === normalizedTicket);
+  return expectPresent ? present : !present;
+}
+
+function queueTradeStateRefresh(options) {
+  const generation = ++tradeStateRefreshGeneration;
+  void (async () => {
+    for (const delayMs of TRADE_STATE_RETRY_DELAYS_MS) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      if (generation !== tradeStateRefreshGeneration) return;
+      await Promise.allSettled([loadPositions(), loadPendingOrders(), loadAccount(), loadStatus()]);
+      if (tradeMutationReflected(options)) {
+        await Promise.allSettled([loadHistory(), loadHistoryChart()]);
+        return;
+      }
+    }
+  })().catch(error => console.warn("trade state refresh failed:", error));
+}
+
 function managementExpectedState(item, ticket, kind) {
   const identity = state.bridgeAccountIdentity;
   if (!identity?.brokerServerKey || !identity?.loginAccount) {
@@ -6852,6 +6879,9 @@ async function cancelPendingOrder(ticket) {
     });
     toast(result.message || "操作完成", result.status === "success" ? "success" : "warning");
     await loadPendingOrders();
+    if (result.status === "success") {
+      queueTradeStateRefresh({ kind: "pending", ticket, expectPresent: false });
+    }
   } catch (e) {
     toast(e.message, "error");
   }
@@ -6935,6 +6965,14 @@ async function submitManualOrder() {
     const resultMessage = localizeReason(result.error) || localizeReason(result.message);
     toast(resultMessage || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadStatus(), loadPendingOrders()]);
+    if (result.status === "success") {
+      const isPending = order.meta.entryMethod !== "market" && order.meta.entryMethod !== "observe";
+      queueTradeStateRefresh({
+        kind: isPending ? "pending" : "position",
+        ticket: result.ticket || result.position_id || result.order,
+        expectPresent: true,
+      });
+    }
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -6959,6 +6997,9 @@ async function closePosition(ticket) {
     const resultMessage = localizeReason(result.error) || localizeReason(result.message);
     toast(resultMessage || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
     await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadStatus()]);
+    if (result.status === "success") {
+      queueTradeStateRefresh({ kind: "position", ticket, expectPresent: false });
+    }
   } catch (error) {
     toast(error.message, "error");
   }

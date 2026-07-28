@@ -1055,6 +1055,10 @@ describe('route permissions and credential redaction', () => {
     expect(app).not.toContain('volume > 0.05')
     expect(app).not.toContain('submit.disabled = Number(meta.marginShortfall)')
     expect(html).not.toContain('id="tradeVolume" class="num" type="number" value="0.01" min="0.01" max="0.05"')
+    expect(app).toContain('const TRADE_STATE_RETRY_DELAYS_MS = [500, 1200, 2500, 4500]')
+    expect(app).toContain('function queueTradeStateRefresh(options)')
+    expect(app).toContain('queueTradeStateRefresh({ kind: "pending", ticket, expectPresent: false })')
+    expect(app).toContain('queueTradeStateRefresh({ kind: "position", ticket, expectPresent: false })')
   })
 
   it('preserves merged position-protection progress in visual and accessible state', () => {

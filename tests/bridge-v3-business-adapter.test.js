@@ -112,6 +112,23 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('normalizes MT4 pending timestamps exposed by the EA snapshot', async () => {
+    const { adapter } = setup({
+      routes:[route({ platform:'mt4' })],
+      rows:[{
+        ticket:'103287473', symbol:'XAUUSD', type:2, volume:0.01, price_open:4000,
+        open_time:1_800_000_000, expiration:1_800_014_400,
+      }],
+    })
+
+    const result = await adapter.execute(42, 'pending_list')
+
+    expect(result.orders[0]).toMatchObject({
+      ticket:'103287473', pending_type:'buy_limit',
+      created_at:'2027-01-15 08:00:00', valid_until:'2027-01-15 12:00:00',
+    })
+  })
+
   it('fails closed when a read-model stream is stale', async () => {
     const { adapter } = setup({ revision:{ revision:3, observed_at_utc_msc:NOW - 30_001 } })
 
@@ -440,6 +457,20 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('maps manual close and pending cancellation to their exact durable actions', async () => {
+    const { adapter, gateway } = setup()
+
+    await adapter.execute(42, 'close', { ticket:'1001', volume:0.05 })
+    await adapter.execute(42, 'cancel_pending', { ticket:'2001' })
+
+    expect(gateway.sendCommand.mock.calls[0][1]).toMatchObject({
+      action:'close_position', params:{ ticket:'1001', volume:0.05 },
+    })
+    expect(gateway.sendCommand.mock.calls[1][1]).toMatchObject({
+      action:'cancel_order', params:{ ticket:'2001' },
+    })
+  })
+
   it('maps stop-limit pending fields without losing expiration semantics', async () => {
     const { adapter, gateway } = setup()
 
@@ -630,6 +661,29 @@ describe('Bridge v3 business compatibility adapter', () => {
       ticket:'99', expected_state:{ ...expectedState, ticket:'99' },
     })).resolves.toEqual({ status:'success', ticket:'99', already_absent:true })
     expect(gateway.sendCommand).not.toHaveBeenCalled()
+  })
+
+  it('maps an unchanged system pending order to a guarded cancellation command', async () => {
+    const order = {
+      ticket:20, symbol:'XAUUSD', side:'buy', type:2,
+      volume_current:0.1, volume_initial:0.1, magic:234000,
+    }
+    const expectedState = {
+      ticket:'20', symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.1,
+    }
+    const { adapter, gateway } = setup({ orderRows:[order] })
+
+    await expect(adapter.execute(42, 'cancel_system_pending', {
+      ticket:'20', operation_id:'cancel-pending-20', expected_state:expectedState,
+    })).resolves.toMatchObject({ status:'success' })
+
+    expect(gateway.sendCommand).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'cancel_order',
+      params:{
+        ticket:'20', symbol:'XAUUSD', side:'buy', volume:0.1, magic:234000,
+        expected_state:expectedState,
+      },
+    }), { timeoutMs:5000 })
   })
 
   it('maps guarded system protection changes to the dedicated position action', async () => {
