@@ -25,6 +25,15 @@ let periodReviewWakeRequested = false
 const parse = (value, fallback = null) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const safeError = error => String(error?.message || error || 'period_review_failed').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 128)
 
+export function periodReviewAccessScope(actor, alias = 'cases') {
+  const userId = Number(actor?.id || 0)
+  if (!userId) throw new Error('invalid_user')
+  if (canManagePlatformAiContent(actor)) {
+    return { userId, sql:`${alias}.strategy_scope = 'platform'`, params:[] }
+  }
+  return { userId, sql:`${alias}.user_id = ?`, params:[userId] }
+}
+
 export function isTerminalTradeEvidenceReason(value) {
   const reasons = [...new Set(String(value || '').split(',').map(item => item.trim()).filter(Boolean))]
   return reasons.length > 0 && reasons.every(reason => TERMINAL_TRADE_EVIDENCE_REASONS.has(reason))
@@ -975,9 +984,10 @@ function periodReviewContentForCase(reviewCase, content) {
   throw new Error('invalid_review_period_type')
 }
 
-export async function listPeriodReviewCases(userId, { periodType = null, status = null, limit = 50, offset = 0 } = {}) {
-  const params = [userId]
-  let where = 'WHERE cases.user_id = ?'
+export async function listPeriodReviewCases(actor, { periodType = null, status = null, limit = 50, offset = 0 } = {}) {
+  const access = periodReviewAccessScope(actor)
+  const params = [access.userId, ...access.params]
+  let where = `WHERE ${access.sql}`
   if (periodType) {
     if (!['daily', 'monthly'].includes(periodType)) throw new Error('invalid_review_period_type')
     where += ' AND cases.period_type = ?'; params.push(periodType)
@@ -987,7 +997,7 @@ export async function listPeriodReviewCases(userId, { periodType = null, status 
   const safeOffset = Math.max(0, Number(offset || 0))
   const fetchLimit = Math.min(500, Math.max(safeLimit, (safeOffset + safeLimit) * 4))
   params.push(fetchLimit, 0)
-  const rows = await queryAll(`SELECT cases.id, cases.period_type, cases.period_key, cases.trading_account_id,
+  const rows = await queryAll(`SELECT cases.id, cases.user_id, cases.period_type, cases.period_key, cases.trading_account_id,
       cases.strategy_id, cases.strategy_version, cases.strategy_scope, cases.timezone_offset_minutes,
       cases.status, cases.evidence_status, cases.evidence_reason, cases.source_count,
       cases.current_version_id, cases.approved_version_id, cases.evidence_json, cases.created_at, cases.updated_at,
@@ -1001,12 +1011,12 @@ export async function listPeriodReviewCases(userId, { periodType = null, status 
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
     LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
       AND derivation.period_version_id = cases.approved_version_id
-    LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id ${where}
+    LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = ? ${where}
     ORDER BY cases.period_start_utc_msc DESC, cases.period_type, cases.id DESC LIMIT ? OFFSET ?`, params)
   const logicalRows = []
   const logicalIndexes = new Map()
   for (const row of rows) {
-    const key = [row.period_type, row.period_key, row.trading_account_id || 0, row.strategy_id].join(':')
+    const key = [row.user_id, row.period_type, row.period_key, row.trading_account_id || 0, row.strategy_id].join(':')
     if (!logicalIndexes.has(key)) {
       logicalIndexes.set(key, logicalRows.length); logicalRows.push(row); continue
     }
@@ -1019,7 +1029,8 @@ export async function listPeriodReviewCases(userId, { periodType = null, status 
   })
 }
 
-export async function getPeriodReviewCase(periodCaseId, userId) {
+export async function getPeriodReviewCase(periodCaseId, actor) {
+  const access = periodReviewAccessScope(actor)
   const reviewCase = await queryOne(`SELECT cases.*,
       COALESCE(strategies.title, CONCAT('策略 #', cases.strategy_id)) AS strategy_title,
       jobs.id AS job_id, jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at,
@@ -1033,8 +1044,8 @@ export async function getPeriodReviewCase(periodCaseId, userId) {
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
     LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
       AND derivation.period_version_id = cases.approved_version_id
-    LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id
-    WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, userId])
+    LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = ?
+    WHERE cases.id = ? AND ${access.sql}`, [access.userId, periodCaseId, ...access.params])
   if (!reviewCase) throw new Error('period_review_not_found')
   const [versions, sources, events] = await Promise.all([
     queryAll(`SELECT id, version_no, parent_version_id, author_type, author_user_id, content_json,
@@ -1049,23 +1060,24 @@ export async function getPeriodReviewCase(periodCaseId, userId) {
     versions: versions.map(row => ({ ...row, content: parse(row.content_json, {}), content_json: undefined })) }
 }
 
-export async function getPeriodReviewSummary(userId) {
-  const rows = await queryAll(`SELECT cases.id, cases.period_type, cases.period_key, cases.trading_account_id,
+export async function getPeriodReviewSummary(actor) {
+  const access = periodReviewAccessScope(actor)
+  const rows = await queryAll(`SELECT cases.id, cases.user_id, cases.period_type, cases.period_key, cases.trading_account_id,
       cases.strategy_id, cases.status, cases.current_version_id,
       seen.last_seen_version_id, jobs.status AS job_status, derivation.status AS derivation_status
     FROM period_review_cases cases
-    LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = cases.user_id
+    LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = ?
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
     LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
       AND derivation.period_version_id = cases.approved_version_id
-    WHERE cases.user_id = ?`, [userId])
+    WHERE ${access.sql}`, [access.userId, ...access.params])
   const summary = { attention:0, unread:0, pending_confirmation:0, generating:0, failed:0,
     total:0, daily_total:0, monthly_total:0,
     daily_attention:0, monthly_attention:0, daily_pending:0, monthly_pending:0,
     derivation_pending:0, derivation_failed:0 }
   const logical = new Map()
   for (const row of rows) {
-    const key = [row.period_type, row.period_key, row.trading_account_id || 0, row.strategy_id].join(':')
+    const key = [row.user_id, row.period_type, row.period_key, row.trading_account_id || 0, row.strategy_id].join(':')
     const current = logical.get(key)
     if (!current || (row.status === 'approved' && current.status !== 'approved')
       || (row.status === current.status && Number(row.id) > Number(current.id))) logical.set(key, row)
@@ -1094,8 +1106,10 @@ export async function getPeriodReviewSummary(userId) {
   return summary
 }
 
-export async function markPeriodReviewRead(periodCaseId, userId, versionId) {
-  const reviewCase = await queryOne('SELECT current_version_id FROM period_review_cases WHERE id = ? AND user_id = ?', [periodCaseId, userId])
+export async function markPeriodReviewRead(periodCaseId, actor, versionId) {
+  const access = periodReviewAccessScope(actor)
+  const reviewCase = await queryOne(`SELECT cases.current_version_id FROM period_review_cases cases
+    WHERE cases.id = ? AND ${access.sql}`, [periodCaseId, ...access.params])
   if (!reviewCase) throw new Error('period_review_not_found')
   if (!reviewCase.current_version_id || Number(reviewCase.current_version_id) !== Number(versionId)) throw new Error('period_review_version_conflict')
   const now = beijingNow()
@@ -1103,11 +1117,12 @@ export async function markPeriodReviewRead(periodCaseId, userId, versionId) {
     (period_case_id, user_id, last_seen_version_id, first_seen_at, last_seen_at, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE last_seen_version_id = VALUES(last_seen_version_id), last_seen_at = VALUES(last_seen_at), updated_at = VALUES(updated_at)`,
-  [periodCaseId, userId, versionId, now, now, now, now])
+  [periodCaseId, access.userId, versionId, now, now, now, now])
   return { read: true, versionId: Number(versionId) }
 }
 
-export async function getPeriodReviewJobStatus(periodCaseId, userId) {
+export async function getPeriodReviewJobStatus(periodCaseId, actor) {
+  const access = periodReviewAccessScope(actor)
   const status = await queryOne(`SELECT cases.id, cases.period_type, cases.status, cases.current_version_id,
       jobs.id AS job_id, jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at,
       jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at, jobs.completed_at,
@@ -1118,16 +1133,18 @@ export async function getPeriodReviewJobStatus(periodCaseId, userId) {
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
     LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
       AND derivation.period_version_id = cases.approved_version_id
-    WHERE cases.id = ? AND cases.user_id = ?`, [periodCaseId, userId])
+    WHERE cases.id = ? AND ${access.sql}`, [periodCaseId, ...access.params])
   if (!status) throw new Error('period_review_not_found')
   const events = await queryAll(`SELECT id, attempt_no, stage, event_status, message_code, metadata_json, created_at
     FROM period_review_job_events WHERE period_case_id = ? ORDER BY id DESC LIMIT 12`, [periodCaseId])
   return { ...status, job_events:events.map(row => ({ ...row, metadata:parse(row.metadata_json, null), metadata_json:undefined })) }
 }
 
-export async function editPeriodReviewCase({ periodCaseId, userId, content, expectedVersionId, changeNote = null }) {
+export async function editPeriodReviewCase({ periodCaseId, actor, content, expectedVersionId, changeNote = null }) {
+  const access = periodReviewAccessScope(actor)
   return withTransaction(async run => {
-    const [rows] = await run('SELECT * FROM period_review_cases WHERE id = ? AND user_id = ? FOR UPDATE', [periodCaseId, userId])
+    const [rows] = await run(`SELECT cases.* FROM period_review_cases cases
+      WHERE cases.id = ? AND ${access.sql} FOR UPDATE`, [periodCaseId, ...access.params])
     const reviewCase = rows[0]
     if (!reviewCase) throw new Error('period_review_not_found')
     if (!reviewCase.current_version_id || Number(reviewCase.current_version_id) !== Number(expectedVersionId)) throw new Error('period_review_version_conflict')
@@ -1138,17 +1155,19 @@ export async function editPeriodReviewCase({ periodCaseId, userId, content, expe
     const [insert] = await run(`INSERT INTO period_review_versions
       (period_case_id, version_no, parent_version_id, author_type, author_user_id, content_json, content_hash, change_note, created_at)
       VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?)`, [periodCaseId, Number(versions[0].max_version) + 1,
-      reviewCase.current_version_id, userId, body, sha256(body), String(changeNote || '').slice(0, 500) || null, now])
+      reviewCase.current_version_id, access.userId, body, sha256(body), String(changeNote || '').slice(0, 500) || null, now])
     await run(`UPDATE period_review_cases SET status = 'edited', current_version_id = ?, approved_version_id = NULL,
       updated_at = ? WHERE id = ?`, [insert.insertId, now, periodCaseId])
     return { versionId: Number(insert.insertId), versionNo: Number(versions[0].max_version) + 1 }
   })
 }
 
-export async function confirmPeriodReviewCase({ periodCaseId, userId, versionId, action }) {
+export async function confirmPeriodReviewCase({ periodCaseId, actor, versionId, action }) {
   if (!['approve', 'needs_revision', 'defer'].includes(action)) throw new Error('invalid_review_action')
+  const access = periodReviewAccessScope(actor)
   return withTransaction(async run => {
-    const [rows] = await run('SELECT * FROM period_review_cases WHERE id = ? AND user_id = ? FOR UPDATE', [periodCaseId, userId])
+    const [rows] = await run(`SELECT cases.* FROM period_review_cases cases
+      WHERE cases.id = ? AND ${access.sql} FOR UPDATE`, [periodCaseId, ...access.params])
     const reviewCase = rows[0]
     if (!reviewCase) throw new Error('period_review_not_found')
     if (!reviewCase.current_version_id || Number(reviewCase.current_version_id) !== Number(versionId)) throw new Error('period_review_version_conflict')
@@ -1163,7 +1182,7 @@ export async function confirmPeriodReviewCase({ periodCaseId, userId, versionId,
       const targetType = reviewCase.strategy_scope === 'platform' ? 'platform_experience' : 'personal_memory'
       await run(`INSERT IGNORE INTO period_review_derivation_jobs
         (period_case_id, period_version_id, user_id, target_type, status, attempt_count, max_attempts, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 'queued', 0, 5, ?, ?)`, [periodCaseId, versionId, userId, targetType, now, now])
+        VALUES (?, ?, ?, ?, 'queued', 0, 5, ?, ?)`, [periodCaseId, versionId, access.userId, targetType, now, now])
       const [jobs] = await run(`SELECT id FROM period_review_derivation_jobs
         WHERE period_case_id = ? AND period_version_id = ? AND target_type = ? LIMIT 1`, [periodCaseId, versionId, targetType])
       derivationJobId = Number(jobs[0]?.id || 0) || null
@@ -1248,10 +1267,11 @@ export async function runPeriodReviewDerivationOnce() {
   }
 }
 
-export async function retryPeriodReviewDerivation(periodCaseId, userId) {
+export async function retryPeriodReviewDerivation(periodCaseId, actor) {
+  const access = periodReviewAccessScope(actor, 'period_review_cases')
   const result = await withTransaction(async run => {
     const [cases] = await run(`SELECT id, approved_version_id FROM period_review_cases
-      WHERE id = ? AND user_id = ? FOR UPDATE`, [periodCaseId, userId])
+      WHERE id = ? AND ${access.sql} FOR UPDATE`, [periodCaseId, ...access.params])
     const reviewCase = cases[0]
     if (!reviewCase || !reviewCase.approved_version_id) throw new Error('approved_period_review_required')
     const [jobs] = await run(`SELECT * FROM period_review_derivation_jobs
@@ -1268,9 +1288,11 @@ export async function retryPeriodReviewDerivation(periodCaseId, userId) {
   return result
 }
 
-export async function retryPeriodReviewCase(periodCaseId, userId) {
+export async function retryPeriodReviewCase(periodCaseId, actor) {
+  const access = periodReviewAccessScope(actor)
   const result = await withTransaction(async run => {
-    const [rows] = await run('SELECT * FROM period_review_cases WHERE id = ? AND user_id = ? FOR UPDATE', [periodCaseId, userId])
+    const [rows] = await run(`SELECT cases.* FROM period_review_cases cases
+      WHERE cases.id = ? AND ${access.sql} FOR UPDATE`, [periodCaseId, ...access.params])
     const reviewCase = rows[0]
     if (!reviewCase) throw new Error('period_review_not_found')
     if (reviewCase.evidence_status !== 'complete') throw new Error('period_review_evidence_incomplete')

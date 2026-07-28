@@ -1057,40 +1057,40 @@ router.get('/ai/reviews', authMiddleware, async (req, res) => {
 })
 
 router.get('/ai/period-reviews', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, cases: await listPeriodReviewCases(req.user.id, req.query) }) }
+  try { res.json({ ok: true, cases: await listPeriodReviewCases(req.user, req.query) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.get('/ai/period-reviews/summary', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, summary: await getPeriodReviewSummary(req.user.id) }) }
+  try { res.json({ ok: true, summary: await getPeriodReviewSummary(req.user) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.get('/ai/period-reviews/:id', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, review: await getPeriodReviewCase(Number(req.params.id), req.user.id) }) }
+  try { res.json({ ok: true, review: await getPeriodReviewCase(Number(req.params.id), req.user) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.get('/ai/period-reviews/:id/job-status', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, job: await getPeriodReviewJobStatus(Number(req.params.id), req.user.id) }) }
+  try { res.json({ ok: true, job: await getPeriodReviewJobStatus(Number(req.params.id), req.user) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/period-reviews/:id/edit', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, ...(await editPeriodReviewCase({ periodCaseId: Number(req.params.id), userId: req.user.id,
+  try { res.json({ ok: true, ...(await editPeriodReviewCase({ periodCaseId: Number(req.params.id), actor: req.user,
     content: req.body?.content, expectedVersionId: req.body?.expected_version_id, changeNote: req.body?.change_note })) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/period-reviews/:id/read', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, ...(await markPeriodReviewRead(Number(req.params.id), req.user.id, req.body?.version_id)) }) }
+  try { res.json({ ok: true, ...(await markPeriodReviewRead(Number(req.params.id), req.user, req.body?.version_id)) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/period-reviews/:id/confirm', authMiddleware, async (req, res) => {
   try {
     const periodCaseId = Number(req.params.id)
-    const result = await confirmPeriodReviewCase({ periodCaseId, userId: req.user.id,
+    const result = await confirmPeriodReviewCase({ periodCaseId, actor: req.user,
       versionId: req.body?.version_id, action: req.body?.action })
     if (req.body?.action === 'approve') requestPeriodReviewCycle()
     res.json({ ok: true, ...result })
@@ -1098,12 +1098,12 @@ router.post('/ai/period-reviews/:id/confirm', authMiddleware, async (req, res) =
 })
 
 router.post('/ai/period-reviews/:id/retry', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, ...(await retryPeriodReviewCase(Number(req.params.id), req.user.id)) }) }
+  try { res.json({ ok: true, ...(await retryPeriodReviewCase(Number(req.params.id), req.user)) }) }
   catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/period-reviews/:id/derivation/retry', authMiddleware, async (req, res) => {
-  try { res.json({ ok:true, ...(await retryPeriodReviewDerivation(Number(req.params.id), req.user.id)) }) }
+  try { res.json({ ok:true, ...(await retryPeriodReviewDerivation(Number(req.params.id), req.user)) }) }
   catch (error) { reviewError(res, error) }
 })
 

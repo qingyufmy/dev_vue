@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
   compactPeriodTradeEvidence, dailyEvidenceSemanticHash, isTerminalTradeEvidenceReason, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey,
-  monthlyReviewSourceHash, samePeriodOutcomeSet, shouldRefreshDailyReviewCase, shouldUpgradePeriodMarketEvidence,
+  monthlyReviewSourceHash, periodReviewAccessScope, samePeriodOutcomeSet, shouldRefreshDailyReviewCase, shouldUpgradePeriodMarketEvidence,
   validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
@@ -216,7 +216,7 @@ describe('period review runtime integration', () => {
   const platform = readFileSync(new URL('../../server/routes/ai/platform-experience.js', import.meta.url), 'utf8')
   const migration = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
 
-  it('exposes owner-scoped daily and monthly review APIs', () => {
+  it('exposes actor-scoped daily and monthly review APIs', () => {
     expect(routes).toContain("router.get('/ai/period-reviews'")
     expect(routes).toContain("router.get('/ai/period-reviews/:id'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/edit'")
@@ -227,6 +227,18 @@ describe('period review runtime integration', () => {
     expect(routes).toContain("router.get('/ai/period-reviews/:id/job-status'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/read'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/derivation/retry'")
+    expect(routes).toContain('listPeriodReviewCases(req.user, req.query)')
+    expect(routes).toContain('confirmPeriodReviewCase({ periodCaseId, actor: req.user')
+  })
+
+  it('lets platform managers access every platform review while ordinary users remain owner-scoped', () => {
+    expect(periodReviewAccessScope({ id:1, role:'admin' }))
+      .toEqual({ userId:1, sql:"cases.strategy_scope = 'platform'", params:[] })
+    expect(periodReviewAccessScope({ id:29, role:'user', plan_source:'observer_source' }))
+      .toEqual({ userId:29, sql:"cases.strategy_scope = 'platform'", params:[] })
+    expect(periodReviewAccessScope({ id:7, role:'user', plan_source:'paid' }))
+      .toEqual({ userId:7, sql:'cases.user_id = ?', params:[7] })
+    expect(() => periodReviewAccessScope({ role:'admin' })).toThrow('invalid_user')
   })
 
   it('starts only the period worker and preserves separate platform experience lineage', () => {

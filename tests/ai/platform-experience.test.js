@@ -43,8 +43,9 @@ describe('platform strategy experience boundary', () => {
 
   it('maps observer-source platform reviews to the shared platform memory tier', async () => {
     db.queryOne
-      .mockResolvedValueOnce({ id:21, user_id:1, user_role:'user', user_plan_source:'observer_source', strategy_scope:'platform', strategy_id:3,
+      .mockResolvedValueOnce({ id:21, user_id:29, strategy_scope:'platform', strategy_id:3,
         strategy_version:2, period_type:'monthly', period_key:'2026-07', status:'approved', approved_version_id:31 })
+      .mockResolvedValueOnce({ id:1, role:'admin', plan_source:'internal' })
       .mockResolvedValueOnce({ id:31, content_json:JSON.stringify({ period_summary:'月度趋势等待确认', memory_candidates:[{
         lesson:'趋势回调确认后再入场', memory_category:'entry_setup', supporting_period_case_ids:[1, 2],
         applicability:{ applicable_when:{ symbols:['xauusd'], timeframes:['h1'] }, avoid_when:{} },
@@ -55,6 +56,8 @@ describe('platform strategy experience boundary', () => {
     db.queryRun.mockResolvedValue({ insertId:41, changes:1 })
     await expect(createPlatformExperienceCandidateFromApprovedPeriodReview(21, 1))
       .resolves.toMatchObject({ memory_tier:'long' })
+    expect(db.queryOne.mock.calls[0][1]).toEqual([21])
+    expect(db.queryOne.mock.calls[1][1]).toEqual([1])
     const insert = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT IGNORE INTO platform_strategy_experience_items'))
     expect(insert[0]).toContain('memory_tier')
     expect(insert[1]).toContain('long')
