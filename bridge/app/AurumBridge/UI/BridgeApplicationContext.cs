@@ -556,21 +556,23 @@ public sealed class BridgeApplicationContext : ApplicationContext
     {
         try
         {
-            foreach (var profileId in BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory))
-            {
-                await BridgeSingleInstanceGuard.WaitForReleaseAsync(
-                    BridgeRuntimeProfile.InstanceId(profileId),
-                    TimeSpan.FromSeconds(10),
-                    cancellationToken:cancellationToken);
-                await ReloadObserverProfileRuntimeAsync(profileId, cancellationToken);
-            }
+            await BridgeObserverRuntimeInitializer.InitializeIndependentlyAsync(
+                BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory),
+                async (profileId, token) =>
+                {
+                    await BridgeSingleInstanceGuard.WaitForReleaseAsync(
+                        BridgeRuntimeProfile.InstanceId(profileId),
+                        TimeSpan.FromSeconds(10),
+                        cancellationToken:token);
+                    await ReloadObserverProfileRuntimeAsync(profileId, token);
+                },
+                (profileId, error) => _logger.Error(
+                    "observer_runtime_initialization_failed",
+                    new InvalidOperationException($"profile_id={profileId}", error)),
+                cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-        }
-        catch (Exception error)
-        {
-            _logger.Error("observer_runtime_initialization_failed", error);
         }
     }
 

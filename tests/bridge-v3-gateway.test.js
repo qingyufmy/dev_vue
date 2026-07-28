@@ -446,6 +446,83 @@ describe('Bridge v3 websocket gateway', () => {
     expect(onTerminalDisconnected).toHaveBeenCalledOnce()
   })
 
+  it('keeps independent observer routes online when one source disconnects', async () => {
+    const consumeTicket = vi.fn(ticket => Promise.resolve({
+      userId:ticket === 'source-a-ticket' ? 42 : 84,
+      tokenVersion:3,
+    }))
+    const queryOneFn = vi.fn((_, params) => Promise.resolve({
+      id:Number(params[0]), role:'admin', token_version:3, has_pro_access:1,
+      trade_send_enabled:1,
+    }))
+    const { gateway } = setup({ consumeTicket, queryOneFn })
+    const sourceA = await connect(gateway, { ticket:'source-a-ticket' })
+    const sourceB = await connect(gateway, { ticket:'source-b-ticket' })
+    const helloA = hello()
+    const helloB = {
+      ...hello(),
+      message_id:'msg_01JGATEWAY_HELLO_B',
+      session_id:'session_01JGATEWAY02',
+      terminals:[{
+        ...hello().terminals[0],
+        terminal_instance_id:'terminal_01JGATEWAY2',
+        platform:'mt4',
+        account_ref:{ broker_server:'Observer-B-Demo', login:'840002' },
+        connection_epoch:8,
+      }],
+    }
+    sourceA.emit('message', Buffer.from(JSON.stringify(helloA)))
+    sourceB.emit('message', Buffer.from(JSON.stringify(helloB)))
+    await flush()
+
+    const queryA = {
+      ...command(),
+      message_id:'msg_01JGATEWAY_QUERY_A',
+      command_id:'command_01JGATEWAY_QUERY_A',
+      action:'query_execution',
+      params:{ expected_kind:'position', ticket:'420001' },
+    }
+    const queryB = {
+      ...queryA,
+      message_id:'msg_01JGATEWAY_QUERY_B',
+      command_id:'command_01JGATEWAY_QUERY_B',
+      terminal_instance_id:helloB.terminals[0].terminal_instance_id,
+      account_ref:helloB.terminals[0].account_ref,
+      connection_epoch:helloB.terminals[0].connection_epoch,
+      params:{ expected_kind:'position', ticket:'840001' },
+    }
+    const pendingA = gateway.sendCommand(42, queryA)
+    const pendingB = gateway.sendCommand(84, queryB)
+    await flush()
+    expect(JSON.parse(sourceA.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'command', command_id:queryA.command_id, terminal_instance_id:'terminal_01JGATEWAY1',
+    })
+    expect(JSON.parse(sourceB.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'command', command_id:queryB.command_id, terminal_instance_id:'terminal_01JGATEWAY2',
+    })
+    sourceA.emit('message', Buffer.from(JSON.stringify({ ...result(), command_id:queryA.command_id })))
+    sourceB.emit('message', Buffer.from(JSON.stringify({
+      ...result(),
+      message_id:'msg_01JGATEWAY_RESULT_B',
+      command_id:queryB.command_id,
+      terminal_instance_id:queryB.terminal_instance_id,
+      account_ref:queryB.account_ref,
+      connection_epoch:queryB.connection_epoch,
+    })))
+    await expect(pendingA).resolves.toMatchObject({ status:'succeeded' })
+    await expect(pendingB).resolves.toMatchObject({ status:'succeeded' })
+
+    sourceA.emit('close')
+    await flush()
+
+    expect(gateway.listConnectedTerminals(42)).toEqual([])
+    expect(gateway.listConnectedTerminals(84)).toEqual([
+      expect.objectContaining({ terminal_instance_id:'terminal_01JGATEWAY2', platform:'mt4' }),
+    ])
+    expect(gateway.connectionsByTerminal.has('terminal_01JGATEWAY1')).toBe(false)
+    expect(gateway.connectionsByTerminal.has('terminal_01JGATEWAY2')).toBe(true)
+  })
+
   it('disables trading and closes every connection when account ownership is revoked', async () => {
     const { gateway } = setup()
     const ws = await connect(gateway)
