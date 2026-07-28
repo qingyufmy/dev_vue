@@ -310,9 +310,15 @@ async function bootstrapperPlan(args, origin) {
   const digest = await sha256(executable)
   if (metadata.schema_version !== 1 || metadata.environment !== targetEnvironment
     || metadata.installer_size_bytes !== info.size
-    || metadata.installer_sha256 !== digest
-    || targetEnvironment === 'production' && metadata.authenticode_signed !== true) {
+    || metadata.installer_sha256 !== digest) {
     fail('release_bootstrapper_metadata_invalid')
+  }
+  const unsignedProductionInstaller = targetEnvironment === 'production'
+    && metadata.authenticode_signed !== true
+  if (unsignedProductionInstaller
+    && (metadata.unsigned_installer_authorized !== true
+      || args.get('allow-unsigned-installer') !== 'true')) {
+    fail('release_unsigned_bootstrapper_confirmation_required')
   }
   const key = `bridge/bootstrapper/${digest}/LiangjianBridgeSetup.exe`
   const metadataKey = `bridge/bootstrapper/${digest}/bootstrapper-metadata.json`
@@ -332,7 +338,8 @@ async function uploadBootstrapper(args) {
       operation:'upload-bootstrapper', dry_run:true,
       environment:plan.metadata.environment,
       installer:{ key:plan.key, url:plan.url, size_bytes:plan.metadata.installer_size_bytes,
-        sha256:plan.metadata.installer_sha256 },
+        sha256:plan.metadata.installer_sha256,
+        authenticode_signed:plan.metadata.authenticode_signed === true },
       metadata:{ key:plan.metadataKey, url:plan.metadataUrl },
     }
   }
@@ -341,7 +348,8 @@ async function uploadBootstrapper(args) {
   return {
     operation:'upload-bootstrapper', environment:plan.metadata.environment,
     installer:{ key:plan.key, url:plan.url, size_bytes:plan.metadata.installer_size_bytes,
-      sha256:plan.metadata.installer_sha256 },
+      sha256:plan.metadata.installer_sha256,
+      authenticode_signed:plan.metadata.authenticode_signed === true },
     metadata:{ key:plan.metadataKey, url:plan.metadataUrl },
   }
 }

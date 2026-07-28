@@ -80,7 +80,7 @@ describe('bridge release tooling', () => {
     expect(result.qiniu_config_source).toBe('environment')
     expect(result.missing_requirements).toEqual(expect.arrayContaining([
       'AURUM_BRIDGE_SIGNER_EXE', 'BRIDGE_RELEASE_PUBLIC_KEY_PATH',
-      'AURUM_AUTHENTICODE_CERT_THUMBPRINT',
+      'AURUM_AUTHENTICODE_CERT_THUMBPRINT_OR_ALLOW_UNSIGNED_INSTALLER',
       'QINIU_ACCESS_KEY', 'QINIU_SECRET_KEY', 'QINIU_BUCKET', 'QINIU_DOMAIN',
       'QINIU_REGION', 'AURUM_BRIDGE_RELEASE_API_TOKEN',
       'RELEASE_SERVER_HTTPS_URL', 'PYTHON_RUNTIME_DIRECTORY', 'AURUM_METAEDITOR_EXE',
@@ -228,10 +228,13 @@ describe('bridge release tooling', () => {
     const bootstrapProject = await readFile(new URL('../bridge/bootstrapper/AurumBridge.Bootstrapper/AurumBridge.Bootstrapper.csproj', import.meta.url), 'utf8')
     const manifestClient = await readFile(new URL('../bridge/app/AurumBridge/Update/ReleaseManifestClient.cs', import.meta.url), 'utf8')
     expect(bootstrapBuilder).toContain('-p:PublishSingleFile=true')
-    expect(bootstrapBuilder).toContain('bootstrap_authenticode_signing_required')
+    expect(bootstrapBuilder).toContain('bootstrap_unsigned_installer_confirmation_required')
+    expect(bootstrapBuilder).toContain('unsigned_installer_authorized=$unsignedInstallerAuthorized')
     expect(bootstrapBuilder).toContain("$TargetEnvironment -eq 'test'")
     expect(bootstrapBuilder).toContain('$uri.IsLoopback')
-    expect(bootstrapUploader).toContain("$signature.Status -ne 'Valid'")
+    expect(bootstrapUploader).toContain("$signature.Status -eq 'Valid'")
+    expect(bootstrapUploader).toContain('bootstrap_authenticode_metadata_mismatch')
+    expect(bootstrapUploader).toContain('-AllowUnsignedInstaller:$AllowUnsignedInstaller')
     expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.launcher.zip')
     expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.release-public-key.pem')
     expect(bootstrapProject).toContain('AurumTargetEnvironment')
@@ -380,6 +383,83 @@ describe('bridge release tooling', () => {
           size_bytes:bytes.length, sha256:digest,
         },
       })
+    } finally {
+      await rm(temporary, { recursive:true, force:true })
+    }
+  })
+
+  it('requires two explicit confirmations before uploading an unsigned production installer', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'aurum-unsigned-bootstrapper-'))
+    try {
+      const executable = path.join(temporary, 'LiangjianBridgeSetup.exe')
+      const bytes = Buffer.from('unsigned production bootstrapper')
+      const digest = createHash('sha256').update(bytes).digest('hex')
+      const metadataPath = path.join(temporary, 'bootstrapper-metadata.json')
+      await writeFile(executable, bytes)
+      await writeFile(metadataPath, JSON.stringify({
+        schema_version:1, environment:'production', git_commit:'abc123',
+        installer_size_bytes:bytes.length, installer_sha256:digest,
+        authenticode_signed:false, unsigned_installer_authorized:false,
+      }))
+      const cli = path.resolve('scripts/bridge-release/release-cli.mjs')
+      const baseArguments = [
+        cli, 'upload-bootstrapper', '--executable', executable,
+        '--metadata', metadataPath, '--target-environment', 'production',
+        '--cdn-origin', 'https://qiniu.example', '--dry-run', 'true',
+      ]
+      await expect(execFileAsync(process.execPath, baseArguments, {
+        env:{ ...process.env, QINIU_ACCESS_KEY:'', QINIU_SECRET_KEY:'' },
+      })).rejects.toMatchObject({
+        stderr:expect.stringContaining('release_unsigned_bootstrapper_confirmation_required'),
+      })
+      await expect(execFileAsync(process.execPath, [
+        ...baseArguments, '--allow-unsigned-installer', 'true',
+      ], { env:{ ...process.env, QINIU_ACCESS_KEY:'', QINIU_SECRET_KEY:'' } })).rejects.toMatchObject({
+        stderr:expect.stringContaining('release_unsigned_bootstrapper_confirmation_required'),
+      })
+      await writeFile(metadataPath, JSON.stringify({
+        schema_version:1, environment:'production', git_commit:'abc123',
+        installer_size_bytes:bytes.length, installer_sha256:digest,
+        authenticode_signed:false, unsigned_installer_authorized:true,
+      }))
+      await expect(execFileAsync(process.execPath, baseArguments, {
+        env:{ ...process.env, QINIU_ACCESS_KEY:'', QINIU_SECRET_KEY:'' },
+      })).rejects.toMatchObject({
+        stderr:expect.stringContaining('release_unsigned_bootstrapper_confirmation_required'),
+      })
+      const { stdout } = await execFileAsync(process.execPath, [
+        ...baseArguments, '--allow-unsigned-installer', 'true',
+      ], { env:{ ...process.env, QINIU_ACCESS_KEY:'', QINIU_SECRET_KEY:'' } })
+      expect(JSON.parse(stdout)).toMatchObject({
+        ok:true, operation:'upload-bootstrapper', dry_run:true, environment:'production',
+        installer:{ sha256:digest, authenticode_signed:false },
+      })
+      if (process.platform === 'win32') {
+        const wrapper = path.resolve('scripts/bridge-release/upload-bootstrapper-qiniu.ps1')
+        const { stdout:wrapperStdout } = await execFileAsync('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', wrapper,
+          '-Executable', executable, '-Metadata', metadataPath,
+          '-TargetEnvironment', 'production', '-CdnOrigin', 'https://qiniu.example',
+          '-AllowUnsignedInstaller', '-DryRun',
+        ], { env:{ ...process.env, QINIU_ACCESS_KEY:'', QINIU_SECRET_KEY:'' } })
+        expect(JSON.parse(wrapperStdout)).toMatchObject({
+          ok:true, operation:'upload-bootstrapper', dry_run:true, environment:'production',
+          installer:{ sha256:digest, authenticode_signed:false },
+        })
+        await writeFile(metadataPath, JSON.stringify({
+          schema_version:1, environment:'production', git_commit:'abc123',
+          installer_size_bytes:bytes.length, installer_sha256:digest,
+          authenticode_signed:true, unsigned_installer_authorized:false,
+        }))
+        await expect(execFileAsync('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', wrapper,
+          '-Executable', executable, '-Metadata', metadataPath,
+          '-TargetEnvironment', 'production', '-CdnOrigin', 'https://qiniu.example',
+          '-AllowUnsignedInstaller', '-DryRun',
+        ], { env:{ ...process.env, QINIU_ACCESS_KEY:'', QINIU_SECRET_KEY:'' } })).rejects.toMatchObject({
+          stderr:expect.stringContaining('bootstrap_authenticode_metadata_mismatch'),
+        })
+      }
     } finally {
       await rm(temporary, { recursive:true, force:true })
     }

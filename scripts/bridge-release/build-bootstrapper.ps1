@@ -6,6 +6,7 @@ param(
   [ValidateSet('test','production')][string]$TargetEnvironment = 'test',
   [string]$AuthenticodeCertificateThumbprint = $env:AURUM_AUTHENTICODE_CERT_THUMBPRINT,
   [string]$TimestampServer = 'http://timestamp.digicert.com',
+  [switch]$AllowUnsignedInstaller,
   [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
@@ -35,14 +36,18 @@ if (Test-Path -LiteralPath $output) { throw 'bootstrap_output_exists' }
 if ($TargetEnvironment -eq 'production' -and (git -C $repo status --porcelain)) {
   throw 'bootstrap_production_worktree_dirty'
 }
-if ($TargetEnvironment -eq 'production' -and -not $AuthenticodeCertificateThumbprint) {
-  throw 'bootstrap_authenticode_certificate_required'
+if ($AllowUnsignedInstaller -and $TargetEnvironment -ne 'production') {
+  throw 'bootstrap_unsigned_installer_confirmation_invalid'
+}
+if ($TargetEnvironment -eq 'production' -and -not $AuthenticodeCertificateThumbprint -and -not $AllowUnsignedInstaller) {
+  throw 'bootstrap_unsigned_installer_confirmation_required'
 }
 if ($DryRun) {
   [pscustomobject]@{
     ok=$true; operation='build-bootstrapper'; dry_run=$true
     environment=$TargetEnvironment; output=$output; server=$uri.GetLeftPart([UriPartial]::Authority)
     launcher_version=$LauncherVersion
+    unsigned_installer_authorized=[bool]($TargetEnvironment -eq 'production' -and $AllowUnsignedInstaller)
   } | ConvertTo-Json
   exit 0
 }
@@ -105,9 +110,11 @@ try {
     if ($signature.Status -ne 'Valid') { throw 'bootstrap_authenticode_signing_failed' }
     $authenticodeSigned = $true
   }
-  if ($TargetEnvironment -eq 'production' -and -not $authenticodeSigned) {
-    throw 'bootstrap_authenticode_signing_required'
+  if ($TargetEnvironment -eq 'production' -and -not $authenticodeSigned -and -not $AllowUnsignedInstaller) {
+    throw 'bootstrap_unsigned_installer_confirmation_required'
   }
+  $unsignedInstallerAuthorized = $TargetEnvironment -eq 'production' -and
+    -not $authenticodeSigned -and $AllowUnsignedInstaller
 
   $metadata = [ordered]@{
     schema_version=1
@@ -120,6 +127,7 @@ try {
     installer_size_bytes=(Get-Item -LiteralPath $destination).Length
     installer_sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
     authenticode_signed=$authenticodeSigned
+    unsigned_installer_authorized=$unsignedInstallerAuthorized
     generated_at_utc=(Get-Date).ToUniversalTime().ToString('o')
   }
   [IO.File]::WriteAllText(
@@ -131,6 +139,7 @@ try {
     ok=$true; operation='build-bootstrapper'; output=$output
     executable=$destination; sha256=$metadata.installer_sha256
     authenticode_signed=$authenticodeSigned
+    unsigned_installer_authorized=$unsignedInstallerAuthorized
   } | ConvertTo-Json
 }
 finally {

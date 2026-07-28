@@ -17,6 +17,7 @@ param(
   [ValidateRange(30,600)][int]$FreshnessSeconds = 90,
   [ValidateRange(90,730)][int]$ValidityDays = 365,
   [string]$ReleaseId,
+  [switch]$AllowUnsignedInstaller,
   [switch]$DryRun,
   [string]$Result
 )
@@ -44,6 +45,7 @@ if ($Server) {
   }
   if ($CdnOrigin) { $arguments += @('--cdn-origin', $CdnOrigin) }
   if ($TargetEnvironment) { $arguments += @('--target-environment', $TargetEnvironment) }
+  if ($AllowUnsignedInstaller) { $arguments += @('--allow-unsigned-installer', 'true') }
   if ($InstallerUrl) { $arguments += @('--installer-url', $InstallerUrl) }
   if ($DryRun) { $arguments += @('--dry-run', 'true') }
 }

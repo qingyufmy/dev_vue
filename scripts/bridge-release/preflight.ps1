@@ -3,6 +3,7 @@ param(
   [ValidateSet('environment','database')][string]$QiniuConfigSource='environment',
   [string]$Server,
   [string]$PythonRuntimeDirectory,
+  [switch]$AllowUnsignedInstaller,
   [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
@@ -11,6 +12,9 @@ $branch = git -C $repo branch --show-current
 $commit = git -C $repo rev-parse HEAD
 $dirty = [bool](git -C $repo status --porcelain)
 if ($Environment -eq 'production' -and $dirty) { throw 'release_production_worktree_dirty' }
+if ($AllowUnsignedInstaller -and $Environment -ne 'production') {
+  throw 'release_unsigned_installer_confirmation_invalid'
+}
 $pythonRuntimeValid = $false
 if ($PythonRuntimeDirectory) {
   try {
@@ -72,6 +76,7 @@ $checks = [ordered]@{
   signer = $signerPathValid
   signing_certificate = $signerSelfTestValid
   authenticode_certificate = $authenticodeCertificateValid
+  unsigned_installer_authorized = [bool]($Environment -eq 'production' -and $AllowUnsignedInstaller -and -not $env:AURUM_AUTHENTICODE_CERT_THUMBPRINT)
   public_key = $publicKeyMatchesSigner
   qiniu = $qiniuValid
   endpoint = [bool]($env:AURUM_BRIDGE_RELEASE_API_TOKEN -and $Server -and $Server.StartsWith('https://'))
@@ -82,7 +87,9 @@ $missingRequirements = @()
 if (-not $checks.signer) { $missingRequirements += 'AURUM_BRIDGE_SIGNER_EXE' }
 elseif (-not $checks.signing_certificate) { $missingRequirements += 'AURUM_BRIDGE_SIGNING_CERT_THUMBPRINT' }
 if (-not $checks.public_key) { $missingRequirements += 'BRIDGE_RELEASE_PUBLIC_KEY_PATH' }
-if (-not $checks.authenticode_certificate) { $missingRequirements += 'AURUM_AUTHENTICODE_CERT_THUMBPRINT' }
+if (-not $checks.authenticode_certificate -and -not $checks.unsigned_installer_authorized) {
+  $missingRequirements += 'AURUM_AUTHENTICODE_CERT_THUMBPRINT_OR_ALLOW_UNSIGNED_INSTALLER'
+}
 if ($QiniuConfigSource -eq 'database') {
   if (-not $checks.qiniu) { $missingRequirements += 'QINIU_DATABASE_CONFIGURATION' }
 } else {
@@ -96,7 +103,7 @@ elseif (-not $Server.StartsWith('https://')) { $missingRequirements += 'RELEASE_
 if (-not $checks.python_runtime) { $missingRequirements += 'PYTHON_RUNTIME_DIRECTORY' }
 if (-not $checks.metaeditor) { $missingRequirements += 'AURUM_METAEDITOR_EXE' }
 if (-not $checks.dotnet -or -not $checks.node) { throw 'release_build_runtime_missing' }
-if ($Environment -eq 'production' -and (-not $checks.signer -or -not $checks.signing_certificate -or -not $checks.authenticode_certificate -or -not $checks.public_key -or -not $checks.qiniu -or -not $checks.endpoint -or -not $checks.python_runtime -or -not $checks.metaeditor)) {
+if ($Environment -eq 'production' -and (-not $checks.signer -or -not $checks.signing_certificate -or (-not $checks.authenticode_certificate -and -not $checks.unsigned_installer_authorized) -or -not $checks.public_key -or -not $checks.qiniu -or -not $checks.endpoint -or -not $checks.python_runtime -or -not $checks.metaeditor)) {
   throw 'release_production_prerequisite_missing'
 }
 [pscustomobject]@{
