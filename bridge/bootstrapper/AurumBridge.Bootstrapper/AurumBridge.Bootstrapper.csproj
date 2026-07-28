@@ -23,6 +23,7 @@
     <Compile Include="..\..\launcher\AurumBridge.Launcher\*.cs" Link="Launcher\%(Filename)%(Extension)" />
     <EmbeddedResource Include="$(AurumBootstrapPublicKey)" LogicalName="AurumBridge.Bootstrapper.release-public-key.pem" />
     <AssemblyMetadata Include="AurumServerUrl" Value="$(AurumServerUrl)" />
+    <AssemblyMetadata Include="AurumLoopbackServerUrl" Value="$(AurumLoopbackServerUrl)" />
     <AssemblyMetadata Include="AurumLauncherVersion" Value="$(AurumLauncherVersion)" />
     <AssemblyMetadata Include="AurumTargetEnvironment" Value="$(AurumTargetEnvironment)" />
   </ItemGroup>

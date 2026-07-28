@@ -4,6 +4,7 @@ param(
   [Parameter(Mandatory=$true)][string]$ServerUrl,
   [string]$LauncherVersion = '1.0.0',
   [ValidateSet('test','production')][string]$TargetEnvironment = 'test',
+  [string]$TestLoopbackServerUrl = 'http://127.0.0.1:3000',
   [string]$AuthenticodeCertificateThumbprint = $env:AURUM_AUTHENTICODE_CERT_THUMBPRINT,
   [string]$TimestampServer = 'http://timestamp.digicert.com',
   [switch]$AllowUnsignedInstaller,
@@ -22,6 +23,17 @@ $localTestServer = $TargetEnvironment -eq 'test' -and
 if (($uri.Scheme -ne 'https' -and -not $localTestServer) -or
   $uri.UserInfo -or $uri.Query -or $uri.Fragment -or $uri.AbsolutePath -ne '/') {
   throw 'bootstrap_server_url_invalid'
+}
+$loopbackServerValue = ''
+if ($TargetEnvironment -eq 'test') {
+  $loopbackUri = $null
+  if (-not [Uri]::TryCreate($TestLoopbackServerUrl, [UriKind]::Absolute, [ref]$loopbackUri) -or
+    $loopbackUri.Scheme -ne 'http' -or -not $loopbackUri.IsLoopback -or
+    $loopbackUri.UserInfo -or $loopbackUri.Query -or $loopbackUri.Fragment -or
+    $loopbackUri.AbsolutePath -ne '/') {
+    throw 'bootstrap_loopback_server_url_invalid'
+  }
+  $loopbackServerValue = $loopbackUri.GetLeftPart([UriPartial]::Authority)
 }
 $parsedLauncherVersion = $null
 if (-not [Version]::TryParse($LauncherVersion, [ref]$parsedLauncherVersion)) {
@@ -46,6 +58,7 @@ if ($DryRun) {
   [pscustomobject]@{
     ok=$true; operation='build-bootstrapper'; dry_run=$true
     environment=$TargetEnvironment; output=$output; server=$uri.GetLeftPart([UriPartial]::Authority)
+    loopback_server=if ($loopbackServerValue) { $loopbackServerValue } else { $null }
     launcher_version=$LauncherVersion
     unsigned_installer_authorized=[bool]($TargetEnvironment -eq 'production' -and $AllowUnsignedInstaller)
   } | ConvertTo-Json
@@ -65,6 +78,7 @@ try {
     -p:DebugType=None -p:DebugSymbols=false -p:Version=$LauncherVersion `
     "-p:AurumBootstrapPublicKey=$publicKeyPath" `
     "-p:AurumServerUrl=$($uri.GetLeftPart([UriPartial]::Authority))" `
+    "-p:AurumLoopbackServerUrl=$loopbackServerValue" `
     "-p:AurumLauncherVersion=$LauncherVersion" `
     "-p:AurumTargetEnvironment=$TargetEnvironment" `
     -o $publish
@@ -105,6 +119,7 @@ try {
     environment=$TargetEnvironment
     git_commit=(git -C $repo rev-parse HEAD)
     server=$uri.GetLeftPart([UriPartial]::Authority)
+    loopback_server=if ($loopbackServerValue) { $loopbackServerValue } else { $null }
     launcher_version=$LauncherVersion
     single_runtime_installer=$true
     public_key_sha256=(Get-FileHash -LiteralPath $publicKeyPath -Algorithm SHA256).Hash.ToLowerInvariant()

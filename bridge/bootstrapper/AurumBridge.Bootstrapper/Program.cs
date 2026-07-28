@@ -236,7 +236,11 @@ internal sealed class BootstrapInstaller
     {
         var serverUrl = Metadata("AurumServerUrl");
         var launcherVersion = Version.Parse(Metadata("AurumLauncherVersion"));
-        var server = ParseServerUri(serverUrl, Metadata("AurumTargetEnvironment"));
+        var targetEnvironment = Metadata("AurumTargetEnvironment");
+        var servers = BuildServerCandidates(
+            ParseServerUri(serverUrl, targetEnvironment),
+            targetEnvironment,
+            MetadataOrNull("AurumLoopbackServerUrl"));
 
         Directory.CreateDirectory(_installRoot);
         using var installationLock = new Semaphore(
@@ -264,17 +268,13 @@ internal sealed class BootstrapInstaller
             var installationId = await identityStore.LoadOrCreateAsync(cancellationToken);
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
             using var verifier = new ReleaseManifestVerifier(publicKey);
-            var manifestClient = new ReleaseManifestClient(
-                server,
+            var manifest = await FetchBootstrapManifestAsync(
+                servers,
                 http,
-                "/api/bridge/v3/releases/bootstrap");
-            var manifest = await manifestClient.FetchVerifiedAsync(
                 verifier,
                 launcherVersion,
                 installationId,
-                "stable",
-                cancellationToken)
-                ?? throw new InvalidOperationException("bootstrap_release_unavailable");
+                cancellationToken);
             ValidateManifestPackageSet(manifest);
 
             _status($"正在下载量见智桥 {manifest.ReleaseVersion}…");
@@ -413,6 +413,87 @@ internal sealed class BootstrapInstaller
         .GetCustomAttributes<AssemblyMetadataAttribute>()
         .SingleOrDefault(value => value.Key == key)?.Value
         ?? throw new InvalidDataException("bootstrap_metadata_missing");
+
+    private string? MetadataOrNull(string key)
+    {
+        var value = _assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .SingleOrDefault(attribute => attribute.Key == key)?.Value;
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    private static IReadOnlyList<Uri> BuildServerCandidates(
+        Uri primaryServer,
+        string targetEnvironment,
+        string? loopbackServerUrl)
+    {
+        var servers = new List<Uri>();
+        if (targetEnvironment == "test" && !string.IsNullOrWhiteSpace(loopbackServerUrl))
+        {
+            var loopback = ParseServerUri(loopbackServerUrl, targetEnvironment);
+            if (loopback.Scheme != Uri.UriSchemeHttp || !loopback.IsLoopback)
+            {
+                throw new InvalidDataException("bootstrap_loopback_server_url_invalid");
+            }
+            servers.Add(loopback);
+        }
+        if (!servers.Any(value => value == primaryServer))
+        {
+            servers.Add(primaryServer);
+        }
+        return servers;
+    }
+
+    private async Task<ReleaseManifest> FetchBootstrapManifestAsync(
+        IReadOnlyList<Uri> servers,
+        HttpClient http,
+        ReleaseManifestVerifier verifier,
+        Version launcherVersion,
+        string installationId,
+        CancellationToken cancellationToken)
+    {
+        var failures = new List<Exception>();
+        for (var index = 0; index < servers.Count; index++)
+        {
+            var server = servers[index];
+            _status(index == 0 && server.IsLoopback
+                ? "正在检查本地安装服务…"
+                : "正在连接备用安装服务器…");
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(server.IsLoopback ? TimeSpan.FromSeconds(2) : TimeSpan.FromSeconds(15));
+            try
+            {
+                var client = new ReleaseManifestClient(
+                    server,
+                    http,
+                    "/api/bridge/v3/releases/bootstrap");
+                var manifest = await client.FetchVerifiedAsync(
+                    verifier,
+                    launcherVersion,
+                    installationId,
+                    "stable",
+                    deadline.Token);
+                if (manifest is not null)
+                {
+                    return manifest;
+                }
+                failures.Add(new InvalidDataException("bootstrap_release_unavailable"));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception error) when (error is HttpRequestException
+                or InvalidDataException
+                or TaskCanceledException)
+            {
+                failures.Add(error);
+            }
+        }
+        throw new InvalidOperationException(
+            "bootstrap_release_unavailable",
+            new AggregateException(failures));
+    }
 
     private static Uri ParseServerUri(string value, string targetEnvironment)
     {

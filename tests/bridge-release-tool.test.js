@@ -239,7 +239,9 @@ describe('bridge release tooling', () => {
     expect(bootstrapProject).not.toContain('AurumBridge.Bootstrapper.launcher.zip')
     expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.release-public-key.pem')
     expect(bootstrapProject).toContain('AurumTargetEnvironment')
+    expect(bootstrapProject).toContain('AurumLoopbackServerUrl')
     expect(bootstrapBuilder).toContain('-p:AurumTargetEnvironment=$TargetEnvironment')
+    expect(bootstrapBuilder).toContain('-p:AurumLoopbackServerUrl=$loopbackServerValue')
     expect(bootstrapBuilder).toContain('single_runtime_installer=$true')
     expect(bootstrapBuilder).not.toContain('AurumBootstrapLauncherZip')
     expect(manifestClient).toContain('/api/bridge/v3/releases/bootstrap')
@@ -254,6 +256,8 @@ describe('bridge release tooling', () => {
     expect(bootstrapProgram).toContain('BridgeInstallationRegistration.Register(')
     expect(bootstrapProgram).toContain('ResolveCurrentExecutable()')
     expect(bootstrapProgram).toContain('BridgeInstallationRegistration.LauncherFileName')
+    expect(bootstrapProgram).toContain('BuildServerCandidates(')
+    expect(bootstrapProgram).toContain('server.IsLoopback ? TimeSpan.FromSeconds(2)')
     expect(bootstrapProgram).toContain('Text = "重试安装"')
     const launcherProgram = await readFile(
       new URL('../bridge/launcher/AurumBridge.Launcher/Program.cs', import.meta.url),
@@ -284,6 +288,7 @@ describe('bridge release tooling', () => {
       const { stdout } = await invoke('test', 'http://127.0.0.1:3101')
       expect(JSON.parse(stdout)).toMatchObject({
         ok:true, dry_run:true, environment:'test', server:'http://127.0.0.1:3101',
+        loopback_server:'http://127.0.0.1:3000',
       })
       await expect(invoke('production', 'http://127.0.0.1:3101')).rejects.toMatchObject({
         stderr:expect.stringContaining('bootstrap_server_url_invalid'),
