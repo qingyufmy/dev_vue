@@ -1,10 +1,15 @@
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('sign','verify-signatures','upload','verify-remote','verify-endpoint','publish','stop','rollback','health','promote-bootstrap','rollback-bootstrap','verify-bootstrap','create-bootstrap-manifest')][string]$Operation,
+  [Parameter(Mandatory=$true)][ValidateSet('sign','verify-signatures','upload','upload-bootstrapper','verify-remote','verify-bootstrapper-remote','verify-endpoint','publish','stop','rollback','health','promote-bootstrap','rollback-bootstrap','verify-bootstrap','create-bootstrap-manifest')][string]$Operation,
   [string]$Manifest,
   [string]$Artifacts,
   [string]$Signer,
   [string]$PublicKey,
   [string]$Output,
+  [string]$Executable,
+  [string]$Metadata,
+  [string]$CdnOrigin,
+  [ValidateSet('test','production')][string]$TargetEnvironment,
+  [string]$InstallerUrl,
   [string]$Server,
   [string]$InstallationId,
   [ValidateSet('internal','stable')][string]$ReleaseChannel,
@@ -26,13 +31,16 @@ if ($Server) {
   if ($DryRun) { $arguments += @('--dry-run', 'true') }
   if ($Result) { $arguments += @('--result', [IO.Path]::GetFullPath($Result)) }
 } else {
-  foreach ($pair in @(@('manifest',$Manifest), @('artifacts',$Artifacts), @('signer',$Signer), @('public-key',$PublicKey), @('output',$Output), @('result',$Result))) {
+  foreach ($pair in @(@('manifest',$Manifest), @('artifacts',$Artifacts), @('signer',$Signer), @('public-key',$PublicKey), @('output',$Output), @('executable',$Executable), @('metadata',$Metadata), @('result',$Result))) {
     if ($pair[1]) { $arguments += @("--$($pair[0])", [IO.Path]::GetFullPath($pair[1])) }
   }
   if ($Operation -eq 'create-bootstrap-manifest') {
     $arguments += @('--validity-days', [string]$ValidityDays)
     if ($ReleaseId) { $arguments += @('--release-id', $ReleaseId) }
   }
+  if ($CdnOrigin) { $arguments += @('--cdn-origin', $CdnOrigin) }
+  if ($TargetEnvironment) { $arguments += @('--target-environment', $TargetEnvironment) }
+  if ($InstallerUrl) { $arguments += @('--installer-url', $InstallerUrl) }
   if ($DryRun) { $arguments += @('--dry-run', 'true') }
 }
 & node @arguments

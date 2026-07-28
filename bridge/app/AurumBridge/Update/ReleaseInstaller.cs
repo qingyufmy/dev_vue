@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AurumBridge.Runtime;
 
 namespace AurumBridge.Update;
 
@@ -31,6 +32,7 @@ public sealed class ReleaseInstaller(
         "coreclr.dll",
         "e_sqlite3.dll",
         "Microsoft.Data.Sqlite.dll",
+        "server-endpoints.json",
         "runtime/python/python.exe",
     ];
     private readonly string _installRoot = Path.GetFullPath(installRoot);
@@ -273,6 +275,7 @@ public sealed class ReleaseInstaller(
         {
             throw new InvalidDataException("update_mt4_adapter_missing");
         }
+        _ = BridgeServerEndpointConfiguration.ReadPackaged(versionDirectory, required:true);
     }
 
     private static void DeleteTemporaryDirectory(string path, string expectedParent)

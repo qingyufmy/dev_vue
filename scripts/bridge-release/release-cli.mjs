@@ -173,8 +173,9 @@ function qiniuConfig() {
   const accessKey = process.env.QINIU_ACCESS_KEY
   const secretKey = process.env.QINIU_SECRET_KEY
   const bucket = process.env.QINIU_BUCKET
-  const domain = process.env.QINIU_DOMAIN?.replace(/\/$/, '')
-  if (!accessKey || !secretKey || !bucket || !domain?.startsWith('https://')) fail('release_qiniu_configuration_missing')
+  const configuredDomain = process.env.QINIU_DOMAIN
+  if (!accessKey || !secretKey || !bucket || !configuredDomain) fail('release_qiniu_configuration_missing')
+  const domain = normalizeCdnOrigin(configuredDomain)
   const mac = new qiniu.auth.digest.Mac(accessKey, secretKey)
   const config = new qiniu.conf.Config()
   const zones = { z0:'Zone_z0', z1:'Zone_z1', z2:'Zone_z2', na0:'Zone_na0', as0:'Zone_as0' }
@@ -231,6 +232,122 @@ async function upload(args) {
     release_id:manifest.release_id,
     uploaded,
     candidate_manifest:{ key:manifestKey, sha256:manifestHash, url:`${context.domain}/${manifestKey}` },
+  }
+}
+
+function normalizeCdnOrigin(value) {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:' || url.username || url.password
+      || url.pathname !== '/' || url.search || url.hash) fail('release_cdn_origin_invalid')
+    return url.origin
+  } catch (error) {
+    if (error?.code) throw error
+    fail('release_cdn_origin_invalid')
+  }
+}
+
+async function bootstrapperPlan(args, origin) {
+  const executable = path.resolve(required(args, 'executable'))
+  const metadataPath = path.resolve(required(args, 'metadata'))
+  const targetEnvironment = required(args, 'target-environment')
+  if (!['test', 'production'].includes(targetEnvironment)) fail('release_target_environment_invalid')
+  const metadataBytes = await readFile(metadataPath)
+  const metadata = JSON.parse(metadataBytes.toString('utf8'))
+  const info = await stat(executable)
+  const digest = await sha256(executable)
+  if (metadata.schema_version !== 1 || metadata.environment !== targetEnvironment
+    || metadata.installer_size_bytes !== info.size
+    || metadata.installer_sha256 !== digest
+    || targetEnvironment === 'production' && metadata.authenticode_signed !== true) {
+    fail('release_bootstrapper_metadata_invalid')
+  }
+  const key = `bridge/bootstrapper/${digest}/LiangjianBridgeSetup.exe`
+  const metadataKey = `bridge/bootstrapper/${digest}/bootstrapper-metadata.json`
+  return {
+    executable, metadataPath, metadataBytes, metadata, key, metadataKey,
+    url:`${origin}/${key}`, metadataUrl:`${origin}/${metadataKey}`,
+  }
+}
+
+async function uploadBootstrapper(args) {
+  const dryRun = isDryRun(args)
+  const context = dryRun ? null : qiniuConfig()
+  const origin = context?.domain || normalizeCdnOrigin(required(args, 'cdn-origin'))
+  const plan = await bootstrapperPlan(args, origin)
+  if (dryRun) {
+    return {
+      operation:'upload-bootstrapper', dry_run:true,
+      environment:plan.metadata.environment,
+      installer:{ key:plan.key, url:plan.url, size_bytes:plan.metadata.installer_size_bytes,
+        sha256:plan.metadata.installer_sha256 },
+      metadata:{ key:plan.metadataKey, url:plan.metadataUrl },
+    }
+  }
+  await uploadOne(plan.executable, plan.key, context)
+  await uploadOne(plan.metadataPath, plan.metadataKey, context)
+  return {
+    operation:'upload-bootstrapper', environment:plan.metadata.environment,
+    installer:{ key:plan.key, url:plan.url, size_bytes:plan.metadata.installer_size_bytes,
+      sha256:plan.metadata.installer_sha256 },
+    metadata:{ key:plan.metadataKey, url:plan.metadataUrl },
+  }
+}
+
+async function streamSha256(response, maximumBytes = 512 * 1024 * 1024) {
+  if (!response.body) fail('release_remote_download_failed')
+  const hash = createHash('sha256')
+  let size = 0
+  for await (const chunk of response.body) {
+    size += chunk.length
+    if (size > maximumBytes) fail('release_remote_artifact_too_large')
+    hash.update(chunk)
+  }
+  return { size, sha256:hash.digest('hex') }
+}
+
+async function readResponseBounded(response, maximumBytes) {
+  if (!response.body) fail('release_remote_download_failed')
+  const chunks = []
+  let size = 0
+  for await (const chunk of response.body) {
+    size += chunk.length
+    if (size > maximumBytes) fail('release_remote_artifact_too_large')
+    chunks.push(Buffer.from(chunk))
+  }
+  return Buffer.concat(chunks, size)
+}
+
+async function verifyRemoteBootstrapper(args) {
+  const metadataPath = path.resolve(required(args, 'metadata'))
+  const metadataBytes = await readFile(metadataPath)
+  const metadata = JSON.parse(metadataBytes.toString('utf8'))
+  if (metadata.schema_version !== 1
+    || !['test', 'production'].includes(metadata.environment)
+    || !Number.isSafeInteger(metadata.installer_size_bytes) || metadata.installer_size_bytes <= 0
+    || !/^[a-f0-9]{64}$/.test(metadata.installer_sha256 || '')) {
+    fail('release_bootstrapper_metadata_invalid')
+  }
+  const installerUrl = new URL(required(args, 'installer-url'))
+  if (installerUrl.protocol !== 'https:' || installerUrl.username || installerUrl.password
+    || installerUrl.search || installerUrl.hash
+    || installerUrl.pathname !== `/bridge/bootstrapper/${metadata.installer_sha256}/LiangjianBridgeSetup.exe`) {
+    fail('release_bootstrapper_url_invalid')
+  }
+  const response = await fetch(installerUrl, { cache:'no-store' })
+  if (!response.ok) fail('release_remote_download_failed')
+  const remote = await streamSha256(response)
+  if (remote.size !== metadata.installer_size_bytes
+    || remote.sha256 !== metadata.installer_sha256) fail('release_remote_artifact_mismatch')
+  const metadataUrl = new URL('bootstrapper-metadata.json', installerUrl)
+  const metadataResponse = await fetch(metadataUrl, { cache:'no-store' })
+  if (!metadataResponse.ok) fail('release_remote_metadata_download_failed')
+  const remoteMetadata = await readResponseBounded(metadataResponse, 1024 * 1024)
+  if (!isDeepStrictEqual(remoteMetadata, metadataBytes)) fail('release_remote_metadata_mismatch')
+  return {
+    operation:'verify-bootstrapper-remote', installer_url:installerUrl.href,
+    metadata_url:metadataUrl.href, size_bytes:remote.size, sha256:remote.sha256,
+    environment:metadata.environment, git_commit:metadata.git_commit,
   }
 }
 
@@ -377,7 +494,9 @@ async function main() {
     sign:() => sign(args),
     'verify-signatures':() => verifySignatures(args),
     upload:() => upload(args),
+    'upload-bootstrapper':() => uploadBootstrapper(args),
     'verify-remote':() => verifyRemote(args),
+    'verify-bootstrapper-remote':() => verifyRemoteBootstrapper(args),
     'verify-endpoint':() => verifyEndpoint(args),
     publish:() => endpoint(args, 'publish'),
     stop:() => endpoint(args, 'stop'),

@@ -61,6 +61,57 @@ public sealed class BridgeRuntimePathResolverTests
     }
 
     [TestMethod]
+    public void UsesTheServerAddressCarriedInsideTheSignedCorePackage()
+    {
+        CreateFile("runtime", "python", "python.exe");
+        CreateFile("modules", "adapter.mt5.python", "worker.py");
+        File.WriteAllText(
+            Path.Combine(_directory, "server-endpoints.json"),
+            """{"schema_version":1,"server_url":"https://bridge-new.example.com"}""");
+
+        var paths = BridgeRuntimePathResolver.Resolve(_directory, _ => null);
+
+        Assert.AreEqual(new Uri("https://bridge-new.example.com"), paths.ServerBaseUri);
+    }
+
+    [TestMethod]
+    public void EnvironmentOverrideTakesPrecedenceOverThePackagedServerAddress()
+    {
+        var python = CreateFile("runtime", "python", "python.exe");
+        var worker = CreateFile("modules", "adapter.mt5.python", "worker.py");
+        File.WriteAllText(
+            Path.Combine(_directory, "server-endpoints.json"),
+            """{"schema_version":1,"server_url":"https://bridge-new.example.com"}""");
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["AURUM_BRIDGE_PYTHON"] = python,
+            ["AURUM_BRIDGE_MT5_WORKER"] = worker,
+            ["AURUM_BRIDGE_SERVER_URL"] = "http://localhost:3000",
+        };
+
+        var paths = BridgeRuntimePathResolver.Resolve(
+            _directory,
+            name => values.GetValueOrDefault(name));
+
+        Assert.AreEqual(new Uri("http://localhost:3000"), paths.ServerBaseUri);
+    }
+
+    [TestMethod]
+    public void RejectsAMalformedOrUnsafePackagedServerAddress()
+    {
+        CreateFile("runtime", "python", "python.exe");
+        CreateFile("modules", "adapter.mt5.python", "worker.py");
+        File.WriteAllText(
+            Path.Combine(_directory, "server-endpoints.json"),
+            """{"schema_version":1,"server_url":"http://remote.example.com"}""");
+
+        var error = Assert.ThrowsExactly<InvalidDataException>(() =>
+            BridgeRuntimePathResolver.Resolve(_directory, _ => null));
+
+        Assert.AreEqual("bridge_server_url_invalid", error.Message);
+    }
+
+    [TestMethod]
     public void ResolvesObserverProfileIntoAnIsolatedStateDirectory()
     {
         var python = CreateFile("tools", "python.exe");

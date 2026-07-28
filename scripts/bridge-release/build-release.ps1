@@ -5,6 +5,7 @@ param(
   [Parameter(Mandatory=$true)][ValidateRange(1,100)][int]$RolloutPercentage,
   [Parameter(Mandatory=$true)][string]$PythonRuntimeDirectory,
   [Parameter(Mandatory=$true)][string]$CdnDomain,
+  [string]$ServerUrl = 'https://www.cnfxtrade.com',
   [string]$ReleaseId,
   [string]$OutputDirectory,
   [int]$MinimumIdleSeconds = 120,
@@ -46,11 +47,19 @@ if (-not [Uri]::TryCreate($domain, [UriKind]::Absolute, [ref]$domainUri) -or
   $domainUri.Query -or
   $domainUri.Fragment) { throw 'release_cdn_domain_invalid' }
 $domain = $domainUri.GetLeftPart([UriPartial]::Authority)
+$serverUri = $null
+if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$serverUri) -or
+  $serverUri.UserInfo -or $serverUri.Query -or $serverUri.Fragment -or
+  $serverUri.AbsolutePath -ne '/' -or
+  ($serverUri.Scheme -ne 'https' -and -not ($TargetEnvironment -eq 'test' -and $serverUri.Scheme -eq 'http' -and $serverUri.IsLoopback))) {
+  throw 'release_server_url_invalid'
+}
+$serverUrlValue = $serverUri.GetLeftPart([UriPartial]::Authority)
 $ReleaseId = if ($ReleaseId) { $ReleaseId } else { "bridge-$ReleaseVersion-$([DateTimeOffset]::UtcNow.ToString('yyyyMMdd.HHmmss'))" }
 $outputRoot = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $repo "bridge\release-artifacts\$ReleaseId" }
 if (Test-Path -LiteralPath $outputRoot) { throw 'release_output_exists' }
 if ($DryRun) {
-  [pscustomobject]@{ ok=$true; operation='build'; dry_run=$true; environment=$TargetEnvironment; release_id=$ReleaseId; output=$outputRoot } | ConvertTo-Json
+  [pscustomobject]@{ ok=$true; operation='build'; dry_run=$true; environment=$TargetEnvironment; release_id=$ReleaseId; server_url=$serverUrlValue; output=$outputRoot } | ConvertTo-Json
   exit 0
 }
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
@@ -67,6 +76,10 @@ try {
   $runtimeTarget = Join-Path $core 'runtime\python'
   New-Item -ItemType Directory -Path $runtimeTarget -Force | Out-Null
   Copy-Item -Path (Join-Path $pythonRoot '*') -Destination $runtimeTarget -Recurse -Force
+  Write-Utf8NoBom -Path (Join-Path $core 'server-endpoints.json') -Content (([ordered]@{
+    schema_version=1
+    server_url=$serverUrlValue
+  }) | ConvertTo-Json)
   $moduleRoot = Join-Path $work 'modules'
   New-Item -ItemType Directory -Path (Join-Path $moduleRoot 'adapter.mt5.python') -Force | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $moduleRoot 'adapter.mt4') -Force | Out-Null
@@ -110,7 +123,7 @@ try {
   }
   $manifestPath = Join-Path $outputRoot 'manifest.unsigned.json'
   Write-Utf8NoBom -Path $manifestPath -Content ($manifest | ConvertTo-Json -Depth 8)
-  $buildResult = [pscustomobject]@{ ok=$true; operation='build'; release_id=$ReleaseId; release_notes=$ReleaseNotes; output=$outputRoot; manifest=$manifestPath; packages=$packages }
+  $buildResult = [pscustomobject]@{ ok=$true; operation='build'; release_id=$ReleaseId; release_notes=$ReleaseNotes; server_url=$serverUrlValue; output=$outputRoot; manifest=$manifestPath; packages=$packages }
   Write-Utf8NoBom -Path (Join-Path $outputRoot 'build-result.json') -Content ($buildResult | ConvertTo-Json -Depth 8)
   $buildSucceeded = $true
   Get-Content -LiteralPath (Join-Path $outputRoot 'build-result.json') -Raw

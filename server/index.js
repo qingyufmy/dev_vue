@@ -51,8 +51,10 @@ import { startPaymentSideEffectWorker } from './jobs/payment-side-effects.js'
 import { securityHeaders } from './security-headers.js'
 import { blockPrivateVideoStatic } from './video-access.js'
 import { installFatalProcessHandlers, listenHttpServer } from './runtime-lifecycle.js'
+import { resolveBridgeInstallerRelease } from './bridge-installer-release.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+const bridgeInstallerRelease = resolveBridgeInstallerRelease()
 
 // .env is loaded by server/config.js via dotenv — no manual parsing needed
 
@@ -291,6 +293,12 @@ app.get('/ai/bridge/:platform', authMiddleware, async (req, res) => {
   const _port = req.get('host')?.split(':')?.[1] || ''
   const _needsPort = _port && !['80', '443'].includes(_port)
   const serverUrl = _needsPort ? `${_proto}://${req.hostname}:${_port}` : `${_proto}://${req.hostname}`
+
+  if (bridgeInstallerRelease.v3
+    && ['setup', 'exe', 'exe-file'].includes(platform)) {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+    return res.redirect(302, bridgeInstallerRelease.fullUrl)
+  }
 
   if (platform === 'setup') {
     // One-click setup: downloads exe + writes config + launches

@@ -446,6 +446,24 @@ public sealed class ReleaseUpdateTests
     }
 
     [TestMethod]
+    public async Task RejectsAnUpdateWhoseCorePackageOmitsTheSignedServerAddress()
+    {
+        var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["core"] = CompleteCoreZip(includeServerEndpoints:false),
+            ["adapter.mt5.python"] = Zip(("worker.py", "worker")),
+            ["adapter.mt4"] = Zip(("AURUMBridgeEA.ex4", "ea")),
+        };
+        using var http = new HttpClient(new PackageResponseHandler(packages));
+        var installer = new ReleaseInstaller(_directory, new ReleaseStager(http));
+
+        var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            installer.StageAsync(ManifestForPackages("3.1.0", packages), new Version(3, 0, 0)));
+
+        Assert.AreEqual("update_core_component_missing", error.Message);
+    }
+
+    [TestMethod]
     public async Task RejectsAManifestMissingEitherTradingPlatformAdapterBeforeDownload()
     {
         var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
@@ -661,7 +679,9 @@ public sealed class ReleaseUpdateTests
         return stream.ToArray();
     }
 
-    private static byte[] CompleteCoreZip(bool includeSqlite = true)
+    private static byte[] CompleteCoreZip(
+        bool includeSqlite = true,
+        bool includeServerEndpoints = true)
     {
         var files = new List<(string Path, string Content)>
         {
@@ -673,6 +693,10 @@ public sealed class ReleaseUpdateTests
             ("Microsoft.Data.Sqlite.dll", "managed-sqlite"),
             ("runtime/python/python.exe", "python"),
         };
+        if (includeServerEndpoints)
+        {
+            files.Add(("server-endpoints.json", "{\"schema_version\":1,\"server_url\":\"https://www.cnfxtrade.com\"}"));
+        }
         if (includeSqlite)
         {
             files.Add(("e_sqlite3.dll", "native-sqlite"));

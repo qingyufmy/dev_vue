@@ -34,14 +34,18 @@ describe('bridge release tooling', () => {
     expect(releaseBuilder).toContain('Start-Process -FilePath $MetaEditorExe')
     expect(releaseBuilder).toContain('-WindowStyle Hidden')
     expect(releaseBuilder).toContain('release_python_runtime_metadata_missing')
+    expect(releaseBuilder).toContain("Join-Path $core 'server-endpoints.json'")
+    expect(releaseBuilder).toContain('server_url=$serverUrlValue')
   })
 
   it('builds a self-contained bootstrapper with an embedded pinned launcher and public key', async () => {
     const bootstrapBuilder = await readFile(new URL('../scripts/bridge-release/build-bootstrapper.ps1', import.meta.url), 'utf8')
+    const bootstrapUploader = await readFile(new URL('../scripts/bridge-release/upload-bootstrapper-qiniu.ps1', import.meta.url), 'utf8')
     const bootstrapProject = await readFile(new URL('../bridge/bootstrapper/AurumBridge.Bootstrapper/AurumBridge.Bootstrapper.csproj', import.meta.url), 'utf8')
     const manifestClient = await readFile(new URL('../bridge/app/AurumBridge/Update/ReleaseManifestClient.cs', import.meta.url), 'utf8')
     expect(bootstrapBuilder).toContain('-p:PublishSingleFile=true')
     expect(bootstrapBuilder).toContain('bootstrap_authenticode_signing_required')
+    expect(bootstrapUploader).toContain("$signature.Status -ne 'Valid'")
     expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.launcher.zip')
     expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.release-public-key.pem')
     expect(manifestClient).toContain('/api/bridge/v3/releases/bootstrap')
@@ -107,6 +111,38 @@ describe('bridge release tooling', () => {
       const result = JSON.parse(stdout)
       expect(result).toMatchObject({ ok:true, operation:'upload', dry_run:true, release_id:manifest.release_id })
       expect(result.planned[0].key).toBe(`bridge/releases/3.1.0/${digest}/core.zip`)
+    } finally {
+      await rm(temporary, { recursive:true, force:true })
+    }
+  })
+
+  it('dry-runs an immutable bootstrapper upload from exact build metadata', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'aurum-bootstrapper-upload-'))
+    try {
+      const executable = path.join(temporary, 'LiangjianBridgeSetup.exe')
+      const bytes = Buffer.from('test bootstrapper')
+      const digest = createHash('sha256').update(bytes).digest('hex')
+      const metadataPath = path.join(temporary, 'bootstrapper-metadata.json')
+      await writeFile(executable, bytes)
+      await writeFile(metadataPath, JSON.stringify({
+        schema_version:1, environment:'test', git_commit:'abc123',
+        installer_size_bytes:bytes.length, installer_sha256:digest,
+        authenticode_signed:false,
+      }))
+      const cli = path.resolve('scripts/bridge-release/release-cli.mjs')
+      const { stdout } = await execFileAsync(process.execPath, [
+        cli, 'upload-bootstrapper', '--executable', executable,
+        '--metadata', metadataPath, '--target-environment', 'test',
+        '--cdn-origin', 'https://qiniu.example', '--dry-run', 'true',
+      ], { env:{ ...process.env, QINIU_ACCESS_KEY:'', QINIU_SECRET_KEY:'' } })
+      expect(JSON.parse(stdout)).toMatchObject({
+        ok:true, operation:'upload-bootstrapper', dry_run:true, environment:'test',
+        installer:{
+          key:`bridge/bootstrapper/${digest}/LiangjianBridgeSetup.exe`,
+          url:`https://qiniu.example/bridge/bootstrapper/${digest}/LiangjianBridgeSetup.exe`,
+          size_bytes:bytes.length, sha256:digest,
+        },
+      })
     } finally {
       await rm(temporary, { recursive:true, force:true })
     }

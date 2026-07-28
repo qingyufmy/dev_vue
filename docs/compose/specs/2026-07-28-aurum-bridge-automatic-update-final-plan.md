@@ -110,6 +110,8 @@ Launcher 保持稳定，只负责版本指针、健康检查、启动和回滚�
 
 网站下载入口只有在引导安装器完成 Authenticode 代码签名、上传和远端复核后才允许切换；旧安装脚本在此之前保持不变。
 
+服务器地址也属于发布内容：`build-release.ps1` 在签名的 core 包内生成严格受限的 `server-endpoints.json`。新版本激活后从自己的版本目录读取服务器地址；若新地址无法恢复连接，Launcher 的就绪检查失败并回滚到上一版本，上一版本会自然继续使用旧地址。环境变量仅保留为本机开发或紧急运维的最高优先级覆盖，远程地址必须使用 HTTPS，不能携带账号、查询串或片段。
+
 ## 5. 更新状态机
 
 ```mermaid
@@ -627,11 +629,15 @@ operation = prepare | publish | expand | stop | rollback | verify
 scripts/bridge-release/
   preflight.ps1
   build-release.ps1
+  build-bootstrapper.ps1
   test-release.ps1
   sign-release.ps1
   upload-qiniu.ps1
+  upload-bootstrapper-qiniu.ps1
   verify-remote-release.ps1
+  verify-bootstrapper-remote.ps1
   publish-manifest.ps1
+  promote-bootstrap.ps1
   get-release-health.ps1
   expand-rollout.ps1
   stop-rollout.ps1

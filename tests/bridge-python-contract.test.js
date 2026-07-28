@@ -439,12 +439,13 @@ describe('Python Bridge history contract', () => {
     )
   })
 
-  it('keeps executable auto-update disabled while exposing the manual installer release', () => {
+  it('keeps legacy auto-update disabled while exposing the configured signed installer release', () => {
     const source = readFileSync(new URL('../server/routes/ai/index.js', import.meta.url), 'utf8')
-    expect(source).toContain('auto_update_enabled: false')
+    expect(source).toContain('auto_update_enabled: BRIDGE_RELEASE.v3')
     expect(source).toContain("updater_url: ''")
-    expect(source).toContain("auto_update_disabled_reason: 'signed_update_manifest_required'")
-    expect(source).toContain("fullUrl: 'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.9.exe'")
+    expect(source).toContain("BRIDGE_RELEASE.v3 ? null : 'signed_update_manifest_required'")
+    expect(source).toContain("BRIDGE_RELEASE.v3 ? 'signed_manifest_v2' : 'legacy_manual_installer'")
+    expect(source).toContain('const BRIDGE_RELEASE = resolveBridgeInstallerRelease()')
     expect(source).toContain('full_url: BRIDGE_RELEASE.fullUrl')
     expect(source).toContain('file_size: BRIDGE_RELEASE.fileSize')
     expect(source).toContain('sha256: BRIDGE_RELEASE.sha256')

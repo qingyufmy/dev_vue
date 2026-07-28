@@ -61,14 +61,7 @@ public static class BridgeRuntimePathResolver
                 mt4ExpertCandidates,
                 "mt4_ea_package_not_found")
             : ResolveOptionalFile(configuredMt4Expert, mt4ExpertCandidates);
-        var serverValue = getEnvironmentVariable("AURUM_BRIDGE_SERVER_URL");
-        if (!Uri.TryCreate(
-                string.IsNullOrWhiteSpace(serverValue) ? DefaultServerUrl : serverValue.Trim(),
-                UriKind.Absolute,
-                out var serverUri))
-        {
-            throw new InvalidDataException("bridge_server_url_invalid");
-        }
+        var serverUri = ResolveServerUri(applicationDirectory, getEnvironmentVariable);
         var profileDataDirectory = BridgeRuntimeProfile.ResolveDataDirectory(rootDataDirectory, profileId);
         return new(
             profileDataDirectory,
@@ -77,6 +70,17 @@ public static class BridgeRuntimePathResolver
             worker,
             mt4Expert,
             serverUri);
+    }
+
+    private static Uri ResolveServerUri(
+        string applicationDirectory,
+        Func<string, string?> getEnvironmentVariable)
+    {
+        var environmentValue = getEnvironmentVariable("AURUM_BRIDGE_SERVER_URL");
+        return string.IsNullOrWhiteSpace(environmentValue)
+            ? BridgeServerEndpointConfiguration.ReadPackaged(applicationDirectory)
+                ?? BridgeServerEndpointConfiguration.ParseServerUri(DefaultServerUrl)
+            : BridgeServerEndpointConfiguration.ParseServerUri(environmentValue);
     }
 
     private static string? ResolveOptionalFile(

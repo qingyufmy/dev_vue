@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using AurumBridge.Update;
+using AurumBridge.Runtime;
 
 namespace AurumBridge.Bootstrapper;
 
@@ -107,6 +108,7 @@ internal sealed class BootstrapInstaller(Action<string> status)
         "coreclr.dll",
         "e_sqlite3.dll",
         "Microsoft.Data.Sqlite.dll",
+        "server-endpoints.json",
         "runtime/python/python.exe",
         "modules/adapter.mt5.python/worker.py",
         "modules/adapter.mt4/AURUMBridgeEA.ex4",
@@ -308,6 +310,7 @@ internal sealed class BootstrapInstaller(Action<string> status)
         {
             throw new InvalidDataException("bootstrap_version_layout_invalid");
         }
+        _ = BridgeServerEndpointConfiguration.ReadPackaged(directory, required:true);
     }
 
     private void InstallVersion(string source, string version)

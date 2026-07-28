@@ -323,7 +323,7 @@ const REASON_MAP = {
   max_open_positions_reached: "持仓数量达到上限，已拒绝",
   signal_price_slippage_exceeded: "信号参考价与当前报价偏离过大，已拒绝",
   auto_trade_disabled: "当前订阅没有开启自动执行",
-  bridge_offline: "用户的 MT5 桥接当前未连接",
+  bridge_offline: "用户的交易终端桥接当前未连接",
   user_quote_unavailable: "无法获取用户 MT5 的有效报价",
   stop_loss_missing: "AI 信号缺少有效止损价格",
   invalid_stop_loss_direction: "止损价格方向与订单方向不一致",
@@ -1360,7 +1360,7 @@ function observerMessage() {
   if (state.aiAccess?.reason === "membership_expired") return "会员已过期，请续费后继续使用 AI 交易实验室";
   if (state.aiAccess?.reason === "membership_required") return "当前为免费账户，请升级会员后使用 AI 交易实验室";
   return state.aiAccess?.reason === "bridge_offline"
-    ? "当前为观摩模式，请连接 MT5 桥接后再操作"
+    ? "当前为观摩模式，请连接量见智桥后再操作"
     : "Plus 会员为观摩模式，仅支持查看";
 }
 
@@ -4327,7 +4327,7 @@ function initBridgeModal() {
     } catch {}
     const a = document.createElement("a");
     a.href = url; a.download = url.split("/").pop(); a.click();
-    toast(`正在下载 MT5 桥接客户端 ${version}`, "success");
+    toast(`正在下载量见智桥 ${version}`, "success");
     modal.classList.add("hidden");
   });
 
@@ -5399,7 +5399,7 @@ function applyRoleUI() {
 
   if (observer) {
     if (state.aiAccess?.reason === "bridge_offline") {
-      showSidebarObserveHint('观摩模式 · <a href="#" id="sidebarBridgeLink">下载并连接 MT5 桥接</a> 后可使用完整功能');
+      showSidebarObserveHint('观摩模式 · <a href="#" id="sidebarBridgeLink">下载并连接量见智桥</a> 后可使用完整功能');
       setTimeout(() => {
         const link = document.getElementById("sidebarBridgeLink");
         if (link) link.onclick = (event) => { event.preventDefault(); handleGatewayModeClick(); };
