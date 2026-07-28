@@ -1,8 +1,9 @@
 import { queryAll, queryOne, queryRun } from '../../db.js'
 import { cacheGetJSON, cacheSetJSON } from '../../redis.js'
-import { getActivePlatformBridgeUserId, getPlatformMarketClockState } from '../../bridge-ws.js'
+import { getActivePlatformBridgeUserId, getBridgeDataRoute, getPlatformMarketClockState } from '../../bridge-ws.js'
 import { mt5Bridge } from './market-data.js'
 import { stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
+import { getDefaultObserverSource, observerSourceSupportsSymbol } from './observer-channels.js'
 
 const CACHE_LIMIT = 1000
 const CACHE_TTL_SECONDS = 24 * 60 * 60
@@ -319,13 +320,20 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   const countLimit = params.review_window === true ? 5000 : 1000
   const count = Math.min(countLimit, Math.max(2, Number(params.count) || 100))
   if (platformUserId) {
-    const clock = getPlatformMarketClockState(platformUserId)
+    const platformRoute = params.platform_route && typeof params.platform_route === 'object'
+      ? {
+          terminal_instance_id:params.platform_route.terminal_instance_id,
+          account_ref:params.platform_route.account_ref,
+        }
+      : {}
+    const clock = getPlatformMarketClockState(platformUserId, params.platform_trading_account_id)
     const rangeStartUtcMs = Number(params.start_utc_msc)
     const rangeEndUtcMs = Number(params.end_utc_msc)
     const exactReviewRange = params.review_window === true && Number.isFinite(rangeStartUtcMs)
       && Number.isFinite(rangeEndUtcMs) && rangeStartUtcMs > 0 && rangeEndUtcMs > rangeStartUtcMs
     if (exactReviewRange) {
       const response = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count,
+        ...platformRoute,
         start_utc_msc:rangeStartUtcMs, end_utc_msc:rangeEndUtcMs }, { timeoutMs:30000, noFallback:true })
       if (response?.status === 'success' && Array.isArray(response.rates) && response.rates.length) {
         const effectiveClock = effectiveResponseClock(clock, response, response.rates)
@@ -360,7 +368,9 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     const cachedResult = await loadClosedCandles(source.id, standardSymbol, timeframe, count).catch(() => ({ rates: [], layer: 'cold' }))
     const probeOnly = cachedResult.rates.length >= count - 1
     const fetchCount = probeOnly ? 3 : count + 1
-    let response = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count: fetchCount }, { timeoutMs: 15000, noFallback: true })
+    let response = await mt5Bridge(platformUserId, 'rates', {
+      symbol, timeframe, count:fetchCount, ...platformRoute,
+    }, { timeoutMs: 15000, noFallback: true })
     if (response?.status === 'success' && Array.isArray(response.rates) && response.rates.length) {
       let rates = response.rates
       let effectiveClock = effectiveResponseClock(clock, response, rates)
@@ -375,7 +385,9 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         && shouldAttemptInternalGapRefill(source.id, standardSymbol, timeframe, cachedIntegrity)
       const windowRefillNeeded = boundaryGapDetected || internalGapRefillAttempted
       if (windowRefillNeeded) {
-        const refill = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count: count + 1 }, { timeoutMs: 15000, noFallback: true })
+        const refill = await mt5Bridge(platformUserId, 'rates', {
+          symbol, timeframe, count:count + 1, ...platformRoute,
+        }, { timeoutMs: 15000, noFallback: true })
         if (refill?.status !== 'success' || !Array.isArray(refill.rates) || !refill.rates.length) {
           return { status: 'error', error: 'rates_gap_refill_failed', message: refill?.message || refill?.error || 'K 线缓存缺口补齐失败' }
         }
@@ -422,6 +434,9 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       }
     }
   }
+  if (platformUserId && params.require_platform_source === true) {
+    return { status:'error', error:'platform_market_source_unavailable', message:'默认观摩源暂时无法提供该品种行情' }
+  }
   const fallback = await mt5Bridge(requestUserId, 'rates', { symbol, timeframe, count,
     ...(params.review_window === true && Number(params.start_utc_msc) > 0 && Number(params.end_utc_msc) > Number(params.start_utc_msc)
       ? { start_utc_msc:Number(params.start_utc_msc), end_utc_msc:Number(params.end_utc_msc) } : {}) },
@@ -462,10 +477,38 @@ export async function saveChanStructureAnchor(sourceId, symbol, timeframe, struc
 
 export async function getPlatformRates(requestUserId, params = {}) {
   maybeCleanupMarketData().catch(error => console.error('[MarketData] cleanup failed:', error.message))
-  const platformUserId = await getActivePlatformBridgeUserId()
-  const key = buildRatesRequestKey(requestUserId, platformUserId, params)
+  let platformUserId
+  let requestParams = params
+  if (params.prefer_user_source === true) {
+    platformUserId = null
+  } else if (params.browser_market_view === true) {
+    const source = await getDefaultObserverSource().catch(() => null)
+    const supported = source ? observerSourceSupportsSymbol(source, params.symbol) : false
+    if (source && supported) {
+      platformUserId = await getActivePlatformBridgeUserId()
+      if (!platformUserId) {
+        return { status:'error', error:'observer_source_offline', message:'默认观摩源暂时离线' }
+      }
+      const route = getBridgeDataRoute(Number(source.bridge_user_id), source.trading_account_id,
+        { strictAccount:true })
+      requestParams = {
+        ...params,
+        require_platform_source:true,
+        platform_trading_account_id:Number(source.trading_account_id) || null,
+        platform_route:route ? {
+          terminal_instance_id:route.terminal_instance_id,
+          account_ref:route.account_ref,
+        } : null,
+      }
+    } else {
+      platformUserId = null
+    }
+  } else {
+    platformUserId = await getActivePlatformBridgeUserId()
+  }
+  const key = buildRatesRequestKey(requestUserId, platformUserId, requestParams)
   if (inFlightRates.has(key)) return inFlightRates.get(key)
-  const request = getPlatformRatesCore(requestUserId, platformUserId, params).finally(() => inFlightRates.delete(key))
+  const request = getPlatformRatesCore(requestUserId, platformUserId, requestParams).finally(() => inFlightRates.delete(key))
   inFlightRates.set(key, request)
   return request
 }
@@ -475,7 +518,9 @@ export function buildRatesRequestKey(requestUserId, platformUserId, params = {})
   const countLimit = reviewWindow ? 5000 : 1000
   const count = Math.min(countLimit, Math.max(2, Number(params.count) || 100))
   const range = reviewWindow ? `${Number(params.start_utc_msc) || 0}-${Number(params.end_utc_msc) || 0}` : 'current'
-  return `${platformUserId || `user-${requestUserId}`}:${String(params.symbol || '').trim()}:${String(params.timeframe || 'M30').toUpperCase()}:${reviewWindow ? 'review' : 'live'}:${range}:${count}`
+  const routeKey = params.platform_route?.terminal_instance_id
+    || params.platform_trading_account_id || 'default'
+  return `${platformUserId || `user-${requestUserId}`}:${routeKey}:${String(params.symbol || '').trim()}:${String(params.timeframe || 'M30').toUpperCase()}:${reviewWindow ? 'review' : 'live'}:${range}:${count}`
 }
 
 export async function getPlatformMarketStatus() {

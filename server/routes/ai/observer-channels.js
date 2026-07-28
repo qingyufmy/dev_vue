@@ -1,5 +1,6 @@
 import { queryAll, queryOne, queryRun, withTransaction } from '../../db.js'
 import { SUBSCRIPTION_SCHEDULE_DEFAULTS } from './subscription-schedule.js'
+import { stripBrokerSuffix } from './utils.js'
 
 const SOURCE_STATUSES = new Set(['active', 'disabled'])
 const CHANNEL_STATUSES = new Set(['active', 'disabled'])
@@ -178,11 +179,24 @@ export async function getObserverSourceForStrategy(strategyId) {
 export async function getDefaultObserverSource() {
   return queryOne(`SELECT sources.id AS source_id, sources.bridge_user_id,
       sources.trading_account_id, sources.strategy_id, sources.name AS source_name,
-      channels.id AS channel_id, channels.name AS channel_name, channels.slug AS channel_slug
+      channels.id AS channel_id, channels.name AS channel_name, channels.slug AS channel_slug,
+      strategies.symbols_json
     FROM ai_observer_channels channels
     JOIN ai_observer_sources sources ON sources.id = channels.source_id
+    JOIN auto_prompt_types strategies ON strategies.id = sources.strategy_id
     WHERE channels.is_default = 1 AND channels.status = 'active' AND sources.status = 'active'
     ORDER BY channels.updated_at DESC, channels.id DESC LIMIT 1`)
+}
+
+export function observerSourceSupportsSymbol(source, symbol) {
+  const requested = stripBrokerSuffix(String(symbol || '').trim())
+  if (!requested) return false
+  let symbols = []
+  try { symbols = JSON.parse(source?.symbols_json || '[]') } catch {}
+  return Array.isArray(symbols) && symbols.some(value => {
+    const candidate = stripBrokerSuffix(String(value || '').trim())
+    return candidate === requested
+  })
 }
 
 export async function listObserverChannelsForUser(userId, plan = 'free') {

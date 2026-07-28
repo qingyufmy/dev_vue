@@ -14,7 +14,7 @@ import {
   deleteObserverSource,
   getDefaultObserverSource, invalidateObserverChannelCache,
   listObserverChannelsForUser, replaceObserverChannelAssignments,
-  resolveObserverSourceForUser, updateObserverSource,
+  resolveObserverSourceForUser, updateObserverSource, observerSourceSupportsSymbol,
 } from '../../server/routes/ai/observer-channels.js'
 
 describe('observer sources and channels', () => {
@@ -36,6 +36,14 @@ describe('observer sources and channels', () => {
     await expect(getDefaultObserverSource()).resolves.toMatchObject({ bridge_user_id:7, channel_slug:'steady' })
     expect(db.queryOne.mock.calls[0][0]).toContain("channels.is_default = 1")
     expect(db.queryOne.mock.calls[0][0]).toContain("sources.status = 'active'")
+    expect(db.queryOne.mock.calls[0][0]).toContain('strategies.symbols_json')
+  })
+
+  it('matches default-source symbols without leaking broker suffix differences', () => {
+    const source = { symbols_json:'["XAUUSD","EURUSD.s"]' }
+    expect(observerSourceSupportsSymbol(source, 'XAUUSD.s')).toBe(true)
+    expect(observerSourceSupportsSymbol(source, 'EURUSD')).toBe(true)
+    expect(observerSourceSupportsSymbol(source, 'GBPUSD')).toBe(false)
   })
 
   it('creates a source for an eligible bridge account and its own trading account', async () => {

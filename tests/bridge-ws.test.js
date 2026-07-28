@@ -386,8 +386,8 @@ describe('initBridgeWS', () => {
     queryOne.mockImplementation(async sql => {
       if (sql.includes('SELECT id FROM users WHERE role')) return { id:42 }
       if (sql.includes('SELECT id, token_version FROM users')) return { id:42, token_version:0 }
-      if (sql.includes('SELECT role, plan, plan_expires_at FROM users')) {
-        return { role:'admin', plan:'pro', plan_expires_at:null }
+      if (sql.includes('SELECT role, plan, plan_expires_at, plan_source FROM users')) {
+        return { role:'admin', plan:'pro', plan_expires_at:null, plan_source:null }
       }
       return null
     })

@@ -9,11 +9,12 @@ import { getRegisteredAutoSchedulerState } from './routes/ai/runtime-state-regis
 import { setWeeklyMarketTimezoneOffset, weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
 import { buildAiAccessContext, observerAccessError, observerWsActionAllowed } from './routes/ai/observer-access.js'
-import { getDefaultObserverSource, resolveObserverSourceForUser } from './routes/ai/observer-channels.js'
+import { getDefaultObserverSource, observerSourceSupportsSymbol, resolveObserverSourceForUser } from './routes/ai/observer-channels.js'
 import { tokenVersionMatches } from './middleware/auth.js'
 import { consumeBridgeConnectionTicket } from './bridge-auth-session.js'
 import { BRIDGE_V3_WS_PATH, createBridgeV3Gateway } from './bridge-v3/gateway.js'
 import { createBridgeV3BusinessAdapter } from './bridge-v3/business-adapter.js'
+import { createObserverQuoteFeedManager } from './observer-quote-feed.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -41,11 +42,54 @@ const adminEventThrottle = new Map()
 
 const PERFORMANCE_SYNC_INTERVAL_MS = 15 * 60 * 1000
 const PERFORMANCE_SYNC_CHUNKS_PER_RUN = 3
+const OBSERVER_QUOTE_INTERVAL_MS = 1000
+const OBSERVER_QUOTE_FRESH_MS = 2500
 export const BRIDGE_WS_LIMITS = Object.freeze({
   maxPayloadBytes: 32 * 1024 * 1024,
   maxBrowserMessageBytes: 256 * 1024,
   maxInitQueueMessages: 32,
   maxInitQueueBytes: 4 * 1024 * 1024,
+})
+
+function observerQuoteTradeMode(quote) {
+  const explicit = Number(quote?.symbol_trade_mode)
+  if (Number.isInteger(explicit) && explicit >= 0 && explicit <= 4) return explicit
+  const marketState = String(quote?.market_state || '').toLowerCase()
+  if (marketState === 'open') return 4
+  if (marketState === 'closed' || marketState === 'stale') return 0
+  if (marketState === 'restricted') return 3
+  return -1
+}
+
+const observerQuoteFeeds = createObserverQuoteFeedManager({
+  intervalMs:OBSERVER_QUOTE_INTERVAL_MS,
+  freshMs:OBSERVER_QUOTE_FRESH_MS,
+  fetchQuote:async descriptor => {
+    if (!isBridgeAlive(descriptor.sourceUserId)) {
+      return { status:'error', code:'observer_source_offline', message:'observer_source_offline' }
+    }
+    const ai = await import('./routes/ai/index.js')
+    const params = {
+      symbol:descriptor.symbol,
+      ...(descriptor.terminalInstanceId ? {
+        terminal_instance_id:descriptor.terminalInstanceId,
+        account_ref:descriptor.accountRef,
+      } : {}),
+    }
+    const quote = await ai.mt5Bridge(descriptor.sourceUserId, 'quote', params, { noFallback:true })
+    if (quote?.status === 'success') recordBridgeMarketState(descriptor.sourceUserId, quote)
+    return quote
+  },
+  publish:(ws, quote) => {
+    if (ws?.readyState !== 1) return false
+    ws.send(JSON.stringify({
+      type:'platform_market_tick',
+      quote,
+      trade_mode:observerQuoteTradeMode(quote),
+      _source:'observer_quote_feed',
+    }))
+    return true
+  },
 })
 
 export function wsMessageByteLength(data) {
@@ -132,11 +176,28 @@ function bridgeV3RouteForContext(userId, tradingAccountId = null) {
   return routes.find(route => route.terminal_instance_id === preferredTerminal) || null
 }
 
+export function getBridgeDataRoute(userId, tradingAccountId = null, { strictAccount = false } = {}) {
+  if (strictAccount && Number(tradingAccountId) > 0) {
+    return bridgeV3RouteForAccount(userId, tradingAccountId)
+  }
+  return bridgeV3RouteForContext(userId, tradingAccountId)
+}
+
 function bridgeRouteParams(route) {
   return route ? {
     terminal_instance_id:route.terminal_instance_id,
     account_ref:route.account_ref,
   } : {}
+}
+
+function observerQuoteDescriptor(dataUserId, observerContext, dataRoute, symbol) {
+  return {
+    sourceUserId:Number(dataUserId),
+    tradingAccountId:Number(observerContext?.channel?.trading_account_id) || null,
+    terminalInstanceId:dataRoute?.terminal_instance_id || null,
+    accountRef:dataRoute?.account_ref || null,
+    symbol:String(symbol || '').trim().toUpperCase(),
+  }
 }
 
 function bridgePlatform(userId, tradingAccountId = null) {
@@ -565,7 +626,10 @@ export async function getActivePlatformBridgeUserId() {
     const channelUserId = Number(channelSource.bridge_user_id)
     // A configured channel is authoritative. Never silently show another
     // account when its source is offline.
-    return isBridgeAlive(channelUserId) ? channelUserId : null
+    const tradingAccountId = Number(channelSource.trading_account_id) || null
+    return (tradingAccountId
+      ? hasAccountBridgeConnection(channelUserId, tradingAccountId)
+      : isBridgeAlive(channelUserId)) ? channelUserId : null
   }
   const configured = await queryOne(`SELECT value FROM system_config
     WHERE category = 'market_data' AND \`key\` = 'platform_market_bridge_user_id' LIMIT 1`).catch(() => null)
@@ -603,7 +667,34 @@ async function resolveObserverBridgeContext(userId, user, requestedChannelId = n
   return { bridgeUserId:null, channel:null }
 }
 
-export function getPlatformMarketClockState(userId) {
+function canUseDefaultPlatformMarketSource(user) {
+  return String(user?.role || '').toLowerCase() === 'user'
+    && String(user?.plan_source || '').toLowerCase() !== 'observer_source'
+}
+
+async function resolveDefaultPlatformMarketContext(user, symbol) {
+  if (!canUseDefaultPlatformMarketSource(user)) return { eligible:false, supported:false }
+  const source = await getDefaultObserverSource().catch(() => null)
+  if (!source) return { eligible:true, configured:false, supported:false }
+  const supported = observerSourceSupportsSymbol(source, symbol)
+  const bridgeUserId = Number(source.bridge_user_id) || null
+  const tradingAccountId = Number(source.trading_account_id) || null
+  const dataRoute = supported && bridgeUserId
+    ? getBridgeDataRoute(bridgeUserId, tradingAccountId, { strictAccount:true }) : null
+  return {
+    eligible:true,
+    configured:true,
+    supported,
+    alive:Boolean(supported && bridgeUserId && (tradingAccountId
+      ? hasAccountBridgeConnection(bridgeUserId, tradingAccountId)
+      : isBridgeAlive(bridgeUserId))),
+    bridgeUserId,
+    dataRoute,
+    source,
+  }
+}
+
+export function getPlatformMarketClockState(userId, tradingAccountId = null) {
   const numericUserId = Number(userId)
   const bridge = bridges.get(numericUserId)
   const hb = bridge?._clientHeartbeat || {}
@@ -619,7 +710,9 @@ export function getPlatformMarketClockState(userId) {
       account_login:bridge.accountLogin || null,
     }
   }
-  const route = bridgeV3RouteForContext(numericUserId)
+  const route = getBridgeDataRoute(numericUserId, tradingAccountId, {
+    strictAccount:Number(tradingAccountId) > 0,
+  })
   const userConnection = bridgeV3Business?.connectedUsers?.()
     .find(item => Number(item.userId) === numericUserId)
   const marketState = bridgeV3MarketStates.get(numericUserId) || {}
@@ -822,7 +915,7 @@ async function handleBrowser(ws, url, req) {
     if (msg.type === 'hb') {
       // Heartbeat uses the same access decision as command handling. Plus is
       // always an observer, even if an old bridge connection still exists.
-      const accessUser = await queryOne('SELECT role, plan, plan_expires_at FROM users WHERE id = ?', [userId]).catch(() => null)
+      const accessUser = await queryOne('SELECT role, plan, plan_expires_at, plan_source FROM users WHERE id = ?', [userId]).catch(() => null)
       const access = buildAiAccessContext(accessUser, { ownBridgeConnected:isBridgeAlive(userId) })
       const observerContext = access.mode === 'observer'
         ? await resolveObserverBridgeContext(userId, accessUser, msg.observer_channel_id, { strict:false })
@@ -834,6 +927,29 @@ async function handleBrowser(ws, url, req) {
       const bridge = dataUserId ? bridges.get(dataUserId) : null
       const dataRoute = dataUserId ? bridgeV3RouteForContext(
         dataUserId, observerContext?.channel?.trading_account_id) : null
+      let quoteClockUserId = dataUserId
+      if (access.mode === 'observer' && ws._observerQuoteSymbol) {
+        const descriptor = observerQuoteDescriptor(
+          dataUserId, observerContext, dataRoute, ws._observerQuoteSymbol)
+        if (!observerQuoteFeeds.matches(ws, descriptor)) observerQuoteFeeds.unsubscribe(ws)
+      } else if (access.mode === 'full' && ws._sharedQuoteKind === 'default_market' && ws._observerQuoteSymbol) {
+        const defaultMarket = await resolveDefaultPlatformMarketContext(accessUser, ws._observerQuoteSymbol)
+        if (defaultMarket.supported && defaultMarket.alive) {
+          quoteClockUserId = defaultMarket.bridgeUserId
+          const descriptor = observerQuoteDescriptor(defaultMarket.bridgeUserId, {
+            channel:{ trading_account_id:defaultMarket.source.trading_account_id },
+          }, defaultMarket.dataRoute, ws._observerQuoteSymbol)
+          if (!observerQuoteFeeds.matches(ws, descriptor)) observerQuoteFeeds.unsubscribe(ws)
+        } else {
+          observerQuoteFeeds.unsubscribe(ws)
+          quoteClockUserId = null
+        }
+      } else {
+        observerQuoteFeeds.unsubscribe(ws)
+      }
+      const sharedQuote = observerQuoteFeeds.latestFor(ws)
+      const v3MarketState = quoteClockUserId ? bridgeV3MarketStates.get(Number(quoteClockUserId)) : null
+      const clockBridge = quoteClockUserId ? bridges.get(Number(quoteClockUserId)) : null
       const usingFallback = access.mode === 'observer'
       const connected = Boolean(dataUserId && isBridgeAlive(dataUserId))
       const alive = connected
@@ -848,6 +964,9 @@ async function handleBrowser(ws, url, req) {
         seq: msg.seq,
         mt5_connected: connected,
         mt5_alive: alive,
+        mt5_time:sharedQuote?.time || clockBridge?.mt5TimeStr || v3MarketState?.mt5TimeStr || null,
+        timezone_offset_minutes:sharedQuote?.timezone_offset_minutes
+          ?? clockBridge?.timezoneOffsetMinutes ?? v3MarketState?.timezoneOffsetMinutes ?? null,
         platform: dataRoute?.platform || bridgePlatform(
           dataUserId, observerContext?.channel?.trading_account_id),
         terminal_instance_id:dataRoute?.terminal_instance_id || null,
@@ -863,10 +982,12 @@ async function handleBrowser(ws, url, req) {
   })
 
   ws.on('close', () => {
+    observerQuoteFeeds.unsubscribe(ws)
     const set = browsers.get(userId)
     if (set) { set.delete(ws); if (set.size === 0) browsers.delete(userId) }
   })
   ws.on('error', () => {
+    observerQuoteFeeds.unsubscribe(ws)
     const set = browsers.get(userId)
     if (set) { set.delete(ws); if (set.size === 0) browsers.delete(userId) }
   })
@@ -1534,7 +1655,7 @@ async function handleBrowserCommand(ws, userId, msg) {
 
   try {
     const ai = await import('./routes/ai/index.js')
-    const user = await queryOne('SELECT plan, role, plan_expires_at FROM users WHERE id = ?', [userId])
+    const user = await queryOne('SELECT plan, role, plan_expires_at, plan_source FROM users WHERE id = ?', [userId])
     const access = buildAiAccessContext(user, { ownBridgeConnected:isBridgeAlive(userId) })
     if (!observerWsActionAllowed(access, action)) {
       const code = access.mode === 'blocked' ? access.reason : 'observer_read_only'
@@ -1611,11 +1732,43 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'symbols':
         result = await ai.mt5Bridge(dataUserId, 'symbols', routedParams(), { noFallback:true })
         break
+      case 'platform_quote': {
+        const defaultMarket = await resolveDefaultPlatformMarketContext(user, params.symbol)
+        if (!defaultMarket.eligible || !defaultMarket.configured || !defaultMarket.supported) {
+          if (ws._sharedQuoteKind === 'default_market') observerQuoteFeeds.unsubscribe(ws)
+          ws._sharedQuoteKind = null
+          ws._observerQuoteSymbol = null
+          result = { status:'success', available:false, source:'own_account' }
+        } else if (!defaultMarket.alive) {
+          observerQuoteFeeds.unsubscribe(ws)
+          ws._sharedQuoteKind = 'default_market'
+          ws._observerQuoteSymbol = String(params.symbol || '').trim().toUpperCase()
+          result = {
+            status:'success', available:true, online:false,
+            source:'default_observer', error:'observer_source_offline',
+          }
+        } else {
+          ws._sharedQuoteKind = 'default_market'
+          ws._observerQuoteSymbol = String(params.symbol || '').trim().toUpperCase()
+          const quote = await observerQuoteFeeds.subscribe(ws,
+            observerQuoteDescriptor(defaultMarket.bridgeUserId, {
+              channel:{ trading_account_id:defaultMarket.source.trading_account_id },
+            }, defaultMarket.dataRoute, ws._observerQuoteSymbol))
+          result = { ...quote, available:true, source:'default_observer' }
+        }
+        break
+      }
       case 'quote': {
-        if (dataUserId && isBridgeAlive(dataUserId)) {
+        if (access.mode === 'observer' && dataUserId && isBridgeAlive(dataUserId)) {
+          ws._sharedQuoteKind = 'observer'
+          ws._observerQuoteSymbol = String(params.symbol || '').trim().toUpperCase()
+          result = await observerQuoteFeeds.subscribe(ws,
+            observerQuoteDescriptor(dataUserId, observerContext, dataRoute, ws._observerQuoteSymbol))
+        } else if (dataUserId && isBridgeAlive(dataUserId)) {
           result = await ai.mt5Bridge(dataUserId, 'quote', routedParams({ symbol: params.symbol }), { noFallback:true })
           if (result?.status === 'success') recordBridgeMarketState(dataUserId, result)
         } else {
+          if (access.mode === 'observer') observerQuoteFeeds.unsubscribe(ws)
           result = { status: 'error', message: 'MT5桥接未连接' }
         }
         break
@@ -1740,7 +1893,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'rates':
-        result = await ai.platformRates(userId, { symbol: params.symbol, timeframe: params.timeframe || 'M30', count: params.count || 100 })
+        result = await ai.platformRates(userId, {
+          symbol:params.symbol,
+          timeframe:params.timeframe || 'M30',
+          count:params.count || 100,
+          browser_market_view:canUseDefaultPlatformMarketSource(user),
+          prefer_user_source:!canUseDefaultPlatformMarketSource(user),
+        })
         break
       case 'diagnostics':
         result = await ai.mt5Bridge(dataUserId, 'diagnostics', routedParams(), { noFallback:true })

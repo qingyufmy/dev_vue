@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const db = vi.hoisted(() => ({ queryAll: vi.fn(), queryOne: vi.fn(), queryRun: vi.fn() }))
-const bridge = vi.hoisted(() => ({ activeId: vi.fn(), clock: vi.fn() }))
+const bridge = vi.hoisted(() => ({ activeId: vi.fn(), clock: vi.fn(), dataRoute: vi.fn() }))
 const mt5Bridge = vi.hoisted(() => vi.fn())
 const redis = vi.hoisted(() => ({ get: vi.fn(), set: vi.fn() }))
 
 vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/bridge-ws.js', () => ({
   getActivePlatformBridgeUserId: bridge.activeId,
+  getBridgeDataRoute: bridge.dataRoute,
   getPlatformMarketClockState: bridge.clock,
 }))
 vi.mock('../../server/routes/ai/market-data.js', () => ({ mt5Bridge }))
@@ -26,6 +27,7 @@ describe('platform market data', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     bridge.activeId.mockResolvedValue(1)
+    bridge.dataRoute.mockReturnValue(null)
     bridge.clock.mockReturnValue({ connected: true, timezone_offset_minutes: 180, clock_status: 'verified', clock_residual_ms: 15, broker_server: 'Demo', account_login: 123456 })
     db.queryOne.mockResolvedValue({ id: 9 })
     db.queryAll.mockResolvedValue([])
@@ -40,6 +42,66 @@ describe('platform market data', () => {
       start_utc_msc:1784185200000, end_utc_msc:1784271600000 })
     expect(live).not.toBe(review)
     expect(review).toContain(':review:1784185200000-1784271600000:1642')
+  })
+
+  it('uses the default observer source for a supported browser symbol', async () => {
+    db.queryOne.mockImplementation(async sql => {
+      if (sql.includes('FROM ai_observer_channels')) {
+        return { bridge_user_id:1, trading_account_id:91, symbols_json:'["XAUUSD"]' }
+      }
+      return { id:9 }
+    })
+    bridge.dataRoute.mockReturnValue({
+      terminal_instance_id:'observer-terminal-91',
+      account_ref:{ broker_server:'Broker-Demo', login:'860058' },
+    })
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.s', rates:[rate(0, 2000), rate(1, 2001), rate(2, 2002)] })
+
+    const result = await getPlatformRates(7, {
+      symbol:'XAUUSD', timeframe:'M1', count:3, browser_market_view:true,
+    })
+
+    expect(bridge.dataRoute).toHaveBeenCalledWith(1, 91, { strictAccount:true })
+    expect(mt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({
+      symbol:'XAUUSD',
+      terminal_instance_id:'observer-terminal-91',
+      account_ref:{ broker_server:'Broker-Demo', login:'860058' },
+    }), expect.any(Object))
+    expect(result.market_meta.source).toBe('platform_admin_bridge')
+  })
+
+  it('uses the ordinary user bridge only when the selected symbol is outside the default source', async () => {
+    db.queryOne.mockImplementation(async sql => {
+      if (sql.includes('FROM ai_observer_channels')) {
+        return { bridge_user_id:1, symbols_json:'["XAUUSD"]' }
+      }
+      return { id:9 }
+    })
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'EURUSD', rates:[rate(0, 1.1), rate(1, 1.2), rate(2, 1.3)] })
+
+    const result = await getPlatformRates(7, {
+      symbol:'EURUSD', timeframe:'M1', count:3, browser_market_view:true,
+    })
+
+    expect(mt5Bridge).toHaveBeenCalledWith(7, 'rates', expect.objectContaining({ symbol:'EURUSD' }), expect.any(Object))
+    expect(result.market_meta.source).toBe('user_bridge_fallback')
+  })
+
+  it('does not silently fall back when the configured default source is offline', async () => {
+    db.queryOne.mockImplementation(async sql => {
+      if (sql.includes('FROM ai_observer_channels')) {
+        return { bridge_user_id:1, symbols_json:'["XAUUSD"]' }
+      }
+      return { id:9 }
+    })
+    bridge.activeId.mockResolvedValue(null)
+
+    const result = await getPlatformRates(7, {
+      symbol:'XAUUSD', timeframe:'M1', count:3, browser_market_view:true,
+    })
+
+    expect(result).toMatchObject({ status:'error', error:'observer_source_offline' })
+    expect(mt5Bridge).not.toHaveBeenCalled()
   })
 
   it('hydrates an exact historical review range without dropping its final closed bar', async () => {

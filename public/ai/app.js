@@ -20,6 +20,8 @@ const state = {
   _lastGatewayLive: false,
   backgroundSyncTimer: null,
   lastQuote: null,
+  lastObserverQuote: null,
+  platformMarketSourceActive: false,
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
   accountBalance: 0,
@@ -128,8 +130,14 @@ function getGlobalSymbol() {
   return localStorage.getItem(SYMBOL_STORAGE_KEY) || "XAUUSD";
 }
 
+function standardMarketSymbol(symbol) {
+  return String(symbol || "").trim().replace(/\.(a|s|c|pro|std|z|ecn|m|raw|mini)$/i, "").toUpperCase();
+}
+
 function setGlobalSymbol(symbol) {
   localStorage.setItem(SYMBOL_STORAGE_KEY, symbol);
+  state.platformMarketSourceActive = false;
+  state.lastObserverQuote = null;
   for (const id of _symSelectors) {
     const el = document.getElementById(id);
     if (el && el._symSet) el._symSet(symbol);
@@ -1549,16 +1557,19 @@ function connectBridgeStatusWs(onReady) {
   state.bridgeWs = ws;
   let _readyFired = false;
   const _fireReady = () => { if (!_readyFired && typeof onReady === 'function') { _readyFired = true; onReady(); } };
+  const sendHeartbeat = () => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ type:'hb', seq:++state._hbSeq, observer_channel_id:state.selectedObserverChannelId || null }));
+    } catch {}
+  };
   ws.onopen = () => {
     state._reconnectAttempts = 0; // reset backoff on successful connection
 
     state._hbSeq = 0;
     if (state._hbTimer) clearInterval(state._hbTimer);
-    state._hbTimer = setInterval(() => {
-      if (ws.readyState === 1) {
-        try { ws.send(JSON.stringify({ type: 'hb', seq: ++state._hbSeq, observer_channel_id:state.selectedObserverChannelId || null })); } catch {}
-      }
-    }, 30000);
+    sendHeartbeat();
+    state._hbTimer = setInterval(sendHeartbeat, 30000);
     _fireReady();
   };
   ws.onmessage = (e) => {
@@ -1570,9 +1581,36 @@ function connectBridgeStatusWs(onReady) {
         if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
         const selected = String($("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || getGlobalSymbol()).toUpperCase();
         const brokerSymbol = String(quote.symbol || '').toUpperCase();
-        if (brokerSymbol && (brokerSymbol === selected || brokerSymbol.startsWith(selected)) &&
+        if (brokerSymbol && standardMarketSymbol(brokerSymbol) === standardMarketSymbol(selected) &&
             Number.isFinite(Number(quote.bid)) && Number.isFinite(Number(quote.ask))) {
+          state.platformMarketSourceActive = true;
+          renderPlatformMarketMeta(quote);
+          if (isObserverMode()) {
+            const previousQuote = state.lastObserverQuote && state.lastObserverQuote.symbol === brokerSymbol
+              ? state.lastObserverQuote : null;
+            const bidDirection = previousQuote
+              ? Number(quote.bid) > previousQuote.bid ? "up" : Number(quote.bid) < previousQuote.bid ? "down" : ""
+              : "";
+            const askDirection = previousQuote
+              ? Number(quote.ask) > previousQuote.ask ? "up" : Number(quote.ask) < previousQuote.ask ? "down" : ""
+              : "";
+            setText("quoteBid", priceDisplay(quote.bid));
+            setText("quoteAsk", priceDisplay(quote.ask));
+            setQuoteDirection("quoteBidDir", bidDirection);
+            setQuoteDirection("quoteAskDir", askDirection);
+            flashPrice("quoteBid", bidDirection);
+            flashPrice("quoteAsk", askDirection);
+            state.lastObserverQuote = {
+              symbol:brokerSymbol,
+              bid:Number(quote.bid),
+              ask:Number(quote.ask),
+              spread:Number(quote.spread),
+              time:quote.time,
+            };
+            updateTradingQuotePreview(state.lastObserverQuote);
+          }
           updateKlineTick(Number(quote.bid), Number(quote.ask), quote);
+          updateSignalPriceFields(state.selectedSignal);
         }
         if (isObserverMode()) _maybeRefreshSignal();
       } else if (msg.type === 'data') {
@@ -1806,6 +1844,19 @@ function updateMarketStatusFromQuote(quote) {
 
 function renderQuoteStatusMeta(quote) {
   setText('quoteSpread', Number.isFinite(Number(quote?.spread)) ? fmt(quote.spread, 2) : '--');
+  const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(quote);
+  if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
+  const quoteTime = formatTerminalQuoteTime(quote);
+  setText('quoteTime', quoteTime);
+  setText('mt5ServerTime', quoteTime === '--' ? '--' : quoteTime.split(' ').pop() || '--');
+  updateMarketStatusFromQuote(quote);
+}
+
+function renderPlatformMarketMeta(quote) {
+  if (isObserverMode()) {
+    renderQuoteStatusMeta(quote);
+    return;
+  }
   const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(quote);
   if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
   const quoteTime = formatTerminalQuoteTime(quote);
@@ -2115,6 +2166,16 @@ function handleHeartbeat(msg) {
   syncAiAccess(msg.access);
   if (msg.platform) updateBridgePlatformUI(msg.platform);
   if (msg.observer_channel?.id) syncSelectedObserverChannel(msg.observer_channel.id);
+  if (msg.mt5_time) {
+    const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(msg);
+    if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
+    const terminalTime = formatTerminalQuoteTime({
+      time:msg.mt5_time,
+      timezone_offset_minutes:msg.timezone_offset_minutes,
+    });
+    setText('quoteTime', terminalTime);
+    setText('mt5ServerTime', terminalTime === '--' ? '--' : terminalTime.split(' ').pop() || '--');
+  }
   const isLive = msg.mt5_connected && msg.mt5_alive;
   const usingFallback = msg.using_fallback;
   const wasLive = state._lastGatewayLive;
@@ -4425,14 +4486,14 @@ function stopLiveQuoteRefreshTimer() {
   }
 }
 
-async function refreshLiveQuote() {
+async function refreshLiveQuote(syncPlatformSource = false) {
   if (_liveQuoteRefreshInFlight
       || document.hidden
       || state._lastGatewayLive !== true
       || state.bridgeWs?.readyState !== WebSocket.OPEN) return;
   _liveQuoteRefreshInFlight = true;
   try {
-    await refreshQuote();
+    await refreshQuote({ syncPlatformSource });
   } catch {
     // A reconnect or terminal switch can invalidate one poll. The next tick
     // retries without surfacing a repeated toast to the user.
@@ -4446,19 +4507,42 @@ function startLiveQuoteRefreshTimer() {
   if (document.hidden
       || state._lastGatewayLive !== true
       || state.bridgeWs?.readyState !== WebSocket.OPEN) return;
-  void refreshLiveQuote();
+  void refreshLiveQuote(true);
+  if (isObserverMode()) return;
   _liveQuoteRefreshTimer = setInterval(() => {
-    void refreshLiveQuote();
+    void refreshLiveQuote(false);
   }, LIVE_QUOTE_REFRESH_INTERVAL_MS);
 }
 
-async function refreshQuote() {
+async function syncDefaultPlatformQuote(symbol) {
+  if (isObserverMode()) return null;
+  const platformQuote = await wsApi("platform_quote", { symbol });
+  state.platformMarketSourceActive = platformQuote.available === true;
+  if (!state.platformMarketSourceActive) return platformQuote;
+  if (platformQuote.online === false) {
+    setText('quoteTime', '--');
+    setText('mt5ServerTime', '--');
+    updateMarketStatus(-2);
+    return platformQuote;
+  }
+  if (Number.isFinite(Number(platformQuote.bid)) && Number.isFinite(Number(platformQuote.ask))) {
+    renderPlatformMarketMeta(platformQuote);
+    updateKlineTick(Number(platformQuote.bid), Number(platformQuote.ask), platformQuote);
+  }
+  return platformQuote;
+}
+
+async function refreshQuote({ syncPlatformSource = true } = {}) {
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
   if (!symbol) return;
+  if (syncPlatformSource) await syncDefaultPlatformQuote(symbol).catch(() => {});
   const data = await wsApi("quote", { symbol });
   const bid = Number(data.bid);
   const ask = Number(data.ask);
-  const previousQuote = state.lastQuote && state.lastQuote.symbol === symbol ? state.lastQuote : null;
+  const observer = isObserverMode();
+  if (observer) state.platformMarketSourceActive = true;
+  const quoteState = observer ? state.lastObserverQuote : state.lastQuote;
+  const previousQuote = quoteState && quoteState.symbol === symbol ? quoteState : null;
   let bidDirection = "";
   let askDirection = "";
 
@@ -4471,7 +4555,8 @@ async function refreshQuote() {
 
   setText("quoteBid", priceDisplay(data.bid));
   setText("quoteAsk", priceDisplay(data.ask));
-  renderQuoteStatusMeta(data);
+  setText('quoteSpread', Number.isFinite(Number(data.spread)) ? fmt(data.spread, 2) : '--');
+  if (observer || !state.platformMarketSourceActive) renderQuoteStatusMeta(data);
   setQuoteDirection("quoteBidDir", bidDirection);
   setQuoteDirection("quoteAskDir", askDirection);
   flashPrice("quoteBid", bidDirection);
@@ -4479,9 +4564,11 @@ async function refreshQuote() {
 
   if (Number.isFinite(bid) && Number.isFinite(ask)) {
     setQuoteChangeUnavailable();
-    state.lastQuote = { symbol, bid, ask, spread: Number(data.spread), time: data.time };
-    updateTradingQuotePreview(state.lastQuote);
-    updateKlineTick(data.bid, data.ask, data);
+    const nextQuote = { symbol, bid, ask, spread: Number(data.spread), time:data.time };
+    if (observer) state.lastObserverQuote = nextQuote;
+    else state.lastQuote = nextQuote;
+    updateTradingQuotePreview(nextQuote);
+    if (observer || !state.platformMarketSourceActive) updateKlineTick(data.bid, data.ask, data);
   }
   updateSignalPriceFields(state.selectedSignal);
 }
@@ -4635,7 +4722,8 @@ async function loadKlineData() {
       const meta = data.market_meta || {};
       const offset = Number.isFinite(Number(meta.timezone_offset_minutes))
         ? `UTC${Number(meta.timezone_offset_minutes) >= 0 ? '+' : ''}${Number(meta.timezone_offset_minutes) / 60}` : '时区待校验';
-      const platform = meta.source === 'platform_admin_bridge';
+      const platform = String(meta.source || '').startsWith('platform_');
+      state.platformMarketSourceActive = platform;
       sourceBadge.textContent = `${platform ? '平台行情' : '本人行情'} · ${offset}`;
       sourceBadge.classList.toggle('is-platform', platform);
       sourceBadge.classList.toggle('is-fallback', !platform);
@@ -5199,12 +5287,21 @@ async function changeObserverChannel(channelId) {
   const nextId = Number(channelId);
   if (!nextId || nextId === state.selectedObserverChannelId) return;
   syncSelectedObserverChannel(nextId);
+  state.platformMarketSourceActive = false;
+  state.lastObserverQuote = null;
+  setText('quoteTime', '--');
+  setText('mt5ServerTime', '--');
   _historyCache = null;
   _historyChartCache = null;
   state.signals = [];
   state.positions = [];
   const accessRes = await api(`/api/ai/access-context?channel_id=${encodeURIComponent(nextId)}`);
   syncAiAccess(accessRes.access);
+  if (state.bridgeWs?.readyState === WebSocket.OPEN) {
+    try {
+      state.bridgeWs.send(JSON.stringify({ type:'hb', seq:++state._hbSeq, observer_channel_id:nextId }));
+    } catch {}
+  }
   await refreshAll();
   const channelName = state.observerChannels.find(channel => Number(channel.id) === nextId)?.name || '观摩频道';
   toast(`已切换至${channelName}`, 'success');
