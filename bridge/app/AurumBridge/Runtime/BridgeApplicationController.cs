@@ -135,6 +135,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
     public event Action<BridgeApplicationStatus>? StatusChanged;
     public event Action<Exception>? ConnectionFailureObserved;
     public event Action<TerminalRuntimeFailure>? TerminalFailureObserved;
+    public event Action<BridgeReleaseAvailableNotification>? ReleaseAvailable;
     public BridgeRuntimePaths Paths => _paths;
     public string? SelectedPlatform
     {
@@ -736,6 +737,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
             }
         };
         webSocket.FullSnapshotRequired += host.HandleFullSnapshotRequestAsync;
+        webSocket.ReleaseAvailable += notification => ReleaseAvailable?.Invoke(notification);
         var connection = new BridgeConnectionSupervisor(
             host.Terminals,
             typeof(BridgeApplicationController).Assembly.GetName().Version?.ToString() ?? "3.0.0",

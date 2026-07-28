@@ -10,7 +10,7 @@
       "enum": [
         "hello", "hello_ack", "command", "command_result", "command_result_ack",
         "quote_request", "quote", "data_request", "data_response",
-        "data_delta", "data_ack", "heartbeat", "error"
+        "data_delta", "data_ack", "heartbeat", "release_available", "error"
       ]
     },
     "message_id": {

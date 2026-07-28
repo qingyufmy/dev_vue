@@ -15,6 +15,12 @@ public sealed record BridgeHelloAcknowledgement(
     string SessionId,
     IReadOnlyList<string> AcceptedTerminalInstanceIds);
 
+public sealed record BridgeReleaseAvailableNotification(
+    string? ReleaseId,
+    string ReleaseVersion,
+    string RolloutChannel,
+    string Reason);
+
 public sealed class BridgeInboundRouter
 {
     private readonly BridgeStore _store;
@@ -47,6 +53,7 @@ public sealed class BridgeInboundRouter
     public event Action<string, string>? DataAcknowledged;
     public event Action<BridgeHelloAcknowledgement>? HelloAcknowledged;
     public event Action<string>? InitialSynchronizationCompleted;
+    public event Action<BridgeReleaseAvailableNotification>? ReleaseAvailable;
 
     public async Task RouteAsync(string payloadJson, CancellationToken cancellationToken = default)
     {
@@ -111,6 +118,35 @@ public sealed class BridgeInboundRouter
                 await HandleDataRequestAsync(payloadJson, cancellationToken);
                 return;
             case "heartbeat":
+                return;
+            case "release_available":
+                var releaseVersion = ReadRequiredString(root, "release_version");
+                if (!Version.TryParse(releaseVersion, out _))
+                {
+                    throw new InvalidDataException("bridge_release_notification_invalid");
+                }
+                var rolloutChannel = ReadRequiredString(root, "rollout_channel");
+                var reason = ReadRequiredString(root, "reason");
+                if (rolloutChannel is not ("internal" or "stable")
+                    || reason is not ("published" or "rollback"))
+                {
+                    throw new InvalidDataException("bridge_release_notification_invalid");
+                }
+                string? releaseId = null;
+                if (root.TryGetProperty("release_id", out var releaseIdElement)
+                    && releaseIdElement.ValueKind is not JsonValueKind.Null)
+                {
+                    releaseId = releaseIdElement.GetString();
+                    if (string.IsNullOrWhiteSpace(releaseId) || releaseId.Length > 128)
+                    {
+                        throw new InvalidDataException("bridge_release_notification_invalid");
+                    }
+                }
+                ReleaseAvailable?.Invoke(new(
+                    releaseId,
+                    releaseVersion,
+                    rolloutChannel,
+                    reason));
                 return;
             case "error":
                 throw new InvalidDataException(ReadRequiredString(root, "error_code"));

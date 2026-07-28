@@ -38,6 +38,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private int _latestPhase = (int)BridgeApplicationPhase.Starting;
     private int _latestTerminalCount;
     private int _canManageObserverSources;
+    private int _updateCheckRequested;
     private string? _lastLoggedStatusFingerprint;
     private bool _shuttingDown;
     private BridgeApplicationStatus? _primaryStatus;
@@ -168,6 +169,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
             LogConnectionFailure("bridge_connection_failure", "primary", error);
         _controller.TerminalFailureObserved += failure =>
             LogTerminalFailure("primary", failure);
+        _controller.ReleaseAvailable += HandleReleaseAvailable;
         _singleInstance.ActivationRequested += HandleActivationRequested;
         _singleInstance.ShutdownRequested += HandleShutdownRequested;
         _singleInstance.StartActivationListener();
@@ -1420,7 +1422,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
             var nextCheckAt = DateTimeOffset.UtcNow.AddMinutes(1);
             while (!cancellationToken.IsCancellationRequested)
             {
-                if (DateTimeOffset.UtcNow >= nextCheckAt)
+                if (DateTimeOffset.UtcNow >= nextCheckAt
+                    || Interlocked.Exchange(ref _updateCheckRequested, 0) == 1)
                 {
                     try
                     {
@@ -1540,6 +1543,30 @@ public sealed class BridgeApplicationContext : ApplicationContext
         });
     }
 
+    private void HandleReleaseAvailable(BridgeReleaseAvailableNotification notification)
+    {
+        if (_updateCoordinator is null || _shuttingDown)
+        {
+            return;
+        }
+        _logger.Info(
+            "update_release_available",
+            $"version={notification.ReleaseVersion};channel={notification.RolloutChannel};reason={notification.Reason}");
+        Interlocked.Exchange(ref _updateCheckRequested, 1);
+        WakeUpdateObserver();
+    }
+
+    private void WakeUpdateObserver()
+    {
+        try
+        {
+            _updateWake.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+        }
+    }
+
     private async Task HideHealthyUpdateNoticeAsync()
     {
         await Task.Delay(TimeSpan.FromSeconds(5));
@@ -1577,10 +1604,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 "update_manual_activation_requested",
                 $"version={state.TargetVersion};priority={state.Priority}");
             HandleUpdateStateChanged(state);
-            if (_updateWake.CurrentCount == 0)
-            {
-                _updateWake.Release();
-            }
+            WakeUpdateObserver();
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {

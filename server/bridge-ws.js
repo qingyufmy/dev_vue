@@ -13,6 +13,7 @@ import { getDefaultObserverSource, observerSourceSupportsSymbol, resolveObserver
 import { tokenVersionMatches } from './middleware/auth.js'
 import { consumeBridgeConnectionTicket } from './bridge-auth-session.js'
 import { BRIDGE_V3_WS_PATH, createBridgeV3Gateway } from './bridge-v3/gateway.js'
+import { setBridgeReleaseNotifier } from './bridge-v3/release-events.js'
 import { createBridgeV3BusinessAdapter } from './bridge-v3/business-adapter.js'
 import { createObserverQuoteFeedManager } from './observer-quote-feed.js'
 
@@ -743,6 +744,7 @@ export function initBridgeWS(server) {
     onTerminalReady:synchronizeBridgeV3TerminalIdentity,
     onTerminalDisconnected:forgetBridgeV3TerminalIdentity,
   })
+  setBridgeReleaseNotifier(release => v3Gateway.broadcastReleaseAvailable(release))
   bridgeV3Business = createBridgeV3BusinessAdapter({ gateway:v3Gateway })
 
   server.on('upgrade', (req, socket, head) => {

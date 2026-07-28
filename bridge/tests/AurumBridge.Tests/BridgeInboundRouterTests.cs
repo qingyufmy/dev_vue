@@ -170,6 +170,53 @@ public sealed class BridgeInboundRouterTests
     }
 
     [TestMethod]
+    public async Task ReleaseAvailableIsAWakeOnlyNotification()
+    {
+        var router = Router();
+        BridgeReleaseAvailableNotification? observed = null;
+        router.ReleaseAvailable += notification => observed = notification;
+
+        await router.RouteAsync("""
+            {
+              "v": 3,
+              "type": "release_available",
+              "message_id": "release_01JROUTER001",
+              "sent_at_utc_msc": 1800000000000,
+              "release_id": "bridge-3.1.0-20260728.1",
+              "release_version": "3.1.0",
+              "rollout_channel": "stable",
+              "reason": "published"
+            }
+            """);
+
+        Assert.IsNotNull(observed);
+        Assert.AreEqual("bridge-3.1.0-20260728.1", observed.ReleaseId);
+        Assert.AreEqual("3.1.0", observed.ReleaseVersion);
+        Assert.AreEqual("stable", observed.RolloutChannel);
+        Assert.AreEqual("published", observed.Reason);
+        Assert.IsEmpty(await _testStore.Store.GetPendingOutboxAsync());
+    }
+
+    [TestMethod]
+    public async Task InvalidReleaseAvailableNotificationFailsClosed()
+    {
+        var router = Router();
+
+        var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => router.RouteAsync("""
+            {
+              "v": 3,
+              "type": "release_available",
+              "release_id": "bridge-3.1.0-20260728.1",
+              "release_version": "not-a-version",
+              "rollout_channel": "stable",
+              "reason": "published"
+            }
+            """));
+
+        Assert.AreEqual("bridge_release_notification_invalid", error.Message);
+    }
+
+    [TestMethod]
     public async Task DuplicateCommandsReplayAReceiptWithoutExecutingWorkerTwice()
     {
         var router = Router();

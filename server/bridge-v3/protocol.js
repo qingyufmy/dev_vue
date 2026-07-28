@@ -3,7 +3,7 @@ export const BRIDGE_PROTOCOL_VERSION = 3
 export const BRIDGE_V3_MESSAGE_TYPES = Object.freeze(new Set([
   'hello', 'hello_ack', 'command', 'command_result', 'command_result_ack', 'quote_request', 'quote',
   'data_request', 'data_response',
-  'data_delta', 'data_ack', 'heartbeat', 'error',
+  'data_delta', 'data_ack', 'heartbeat', 'release_available', 'error',
 ]))
 
 export const BRIDGE_V3_DATA_REQUEST_ACTIONS = Object.freeze(new Set([
@@ -245,6 +245,22 @@ function validateDataDelta(message) {
   return errors
 }
 
+function validateReleaseAvailable(message) {
+  const errors = validateEnvelope(message)
+  if (message.release_id !== null && message.release_id !== undefined) {
+    validateId(errors, 'release_id', message.release_id)
+  }
+  if (typeof message.release_version !== 'string'
+    || !/^\d+\.\d+(?:\.\d+){0,2}$/.test(message.release_version)) {
+    errors.push('release_version:invalid')
+  }
+  if (!['internal', 'stable'].includes(message.rollout_channel)) {
+    errors.push('rollout_channel:unsupported')
+  }
+  if (!['published', 'rollback'].includes(message.reason)) errors.push('reason:unsupported')
+  return errors
+}
+
 export function validateBridgeV3Message(message, { nowUtcMsc = Date.now() } = {}) {
   const envelopeErrors = validateEnvelope(message)
   if (envelopeErrors.length || !isRecord(message)) return { ok:false, errors:envelopeErrors }
@@ -259,6 +275,7 @@ export function validateBridgeV3Message(message, { nowUtcMsc = Date.now() } = {}
   else if (message.type === 'data_request') errors = validateDataRequest(message)
   else if (message.type === 'data_response') errors = validateDataResponse(message)
   else if (message.type === 'data_delta') errors = validateDataDelta(message)
+  else if (message.type === 'release_available') errors = validateReleaseAvailable(message)
   else errors = envelopeErrors
 
   return errors.length ? { ok:false, errors } : { ok:true, errors:[] }

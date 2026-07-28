@@ -310,6 +310,7 @@ describe('bridge release manifest route', () => {
     try {
       const manifestPath = path.join(directory, 'current.json')
       const publicKeyPath = path.join(directory, 'public-key.pem')
+      const notifyReleaseAvailable = vi.fn()
       await writeFile(publicKeyPath, 'test-public-key')
       const router = createBridgeReleaseRouter({
         manifestPath,
@@ -317,6 +318,7 @@ describe('bridge release manifest route', () => {
         requireAdmin:(req, res, next) => next(),
         publicKeyPath,
         verifySignatures:() => true,
+        notifyReleaseAvailable,
       })
       const first = manifestV2({
         release_id:'bridge-3.1.0-first',
@@ -337,6 +339,26 @@ describe('bridge release manifest route', () => {
       const rollback = await mutate(router, '/admin/bridge/v3/releases/rollback')
       expect(rollback.status).toBe(200)
       expect(JSON.parse(rollback.body).release_id).toBe(first.release_id)
+      expect(notifyReleaseAvailable.mock.calls).toEqual([
+        [{
+          releaseId:first.release_id,
+          releaseVersion:first.release_version,
+          rolloutChannel:first.rollout_channel,
+          reason:'published',
+        }],
+        [{
+          releaseId:second.release_id,
+          releaseVersion:second.release_version,
+          rolloutChannel:second.rollout_channel,
+          reason:'published',
+        }],
+        [{
+          releaseId:first.release_id,
+          releaseVersion:first.release_version,
+          rolloutChannel:first.rollout_channel,
+          reason:'rollback',
+        }],
+      ])
     } finally {
       await rm(directory, { recursive:true, force:true })
     }

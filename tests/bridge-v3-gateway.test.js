@@ -198,6 +198,45 @@ async function completeInitialSync(ws) {
 }
 
 describe('Bridge v3 websocket gateway', () => {
+  it('broadcasts one wake-only release notice to each live connection', async () => {
+    const { gateway } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify({
+      ...hello(),
+      bridge_version:'3.1.2',
+    })))
+    await flush()
+
+    expect(gateway.broadcastReleaseAvailable({
+      releaseId:'bridge-3.1.0-20260728.1',
+      releaseVersion:'3.1.0',
+      rolloutChannel:'stable',
+      reason:'published',
+    })).toBe(1)
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      v:3,
+      type:'release_available',
+      release_id:'bridge-3.1.0-20260728.1',
+      release_version:'3.1.0',
+      rollout_channel:'stable',
+      reason:'published',
+    })
+  })
+
+  it('keeps legacy v3 clients on polling without sending an unknown notice type', async () => {
+    const { gateway } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    const sendsBeforeNotice = ws.send.mock.calls.length
+
+    expect(gateway.broadcastReleaseAvailable({
+      releaseId:'bridge-3.1.2-20260728.1',
+      releaseVersion:'3.1.2',
+    })).toBe(0)
+    expect(ws.send.mock.calls).toHaveLength(sendsBeforeNotice)
+  })
+
   it('authenticates with a one-time ticket and requires hello before data', async () => {
     const { gateway, dependencies } = setup()
     const ws = await connect(gateway)

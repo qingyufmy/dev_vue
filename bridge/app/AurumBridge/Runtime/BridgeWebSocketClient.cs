@@ -41,6 +41,7 @@ public sealed class BridgeWebSocketClient
     public event Func<FullSnapshotRequest, Task>? FullSnapshotRequired;
     public event Action<string>? InitialSynchronizationCompleted;
     public event Action<string>? DataAcknowledged;
+    public event Action<BridgeReleaseAvailableNotification>? ReleaseAvailable;
 
     public async Task RunSessionAsync(
         BridgeConnectionAttempt attempt,
@@ -90,6 +91,7 @@ public sealed class BridgeWebSocketClient
             router.InitialSynchronizationCompleted += terminalId =>
                 InitialSynchronizationCompleted?.Invoke(terminalId);
             router.FullSnapshotRequired += request => FullSnapshotRequired?.Invoke(request) ?? Task.CompletedTask;
+            router.ReleaseAvailable += notification => ReleaseAvailable?.Invoke(notification);
 
             using var sessionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var receiveTask = ReceiveLoopAsync(socket, router, sessionCancellation.Token);

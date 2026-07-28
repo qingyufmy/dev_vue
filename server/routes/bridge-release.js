@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { queryAll } from '../db.js'
+import { notifyBridgeReleaseAvailable } from '../bridge-v3/release-events.js'
 import { adminOnly, authMiddleware } from '../middleware/auth.js'
 
 const MAX_MANIFEST_BYTES = 128 * 1024
@@ -221,6 +222,7 @@ export function createBridgeReleaseRouter({
   releaseToken = process.env.AURUM_BRIDGE_RELEASE_API_TOKEN,
   verifySignatures = verifyBridgeReleaseSignatures,
   queryAllFn = queryAll,
+  notifyReleaseAvailable = notifyBridgeReleaseAvailable,
   now = () => Date.now(),
 } = {}) {
   const router = Router()
@@ -279,6 +281,20 @@ export function createBridgeReleaseRouter({
     } catch (error) {
       if (error?.code === 'ENOENT') return null
       throw error
+    }
+  }
+
+  function announceRelease(manifest, reason) {
+    try {
+      notifyReleaseAvailable({
+        releaseId:manifest.release_id || null,
+        releaseVersion:manifest.release_version,
+        rolloutChannel:manifest.rollout_channel || 'stable',
+        reason,
+      })
+    } catch {
+      // The WSS notice is only a latency optimization. Publishing the signed
+      // HTTPS manifest remains authoritative and must not depend on delivery.
     }
   }
 
@@ -428,6 +444,7 @@ export function createBridgeReleaseRouter({
         await atomicWrite(manifestPath, JSON.stringify(req.body.manifest))
         await fileOps.rm(disabledPath, { force:true })
       })
+      announceRelease(req.body.manifest, 'published')
       return res.json({
         ok:true,
         release_id:req.body.manifest.release_id || null,
@@ -523,6 +540,7 @@ export function createBridgeReleaseRouter({
         return value
       })
       if (!previous) return res.status(404).json({ ok:false, error:'bridge_release_previous_not_found' })
+      announceRelease(previous, 'rollback')
       return res.json({
         ok:true,
         release_id:previous.release_id || null,

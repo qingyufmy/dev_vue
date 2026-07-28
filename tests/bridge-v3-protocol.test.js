@@ -218,6 +218,24 @@ describe('Bridge v3 protocol contract', () => {
       .toMatchObject({ ok:false, errors:expect.arrayContaining(['base_revision:full_snapshot_requires_zero']) })
   })
 
+  it('validates the wake-only release notification contract', () => {
+    const notification = envelope('release_available', {
+      release_id:'bridge-3.1.2-20260728.1',
+      release_version:'3.1.2',
+      rollout_channel:'stable',
+      reason:'published',
+    })
+    expect(validateBridgeV3Message(notification)).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({ ...notification, release_version:'latest' })).toMatchObject({
+      ok:false,
+      errors:expect.arrayContaining(['release_version:invalid']),
+    })
+    expect(validateBridgeV3Message({ ...notification, rollout_channel:'all' })).toMatchObject({
+      ok:false,
+      errors:expect.arrayContaining(['rollout_channel:unsupported']),
+    })
+  })
+
   it('compares the complete immutable route and normalizes broker case only', () => {
     const expected = route()
     expect(sameBridgeRoute(expected, route({

@@ -25,6 +25,7 @@ const AUTH_QUEUE_MAX_BYTES = 1024 * 1024
 const MAX_PENDING_QUOTES_PER_CONNECTION = 64
 const MAX_PENDING_DATA_REQUESTS_PER_CONNECTION = 32
 const REQUIRED_INITIAL_STREAMS = Object.freeze(['account', 'positions', 'orders'])
+const RELEASE_NOTICE_MINIMUM_BRIDGE_VERSION = Object.freeze([3, 1, 2])
 const BROKER_SYMBOL_SUFFIX_RE = /\.(a|s|c|pro|std|z|ecn|m|raw|mini)$/i
 
 function messageId(prefix) {
@@ -73,6 +74,18 @@ function routeFromTerminal(terminal) {
 function sameBrokerSymbol(left, right) {
   const standard = value => String(value || '').replace(BROKER_SYMBOL_SUFFIX_RE, '').toUpperCase()
   return standard(left) === standard(right)
+}
+
+function supportsReleaseNotice(version) {
+  const match = /^(\d+)\.(\d+)(?:\.(\d+))?$/.exec(String(version || ''))
+  if (!match) return false
+  const parts = [Number(match[1]), Number(match[2]), Number(match[3] || 0)]
+  for (let index = 0; index < RELEASE_NOTICE_MINIMUM_BRIDGE_VERSION.length; index++) {
+    if (parts[index] !== RELEASE_NOTICE_MINIMUM_BRIDGE_VERSION[index]) {
+      return parts[index] > RELEASE_NOTICE_MINIMUM_BRIDGE_VERSION[index]
+    }
+  }
+  return true
 }
 
 export function createBridgeV3Gateway({
@@ -794,6 +807,41 @@ export function createBridgeV3Gateway({
     return connections.size
   }
 
+  function broadcastReleaseAvailable({
+    releaseId = null,
+    releaseVersion,
+    rolloutChannel = 'stable',
+    reason = 'published',
+  } = {}) {
+    if (typeof releaseVersion !== 'string'
+      || !/^\d+\.\d+(?:\.\d+){0,2}$/.test(releaseVersion)
+      || !['internal', 'stable'].includes(rolloutChannel)
+      || !['published', 'rollback'].includes(reason)) return 0
+    const message = {
+      v:3,
+      type:'release_available',
+      message_id:messageId('release'),
+      sent_at_utc_msc:now(),
+      release_id:typeof releaseId === 'string' && releaseId ? releaseId : null,
+      release_version:releaseVersion,
+      rollout_channel:rolloutChannel,
+      reason,
+    }
+    const connections = new Set()
+    for (const { connection } of connectionsByTerminal.values()) {
+      // Older v3 clients fail closed on unknown message types. They keep the
+      // 15-minute HTTPS poll until they have upgraded to the notice-aware build.
+      if (connectionAlive(connection) && supportsReleaseNotice(connection.bridgeVersion)) {
+        connections.add(connection)
+      }
+    }
+    let delivered = 0
+    for (const connection of connections) {
+      if (safeSend(connection.ws, message)) delivered += 1
+    }
+    return delivered
+  }
+
   return {
     wss,
     connectionsByTerminal,
@@ -811,6 +859,7 @@ export function createBridgeV3Gateway({
     isTradeEnabled,
     setTradeEnabled,
     disconnectUser,
+    broadcastReleaseAvailable,
     acquireMaintenanceLease,
     renewMaintenanceLease,
     releaseMaintenanceLease,
