@@ -281,6 +281,25 @@ public sealed class ReleaseUpdateTests
     }
 
     [TestMethod]
+    public async Task CreatesOneStableAnonymousInstallationIdentity()
+    {
+        var path = Path.Combine(_directory, "installation-id");
+        var store = new BridgeInstallationIdentityStore(path);
+
+        var first = await store.LoadOrCreateAsync();
+        var second = await store.LoadOrCreateAsync();
+
+        Assert.AreEqual(first, second);
+        StringAssert.StartsWith(first, "install_");
+        Assert.AreEqual(first, (await File.ReadAllTextAsync(path)).Trim());
+
+        await File.WriteAllTextAsync(path, "invalid identity with spaces");
+        var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            store.LoadOrCreateAsync());
+        Assert.AreEqual("bridge_installation_identity_invalid", error.Message);
+    }
+
+    [TestMethod]
     public async Task RejectsUnknownOrIncompletePersistentUpdateState()
     {
         var statePath = Path.Combine(_directory, "update-state.json");

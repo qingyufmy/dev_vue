@@ -56,7 +56,7 @@ public sealed record BridgeApplicationStatus(
     public bool CanManageObserverSources { get; init; }
 }
 
-public sealed class BridgeApplicationController : IAsyncDisposable
+public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdateDrainTarget
 {
     private readonly BridgeRuntimePaths _paths;
     private readonly BridgeStore _store;
@@ -288,6 +288,21 @@ public sealed class BridgeApplicationController : IAsyncDisposable
         RequestRedetect();
         return revoked;
     }
+
+    public Task<BridgeMaintenanceLeaseDecision> AcquireMaintenanceLeaseAsync(
+        BridgeMaintenanceLeaseRequest request,
+        CancellationToken cancellationToken = default) =>
+        _sessionClient.AcquireMaintenanceLeaseAsync(request, cancellationToken);
+
+    public Task<long> RenewMaintenanceLeaseAsync(
+        string leaseId,
+        CancellationToken cancellationToken = default) =>
+        _sessionClient.RenewMaintenanceLeaseAsync(leaseId, cancellationToken);
+
+    public Task ReleaseMaintenanceLeaseAsync(
+        string leaseId,
+        CancellationToken cancellationToken = default) =>
+        _sessionClient.ReleaseMaintenanceLeaseAsync(leaseId, cancellationToken);
 
     public async Task PauseForUpdateAsync(
         TimeSpan timeout,

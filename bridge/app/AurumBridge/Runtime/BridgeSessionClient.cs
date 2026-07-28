@@ -10,6 +10,23 @@ namespace AurumBridge.Runtime;
 
 public sealed record BridgePairingPrompt(string UserCode, Uri VerificationUri, long ExpiresAtUtcMsc);
 
+public sealed record BridgeMaintenanceLeaseRequest(
+    string InstallationId,
+    string TargetVersion,
+    string Priority,
+    bool ManualRequest,
+    IReadOnlyList<string> TerminalInstanceIds,
+    IReadOnlyList<long> ObserverBridgeUserIds,
+    int ExpectedDowntimeSeconds = 60);
+
+public sealed record BridgeMaintenanceLeaseDecision(
+    bool Acquired,
+    string? LeaseId,
+    long? ExpiresAtUtcMsc,
+    string? ReasonCode,
+    string? Reason,
+    int RetryAfterSeconds);
+
 public sealed record BridgeObserverSource(
     long BridgeUserId,
     string Email,
@@ -182,6 +199,83 @@ public sealed class BridgeSessionClient
         return new(
             response.RefreshToken,
             checked(_clock() + (long)response.RefreshExpiresInSeconds * 1_000));
+    }
+
+    public async Task<BridgeMaintenanceLeaseDecision> AcquireMaintenanceLeaseAsync(
+        BridgeMaintenanceLeaseRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var accessToken = await RefreshAccessTokenAsync(cancellationToken);
+        var response = await PostAsync<MaintenanceLeaseResponse>(
+            "/api/bridge/v3/maintenance-leases",
+            new
+            {
+                installation_id = request.InstallationId,
+                target_version = request.TargetVersion,
+                priority = request.Priority,
+                manual_request = request.ManualRequest,
+                terminal_instance_ids = request.TerminalInstanceIds,
+                observer_bridge_user_ids = request.ObserverBridgeUserIds,
+                expected_downtime_seconds = request.ExpectedDowntimeSeconds,
+            },
+            accessToken,
+            cancellationToken);
+        if (response.Acquired
+            && (string.IsNullOrWhiteSpace(response.LeaseId)
+                || response.ExpiresAtUtcMsc is not { } expiresAt
+                || expiresAt <= _clock()))
+        {
+            throw new InvalidDataException("bridge_maintenance_lease_response_invalid");
+        }
+        if (!response.Acquired && string.IsNullOrWhiteSpace(response.ReasonCode))
+        {
+            throw new InvalidDataException("bridge_maintenance_lease_response_invalid");
+        }
+        return new(
+            response.Acquired,
+            response.LeaseId,
+            response.ExpiresAtUtcMsc,
+            response.ReasonCode,
+            response.Reason,
+            Math.Clamp(response.RetryAfterSeconds, 1, 300));
+    }
+
+    public async Task<long> RenewMaintenanceLeaseAsync(
+        string leaseId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leaseId);
+        var accessToken = await RefreshAccessTokenAsync(cancellationToken);
+        var response = await PostAsync<MaintenanceLeaseResponse>(
+            $"/api/bridge/v3/maintenance-leases/{Uri.EscapeDataString(leaseId)}/renew",
+            new { },
+            accessToken,
+            cancellationToken);
+        if (!response.Renewed || response.LeaseId != leaseId
+            || response.ExpiresAtUtcMsc is not { } expiresAt
+            || expiresAt <= _clock())
+        {
+            throw new InvalidDataException("bridge_maintenance_lease_response_invalid");
+        }
+        return expiresAt;
+    }
+
+    public async Task ReleaseMaintenanceLeaseAsync(
+        string leaseId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leaseId);
+        var accessToken = await RefreshAccessTokenAsync(cancellationToken);
+        var response = await PostAsync<MaintenanceLeaseResponse>(
+            $"/api/bridge/v3/maintenance-leases/{Uri.EscapeDataString(leaseId)}/release",
+            new { },
+            accessToken,
+            cancellationToken);
+        if (!response.Released || response.LeaseId != leaseId)
+        {
+            throw new InvalidDataException("bridge_maintenance_lease_response_invalid");
+        }
     }
 
     public async Task<bool> LogoutAsync(CancellationToken cancellationToken = default)
@@ -539,5 +633,32 @@ public sealed class BridgeSessionClient
 
         [JsonPropertyName("terminalInstanceId")]
         public string TerminalInstanceId { get; init; } = string.Empty;
+    }
+
+    private sealed record MaintenanceLeaseResponse : ApiResponse
+    {
+        [JsonPropertyName("acquired")]
+        public bool Acquired { get; init; }
+
+        [JsonPropertyName("renewed")]
+        public bool Renewed { get; init; }
+
+        [JsonPropertyName("released")]
+        public bool Released { get; init; }
+
+        [JsonPropertyName("lease_id")]
+        public string? LeaseId { get; init; }
+
+        [JsonPropertyName("expires_at_utc_msc")]
+        public long? ExpiresAtUtcMsc { get; init; }
+
+        [JsonPropertyName("reason_code")]
+        public string? ReasonCode { get; init; }
+
+        [JsonPropertyName("reason")]
+        public string? Reason { get; init; }
+
+        [JsonPropertyName("retry_after_seconds")]
+        public int RetryAfterSeconds { get; init; } = 5;
     }
 }

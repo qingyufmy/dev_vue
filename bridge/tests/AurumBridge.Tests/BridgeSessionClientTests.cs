@@ -227,6 +227,92 @@ public sealed class BridgeSessionClientTests
     }
 
     [TestMethod]
+    public async Task AcquiresRenewsAndReleasesAnAuthenticatedMaintenanceLease()
+    {
+        var handler = new QueueHandler(
+            Refresh("maintenance-jwt"),
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true, acquired = true, lease_id = "lease_01JSESSION0001",
+                expires_at_utc_msc = 1_800_000_090_000,
+                terminal_instance_ids = new[] { "terminal_01JSESSION0001" },
+            }),
+            Refresh("maintenance-jwt-2"),
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true, renewed = true, lease_id = "lease_01JSESSION0001",
+                expires_at_utc_msc = 1_800_000_120_000,
+            }),
+            Refresh("maintenance-jwt-3"),
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true, released = true, lease_id = "lease_01JSESSION0001",
+            }));
+        var client = new BridgeSessionClient(
+            new Uri("https://bridge.example"),
+            new HttpClient(handler),
+            AuthorizedStore(),
+            clock:() => 1_800_000_000_000);
+
+        var lease = await client.AcquireMaintenanceLeaseAsync(new(
+            "install_01JSESSION0001",
+            "3.1.0",
+            "normal",
+            true,
+            ["terminal_01JSESSION0001"],
+            [42]));
+        var renewedUntil = await client.RenewMaintenanceLeaseAsync(lease.LeaseId!);
+        await client.ReleaseMaintenanceLeaseAsync(lease.LeaseId!);
+
+        Assert.IsTrue(lease.Acquired);
+        Assert.AreEqual(1_800_000_120_000, renewedUntil);
+        Assert.AreEqual("Bearer maintenance-jwt", handler.Requests[1].Authorization);
+        StringAssert.Contains(handler.Requests[1].Body, "install_01JSESSION0001");
+        StringAssert.Contains(handler.Requests[1].Body, "terminal_01JSESSION0001");
+        StringAssert.Contains(handler.Requests[1].Body, "42");
+        StringAssert.EndsWith(handler.Requests[3].Uri, "/lease_01JSESSION0001/renew");
+        StringAssert.EndsWith(handler.Requests[5].Uri, "/lease_01JSESSION0001/release");
+    }
+
+    [TestMethod]
+    public async Task PreservesExplicitLeaseDenialAndRejectsMalformedSuccess()
+    {
+        var deniedClient = new BridgeSessionClient(
+            new Uri("https://bridge.example"),
+            new HttpClient(new QueueHandler(
+                Refresh("maintenance-jwt"),
+                Response(HttpStatusCode.OK, new
+                {
+                    ok = true, acquired = false,
+                    reason_code = "bridge_maintenance_commands_in_flight",
+                    reason = "仍有交易指令正在处理。",
+                    retry_after_seconds = 5,
+                }))),
+            AuthorizedStore(),
+            clock:() => 1_800_000_000_000);
+        var request = new BridgeMaintenanceLeaseRequest(
+            "install_01JSESSION0001", "3.1.0", "urgent", false,
+            ["terminal_01JSESSION0001"], []);
+
+        var denied = await deniedClient.AcquireMaintenanceLeaseAsync(request);
+
+        Assert.IsFalse(denied.Acquired);
+        Assert.AreEqual("bridge_maintenance_commands_in_flight", denied.ReasonCode);
+        Assert.AreEqual(5, denied.RetryAfterSeconds);
+
+        var malformedClient = new BridgeSessionClient(
+            new Uri("https://bridge.example"),
+            new HttpClient(new QueueHandler(
+                Refresh("maintenance-jwt"),
+                Response(HttpStatusCode.OK, new { ok = true, acquired = true }))),
+            AuthorizedStore(),
+            clock:() => 1_800_000_000_000);
+        var error = await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            malformedClient.AcquireMaintenanceLeaseAsync(request));
+        Assert.AreEqual("bridge_maintenance_lease_response_invalid", error.Message);
+    }
+
+    [TestMethod]
     public async Task RevokedRefreshCredentialIsRemovedBeforeRePairing()
     {
         var handler = new QueueHandler(Response(HttpStatusCode.Unauthorized, new
@@ -424,6 +510,19 @@ public sealed class BridgeSessionClientTests
     private static HttpResponseMessage Response(HttpStatusCode status, object body) => new(status)
     {
         Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"),
+    };
+
+    private static HttpResponseMessage Refresh(string token) => Response(HttpStatusCode.OK, new
+    {
+        ok = true,
+        token,
+        refreshExpiresInSeconds = 7_776_000,
+        bridgeRole = "admin",
+    });
+
+    private static MemoryCredentialStore AuthorizedStore() => new()
+    {
+        Credential = new(new string('r', 64), 1_900_000_000_000),
     };
 
     private static HttpResponseMessage TextResponse(
