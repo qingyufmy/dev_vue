@@ -180,7 +180,7 @@ public sealed class ReleaseStager(HttpClient httpClient)
         return root;
     }
 
-    private static async Task<bool> VerifyPackageFileAsync(
+    public static async Task<bool> VerifyPackageFileAsync(
         ReleasePackage package,
         string packagePath,
         CancellationToken cancellationToken)

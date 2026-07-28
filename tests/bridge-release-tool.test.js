@@ -224,6 +224,7 @@ describe('bridge release tooling', () => {
 
   it('builds one self-contained binary that installs itself as the pinned launcher', async () => {
     const bootstrapBuilder = await readFile(new URL('../scripts/bridge-release/build-bootstrapper.ps1', import.meta.url), 'utf8')
+    const fullInstallerBuilder = await readFile(new URL('../scripts/bridge-release/build-full-installer.ps1', import.meta.url), 'utf8')
     const bootstrapUploader = await readFile(new URL('../scripts/bridge-release/upload-bootstrapper-qiniu.ps1', import.meta.url), 'utf8')
     const bootstrapProject = await readFile(new URL('../bridge/bootstrapper/AurumBridge.Bootstrapper/AurumBridge.Bootstrapper.csproj', import.meta.url), 'utf8')
     const manifestClient = await readFile(new URL('../bridge/app/AurumBridge/Update/ReleaseManifestClient.cs', import.meta.url), 'utf8')
@@ -258,6 +259,17 @@ describe('bridge release tooling', () => {
     expect(bootstrapProgram).toContain('BridgeInstallationRegistration.LauncherFileName')
     expect(bootstrapProgram).toContain('BuildServerCandidates(')
     expect(bootstrapProgram).toContain('server.IsLoopback ? TimeSpan.FromSeconds(2)')
+    expect(bootstrapProgram).toContain('"offline-bundle-root"')
+    expect(bootstrapProgram).toContain('LoadOfflineManifestAsync(')
+    expect(bootstrapProgram).toContain('ReleaseStager.VerifyPackageFileAsync(')
+    expect(fullInstallerBuilder).toContain("installer_type='full-offline-v3'")
+    expect(fullInstallerBuilder).toContain('Compression=lzma2/ultra64')
+    expect(fullInstallerBuilder).toContain('OutputBaseFilename=LiangjianBridgeSetup')
+    expect(fullInstallerBuilder).toContain('Uninstallable=no')
+    expect(fullInstallerBuilder).toContain("bootstrapper-metadata.json")
+    expect(fullInstallerBuilder).toContain('--offline-bundle-root')
+    expect(fullInstallerBuilder).toContain("$manifest.rollout_channel -ne 'stable'")
+    expect(fullInstallerBuilder).toContain('$MinimumOfflineValidityDays')
     expect(bootstrapProgram).toContain('Text = "重试安装"')
     const launcherProgram = await readFile(
       new URL('../bridge/launcher/AurumBridge.Launcher/Program.cs', import.meta.url),
@@ -270,6 +282,53 @@ describe('bridge release tooling', () => {
     expect(launcherProgram).toContain('["--uninstall"]')
     expect(launcherUninstaller).toContain('BridgeInstallationRegistration.IsDefaultInstallRoot')
     expect(launcherUninstaller).toContain('RemoveRegistrationAndShortcuts')
+  })
+
+  it('validates a complete offline V3 bundle without building or publishing it', async () => {
+    if (process.platform !== 'win32') return
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'aurum-full-installer-builder-'))
+    const output = path.join(temporary, 'output')
+    try {
+      const modules = ['core', 'adapter.mt5.python', 'adapter.mt4']
+      const packages = []
+      for (const module_id of modules) {
+        const bytes = Buffer.from(`offline-${module_id}`)
+        await writeFile(path.join(temporary, `${module_id}.zip`), bytes)
+        packages.push({
+          module_id, version:'3.1.0', size_bytes:bytes.length,
+          sha256:createHash('sha256').update(bytes).digest('hex'),
+          url:`https://cdn.example/${module_id}.zip`, signature:'c2ln',
+        })
+      }
+      const manifest = {
+        schema_version:2, release_id:'bridge-3.1.0-offline-test', release_version:'3.1.0',
+        expires_at_utc_msc:Date.now() + 180 * 24 * 60 * 60 * 1000,
+        priority:'normal', activation_deadline_utc_msc:null,
+        rollout_channel:'stable', rollout_percentage:100, packages, signature:'c2ln',
+      }
+      const manifestPath = path.join(temporary, 'manifest.signed.json')
+      const publicKey = path.join(temporary, 'release-public-key.pem')
+      await writeFile(manifestPath, JSON.stringify(manifest))
+      await writeFile(publicKey, 'test-public-key')
+      const script = path.resolve('scripts/bridge-release/build-full-installer.ps1')
+      const { stdout } = await execFileAsync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+        '-OutputDirectory', output,
+        '-ReleaseDirectory', temporary,
+        '-ManifestPath', manifestPath,
+        '-PublicKey', publicKey,
+        '-ServerUrl', 'https://www.cnfxtrade.com',
+        '-TargetEnvironment', 'test',
+        '-MinimumOfflineValidityDays', '90',
+        '-DryRun',
+      ])
+      expect(JSON.parse(stdout)).toMatchObject({
+        ok:true, operation:'build-full-installer', dry_run:true,
+        release_id:manifest.release_id, release_version:'3.1.0',
+      })
+    } finally {
+      await rm(temporary, { recursive:true, force:true })
+    }
   })
 
   it('allows an HTTP bootstrap API only for a loopback test rehearsal', async () => {

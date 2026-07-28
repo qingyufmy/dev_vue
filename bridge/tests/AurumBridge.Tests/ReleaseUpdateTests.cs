@@ -132,6 +132,22 @@ public sealed class ReleaseUpdateTests
     }
 
     [TestMethod]
+    public async Task VerifiesAnOfflinePackageWithoutTrustingItsFileName()
+    {
+        var bytes = Encoding.UTF8.GetBytes("verified offline payload");
+        var sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var package = Manifest(sha256, bytes.Length, "signature").Packages[0];
+        var path = Path.Combine(_directory, "renamed-offline-package.zip");
+        await File.WriteAllBytesAsync(path, bytes);
+
+        Assert.IsTrue(await ReleaseStager.VerifyPackageFileAsync(package, path, CancellationToken.None));
+
+        bytes[0] ^= 0xff;
+        await File.WriteAllBytesAsync(path, bytes);
+        Assert.IsFalse(await ReleaseStager.VerifyPackageFileAsync(package, path, CancellationToken.None));
+    }
+
+    [TestMethod]
     public async Task FetchesAndVerifiesTheServerManifestBeforeReturningIt()
     {
         using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);

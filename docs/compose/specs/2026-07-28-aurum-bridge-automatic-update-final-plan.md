@@ -103,13 +103,15 @@ Launcher 保持稳定，只负责版本指针、健康检查、启动和回滚�
 
 - 只允许提升已签名的 Manifest V2，且必须是 `stable`、`normal`、100% 覆盖、无强制激活截止时间。
 - 必须同时包含 `core`、`adapter.mt5.python` 和 `adapter.mt4`，剩余有效期不得少于 90 天。
-- 引导安装器与稳定 Launcher 使用同一个自包含二进制：首次运行时负责联网安装，并将自身原子复制为 `AURUMBridge.Launcher.exe`；安装器内只固化服务器地址、Launcher 代码和发布公钥，不固化业务程序包，也不再重复携带第二套 .NET 运行时。
-- 内部测试安装器临时优先检查 `http://127.0.0.1:3000`，本地接口无清单、响应异常或超时后再回退到打包域名；生产构建不会嵌入 HTTP 回环地址，正式接口上线后删除该测试兼容路径。
-- 安装器实时读取 `bootstrap` 指针，下载并验签完整版本后安装到 `%LOCALAPPDATA%\AURUM\LiangjianBridge`。
-- 重装或修复同版本时不信任已有目录，改用刚下载并验签的版本替换，同时保留恢复备份。
+- 官网默认提供 Inno Setup 标准完整安装包。安装包内嵌稳定 Launcher、已签名的 Bootstrap Manifest V2 以及 `core`、`adapter.mt5.python`、`adapter.mt4` 三个完整包；首次安装不依赖版本接口或 CDN。
+- Inno Setup 只提供标准中文安装向导和完整包封装，实际安装仍调用统一 Bootstrapper：先验证 Manifest 和逐包签名，再核对大小与 SHA-256，最后原子写入版本目录、注册快捷方式和 Windows“应用和功能”。Inno 不创建第二套卸载记录。
+- Bootstrapper 与稳定 Launcher 使用同一个自包含二进制，并将自身原子复制为 `AURUMBridge.Launcher.exe`。完整安装后仍由 V3 Update Coordinator 按模块下载、等待安全窗口、健康检查和失败回滚。
+- 保留在线 Bootstrapper 作为内部测试和修复入口；测试构建可优先检查 `http://127.0.0.1:3000`，失败后回退打包域名，生产构建不会嵌入 HTTP 回环地址。
+- 完整安装包的离线 Manifest 在构建时必须至少剩余 90 天有效期；过期包不得继续构建或安装。普通模块更新不要求重打完整安装包，但 Launcher、根公钥、安装协议变化或内置基线明显落后时必须重打。
+- 重装或修复同版本时不信任已有目录，改用内嵌且重新验签的版本替换，同时保留恢复备份。
 - `bootstrap` 与日常灰度指针分别保留上一版本，可独立回退，互不影响。
 
-网站下载入口只有在引导安装器完成 Authenticode 代码签名、上传和远端复核后才允许切换；旧安装脚本在此之前保持不变。
+网站下载入口只有在完整安装器完成构建、签名状态记录、上传和远端哈希复核后才允许切换；没有 Authenticode 证书时必须显式记录未签名发布授权和 SmartScreen 风险，旧安装脚本在新包验收前保持不变。
 
 服务器地址也属于发布内容：`build-release.ps1` 在签名的 core 包内生成严格受限的 `server-endpoints.json`。新版本激活后从自己的版本目录读取服务器地址；若新地址无法恢复连接，Launcher 的就绪检查失败并回滚到上一版本，上一版本会自然继续使用旧地址。环境变量仅保留为本机开发或紧急运维的最高优先级覆盖，地址不能携带账号、查询串或片段。
 
@@ -685,6 +687,7 @@ scripts/bridge-release/
   preflight.ps1
   build-release.ps1
   build-bootstrapper.ps1
+  build-full-installer.ps1
   test-release.ps1
   sign-release.ps1
   upload-qiniu.ps1

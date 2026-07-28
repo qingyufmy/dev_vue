@@ -20,7 +20,7 @@ internal static class Program
         }
         if (args.Length > 0)
         {
-            return RunRehearsalAsync(args).GetAwaiter().GetResult();
+            return RunCommandAsync(args).GetAwaiter().GetResult();
         }
         ApplicationConfiguration.Initialize();
         Application.Run(new BootstrapperForm());
@@ -38,9 +38,9 @@ internal static class Program
                 && args[0] is "--autostart" or "--uninstall" or "--uninstall-worker";
     }
 
-    private static async Task<int> RunRehearsalAsync(string[] args)
+    private static async Task<int> RunCommandAsync(string[] args)
     {
-        if (args.Length != 4 || args.Length % 2 != 0)
+        if (args.Length is < 4 or > 6 || args.Length % 2 != 0)
         {
             return 2;
         }
@@ -54,28 +54,55 @@ internal static class Program
                 return 2;
             }
         }
-        if (values.Count != 2
-            || !values.TryGetValue("rehearsal-install-root", out var installRoot)
-            || !values.TryGetValue("rehearsal-result", out var resultPath))
+        var offlineBundleRoot = values.GetValueOrDefault("offline-bundle-root");
+        var rehearsalInstallRoot = values.GetValueOrDefault("rehearsal-install-root");
+        var rehearsalResultPath = values.GetValueOrDefault("rehearsal-result");
+        var installResultPath = values.GetValueOrDefault("install-result");
+        var rehearsal = rehearsalInstallRoot is not null
+            && rehearsalResultPath is not null
+            && values.Count == (offlineBundleRoot is null ? 2 : 3);
+        var offlineInstall = offlineBundleRoot is not null
+            && installResultPath is not null
+            && values.Count == 2;
+        if (!rehearsal && !offlineInstall)
         {
             return 2;
         }
+        var resultPath = rehearsal ? rehearsalResultPath! : installResultPath!;
         var fullResultPath = Path.GetFullPath(resultPath);
+        if (offlineInstall && !string.Equals(
+            fullResultPath,
+            Path.Combine(Path.GetFullPath(offlineBundleRoot!), "install-result.json"),
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
         try
         {
-            var installer = new BootstrapInstaller(_ => { }, installRoot);
-            var version = await installer.InstallAsync();
+            var installer = new BootstrapInstaller(
+                _ => { },
+                rehearsal ? rehearsalInstallRoot : null);
+            var version = await installer.InstallAsync(offlineBundleRoot);
             await WriteRehearsalResultAsync(fullResultPath, new
             {
                 ok = true,
-                operation = "bootstrap-install-rehearsal",
+                operation = rehearsal
+                    ? "bootstrap-install-rehearsal"
+                    : "bootstrap-offline-install",
                 version,
-                install_root = Path.GetFullPath(installRoot),
+                install_root = rehearsal
+                    ? Path.GetFullPath(rehearsalInstallRoot!)
+                    : BridgeInstallationRegistration.DefaultInstallRoot,
+                source = offlineBundleRoot is null ? "online" : "offline",
             });
             return 0;
         }
         catch (Exception error)
         {
+            if (offlineInstall)
+            {
+                BootstrapInstaller.WriteFailureLog(error);
+            }
             await WriteRehearsalResultAsync(fullResultPath, new
             {
                 ok = false,
@@ -232,7 +259,9 @@ internal sealed class BootstrapInstaller
         _rehearsal = true;
     }
 
-    public async Task<string> InstallAsync(CancellationToken cancellationToken = default)
+    public async Task<string> InstallAsync(
+        string? offlineBundleRoot = null,
+        CancellationToken cancellationToken = default)
     {
         var serverUrl = Metadata("AurumServerUrl");
         var launcherVersion = Version.Parse(Metadata("AurumLauncherVersion"));
@@ -268,13 +297,19 @@ internal sealed class BootstrapInstaller
             var installationId = await identityStore.LoadOrCreateAsync(cancellationToken);
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
             using var verifier = new ReleaseManifestVerifier(publicKey);
-            var manifest = await FetchBootstrapManifestAsync(
-                servers,
-                http,
-                verifier,
-                launcherVersion,
-                installationId,
-                cancellationToken);
+            var manifest = offlineBundleRoot is null
+                ? await FetchBootstrapManifestAsync(
+                    servers,
+                    http,
+                    verifier,
+                    launcherVersion,
+                    installationId,
+                    cancellationToken)
+                : await LoadOfflineManifestAsync(
+                    offlineBundleRoot,
+                    verifier,
+                    launcherVersion,
+                    cancellationToken);
             ValidateManifestPackageSet(manifest);
 
             _status($"正在下载量见智桥 {manifest.ReleaseVersion}…");
@@ -283,7 +318,12 @@ internal sealed class BootstrapInstaller
             var stager = new ReleaseStager(http);
             foreach (var package in manifest.Packages.OrderBy(value => value.ModuleId, StringComparer.Ordinal))
             {
-                var archive = await stager.DownloadPackageAsync(package, downloads, cancellationToken);
+                var archive = offlineBundleRoot is null
+                    ? await stager.DownloadPackageAsync(package, downloads, cancellationToken)
+                    : await ResolveOfflinePackageAsync(
+                        offlineBundleRoot,
+                        package,
+                        cancellationToken);
                 var destination = package.ModuleId == "core"
                     ? versionDirectory
                     : Path.Combine(versionDirectory, "modules", package.ModuleId);
@@ -495,6 +535,77 @@ internal sealed class BootstrapInstaller
             new AggregateException(failures));
     }
 
+    private static async Task<ReleaseManifest> LoadOfflineManifestAsync(
+        string bundleRoot,
+        ReleaseManifestVerifier verifier,
+        Version launcherVersion,
+        CancellationToken cancellationToken)
+    {
+        var root = ValidateOfflineBundleRoot(bundleRoot);
+        var manifestPath = Path.Combine(root, "manifest.signed.json");
+        var file = new FileInfo(manifestPath);
+        if (!file.Exists || file.Length is <= 0 or > 1024 * 1024)
+        {
+            throw new InvalidDataException("bootstrap_offline_manifest_missing");
+        }
+        ReleaseManifest manifest;
+        try
+        {
+            await using var stream = new FileStream(
+                manifestPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            manifest = await JsonSerializer.DeserializeAsync<ReleaseManifest>(
+                stream,
+                cancellationToken: cancellationToken)
+                ?? throw new InvalidDataException("bootstrap_offline_manifest_invalid");
+        }
+        catch (JsonException error)
+        {
+            throw new InvalidDataException("bootstrap_offline_manifest_invalid", error);
+        }
+        verifier.Verify(manifest, launcherVersion);
+        return manifest;
+    }
+
+    private static async Task<string> ResolveOfflinePackageAsync(
+        string bundleRoot,
+        ReleasePackage package,
+        CancellationToken cancellationToken)
+    {
+        var root = ValidateOfflineBundleRoot(bundleRoot);
+        var fileName = package.ModuleId switch
+        {
+            "core" => "core.zip",
+            "adapter.mt5.python" => "adapter.mt5.python.zip",
+            "adapter.mt4" => "adapter.mt4.zip",
+            _ => throw new InvalidDataException("bootstrap_offline_package_invalid"),
+        };
+        var path = Path.Combine(root, fileName);
+        if (!await ReleaseStager.VerifyPackageFileAsync(package, path, cancellationToken))
+        {
+            throw new InvalidDataException("bootstrap_offline_package_integrity_failed");
+        }
+        return path;
+    }
+
+    private static string ValidateOfflineBundleRoot(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidDataException("bootstrap_offline_bundle_invalid");
+        }
+        var root = Path.GetFullPath(value);
+        if (!Directory.Exists(root))
+        {
+            throw new InvalidDataException("bootstrap_offline_bundle_invalid");
+        }
+        return root;
+    }
+
     private static Uri ParseServerUri(string value, string targetEnvironment)
     {
         try
@@ -538,6 +649,8 @@ internal sealed class BootstrapInstaller
         var modules = manifest.Packages.Select(value => value.ModuleId).ToHashSet(StringComparer.Ordinal);
         if (manifest.SchemaVersion != 2 || manifest.RolloutPercentage != 100
             || manifest.RolloutChannel != "stable"
+            || manifest.Priority != "normal"
+            || manifest.ActivationDeadlineUtcMsc is not null
             || !modules.SetEquals(["core", "adapter.mt5.python", "adapter.mt4"]))
         {
             throw new InvalidDataException("bootstrap_manifest_package_set_invalid");
