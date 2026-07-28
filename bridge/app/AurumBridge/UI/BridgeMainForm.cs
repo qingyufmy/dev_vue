@@ -24,6 +24,25 @@ public sealed record BridgeObserverProfileView(
     BridgeApplicationPhase? RuntimePhase = null,
     string? RuntimeDetailCode = null);
 
+public enum BridgeUpdateNoticePhase
+{
+    Downloading,
+    Ready,
+}
+
+public sealed record BridgeUpdateNoticeView(
+    string Version,
+    bool Urgent,
+    BridgeUpdateNoticePhase Phase,
+    bool ManualActivationRequested);
+
+public sealed record BridgeUpdateNoticeText(
+    string Title,
+    string Description,
+    string ButtonText,
+    bool ButtonVisible,
+    bool ButtonEnabled);
+
 internal sealed record TradingPermissionDetail(string Label, bool? Allowed);
 
 internal sealed record TradingPermissionToolTipContent(
@@ -64,6 +83,10 @@ public sealed class BridgeMainForm : Form
     private readonly Button _logoutButton = new();
     private readonly Button _observerSourcesButton = new();
     private readonly Button _mt4ExpertButton = new();
+    private readonly TableLayoutPanel _updateBanner = new();
+    private readonly Label _updateTitle = new();
+    private readonly Label _updateDescription = new();
+    private readonly Button _updateButton = new();
     private readonly PlatformComboBox _platformSelector = new();
     private readonly Label _platformSelectorLabel = new();
     private readonly ComboBox _terminalSelector = new();
@@ -120,6 +143,7 @@ public sealed class BridgeMainForm : Form
     public event EventHandler? OpenLogsRequested;
     public event EventHandler? LogoutRequested;
     public event EventHandler? ExitRequested;
+    public event EventHandler? ManualUpdateRequested;
     public event EventHandler<BridgePlatformChangedEventArgs>? PlatformChanged;
     public event EventHandler<BridgeTerminalChangedEventArgs>? TerminalChanged;
 
@@ -185,6 +209,22 @@ public sealed class BridgeMainForm : Form
         _mt4ExpertButton.Text = busy ? "正在安装…" : "安装 / 修复 EA";
     }
 
+    public void ApplyUpdateNotice(BridgeUpdateNoticeView? notice)
+    {
+        if (notice is null)
+        {
+            _updateBanner.Visible = false;
+            return;
+        }
+        _updateBanner.Visible = true;
+        var text = DescribeUpdateNotice(notice);
+        _updateTitle.Text = text.Title;
+        _updateDescription.Text = text.Description;
+        _updateButton.Text = text.ButtonText;
+        _updateButton.Visible = text.ButtonVisible;
+        _updateButton.Enabled = text.ButtonEnabled;
+    }
+
     public void BeginPlatformSwitch(string platform)
     {
         _pendingPlatform = BridgePlatform.Normalize(platform);
@@ -216,6 +256,32 @@ public sealed class BridgeMainForm : Form
     public static bool CanShowMt4ExpertSetup(string? selectedPlatform) =>
         selectedPlatform == BridgePlatform.Mt4;
 
+    public static BridgeUpdateNoticeText DescribeUpdateNotice(BridgeUpdateNoticeView notice)
+    {
+        ArgumentNullException.ThrowIfNull(notice);
+        if (notice.Phase == BridgeUpdateNoticePhase.Downloading)
+        {
+            return new(
+                $"发现新版本 {notice.Version}",
+                "正在后台下载并校验，当前桥接和交易不受影响。",
+                "重启更新",
+                ButtonVisible:false,
+                ButtonEnabled:false);
+        }
+        return new(
+            notice.Urgent
+                ? $"紧急修复 {notice.Version} 已准备好"
+                : $"新版本 {notice.Version} 已准备好",
+            notice.ManualActivationRequested
+                ? "已收到更新请求，将在当前操作结束后的安全时机重启。"
+                : notice.Urgent
+                    ? "修复包已通过安全校验，可请求在最近的安全空闲时机更新。"
+                    : "更新包已通过安全校验，将在休市安全时段自动更新。",
+            notice.ManualActivationRequested ? "已请求" : "重启更新",
+            ButtonVisible:true,
+            ButtonEnabled:!notice.ManualActivationRequested);
+    }
+
     private void BuildLayout(string profileId, bool isDefaultProfile)
     {
         var root = new TableLayoutPanel
@@ -223,8 +289,9 @@ public sealed class BridgeMainForm : Form
             Dock = DockStyle.Fill,
             Padding = new(32, 24, 32, 24),
             ColumnCount = 1,
-            RowCount = 8,
+            RowCount = 9,
         };
+        root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.AutoSize));
         root.RowStyles.Add(new(SizeType.AutoSize));
@@ -255,6 +322,46 @@ public sealed class BridgeMainForm : Form
         };
         root.Controls.Add(heading, 0, 0);
         root.Controls.Add(subheading, 0, 1);
+
+        _updateBanner.AutoSize = true;
+        _updateBanner.Dock = DockStyle.Fill;
+        _updateBanner.BackColor = Color.FromArgb(255, 251, 235);
+        _updateBanner.Padding = new(14, 11, 12, 11);
+        _updateBanner.ColumnCount = 2;
+        _updateBanner.RowCount = 1;
+        _updateBanner.Margin = new Padding(0, 0, 0, 16);
+        _updateBanner.ColumnStyles.Add(new(SizeType.Percent, 100));
+        _updateBanner.ColumnStyles.Add(new(SizeType.AutoSize));
+        var updateCopy = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = Padding.Empty,
+        };
+        _updateTitle.AutoSize = true;
+        _updateTitle.Font = new(Font.FontFamily, 9.5F, FontStyle.Bold);
+        _updateTitle.ForeColor = Color.FromArgb(120, 53, 15);
+        _updateTitle.Margin = Padding.Empty;
+        _updateDescription.AutoSize = true;
+        _updateDescription.MaximumSize = new(420, 0);
+        _updateDescription.ForeColor = Color.FromArgb(146, 64, 14);
+        _updateDescription.Margin = new Padding(0, 3, 12, 0);
+        updateCopy.Controls.Add(_updateTitle, 0, 0);
+        updateCopy.Controls.Add(_updateDescription, 0, 1);
+        _updateBanner.Controls.Add(updateCopy, 0, 0);
+        ConfigureButton(_updateButton, "重启更新", primary:true);
+        _updateButton.Anchor = AnchorStyles.Right;
+        _updateButton.MinimumSize = new(104, 36);
+        _updateButton.Margin = new Padding(12, 0, 0, 0);
+        _updateButton.BackColor = Color.FromArgb(212, 175, 55);
+        _updateButton.ForeColor = Color.FromArgb(15, 23, 42);
+        _updateButton.AccessibleName = "在安全时机重启并更新量见智桥";
+        _updateButton.Click += (_, _) => ManualUpdateRequested?.Invoke(this, EventArgs.Empty);
+        _updateBanner.Controls.Add(_updateButton, 1, 0);
+        _updateBanner.Visible = false;
+        root.Controls.Add(_updateBanner, 0, 2);
 
         var platformBar = new TableLayoutPanel
         {
@@ -325,7 +432,7 @@ public sealed class BridgeMainForm : Form
         _logoutButton.Click += (_, _) => LogoutRequested?.Invoke(this, EventArgs.Empty);
         platformActions.Controls.Add(_logoutButton);
         platformBar.Controls.Add(platformActions, 2, 0);
-        root.Controls.Add(platformBar, 0, 2);
+        root.Controls.Add(platformBar, 0, 3);
 
         _terminalSelectorBar.AutoSize = true;
         _terminalSelectorBar.Dock = DockStyle.Fill;
@@ -353,7 +460,7 @@ public sealed class BridgeMainForm : Form
         };
         _terminalSelectorBar.Controls.Add(_terminalSelector, 1, 0);
         _terminalSelectorBar.Visible = false;
-        root.Controls.Add(_terminalSelectorBar, 0, 3);
+        root.Controls.Add(_terminalSelectorBar, 0, 4);
 
         _mt4SetupBar.AutoSize = true;
         _mt4SetupBar.Dock = DockStyle.Fill;
@@ -380,7 +487,7 @@ public sealed class BridgeMainForm : Form
             InstallMt4ExpertRequested?.Invoke(this, EventArgs.Empty);
         _mt4SetupBar.Controls.Add(_mt4ExpertButton, 1, 0);
         _mt4SetupBar.Visible = false;
-        root.Controls.Add(_mt4SetupBar, 0, 4);
+        root.Controls.Add(_mt4SetupBar, 0, 5);
 
         var card = new TableLayoutPanel
         {
@@ -469,7 +576,7 @@ public sealed class BridgeMainForm : Form
         card.Controls.Add(divider, 0, 3);
         card.Controls.Add(accountsHeader, 0, 4);
         card.Controls.Add(_terminalList, 0, 5);
-        root.Controls.Add(card, 0, 5);
+        root.Controls.Add(card, 0, 6);
 
         var safety = new Label
         {
@@ -478,7 +585,7 @@ public sealed class BridgeMainForm : Form
             Text = "关闭窗口后仍会在托盘运行。退出桥接不会撤单、平仓或关闭 MT。",
             Margin = new Padding(0, 0, 0, 16),
         };
-        root.Controls.Add(safety, 0, 6);
+        root.Controls.Add(safety, 0, 7);
 
         var actions = new FlowLayoutPanel
         {
@@ -500,7 +607,7 @@ public sealed class BridgeMainForm : Form
         actions.Controls.Add(_detectButton);
         actions.Controls.Add(_logButton);
         actions.Controls.Add(_exitButton);
-        root.Controls.Add(actions, 0, 7);
+        root.Controls.Add(actions, 0, 8);
         Controls.Add(root);
     }
 

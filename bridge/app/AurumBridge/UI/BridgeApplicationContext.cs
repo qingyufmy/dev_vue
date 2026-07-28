@@ -111,6 +111,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.PlatformChanged += HandlePlatformChanged;
         _form.TerminalChanged += HandleTerminalChanged;
         _form.ExitRequested += HandleExitRequested;
+        _form.ManualUpdateRequested += HandleManualUpdateRequested;
+        if (_updateCoordinator is not null)
+        {
+            _updateCoordinator.StateChanged += HandleUpdateStateChanged;
+        }
         _controller.StatusChanged += HandlePrimaryStatusChanged;
         _controller.ConnectionFailureObserved += error =>
             LogConnectionFailure("bridge_connection_failure", "primary", error);
@@ -1280,6 +1285,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     {
         try
         {
+            HandleUpdateStateChanged(await coordinator.LoadStateAsync(cancellationToken));
             await Task.Delay(TimeSpan.FromMinutes(1), cancellationToken);
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -1306,6 +1312,65 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+        }
+    }
+
+    private void HandleUpdateStateChanged(BridgeUpdateState? state)
+    {
+        var notice = state?.State switch
+        {
+            BridgeUpdateStates.Downloading => new BridgeUpdateNoticeView(
+                state.TargetVersion!,
+                state.Priority == "urgent",
+                BridgeUpdateNoticePhase.Downloading,
+                state.ManualActivationRequested),
+            BridgeUpdateStates.WaitingWindow => new BridgeUpdateNoticeView(
+                state.TargetVersion!,
+                state.Priority == "urgent",
+                BridgeUpdateNoticePhase.Ready,
+                state.ManualActivationRequested),
+            _ => null,
+        };
+        TryBeginInvoke(() =>
+        {
+            if (!_shuttingDown)
+            {
+                _form.ApplyUpdateNotice(notice);
+            }
+        });
+    }
+
+    private async void HandleManualUpdateRequested(object? sender, EventArgs eventArgs)
+    {
+        if (_updateCoordinator is null || _shuttingDown)
+        {
+            return;
+        }
+        try
+        {
+            var state = await _updateCoordinator.RequestManualActivationAsync(_stop.Token);
+            if (state is null)
+            {
+                _form.ApplyUpdateNotice(null);
+                return;
+            }
+            _logger.Info(
+                "update_manual_activation_requested",
+                $"version={state.TargetVersion};priority={state.Priority}");
+            HandleUpdateStateChanged(state);
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("update_manual_activation_request_failed", error);
+            MessageBox.Show(
+                _form,
+                "暂时无法提交更新请求，请稍后重试。当前桥接不会受到影响。",
+                "更新请求失败",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
     }
 

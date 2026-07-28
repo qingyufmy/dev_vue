@@ -40,6 +40,8 @@ public sealed class BridgeUpdateCoordinator : IDisposable
 
     public BridgeUpdateEnvironment Environment { get; }
 
+    public event Action<BridgeUpdateState>? StateChanged;
+
     public static BridgeUpdateCoordinator? CreateIfInstalled(
         string applicationDirectory,
         Uri serverBaseUri)
@@ -110,14 +112,26 @@ public sealed class BridgeUpdateCoordinator : IDisposable
                 await SaveCheckingStateAsync(cancellationToken);
                 return null;
             }
-            await _stateStore.SaveAsync(new()
+            var previous = await _stateStore.LoadAsync(cancellationToken);
+            var sameRelease = previous is not null
+                && previous.TargetVersion == manifest.ReleaseVersion
+                && previous.ReleaseId == manifest.ReleaseId;
+            var alreadyWaiting = sameRelease
+                && previous!.State == BridgeUpdateStates.WaitingWindow;
+            if (!alreadyWaiting)
             {
-                State = BridgeUpdateStates.Downloading,
-                TargetVersion = manifest.ReleaseVersion,
-                ReleaseId = manifest.ReleaseId,
-                Priority = manifest.SchemaVersion == 2 ? manifest.Priority : "normal",
-                UpdatedAtUtcMsc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            }, cancellationToken);
+                await SaveStateAsync(new()
+                {
+                    State = BridgeUpdateStates.Downloading,
+                    TargetVersion = manifest.ReleaseVersion,
+                    ReleaseId = manifest.ReleaseId,
+                    Priority = manifest.SchemaVersion == 2 ? manifest.Priority : "normal",
+                    ManualActivationRequested = sameRelease
+                        && previous!.ManualActivationRequested,
+                    StagedAtUtcMsc = sameRelease ? previous!.StagedAtUtcMsc : null,
+                    UpdatedAtUtcMsc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                }, cancellationToken);
+            }
             var staged = await _installer.StageAsync(
                 manifest,
                 Environment.CurrentVersion,
@@ -127,13 +141,17 @@ public sealed class BridgeUpdateCoordinator : IDisposable
                 await SaveCheckingStateAsync(cancellationToken);
                 return null;
             }
-            var stagedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            await _stateStore.SaveAsync(new()
+            var stagedAt = sameRelease && previous!.StagedAtUtcMsc is { } priorStagedAt
+                ? priorStagedAt
+                : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            await SaveStateAsync(new()
             {
                 State = BridgeUpdateStates.WaitingWindow,
                 TargetVersion = staged.Version,
                 ReleaseId = staged.ReleaseId,
                 Priority = staged.Priority,
+                ManualActivationRequested = sameRelease
+                    && previous!.ManualActivationRequested,
                 StagedAtUtcMsc = stagedAt,
                 UpdatedAtUtcMsc = stagedAt,
             }, cancellationToken);
@@ -155,6 +173,24 @@ public sealed class BridgeUpdateCoordinator : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         return _stateStore.LoadAsync(cancellationToken);
+    }
+
+    public async Task<BridgeUpdateState?> RequestManualActivationAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var state = await _stateStore.LoadAsync(cancellationToken);
+        if (state?.State != BridgeUpdateStates.WaitingWindow)
+        {
+            return null;
+        }
+        if (state.ManualActivationRequested)
+        {
+            return state;
+        }
+        return await SaveStateAsync(
+            state with { ManualActivationRequested = true },
+            cancellationToken);
     }
 
     public Task PrepareActivationAsync(
@@ -190,8 +226,23 @@ public sealed class BridgeUpdateCoordinator : IDisposable
         _httpClient.Dispose();
     }
 
-    private Task SaveCheckingStateAsync(CancellationToken cancellationToken) =>
-        _stateStore.SaveAsync(new()
+    private async Task<BridgeUpdateState> SaveStateAsync(
+        BridgeUpdateState state,
+        CancellationToken cancellationToken)
+    {
+        var persisted = await _stateStore.SaveAsync(state, cancellationToken);
+        try
+        {
+            StateChanged?.Invoke(persisted);
+        }
+        catch
+        {
+        }
+        return persisted;
+    }
+
+    private Task<BridgeUpdateState> SaveCheckingStateAsync(CancellationToken cancellationToken) =>
+        SaveStateAsync(new()
         {
             State = BridgeUpdateStates.Checking,
             UpdatedAtUtcMsc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -204,7 +255,7 @@ public sealed class BridgeUpdateCoordinator : IDisposable
             : "update_check_failed";
         try
         {
-            await _stateStore.SaveAsync(new()
+            await SaveStateAsync(new()
             {
                 State = BridgeUpdateStates.Failed,
                 LastErrorCode = errorCode,

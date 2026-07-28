@@ -110,7 +110,7 @@ public sealed class BridgeUpdateStateStore(
         }
     }
 
-    public async Task SaveAsync(
+    public async Task<BridgeUpdateState> SaveAsync(
         BridgeUpdateState state,
         CancellationToken cancellationToken = default)
     {
@@ -140,6 +140,7 @@ public sealed class BridgeUpdateStateStore(
                 await stream.FlushAsync(cancellationToken);
             }
             File.Move(temporaryPath, _statePath, overwrite:true);
+            return timestamped;
         }
         finally
         {

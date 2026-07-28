@@ -206,6 +206,30 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
+    public void UpdateNoticeDistinguishesDownloadReadyAndManualRequestStates()
+    {
+        var downloading = new BridgeUpdateNoticeView(
+            "3.1.0", false, BridgeUpdateNoticePhase.Downloading, false);
+        var ready = downloading with { Phase = BridgeUpdateNoticePhase.Ready };
+        var requested = ready with { ManualActivationRequested = true };
+        var urgent = ready with { Urgent = true };
+
+        var downloadingText = BridgeMainForm.DescribeUpdateNotice(downloading);
+        var readyText = BridgeMainForm.DescribeUpdateNotice(ready);
+        var requestedText = BridgeMainForm.DescribeUpdateNotice(requested);
+        var urgentText = BridgeMainForm.DescribeUpdateNotice(urgent);
+
+        StringAssert.Contains(downloadingText.Description, "不受影响");
+        Assert.IsFalse(downloadingText.ButtonVisible);
+        StringAssert.Contains(readyText.Description, "休市安全时段");
+        Assert.AreEqual("重启更新", readyText.ButtonText);
+        Assert.IsTrue(readyText.ButtonEnabled);
+        Assert.AreEqual("已请求", requestedText.ButtonText);
+        Assert.IsFalse(requestedText.ButtonEnabled);
+        StringAssert.Contains(urgentText.Title, "紧急修复");
+    }
+
+    [TestMethod]
     public void ObserverControlsChooseSafeActionsFromPersistentAndRuntimeState()
     {
         var configured = new BridgeObserverProfileView(

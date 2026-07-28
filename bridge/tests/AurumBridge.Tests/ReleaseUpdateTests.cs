@@ -266,6 +266,7 @@ public sealed class ReleaseUpdateTests
             TargetVersion = "3.1.0",
             ReleaseId = "bridge-3.1.0-20260728.1",
             Priority = "normal",
+            ManualActivationRequested = true,
             StagedAtUtcMsc = now - 100,
             UpdatedAtUtcMsc = 1,
         });
@@ -274,6 +275,7 @@ public sealed class ReleaseUpdateTests
         Assert.IsNotNull(restored);
         Assert.AreEqual(BridgeUpdateStates.WaitingWindow, restored.State);
         Assert.AreEqual("3.1.0", restored.TargetVersion);
+        Assert.IsTrue(restored.ManualActivationRequested);
         Assert.AreEqual(now, restored.UpdatedAtUtcMsc);
         Assert.IsFalse(Directory.EnumerateFiles(_directory, "*.tmp").Any());
     }
