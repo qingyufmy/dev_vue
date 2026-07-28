@@ -1,4 +1,5 @@
 using AurumBridge.Launcher;
+using AurumBridge.Runtime;
 using System.Text.Json;
 
 namespace AurumBridge.Tests;
@@ -106,6 +107,29 @@ public sealed class LauncherEngineTests
     }
 
     [TestMethod]
+    public async Task RollbackRestoresTheServerAddressCarriedByLastKnownGoodVersion()
+    {
+        CreateVersion("3.0.0", "https://bridge-old.example.com");
+        CreateVersion("3.1.0", "https://bridge-new.example.com");
+        await _store.SaveAsync(Pointer("3.1.0", "3.0.0", "pending"));
+        await WriteUpdateStateAsync("3.1.0");
+        var runner = new FakeRunner(_ => true, startupReady:false, rollbackReady:true);
+        var engine = new LauncherEngine(_directory, _store, runner);
+
+        var launched = await engine.LaunchAsync();
+        var pointer = await _store.LoadAsync();
+        var activeDirectory = Path.Combine(_directory, "versions", pointer.ActiveVersion);
+        var runtime = BridgeRuntimePathResolver.Resolve(activeDirectory, _ => null);
+
+        Assert.AreEqual("3.0.0", launched);
+        Assert.AreEqual("3.0.0", pointer.ActiveVersion);
+        Assert.AreEqual(new Uri("https://bridge-old.example.com"), runtime.ServerBaseUri);
+        CollectionAssert.AreEqual(
+            new[] { "3.1.0", "3.0.0" },
+            runner.StartupChecks.Select(check => check.ExpectedVersion).ToArray());
+    }
+
+    [TestMethod]
     public async Task FailsClosedWhenTheLastKnownGoodVersionAlsoFailsHealthCheck()
     {
         CreateVersion("3.0.0");
@@ -189,11 +213,28 @@ public sealed class LauncherEngineTests
         await Assert.ThrowsExactlyAsync<FileNotFoundException>(() => engine.LaunchAsync());
     }
 
-    private void CreateVersion(string version)
+    private void CreateVersion(string version, string? serverUrl = null)
     {
         var directory = Path.Combine(_directory, "versions", version);
         Directory.CreateDirectory(directory);
         File.WriteAllBytes(Path.Combine(directory, "AURUMBridge.exe"), []);
+        if (serverUrl is null)
+        {
+            return;
+        }
+        Directory.CreateDirectory(Path.Combine(directory, "runtime", "python"));
+        File.WriteAllBytes(Path.Combine(directory, "runtime", "python", "python.exe"), []);
+        Directory.CreateDirectory(Path.Combine(directory, "modules", "adapter.mt5.python"));
+        File.WriteAllText(
+            Path.Combine(directory, "modules", "adapter.mt5.python", "worker.py"),
+            string.Empty);
+        Directory.CreateDirectory(Path.Combine(directory, "modules", "adapter.mt4"));
+        File.WriteAllBytes(
+            Path.Combine(directory, "modules", "adapter.mt4", "AURUMBridgeEA.ex4"),
+            []);
+        File.WriteAllText(
+            Path.Combine(directory, BridgeServerEndpointConfiguration.FileName),
+            JsonSerializer.Serialize(new { schema_version = 1, server_url = serverUrl }));
     }
 
     private static VersionPointer Pointer(

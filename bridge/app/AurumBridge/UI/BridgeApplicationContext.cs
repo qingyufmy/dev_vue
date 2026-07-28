@@ -1682,11 +1682,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
         DateTimeOffset localNow)
     {
         ArgumentNullException.ThrowIfNull(state);
-        if (state.ManualActivationRequested || state.Priority == "urgent")
-        {
-            return true;
-        }
-        return localNow.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+        _ = localNow;
+        // The server owns Broker maintenance-window and market-stall evidence.
+        // A normal release may ask for admission at any time, but cannot restart
+        // until the server grants a scoped maintenance lease.
+        return state.State == BridgeUpdateStates.WaitingWindow;
     }
 
     private UpdateRuntimeSnapshot CaptureUpdateRuntimeSnapshot()

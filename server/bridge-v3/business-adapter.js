@@ -696,6 +696,8 @@ export function createBridgeV3BusinessAdapter({
       tick_progressing:market.state === 'open',
       tick_unchanged_seconds:null,
       tick_age_seconds:market.tickAgeMs == null ? null : market.tickAgeMs / 1000,
+      timezone_offset_minutes:quote.timezone_offset_minutes,
+      clock_status:quote.clock_status,
       source:route.platform,
     }
   }

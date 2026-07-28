@@ -5,9 +5,19 @@ import { listManagedObserverSources } from '../bridge-pairing.js'
 import { bridgeUpdateAdmission } from '../bridge-v3/update-admission.js'
 import {
   acquireBridgeMaintenanceLease,
+  listBridgeUpdateMaintenanceTerminals,
+  probeBridgeUpdateMaintenanceMarket,
   releaseBridgeMaintenanceLease,
   renewBridgeMaintenanceLease,
 } from '../bridge-ws.js'
+import {
+  createBridgeAutomaticMaintenanceWindowGate,
+} from '../bridge-v3/update-maintenance-window.js'
+
+const bridgeAutomaticMaintenanceWindow = createBridgeAutomaticMaintenanceWindowGate({
+  resolveTerminals:listBridgeUpdateMaintenanceTerminals,
+  probeMarket:probeBridgeUpdateMaintenanceMarket,
+})
 
 const DENIAL_MESSAGES = Object.freeze({
   bridge_maintenance_commands_in_flight:'仍有交易指令正在处理，系统将在完成后重试。',
@@ -15,6 +25,12 @@ const DENIAL_MESSAGES = Object.freeze({
   bridge_maintenance_scheduler_in_flight:'相关 AI 分析轮次仍在收尾，完成后将自动重试更新。',
   bridge_maintenance_delivery_in_flight:'该账户的交易建议正在完成交付，完成后将自动重试更新。',
   bridge_maintenance_weekly_task_active:'周末清仓或账户保护任务正在执行，完成后才能更新。',
+  bridge_maintenance_window_unconfigured:'该交易服务器未配置可靠的每日维护窗口，将等待周末或手动更新。',
+  bridge_maintenance_window_not_open:'尚未进入该交易服务器的每日维护窗口。',
+  bridge_maintenance_window_too_short:'本次维护窗口剩余时间不足，将等待下一次安全窗口。',
+  bridge_maintenance_market_probe_failed:'暂时无法确认终端行情状态，将稍后重试。',
+  bridge_maintenance_terminal_clock_unavailable:'终端服务器时间与维护窗口配置不一致，暂不自动重启。',
+  bridge_maintenance_market_not_closed:'终端行情仍在更新，暂不自动重启。',
 })
 
 function routeError(code, status = 400) {
@@ -72,6 +88,7 @@ export function createBridgeMaintenanceRouter({
   renewLease = renewBridgeMaintenanceLease,
   releaseLease = releaseBridgeMaintenanceLease,
   admission = bridgeUpdateAdmission,
+  automaticWindow = bridgeAutomaticMaintenanceWindow,
 } = {}) {
   const router = Router()
 
@@ -90,6 +107,29 @@ export function createBridgeMaintenanceRouter({
           reason_code:prepared.code,
           reason:DENIAL_MESSAGES[prepared.code] || '当前尚不满足安全更新条件。',
           retry_after_seconds:prepared.retry_after_seconds || 5,
+        })
+      }
+
+      let windowDecision
+      try {
+        windowDecision = await automaticWindow({
+          priority:req.body?.priority,
+          manualRequest:req.body?.manual_request,
+          authorizedUserIds:allowedUsers,
+          terminalInstanceIds:req.body?.terminal_instance_ids,
+        })
+      } catch (error) {
+        admission.discardFence(prepared.fence_id)
+        throw error
+      }
+      if (!windowDecision.allowed) {
+        admission.discardFence(prepared.fence_id)
+        return res.json({
+          ok:true,
+          acquired:false,
+          reason_code:windowDecision.code,
+          reason:DENIAL_MESSAGES[windowDecision.code] || '当前尚不满足安全更新条件。',
+          retry_after_seconds:windowDecision.retry_after_seconds || 30,
         })
       }
 

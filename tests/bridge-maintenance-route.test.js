@@ -160,6 +160,55 @@ describe('bridge update maintenance route', () => {
     expect(gate.discardFence).toHaveBeenCalledWith('fence_01JROUTE0001')
   })
 
+  it('keeps a normal automatic update waiting when the Broker window is not safe', async () => {
+    const gate = admission()
+    const acquireLease = vi.fn()
+    const automaticWindow = vi.fn().mockResolvedValue({
+      allowed:false,
+      code:'bridge_maintenance_window_not_open',
+      retry_after_seconds:300,
+    })
+    const response = await request(createBridgeMaintenanceRouter({
+      authenticate:auth({ id:7, role:'user' }),
+      admission:gate,
+      acquireLease,
+      automaticWindow,
+    }), '/bridge/v3/maintenance-leases', body({ manual_request:false }))
+
+    expect(response).toMatchObject({
+      status:200,
+      body:{
+        ok:true,
+        acquired:false,
+        reason_code:'bridge_maintenance_window_not_open',
+        retry_after_seconds:300,
+      },
+    })
+    expect(gate.discardFence).toHaveBeenCalledWith('fence_01JROUTE0001')
+    expect(acquireLease).not.toHaveBeenCalled()
+  })
+
+  it('removes the provisional scheduler fence when window inspection fails', async () => {
+    const gate = admission()
+    const acquireLease = vi.fn()
+    const response = await request(createBridgeMaintenanceRouter({
+      authenticate:auth({ id:7, role:'user' }),
+      admission:gate,
+      acquireLease,
+      automaticWindow:vi.fn().mockRejectedValue(Object.assign(
+        new Error('bridge_maintenance_market_probe_failed'),
+        { code:'bridge_maintenance_market_probe_failed' }
+      )),
+    }), '/bridge/v3/maintenance-leases', body({ manual_request:false }))
+
+    expect(response).toMatchObject({
+      status:503,
+      body:{ ok:false, code:'bridge_maintenance_market_probe_failed' },
+    })
+    expect(gate.discardFence).toHaveBeenCalledWith('fence_01JROUTE0001')
+    expect(acquireLease).not.toHaveBeenCalled()
+  })
+
   it('releases a gateway lease if its scheduler fence expires before binding', async () => {
     const releaseLease = vi.fn().mockReturnValue({ released:true })
     const response = await request(createBridgeMaintenanceRouter({

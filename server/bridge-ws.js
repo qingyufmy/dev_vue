@@ -3041,6 +3041,33 @@ export function acquireBridgeMaintenanceLease(request) {
   return bridgeV3Business.acquireMaintenanceLease(request)
 }
 
+export function listBridgeUpdateMaintenanceTerminals(authorizedUserIds, terminalInstanceIds) {
+  if (!bridgeV3Business?.connectedTerminals) return []
+  const allowed = new Set((authorizedUserIds || []).map(Number))
+  const requested = new Set((terminalInstanceIds || []).map(String))
+  const terminals = []
+  for (const userId of allowed) {
+    for (const terminal of bridgeV3Business.connectedTerminals(userId)) {
+      if (!requested.has(terminal.terminal_instance_id)) continue
+      terminals.push({ ...terminal, user_id:userId })
+    }
+  }
+  return terminals
+}
+
+export function probeBridgeUpdateMaintenanceMarket(terminal, symbol) {
+  if (!bridgeV3Business?.execute) {
+    throw Object.assign(new Error('bridge_maintenance_unavailable'), {
+      code:'bridge_maintenance_unavailable',
+    })
+  }
+  return bridgeV3Business.execute(Number(terminal.user_id), 'market_state', {
+    symbol,
+    terminal_instance_id:terminal.terminal_instance_id,
+    account_ref:terminal.account_ref,
+  }, { timeoutMs:5_000 })
+}
+
 export function renewBridgeMaintenanceLease(actorUserId, leaseId, options = {}) {
   if (!bridgeV3Business?.renewMaintenanceLease) {
     throw Object.assign(new Error('bridge_maintenance_unavailable'), {

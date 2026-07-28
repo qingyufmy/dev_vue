@@ -247,7 +247,7 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
-    public void UpdateActivationPolicyUsesImmediateRequestsAndConservativeAutomaticWindows()
+    public void UpdateActivationPolicyDelegatesAutomaticWindowEvidenceToTheServerLeaseGate()
     {
         var state = new BridgeUpdateState
         {
@@ -258,7 +258,7 @@ public sealed class BridgeUiTextTests
             UpdatedAtUtcMsc = 1,
         };
 
-        Assert.IsFalse(BridgeApplicationContext.ShouldAttemptUpdateActivation(
+        Assert.IsTrue(BridgeApplicationContext.ShouldAttemptUpdateActivation(
             state,
             new DateTimeOffset(2026, 7, 28, 12, 0, 0, TimeSpan.FromHours(8))));
         Assert.IsTrue(BridgeApplicationContext.ShouldAttemptUpdateActivation(
@@ -270,6 +270,9 @@ public sealed class BridgeUiTextTests
         Assert.IsTrue(BridgeApplicationContext.ShouldAttemptUpdateActivation(
             state with { Priority = "urgent" },
             new DateTimeOffset(2026, 7, 28, 12, 0, 0, TimeSpan.FromHours(8))));
+        Assert.IsFalse(BridgeApplicationContext.ShouldAttemptUpdateActivation(
+            state with { State = BridgeUpdateStates.Downloading },
+            new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.FromHours(8))));
     }
 
     [TestMethod]
