@@ -103,6 +103,7 @@ export function buildBridgeOrderCall(request) {
       sl: request.sl,
       tp: request.tp,
       deviation: request.deviation,
+      magic: request.magic,
       expiration,
     },
   }
@@ -682,7 +683,10 @@ export async function executeManualOrderCore(userId, request, action = 'manual_o
     validateRequest: async (_config, _account, prepared) => {
       validateManualOrderRequest(prepared)
       return {
-        approved_order:{ ...prepared },
+        // A direct user order is deliberately not owned by the AI position
+        // manager. Magic 0 keeps MT4/MT5 terminal semantics aligned and lets
+        // users omit SL/TP without creating a system protection incident.
+        approved_order:{ ...prepared, magic:0 },
         original_order:{ ...prepared },
         rule_results:[],
         risk_amount:null,

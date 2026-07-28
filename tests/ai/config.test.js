@@ -167,6 +167,14 @@ describe('signalOrderPayload', () => {
 })
 
 describe('buildBridgeOrderCall', () => {
+  it('preserves a manual magic number for pending orders', () => {
+    const result = buildBridgeOrderCall({
+      symbol:'XAUUSD', entry_method:'limit', order_type:'buy',
+      limit_price:3980, volume:0.01, magic:0,
+    })
+    expect(result.bridgeParams.magic).toBe(0)
+  })
+
   it('market 请求 → bridgeAction open', () => {
     const result = buildBridgeOrderCall({ symbol: 'XAUUSD', order_type: 'buy', volume: 0.01 })
     expect(result.bridgeAction).toBe('open')

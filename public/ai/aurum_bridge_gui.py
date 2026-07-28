@@ -1632,7 +1632,8 @@ class BridgeWorker(QThread):
                 tp, price_error = self._parse_order_price(params.get("tp"), "take profit")
                 if price_error: return {"status": "rejected", "message": price_error}
                 base_req = {"action": self.mt5.TRADE_ACTION_DEAL, "symbol": symbol,
-                            "volume": volume, "type": ot, "magic": SYSTEM_TRADE_MAGIC,
+                            "volume": volume, "type": ot,
+                            "magic": int(params["magic"]) if params.get("magic") is not None else SYSTEM_TRADE_MAGIC,
                             "comment": self._normalize_order_comment(params.get("comment"), "AI交易实验室"),
                             "type_time": self.mt5.ORDER_TIME_GTC,
                             "type_filling": self._get_filling_mode(symbol)}
@@ -2449,7 +2450,8 @@ class BridgeWorker(QThread):
                 req = {
                     "action": self.mt5.TRADE_ACTION_PENDING,
                     "symbol": symbol, "volume": volume, "type": ot,
-                    "price": price, "magic": SYSTEM_TRADE_MAGIC,
+                    "price": price,
+                    "magic": int(params["magic"]) if params.get("magic") is not None else SYSTEM_TRADE_MAGIC,
                     "comment": self._normalize_order_comment(params.get("comment"), "AI挂单"),
                     "type_filling": self.mt5.ORDER_FILLING_RETURN,
                     "type_time": type_time,

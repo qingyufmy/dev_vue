@@ -358,7 +358,8 @@ export async function deleteStrategy(strategyId, userId, userRole, confirmation 
 export async function listTradingAccounts(userId) {
   return queryAll(`SELECT ta.*,
       CASE WHEN bindings.current_user_id = ta.user_id
-        AND bindings.current_trading_account_id = ta.id THEN 1 ELSE 0 END AS is_active
+        AND bindings.current_trading_account_id = ta.id
+        AND ta.observe_status = 'active' THEN 1 ELSE 0 END AS is_active
     FROM trading_accounts ta
     LEFT JOIN mt5_account_bindings bindings
       ON bindings.current_trading_account_id = ta.id

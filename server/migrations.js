@@ -4197,6 +4197,41 @@ const migrations = [
       // worker. A candle opening more than two minutes in the future is invalid.
       await queryRun('DELETE FROM market_candles WHERE open_time_utc_msc > ?', [Date.now() + 120000])
     }
+  },
+  {
+    id: '145_manual_orders_outside_ai_protection',
+    async up() {
+      // Older direct website orders were recorded as AI-managed outcomes.
+      // Retire only those explicitly created with source_type=manual; terminal
+      // manual trades never had an outcome and need no migration.
+      await queryRun(`UPDATE signal_outcomes outcomes
+        JOIN order_intents intents ON intents.id = outcomes.order_intent_id
+        SET outcomes.status = 'manual_exempt',
+          outcomes.attribution_status = 'manual_exempt',
+          outcomes.protection_status = 'not_applicable',
+          outcomes.updated_at = NOW()
+        WHERE intents.source_type = 'manual'
+          AND outcomes.status IN ('open','closing')`)
+      await queryRun(`UPDATE risk_account_state risk_state
+        SET halt_status = 'active', halt_reason = NULL, updated_at = NOW()
+        WHERE risk_state.halt_status = 'protection_incident'
+          AND risk_state.halt_reason IN ('missing_stop_loss','invalid_stop_loss_direction')
+          AND EXISTS (
+            SELECT 1 FROM signal_outcomes manual_outcomes
+            JOIN order_intents manual_intents ON manual_intents.id = manual_outcomes.order_intent_id
+            WHERE manual_outcomes.trading_account_id = risk_state.trading_account_id
+              AND manual_outcomes.status = 'manual_exempt'
+              AND manual_intents.source_type = 'manual'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM signal_outcomes outcomes
+            JOIN order_intents intents ON intents.id = outcomes.order_intent_id
+            WHERE outcomes.trading_account_id = risk_state.trading_account_id
+              AND outcomes.status IN ('open','closing','attribution_ambiguous')
+              AND outcomes.protection_status IN ('missing_stop_loss','invalid_stop_loss_direction')
+              AND intents.source_type <> 'manual'
+          )`)
+    }
   }
 ]
 

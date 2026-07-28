@@ -459,6 +459,16 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("XAUUSD.s", result["payload"]["symbol"])
         self.assertEqual(("XAUUSD.s", True), adapter.mt5.selected[-1])
 
+    def test_preserves_zero_magic_for_direct_user_order(self):
+        adapter = self.adapter()
+
+        result = adapter.execute(self.command(params={
+            "symbol": "XAUUSD", "side": "buy", "volume": 0.01, "magic": 0,
+        }))
+
+        self.assertEqual("succeeded", result["status"])
+        self.assertEqual(0, adapter.mt5.sent[0]["magic"])
+
     def test_resolves_broker_suffix_before_sending_market_order(self):
         adapter = self.adapter()
         adapter.mt5.symbols_get = lambda: (SimpleNamespace(name="XAUUSD.s"),)

@@ -1355,7 +1355,7 @@ class Mt5Adapter:
             "type": order_type,
             "price": price,
             "deviation": int(params.get("deviation") or 20),
-            "magic": int(params.get("magic") or 234000),
+            "magic": int(params["magic"]) if params.get("magic") is not None else 234000,
             "comment": f"AURUM:{str(command['command_id'])[-20:]}",
             "type_time": int(params.get("type_time") or self.mt5.ORDER_TIME_GTC),
             "type_filling": int(params.get("type_filling") if params.get("type_filling") is not None
@@ -1490,7 +1490,7 @@ class Mt5Adapter:
             "symbol": position.symbol,
             "sl": next_sl,
             "tp": next_tp,
-            "magic": int(params.get("magic") or 234000),
+            "magic": int(params["magic"]) if params.get("magic") is not None else 234000,
         })
         verified = self.mt5.positions_get(ticket=ticket)
         if verified is None:
@@ -1542,7 +1542,7 @@ class Mt5Adapter:
             "type": self.mt5.ORDER_TYPE_SELL if is_buy else self.mt5.ORDER_TYPE_BUY,
             "price": tick.bid if is_buy else tick.ask,
             "deviation": int(params.get("deviation") or 20),
-            "magic": int(params.get("magic") or 234000),
+            "magic": int(params["magic"]) if params.get("magic") is not None else 234000,
             "comment": f"AURUM:{str(command['command_id'])[-20:]}",
             "type_filling": self._filling_mode(self.mt5.symbol_info(position.symbol), pending=False),
         }

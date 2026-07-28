@@ -691,7 +691,8 @@ router.delete('/ai/subscriptions/:id', authMiddleware, async (req, res) => {
 
 router.get('/ai/risk-center', authMiddleware, async (req, res) => {
   try {
-    const accounts = await listTradingAccounts(req.user.id)
+    const accounts = (await listTradingAccounts(req.user.id))
+      .filter(account => Number(account.is_active) === 1)
     const subscriptions = await listSubscriptions(req.user.id, req.user.role)
     const rows = []
     for (const account of accounts) {

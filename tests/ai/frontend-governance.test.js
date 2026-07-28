@@ -30,7 +30,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('setText("quoteAsk", priceDisplay(q.ask))')
     expect(app).toContain('setText("quoteBid", priceDisplay(data.bid))')
     expect(app).toContain('setText("quoteAsk", priceDisplay(data.ask))')
-    expect(html).toContain('/ai/app.js?v=20260727bridgefix4')
+    expect(html).toContain('/ai/app.js?v=20260728manualrisk')
   })
 
   it('uses an icon included in the local Lucide bundle for position protection editing', () => {

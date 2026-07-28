@@ -2784,6 +2784,8 @@ const RISK_ROLLOUT_LABELS = {
 function riskRolloutLabel(code) { return RISK_ROLLOUT_LABELS[code] || "未命名风控规则"; }
 
 const RISK_DECISION_LABELS = {
+  missing_stop_loss:"系统托管仓位缺少止损",
+  invalid_stop_loss_direction:"系统托管仓位止损方向异常",
   "R5_SCHEMA_SYMBOL":"缺少交易品种", "R5_SCHEMA_ORDER_TYPE":"订单方向无效", "R5_SCHEMA_ENTRY_METHOD":"入场方式无效",
   "R5_SCHEMA_AI_REQUIRED":"AI 订单必要字段不完整", "R5_SCHEMA_PENDING_PRICE":"挂单价格无效",
   "R5_SCHEMA_STOP_LIMIT_PRICE":"Stop Limit 触发后限价无效", "R5_SCHEMA_AI_POSITION_SIZE_TIER":"AI 返回的仓位档位无效",

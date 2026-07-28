@@ -6,6 +6,7 @@ import { positionProtectionStatus } from './position-management.js'
 
 const SYSTEM_MAGIC = 234000
 const OPEN_STATUSES = ['open', 'closing']
+const PROTECTION_INCIDENTS = ['missing_stop_loss', 'invalid_stop_loss_direction']
 let monitorTimer = null
 
 const num = value => Number.isFinite(Number(value)) ? Number(value) : 0
@@ -85,8 +86,12 @@ export function resolveOutcomeClosureTransition(outcome, result, now = beijingNo
   }
 }
 
+export function isSystemManagedOutcomeSource(sourceType) {
+  return String(sourceType || '').trim().toLowerCase() !== 'manual'
+}
+
 export async function createSignalOutcomeTx(run, intent, bridgeResult, bridgeAction = null) {
-  if (!intent?.trading_account_id) return null
+  if (!intent?.trading_account_id || !isSystemManagedOutcomeSource(intent.source_type)) return null
   const request = parse(intent.approved_order_json, parse(intent.request_json))
   const [accounts] = await run('SELECT margin_mode, broker_server, login_account FROM trading_accounts WHERE id = ? LIMIT 1', [intent.trading_account_id])
   const account = Array.isArray(accounts) ? accounts[0] : null
@@ -184,6 +189,27 @@ async function saveMatchedDeals(run, outcome, deals) {
   }
 }
 
+async function clearRecoveredProtectionIncidentTx(run, outcome) {
+  const [rows] = await run(`SELECT COUNT(*) AS unresolved_count
+    FROM signal_outcomes outcomes
+    JOIN order_intents intents ON intents.id = outcomes.order_intent_id
+    WHERE outcomes.trading_account_id = ? AND outcomes.status IN ('open','closing','attribution_ambiguous')
+      AND outcomes.protection_status IN ('missing_stop_loss','invalid_stop_loss_direction')
+      AND intents.source_type <> 'manual'`, [outcome.trading_account_id])
+  if (Number(rows?.[0]?.unresolved_count || 0) > 0) return false
+  const [stateRows] = await run(`SELECT halt_status, halt_reason FROM risk_account_state
+    WHERE trading_account_id = ? FOR UPDATE`, [outcome.trading_account_id])
+  const state = stateRows?.[0]
+  if (state?.halt_status !== 'protection_incident' || !PROTECTION_INCIDENTS.includes(String(state?.halt_reason || ''))) {
+    return false
+  }
+  await run(`UPDATE risk_account_state SET halt_status = 'active', halt_reason = NULL, updated_at = ?
+    WHERE trading_account_id = ? AND halt_status = 'protection_incident'
+      AND halt_reason IN ('missing_stop_loss','invalid_stop_loss_direction')`,
+  [beijingNow(), outcome.trading_account_id])
+  return true
+}
+
 export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
   await reconcileTerminalPendingOutcomes()
   const outcomes = await queryAll(`SELECT so.*, oi.bridge_command_ref, oi.approved_order_json
@@ -219,6 +245,7 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
         ? positionProtectionStatus(currentPosition, item.outcome.entry_direction)
         : { status:'unknown', actualStopLoss:null, actualTakeProfit:null, systemOwned:false }
       let protectionIncidentCreated = false
+      let protectionIncidentCleared = false
       await withTransaction(async run => {
         const [lockedRows] = await run('SELECT * FROM signal_outcomes WHERE id = ? FOR UPDATE', [item.outcome.id])
         const locked = lockedRows[0]
@@ -233,7 +260,7 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
             JSON.stringify(currentPosition), beijingNow(), locked.id,
           ])
         }
-        if (currentPosition && protection.systemOwned && ['missing_stop_loss', 'invalid_stop_loss_direction'].includes(protection.status)) {
+        if (currentPosition && protection.systemOwned && PROTECTION_INCIDENTS.includes(protection.status)) {
           await run(`INSERT INTO risk_account_state
             (trading_account_id, user_id, halt_status, halt_reason, created_at, updated_at)
             VALUES (?, ?, 'protection_incident', ?, ?, ?)
@@ -244,6 +271,9 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
             locked.trading_account_id, locked.user_id, protection.status, beijingNow(), beijingNow(),
           ])
           protectionIncidentCreated = String(locked.protection_status || '') !== protection.status
+        }
+        if (currentPosition && protection.systemOwned && protection.status === 'protected') {
+          protectionIncidentCleared = await clearRecoveredProtectionIncidentTx(run, locked)
         }
         if (result.attributionStatus === 'attribution_ambiguous') {
           await run(`UPDATE signal_outcomes SET position_id = ?, status = 'attribution_ambiguous',
@@ -268,8 +298,11 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
           JSON.stringify(result.interventions), transition.status, result.complete ? result.feeHash : null,
           transition.feeStableAt, result.complete ? result.latestExit : null,
           transition.reviewEligibleAt, now, now, protection.actualStopLoss, protection.actualTakeProfit,
-          currentPosition ? protection.status : locked.protection_status, locked.id,
+          currentPosition ? protection.status : (result.complete ? 'position_closed' : locked.protection_status), locked.id,
         ])
+        if (!currentPosition && result.complete) {
+          protectionIncidentCleared = await clearRecoveredProtectionIncidentTx(run, locked)
+        }
         if (transition.status === 'closed') closed += 1
       })
       if (protectionIncidentCreated) {
@@ -282,6 +315,17 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
         }
         sendToBrowsers(Number(item.outcome.user_id), payload)
         broadcastAdminEvent('risk-audit', 'position_protection_incident', {
+          user_id:Number(item.outcome.user_id), ...payload,
+        }, { scopes:['overview', 'ai-operations', 'risk-audit'], refresh:true })
+      }
+      if (protectionIncidentCleared) {
+        const payload = {
+          type:'position_protection_recovered', outcome_id:Number(item.outcome.id),
+          trading_account_id:Number(item.outcome.trading_account_id),
+          message:'系统仓位保护已恢复，账户已自动解除新开仓暂停',
+        }
+        sendToBrowsers(Number(item.outcome.user_id), payload)
+        broadcastAdminEvent('risk-audit', 'position_protection_recovered', {
           user_id:Number(item.outcome.user_id), ...payload,
         }, { scopes:['overview', 'ai-operations', 'risk-audit'], refresh:true })
       }

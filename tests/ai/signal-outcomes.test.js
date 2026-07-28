@@ -9,6 +9,8 @@ vi.mock('../../server/db.js', () => db)
 
 import {
   analyzeOutcomeAttribution,
+  createSignalOutcomeTx,
+  isSystemManagedOutcomeSource,
   reconcileTerminalPendingOutcomes,
   reconcileSignalOutcomes,
   resolveOutcomeClosureTransition,
@@ -25,6 +27,17 @@ const deal = (overrides = {}) => ({
 })
 
 describe('signal outcome attribution', () => {
+  it('does not register direct user orders as AI-managed outcomes', async () => {
+    const run = vi.fn()
+    await expect(createSignalOutcomeTx(run, {
+      trading_account_id:3, source_type:'manual',
+    }, { order:1001 })).resolves.toBeNull()
+    expect(run).not.toHaveBeenCalled()
+    expect(isSystemManagedOutcomeSource('manual')).toBe(false)
+    expect(isSystemManagedOutcomeSource('manual_ai')).toBe(true)
+    expect(isSystemManagedOutcomeSource('auto_delivery')).toBe(true)
+  })
+
   it('attributes a complete hedging position and includes every fee', () => {
     const result = analyzeOutcomeAttribution(outcome(), [
       deal(),
@@ -101,6 +114,39 @@ describe('position outcome monitor durability', () => {
     expect(await reconcileTerminalPendingOutcomes()).toBe(97)
     expect(db.queryRun.mock.calls[0][0]).toContain("IN ('cancelled','expired','superseded')")
     expect(db.queryRun.mock.calls[0][0]).toContain("attribution_status = 'not_filled'")
+  })
+
+  it('automatically clears a protection pause after the system position is protected again', async () => {
+    db.queryAll.mockResolvedValue([outcome({
+      status:'open', order_intent_id:8, entry_direction:'buy',
+      protection_status:'missing_stop_loss', original_stop_loss:90,
+    })])
+    const writes = []
+    const run = vi.fn(async (sql) => {
+      writes.push(sql)
+      if (sql.includes('SELECT * FROM signal_outcomes')) {
+        return [[outcome({
+          status:'open', order_intent_id:8, entry_direction:'buy',
+          protection_status:'missing_stop_loss', original_stop_loss:90,
+        })], []]
+      }
+      if (sql.includes('COUNT(*) AS unresolved_count')) return [[{ unresolved_count:0 }], []]
+      if (sql.includes('FROM risk_account_state') && sql.includes('FOR UPDATE')) {
+        return [[{ halt_status:'protection_incident', halt_reason:'missing_stop_loss' }], []]
+      }
+      return [{ affectedRows:1 }, []]
+    })
+    db.withTransaction.mockImplementation(callback => callback(run))
+    const bridge = vi.fn(async (_userId, action) => action === 'history'
+      ? { status:'success', deals:[deal()], history_orders:[] }
+      : { status:'success', positions:[{
+        ticket:'P1', position_id:'P1', type:'buy', price_current:100,
+        sl:90, tp:120, magic:234000, volume:1,
+      }] })
+
+    await reconcileSignalOutcomes({ bridge })
+
+    expect(writes.some(sql => sql.includes("SET halt_status = 'active', halt_reason = NULL"))).toBe(true)
   })
 
   it('enforces idempotency for both outcomes and MT5 deals in the schema', () => {
