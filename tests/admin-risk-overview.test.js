@@ -26,7 +26,10 @@ describe('admin risk overview account pagination', () => {
 
     const result = await getAdminRiskAuditOverview({ accountPage:3, accountPageSize:8 })
     const accountQuery = queryAll.mock.calls.find(([sql]) => sql.includes('FROM trading_accounts accounts'))
+    const summaryQuery = queryOne.mock.calls.find(([sql]) => sql.includes('AS decisions_today'))
 
+    expect(summaryQuery[0]).toContain("account.observe_status = 'active'")
+    expect(summaryQuery[0]).toContain("observe_status = 'active') AS trading_accounts")
     expect(accountQuery[0]).toContain('LIMIT ? OFFSET ?')
     expect(accountQuery[0]).not.toContain('LIMIT 500')
     expect(accountQuery[0]).toContain('accounts.observe_status')

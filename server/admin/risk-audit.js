@@ -19,11 +19,11 @@ export async function getAdminRiskAuditOverview({ accountPage = 1, accountPageSi
       (SELECT COUNT(*) FROM risk_decisions WHERE created_at >= CURDATE() AND decision_status = 'adjust') AS adjusted_today,
       (SELECT COUNT(*) FROM trading_accounts account
         LEFT JOIN risk_account_state state ON state.trading_account_id = account.id
-        WHERE account.is_deleted = 0 AND (
-          account.observe_status IN ('paused','switched','frozen','transferred')
-          OR state.halt_status <> 'active' OR state.user_kill_switch = 1 OR state.data_complete = 0
+        WHERE account.is_deleted = 0 AND account.observe_status = 'active' AND (
+          state.halt_status <> 'active' OR state.user_kill_switch = 1 OR state.data_complete = 0
         )) AS paused_accounts,
-      (SELECT COUNT(*) FROM trading_accounts WHERE is_deleted = 0) AS trading_accounts,
+      (SELECT COUNT(*) FROM trading_accounts
+        WHERE is_deleted = 0 AND observe_status = 'active') AS trading_accounts,
       (SELECT COUNT(*) FROM audit_logs WHERE created_at >= CURDATE()) AS admin_actions_today`),
     queryOne('SELECT global_kill_switch, reason, changed_by, updated_at FROM global_risk_control WHERE id = 1'),
     queryOne('SELECT COUNT(*) AS total FROM trading_accounts WHERE is_deleted = 0'),
