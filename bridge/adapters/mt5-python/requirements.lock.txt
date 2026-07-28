@@ -1,0 +1,4 @@
+MetaTrader5==5.0.5735 \
+    --hash=sha256:0d05b69cef5eb3f43ea47cb6d36dac0e7e15f82a4fb77974439c565daa54d1c9
+numpy==2.4.6 \
+    --hash=sha256:1e254a00cdf42b1e4d5b3d68d33af63268d41340d8885df2ab6470f2e1500147

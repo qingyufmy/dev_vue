@@ -17,6 +17,9 @@ param(
   [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
+function Write-Utf8NoBom([string]$Path, [string]$Content) {
+  [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+}
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $dirty = [bool](git -C $repo status --porcelain)
 if ($TargetEnvironment -eq 'production' -and $dirty) { throw 'release_production_worktree_dirty' }
@@ -27,6 +30,12 @@ $pythonRoot = (Resolve-Path -LiteralPath $PythonRuntimeDirectory).Path
 if (-not (Test-Path -LiteralPath (Join-Path $pythonRoot 'python.exe') -PathType Leaf)) { throw 'release_python_runtime_invalid' }
 if ((Test-Path -LiteralPath (Join-Path $pythonRoot 'pyvenv.cfg')) -or
   (Test-Path -LiteralPath (Join-Path (Split-Path $pythonRoot -Parent) 'pyvenv.cfg'))) { throw 'release_python_runtime_not_portable' }
+if ($TargetEnvironment -eq 'production') {
+  $runtimeMetadataPath = Join-Path $pythonRoot 'runtime-metadata.json'
+  if (-not (Test-Path -LiteralPath $runtimeMetadataPath -PathType Leaf)) { throw 'release_python_runtime_metadata_missing' }
+  $runtimeMetadata = Get-Content -LiteralPath $runtimeMetadataPath -Raw | ConvertFrom-Json
+  if ($runtimeMetadata.schema_version -ne 1 -or $runtimeMetadata.architecture -ne 'win-x64' -or -not ([string]$runtimeMetadata.python_version).StartsWith('3.11.')) { throw 'release_python_runtime_metadata_invalid' }
+}
 if ($TargetEnvironment -eq 'production' -and (-not $MetaEditorExe -or -not (Test-Path -LiteralPath $MetaEditorExe -PathType Leaf))) { throw 'release_metaeditor_required' }
 $domain = $CdnDomain.TrimEnd('/')
 $domainUri = $null
@@ -47,11 +56,14 @@ if ($DryRun) {
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $work = Join-Path ([IO.Path]::GetTempPath()) "aurum-release-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $work | Out-Null
+$buildSucceeded = $false
 try {
   $dotnet = if ($env:AURUM_DOTNET_EXE) { $env:AURUM_DOTNET_EXE } elseif (Get-Command dotnet -ErrorAction SilentlyContinue) { 'dotnet' } else { Join-Path $env:USERPROFILE '.cache\aurum-dotnet\dotnet.exe' }
   $core = Join-Path $work 'core'
-  & $dotnet publish (Join-Path $repo 'bridge\app\AurumBridge\AurumBridge.csproj') -c Release -r win-x64 --self-contained true -o $core
+  & $dotnet publish (Join-Path $repo 'bridge\app\AurumBridge\AurumBridge.csproj') -c Release -r win-x64 --self-contained true -p:Version=$ReleaseVersion -o $core
   if ($LASTEXITCODE -ne 0) { throw 'release_dotnet_publish_failed' }
+  $publishedAssembly = [Reflection.AssemblyName]::GetAssemblyName((Join-Path $core 'AURUMBridge.dll')).Version
+  if ($publishedAssembly.Major -ne $parsedVersion.Major -or $publishedAssembly.Minor -ne $parsedVersion.Minor -or $publishedAssembly.Build -ne $parsedVersion.Build) { throw 'release_core_version_mismatch' }
   $runtimeTarget = Join-Path $core 'runtime\python'
   New-Item -ItemType Directory -Path $runtimeTarget -Force | Out-Null
   Copy-Item -Path (Join-Path $pythonRoot '*') -Destination $runtimeTarget -Recurse -Force
@@ -64,8 +76,10 @@ try {
     $mq4 = Join-Path $mt4Target 'AURUMBridgeEA.mq4'
     $compileLog = Join-Path $mt4Target 'compile.log'
     Copy-Item -LiteralPath (Join-Path $repo 'bridge\adapters\mt4-ea\AURUMBridgeEA.mq4') -Destination $mq4
-    & $MetaEditorExe "/compile:$mq4" "/log:$compileLog"
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $mt4Target 'AURUMBridgeEA.ex4') -PathType Leaf)) { throw 'release_mt4_compile_failed' }
+    $compileArgument = "/compile:`"$mq4`""
+    $logArgument = "/log:`"$compileLog`""
+    $null = Start-Process -FilePath $MetaEditorExe -ArgumentList @($compileArgument,$logArgument) -Wait -PassThru -WindowStyle Hidden
+    if (-not (Test-Path -LiteralPath (Join-Path $mt4Target 'AURUMBridgeEA.ex4') -PathType Leaf) -or -not (Test-Path -LiteralPath $compileLog -PathType Leaf)) { throw 'release_mt4_compile_failed' }
     $compileText = Get-Content -LiteralPath $compileLog -Raw -ErrorAction Stop
     if ($compileText -notmatch 'Result:\s*0 errors,\s*0 warnings') { throw 'release_mt4_compile_failed' }
     Remove-Item -LiteralPath $mq4,$compileLog -Force
@@ -95,12 +109,16 @@ try {
     packages=$packages; signature=''
   }
   $manifestPath = Join-Path $outputRoot 'manifest.unsigned.json'
-  $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
-  [pscustomobject]@{ ok=$true; operation='build'; release_id=$ReleaseId; release_notes=$ReleaseNotes; output=$outputRoot; manifest=$manifestPath; packages=$packages } |
-    ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputRoot 'build-result.json') -Encoding utf8NoBOM
+  Write-Utf8NoBom -Path $manifestPath -Content ($manifest | ConvertTo-Json -Depth 8)
+  $buildResult = [pscustomobject]@{ ok=$true; operation='build'; release_id=$ReleaseId; release_notes=$ReleaseNotes; output=$outputRoot; manifest=$manifestPath; packages=$packages }
+  Write-Utf8NoBom -Path (Join-Path $outputRoot 'build-result.json') -Content ($buildResult | ConvertTo-Json -Depth 8)
+  $buildSucceeded = $true
   Get-Content -LiteralPath (Join-Path $outputRoot 'build-result.json') -Raw
 } finally {
   if ((Test-Path -LiteralPath $work) -and $work.StartsWith([IO.Path]::GetTempPath(), [StringComparison]::OrdinalIgnoreCase)) {
     Remove-Item -LiteralPath $work -Recurse -Force
+  }
+  if (-not $buildSucceeded -and (Test-Path -LiteralPath $outputRoot)) {
+    Remove-Item -LiteralPath $outputRoot -Recurse -Force
   }
 }

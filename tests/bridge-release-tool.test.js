@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -13,6 +13,24 @@ import { verifyBridgeReleaseSignatures } from '../server/routes/bridge-release.j
 const execFileAsync = promisify(execFile)
 
 describe('bridge release tooling', () => {
+  it('pins the portable MT5 Python runtime and enforces build provenance', async () => {
+    const lock = await readFile(new URL('../bridge/adapters/mt5-python/requirements.lock.txt', import.meta.url), 'utf8')
+    const runtimeBuilder = await readFile(new URL('../scripts/bridge-release/build-python-runtime.ps1', import.meta.url), 'utf8')
+    const releaseBuilder = await readFile(new URL('../scripts/bridge-release/build-release.ps1', import.meta.url), 'utf8')
+    expect(lock).toContain('MetaTrader5==5.0.5735')
+    expect(lock).toContain('numpy==2.4.6')
+    expect(lock.match(/--hash=sha256:[a-f0-9]{64}/g)).toHaveLength(2)
+    expect(runtimeBuilder).toContain("'--require-hashes'")
+    expect(runtimeBuilder).toContain("'--only-binary=:all:'")
+    expect(runtimeBuilder).toContain('release_python_source_is_venv')
+    expect(runtimeBuilder).toContain('release_python_runtime_smoke_test_failed')
+    expect(releaseBuilder).toContain('-p:Version=$ReleaseVersion')
+    expect(releaseBuilder).toContain('release_core_version_mismatch')
+    expect(releaseBuilder).toContain('Start-Process -FilePath $MetaEditorExe')
+    expect(releaseBuilder).toContain('-WindowStyle Hidden')
+    expect(releaseBuilder).toContain('release_python_runtime_metadata_missing')
+  })
+
   it('matches the signed package and Manifest V2 canonical contracts', () => {
     const pkg = {
       module_id:'core', version:'3.1.0', url:'https://qiniu.example/bridge/core.zip',
