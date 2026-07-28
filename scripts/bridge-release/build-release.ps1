@@ -22,6 +22,8 @@ function Write-Utf8NoBom([string]$Path, [string]$Content) {
   [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
 }
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$branch = git -C $repo branch --show-current
+$commit = git -C $repo rev-parse HEAD
 $dirty = [bool](git -C $repo status --porcelain)
 if ($TargetEnvironment -eq 'production' -and $dirty) { throw 'release_production_worktree_dirty' }
 $parsedVersion = $null
@@ -62,7 +64,7 @@ $ReleaseId = if ($ReleaseId) { $ReleaseId } else { "bridge-$ReleaseVersion-$([Da
 $outputRoot = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $repo "bridge\release-artifacts\$ReleaseId" }
 if (Test-Path -LiteralPath $outputRoot) { throw 'release_output_exists' }
 if ($DryRun) {
-  [pscustomobject]@{ ok=$true; operation='build'; dry_run=$true; environment=$TargetEnvironment; release_id=$ReleaseId; server_url=$serverUrlValue; output=$outputRoot } | ConvertTo-Json
+  [pscustomobject]@{ ok=$true; operation='build'; dry_run=$true; environment=$TargetEnvironment; release_id=$ReleaseId; git_branch=$branch; git_commit=$commit; source_dirty=$dirty; server_url=$serverUrlValue; output=$outputRoot } | ConvertTo-Json
   exit 0
 }
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
@@ -126,7 +128,7 @@ try {
   }
   $manifestPath = Join-Path $outputRoot 'manifest.unsigned.json'
   Write-Utf8NoBom -Path $manifestPath -Content ($manifest | ConvertTo-Json -Depth 8)
-  $buildResult = [pscustomobject]@{ ok=$true; operation='build'; release_id=$ReleaseId; release_notes=$ReleaseNotes; server_url=$serverUrlValue; output=$outputRoot; manifest=$manifestPath; packages=$packages }
+  $buildResult = [pscustomobject]@{ ok=$true; operation='build'; release_id=$ReleaseId; release_notes=$ReleaseNotes; git_branch=$branch; git_commit=$commit; source_dirty=$dirty; server_url=$serverUrlValue; output=$outputRoot; manifest=$manifestPath; packages=$packages }
   Write-Utf8NoBom -Path (Join-Path $outputRoot 'build-result.json') -Content ($buildResult | ConvertTo-Json -Depth 8)
   $buildSucceeded = $true
   Get-Content -LiteralPath (Join-Path $outputRoot 'build-result.json') -Raw
