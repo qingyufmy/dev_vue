@@ -6,7 +6,11 @@ public sealed record BridgeRuntimePaths(
     string PythonExecutable,
     string Mt5WorkerScript,
     string? Mt4ExpertPath,
-    Uri ServerBaseUri);
+    Uri ServerBaseUri)
+{
+    public Uri RealtimeBaseUri { get; init; } =
+        BridgeServerEndpointConfiguration.DeriveRealtimeUri(ServerBaseUri);
+}
 
 public static class BridgeRuntimePathResolver
 {
@@ -79,7 +83,10 @@ public static class BridgeRuntimePathResolver
                 mt4ExpertCandidates,
                 "mt4_ea_package_not_found")
             : ResolveOptionalFile(configuredMt4Expert, mt4ExpertCandidates);
-        var serverUri = ResolveServerUri(applicationDirectory, getEnvironmentVariable);
+        var endpoints = ResolveEndpoints(
+            applicationDirectory,
+            rootDataDirectory,
+            getEnvironmentVariable);
         var profileDataDirectory = BridgeRuntimeProfile.ResolveDataDirectory(rootDataDirectory, profileId);
         return new(
             profileDataDirectory,
@@ -87,23 +94,62 @@ public static class BridgeRuntimePathResolver
             python,
             worker,
             mt4Expert,
-            serverUri);
+            endpoints.ControlBaseUri)
+        {
+            RealtimeBaseUri = endpoints.RealtimeBaseUri,
+        };
     }
 
-    private static Uri ResolveServerUri(
+    public static BridgeEndpointConfiguration ResolveOfficialEndpoints(
+        string applicationDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(applicationDirectory);
+        var control = BridgeServerEndpointConfiguration.ReadPackaged(
+            Path.GetFullPath(applicationDirectory),
+            required:false)
+            ?? BridgeServerEndpointConfiguration.ParseServerUri(DefaultServerUrl);
+        return new(control, BridgeServerEndpointConfiguration.DeriveRealtimeUri(control));
+    }
+
+    private static BridgeEndpointConfiguration ResolveEndpoints(
         string applicationDirectory,
+        string rootDataDirectory,
         Func<string, string?> getEnvironmentVariable)
     {
         var environmentValue = getEnvironmentVariable("AURUM_BRIDGE_SERVER_URL");
         if (!string.IsNullOrWhiteSpace(environmentValue))
         {
-            return BridgeServerEndpointConfiguration.ParseServerUri(environmentValue);
+            var control = BridgeServerEndpointConfiguration.ParseServerUri(environmentValue);
+            var realtimeValue = getEnvironmentVariable("AURUM_BRIDGE_REALTIME_URL");
+            var realtime = string.IsNullOrWhiteSpace(realtimeValue)
+                ? BridgeServerEndpointConfiguration.DeriveRealtimeUri(control)
+                : BridgeServerEndpointConfiguration.ParseRealtimeUri(realtimeValue);
+            return new(control, realtime);
+        }
+        try
+        {
+            var custom = new BridgeEndpointSettingsStore(rootDataDirectory).Load();
+            if (custom is not null)
+            {
+                return custom;
+            }
+        }
+        catch (InvalidDataException)
+        {
+            // A damaged local override must not prevent recovery with the signed package default.
         }
         var packaged = BridgeServerEndpointConfiguration.ReadPackaged(
             applicationDirectory,
             required:IsInstalledVersionDirectory(applicationDirectory));
-        return packaged
+        var official = packaged
             ?? BridgeServerEndpointConfiguration.ParseServerUri(DefaultServerUrl);
+        var officialRealtime = BridgeServerEndpointConfiguration.DeriveRealtimeUri(official);
+        var realtimeOverride = getEnvironmentVariable("AURUM_BRIDGE_REALTIME_URL");
+        return new(
+            official,
+            string.IsNullOrWhiteSpace(realtimeOverride)
+                ? officialRealtime
+                : BridgeServerEndpointConfiguration.ParseRealtimeUri(realtimeOverride));
     }
 
     private static string? ResolveOptionalFile(

@@ -34,6 +34,7 @@ public sealed class BridgeRuntimePathResolverTests
                 "AURUM", "BridgeV3", "credential.dat"),
             paths.CredentialPath);
         Assert.AreEqual(new Uri("https://www.cnfxtrade.com"), paths.ServerBaseUri);
+        Assert.AreEqual(new Uri("wss://www.cnfxtrade.com"), paths.RealtimeBaseUri);
     }
 
     [TestMethod]
@@ -145,6 +146,53 @@ public sealed class BridgeRuntimePathResolverTests
             name => values.GetValueOrDefault(name));
 
         Assert.AreEqual(new Uri("http://localhost:3000"), paths.ServerBaseUri);
+    }
+
+    [TestMethod]
+    public async Task AdminEndpointSettingsOverrideThePackageForEveryRuntimeProfile()
+    {
+        var python = CreateFile("runtime", "python", "python.exe");
+        var worker = CreateFile("modules", "adapter.mt5.python", "worker.py");
+        var state = Path.Combine(_directory, "state");
+        await new BridgeEndpointSettingsStore(state).SaveAsync(new(
+            new Uri("https://control.example.com"),
+            new Uri("ws://realtime.example.com:8080")));
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["AURUM_BRIDGE_PYTHON"] = python,
+            ["AURUM_BRIDGE_MT5_WORKER"] = worker,
+            ["AURUM_BRIDGE_DATA_DIR"] = state,
+        };
+
+        var paths = BridgeRuntimePathResolver.Resolve(
+            _directory,
+            name => values.GetValueOrDefault(name),
+            "source-1");
+
+        Assert.AreEqual(new Uri("https://control.example.com"), paths.ServerBaseUri);
+        Assert.AreEqual(new Uri("ws://realtime.example.com:8080"), paths.RealtimeBaseUri);
+    }
+
+    [TestMethod]
+    public void DamagedAdminSettingsFallBackToThePackagedOfficialAddress()
+    {
+        CreateFile("runtime", "python", "python.exe");
+        CreateFile("modules", "adapter.mt5.python", "worker.py");
+        var state = Path.Combine(_directory, "state");
+        Directory.CreateDirectory(state);
+        File.WriteAllText(
+            Path.Combine(state, BridgeEndpointSettingsStore.FileName),
+            "{broken");
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["AURUM_BRIDGE_DATA_DIR"] = state,
+        };
+
+        var paths = BridgeRuntimePathResolver.Resolve(
+            _directory,
+            name => values.GetValueOrDefault(name));
+
+        Assert.AreEqual(new Uri("https://www.cnfxtrade.com"), paths.ServerBaseUri);
     }
 
     [TestMethod]

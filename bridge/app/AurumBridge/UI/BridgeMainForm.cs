@@ -87,6 +87,7 @@ public sealed class BridgeMainForm : Form
     private readonly Button _exitButton = new();
     private readonly Button _logoutButton = new();
     private readonly Button _observerSourcesButton = new();
+    private readonly Button _settingsButton = new();
     private readonly Button _mt4ExpertButton = new();
     private readonly TableLayoutPanel _updateBanner = new();
     private readonly Label _updateTitle = new();
@@ -142,6 +143,7 @@ public sealed class BridgeMainForm : Form
 
     public event EventHandler? PairRequested;
     public event EventHandler? ObserverSourcesRequested;
+    public event EventHandler? SettingsRequested;
     public event EventHandler<BridgeObserverActionEventArgs>? ObserverActionRequested;
     public event EventHandler? InstallMt4ExpertRequested;
     public event EventHandler? RedetectRequested;
@@ -167,6 +169,9 @@ public sealed class BridgeMainForm : Form
         _observerSourcesButton.Visible = CanShowObserverSources(
             _isDefaultProfile,
             status.CanManageObserverSources);
+        _settingsButton.Visible = CanShowSettings(
+            _isDefaultProfile,
+            status.IsAdministrator);
         _mt4SetupBar.Visible = CanShowMt4ExpertSetup(status.SelectedPlatform);
         if (_pendingPlatform is null)
         {
@@ -281,6 +286,10 @@ public sealed class BridgeMainForm : Form
     public static bool CanShowObserverSources(
         bool isDefaultProfile,
         bool canManageObserverSources) => isDefaultProfile && canManageObserverSources;
+
+    public static bool CanShowSettings(
+        bool isDefaultProfile,
+        bool isAdministrator) => isDefaultProfile && isAdministrator;
 
     public static bool CanShowMt4ExpertSetup(string? selectedPlatform) =>
         selectedPlatform == BridgePlatform.Mt4;
@@ -673,15 +682,19 @@ public sealed class BridgeMainForm : Form
         ConfigureButton(_pairButton, "连接账号", primary: true);
         ConfigureButton(_detectButton, "重新检测", primary: false);
         ConfigureButton(_logButton, "查看日志", primary: false);
+        ConfigureButton(_settingsButton, "连接设置", primary: false);
         ConfigureButton(_exitButton, "退出桥接", primary: false);
         _pairButton.Visible = false;
         _pairButton.Click += (_, _) => PairRequested?.Invoke(this, EventArgs.Empty);
         _detectButton.Click += (_, _) => RedetectRequested?.Invoke(this, EventArgs.Empty);
         _logButton.Click += (_, _) => OpenLogsRequested?.Invoke(this, EventArgs.Empty);
+        _settingsButton.Visible = false;
+        _settingsButton.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
         _exitButton.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
         actions.Controls.Add(_pairButton);
         actions.Controls.Add(_detectButton);
         actions.Controls.Add(_logButton);
+        actions.Controls.Add(_settingsButton);
         actions.Controls.Add(_exitButton);
         root.Controls.Add(actions, 0, 8);
         Controls.Add(root);

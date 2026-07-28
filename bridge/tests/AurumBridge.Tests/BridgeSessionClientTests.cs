@@ -143,6 +143,42 @@ public sealed class BridgeSessionClientTests
     }
 
     [TestMethod]
+    public async Task UsesTheDedicatedRealtimeOriginWithoutSendingTheRefreshTokenToIt()
+    {
+        var handler = new QueueHandler(
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true,
+                token = "short-jwt",
+                refreshExpiresInSeconds = 7_776_000,
+                bridgeRole = "admin",
+            }),
+            Response(HttpStatusCode.OK, new
+            {
+                ok = true,
+                ticket = new string('t', 48),
+                expiresInSeconds = 30,
+            }));
+        var store = new MemoryCredentialStore
+        {
+            Credential = new(new string('r', 64), 1_900_000_000_000),
+        };
+        var client = new BridgeSessionClient(
+            new Uri("https://control.example.com"),
+            new HttpClient(handler),
+            store,
+            realtimeBaseUri:new Uri("ws://realtime.example.com:8080"));
+
+        var attempt = await client.AcquireConnectionAttemptAsync(Hello());
+
+        Assert.AreEqual(
+            "ws://realtime.example.com:8080/aurum-api/bridge/v3/ws",
+            attempt.WebSocketUri.AbsoluteUri);
+        Assert.IsTrue(handler.Requests.All(request =>
+            new Uri(request.Uri).Host == "control.example.com"));
+    }
+
+    [TestMethod]
     public async Task MissingOrNonAdminRoleFailsObserverManagementClosed()
     {
         var handler = new QueueHandler(

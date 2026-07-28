@@ -63,6 +63,7 @@ public sealed class BridgeApiException : Exception
 public sealed class BridgeSessionClient
 {
     private readonly Uri _serverBaseUri;
+    private readonly Uri _realtimeBaseUri;
     private readonly HttpClient _httpClient;
     private readonly IBridgeCredentialStore _credentialStore;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
@@ -75,9 +76,13 @@ public sealed class BridgeSessionClient
         HttpClient httpClient,
         IBridgeCredentialStore credentialStore,
         Func<TimeSpan, CancellationToken, Task>? delay = null,
-        Func<long>? clock = null)
+        Func<long>? clock = null,
+        Uri? realtimeBaseUri = null)
     {
         _serverBaseUri = NormalizeServerUri(serverBaseUri);
+        _realtimeBaseUri = BridgeServerEndpointConfiguration.ParseRealtimeUri(
+            (realtimeBaseUri
+                ?? BridgeServerEndpointConfiguration.DeriveRealtimeUri(_serverBaseUri)).AbsoluteUri);
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _credentialStore = credentialStore ?? throw new ArgumentNullException(nameof(credentialStore));
         _delay = delay ?? Task.Delay;
@@ -486,9 +491,8 @@ public sealed class BridgeSessionClient
 
     private Uri BuildWebSocketUri()
     {
-        var builder = new UriBuilder(_serverBaseUri)
+        var builder = new UriBuilder(_realtimeBaseUri)
         {
-            Scheme = _serverBaseUri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
             Path = "/aurum-api/bridge/v3/ws",
             Query = string.Empty,
         };

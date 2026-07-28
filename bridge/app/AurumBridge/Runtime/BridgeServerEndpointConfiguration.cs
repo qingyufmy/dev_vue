@@ -60,4 +60,28 @@ public static class BridgeServerEndpointConfiguration
         }
         return uri;
     }
+
+    public static Uri ParseRealtimeUri(string value)
+    {
+        if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)
+            || uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0
+            || uri.AbsolutePath != "/"
+            || uri.Scheme != "ws" && uri.Scheme != "wss")
+        {
+            throw new InvalidDataException("bridge_realtime_url_invalid");
+        }
+        return new UriBuilder(uri) { Path = "/", Query = string.Empty, Fragment = string.Empty }.Uri;
+    }
+
+    public static Uri DeriveRealtimeUri(Uri controlBaseUri)
+    {
+        ArgumentNullException.ThrowIfNull(controlBaseUri);
+        return ParseRealtimeUri(new UriBuilder(controlBaseUri)
+        {
+            Scheme = controlBaseUri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
+            Path = "/",
+            Query = string.Empty,
+            Fragment = string.Empty,
+        }.Uri.AbsoluteUri);
+    }
 }

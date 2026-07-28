@@ -14,6 +14,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private readonly BridgeApplicationController _controller;
     private readonly BridgeFileLogger _logger;
     private readonly BridgeUserPreferencesStore _preferences;
+    private readonly BridgeEndpointSettingsStore _endpointSettings;
     private readonly BridgeSingleInstanceGuard _singleInstance;
     private readonly BridgeUpdateCoordinator? _updateCoordinator;
     private readonly BridgeInstallationIdentityStore? _installationIdentityStore;
@@ -37,16 +38,20 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private Task? _observerRuntimeTask;
     private BridgeLogViewerForm? _logViewer;
     private ToolStripMenuItem? _autoStartMenuItem;
+    private ToolStripMenuItem? _settingsMenuItem;
+    private ToolStripMenuItem? _connectionRecoveryMenuItem;
     private int _startupReadyWritten;
     private int _latestPhase = (int)BridgeApplicationPhase.Starting;
     private int _latestTerminalCount;
     private int _canManageObserverSources;
+    private int _isAdministrator;
     private int _updateCheckRequested;
     private string? _lastLoggedStatusFingerprint;
     private string? _lastLoggedUpdateStateFingerprint;
     private string? _lastLoggedUpdateState;
     private bool _shuttingDown;
     private bool _autoStartEnabled = true;
+    private bool _customEndpointActive;
     private BridgeApplicationStatus? _primaryStatus;
 
     public BridgeApplicationContext(
@@ -75,6 +80,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
         }
         var rootPaths = BridgeRuntimePathResolver.Resolve(AppContext.BaseDirectory);
         _rootDataDirectory = rootPaths.DataDirectory;
+        _endpointSettings = new(_rootDataDirectory);
+        _customEndpointActive = _endpointSettings.Exists;
         var paths = BridgeRuntimePathResolver.Resolve(
             AppContext.BaseDirectory,
             profileId:_profileId);
@@ -148,6 +155,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form = new(_profileId);
         _form.PairRequested += HandlePairRequested;
         _form.ObserverSourcesRequested += HandleObserverSourcesRequested;
+        _form.SettingsRequested += HandleSettingsRequested;
         _form.ObserverActionRequested += HandleObserverActionRequested;
         _form.InstallMt4ExpertRequested += HandleInstallMt4ExpertRequested;
         _form.RedetectRequested += (_, _) => _controller.RequestRedetect();
@@ -191,6 +199,19 @@ public sealed class BridgeApplicationContext : ApplicationContext
             _autoStartMenuItem.Click += HandleAutoStartToggleRequested;
             menu.Items.Add(_autoStartMenuItem);
             UpdateAutoStartMenuState();
+            _settingsMenuItem = new ToolStripMenuItem("连接设置")
+            {
+                Visible = false,
+            };
+            _settingsMenuItem.Click += HandleSettingsRequested;
+            menu.Items.Add(_settingsMenuItem);
+            _connectionRecoveryMenuItem = new ToolStripMenuItem("恢复官方连接")
+            {
+                ToolTipText = "自定义服务器无法连接时，恢复更新包携带的官方地址。",
+                Visible = false,
+            };
+            _connectionRecoveryMenuItem.Click += HandleConnectionRecoveryRequested;
+            menu.Items.Add(_connectionRecoveryMenuItem);
         }
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出桥接", null, HandleExitRequested);
@@ -341,6 +362,144 @@ public sealed class BridgeApplicationContext : ApplicationContext
             : "已关闭：需要手动打开量见智桥。";
     }
 
+    private void UpdateSettingsMenuState(BridgeApplicationStatus status)
+    {
+        if (_settingsMenuItem is not null)
+        {
+            _settingsMenuItem.Visible = status.IsAdministrator;
+        }
+        if (_connectionRecoveryMenuItem is not null)
+        {
+            _connectionRecoveryMenuItem.Visible = _customEndpointActive
+                && !status.ServerConnected;
+        }
+    }
+
+    private async void HandleSettingsRequested(object? sender, EventArgs eventArgs)
+    {
+        if (_shuttingDown || Volatile.Read(ref _isAdministrator) != 1)
+        {
+            return;
+        }
+        try
+        {
+            BridgeEndpointConfiguration? custom = null;
+            try
+            {
+                custom = _endpointSettings.Load();
+            }
+            catch (InvalidDataException error)
+            {
+                _logger.Error("endpoint_settings_load_failed", error);
+            }
+            var official = BridgeRuntimePathResolver.ResolveOfficialEndpoints(
+                AppContext.BaseDirectory);
+            var effective = new BridgeEndpointConfiguration(
+                _controller.Paths.ServerBaseUri,
+                _controller.Paths.RealtimeBaseUri);
+            using var settings = new BridgeSettingsForm(new(
+                official,
+                custom ?? effective,
+                custom is not null));
+            if (settings.ShowDialog(_form) != DialogResult.OK
+                || settings.Selection is not { } selection)
+            {
+                return;
+            }
+            if (Volatile.Read(ref _isAdministrator) != 1)
+            {
+                MessageBox.Show(
+                    _form,
+                    "管理员身份已失效，请重新连接服务器后再保存。",
+                    "无法保存设置",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+            await ApplyEndpointSettingsAndRestartAsync(selection);
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("endpoint_settings_update_failed", error);
+            MessageBox.Show(
+                _form,
+                "连接设置未保存，请检查地址和网络后重试。",
+                "设置失败",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private async Task ApplyEndpointSettingsAndRestartAsync(
+        BridgeEndpointSettingsSelection selection)
+    {
+        var controlChanged = _controller.Paths.ServerBaseUri !=
+            selection.Configuration.ControlBaseUri;
+        if (controlChanged)
+        {
+            await ClearAuthorizationForEndpointChangeAsync(_stop.Token);
+        }
+        if (selection.FollowOfficial)
+        {
+            await _endpointSettings.ClearAsync(_stop.Token);
+        }
+        else
+        {
+            await _endpointSettings.SaveAsync(selection.Configuration, _stop.Token);
+        }
+        _customEndpointActive = !selection.FollowOfficial;
+        _logger.Info(
+            "endpoint_settings_saved",
+            $"mode={(selection.FollowOfficial ? "official" : "custom")};"
+            + $"control_host={selection.Configuration.ControlBaseUri.Host};"
+            + $"realtime_host={selection.Configuration.RealtimeBaseUri.Host};"
+            + $"control_changed={controlChanged}");
+        await RestartAsync();
+    }
+
+    private async void HandleConnectionRecoveryRequested(object? sender, EventArgs eventArgs)
+    {
+        if (_shuttingDown || !_customEndpointActive)
+        {
+            return;
+        }
+        var answer = MessageBox.Show(
+            _form,
+            "确定恢复更新包携带的官方服务器地址？\n\n旧服务器授权将被清除，恢复后桥接会自动重启。",
+            "恢复官方连接",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (answer != DialogResult.Yes)
+        {
+            return;
+        }
+        try
+        {
+            await ClearAuthorizationForEndpointChangeAsync(_stop.Token);
+            await _endpointSettings.ClearAsync(_stop.Token);
+            _customEndpointActive = false;
+            _logger.Info("endpoint_settings_recovered_to_official");
+            await RestartAsync();
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _logger.Error("endpoint_settings_recovery_failed", error);
+            MessageBox.Show(
+                _form,
+                "暂时无法恢复官方连接，请稍后重试。",
+                "恢复失败",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
     private void HandleActivationRequested()
     {
         if (_backgroundMode)
@@ -378,6 +537,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
         Volatile.Write(
             ref _canManageObserverSources,
             status.CanManageObserverSources ? 1 : 0);
+        Volatile.Write(ref _isAdministrator, status.IsAdministrator ? 1 : 0);
         PublishCombinedStatus();
     }
 
@@ -449,6 +609,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 return;
             }
             _form.ApplyStatus(status);
+            UpdateSettingsMenuState(status);
             _notifyIcon.Text = status.Phase == BridgeApplicationPhase.Online
                 ? $"{BridgeBrand.ProductName} · 运行中"
                 : BridgeBrand.ProductName;
@@ -1024,7 +1185,8 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 var previousSession = new BridgeSessionClient(
                     profilePaths.ServerBaseUri,
                     httpClient,
-                    credentialStore);
+                    credentialStore,
+                    realtimeBaseUri:profilePaths.RealtimeBaseUri);
                 await previousSession.LogoutAsync(cancellationToken);
             }
             catch (Exception error) when (error is not OperationCanceledException)
@@ -1411,7 +1573,13 @@ public sealed class BridgeApplicationContext : ApplicationContext
         await ShutdownAsync(stopObserverProfiles:BridgeRuntimeProfile.IsDefault(_profileId));
     }
 
-    private async Task ShutdownAsync(bool stopObserverProfiles)
+    private Task RestartAsync() => ShutdownAsync(
+        stopObserverProfiles:BridgeRuntimeProfile.IsDefault(_profileId),
+        restartInfo:CreateRestartInfo());
+
+    private async Task ShutdownAsync(
+        bool stopObserverProfiles,
+        ProcessStartInfo? restartInfo = null)
     {
         if (_shuttingDown)
         {
@@ -1438,6 +1606,28 @@ public sealed class BridgeApplicationContext : ApplicationContext
             await IgnoreCancellationAsync(_healthTask);
         }
         await _controller.DisposeAsync();
+        _singleInstance.ActivationRequested -= HandleActivationRequested;
+        _singleInstance.ShutdownRequested -= HandleShutdownRequested;
+        _singleInstance.Dispose();
+        if (restartInfo is not null)
+        {
+            try
+            {
+                _ = Process.Start(restartInfo)
+                    ?? throw new InvalidOperationException("bridge_restart_process_start_failed");
+                _logger.Info("bridge_restart_started");
+            }
+            catch (Exception error)
+            {
+                _logger.Error("bridge_restart_failed", error);
+                MessageBox.Show(
+                    _form,
+                    $"设置已保存，但{BridgeBrand.ProductName}无法自动重启。请手动重新打开。",
+                    "需要手动重启",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _logViewer?.Close();
@@ -1446,11 +1636,40 @@ public sealed class BridgeApplicationContext : ApplicationContext
         _form.Close();
         _form.Dispose();
         _stop.Dispose();
-        _singleInstance.ActivationRequested -= HandleActivationRequested;
-        _singleInstance.ShutdownRequested -= HandleShutdownRequested;
         _updateCoordinator?.Dispose();
         _logger.Dispose();
         ExitThread();
+    }
+
+    private static ProcessStartInfo CreateRestartInfo()
+    {
+        var launcher = BridgeAutoStartRegistration.ResolveStableLauncher(
+            AppContext.BaseDirectory);
+        if (launcher is not null)
+        {
+            return new()
+            {
+                FileName = launcher,
+                WorkingDirectory = Path.GetDirectoryName(launcher)!,
+                UseShellExecute = false,
+            };
+        }
+        var processPath = Environment.ProcessPath
+            ?? throw new InvalidOperationException("bridge_process_path_unavailable");
+        var info = new ProcessStartInfo
+        {
+            FileName = processPath,
+            WorkingDirectory = AppContext.BaseDirectory,
+            UseShellExecute = false,
+        };
+        if (string.Equals(
+                Path.GetFileNameWithoutExtension(processPath),
+                "dotnet",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            info.ArgumentList.Add(typeof(BridgeApplicationContext).Assembly.Location);
+        }
+        return info;
     }
 
     private void SignalObserverProfilesShutdown()
@@ -2253,11 +2472,79 @@ public sealed class BridgeApplicationContext : ApplicationContext
             var credentials = new FileBridgeCredentialStore(
                 paths.CredentialPath,
                 new WindowsDpapiProtector());
-            var session = new BridgeSessionClient(paths.ServerBaseUri, httpClient, credentials);
+            var session = new BridgeSessionClient(
+                paths.ServerBaseUri,
+                httpClient,
+                credentials,
+                realtimeBaseUri:paths.RealtimeBaseUri);
             await session.LogoutAsync(cancellationToken);
         }
         await RefreshObserverProfileViewsAsync(cancellationToken);
     }
+
+    private async Task ClearAuthorizationForEndpointChangeAsync(
+        CancellationToken cancellationToken)
+    {
+        await StopAllObserverRuntimesAsync();
+        var profileIds = BridgeRuntimeProfile.ListObserverProfiles(_rootDataDirectory);
+        using var revokeDeadline = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken);
+        revokeDeadline.CancelAfter(TimeSpan.FromSeconds(4));
+        var revokeTasks = new List<Task>
+        {
+            _controller.LogoutAsync(revokeDeadline.Token),
+        };
+        revokeTasks.AddRange(profileIds.Select(profileId =>
+            RevokeObserverProfileAsync(profileId, revokeDeadline.Token)));
+        try
+        {
+            await Task.WhenAll(revokeTasks);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.Info("endpoint_authorization_revoke_timed_out");
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            _logger.Error("endpoint_authorization_revoke_failed", error);
+        }
+        finally
+        {
+            await ClearCredentialAsync(_controller.Paths.CredentialPath);
+            foreach (var profileId in profileIds)
+            {
+                var paths = BridgeRuntimePathResolver.Resolve(
+                    AppContext.BaseDirectory,
+                    profileId:profileId);
+                await ClearCredentialAsync(paths.CredentialPath);
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private async Task RevokeObserverProfileAsync(
+        string profileId,
+        CancellationToken cancellationToken)
+    {
+        var paths = BridgeRuntimePathResolver.Resolve(
+            AppContext.BaseDirectory,
+            profileId:profileId);
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
+        var credentials = new FileBridgeCredentialStore(
+            paths.CredentialPath,
+            new WindowsDpapiProtector());
+        var session = new BridgeSessionClient(
+            paths.ServerBaseUri,
+            httpClient,
+            credentials,
+            realtimeBaseUri:paths.RealtimeBaseUri);
+        await session.LogoutAsync(cancellationToken);
+    }
+
+    private static Task ClearCredentialAsync(string credentialPath) =>
+        new FileBridgeCredentialStore(
+            credentialPath,
+            new WindowsDpapiProtector()).ClearAsync(CancellationToken.None);
 
     private async Task ObserveControllerAsync(Task runTask)
     {

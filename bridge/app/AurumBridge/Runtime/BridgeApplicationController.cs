@@ -56,6 +56,7 @@ public sealed record BridgeApplicationStatus(
     public long? LastDataSyncUtcMsc { get; init; }
     public string BridgeVersion { get; init; } = "3.0.0";
     public bool CanManageObserverSources { get; init; }
+    public bool IsAdministrator { get; init; }
 }
 
 public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdateDrainTarget
@@ -88,6 +89,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
     private IReadOnlyList<BridgeTerminalCandidate> _terminalCandidates = [];
     private bool _serverConnected;
     private bool _canManageObserverSources;
+    private bool _isAdministrator;
     private long? _lastDataSyncUtcMsc;
     private bool _disposed;
 
@@ -111,7 +113,11 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
         var credentials = new FileBridgeCredentialStore(
             paths.CredentialPath,
             new WindowsDpapiProtector());
-        _sessionClient = new(paths.ServerBaseUri, _httpClient, credentials);
+        _sessionClient = new(
+            paths.ServerBaseUri,
+            _httpClient,
+            credentials,
+            realtimeBaseUri:paths.RealtimeBaseUri);
         _sessionClient.ObserverSourceManagementChanged += HandleObserverSourceManagementChanged;
         _mt5Provisioner = new(
             _store,
@@ -1193,6 +1199,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
         lock (_sync)
         {
             _canManageObserverSources = allowed;
+            _isAdministrator = allowed;
         }
         PublishCurrent();
     }
@@ -1212,6 +1219,7 @@ public sealed class BridgeApplicationController : IAsyncDisposable, IBridgeUpdat
         BridgeVersion = typeof(BridgeApplicationController).Assembly.GetName().Version?.ToString(3)
             ?? "3.0.0",
         CanManageObserverSources = _canManageObserverSources,
+        IsAdministrator = _isAdministrator,
     };
 
     public static IReadOnlyList<BridgeObserverTerminalConfiguration>
