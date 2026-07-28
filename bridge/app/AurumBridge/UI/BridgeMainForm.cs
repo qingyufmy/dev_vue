@@ -171,7 +171,8 @@ public sealed class BridgeMainForm : Form
             status.CanManageObserverSources);
         _settingsButton.Visible = CanShowSettings(
             _isDefaultProfile,
-            status.IsAdministrator);
+            status.IsAdministrator,
+            status.ServerConnected);
         _mt4SetupBar.Visible = CanShowMt4ExpertSetup(status.SelectedPlatform);
         if (_pendingPlatform is null)
         {
@@ -289,7 +290,9 @@ public sealed class BridgeMainForm : Form
 
     public static bool CanShowSettings(
         bool isDefaultProfile,
-        bool isAdministrator) => isDefaultProfile && isAdministrator;
+        bool isAdministrator,
+        bool serverConnected) => isDefaultProfile
+            && (isAdministrator || !serverConnected);
 
     public static bool CanShowMt4ExpertSetup(string? selectedPlatform) =>
         selectedPlatform == BridgePlatform.Mt4;

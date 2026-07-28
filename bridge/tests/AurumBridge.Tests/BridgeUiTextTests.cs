@@ -23,10 +23,20 @@ public sealed class BridgeUiTextTests
             canManageObserverSources:true));
         Assert.IsTrue(BridgeMainForm.CanShowSettings(
             isDefaultProfile:true,
-            isAdministrator:true));
+            isAdministrator:true,
+            serverConnected:true));
+        Assert.IsTrue(BridgeMainForm.CanShowSettings(
+            isDefaultProfile:true,
+            isAdministrator:false,
+            serverConnected:false));
         Assert.IsFalse(BridgeMainForm.CanShowSettings(
             isDefaultProfile:true,
-            isAdministrator:false));
+            isAdministrator:false,
+            serverConnected:true));
+        Assert.IsFalse(BridgeMainForm.CanShowSettings(
+            isDefaultProfile:false,
+            isAdministrator:false,
+            serverConnected:false));
     }
 
     [TestMethod]

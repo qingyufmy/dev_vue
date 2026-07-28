@@ -35,8 +35,8 @@ public sealed class BridgeSettingsForm : Form
     {
         _view = view ?? throw new ArgumentNullException(nameof(view));
         _tester = tester ?? new BridgeEndpointConnectivityTester();
-        Text = $"{BridgeBrand.ProductName} · 管理员设置";
-        AccessibleName = "量见智桥管理员连接设置";
+        Text = $"{BridgeBrand.ProductName} · 连接设置";
+        AccessibleName = "量见智桥连接设置";
         Icon = BridgeBrandIcon.ApplicationIcon;
         StartPosition = FormStartPosition.CenterParent;
         ClientSize = new(620, 490);

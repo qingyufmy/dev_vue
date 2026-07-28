@@ -45,6 +45,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
     private int _latestTerminalCount;
     private int _canManageObserverSources;
     private int _isAdministrator;
+    private int _serverConnected;
     private int _updateCheckRequested;
     private string? _lastLoggedStatusFingerprint;
     private string? _lastLoggedUpdateStateFingerprint;
@@ -366,7 +367,13 @@ public sealed class BridgeApplicationContext : ApplicationContext
     {
         if (_settingsMenuItem is not null)
         {
-            _settingsMenuItem.Visible = status.IsAdministrator;
+            _settingsMenuItem.Visible = BridgeMainForm.CanShowSettings(
+                isDefaultProfile:true,
+                isAdministrator:status.IsAdministrator,
+                serverConnected:status.ServerConnected);
+            _settingsMenuItem.Text = status.ServerConnected
+                ? "连接设置"
+                : "切换服务器";
         }
         if (_connectionRecoveryMenuItem is not null)
         {
@@ -377,7 +384,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
 
     private async void HandleSettingsRequested(object? sender, EventArgs eventArgs)
     {
-        if (_shuttingDown || Volatile.Read(ref _isAdministrator) != 1)
+        if (!CanOpenEndpointSettings())
         {
             return;
         }
@@ -406,11 +413,11 @@ public sealed class BridgeApplicationContext : ApplicationContext
             {
                 return;
             }
-            if (Volatile.Read(ref _isAdministrator) != 1)
+            if (!CanOpenEndpointSettings())
             {
                 MessageBox.Show(
                     _form,
-                    "管理员身份已失效，请重新连接服务器后再保存。",
+                    "服务器连接状态已经变化，当前账户没有修改连接地址的权限。",
                     "无法保存设置",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -538,8 +545,15 @@ public sealed class BridgeApplicationContext : ApplicationContext
             ref _canManageObserverSources,
             status.CanManageObserverSources ? 1 : 0);
         Volatile.Write(ref _isAdministrator, status.IsAdministrator ? 1 : 0);
+        Volatile.Write(ref _serverConnected, status.ServerConnected ? 1 : 0);
         PublishCombinedStatus();
     }
+
+    private bool CanOpenEndpointSettings() => !_shuttingDown
+        && BridgeMainForm.CanShowSettings(
+            isDefaultProfile:BridgeRuntimeProfile.IsDefault(_profileId),
+            isAdministrator:Volatile.Read(ref _isAdministrator) == 1,
+            serverConnected:Volatile.Read(ref _serverConnected) == 1);
 
     private void HandleObserverStatus(
         string profileId,
