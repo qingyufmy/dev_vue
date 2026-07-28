@@ -32,11 +32,12 @@ public static class BridgeRuntimeHealthSampler
         }
         using var process = Process.GetCurrentProcess();
         process.Refresh();
+        var managedHeapBytes = Math.Max(0, GC.GetTotalMemory(forceFullCollection:false));
         return new(
             (long)Stopwatch.GetElapsedTime(startedTimestamp).TotalSeconds,
             process.WorkingSet64,
             process.PrivateMemorySize64,
-            GC.GetTotalMemory(forceFullCollection:false),
+            managedHeapBytes,
             (long)process.TotalProcessorTime.TotalMilliseconds,
             GC.CollectionCount(0),
             GC.CollectionCount(1),
@@ -48,9 +49,10 @@ public static class BridgeRuntimeHealthSampler
     public static string Format(BridgeRuntimeHealthSnapshot sample)
     {
         ArgumentNullException.ThrowIfNull(sample);
+        var managedHeapBytes = Math.Max(0, sample.ManagedHeapBytes);
         return string.Create(CultureInfo.InvariantCulture,
             $"uptime_seconds={sample.UptimeSeconds}; working_set_bytes={sample.WorkingSetBytes}; "
-            + $"private_memory_bytes={sample.PrivateMemoryBytes}; managed_heap_bytes={sample.ManagedHeapBytes}; "
+            + $"private_memory_bytes={sample.PrivateMemoryBytes}; managed_heap_bytes={managedHeapBytes}; "
             + $"cpu_time_milliseconds={sample.CpuTimeMilliseconds}; "
             + $"gc_collections={sample.Gen0Collections},{sample.Gen1Collections},{sample.Gen2Collections}; "
             + $"phase={sample.Phase}; terminals={sample.TerminalCount}");

@@ -50,4 +50,25 @@ public sealed class BridgeRuntimeHealthSamplerTests
         Assert.AreEqual(BridgeApplicationPhase.Starting, sample.Phase);
         Assert.AreEqual(0, sample.TerminalCount);
     }
+
+    [TestMethod]
+    public void NeverFormatsANegativeManagedHeapSample()
+    {
+        var sample = new BridgeRuntimeHealthSnapshot(
+            60,
+            50_000_000,
+            25_000_000,
+            -822_064,
+            123,
+            1,
+            0,
+            0,
+            BridgeApplicationPhase.Online,
+            2);
+
+        var value = BridgeRuntimeHealthSampler.Format(sample);
+
+        StringAssert.Contains(value, "managed_heap_bytes=0");
+        Assert.DoesNotContain("managed_heap_bytes=-", value);
+    }
 }
