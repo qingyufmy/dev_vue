@@ -4283,6 +4283,68 @@ const migrations = [
         await queryRun(`ALTER TABLE bridge_v3_terminal_sessions ${additions.join(', ')}`)
       }
     }
+  },
+  {
+    id: '147_position_management_inference_confirmations',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_position_management_evaluations (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        decision_signal_id BIGINT NOT NULL,
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        outcome_id BIGINT NOT NULL,
+        position_id VARCHAR(64) DEFAULT NULL,
+        management_group_id VARCHAR(64) NOT NULL,
+        thesis_id VARCHAR(64) NOT NULL,
+        original_symbol VARCHAR(64) NOT NULL,
+        standard_symbol VARCHAR(64) NOT NULL,
+        action VARCHAR(16) NOT NULL,
+        validation_status VARCHAR(16) NOT NULL DEFAULT 'valid',
+        matched_condition_id VARCHAR(64) DEFAULT NULL,
+        reason VARCHAR(1000) DEFAULT NULL,
+        evidence_refs_json LONGTEXT NOT NULL,
+        model_evaluation_json LONGTEXT NOT NULL,
+        decision_timeframe VARCHAR(16) NOT NULL,
+        closed_bar_time_utc_ms BIGINT NOT NULL,
+        market_snapshot_hash CHAR(64) NOT NULL,
+        inference_source VARCHAR(32) NOT NULL DEFAULT 'automatic_scheduler',
+        consecutive_exit_count TINYINT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_position_management_evaluation (decision_signal_id, outcome_id),
+        KEY idx_position_management_evaluation_outcome (outcome_id, management_group_id, id),
+        KEY idx_position_management_evaluation_user (user_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      const taskColumns = await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_position_management_tasks'
+          AND COLUMN_NAME IN ('confirmation_count', 'required_confirmations')`)
+      const taskColumnNames = new Set(taskColumns.map(row => row.COLUMN_NAME))
+      if (!taskColumnNames.has('confirmation_count')) {
+        await queryRun(`ALTER TABLE ai_position_management_tasks
+          ADD COLUMN confirmation_count TINYINT NOT NULL DEFAULT 0 AFTER evidence_validation_json`)
+      }
+      if (!taskColumnNames.has('required_confirmations')) {
+        await queryRun(`ALTER TABLE ai_position_management_tasks
+          ADD COLUMN required_confirmations TINYINT NOT NULL DEFAULT 2 AFTER confirmation_count`)
+      }
+
+      // Old candidates used closed-bar confirmation semantics and cannot be
+      // mixed with the new consecutive-inference counter.
+      await queryRun(`UPDATE ai_position_management_tasks
+        SET status = 'EXPIRED', completed_at = COALESCE(completed_at, NOW()), updated_at = NOW()
+        WHERE task_type = 'position_exit' AND status = 'CANDIDATE'`)
+    }
+  },
+  {
+    id: '148_single_inference_pending_cancel',
+    async up() {
+      // Retire stale two-round candidates without executing them. If the order
+      // is still active, a later inference can create a fresh one-round task.
+      await queryRun(`UPDATE ai_position_management_tasks
+        SET status = 'EXPIRED', completed_at = COALESCE(completed_at, NOW()), updated_at = NOW()
+        WHERE task_type = 'pending_cancel' AND status = 'CANDIDATE'`)
+    }
   }
 ]
 

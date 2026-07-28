@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 vi.mock('../../server/db.js', () => ({
@@ -13,6 +13,7 @@ vi.mock('../../server/bridge-ws.js', () => ({
 
 import {
   POSITION_MANAGEMENT_CONTRACT_VERSION,
+  AUTO_EXIT_CONFIRMATIONS_REQUIRED,
   buildPositionManagementAsOf,
   buildPositionManagementOutputFormat,
   canTransitionPositionManagement,
@@ -21,12 +22,18 @@ import {
   getPositionManagementSettings,
   isActivePositionManagementOutcome,
   positionProtectionStatus,
+  persistPositionManagementEvaluations,
+  resolveAutomaticExitConfirmation,
   resolvePositionManagementTaskMode,
   savePositionManagementSettings,
   targetMatchesPositionManagementTask,
   validatePositionManagementResponse,
 } from '../../server/routes/ai/position-management.js'
-import { queryOne, queryRun } from '../../server/db.js'
+import { queryAll, queryOne, queryRun } from '../../server/db.js'
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 const asOf = {
   decision_timeframe:'M15',
@@ -157,6 +164,143 @@ describe('position management v1.1 contract', () => {
   })
 })
 
+describe('consecutive automatic-inference exit confirmation', () => {
+  it('requires two valid consecutive exit decisions and ignores condition changes', () => {
+    expect(AUTO_EXIT_CONFIRMATIONS_REQUIRED).toBe(2)
+    expect(resolveAutomaticExitConfirmation({ action:'exit', matched_condition_id:'condition-a' }, null))
+      .toMatchObject({ validation_status:'valid', confirmation_count:1 })
+    expect(resolveAutomaticExitConfirmation({ action:'exit', matched_condition_id:'condition-b' }, {
+      action:'exit', validation_status:'valid', matched_condition_id:'condition-a',
+    })).toMatchObject({ validation_status:'valid', confirmation_count:2 })
+  })
+
+  it('resets confirmation on hold or invalid model output', () => {
+    const previous = { action:'exit', validation_status:'valid' }
+    expect(resolveAutomaticExitConfirmation({ action:'hold' }, previous))
+      .toMatchObject({ confirmation_count:0, reset_reason:'automatic_inference_hold' })
+    expect(resolveAutomaticExitConfirmation({ action:'hold', validation_source:'server_fail_closed' }, previous))
+      .toMatchObject({ validation_status:'invalid', confirmation_count:0, reset_reason:'invalid_inference_output' })
+  })
+
+  it('records the first exit as 1/2 without creating an executable task', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+    queryAll.mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:11, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+      .mockResolvedValueOnce({ insertId:21, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+    const target = {
+      user_id:7, trading_account_id:3, outcome_id:9, position_id:'P-9', original_symbol:'XAUUSD.s',
+      standard_symbol:'XAUUSD', management_group_id:'position_group_01', thesis_id:'thesis_01',
+      ownership_history_id:5, broker_server_key:'Broker-Demo', login_account:'10001',
+      strategy_id:2, strategy_version:4, origin_signal_id:100,
+    }
+    const localContext = { ...context, _targets:new Map([['position_group_01', [target]]]) }
+    const result = await persistPositionManagementEvaluations({ signalId:101, context:localContext,
+      inferenceSource:'automatic_scheduler', management:{
+      position_evaluations:[response().position_evaluations[0]], pending_evaluations:[],
+    } })
+    expect(result).toEqual([expect.objectContaining({ status:'CANDIDATE', confirmation_count:1, required_confirmations:2 })])
+    expect(queryRun.mock.calls.some(call => String(call[0]).includes('ai_position_management_evaluations'))).toBe(true)
+    expect(queryRun.mock.calls.some(call => String(call[0]).includes("'EVIDENCE_CONFIRMED'"))).toBe(false)
+  })
+
+  it('promotes the same task after a second consecutive valid exit', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+      .mockResolvedValueOnce({ id:11, decision_signal_id:101, action:'exit', validation_status:'valid' })
+      .mockResolvedValueOnce({ id:21, state_version:1, status:'CANDIDATE', user_id:7,
+        execution_mode:'auto_exit', task_type:'position_exit', management_group_id:'position_group_01', thesis_id:'thesis_01' })
+    queryAll.mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:12, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+    const target = {
+      user_id:7, trading_account_id:3, outcome_id:9, position_id:'P-9', original_symbol:'XAUUSD.s',
+      standard_symbol:'XAUUSD', management_group_id:'position_group_01', thesis_id:'thesis_01',
+      ownership_history_id:5, broker_server_key:'Broker-Demo', login_account:'10001',
+      strategy_id:2, strategy_version:4, origin_signal_id:100,
+    }
+    const localContext = { ...context, _targets:new Map([['position_group_01', [target]]]) }
+    const result = await persistPositionManagementEvaluations({ signalId:102, context:localContext,
+      inferenceSource:'automatic_scheduler', management:{
+      position_evaluations:[response().position_evaluations[0]], pending_evaluations:[],
+    } })
+    expect(result).toEqual([expect.objectContaining({ status:'EVIDENCE_CONFIRMED', confirmation_count:2 })])
+    expect(queryRun.mock.calls.some(call => String(call[0]).includes("status = 'EVIDENCE_CONFIRMED'"))).toBe(true)
+  })
+
+  it('does not create another close task after the confirmed task has entered execution', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+      .mockResolvedValueOnce({ id:12, decision_signal_id:102, action:'exit', validation_status:'valid' })
+      .mockResolvedValueOnce({ id:21, state_version:3, status:'PRECONDITIONS_LOCKED', user_id:7,
+        execution_mode:'auto_exit', task_type:'position_exit', management_group_id:'position_group_01', thesis_id:'thesis_01' })
+    queryAll.mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:13, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+    const target = {
+      user_id:7, trading_account_id:3, outcome_id:9, position_id:'P-9', original_symbol:'XAUUSD.s',
+      standard_symbol:'XAUUSD', management_group_id:'position_group_01', thesis_id:'thesis_01',
+      ownership_history_id:5, broker_server_key:'Broker-Demo', login_account:'10001',
+      strategy_id:2, strategy_version:4, origin_signal_id:100,
+    }
+    const localContext = { ...context, _targets:new Map([['position_group_01', [target]]]) }
+    const result = await persistPositionManagementEvaluations({ signalId:103, context:localContext,
+      inferenceSource:'automatic_scheduler', management:{
+      position_evaluations:[response().position_evaluations[0]], pending_evaluations:[],
+    } })
+    expect(result).toEqual([])
+    expect(queryRun.mock.calls.filter(call => String(call[0]).includes('INSERT IGNORE INTO ai_position_management_tasks'))).toHaveLength(0)
+  })
+
+  it('records manual analysis for audit without using it as automatic-close evidence', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+    queryAll.mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:14, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+    const target = {
+      user_id:7, trading_account_id:3, outcome_id:9, position_id:'P-9', original_symbol:'XAUUSD.s',
+      standard_symbol:'XAUUSD', management_group_id:'position_group_01', thesis_id:'thesis_01',
+      ownership_history_id:5, strategy_id:2,
+    }
+    const localContext = { ...context, _targets:new Map([['position_group_01', [target]]]) }
+    const result = await persistPositionManagementEvaluations({ signalId:104, context:localContext,
+      inferenceSource:'manual_analysis', management:{
+        position_evaluations:[response().position_evaluations[0]], pending_evaluations:[],
+      } })
+    expect(result).toEqual([])
+    expect(queryRun.mock.calls[0][1]).toContain('manual_analysis')
+    expect(queryRun.mock.calls.filter(call => String(call[0]).includes('INSERT IGNORE INTO ai_position_management_tasks'))).toHaveLength(0)
+  })
+})
+
+describe('single-inference pending cancellation', () => {
+  it('confirms a valid cancel decision immediately without querying a previous round', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+    queryAll.mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:31, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+    const target = {
+      user_id:7, trading_account_id:3, outcome_id:19, pending_ticket:'O-19', position_id:null,
+      original_symbol:'XAUUSD.s', standard_symbol:'XAUUSD', management_group_id:'pending_group_01',
+      thesis_id:'thesis_pending_01', ownership_history_id:5, broker_server_key:'Broker-Demo',
+      login_account:'10001', strategy_id:2, strategy_version:4, origin_signal_id:100,
+    }
+    const localContext = { ...context, _targets:new Map([['pending_group_01', [target]]]) }
+    const result = await persistPositionManagementEvaluations({ signalId:105, context:localContext,
+      inferenceSource:'automatic_scheduler', management:{
+        position_evaluations:[], pending_evaluations:[response().pending_evaluations[0]],
+      } })
+    expect(result).toEqual([expect.objectContaining({
+      status:'EVIDENCE_CONFIRMED', confirmation_count:1, required_confirmations:1,
+    })])
+    expect(queryOne).toHaveBeenCalledTimes(1)
+    expect(queryRun.mock.calls[0][0]).toContain("'EVIDENCE_CONFIRMED'")
+    expect(queryRun.mock.calls.some(call => String(call[0]).includes("status = 'EVIDENCE_CONFIRMED'"))).toBe(false)
+    expect(queryRun.mock.calls.some(call => String(call[0]).includes('single_inference_pending_cancel_confirmed'))).toBe(true)
+  })
+})
+
 describe('durable state and protection boundaries', () => {
   it('claims a worker lease using the database wrapper changes field', async () => {
     queryRun.mockResolvedValueOnce({ changes:1 })
@@ -258,7 +402,7 @@ describe('durable state and protection boundaries', () => {
     const migrations = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
     const positionManagement = readFileSync(new URL('../../server/routes/ai/position-management.js', import.meta.url), 'utf8')
     const bridge = readFileSync(new URL('../../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
-    for (const table of ['ai_trade_theses', 'ai_position_management_tasks',
+    for (const table of ['ai_trade_theses', 'ai_position_management_tasks', 'ai_position_management_evaluations',
       'ai_position_management_commands', 'ai_position_management_events']) {
       expect(migrations).toContain(`CREATE TABLE IF NOT EXISTS ${table}`)
     }
@@ -266,10 +410,17 @@ describe('durable state and protection boundaries', () => {
     expect(migrations).toContain("129_remove_position_management_shadow_mode")
     expect(migrations).toContain("130_default_automatic_close_enabled")
     expect(migrations).toContain("131_independent_ai_pending_order_controls")
+    expect(migrations).toContain("147_position_management_inference_confirmations")
+    expect(migrations).toContain("148_single_inference_pending_cancel")
+    expect(migrations).toContain('confirmation_count TINYINT NOT NULL DEFAULT 0')
+    expect(migrations).toContain("inference_source VARCHAR(32) NOT NULL DEFAULT 'automatic_scheduler'")
+    expect(positionManagement).toContain("inferenceSource = 'manual_analysis'")
+    expect(positionManagement).toContain("inferenceSource !== 'automatic_scheduler'")
     expect(migrations).toContain('ai_pending_order_enabled')
     expect(migrations).toContain('ai_pending_cancel_enabled')
     expect(migrations).toContain("MODIFY execution_mode VARCHAR(20) NOT NULL DEFAULT 'auto_exit'")
     expect(positionManagement).toContain("if (mode === 'display') continue")
+    expect(positionManagement).not.toContain('server_hard_condition')
     expect(bridge).toContain('operation_id')
     expect(bridge).toContain('_management_precondition_error')
     expect(bridge).toContain('idempotent_replay')

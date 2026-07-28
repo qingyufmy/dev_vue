@@ -785,6 +785,7 @@ export async function handleAnalyze(userId, params) {
         signalId:signal.id,
         context:positionManagementContext,
         management:signal._position_management,
+        inferenceSource:'manual_analysis',
       })
     } catch (error) {
       console.error('[Analyze] Position management task persistence failed:', error.message)

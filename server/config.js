@@ -42,8 +42,8 @@ export function parseCorsOrigins(value = process.env.CORS_ORIGINS) {
 }
 export const CORS_ORIGINS = Object.freeze(parseCorsOrigins())
 
-// Rate limiting
-export const API_RATE_LIMIT_MAX = parseInt(process.env.API_RATE_LIMIT_MAX || '2000')
+// Sensitive-operation rate limiting. General API CC protection is enforced
+// at the deployment edge so dashboard polling is not double-limited per IP.
 export const AUTH_RATE_LIMIT_MAX = parseInt(process.env.AUTH_RATE_LIMIT_MAX || '20')
 export const BRIDGE_AUTH_RATE_LIMIT_MAX = parseInt(process.env.BRIDGE_AUTH_RATE_LIMIT_MAX || '240')
 export const WRITE_RATE_LIMIT_MAX = parseInt(process.env.WRITE_RATE_LIMIT_MAX || '10')

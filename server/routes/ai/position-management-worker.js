@@ -310,6 +310,38 @@ async function releaseLease(taskId, leaseToken) {
     WHERE id = ? AND lease_token = ?`, [beijingNow(), taskId, leaseToken])
 }
 
+async function expireInactiveAutomaticExitCandidates(limit = 50) {
+  const rows = await queryAll(`SELECT tasks.*
+    FROM ai_position_management_tasks tasks
+    LEFT JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
+    WHERE tasks.task_type = 'position_exit' AND tasks.status = 'CANDIDATE'
+      AND (outcomes.id IS NULL OR outcomes.status NOT IN ('open','closing') OR outcomes.position_id IS NULL)
+    ORDER BY tasks.updated_at ASC, tasks.id ASC LIMIT ?`, [Math.max(1, Math.min(Number(limit) || 50, 100))])
+  let expired = 0
+  for (const task of rows) {
+    const now = beijingNow()
+    const previousEvidence = json(task.evidence_validation_json, {})
+    const evidence = {
+      ...previousEvidence, status:'expired', source:'position_no_longer_active', confirmation_count:0,
+      required_confirmations:Number(task.required_confirmations || 2),
+    }
+    const result = await queryRun(`UPDATE ai_position_management_tasks
+      SET status = 'EXPIRED', evidence_validation_json = ?, confirmation_count = 0,
+        state_version = state_version + 1, completed_at = ?, updated_at = ?
+      WHERE id = ? AND status = 'CANDIDATE'`, [JSON.stringify(evidence), now, now, task.id])
+    if (Number(result?.changes ?? result?.affectedRows ?? 0) !== 1) continue
+    await queryRun(`INSERT INTO ai_position_management_events
+      (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
+      VALUES (?, 'CANDIDATE', 'EXPIRED', 'position_no_longer_active',
+        '目标持仓已不存在，连续平仓确认已结束', ?, 'system', ?)`, [task.id, JSON.stringify(evidence), now])
+    broadcastPositionManagementTask({ ...task, status:'EXPIRED', confirmation_count:0,
+      state_version:Number(task.state_version || 1) + 1, evidence_validation_json:JSON.stringify(evidence), updated_at:now },
+    'position_no_longer_active')
+    expired += 1
+  }
+  return expired
+}
+
 async function loadTaskContext(taskId) {
   const task = await queryOne('SELECT * FROM ai_position_management_tasks WHERE id = ?', [taskId])
   if (!task) return null
@@ -869,6 +901,7 @@ export async function runPositionManagementWorkerOnce({ bridge = mt5Bridge, limi
   let processed = 0
   try {
     const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 50))
+    processed += await expireInactiveAutomaticExitCandidates(safeLimit)
     const states = [...new Set(['EVIDENCE_CONFIRMED', ...CLOSE_RECOVERY_STATES, ...PENDING_RECOVERY_STATES])]
     const rows = await queryAll(`SELECT id FROM ai_position_management_tasks
       WHERE task_type IN ('position_exit','pending_cancel')

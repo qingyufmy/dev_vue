@@ -1566,6 +1566,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
           signalId,
           context:positionManagementContext,
           management:signal._position_management,
+          inferenceSource:'automatic_scheduler',
         })
       } catch (error) {
         l(`position management task persistence failed (${error.message})`)

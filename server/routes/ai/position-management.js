@@ -7,6 +7,7 @@ export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.1'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
+export const AUTO_EXIT_CONFIRMATIONS_REQUIRED = 2
 
 const SYSTEM_MAGIC = 234000
 const MODE_RANK = new Map(POSITION_MANAGEMENT_MODES.map((mode, index) => [mode, index]))
@@ -96,27 +97,6 @@ function lastClosedBarTime(market, timeframe) {
   if (seconds && seconds > 0) return Math.trunc(seconds > 10_000_000_000 ? seconds : seconds * 1000)
   const parsed = Date.parse(String(market?.timestamp || ''))
   return Number.isFinite(parsed) ? parsed : null
-}
-
-function timeframeMilliseconds(timeframe) {
-  const match = String(timeframe || '').toUpperCase().match(/^(M|H|D|W)(\d+)$/)
-  if (!match) return null
-  const unit = { M:60_000, H:3_600_000, D:86_400_000, W:604_800_000 }[match[1]]
-  return unit * Number(match[2])
-}
-
-function hardInvalidation(group, context) {
-  const row = lastClosedBar(context?._market, context?.as_of?.decision_timeframe)
-  const close = number(row?.close)
-  if (!close) return null
-  for (const condition of group?.frozen_conditions || []) {
-    if (condition.kind !== 'hard' || number(condition.threshold) == null) continue
-    const threshold = Number(condition.threshold)
-    const matched = condition.operator === 'closed_bar_lte' ? close <= threshold
-      : condition.operator === 'closed_bar_gte' ? close >= threshold : false
-    if (matched) return { condition, close }
-  }
-  return null
 }
 
 export function buildPositionManagementAsOf(market, decisionTimeframe) {
@@ -454,7 +434,8 @@ export function validatePositionManagementResponse(value, context, validateMarke
 }
 
 function taskSummary(action, taskType) {
-  if (taskType === 'pending_cancel') return action === 'cancel' ? 'AI 提出取消策略挂单，等待证据与执行条件复核' : '策略挂单继续保留'
+  if (taskType === 'pending_cancel') return action === 'cancel'
+    ? 'AI 明确建议取消策略挂单，已进入挂单身份与状态校验' : '策略挂单继续保留'
   return action === 'exit' ? 'AI 提出平掉策略持仓，当前仅记录并复核' : '原交易论点仍有效，继续持有'
 }
 
@@ -468,31 +449,250 @@ async function resolveModes(targets) {
   return { control:control || { maximum_mode:'display', ai_pending_cancel_enabled:0 }, byUser }
 }
 
-export async function persistPositionManagementEvaluations({ signalId, context, management } = {}) {
-  if (!signalId || !context?._targets || !management) return []
-  const candidates = [
-    ...(management.pending_evaluations || []).filter(item => item.action === 'cancel').map(item => ({ ...item, taskType:'pending_cancel' })),
-    ...(management.position_evaluations || []).filter(item => item.action === 'exit').map(item => ({ ...item, taskType:'position_exit' })),
-  ]
-  const existingPositionGroups = new Set(candidates.filter(item => item.taskType === 'position_exit')
-    .map(item => item.management_group_id))
-  for (const group of context.position_groups || []) {
-    const hard = hardInvalidation(group, context)
-    if (!hard || existingPositionGroups.has(group.management_group_id)) continue
-    candidates.push({
-      taskType:'position_exit', management_group_id:group.management_group_id,
-      thesis_id:group.thesis_id, action:'exit', matched_condition_id:hard.condition.condition_id,
-      reversal_candidate:false, server_derived:true,
-      reason:`已收盘 K 线价格 ${hard.close} 命中冻结硬失效条件，服务端生成平仓候选`,
-      evidence_refs:[`bar:${context.as_of.decision_timeframe}:${context.as_of.closed_bar_time_utc_ms}`,
-        `condition:${hard.condition.condition_id}`],
-    })
+export function resolveAutomaticExitConfirmation(current, previous = null) {
+  const validationStatus = current?.validation_source === 'server_fail_closed' ? 'invalid' : 'valid'
+  const action = String(current?.action || '').toLowerCase()
+  if (validationStatus !== 'valid') {
+    return { validation_status:'invalid', confirmation_count:0, reset_reason:'invalid_inference_output' }
   }
-  const allTargets = candidates.flatMap(item => (context._targets.get(item.management_group_id) || [])
-    .filter(target => targetMatchesPositionManagementTask(target, item.taskType)))
+  if (action !== 'exit') {
+    return { validation_status:'valid', confirmation_count:0, reset_reason:'automatic_inference_hold' }
+  }
+  const previousExit = String(previous?.validation_status || '').toLowerCase() === 'valid'
+    && String(previous?.action || '').toLowerCase() === 'exit'
+  return {
+    validation_status:'valid',
+    confirmation_count:previousExit ? AUTO_EXIT_CONFIRMATIONS_REQUIRED : 1,
+    reset_reason:null,
+  }
+}
+
+async function recordAutomaticPositionEvaluation({ signalId, context, target, evaluation, inferenceSource } = {}) {
+  const now = beijingNow()
+  const originalSymbol = String(target.original_symbol || target.symbol || target.standard_symbol || '')
+  const standardSymbol = target.standard_symbol || stripBrokerSuffix(originalSymbol).toUpperCase()
+  const validationStatus = evaluation.validation_source === 'server_fail_closed' ? 'invalid' : 'valid'
+  const result = await queryRun(`INSERT IGNORE INTO ai_position_management_evaluations
+    (decision_signal_id, user_id, trading_account_id, outcome_id, position_id,
+     management_group_id, thesis_id, original_symbol, standard_symbol, action,
+     validation_status, matched_condition_id, reason, evidence_refs_json,
+     model_evaluation_json, decision_timeframe, closed_bar_time_utc_ms,
+     market_snapshot_hash, inference_source, consecutive_exit_count, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`, [
+    signalId, target.user_id, target.trading_account_id, target.outcome_id,
+    target.position_id || null, target.management_group_id, target.thesis_id,
+    originalSymbol, standardSymbol, evaluation.action, validationStatus,
+    evaluation.matched_condition_id || null, text(evaluation.reason, 1000) || null,
+    JSON.stringify(evaluation.evidence_refs || []), JSON.stringify(evaluation),
+    context.as_of.decision_timeframe, context.as_of.closed_bar_time_utc_ms,
+    String(context.as_of.market_snapshot_hash).replace(/^sha256:/, ''), inferenceSource, now,
+  ])
+  if (!Number(result?.insertId)) return null
+  const evaluationId = Number(result.insertId)
+  const previous = inferenceSource === 'automatic_scheduler'
+    ? await queryOne(`SELECT id, decision_signal_id, action, validation_status,
+        consecutive_exit_count, created_at
+      FROM ai_position_management_evaluations
+      WHERE outcome_id = ? AND management_group_id = ? AND inference_source = 'automatic_scheduler' AND id < ?
+      ORDER BY id DESC LIMIT 1`, [target.outcome_id, target.management_group_id, evaluationId])
+    : null
+  const confirmation = inferenceSource === 'automatic_scheduler'
+    ? resolveAutomaticExitConfirmation(evaluation, previous)
+    : { validation_status:validationStatus, confirmation_count:0, reset_reason:null }
+  await queryRun(`UPDATE ai_position_management_evaluations
+    SET consecutive_exit_count = ? WHERE id = ?`, [confirmation.confirmation_count, evaluationId])
+  return {
+    id:evaluationId,
+    decision_signal_id:Number(signalId),
+    action:String(evaluation.action || '').toLowerCase(),
+    validation_status:confirmation.validation_status,
+    confirmation_count:confirmation.confirmation_count,
+    reset_reason:confirmation.reset_reason,
+    inference_source:inferenceSource,
+    previous,
+    created_at:now,
+  }
+}
+
+function automaticInferenceEvidence(record) {
+  const previous = record.previous && String(record.previous.action).toLowerCase() === 'exit'
+    && String(record.previous.validation_status).toLowerCase() === 'valid' ? record.previous : null
+  const evaluationIds = [previous?.id, record.id].filter(Boolean).map(Number)
+  const decisionSignalIds = [previous?.decision_signal_id, record.decision_signal_id].filter(Boolean).map(Number)
+  return {
+    status:record.confirmation_count >= AUTO_EXIT_CONFIRMATIONS_REQUIRED ? 'confirmed' : 'candidate',
+    source:'automatic_inference_consecutive',
+    confirmation_count:record.confirmation_count,
+    required_confirmations:AUTO_EXIT_CONFIRMATIONS_REQUIRED,
+    evaluation_ids:evaluationIds,
+    decision_signal_ids:decisionSignalIds,
+    latest_evaluation_id:record.id,
+    latest_decision_signal_id:record.decision_signal_id,
+  }
+}
+
+async function resetAutomaticExitCandidate(target, record, evaluation) {
+  const task = await queryOne(`SELECT * FROM ai_position_management_tasks
+    WHERE outcome_id = ? AND management_group_id = ? AND task_type = 'position_exit'
+      AND status = 'CANDIDATE'
+    ORDER BY id DESC LIMIT 1`, [target.outcome_id, target.management_group_id])
+  if (!task) return null
+  const now = beijingNow()
+  const previousEvidence = json(task.evidence_validation_json, {})
+  const evaluationIds = [...new Set([
+    ...(Array.isArray(previousEvidence.evaluation_ids) ? previousEvidence.evaluation_ids : []),
+    record.id,
+  ].map(Number).filter(id => id > 0))]
+  const decisionSignalIds = [...new Set([
+    ...(Array.isArray(previousEvidence.decision_signal_ids) ? previousEvidence.decision_signal_ids : []),
+    record.decision_signal_id,
+  ].map(Number).filter(id => id > 0))]
+  const evidence = {
+    status:'reset',
+    source:record.validation_status === 'invalid' ? 'invalid_inference_output' : 'automatic_inference_hold',
+    confirmation_count:0,
+    required_confirmations:AUTO_EXIT_CONFIRMATIONS_REQUIRED,
+    reset_evaluation_id:record.id,
+    reset_decision_signal_id:record.decision_signal_id,
+    evaluation_ids:evaluationIds,
+    decision_signal_ids:decisionSignalIds,
+  }
+  const result = await queryRun(`UPDATE ai_position_management_tasks
+    SET status = 'HELD', evidence_validation_json = ?, confirmation_count = 0,
+      state_version = state_version + 1, completed_at = ?, updated_at = ?
+    WHERE id = ? AND status = 'CANDIDATE'`, [JSON.stringify(evidence), now, now, task.id])
+  if (Number(result?.changes ?? result?.affectedRows ?? 0) !== 1) return null
+  const summary = record.validation_status === 'invalid'
+    ? '本轮自动推理结果无效，连续平仓确认已中断'
+    : '本轮自动推理建议继续持有，连续平仓确认已清零'
+  await queryRun(`INSERT INTO ai_position_management_events
+    (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
+    VALUES (?, 'CANDIDATE', 'HELD', 'automatic_confirmation_reset', ?, ?, 'model', ?)`, [
+    task.id, summary, JSON.stringify({ evaluation, evidence }), now,
+  ])
+  const updated = { ...task, status:'HELD', state_version:Number(task.state_version || 1) + 1,
+    confirmation_count:0, evidence_validation_json:JSON.stringify(evidence), updated_at:now }
+  broadcastPositionManagementTask(updated, 'automatic_confirmation_reset')
+  return updated
+}
+
+async function createAutomaticExitTask({ signalId, context, target, evaluation, mode, record, evidence } = {}) {
+  const now = beijingNow()
+  const originalSymbol = String(target.original_symbol || target.symbol || target.standard_symbol || '')
+  const confirmed = record.confirmation_count >= AUTO_EXIT_CONFIRMATIONS_REQUIRED
+  const status = confirmed ? 'EVIDENCE_CONFIRMED' : 'CANDIDATE'
+  const taskKey = hash(['automatic_inference_exit', target.outcome_id, target.management_group_id,
+    evidence.evaluation_ids[0] || record.id])
+  const result = await queryRun(`INSERT IGNORE INTO ai_position_management_tasks
+    (task_key, task_type, execution_mode, user_id, trading_account_id, ownership_history_id,
+     broker_server_key, login_account, bridge_generation, original_symbol, standard_symbol,
+     strategy_id, strategy_version, management_group_id, thesis_id, origin_signal_id,
+     decision_signal_id, outcome_id, decision_timeframe, closed_bar_time_utc_ms,
+     market_snapshot_hash, candidate_action, reversal_candidate, model_evaluation_json,
+     evidence_validation_json, confirmation_count, required_confirmations, status,
+     state_version, candidate_expires_at, created_at, updated_at)
+    VALUES (?, 'position_exit', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, 'exit', ?, ?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY), ?, ?)`, [
+    taskKey, mode, target.user_id, target.trading_account_id, target.ownership_history_id || null,
+    target.broker_server_key || null, target.login_account || null, getBridgeGeneration(Number(target.user_id)),
+    originalSymbol, target.standard_symbol || stripBrokerSuffix(originalSymbol).toUpperCase(), target.strategy_id,
+    target.strategy_version || 1, target.management_group_id, target.thesis_id,
+    target.origin_signal_id || null, signalId, target.outcome_id, context.as_of.decision_timeframe,
+    context.as_of.closed_bar_time_utc_ms, String(context.as_of.market_snapshot_hash).replace(/^sha256:/, ''),
+    evaluation.reversal_candidate ? 1 : 0, JSON.stringify(evaluation), JSON.stringify(evidence),
+    record.confirmation_count, AUTO_EXIT_CONFIRMATIONS_REQUIRED, status, confirmed ? 2 : 1, now, now,
+  ])
+  if (!Number(result?.insertId)) return null
+  const taskId = Number(result.insertId)
+  await queryRun(`INSERT INTO ai_position_management_events
+    (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
+    VALUES (?, NULL, ?, 'automatic_confirmation_recorded', ?, ?, 'model', ?)`, [
+    taskId, status,
+    confirmed ? '连续两轮自动推理均建议平仓，已进入自动执行队列' : '第 1 次自动推理建议平仓，等待下一轮确认',
+    JSON.stringify({ mode, evaluation, evidence }), now,
+  ])
+  const task = { id:taskId, user_id:Number(target.user_id), status, state_version:confirmed ? 2 : 1,
+    execution_mode:mode, task_type:'position_exit', management_group_id:target.management_group_id,
+    thesis_id:target.thesis_id, candidate_action:'exit', confirmation_count:record.confirmation_count,
+    required_confirmations:AUTO_EXIT_CONFIRMATIONS_REQUIRED, updated_at:now }
+  broadcastPositionManagementTask(task, confirmed ? 'automatic_confirmation_completed' : 'automatic_confirmation_recorded')
+  return task
+}
+
+async function advanceAutomaticExitCandidate({ signalId, context, target, evaluation, mode, record } = {}) {
+  const evidence = automaticInferenceEvidence(record)
+  const task = await queryOne(`SELECT * FROM ai_position_management_tasks
+    WHERE outcome_id = ? AND management_group_id = ? AND task_type = 'position_exit'
+      AND status NOT IN ('HELD','EXPIRED','REJECTED','FAILED','COMPLETED','EXIT_ONLY_COMPLETED','MANUAL_REVIEW')
+    ORDER BY id DESC LIMIT 1`, [target.outcome_id, target.management_group_id])
+  if (task && task.status !== 'CANDIDATE') return null
+  if (record.confirmation_count < AUTO_EXIT_CONFIRMATIONS_REQUIRED) {
+    return task ? null : createAutomaticExitTask({ signalId, context, target, evaluation, mode, record, evidence })
+  }
+  if (!task) return createAutomaticExitTask({ signalId, context, target, evaluation, mode, record, evidence })
+  const now = beijingNow()
+  const result = await queryRun(`UPDATE ai_position_management_tasks
+    SET decision_signal_id = ?, closed_bar_time_utc_ms = ?, market_snapshot_hash = ?,
+      reversal_candidate = ?, model_evaluation_json = ?, evidence_validation_json = ?,
+      confirmation_count = ?, required_confirmations = ?, status = 'EVIDENCE_CONFIRMED',
+      state_version = state_version + 1, updated_at = ?
+    WHERE id = ? AND status = 'CANDIDATE'`, [
+    signalId, context.as_of.closed_bar_time_utc_ms,
+    String(context.as_of.market_snapshot_hash).replace(/^sha256:/, ''),
+    evaluation.reversal_candidate ? 1 : 0, JSON.stringify(evaluation), JSON.stringify(evidence),
+    AUTO_EXIT_CONFIRMATIONS_REQUIRED, AUTO_EXIT_CONFIRMATIONS_REQUIRED, now, task.id,
+  ])
+  if (Number(result?.changes ?? result?.affectedRows ?? 0) !== 1) return null
+  await queryRun(`INSERT INTO ai_position_management_events
+    (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
+    VALUES (?, 'CANDIDATE', 'EVIDENCE_CONFIRMED', 'automatic_confirmation_completed',
+      '连续两轮自动推理均建议平仓，已进入自动执行队列', ?, 'model', ?)`, [
+    task.id, JSON.stringify({ evaluation, evidence }), now,
+  ])
+  const updated = { ...task, status:'EVIDENCE_CONFIRMED', state_version:Number(task.state_version || 1) + 1,
+    decision_signal_id:signalId, model_evaluation_json:JSON.stringify(evaluation),
+    evidence_validation_json:JSON.stringify(evidence), confirmation_count:AUTO_EXIT_CONFIRMATIONS_REQUIRED,
+    required_confirmations:AUTO_EXIT_CONFIRMATIONS_REQUIRED, updated_at:now }
+  broadcastPositionManagementTask(updated, 'automatic_confirmation_completed')
+  return updated
+}
+
+export async function persistPositionManagementEvaluations({
+  signalId, context, management, inferenceSource = 'manual_analysis',
+} = {}) {
+  if (!signalId || !context?._targets || !management) return []
+  const positionEvaluations = management.position_evaluations || []
+  const pendingCandidates = (management.pending_evaluations || [])
+    .filter(item => item.action === 'cancel').map(item => ({ ...item, taskType:'pending_cancel' }))
+  const allTargets = [
+    ...positionEvaluations.flatMap(item => (context._targets.get(item.management_group_id) || [])
+      .filter(target => targetMatchesPositionManagementTask(target, 'position_exit'))),
+    ...pendingCandidates.flatMap(item => (context._targets.get(item.management_group_id) || [])
+      .filter(target => targetMatchesPositionManagementTask(target, 'pending_cancel'))),
+  ]
   const modes = await resolveModes(allTargets)
   const created = []
-  for (const evaluation of candidates) {
+
+  for (const evaluation of positionEvaluations) {
+    const targets = (context._targets.get(evaluation.management_group_id) || [])
+      .filter(target => targetMatchesPositionManagementTask(target, 'position_exit'))
+    for (const target of targets) {
+      const mode = resolvePositionManagementTaskMode('position_exit',
+        modes.byUser.get(Number(target.user_id)) || 'auto_exit', modes.control)
+      if (mode === 'display') continue
+      const record = await recordAutomaticPositionEvaluation({
+        signalId, context, target, evaluation, inferenceSource,
+      })
+      if (!record) continue
+      if (inferenceSource !== 'automatic_scheduler') continue
+      const task = record.validation_status !== 'valid' || record.action !== 'exit'
+        ? await resetAutomaticExitCandidate(target, record, evaluation)
+        : await advanceAutomaticExitCandidate({ signalId, context, target, evaluation, mode, record })
+      if (task) created.push(task)
+    }
+  }
+
+  for (const evaluation of pendingCandidates) {
     const targets = (context._targets.get(evaluation.management_group_id) || [])
       .filter(target => targetMatchesPositionManagementTask(target, evaluation.taskType))
     for (const target of targets) {
@@ -507,59 +707,10 @@ export async function persistPositionManagementEvaluations({ signalId, context, 
         target.ownership_history_id, target.strategy_id, target.thesis_id, target.management_group_id,
         context.as_of.closed_bar_time_utc_ms, evaluation.action, target.outcome_id,
       ])
-      const group = (context.position_groups || []).find(item => item.management_group_id === evaluation.management_group_id)
-        || (context.pending_groups || []).find(item => item.management_group_id === evaluation.management_group_id)
-      const matchedCondition = (group?.frozen_conditions || [])
-        .find(condition => condition.condition_id === evaluation.matched_condition_id)
-      const currentHardInvalidation = hardInvalidation(group, context)
-      let evidenceValidation = { status:'candidate', source:'model', reason:'awaiting_evidence_confirmation' }
-      if (matchedCondition?.kind === 'hard'
-        && currentHardInvalidation?.condition?.condition_id === matchedCondition.condition_id) {
-        evidenceValidation = { status:'confirmed', source:'server_hard_condition',
-          condition_id:matchedCondition.condition_id, closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms }
-      } else if (evaluation.taskType === 'pending_cancel') {
-        const previous = await queryOne(`SELECT closed_bar_time_utc_ms, model_evaluation_json
-          FROM ai_position_management_tasks
-          WHERE user_id = ? AND outcome_id = ? AND management_group_id = ?
-            AND task_type = 'pending_cancel' AND candidate_action = 'cancel'
-            AND closed_bar_time_utc_ms < ?
-          ORDER BY closed_bar_time_utc_ms DESC, id DESC LIMIT 1`, [
-          target.user_id, target.outcome_id, target.management_group_id, context.as_of.closed_bar_time_utc_ms,
-        ])
-        const previousEvaluation = json(previous?.model_evaluation_json, {})
-        const interval = timeframeMilliseconds(context.as_of.decision_timeframe)
-        const previousTime = number(previous?.closed_bar_time_utc_ms)
-        const consecutive = previousTime && interval
-          ? Number(context.as_of.closed_bar_time_utc_ms) - previousTime <= interval * 1.5 : Boolean(previousTime)
-        if (consecutive && previousEvaluation.action === 'cancel') {
-          evidenceValidation = { status:'confirmed', source:'two_closed_bar_pending_confirmations',
-            previous_closed_bar_time_utc_ms:previousTime,
-            closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms }
-        } else {
-          evidenceValidation = { status:'candidate', source:'pending_cancel_first_confirmation',
-            closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms }
-        }
-      } else if (evaluation.taskType === 'position_exit' && matchedCondition?.kind === 'soft') {
-        const previous = await queryOne(`SELECT closed_bar_time_utc_ms, model_evaluation_json
-          FROM ai_position_management_tasks
-          WHERE user_id = ? AND outcome_id = ? AND management_group_id = ?
-            AND candidate_action = 'exit' AND closed_bar_time_utc_ms < ?
-          ORDER BY closed_bar_time_utc_ms DESC, id DESC LIMIT 1`, [
-          target.user_id, target.outcome_id, target.management_group_id, context.as_of.closed_bar_time_utc_ms,
-        ])
-        const previousEvaluation = json(previous?.model_evaluation_json, {})
-        const interval = timeframeMilliseconds(context.as_of.decision_timeframe)
-        const previousTime = number(previous?.closed_bar_time_utc_ms)
-        const consecutive = previousTime && interval
-          ? Number(context.as_of.closed_bar_time_utc_ms) - previousTime <= interval * 1.5 : Boolean(previousTime)
-        if (consecutive && previousEvaluation.matched_condition_id === matchedCondition.condition_id) {
-          evidenceValidation = { status:'confirmed', source:'two_closed_bar_model_confirmations',
-            condition_id:matchedCondition.condition_id, previous_closed_bar_time_utc_ms:previousTime,
-            closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms }
-        } else {
-          evidenceValidation = { status:'candidate', source:'soft_condition_first_confirmation',
-            condition_id:matchedCondition.condition_id, closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms }
-        }
+      const evidenceValidation = {
+        status:'confirmed', source:'single_inference_pending_cancel',
+        confirmation_count:1, required_confirmations:1,
+        closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms,
       }
       const now = beijingNow()
       const result = await queryRun(`INSERT IGNORE INTO ai_position_management_tasks
@@ -568,9 +719,10 @@ export async function persistPositionManagementEvaluations({ signalId, context, 
          strategy_id, strategy_version, management_group_id, thesis_id, origin_signal_id,
          decision_signal_id, outcome_id, decision_timeframe, closed_bar_time_utc_ms,
          market_snapshot_hash, candidate_action, reversal_candidate, model_evaluation_json,
-         evidence_validation_json, status, state_version, candidate_expires_at, created_at, updated_at)
+         evidence_validation_json, confirmation_count, required_confirmations,
+         status, state_version, candidate_expires_at, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-          'CANDIDATE', 1, DATE_ADD(NOW(), INTERVAL 1 DAY), ?, ?)`, [
+          1, 1, 'EVIDENCE_CONFIRMED', 1, DATE_ADD(NOW(), INTERVAL 1 DAY), ?, ?)`, [
         taskKey, evaluation.taskType, mode, target.user_id, target.trading_account_id,
         target.ownership_history_id || null, target.broker_server_key || null, target.login_account || null,
         getBridgeGeneration(Number(target.user_id)), originalSymbol,
@@ -585,27 +737,16 @@ export async function persistPositionManagementEvaluations({ signalId, context, 
       const taskId = Number(result.insertId)
       await queryRun(`INSERT INTO ai_position_management_events
         (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
-        VALUES (?, NULL, 'CANDIDATE', 'candidate_created', ?, ?, 'model', ?)`, [
-        taskId, taskSummary(evaluation.action, evaluation.taskType), JSON.stringify({ mode, evaluation }), now,
+        VALUES (?, NULL, 'EVIDENCE_CONFIRMED', 'single_inference_pending_cancel_confirmed', ?, ?, 'model', ?)`, [
+        taskId, taskSummary(evaluation.action, evaluation.taskType),
+        JSON.stringify({ mode, evaluation, evidence:evidenceValidation }), now,
       ])
-      let taskStatus = 'CANDIDATE'
-      let stateVersion = 1
-      if (evidenceValidation.status === 'confirmed') {
-        await queryRun(`UPDATE ai_position_management_tasks
-          SET status = 'EVIDENCE_CONFIRMED', state_version = 2, updated_at = ?
-          WHERE id = ? AND status = 'CANDIDATE' AND state_version = 1`, [now, taskId])
-        await queryRun(`INSERT INTO ai_position_management_events
-          (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
-          VALUES (?, 'CANDIDATE', 'EVIDENCE_CONFIRMED', 'evidence_confirmed',
-            '冻结失效条件已由服务端证据确认', ?, 'system', ?)`, [taskId, JSON.stringify(evidenceValidation), now])
-        taskStatus = 'EVIDENCE_CONFIRMED'
-        stateVersion = 2
-      }
-      const task = { id:taskId, user_id:Number(target.user_id), status:taskStatus, state_version:stateVersion, execution_mode:mode,
+      const task = { id:taskId, user_id:Number(target.user_id), status:'EVIDENCE_CONFIRMED', state_version:1, execution_mode:mode,
         task_type:evaluation.taskType, management_group_id:target.management_group_id,
-        thesis_id:target.thesis_id, candidate_action:evaluation.action, updated_at:now }
+        thesis_id:target.thesis_id, candidate_action:evaluation.action,
+        confirmation_count:1, required_confirmations:1, updated_at:now }
       created.push(task)
-      broadcastPositionManagementTask(task, 'candidate_created')
+      broadcastPositionManagementTask(task, 'single_inference_pending_cancel_confirmed')
     }
   }
   return created
@@ -771,21 +912,43 @@ export async function listPositionManagementTasks({ userId = null, admin = false
   const total = Number(totalRow?.total || 0)
   const pages = Math.max(1, Math.ceil(total / safeSize))
   const normalizedPage = Math.min(safePage, pages)
-  const rows = await queryAll(`SELECT tasks.*, users.nickname AS user_nickname, users.email AS user_email
-    FROM ai_position_management_tasks tasks LEFT JOIN users ON users.id = tasks.user_id
+  const rows = await queryAll(`SELECT tasks.*, users.nickname AS user_nickname, users.email AS user_email,
+      outcomes.position_id AS target_position_id, outcomes.pending_ticket AS target_pending_ticket,
+      outcomes.entry_direction AS target_direction, outcomes.expected_volume AS target_volume,
+      outcomes.status AS target_status
+    FROM ai_position_management_tasks tasks
+    LEFT JOIN users ON users.id = tasks.user_id
+    LEFT JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
     ${clause} ORDER BY tasks.id DESC LIMIT ? OFFSET ?`, [...params, safeSize, (normalizedPage - 1) * safeSize])
   return { tasks:rows, pagination:{ page:normalizedPage, page_size:safeSize, total, pages } }
 }
 
 export async function getPositionManagementTask(taskId, { userId = null, admin = false } = {}) {
-  const task = await queryOne(`SELECT * FROM ai_position_management_tasks WHERE id = ?${admin ? '' : ' AND user_id = ?'}`,
+  const task = await queryOne(`SELECT tasks.*,
+      outcomes.position_id AS target_position_id, outcomes.pending_ticket AS target_pending_ticket,
+      outcomes.entry_direction AS target_direction, outcomes.expected_volume AS target_expected_volume,
+      outcomes.entry_volume AS target_entry_volume, outcomes.closed_volume AS target_closed_volume,
+      outcomes.status AS target_status, outcomes.attribution_status AS target_attribution_status,
+      outcomes.actual_stop_loss AS target_actual_stop_loss,
+      outcomes.actual_take_profit AS target_actual_take_profit,
+      outcomes.last_position_snapshot_json AS target_snapshot_json,
+      theses.core_entry_reason, theses.invalidation_conditions_json
+    FROM ai_position_management_tasks tasks
+    LEFT JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
+    LEFT JOIN ai_trade_theses theses ON theses.thesis_id = tasks.thesis_id
+    WHERE tasks.id = ?${admin ? '' : ' AND tasks.user_id = ?'}`,
     admin ? [taskId] : [taskId, userId])
   if (!task) return null
-  const [events, commands] = await Promise.all([
+  const evidence = json(task.evidence_validation_json, {})
+  const evaluationIds = Array.isArray(evidence.evaluation_ids)
+    ? [...new Set(evidence.evaluation_ids.map(Number).filter(id => id > 0))] : []
+  const [events, commands, evaluations] = await Promise.all([
     queryAll('SELECT * FROM ai_position_management_events WHERE task_id = ? ORDER BY id', [taskId]),
     queryAll('SELECT * FROM ai_position_management_commands WHERE task_id = ? ORDER BY command_sequence, id', [taskId]),
+    evaluationIds.length ? queryAll(`SELECT * FROM ai_position_management_evaluations
+      WHERE id IN (${evaluationIds.map(() => '?').join(',')}) ORDER BY id`, evaluationIds) : [],
   ])
-  return { task, events, commands }
+  return { task, events, commands, evaluations }
 }
 
 export function broadcastPositionManagementTask(task, reason = 'updated') {

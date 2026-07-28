@@ -23,7 +23,7 @@ import { JWT_SECRET } from './config.js'
 const bridges = new Map()       // userId -> { ws, lastSeen }
 const browsers = new Map()      // userId -> Set<ws>
 const adminBrowsers = new Set() // authenticated admin console sockets
-const pendingCommands = new Map() // commandId -> { resolve, timer, userId }
+const pendingCommands = new Map() // commandId -> { resolve, timer, userId, action, ws, bridgeGeneration }
 const performanceSyncJobs = new Set()
 const performanceSyncTimers = new Map()
 const riskSnapshotRefreshTimers = new Map()
@@ -1165,7 +1165,15 @@ async function _initBridge(ws, userId, user, initQueue = null) {
   })
 
   ws.on('error', (err) => {
-    console.error(`[BridgeWS] Bridge error user=${userId}:`, err.message)
+    const pendingActions = []
+    for (const pending of pendingCommands.values()) {
+      if (pending.userId === Number(userId) && pending.ws === ws && pending.action) {
+        pendingActions.push(pending.action)
+        if (pendingActions.length >= 5) break
+      }
+    }
+    const actionDetail = pendingActions.length ? ` pendingActions=${pendingActions.join(',')}` : ''
+    console.error(`[BridgeWS] Bridge error user=${userId}${actionDetail}:`, err.message)
     try {
       queryRun(
         `UPDATE bridge_connection_status SET last_error=?, updated_at=NOW() WHERE user_id=?`,
@@ -3019,6 +3027,7 @@ export async function sendBridgeCommand(userId, action, params, timeoutMs = 5000
 
     pendingCommands.set(cmdId, {
       resolve, timer, userId:numericUserId,
+      action:String(action || '').slice(0, 64),
       ws:bridge.ws, bridgeGeneration:Number(bridge.generation || 0),
     })
     try {

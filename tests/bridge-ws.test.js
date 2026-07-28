@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'events'
+import { readFileSync } from 'node:fs'
 
 vi.mock('../server/db.js', () => ({
   queryOne: vi.fn(),
@@ -451,6 +452,12 @@ describe('getOwnBridgeMarketState', () => {
 })
 
 describe('bridge-reported market state', () => {
+  it('keeps the pending action name for oversized payload diagnostics', () => {
+    const source = readFileSync(new URL('../server/bridge-ws.js', import.meta.url), 'utf8')
+    expect(source).toContain("action:String(action || '').slice(0, 64)")
+    expect(source).toContain("pendingActions=${pendingActions.join(',')}")
+  })
+
   it('maps explicit bridge states to the legacy trade-mode contract', () => {
     expect(normalizeBridgeMarketState({ market_state_version: 1, market_state: 'open', market_reason: 'tick_advancing',
       symbol: 'XAUUSD', symbol_trade_mode: 4, tick_progressing: true }, 1000)).toMatchObject({

@@ -7597,8 +7597,8 @@ function _renderHistoryChart(data) {
 
 
 const POSITION_MANAGEMENT_STATUS = {
-  CANDIDATE: { label:"等待证据", tone:"candidate" },
-  EVIDENCE_CONFIRMED: { label:"证据已确认", tone:"confirmed" },
+  CANDIDATE: { label:"等待下一轮确认", tone:"candidate" },
+  EVIDENCE_CONFIRMED: { label:"连续确认已完成", tone:"confirmed" },
   PRECONDITIONS_LOCKED: { label:"执行条件已锁定", tone:"confirmed" },
   PENDING_CANCEL_INTENT: { label:"已创建取消意图", tone:"candidate" },
   PENDING_CANCEL_SENT: { label:"取消命令已发送", tone:"candidate" },
@@ -7649,6 +7649,54 @@ function positionManagementBarTime(task) {
   return fmtUtc(new Date(timestamp + offset * 60_000));
 }
 
+function positionManagementDecisionTime(task) {
+  const timestamp = parseBeijingServerTime(task?.updated_at || task?.created_at);
+  if (!Number.isFinite(timestamp)) return positionManagementBarTime(task);
+  const offset = Number.isFinite(Number(state.mt5TimezoneOffsetMinutes)) ? Number(state.mt5TimezoneOffsetMinutes) : 180;
+  return fmtUtc(new Date(timestamp + offset * 60_000));
+}
+
+function positionManagementDirection(direction) {
+  const value = String(direction || "").toLowerCase();
+  return value === "buy" ? "买入" : value === "sell" ? "卖出" : "--";
+}
+
+function positionManagementConfirmationMeta(task = {}, evidence = {}) {
+  if (task.task_type === "pending_cancel") {
+    if (task.status === "EXPIRED") return { label:"旧撤单复核已结束", tone:"expired", count:0, required:1 };
+    return evidence.status === "confirmed" || task.status !== "CANDIDATE"
+      ? { label:"撤单判断已确认", tone:"confirmed", count:1, required:1 }
+      : { label:"等待撤单执行", tone:"candidate", count:0, required:1 };
+  }
+  const required = Math.max(1, Number(task.required_confirmations || evidence.required_confirmations || 2));
+  const count = Math.max(0, Math.min(required, Number(task.confirmation_count ?? evidence.confirmation_count ?? 0)));
+  if (evidence.status === "reset") return { label:"连续确认已清零", tone:"completed", count:0, required };
+  if (evidence.status === "expired" || task.status === "EXPIRED") return { label:"目标持仓已结束", tone:"expired", count:0, required };
+  if (count >= required || evidence.status === "confirmed") return { label:`连续确认 ${required}/${required}`, tone:"confirmed", count:required, required };
+  return { label:`平仓确认 ${count || 1}/${required}`, tone:"candidate", count:count || 1, required };
+}
+
+function positionManagementEvidenceSource(source) {
+  return ({
+    automatic_inference_consecutive:"连续自动推理判断",
+    automatic_inference_hold:"自动推理改为继续持有",
+    invalid_inference_output:"自动推理结果校验失败",
+    position_no_longer_active:"目标持仓已经结束",
+    pending_cancel_first_confirmation:"首次撤单判断",
+    two_closed_bar_pending_confirmations:"连续撤单判断已确认",
+    single_inference_pending_cancel:"单轮自动推理撤单判断",
+  })[source] || "自动推理记录";
+}
+
+function positionManagementConditionText(condition = {}) {
+  if (condition.description) return condition.description;
+  const threshold = Number(condition.threshold);
+  if (condition.type === "protective_stop" && Number.isFinite(threshold)) {
+    return `${condition.timeframe || "决策周期"}收盘价触及保护价 ${priceDisplay(threshold)}`;
+  }
+  return "本轮AI引用了原交易论点中的失效条件";
+}
+
 function renderPositionManagementOverview(tasks = [], settings = {}, pagination = {}) {
   const host = $("positionManagementOverview");
   if (!host) return;
@@ -7662,13 +7710,13 @@ function renderPositionManagementOverview(tasks = [], settings = {}, pagination 
   if (kicker) kicker.textContent = `统一推理 · ${positionManagementMode(mode)}`;
   const description = $("positionManagementModeDescription");
   if (description) description.textContent = mode === "auto_exit"
-    ? `自动平仓已生效；AI 取消挂单${pendingCancelEnabled ? "已开启" : "已由平台关闭"}。每次操作仍须通过证据、归属、Bridge 代际与 MT5 身份核对。`
+    ? `自动平仓已生效；同一持仓连续两轮自动推理均建议平仓后，系统才会提交平仓。AI 取消挂单${pendingCancelEnabled ? "已开启" : "已由平台关闭"}。`
     : `自动平仓已关闭；AI 取消挂单${pendingCancelEnabled ? "仍独立运行" : "也已由平台关闭"}。`;
   host.innerHTML = `
     <article class="insight-item primary"><span>当前运行方式</span><strong>${escapeHtml(positionManagementMode(mode))}</strong><small>平台总闸：${platformAutoCloseEnabled ? "已开启" : "已关闭"}</small></article>
     <article class="insight-item"><span>管理任务</span><strong class="num">${Number(pagination.total || 0)}</strong><small>全部可追踪记录</small></article>
-    <article class="insight-item success"><span>证据已确认</span><strong class="num">${confirmed}</strong><small>当前页服务端复核通过</small></article>
-    <article class="insight-item warning"><span>等待确认</span><strong class="num">${waiting}</strong><small>当前页尚未满足执行证据</small></article>`;
+    <article class="insight-item success"><span>连续确认完成</span><strong class="num">${confirmed}</strong><small>当前页已达到 2/2</small></article>
+    <article class="insight-item warning"><span>等待下一轮</span><strong class="num">${waiting}</strong><small>当前页仍处于 1/2</small></article>`;
   const note = $("positionManagementSafetyNote");
   if (note) note.innerHTML = `<i data-lucide="shield-check" size="14"></i>平台能力：自动平仓 ${platformAutoCloseEnabled ? "开启" : "关闭"} · AI 挂单 ${pendingOrderEnabled ? "开启" : "关闭"} · AI 取消挂单 ${pendingCancelEnabled ? "开启" : "关闭"}`;
   initIcons();
@@ -7678,12 +7726,12 @@ function renderPositionManagementSettings(settings = {}) {
   const host = $("positionManagementSettingsPanel");
   if (!host) return;
   const user = settings.user || {};
-  host.innerHTML = `<div class="management-settings-copy"><strong>自动平仓</strong><small>默认开启；关闭后只停止自动平仓。AI 挂单和 AI 取消挂单由平台独立控制，你的个人选择不会被平台总闸改写。</small></div><form id="positionManagementSettingsForm" class="management-settings-form"><label><span>运行状态</span><select id="positionManagementModeInput"><option value="display" ${!["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>关闭</option><option value="auto_exit" ${["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>自动平仓</option></select></label><button class="btn btn-primary btn-sm" type="submit">保存设置</button></form>`;
+  host.innerHTML = `<div class="management-settings-copy"><strong>自动平仓</strong><small>默认开启；同一持仓连续两轮有效自动推理都建议平仓才会执行，任意一轮继续持有或输出无效都会清零。AI 挂单和 AI 取消挂单由平台独立控制；你的个人选择不会被平台总闸改写。</small></div><form id="positionManagementSettingsForm" class="management-settings-form"><label><span>运行状态</span><select id="positionManagementModeInput"><option value="display" ${!["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>关闭</option><option value="auto_exit" ${["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>自动平仓</option></select></label><button class="btn btn-primary btn-sm" type="submit">保存设置</button></form>`;
   $("positionManagementSettingsForm")?.addEventListener("submit", async event => {
     event.preventDefault();
     const button = event.submitter;
     const executionMode = $("positionManagementModeInput").value;
-    if (executionMode === "auto_exit" && !await showConfirm("开启自动平仓？", "开启后立即对当前用户生效。AI 在证据充分时可以平掉已有系统持仓；净持仓账户仍须通过同品种独占仓位与唯一归属校验。AI 挂单和 AI 取消挂单使用独立的平台开关。", { confirmText:"确认开启", danger:true })) return;
+    if (executionMode === "auto_exit" && !await showConfirm("开启自动平仓？", "开启后，同一持仓连续两轮有效自动推理都建议平仓时，系统会核对具体 MT5 票号并执行。任意一轮继续持有或输出无效都会清零；净持仓账户仍须通过同品种独占仓位与唯一归属校验。AI 挂单和 AI 取消挂单使用独立的平台开关。", { confirmText:"确认开启", danger:true })) return;
     button.disabled = true;
     try {
       await api("/api/ai/position-management/settings", { method:"PUT", body:JSON.stringify({
@@ -7708,17 +7756,17 @@ function renderPositionManagementTasks(tasks = [], pagination = {}) {
     body.innerHTML = tasks.map(task => {
       const status = positionManagementStatus(task.status);
       const evidence = parseJsonField(task.evidence_validation_json, {});
-      const evidenceMeta = evidence.status === "confirmed"
-        ? { label:"已确认", tone:"confirmed" }
-        : { label:"待复核", tone:"candidate" };
+      const evidenceMeta = positionManagementConfirmationMeta(task, evidence);
       const selected = Number(state.selectedPositionManagementId) === Number(task.id);
+      const ticket = task.target_position_id || task.target_pending_ticket;
+      const targetMeta = [ticket ? `#${ticket}` : "票号待同步", positionManagementDirection(task.target_direction), Number(task.target_volume) > 0 ? `${Number(task.target_volume)}手` : ""].filter(Boolean).join(" · ");
       return `<tr class="${selected ? "selected" : ""}" data-position-management-row="${Number(task.id)}">
-        <td><span class="management-group-cell"><strong>${escapeHtml(task.standard_symbol || task.original_symbol || "--")}</strong><small title="${escapeHtml(task.management_group_id)}">${escapeHtml(task.management_group_id)}</small></span></td>
+        <td><span class="management-group-cell"><strong>${escapeHtml(task.standard_symbol || task.original_symbol || "--")}</strong><small title="${escapeHtml(targetMeta)}">${escapeHtml(targetMeta)}</small></span></td>
         <td><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(positionManagementTaskLabel(task.task_type))}</span></td>
         <td><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></td>
-        <td><span class="management-state ${evidenceMeta.tone}">${evidenceMeta.label}</span></td>
+        <td><span class="management-state ${evidenceMeta.tone}">${escapeHtml(evidenceMeta.label)}</span></td>
         <td><span class="management-mode ${escapeHtml(task.execution_mode || "display")}">${escapeHtml(positionManagementTaskMode(task))}</span></td>
-        <td class="num" title="收盘 K 线时间（${bridgePlatformLabel()}）">${escapeHtml(compactTimeText(positionManagementBarTime(task)))}</td>
+        <td class="num" title="最近一次判断时间（${bridgePlatformLabel()}）">${escapeHtml(compactTimeText(positionManagementDecisionTime(task)))}</td>
         <td><button class="management-detail-btn" type="button" data-position-management-id="${Number(task.id)}" aria-label="查看 ${escapeHtml(task.standard_symbol || task.original_symbol || "任务")} 管理详情">查看</button></td>
       </tr>`;
     }).join("");
@@ -7785,14 +7833,60 @@ async function loadPositionManagementDetail(taskId, options = {}) {
     const evaluation = parseJsonField(task.model_evaluation_json, {});
     const evidence = parseJsonField(task.evidence_validation_json, {});
     const status = positionManagementStatus(task.status);
-    const refs = Array.isArray(evaluation.evidence_refs) ? evaluation.evidence_refs : [];
+    const confirmation = positionManagementConfirmationMeta(task, evidence);
+    const conditions = parseJsonField(task.invalidation_conditions_json, []);
+    const snapshot = parseJsonField(task.target_snapshot_json, {});
+    const evaluations = Array.isArray(result.evaluations) ? result.evaluations.map(item => ({
+      ...item,
+      model:parseJsonField(item.model_evaluation_json, {}),
+    })) : [];
     const events = Array.isArray(result.events) ? result.events : [];
     const commands = Array.isArray(result.commands) ? result.commands : [];
+    const pendingCancelTask = task.task_type === "pending_cancel";
+    const ticket = task.target_position_id || task.target_pending_ticket || "--";
+    const targetActive = pendingCancelTask
+      ? String(task.target_attribution_status || "").toLowerCase() === "pending" && Boolean(task.target_pending_ticket)
+      : ["open", "closing"].includes(String(task.target_status || "").toLowerCase());
+    const targetKind = pendingCancelTask ? `${bridgePlatformLabel()} 挂单` : `${bridgePlatformLabel()} 持仓`;
+    const targetStateLabel = pendingCancelTask
+      ? (targetActive ? "挂单有效" : "挂单已结束")
+      : (targetActive ? "持仓中" : "持仓已结束");
+    const volume = Number(snapshot.volume ?? snapshot.volume_current ?? task.target_expected_volume ?? 0);
+    const stopLoss = Number(snapshot.sl ?? snapshot.stop_loss ?? task.target_actual_stop_loss ?? 0);
+    const takeProfit = Number(snapshot.tp ?? snapshot.take_profit ?? task.target_actual_take_profit ?? 0);
+    const currentPrice = Number(snapshot.price_current ?? snapshot.current_price ?? 0);
+    const entryPrice = Number(snapshot.price_open ?? snapshot.open_price ?? 0);
+    const evaluationRows = evaluations.length ? evaluations.map((item, index) => {
+      const model = item.model || {};
+      const condition = conditions.find(row => row.condition_id === model.matched_condition_id);
+      const valid = item.validation_status === "valid";
+      const action = valid ? positionManagementActionLabel(item.action) : "结果无效";
+      return `<li class="management-confirmation-row ${escapeHtml(valid ? item.action : "invalid")}"><span class="management-confirmation-index">${index + 1}</span><div><header><strong>${escapeHtml(action)}</strong><time>${escapeHtml(compactTimeText(positionManagementDecisionTime(item)))}</time></header><p>${escapeHtml(item.reason || model.reason || "本轮没有可用说明")}</p>${condition ? `<small>${escapeHtml(positionManagementConditionText(condition))}</small>` : ""}</div></li>`;
+    }).join("") : pendingCancelTask
+      ? `<li class="management-confirmation-row cancel"><span class="management-confirmation-index">1</span><div><header><strong>建议撤单</strong><time>${escapeHtml(compactTimeText(positionManagementDecisionTime(task)))}</time></header><p>${escapeHtml(evaluation.reason || "AI 明确建议取消该策略挂单")}</p><small>单轮有效判断已完成，下一步仅执行挂单身份与状态校验。</small></div></li>`
+      : `<li class="management-confirmation-empty">旧任务没有逐轮判断记录。</li>`;
+    const targetDetails = pendingCancelTask
+      ? `<div><span>挂单票号</span><strong>#${escapeHtml(ticket)}</strong></div><div><span>执行前校验</span><strong>策略归属 · 系统 Magic</strong></div>`
+      : `<div><span>入场 / 当前价</span><strong>${entryPrice > 0 ? priceDisplay(entryPrice) : "--"} / ${currentPrice > 0 ? priceDisplay(currentPrice) : "--"}</strong></div><div><span>当前止损 / 当前止盈</span><strong>${stopLoss > 0 ? priceDisplay(stopLoss) : "--"} / ${takeProfit > 0 ? priceDisplay(takeProfit) : "--"}</strong></div>`;
+    const confirmationTitle = pendingCancelTask ? "自动推理撤单判断" : "连续自动推理确认";
+    const confirmationDescription = pendingCancelTask
+      ? "一轮有效判断明确建议撤单后，立即进入挂单身份与状态校验。"
+      : "只有连续两轮有效判断都建议平仓，才会进入执行。";
+    const executionDescription = commands.length
+      ? "已创建精确票号的持久化命令，请结合状态时间线核对最终结果。"
+      : confirmation.count >= confirmation.required
+        ? (pendingCancelTask
+            ? "撤单判断已确认，系统正在核对挂单票号、策略归属和当前状态。"
+            : "连续确认已经完成，系统正在核对持仓票号和当前状态。")
+        : (pendingCancelTask
+            ? "旧的两轮撤单复核任务已经停止，不会创建撤单命令。"
+            : `尚未达到连续确认次数，不会创建 ${bridgePlatformLabel()} 平仓命令。`);
     host.innerHTML = `
-      <header class="management-detail-head"><div><span class="section-kicker">任务 #${id}</span><h3>${escapeHtml(task.standard_symbol || task.original_symbol || "管理任务")}</h3><p>${escapeHtml(positionManagementTaskLabel(task.task_type))} · ${escapeHtml(positionManagementBarTime(task))} ${bridgePlatformLabel()}</p></div><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(status.label)}</span></header>
-      <section class="management-detail-section"><header><h4>AI 评估结论</h4><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></header><p>${escapeHtml(evaluation.reason || "本任务由服务端安全规则生成，暂无模型说明。")}</p></section>
-      <section class="management-detail-section"><header><h4>证据与安全校验</h4><span class="management-state ${evidence.status === "confirmed" ? "confirmed" : "candidate"}">${evidence.status === "confirmed" ? "证据已确认" : "等待证据"}</span></header><div class="management-detail-grid"><div><span>命中条件</span><strong>${escapeHtml(evaluation.matched_condition_id || evidence.condition_id || "未命中冻结条件")}</strong></div><div><span>校验来源</span><strong>${escapeHtml(evidence.source || "awaiting_evidence_confirmation")}</strong></div><div><span>策略版本</span><strong>v${Number(task.strategy_version || 1)}</strong></div><div><span>运行方式</span><strong>${escapeHtml(positionManagementTaskMode(task))}</strong></div></div>${refs.length ? `<ul>${refs.map(ref => `<li>${escapeHtml(ref)}</li>`).join("")}</ul>` : `<p>暂无可用于真实执行的完整证据链。</p>`}</section>
-      <section class="management-detail-section"><header><h4>执行隔离</h4><span>${commands.length} 条命令</span></header><p>${commands.length ? "已有持久化命令记录，请结合状态时间线核对；页面不提供重发入口。" : "未创建 MT5 指令。该任务没有进入自动执行阶段。"}</p></section>
+      <header class="management-detail-head"><div><span class="section-kicker">任务 #${id}</span><h3>${escapeHtml(task.standard_symbol || task.original_symbol || "管理任务")} · #${escapeHtml(ticket)}</h3><p>${escapeHtml(positionManagementDirection(task.target_direction))}${volume > 0 ? ` · ${escapeHtml(String(volume))}手` : ""} · ${escapeHtml(positionManagementTaskLabel(task.task_type))}</p></div><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(status.label)}</span></header>
+      <section class="management-target-summary"><header><div><span>执行对象</span><strong>${targetKind} #${escapeHtml(ticket)}</strong></div><span class="management-state ${targetActive ? "confirmed" : "expired"}">${targetStateLabel}</span></header><div class="management-detail-grid"><div><span>方向 / 手数</span><strong>${escapeHtml(positionManagementDirection(task.target_direction))}${volume > 0 ? ` · ${escapeHtml(String(volume))}手` : ""}</strong></div><div><span>账户</span><strong>${escapeHtml(task.login_account || "--")}</strong></div>${targetDetails}</div></section>
+      <section class="management-detail-section"><header><div><h4>${confirmationTitle}</h4><p>${confirmationDescription}</p></div><span class="management-state ${escapeHtml(confirmation.tone)}">${escapeHtml(confirmation.label)}</span></header><div class="management-confirmation-meter" role="progressbar" aria-valuemin="0" aria-valuemax="${confirmation.required}" aria-valuenow="${confirmation.count}"><i style="--confirmation-progress:${(confirmation.count / confirmation.required) * 100}%"></i></div><ol class="management-confirmation-list">${evaluationRows}</ol></section>
+      <section class="management-detail-section"><header><h4>当前结论</h4><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></header><p>${escapeHtml(evaluation.reason || "暂无模型说明。")}</p><small>${escapeHtml(positionManagementEvidenceSource(evidence.source))}</small></section>
+      <section class="management-detail-section"><header><h4>执行状态</h4><span>${commands.length} 条 ${bridgePlatformLabel()} 命令</span></header><p>${executionDescription}</p></section>
       <section class="management-detail-section"><header><h4>状态时间线</h4><span>${events.length} 条</span></header>${events.length ? `<ol class="management-timeline">${events.map(event => `<li><time>${escapeHtml(compactTimeText(event.created_at))}</time><span><strong>${escapeHtml(positionManagementStatus(event.to_status).label)}</strong><br>${escapeHtml(event.summary || event.event_type || "状态已更新")}</span></li>`).join("")}</ol>` : `<p>暂无状态记录。</p>`}</section>`;
     initIcons();
   } catch (error) {

@@ -4,7 +4,7 @@ import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import http from 'http'
-import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, API_RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX, BRIDGE_AUTH_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, CORS_ORIGINS, isCorsOriginAllowed } from './config.js'
+import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, AUTH_RATE_LIMIT_MAX, BRIDGE_AUTH_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, CORS_ORIGINS, isCorsOriginAllowed } from './config.js'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
@@ -86,36 +86,9 @@ app.use(securityHeaders)
 // consume unnecessary bandwidth on every cold load.
 app.use(compression({ threshold: 1024 }))
 
-// Rate limiting — prevent brute force and DoS
-const AUTH_RATE_LIMIT_PATHS = new Set([
-  '/api/login',
-  '/api/register',
-  '/api/send-code',
-  '/api/verify-code',
-  '/api/reset-password',
-  '/api/send-bind-code',
-  '/api/bind-phone',
-  '/api/bind-email',
-  '/api/auth/bridge-refresh',
-  '/api/auth/bridge-session',
-  '/api/auth/bridge-revoke',
-  '/api/auth/bridge-pair/start',
-  '/api/auth/bridge-pair/token',
-  '/api/auth/bridge-pair/approve',
-  '/api/auth/bridge-observer-session'
-])
-
-const apiLimiter = rateLimit({
-  windowMs: RATE_LIMIT_WINDOW_MS,
-  max: API_RATE_LIMIT_MAX,
-  standardHeaders: true,
-  legacyHeaders: false,
-  // Authentication has its own stricter limiter below. If it also consumes
-  // the general API quota, background requests from the trading dashboard can
-  // make login and account recovery unavailable for the rest of the window.
-  skip: req => AUTH_RATE_LIMIT_PATHS.has(req.originalUrl.split('?')[0]),
-  message: { ok: false, code:'api_rate_limited', error: '请求过于频繁，请稍后再试' }
-})
+// Application-side rate limiting is intentionally limited to abuse-sensitive
+// operations. General dashboard traffic is protected at Nginx/WAF; applying a
+// second per-IP quota here breaks polling and Bridge reconnects behind one NAT.
 const authLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
   max: AUTH_RATE_LIMIT_MAX,
@@ -137,8 +110,6 @@ const writeLimiter = rateLimit({
   legacyHeaders: false,
   message: { ok: false, error: '发布过于频繁，请稍后再试' }
 })
-app.use('/api', apiLimiter)
-app.use('/aurum-api', apiLimiter)
 app.use('/api/login', authLimiter)
 app.use('/api/auth/bridge-refresh', bridgeAuthLimiter)
 app.use('/api/auth/bridge-session', bridgeAuthLimiter)

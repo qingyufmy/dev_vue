@@ -7,6 +7,11 @@ const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url),
 const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
 
 describe('AI position management workspace', () => {
+  it('publishes the automatic-exit UI with a fresh asset cache key', () => {
+    expect(html).toContain('/ai/styles.css?v=20260728singlecancel1')
+    expect(html).toContain('/ai/app.js?v=20260728singlecancel1')
+  })
+
   it('keeps position management inside AI trader instead of adding another top-level module', () => {
     expect(html).toContain('data-workspace-target="management"')
     expect(html).toContain('AI持仓管理')
@@ -14,12 +19,23 @@ describe('AI position management workspace', () => {
     expect(html).not.toContain('data-tab="position-management"')
   })
 
-  it('shows durable decision evidence with the connected terminal bar time and no manual execution control', () => {
-    expect(html).toContain('data-bridge-platform-template="决策 K 线（{platform}）"')
+  it('shows the concrete MT5 target and consecutive inference progress without manual execution controls', () => {
+    expect(html).toContain('持仓 / 品种')
+    expect(html).toContain('确认进度')
+    expect(html).toContain('最近判断')
     expect(html).toContain('positionManagementDetail')
     expect(app).toContain('model_evaluation_json')
     expect(app).toContain('evidence_validation_json')
-    expect(app).toContain('未创建 MT5 指令。该任务没有进入自动执行阶段。')
+    expect(app).toContain('连续自动推理确认')
+    expect(app).toContain('const targetKind = pendingCancelTask ? `${bridgePlatformLabel()} 挂单`')
+    expect(app).toContain('snapshot.sl ?? snapshot.stop_loss ?? task.target_actual_stop_loss')
+    expect(app).toContain('snapshot.tp ?? snapshot.take_profit ?? task.target_actual_take_profit')
+    expect(app).toContain('当前止损 / 当前止盈')
+    expect(app).not.toContain('target_original_take_profits_json')
+    expect(app).toContain('一轮有效判断明确建议撤单后，立即进入挂单身份与状态校验。')
+    expect(app).toContain('撤单判断已确认')
+    expect(app).toContain('${bridgePlatformLabel()} 挂单')
+    expect(app).toContain('不会创建 ${bridgePlatformLabel()} 平仓命令')
     expect(html).not.toContain('data-action="execute-position-management"')
   })
 
@@ -61,6 +77,8 @@ describe('AI position management workspace', () => {
 
   it('uses responsive, keyboard-visible and reduced-motion styles', () => {
     expect(css).toContain('.management-detail-btn:focus-visible')
+    expect(css).toContain('.management-confirmation-meter')
+    expect(css).toContain('.management-confirmation-row')
     expect(css).toContain('@media (max-width: 760px)')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
