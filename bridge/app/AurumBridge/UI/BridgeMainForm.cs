@@ -24,6 +24,12 @@ public sealed record BridgeObserverProfileView(
     BridgeApplicationPhase? RuntimePhase = null,
     string? RuntimeDetailCode = null);
 
+internal sealed record TradingPermissionDetail(string Label, bool? Allowed);
+
+internal sealed record TradingPermissionToolTipContent(
+    IReadOnlyList<TradingPermissionDetail> Details,
+    string Action);
+
 public enum BridgeObserverAction
 {
     Start,
@@ -97,9 +103,11 @@ public sealed class BridgeMainForm : Form
         _accountPermissionToolTip.ReshowDelay = 100;
         _accountPermissionToolTip.AutoPopDelay = 15_000;
         _accountPermissionToolTip.ShowAlways = true;
-        _accountPermissionToolTip.ToolTipTitle = "交易权限详情";
+        _accountPermissionToolTip.OwnerDraw = true;
         _accountPermissionToolTip.UseAnimation = true;
         _accountPermissionToolTip.UseFading = true;
+        _accountPermissionToolTip.Popup += HandleTradingPermissionToolTipPopup;
+        _accountPermissionToolTip.Draw += HandleTradingPermissionToolTipDraw;
         BuildLayout(validatedProfileId, isDefaultProfile);
         FormClosing += HandleFormClosing;
     }
@@ -732,6 +740,7 @@ public sealed class BridgeMainForm : Form
             Margin = new Padding(0, 4, 8, 0),
         });
         var permissionDetails = DescribeTradingPermissions(terminal);
+        var permissionToolTipContent = CreateTradingPermissionToolTipContent(terminal);
         var permissionBadge = new Label
         {
             AutoSize = true,
@@ -746,6 +755,7 @@ public sealed class BridgeMainForm : Form
             Cursor = Cursors.Help,
             AccessibleName = DescribeTradingPermissionSummary(terminal),
             AccessibleDescription = permissionDetails,
+            Tag = permissionToolTipContent,
         };
         AttachTradingPermissionToolTip(permissionBadge, permissionDetails);
         copy.Controls.Add(permissionBadge);
@@ -861,6 +871,13 @@ public sealed class BridgeMainForm : Form
         _ => "检测中",
     };
 
+    public static Color ResolveTradingPermissionDetailColor(bool? allowed) => allowed switch
+    {
+        true => Color.FromArgb(4, 120, 87),
+        false => Color.FromArgb(185, 28, 28),
+        _ => Color.FromArgb(161, 98, 7),
+    };
+
     private static Color ResolveTradingPermissionColor(BridgeTerminalStatus? terminal)
     {
         var summary = DescribeTradingPermissionSummary(terminal);
@@ -903,6 +920,142 @@ public sealed class BridgeMainForm : Form
                 terminal.AccountTradingAllowed,
                 terminal.AccountExpertTradingAllowed,
             };
+    }
+
+    private static TradingPermissionToolTipContent CreateTradingPermissionToolTipContent(
+        BridgeTerminalStatus? terminal)
+    {
+        if (terminal is null)
+        {
+            return new(
+                [new("交易权限", null)],
+                "权限仍在检测，请稍后点击“重新检测”。");
+        }
+        var details = terminal.Platform == BridgePlatform.Mt4
+            ? new TradingPermissionDetail[]
+            {
+                new("MT4 顶部“自动交易”", terminal.TerminalTradingAllowed),
+                new("EA“允许实时自动交易”", terminal.ProgramTradingAllowed),
+                new("账户 EA 权限", terminal.AccountExpertTradingAllowed),
+                new("账户交易权限", terminal.AccountTradingAllowed),
+            }
+            :
+            [
+                new("MT5 工具栏“算法交易”", terminal.TerminalTradingAllowed),
+                new("账户 EA 权限", terminal.AccountExpertTradingAllowed),
+                new("账户交易权限", terminal.AccountTradingAllowed),
+            ];
+        return new(details, DescribeTradingPermissionAction(terminal));
+    }
+
+    private void HandleTradingPermissionToolTipPopup(object? sender, PopupEventArgs eventArgs)
+    {
+        if (eventArgs.AssociatedControl?.Tag is not TradingPermissionToolTipContent content)
+        {
+            return;
+        }
+        const int width = 360;
+        const int horizontalPadding = 14;
+        const int titleHeight = 25;
+        const int detailLineHeight = 23;
+        const int dividerGap = 13;
+        var actionSize = TextRenderer.MeasureText(
+            content.Action,
+            Font,
+            new Size(width - horizontalPadding * 2, 0),
+            TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+        eventArgs.ToolTipSize = new Size(
+            width,
+            horizontalPadding
+                + titleHeight
+                + content.Details.Count * detailLineHeight
+                + dividerGap
+                + Math.Max(Font.Height, actionSize.Height)
+                + horizontalPadding);
+    }
+
+    private void HandleTradingPermissionToolTipDraw(object? sender, DrawToolTipEventArgs eventArgs)
+    {
+        if (eventArgs.AssociatedControl?.Tag is not TradingPermissionToolTipContent content)
+        {
+            eventArgs.DrawBackground();
+            eventArgs.DrawBorder();
+            eventArgs.DrawText();
+            return;
+        }
+        var bounds = eventArgs.Bounds;
+        using var backgroundBrush = new SolidBrush(Color.White);
+        eventArgs.Graphics.FillRectangle(backgroundBrush, bounds);
+        ControlPaint.DrawBorder(
+            eventArgs.Graphics,
+            bounds,
+            Color.FromArgb(203, 213, 225),
+            ButtonBorderStyle.Solid);
+
+        const int horizontalPadding = 14;
+        const int titleHeight = 25;
+        const int detailLineHeight = 23;
+        var contentWidth = bounds.Width - horizontalPadding * 2;
+        using var boldFont = new Font(Font, FontStyle.Bold);
+        TextRenderer.DrawText(
+            eventArgs.Graphics,
+            "交易权限详情",
+            boldFont,
+            new Rectangle(horizontalPadding, 11, contentWidth, titleHeight),
+            Color.FromArgb(15, 23, 42),
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+
+        var labelWidth = content.Details.Count == 0
+            ? 0
+            : content.Details.Max(detail => TextRenderer.MeasureText(
+                $"{detail.Label}：",
+                Font,
+                Size.Empty,
+                TextFormatFlags.NoPadding).Width);
+        var detailTop = 11 + titleHeight;
+        for (var index = 0; index < content.Details.Count; index++)
+        {
+            var detail = content.Details[index];
+            var lineTop = detailTop + index * detailLineHeight;
+            TextRenderer.DrawText(
+                eventArgs.Graphics,
+                $"{detail.Label}：",
+                Font,
+                new Rectangle(horizontalPadding, lineTop, labelWidth, detailLineHeight),
+                Color.FromArgb(71, 85, 105),
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            TextRenderer.DrawText(
+                eventArgs.Graphics,
+                $"● {DescribePermission(detail.Allowed)}",
+                boldFont,
+                new Rectangle(
+                    horizontalPadding + labelWidth + 8,
+                    lineTop,
+                    Math.Max(0, contentWidth - labelWidth - 8),
+                    detailLineHeight),
+                ResolveTradingPermissionDetailColor(detail.Allowed),
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        }
+
+        var dividerTop = detailTop + content.Details.Count * detailLineHeight + 5;
+        using var dividerPen = new Pen(Color.FromArgb(226, 232, 240));
+        eventArgs.Graphics.DrawLine(
+            dividerPen,
+            horizontalPadding,
+            dividerTop,
+            bounds.Width - horizontalPadding,
+            dividerTop);
+        TextRenderer.DrawText(
+            eventArgs.Graphics,
+            content.Action,
+            Font,
+            new Rectangle(
+                horizontalPadding,
+                dividerTop + 8,
+                contentWidth,
+                Math.Max(0, bounds.Height - dividerTop - 8 - horizontalPadding)),
+            Color.FromArgb(51, 65, 85),
+            TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
     }
 
     private void AttachTradingPermissionToolTip(Control control, string details)

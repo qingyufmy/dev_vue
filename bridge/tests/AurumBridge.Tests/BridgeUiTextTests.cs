@@ -342,6 +342,20 @@ public sealed class BridgeUiTextTests
     }
 
     [TestMethod]
+    public void TradingPermissionDetailColorsFollowSemanticState()
+    {
+        var enabled = BridgeMainForm.ResolveTradingPermissionDetailColor(true);
+        var disabled = BridgeMainForm.ResolveTradingPermissionDetailColor(false);
+        var detecting = BridgeMainForm.ResolveTradingPermissionDetailColor(null);
+
+        Assert.IsTrue(enabled.G > enabled.R, "Enabled permissions should be green.");
+        Assert.IsTrue(disabled.R > disabled.G, "Disabled permissions should be red.");
+        Assert.IsTrue(
+            detecting.R > detecting.B && detecting.G > detecting.B,
+            "Unknown permissions should use an amber warning color.");
+    }
+
+    [TestMethod]
     public void AccountSnapshotsProjectIndependentTradingPermissionLayers()
     {
         var terminal = new BridgeTerminalStatus(
