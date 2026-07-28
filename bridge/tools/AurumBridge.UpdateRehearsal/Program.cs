@@ -25,7 +25,8 @@ internal static class Program
             var firstManifestPath = ExistingFile(Required(options, "first-manifest"));
             var secondManifestPath = ExistingFile(Required(options, "second-manifest"));
             var installRoot = PrepareEmptyInstallRoot(Required(options, "install-root"));
-            var expectedServer = ParseLoopbackServer(Required(options, "expected-server-url"));
+            var expectedServer = BridgeServerEndpointConfiguration.ParseServerUri(
+                Required(options, "expected-server-url"));
             if (!Version.TryParse(Required(options, "initial-version"), out var initialVersion))
             {
                 throw new ArgumentException("update_rehearsal_initial_version_invalid");

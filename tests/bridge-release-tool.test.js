@@ -207,6 +207,7 @@ describe('bridge release tooling', () => {
     )
     const solution = await readFile(new URL('../bridge/AurumBridge.slnx', import.meta.url), 'utf8')
     expect(tool).toContain('uri.IsLoopback')
+    expect(tool).toContain('BridgeServerEndpointConfiguration.ParseServerUri')
     expect(tool).toContain('new ReleaseManifestClient')
     expect(tool).toContain('new ReleaseInstaller')
     expect(tool).toContain('new LauncherEngine')
