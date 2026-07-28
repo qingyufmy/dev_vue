@@ -13,4 +13,7 @@
     <Description>量见智桥启动与自动恢复程序</Description>
     <Version>1.0.0</Version>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\shared\BridgeInstallationRegistration.cs" Link="Installation\BridgeInstallationRegistration.cs" />
+  </ItemGroup>
 </Project>

@@ -28,6 +28,31 @@ if ($signerPathValid) {
   $signerSelfTestOutput = & $env:AURUM_BRIDGE_SIGNER_EXE self-test 2>$null
   $signerSelfTestValid = $LASTEXITCODE -eq 0 -and ($signerSelfTestOutput -join '') -match '"ok"\s*:\s*true'
 }
+$publicKeyPathValid = [bool]($env:BRIDGE_RELEASE_PUBLIC_KEY_PATH -and
+  (Test-Path -LiteralPath $env:BRIDGE_RELEASE_PUBLIC_KEY_PATH -PathType Leaf))
+$publicKeyMatchesSigner = $false
+if ($signerSelfTestValid -and $publicKeyPathValid) {
+  $exportedPublicKey = Join-Path ([IO.Path]::GetTempPath()) "aurum-release-public-key-$([Guid]::NewGuid().ToString('N')).pem"
+  try {
+    $null = & $env:AURUM_BRIDGE_SIGNER_EXE export-public-key --output $exportedPublicKey 2>$null
+    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $exportedPublicKey -PathType Leaf)) {
+      $configuredPublicKey = (Get-Content -LiteralPath $env:BRIDGE_RELEASE_PUBLIC_KEY_PATH -Raw) -replace '\s', ''
+      $actualPublicKey = (Get-Content -LiteralPath $exportedPublicKey -Raw) -replace '\s', ''
+      $publicKeyMatchesSigner = $configuredPublicKey -ceq $actualPublicKey
+    }
+  } finally {
+    Remove-Item -LiteralPath $exportedPublicKey -Force -ErrorAction SilentlyContinue
+  }
+}
+$authenticodeCertificateValid = $false
+if ($env:AURUM_AUTHENTICODE_CERT_THUMBPRINT) {
+  $normalizedAuthenticodeThumbprint = ($env:AURUM_AUTHENTICODE_CERT_THUMBPRINT -replace '[^a-fA-F0-9]', '').ToUpperInvariant()
+  $authenticodeCertificateValid = [bool](Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue | Where-Object {
+    $_.Thumbprint -eq $normalizedAuthenticodeThumbprint -and $_.HasPrivateKey -and
+    $_.NotAfter -gt (Get-Date) -and
+    $_.EnhancedKeyUsageList.ObjectId.Value -contains '1.3.6.1.5.5.7.3.3'
+  } | Select-Object -First 1)
+}
 $qiniuValid = [bool]($env:QINIU_ACCESS_KEY -and $env:QINIU_SECRET_KEY -and
   $env:QINIU_BUCKET -and $env:QINIU_DOMAIN -and $env:QINIU_REGION)
 if ($QiniuConfigSource -eq 'database') {
@@ -46,7 +71,8 @@ $checks = [ordered]@{
   node = [bool](Get-Command node -ErrorAction SilentlyContinue)
   signer = $signerPathValid
   signing_certificate = $signerSelfTestValid
-  public_key = [bool]($env:BRIDGE_RELEASE_PUBLIC_KEY_PATH -and (Test-Path -LiteralPath $env:BRIDGE_RELEASE_PUBLIC_KEY_PATH -PathType Leaf))
+  authenticode_certificate = $authenticodeCertificateValid
+  public_key = $publicKeyMatchesSigner
   qiniu = $qiniuValid
   endpoint = [bool]($env:AURUM_BRIDGE_RELEASE_API_TOKEN -and $Server -and $Server.StartsWith('https://'))
   python_runtime = [bool]$pythonRuntimeValid
@@ -56,6 +82,7 @@ $missingRequirements = @()
 if (-not $checks.signer) { $missingRequirements += 'AURUM_BRIDGE_SIGNER_EXE' }
 elseif (-not $checks.signing_certificate) { $missingRequirements += 'AURUM_BRIDGE_SIGNING_CERT_THUMBPRINT' }
 if (-not $checks.public_key) { $missingRequirements += 'BRIDGE_RELEASE_PUBLIC_KEY_PATH' }
+if (-not $checks.authenticode_certificate) { $missingRequirements += 'AURUM_AUTHENTICODE_CERT_THUMBPRINT' }
 if ($QiniuConfigSource -eq 'database') {
   if (-not $checks.qiniu) { $missingRequirements += 'QINIU_DATABASE_CONFIGURATION' }
 } else {
@@ -69,7 +96,7 @@ elseif (-not $Server.StartsWith('https://')) { $missingRequirements += 'RELEASE_
 if (-not $checks.python_runtime) { $missingRequirements += 'PYTHON_RUNTIME_DIRECTORY' }
 if (-not $checks.metaeditor) { $missingRequirements += 'AURUM_METAEDITOR_EXE' }
 if (-not $checks.dotnet -or -not $checks.node) { throw 'release_build_runtime_missing' }
-if ($Environment -eq 'production' -and (-not $checks.signer -or -not $checks.signing_certificate -or -not $checks.public_key -or -not $checks.qiniu -or -not $checks.endpoint -or -not $checks.python_runtime -or -not $checks.metaeditor)) {
+if ($Environment -eq 'production' -and (-not $checks.signer -or -not $checks.signing_certificate -or -not $checks.authenticode_certificate -or -not $checks.public_key -or -not $checks.qiniu -or -not $checks.endpoint -or -not $checks.python_runtime -or -not $checks.metaeditor)) {
   throw 'release_production_prerequisite_missing'
 }
 [pscustomobject]@{

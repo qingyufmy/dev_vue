@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using AurumBridge.Installation;
 using AurumBridge.Update;
 using AurumBridge.Runtime;
 
@@ -63,6 +64,7 @@ internal static class Program
             {
                 ok = false,
                 error = BootstrapInstaller.SafeErrorCode(error),
+                error_types = BootstrapInstaller.SafeErrorTypes(error),
             });
             return 1;
         }
@@ -80,6 +82,15 @@ internal static class Program
 
 internal sealed class BootstrapperForm : Form
 {
+    private readonly Button _retry = new()
+    {
+        Left = 368,
+        Top = 166,
+        Width = 120,
+        Height = 36,
+        Text = "重试安装",
+        Visible = false,
+    };
     private readonly Label _status = new()
     {
         AutoSize = false,
@@ -104,7 +115,7 @@ internal sealed class BootstrapperForm : Form
     {
         Text = "量见智桥安装程序";
         Width = 536;
-        Height = 230;
+        Height = 252;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -120,6 +131,8 @@ internal sealed class BootstrapperForm : Form
         });
         Controls.Add(_status);
         Controls.Add(_progress);
+        Controls.Add(_retry);
+        _retry.Click += async (_, _) => await InstallAsync();
         Shown += async (_, _) => await InstallAsync();
         FormClosing += (_, eventArgs) =>
         {
@@ -130,6 +143,9 @@ internal sealed class BootstrapperForm : Form
     private async Task InstallAsync()
     {
         if (Interlocked.Exchange(ref _started, 1) != 0) return;
+        _retry.Visible = false;
+        _progress.Style = ProgressBarStyle.Marquee;
+        _progress.MarqueeAnimationSpeed = 24;
         try
         {
             var installer = new BootstrapInstaller(UpdateStatus);
@@ -145,10 +161,12 @@ internal sealed class BootstrapperForm : Form
         catch (Exception error)
         {
             _progress.Style = ProgressBarStyle.Blocks;
+            _progress.MarqueeAnimationSpeed = 0;
             _progress.Value = 0;
             _status.Text = BootstrapInstaller.DescribeError(error);
             BootstrapInstaller.WriteFailureLog(error);
             Interlocked.Exchange(ref _started, 0);
+            _retry.Visible = true;
             MessageBox.Show(this, _status.Text, "量见智桥安装失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
@@ -183,10 +201,7 @@ internal sealed class BootstrapInstaller
     {
         _assembly = typeof(BootstrapInstaller).Assembly;
         _status = status ?? throw new ArgumentNullException(nameof(status));
-        var defaultInstallRoot = Path.GetFullPath(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AURUM",
-            "LiangjianBridge"));
+        var defaultInstallRoot = BridgeInstallationRegistration.DefaultInstallRoot;
         if (rehearsalInstallRoot is null)
         {
             _installRoot = defaultInstallRoot;
@@ -209,20 +224,14 @@ internal sealed class BootstrapInstaller
         var server = ParseServerUri(serverUrl, Metadata("AurumTargetEnvironment"));
 
         Directory.CreateDirectory(_installRoot);
-        using var installationLock = new Mutex(
-            false,
+        using var installationLock = new Semaphore(
+            1,
+            1,
             _rehearsal
                 ? "Local\\AURUM-LiangjianBridge-Installer-Rehearsal"
                 : "Local\\AURUM-LiangjianBridge-Installer");
         var ownsInstallationLock = false;
-        try
-        {
-            ownsInstallationLock = installationLock.WaitOne(TimeSpan.Zero);
-        }
-        catch (AbandonedMutexException)
-        {
-            ownsInstallationLock = true;
-        }
+        ownsInstallationLock = installationLock.WaitOne(TimeSpan.Zero);
         if (!ownsInstallationLock)
         {
             throw new InvalidOperationException("bootstrap_installation_in_progress");
@@ -298,12 +307,19 @@ internal sealed class BootstrapInstaller
                     updated_at_utc_msc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 }),
                 cancellationToken);
-            if (!_rehearsal) CreateDesktopShortcut();
+            if (!_rehearsal)
+            {
+                CreateShortcuts();
+                BridgeInstallationRegistration.Register(
+                    _installRoot,
+                    manifest.ReleaseVersion,
+                    DirectorySize(_installRoot));
+            }
             return manifest.ReleaseVersion;
         }
         finally
         {
-            if (ownsInstallationLock) installationLock.ReleaseMutex();
+            if (ownsInstallationLock) installationLock.Release();
             try { Directory.Delete(operationRoot, recursive:true); } catch { }
         }
     }
@@ -349,11 +365,38 @@ internal sealed class BootstrapInstaller
 
     public static string SafeErrorCode(Exception error)
     {
-        var value = error.Message;
-        return value is { Length: >= 1 and <= 96 }
-            && value.All(character => char.IsAsciiLetterOrDigit(character) || character == '_')
-                ? value
-                : "bootstrap_rehearsal_failed";
+        for (Exception? current = error; current is not null; current = current.InnerException)
+        {
+            var value = current.Message;
+            if (value is { Length: >= 1 and <= 96 }
+                && value.All(character => char.IsAsciiLetterOrDigit(character) || character == '_'))
+            {
+                return value;
+            }
+            var mapped = current switch
+            {
+                UnauthorizedAccessException => "bootstrap_access_denied",
+                HttpRequestException => "bootstrap_network_request_failed",
+                IOException => "bootstrap_io_failed",
+                JsonException => "bootstrap_json_invalid",
+                _ => null,
+            };
+            if (mapped is not null)
+            {
+                return mapped;
+            }
+        }
+        return "bootstrap_rehearsal_failed";
+    }
+
+    public static IReadOnlyList<string> SafeErrorTypes(Exception error)
+    {
+        var types = new List<string>();
+        for (Exception? current = error; current is not null && types.Count < 8; current = current.InnerException)
+        {
+            types.Add(current.GetType().Name);
+        }
+        return types;
     }
 
     private string Metadata(string key) => _assembly
@@ -441,21 +484,52 @@ internal sealed class BootstrapInstaller
             Directory.Move(destination, backup);
             try
             {
-                Directory.Move(source, destination);
+                MoveDirectoryIntoPlace(source, destination);
                 ValidateVersionDirectory(destination);
                 return;
             }
             catch
             {
-                if (!Directory.Exists(destination) && Directory.Exists(backup))
+                if (Directory.Exists(destination))
+                {
+                    Directory.Delete(destination, recursive:true);
+                }
+                if (Directory.Exists(backup))
                 {
                     Directory.Move(backup, destination);
                 }
                 throw;
             }
         }
-        Directory.Move(source, destination);
+        MoveDirectoryIntoPlace(source, destination);
         ValidateVersionDirectory(destination);
+    }
+
+    private static void MoveDirectoryIntoPlace(string source, string destination)
+    {
+        if (string.Equals(
+            Path.GetPathRoot(source),
+            Path.GetPathRoot(destination),
+            StringComparison.OrdinalIgnoreCase))
+        {
+            Directory.Move(source, destination);
+            return;
+        }
+
+        var staging = Path.Combine(
+            Path.GetDirectoryName(destination)!,
+            $".installing-{Path.GetFileName(destination)}-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(staging);
+            CopyDirectoryFilesAtomically(source, staging);
+            Directory.Move(staging, destination);
+            Directory.Delete(source, recursive:true);
+        }
+        finally
+        {
+            if (Directory.Exists(staging)) Directory.Delete(staging, recursive:true);
+        }
     }
 
     private static void CopyDirectoryFilesAtomically(string source, string destination)
@@ -503,28 +577,37 @@ internal sealed class BootstrapInstaller
         }
     }
 
-    private void CreateDesktopShortcut()
+    private void CreateShortcuts()
     {
         try
         {
-            var shortcutPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-                "量见智桥.lnk");
             var shellType = Type.GetTypeFromProgID("WScript.Shell");
             if (shellType is null) return;
             dynamic shell = Activator.CreateInstance(shellType)!;
-            dynamic shortcut = shell.CreateShortcut(shortcutPath);
-            shortcut.TargetPath = Path.Combine(_installRoot, "AURUMBridge.Launcher.exe");
-            shortcut.WorkingDirectory = _installRoot;
-            shortcut.IconLocation = Path.Combine(_installRoot, "AURUMBridge.Launcher.exe");
-            shortcut.Description = "量见智桥 - 连接交易终端与量见 AI交易实验室";
-            shortcut.Save();
+            foreach (var shortcutPath in new[]
+            {
+                BridgeInstallationRegistration.DesktopShortcutPath,
+                BridgeInstallationRegistration.StartMenuShortcutPath,
+            })
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(shortcutPath)!);
+                dynamic shortcut = shell.CreateShortcut(shortcutPath);
+                shortcut.TargetPath = Path.Combine(_installRoot, BridgeInstallationRegistration.LauncherFileName);
+                shortcut.WorkingDirectory = _installRoot;
+                shortcut.IconLocation = Path.Combine(_installRoot, BridgeInstallationRegistration.LauncherFileName);
+                shortcut.Description = "量见智桥 - 连接交易终端与量见 AI交易实验室";
+                shortcut.Save();
+            }
         }
         catch
         {
             // A shortcut is optional; the launcher also registers user startup.
         }
     }
+
+    private static long DirectorySize(string directory) =>
+        Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+            .Sum(file => new FileInfo(file).Length);
 
     private static void EnsureBridgeIsStopped()
     {

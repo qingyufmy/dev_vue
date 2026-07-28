@@ -24,7 +24,11 @@ public sealed class BridgeRuntimePathResolverTests
         var worker = CreateFile("modules", "adapter.mt5.python", "worker.py");
         var mt4Expert = CreateFile("modules", "adapter.mt4", "AURUMBridgeEA.ex4");
 
-        var paths = BridgeRuntimePathResolver.Resolve(_directory, _ => null);
+        var paths = BridgeRuntimePathResolver.Resolve(
+            _directory,
+            name => name == "AURUM_BRIDGE_SERVER_URL"
+                ? "https://www.cnfxtrade.com"
+                : null);
 
         Assert.AreEqual(python, paths.PythonExecutable);
         Assert.AreEqual(worker, paths.Mt5WorkerScript);
@@ -90,7 +94,7 @@ public sealed class BridgeRuntimePathResolverTests
             Path.Combine(_directory, "server-endpoints.json"),
             """{"schema_version":1,"server_url":"https://bridge-new.example.com"}""");
 
-        var paths = BridgeRuntimePathResolver.Resolve(_directory, _ => null);
+        var paths = BridgeRuntimePathResolver.Resolve(_directory, IsolatedEnvironment);
 
         Assert.AreEqual(new Uri("https://bridge-new.example.com"), paths.ServerBaseUri);
     }
@@ -104,7 +108,7 @@ public sealed class BridgeRuntimePathResolverTests
         CreateFile(installed, "modules", "adapter.mt4", "AURUMBridgeEA.ex4");
 
         var error = Assert.ThrowsExactly<InvalidDataException>(() =>
-            BridgeRuntimePathResolver.Resolve(installed, _ => null));
+            BridgeRuntimePathResolver.Resolve(installed, IsolatedEnvironment));
 
         Assert.AreEqual("bridge_server_endpoints_missing", error.Message);
     }
@@ -205,7 +209,7 @@ public sealed class BridgeRuntimePathResolverTests
             """{"schema_version":1,"server_url":"http://remote.example.com"}""");
 
         var error = Assert.ThrowsExactly<InvalidDataException>(() =>
-            BridgeRuntimePathResolver.Resolve(_directory, _ => null));
+            BridgeRuntimePathResolver.Resolve(_directory, IsolatedEnvironment));
 
         Assert.AreEqual("bridge_server_url_invalid", error.Message);
     }
@@ -290,7 +294,7 @@ public sealed class BridgeRuntimePathResolverTests
             "worker.py"), []);
 
         var error = Assert.ThrowsExactly<FileNotFoundException>(() =>
-            BridgeRuntimePathResolver.Resolve(applicationDirectory, _ => null));
+            BridgeRuntimePathResolver.Resolve(applicationDirectory, IsolatedEnvironment));
 
         Assert.AreEqual("mt4_ea_package_not_found", error.Message);
     }
@@ -302,4 +306,9 @@ public sealed class BridgeRuntimePathResolverTests
         File.WriteAllBytes(path, []);
         return path;
     }
+
+    private string? IsolatedEnvironment(string name) =>
+        name == "AURUM_BRIDGE_DATA_DIR"
+            ? Path.Combine(_directory, "state")
+            : null;
 }

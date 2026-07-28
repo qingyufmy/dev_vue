@@ -137,7 +137,11 @@ public sealed class LauncherEngineTests
         var launched = await engine.LaunchAsync();
         var pointer = await _store.LoadAsync();
         var activeDirectory = Path.Combine(_directory, "versions", pointer.ActiveVersion);
-        var runtime = BridgeRuntimePathResolver.Resolve(activeDirectory, _ => null);
+        var runtime = BridgeRuntimePathResolver.Resolve(
+            activeDirectory,
+            name => name == "AURUM_BRIDGE_DATA_DIR"
+                ? Path.Combine(_directory, "state")
+                : null);
 
         Assert.AreEqual("3.0.0", launched);
         Assert.AreEqual("3.0.0", pointer.ActiveVersion);

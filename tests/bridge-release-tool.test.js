@@ -64,6 +64,7 @@ describe('bridge release tooling', () => {
     const scrubbed = { ...process.env }
     for (const name of [
       'AURUM_BRIDGE_SIGNER_EXE', 'AURUM_BRIDGE_SIGNING_CERT_THUMBPRINT',
+      'AURUM_AUTHENTICODE_CERT_THUMBPRINT',
       'BRIDGE_RELEASE_PUBLIC_KEY_PATH',
       'QINIU_ACCESS_KEY', 'QINIU_SECRET_KEY', 'QINIU_BUCKET', 'QINIU_DOMAIN',
       'QINIU_REGION', 'AURUM_BRIDGE_RELEASE_API_TOKEN', 'AURUM_METAEDITOR_EXE',
@@ -79,6 +80,7 @@ describe('bridge release tooling', () => {
     expect(result.qiniu_config_source).toBe('environment')
     expect(result.missing_requirements).toEqual(expect.arrayContaining([
       'AURUM_BRIDGE_SIGNER_EXE', 'BRIDGE_RELEASE_PUBLIC_KEY_PATH',
+      'AURUM_AUTHENTICODE_CERT_THUMBPRINT',
       'QINIU_ACCESS_KEY', 'QINIU_SECRET_KEY', 'QINIU_BUCKET', 'QINIU_DOMAIN',
       'QINIU_REGION', 'AURUM_BRIDGE_RELEASE_API_TOKEN',
       'RELEASE_SERVER_HTTPS_URL', 'PYTHON_RUNTIME_DIRECTORY', 'AURUM_METAEDITOR_EXE',
@@ -242,7 +244,20 @@ describe('bridge release tooling', () => {
     expect(bootstrapProgram).toContain('"rehearsal-install-root"')
     expect(bootstrapProgram).toContain('bootstrap_rehearsal_not_allowed')
     expect(bootstrapProgram).toContain('if (!_rehearsal) EnsureBridgeIsStopped()')
-    expect(bootstrapProgram).toContain('if (!_rehearsal) CreateDesktopShortcut()')
+    expect(bootstrapProgram).toContain('CreateShortcuts()')
+    expect(bootstrapProgram).toContain('BridgeInstallationRegistration.Register(')
+    expect(bootstrapProgram).toContain('Text = "重试安装"')
+    const launcherProgram = await readFile(
+      new URL('../bridge/launcher/AurumBridge.Launcher/Program.cs', import.meta.url),
+      'utf8',
+    )
+    const launcherUninstaller = await readFile(
+      new URL('../bridge/launcher/AurumBridge.Launcher/LauncherUninstaller.cs', import.meta.url),
+      'utf8',
+    )
+    expect(launcherProgram).toContain('["--uninstall"]')
+    expect(launcherUninstaller).toContain('BridgeInstallationRegistration.IsDefaultInstallRoot')
+    expect(launcherUninstaller).toContain('RemoveRegistrationAndShortcuts')
   })
 
   it('allows an HTTP bootstrap API only for a loopback test rehearsal', async () => {

@@ -7,6 +7,20 @@ internal static class Program
     [STAThread]
     public static async Task Main(string[] args)
     {
+        if (args is ["--uninstall"])
+        {
+            Environment.ExitCode = await LauncherUninstaller.BeginInteractiveAsync();
+            return;
+        }
+        if (args is ["--uninstall-worker", var installRoot, var dataMode, var parentProcessId]
+            && int.TryParse(parentProcessId, out var parsedParentProcessId))
+        {
+            Environment.ExitCode = await LauncherUninstaller.RunWorkerAsync(
+                installRoot,
+                dataMode,
+                parsedParentProcessId);
+            return;
+        }
         var automaticStartup = args.Length == 1 && args[0] == "--autostart";
         try
         {
