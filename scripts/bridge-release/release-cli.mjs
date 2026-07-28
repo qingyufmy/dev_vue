@@ -170,6 +170,15 @@ async function createBootstrapManifest(args) {
   }
 }
 
+const QINIU_REGION_HINTS = new Set(['z0', 'z1', 'z2', 'na0', 'as0'])
+
+export function createQiniuUploadConfig(regionHint) {
+  if (!QINIU_REGION_HINTS.has(regionHint)) fail('release_qiniu_region_invalid')
+  // A stored region is only a diagnostic hint. Buckets can be migrated and the
+  // Qiniu SDK's bucket query is the authoritative source for upload endpoints.
+  return new qiniu.conf.Config({ useHttpsDomain:true })
+}
+
 function qiniuConfig() {
   const accessKey = process.env.QINIU_ACCESS_KEY
   const secretKey = process.env.QINIU_SECRET_KEY
@@ -178,13 +187,9 @@ function qiniuConfig() {
   if (!accessKey || !secretKey || !bucket || !configuredDomain) fail('release_qiniu_configuration_missing')
   const domain = normalizeCdnOrigin(configuredDomain)
   const mac = new qiniu.auth.digest.Mac(accessKey, secretKey)
-  const config = new qiniu.conf.Config()
-  const zones = { z0:'Zone_z0', z1:'Zone_z1', z2:'Zone_z2', na0:'Zone_na0', as0:'Zone_as0' }
-  const zone = zones[process.env.QINIU_REGION || 'z0']
-  if (!zone || !qiniu.zone[zone]) fail('release_qiniu_region_invalid')
-  config.zone = qiniu.zone[zone]
-  config.useHttpsDomain = true
-  return { accessKey, bucket, config, domain, mac }
+  const regionHint = process.env.QINIU_REGION || 'z0'
+  const config = createQiniuUploadConfig(regionHint)
+  return { accessKey, bucket, config, domain, mac, regionHint }
 }
 
 async function prepareQiniuConfiguration(args, command) {
@@ -209,11 +214,20 @@ async function verifyQiniuAccess(args) {
   if (resp.statusCode !== 200 || !data || !Array.isArray(data.items)) {
     fail('release_qiniu_access_verification_failed')
   }
+  const regionsProvider = await context.config.getRegionsProvider({
+    bucketName:context.bucket,
+    accessKey:context.accessKey,
+  })
+  const detectedRegions = (await regionsProvider.getRegions())
+    .map(region => region.regionId)
+    .filter(Boolean)
   return {
     operation:'verify-qiniu-access',
     bucket_accessible:true,
     domain:context.domain,
-    region:process.env.QINIU_REGION,
+    configured_region:context.regionHint,
+    detected_regions:detectedRegions,
+    region_matches:detectedRegions.includes(context.regionHint),
     sample_count:data.items.length,
   }
 }

@@ -10,6 +10,7 @@ import { promisify } from 'node:util'
 import {
   canonicalManifest,
   canonicalPackage,
+  createQiniuUploadConfig,
   immutablePackageKey,
   isBootstrapManifest,
   validateQiniuUploadResult,
@@ -21,6 +22,13 @@ import { verifyBridgeReleaseSignatures } from '../server/routes/bridge-release.j
 const execFileAsync = promisify(execFile)
 
 describe('bridge release tooling', () => {
+  it('auto-discovers Qiniu upload regions instead of pinning stale database hints', () => {
+    const config = createQiniuUploadConfig('z0')
+    expect(config.useHttpsDomain).toBe(true)
+    expect(config.zone).toBeNull()
+    expect(() => createQiniuUploadConfig('invalid')).toThrow('release_qiniu_region_invalid')
+  })
+
   it('normalizes database Qiniu configuration without exposing it in release results', () => {
     expect(normalizeDatabaseQiniuConfig({
       access_key:'access-key', secret_key:'secret-key', bucket:'release-bucket',
