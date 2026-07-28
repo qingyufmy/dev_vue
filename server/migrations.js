@@ -4236,17 +4236,6 @@ const migrations = [
   {
     id: '146_bridge_release_observability',
     async up() {
-      await queryRun(`ALTER TABLE bridge_v3_terminal_sessions
-        ADD COLUMN installation_id VARCHAR(64) DEFAULT NULL,
-        ADD COLUMN bridge_version VARCHAR(64) DEFAULT NULL,
-        ADD COLUMN update_release_id VARCHAR(128) DEFAULT NULL,
-        ADD COLUMN update_target_version VARCHAR(64) DEFAULT NULL,
-        ADD COLUMN update_state VARCHAR(24) DEFAULT NULL,
-        ADD COLUMN update_started_at_utc_msc BIGINT UNSIGNED DEFAULT NULL,
-        ADD COLUMN update_reported_at_utc_msc BIGINT UNSIGNED DEFAULT NULL,
-        ADD COLUMN update_error_code VARCHAR(128) DEFAULT NULL,
-        ADD KEY idx_bridge_v3_installation (installation_id, connected, last_seen_at_utc_msc),
-        ADD KEY idx_bridge_v3_update_release (update_release_id, update_state)`)
       await queryRun(`CREATE TABLE IF NOT EXISTS bridge_update_events (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
         installation_id VARCHAR(64) NOT NULL,
@@ -4262,6 +4251,37 @@ const migrations = [
         KEY idx_bridge_update_release (release_id, state, updated_at_utc_msc),
         KEY idx_bridge_update_installation (installation_id, updated_at_utc_msc)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      const existingColumns = new Set((await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'bridge_v3_terminal_sessions'`))
+        .map(row => String(row.COLUMN_NAME)))
+      const existingIndexes = new Set((await queryAll(`SELECT DISTINCT INDEX_NAME
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'bridge_v3_terminal_sessions'`))
+        .map(row => String(row.INDEX_NAME)))
+      const additions = []
+      const columns = [
+        ['installation_id', 'VARCHAR(64) DEFAULT NULL'],
+        ['bridge_version', 'VARCHAR(64) DEFAULT NULL'],
+        ['update_release_id', 'VARCHAR(128) DEFAULT NULL'],
+        ['update_target_version', 'VARCHAR(64) DEFAULT NULL'],
+        ['update_state', 'VARCHAR(24) DEFAULT NULL'],
+        ['update_started_at_utc_msc', 'BIGINT UNSIGNED DEFAULT NULL'],
+        ['update_reported_at_utc_msc', 'BIGINT UNSIGNED DEFAULT NULL'],
+        ['update_error_code', 'VARCHAR(128) DEFAULT NULL'],
+      ]
+      for (const [name, definition] of columns) {
+        if (!existingColumns.has(name)) additions.push(`ADD COLUMN ${name} ${definition}`)
+      }
+      if (!existingIndexes.has('idx_bridge_v3_installation')) {
+        additions.push('ADD KEY idx_bridge_v3_installation (installation_id, connected, last_seen_at_utc_msc)')
+      }
+      if (!existingIndexes.has('idx_bridge_v3_update_release')) {
+        additions.push('ADD KEY idx_bridge_v3_update_release (update_release_id, update_state)')
+      }
+      if (additions.length) {
+        await queryRun(`ALTER TABLE bridge_v3_terminal_sessions ${additions.join(', ')}`)
+      }
     }
   }
 ]
