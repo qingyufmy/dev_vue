@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { createHash } from 'node:crypto'
+import { createHash, createPublicKey, timingSafeEqual, verify } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -59,6 +59,35 @@ export function isInstallationInRollout(manifest, installationId, channel = 'sta
   return digest.readUInt32BE(0) % 100 < manifest.rollout_percentage
 }
 
+function canonicalPackage(pkg) {
+  return `AURUM-PACKAGE-V1\n${pkg.module_id}\n${pkg.version}\n${pkg.url}\n${pkg.size_bytes}\n${pkg.sha256.toLowerCase()}\n${pkg.minimum_core_version || ''}\n${pkg.maximum_core_version || ''}\n`
+}
+
+function canonicalManifest(manifest) {
+  let value = `AURUM-RELEASE-V2\n2\n${manifest.release_id}\n${manifest.release_version}\n${manifest.generated_at_utc_msc}\n${manifest.published_at_utc_msc}\n${manifest.expires_at_utc_msc}\n${manifest.priority}\n${manifest.minimum_launcher_version}\n${manifest.minimum_idle_seconds}\n${manifest.activation_deadline_utc_msc ?? ''}\n${manifest.rollout_channel}\n${manifest.rollout_percentage}\n`
+  for (const pkg of [...manifest.packages].sort((left, right) => left.module_id.localeCompare(right.module_id, 'en'))) {
+    value += `${pkg.module_id}|${pkg.version}|${pkg.url}|${pkg.size_bytes}|${pkg.sha256.toLowerCase()}|${pkg.signature}|${pkg.minimum_core_version || ''}|${pkg.maximum_core_version || ''}\n`
+  }
+  return value
+}
+
+export function verifyBridgeReleaseSignatures(manifest, publicKeyPem) {
+  if (manifest?.schema_version !== 2 || !publicKeyPem) return false
+  try {
+    const key = createPublicKey(publicKeyPem)
+    if (!manifest.packages.every(pkg => verify('sha256', Buffer.from(canonicalPackage(pkg)), {
+      key,
+      dsaEncoding:'ieee-p1363',
+    }, Buffer.from(pkg.signature, 'base64')))) return false
+    return verify('sha256', Buffer.from(canonicalManifest(manifest)), {
+      key,
+      dsaEncoding:'ieee-p1363',
+    }, Buffer.from(manifest.signature, 'base64'))
+  } catch {
+    return false
+  }
+}
+
 export function validateBridgeReleaseManifest(manifest, nowUtcMsc = Date.now()) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
     || ![1, 2].includes(manifest.schema_version)
@@ -94,11 +123,24 @@ export function createBridgeReleaseRouter({
   authenticate = authMiddleware,
   requireAdmin = adminOnly,
   fileOps = { mkdir, readFile, rename, rm, writeFile },
+  publicKeyPath = process.env.BRIDGE_RELEASE_PUBLIC_KEY_PATH,
+  releaseToken = process.env.AURUM_BRIDGE_RELEASE_API_TOKEN,
+  verifySignatures = verifyBridgeReleaseSignatures,
 } = {}) {
   const router = Router()
   const previousPath = manifestPath ? `${manifestPath}.previous` : ''
   const disabledPath = manifestPath ? `${manifestPath}.disabled` : ''
   let mutation = Promise.resolve()
+
+  function authorizeRelease(req, res, next) {
+    const provided = String(req.get('Authorization') || '').replace(/^Bearer\s+/i, '')
+    if (releaseToken && releaseToken.length >= 32 && provided) {
+      const expectedBytes = Buffer.from(releaseToken, 'utf8')
+      const providedBytes = Buffer.from(provided, 'utf8')
+      if (expectedBytes.length === providedBytes.length && timingSafeEqual(expectedBytes, providedBytes)) return next()
+    }
+    return authenticate(req, res, () => requireAdmin(req, res, next))
+  }
 
   function serialize(operation) {
     const result = mutation.then(operation, operation)
@@ -161,6 +203,11 @@ export function createBridgeReleaseRouter({
         String(req.get('X-Aurum-Release-Channel') || 'stable').toLowerCase())) {
         return res.status(204).end()
       }
+      if (manifest.schema_version === 2) {
+        if (!publicKeyPath) throw new Error('bridge_release_signature_verifier_unavailable')
+        const publicKey = await fileOps.readFile(publicKeyPath, 'utf8')
+        if (!verifySignatures(manifest, publicKey)) throw new Error('bridge_release_signature_invalid')
+      }
       return res.json(manifest)
     } catch (error) {
       console.error('[BridgeRelease] manifest unavailable:', error?.message || 'unknown')
@@ -168,7 +215,7 @@ export function createBridgeReleaseRouter({
     }
   })
 
-  router.get('/admin/bridge/v3/releases/status', authenticate, requireAdmin, async (req, res) => {
+  router.get('/admin/bridge/v3/releases/status', authorizeRelease, async (req, res) => {
     try {
       const [current, previous, disabled] = await Promise.all([
         optionalManifest(manifestPath),
@@ -186,11 +233,18 @@ export function createBridgeReleaseRouter({
     }
   })
 
-  router.post('/admin/bridge/v3/releases/publish', authenticate, requireAdmin, async (req, res) => {
+  router.post('/admin/bridge/v3/releases/publish', authorizeRelease, async (req, res) => {
     if (!manifestPath || !validateBridgeReleaseManifest(req.body?.manifest)) {
       return res.status(400).json({ ok:false, error:'bridge_release_manifest_invalid' })
     }
     try {
+      if (!publicKeyPath) {
+        return res.status(503).json({ ok:false, error:'bridge_release_signature_verifier_unavailable' })
+      }
+      const publicKey = await fileOps.readFile(publicKeyPath, 'utf8')
+      if (!verifySignatures(req.body.manifest, publicKey)) {
+        return res.status(400).json({ ok:false, error:'bridge_release_signature_invalid' })
+      }
       await serialize(async () => {
         const current = await optionalManifest(manifestPath)
         if (current) await atomicWrite(previousPath, JSON.stringify(current))
@@ -208,27 +262,37 @@ export function createBridgeReleaseRouter({
     }
   })
 
-  router.post('/admin/bridge/v3/releases/stop', authenticate, requireAdmin, async (req, res) => {
+  router.post('/admin/bridge/v3/releases/stop', authorizeRelease, async (req, res) => {
     try {
-      const current = await optionalManifest(manifestPath)
+      const current = await serialize(async () => {
+        const value = await optionalManifest(manifestPath)
+        if (value) await atomicWrite(disabledPath, JSON.stringify(value))
+        return value
+      })
       if (!current) return res.status(404).json({ ok:false, error:'bridge_release_not_found' })
-      await serialize(() => atomicWrite(disabledPath, JSON.stringify(current)))
       return res.json({ ok:true, stopped_release_id:current.release_id || null })
     } catch {
       return res.status(503).json({ ok:false, error:'bridge_release_stop_failed' })
     }
   })
 
-  router.post('/admin/bridge/v3/releases/rollback', authenticate, requireAdmin, async (req, res) => {
+  router.post('/admin/bridge/v3/releases/rollback', authorizeRelease, async (req, res) => {
     try {
-      const previous = await optionalManifest(previousPath)
-      if (!previous) return res.status(404).json({ ok:false, error:'bridge_release_previous_not_found' })
-      await serialize(async () => {
+      const previous = await serialize(async () => {
+        const value = await optionalManifest(previousPath)
+        if (!value) return null
+        if (value.schema_version === 2) {
+          if (!publicKeyPath) throw new Error('bridge_release_signature_verifier_unavailable')
+          const publicKey = await fileOps.readFile(publicKeyPath, 'utf8')
+          if (!verifySignatures(value, publicKey)) throw new Error('bridge_release_signature_invalid')
+        }
         const current = await optionalManifest(manifestPath)
-        await atomicWrite(manifestPath, JSON.stringify(previous))
+        await atomicWrite(manifestPath, JSON.stringify(value))
         if (current) await atomicWrite(previousPath, JSON.stringify(current))
         await fileOps.rm(disabledPath, { force:true })
+        return value
       })
+      if (!previous) return res.status(404).json({ ok:false, error:'bridge_release_previous_not_found' })
       return res.json({
         ok:true,
         release_id:previous.release_id || null,

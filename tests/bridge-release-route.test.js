@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import express from 'express'
 import http from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -67,7 +67,7 @@ function request(router, headers = {}) {
   })
 }
 
-function mutate(router, routePath, body) {
+function mutate(router, routePath, body, headers = {}) {
   const app = express()
   app.use(express.json({ limit:'256kb' }))
   app.use('/api', router)
@@ -79,7 +79,7 @@ function mutate(router, routePath, body) {
         port:server.address().port,
         path:`/api${routePath}`,
         method:'POST',
-        headers:{ 'Content-Type':'application/json', 'Content-Length':Buffer.byteLength(payload) },
+        headers:{ 'Content-Type':'application/json', 'Content-Length':Buffer.byteLength(payload), ...headers },
       }, res => {
         let responseBody = ''
         res.on('data', chunk => { responseBody += chunk })
@@ -170,14 +170,52 @@ describe('bridge release manifest route', () => {
     expect(response.status).toBe(204)
   })
 
+  it('fails a selected v2 public release closed when signature verification is unavailable', async () => {
+    const value = manifestV2({ rollout_percentage:100 })
+    const response = await request(createBridgeReleaseRouter({
+      manifestPath:'release.json',
+      readManifest:vi.fn().mockResolvedValue(Buffer.from(JSON.stringify(value))),
+    }), {
+      'X-Aurum-Installation-Id':'install_0123456789abcdef0123456789abcdef',
+      'X-Aurum-Release-Channel':'stable',
+    })
+    expect(response.status).toBe(503)
+  })
+
+  it('serves a selected v2 public release only after server-side signature verification', async () => {
+    const value = manifestV2({ rollout_percentage:100 })
+    const response = await request(createBridgeReleaseRouter({
+      manifestPath:'release.json',
+      readManifest:vi.fn().mockResolvedValue(Buffer.from(JSON.stringify(value))),
+      publicKeyPath:'public-key.pem',
+      fileOps:{
+        mkdir:vi.fn(), rename:vi.fn(), rm:vi.fn(), writeFile:vi.fn(),
+        readFile:vi.fn(async target => {
+          if (target === 'public-key.pem') return 'public-key'
+          throw Object.assign(new Error('missing'), { code:'ENOENT' })
+        }),
+      },
+      verifySignatures:vi.fn().mockReturnValue(true),
+    }), {
+      'X-Aurum-Installation-Id':'install_0123456789abcdef0123456789abcdef',
+      'X-Aurum-Release-Channel':'stable',
+    })
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toEqual(value)
+  })
+
   it('publishes, stops and rolls back signed manifest pointers atomically', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'bridge-release-route-'))
     try {
       const manifestPath = path.join(directory, 'current.json')
+      const publicKeyPath = path.join(directory, 'public-key.pem')
+      await writeFile(publicKeyPath, 'test-public-key')
       const router = createBridgeReleaseRouter({
         manifestPath,
         authenticate:(req, res, next) => next(),
         requireAdmin:(req, res, next) => next(),
+        publicKeyPath,
+        verifySignatures:() => true,
       })
       const first = manifestV2({
         release_id:'bridge-3.1.0-first',
@@ -198,6 +236,29 @@ describe('bridge release manifest route', () => {
       const rollback = await mutate(router, '/admin/bridge/v3/releases/rollback')
       expect(rollback.status).toBe(200)
       expect(JSON.parse(rollback.body).release_id).toBe(first.release_id)
+    } finally {
+      await rm(directory, { recursive:true, force:true })
+    }
+  })
+
+  it('accepts a dedicated constant-time release token without requiring a user JWT', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'bridge-release-token-'))
+    try {
+      const releaseToken = 'release-token-for-automation-only-1234567890'
+      const publicKeyPath = path.join(directory, 'public-key.pem')
+      await writeFile(publicKeyPath, 'test-public-key')
+      const router = createBridgeReleaseRouter({
+        manifestPath:path.join(directory, 'current.json'),
+        authenticate:vi.fn(() => { throw new Error('user auth should not run') }),
+        requireAdmin:vi.fn(() => { throw new Error('admin auth should not run') }),
+        publicKeyPath,
+        releaseToken,
+        verifySignatures:() => true,
+      })
+      const response = await mutate(router, '/admin/bridge/v3/releases/publish', {
+        manifest:manifestV2({ release_id:'bridge-3.1.0-token', rollout_percentage:5 }),
+      }, { Authorization:`Bearer ${releaseToken}` })
+      expect(response.status).toBe(200)
     } finally {
       await rm(directory, { recursive:true, force:true })
     }

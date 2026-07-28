@@ -30,6 +30,7 @@ build/
 dist/
 dist_inno/
 dist_nuitka/
+bridge/release-artifacts/
 
 __pycache__/
 .venv-bridge/
