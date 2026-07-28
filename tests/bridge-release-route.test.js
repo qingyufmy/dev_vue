@@ -22,6 +22,21 @@ function manifest(overrides = {}) {
   }
 }
 
+function manifestV2(overrides = {}) {
+  return manifest({
+    schema_version:2,
+    release_id:'bridge-3.1.0-20260728.1',
+    priority:'normal',
+    published_at_utc_msc:1_800_000_000_000,
+    expires_at_utc_msc:1_800_086_400_000,
+    minimum_idle_seconds:120,
+    activation_deadline_utc_msc:null,
+    rollout_channel:'stable',
+    rollout_percentage:10,
+    ...overrides,
+  })
+}
+
 function request(router) {
   const app = express()
   app.use('/api', router)
@@ -88,5 +103,17 @@ describe('bridge release manifest route', () => {
     expect(validateBridgeReleaseManifest(manifest({
       packages:[{ ...manifest().packages[0], signature:'' }],
     }))).toBe(false)
+  })
+
+  it('accepts bounded v2 rollout policy and rejects unsafe activation metadata', () => {
+    const now = 1_800_000_000_100
+    expect(validateBridgeReleaseManifest(manifestV2(), now)).toBe(true)
+    expect(validateBridgeReleaseManifest(manifestV2({ priority:'critical' }), now)).toBe(false)
+    expect(validateBridgeReleaseManifest(manifestV2({ minimum_idle_seconds:0 }), now)).toBe(false)
+    expect(validateBridgeReleaseManifest(manifestV2({ expires_at_utc_msc:now }), now)).toBe(false)
+    expect(validateBridgeReleaseManifest(manifestV2({
+      activation_deadline_utc_msc:1_800_086_400_001,
+    }), now)).toBe(false)
+    expect(validateBridgeReleaseManifest(manifestV2({ rollout_percentage:0 }), now)).toBe(false)
   })
 })

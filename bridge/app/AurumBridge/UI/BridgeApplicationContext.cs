@@ -1288,8 +1288,9 @@ public sealed class BridgeApplicationContext : ApplicationContext
                     var staged = await coordinator.CheckAndStageAsync(cancellationToken);
                     if (staged is not null)
                     {
-                        TryBeginInvoke(() => _ = ApplyStagedUpdateAsync(coordinator, staged));
-                        return;
+                        _logger.Info(
+                            "update_waiting_window",
+                            $"version={staged.Version};priority={staged.Priority}");
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1300,7 +1301,7 @@ public sealed class BridgeApplicationContext : ApplicationContext
                 {
                     _logger.Error("update_check_failed", error);
                 }
-                await Task.Delay(TimeSpan.FromHours(6), cancellationToken);
+                await Task.Delay(BridgeUpdateCoordinator.RegularCheckInterval, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

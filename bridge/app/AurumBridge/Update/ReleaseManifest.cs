@@ -39,11 +39,35 @@ public sealed record ReleaseManifest
     [JsonPropertyName("release_version")]
     public required string ReleaseVersion { get; init; }
 
+    [JsonPropertyName("release_id")]
+    public string? ReleaseId { get; init; }
+
     [JsonPropertyName("generated_at_utc_msc")]
     public required long GeneratedAtUtcMsc { get; init; }
 
+    [JsonPropertyName("published_at_utc_msc")]
+    public long? PublishedAtUtcMsc { get; init; }
+
+    [JsonPropertyName("expires_at_utc_msc")]
+    public long? ExpiresAtUtcMsc { get; init; }
+
+    [JsonPropertyName("priority")]
+    public string? Priority { get; init; }
+
     [JsonPropertyName("minimum_launcher_version")]
     public required string MinimumLauncherVersion { get; init; }
+
+    [JsonPropertyName("minimum_idle_seconds")]
+    public int? MinimumIdleSeconds { get; init; }
+
+    [JsonPropertyName("activation_deadline_utc_msc")]
+    public long? ActivationDeadlineUtcMsc { get; init; }
+
+    [JsonPropertyName("rollout_channel")]
+    public string? RolloutChannel { get; init; }
+
+    [JsonPropertyName("rollout_percentage")]
+    public int? RolloutPercentage { get; init; }
 
     [JsonPropertyName("packages")]
     public required IReadOnlyList<ReleasePackage> Packages { get; init; }
@@ -62,19 +86,23 @@ public sealed class ReleaseManifestVerifier : IDisposable
         "data.symbol-map",
     };
     private readonly ECDsa _publicKey;
+    private readonly Func<long> _clock;
 
-    public ReleaseManifestVerifier(string subjectPublicKeyInfoPem)
+    public ReleaseManifestVerifier(
+        string subjectPublicKeyInfoPem,
+        Func<long>? clock = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(subjectPublicKeyInfoPem);
         _publicKey = ECDsa.Create();
         _publicKey.ImportFromPem(subjectPublicKeyInfoPem);
+        _clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
 
     public void Verify(ReleaseManifest manifest, Version launcherVersion)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(launcherVersion);
-        ValidateManifest(manifest, launcherVersion);
+        ValidateManifest(manifest, launcherVersion, _clock());
         byte[] signature;
         try
         {
@@ -98,12 +126,30 @@ public sealed class ReleaseManifestVerifier : IDisposable
     public static string Canonicalize(ReleaseManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        var builder = new StringBuilder()
-            .Append("AURUM-RELEASE-V1\n")
-            .Append(manifest.SchemaVersion).Append('\n')
-            .Append(manifest.ReleaseVersion).Append('\n')
-            .Append(manifest.GeneratedAtUtcMsc).Append('\n')
-            .Append(manifest.MinimumLauncherVersion).Append('\n');
+        var builder = manifest.SchemaVersion switch
+        {
+            1 => new StringBuilder()
+                .Append("AURUM-RELEASE-V1\n")
+                .Append(manifest.SchemaVersion).Append('\n')
+                .Append(manifest.ReleaseVersion).Append('\n')
+                .Append(manifest.GeneratedAtUtcMsc).Append('\n')
+                .Append(manifest.MinimumLauncherVersion).Append('\n'),
+            2 => new StringBuilder()
+                .Append("AURUM-RELEASE-V2\n")
+                .Append(manifest.SchemaVersion).Append('\n')
+                .Append(manifest.ReleaseId).Append('\n')
+                .Append(manifest.ReleaseVersion).Append('\n')
+                .Append(manifest.GeneratedAtUtcMsc).Append('\n')
+                .Append(manifest.PublishedAtUtcMsc).Append('\n')
+                .Append(manifest.ExpiresAtUtcMsc).Append('\n')
+                .Append(manifest.Priority).Append('\n')
+                .Append(manifest.MinimumLauncherVersion).Append('\n')
+                .Append(manifest.MinimumIdleSeconds).Append('\n')
+                .Append(manifest.ActivationDeadlineUtcMsc?.ToString() ?? string.Empty).Append('\n')
+                .Append(manifest.RolloutChannel).Append('\n')
+                .Append(manifest.RolloutPercentage).Append('\n'),
+            _ => throw new InvalidDataException("update_manifest_schema_unsupported"),
+        };
         foreach (var package in manifest.Packages.OrderBy(value => value.ModuleId, StringComparer.Ordinal))
         {
             builder.Append(package.ModuleId).Append('|')
@@ -135,15 +181,35 @@ public sealed class ReleaseManifestVerifier : IDisposable
 
     public void Dispose() => _publicKey.Dispose();
 
-    private static void ValidateManifest(ReleaseManifest manifest, Version launcherVersion)
+    private static void ValidateManifest(
+        ReleaseManifest manifest,
+        Version launcherVersion,
+        long nowUtcMsc)
     {
-        if (manifest.SchemaVersion != 1
+        if (manifest.SchemaVersion is not (1 or 2)
             || !Version.TryParse(manifest.ReleaseVersion, out _)
             || manifest.GeneratedAtUtcMsc <= 0
             || !Version.TryParse(manifest.MinimumLauncherVersion, out var minimumLauncher)
             || launcherVersion < minimumLauncher
             || manifest.Packages.Count is < 1 or > 16
             || string.IsNullOrWhiteSpace(manifest.Signature))
+        {
+            throw new InvalidDataException("update_manifest_invalid");
+        }
+        if (manifest.SchemaVersion == 2
+            && (!ValidReleaseId(manifest.ReleaseId)
+                || manifest.Priority is not ("normal" or "urgent")
+                || manifest.PublishedAtUtcMsc is not > 0
+                || manifest.ExpiresAtUtcMsc is not > 0
+                || manifest.ExpiresAtUtcMsc <= manifest.PublishedAtUtcMsc
+                || manifest.ExpiresAtUtcMsc <= nowUtcMsc
+                || manifest.GeneratedAtUtcMsc > manifest.ExpiresAtUtcMsc
+                || manifest.MinimumIdleSeconds is not (>= 30 and <= 3600)
+                || manifest.ActivationDeadlineUtcMsc is { } activationDeadline
+                    && (activationDeadline <= manifest.PublishedAtUtcMsc
+                        || activationDeadline > manifest.ExpiresAtUtcMsc)
+                || manifest.RolloutChannel is not ("internal" or "stable")
+                || manifest.RolloutPercentage is not (>= 1 and <= 100)))
         {
             throw new InvalidDataException("update_manifest_invalid");
         }
@@ -165,6 +231,10 @@ public sealed class ReleaseManifestVerifier : IDisposable
             }
         }
     }
+
+    private static bool ValidReleaseId(string? releaseId) => releaseId is { Length: >= 8 and <= 128 }
+        && releaseId.All(character => char.IsAsciiLetterOrDigit(character)
+            || character is '.' or '_' or ':' or '-');
 
     private void VerifyPackage(ReleasePackage package)
     {

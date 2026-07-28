@@ -3,7 +3,11 @@ using System.Text.Json.Serialization;
 
 namespace AurumBridge.Update;
 
-public sealed record StagedRelease(string Version, string VersionDirectory);
+public sealed record StagedRelease(
+    string Version,
+    string VersionDirectory,
+    string Priority = "normal",
+    string? ReleaseId = null);
 
 public sealed class ReleaseInstaller(
     string installRoot,
@@ -56,7 +60,7 @@ public sealed class ReleaseInstaller(
                 finalVersionDirectory,
                 manifest,
                 cancellationToken)
-                ? new(manifest.ReleaseVersion, finalVersionDirectory)
+                ? DescribeStagedRelease(manifest, finalVersionDirectory)
                 : throw new IOException("update_version_already_exists");
         }
 
@@ -98,7 +102,7 @@ public sealed class ReleaseInstaller(
             }
             Directory.CreateDirectory(versionsRoot);
             Directory.Move(temporaryVersionDirectory, finalVersionDirectory);
-            return new(manifest.ReleaseVersion, finalVersionDirectory);
+            return DescribeStagedRelease(manifest, finalVersionDirectory);
         }
         finally
         {
@@ -106,6 +110,14 @@ public sealed class ReleaseInstaller(
             DeleteTemporaryDirectory(downloadDirectory, Path.Combine(_installRoot, "staging"));
         }
     }
+
+    private static StagedRelease DescribeStagedRelease(
+        ReleaseManifest manifest,
+        string versionDirectory) => new(
+            manifest.ReleaseVersion,
+            versionDirectory,
+            manifest.SchemaVersion == 2 ? manifest.Priority! : "normal",
+            manifest.ReleaseId);
 
     private static async Task<bool> MatchesStagedReleaseAsync(
         string versionDirectory,

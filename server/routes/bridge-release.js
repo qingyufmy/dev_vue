@@ -32,14 +32,37 @@ function validPackage(pkg) {
     && (pkg.maximum_core_version == null || validVersion(pkg.maximum_core_version))
 }
 
-export function validateBridgeReleaseManifest(manifest) {
+function validReleaseId(value) {
+  return typeof value === 'string'
+    && value.length >= 8 && value.length <= 128
+    && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)
+}
+
+export function validateBridgeReleaseManifest(manifest, nowUtcMsc = Date.now()) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
-    || manifest.schema_version !== 1
+    || ![1, 2].includes(manifest.schema_version)
     || !validVersion(manifest.release_version)
     || !Number.isSafeInteger(manifest.generated_at_utc_msc) || manifest.generated_at_utc_msc <= 0
     || !validVersion(manifest.minimum_launcher_version)
     || typeof manifest.signature !== 'string' || !manifest.signature
     || !Array.isArray(manifest.packages) || manifest.packages.length < 1 || manifest.packages.length > 16) return false
+  if (manifest.schema_version === 2
+    && (!validReleaseId(manifest.release_id)
+      || !['normal', 'urgent'].includes(manifest.priority)
+      || !Number.isSafeInteger(manifest.published_at_utc_msc) || manifest.published_at_utc_msc <= 0
+      || !Number.isSafeInteger(manifest.expires_at_utc_msc)
+      || manifest.expires_at_utc_msc <= manifest.published_at_utc_msc
+      || manifest.expires_at_utc_msc <= nowUtcMsc
+      || manifest.generated_at_utc_msc > manifest.expires_at_utc_msc
+      || !Number.isSafeInteger(manifest.minimum_idle_seconds)
+      || manifest.minimum_idle_seconds < 30 || manifest.minimum_idle_seconds > 3600
+      || manifest.activation_deadline_utc_msc != null
+        && (!Number.isSafeInteger(manifest.activation_deadline_utc_msc)
+          || manifest.activation_deadline_utc_msc <= manifest.published_at_utc_msc
+          || manifest.activation_deadline_utc_msc > manifest.expires_at_utc_msc)
+      || !['internal', 'stable'].includes(manifest.rollout_channel)
+      || !Number.isSafeInteger(manifest.rollout_percentage)
+      || manifest.rollout_percentage < 1 || manifest.rollout_percentage > 100)) return false
   const modules = new Set()
   return manifest.packages.every(pkg => validPackage(pkg) && !modules.has(pkg.module_id) && modules.add(pkg.module_id))
 }

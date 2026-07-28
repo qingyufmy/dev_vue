@@ -45,6 +45,50 @@ public sealed class ReleaseUpdateTests
     }
 
     [TestMethod]
+    public void PreservesTheV1CanonicalSignatureContract()
+    {
+        var value = Manifest(new string('a', 64), 100, "manifest-signature");
+
+        var canonical = ReleaseManifestVerifier.Canonicalize(value);
+
+        StringAssert.StartsWith(canonical, "AURUM-RELEASE-V1\n1\n3.1.0\n1800000000000\n1.0.0\n");
+        StringAssert.Contains(canonical, "core|3.1.0|https://updates.example.com/core-3.1.0.zip|");
+    }
+
+    [TestMethod]
+    public void VerifiesV2PolicyAndRejectsExpiryOrSignedPolicyTampering()
+    {
+        const long now = 1_800_000_000_100;
+        using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var unsigned = SignPackages(
+            ManifestV2("00" + new string('a', 62), 100, string.Empty),
+            signingKey);
+        var signed = unsigned with
+        {
+            Signature = Convert.ToBase64String(signingKey.SignData(
+                Encoding.UTF8.GetBytes(ReleaseManifestVerifier.Canonicalize(unsigned)),
+                HashAlgorithmName.SHA256)),
+        };
+        using var verifier = new ReleaseManifestVerifier(
+            signingKey.ExportSubjectPublicKeyInfoPem(),
+            () => now);
+
+        verifier.Verify(signed, new Version(1, 0, 0));
+
+        var priorityTampered = signed with { Priority = "urgent" };
+        var priorityError = Assert.ThrowsExactly<InvalidDataException>(() =>
+            verifier.Verify(priorityTampered, new Version(1, 0, 0)));
+        Assert.AreEqual("update_manifest_signature_invalid", priorityError.Message);
+
+        using var expiredVerifier = new ReleaseManifestVerifier(
+            signingKey.ExportSubjectPublicKeyInfoPem(),
+            () => signed.ExpiresAtUtcMsc!.Value);
+        var expiryError = Assert.ThrowsExactly<InvalidDataException>(() =>
+            expiredVerifier.Verify(signed, new Version(1, 0, 0)));
+        Assert.AreEqual("update_manifest_invalid", expiryError.Message);
+    }
+
+    [TestMethod]
     public void RejectsAPackageWithoutItsOwnValidSignature()
     {
         using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
@@ -177,6 +221,82 @@ public sealed class ReleaseUpdateTests
         Assert.IsNotNull(second);
         Assert.AreEqual(first.VersionDirectory, second.VersionDirectory);
         Assert.AreEqual(3, handler.Requests);
+    }
+
+    [TestMethod]
+    public async Task CarriesSignedV2ActivationPolicyIntoTheStagedRelease()
+    {
+        var packages = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["core"] = CompleteCoreZip(),
+            ["adapter.mt5.python"] = Zip(("worker.py", "worker")),
+            ["adapter.mt4"] = Zip(("AURUMBridgeEA.ex4", "ea")),
+        };
+        using var http = new HttpClient(new PackageResponseHandler(packages));
+        var manifest = ManifestForPackages("3.1.0", packages) with
+        {
+            SchemaVersion = 2,
+            ReleaseId = "bridge-3.1.0-20260728.1",
+            Priority = "urgent",
+            PublishedAtUtcMsc = 1_800_000_000_000,
+            ExpiresAtUtcMsc = 1_800_086_400_000,
+            MinimumIdleSeconds = 120,
+            RolloutChannel = "stable",
+            RolloutPercentage = 100,
+        };
+        var installer = new ReleaseInstaller(_directory, new ReleaseStager(http));
+
+        var staged = await installer.StageAsync(manifest, new Version(3, 0, 0));
+
+        Assert.IsNotNull(staged);
+        Assert.AreEqual("urgent", staged.Priority);
+        Assert.AreEqual("bridge-3.1.0-20260728.1", staged.ReleaseId);
+    }
+
+    [TestMethod]
+    public async Task AtomicallyPersistsAndReloadsTheUpdateState()
+    {
+        const long now = 1_800_000_000_100;
+        var statePath = Path.Combine(_directory, "update-state.json");
+        var store = new BridgeUpdateStateStore(statePath, () => now);
+
+        await store.SaveAsync(new()
+        {
+            State = BridgeUpdateStates.WaitingWindow,
+            TargetVersion = "3.1.0",
+            ReleaseId = "bridge-3.1.0-20260728.1",
+            Priority = "normal",
+            StagedAtUtcMsc = now - 100,
+            UpdatedAtUtcMsc = 1,
+        });
+        var restored = await store.LoadAsync();
+
+        Assert.IsNotNull(restored);
+        Assert.AreEqual(BridgeUpdateStates.WaitingWindow, restored.State);
+        Assert.AreEqual("3.1.0", restored.TargetVersion);
+        Assert.AreEqual(now, restored.UpdatedAtUtcMsc);
+        Assert.IsFalse(Directory.EnumerateFiles(_directory, "*.tmp").Any());
+    }
+
+    [TestMethod]
+    public async Task RejectsUnknownOrIncompletePersistentUpdateState()
+    {
+        var statePath = Path.Combine(_directory, "update-state.json");
+        var store = new BridgeUpdateStateStore(statePath, () => 1_800_000_000_100);
+        await File.WriteAllTextAsync(statePath,
+            "{\"schema_version\":1,\"state\":\"waiting_window\",\"target_version\":\"3.1.0\",\"priority\":\"normal\",\"updated_at_utc_msc\":1,\"unexpected\":true}");
+
+        var unknown = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => store.LoadAsync());
+        Assert.AreEqual("update_state_invalid", unknown.Message);
+
+        var incomplete = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => store.SaveAsync(new()
+        {
+            State = BridgeUpdateStates.WaitingWindow,
+            TargetVersion = "3.1.0",
+            Priority = "normal",
+            UpdatedAtUtcMsc = 1,
+        }));
+        Assert.AreEqual("update_state_invalid", incomplete.Message);
     }
 
     [TestMethod]
@@ -326,6 +446,8 @@ public sealed class ReleaseUpdateTests
         Assert.IsNotNull(environment);
         Assert.AreEqual(new Version(3, 0, 0), environment.CurrentVersion);
         Assert.AreEqual(new Version(1, 0, 0), environment.LauncherVersion);
+        Assert.AreEqual(Path.Combine(_directory, "update-state.json"), environment.UpdateStatePath);
+        Assert.AreEqual(TimeSpan.FromMinutes(15), BridgeUpdateCoordinator.RegularCheckInterval);
         Assert.IsNull(BridgeUpdateCoordinator.ResolveEnvironment(Path.Combine(_directory, "bin", "Debug")));
     }
 
@@ -348,6 +470,20 @@ public sealed class ReleaseUpdateTests
             },
         ],
     };
+
+    private static ReleaseManifest ManifestV2(string sha256, long size, string signature) =>
+        Manifest(sha256, size, signature) with
+        {
+            SchemaVersion = 2,
+            ReleaseId = "bridge-3.1.0-20260728.1",
+            Priority = "normal",
+            PublishedAtUtcMsc = 1_800_000_000_000,
+            ExpiresAtUtcMsc = 1_800_086_400_000,
+            MinimumIdleSeconds = 120,
+            ActivationDeadlineUtcMsc = null,
+            RolloutChannel = "stable",
+            RolloutPercentage = 10,
+        };
 
     private static ReleaseManifest ManifestForPackages(
         string releaseVersion,
