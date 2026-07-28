@@ -15,5 +15,6 @@
   <ItemGroup>
     <ProjectReference Include="../../app/AurumBridge/AurumBridge.csproj" />
     <ProjectReference Include="../../launcher/AurumBridge.Launcher/AurumBridge.Launcher.csproj" />
+    <ProjectReference Include="../../tools/AurumBridge.ReleaseSigner/AurumBridge.ReleaseSigner.csproj" />
   </ItemGroup>
 </Project>
