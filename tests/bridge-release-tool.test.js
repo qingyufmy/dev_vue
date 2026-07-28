@@ -19,6 +19,34 @@ import { verifyBridgeReleaseSignatures } from '../server/routes/bridge-release.j
 const execFileAsync = promisify(execFile)
 
 describe('bridge release tooling', () => {
+  it('reports exact missing release configuration names without exposing values', async () => {
+    if (process.platform !== 'win32') return
+    const script = path.resolve('scripts/bridge-release/preflight.ps1')
+    const scrubbed = { ...process.env }
+    for (const name of [
+      'AURUM_BRIDGE_SIGNER_EXE', 'AURUM_BRIDGE_SIGNING_CERT_THUMBPRINT',
+      'BRIDGE_RELEASE_PUBLIC_KEY_PATH',
+      'QINIU_ACCESS_KEY', 'QINIU_SECRET_KEY', 'QINIU_BUCKET', 'QINIU_DOMAIN',
+      'QINIU_REGION', 'AURUM_BRIDGE_RELEASE_API_TOKEN', 'AURUM_METAEDITOR_EXE',
+    ]) delete scrubbed[name]
+
+    const { stdout } = await execFileAsync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+      '-Environment', 'test', '-DryRun',
+    ], { env:scrubbed })
+    const result = JSON.parse(stdout)
+
+    expect(result).toMatchObject({ ok:true, operation:'preflight', environment:'test' })
+    expect(result.missing_requirements).toEqual(expect.arrayContaining([
+      'AURUM_BRIDGE_SIGNER_EXE', 'BRIDGE_RELEASE_PUBLIC_KEY_PATH',
+      'QINIU_ACCESS_KEY', 'QINIU_SECRET_KEY', 'QINIU_BUCKET', 'QINIU_DOMAIN',
+      'QINIU_REGION', 'AURUM_BRIDGE_RELEASE_API_TOKEN',
+      'RELEASE_SERVER_HTTPS_URL', 'PYTHON_RUNTIME_DIRECTORY', 'AURUM_METAEDITOR_EXE',
+    ]))
+    expect(stdout).not.toContain('QINIU_SECRET_KEY=')
+    expect(stdout).not.toContain('AURUM_BRIDGE_RELEASE_API_TOKEN=')
+  })
+
   it('pins the portable MT5 Python runtime and enforces build provenance', async () => {
     const lock = await readFile(new URL('../bridge/adapters/mt5-python/requirements.lock.txt', import.meta.url), 'utf8')
     const runtimeBuilder = await readFile(new URL('../scripts/bridge-release/build-python-runtime.ps1', import.meta.url), 'utf8')

@@ -38,8 +38,30 @@ $checks = [ordered]@{
   python_runtime = [bool]$pythonRuntimeValid
   metaeditor = [bool]($env:AURUM_METAEDITOR_EXE -and (Test-Path -LiteralPath $env:AURUM_METAEDITOR_EXE -PathType Leaf))
 }
+$missingRequirements = @()
+if (-not $checks.signer) { $missingRequirements += 'AURUM_BRIDGE_SIGNER_EXE' }
+elseif (-not $checks.signing_certificate) { $missingRequirements += 'AURUM_BRIDGE_SIGNING_CERT_THUMBPRINT' }
+if (-not $checks.public_key) { $missingRequirements += 'BRIDGE_RELEASE_PUBLIC_KEY_PATH' }
+foreach ($name in @('QINIU_ACCESS_KEY','QINIU_SECRET_KEY','QINIU_BUCKET','QINIU_DOMAIN','QINIU_REGION')) {
+  if (-not [Environment]::GetEnvironmentVariable($name, 'Process')) { $missingRequirements += $name }
+}
+if (-not $env:AURUM_BRIDGE_RELEASE_API_TOKEN) { $missingRequirements += 'AURUM_BRIDGE_RELEASE_API_TOKEN' }
+if (-not $Server) { $missingRequirements += 'RELEASE_SERVER_HTTPS_URL' }
+elseif (-not $Server.StartsWith('https://')) { $missingRequirements += 'RELEASE_SERVER_HTTPS_REQUIRED' }
+if (-not $checks.python_runtime) { $missingRequirements += 'PYTHON_RUNTIME_DIRECTORY' }
+if (-not $checks.metaeditor) { $missingRequirements += 'AURUM_METAEDITOR_EXE' }
 if (-not $checks.dotnet -or -not $checks.node) { throw 'release_build_runtime_missing' }
 if ($Environment -eq 'production' -and (-not $checks.signer -or -not $checks.signing_certificate -or -not $checks.public_key -or -not $checks.qiniu -or -not $checks.endpoint -or -not $checks.python_runtime -or -not $checks.metaeditor)) {
   throw 'release_production_prerequisite_missing'
 }
-[pscustomobject]@{ ok=$true; operation='preflight'; environment=$Environment; dry_run=[bool]$DryRun; branch=$branch; commit=$commit; dirty=$dirty; checks=$checks } | ConvertTo-Json -Depth 5
+[pscustomobject]@{
+  ok=$true
+  operation='preflight'
+  environment=$Environment
+  dry_run=[bool]$DryRun
+  branch=$branch
+  commit=$commit
+  dirty=$dirty
+  checks=$checks
+  missing_requirements=@($missingRequirements | Select-Object -Unique)
+} | ConvertTo-Json -Depth 5
