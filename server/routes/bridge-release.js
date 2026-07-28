@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
 const MAX_MANIFEST_BYTES = 128 * 1024
@@ -36,6 +37,23 @@ function validReleaseId(value) {
   return typeof value === 'string'
     && value.length >= 8 && value.length <= 128
     && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)
+}
+
+function validInstallationId(value) {
+  return typeof value === 'string'
+    && /^install_[a-f0-9]{32}$/.test(value)
+}
+
+export function isInstallationInRollout(manifest, installationId, channel = 'stable') {
+  if (manifest.schema_version !== 2) return true
+  if (!validInstallationId(installationId)
+    || !['internal', 'stable'].includes(channel)
+    || manifest.rollout_channel !== channel) return false
+  if (manifest.rollout_percentage >= 100) return true
+  const digest = createHash('sha256')
+    .update(`${manifest.release_id}:${installationId}`, 'utf8')
+    .digest()
+  return digest.readUInt32BE(0) % 100 < manifest.rollout_percentage
 }
 
 export function validateBridgeReleaseManifest(manifest, nowUtcMsc = Date.now()) {
@@ -85,6 +103,12 @@ export function createBridgeReleaseRouter({
       const manifest = JSON.parse(bytes.toString('utf8'))
       if (!validateBridgeReleaseManifest(manifest)) {
         throw new Error('bridge_release_manifest_invalid')
+      }
+      if (!isInstallationInRollout(
+        manifest,
+        req.get('X-Aurum-Installation-Id'),
+        String(req.get('X-Aurum-Release-Channel') || 'stable').toLowerCase())) {
+        return res.status(204).end()
       }
       return res.json(manifest)
     } catch (error) {

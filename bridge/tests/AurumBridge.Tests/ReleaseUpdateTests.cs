@@ -145,7 +145,11 @@ public sealed class ReleaseUpdateTests
         using var verifier = new ReleaseManifestVerifier(signingKey.ExportSubjectPublicKeyInfoPem());
         var client = new ReleaseManifestClient(new Uri("https://www.cnfxtrade.com"), http);
 
-        var fetched = await client.FetchVerifiedAsync(verifier, new Version(1, 0, 0));
+        var fetched = await client.FetchVerifiedAsync(
+            verifier,
+            new Version(1, 0, 0),
+            "install_0123456789abcdef0123456789abcdef",
+            "stable");
 
         Assert.IsNotNull(fetched);
         Assert.AreEqual("3.1.0", fetched.ReleaseVersion);

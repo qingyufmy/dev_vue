@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import express from 'express'
 import http from 'node:http'
-import { createBridgeReleaseRouter, validateBridgeReleaseManifest } from '../server/routes/bridge-release.js'
+import {
+  createBridgeReleaseRouter,
+  isInstallationInRollout,
+  validateBridgeReleaseManifest,
+} from '../server/routes/bridge-release.js'
 
 function manifest(overrides = {}) {
   return {
@@ -37,7 +41,7 @@ function manifestV2(overrides = {}) {
   })
 }
 
-function request(router) {
+function request(router, headers = {}) {
   const app = express()
   app.use('/api', router)
   return new Promise((resolve, reject) => {
@@ -46,6 +50,7 @@ function request(router) {
         hostname:'127.0.0.1',
         port:server.address().port,
         path:'/api/bridge/v3/releases/current',
+        headers,
       }, res => {
         let body = ''
         res.on('data', chunk => { body += chunk })
@@ -115,5 +120,23 @@ describe('bridge release manifest route', () => {
       activation_deadline_utc_msc:1_800_086_400_001,
     }), now)).toBe(false)
     expect(validateBridgeReleaseManifest(manifestV2({ rollout_percentage:0 }), now)).toBe(false)
+  })
+
+  it('uses a stable installation bucket and keeps release channels isolated', async () => {
+    const value = manifestV2({ rollout_percentage:25 })
+    const firstId = 'install_0123456789abcdef0123456789abcdef'
+    const sameDecision = isInstallationInRollout(value, firstId, 'stable')
+    expect(isInstallationInRollout(value, firstId, 'stable')).toBe(sameDecision)
+    expect(isInstallationInRollout(value, firstId, 'internal')).toBe(false)
+    expect(isInstallationInRollout(value, 'invalid', 'stable')).toBe(false)
+
+    const response = await request(createBridgeReleaseRouter({
+      manifestPath:'release.json',
+      readManifest:vi.fn().mockResolvedValue(Buffer.from(JSON.stringify(value))),
+    }), {
+      'X-Aurum-Installation-Id':firstId,
+      'X-Aurum-Release-Channel':'internal',
+    })
+    expect(response.status).toBe(204)
   })
 })

@@ -21,6 +21,8 @@ public sealed class BridgeUpdateCoordinator : IDisposable
     private readonly ReleaseInstaller _installer;
     private readonly ReleaseActivationStore _activationStore;
     private readonly BridgeUpdateStateStore _stateStore;
+    private readonly BridgeInstallationIdentityStore _installationIdentityStore;
+    private readonly string _rolloutChannel;
     private bool _disposed;
 
     private BridgeUpdateCoordinator(
@@ -36,6 +38,8 @@ public sealed class BridgeUpdateCoordinator : IDisposable
         _installer = new(environment.InstallRoot, new ReleaseStager(httpClient));
         _activationStore = new(environment.PointerPath);
         _stateStore = new(environment.UpdateStatePath);
+        _installationIdentityStore = new(Path.Combine(environment.InstallRoot, "installation-id"));
+        _rolloutChannel = ReadRolloutChannel(environment.InstallRoot);
     }
 
     public BridgeUpdateEnvironment Environment { get; }
@@ -106,9 +110,12 @@ public sealed class BridgeUpdateCoordinator : IDisposable
         try
         {
             var previous = await _stateStore.LoadAsync(cancellationToken);
+            var installationId = await _installationIdentityStore.LoadOrCreateAsync(cancellationToken);
             var manifest = await _manifestClient.FetchVerifiedAsync(
                 _verifier,
                 Environment.LauncherVersion,
+                installationId,
+                _rolloutChannel,
                 cancellationToken);
             if (manifest is null)
             {
@@ -372,5 +379,18 @@ public sealed class BridgeUpdateCoordinator : IDisposable
             throw new InvalidDataException("update_launcher_version_invalid");
         }
         return new(info.FileMajorPart, info.FileMinorPart, info.FileBuildPart);
+    }
+
+    private static string ReadRolloutChannel(string installRoot)
+    {
+        var path = Path.Combine(installRoot, "release-channel");
+        if (!File.Exists(path))
+        {
+            return "stable";
+        }
+        var value = File.ReadAllText(path).Trim().ToLowerInvariant();
+        return value is "internal" or "stable"
+            ? value
+            : throw new InvalidDataException("update_rollout_channel_invalid");
     }
 }

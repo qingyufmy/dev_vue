@@ -30,12 +30,22 @@ public sealed class ReleaseManifestClient
     public async Task<ReleaseManifest?> FetchVerifiedAsync(
         ReleaseManifestVerifier verifier,
         Version launcherVersion,
+        string installationId,
+        string rolloutChannel,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(verifier);
         ArgumentNullException.ThrowIfNull(launcherVersion);
-        using var response = await _httpClient.GetAsync(
-            _endpoint,
+        if (string.IsNullOrWhiteSpace(installationId)
+            || rolloutChannel is not ("internal" or "stable"))
+        {
+            throw new ArgumentException("update_rollout_identity_invalid");
+        }
+        using var request = new HttpRequestMessage(HttpMethod.Get, _endpoint);
+        request.Headers.Add("X-Aurum-Installation-Id", installationId);
+        request.Headers.Add("X-Aurum-Release-Channel", rolloutChannel);
+        using var response = await _httpClient.SendAsync(
+            request,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
         if (response.StatusCode == HttpStatusCode.NoContent)
