@@ -41,6 +41,10 @@ public static class BridgeUiText
                 "量见智桥运行中",
                 "账户数据与交易指令通道均已连接。",
                 0x15803D),
+            BridgeApplicationPhase.Degraded when status.DetailCode == "mt4_ea_reconnecting" => State(
+                "正在恢复 MT4 连接",
+                DescribeCode(status.DetailCode, "MT4 EA 连接短暂中断，程序正在自动恢复。"),
+                0xD97706),
             BridgeApplicationPhase.Degraded => State(
                 "部分连接异常",
                 DescribeCode(status.DetailCode, "程序正在自动恢复，不影响 MT 中已有订单。"),
@@ -110,6 +114,8 @@ public static class BridgeUiText
         "mt4_registration_invalid" => "MT4 EA 尚未连接或账户信息不完整。",
         "mt5_probe_identity_mismatch" => "MT5 账号、Server 或终端与已绑定信息不匹配，请登录正确账号后重试。",
         "mt4_ea_identity_mismatch" => "MT4 EA 的账号、Server 或终端与已绑定信息不匹配，请确认账号后重新挂载 EA。",
+        "mt4_ea_reconnecting" =>
+            "MT4 EA 连接短暂中断，程序正在等待 EA 自动重连；无需重新登录或退出桥接。",
         "terminal_runtime_identity_mismatch" => "交易终端身份与绑定信息不匹配，桥接已拒绝连接，请确认账号和 Server。",
         "terminal_worker_failure_limit" => "交易终端连续恢复失败，已暂停该终端；请确认 MT 正常后点击“重新检测”。",
             "mt5_probe_timeout" => "MT5 响应超时，程序会自动重试。",

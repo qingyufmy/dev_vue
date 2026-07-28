@@ -244,13 +244,22 @@ public sealed class TerminalRuntimeSupervisor : IAsyncDisposable
         return TimeSpan.FromSeconds(seconds);
     }
 
-    private static string NormalizeError(Exception error) => error switch
+    private string NormalizeError(Exception error)
     {
-        TimeoutException => "terminal_worker_timeout",
-        InvalidDataException => "terminal_worker_protocol_error",
-        IOException => "terminal_worker_io_error",
-        _ => "terminal_worker_failure",
-    };
+        if (_terminal.Platform == BridgePlatform.Mt4
+            && (error is IOException
+                || error is InvalidOperationException { Message: "mt4_ea_not_ready" }))
+        {
+            return "mt4_ea_reconnecting";
+        }
+        return error switch
+        {
+            TimeoutException => "terminal_worker_timeout",
+            InvalidDataException => "terminal_worker_protocol_error",
+            IOException => "terminal_worker_io_error",
+            _ => "terminal_worker_failure",
+        };
+    }
 
     private static async ValueTask TryDisposeAsync(IBridgeTerminalRuntime runtime)
     {

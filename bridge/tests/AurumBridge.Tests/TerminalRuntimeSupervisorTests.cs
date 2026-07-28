@@ -165,6 +165,29 @@ public sealed class TerminalRuntimeSupervisorTests
         Assert.AreEqual(2, creations, "A diagnostic listener must not stop runtime recovery.");
     }
 
+    [TestMethod]
+    public async Task ReportsMt4PipeDisconnectAsAutomaticEaRecovery()
+    {
+        var reported = new TaskCompletionSource<TerminalRuntimeFailure>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var creations = 0;
+        var terminal = Terminal() with { Platform = BridgePlatform.Mt4 };
+        var supervisor = new TerminalRuntimeSupervisor(
+            terminal,
+            () => ++creations == 1
+                ? new FakeRuntime(terminal, failCollection:true)
+                : new FakeRuntime(terminal, stopWhenStarted:stop),
+            (_, _) => Task.CompletedTask);
+        supervisor.FailureObserved += failure => reported.TrySetResult(failure);
+
+        await supervisor.RunAsync(stop.Token);
+
+        var failure = await reported.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.AreEqual("mt4_ea_reconnecting", failure.ErrorCode);
+        Assert.AreEqual(2, creations);
+    }
+
     private static TerminalDescriptor Terminal() => new()
     {
         TerminalInstanceId = "terminal_supervisor_01",

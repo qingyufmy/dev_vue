@@ -1,5 +1,6 @@
 using AurumBridge.Runtime;
 using AurumBridge.UI;
+using System.Drawing;
 using System.Text.Json;
 
 namespace AurumBridge.Tests;
@@ -32,6 +33,22 @@ public sealed class BridgeUiTextTests
         Assert.AreEqual("量见智桥运行中", text.Title);
         StringAssert.Contains(text.Description, "数据");
         StringAssert.Contains(text.Description, "指令");
+    }
+
+    [TestMethod]
+    public void Mt4PipeRecoveryUsesAConciseNonFatalState()
+    {
+        var text = BridgeUiText.ForStatus(new(
+            BridgeApplicationPhase.Degraded,
+            [],
+            "mt4_ea_reconnecting")
+        {
+            SelectedPlatform = BridgePlatform.Mt4,
+        });
+
+        Assert.AreEqual("正在恢复 MT4 连接", text.Title);
+        StringAssert.Contains(text.Description, "自动重连");
+        Assert.AreEqual(Color.FromArgb(0xD9, 0x77, 0x06), text.AccentColor);
     }
 
     [TestMethod]

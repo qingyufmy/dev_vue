@@ -1,4 +1,6 @@
+using System.IO.Pipes;
 using AurumBridge.Runtime;
+using AurumBridge.Workers;
 
 namespace AurumBridge.Tests;
 
@@ -148,5 +150,74 @@ public sealed class Mt4RuntimeProvisionerTests
         Assert.HasCount(1, bindings);
         Assert.AreEqual(expectedRouteId, bindings[0].TerminalInstanceId);
         await result.Terminals[0].Supervisor.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task ReplacesTheOldAccountRouteWhenTheEaRegistersAfterAnAccountSwitch()
+    {
+        await using var testStore = await TestStore.CreateAsync();
+        var dataPath = Path.Combine(testStore.DataDirectory, "Switched Live MT4");
+        Directory.CreateDirectory(dataPath);
+        var oldRoute = Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+            dataPath, "Broker-Demo", "1001");
+        await testStore.Store.ActivateTerminalBindingAsync(
+            oldRoute,
+            "mt4",
+            dataPath,
+            new("Broker-Demo", "1001"),
+            1_800_000_000_000);
+        var registration = await RegisterEaAsync(
+            dataPath, "Broker-Demo", "1002");
+        var provisioner = new Mt4RuntimeProvisioner(
+            testStore.Store, () => 1_800_000_000_100);
+
+        var result = await provisioner.ProvisionManyAsync(
+            [registration],
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                Mt4TerminalIdentity.CreateTerminalInstanceId(dataPath),
+            });
+
+        Assert.HasCount(1, result.Terminals);
+        Assert.IsEmpty(result.Failures);
+        var newRoute = Mt4TerminalIdentity.CreateAccountTerminalInstanceId(
+            dataPath, "Broker-Demo", "1002");
+        Assert.AreEqual(newRoute, result.Terminals[0].Binding.TerminalInstanceId);
+        var bindings = await testStore.Store.GetTerminalBindingsAsync();
+        Assert.HasCount(1, bindings);
+        Assert.AreEqual(newRoute, bindings[0].TerminalInstanceId);
+        Assert.AreEqual("1002", bindings[0].AccountRef.Login);
+        Assert.IsFalse(bindings.Any(binding => binding.TerminalInstanceId == oldRoute));
+
+        await result.Terminals[0].Supervisor.DisposeAsync();
+        await registration.DisposeAsync();
+    }
+
+    private static async Task<Mt4EaConnection> RegisterEaAsync(
+        string terminalDataPath,
+        string brokerServer,
+        string login)
+    {
+        var pipeName = $"aurum_test_registration_{Guid.NewGuid():N}";
+        var accept = Mt4EaConnection.AcceptAsync(
+            pipeName,
+            TimeSpan.FromSeconds(2));
+        using var client = new NamedPipeClientStream(
+            ".",
+            pipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+        await client.ConnectAsync(2_000);
+        await Mt4PipeProtocol.WriteFrameAsync(
+            client,
+            Mt4PipeProtocol.EncodeHello(new(
+                3,
+                "3.2.4",
+                terminalDataPath,
+                brokerServer,
+                login,
+                Connected:true,
+                TradeAllowed:true)));
+        return await accept;
     }
 }
