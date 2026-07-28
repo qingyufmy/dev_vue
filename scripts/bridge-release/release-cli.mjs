@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import qiniu from 'qiniu'
+import { loadDatabaseQiniuConfig } from './database-qiniu-config.mjs'
 
 function fail(code) {
   throw Object.assign(new Error(code), { code })
@@ -184,6 +185,37 @@ function qiniuConfig() {
   config.zone = qiniu.zone[zone]
   config.useHttpsDomain = true
   return { accessKey, bucket, config, domain, mac }
+}
+
+async function prepareQiniuConfiguration(args, command) {
+  const source = args.get('qiniu-config-source') || 'environment'
+  if (!['environment', 'database'].includes(source)) fail('release_qiniu_configuration_source_invalid')
+  if (!['upload', 'upload-bootstrapper', 'verify-qiniu-access'].includes(command)) {
+    if (args.has('qiniu-config-source')) fail('release_qiniu_configuration_source_invalid')
+    return
+  }
+  if (isDryRun(args)) return
+  if (source === 'database') Object.assign(process.env, await loadDatabaseQiniuConfig())
+}
+
+async function verifyQiniuAccess(args) {
+  if (isDryRun(args)) return { operation:'verify-qiniu-access', dry_run:true }
+  const context = qiniuConfig()
+  const manager = new qiniu.rs.BucketManager(context.mac, context.config)
+  const { data, resp } = await manager.listPrefix(context.bucket, {
+    prefix:'bridge/releases/',
+    limit:1,
+  })
+  if (resp.statusCode !== 200 || !data || !Array.isArray(data.items)) {
+    fail('release_qiniu_access_verification_failed')
+  }
+  return {
+    operation:'verify-qiniu-access',
+    bucket_accessible:true,
+    domain:context.domain,
+    region:process.env.QINIU_REGION,
+    sample_count:data.items.length,
+  }
 }
 
 async function uploadOne(localFile, key, qiniuContext) {
@@ -490,11 +522,13 @@ async function verifyEndpoint(args) {
 async function main() {
   const [command, ...rest] = process.argv.slice(2)
   const args = argumentsMap(rest)
+  await prepareQiniuConfiguration(args, command)
   const handlers = {
     sign:() => sign(args),
     'verify-signatures':() => verifySignatures(args),
     upload:() => upload(args),
     'upload-bootstrapper':() => uploadBootstrapper(args),
+    'verify-qiniu-access':() => verifyQiniuAccess(args),
     'verify-remote':() => verifyRemote(args),
     'verify-bootstrapper-remote':() => verifyRemoteBootstrapper(args),
     'verify-endpoint':() => verifyEndpoint(args),

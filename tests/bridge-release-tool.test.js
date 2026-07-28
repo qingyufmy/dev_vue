@@ -13,12 +13,29 @@ import {
   immutablePackageKey,
   isBootstrapManifest,
 } from '../scripts/bridge-release/release-cli.mjs'
+import { normalizeDatabaseQiniuConfig } from '../scripts/bridge-release/database-qiniu-config.mjs'
 import { startLocalReleaseRehearsal } from '../scripts/bridge-release/local-rehearsal-server.mjs'
 import { verifyBridgeReleaseSignatures } from '../server/routes/bridge-release.js'
 
 const execFileAsync = promisify(execFile)
 
 describe('bridge release tooling', () => {
+  it('normalizes database Qiniu configuration without exposing it in release results', () => {
+    expect(normalizeDatabaseQiniuConfig({
+      access_key:'access-key', secret_key:'secret-key', bucket:'release-bucket',
+      domain:'cdn.example.com', region:'z0',
+    })).toEqual({
+      QINIU_ACCESS_KEY:'access-key', QINIU_SECRET_KEY:'secret-key',
+      QINIU_BUCKET:'release-bucket', QINIU_DOMAIN:'https://cdn.example.com', QINIU_REGION:'z0',
+    })
+    expect(() => normalizeDatabaseQiniuConfig({
+      access_key:'access-key', secret_key:'secret-key', bucket:'release-bucket',
+      domain:'http://cdn.example.com', region:'z0',
+    })).toThrow('release_qiniu_database_domain_invalid')
+    expect(() => normalizeDatabaseQiniuConfig({ domain:'cdn.example.com' }))
+      .toThrow('release_qiniu_database_configuration_missing')
+  })
+
   it('reports exact missing release configuration names without exposing values', async () => {
     if (process.platform !== 'win32') return
     const script = path.resolve('scripts/bridge-release/preflight.ps1')
@@ -37,6 +54,7 @@ describe('bridge release tooling', () => {
     const result = JSON.parse(stdout)
 
     expect(result).toMatchObject({ ok:true, operation:'preflight', environment:'test' })
+    expect(result.qiniu_config_source).toBe('environment')
     expect(result.missing_requirements).toEqual(expect.arrayContaining([
       'AURUM_BRIDGE_SIGNER_EXE', 'BRIDGE_RELEASE_PUBLIC_KEY_PATH',
       'QINIU_ACCESS_KEY', 'QINIU_SECRET_KEY', 'QINIU_BUCKET', 'QINIU_DOMAIN',

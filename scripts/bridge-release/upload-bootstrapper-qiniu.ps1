@@ -2,6 +2,7 @@ param(
   [Parameter(Mandatory=$true)][string]$Executable,
   [Parameter(Mandatory=$true)][string]$Metadata,
   [ValidateSet('test','production')][string]$TargetEnvironment = 'test',
+  [ValidateSet('environment','database')][string]$QiniuConfigSource = 'environment',
   [string]$CdnOrigin,
   [switch]$DryRun,
   [string]$Result
@@ -12,4 +13,4 @@ if ($TargetEnvironment -eq 'production') {
 }
 & (Join-Path $PSScriptRoot 'invoke-release-cli.ps1') -Operation upload-bootstrapper `
   -Executable $Executable -Metadata $Metadata -TargetEnvironment $TargetEnvironment `
-  -CdnOrigin $CdnOrigin -DryRun:$DryRun -Result $Result
+  -QiniuConfigSource $QiniuConfigSource -CdnOrigin $CdnOrigin -DryRun:$DryRun -Result $Result

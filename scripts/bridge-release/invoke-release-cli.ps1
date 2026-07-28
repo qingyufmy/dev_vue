@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('sign','verify-signatures','upload','upload-bootstrapper','verify-remote','verify-bootstrapper-remote','verify-endpoint','publish','stop','rollback','health','promote-bootstrap','rollback-bootstrap','verify-bootstrap','create-bootstrap-manifest')][string]$Operation,
+  [Parameter(Mandatory=$true)][ValidateSet('sign','verify-signatures','upload','upload-bootstrapper','verify-qiniu-access','verify-remote','verify-bootstrapper-remote','verify-endpoint','publish','stop','rollback','health','promote-bootstrap','rollback-bootstrap','verify-bootstrap','create-bootstrap-manifest')][string]$Operation,
   [string]$Manifest,
   [string]$Artifacts,
   [string]$Signer,
@@ -9,6 +9,7 @@ param(
   [string]$Metadata,
   [string]$CdnOrigin,
   [ValidateSet('test','production')][string]$TargetEnvironment,
+  [ValidateSet('environment','database')][string]$QiniuConfigSource = 'environment',
   [string]$InstallerUrl,
   [string]$Server,
   [string]$InstallationId,
@@ -22,6 +23,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $tool = Join-Path $PSScriptRoot 'release-cli.mjs'
 $arguments = @($tool, $Operation)
+if ($Operation -in @('upload','upload-bootstrapper','verify-qiniu-access')) {
+  $arguments += @('--qiniu-config-source', $QiniuConfigSource)
+}
 if ($Server) {
   if ($Manifest) { $arguments += @('--manifest', [IO.Path]::GetFullPath($Manifest)) }
   $arguments += @('--server', $Server)

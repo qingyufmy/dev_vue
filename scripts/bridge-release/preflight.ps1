@@ -1,5 +1,6 @@
 param(
   [ValidateSet('test','production')][string]$Environment='test',
+  [ValidateSet('environment','database')][string]$QiniuConfigSource='environment',
   [string]$Server,
   [string]$PythonRuntimeDirectory,
   [switch]$DryRun
@@ -27,13 +28,26 @@ if ($signerPathValid) {
   $signerSelfTestOutput = & $env:AURUM_BRIDGE_SIGNER_EXE self-test 2>$null
   $signerSelfTestValid = $LASTEXITCODE -eq 0 -and ($signerSelfTestOutput -join '') -match '"ok"\s*:\s*true'
 }
+$qiniuValid = [bool]($env:QINIU_ACCESS_KEY -and $env:QINIU_SECRET_KEY -and
+  $env:QINIU_BUCKET -and $env:QINIU_DOMAIN -and $env:QINIU_REGION)
+if ($QiniuConfigSource -eq 'database') {
+  try {
+    $qiniuCheckOutput = & (Join-Path $PSScriptRoot 'verify-qiniu-access.ps1') `
+      -QiniuConfigSource database 2>$null
+    $qiniuCheck = ($qiniuCheckOutput -join '') | ConvertFrom-Json
+    $qiniuValid = $LASTEXITCODE -eq 0 -and $qiniuCheck.ok -eq $true -and
+      $qiniuCheck.bucket_accessible -eq $true
+  } catch {
+    $qiniuValid = $false
+  }
+}
 $checks = [ordered]@{
   dotnet = [bool]($env:AURUM_DOTNET_EXE -or (Get-Command dotnet -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $env:USERPROFILE '.cache\aurum-dotnet\dotnet.exe')))
   node = [bool](Get-Command node -ErrorAction SilentlyContinue)
   signer = $signerPathValid
   signing_certificate = $signerSelfTestValid
   public_key = [bool]($env:BRIDGE_RELEASE_PUBLIC_KEY_PATH -and (Test-Path -LiteralPath $env:BRIDGE_RELEASE_PUBLIC_KEY_PATH -PathType Leaf))
-  qiniu = [bool]($env:QINIU_ACCESS_KEY -and $env:QINIU_SECRET_KEY -and $env:QINIU_BUCKET -and $env:QINIU_DOMAIN -and $env:QINIU_REGION)
+  qiniu = $qiniuValid
   endpoint = [bool]($env:AURUM_BRIDGE_RELEASE_API_TOKEN -and $Server -and $Server.StartsWith('https://'))
   python_runtime = [bool]$pythonRuntimeValid
   metaeditor = [bool]($env:AURUM_METAEDITOR_EXE -and (Test-Path -LiteralPath $env:AURUM_METAEDITOR_EXE -PathType Leaf))
@@ -42,8 +56,12 @@ $missingRequirements = @()
 if (-not $checks.signer) { $missingRequirements += 'AURUM_BRIDGE_SIGNER_EXE' }
 elseif (-not $checks.signing_certificate) { $missingRequirements += 'AURUM_BRIDGE_SIGNING_CERT_THUMBPRINT' }
 if (-not $checks.public_key) { $missingRequirements += 'BRIDGE_RELEASE_PUBLIC_KEY_PATH' }
-foreach ($name in @('QINIU_ACCESS_KEY','QINIU_SECRET_KEY','QINIU_BUCKET','QINIU_DOMAIN','QINIU_REGION')) {
-  if (-not [Environment]::GetEnvironmentVariable($name, 'Process')) { $missingRequirements += $name }
+if ($QiniuConfigSource -eq 'database') {
+  if (-not $checks.qiniu) { $missingRequirements += 'QINIU_DATABASE_CONFIGURATION' }
+} else {
+  foreach ($name in @('QINIU_ACCESS_KEY','QINIU_SECRET_KEY','QINIU_BUCKET','QINIU_DOMAIN','QINIU_REGION')) {
+    if (-not [Environment]::GetEnvironmentVariable($name, 'Process')) { $missingRequirements += $name }
+  }
 }
 if (-not $env:AURUM_BRIDGE_RELEASE_API_TOKEN) { $missingRequirements += 'AURUM_BRIDGE_RELEASE_API_TOKEN' }
 if (-not $Server) { $missingRequirements += 'RELEASE_SERVER_HTTPS_URL' }
@@ -58,6 +76,7 @@ if ($Environment -eq 'production' -and (-not $checks.signer -or -not $checks.sig
   ok=$true
   operation='preflight'
   environment=$Environment
+  qiniu_config_source=$QiniuConfigSource
   dry_run=[bool]$DryRun
   branch=$branch
   commit=$commit
