@@ -22,6 +22,7 @@
     <EmbeddedResource Include="$(AurumBootstrapPublicKey)" LogicalName="AurumBridge.Bootstrapper.release-public-key.pem" />
     <AssemblyMetadata Include="AurumServerUrl" Value="$(AurumServerUrl)" />
     <AssemblyMetadata Include="AurumLauncherVersion" Value="$(AurumLauncherVersion)" />
+    <AssemblyMetadata Include="AurumTargetEnvironment" Value="$(AurumTargetEnvironment)" />
   </ItemGroup>
 
   <Target Name="ValidateBootstrapInputs" BeforeTargets="BeforeBuild">
@@ -29,5 +30,6 @@
     <Error Condition="!Exists('$(AurumBootstrapPublicKey)')" Text="bootstrap_public_key_missing" />
     <Error Condition="'$(AurumServerUrl)' == ''" Text="bootstrap_server_url_missing" />
     <Error Condition="'$(AurumLauncherVersion)' == ''" Text="bootstrap_launcher_version_missing" />
+    <Error Condition="'$(AurumTargetEnvironment)' == ''" Text="bootstrap_target_environment_missing" />
   </Target>
 </Project>

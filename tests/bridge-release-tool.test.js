@@ -227,10 +227,50 @@ describe('bridge release tooling', () => {
     const manifestClient = await readFile(new URL('../bridge/app/AurumBridge/Update/ReleaseManifestClient.cs', import.meta.url), 'utf8')
     expect(bootstrapBuilder).toContain('-p:PublishSingleFile=true')
     expect(bootstrapBuilder).toContain('bootstrap_authenticode_signing_required')
+    expect(bootstrapBuilder).toContain("$TargetEnvironment -eq 'test'")
+    expect(bootstrapBuilder).toContain('$uri.IsLoopback')
     expect(bootstrapUploader).toContain("$signature.Status -ne 'Valid'")
     expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.launcher.zip')
     expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.release-public-key.pem')
+    expect(bootstrapProject).toContain('AurumTargetEnvironment')
+    expect(bootstrapBuilder).toContain('-p:AurumTargetEnvironment=$TargetEnvironment')
     expect(manifestClient).toContain('/api/bridge/v3/releases/bootstrap')
+    const bootstrapProgram = await readFile(
+      new URL('../bridge/bootstrapper/AurumBridge.Bootstrapper/Program.cs', import.meta.url),
+      'utf8',
+    )
+    expect(bootstrapProgram).toContain('"rehearsal-install-root"')
+    expect(bootstrapProgram).toContain('bootstrap_rehearsal_not_allowed')
+    expect(bootstrapProgram).toContain('if (!_rehearsal) EnsureBridgeIsStopped()')
+    expect(bootstrapProgram).toContain('if (!_rehearsal) CreateDesktopShortcut()')
+  })
+
+  it('allows an HTTP bootstrap API only for a loopback test rehearsal', async () => {
+    if (process.platform !== 'win32') return
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'aurum-bootstrap-builder-'))
+    const publicKey = path.join(temporary, 'release-public-key.pem')
+    await writeFile(publicKey, '-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----\n')
+    const script = path.resolve('scripts/bridge-release/build-bootstrapper.ps1')
+    const invoke = (environment, server) => execFileAsync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+      '-OutputDirectory', path.join(temporary, 'bootstrap-output'),
+      '-PublicKey', publicKey, '-ServerUrl', server,
+      '-TargetEnvironment', environment, '-DryRun',
+    ])
+    try {
+      const { stdout } = await invoke('test', 'http://127.0.0.1:3101')
+      expect(JSON.parse(stdout)).toMatchObject({
+        ok:true, dry_run:true, environment:'test', server:'http://127.0.0.1:3101',
+      })
+      await expect(invoke('production', 'http://127.0.0.1:3101')).rejects.toMatchObject({
+        stderr:expect.stringContaining('bootstrap_server_url_invalid'),
+      })
+      await expect(invoke('test', 'http://bootstrap.example')).rejects.toMatchObject({
+        stderr:expect.stringContaining('bootstrap_server_url_invalid'),
+      })
+    } finally {
+      await rm(temporary, { recursive:true, force:true })
+    }
   })
 
   it('matches the signed package and Manifest V2 canonical contracts', () => {

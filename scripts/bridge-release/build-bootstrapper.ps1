@@ -13,8 +13,13 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $publicKeyPath = (Resolve-Path -LiteralPath $PublicKey).Path
 $uri = $null
-if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$uri) -or
-  $uri.Scheme -ne 'https' -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) {
+if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$uri)) {
+  throw 'bootstrap_server_url_invalid'
+}
+$localTestServer = $TargetEnvironment -eq 'test' -and
+  $uri.Scheme -eq 'http' -and $uri.IsLoopback
+if (($uri.Scheme -ne 'https' -and -not $localTestServer) -or
+  $uri.UserInfo -or $uri.Query -or $uri.Fragment -or $uri.AbsolutePath -ne '/') {
   throw 'bootstrap_server_url_invalid'
 }
 $parsedLauncherVersion = $null
@@ -80,6 +85,7 @@ try {
     "-p:AurumBootstrapPublicKey=$publicKeyPath" `
     "-p:AurumServerUrl=$($uri.GetLeftPart([UriPartial]::Authority))" `
     "-p:AurumLauncherVersion=$LauncherVersion" `
+    "-p:AurumTargetEnvironment=$TargetEnvironment" `
     -o $publish
   if ($LASTEXITCODE -ne 0) { throw 'bootstrap_publish_failed' }
   $executable = Join-Path $publish 'LiangjianBridgeSetup.exe'

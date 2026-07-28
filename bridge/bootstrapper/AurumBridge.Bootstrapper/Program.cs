@@ -10,10 +10,71 @@ namespace AurumBridge.Bootstrapper;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static int Main(string[] args)
     {
+        if (args.Length > 0)
+        {
+            return RunRehearsalAsync(args).GetAwaiter().GetResult();
+        }
         ApplicationConfiguration.Initialize();
         Application.Run(new BootstrapperForm());
+        return 0;
+    }
+
+    private static async Task<int> RunRehearsalAsync(string[] args)
+    {
+        if (args.Length != 4 || args.Length % 2 != 0)
+        {
+            return 2;
+        }
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var index = 0; index < args.Length; index += 2)
+        {
+            if (!args[index].StartsWith("--", StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(args[index + 1])
+                || !values.TryAdd(args[index][2..], args[index + 1]))
+            {
+                return 2;
+            }
+        }
+        if (values.Count != 2
+            || !values.TryGetValue("rehearsal-install-root", out var installRoot)
+            || !values.TryGetValue("rehearsal-result", out var resultPath))
+        {
+            return 2;
+        }
+        var fullResultPath = Path.GetFullPath(resultPath);
+        try
+        {
+            var installer = new BootstrapInstaller(_ => { }, installRoot);
+            var version = await installer.InstallAsync();
+            await WriteRehearsalResultAsync(fullResultPath, new
+            {
+                ok = true,
+                operation = "bootstrap-install-rehearsal",
+                version,
+                install_root = Path.GetFullPath(installRoot),
+            });
+            return 0;
+        }
+        catch (Exception error)
+        {
+            await WriteRehearsalResultAsync(fullResultPath, new
+            {
+                ok = false,
+                error = BootstrapInstaller.SafeErrorCode(error),
+            });
+            return 1;
+        }
+    }
+
+    private static async Task WriteRehearsalResultAsync(string path, object value)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(
+            path,
+            JsonSerializer.Serialize(value),
+            new UTF8Encoding(false));
     }
 }
 
@@ -95,7 +156,7 @@ internal sealed class BootstrapperForm : Form
     private void UpdateStatus(string value) => _status.Text = value;
 }
 
-internal sealed class BootstrapInstaller(Action<string> status)
+internal sealed class BootstrapInstaller
 {
     private const string PublicKeyResource = "AurumBridge.Bootstrapper.release-public-key.pem";
     private const string LauncherResource = "AurumBridge.Bootstrapper.launcher.zip";
@@ -113,25 +174,46 @@ internal sealed class BootstrapInstaller(Action<string> status)
         "modules/adapter.mt5.python/worker.py",
         "modules/adapter.mt4/AURUMBridgeEA.ex4",
     ];
-    private readonly Assembly _assembly = typeof(BootstrapInstaller).Assembly;
-    private readonly Action<string> _status = status;
-    private readonly string _installRoot = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "AURUM",
-        "LiangjianBridge");
+    private readonly Assembly _assembly;
+    private readonly Action<string> _status;
+    private readonly string _installRoot;
+    private readonly bool _rehearsal;
+
+    public BootstrapInstaller(Action<string> status, string? rehearsalInstallRoot = null)
+    {
+        _assembly = typeof(BootstrapInstaller).Assembly;
+        _status = status ?? throw new ArgumentNullException(nameof(status));
+        var defaultInstallRoot = Path.GetFullPath(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AURUM",
+            "LiangjianBridge"));
+        if (rehearsalInstallRoot is null)
+        {
+            _installRoot = defaultInstallRoot;
+            return;
+        }
+        var overrideRoot = Path.GetFullPath(rehearsalInstallRoot);
+        if (Metadata("AurumTargetEnvironment") != "test"
+            || string.Equals(overrideRoot, defaultInstallRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("bootstrap_rehearsal_not_allowed");
+        }
+        _installRoot = overrideRoot;
+        _rehearsal = true;
+    }
 
     public async Task<string> InstallAsync(CancellationToken cancellationToken = default)
     {
         var serverUrl = Metadata("AurumServerUrl");
         var launcherVersion = Version.Parse(Metadata("AurumLauncherVersion"));
-        if (!Uri.TryCreate(serverUrl, UriKind.Absolute, out var server)
-            || server.Scheme != Uri.UriSchemeHttps)
-        {
-            throw new InvalidDataException("bootstrap_server_url_invalid");
-        }
+        var server = ParseServerUri(serverUrl, Metadata("AurumTargetEnvironment"));
 
         Directory.CreateDirectory(_installRoot);
-        using var installationLock = new Mutex(false, "Local\\AURUM-LiangjianBridge-Installer");
+        using var installationLock = new Mutex(
+            false,
+            _rehearsal
+                ? "Local\\AURUM-LiangjianBridge-Installer-Rehearsal"
+                : "Local\\AURUM-LiangjianBridge-Installer");
         var ownsInstallationLock = false;
         try
         {
@@ -150,7 +232,7 @@ internal sealed class BootstrapInstaller(Action<string> status)
             $"aurum-bootstrap-{Guid.NewGuid():N}");
         try
         {
-            EnsureBridgeIsStopped();
+            if (!_rehearsal) EnsureBridgeIsStopped();
             Directory.CreateDirectory(operationRoot);
             _status("正在验证发布信息…");
             var publicKey = ReadTextResource(PublicKeyResource);
@@ -200,7 +282,7 @@ internal sealed class BootstrapInstaller(Action<string> status)
                 throw new InvalidDataException("bootstrap_launcher_invalid");
             }
 
-            EnsureBridgeIsStopped();
+            if (!_rehearsal) EnsureBridgeIsStopped();
             InstallVersion(versionDirectory, manifest.ReleaseVersion);
             CopyDirectoryFilesAtomically(launcherDirectory, _installRoot);
             await WriteAtomicAsync(Path.Combine(_installRoot, "release-public-key.pem"), publicKey, cancellationToken);
@@ -216,7 +298,7 @@ internal sealed class BootstrapInstaller(Action<string> status)
                     updated_at_utc_msc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 }),
                 cancellationToken);
-            CreateDesktopShortcut();
+            if (!_rehearsal) CreateDesktopShortcut();
             return manifest.ReleaseVersion;
         }
         finally
@@ -265,10 +347,37 @@ internal sealed class BootstrapInstaller(Action<string> status)
         }
     }
 
+    public static string SafeErrorCode(Exception error)
+    {
+        var value = error.Message;
+        return value is { Length: >= 1 and <= 96 }
+            && value.All(character => char.IsAsciiLetterOrDigit(character) || character == '_')
+                ? value
+                : "bootstrap_rehearsal_failed";
+    }
+
     private string Metadata(string key) => _assembly
         .GetCustomAttributes<AssemblyMetadataAttribute>()
         .SingleOrDefault(value => value.Key == key)?.Value
         ?? throw new InvalidDataException("bootstrap_metadata_missing");
+
+    private static Uri ParseServerUri(string value, string targetEnvironment)
+    {
+        try
+        {
+            var server = BridgeServerEndpointConfiguration.ParseServerUri(value);
+            if (targetEnvironment is not ("test" or "production")
+                || targetEnvironment == "production" && server.Scheme != Uri.UriSchemeHttps)
+            {
+                throw new InvalidDataException("bootstrap_server_url_invalid");
+            }
+            return server;
+        }
+        catch (InvalidDataException error) when (error.Message != "bootstrap_server_url_invalid")
+        {
+            throw new InvalidDataException("bootstrap_server_url_invalid", error);
+        }
+    }
 
     private string ReadTextResource(string name)
     {
