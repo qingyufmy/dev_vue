@@ -75,6 +75,37 @@ public sealed class BridgeRuntimePathResolverTests
     }
 
     [TestMethod]
+    public void InstalledVersionFailsClosedWhenTheSignedServerAddressIsMissing()
+    {
+        var installed = Path.Combine(_directory, "versions", "3.2.5");
+        CreateFile(installed, "runtime", "python", "python.exe");
+        CreateFile(installed, "modules", "adapter.mt5.python", "worker.py");
+        CreateFile(installed, "modules", "adapter.mt4", "AURUMBridgeEA.ex4");
+
+        var error = Assert.ThrowsExactly<InvalidDataException>(() =>
+            BridgeRuntimePathResolver.Resolve(installed, _ => null));
+
+        Assert.AreEqual("bridge_server_endpoints_missing", error.Message);
+    }
+
+    [TestMethod]
+    public void ExplicitOperationsOverrideCanRecoverAnInstalledVersionWithAMissingAddressFile()
+    {
+        var installed = Path.Combine(_directory, "versions", "3.2.5");
+        CreateFile(installed, "runtime", "python", "python.exe");
+        CreateFile(installed, "modules", "adapter.mt5.python", "worker.py");
+        CreateFile(installed, "modules", "adapter.mt4", "AURUMBridgeEA.ex4");
+
+        var paths = BridgeRuntimePathResolver.Resolve(
+            installed,
+            name => name == "AURUM_BRIDGE_SERVER_URL"
+                ? "https://bridge-recovery.example.com"
+                : null);
+
+        Assert.AreEqual(new Uri("https://bridge-recovery.example.com"), paths.ServerBaseUri);
+    }
+
+    [TestMethod]
     public void EnvironmentOverrideTakesPrecedenceOverThePackagedServerAddress()
     {
         var python = CreateFile("runtime", "python", "python.exe");

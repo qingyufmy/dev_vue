@@ -77,10 +77,15 @@ public static class BridgeRuntimePathResolver
         Func<string, string?> getEnvironmentVariable)
     {
         var environmentValue = getEnvironmentVariable("AURUM_BRIDGE_SERVER_URL");
-        return string.IsNullOrWhiteSpace(environmentValue)
-            ? BridgeServerEndpointConfiguration.ReadPackaged(applicationDirectory)
-                ?? BridgeServerEndpointConfiguration.ParseServerUri(DefaultServerUrl)
-            : BridgeServerEndpointConfiguration.ParseServerUri(environmentValue);
+        if (!string.IsNullOrWhiteSpace(environmentValue))
+        {
+            return BridgeServerEndpointConfiguration.ParseServerUri(environmentValue);
+        }
+        var packaged = BridgeServerEndpointConfiguration.ReadPackaged(
+            applicationDirectory,
+            required:IsInstalledVersionDirectory(applicationDirectory));
+        return packaged
+            ?? BridgeServerEndpointConfiguration.ParseServerUri(DefaultServerUrl);
     }
 
     private static string? ResolveOptionalFile(
