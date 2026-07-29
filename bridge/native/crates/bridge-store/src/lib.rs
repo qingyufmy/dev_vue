@@ -5,10 +5,11 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -323,6 +324,16 @@ pub struct NewOutboxRecord {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalBinding {
+    pub terminal_instance_id: String,
+    pub platform: String,
+    pub terminal_path: PathBuf,
+    pub account_ref: AccountRef,
+    pub connection_epoch: i64,
+    pub updated_at_utc_msc: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandLedgerRecord {
     pub command_id: String,
     pub payload_json: String,
@@ -442,6 +453,141 @@ impl OutboxStore {
             )
             .map(|affected| affected == 1)
             .map_err(|_| StoreError::new("bridge_store_outbox_enqueue_failed"))
+    }
+
+    pub fn activate_terminal_binding(
+        &self,
+        terminal_instance_id: &str,
+        platform: &str,
+        terminal_path: impl AsRef<Path>,
+        account_ref: &AccountRef,
+        updated_at_utc_msc: i64,
+    ) -> Result<TerminalBinding, StoreError> {
+        let mut binding = normalize_terminal_binding(
+            terminal_instance_id,
+            platform,
+            terminal_path.as_ref(),
+            account_ref,
+            updated_at_utc_msc,
+        )?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_binding_transaction_failed"))?;
+        let previous_epoch = transaction
+            .query_row(
+                "SELECT connection_epoch FROM terminal_bindings \
+                 WHERE terminal_instance_id = ?1;",
+                [&binding.terminal_instance_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_binding_query_failed"))?
+            .unwrap_or(0);
+        binding.connection_epoch = previous_epoch
+            .checked_add(1)
+            .ok_or_else(|| StoreError::new("terminal_connection_epoch_exhausted"))?;
+        let terminal_path = binding
+            .terminal_path
+            .to_str()
+            .ok_or_else(|| StoreError::new("bridge_store_terminal_path_invalid"))?;
+        transaction
+            .execute(
+                "INSERT INTO terminal_bindings (\
+                   terminal_instance_id, platform, terminal_path, broker_server, login_account, \
+                   connection_epoch, updated_at_utc_msc\
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\
+                 ON CONFLICT(terminal_instance_id) DO UPDATE SET \
+                   platform = excluded.platform, terminal_path = excluded.terminal_path, \
+                   broker_server = excluded.broker_server, login_account = excluded.login_account, \
+                   connection_epoch = excluded.connection_epoch, \
+                   updated_at_utc_msc = excluded.updated_at_utc_msc;",
+                params![
+                    binding.terminal_instance_id,
+                    binding.platform,
+                    terminal_path,
+                    binding.account_ref.broker_server,
+                    binding.account_ref.login,
+                    binding.connection_epoch,
+                    binding.updated_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_binding_write_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM outbox_messages \
+                 WHERE terminal_instance_id = ?1 AND message_type = 'data_delta' \
+                   AND connection_epoch < ?2;",
+                params![binding.terminal_instance_id, binding.connection_epoch],
+            )
+            .map_err(|_| StoreError::new("bridge_store_binding_prune_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM stream_revisions \
+                 WHERE terminal_instance_id = ?1 AND connection_epoch < ?2;",
+                params![binding.terminal_instance_id, binding.connection_epoch],
+            )
+            .map_err(|_| StoreError::new("bridge_store_binding_prune_failed"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_binding_commit_failed"))?;
+        Ok(binding)
+    }
+
+    pub fn terminal_bindings(&self) -> Result<Vec<TerminalBinding>, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let mut statement = connection
+            .prepare(
+                "SELECT terminal_instance_id, platform, terminal_path, broker_server, \
+                        login_account, connection_epoch, updated_at_utc_msc \
+                 FROM terminal_bindings ORDER BY terminal_instance_id;",
+            )
+            .map_err(|_| StoreError::new("bridge_store_binding_query_failed"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            })
+            .map_err(|_| StoreError::new("bridge_store_binding_query_failed"))?;
+        rows.map(|row| {
+            let (terminal_id, platform, path, server, login, epoch, updated_at) =
+                row.map_err(|_| StoreError::new("bridge_store_binding_query_failed"))?;
+            let account_ref = AccountRef {
+                broker_server: server,
+                login,
+            };
+            if !Path::new(&path).is_absolute() {
+                return Err(StoreError::new("bridge_store_terminal_path_invalid"));
+            }
+            let binding = normalize_terminal_binding(
+                &terminal_id,
+                &platform,
+                Path::new(&path),
+                &account_ref,
+                updated_at,
+            )?;
+            if epoch <= 0 {
+                return Err(StoreError::new("bridge_store_binding_invalid"));
+            }
+            Ok(TerminalBinding {
+                connection_epoch: epoch,
+                ..binding
+            })
+        })
+        .collect()
     }
 
     pub fn persist_data_delta(
@@ -1162,6 +1308,45 @@ fn database_is_empty(path: &Path) -> Result<bool, StoreError> {
         .map_err(|_| StoreError::new("bridge_store_schema_query_failed"))
 }
 
+fn normalize_terminal_binding(
+    terminal_instance_id: &str,
+    platform: &str,
+    terminal_path: &Path,
+    account_ref: &AccountRef,
+    updated_at_utc_msc: i64,
+) -> Result<TerminalBinding, StoreError> {
+    validate_id(terminal_instance_id)
+        .map_err(|_| StoreError::new("bridge_store_binding_invalid"))?;
+    account_ref
+        .validate()
+        .map_err(|_| StoreError::new("bridge_store_binding_invalid"))?;
+    let platform = platform.trim().to_ascii_lowercase();
+    if !matches!(platform.as_str(), "mt4" | "mt5") || updated_at_utc_msc <= 0 {
+        return Err(StoreError::new("bridge_store_binding_invalid"));
+    }
+    let path_text = terminal_path
+        .to_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| StoreError::new("bridge_store_terminal_path_invalid"))?;
+    let terminal_path = PathBuf::from(path_text);
+    let terminal_path = if terminal_path.is_absolute() {
+        terminal_path
+    } else {
+        env::current_dir()
+            .map_err(|_| StoreError::new("bridge_store_terminal_path_invalid"))?
+            .join(terminal_path)
+    };
+    Ok(TerminalBinding {
+        terminal_instance_id: terminal_instance_id.to_owned(),
+        platform,
+        terminal_path,
+        account_ref: account_ref.clone(),
+        connection_epoch: 0,
+        updated_at_utc_msc,
+    })
+}
+
 fn initialize_fresh_database(path: &Path) -> Result<(), StoreError> {
     let mut connection = Connection::open_with_flags(
         path,
@@ -1605,6 +1790,111 @@ mod tests {
             vec!["account_latest.payload_json".to_owned()]
         );
         fs::remove_dir_all(root).expect("remove incompatible fixture");
+    }
+
+    #[test]
+    fn terminal_binding_activation_advances_epoch_and_prunes_only_stale_data_sync_state() {
+        let root = unique_test_directory("terminal-binding");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("binding store");
+        let terminal_path = root.join("terminal64.exe");
+        let first_account = AccountRef {
+            broker_server: "Broker-Demo".to_owned(),
+            login: "123456".to_owned(),
+        };
+        let first = store
+            .activate_terminal_binding(
+                "mt5_terminal_01",
+                "MT5",
+                &terminal_path,
+                &first_account,
+                1_700_000_000_000,
+            )
+            .expect("first binding");
+        assert_eq!(first.connection_epoch, 1);
+        assert_eq!(first.platform, "mt5");
+        assert!(first.terminal_path.is_absolute());
+
+        let mut delta = data_delta(
+            "account",
+            1,
+            0,
+            true,
+            vec![serde_json::json!({
+                "login": 123456,
+                "server": "Broker-Demo"
+            })],
+            Vec::new(),
+        );
+        delta.connection_epoch = 1;
+        store.persist_data_delta(&delta).expect("old epoch delta");
+        assert_eq!(
+            store
+                .activate_terminal_binding(
+                    "mt5_terminal_01",
+                    "unsupported",
+                    &terminal_path,
+                    &first_account,
+                    1_700_000_000_001,
+                )
+                .expect_err("invalid platform")
+                .code(),
+            "bridge_store_binding_invalid"
+        );
+        let replacement_account = AccountRef {
+            broker_server: "Broker-Demo".to_owned(),
+            login: "654321".to_owned(),
+        };
+        let replacement = store
+            .activate_terminal_binding(
+                "mt5_terminal_01",
+                "mt5",
+                &terminal_path,
+                &replacement_account,
+                1_700_000_000_002,
+            )
+            .expect("replacement binding");
+        assert_eq!(replacement.connection_epoch, 2);
+        assert_eq!(
+            store.terminal_bindings().expect("stored bindings"),
+            vec![replacement]
+        );
+        let connection = store.connection.lock().expect("store lock");
+        let stale_revisions: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM stream_revisions WHERE connection_epoch = 1;",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stale revisions");
+        let stale_data_outbox: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM outbox_messages \
+                 WHERE message_type = 'data_delta' AND connection_epoch = 1;",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stale data outbox");
+        assert_eq!((stale_revisions, stale_data_outbox), (0, 0));
+        connection
+            .execute(
+                "INSERT INTO terminal_bindings (\
+                   terminal_instance_id, platform, terminal_path, broker_server, login_account, \
+                   connection_epoch, updated_at_utc_msc\
+                 ) VALUES ('mt4_corrupt', 'mt4', 'terminal.exe', 'Broker-Demo', '111111', 1, 1700000000003);",
+                [],
+            )
+            .expect("insert corrupt relative binding");
+        drop(connection);
+        assert_eq!(
+            store
+                .terminal_bindings()
+                .expect_err("relative stored path must fail closed")
+                .code(),
+            "bridge_store_terminal_path_invalid"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove binding fixture");
     }
 
     #[test]

@@ -9,6 +9,7 @@
 - `bridge-foundation` 固定 Launcher 参数、安装目录、Profile 隔离、运行时文件和 SQLite WAL 健康检查合同。
 - `bridge-security-win` 与 V3 共用 DPAPI CurrentUser、固定 entropy、JSON 字段和原子凭据轮换合同。
 - `bridge-store` 可由 Native Core 在全新 Profile 中事务化创建完整 SQLite 表与索引，并固定 WAL、`synchronous=FULL` 和外键检查；上次建库中断留下的空文件可安全继续初始化，但部分建成或列不完整的数据库拒绝原地猜测修复。兼容检查测试仍直接对照当前 C# 建库源码以阻止静默漂移。
+- `bridge-store` 以 Profile SQLite 的 `terminal_bindings` 作为终端配置权威源：账户、平台或路径激活会在同一事务中递增 `connection_epoch`，并只清理该终端旧 epoch 的数据同步 revision 与 `data_delta` Outbox。非法配置不会消耗 epoch；读取时重新校验终端 ID、平台、绝对路径和账户身份，避免损坏记录被 Core 启动。
 - `bridge-store` 另提供未接入生产入口的 V3 Outbox、执行回执和数据 delta 兼容层：账户/持仓/挂单的 revision、最新 SQLite 投影与服务器 Outbox 在同一事务提交；重复 revision 必须匹配原 message/hash，gap 不写入，full snapshot 会替换旧投影并压缩该流的待发 Outbox。交易优先、持久化重试、回执/Outbox 同事务写入和 applied / duplicate 删除语义保持不变。
 - `bridge-terminal-data` 已实现 MT5 快照投影与采集协调器：从 SQLite 恢复账户/持仓/挂单 revision 与当前集合，按 ticket 计算 upsert/delete，无变化只刷新内存 freshness；首次连接、账户 epoch 变化、主动 reconciliation 或服务器 gap 会发送 full snapshot。gap 会采用存储返回的当前 revision 后再以 `current + 1` 恢复，避免旧 revision 重试循环。协调器会在空闲时每 1 秒、有持仓或挂单时每 250 毫秒采集，交易完成或 reconciliation 请求可立即唤醒；Worker 重启期间按上限 10 秒退避，并在投影前再次校验账户路由。它尚未由 Core 的真实授权与终端配置入口启动。
 - `bridge-terminal-session` 已把 MT5 Worker supervisor、数据路由、SQLite 投影和采集器组合成单终端会话。账户变化必须提升 `connection_epoch`；合法替换会先等待旧采集器退出，再停止旧 Worker，最后启动新会话。非法 epoch 或采集配置会在停止旧会话前拒绝，旧控制句柄在切换后失效；只有 Worker 与初始投影都 Ready 时会话才报告数据就绪。该管理器尚未接入 Core 的真实授权与终端配置入口。

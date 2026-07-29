@@ -121,6 +121,14 @@
     "data_ready_requires_worker_and_collector_ready": true,
     "stale_control_handle_rejected": true
   },
+  "terminal_binding_contract": {
+    "authority": "profile_sqlite_terminal_bindings",
+    "identity_fields": ["terminal_instance_id", "platform", "terminal_path", "account_ref"],
+    "activation_advances_epoch_atomically": true,
+    "invalid_activation_does_not_consume_epoch": true,
+    "account_switch_prunes_only_stale_data_sync_state": true,
+    "bindings_ordered_by_terminal_instance_id": true
+  },
   "server_transport_contract": {
     "protocol_version": 3,
     "websocket_path": "/aurum-api/bridge/v3/ws",
