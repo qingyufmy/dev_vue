@@ -1,8 +1,10 @@
 #![windows_subsystem = "windows"]
 
 mod log_viewer;
+mod observer_profile_dialog;
 mod permission_tooltip;
 mod settings;
+mod terminal_directory;
 
 use bridge_foundation::{DEFAULT_PROFILE_ID, default_data_directory, validate_profile_id};
 use bridge_local_control::{
@@ -89,6 +91,7 @@ const TIMER_POLL: usize = 1;
 const WM_STATE_READY: u32 = WM_APP + 1;
 const WM_ACTION_READY: u32 = WM_APP + 2;
 const WM_TRAY: u32 = WM_APP + 3;
+const WM_OPEN_OBSERVER_DEMO: u32 = WM_APP + 4;
 
 #[derive(Clone)]
 enum UiMessage {
@@ -145,6 +148,7 @@ struct AppState {
     hovered_permission_account: Option<usize>,
     tracking_mouse_leave: bool,
     busy_observer_profiles: BTreeSet<String>,
+    open_observer_demo: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -183,7 +187,11 @@ fn build_tray_menu_view(
 fn main() {
     let profile_id = parse_profile_id();
     #[cfg(debug_assertions)]
-    let state = if std::env::args().any(|argument| argument == "--demo") {
+    let open_observer_demo = std::env::args().any(|argument| argument == "--observer-dialog-demo");
+    #[cfg(not(debug_assertions))]
+    let open_observer_demo = false;
+    #[cfg(debug_assertions)]
+    let state = if open_observer_demo || std::env::args().any(|argument| argument == "--demo") {
         demo_state(&profile_id)
     } else {
         initial_state(&profile_id)
@@ -218,6 +226,7 @@ fn main() {
             hovered_permission_account: None,
             tracking_mouse_leave: false,
             busy_observer_profiles: BTreeSet::new(),
+            open_observer_demo,
         });
     }
 }
@@ -449,6 +458,9 @@ unsafe extern "system" fn window_proc(
                 windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(hwnd, TIMER_POLL, 500, None);
                 begin_state_poll(hwnd, state);
                 apply_layout(hwnd, state);
+                if state.open_observer_demo {
+                    PostMessageW(hwnd, WM_OPEN_OBSERVER_DEMO, 0, 0);
+                }
             }
             0
         }
@@ -472,6 +484,11 @@ unsafe extern "system" fn window_proc(
         }
         WM_STATE_READY | WM_ACTION_READY => {
             unsafe { receive_background_message(hwnd, state) };
+            0
+        }
+        WM_OPEN_OBSERVER_DEMO => {
+            state.open_observer_demo = false;
+            unsafe { open_observer_dialog(hwnd, state) };
             0
         }
         WM_COMMAND => {
@@ -1508,6 +1525,7 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
                 };
             }
         }
+        CONTROL_OBSERVER => unsafe { open_observer_dialog(hwnd, app) },
         CONTROL_DETECT => unsafe { begin_action(hwnd, app, LocalControlAction::Redetect) },
         CONTROL_LOGS => match default_data_directory(&app.profile_id) {
             Ok(data_directory) => match unsafe {
@@ -1561,6 +1579,18 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
             ) =>
         unsafe { begin_action(hwnd, app, LocalControlAction::SettingsRestoreOfficial) },
         _ => {}
+    }
+}
+
+unsafe fn open_observer_dialog(hwnd: HWND, app: &mut AppState) {
+    match unsafe {
+        observer_profile_dialog::show_modal(hwnd, app.brand_icon, &app.state.observer_sources, None)
+    } {
+        Ok(Some(observer)) => unsafe {
+            begin_action(hwnd, app, LocalControlAction::ObserverCreate { observer })
+        },
+        Ok(None) => {}
+        Err(code) => show_error(hwnd, code),
     }
 }
 
