@@ -87,6 +87,17 @@ impl BridgeUserPreferences {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObserverProfilePreferences {
+    pub platform: String,
+    pub terminal_instance_id: String,
+    pub terminal_path: String,
+    pub bridge_user_id: i64,
+    pub observer_account_label: Option<String>,
+    pub trading_account_id: Option<i64>,
+    pub trading_account_label: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct BridgePreferencesStore {
     path: PathBuf,
@@ -145,6 +156,49 @@ impl BridgePreferencesStore {
 
     pub fn save_autostart_enabled(&self, enabled: bool) -> Result<(), PreferencesError> {
         self.update(|preferences| preferences.auto_start_enabled = enabled)
+    }
+
+    pub fn save_observer_profile(
+        &self,
+        observer: &ObserverProfilePreferences,
+    ) -> Result<(), PreferencesError> {
+        let platform = normalize_platform(Some(&observer.platform))
+            .ok_or_else(|| PreferencesError::new("bridge_preferences_platform_invalid"))?;
+        let terminal_instance_id = normalize_terminal_id(
+            Some(&observer.terminal_instance_id),
+            &format!("{platform}_"),
+        )
+        .ok_or_else(|| PreferencesError::new("bridge_preferences_terminal_invalid"))?;
+        let terminal_path = if platform == "mt4" {
+            normalize_absolute_path(Some(&observer.terminal_path))
+        } else {
+            normalize_mt5_path(Some(&observer.terminal_path))
+        }
+        .ok_or_else(|| PreferencesError::new("bridge_preferences_terminal_path_invalid"))?;
+        if observer.bridge_user_id <= 0
+            || observer.trading_account_id.is_some_and(|value| value <= 0)
+        {
+            return Err(PreferencesError::new(
+                "bridge_preferences_observer_binding_invalid",
+            ));
+        }
+        let observer_account_label = normalize_label(observer.observer_account_label.as_deref());
+        let trading_account_label = normalize_label(observer.trading_account_label.as_deref());
+        self.update(|preferences| {
+            preferences.platform = Some(platform.clone());
+            if platform == "mt4" {
+                preferences.mt4_terminal_instance_id = Some(terminal_instance_id.clone());
+                preferences.mt4_terminal_path = Some(terminal_path.clone());
+            } else {
+                preferences.mt5_terminal_instance_id = Some(terminal_instance_id.clone());
+                preferences.mt5_terminal_path = Some(terminal_path.clone());
+            }
+            preferences.observer_bridge_user_id = Some(observer.bridge_user_id);
+            preferences.observer_account_label = observer_account_label;
+            preferences.observer_trading_account_id = observer.trading_account_id;
+            preferences.observer_trading_account_label = trading_account_label;
+            preferences.observer_claimed_terminal_instance_id = Some(terminal_instance_id);
+        })
     }
 
     fn update(
@@ -410,6 +464,45 @@ mod tests {
                     .to_string_lossy()
                     .starts_with(&format!(".{file_name}.{}.", std::process::id())))
         );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn observer_profile_is_saved_as_one_dotnet_compatible_preference_update() {
+        let path = test_path("observer-profile");
+        let store = BridgePreferencesStore::new(&path).expect("store");
+        store
+            .save_observer_profile(&ObserverProfilePreferences {
+                platform: "MT5".to_owned(),
+                terminal_instance_id: "mt5_0123456789abcdef01234567".to_owned(),
+                terminal_path: r"C:\Broker MT5\terminal64.exe".to_owned(),
+                bridge_user_id: 29,
+                observer_account_label: Some(" 一号观摩源 · source@example.com ".to_owned()),
+                trading_account_id: Some(9),
+                trading_account_label: Some("596520 · DooTechnology-Demo".to_owned()),
+            })
+            .expect("save observer profile");
+        let loaded = store.load();
+        assert_eq!(loaded.platform.as_deref(), Some("mt5"));
+        assert_eq!(
+            loaded.mt5_terminal_instance_id.as_deref(),
+            Some("mt5_0123456789abcdef01234567")
+        );
+        assert_eq!(loaded.observer_bridge_user_id, Some(29));
+        assert_eq!(loaded.observer_trading_account_id, Some(9));
+        assert_eq!(
+            loaded.observer_claimed_terminal_instance_id.as_deref(),
+            Some("mt5_0123456789abcdef01234567")
+        );
+        assert_eq!(
+            loaded.observer_account_label.as_deref(),
+            Some("一号观摩源 · source@example.com")
+        );
+        let encoded: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read observer preferences"))
+                .expect("decode observer preferences");
+        assert_eq!(encoded["ObserverBridgeUserId"], 29);
+        assert_eq!(encoded["Mt5TerminalPath"], r"C:\Broker MT5\terminal64.exe");
         let _ = fs::remove_file(path);
     }
 }

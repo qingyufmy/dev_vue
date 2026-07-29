@@ -150,6 +150,60 @@ async fn administrator_observer_sources_are_refreshed_and_validated() {
 }
 
 #[tokio::test]
+async fn administrator_can_issue_a_terminal_scoped_observer_credential() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("observer credential bind");
+    let address = listener.local_addr().expect("observer credential address");
+    let server = tokio::spawn(async move {
+        let refresh = read_http_request(listener.accept().await.expect("refresh accept").0).await;
+        write_http_json(
+            refresh,
+            r#"{"ok":true,"token":"access_fixture","refreshExpiresInSeconds":3600,"bridgeRole":"admin"}"#,
+        )
+        .await;
+        let session = read_http_request(listener.accept().await.expect("session accept").0).await;
+        assert!(
+            session
+                .1
+                .starts_with("POST /api/auth/bridge-observer-session HTTP/1.1")
+        );
+        assert!(session.1.contains("\"bridgeUserId\":29"));
+        assert!(
+            session
+                .1
+                .contains("\"terminalInstanceId\":\"mt5_0123456789abcdef01234567\"")
+        );
+        assert!(
+            session
+                .1
+                .to_ascii_lowercase()
+                .contains("authorization: bearer access_fixture")
+        );
+        write_http_json(
+            session,
+            r#"{"ok":true,"bridgeUserId":29,"terminalInstanceId":"mt5_0123456789abcdef01234567","refreshToken":"observer_refresh_token_fixture_that_is_long_enough","refreshExpiresInSeconds":7200}"#,
+        )
+        .await;
+    });
+    let endpoints = ServerEndpoints::normalize(&format!("http://{address}/"), "ws://127.0.0.1:1/")
+        .expect("observer credential endpoints");
+    let auth = BridgeAuthClient::new(endpoints, "LiangJian-Bridge-Native-Test/4")
+        .expect("observer credential client");
+    let credential = auth
+        .managed_observer_credential("refresh_fixture", 29, "mt5_0123456789abcdef01234567")
+        .await
+        .expect("managed observer credential");
+    assert_eq!(credential.bridge_user_id, 29);
+    assert_eq!(
+        credential.terminal_instance_id,
+        "mt5_0123456789abcdef01234567"
+    );
+    assert_eq!(credential.refresh_expires_in_seconds, 7200);
+    server.await.expect("observer credential server");
+}
+
+#[tokio::test]
 async fn auth_preserves_stable_api_codes_and_rejects_html_error_pages() {
     let code = acquire_error_code(
         "HTTP/1.1 503 Service Unavailable",

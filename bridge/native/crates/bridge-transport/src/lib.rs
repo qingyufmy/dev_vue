@@ -490,6 +490,14 @@ pub struct ManagedObserverAccess {
     pub sources: Vec<ManagedObserverSource>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedObserverCredential {
+    pub bridge_user_id: i64,
+    pub terminal_instance_id: String,
+    pub refresh_token: String,
+    pub refresh_expires_in_seconds: u64,
+}
+
 pub struct BridgeAuthClient {
     client: reqwest::Client,
     endpoints: ServerEndpoints,
@@ -594,6 +602,61 @@ impl BridgeAuthClient {
         Ok(ManagedObserverAccess {
             bridge_role: refresh.bridge_role,
             sources: response.sources,
+        })
+    }
+
+    pub async fn managed_observer_credential(
+        &self,
+        refresh_token: &str,
+        bridge_user_id: i64,
+        terminal_instance_id: &str,
+    ) -> Result<ManagedObserverCredential, TransportError> {
+        if refresh_token.trim().is_empty() || refresh_token.len() > 16_384 {
+            return Err(TransportError::new("bridge_not_paired"));
+        }
+        if bridge_user_id <= 0 || !valid_managed_terminal_id(terminal_instance_id) {
+            return Err(TransportError::new(
+                "bridge_observer_session_request_invalid",
+            ));
+        }
+        let refresh: RefreshResponse = self
+            .post_json(
+                "/api/auth/bridge-refresh",
+                &serde_json::json!({ "refreshToken": refresh_token }),
+                None,
+            )
+            .await?;
+        if refresh.token.trim().is_empty()
+            || refresh.refresh_expires_in_seconds == 0
+            || refresh.bridge_role != "admin"
+        {
+            return Err(TransportError::new("bridge_refresh_response_invalid"));
+        }
+        let response: ManagedObserverCredentialResponse = self
+            .post_json(
+                "/api/auth/bridge-observer-session",
+                &serde_json::json!({
+                    "bridgeUserId": bridge_user_id,
+                    "terminalInstanceId": terminal_instance_id,
+                }),
+                Some(&refresh.token),
+            )
+            .await?;
+        if response.bridge_user_id != bridge_user_id
+            || response.terminal_instance_id != terminal_instance_id
+            || response.refresh_token.trim().is_empty()
+            || response.refresh_token.len() > 16_384
+            || response.refresh_expires_in_seconds == 0
+        {
+            return Err(TransportError::new(
+                "bridge_observer_session_response_invalid",
+            ));
+        }
+        Ok(ManagedObserverCredential {
+            bridge_user_id: response.bridge_user_id,
+            terminal_instance_id: response.terminal_instance_id,
+            refresh_token: response.refresh_token,
+            refresh_expires_in_seconds: response.refresh_expires_in_seconds,
         })
     }
 
@@ -704,6 +767,25 @@ struct TicketResponse {
 #[derive(Deserialize)]
 struct ObserverSourcesResponse {
     sources: Vec<ManagedObserverSource>,
+}
+
+#[derive(Deserialize)]
+struct ManagedObserverCredentialResponse {
+    #[serde(rename = "bridgeUserId")]
+    bridge_user_id: i64,
+    #[serde(rename = "terminalInstanceId")]
+    terminal_instance_id: String,
+    #[serde(rename = "refreshToken")]
+    refresh_token: String,
+    #[serde(rename = "refreshExpiresInSeconds")]
+    refresh_expires_in_seconds: u64,
+}
+
+fn valid_managed_terminal_id(value: &str) -> bool {
+    (8..=128).contains(&value.len())
+        && value.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphanumeric() || (index > 0 && matches!(byte, b'.' | b'_' | b':' | b'-'))
+        })
 }
 
 impl<'de> Deserialize<'de> for ManagedObserverSource {
