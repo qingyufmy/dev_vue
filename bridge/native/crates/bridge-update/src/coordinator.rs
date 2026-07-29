@@ -766,12 +766,12 @@ fn write_release_marker(directory: &Path, manifest: &ReleaseManifest) -> Result<
         .map_err(|_| UpdateError::new("update_staged_release_write_failed"))
 }
 
-struct InstallationIdentityStore {
+pub struct InstallationIdentityStore {
     path: PathBuf,
 }
 
 impl InstallationIdentityStore {
-    fn new(path: PathBuf) -> Result<Self, UpdateError> {
+    pub fn new(path: PathBuf) -> Result<Self, UpdateError> {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err(UpdateError::new(
                 "bridge_installation_identity_path_invalid",
@@ -780,7 +780,7 @@ impl InstallationIdentityStore {
         Ok(Self { path })
     }
 
-    fn load_or_create(&self) -> Result<String, UpdateError> {
+    pub fn load_or_create(&self) -> Result<String, UpdateError> {
         if let Some(existing) = self.load()? {
             return Ok(existing);
         }

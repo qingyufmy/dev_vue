@@ -7,9 +7,11 @@ publish.workspace = true
 
 [dependencies]
 bridge-update = { path = "../../crates/bridge-update" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+url.workspace = true
 windows-registry.workspace = true
 windows-sys.workspace = true
 

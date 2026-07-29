@@ -3,6 +3,7 @@ members = [
   "apps/bridge-compat-probe",
   "apps/bridge-core",
   "apps/bridge-installer",
+  "apps/bridge-bootstrapper",
   "apps/bridge-launcher",
   "apps/bridge-ui",
   "crates/bridge-contract",

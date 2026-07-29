@@ -68,26 +68,36 @@ if ($DryRun) {
   exit 0
 }
 
-$dotnet = if ($env:AURUM_DOTNET_EXE) { $env:AURUM_DOTNET_EXE } elseif (Get-Command dotnet -ErrorAction SilentlyContinue) { 'dotnet' } else { Join-Path $env:USERPROFILE '.cache\aurum-dotnet\dotnet.exe' }
+$cargo = if (Get-Command cargo -ErrorAction SilentlyContinue) {
+  (Get-Command cargo).Source
+} else {
+  Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
+}
+if (-not (Test-Path -LiteralPath $cargo -PathType Leaf)) {
+  throw 'bootstrap_cargo_missing'
+}
 $work = Join-Path ([IO.Path]::GetTempPath()) "aurum-bootstrap-build-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $work | Out-Null
 New-Item -ItemType Directory -Path $output | Out-Null
 $succeeded = $false
+$previousCargoTarget = $env:CARGO_TARGET_DIR
+$previousPublicKey = $env:AURUM_BOOTSTRAPPER_PUBLIC_KEY_PATH
+$previousServerUrl = $env:AURUM_BOOTSTRAPPER_SERVER_URL
+$previousLauncherVersion = $env:AURUM_BOOTSTRAPPER_LAUNCHER_VERSION
+$previousTargetEnvironment = $env:AURUM_BOOTSTRAPPER_TARGET_ENVIRONMENT
+$previousWindowsVersion = $env:AURUM_WINDOWS_PRODUCT_VERSION_OVERRIDE
 try {
-  $publish = Join-Path $work 'bootstrapper'
-  & $dotnet publish (Join-Path $repo 'bridge\bootstrapper\AurumBridge.Bootstrapper\AurumBridge.Bootstrapper.csproj') `
-    -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true `
-    -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:DebugType=None -p:DebugSymbols=false -p:Version=$LauncherVersion `
-    "-p:AurumBootstrapPublicKey=$publicKeyPath" `
-    "-p:AurumServerUrl=$($uri.GetLeftPart([UriPartial]::Authority))" `
-    "-p:AurumLoopbackServerUrl=$loopbackServerValue" `
-    "-p:AurumLauncherVersion=$LauncherVersion" `
-    "-p:AurumTargetEnvironment=$TargetEnvironment" `
-    -o $publish
-  if ($LASTEXITCODE -ne 0) { throw 'bootstrap_publish_failed' }
-  $executable = Join-Path $publish 'LiangjianBridgeSetup.exe'
-  if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'bootstrap_publish_failed' }
+  $env:CARGO_TARGET_DIR = Join-Path $work 'cargo-target'
+  $env:AURUM_BOOTSTRAPPER_PUBLIC_KEY_PATH = $publicKeyPath
+  $env:AURUM_BOOTSTRAPPER_SERVER_URL = $uri.GetLeftPart([UriPartial]::Authority)
+  $env:AURUM_BOOTSTRAPPER_LAUNCHER_VERSION = $LauncherVersion
+  $env:AURUM_BOOTSTRAPPER_TARGET_ENVIRONMENT = $TargetEnvironment
+  $env:AURUM_WINDOWS_PRODUCT_VERSION_OVERRIDE = $LauncherVersion
+  & $cargo build --locked --release --target x86_64-pc-windows-msvc `
+    -p liangjian-bridge-bootstrapper --manifest-path (Join-Path $repo 'bridge\native\Cargo.toml')
+  if ($LASTEXITCODE -ne 0) { throw 'bootstrap_native_build_failed' }
+  $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc\release\liangjian-bridge-bootstrapper.exe'
+  if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'bootstrap_native_build_failed' }
   $launcherProductVersion = (Get-Item -LiteralPath $executable).VersionInfo.ProductVersion
   $launcherFileVersion = $null
   if (-not [Version]::TryParse(($launcherProductVersion -split '[+-]')[0], [ref]$launcherFileVersion) -or
@@ -124,6 +134,7 @@ try {
     server=$uri.GetLeftPart([UriPartial]::Authority)
     loopback_server=if ($loopbackServerValue) { $loopbackServerValue } else { $null }
     launcher_version=$LauncherVersion
+    implementation='rust-native'
     single_runtime_installer=$true
     public_key_sha256=(Get-FileHash -LiteralPath $publicKeyPath -Algorithm SHA256).Hash.ToLowerInvariant()
     installer_size_bytes=(Get-Item -LiteralPath $destination).Length
@@ -145,6 +156,12 @@ try {
   } | ConvertTo-Json
 }
 finally {
+  $env:CARGO_TARGET_DIR = $previousCargoTarget
+  $env:AURUM_BOOTSTRAPPER_PUBLIC_KEY_PATH = $previousPublicKey
+  $env:AURUM_BOOTSTRAPPER_SERVER_URL = $previousServerUrl
+  $env:AURUM_BOOTSTRAPPER_LAUNCHER_VERSION = $previousLauncherVersion
+  $env:AURUM_BOOTSTRAPPER_TARGET_ENVIRONMENT = $previousTargetEnvironment
+  $env:AURUM_WINDOWS_PRODUCT_VERSION_OVERRIDE = $previousWindowsVersion
   if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
   if (-not $succeeded -and (Test-Path -LiteralPath $output)) { Remove-Item -LiteralPath $output -Recurse -Force }
 }

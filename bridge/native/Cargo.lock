@@ -1019,6 +1019,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "liangjian-bridge-bootstrapper"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "liangjian-bridge-installer",
+ "serde",
+ "serde_json",
+ "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "liangjian-bridge-compat-probe"
 version = "3.0.0-alpha.1"
 dependencies = [
@@ -1064,6 +1075,7 @@ dependencies = [
  "base64",
  "bridge-update",
  "p256",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

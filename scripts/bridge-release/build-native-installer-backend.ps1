@@ -46,6 +46,7 @@ if (-not (Test-Path -LiteralPath $cargo -PathType Leaf)) {
 $env:AURUM_INSTALLER_PUBLIC_KEY_PATH = $publicKeyPath
 $env:AURUM_INSTALLER_LAUNCHER_VERSION = $LauncherVersion
 $env:AURUM_INSTALLER_TARGET_ENVIRONMENT = $TargetEnvironment
+$env:AURUM_WINDOWS_PRODUCT_VERSION_OVERRIDE = $LauncherVersion
 & $cargo build --locked --release --target x86_64-pc-windows-msvc `
   -p liangjian-bridge-installer --manifest-path (Join-Path $repo 'bridge\native\Cargo.toml')
 if ($LASTEXITCODE -ne 0) { throw 'native_installer_build_failed' }

@@ -1,7 +1,8 @@
 use bridge_update::{
-    ReleaseActivationStore, ReleaseManifest, ReleaseManifestVerifier, ReleasePackage,
-    extract_verified_package, validate_native_release_layout,
-    validate_release_package_compatibility, verified_expanded_size, verify_package_file,
+    InstallationIdentityStore, ReleaseActivationStore, ReleaseManifest, ReleaseManifestClient,
+    ReleaseManifestVerifier, ReleasePackage, ReleasePackageStager, extract_verified_package,
+    validate_native_release_layout, validate_release_package_compatibility, verified_expanded_size,
+    verify_package_file,
 };
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
@@ -12,7 +13,9 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+use url::{Host, Url};
 use windows_registry::CURRENT_USER;
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
@@ -37,6 +40,7 @@ const MAXIMUM_MANIFEST_BYTES: u64 = 128 * 1024;
 const MAXIMUM_TOTAL_EXPANDED_BYTES: u64 = 1024 * 1024 * 1024;
 const REQUIRED_MODULES: [&str; 3] = ["core", "adapter.mt5.python", "adapter.mt4"];
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+const BOOTSTRAP_MANIFEST_PATH: &str = "/api/bridge/v3/releases/bootstrap";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InstallerError {
@@ -118,6 +122,14 @@ impl OfflineInstaller {
             .map_err(|_| InstallerError::new("bootstrap_io_failed"))?;
         let _installation_lock =
             InstallationLock::acquire(&install_root, self.configuration.rehearsal)?;
+        self.install_bundle(&bundle_root, &install_root).await
+    }
+
+    async fn install_bundle(
+        &self,
+        bundle_root: &Path,
+        install_root: &Path,
+    ) -> Result<InstallOutcome, InstallerError> {
         if !self.configuration.rehearsal && bridge_processes_running()? {
             return Err(InstallerError::new("bootstrap_running_process_detected"));
         }
@@ -131,17 +143,17 @@ impl OfflineInstaller {
         fs::create_dir(&operation_root).map_err(|_| InstallerError::new("bootstrap_io_failed"))?;
         let _operation_cleanup = TemporaryDirectoryCleanup {
             directory: operation_root.clone(),
-            required_parent: install_root.clone(),
+            required_parent: install_root.to_path_buf(),
             required_prefix: ".bootstrap-",
         };
         let manifest = load_and_verify_manifest(
-            &bundle_root,
+            bundle_root,
             &self.configuration.public_key_pem,
             &self.configuration.launcher_version,
         )?;
         validate_bootstrap_manifest(&manifest)?;
         let version_directory = operation_root.join("version");
-        extract_offline_packages(&bundle_root, &version_directory, &manifest).await?;
+        extract_offline_packages(bundle_root, &version_directory, &manifest).await?;
         validate_native_release_layout(&version_directory)
             .map_err(|error| InstallerError::new(error.code()))?;
         write_new_file(
@@ -151,7 +163,7 @@ impl OfflineInstaller {
         )?;
 
         let installed_version =
-            install_version(&install_root, &version_directory, &manifest.release_version)?;
+            install_version(install_root, &version_directory, &manifest.release_version)?;
         let packaged_launcher = installed_version.join("launcher").join(LAUNCHER_FILE_NAME);
         if !packaged_launcher.is_file() {
             return Err(InstallerError::new("bootstrap_native_launcher_missing"));
@@ -168,15 +180,142 @@ impl OfflineInstaller {
             .map_err(|error| InstallerError::new(error.code()))?;
         if !self.configuration.rehearsal {
             register_installation(
-                &install_root,
+                install_root,
                 &manifest.release_version,
-                directory_size(&install_root)?,
+                directory_size(install_root)?,
             )?;
         }
         Ok(InstallOutcome {
             version: manifest.release_version,
-            install_root,
+            install_root: install_root.to_path_buf(),
         })
+    }
+}
+
+pub struct OnlineInstaller {
+    configuration: InstallerConfiguration,
+    server_base: Url,
+    client: reqwest::Client,
+}
+
+impl OnlineInstaller {
+    pub fn new(
+        configuration: InstallerConfiguration,
+        server_url: &str,
+    ) -> Result<Self, InstallerError> {
+        configuration.validate()?;
+        let server_base = validate_online_server(server_url, &configuration.target_environment)?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10 * 60))
+            .build()
+            .map_err(|_| InstallerError::new("bootstrap_network_client_failed"))?;
+        Ok(Self {
+            configuration,
+            server_base,
+            client,
+        })
+    }
+
+    pub fn server_url(&self) -> &str {
+        self.server_base.as_str()
+    }
+
+    pub async fn install(
+        &self,
+        status: &(dyn Fn(&str) + Send + Sync),
+    ) -> Result<InstallOutcome, InstallerError> {
+        let install_root = std::path::absolute(&self.configuration.install_root)
+            .map_err(|_| InstallerError::new("bootstrap_install_root_invalid"))?;
+        fs::create_dir_all(&install_root)
+            .map_err(|_| InstallerError::new("bootstrap_io_failed"))?;
+        let _installation_lock =
+            InstallationLock::acquire(&install_root, self.configuration.rehearsal)?;
+        if !self.configuration.rehearsal && bridge_processes_running()? {
+            return Err(InstallerError::new("bootstrap_running_process_detected"));
+        }
+        let bundle_root = install_root.join(format!(
+            ".bootstrap-online-{}-{}-{}",
+            process::id(),
+            timestamp_nanos(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&bundle_root).map_err(|_| InstallerError::new("bootstrap_io_failed"))?;
+        let _bundle_cleanup = TemporaryDirectoryCleanup {
+            directory: bundle_root.clone(),
+            required_parent: install_root.clone(),
+            required_prefix: ".bootstrap-online-",
+        };
+
+        status("正在验证发布信息…");
+        status(if is_loopback_url(&self.server_base) {
+            "正在检查本地安装服务…"
+        } else {
+            "正在连接安装服务器…"
+        });
+        let installation_id = InstallationIdentityStore::new(install_root.join("installation-id"))
+            .map_err(|error| InstallerError::new(error.code()))?
+            .load_or_create()
+            .map_err(|error| InstallerError::new(error.code()))?;
+        let verifier = ReleaseManifestVerifier::new(&self.configuration.public_key_pem)
+            .map_err(|error| InstallerError::new(error.code()))?;
+        let mut client = ReleaseManifestClient::with_endpoint(
+            self.server_base.clone(),
+            self.client.clone(),
+            BOOTSTRAP_MANIFEST_PATH,
+        )
+        .map_err(|error| InstallerError::new(error.code()))?;
+        let deadline = if is_loopback_url(&self.server_base) {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_secs(15)
+        };
+        let manifest = match tokio::time::timeout(
+            deadline,
+            client.fetch_verified(
+                &verifier,
+                &self.configuration.launcher_version,
+                &installation_id,
+                "stable",
+            ),
+        )
+        .await
+        {
+            Ok(Ok(Some(manifest))) => manifest,
+            Ok(Ok(None)) | Err(_) => {
+                return Err(InstallerError::new("bootstrap_release_unavailable"));
+            }
+            Ok(Err(error)) if error.code() == "update_manifest_request_failed" => {
+                return Err(InstallerError::new("bootstrap_release_unavailable"));
+            }
+            Ok(Err(error)) => return Err(InstallerError::new(error.code())),
+        };
+        validate_bootstrap_manifest(&manifest)?;
+        write_new_file(
+            &bundle_root.join("manifest.signed.json"),
+            &serde_json::to_vec(&manifest)
+                .map_err(|_| InstallerError::new("bootstrap_json_invalid"))?,
+        )?;
+
+        status(&format!("正在下载量见智桥 {}…", manifest.release_version));
+        let stager = ReleasePackageStager::new(self.client.clone(), bundle_root.join("cache"))
+            .map_err(|error| InstallerError::new(error.code()))?;
+        let mut packages = manifest.packages.iter().collect::<Vec<_>>();
+        packages.sort_by(|left, right| left.module_id.cmp(&right.module_id));
+        for package in packages {
+            let downloaded = stager
+                .download_verified(package)
+                .await
+                .map_err(|error| InstallerError::new(error.code()))?;
+            copy_file_atomically(
+                &downloaded,
+                &bundle_root.join(package_file_name(&package.module_id)?),
+            )?;
+        }
+
+        status("正在安装稳定启动组件…");
+        OfflineInstaller::new(self.configuration.clone())?
+            .install_bundle(&bundle_root, &install_root)
+            .await
     }
 }
 
@@ -213,6 +352,62 @@ pub fn write_failure_log(error: InstallerError) {
     }
     let payload = format!("{}\r\n{}\r\n", now_utc_msc(), error.code());
     let _ = fs::write(logs.join("installer-last-error.log"), payload.as_bytes());
+}
+
+pub fn describe_installer_error(error: InstallerError) -> &'static str {
+    match error.code() {
+        "bootstrap_running_process_detected" => "请先退出正在运行的量见智桥，再重新安装。",
+        "bootstrap_installation_in_progress" => "另一个安装程序正在运行，请稍后重试。",
+        "bootstrap_release_unavailable" => "当前没有可用于首次安装的稳定版本，请稍后重试。",
+        "update_manifest_signature_invalid" | "update_package_signature_invalid" => {
+            "安装包安全校验失败，已停止安装。"
+        }
+        "update_package_integrity_failed" | "update_package_size_mismatch" => {
+            "安装包下载不完整，请检查网络后重试。"
+        }
+        _ => "安装未完成，请检查网络后重试；如仍失败，请联系管理员。",
+    }
+}
+
+pub fn start_launcher(install_root: impl AsRef<Path>) -> Result<(), InstallerError> {
+    let root = std::path::absolute(install_root.as_ref())
+        .map_err(|_| InstallerError::new("bootstrap_install_root_invalid"))?;
+    let launcher = root.join(LAUNCHER_FILE_NAME);
+    if !launcher.is_file() {
+        return Err(InstallerError::new("bootstrap_native_launcher_missing"));
+    }
+    process::Command::new(launcher)
+        .spawn()
+        .map_err(|_| InstallerError::new("bootstrap_launcher_start_failed"))?;
+    Ok(())
+}
+
+fn validate_online_server(value: &str, target_environment: &str) -> Result<Url, InstallerError> {
+    let mut server =
+        Url::parse(value).map_err(|_| InstallerError::new("bootstrap_server_url_invalid"))?;
+    if server.cannot_be_a_base()
+        || !server.username().is_empty()
+        || server.password().is_some()
+        || server.query().is_some()
+        || server.fragment().is_some()
+        || server.path() != "/"
+        || (target_environment == "test"
+            && (server.scheme() != "http" || !is_loopback_url(&server)))
+        || (target_environment == "production" && server.scheme() != "https")
+    {
+        return Err(InstallerError::new("bootstrap_server_url_invalid"));
+    }
+    server.set_path("/");
+    Ok(server)
+}
+
+fn is_loopback_url(server: &Url) -> bool {
+    match server.host() {
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
 }
 
 fn load_and_verify_manifest(
@@ -321,13 +516,16 @@ fn offline_package_path(
     bundle_root: &Path,
     package: &ReleasePackage,
 ) -> Result<PathBuf, InstallerError> {
-    let file_name = match package.module_id.as_str() {
+    Ok(bundle_root.join(package_file_name(&package.module_id)?))
+}
+
+fn package_file_name(module_id: &str) -> Result<&'static str, InstallerError> {
+    Ok(match module_id {
         "core" => "core.zip",
         "adapter.mt5.python" => "adapter.mt5.python.zip",
         "adapter.mt4" => "adapter.mt4.zip",
         _ => return Err(InstallerError::new("bootstrap_offline_package_invalid")),
-    };
-    Ok(bundle_root.join(file_name))
+    })
 }
 
 fn validate_bundle_root(value: &Path) -> Result<PathBuf, InstallerError> {

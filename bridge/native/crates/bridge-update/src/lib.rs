@@ -8,8 +8,8 @@ pub use activation::{
     promote_staged_launcher,
 };
 pub use coordinator::{
-    BridgeUpdateCoordinator, BridgeUpdateEnvironment, StagedRelease, UPDATE_CHECK_INTERVAL,
-    validate_native_release_layout, validate_release_package_compatibility,
+    BridgeUpdateCoordinator, BridgeUpdateEnvironment, InstallationIdentityStore, StagedRelease,
+    UPDATE_CHECK_INTERVAL, validate_native_release_layout, validate_release_package_compatibility,
 };
 pub use manifest::{
     ReleaseManifest, ReleaseManifestClient, ReleaseManifestVerifier, ReleasePackage,

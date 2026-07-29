@@ -1,0 +1,13 @@
+[package]
+name = "liangjian-bridge-bootstrapper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+liangjian-bridge-installer = { path = "../bridge-installer" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+windows-sys.workspace = true

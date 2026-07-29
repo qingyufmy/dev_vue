@@ -5,6 +5,7 @@ use std::process::Command;
 
 pub fn embed_windows_executable_resource(file_description: &str, original_file_name: &str) {
     println!("cargo:rerun-if-changed=../../../assets/liangjian-bridge.ico");
+    println!("cargo:rerun-if-env-changed=AURUM_WINDOWS_PRODUCT_VERSION_OVERRIDE");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
@@ -18,7 +19,8 @@ pub fn embed_windows_executable_resource(file_description: &str, original_file_n
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("out dir"));
     let resource_script = out_dir.join("liangjian-bridge.rc");
     let compiled_resource = out_dir.join("liangjian-bridge.res");
-    let package_version = env::var("CARGO_PKG_VERSION").expect("package version");
+    let package_version = env::var("AURUM_WINDOWS_PRODUCT_VERSION_OVERRIDE")
+        .unwrap_or_else(|_| env::var("CARGO_PKG_VERSION").expect("package version"));
     let numeric_version = numeric_version(&package_version);
     let icon_path = icon.to_string_lossy().replace('\\', "\\\\");
     let resource = format!(
