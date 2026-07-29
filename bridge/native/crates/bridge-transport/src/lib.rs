@@ -21,6 +21,22 @@ use tokio_tungstenite::tungstenite::protocol::{Message, WebSocketConfig};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_with_config};
 use url::Url;
 
+mod inbound;
+mod runtime;
+mod supervisor;
+
+pub use inbound::{
+    InboundEventSink, NativeInboundRouter, NoopInboundEventSink, ReleaseAvailableNotification,
+};
+pub use runtime::{
+    SessionCancellation, SessionChannel, SessionIntervals, SessionRuntime,
+    TerminalFreshnessProvider,
+};
+pub use supervisor::{
+    CredentialSource, HelloProvider, NoopSupervisorStateSink, SessionConnector, SessionSupervisor,
+    SupervisorStateSink, V3SessionConnector,
+};
+
 pub const ENDPOINT_SETTINGS_FILE_NAME: &str = "endpoint-settings.json";
 pub const BRIDGE_WEBSOCKET_PATH: &str = "/aurum-api/bridge/v3/ws";
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -38,7 +54,7 @@ impl TransportError {
         &self.code
     }
 
-    fn new(code: impl Into<String>) -> Self {
+    pub(crate) fn new(code: impl Into<String>) -> Self {
         Self { code: code.into() }
     }
 }
@@ -410,7 +426,7 @@ impl BridgeWebSocketSession {
         Ok(payload)
     }
 
-    pub async fn close(mut self) -> Result<(), TransportError> {
+    pub async fn close(&mut self) -> Result<(), TransportError> {
         self.socket
             .close(None)
             .await
@@ -735,6 +751,10 @@ impl OutboxPump {
                 },
             );
         Ok(true)
+    }
+
+    pub fn release_claim(&self, message_id: &str) -> Result<(), TransportError> {
+        self.release(message_id)
     }
 
     pub async fn handle_data_acknowledgement(

@@ -13,9 +13,12 @@
 - `bridge-observability` 写入现有内置日志查看器可直接读取的脱敏 JSONL，并持久化 panic 与非正常退出证据。
 - `bridge-runtime-win` 与 .NET V3 共用锁文件及 `Local\*.activate/.shutdown` 事件，并用 Windows Job Object 监管、清理和退避重启子进程树。
 - `bridge-transport` 已完成统一端点解析、rustls HTTP / WebSocket、refresh / ticket、Hello / ACK、心跳包络、严格优先队列、重连状态机和 Outbox 泵基础。
+- 原生会话编排器现已联动 WebSocket 收发、10 秒心跳、200 ms Outbox 轮询和整组取消；任一循环失败都会关闭本次会话并保留原始稳定错误码。
+- 入站路由已安全处理 `data_ack`、gap 全量恢复通知、版本通知、心跳和服务器错误；交易命令、报价/数据请求及命令结果 ACK 在账本和 Worker 接入前继续以 `native_bridge_runtime_not_ready` 等稳定错误失败关闭。
+- 原生连接监督器已保留 V3 的 1/2/4/8/10 秒退避，并在凭据缺失时等待明确的授权变化，不会自行打开浏览器。
 - 本地端到端测试会真实执行 refresh → ticket → WebSocket ticket → Hello / ACK → Heartbeat，并验证二进制帧失败关闭。
 - `liangjian-bridge-compat-probe` 可在不输出令牌或业务数据的情况下检查默认账户或观摩源的本地迁移兼容性。
-- `bridge-core` 普通运行现在会建立日志、单实例和运行标记后以 `native_bridge_runtime_not_ready` 失败关闭；传输层尚未接入 Core，仍不生成 Launcher ready 信号，也不连接服务器或 MT。
+- `bridge-core` 普通运行现在会建立日志、单实例和运行标记后以 `native_bridge_runtime_not_ready` 失败关闭；会话编排器尚未接入 Core，仍不生成 Launcher ready 信号，也不连接服务器或 MT。
 
 ## 本地验证
 
