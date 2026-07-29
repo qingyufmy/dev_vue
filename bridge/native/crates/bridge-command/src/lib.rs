@@ -69,10 +69,15 @@ pub trait CommandWorker: Send + Sync {
     ) -> BoxFuture<'_, Result<CommandResultMessage, CommandWorkerError>>;
 }
 
+pub trait CommandExecutionObserver: Send + Sync {
+    fn command_succeeded(&self, result: &CommandResultMessage);
+}
+
 pub struct CommandDispatcher {
     store: Arc<OutboxStore>,
     admission: Arc<dyn CommandAdmissionPolicy>,
     worker: Arc<dyn CommandWorker>,
+    execution_observer: Option<Arc<dyn CommandExecutionObserver>>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     worker_timeout: Duration,
     receipt_limit: usize,
@@ -95,12 +100,18 @@ impl CommandDispatcher {
             store,
             admission,
             worker,
+            execution_observer: None,
             clock,
             worker_timeout,
             receipt_limit: DEFAULT_RECEIPT_LIMIT,
             sequence: AtomicU64::new(0),
             in_flight: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn with_execution_observer(mut self, observer: Arc<dyn CommandExecutionObserver>) -> Self {
+        self.execution_observer = Some(observer);
+        self
     }
 
     pub async fn dispatch(
@@ -196,7 +207,15 @@ impl CommandDispatcher {
                 }
             }
         };
-        self.persist_result(result).await
+        let persisted = self.persist_result(result).await?;
+        if persisted.status == "succeeded"
+            && let Some(observer) = &self.execution_observer
+        {
+            let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                observer.command_succeeded(&persisted);
+            }));
+        }
+        Ok(persisted)
     }
 
     async fn read_receipt(
@@ -373,6 +392,23 @@ mod tests {
         calls: AtomicUsize,
     }
 
+    #[derive(Default)]
+    struct CountingObserver(AtomicUsize);
+
+    impl CommandExecutionObserver for CountingObserver {
+        fn command_succeeded(&self, _result: &CommandResultMessage) {
+            self.0.fetch_add(1, AtomicOrdering::SeqCst);
+        }
+    }
+
+    struct PanickingObserver;
+
+    impl CommandExecutionObserver for PanickingObserver {
+        fn command_succeeded(&self, _result: &CommandResultMessage) {
+            panic!("simulated post-execution observer failure");
+        }
+    }
+
     impl FakeWorker {
         fn new(mode: WorkerMode) -> Self {
             Self {
@@ -478,11 +514,17 @@ mod tests {
     async fn concurrent_duplicates_execute_once_and_restart_uses_the_receipt() {
         let fixture = StoreFixture::new("single-flight");
         let worker = Arc::new(FakeWorker::new(WorkerMode::Delay));
-        let active_dispatcher = dispatcher(
-            fixture.store(),
-            Arc::new(AllowAdmission),
-            worker.clone(),
-            Duration::from_secs(1),
+        let observer = Arc::new(CountingObserver::default());
+        let active_dispatcher = Arc::new(
+            CommandDispatcher::new(
+                fixture.store(),
+                Arc::new(AllowAdmission),
+                worker.clone(),
+                Arc::new(|| NOW),
+                Duration::from_secs(1),
+            )
+            .expect("dispatcher")
+            .with_execution_observer(observer.clone()),
         );
         let command = command("command_01JSINGLEFLT");
         let results = futures_util::future::join_all((0..64).map(|_| {
@@ -497,6 +539,7 @@ mod tests {
                 .is_ok_and(|result| result.status == "succeeded")
         }));
         assert_eq!(worker.calls.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(observer.0.load(AtomicOrdering::SeqCst), 1);
 
         let restarted_worker = Arc::new(FakeWorker::new(WorkerMode::Success));
         let restarted = dispatcher(
@@ -514,6 +557,7 @@ mod tests {
             "succeeded"
         );
         assert_eq!(restarted_worker.calls.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(observer.0.load(AtomicOrdering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -561,6 +605,33 @@ mod tests {
                 .code(),
             "bridge_command_id_conflict"
         );
+        assert_eq!(worker.calls.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn post_execution_observer_failure_never_changes_the_durable_success() {
+        let fixture = StoreFixture::new("observer-panic");
+        let worker = Arc::new(FakeWorker::new(WorkerMode::Success));
+        let dispatcher = CommandDispatcher::new(
+            fixture.store(),
+            Arc::new(AllowAdmission),
+            worker.clone(),
+            Arc::new(|| NOW),
+            Duration::from_secs(1),
+        )
+        .expect("dispatcher")
+        .with_execution_observer(Arc::new(PanickingObserver));
+        let command = command("command_01JOBSERVER1");
+        let first = dispatcher
+            .dispatch(command.clone())
+            .await
+            .expect("persisted success");
+        let duplicate = dispatcher
+            .dispatch(command)
+            .await
+            .expect("durable duplicate");
+        assert_eq!(first.status, "succeeded");
+        assert_eq!(duplicate, first);
         assert_eq!(worker.calls.load(AtomicOrdering::SeqCst), 1);
     }
 

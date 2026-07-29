@@ -823,6 +823,7 @@ dependencies = [
 name = "liangjian-bridge-core"
 version = "3.0.0-alpha.1"
 dependencies = [
+ "bridge-command",
  "bridge-contract",
  "bridge-foundation",
  "bridge-observability",
@@ -831,8 +832,13 @@ dependencies = [
  "bridge-store",
  "bridge-terminal-data",
  "bridge-terminal-session",
+ "bridge-transport",
  "bridge-worker-host",
+ "futures-util",
  "serde_json",
+ "sha2",
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

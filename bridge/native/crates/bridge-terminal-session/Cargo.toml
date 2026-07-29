@@ -6,11 +6,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+bridge-contract = { path = "../bridge-contract" }
 bridge-runtime-win = { path = "../bridge-runtime-win" }
 bridge-store = { path = "../bridge-store" }
 bridge-terminal-data = { path = "../bridge-terminal-data" }
 bridge-worker-host = { path = "../bridge-worker-host" }
 tokio.workspace = true
-
-[dev-dependencies]
-bridge-contract = { path = "../bridge-contract" }

@@ -1,3 +1,4 @@
+use bridge_contract::TerminalStreamFreshness;
 use bridge_runtime_win::RestartPolicy;
 use bridge_store::OutboxStore;
 use bridge_terminal_data::{
@@ -7,6 +8,7 @@ use bridge_worker_host::{
     WorkerCapability, WorkerDataRouter, WorkerHostError, WorkerLifecycleState, WorkerProgram,
     WorkerRegistry, WorkerRoute, WorkerSupervisor, WorkerSupervisorHandle,
 };
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -138,6 +140,25 @@ impl TerminalSessionHandle {
         self.collector
             .request_full_snapshot(stream)
             .map_err(projection_error)
+    }
+
+    pub fn freshness(&self) -> TerminalStreamFreshness {
+        let status = self.collector.status();
+        let streams = status
+            .last_success_at_utc_msc
+            .filter(|observed| *observed > 0)
+            .map(|observed| {
+                ["account", "positions", "orders"]
+                    .into_iter()
+                    .map(|stream| (stream.to_owned(), observed))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        TerminalStreamFreshness {
+            terminal_instance_id: self.route.terminal_instance_id.clone(),
+            connection_epoch: self.route.connection_epoch,
+            streams,
+        }
     }
 }
 
@@ -430,6 +451,21 @@ mod tests {
             route(2)
         );
         assert!(registry.resolve(&route(2)).await.is_ok());
+        let freshness = replacement.freshness();
+        assert_eq!(
+            freshness.terminal_instance_id,
+            route(2).terminal_instance_id
+        );
+        assert_eq!(freshness.connection_epoch, 2);
+        assert_eq!(
+            freshness
+                .streams
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["account", "orders", "positions"]
+        );
+        assert!(freshness.streams.values().all(|observed| *observed > 0));
         assert_eq!(
             registry
                 .resolve(&route(1))

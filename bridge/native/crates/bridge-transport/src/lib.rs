@@ -53,6 +53,10 @@ pub struct TransportError {
 }
 
 impl TransportError {
+    pub fn from_static_code(code: &'static str) -> Self {
+        Self::new(code)
+    }
+
     pub fn code(&self) -> &str {
         &self.code
     }

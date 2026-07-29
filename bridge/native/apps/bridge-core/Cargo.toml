@@ -6,6 +6,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+bridge-command = { path = "../../crates/bridge-command" }
+bridge-contract = { path = "../../crates/bridge-contract" }
 bridge-foundation = { path = "../../crates/bridge-foundation" }
 bridge-observability = { path = "../../crates/bridge-observability" }
 bridge-runtime-win = { path = "../../crates/bridge-runtime-win" }
@@ -13,8 +15,12 @@ bridge-security-win = { path = "../../crates/bridge-security-win" }
 bridge-store = { path = "../../crates/bridge-store" }
 bridge-terminal-data = { path = "../../crates/bridge-terminal-data" }
 bridge-terminal-session = { path = "../../crates/bridge-terminal-session" }
+bridge-transport = { path = "../../crates/bridge-transport" }
 bridge-worker-host = { path = "../../crates/bridge-worker-host" }
+futures-util.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+windows-sys.workspace = true
 
 [dev-dependencies]
-bridge-contract = { path = "../../crates/bridge-contract" }
 serde_json.workspace = true

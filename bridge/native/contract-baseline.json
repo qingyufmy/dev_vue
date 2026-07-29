@@ -137,6 +137,15 @@
     "prepared_route_matches_persisted_binding": true,
     "workers_start_only_with_server_runtime": true
   },
+  "core_connected_runtime_contract": {
+    "credential_changes_detect_pair_and_logout": true,
+    "server_and_terminal_sessions_share_cancellation": true,
+    "terminal_shutdown_order_is_reverse_start_order": true,
+    "gap_requires_current_terminal_epoch": true,
+    "successful_persisted_command_wakes_collector_once": true,
+    "heartbeat_uses_terminal_collector_freshness": true,
+    "post_execution_observer_failure_does_not_change_receipt": true
+  },
   "server_transport_contract": {
     "protocol_version": 3,
     "websocket_path": "/aurum-api/bridge/v3/ws",
