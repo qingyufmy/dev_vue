@@ -40,7 +40,15 @@
       "AURUM_BRIDGE_WORKER_BROKER_SERVER",
       "AURUM_BRIDGE_WORKER_LOGIN",
       "AURUM_BRIDGE_WORKER_CONNECTION_EPOCH"
-    ]
+    ],
+    "client_registry": {
+      "key": "terminal_instance_id",
+      "route_fields": ["account_ref", "connection_epoch", "platform"],
+      "monotonic_client_generation": true,
+      "request_pre_and_post_generation_fencing": true,
+      "terminal_claim_supersedes_previous_supervisor": true,
+      "stale_supervisor_cannot_remove_or_replace_current_client": true
+    }
   },
   "mt4_ea_protocol": {
     "wire_format": "little-endian-u32-length-prefixed-binary",

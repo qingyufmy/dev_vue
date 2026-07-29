@@ -1,4 +1,4 @@
-use crate::{WorkerClient, WorkerRequest, WorkerResponseBody, WorkerRoute};
+use crate::{WorkerClient, WorkerRegistry, WorkerRequest, WorkerResponseBody, WorkerRoute};
 use bridge_command::{CommandWorker, CommandWorkerError};
 use bridge_contract::{CommandMessage, CommandResultMessage};
 use futures_util::future::BoxFuture;
@@ -8,6 +8,12 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 pub struct IpcCommandWorker<S> {
     client: Arc<WorkerClient<S>>,
+    clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    request_timeout: Duration,
+}
+
+pub struct RegistryCommandWorker<S> {
+    registry: Arc<WorkerRegistry<S>>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     request_timeout: Duration,
 }
@@ -45,6 +51,8 @@ where
             if now_utc_msc <= 0 {
                 return Err(CommandWorkerError::new("worker_clock_invalid"));
             }
+            let request_timeout =
+                effective_timeout(command.deadline_utc_msc, now_utc_msc, self.request_timeout)?;
             let route = WorkerRoute {
                 terminal_instance_id: command.terminal_instance_id.clone(),
                 platform: self.client.route().platform.clone(),
@@ -55,16 +63,82 @@ where
                 .map_err(|error| CommandWorkerError::new(error.code()))?;
             let response = self
                 .client
-                .request(&request, now_utc_msc, self.request_timeout)
+                .request(&request, now_utc_msc, request_timeout)
                 .await
                 .map_err(|error| CommandWorkerError::new(error.code()))?;
-            match response.body {
-                WorkerResponseBody::CommandResult { result } => Ok(*result),
-                WorkerResponseBody::Error { error_code, .. } => {
-                    Err(CommandWorkerError::new(error_code))
-                }
-            }
+            map_response(response.body)
         })
+    }
+}
+
+impl<S> RegistryCommandWorker<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    pub fn new(
+        registry: Arc<WorkerRegistry<S>>,
+        clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+        request_timeout: Duration,
+    ) -> Result<Self, CommandWorkerError> {
+        if request_timeout.is_zero() {
+            return Err(CommandWorkerError::new("worker_request_timeout_invalid"));
+        }
+        Ok(Self {
+            registry,
+            clock,
+            request_timeout,
+        })
+    }
+}
+
+impl<S> CommandWorker for RegistryCommandWorker<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    fn execute(
+        &self,
+        command: CommandMessage,
+    ) -> BoxFuture<'_, Result<CommandResultMessage, CommandWorkerError>> {
+        Box::pin(async move {
+            let now_utc_msc = (self.clock)();
+            if now_utc_msc <= 0 {
+                return Err(CommandWorkerError::new("worker_clock_invalid"));
+            }
+            let request_timeout =
+                effective_timeout(command.deadline_utc_msc, now_utc_msc, self.request_timeout)?;
+            let lease = self
+                .registry
+                .resolve_command(&command)
+                .await
+                .map_err(|error| CommandWorkerError::new(error.code()))?;
+            let request = WorkerRequest::from_command(lease.route().clone(), command)
+                .map_err(|error| CommandWorkerError::new(error.code()))?;
+            let response = lease
+                .request(&self.registry, &request, now_utc_msc, request_timeout)
+                .await
+                .map_err(|error| CommandWorkerError::new(error.code()))?;
+            map_response(response.body)
+        })
+    }
+}
+
+fn effective_timeout(
+    deadline_utc_msc: i64,
+    now_utc_msc: i64,
+    configured: Duration,
+) -> Result<Duration, CommandWorkerError> {
+    let remaining_msc = deadline_utc_msc
+        .checked_sub(now_utc_msc)
+        .and_then(|value| u64::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| CommandWorkerError::new("worker_command_expired"))?;
+    Ok(configured.min(Duration::from_millis(remaining_msc)))
+}
+
+fn map_response(body: WorkerResponseBody) -> Result<CommandResultMessage, CommandWorkerError> {
+    match body {
+        WorkerResponseBody::CommandResult { result } => Ok(*result),
+        WorkerResponseBody::Error { error_code, .. } => Err(CommandWorkerError::new(error_code)),
     }
 }
 
@@ -199,5 +273,23 @@ mod tests {
             Some(false)
         );
         worker_task.await.expect("worker task");
+    }
+
+    #[tokio::test]
+    async fn expired_command_is_rejected_before_registry_lookup_or_worker_io() {
+        let registry = Arc::new(WorkerRegistry::<tokio::io::DuplexStream>::new());
+        let worker =
+            RegistryCommandWorker::new(registry, Arc::new(|| NOW), Duration::from_secs(30))
+                .expect("registry worker");
+        let mut command = query_command();
+        command.deadline_utc_msc = NOW;
+        assert_eq!(
+            worker
+                .execute(command)
+                .await
+                .expect_err("expired command")
+                .code(),
+            "worker_command_expired"
+        );
     }
 }

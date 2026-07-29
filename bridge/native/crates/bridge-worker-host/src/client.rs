@@ -89,6 +89,10 @@ where
         self.healthy.load(Ordering::Acquire)
     }
 
+    pub fn invalidate(&self) {
+        self.fail();
+    }
+
     pub async fn request(
         &self,
         request: &WorkerRequest,

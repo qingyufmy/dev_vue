@@ -261,6 +261,7 @@ pub struct ProcessEvent {
     pub exit_code: Option<i32>,
 }
 
+#[derive(Clone)]
 pub struct ProcessSpec {
     executable: PathBuf,
     arguments: Vec<OsString>,

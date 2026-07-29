@@ -19,6 +19,7 @@ pub const WORKER_BROKER_SERVER_ENV: &str = "AURUM_BRIDGE_WORKER_BROKER_SERVER";
 pub const WORKER_LOGIN_ENV: &str = "AURUM_BRIDGE_WORKER_LOGIN";
 pub const WORKER_CONNECTION_EPOCH_ENV: &str = "AURUM_BRIDGE_WORKER_CONNECTION_EPOCH";
 
+#[derive(Clone)]
 pub struct WorkerProgram {
     process: ProcessSpec,
 }
@@ -182,7 +183,10 @@ mod tests {
             return;
         }
         let pipe_name = env::var(WORKER_PIPE_ENV).expect("pipe env");
-        let nonce = env::var(WORKER_NONCE_ENV).expect("nonce env");
+        let mut nonce = env::var(WORKER_NONCE_ENV).expect("nonce env");
+        if env::var("AURUM_TEST_WORKER_BAD_NONCE").as_deref() == Ok("1") {
+            nonce.push('0');
+        }
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_io()
             .enable_time()
@@ -219,7 +223,11 @@ mod tests {
             )
             .await
             .expect("hello");
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            let lifetime_msc = env::var("AURUM_TEST_WORKER_LIFETIME_MSC")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(30_000);
+            tokio::time::sleep(Duration::from_millis(lifetime_msc)).await;
         });
     }
 
