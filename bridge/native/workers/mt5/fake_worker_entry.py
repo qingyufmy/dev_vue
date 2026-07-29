@@ -8,7 +8,7 @@ from worker import run
 
 Account = namedtuple("Account", "login server balance equity margin_free trade_allowed trade_expert")
 Terminal = namedtuple("Terminal", "connected trade_allowed tradeapi_disabled")
-Position = namedtuple("Position", "ticket symbol type volume price_open sl tp magic")
+Position = namedtuple("Position", "ticket symbol type volume price_open sl tp magic comment")
 Order = namedtuple("Order", "ticket symbol type volume_initial volume_current price_open sl tp magic comment")
 Symbol = namedtuple("Symbol", "name trade_mode digits point trade_tick_size volume_min volume_max volume_step filling_mode")
 Tick = namedtuple("Tick", "bid ask last time_msc")
@@ -38,7 +38,8 @@ class FakeMt5:
     TRADE_RETCODE_DONE_PARTIAL = 10010
 
     def __init__(self):
-        self.positions = [Position(101, "XAUUSD.s", 0, 0.01, 2300.0, 2290.0, 2320.0, 234000)]
+        self.positions = [Position(101, "XAUUSD.s", 0, 0.01, 2300.0, 2290.0, 2320.0,
+                                   234000, "AURUM:command_01JRECOVER01")]
         self.orders = [Order(202, "XAUUSD.s", 2, 0.01, 0.01, 2280.0, 2270.0,
                              2310.0, 234000, "AI-PENDING")]
 
@@ -94,6 +95,13 @@ class FakeMt5:
         return SimpleNamespace(retcode=0, comment="ok")
 
     def order_send(self, request):
+        import os
+        from pathlib import Path
+        count_file = os.environ.get("AURUM_TEST_WORKER_ORDER_SEND_COUNT_FILE")
+        if count_file:
+            path = Path(count_file)
+            count = int(path.read_text(encoding="ascii")) if path.exists() else 0
+            path.write_text(str(count + 1), encoding="ascii")
         return SimpleNamespace(retcode=10009, order=1001, deal=2001, comment="done")
 
     def history_orders_get(self, *_args, **_kwargs):

@@ -192,7 +192,9 @@
     "mt5_query_adapter_implemented": true,
     "mt5_query_uses_fresh_command_id": true,
     "mt5_query_settlement_window_is_fail_closed": true,
-    "mt5_query_adapter_connected": false
+    "mt5_query_adapter_connected": true,
+    "startup_and_periodic_reconciliation_enabled": true,
+    "reconciliation_shutdown_is_cancellable": true
   },
   "core_process_lifecycle_contract": {
     "missing_authorization_waits_without_opening_browser": true,
@@ -205,6 +207,7 @@
     "loopback_process_test_covers_real_python_worker": true,
     "loopback_process_test_covers_data_forwarding": true,
     "loopback_process_test_covers_command_dispatch_and_result_ack": true,
+    "loopback_process_test_covers_interrupted_command_reconciliation_without_replay": true,
     "loopback_process_test_covers_disconnect_reconnect": true,
     "loopback_process_test_verifies_worker_exit": true
   },

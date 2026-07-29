@@ -1,4 +1,4 @@
-use bridge_contract::{AccountRef, HelloAcknowledgement, HelloMessage};
+use bridge_contract::{AccountRef, CommandMessage, HelloAcknowledgement, HelloMessage};
 use bridge_foundation::{profile_instance_id, resolve_profile_paths};
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
@@ -24,6 +24,8 @@ use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
+const RECOVERED_COMMAND_ID: &str = "command_01JRECOVER01";
+
 #[test]
 fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     let root = unique_test_directory();
@@ -40,6 +42,7 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     );
     let ready = root.join("ready.json");
     let worker_pid_file = root.join("worker.pid");
+    let order_send_count_file = root.join("order-send-count.txt");
     let mut child = ChildGuard::spawn(
         application.join("liangjian-bridge-core.exe"),
         &root,
@@ -53,7 +56,9 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
             && worker_pid_file.is_file()
             && server.saw_routed_full_snapshot(terminal_id)
             && server.saw_succeeded_command_result()
+            && server.saw_recovered_command_result()
             && command_is_acked(&paths.database_path)
+            && command_is_acked_by_id(&paths.database_path, RECOVERED_COMMAND_ID)
     });
     let worker_pid = fs::read_to_string(&worker_pid_file)
         .expect("worker pid")
@@ -79,6 +84,17 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     assert!(
         command_is_acked(&paths.database_path),
         "command result acknowledgement was not persisted"
+    );
+    assert!(
+        server.saw_recovered_command_result(),
+        "interrupted command was not reconciled from terminal facts"
+    );
+    assert_eq!(
+        fs::read_to_string(&order_send_count_file)
+            .expect("order send count")
+            .trim(),
+        "1",
+        "startup reconciliation must query terminal facts without replaying the interrupted order"
     );
 
     server.disconnect_first();
@@ -142,6 +158,10 @@ impl ChildGuard {
             .env("AURUM_BRIDGE_DATA_DIR", root)
             .env("LOCALAPPDATA", root.join("local"))
             .env("AURUM_TEST_WORKER_PID_FILE", root.join("worker.pid"))
+            .env(
+                "AURUM_TEST_WORKER_ORDER_SEND_COUNT_FILE",
+                root.join("order-send-count.txt"),
+            )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -268,6 +288,14 @@ impl LoopbackBridgeServer {
             .expect("message types")
             .iter()
             .any(|value| value == "command_result:succeeded:10009")
+    }
+
+    fn saw_recovered_command_result(&self) -> bool {
+        self.message_types
+            .lock()
+            .expect("message types")
+            .iter()
+            .any(|value| value == &format!("command_result_id:{RECOVERED_COMMAND_ID}:succeeded"))
     }
 
     fn stop(&mut self) {
@@ -417,6 +445,13 @@ async fn serve_realtime(
                         }
                     };
                     message_types.lock().expect("message types").push(summary);
+                    if message_type == "command_result" {
+                        message_types.lock().expect("message types").push(format!(
+                            "command_result_id:{}:{}",
+                            payload["command_id"].as_str().unwrap_or("missing"),
+                            payload["status"].as_str().unwrap_or("missing")
+                        ));
+                    }
 
                     if message_type == "data_delta"
                         && payload["full_snapshot"].as_bool() == Some(true)
@@ -504,9 +539,13 @@ async fn serve_realtime(
 }
 
 fn command_is_acked(database_path: &Path) -> bool {
+    command_is_acked_by_id(database_path, "command_01JCONNECTED1")
+}
+
+fn command_is_acked_by_id(database_path: &Path, command_id: &str) -> bool {
     OutboxStore::open_existing(database_path)
         .ok()
-        .and_then(|store| store.command_ledger("command_01JCONNECTED1").ok())
+        .and_then(|store| store.command_ledger(command_id).ok())
         .flatten()
         .is_some_and(|record| record.status == "acked")
 }
@@ -646,8 +685,8 @@ fn prepare_profile(
         .expect("credential");
     let terminal_path = root.join("terminal64.exe");
     fs::write(&terminal_path, b"terminal fixture").expect("terminal fixture");
-    OutboxStore::open_or_create(&paths.database_path)
-        .expect("store")
+    let store = OutboxStore::open_or_create(&paths.database_path).expect("store");
+    let binding = store
         .activate_terminal_binding(
             terminal_id,
             "mt5",
@@ -659,6 +698,32 @@ fn prepare_profile(
             now_utc_msc(),
         )
         .expect("terminal binding");
+    let now = now_utc_msc();
+    let interrupted = CommandMessage {
+        v: 3,
+        message_type: "command".to_owned(),
+        message_id: "message_01JRECOVER01".to_owned(),
+        sent_at_utc_msc: now - 60_000,
+        command_id: RECOVERED_COMMAND_ID.to_owned(),
+        terminal_instance_id: binding.terminal_instance_id,
+        account_ref: binding.account_ref,
+        connection_epoch: binding.connection_epoch,
+        issued_at_utc_msc: now - 60_000,
+        deadline_utc_msc: now - 30_000,
+        action: "place_order".to_owned(),
+        params: serde_json::json!({
+            "symbol": "XAUUSD",
+            "side": "buy",
+            "volume": 0.01,
+            "magic": 234000
+        }),
+    };
+    store
+        .record_command(&interrupted, now - 60_000)
+        .expect("record interrupted command");
+    store
+        .mark_command_dispatched(RECOVERED_COMMAND_ID, now - 59_999)
+        .expect("mark interrupted command dispatched");
     fs::create_dir_all(&paths.root_data_directory).expect("root data directory");
     fs::write(
         paths.root_data_directory.join("endpoint-settings.json"),

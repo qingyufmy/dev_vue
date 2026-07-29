@@ -1,4 +1,7 @@
-use bridge_command::{CommandDispatcher, CommandExecutionObserver, CommandWorker};
+use bridge_command::{
+    CommandDispatcher, CommandExecutionObserver, CommandReconciler, CommandWorker,
+    ExecutionReconciliationWorker,
+};
 use bridge_contract::{
     CommandResultMessage, HelloMessage, SERVER_DATA_QUEUE_CAPACITY, SERVER_PROTOCOL_VERSION,
     SERVER_TRADE_QUEUE_CAPACITY, TerminalDescriptor, TerminalStreamFreshness,
@@ -20,7 +23,9 @@ use bridge_transport::{
     SessionTransition, SupervisorStateSink, TerminalFreshnessProvider, TransportError,
     V3SessionConnector,
 };
-use bridge_worker_host::{RegistryCommandWorker, WorkerProgram, WorkerRegistry, WorkerRoute};
+use bridge_worker_host::{
+    RegistryCommandWorker, RegistryReconciliationWorker, WorkerProgram, WorkerRegistry, WorkerRoute,
+};
 use futures_util::{FutureExt, future::BoxFuture};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -41,6 +46,10 @@ use windows_sys::Win32::Security::Cryptography::{
 
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const RECONCILIATION_QUERY_TIMEOUT: Duration = Duration::from_secs(12);
+const RECONCILIATION_SETTLE_AFTER: Duration = Duration::from_secs(30);
+const RECONCILIATION_INTERVAL: Duration = Duration::from_secs(5);
+const RECONCILIATION_BATCH_LIMIT: usize = 100;
 const CREDENTIAL_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_CREDENTIAL_FILE_BYTES: u64 = 1024 * 1024;
 
@@ -430,6 +439,7 @@ impl SupervisorStateSink for CoreConnectionState {
 pub struct NativeConnectedRuntime {
     active_sessions: Arc<ActiveMt5Sessions>,
     supervisor: SessionSupervisor,
+    command_reconciler: Arc<CommandReconciler>,
     connection_state: Arc<CoreConnectionState>,
 }
 
@@ -495,6 +505,23 @@ impl NativeConnectedRuntime {
                 .map_err(|error| CoreBootstrapError::new(error.code()))?
                 .with_execution_observer(active_sessions.clone()),
             );
+            let reconciliation_worker: Arc<dyn ExecutionReconciliationWorker> = Arc::new(
+                RegistryReconciliationWorker::new(
+                    active_sessions.worker_registry(),
+                    Arc::clone(&clock),
+                    WORKER_REQUEST_TIMEOUT,
+                    RECONCILIATION_SETTLE_AFTER,
+                )
+                .map_err(|error| CoreBootstrapError::new(error.code()))?,
+            );
+            let command_reconciler = Arc::new(
+                CommandReconciler::new(
+                    Arc::clone(&store),
+                    reconciliation_worker,
+                    RECONCILIATION_QUERY_TIMEOUT,
+                )
+                .map_err(|error| CoreBootstrapError::new(error.code()))?,
+            );
             let outbox = Arc::new(OutboxPump::new(store, queue.clone(), Some(terminal_ids)));
             let events: Arc<dyn InboundEventSink> = active_sessions.clone();
             let inbound = Arc::new(
@@ -535,6 +562,7 @@ impl NativeConnectedRuntime {
             Ok(Self {
                 active_sessions: active_sessions.clone(),
                 supervisor,
+                command_reconciler,
                 connection_state,
             })
         })();
@@ -550,16 +578,63 @@ impl NativeConnectedRuntime {
     }
 
     pub async fn run(self, stop: SessionCancellation) -> Result<(), CoreBootstrapError> {
-        let server_result = AssertUnwindSafe(self.supervisor.run(stop.clone()))
+        let NativeConnectedRuntime {
+            active_sessions,
+            supervisor,
+            command_reconciler,
+            ..
+        } = self;
+        let server_stop = stop.clone();
+        let server = async move {
+            let result = AssertUnwindSafe(supervisor.run(server_stop.clone()))
+                .catch_unwind()
+                .await;
+            server_stop.cancel();
+            result
+        };
+        let reconciliation_stop = stop.clone();
+        let reconciliation = async move {
+            let result = AssertUnwindSafe(run_command_reconciliation(
+                command_reconciler,
+                reconciliation_stop.clone(),
+            ))
             .catch_unwind()
             .await;
+            reconciliation_stop.cancel();
+            result
+        };
+        let (server_result, reconciliation_result) = tokio::join!(server, reconciliation);
         stop.cancel();
-        let terminal_result = self.active_sessions.stop().await;
-        match (server_result, terminal_result) {
-            (Err(_), _) => Err(CoreBootstrapError::new("bridge_server_runtime_failed")),
-            (Ok(Err(error)), _) => Err(transport_error(error)),
-            (Ok(Ok(())), Err(error)) => Err(error),
-            (Ok(Ok(())), Ok(())) => Ok(()),
+        let terminal_result = active_sessions.stop().await;
+        match (server_result, reconciliation_result, terminal_result) {
+            (Err(_), _, _) => Err(CoreBootstrapError::new("bridge_server_runtime_failed")),
+            (_, Err(_), _) => Err(CoreBootstrapError::new(
+                "bridge_command_reconciliation_failed",
+            )),
+            (Ok(Err(error)), _, _) => Err(transport_error(error)),
+            (_, Ok(Err(error)), _) => Err(error),
+            (Ok(Ok(())), Ok(Ok(())), Err(error)) => Err(error),
+            (Ok(Ok(())), Ok(Ok(())), Ok(())) => Ok(()),
+        }
+    }
+}
+
+async fn run_command_reconciliation(
+    reconciler: Arc<CommandReconciler>,
+    stop: SessionCancellation,
+) -> Result<(), CoreBootstrapError> {
+    loop {
+        if stop.is_cancelled() {
+            return Ok(());
+        }
+        let run = tokio::select! {
+            _ = stop.cancelled() => return Ok(()),
+            result = reconciler.reconcile_once(RECONCILIATION_BATCH_LIMIT) => result,
+        };
+        run.map_err(|error| CoreBootstrapError::new(error.code()))?;
+        tokio::select! {
+            _ = stop.cancelled() => return Ok(()),
+            _ = sleep(RECONCILIATION_INTERVAL) => {}
         }
     }
 }
