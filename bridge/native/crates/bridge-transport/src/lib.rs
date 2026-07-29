@@ -41,6 +41,7 @@ pub use supervisor::{
 };
 
 pub const ENDPOINT_SETTINGS_FILE_NAME: &str = "endpoint-settings.json";
+pub const PACKAGED_SERVER_ENDPOINTS_FILE_NAME: &str = "server-endpoints.json";
 pub const BRIDGE_WEBSOCKET_PATH: &str = "/aurum-api/bridge/v3/ws";
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
@@ -141,19 +142,72 @@ struct EndpointSettingsDocument {
     realtime_url: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PackagedServerEndpointsDocument {
+    schema_version: u8,
+    server_url: String,
+}
+
 pub fn load_endpoint_settings(path: impl AsRef<Path>) -> Result<ServerEndpoints, TransportError> {
-    let bytes =
-        fs::read(path).map_err(|_| TransportError::new("bridge_endpoint_settings_invalid"))?;
-    if bytes.is_empty() || bytes.len() > 4096 {
-        return Err(TransportError::new("bridge_endpoint_settings_invalid"));
-    }
-    let document: EndpointSettingsDocument = serde_json::from_slice(&bytes)
+    let bytes = read_small_json(path.as_ref(), "bridge_endpoint_settings_invalid")?;
+    let document: EndpointSettingsDocument = serde_json::from_slice(strip_utf8_bom(&bytes))
         .map_err(|_| TransportError::new("bridge_endpoint_settings_invalid"))?;
     if document.schema_version != 1 {
         return Err(TransportError::new("bridge_endpoint_settings_invalid"));
     }
     ServerEndpoints::normalize(&document.control_url, &document.realtime_url)
         .map_err(|_| TransportError::new("bridge_endpoint_settings_invalid"))
+}
+
+pub fn load_packaged_server_endpoints(
+    path: impl AsRef<Path>,
+) -> Result<ServerEndpoints, TransportError> {
+    let bytes = read_small_json(path.as_ref(), "bridge_server_endpoints_invalid")?;
+    let document: PackagedServerEndpointsDocument = serde_json::from_slice(strip_utf8_bom(&bytes))
+        .map_err(|_| TransportError::new("bridge_server_endpoints_invalid"))?;
+    if document.schema_version != 1 {
+        return Err(TransportError::new("bridge_server_endpoints_invalid"));
+    }
+    ServerEndpoints::from_server_url(&document.server_url)
+        .map_err(|_| TransportError::new("bridge_server_endpoints_invalid"))
+}
+
+pub fn resolve_server_endpoints(
+    application_directory: impl AsRef<Path>,
+    root_data_directory: impl AsRef<Path>,
+) -> Result<ServerEndpoints, TransportError> {
+    let application_directory = application_directory.as_ref();
+    let root_data_directory = root_data_directory.as_ref();
+    if !application_directory.is_absolute()
+        || !application_directory.is_dir()
+        || !root_data_directory.is_absolute()
+    {
+        return Err(TransportError::new("bridge_endpoint_directory_invalid"));
+    }
+    let override_path = root_data_directory.join(ENDPOINT_SETTINGS_FILE_NAME);
+    if override_path.is_file()
+        && let Ok(endpoints) = load_endpoint_settings(&override_path)
+    {
+        return Ok(endpoints);
+    }
+    let packaged_path = application_directory.join(PACKAGED_SERVER_ENDPOINTS_FILE_NAME);
+    if !packaged_path.is_file() {
+        return Err(TransportError::new("bridge_server_endpoints_missing"));
+    }
+    load_packaged_server_endpoints(packaged_path)
+}
+
+fn read_small_json(path: &Path, code: &'static str) -> Result<Vec<u8>, TransportError> {
+    let metadata = fs::metadata(path).map_err(|_| TransportError::new(code))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 4096 {
+        return Err(TransportError::new(code));
+    }
+    fs::read(path).map_err(|_| TransportError::new(code))
+}
+
+fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
 }
 
 fn parse_control_url(value: &str) -> Result<Url, TransportError> {
@@ -1159,6 +1213,8 @@ mod tests {
     use super::*;
     use bridge_contract::{AccountRef, HeartbeatMessage, TerminalDescriptor};
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[derive(Default)]
     struct FakeOutbox {
@@ -1284,6 +1340,88 @@ mod tests {
         );
     }
 
+    #[test]
+    fn endpoint_authority_prefers_admin_override_and_recovers_from_damage_with_package() {
+        let root = unique_endpoint_directory();
+        let application = root.join("application");
+        let data = root.join("data");
+        fs::create_dir_all(&application).expect("application directory");
+        fs::create_dir_all(&data).expect("data directory");
+        let packaged = application.join(PACKAGED_SERVER_ENDPOINTS_FILE_NAME);
+        fs::write(
+            &packaged,
+            b"\xEF\xBB\xBF{\"schema_version\":1,\"server_url\":\"https://package.example\"}",
+        )
+        .expect("packaged endpoints");
+        assert_eq!(
+            resolve_server_endpoints(&application, &data)
+                .expect("packaged authority")
+                .control_base()
+                .as_str(),
+            "https://package.example/"
+        );
+
+        let custom = data.join(ENDPOINT_SETTINGS_FILE_NAME);
+        fs::write(
+            &custom,
+            br#"{"schema_version":1,"control_url":"https://admin.example","realtime_url":"wss://stream.admin.example"}"#,
+        )
+        .expect("custom endpoints");
+        let resolved = resolve_server_endpoints(&application, &data).expect("custom authority");
+        assert_eq!(resolved.control_base().as_str(), "https://admin.example/");
+        assert_eq!(
+            resolved.realtime_base().as_str(),
+            "wss://stream.admin.example/"
+        );
+
+        fs::write(&custom, b"{damaged").expect("damage custom endpoints");
+        assert_eq!(
+            resolve_server_endpoints(&application, &data)
+                .expect("damaged override fallback")
+                .control_base()
+                .as_str(),
+            "https://package.example/"
+        );
+        fs::remove_file(&packaged).expect("remove packaged endpoints");
+        assert_eq!(
+            resolve_server_endpoints(&application, &data)
+                .expect_err("missing signed package fallback")
+                .code(),
+            "bridge_server_endpoints_missing"
+        );
+        fs::remove_dir_all(root).expect("remove endpoint fixture");
+    }
+
+    #[test]
+    fn packaged_endpoint_rejects_remote_plaintext_and_unknown_fields() {
+        let root = unique_endpoint_directory();
+        fs::create_dir_all(&root).expect("endpoint directory");
+        let path = root.join(PACKAGED_SERVER_ENDPOINTS_FILE_NAME);
+        fs::write(
+            &path,
+            br#"{"schema_version":1,"server_url":"http://example.com"}"#,
+        )
+        .expect("plaintext endpoints");
+        assert_eq!(
+            load_packaged_server_endpoints(&path)
+                .expect_err("remote plaintext")
+                .code(),
+            "bridge_server_endpoints_invalid"
+        );
+        fs::write(
+            &path,
+            br#"{"schema_version":1,"server_url":"https://example.com","extra":true}"#,
+        )
+        .expect("unknown field endpoints");
+        assert_eq!(
+            load_packaged_server_endpoints(&path)
+                .expect_err("unknown field")
+                .code(),
+            "bridge_server_endpoints_invalid"
+        );
+        fs::remove_dir_all(root).expect("remove endpoint fixture");
+    }
+
     #[tokio::test]
     async fn queue_is_bounded_and_strictly_trade_first() {
         let queue = PriorityMessageQueue::new(1, 2).expect("queue");
@@ -1347,6 +1485,17 @@ mod tests {
             ConnectionState::PairingRequired
         );
         assert_eq!(machine.stop().state, ConnectionState::Stopped);
+    }
+
+    fn unique_endpoint_directory() -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "liangjian-bridge-endpoints-{}-{stamp}",
+            std::process::id()
+        ))
     }
 
     #[tokio::test]

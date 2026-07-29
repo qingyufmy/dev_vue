@@ -146,6 +146,16 @@
     "heartbeat_uses_terminal_collector_freshness": true,
     "post_execution_observer_failure_does_not_change_receipt": true
   },
+  "endpoint_authority_contract": {
+    "administrator_override_file": "%APPDATA%/AURUM/BridgeV3/endpoint-settings.json",
+    "packaged_default_file": "{application_directory}/server-endpoints.json",
+    "administrator_override_precedence": true,
+    "invalid_override_falls_back_to_packaged_default": true,
+    "packaged_default_required": true,
+    "single_server_url_derives_realtime_url": true,
+    "remote_plaintext_control_rejected": true,
+    "json_maximum_bytes": 4096
+  },
   "server_transport_contract": {
     "protocol_version": 3,
     "websocket_path": "/aurum-api/bridge/v3/ws",

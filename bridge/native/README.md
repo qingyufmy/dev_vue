@@ -20,7 +20,7 @@
 - `workers/mt5` 已实现独立的 MT5 Python 只读 Worker：每次请求复核终端、经纪商服务器、登录号和连接状态，只声明 `snapshot` / `quote` 能力；账户、持仓和挂单字段无损转发，列表带 ticket 且受 4 MiB 帧限制；报价保留经纪商时区校准，时钟未可信时失败关闭。Rust 测试会启动真实 Python 子进程并通过受保护命名管道验证账户、持仓、挂单及报价互操作；Core 共同生命周期已能监管和轮询该 Worker，但正式入口尚未启用，交易能力仍待阶段 4 实现。
 - `bridge-observability` 写入现有内置日志查看器可直接读取的脱敏 JSONL，并持久化 panic 与非正常退出证据。
 - `bridge-runtime-win` 与 .NET V3 共用锁文件及 `Local\*.activate/.shutdown` 事件，并用 Windows Job Object 监管、清理和退避重启子进程树。
-- `bridge-transport` 已完成统一端点解析、rustls HTTP / WebSocket、refresh / ticket、Hello / ACK、心跳包络、严格优先队列、重连状态机和 Outbox 泵基础。
+- `bridge-transport` 已完成统一端点解析、rustls HTTP / WebSocket、refresh / ticket、Hello / ACK、心跳包络、严格优先队列、重连状态机和 Outbox 泵基础。服务器地址以管理员数据目录中的 `endpoint-settings.json` 为优先权威源；文件缺失或损坏时退回安装目录随签名包发布的 `server-endpoints.json`。单一 `server_url` 会派生实时地址，公网明文 HTTP 不被接受，本机回环地址仅供开发使用。
 - 原生会话编排器现已联动 WebSocket 收发、10 秒心跳、200 ms Outbox 轮询和整组取消；任一循环失败都会关闭本次会话并保留原始稳定错误码。
 - 入站路由已安全处理 `data_ack`、gap 全量恢复通知、版本通知、心跳、服务器错误和 `command_result_ack`；ACK 会严格核对持久化回执或待发送结果的账户、终端及 epoch。
 - 交易命令准入已冻结过期、动作、账户、终端、epoch、暂停状态和初始全量同步门禁；入站路由支持显式注入命令 Dispatcher，执行回执与交易 Outbox 同事务保存，服务器 ACK 后账本原子推进为 `acked`。正式 Worker 尚未接入 Core，因此默认入口仍以 `native_bridge_runtime_not_ready` 失败关闭，报价/数据请求同样不会执行。
