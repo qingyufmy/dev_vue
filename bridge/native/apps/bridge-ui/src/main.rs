@@ -13,7 +13,7 @@ use bridge_foundation::{
 };
 use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
-    LocalControlResult, UiStateSnapshot,
+    LocalControlResult, UiObserverProfile, UiStateSnapshot,
 };
 use bridge_runtime_win::{
     InstanceAcquireResult, InstanceSignal, SingleInstanceGuard, default_lock_directory,
@@ -463,6 +463,7 @@ fn demo_state(profile_id: &str, scenario: DemoScenario) -> UiStateSnapshot {
             state.observer_profiles = vec![UiObserverProfile {
                 observer_profile_id: "source-1".to_owned(),
                 platform: Some("mt5".to_owned()),
+                terminal_directory: Some(r"C:\Broker MT5".to_owned()),
                 configured: true,
                 enabled: true,
                 terminal_instance_id: Some("observer-1-terminal".to_owned()),
@@ -1701,6 +1702,10 @@ unsafe fn handle_account_click(hwnd: HWND, app: &mut AppState, point: POINT) {
         return;
     };
     let profile_id = account.role.clone();
+    if matches!(action, ObserverAction::Bind | ObserverAction::Configure) {
+        unsafe { open_existing_observer_dialog(hwnd, app, &profile_id) };
+        return;
+    }
     let Some(local_action) = observer_local_action(&profile_id, action) else {
         show_error(hwnd, "bridge_local_control_action_unavailable");
         return;
@@ -2090,6 +2095,53 @@ unsafe fn open_observer_dialog(hwnd: HWND, app: &mut AppState) {
     }
 }
 
+unsafe fn open_existing_observer_dialog(hwnd: HWND, app: &mut AppState, profile_id: &str) {
+    let Some(profile) = app
+        .state
+        .observer_profiles
+        .iter()
+        .find(|profile| profile.observer_profile_id == profile_id)
+        .cloned()
+    else {
+        show_error(hwnd, "bridge_observer_profile_not_found");
+        return;
+    };
+    let existing = observer_dialog_existing(&profile);
+    match unsafe {
+        observer_profile_dialog::show_modal(
+            hwnd,
+            app.brand_icon,
+            &app.state.observer_sources,
+            Some(existing),
+        )
+    } {
+        Ok(Some(observer)) => {
+            app.busy_observer_profiles
+                .insert(observer.observer_profile_id.clone());
+            if let Ok(view) =
+                build_main_window_view(&app.state, &app.busy_observer_profiles, format_local_time)
+            {
+                app.view = view;
+                unsafe { apply_layout(hwnd, app) };
+            }
+            unsafe { begin_action(hwnd, app, LocalControlAction::ObserverUpdate { observer }) };
+        }
+        Ok(None) => {}
+        Err(code) => show_error(hwnd, code),
+    }
+}
+
+fn observer_dialog_existing(
+    profile: &UiObserverProfile,
+) -> observer_profile_dialog::ExistingObserverProfile {
+    observer_profile_dialog::ExistingObserverProfile {
+        observer_profile_id: profile.observer_profile_id.clone(),
+        bridge_user_id: profile.bridge_user_id,
+        platform: profile.platform.clone().unwrap_or_else(|| "mt5".to_owned()),
+        terminal_directory: profile.terminal_directory.clone().unwrap_or_default(),
+    }
+}
+
 unsafe fn begin_state_poll(hwnd: HWND, app: &AppState) {
     if app.inbox.poll_running.swap(true, Ordering::AcqRel) {
         return;
@@ -2131,13 +2183,34 @@ unsafe fn begin_action(hwnd: HWND, app: &AppState, action: LocalControlAction) {
     let inbox = Arc::clone(&app.inbox);
     let hwnd_value = hwnd as usize;
     std::thread::spawn(move || {
-        let result = run_local_request(&profile_id, &inbox, action.clone(), Duration::from_secs(2));
+        let result = run_local_request(
+            &profile_id,
+            &inbox,
+            action.clone(),
+            local_action_timeout(&action),
+        );
         if let Ok(mut messages) = inbox.messages.lock() {
             messages.push_back(UiMessage::Action { action, result });
         }
         inbox.action_running.store(false, Ordering::Release);
         unsafe { PostMessageW(hwnd_value as HWND, WM_ACTION_READY, 0, 0) };
     });
+}
+
+fn local_action_timeout(action: &LocalControlAction) -> Duration {
+    match action {
+        LocalControlAction::ObserverCreate { .. }
+        | LocalControlAction::ObserverUpdate { .. }
+        | LocalControlAction::ObserverBind { .. }
+        | LocalControlAction::ObserverStart { .. }
+        | LocalControlAction::ObserverPause { .. }
+        | LocalControlAction::ObserverRetry { .. } => Duration::from_secs(30),
+        LocalControlAction::SettingsTest { .. } => Duration::from_secs(20),
+        LocalControlAction::SettingsSave { .. } | LocalControlAction::SettingsRestoreOfficial => {
+            Duration::from_secs(10)
+        }
+        _ => Duration::from_secs(2),
+    }
 }
 
 fn run_local_request(
@@ -2291,6 +2364,22 @@ fn show_error(hwnd: HWND, code: &str) {
         "mt4_ea_install_io_failed" | "mt4_ea_install_failed" => {
             "MT4 EA 暂时无法安装，请关闭 MT4 后重新尝试。"
         }
+        "bridge_observer_management_forbidden" => "只有管理员账号可以管理观摩源。",
+        "bridge_observer_sources_empty" => "当前没有可绑定的观摩账户，请先在管理后台创建。",
+        "bridge_pair_source_invalid" => "所选观摩账户已不可用，请刷新后重新选择。",
+        "bridge_observer_profile_exists" => "该观摩源名称已经存在，请直接打开已有观摩源。",
+        "bridge_observer_profile_not_found" => "该观摩源已不存在，请刷新后重试。",
+        "bridge_observer_profile_not_configured" => "请先设置观摩账户和独立交易终端。",
+        "observer_terminal_already_assigned" => {
+            "该交易终端已被主账户或其他观摩源使用，请选择独立终端。"
+        }
+        "bridge_observer_mt4_directory_invalid" => {
+            "未找到对应的 MT4，请选择它的安装目录或数据目录。"
+        }
+        "bridge_observer_mt5_directory_invalid" => {
+            "所选目录中没有 MT5 终端程序，请重新选择安装目录。"
+        }
+        "bridge_observer_runtime_stop_timeout" => "旧观摩源进程未能及时退出，请稍后重试。",
         "bridge_update_runtime_unavailable" => "当前运行方式不支持自动更新，请使用正式安装版本。",
         "bridge_update_not_ready" => "当前没有已下载并通过校验的更新。",
         "bridge_ui_update_launcher_invalid" | "bridge_ui_update_handoff_invalid" => {
@@ -2710,6 +2799,7 @@ fn now_utc_msc() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bridge_local_control::{EndpointSettingsSelection, ObserverProfileMutation};
     use bridge_ui_model::{PermissionDetailView, PermissionView};
 
     #[test]
@@ -2827,6 +2917,40 @@ mod tests {
         ));
         assert!(observer_local_action("source-1", ObserverAction::Bind).is_none());
         assert!(observer_local_action("source-1", ObserverAction::Configure).is_none());
+    }
+
+    #[test]
+    fn observer_editing_reuses_the_current_binding_terminal_and_long_running_timeout() {
+        let state = demo_state(DEFAULT_PROFILE_ID, DemoScenario::AdminMultiAccount);
+        let observer = state.observer_profiles.first().expect("observer profile");
+        let existing = observer_dialog_existing(observer);
+        assert_eq!(existing.observer_profile_id, observer.observer_profile_id);
+        assert_eq!(existing.bridge_user_id, observer.bridge_user_id);
+        assert_eq!(existing.platform, "mt5");
+        assert_eq!(
+            existing.terminal_directory,
+            observer.terminal_directory.clone().unwrap_or_default()
+        );
+        assert_eq!(
+            local_action_timeout(&LocalControlAction::ObserverUpdate {
+                observer: ObserverProfileMutation {
+                    observer_profile_id: "source-1".to_owned(),
+                    bridge_user_id: 7,
+                    platform: "mt5".to_owned(),
+                    terminal_directory: r"C:\Broker MT5".to_owned(),
+                },
+            }),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            local_action_timeout(&LocalControlAction::SettingsTest {
+                settings: EndpointSettingsSelection {
+                    follow_official: false,
+                    server_url: "http://127.0.0.1:3000/".to_owned(),
+                },
+            }),
+            Duration::from_secs(20)
+        );
     }
 
     #[test]

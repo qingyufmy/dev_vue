@@ -1301,11 +1301,22 @@ pub struct NativeRuntimeStatusHandle {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct TerminalTradingPermissions {
-    terminal_trading_allowed: Option<bool>,
-    program_trading_allowed: Option<bool>,
-    account_trading_allowed: Option<bool>,
-    account_expert_trading_allowed: Option<bool>,
+pub struct TerminalTradingPermissions {
+    pub terminal_trading_allowed: Option<bool>,
+    pub program_trading_allowed: Option<bool>,
+    pub account_trading_allowed: Option<bool>,
+    pub account_expert_trading_allowed: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TerminalPermissionQuery<'a> {
+    pub platform: &'a str,
+    pub terminal_instance_id: &'a str,
+    pub account_ref: &'a bridge_contract::AccountRef,
+    pub connection_epoch: i64,
+    pub runtime_ready: bool,
+    pub last_success_at_utc_msc: Option<i64>,
+    pub observed_at_utc_msc: i64,
 }
 
 fn terminal_trading_permissions(
@@ -1313,24 +1324,62 @@ fn terminal_trading_permissions(
     status: &TerminalSessionStatus,
     observed_at_utc_msc: i64,
 ) -> TerminalTradingPermissions {
-    if !permission_snapshot_is_fresh(status, observed_at_utc_msc) {
+    project_terminal_trading_permissions(
+        store,
+        TerminalPermissionQuery {
+            platform: &status.route.platform,
+            terminal_instance_id: &status.route.terminal_instance_id,
+            account_ref: &status.route.account_ref,
+            connection_epoch: status.route.connection_epoch,
+            runtime_ready: status.state == bridge_terminal_session::TerminalSessionState::Ready,
+            last_success_at_utc_msc: status.last_success_at_utc_msc,
+            observed_at_utc_msc,
+        },
+    )
+}
+
+/// Projects the trading switches from a route-fenced account snapshot. This is shared by the
+/// primary runtime and the administrator's observer-profile aggregation; failures deliberately
+/// return unknown values instead of retaining permissions from an old account or epoch.
+pub fn project_terminal_trading_permissions(
+    store: &OutboxStore,
+    query: TerminalPermissionQuery<'_>,
+) -> TerminalTradingPermissions {
+    if !permission_projection_is_fresh(
+        query.runtime_ready,
+        query.last_success_at_utc_msc,
+        query.observed_at_utc_msc,
+    ) {
         return TerminalTradingPermissions::default();
     }
     let Ok(account) = store.load_account_projection(
-        &status.route.terminal_instance_id,
-        &status.route.account_ref,
-        status.route.connection_epoch,
+        query.terminal_instance_id,
+        query.account_ref,
+        query.connection_epoch,
     ) else {
         return TerminalTradingPermissions::default();
     };
-    parse_terminal_trading_permissions(&status.route.platform, account.items.first())
+    parse_terminal_trading_permissions(query.platform, account.items.first())
 }
 
+#[cfg(test)]
 fn permission_snapshot_is_fresh(status: &TerminalSessionStatus, observed_at_utc_msc: i64) -> bool {
-    let Some(last_success_at_utc_msc) = status.last_success_at_utc_msc else {
+    permission_projection_is_fresh(
+        status.state == bridge_terminal_session::TerminalSessionState::Ready,
+        status.last_success_at_utc_msc,
+        observed_at_utc_msc,
+    )
+}
+
+fn permission_projection_is_fresh(
+    runtime_ready: bool,
+    last_success_at_utc_msc: Option<i64>,
+    observed_at_utc_msc: i64,
+) -> bool {
+    let Some(last_success_at_utc_msc) = last_success_at_utc_msc else {
         return false;
     };
-    status.state == bridge_terminal_session::TerminalSessionState::Ready
+    runtime_ready
         && observed_at_utc_msc > 0
         && last_success_at_utc_msc > 0
         && last_success_at_utc_msc <= observed_at_utc_msc.saturating_add(1_000)

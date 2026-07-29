@@ -469,6 +469,7 @@ impl UiTerminalStatus {
 pub struct UiObserverProfile {
     pub observer_profile_id: String,
     pub platform: Option<String>,
+    pub terminal_directory: Option<String>,
     pub configured: bool,
     pub enabled: bool,
     pub terminal_instance_id: Option<String>,
@@ -485,6 +486,10 @@ impl UiObserverProfile {
             == Ok(self.observer_profile_id.as_str())
             && self.observer_profile_id != DEFAULT_PROFILE_ID
             && self.platform.as_deref().is_none_or(valid_platform)
+            && self
+                .terminal_directory
+                .as_deref()
+                .is_none_or(|value| valid_text(value, 1_024))
             && self
                 .terminal_instance_id
                 .as_deref()
@@ -748,6 +753,7 @@ mod tests {
         leaked.observer_profiles.push(UiObserverProfile {
             observer_profile_id: "source-1".to_owned(),
             platform: Some("mt5".to_owned()),
+            terminal_directory: Some(r"C:\Broker MT5".to_owned()),
             configured: true,
             enabled: true,
             terminal_instance_id: Some("mt5_source".to_owned()),
@@ -788,6 +794,7 @@ mod tests {
         admin.observer_profiles.push(UiObserverProfile {
             observer_profile_id: "source-1".to_owned(),
             platform: Some("mt4".to_owned()),
+            terminal_directory: Some(r"C:\Broker MT4".to_owned()),
             configured: true,
             enabled: true,
             terminal_instance_id: Some("mt4_source".to_owned()),

@@ -10,7 +10,8 @@ use bridge_foundation::{
 use bridge_local_control::{
     EndpointSettingsSelection, LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction,
     LocalControlPipeServer, LocalControlResponse, LocalControlResult, ObserverProfileMutation,
-    UiObserverSource, UiStateSnapshot, UiStateStore, UiTerminalCandidate, UiUpdateNotice,
+    UiObserverProfile, UiObserverSource, UiStateSnapshot, UiStateStore, UiTerminalCandidate,
+    UiTerminalStatus, UiUpdateNotice,
 };
 use bridge_observability::{BridgeLogger, LoggerConfig};
 use bridge_preferences::{
@@ -37,9 +38,10 @@ use bridge_update::{
 use liangjian_bridge_core::{
     ActiveMt5Sessions, CoreConnectionState, CredentialState, NativeConnectedRuntime,
     NativeProfileBootstrap, NativeRuntimeStatusHandle, NativeRuntimeStatusSnapshot,
-    ProfileCredentialSource, ProfileTerminalBindingSource,
+    ProfileCredentialSource, ProfileTerminalBindingSource, TerminalPermissionQuery,
+    project_terminal_trading_permissions,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
@@ -52,6 +54,7 @@ use mt4_expert_installer::{deploy_expert, resolve_expert_source};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const ADMINISTRATOR_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const OBSERVER_UI_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 enum ProfileRuntimeTrigger {
     Completed(Result<(), liangjian_bridge_core::CoreBootstrapError>),
@@ -163,6 +166,12 @@ struct ObserverRuntimeManager {
     root_data_directory: PathBuf,
     entries: AsyncMutex<HashMap<String, ObserverRuntimeEntry>>,
     logger: BridgeLogger,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ObserverUiProjection {
+    profiles: Vec<UiObserverProfile>,
+    terminals: Vec<UiTerminalStatus>,
 }
 
 impl ObserverRuntimeManager {
@@ -284,6 +293,11 @@ struct AdministratorCache {
     last_error_code: Option<String>,
     refresh_in_progress: bool,
     generation: u64,
+    observer_projection: ObserverUiProjection,
+    observer_last_refresh: Option<Instant>,
+    observer_refresh_in_progress: bool,
+    observer_generation: u64,
+    observer_last_error_code: Option<String>,
 }
 
 impl AdministratorCache {
@@ -313,11 +327,23 @@ impl AdministratorCache {
         self.refresh_in_progress = false;
         match result {
             Ok((is_administrator, observer_sources)) => {
+                if self.is_administrator != is_administrator {
+                    self.invalidate_observers();
+                }
                 self.is_administrator = is_administrator;
                 self.observer_sources = observer_sources;
+                if !is_administrator {
+                    self.observer_projection = ObserverUiProjection::default();
+                }
                 self.last_error_code = None;
             }
-            Err(code) => self.log_refresh_error(logger, &code),
+            Err(code) => {
+                self.is_administrator = false;
+                self.observer_sources.clear();
+                self.observer_projection = ObserverUiProjection::default();
+                self.invalidate_observers();
+                self.log_refresh_error(logger, &code);
+            }
         }
     }
 
@@ -338,9 +364,79 @@ impl AdministratorCache {
         } else {
             Vec::new()
         };
-        // Keep the existing .NET observer-management surface hidden until every original
-        // dialog action has a real native backend. A partially wired replacement is not shown.
-        state.can_manage_observer_sources = false;
+        state
+            .terminals
+            .retain(|terminal| terminal.observer_profile_id.is_none());
+        state.can_manage_observer_sources = self.is_administrator;
+        state.observer_profiles = if self.is_administrator {
+            self.observer_projection.profiles.clone()
+        } else {
+            Vec::new()
+        };
+        if self.is_administrator {
+            let mut terminal_ids = state
+                .terminals
+                .iter()
+                .map(|terminal| terminal.terminal_instance_id.clone())
+                .collect::<BTreeSet<_>>();
+            state.terminals.extend(
+                self.observer_projection
+                    .terminals
+                    .iter()
+                    .filter(|terminal| terminal_ids.insert(terminal.terminal_instance_id.clone()))
+                    .cloned(),
+            );
+        }
+    }
+
+    fn schedule_observer_refresh(&mut self, profile_id: &str) -> Option<u64> {
+        if profile_id != DEFAULT_PROFILE_ID
+            || !self.is_administrator
+            || self.observer_refresh_in_progress
+            || self
+                .observer_last_refresh
+                .is_some_and(|value| value.elapsed() < OBSERVER_UI_REFRESH_INTERVAL)
+        {
+            return None;
+        }
+        self.observer_refresh_in_progress = true;
+        self.observer_last_refresh = Some(Instant::now());
+        Some(self.observer_generation)
+    }
+
+    fn complete_observer_refresh(
+        &mut self,
+        generation: u64,
+        result: Result<ObserverUiProjection, String>,
+        logger: &BridgeLogger,
+    ) {
+        if generation != self.observer_generation {
+            return;
+        }
+        self.observer_refresh_in_progress = false;
+        if !self.is_administrator {
+            self.observer_projection = ObserverUiProjection::default();
+            return;
+        }
+        match result {
+            Ok(projection) => {
+                self.observer_projection = projection;
+                self.observer_last_error_code = None;
+            }
+            Err(code) => {
+                if self.observer_last_error_code.as_deref() != Some(&code) {
+                    logger.warning("native_observer_projection_failed", Some(&code));
+                    self.observer_last_error_code = Some(code);
+                }
+            }
+        }
+    }
+
+    fn invalidate_observers(&mut self) {
+        self.observer_generation = self.observer_generation.saturating_add(1);
+        self.observer_last_refresh = None;
+        self.observer_refresh_in_progress = false;
+        self.observer_last_error_code = None;
     }
 
     fn clear(&mut self) {
@@ -350,6 +446,8 @@ impl AdministratorCache {
         self.last_refresh = None;
         self.last_error_code = None;
         self.refresh_in_progress = false;
+        self.observer_projection = ObserverUiProjection::default();
+        self.invalidate_observers();
     }
 
     fn log_refresh_error(&mut self, logger: &BridgeLogger, code: &str) {
@@ -386,6 +484,155 @@ async fn refresh_administrator_access(
         Vec::new()
     };
     Ok((is_administrator, observer_sources))
+}
+
+fn load_observer_ui_projection(
+    root_data_directory: &std::path::Path,
+    observed_at_utc_msc: i64,
+) -> Result<ObserverUiProjection, String> {
+    let mut projection = ObserverUiProjection::default();
+    for profile_id in list_observer_profiles(root_data_directory).map_err(str::to_owned)? {
+        let paths =
+            resolve_profile_paths(root_data_directory, &profile_id).map_err(str::to_owned)?;
+        let preferences =
+            BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+                .map_err(|error| error.code().to_owned())?
+                .load();
+        let runtime_result = read_runtime_status_snapshot(
+            &paths.runtime_status_path,
+            &profile_id,
+            observed_at_utc_msc,
+        );
+        let runtime_is_fresh = runtime_result
+            .as_ref()
+            .is_ok_and(|runtime| !runtime.is_stale(observed_at_utc_msc, 5_000));
+        let (runtime_phase, runtime_detail_code) = match &runtime_result {
+            Ok(runtime) if runtime_is_fresh => (
+                Some(runtime.phase.clone()),
+                runtime
+                    .server_error_code
+                    .clone()
+                    .or_else(|| runtime.reconciliation.fatal_error_code.clone())
+                    .or_else(|| {
+                        runtime
+                            .terminals
+                            .iter()
+                            .find_map(|terminal| terminal.error_code.clone())
+                    }),
+            ),
+            Ok(_) => (
+                Some("degraded".to_owned()),
+                Some("bridge_runtime_status_stale".to_owned()),
+            ),
+            Err(code) if paths.runtime_status_path.is_file() => {
+                (Some("degraded".to_owned()), Some((*code).to_owned()))
+            }
+            Err(_) => (None, None),
+        };
+        projection.profiles.push(UiObserverProfile {
+            observer_profile_id: profile_id.clone(),
+            platform: preferences.platform.clone(),
+            terminal_directory: observer_terminal_directory(&preferences),
+            configured: observer_terminal_configured(&preferences),
+            enabled: preferences.observer_enabled,
+            terminal_instance_id: preferences
+                .selected_terminal_instance_id()
+                .map(str::to_owned),
+            bridge_user_id: preferences.observer_bridge_user_id,
+            observer_account_label: preferences.observer_account_label.clone(),
+            trading_account_label: preferences.observer_trading_account_label.clone(),
+            runtime_phase,
+            runtime_detail_code,
+        });
+        if preferences.observer_enabled
+            && runtime_is_fresh
+            && let Ok(runtime) = runtime_result
+        {
+            projection.terminals.extend(load_observer_terminal_statuses(
+                &profile_id,
+                &preferences,
+                &paths.database_path,
+                &runtime,
+                observed_at_utc_msc,
+            ));
+        }
+    }
+    Ok(projection)
+}
+
+fn load_observer_terminal_statuses(
+    profile_id: &str,
+    preferences: &BridgeUserPreferences,
+    database_path: &std::path::Path,
+    runtime: &bridge_foundation::RuntimeStatusDocument,
+    observed_at_utc_msc: i64,
+) -> Vec<UiTerminalStatus> {
+    let Some(expected_terminal_id) = preferences.selected_terminal_instance_id() else {
+        return Vec::new();
+    };
+    let Ok(store) = OutboxStore::open_existing(database_path) else {
+        return Vec::new();
+    };
+    let Ok(bindings) = store.terminal_bindings() else {
+        return Vec::new();
+    };
+    runtime
+        .terminals
+        .iter()
+        .filter(|terminal| terminal.terminal_instance_id == expected_terminal_id)
+        .filter_map(|terminal| {
+            let binding = bindings.iter().find(|binding| {
+                binding.terminal_instance_id == terminal.terminal_instance_id
+                    && binding.platform == terminal.platform
+                    && binding.connection_epoch == terminal.connection_epoch
+            })?;
+            let permissions = project_terminal_trading_permissions(
+                &store,
+                TerminalPermissionQuery {
+                    platform: &terminal.platform,
+                    terminal_instance_id: &terminal.terminal_instance_id,
+                    account_ref: &binding.account_ref,
+                    connection_epoch: terminal.connection_epoch,
+                    runtime_ready: terminal.state == "ready",
+                    last_success_at_utc_msc: terminal.last_success_at_utc_msc,
+                    observed_at_utc_msc,
+                },
+            );
+            Some(UiTerminalStatus {
+                terminal_instance_id: terminal.terminal_instance_id.clone(),
+                platform: terminal.platform.clone(),
+                broker_server: binding.account_ref.broker_server.clone(),
+                login: binding.account_ref.login.clone(),
+                runtime_state: match terminal.state.as_str() {
+                    "ready" => "running",
+                    "degraded" => "restarting",
+                    "starting" => "starting",
+                    _ => "stopped",
+                }
+                .to_owned(),
+                error_code: terminal.error_code.clone(),
+                observer_profile_id: Some(profile_id.to_owned()),
+                terminal_trading_allowed: permissions.terminal_trading_allowed,
+                program_trading_allowed: permissions.program_trading_allowed,
+                account_trading_allowed: permissions.account_trading_allowed,
+                account_expert_trading_allowed: permissions.account_expert_trading_allowed,
+                mt4_expert_restart_required: false,
+            })
+        })
+        .collect()
+}
+
+fn observer_terminal_directory(preferences: &BridgeUserPreferences) -> Option<String> {
+    let value = match preferences.platform.as_deref() {
+        Some("mt5") => preferences.mt5_terminal_path.as_deref().and_then(|path| {
+            std::path::Path::new(path)
+                .parent()
+                .map(|directory| directory.display().to_string())
+        }),
+        Some("mt4") => preferences.mt4_terminal_path.clone(),
+        _ => None,
+    }?;
+    (!value.trim().is_empty() && value.len() <= 1_024).then_some(value)
 }
 
 fn main() {
@@ -1275,12 +1522,14 @@ async fn run_local_control_server(
             let result = match request.action {
                 LocalControlAction::GetState => match ui_state.snapshot() {
                     Ok(mut state) => {
-                        let refresh_generation = {
+                        let (refresh_generation, observer_refresh_generation) = {
                             let mut cache = administrator_cache.lock().await;
                             let refresh_generation =
                                 cache.schedule_refresh(server.endpoint().profile_id());
+                            let observer_refresh_generation =
+                                cache.schedule_observer_refresh(server.endpoint().profile_id());
                             cache.decorate(server.endpoint().profile_id(), &mut state);
-                            refresh_generation
+                            (refresh_generation, observer_refresh_generation)
                         };
                         if let Some(refresh_generation) = refresh_generation {
                             let cache = Arc::clone(&administrator_cache);
@@ -1297,6 +1546,24 @@ async fn run_local_control_server(
                                 .await;
                                 cache.lock().await.complete_refresh(
                                     refresh_generation,
+                                    result,
+                                    &logger,
+                                );
+                            });
+                        }
+                        if let Some(observer_refresh_generation) = observer_refresh_generation {
+                            let cache = Arc::clone(&administrator_cache);
+                            let root_data_directory = root_data_directory.clone();
+                            let logger = logger.clone();
+                            tokio::spawn(async move {
+                                let result = tokio::task::spawn_blocking(move || {
+                                    load_observer_ui_projection(&root_data_directory, now_utc_msc())
+                                })
+                                .await
+                                .map_err(|_| "bridge_observer_projection_join_failed".to_owned())
+                                .and_then(std::convert::identity);
+                                cache.lock().await.complete_observer_refresh(
+                                    observer_refresh_generation,
                                     result,
                                     &logger,
                                 );
@@ -1570,6 +1837,24 @@ async fn run_local_control_server(
                     )
                     .await
                 }
+                LocalControlAction::ObserverBind {
+                    observer_profile_id,
+                    bridge_user_id,
+                } => {
+                    bind_observer_profile(
+                        &observer_profile_id,
+                        bridge_user_id,
+                        ObserverProfileActionContext {
+                            application_directory: &application_directory,
+                            root_data_directory: &root_data_directory,
+                            administrator_credential_store: &credential_store,
+                            administrator_cache: &administrator_cache,
+                            observer_runtimes: observer_runtimes.as_deref(),
+                            logger: &logger,
+                        },
+                    )
+                    .await
+                }
                 LocalControlAction::ObserverStart {
                     observer_profile_id,
                 }
@@ -1598,9 +1883,6 @@ async fn run_local_control_server(
                     .await
                 }
                 LocalControlAction::BridgeExit => LocalControlResult::Accepted,
-                _ => LocalControlResult::Rejected {
-                    code: "bridge_local_control_action_unavailable".to_owned(),
-                },
             };
             let response = LocalControlResponse {
                 schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
@@ -1922,9 +2204,12 @@ async fn configure_observer_profile(
         let _ = credential_store.clear();
         return rejected(error.code());
     }
-    if let Err(code) = observer_runtimes.start(&observer.observer_profile_id).await {
+    if preferences_store.load().observer_enabled
+        && let Err(code) = observer_runtimes.start(&observer.observer_profile_id).await
+    {
         return rejected(&code);
     }
+    administrator_cache.lock().await.invalidate_observers();
     logger.info(
         if create {
             "native_observer_profile_created"
@@ -1934,6 +2219,45 @@ async fn configure_observer_profile(
         Some(&format!("profile={}", observer.observer_profile_id)),
     );
     LocalControlResult::Accepted
+}
+
+async fn bind_observer_profile(
+    profile_id: &str,
+    bridge_user_id: i64,
+    context: ObserverProfileActionContext<'_>,
+) -> LocalControlResult {
+    let paths = match resolve_profile_paths(context.root_data_directory, profile_id) {
+        Ok(paths) if paths.data_directory.is_dir() => paths,
+        Ok(_) => return rejected("bridge_observer_profile_not_found"),
+        Err(code) => return rejected(code),
+    };
+    let preferences =
+        match BridgePreferencesStore::new(paths.data_directory.join("preferences.json")) {
+            Ok(store) => store.load(),
+            Err(error) => return rejected(error.code()),
+        };
+    let Some(platform) = preferences.platform.clone() else {
+        return rejected("bridge_observer_profile_not_configured");
+    };
+    let terminal_directory = match platform.as_str() {
+        "mt5" => preferences.mt5_terminal_path.clone(),
+        "mt4" => preferences.mt4_terminal_path.clone(),
+        _ => None,
+    };
+    let Some(terminal_directory) = terminal_directory else {
+        return rejected("bridge_observer_profile_not_configured");
+    };
+    configure_observer_profile(
+        false,
+        ObserverProfileMutation {
+            observer_profile_id: profile_id.to_owned(),
+            bridge_user_id,
+            platform,
+            terminal_directory,
+        },
+        context,
+    )
+    .await
 }
 
 async fn observer_runtime_enabled_action(
@@ -1970,15 +2294,20 @@ async fn observer_runtime_enabled_action(
         observer_runtimes.stop(profile_id).await
     };
     match result {
-        Ok(()) => LocalControlResult::Accepted,
+        Ok(()) => {
+            administrator_cache.lock().await.invalidate_observers();
+            LocalControlResult::Accepted
+        }
         Err(code) => rejected(&code),
     }
 }
 
 fn observer_preferences_configured(preferences: &BridgeUserPreferences) -> bool {
-    if preferences.observer_bridge_user_id.is_none()
-        || preferences.selected_terminal_instance_id().is_none()
-    {
+    preferences.observer_bridge_user_id.is_some() && observer_terminal_configured(preferences)
+}
+
+fn observer_terminal_configured(preferences: &BridgeUserPreferences) -> bool {
+    if preferences.selected_terminal_instance_id().is_none() {
         return false;
     }
     match preferences.platform.as_deref() {
@@ -2903,7 +3232,7 @@ fn now_utc_msc() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bridge_contract::AccountRef;
+    use bridge_contract::{AccountRef, DataDeltaMessage};
     use bridge_security_win::BridgeCredential;
     use bridge_transport::load_endpoint_settings;
 
@@ -3002,7 +3331,7 @@ mod tests {
     }
 
     #[test]
-    fn administrator_cache_only_decorates_the_default_profile_without_exposing_dead_actions() {
+    fn administrator_cache_decorates_only_the_default_profile_with_live_observer_controls() {
         let mut state = NativeRuntimeStatusSnapshot::inactive(
             DEFAULT_PROFILE_ID,
             VERSION,
@@ -3027,24 +3356,63 @@ mod tests {
                 login_account: Some("596520".to_owned()),
                 broker_server: Some("DooTechnology-Demo".to_owned()),
             }],
+            observer_projection: ObserverUiProjection {
+                profiles: vec![UiObserverProfile {
+                    observer_profile_id: "source-1".to_owned(),
+                    platform: Some("mt5".to_owned()),
+                    terminal_directory: Some(r"C:\Broker MT5".to_owned()),
+                    configured: true,
+                    enabled: true,
+                    terminal_instance_id: Some("mt5_0123456789abcdef01234567".to_owned()),
+                    bridge_user_id: Some(9),
+                    observer_account_label: Some("一号观摩源".to_owned()),
+                    trading_account_label: Some("596520 · DooTechnology-Demo".to_owned()),
+                    runtime_phase: Some("online".to_owned()),
+                    runtime_detail_code: None,
+                }],
+                terminals: vec![UiTerminalStatus {
+                    terminal_instance_id: "mt5_0123456789abcdef01234567".to_owned(),
+                    platform: "mt5".to_owned(),
+                    broker_server: "DooTechnology-Demo".to_owned(),
+                    login: "596520".to_owned(),
+                    runtime_state: "running".to_owned(),
+                    error_code: None,
+                    observer_profile_id: Some("source-1".to_owned()),
+                    terminal_trading_allowed: Some(true),
+                    program_trading_allowed: None,
+                    account_trading_allowed: Some(true),
+                    account_expert_trading_allowed: Some(true),
+                    mt4_expert_restart_required: false,
+                }],
+            },
             ..AdministratorCache::default()
         };
         cache.decorate(DEFAULT_PROFILE_ID, &mut state);
         assert!(state.is_administrator);
         assert_eq!(state.observer_sources.len(), 1);
-        assert!(!state.can_manage_observer_sources);
+        assert!(state.can_manage_observer_sources);
+        assert_eq!(state.observer_profiles.len(), 1);
+        assert_eq!(state.terminals.len(), 1);
         state
             .validate(DEFAULT_PROFILE_ID)
             .expect("decorated default state");
 
-        let mut observer_state = state.clone();
-        observer_state.profile_id = "source-1".to_owned();
-        observer_state.is_administrator = false;
-        observer_state.observer_sources.clear();
+        let mut observer_state = NativeRuntimeStatusSnapshot::inactive(
+            "source-1",
+            VERSION,
+            now_utc_msc(),
+            "starting",
+            "stopped",
+            None,
+        )
+        .expect("observer runtime status")
+        .to_ui_state(1)
+        .expect("observer UI state");
         cache.decorate("source-1", &mut observer_state);
         assert!(!observer_state.is_administrator);
         assert!(observer_state.observer_sources.is_empty());
         assert!(!observer_state.can_manage_observer_sources);
+        assert!(observer_state.observer_profiles.is_empty());
     }
 
     #[test]
@@ -3109,7 +3477,133 @@ mod tests {
         assert!(observer_preferences_configured(&preferences));
         preferences.observer_bridge_user_id = None;
         assert!(!observer_preferences_configured(&preferences));
+        assert!(observer_terminal_configured(&preferences));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn observer_ui_projection_combines_preferences_runtime_route_and_permissions() {
+        let root = unique_test_directory("observer-ui-projection");
+        std::fs::create_dir_all(&root).expect("observer projection root");
+        let now = now_utc_msc();
+        let paths = resolve_profile_paths(&root, "source-1").expect("observer paths");
+        let terminal = root.join("Broker MT5").join("terminal64.exe");
+        std::fs::create_dir_all(terminal.parent().expect("terminal parent"))
+            .expect("terminal directory");
+        std::fs::write(&terminal, b"terminal").expect("terminal fixture");
+        let terminal_instance_id = "mt5_cccccccccccccccccccccccc";
+        BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+            .expect("observer preferences")
+            .save_observer_profile(&ObserverProfilePreferences {
+                platform: "mt5".to_owned(),
+                terminal_instance_id: terminal_instance_id.to_owned(),
+                terminal_path: terminal.display().to_string(),
+                bridge_user_id: 42,
+                observer_account_label: Some("一号观摩源".to_owned()),
+                trading_account_id: Some(9),
+                trading_account_label: Some("596520 · Broker-Demo".to_owned()),
+            })
+            .expect("save observer profile");
+        let account_ref = AccountRef {
+            broker_server: "Broker-Demo".to_owned(),
+            login: "596520".to_owned(),
+        };
+        let store = OutboxStore::open_or_create(&paths.database_path).expect("observer store");
+        let binding = store
+            .activate_terminal_binding(terminal_instance_id, "mt5", &terminal, &account_ref, now)
+            .expect("observer binding");
+        store
+            .persist_data_delta(&DataDeltaMessage {
+                v: 3,
+                message_type: "data_delta".to_owned(),
+                message_id: "msg_observer_permission_000001".to_owned(),
+                sent_at_utc_msc: now,
+                terminal_instance_id: terminal_instance_id.to_owned(),
+                account_ref: account_ref.clone(),
+                connection_epoch: binding.connection_epoch,
+                stream: "account".to_owned(),
+                revision: 1,
+                base_revision: 0,
+                observed_at_utc_msc: now,
+                source_time_msc: Some(now),
+                full_snapshot: true,
+                upserts: vec![serde_json::json!({
+                    "login": 596520,
+                    "server": "Broker-Demo",
+                    "terminal_trade_allowed": true,
+                    "trade_allowed": true,
+                    "trade_expert": false,
+                })],
+                deletes: Vec::new(),
+            })
+            .expect("observer account snapshot");
+        drop(store);
+        let runtime = serde_json::json!({
+            "schema_version": 1,
+            "bridge_version": VERSION,
+            "profile_id": "source-1",
+            "observed_at_utc_msc": now,
+            "phase": "online",
+            "server_state": "connected",
+            "server_error_code": null,
+            "terminals": [{
+                "terminal_instance_id": terminal_instance_id,
+                "platform": "mt5",
+                "connection_epoch": binding.connection_epoch,
+                "state": "ready",
+                "worker_state": "ready",
+                "collector_state": "ready",
+                "data_ready": true,
+                "worker_consecutive_failures": 0,
+                "collector_consecutive_failures": 0,
+                "last_success_at_utc_msc": now,
+                "error_code": null
+            }],
+            "reconciliation": {
+                "last_run_at_utc_msc": now,
+                "inspected": 0,
+                "resolved": 0,
+                "pending": 0,
+                "error_codes": [],
+                "consecutive_failures": 0,
+                "fatal_error_code": null
+            }
+        });
+        write_runtime_status_snapshot(
+            &paths.runtime_status_path,
+            &serde_json::to_vec(&runtime).expect("runtime payload"),
+        )
+        .expect("observer runtime status");
+
+        let projection = load_observer_ui_projection(&root, now).expect("observer projection");
+        assert_eq!(projection.profiles.len(), 1);
+        assert_eq!(projection.profiles[0].observer_profile_id, "source-1");
+        assert_eq!(
+            projection.profiles[0].terminal_directory.as_deref(),
+            terminal
+                .parent()
+                .map(|value| value.to_string_lossy())
+                .as_deref()
+        );
+        assert!(projection.profiles[0].configured);
+        assert_eq!(projection.terminals.len(), 1);
+        assert_eq!(projection.terminals[0].login, "596520");
+        assert_eq!(projection.terminals[0].terminal_trading_allowed, Some(true));
+        assert_eq!(projection.terminals[0].account_trading_allowed, Some(true));
+        assert_eq!(
+            projection.terminals[0].account_expert_trading_allowed,
+            Some(false)
+        );
+
+        let stale =
+            load_observer_ui_projection(&root, now + 5_001).expect("stale observer projection");
+        assert_eq!(stale.profiles[0].runtime_phase.as_deref(), Some("degraded"));
+        assert_eq!(
+            stale.profiles[0].runtime_detail_code.as_deref(),
+            Some("bridge_runtime_status_stale")
+        );
+        assert!(stale.terminals.is_empty());
+        std::fs::remove_dir_all(root).expect("remove observer projection fixture");
     }
 
     #[test]

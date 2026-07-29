@@ -851,6 +851,7 @@ mod tests {
         state.observer_profiles.push(UiObserverProfile {
             observer_profile_id: "source-1".to_owned(),
             platform: Some("mt4".to_owned()),
+            terminal_directory: Some(r"C:\Broker MT4".to_owned()),
             configured: true,
             enabled: false,
             terminal_instance_id: None,
