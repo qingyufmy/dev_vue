@@ -160,9 +160,6 @@ impl NativeCommandAdmission {
         ) {
             return Err(TransportError::new("command_route_mismatch"));
         }
-        if terminal.platform == "mt4" {
-            return Err(TransportError::new("terminal_trade_unavailable"));
-        }
         if command.action != "query_execution"
             && !state
                 .synchronized_streams
@@ -242,19 +239,22 @@ mod tests {
     }
 
     #[test]
-    fn mt4_commands_remain_closed_until_the_native_execution_adapter_is_enabled() {
+    fn mt4_commands_follow_the_same_snapshot_admission_as_mt5() {
         let admission = NativeCommandAdmission::default();
         let mut mt4_terminal = terminal();
         mt4_terminal.platform = "mt4".to_owned();
         admission
             .begin_session("session_01JADMITMT4", &[mt4_terminal])
             .expect("session");
+        admission
+            .validate(&command("query_execution"), 1_700_000_000_001)
+            .expect("MT4 reconciliation query");
         assert_eq!(
             admission
-                .validate(&command("query_execution"), 1_700_000_000_001)
-                .expect_err("MT4 execution must remain unavailable")
+                .validate(&command("place_order"), 1_700_000_000_001)
+                .expect_err("initial sync")
                 .code(),
-            "terminal_trade_unavailable"
+            "terminal_initial_sync_pending"
         );
     }
 

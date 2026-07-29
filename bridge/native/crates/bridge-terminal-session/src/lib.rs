@@ -1,5 +1,8 @@
-use bridge_contract::TerminalStreamFreshness;
-use bridge_mt4::{Mt4EaSnapshotSource, Mt4SnapshotSourceSpec};
+use bridge_contract::{CommandMessage, CommandResultMessage, TerminalStreamFreshness};
+use bridge_mt4::{
+    Mt4EaSnapshotSource, Mt4SnapshotSourceSpec, command_from_bridge, rejected_bridge_result,
+    result_to_bridge,
+};
 use bridge_runtime_win::RestartPolicy;
 use bridge_store::{HistoryArchiveBatch, HistoryCursor, OutboxStore};
 use bridge_terminal_data::{
@@ -14,6 +17,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::windows::named_pipe::NamedPipeServer;
 use tokio::sync::{Mutex, Notify, mpsc, watch};
@@ -136,6 +140,8 @@ pub struct Mt4SessionHandle {
     source: Arc<Mt4EaSnapshotSource>,
     collector: CollectorHandle,
     history: HistorySyncHandle,
+    clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    command_sequence: Arc<AtomicU64>,
 }
 
 impl Mt4SessionHandle {
@@ -198,6 +204,49 @@ impl Mt4SessionHandle {
             .request_quote(request_id, symbol)
             .await
             .map_err(|error| TerminalSessionError::new(error.code()))
+    }
+
+    pub async fn execute_command(
+        &self,
+        command: CommandMessage,
+    ) -> Result<CommandResultMessage, TerminalSessionError> {
+        if !self.route.matches(&WorkerRoute {
+            terminal_instance_id: command.terminal_instance_id.clone(),
+            platform: "mt4".to_owned(),
+            account_ref: command.account_ref.clone(),
+            connection_epoch: command.connection_epoch,
+        }) {
+            return Err(TerminalSessionError::new("command_route_mismatch"));
+        }
+        let now = (self.clock)();
+        if now <= 0 {
+            return Err(TerminalSessionError::new("terminal_session_clock_invalid"));
+        }
+        let sequence = self.command_sequence.fetch_add(1, Ordering::Relaxed);
+        let message_id = format!("result_mt4_{now:x}_{sequence:x}");
+        let local = match command_from_bridge(&command) {
+            Ok(local) => local,
+            Err(error) => {
+                let rejected = rejected_bridge_result(&command, now, message_id, error.code());
+                rejected
+                    .validate()
+                    .map_err(|_| TerminalSessionError::new("mt4_command_result_invalid"))?;
+                return Ok(rejected);
+            }
+        };
+        let result = self
+            .source
+            .execute_trade(local)
+            .await
+            .map_err(|error| TerminalSessionError::new(error.code()))?;
+        result_to_bridge(&command, result, message_id)
+            .map_err(|error| TerminalSessionError::new(error.code()))
+    }
+
+    pub fn wake_after_command(&self) -> Result<(), TerminalSessionError> {
+        self.collector.wake().map_err(projection_error)?;
+        self.history.wake();
+        Ok(())
     }
 
     pub fn request_history_refresh(&self) {
@@ -614,9 +663,13 @@ impl RunningMt4Session {
         );
         let projector =
             SnapshotProjector::restore(store, spec.route.clone()).map_err(projection_error)?;
-        let (collector, collector_handle) =
-            SnapshotCollector::new(Arc::clone(&source), projector, clock, spec.collector_policy)
-                .map_err(projection_error)?;
+        let (collector, collector_handle) = SnapshotCollector::new(
+            Arc::clone(&source),
+            projector,
+            Arc::clone(&clock),
+            spec.collector_policy,
+        )
+        .map_err(projection_error)?;
         let collector_task = tokio::spawn(collector.run());
         Ok(Self {
             handle: Mt4SessionHandle {
@@ -624,6 +677,8 @@ impl RunningMt4Session {
                 source,
                 collector: collector_handle,
                 history,
+                clock,
+                command_sequence: Arc::new(AtomicU64::new(0)),
             },
             collector_task,
             history_task,
@@ -940,8 +995,9 @@ mod tests {
     use bridge_contract::AccountRef;
     use bridge_mt4::{
         CURRENT_PROTOCOL_VERSION, CollectionStreams, DealsBatch, Hello, MessageType, Snapshot,
-        decode_collect, decode_message_type, decode_welcome, encode_deals, encode_hello,
-        encode_message_type, encode_snapshot, read_frame, reconnect_pipe_name, write_frame,
+        TradeResult, decode_collect, decode_command, decode_message_type, decode_welcome,
+        encode_command_result, encode_deals, encode_hello, encode_message_type, encode_snapshot,
+        read_frame, reconnect_pipe_name, write_frame,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1101,7 +1157,7 @@ mod tests {
                 &mut pipe,
                 &encode_hello(&Hello {
                     protocol_version: CURRENT_PROTOCOL_VERSION,
-                    adapter_version: "3.2.4-test".to_owned(),
+                    adapter_version: "3.2.5-test".to_owned(),
                     terminal_data_path: ea_terminal_data_path.to_string_lossy().into_owned(),
                     broker_server: "Broker-Demo".to_owned(),
                     login: "12345678".to_owned(),
@@ -1161,6 +1217,26 @@ mod tests {
                     .expect("write deals");
                     continue;
                 }
+                if message_type == MessageType::Command as i32 {
+                    let command = decode_command(&frame).expect("trade command");
+                    write_frame(
+                        &mut pipe,
+                        &encode_command_result(&TradeResult {
+                            command_id: command.command_id,
+                            status: "succeeded".to_owned(),
+                            error_code: None,
+                            error_message: None,
+                            broker_retcode: 0,
+                            ticket: 501,
+                            observed_at_utc_msc: 1_800_000_000_050,
+                            raw_result: Some(serde_json::json!({ "ticket": "501" })),
+                        })
+                        .expect("trade result"),
+                    )
+                    .await
+                    .expect("write trade result");
+                    continue;
+                }
                 assert_eq!(
                     decode_collect(&frame).expect("collect"),
                     CollectionStreams::ALL
@@ -1191,6 +1267,31 @@ mod tests {
         });
 
         wait_mt4_ready(&handle).await;
+        let trade = handle
+            .execute_command(CommandMessage {
+                v: 3,
+                message_type: "command".to_owned(),
+                message_id: "message_01JMT4SESSION01".to_owned(),
+                sent_at_utc_msc: 1_800_000_100_000,
+                command_id: "command_01JMT4SESSION01".to_owned(),
+                terminal_instance_id: terminal_id.clone(),
+                account_ref: route.account_ref.clone(),
+                connection_epoch: route.connection_epoch,
+                issued_at_utc_msc: 1_800_000_100_000,
+                deadline_utc_msc: 1_800_000_110_000,
+                action: "place_order".to_owned(),
+                params: serde_json::json!({
+                    "symbol": "XAUUSD",
+                    "side": "buy",
+                    "order_kind": "market",
+                    "volume": 0.01,
+                    "comment": "AI-MT4-SESSION"
+                }),
+            })
+            .await
+            .expect("execute MT4 command");
+        assert_eq!(trade.status, "succeeded");
+        assert_eq!(trade.evidence.order_tickets, ["501"]);
         let projection = store
             .load_terminal_projection(&terminal_id, &route.account_ref, route.connection_epoch)
             .expect("projection");

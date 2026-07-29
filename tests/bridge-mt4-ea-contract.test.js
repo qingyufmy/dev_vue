@@ -12,7 +12,7 @@ function functionBlock(name, nextName) {
 describe('MT4 EA time contract', () => {
   it('normalizes broker quote time to UTC before publishing it', () => {
     const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
-    expect(source).toContain('#property version   "3.24"')
+    expect(source).toContain('#property version   "3.25"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
     expect(block).toContain('AppendInt32(response, CurrentServerOffsetMinutes())')
     expect(block).toContain('AppendUtf8(response, "broker_time_derived")')
@@ -42,7 +42,7 @@ describe('MT4 EA time contract', () => {
 describe('MT4 EA extended data contract', () => {
   it('advertises version 3.2 and handles every server data action', () => {
     expect(source).toContain('#define BRIDGE_PROTOCOL_VERSION 3')
-    expect(source).toContain('#define ADAPTER_VERSION "3.2.4"')
+    expect(source).toContain('#define ADAPTER_VERSION "3.2.5"')
     expect(source).toContain('AppendInt32(hello, BRIDGE_PROTOCOL_VERSION)')
     expect(source).toContain('AppendUtf8(hello, ADAPTER_VERSION)')
     const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')
@@ -118,6 +118,26 @@ describe('MT4 EA uncertain execution contract', () => {
     expect(block).toContain('\\"found\\":false,\\"complete\\":false')
     expect(block).toContain('mt4_history_range_unverified')
     expect(block).not.toContain('\\"found\\":false,\\"complete\\":true')
+  })
+
+  it('publishes enough source state to reconcile every management command', () => {
+    const block = functionBlock('void ExecuteQuery', 'void SendTradeFailure')
+    for (const evidence of [
+      '\\"source\\"',
+      'active_position',
+      'active_order',
+      'history_deal',
+      'history_order',
+      '\\"volume\\"',
+      '\\"price\\"',
+      '\\"stop_loss\\"',
+      '\\"take_profit\\"',
+      '\\"expiration\\"',
+      '\\"magic\\"',
+      '\\"point\\"',
+    ]) {
+      expect(block).toContain(evidence)
+    }
   })
 })
 

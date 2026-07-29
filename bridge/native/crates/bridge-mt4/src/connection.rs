@@ -1,13 +1,14 @@
 use crate::{
     CURRENT_PROTOCOL_VERSION, CollectionStreams, DataResult, DealsBatch, DealsRequest,
     ExtendedDataRequest, Hello, MessageType, Mt4ProtocolError, PerformanceDailyRequest, Quote,
-    QuoteRequest, RatesRequest, RiskSnapshotRequest, Snapshot, SymbolSnapshotRequest, Welcome,
-    decode_deals, decode_extended_data, decode_hello, decode_message_type,
-    decode_performance_daily, decode_quote, decode_rates, decode_risk_snapshot, decode_snapshot,
-    decode_symbol_snapshot, encode_collect, encode_deals_request, encode_extended_data_request,
-    encode_message_type, encode_performance_daily_request, encode_quote_request,
-    encode_rates_request, encode_risk_snapshot_request, encode_symbol_snapshot_request,
-    encode_welcome, read_frame, write_frame,
+    QuoteRequest, RatesRequest, RiskSnapshotRequest, Snapshot, SymbolSnapshotRequest, TradeCommand,
+    TradeResult, Welcome, decode_command_result, decode_deals, decode_extended_data, decode_hello,
+    decode_message_type, decode_performance_daily, decode_quote, decode_rates,
+    decode_risk_snapshot, decode_snapshot, decode_symbol_snapshot, encode_collect, encode_command,
+    encode_deals_request, encode_extended_data_request, encode_message_type,
+    encode_performance_daily_request, encode_quote_request, encode_rates_request,
+    encode_risk_snapshot_request, encode_symbol_snapshot_request, encode_welcome, read_frame,
+    write_frame,
 };
 use bridge_runtime_win::CurrentUserPipeSecurity;
 use std::path::{Path, PathBuf};
@@ -223,6 +224,14 @@ impl EaConnection {
         decode_snapshot(&response).inspect_err(|_| self.disconnect())
     }
 
+    pub async fn execute(
+        &mut self,
+        command: &TradeCommand,
+    ) -> Result<TradeResult, Mt4ProtocolError> {
+        let response = self.request(encode_command(command)?).await?;
+        decode_command_result(&response).inspect_err(|_| self.disconnect())
+    }
+
     pub async fn get_quote(&mut self, request: &QuoteRequest) -> Result<Quote, Mt4ProtocolError> {
         let response = self.request(encode_quote_request(request)?).await?;
         decode_quote(&response).inspect_err(|_| self.disconnect())
@@ -353,7 +362,9 @@ fn paths_equal_ordinal_ignore_case(left: &Path, right: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::{
-        PayloadWriter, RouteFields, decode_collect, decode_welcome, encode_hello, encode_snapshot,
+        OrderKind, OrderSide, PayloadWriter, RouteFields, TradeAction, TradeCommand, TradeResult,
+        decode_collect, decode_command, decode_welcome, encode_command_result, encode_hello,
+        encode_snapshot,
     };
     use tokio::net::windows::named_pipe::ClientOptions;
 
@@ -371,7 +382,7 @@ mod tests {
     fn hello(path: &Path, login: &str) -> Hello {
         Hello {
             protocol_version: CURRENT_PROTOCOL_VERSION,
-            adapter_version: "3.2.4-test".to_owned(),
+            adapter_version: "3.2.5-test".to_owned(),
             terminal_data_path: path.to_string_lossy().into_owned(),
             broker_server: "Broker-Demo".to_owned(),
             login: login.to_owned(),
@@ -432,6 +443,26 @@ mod tests {
             write_frame(&mut pipe, &response.finish().expect("rates response"))
                 .await
                 .expect("write rates");
+            let command = decode_command(&read_frame(&mut pipe).await.expect("command frame"))
+                .expect("command");
+            assert_eq!(command.action, TradeAction::PlaceOrder);
+            assert_eq!(command.volume, 0.01);
+            write_frame(
+                &mut pipe,
+                &encode_command_result(&TradeResult {
+                    command_id: command.command_id,
+                    status: "succeeded".to_owned(),
+                    error_code: None,
+                    error_message: None,
+                    broker_retcode: 0,
+                    ticket: 91,
+                    observed_at_utc_msc: 1_800_000_000_002,
+                    raw_result: Some(serde_json::json!({ "ticket": "91" })),
+                })
+                .expect("command result"),
+            )
+            .await
+            .expect("write command result");
             let shutdown = read_frame(&mut pipe).await.expect("shutdown frame");
             decode_message_type(&shutdown, MessageType::Shutdown).expect("shutdown");
             write_frame(&mut pipe, &encode_message_type(MessageType::ShutdownAck))
@@ -477,6 +508,36 @@ mod tests {
             .await
             .expect("rates");
         assert_eq!(rates.payload.expect("rates payload")["source"], "mt4");
+        let trade = connection
+            .execute(&TradeCommand {
+                command_id: "command_01JMT4PIPE01".to_owned(),
+                terminal_instance_id: "mt4_0123456789abcdef01234567".to_owned(),
+                broker_server: "Broker-Demo".to_owned(),
+                login: "12345678".to_owned(),
+                connection_epoch: 9,
+                deadline_utc_msc: 1_800_000_010_000,
+                action: TradeAction::PlaceOrder,
+                symbol: "XAUUSD".to_owned(),
+                side: OrderSide::Buy,
+                order_kind: OrderKind::Market,
+                ticket: 0,
+                volume: 0.01,
+                price: None,
+                stop_loss: None,
+                take_profit: None,
+                deviation: 20,
+                magic: 234000,
+                expiration: 0,
+                expected_stop_loss: None,
+                expected_take_profit: None,
+                comment: "AI-MT4-PIPE".to_owned(),
+                expected_kind: String::new(),
+                bridge_command_ref: String::new(),
+            })
+            .await
+            .expect("execute trade");
+        assert_eq!(trade.status, "succeeded");
+        assert_eq!(trade.ticket, 91);
         connection.close().await.expect("close");
         client.await.expect("client task");
     }

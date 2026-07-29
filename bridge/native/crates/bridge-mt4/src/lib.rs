@@ -5,6 +5,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 mod connection;
 mod read_api;
 mod session;
+mod trade_api;
 pub use connection::{
     EaConnection, EaIdentity, EaPipeListener, REGISTRATION_PIPE_NAME, reconnect_pipe_name,
 };
@@ -19,9 +20,14 @@ pub use read_api::{
 pub use session::{
     EaRegistrationHub, EaRegistrationHubHandle, Mt4EaSnapshotSource, Mt4SnapshotSourceSpec,
 };
+pub use trade_api::{
+    OrderKind, OrderSide, TradeAction, TradeCommand, TradeResult, command_from_bridge,
+    decode_command, decode_command_result, encode_command, encode_command_result,
+    rejected_bridge_result, result_to_bridge,
+};
 
 pub const CURRENT_PROTOCOL_VERSION: i32 = 3;
-pub const CURRENT_ADAPTER_VERSION: &str = "3.2.4";
+pub const CURRENT_ADAPTER_VERSION: &str = "3.2.5";
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_STRING_BYTES: usize = 2 * 1024 * 1024;
 
@@ -106,7 +112,7 @@ impl Hello {
     }
 
     pub fn adapter_requires_restart(&self) -> bool {
-        parse_adapter_version(&self.adapter_version).is_some_and(|version| version < (3, 2, 4))
+        parse_adapter_version(&self.adapter_version).is_some_and(|version| version < (3, 2, 5))
     }
 
     pub fn supports_deals(&self) -> bool {
@@ -498,7 +504,7 @@ mod tests {
     fn hello() -> Hello {
         Hello {
             protocol_version: 3,
-            adapter_version: "3.2.4-test".to_owned(),
+            adapter_version: "3.2.5-test".to_owned(),
             terminal_data_path: r"C:\MT4\Data".to_owned(),
             broker_server: "Broker-Demo".to_owned(),
             login: "12345678".to_owned(),
@@ -516,7 +522,7 @@ mod tests {
     fn hello_matches_the_existing_dotnet_and_ea_binary_contract() {
         let mut expected = 1_i32.to_le_bytes().to_vec();
         expected.extend_from_slice(&3_i32.to_le_bytes());
-        append_string(&mut expected, "3.2.4-test");
+        append_string(&mut expected, "3.2.5-test");
         append_string(&mut expected, r"C:\MT4\Data");
         append_string(&mut expected, "Broker-Demo");
         append_string(&mut expected, "12345678");
@@ -612,6 +618,12 @@ mod tests {
         assert!(candidate.protocol_is_current());
         assert!(candidate.adapter_is_current());
         assert!(!candidate.adapter_requires_restart());
+        assert!(candidate.supports_deals());
+        assert!(candidate.supports_extended_data());
+
+        candidate.adapter_version = "3.2.4".to_owned();
+        assert!(candidate.adapter_requires_restart());
+        assert!(!candidate.adapter_is_current());
         assert!(candidate.supports_deals());
         assert!(candidate.supports_extended_data());
 

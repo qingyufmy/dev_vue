@@ -9,7 +9,7 @@ mod supervisor;
 mod windows_pipe;
 
 pub use client::{ExpectedWorker, WorkerClient};
-pub use command_adapter::{IpcCommandWorker, RegistryCommandWorker, RegistryReconciliationWorker};
+pub use command_adapter::{CommandReconciliationWorker, IpcCommandWorker, RegistryCommandWorker};
 pub use contract::{
     HistorySyncRequest, QuoteRequest, SnapshotRequest, SnapshotStream, SnapshotStreams,
     TerminalQuote, TerminalSnapshot, WORKER_IPC_VERSION, WorkerCapability, WorkerDataRequest,

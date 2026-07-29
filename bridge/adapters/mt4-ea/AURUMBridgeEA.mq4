@@ -1,9 +1,9 @@
 #property strict
-#property version   "3.24"
+#property version   "3.25"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.2.4"
+#define ADAPTER_VERSION "3.2.5"
 
 input string InpPipeName = "AURUMBridgeV3";
 
@@ -2012,11 +2012,22 @@ void ExecuteQuery(const string command_id, const int ticket,
      }
    string raw = "{\"found\":true,\"complete\":true"
       + ",\"kind\":\"" + kind + "\""
+      + ",\"source\":\"" + (active
+         ? (is_market ? "active_position" : "active_order")
+         : (is_market ? "history_deal" : "history_order")) + "\""
+      + ",\"active\":" + (active ? "true" : "false")
       + ",\"ticket\":\"" + IntegerToString(selected_ticket) + "\""
       + ",\"order\":\"" + IntegerToString(selected_ticket) + "\""
       + (is_market ? ",\"position_id\":\"" + IntegerToString(selected_ticket) + "\"" : "")
       + ",\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\""
       + ",\"comment\":\"" + JsonEscape(OrderComment()) + "\""
+      + ",\"volume\":" + JsonNumber(OrderLots())
+      + ",\"price\":" + JsonNumber(OrderOpenPrice())
+      + ",\"stop_loss\":" + JsonNumber(OrderStopLoss())
+      + ",\"take_profit\":" + JsonNumber(OrderTakeProfit())
+      + ",\"expiration\":" + IntegerToString((int)OrderExpiration())
+      + ",\"magic\":" + IntegerToString(OrderMagicNumber())
+      + ",\"point\":" + JsonNumber(MarketInfo(OrderSymbol(), MODE_POINT))
       + (pending_state == "" ? "" : ",\"pending_state\":\"" + pending_state + "\"")
       + "}";
    SendCommandResult(command_id, 1, "", "", 0, selected_ticket, raw);

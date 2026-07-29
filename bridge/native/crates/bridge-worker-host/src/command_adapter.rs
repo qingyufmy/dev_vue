@@ -20,8 +20,8 @@ pub struct RegistryCommandWorker<S> {
     request_timeout: Duration,
 }
 
-pub struct RegistryReconciliationWorker<S> {
-    command_worker: RegistryCommandWorker<S>,
+pub struct CommandReconciliationWorker {
+    command_worker: Arc<dyn CommandWorker>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     request_timeout: Duration,
     settle_after: Duration,
@@ -101,12 +101,9 @@ where
     }
 }
 
-impl<S> RegistryReconciliationWorker<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
-{
+impl CommandReconciliationWorker {
     pub fn new(
-        registry: Arc<WorkerRegistry<S>>,
+        command_worker: Arc<dyn CommandWorker>,
         clock: Arc<dyn Fn() -> i64 + Send + Sync>,
         request_timeout: Duration,
         settle_after: Duration,
@@ -120,11 +117,7 @@ where
             ));
         }
         Ok(Self {
-            command_worker: RegistryCommandWorker::new(
-                registry,
-                Arc::clone(&clock),
-                request_timeout,
-            )?,
+            command_worker,
             clock,
             request_timeout,
             settle_after,
@@ -170,10 +163,7 @@ where
     }
 }
 
-impl<S> ExecutionReconciliationWorker for RegistryReconciliationWorker<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
-{
+impl ExecutionReconciliationWorker for CommandReconciliationWorker {
     fn reconcile(
         &self,
         command: CommandMessage,

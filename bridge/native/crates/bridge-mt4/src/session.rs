@@ -2,7 +2,7 @@ use crate::{
     CollectionStreams, DataResult, DealsBatch, DealsRequest, EaConnection, EaIdentity,
     EaPipeListener, ExtendedDataRequest, Mt4ProtocolError, PerformanceDailyRequest, Quote,
     QuoteRequest, REGISTRATION_PIPE_NAME, RatesRequest, RiskSnapshotRequest, RouteFields,
-    SymbolSnapshotRequest, Welcome, reconnect_pipe_name,
+    SymbolSnapshotRequest, TradeCommand, TradeResult, Welcome, reconnect_pipe_name,
 };
 use bridge_terminal_data::SnapshotSource;
 use bridge_worker_host::{
@@ -362,6 +362,42 @@ impl Mt4EaSnapshotSource {
         result
     }
 
+    pub async fn execute_trade(
+        &self,
+        command: TradeCommand,
+    ) -> Result<TradeResult, Mt4ProtocolError> {
+        if command.terminal_instance_id != self.route.terminal_instance_id
+            || command.connection_epoch != self.route.connection_epoch
+            || command.login != self.route.account_ref.login
+            || !command
+                .broker_server
+                .eq_ignore_ascii_case(&self.route.account_ref.broker_server)
+        {
+            return Err(Mt4ProtocolError::new("command_route_mismatch"));
+        }
+        let command_id = command.command_id.clone();
+        let mut active = self.connection.lock().await;
+        if active.is_none() {
+            *active = Some(self.connect().await?);
+        }
+        let result = active
+            .as_mut()
+            .ok_or_else(|| Mt4ProtocolError::new("mt4_ea_not_ready"))?
+            .execute(&command)
+            .await;
+        match result {
+            Ok(result) if result.command_id == command_id => Ok(result),
+            Ok(_) => {
+                active.take();
+                Err(Mt4ProtocolError::new("mt4_command_result_id_mismatch"))
+            }
+            Err(error) => {
+                active.take();
+                Err(error)
+            }
+        }
+    }
+
     pub async fn request_quote(
         &self,
         request_id: String,
@@ -639,7 +675,7 @@ mod tests {
     fn hello(path: &std::path::Path) -> Hello {
         Hello {
             protocol_version: CURRENT_PROTOCOL_VERSION,
-            adapter_version: "3.2.4-test".to_owned(),
+            adapter_version: "3.2.5-test".to_owned(),
             terminal_data_path: path.to_string_lossy().into_owned(),
             broker_server: "Broker-Demo".to_owned(),
             login: "12345678".to_owned(),

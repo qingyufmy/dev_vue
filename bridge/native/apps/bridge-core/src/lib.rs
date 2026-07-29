@@ -1,6 +1,6 @@
 use bridge_command::{
     CommandDispatcher, CommandExecutionObserver, CommandReconciler, CommandWorker,
-    ExecutionReconciliationWorker,
+    CommandWorkerError, ExecutionReconciliationWorker,
 };
 use bridge_contract::{
     CommandResultMessage, DataRequestMessage, HelloMessage, QuoteRequestMessage,
@@ -28,7 +28,7 @@ use bridge_transport::{
     SupervisorStateSink, TerminalFreshnessProvider, TransportError, V3SessionConnector,
 };
 use bridge_worker_host::{
-    RegistryCommandWorker, RegistryReconciliationWorker, WorkerProgram, WorkerRegistry, WorkerRoute,
+    CommandReconciliationWorker, RegistryCommandWorker, WorkerProgram, WorkerRegistry, WorkerRoute,
 };
 use futures_util::{FutureExt, future::BoxFuture};
 use serde::Serialize;
@@ -173,6 +173,50 @@ pub struct ActiveMt5Sessions {
     store: Arc<OutboxStore>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     latest_release: Mutex<Option<ReleaseAvailableNotification>>,
+}
+
+struct RoutedCommandWorker {
+    active_sessions: Arc<ActiveMt5Sessions>,
+    mt5_worker: RegistryCommandWorker<NamedPipeServer>,
+}
+
+impl RoutedCommandWorker {
+    fn new(
+        active_sessions: Arc<ActiveMt5Sessions>,
+        clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    ) -> Result<Self, CommandWorkerError> {
+        let mt5_worker = RegistryCommandWorker::new(
+            active_sessions.worker_registry(),
+            clock,
+            WORKER_REQUEST_TIMEOUT,
+        )?;
+        Ok(Self {
+            active_sessions,
+            mt5_worker,
+        })
+    }
+}
+
+impl CommandWorker for RoutedCommandWorker {
+    fn execute(
+        &self,
+        command: bridge_contract::CommandMessage,
+    ) -> BoxFuture<'_, Result<CommandResultMessage, CommandWorkerError>> {
+        Box::pin(async move {
+            if let Some(session) = self
+                .active_sessions
+                .mt4_sessions
+                .get(&command.terminal_instance_id)
+            {
+                return session
+                    .handle
+                    .execute_command(command)
+                    .await
+                    .map_err(|error| CommandWorkerError::new(error.code()));
+            }
+            self.mt5_worker.execute(command).await
+        })
+    }
 }
 
 impl ActiveMt5Sessions {
@@ -818,7 +862,11 @@ fn data_cache_max_age_msc(action: &str) -> i64 {
 
 impl CommandExecutionObserver for ActiveMt5Sessions {
     fn command_succeeded(&self, result: &CommandResultMessage) {
-        if let Ok(session) =
+        if let Some(session) = self.mt4_sessions.get(&result.terminal_instance_id) {
+            if session.handle.route().connection_epoch == result.connection_epoch {
+                let _ = session.handle.wake_after_command();
+            }
+        } else if let Ok(session) =
             self.session_for_route(&result.terminal_instance_id, result.connection_epoch)
         {
             let _ = session.handle.wake_after_command();
@@ -1384,18 +1432,14 @@ impl NativeConnectedRuntime {
                     .map_err(transport_error)?;
             let command_admission = Arc::new(NativeCommandAdmission::default());
             let command_worker: Arc<dyn CommandWorker> = Arc::new(
-                RegistryCommandWorker::new(
-                    active_sessions.worker_registry(),
-                    Arc::clone(&clock),
-                    WORKER_REQUEST_TIMEOUT,
-                )
-                .map_err(|error| CoreBootstrapError::new(error.code()))?,
+                RoutedCommandWorker::new(active_sessions.clone(), Arc::clone(&clock))
+                    .map_err(|error| CoreBootstrapError::new(error.code()))?,
             );
             let command_dispatcher = Arc::new(
                 CommandDispatcher::new(
                     Arc::clone(&store),
                     command_admission.clone(),
-                    command_worker,
+                    Arc::clone(&command_worker),
                     Arc::clone(&clock),
                     WORKER_REQUEST_TIMEOUT,
                 )
@@ -1403,8 +1447,8 @@ impl NativeConnectedRuntime {
                 .with_execution_observer(active_sessions.clone()),
             );
             let reconciliation_worker: Arc<dyn ExecutionReconciliationWorker> = Arc::new(
-                RegistryReconciliationWorker::new(
-                    active_sessions.worker_registry(),
+                CommandReconciliationWorker::new(
+                    command_worker,
                     Arc::clone(&clock),
                     WORKER_REQUEST_TIMEOUT,
                     RECONCILIATION_SETTLE_AFTER,
