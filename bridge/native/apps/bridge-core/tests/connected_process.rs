@@ -62,6 +62,7 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
             && server.saw_succeeded_command_result()
             && server.saw_recovered_command_result()
             && server.saw_history_response()
+            && server.saw_data_response("chart_data")
             && server.saw_data_response("rates")
             && server.saw_data_response("symbols")
             && server.saw_data_response("symbol_snapshot")
@@ -119,6 +120,10 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     assert!(
         server.saw_history_response(),
         "history data request did not complete through SQLite"
+    );
+    assert!(
+        server.saw_data_response("chart_data"),
+        "chart data request did not complete through SQLite"
     );
     assert!(
         server.saw_data_response("rates"),
@@ -749,6 +754,12 @@ async fn serve_realtime(
                                 .await
                                 .expect("history request send");
                             for (request_id, message_id, action, params) in [
+                                (
+                                    "data_01JCHARTREQ01",
+                                    "message_01JCHARTREQ1",
+                                    "chart_data",
+                                    serde_json::json!({ "force_refresh": true }),
+                                ),
                                 (
                                     "data_01JRATESREQ01",
                                     "message_01JRATES001",

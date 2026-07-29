@@ -326,6 +326,7 @@ impl InboundDataHandler for ActiveMt5Sessions {
                 "history"
                     | "rates"
                     | "symbols"
+                    | "chart_data"
                     | "symbol_snapshot"
                     | "risk_snapshot"
                     | "performance_daily"
@@ -349,7 +350,7 @@ impl InboundDataHandler for ActiveMt5Sessions {
                     "bridge_message_route_mismatch",
                 ));
             }
-            if request.action == "history"
+            if matches!(request.action.as_str(), "history" | "chart_data")
                 && request
                     .params
                     .get("force_refresh")
@@ -378,6 +379,14 @@ impl InboundDataHandler for ActiveMt5Sessions {
             if action == "history" {
                 return tokio::task::spawn_blocking(move || {
                     store.read_history_archive_page(&terminal, &parameters)
+                })
+                .await
+                .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))?
+                .map_err(|error| TransportError::from_static_code(error.code()));
+            }
+            if action == "chart_data" {
+                return tokio::task::spawn_blocking(move || {
+                    store.read_history_chart_data(&terminal, &parameters)
                 })
                 .await
                 .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))?

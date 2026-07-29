@@ -966,6 +966,156 @@ impl OutboxStore {
         Ok(payload)
     }
 
+    pub fn read_history_chart_data(
+        &self,
+        terminal: &TerminalDescriptor,
+        parameters: &serde_json::Value,
+    ) -> Result<serde_json::Value, StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        let request = parse_history_chart_request(parameters)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let mut values = history_scope_values(terminal);
+        values.extend(request.filter_values.iter().cloned());
+        let net = "CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
+                   json_extract(payload_json, '$.profit'), 0) AS REAL)";
+        let mut daily_statement = connection
+            .prepare(&format!(
+                "SELECT strftime('%Y-%m-%d', event_time_msc / 1000, 'unixepoch') AS day, \
+                   COALESCE(SUM({net}), 0), COUNT(*), \
+                   COALESCE(SUM(CASE WHEN {net} > 0 THEN 1 ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN {net} < 0 THEN 1 ELSE 0 END), 0) \
+                 FROM history_archive_items WHERE terminal_instance_id = ? \
+                   AND broker_server = ? COLLATE NOCASE AND login_account = ? \
+                   AND item_kind = 'trade'{} GROUP BY day ORDER BY day;",
+                request.filter_sql
+            ))
+            .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+        let daily = daily_statement
+            .query_map(params_from_iter(values.clone()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })
+            .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+        let (total, gross_profit, gross_loss, win_count, loss_count, total_profit) = connection
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*), \
+                       COALESCE(SUM(CASE WHEN {net} > 0 THEN {net} ELSE 0 END), 0), \
+                       COALESCE(SUM(CASE WHEN {net} < 0 THEN -{net} ELSE 0 END), 0), \
+                       COALESCE(SUM(CASE WHEN {net} > 0 THEN 1 ELSE 0 END), 0), \
+                       COALESCE(SUM(CASE WHEN {net} < 0 THEN 1 ELSE 0 END), 0), \
+                       COALESCE(SUM({net}), 0) \
+                     FROM history_archive_items WHERE terminal_instance_id = ? \
+                       AND broker_server = ? COLLATE NOCASE AND login_account = ? \
+                       AND item_kind = 'trade'{};",
+                    request.filter_sql
+                ),
+                params_from_iter(values),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, f64>(1)?,
+                        row.get::<_, f64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, f64>(5)?,
+                    ))
+                },
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+        let balance = connection
+            .query_row(
+                "SELECT CAST(COALESCE(json_extract(payload_json, '$.balance'), 0) AS REAL) \
+                 FROM account_latest WHERE terminal_instance_id = ?1 \
+                   AND connection_epoch = ?2 LIMIT 1;",
+                params![terminal.terminal_instance_id, terminal.connection_epoch],
+                |row| row.get::<_, f64>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?
+            .unwrap_or(0.0);
+        let round = |value: f64| (value * 100.0).round() / 100.0;
+        let initial_capital = (balance - total_profit).max(0.0);
+        let mut running = 0.0;
+        let mut peak = initial_capital;
+        let mut maximum_drawdown: f64 = 0.0;
+        let mut cumulative = Vec::with_capacity(daily.len());
+        let mut drawdown = Vec::with_capacity(daily.len());
+        let daily = daily
+            .into_iter()
+            .map(|(date, profit, trade_count, wins, losses)| {
+                let profit = round(profit);
+                running = round(running + profit);
+                cumulative.push(running);
+                let equity = initial_capital + running;
+                peak = peak.max(equity);
+                let current_drawdown = if peak > 0.0 {
+                    round((1.0 - equity / peak) * 100.0)
+                } else {
+                    0.0
+                };
+                maximum_drawdown = maximum_drawdown.max(current_drawdown);
+                drawdown.push(current_drawdown);
+                serde_json::json!({
+                    "date": date,
+                    "profit": profit,
+                    "trade_count": trade_count,
+                    "wins": wins,
+                    "losses": losses,
+                })
+            })
+            .collect::<Vec<_>>();
+        let average_win = if win_count > 0 {
+            gross_profit / win_count as f64
+        } else {
+            0.0
+        };
+        let average_loss = if loss_count > 0 {
+            gross_loss / loss_count as f64
+        } else {
+            0.0
+        };
+        let profit_factor = if average_loss > 0.0 {
+            round(average_win / average_loss)
+        } else if average_win > 0.0 {
+            999.0
+        } else {
+            0.0
+        };
+        let state = read_history_state_locked(&connection, terminal)?;
+        Ok(serde_json::json!({
+            "daily": daily,
+            "cumulative": cumulative,
+            "drawdown": drawdown,
+            "stats": {
+                "total_trades": total,
+                "win_rate": if total > 0 { round(win_count as f64 / total as f64 * 100.0) } else { 0.0 },
+                "profit_factor": profit_factor,
+                "max_drawdown": maximum_drawdown,
+                "gross_profit": round(gross_profit),
+                "gross_loss": round(gross_loss),
+            },
+            "history_sync": {
+                "complete": state.is_complete,
+                "cursor_time_msc": state.cursor.time_msc,
+                "updated_at_utc_msc": state.updated_at_utc_msc,
+            },
+            "source": format!("{}_sqlite", terminal.platform),
+        }))
+    }
+
     pub fn persist_data_delta(
         &self,
         message: &DataDeltaMessage,
@@ -2271,6 +2421,25 @@ struct HistoryPageRequest {
     capital_filter_values: Vec<SqlValue>,
 }
 
+fn parse_history_chart_request(
+    parameters: &serde_json::Value,
+) -> Result<HistoryPageRequest, StoreError> {
+    let object = parameters
+        .as_object()
+        .ok_or_else(|| StoreError::new("history_params_invalid"))?;
+    const ALLOWED: &[&str] = &[
+        "date_from",
+        "date_to",
+        "direction",
+        "profit_filter",
+        "force_refresh",
+    ];
+    if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return Err(StoreError::new("history_params_invalid"));
+    }
+    parse_history_page_request(parameters)
+}
+
 fn parse_history_page_request(
     parameters: &serde_json::Value,
 ) -> Result<HistoryPageRequest, StoreError> {
@@ -3312,6 +3481,130 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove history fixture");
+    }
+
+    #[test]
+    fn history_chart_data_aggregates_in_sql_and_remains_account_scoped() {
+        let root = unique_test_directory("history-chart");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("history chart store");
+        let terminal = TerminalDescriptor {
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            platform: "mt5".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            worker_version: Some("3.0.0".to_owned()),
+        };
+        store
+            .persist_data_delta(&data_delta(
+                "account",
+                1,
+                0,
+                true,
+                vec![serde_json::json!({
+                    "login": 123456,
+                    "server": "Broker-Demo",
+                    "balance": 10_060.0
+                })],
+                Vec::new(),
+            ))
+            .expect("account balance projection");
+        let first_day = parse_utc_date_msc("2026-01-01").expect("first day");
+        let trades = [
+            (5001, first_day + 3_600_000, "BUY", 100.0),
+            (5002, first_day + 7_200_000, "SELL", -50.0),
+            (5003, first_day + 86_400_000 + 3_600_000, "BUY", 20.0),
+            (5004, first_day + 2 * 86_400_000 + 3_600_000, "BUY", -10.0),
+        ]
+        .into_iter()
+        .map(|(ticket, close_time_msc, direction, net_profit)| {
+            serde_json::json!({
+                "deal_ticket": ticket,
+                "order_ticket": ticket + 1_000,
+                "position_id": ticket + 2_000,
+                "close_time_msc": close_time_msc,
+                "symbol": "XAUUSD.s",
+                "type": direction,
+                "volume": 0.01,
+                "net_profit": net_profit
+            })
+        })
+        .collect::<Vec<_>>();
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades,
+                    next_cursor: HistoryCursor {
+                        time_msc: first_day + 2 * 86_400_000 + 3_600_000,
+                        ticket: "5004".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: first_day + 3 * 86_400_000,
+                },
+            )
+            .expect("history chart batch");
+
+        let chart = store
+            .read_history_chart_data(&terminal, &serde_json::json!({}))
+            .expect("complete chart");
+        assert_eq!(chart["daily"].as_array().expect("daily").len(), 3);
+        assert_eq!(chart["daily"][0]["profit"], 50.0);
+        assert_eq!(chart["cumulative"], serde_json::json!([50.0, 70.0, 60.0]));
+        assert_eq!(chart["drawdown"], serde_json::json!([0.0, 0.0, 0.1]));
+        assert_eq!(chart["stats"]["total_trades"], 4);
+        assert_eq!(chart["stats"]["win_rate"], 50.0);
+        assert_eq!(chart["stats"]["profit_factor"], 2.0);
+        assert_eq!(chart["stats"]["gross_profit"], 120.0);
+        assert_eq!(chart["stats"]["gross_loss"], 60.0);
+        assert_eq!(chart["source"], "mt5_sqlite");
+        assert_eq!(chart["history_sync"]["complete"], true);
+
+        let filtered = store
+            .read_history_chart_data(
+                &terminal,
+                &serde_json::json!({ "direction": "BUY", "profit_filter": "profit" }),
+            )
+            .expect("filtered chart");
+        assert_eq!(filtered["stats"]["total_trades"], 2);
+        assert_eq!(filtered["stats"]["profit_factor"], 999.0);
+        assert_eq!(filtered["cumulative"], serde_json::json!([100.0, 120.0]));
+
+        let ranged = store
+            .read_history_chart_data(
+                &terminal,
+                &serde_json::json!({ "date_from": "2026-01-02", "date_to": "2026-01-03" }),
+            )
+            .expect("date filtered chart");
+        assert_eq!(ranged["stats"]["total_trades"], 2);
+        assert_eq!(ranged["cumulative"], serde_json::json!([20.0, 10.0]));
+
+        let mut other = terminal.clone();
+        other.account_ref.login = "654321".to_owned();
+        let isolated = store
+            .read_history_chart_data(&other, &serde_json::json!({}))
+            .expect("isolated chart");
+        assert_eq!(isolated["stats"]["total_trades"], 0);
+        assert!(
+            isolated["daily"]
+                .as_array()
+                .expect("isolated daily")
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .read_history_chart_data(&terminal, &serde_json::json!({ "page": 1 }),)
+                .expect_err("chart rejects history pagination")
+                .code(),
+            "history_params_invalid"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove history chart fixture");
     }
 
     #[test]
