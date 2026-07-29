@@ -2,6 +2,7 @@
 members = [
   "apps/bridge-compat-probe",
   "apps/bridge-core",
+  "apps/bridge-launcher",
   "apps/bridge-ui",
   "crates/bridge-contract",
   "crates/bridge-command",

@@ -4,6 +4,7 @@ use bridge_preferences::BridgePreferencesStore;
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
 use bridge_store::OutboxStore;
+use bridge_update::{BridgeUpdateState, BridgeUpdateStateStore, STATE_VERIFYING};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -46,6 +47,8 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         &server.realtime_url,
     );
     let ready = root.join("ready.json");
+    let update_state_path = root.join("update-state.json");
+    prepare_verifying_update_state(&update_state_path);
     let worker_pid_file = root.join("worker.pid");
     let order_send_count_file = root.join("order-send-count.txt");
     let mut child = ChildGuard::spawn(
@@ -54,10 +57,12 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         &profile_id,
         &ready,
         terminal_id,
+        &update_state_path,
     );
 
     wait_until(&mut child, Duration::from_secs(20), || {
         ready.is_file()
+            && server.maintenance_released()
             && worker_pid_file.is_file()
             && server.saw_routed_full_snapshot(terminal_id)
             && server.saw_succeeded_command_result()
@@ -86,6 +91,10 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     assert_eq!(payload["version"], "3.0.0");
     assert_eq!(payload["server_connected"], true);
     assert_eq!(payload["running_terminal_instance_ids"][0], terminal_id);
+    assert!(
+        server.maintenance_released(),
+        "startup ready must release the persisted maintenance lease"
+    );
     let runtime_status: Value = serde_json::from_slice(
         &fs::read(&paths.runtime_status_path).expect("runtime status payload"),
     )
@@ -347,6 +356,7 @@ impl ChildGuard {
         profile_id: &str,
         ready: &Path,
         terminal_id: &str,
+        update_state_path: &Path,
     ) -> Self {
         let child = Command::new(executable)
             .args([
@@ -359,6 +369,7 @@ impl ChildGuard {
                 terminal_id,
             ])
             .env("AURUM_BRIDGE_DATA_DIR", root)
+            .env("AURUM_BRIDGE_UPDATE_STATE_PATH", update_state_path)
             .env("LOCALAPPDATA", root.join("local"))
             .env("AURUM_TEST_WORKER_PID_FILE", root.join("worker.pid"))
             .env(
@@ -401,6 +412,7 @@ struct LoopbackBridgeServer {
     stop: Arc<AtomicBool>,
     websocket_connections: Arc<AtomicUsize>,
     message_types: Arc<Mutex<Vec<String>>>,
+    maintenance_released: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -411,6 +423,7 @@ impl LoopbackBridgeServer {
         let websocket_connections = Arc::new(AtomicUsize::new(0));
         let command_sent = Arc::new(AtomicBool::new(false));
         let message_types = Arc::new(Mutex::new(Vec::new()));
+        let maintenance_released = Arc::new(AtomicBool::new(false));
         let (addresses_tx, addresses_rx) = mpsc::sync_channel(1);
         let thread = {
             let disconnect_first = Arc::clone(&disconnect_first);
@@ -418,6 +431,7 @@ impl LoopbackBridgeServer {
             let websocket_connections = Arc::clone(&websocket_connections);
             let command_sent = Arc::clone(&command_sent);
             let message_types = Arc::clone(&message_types);
+            let maintenance_released = Arc::clone(&maintenance_released);
             thread::spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -437,7 +451,7 @@ impl LoopbackBridgeServer {
                         ))
                         .expect("send addresses");
                     tokio::join!(
-                        serve_control(control, Arc::clone(&stop)),
+                        serve_control(control, Arc::clone(&stop), maintenance_released,),
                         serve_realtime(
                             realtime,
                             disconnect_first,
@@ -460,6 +474,7 @@ impl LoopbackBridgeServer {
             stop,
             websocket_connections,
             message_types,
+            maintenance_released,
             thread: Some(thread),
         }
     }
@@ -470,6 +485,10 @@ impl LoopbackBridgeServer {
 
     fn websocket_connections(&self) -> usize {
         self.websocket_connections.load(Ordering::SeqCst)
+    }
+
+    fn maintenance_released(&self) -> bool {
+        self.maintenance_released.load(Ordering::SeqCst)
     }
 
     fn saw_routed_full_snapshot(&self, terminal_id: &str) -> bool {
@@ -543,7 +562,11 @@ impl Drop for LoopbackBridgeServer {
     }
 }
 
-async fn serve_control(listener: TcpListener, stop: Arc<AtomicBool>) {
+async fn serve_control(
+    listener: TcpListener,
+    stop: Arc<AtomicBool>,
+    maintenance_released: Arc<AtomicBool>,
+) {
     while !stop.load(Ordering::SeqCst) {
         let accepted = tokio::select! {
             accepted = listener.accept() => Some(accepted.expect("control accept").0),
@@ -557,6 +580,12 @@ async fn serve_control(listener: TcpListener, stop: Arc<AtomicBool>) {
             r#"{"ok":true,"token":"access_fixture","refreshExpiresInSeconds":3600,"bridgeRole":"admin"}"#
         } else if request.1.starts_with("POST /api/auth/bridge-ticket ") {
             r#"{"ok":true,"ticket":"ticket_fixture","expiresInSeconds":30}"#
+        } else if request
+            .1
+            .starts_with("POST /api/bridge/v3/maintenance-leases/lease_01JSTARTUP/release ")
+        {
+            maintenance_released.store(true, Ordering::SeqCst);
+            r#"{"ok":true,"released":true,"lease_id":"lease_01JSTARTUP"}"#
         } else {
             panic!(
                 "unexpected control request: {}",
@@ -565,6 +594,29 @@ async fn serve_control(listener: TcpListener, stop: Arc<AtomicBool>) {
         };
         write_http_json(request.0, body).await;
     }
+}
+
+fn prepare_verifying_update_state(path: &Path) {
+    BridgeUpdateStateStore::new(path)
+        .expect("update state store")
+        .save(BridgeUpdateState {
+            schema_version: 1,
+            state: STATE_VERIFYING.to_owned(),
+            target_version: Some("3.0.0".to_owned()),
+            release_id: Some("release_3.0.0".to_owned()),
+            priority: Some("normal".to_owned()),
+            manual_activation_requested: false,
+            staged_at_utc_msc: Some(now_utc_msc()),
+            activation_started_at_utc_msc: Some(now_utc_msc()),
+            minimum_idle_seconds: 120,
+            activation_deadline_utc_msc: None,
+            maintenance_lease_id: Some("lease_01JSTARTUP".to_owned()),
+            maintenance_lease_expires_at_utc_msc: Some(now_utc_msc() + 90_000),
+            next_retry_at_utc_msc: None,
+            last_error_code: None,
+            updated_at_utc_msc: 1,
+        })
+        .expect("save verifying update state");
 }
 
 #[allow(clippy::result_large_err)]

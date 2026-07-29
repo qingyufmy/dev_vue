@@ -1627,9 +1627,6 @@ fn resolve_update_state_store(
     application_directory: &std::path::Path,
     profile_id: &str,
 ) -> Result<Option<BridgeUpdateStateStore>, &'static str> {
-    if profile_id != DEFAULT_PROFILE_ID {
-        return Ok(None);
-    }
     #[cfg(debug_assertions)]
     if let Some(configured) = env::var_os("AURUM_BRIDGE_UPDATE_STATE_PATH") {
         let configured = PathBuf::from(configured);
@@ -1639,6 +1636,9 @@ fn resolve_update_state_store(
         return BridgeUpdateStateStore::new(configured)
             .map(Some)
             .map_err(|error| error.code());
+    }
+    if profile_id != DEFAULT_PROFILE_ID {
+        return Ok(None);
     }
     let Ok(install_root) = resolve_installed_root(application_directory) else {
         return Ok(None);

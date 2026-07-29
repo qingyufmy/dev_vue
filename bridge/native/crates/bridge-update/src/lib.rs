@@ -3,7 +3,7 @@ mod coordinator;
 mod manifest;
 mod staging;
 
-pub use activation::{ReleaseActivationPointer, pending_launcher_handoff};
+pub use activation::{ReleaseActivationPointer, ReleaseActivationStore, pending_launcher_handoff};
 pub use coordinator::{
     BridgeUpdateCoordinator, BridgeUpdateEnvironment, StagedRelease, UPDATE_CHECK_INTERVAL,
 };
@@ -287,6 +287,47 @@ impl BridgeUpdateStateStore {
         state.manual_activation_requested = true;
         self.save_unlocked(state).map(Some)
     }
+
+    pub fn mark_launcher_state(
+        &self,
+        next_state: &str,
+        target_version: &str,
+        error_code: Option<String>,
+        clear_maintenance_lease: bool,
+    ) -> Result<Option<BridgeUpdateState>, UpdateError> {
+        if !matches!(
+            next_state,
+            STATE_VERIFYING | STATE_HEALTHY | STATE_ROLLED_BACK
+        ) || !valid_dotnet_version(target_version)
+            || error_code.as_deref().is_some_and(|value| {
+                value.is_empty()
+                    || value.len() > 256
+                    || !value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            })
+        {
+            return Err(UpdateError::new("update_state_invalid"));
+        }
+        let _guard = self
+            .mutation_gate
+            .lock()
+            .map_err(|_| UpdateError::new("update_state_io_failed"))?;
+        let Some(mut state) = self.load_unlocked()? else {
+            return Ok(None);
+        };
+        if state.target_version.as_deref() != Some(target_version) {
+            return Ok(None);
+        }
+        state.state = next_state.to_owned();
+        if clear_maintenance_lease {
+            state.maintenance_lease_id = None;
+            state.maintenance_lease_expires_at_utc_msc = None;
+        }
+        state.next_retry_at_utc_msc = None;
+        state.last_error_code = error_code;
+        self.save_unlocked(state).map(Some)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -443,6 +484,44 @@ mod tests {
                 .manual_activation_requested
         );
         assert_eq!(fs::read_dir(&root).expect("state directory").count(), 1);
+        fs::remove_dir_all(root).expect("remove state fixture");
+    }
+
+    #[test]
+    fn launcher_state_transitions_match_dotnet_and_clear_the_lease_only_after_readiness() {
+        let root = unique_test_directory("launcher-state");
+        let path = root.join(UPDATE_STATE_FILE_NAME);
+        let store =
+            BridgeUpdateStateStore::with_clock(&path, || 1_800_000_000_123).expect("state store");
+        let mut activating = waiting_state();
+        activating.state = STATE_ACTIVATING.to_owned();
+        activating.activation_started_at_utc_msc = Some(1_800_000_000_010);
+        activating.maintenance_lease_id = Some("lease_01JLAUNCHER".to_owned());
+        activating.maintenance_lease_expires_at_utc_msc = Some(1_800_000_090_000);
+        store.save(activating).expect("save activating");
+
+        let verifying = store
+            .mark_launcher_state(STATE_VERIFYING, "3.0.1", None, false)
+            .expect("mark verifying")
+            .expect("matching release");
+        assert_eq!(verifying.state, STATE_VERIFYING);
+        assert_eq!(
+            verifying.maintenance_lease_id.as_deref(),
+            Some("lease_01JLAUNCHER")
+        );
+        let healthy = store
+            .mark_launcher_state(STATE_HEALTHY, "3.0.1", None, true)
+            .expect("mark healthy")
+            .expect("matching release");
+        assert_eq!(healthy.state, STATE_HEALTHY);
+        assert!(healthy.maintenance_lease_id.is_none());
+        assert!(healthy.maintenance_lease_expires_at_utc_msc.is_none());
+        assert_eq!(
+            store
+                .mark_launcher_state(STATE_HEALTHY, "9.9.9", None, true)
+                .expect("ignore another release"),
+            None
+        );
         fs::remove_dir_all(root).expect("remove state fixture");
     }
 

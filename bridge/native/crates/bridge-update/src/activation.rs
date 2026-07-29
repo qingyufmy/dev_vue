@@ -25,12 +25,12 @@ pub struct ReleaseActivationPointer {
 }
 
 #[derive(Clone)]
-pub(crate) struct ReleaseActivationStore {
+pub struct ReleaseActivationStore {
     pointer_path: PathBuf,
 }
 
 impl ReleaseActivationStore {
-    pub(crate) fn new(pointer_path: impl AsRef<Path>) -> Result<Self, UpdateError> {
+    pub fn new(pointer_path: impl AsRef<Path>) -> Result<Self, UpdateError> {
         let pointer_path = std::path::absolute(pointer_path.as_ref())
             .map_err(|_| UpdateError::new("update_pointer_invalid"))?;
         if pointer_path.file_name().and_then(|value| value.to_str()) != Some(POINTER_FILE_NAME) {
@@ -39,7 +39,7 @@ impl ReleaseActivationStore {
         Ok(Self { pointer_path })
     }
 
-    pub(crate) fn load(&self) -> Result<ReleaseActivationPointer, UpdateError> {
+    pub fn load(&self) -> Result<ReleaseActivationPointer, UpdateError> {
         let metadata = fs::metadata(&self.pointer_path)
             .map_err(|_| UpdateError::new("update_pointer_invalid"))?;
         if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAXIMUM_POINTER_BYTES {
@@ -90,6 +90,73 @@ impl ReleaseActivationStore {
             expected_terminal_instance_ids,
             updated_at_utc_msc: now_utc_msc,
         })
+    }
+
+    pub fn mark_healthy(
+        &self,
+        expected_active_version: &str,
+        now_utc_msc: i64,
+    ) -> Result<ReleaseActivationPointer, UpdateError> {
+        let pointer = self.load()?;
+        if pointer.active_version != expected_active_version || now_utc_msc <= 0 {
+            return Err(UpdateError::new("update_activation_invalid"));
+        }
+        let healthy = ReleaseActivationPointer {
+            active_version: pointer.active_version.clone(),
+            last_known_good_version: pointer.active_version,
+            status: "healthy".to_owned(),
+            expected_terminal_instance_ids: Vec::new(),
+            updated_at_utc_msc: now_utc_msc,
+        };
+        self.save(&healthy)?;
+        Ok(healthy)
+    }
+
+    pub fn mark_rolled_back(
+        &self,
+        failed_active_version: &str,
+        now_utc_msc: i64,
+    ) -> Result<ReleaseActivationPointer, UpdateError> {
+        let pointer = self.load()?;
+        if pointer.active_version != failed_active_version
+            || pointer.active_version == pointer.last_known_good_version
+            || now_utc_msc <= 0
+        {
+            return Err(UpdateError::new("update_activation_invalid"));
+        }
+        let rolled_back = ReleaseActivationPointer {
+            active_version: pointer.last_known_good_version.clone(),
+            last_known_good_version: pointer.last_known_good_version,
+            status: "rolled_back".to_owned(),
+            expected_terminal_instance_ids: pointer.expected_terminal_instance_ids,
+            updated_at_utc_msc: now_utc_msc,
+        };
+        self.save(&rolled_back)?;
+        Ok(rolled_back)
+    }
+
+    pub fn confirm_rollback(
+        &self,
+        expected_active_version: &str,
+        now_utc_msc: i64,
+    ) -> Result<ReleaseActivationPointer, UpdateError> {
+        let pointer = self.load()?;
+        if pointer.status != "rolled_back"
+            || pointer.active_version != expected_active_version
+            || pointer.last_known_good_version != expected_active_version
+            || now_utc_msc <= 0
+        {
+            return Err(UpdateError::new("update_activation_invalid"));
+        }
+        let confirmed = ReleaseActivationPointer {
+            active_version: pointer.active_version,
+            last_known_good_version: pointer.last_known_good_version,
+            status: pointer.status,
+            expected_terminal_instance_ids: Vec::new(),
+            updated_at_utc_msc: now_utc_msc,
+        };
+        self.save(&confirmed)?;
+        Ok(confirmed)
     }
 
     fn save(&self, pointer: &ReleaseActivationPointer) -> Result<(), UpdateError> {
@@ -279,6 +346,57 @@ mod tests {
                 .expect_err("damaged installed pointer")
                 .code(),
             "update_pointer_invalid"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn launcher_health_and_rollback_transitions_preserve_the_dotnet_pointer_contract() {
+        let root = test_directory("launcher-transitions");
+        fs::create_dir_all(&root).expect("root");
+        let path = root.join(POINTER_FILE_NAME);
+        fs::write(
+            &path,
+            br#"{"active_version":"3.1.0","last_known_good_version":"3.0.0","status":"pending","expected_terminal_instance_ids":["mt5_a"],"updated_at_utc_msc":1}"#,
+        )
+        .expect("pending pointer");
+        let store = ReleaseActivationStore::new(&path).expect("store");
+        assert_eq!(
+            store
+                .mark_healthy("3.1.0", 1_800_000_000_001)
+                .expect("mark healthy"),
+            ReleaseActivationPointer {
+                active_version: "3.1.0".to_owned(),
+                last_known_good_version: "3.1.0".to_owned(),
+                status: "healthy".to_owned(),
+                expected_terminal_instance_ids: Vec::new(),
+                updated_at_utc_msc: 1_800_000_000_001,
+            }
+        );
+
+        fs::write(
+            &path,
+            br#"{"active_version":"3.2.0","last_known_good_version":"3.1.0","status":"pending","expected_terminal_instance_ids":["mt4_b"],"updated_at_utc_msc":2}"#,
+        )
+        .expect("second pending pointer");
+        assert_eq!(
+            store
+                .mark_rolled_back("3.2.0", 1_800_000_000_002)
+                .expect("mark rolled back"),
+            ReleaseActivationPointer {
+                active_version: "3.1.0".to_owned(),
+                last_known_good_version: "3.1.0".to_owned(),
+                status: "rolled_back".to_owned(),
+                expected_terminal_instance_ids: vec!["mt4_b".to_owned()],
+                updated_at_utc_msc: 1_800_000_000_002,
+            }
+        );
+        assert_eq!(
+            store
+                .confirm_rollback("3.1.0", 1_800_000_000_003)
+                .expect("confirm rollback")
+                .expected_terminal_instance_ids,
+            Vec::<String>::new()
         );
         fs::remove_dir_all(root).expect("cleanup");
     }

@@ -51,8 +51,12 @@ try {
 
         $releaseDirectory = Join-Path $nativeRoot 'target\x86_64-pc-windows-msvc\release'
         $releaseCore = Join-Path $releaseDirectory 'liangjian-bridge-core.exe'
+        $releaseLauncher = Join-Path $releaseDirectory 'liangjian-bridge-launcher.exe'
         if (-not (Test-Path -LiteralPath $releaseCore)) {
             throw 'native_release_core_not_found'
+        }
+        if (-not (Test-Path -LiteralPath $releaseLauncher)) {
+            throw 'native_release_launcher_not_found'
         }
         Copy-Item -LiteralPath $developmentEndpoints `
             -Destination (Join-Path $releaseDirectory 'server-endpoints.json') `
