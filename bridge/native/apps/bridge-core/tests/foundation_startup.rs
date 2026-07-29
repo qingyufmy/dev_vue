@@ -39,9 +39,11 @@ fn native_foundation_initializes_diagnostics_but_stays_fail_closed() {
             .collect::<Vec<_>>(),
         vec![
             "native_runtime_foundation_started",
+            "native_runtime_profile_loaded",
             "native_runtime_not_ready"
         ]
     );
+    assert!(data_directory.join("bridge.db").is_file());
     assert!(!data_directory.join("native-bridge-core.active").exists());
     assert!(!root.join("ready.json").exists());
 

@@ -1,9 +1,10 @@
 use bridge_foundation::{
-    CliMode, HealthCheckOptions, default_data_directory, parse_cli, profile_instance_id,
-    resolve_installed_root, run_health_check,
+    CliMode, HealthCheckOptions, default_data_directory, default_root_data_directory, parse_cli,
+    profile_instance_id, resolve_installed_root, resolve_profile_paths, run_health_check,
 };
 use bridge_observability::{BridgeLogger, LoggerConfig};
 use bridge_runtime_win::{InstanceAcquireResult, SingleInstanceGuard, default_lock_directory};
+use liangjian_bridge_core::{CredentialState, NativeProfileBootstrap};
 use std::env;
 use std::error::Error;
 
@@ -49,7 +50,9 @@ fn run() -> Result<(), Box<dyn Error>> {
 }
 
 fn run_native_foundation(profile_id: String, start_minimized: bool) -> Result<(), Box<dyn Error>> {
-    let data_directory = default_data_directory(&profile_id)?;
+    let root_data_directory = default_root_data_directory()?;
+    let profile_paths = resolve_profile_paths(&root_data_directory, &profile_id)?;
+    let data_directory = profile_paths.data_directory.clone();
     let logger = BridgeLogger::new(LoggerConfig::new(data_directory.join("logs"))?);
     logger.install_panic_hook("bridge-core", VERSION);
     let instance_id = profile_instance_id(&profile_id)?;
@@ -65,6 +68,24 @@ fn run_native_foundation(profile_id: String, start_minimized: bool) -> Result<()
     logger.info(
         "native_runtime_foundation_started",
         Some(&format!("profile={profile_id}")),
+    );
+    let application_directory = env::current_exe()?
+        .parent()
+        .ok_or("bridge_application_directory_invalid")?
+        .to_path_buf();
+    let bootstrap =
+        NativeProfileBootstrap::load(application_directory, root_data_directory, &profile_id)?;
+    logger.info(
+        "native_runtime_profile_loaded",
+        Some(&format!(
+            "credential={} mt5_bindings={} mt4_bindings={}",
+            match bootstrap.credential_state {
+                CredentialState::Missing => "missing",
+                CredentialState::Present => "present",
+            },
+            bootstrap.mt5_sessions.len(),
+            bootstrap.mt4_bindings.len()
+        )),
     );
     logger.warning(
         "native_runtime_not_ready",

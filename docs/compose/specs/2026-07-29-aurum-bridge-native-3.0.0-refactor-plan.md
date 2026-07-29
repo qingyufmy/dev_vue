@@ -6,7 +6,7 @@
 >
 > 产品版本：Rust Native 直接作为正式 3.0.0；现有 .NET Bridge 仅作功能与协议对照
 >
-> 当前进度：阶段 0 / 1 / 2 已完成；阶段 3 已完成 MT5 Python Worker 的账户、持仓、挂单和报价只读 IPC，Core 轮询、增量同步与恢复接线待实施
+> 当前进度：阶段 0 / 1 / 2 已完成；阶段 3 已完成 MT5 Python Worker、增量投影、会话编排和 Core Profile 启动准备，真实服务器会话与 Worker 共同启停接线待实施
 
 ## 1. 结论
 
@@ -409,6 +409,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - 已完成现有 V3 SQLite Outbox 的原生兼容访问、ACK、重试、gap 抑制和重连状态机。
 - 已完成 Native 3.0.0 全新 Profile 的 SQLite 自主建库：完整表与索引在单一事务创建，固定 WAL、`synchronous=FULL` 和外键检查；空文件可恢复初始化，部分 schema 则失败关闭且不做原地修补。
 - 已完成 Native 终端绑定仓储：Profile SQLite 作为账户、平台、路径与 epoch 的权威来源；激活原子递增 epoch，非法配置不改变当前绑定，账户切换只清理旧数据同步状态而保留交易回执与审计账本。
+- 已完成 Core Profile 启动准备：读取 DPAPI 凭据状态、创建或打开 Profile SQLite、加载 MT4/MT5 绑定；存在 MT5 绑定时才校验安装包内 Python/Worker/终端路径并生成精确 route，服务器运行时未就绪前不提前启动 Worker。
 - 已完成可取消的会话编排：WebSocket 收发、心跳、Outbox 轮询中任一循环结束都会取消整组任务，断线错误不会被通用错误覆盖。
 - 已完成安全入站控制路由：`data_ack`、gap 恢复回调、版本通知、心跳和服务器错误均经过严格字段验证；尚未具备账本的交易/数据请求继续失败关闭。
 - 已完成凭据变化驱动的连接监督器：保持 1/2/4/8/10 秒退避，授权缺失时只等待用户主动授权，不自动打开浏览器。
@@ -585,4 +586,4 @@ bridge/native/
 - 已完成 Worker 代际注册表、请求前后 fencing、崩溃自动重启及账户切换 supervisor 取代；真实测试覆盖了进程连续崩溃重启、客户端换代和两个账户不争抢同一终端路由。
 - 当前 Native Core 尚未接入真实凭据、服务器会话或 MT Worker，不会误执行生产交易。
 - 已完成 Core 可托管的 MT5 终端会话编排：账户切换要求 epoch 单调递增，旧采集器和 Worker 依次完全停止后才启动新路由；真实 Python Worker 测试验证旧句柄失效、旧路由拒绝和新会话初始投影 Ready。
-- 下一批把会话管理器接入 Native Core 的 Profile/授权配置，并将命令执行成功后的唤醒控制与服务器 gap reconciliation 路由到当前会话。
+- 下一批把已准备的会话规格与服务器会话共同启停，并将命令执行成功后的唤醒控制与服务器 gap reconciliation 路由到当前会话。

@@ -823,9 +823,15 @@ dependencies = [
 name = "liangjian-bridge-core"
 version = "3.0.0-alpha.1"
 dependencies = [
+ "bridge-contract",
  "bridge-foundation",
  "bridge-observability",
  "bridge-runtime-win",
+ "bridge-security-win",
+ "bridge-store",
+ "bridge-terminal-data",
+ "bridge-terminal-session",
+ "bridge-worker-host",
  "serde_json",
 ]
 
