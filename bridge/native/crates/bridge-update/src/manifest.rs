@@ -419,10 +419,10 @@ fn now_utc_msc() -> i64 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DotNetVersion([i32; 4]);
+pub(crate) struct DotNetVersion([i32; 4]);
 
 impl DotNetVersion {
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         let components = value.split('.').collect::<Vec<_>>();
         if !(2..=4).contains(&components.len()) {
             return None;

@@ -29,7 +29,9 @@ use bridge_transport::{
     load_packaged_server_endpoints, resolve_server_endpoints, save_endpoint_settings,
     test_server_endpoints,
 };
-use bridge_update::{BridgeUpdateStateStore, UPDATE_STATE_FILE_NAME};
+use bridge_update::{
+    BridgeUpdateCoordinator, BridgeUpdateStateStore, UPDATE_CHECK_INTERVAL, UPDATE_STATE_FILE_NAME,
+};
 use liangjian_bridge_core::{
     ActiveMt5Sessions, CoreConnectionState, CredentialState, NativeConnectedRuntime,
     NativeProfileBootstrap, NativeRuntimeStatusHandle, NativeRuntimeStatusSnapshot,
@@ -463,6 +465,19 @@ async fn run_connected_profile(
     let preferences_store =
         BridgePreferencesStore::new(profile_paths.data_directory.join("preferences.json"))?;
     let update_state_store = resolve_update_state_store(&application_directory, &profile_id)?;
+    let update_coordinator = match update_state_store.as_ref() {
+        Some(store) => match BridgeUpdateCoordinator::create_if_installed(
+            &application_directory,
+            store.clone(),
+        ) {
+            Ok(coordinator) => coordinator,
+            Err(error) => {
+                logger.warning("native_update_coordinator_unavailable", Some(error.code()));
+                None
+            }
+        },
+        None => None,
+    };
     let observer_runtimes = if profile_id == DEFAULT_PROFILE_ID {
         let manager = Arc::new(ObserverRuntimeManager::new(
             env::current_exe()?,
@@ -494,6 +509,15 @@ async fn run_connected_profile(
         }
     }
     let (preference_change_sender, preference_change_receiver) = watch::channel(0_u64);
+    let update_task = update_coordinator.map(|coordinator| {
+        tokio::spawn(run_periodic_update_checks(
+            coordinator,
+            application_directory.clone(),
+            root_data_directory.clone(),
+            stop.clone(),
+            logger.clone(),
+        ))
+    });
     let control_stop = stop.clone();
     let control_task = tokio::spawn(run_local_control_server(
         local_control_server,
@@ -551,6 +575,9 @@ async fn run_connected_profile(
     signal_waiter
         .await
         .map_err(|_| "bridge_instance_wait_failed")??;
+    if let Some(update_task) = update_task {
+        update_task.await.map_err(|_| "bridge_update_task_failed")?;
+    }
     let status_path = profile_paths.runtime_status_path;
     let final_preferences = preferences_store.load();
     match &profile_result {
@@ -592,6 +619,55 @@ async fn run_connected_profile(
         }
     }
     profile_result
+}
+
+async fn run_periodic_update_checks(
+    mut coordinator: BridgeUpdateCoordinator,
+    application_directory: PathBuf,
+    root_data_directory: PathBuf,
+    stop: SessionCancellation,
+    logger: BridgeLogger,
+) {
+    loop {
+        let endpoints = match resolve_server_endpoints(&application_directory, &root_data_directory)
+        {
+            Ok(endpoints) => endpoints,
+            Err(error) => {
+                logger.warning("native_update_endpoint_unavailable", Some(error.code()));
+                if wait_for_update_interval(&stop).await {
+                    return;
+                }
+                continue;
+            }
+        };
+        let server_base = endpoints.control_base().clone();
+        let check = coordinator.check_and_stage(server_base);
+        let result = tokio::select! {
+            _ = stop.cancelled() => return,
+            result = check => result,
+        };
+        match result {
+            Ok(Some(staged)) => logger.info(
+                "native_update_staged",
+                Some(&format!(
+                    "version={};priority={}",
+                    staged.version, staged.priority
+                )),
+            ),
+            Ok(None) => {}
+            Err(error) => logger.warning("native_update_check_failed", Some(error.code())),
+        }
+        if wait_for_update_interval(&stop).await {
+            return;
+        }
+    }
+}
+
+async fn wait_for_update_interval(stop: &SessionCancellation) -> bool {
+    tokio::select! {
+        _ = stop.cancelled() => true,
+        _ = tokio::time::sleep(UPDATE_CHECK_INTERVAL) => false,
+    }
 }
 
 async fn run_local_control_server(
@@ -2287,6 +2363,18 @@ mod tests {
             &state,
             false,
         ));
+    }
+
+    #[test]
+    fn observer_profiles_never_own_the_global_update_state_or_coordinator() {
+        let application = unique_test_directory("observer-update-isolation");
+        std::fs::create_dir_all(&application).expect("application directory");
+        assert!(
+            resolve_update_state_store(&application, "source-1")
+                .expect("observer update resolution")
+                .is_none()
+        );
+        std::fs::remove_dir_all(application).expect("cleanup");
     }
 
     #[test]

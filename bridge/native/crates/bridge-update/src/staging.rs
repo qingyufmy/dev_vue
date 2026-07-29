@@ -69,11 +69,8 @@ impl ReleasePackageStager {
             timestamp_nanos(),
             sequence
         ));
-        let result = self.download_to(package, &temporary, &final_path).await;
-        if result.is_err() {
-            let _ = tokio::fs::remove_file(&temporary).await;
-        }
-        result
+        let _temporary_cleanup = TemporaryFileCleanup(temporary.clone());
+        self.download_to(package, &temporary, &final_path).await
     }
 
     async fn download_to(
@@ -141,6 +138,14 @@ impl ReleasePackageStager {
     }
 }
 
+struct TemporaryFileCleanup(PathBuf);
+
+impl Drop for TemporaryFileCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 pub async fn verify_package_file(
     package: &ReleasePackage,
     package_path: impl AsRef<Path>,
@@ -174,6 +179,49 @@ pub async fn verify_package_file(
         hash.update(&buffer[..read]);
     }
     Ok(hash.finalize().as_slice() == decode_sha256(&package.sha256)?)
+}
+
+pub fn verified_expanded_size(
+    package: &ReleasePackage,
+    package_path: impl AsRef<Path>,
+) -> Result<u64, UpdateError> {
+    if !validate_package(package) {
+        return Err(UpdateError::new("update_manifest_package_invalid"));
+    }
+    let mut source =
+        File::open(package_path).map_err(|_| UpdateError::new("update_package_io_failed"))?;
+    let metadata = source
+        .metadata()
+        .map_err(|_| UpdateError::new("update_package_io_failed"))?;
+    if !metadata.is_file() || metadata.len() != package.size_bytes {
+        return Err(UpdateError::new("update_package_integrity_failed"));
+    }
+    let mut hash = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .map_err(|_| UpdateError::new("update_package_io_failed"))?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+    }
+    if hash.finalize().as_slice() != decode_sha256(&package.sha256)? {
+        return Err(UpdateError::new("update_package_integrity_failed"));
+    }
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| UpdateError::new("update_package_io_failed"))?;
+    let mut archive =
+        ZipArchive::new(source).map_err(|_| UpdateError::new("update_package_archive_invalid"))?;
+    inspect_archive(&mut archive)?
+        .iter()
+        .try_fold(0_u64, |total, entry| {
+            total
+                .checked_add(if entry.directory { 0 } else { entry.size })
+                .ok_or_else(|| UpdateError::new("update_package_expanded_size_exceeded"))
+        })
 }
 
 pub fn extract_verified_package(

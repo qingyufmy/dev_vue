@@ -1,11 +1,17 @@
+mod coordinator;
 mod manifest;
 mod staging;
 
+pub use coordinator::{
+    BridgeUpdateCoordinator, BridgeUpdateEnvironment, StagedRelease, UPDATE_CHECK_INTERVAL,
+};
 pub use manifest::{
     ReleaseManifest, ReleaseManifestClient, ReleaseManifestVerifier, ReleasePackage,
     canonicalize_manifest, canonicalize_package,
 };
-pub use staging::{ReleasePackageStager, extract_verified_package};
+pub use staging::{
+    ReleasePackageStager, extract_verified_package, verified_expanded_size, verify_package_file,
+};
 
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -287,7 +293,7 @@ pub struct UpdateError {
 }
 
 impl UpdateError {
-    fn new(code: &'static str) -> Self {
+    pub(crate) fn new(code: &'static str) -> Self {
         Self { code }
     }
 
