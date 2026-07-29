@@ -504,7 +504,11 @@ mod tests {
             let request: WorkerRequest = read_frame(&mut worker).await.expect("request");
             request_seen_tx.send(()).expect("request seen");
             release_rx.await.expect("release response");
-            let command = request.operation.command().clone();
+            let command = request
+                .operation
+                .command()
+                .expect("command operation")
+                .clone();
             write_frame(
                 &mut worker,
                 &WorkerResponse::command_result(&request, result(&command)),

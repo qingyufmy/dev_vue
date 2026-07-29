@@ -267,8 +267,10 @@ mod tests {
                 .await
                 .expect("hello");
             let request: WorkerRequest = read_frame(&mut worker).await.expect("request");
-            let mut response =
-                WorkerResponse::command_result(&request, result(request.operation.command()));
+            let mut response = WorkerResponse::command_result(
+                &request,
+                result(request.operation.command().expect("command operation")),
+            );
             response.request_id = "command_01JWRONG001".to_owned();
             write_frame(&mut worker, &response).await.expect("response");
         });

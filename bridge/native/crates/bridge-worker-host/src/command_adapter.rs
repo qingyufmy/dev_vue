@@ -139,6 +139,9 @@ fn map_response(body: WorkerResponseBody) -> Result<CommandResultMessage, Comman
     match body {
         WorkerResponseBody::CommandResult { result } => Ok(*result),
         WorkerResponseBody::Error { error_code, .. } => Err(CommandWorkerError::new(error_code)),
+        WorkerResponseBody::Snapshot { .. } | WorkerResponseBody::Quote { .. } => Err(
+            CommandWorkerError::new("worker_response_operation_mismatch"),
+        ),
     }
 }
 
@@ -240,7 +243,7 @@ mod tests {
                 request.operation,
                 WorkerOperation::QueryExecution { .. }
             ));
-            let result = query_result(request.operation.command());
+            let result = query_result(request.operation.command().expect("command operation"));
             write_frame(
                 &mut worker_stream,
                 &WorkerResponse::command_result(&request, result),

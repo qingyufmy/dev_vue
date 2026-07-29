@@ -5,7 +5,7 @@ use crate::{
 use bridge_runtime_win::{ManagedProcess, ProcessSpec};
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::windows::named_pipe::NamedPipeServer;
@@ -18,10 +18,12 @@ pub const WORKER_PLATFORM_ENV: &str = "AURUM_BRIDGE_WORKER_PLATFORM";
 pub const WORKER_BROKER_SERVER_ENV: &str = "AURUM_BRIDGE_WORKER_BROKER_SERVER";
 pub const WORKER_LOGIN_ENV: &str = "AURUM_BRIDGE_WORKER_LOGIN";
 pub const WORKER_CONNECTION_EPOCH_ENV: &str = "AURUM_BRIDGE_WORKER_CONNECTION_EPOCH";
+pub const WORKER_TERMINAL_PATH_ENV: &str = "AURUM_BRIDGE_WORKER_TERMINAL_PATH";
 
 #[derive(Clone)]
 pub struct WorkerProgram {
     process: ProcessSpec,
+    terminal_path: Option<PathBuf>,
 }
 
 impl WorkerProgram {
@@ -31,6 +33,7 @@ impl WorkerProgram {
     ) -> Result<Self, WorkerHostError> {
         Ok(Self {
             process: ProcessSpec::new(executable, working_directory).map_err(runtime_error)?,
+            terminal_path: None,
         })
     }
 
@@ -55,6 +58,21 @@ impl WorkerProgram {
     pub fn show_window(mut self, show_window: bool) -> Self {
         self.process = self.process.show_window(show_window);
         self
+    }
+
+    pub fn terminal_path(
+        mut self,
+        terminal_path: impl AsRef<Path>,
+    ) -> Result<Self, WorkerHostError> {
+        let terminal_path = terminal_path
+            .as_ref()
+            .canonicalize()
+            .map_err(|_| WorkerHostError::new("worker_terminal_path_invalid"))?;
+        if !terminal_path.is_file() || !terminal_path.is_absolute() {
+            return Err(WorkerHostError::new("worker_terminal_path_invalid"));
+        }
+        self.terminal_path = Some(terminal_path);
+        Ok(self)
     }
 
     fn into_process_spec(
@@ -82,6 +100,12 @@ impl WorkerProgram {
             ),
         ] {
             self.process = self.process.env(name, value).map_err(runtime_error)?;
+        }
+        if let Some(terminal_path) = self.terminal_path {
+            self.process = self
+                .process
+                .env(WORKER_TERMINAL_PATH_ENV, terminal_path.into_os_string())
+                .map_err(runtime_error)?;
         }
         Ok(self.process)
     }
@@ -158,9 +182,11 @@ fn runtime_error(error: bridge_runtime_win::RuntimeError) -> WorkerHostError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{WorkerHello, write_frame};
+    use crate::{SnapshotStream, WorkerDataRouter, WorkerHello, WorkerRegistry, write_frame};
     use bridge_contract::AccountRef;
     use std::env;
+    use std::fs;
+    use std::process::Command;
     use tokio::net::windows::named_pipe::ClientOptions;
 
     const HELPER_FLAG: &str = "AURUM_TEST_WORKER_HELPER";
@@ -255,6 +281,105 @@ mod tests {
         assert_ne!(session.process_id(), 0);
         session.terminate().expect("terminate job");
         assert!(!session.is_running().expect("stopped"));
+    }
+
+    #[tokio::test]
+    async fn python_mt5_worker_interoperates_over_the_native_pipe() {
+        let where_output = Command::new("where.exe")
+            .arg("python.exe")
+            .output()
+            .expect("locate python");
+        assert!(
+            where_output.status.success(),
+            "python is required for worker tests"
+        );
+        let python = String::from_utf8(where_output.stdout)
+            .expect("python path utf8")
+            .lines()
+            .next()
+            .map(PathBuf::from)
+            .expect("python path");
+        let native_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("native root");
+        let worker_directory = native_root.join("workers").join("mt5");
+        let worker_entry = worker_directory.join("fake_worker_entry.py");
+        assert!(worker_entry.is_file(), "fake worker entry");
+        let test_directory = env::temp_dir().join(format!(
+            "aurum-mt5-worker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        fs::create_dir(&test_directory).expect("worker test directory");
+        let terminal_path = test_directory.join("terminal64.exe");
+        fs::write(&terminal_path, []).expect("fake terminal");
+
+        let program = WorkerProgram::new(&python, &worker_directory)
+            .expect("python program")
+            .arg(worker_entry.into_os_string())
+            .env("LOCALAPPDATA", test_directory.as_os_str())
+            .expect("isolated local app data")
+            .terminal_path(&terminal_path)
+            .expect("terminal path");
+        let active_route = route();
+        let mut session = WorkerProcessSession::launch(
+            program,
+            active_route.clone(),
+            BTreeSet::from([WorkerCapability::Snapshot, WorkerCapability::Quote]),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("python worker session");
+        let registry = Arc::new(WorkerRegistry::new());
+        registry
+            .install(active_route.clone(), session.client())
+            .await
+            .expect("registry install");
+        let router = WorkerDataRouter::new(
+            registry,
+            Arc::new(|| 1_800_000_000_000),
+            Duration::from_secs(2),
+        )
+        .expect("data router");
+        let snapshot = router
+            .collect_snapshot(
+                active_route.clone(),
+                "request_01JMT5SNAPSHOT".to_owned(),
+                vec![
+                    SnapshotStream::Account,
+                    SnapshotStream::Positions,
+                    SnapshotStream::Orders,
+                ],
+            )
+            .await
+            .expect("snapshot");
+        assert_eq!(
+            snapshot
+                .streams
+                .account
+                .as_ref()
+                .and_then(|value| value["login"].as_u64()),
+            Some(123_456)
+        );
+        assert_eq!(snapshot.streams.positions.as_ref().map(Vec::len), Some(1));
+        assert_eq!(snapshot.streams.orders.as_ref().map(Vec::len), Some(1));
+        let quote = router
+            .quote(
+                active_route,
+                "request_01JMT5QUOTE01".to_owned(),
+                "XAUUSD".to_owned(),
+            )
+            .await
+            .expect("quote");
+        assert_eq!(quote.symbol, "XAUUSD.s");
+        assert_eq!(quote.clock_status, "verified");
+
+        session.terminate().expect("terminate python worker");
+        fs::remove_dir_all(test_directory).expect("remove worker test directory");
     }
 
     #[test]

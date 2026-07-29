@@ -25,6 +25,8 @@
     ],
     "request_correlation_field": "request_id",
     "query_execution_separate_operation": true,
+    "read_only_operations": ["collect_snapshot", "quote"],
+    "mt5_read_only_capabilities": ["snapshot", "quote"],
     "windows_pipe_security": {
       "dacl_scope": "current-user-sid-only",
       "reject_remote_clients": true,
@@ -39,7 +41,8 @@
       "AURUM_BRIDGE_WORKER_PLATFORM",
       "AURUM_BRIDGE_WORKER_BROKER_SERVER",
       "AURUM_BRIDGE_WORKER_LOGIN",
-      "AURUM_BRIDGE_WORKER_CONNECTION_EPOCH"
+      "AURUM_BRIDGE_WORKER_CONNECTION_EPOCH",
+      "AURUM_BRIDGE_WORKER_TERMINAL_PATH"
     ],
     "client_registry": {
       "key": "terminal_instance_id",

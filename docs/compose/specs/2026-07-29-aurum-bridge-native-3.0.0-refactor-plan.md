@@ -6,7 +6,7 @@
 >
 > 产品版本：Rust Native 直接作为正式 3.0.0；现有 .NET Bridge 仅作功能与协议对照
 >
-> 当前进度：阶段 0 / 1 已完成；阶段 2 已完成传输、命令账本、安全 Worker IPC、代际注册表及自动重启 supervisor，真实 MT5 Worker 与 Core 接线待实施
+> 当前进度：阶段 0 / 1 / 2 已完成；阶段 3 已完成 MT5 Python Worker 的账户、持仓、挂单和报价只读 IPC，Core 轮询、增量同步与恢复接线待实施
 
 ## 1. 结论
 
@@ -425,15 +425,16 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - 已完成 supervisor claim：同一终端的新账户/epoch 会原子取代旧 supervisor，旧实例不能重新抢回注册表，也不能删除新实例。
 - 已完成异步 Worker supervisor：真实监控进程与通道健康，按 1/2/4/8/10 秒退避重启，稳定运行后清零失败计数，停止、被取代及异常退出均先撤销路由并终止 Job Object。
 - 已提供基于注册表的 `CommandWorker` 适配器，并将本地请求超时限制在服务器命令 deadline 以内。
-- 待完成 Python Worker 实现、报价/数据请求 Worker 路由、凭据存储适配、Core 接线及真实服务器故障矩阵。
+- 已完成最小 MT5 Python 只读 Worker、严格 `snapshot` / `quote` 操作、终端路径受控启动参数、账户身份逐请求复核、经纪商时间校准和注册表数据路由；Rust 测试通过真实 Python 子进程与 Windows 命名管道验证互操作。
+- 待完成 Core 轮询/增量同步、Worker 路径与账户切换恢复、凭据存储适配及真实服务器故障矩阵。
 
 交付门：断网、乱序、重复 ACK、超大包、HTML 错页和服务器重启不会丢高优先消息。
 
 ### 阶段 3：MT5 只读链路
 
-- 拆出一终端一 Python Worker。
-- 账户、品种、报价、持仓、挂单、K 线和历史分页。
-- 全量初始化 + delta + 定期 reconciliation。
+- [进行中] 已拆出一终端一 Python Worker，并完成账户、报价、持仓和挂单只读 IPC；品种、K 线和历史分页留到后续数据批次。
+- [已完成] 报价经经纪商时区校准后输出 UTC；时钟未可信、账户改变、终端断开或返回数据无效时失败关闭。
+- [待完成] Core 定时采集、全量初始化、delta、SQLite 最新状态和定期 reconciliation。
 - Worker 崩溃、MT5 重启、账户切换和路径切换恢复。
 
 交付门：页面数据满足现有服务器和产品功能合同，24 小时运行无串账户、无持续内存增长、历史响应不超限。
@@ -548,7 +549,7 @@ bridge/native/
     bridge-worker-host/   # Worker 生命周期及本地 IPC
     bridge-update/        # Manifest、下载、切换、回滚
   workers/
-    mt5-python/           # 最小 MT5 Python 适配器
+    mt5/                  # 最小 MT5 Python 适配器
     mt4-native/           # MT4 EA 协议适配器
   packages/
     mt4-ea/               # EA 源码和构建产物
@@ -579,4 +580,4 @@ bridge/native/
 - 已完成当前用户 SID 限定的 Windows 命名管道和受 Job Object 管理的 Worker 启动会话；真实子进程启动、握手、交付及终止已经过本机测试。
 - 已完成 Worker 代际注册表、请求前后 fencing、崩溃自动重启及账户切换 supervisor 取代；真实测试覆盖了进程连续崩溃重启、客户端换代和两个账户不争抢同一终端路由。
 - 当前 Native Core 尚未接入真实凭据、服务器会话或 MT Worker，不会误执行生产交易。
-- 下一批拆分 MT5 Python Worker 的账户、报价、持仓和挂单只读链路，并接入注册表数据路由。
+- 下一批把 MT5 只读 Worker 接入 Core 采集循环与 SQLite 最新状态，建立 revision/delta，并补账户切换与进程恢复测试。
