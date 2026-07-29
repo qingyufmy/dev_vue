@@ -182,8 +182,12 @@ fn runtime_error(error: bridge_runtime_win::RuntimeError) -> WorkerHostError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SnapshotStream, WorkerDataRouter, WorkerHello, WorkerRegistry, write_frame};
-    use bridge_contract::AccountRef;
+    use crate::{
+        RegistryCommandWorker, SnapshotStream, WorkerDataRouter, WorkerHello, WorkerRegistry,
+        write_frame,
+    };
+    use bridge_command::CommandWorker;
+    use bridge_contract::{AccountRef, CommandMessage};
     use std::env;
     use std::fs;
     use std::process::Command;
@@ -329,7 +333,12 @@ mod tests {
         let mut session = WorkerProcessSession::launch(
             program,
             active_route.clone(),
-            BTreeSet::from([WorkerCapability::Snapshot, WorkerCapability::Quote]),
+            BTreeSet::from([
+                WorkerCapability::Snapshot,
+                WorkerCapability::Quote,
+                WorkerCapability::ExecuteCommand,
+                WorkerCapability::QueryExecution,
+            ]),
             Duration::from_secs(5),
         )
         .await
@@ -340,7 +349,7 @@ mod tests {
             .await
             .expect("registry install");
         let router = WorkerDataRouter::new(
-            registry,
+            Arc::clone(&registry),
             Arc::new(|| 1_800_000_000_000),
             Duration::from_secs(2),
         )
@@ -369,7 +378,7 @@ mod tests {
         assert_eq!(snapshot.streams.orders.as_ref().map(Vec::len), Some(1));
         let quote = router
             .quote(
-                active_route,
+                active_route.clone(),
                 "request_01JMT5QUOTE01".to_owned(),
                 "XAUUSD".to_owned(),
             )
@@ -377,6 +386,39 @@ mod tests {
             .expect("quote");
         assert_eq!(quote.symbol, "XAUUSD.s");
         assert_eq!(quote.clock_status, "verified");
+
+        let command_worker = RegistryCommandWorker::new(
+            registry,
+            Arc::new(|| 1_800_000_000_000),
+            Duration::from_secs(2),
+        )
+        .expect("command worker");
+        let result = command_worker
+            .execute(CommandMessage {
+                v: 3,
+                message_type: "command".to_owned(),
+                message_id: "message_01JMT5TRADE1".to_owned(),
+                sent_at_utc_msc: 1_800_000_000_000,
+                command_id: "command_01JMT5TRADE1".to_owned(),
+                terminal_instance_id: active_route.terminal_instance_id,
+                account_ref: active_route.account_ref,
+                connection_epoch: active_route.connection_epoch,
+                issued_at_utc_msc: 1_800_000_000_000,
+                deadline_utc_msc: 1_800_000_010_000,
+                action: "place_order".to_owned(),
+                params: serde_json::json!({
+                    "symbol": "XAUUSD",
+                    "side": "buy",
+                    "volume": 0.01,
+                    "comment": "IPC-TRADE-1"
+                }),
+            })
+            .await
+            .expect("trade result");
+        assert_eq!(result.status, "succeeded");
+        assert_eq!(result.evidence.broker_retcode, Some(10_009));
+        assert_eq!(result.evidence.order_tickets, ["1001"]);
+        assert_eq!(result.evidence.deal_tickets, ["2001"]);
 
         session.terminate().expect("terminate python worker");
         fs::remove_dir_all(test_directory).expect("remove worker test directory");

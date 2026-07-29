@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from trade import Mt5TradeExecutor
+
 IPC_VERSION = 1
 WORKER_VERSION = "3.0.0-alpha.1"
 MAX_FRAME_BYTES = 4 * 1024 * 1024
@@ -322,10 +324,16 @@ class ReadOnlyMt5Adapter:
         return resolved
 
 
-class ReadOnlyWorker:
+class Mt5Worker:
     def __init__(self, adapter: ReadOnlyMt5Adapter, route: WorkerRoute):
         self.adapter = adapter
         self.route = route
+        self.trade = Mt5TradeExecutor(
+            adapter.mt5,
+            route,
+            adapter._ensure_identity,
+            adapter._resolve_symbol,
+        )
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         request_id = str(request.get("request_id") or "")
@@ -333,11 +341,10 @@ class ReadOnlyWorker:
             self._validate_request(request)
             operation = request["operation"]
             body = request.get("payload")
-            if (not isinstance(body, dict) or set(body) != {"request"}
-                    or not isinstance(body.get("request"), dict)):
+            if not isinstance(body, dict):
                 raise WorkerError("worker_request_payload_invalid")
-            payload = body["request"]
             if operation == "collect_snapshot":
+                payload = self._request_payload(body)
                 if set(payload) != {"streams"}:
                     raise WorkerError("worker_request_payload_invalid")
                 streams = payload.get("streams")
@@ -349,12 +356,20 @@ class ReadOnlyWorker:
                     "snapshot": self.adapter.collect_snapshot(streams)
                 })
             if operation == "quote":
+                payload = self._request_payload(body)
                 if set(payload) != {"symbol"}:
                     raise WorkerError("worker_request_payload_invalid")
                 symbol = payload.get("symbol")
                 if not isinstance(symbol, str) or symbol.strip() != symbol or not symbol or len(symbol) > 64:
                     raise WorkerError("worker_quote_symbol_invalid")
                 return self._response(request_id, "quote", {"quote": self.adapter.quote(symbol)})
+            if operation in {"execute_command", "query_execution"}:
+                if set(body) != {"command"} or not isinstance(body.get("command"), dict):
+                    raise WorkerError("worker_request_payload_invalid")
+                command = body["command"]
+                self._validate_command(request_id, operation, command)
+                result = self.trade.execute(command, read_only=operation == "query_execution")
+                return self._response(request_id, "command_result", {"result": result})
             raise WorkerError("worker_operation_unsupported")
         except WorkerError as error:
             return self._response(request_id, "error", {"error_code": error.code})
@@ -371,6 +386,30 @@ class ReadOnlyWorker:
             raise WorkerError("worker_request_id_invalid")
         if request.get("route") != self.route.payload():
             raise WorkerError("worker_request_route_mismatch")
+
+    @staticmethod
+    def _request_payload(body: dict[str, Any]) -> dict[str, Any]:
+        if set(body) != {"request"} or not isinstance(body.get("request"), dict):
+            raise WorkerError("worker_request_payload_invalid")
+        return body["request"]
+
+    def _validate_command(self, request_id: str, operation: str,
+                          command: dict[str, Any]) -> None:
+        account = command.get("account_ref")
+        if (command.get("v") != 3 or command.get("type") != "command"
+                or command.get("command_id") != request_id
+                or command.get("terminal_instance_id") != self.route.terminal_instance_id
+                or command.get("connection_epoch") != self.route.connection_epoch
+                or account != {"broker_server": self.route.broker_server, "login": self.route.login}
+                or not isinstance(command.get("params"), dict)):
+            raise WorkerError("worker_request_route_mismatch")
+        action = command.get("action")
+        if operation == "query_execution" and action != "query_execution":
+            raise WorkerError("worker_query_action_invalid")
+        if operation == "execute_command" and action not in {
+            "place_order", "cancel_order", "modify_order", "modify_position", "close_position"
+        }:
+            raise WorkerError("worker_execute_action_invalid")
 
     def _response(self, request_id: str, outcome: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -400,7 +439,7 @@ def run(mt5: Any) -> None:
     adapter.connect()
     pipe_name = _required_env("AURUM_BRIDGE_WORKER_PIPE")
     nonce = _required_env("AURUM_BRIDGE_WORKER_NONCE")
-    worker = ReadOnlyWorker(adapter, route)
+    worker = Mt5Worker(adapter, route)
     try:
         with open(rf"\\.\pipe\{pipe_name}", "r+b", buffering=0) as stream:
             write_frame(stream, {
@@ -409,7 +448,7 @@ def run(mt5: Any) -> None:
                 "session_nonce": nonce,
                 "worker_version": WORKER_VERSION,
                 "route": route.payload(),
-                "capabilities": ["snapshot", "quote"],
+                "capabilities": ["snapshot", "quote", "execute_command", "query_execution"],
             })
             while True:
                 write_frame(stream, worker.handle(read_frame(stream)))

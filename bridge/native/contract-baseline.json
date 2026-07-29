@@ -34,8 +34,15 @@
       "close_position",
       "query_execution"
     ],
-    "read_only_operations": ["collect_snapshot", "quote"],
-    "mt5_read_only_capabilities": ["snapshot", "quote"],
+    "read_only_operations": ["collect_snapshot", "quote", "query_execution"],
+    "mt5_worker_capabilities": [
+      "snapshot",
+      "quote",
+      "execute_command",
+      "query_execution"
+    ],
+    "demo_trade_acceptance_script": "../../scripts/bridge-native/test-mt5-demo.py",
+    "demo_trade_acceptance_requires_empty_symbol_position": true,
     "windows_pipe_security": {
       "dacl_scope": "current-user-sid-only",
       "reject_remote_clients": true,

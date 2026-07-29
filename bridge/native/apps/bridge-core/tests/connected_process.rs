@@ -463,6 +463,11 @@ fn prepare_application(root: &Path) -> PathBuf {
         worker_directory.join("runtime_worker.py"),
     )
     .expect("copy runtime worker");
+    fs::copy(
+        source_worker_directory.join("trade.py"),
+        worker_directory.join("trade.py"),
+    )
+    .expect("copy trade worker module");
     let fake_entry = fs::read_to_string(source_worker_directory.join("fake_worker_entry.py"))
         .expect("fake worker entry")
         .replace(
