@@ -19,6 +19,7 @@ bridge-store = { path = "../../crates/bridge-store" }
 bridge-terminal-data = { path = "../../crates/bridge-terminal-data" }
 bridge-terminal-session = { path = "../../crates/bridge-terminal-session" }
 bridge-transport = { path = "../../crates/bridge-transport" }
+bridge-update = { path = "../../crates/bridge-update" }
 bridge-worker-host = { path = "../../crates/bridge-worker-host" }
 futures-util.workspace = true
 serde.workspace = true

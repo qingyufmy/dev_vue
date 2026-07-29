@@ -2173,6 +2173,11 @@ fn show_error(hwnd: HWND, code: &str) {
         "mt4_ea_install_io_failed" | "mt4_ea_install_failed" => {
             "MT4 EA 暂时无法安装，请关闭 MT4 后重新尝试。"
         }
+        "bridge_update_runtime_unavailable" => "当前运行方式不支持自动更新，请使用正式安装版本。",
+        "bridge_update_not_ready" => "当前没有已下载并通过校验的更新。",
+        "update_state_invalid" | "update_state_io_failed" => {
+            "更新状态暂时不可用，当前桥接和交易不受影响。"
+        }
         _ => "量见智桥暂时无法完成操作，请稍后重试。",
     };
     let text = wide(message);

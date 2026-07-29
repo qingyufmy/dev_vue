@@ -8,6 +8,9 @@ use bridge_preferences::BridgePreferencesStore;
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
 use bridge_store::OutboxStore;
+use bridge_update::{
+    BridgeUpdateState, BridgeUpdateStateStore, STATE_WAITING_WINDOW, UPDATE_STATE_FILE_NAME,
+};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -316,6 +319,88 @@ fn mt4_expert_action_installs_and_rechecks_the_selected_terminal_over_local_cont
 }
 
 #[test]
+fn signed_update_state_is_projected_and_manual_activation_is_persisted_over_local_control() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("fixture root");
+    let update_path = root.join(UPDATE_STATE_FILE_NAME);
+    let update_store = BridgeUpdateStateStore::with_clock(&update_path, || 1_800_000_000_123)
+        .expect("update state store");
+    update_store
+        .save(BridgeUpdateState {
+            schema_version: 1,
+            state: STATE_WAITING_WINDOW.to_owned(),
+            target_version: Some("3.0.1".to_owned()),
+            release_id: Some("release-3.0.1".to_owned()),
+            priority: Some("urgent".to_owned()),
+            manual_activation_requested: false,
+            staged_at_utc_msc: Some(1_800_000_000_000),
+            activation_started_at_utc_msc: None,
+            minimum_idle_seconds: 120,
+            activation_deadline_utc_msc: None,
+            maintenance_lease_id: None,
+            maintenance_lease_expires_at_utc_msc: None,
+            next_retry_at_utc_msc: None,
+            last_error_code: None,
+            updated_at_utc_msc: 1,
+        })
+        .expect("waiting update state");
+    let child = Command::new(env!("CARGO_BIN_EXE_liangjian-bridge-core"))
+        .env("AURUM_BRIDGE_DATA_DIR", &root)
+        .env("AURUM_BRIDGE_UPDATE_STATE_PATH", &update_path)
+        .env("LOCALAPPDATA", root.join("local"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn default native core");
+    let state = wait_for_ui_phase("default", "platform_selection_required");
+    let notice = state.update_notice.expect("ready update notice");
+    assert_eq!(notice.version, "3.0.1");
+    assert!(notice.urgent);
+    assert_eq!(notice.phase, "ready");
+    assert!(!notice.manual_activation_requested);
+
+    assert_eq!(
+        local_control_request(
+            "default",
+            "request-update-activate",
+            LocalControlAction::UpdateActivate,
+        ),
+        LocalControlResult::Accepted
+    );
+    let persisted = update_store
+        .load()
+        .expect("load update state")
+        .expect("persisted update state");
+    assert!(persisted.manual_activation_requested);
+    let LocalControlResult::State { state } = local_control_request(
+        "default",
+        "request-updated-state",
+        LocalControlAction::GetState,
+    ) else {
+        panic!("expected updated UI state");
+    };
+    assert!(
+        state
+            .update_notice
+            .expect("updated notice")
+            .manual_activation_requested
+    );
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id("default").expect("default instance id"),
+    )
+    .expect("request shutdown");
+    let output = child.wait_with_output().expect("wait native core");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let paths = resolve_profile_paths(&root, "default").expect("default profile paths");
+    assert!(
+        log_events(&paths.data_directory).contains(&"native_update_manual_activation_requested")
+    );
+    fs::remove_dir_all(root).expect("remove update state fixture");
+}
+
+#[test]
 fn observer_profile_cannot_change_global_endpoint_settings() {
     let root = unique_test_directory();
     let profile_id = unique_profile_id();
@@ -336,6 +421,16 @@ fn observer_profile_cannot_change_global_endpoint_settings() {
         save_result,
         LocalControlResult::Rejected {
             code: "bridge_endpoint_settings_forbidden".to_owned()
+        }
+    );
+    assert_eq!(
+        local_control_request(
+            &profile_id,
+            "request-observer-update-activate",
+            LocalControlAction::UpdateActivate,
+        ),
+        LocalControlResult::Rejected {
+            code: "bridge_update_runtime_unavailable".to_owned()
         }
     );
     assert!(!root.join("endpoint-settings.json").exists());
@@ -671,6 +766,9 @@ fn known_event(value: &str) -> Option<&'static str> {
         }
         "native_mt4_ea_automatic_deployment_completed" => {
             Some("native_mt4_ea_automatic_deployment_completed")
+        }
+        "native_update_manual_activation_requested" => {
+            Some("native_update_manual_activation_requested")
         }
         _ => None,
     }

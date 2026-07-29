@@ -520,7 +520,7 @@ pub struct UiUpdateNotice {
 
 impl UiUpdateNotice {
     fn validate(&self) -> bool {
-        valid_text(&self.version, 64)
+        (valid_text(&self.version, 64) || self.phase == "failed" && self.version.is_empty())
             && matches!(
                 self.phase.as_str(),
                 "downloading"
@@ -759,6 +759,23 @@ mod tests {
         });
         assert_eq!(
             leaked.validate(DEFAULT_PROFILE_ID),
+            Err("bridge_local_control_state_invalid")
+        );
+    }
+
+    #[test]
+    fn failed_update_notice_allows_the_empty_version_used_by_dotnet() {
+        let mut failed = state();
+        failed.update_notice = Some(UiUpdateNotice {
+            version: String::new(),
+            urgent: false,
+            phase: "failed".to_owned(),
+            manual_activation_requested: false,
+        });
+        assert_eq!(failed.validate(DEFAULT_PROFILE_ID), Ok(()));
+        failed.update_notice.as_mut().expect("notice").phase = "ready".to_owned();
+        assert_eq!(
+            failed.validate(DEFAULT_PROFILE_ID),
             Err("bridge_local_control_state_invalid")
         );
     }

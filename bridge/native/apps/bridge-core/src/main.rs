@@ -10,7 +10,7 @@ use bridge_foundation::{
 use bridge_local_control::{
     EndpointSettingsSelection, LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction,
     LocalControlPipeServer, LocalControlResponse, LocalControlResult, ObserverProfileMutation,
-    UiObserverSource, UiStateSnapshot, UiStateStore, UiTerminalCandidate,
+    UiObserverSource, UiStateSnapshot, UiStateStore, UiTerminalCandidate, UiUpdateNotice,
 };
 use bridge_observability::{BridgeLogger, LoggerConfig};
 use bridge_preferences::{
@@ -29,6 +29,7 @@ use bridge_transport::{
     load_packaged_server_endpoints, resolve_server_endpoints, save_endpoint_settings,
     test_server_endpoints,
 };
+use bridge_update::{BridgeUpdateStateStore, UPDATE_STATE_FILE_NAME};
 use liangjian_bridge_core::{
     ActiveMt5Sessions, CoreConnectionState, CredentialState, NativeConnectedRuntime,
     NativeProfileBootstrap, NativeRuntimeStatusHandle, NativeRuntimeStatusSnapshot,
@@ -70,6 +71,7 @@ struct LocalControlContext {
     preference_change_sender: watch::Sender<u64>,
     application_directory: PathBuf,
     root_data_directory: PathBuf,
+    update_state_store: Option<BridgeUpdateStateStore>,
     stop: SessionCancellation,
     logger: BridgeLogger,
     observer_runtimes: Option<Arc<ObserverRuntimeManager>>,
@@ -460,6 +462,7 @@ async fn run_connected_profile(
     let credential_store = CredentialStore::new(&profile_paths.credential_path)?;
     let preferences_store =
         BridgePreferencesStore::new(profile_paths.data_directory.join("preferences.json"))?;
+    let update_state_store = resolve_update_state_store(&application_directory, &profile_id)?;
     let observer_runtimes = if profile_id == DEFAULT_PROFILE_ID {
         let manager = Arc::new(ObserverRuntimeManager::new(
             env::current_exe()?,
@@ -501,6 +504,7 @@ async fn run_connected_profile(
             preference_change_sender,
             application_directory: application_directory.clone(),
             root_data_directory: root_data_directory.clone(),
+            update_state_store,
             stop: control_stop,
             logger: logger.clone(),
             observer_runtimes: observer_runtimes.clone(),
@@ -601,6 +605,7 @@ async fn run_local_control_server(
         preference_change_sender,
         application_directory,
         root_data_directory,
+        update_state_store,
         stop,
         logger,
         observer_runtimes,
@@ -610,6 +615,7 @@ async fn run_local_control_server(
         Some(&format!("profile={}", server.endpoint().profile_id())),
     );
     let administrator_cache = Arc::new(AsyncMutex::new(AdministratorCache::default()));
+    let mut last_update_state_error = None;
     loop {
         let accepted = tokio::select! {
             result = server.accept() => result,
@@ -670,6 +676,19 @@ async fn run_local_control_server(
                                     &logger,
                                 );
                             });
+                        }
+                        match project_update_notice(update_state_store.as_ref()) {
+                            Ok(notice) => {
+                                state.update_notice = notice;
+                                last_update_state_error = None;
+                            }
+                            Err(code) => {
+                                state.update_notice = None;
+                                if last_update_state_error != Some(code) {
+                                    logger.warning("native_update_state_read_failed", Some(code));
+                                    last_update_state_error = Some(code);
+                                }
+                            }
                         }
                         LocalControlResult::State {
                             state: Box::new(state),
@@ -752,6 +771,9 @@ async fn run_local_control_server(
                         &logger,
                     )
                     .await
+                }
+                LocalControlAction::UpdateActivate => {
+                    request_manual_update_activation(update_state_store.as_ref(), &logger)
                 }
                 LocalControlAction::SettingsTest { settings } => {
                     let is_administrator = administrator_cache.lock().await.is_administrator;
@@ -970,6 +992,91 @@ async fn run_local_control_server(
         }
         if let Err(error) = server.disconnect() {
             logger.warning("native_local_control_disconnect_failed", Some(error.code()));
+        }
+    }
+}
+
+fn resolve_update_state_store(
+    application_directory: &std::path::Path,
+    profile_id: &str,
+) -> Result<Option<BridgeUpdateStateStore>, &'static str> {
+    if profile_id != DEFAULT_PROFILE_ID {
+        return Ok(None);
+    }
+    #[cfg(debug_assertions)]
+    if let Some(configured) = env::var_os("AURUM_BRIDGE_UPDATE_STATE_PATH") {
+        let configured = PathBuf::from(configured);
+        if !configured.is_absolute() {
+            return Err("update_state_path_invalid");
+        }
+        return BridgeUpdateStateStore::new(configured)
+            .map(Some)
+            .map_err(|error| error.code());
+    }
+    let Ok(install_root) = resolve_installed_root(application_directory) else {
+        return Ok(None);
+    };
+    if [
+        "AURUMBridge.Launcher.exe",
+        "release-public-key.pem",
+        "current.json",
+    ]
+    .iter()
+    .any(|name| !install_root.join(name).is_file())
+    {
+        return Ok(None);
+    }
+    BridgeUpdateStateStore::new(install_root.join(UPDATE_STATE_FILE_NAME))
+        .map(Some)
+        .map_err(|error| error.code())
+}
+
+fn project_update_notice(
+    store: Option<&BridgeUpdateStateStore>,
+) -> Result<Option<UiUpdateNotice>, &'static str> {
+    let Some(store) = store else {
+        return Ok(None);
+    };
+    let state = store.load().map_err(|error| error.code())?;
+    Ok(state.and_then(|state| {
+        state.notice().map(|notice| UiUpdateNotice {
+            version: notice.version,
+            urgent: notice.urgent,
+            phase: notice.phase.to_owned(),
+            manual_activation_requested: notice.manual_activation_requested,
+        })
+    }))
+}
+
+fn request_manual_update_activation(
+    store: Option<&BridgeUpdateStateStore>,
+    logger: &BridgeLogger,
+) -> LocalControlResult {
+    let Some(store) = store else {
+        return rejected("bridge_update_runtime_unavailable");
+    };
+    match store.request_manual_activation() {
+        Ok(Some(state)) => {
+            logger.info(
+                "native_update_manual_activation_requested",
+                state
+                    .target_version
+                    .as_deref()
+                    .map(|version| {
+                        format!(
+                            "version={version};priority={}",
+                            state.priority.as_deref().unwrap_or("normal")
+                        )
+                    })
+                    .as_deref(),
+            );
+            LocalControlResult::Accepted
+        }
+        Ok(None) => rejected("bridge_update_not_ready"),
+        Err(error) => {
+            let code = error.code();
+            logger.warning("native_update_manual_activation_failed", Some(code));
+            rejected(code)
         }
     }
 }

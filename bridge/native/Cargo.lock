@@ -213,6 +213,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-update"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "bridge-worker-host"
 version = "3.0.0-alpha.1"
 dependencies = [
@@ -881,6 +890,7 @@ dependencies = [
  "bridge-terminal-data",
  "bridge-terminal-session",
  "bridge-transport",
+ "bridge-update",
  "bridge-worker-host",
  "futures-util",
  "serde",
