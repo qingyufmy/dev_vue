@@ -1,5 +1,6 @@
 use bridge_contract::{
-    AccountRef, CommandMessage, CommandResultMessage, DataDeltaMessage, validate_id,
+    AccountRef, CommandMessage, CommandResultMessage, DataDeltaMessage, SERVER_MAX_MESSAGE_BYTES,
+    TerminalDescriptor, validate_id,
 };
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter};
@@ -15,6 +16,10 @@ use std::time::Duration;
 
 pub const BRIDGE_DATABASE_FILE_NAME: &str = "bridge.db";
 const DEFAULT_DATA_OUTBOX_LIMIT_PER_STREAM: i64 = 256;
+const MAX_HISTORY_BATCH_ITEMS: usize = 250;
+const MAX_HISTORY_EVIDENCE_ITEMS: usize = 500;
+const MAX_HISTORY_ITEM_BYTES: usize = 16 * 1024;
+const MAX_HISTORY_PAGE_PAYLOAD_BYTES: usize = SERVER_MAX_MESSAGE_BYTES - 64 * 1024;
 
 pub const REQUIRED_SCHEMA: &[(&str, &[&str])] = &[
     (
@@ -383,6 +388,29 @@ pub struct StoredTerminalProjection {
     pub orders: StoredStreamProjection,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, serde::Deserialize)]
+pub struct HistoryCursor {
+    pub time_msc: i64,
+    pub ticket: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryArchiveBatch {
+    pub deals: Vec<serde_json::Value>,
+    pub history_orders: Vec<serde_json::Value>,
+    pub trades: Vec<serde_json::Value>,
+    pub next_cursor: HistoryCursor,
+    pub has_more: bool,
+    pub observed_at_utc_msc: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryArchiveState {
+    pub cursor: HistoryCursor,
+    pub is_complete: bool,
+    pub updated_at_utc_msc: i64,
+}
+
 pub struct OutboxStore {
     connection: Mutex<Connection>,
 }
@@ -595,6 +623,226 @@ impl OutboxStore {
             })
         })
         .collect()
+    }
+
+    pub fn history_archive_state(
+        &self,
+        terminal_instance_id: &str,
+        account_ref: &AccountRef,
+    ) -> Result<HistoryArchiveState, StoreError> {
+        validate_history_scope(terminal_instance_id, account_ref)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        connection
+            .query_row(
+                "SELECT cursor_value, is_complete, updated_at_utc_msc \
+                 FROM history_archive_state \
+                 WHERE terminal_instance_id = ?1 \
+                   AND broker_server = ?2 COLLATE NOCASE \
+                   AND login_account = ?3 LIMIT 1;",
+                params![
+                    terminal_instance_id,
+                    account_ref.broker_server,
+                    account_ref.login
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_history_state_query_failed"))?
+            .map(|(cursor_json, complete, updated_at)| {
+                let cursor = parse_history_cursor(&cursor_json)?;
+                if !matches!(complete, 0 | 1) || updated_at <= 0 {
+                    return Err(StoreError::new("bridge_store_history_state_invalid"));
+                }
+                Ok(HistoryArchiveState {
+                    cursor,
+                    is_complete: complete == 1,
+                    updated_at_utc_msc: updated_at,
+                })
+            })
+            .transpose()
+            .map(|state| {
+                state.unwrap_or(HistoryArchiveState {
+                    cursor: HistoryCursor::default(),
+                    is_complete: false,
+                    updated_at_utc_msc: 0,
+                })
+            })
+    }
+
+    pub fn persist_history_archive_batch(
+        &self,
+        terminal: &TerminalDescriptor,
+        batch: &HistoryArchiveBatch,
+    ) -> Result<(), StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        validate_history_cursor(&batch.next_cursor)?;
+        if batch.observed_at_utc_msc <= 0
+            || batch.deals.len() > MAX_HISTORY_BATCH_ITEMS
+            || batch.history_orders.len() > MAX_HISTORY_BATCH_ITEMS
+            || batch.trades.len() > MAX_HISTORY_BATCH_ITEMS
+        {
+            return Err(StoreError::new("bridge_store_history_batch_invalid"));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_history_transaction_failed"))?;
+        upsert_history_items(
+            &transaction,
+            terminal,
+            "deal",
+            &batch.deals,
+            batch.observed_at_utc_msc,
+        )?;
+        upsert_history_items(
+            &transaction,
+            terminal,
+            "history_order",
+            &batch.history_orders,
+            batch.observed_at_utc_msc,
+        )?;
+        upsert_history_items(
+            &transaction,
+            terminal,
+            "trade",
+            &batch.trades,
+            batch.observed_at_utc_msc,
+        )?;
+        let current = transaction
+            .query_row(
+                "SELECT cursor_value FROM history_archive_state \
+                 WHERE terminal_instance_id = ?1 \
+                   AND broker_server = ?2 COLLATE NOCASE \
+                   AND login_account = ?3 LIMIT 1;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_history_state_query_failed"))?
+            .map(|value| parse_history_cursor(&value))
+            .transpose()?
+            .unwrap_or_default();
+        if compare_history_cursor(&batch.next_cursor, &current).is_lt() {
+            return Err(StoreError::new("bridge_store_history_cursor_regression"));
+        }
+        let cursor_json = serde_json::to_string(&batch.next_cursor)
+            .map_err(|_| StoreError::new("bridge_store_history_cursor_invalid"))?;
+        transaction
+            .execute(
+                "INSERT INTO history_archive_state (\
+                   terminal_instance_id, broker_server, login_account, cursor_value, \
+                   is_complete, updated_at_utc_msc\
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)\
+                 ON CONFLICT(terminal_instance_id, broker_server, login_account) DO UPDATE SET \
+                   cursor_value = excluded.cursor_value, is_complete = excluded.is_complete, \
+                   updated_at_utc_msc = excluded.updated_at_utc_msc;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    cursor_json,
+                    if batch.has_more { 0 } else { 1 },
+                    batch.observed_at_utc_msc
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_state_write_failed"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_commit_failed"))
+    }
+
+    pub fn read_history_archive_page(
+        &self,
+        terminal: &TerminalDescriptor,
+        page: i64,
+        page_size: i64,
+        include_evidence: bool,
+    ) -> Result<serde_json::Value, StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        if page < 1 || !(1..=200).contains(&page_size) {
+            return Err(StoreError::new("history_pagination_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let total = connection
+            .query_row(
+                "SELECT COUNT(*) FROM history_archive_items \
+                 WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE \
+                   AND login_account = ?3 AND item_kind = 'trade';",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_page_query_failed"))?;
+        let mut statement = connection
+            .prepare(
+                "SELECT payload_json FROM history_archive_items \
+                 WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE \
+                   AND login_account = ?3 AND item_kind = 'trade' \
+                 ORDER BY event_time_msc DESC, item_id DESC LIMIT ?4 OFFSET ?5;",
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_page_query_failed"))?;
+        let rows = read_json_rows(
+            &mut statement,
+            params![
+                terminal.terminal_instance_id,
+                terminal.account_ref.broker_server,
+                terminal.account_ref.login,
+                page_size,
+                (page - 1).saturating_mul(page_size)
+            ],
+        )?;
+        let (deals, history_orders, evidence_truncated) = if include_evidence {
+            read_history_evidence(&connection, terminal, &rows)?
+        } else {
+            (Vec::new(), Vec::new(), false)
+        };
+        let state = read_history_state_locked(&connection, terminal)?;
+        let mut payload = serde_json::json!({
+            "orders": rows,
+            "deals": deals,
+            "history_orders": history_orders,
+            "pagination": {
+                "current_page": page,
+                "page_size": page_size,
+                "total_count": total,
+                "total_pages": std::cmp::max((total + page_size - 1) / page_size, 1),
+            },
+            "history_sync": {
+                "complete": state.is_complete,
+                "cursor_time_msc": state.cursor.time_msc,
+                "updated_at_utc_msc": state.updated_at_utc_msc,
+                "evidence_truncated": evidence_truncated,
+            },
+            "source": format!("{}_sqlite", terminal.platform),
+        });
+        enforce_history_payload_budget(&mut payload)?;
+        Ok(payload)
     }
 
     pub fn persist_data_delta(
@@ -1892,6 +2140,325 @@ fn scalar_ticket(value: &serde_json::Value) -> Result<String, StoreError> {
     Ok(ticket)
 }
 
+fn validate_history_scope(
+    terminal_instance_id: &str,
+    account_ref: &AccountRef,
+) -> Result<(), StoreError> {
+    if validate_id(terminal_instance_id).is_err() || account_ref.validate().is_err() {
+        return Err(StoreError::new("bridge_store_history_scope_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_history_cursor(cursor: &HistoryCursor) -> Result<(), StoreError> {
+    if cursor.time_msc < 0
+        || cursor.ticket.len() > 32
+        || cursor.ticket.bytes().any(|byte| !byte.is_ascii_digit())
+        || cursor.time_msc == 0 && !cursor.ticket.is_empty()
+        || cursor.time_msc > 0 && cursor.ticket.is_empty()
+    {
+        return Err(StoreError::new("bridge_store_history_cursor_invalid"));
+    }
+    Ok(())
+}
+
+fn parse_history_cursor(value: &str) -> Result<HistoryCursor, StoreError> {
+    let cursor = serde_json::from_str::<HistoryCursor>(value)
+        .map_err(|_| StoreError::new("bridge_store_history_cursor_invalid"))?;
+    validate_history_cursor(&cursor)?;
+    Ok(cursor)
+}
+
+fn compare_history_cursor(left: &HistoryCursor, right: &HistoryCursor) -> std::cmp::Ordering {
+    left.time_msc
+        .cmp(&right.time_msc)
+        .then_with(|| compare_decimal_strings(&left.ticket, &right.ticket))
+}
+
+fn compare_decimal_strings(left: &str, right: &str) -> std::cmp::Ordering {
+    let left = left.trim_start_matches('0');
+    let right = right.trim_start_matches('0');
+    left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+}
+
+fn history_scalar(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        object.get(*key).and_then(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| value.as_u64().map(|number| number.to_string()))
+                .filter(|text| !text.trim().is_empty())
+        })
+    })
+}
+
+fn history_time_msc(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<i64, StoreError> {
+    ["time_msc", "close_time_msc", "event_time_msc"]
+        .iter()
+        .find_map(|key| object.get(*key).and_then(serde_json::Value::as_i64))
+        .filter(|value| *value > 0)
+        .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))
+}
+
+fn upsert_history_items(
+    transaction: &Transaction<'_>,
+    terminal: &TerminalDescriptor,
+    item_kind: &str,
+    items: &[serde_json::Value],
+    observed_at_utc_msc: i64,
+) -> Result<(), StoreError> {
+    for item in items {
+        let object = item
+            .as_object()
+            .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))?;
+        let item_id = match item_kind {
+            "deal" => history_scalar(object, &["deal_ticket", "ticket"]),
+            "history_order" => history_scalar(object, &["ticket", "order"]),
+            "trade" => history_scalar(object, &["deal_ticket", "ticket", "order"]),
+            _ => None,
+        }
+        .filter(|value| {
+            value.len() <= 32
+                && value.bytes().all(|byte| byte.is_ascii_digit())
+                && value.bytes().any(|byte| byte != b'0')
+        })
+        .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))?;
+        let event_time_msc = history_time_msc(object)?;
+        let position_id = history_scalar(object, &["position_id", "position"]);
+        let order_ticket = history_scalar(object, &["order_ticket", "order"]);
+        let symbol = history_scalar(object, &["symbol"]);
+        if position_id.as_ref().is_some_and(|value| value.len() > 32)
+            || order_ticket.as_ref().is_some_and(|value| value.len() > 32)
+            || symbol.as_ref().is_some_and(|value| value.len() > 64)
+        {
+            return Err(StoreError::new("bridge_store_history_item_invalid"));
+        }
+        let payload_json = serde_json::to_string(item)
+            .map_err(|_| StoreError::new("bridge_store_history_item_invalid"))?;
+        if payload_json.len() > MAX_HISTORY_ITEM_BYTES {
+            return Err(StoreError::new("bridge_store_history_item_too_large"));
+        }
+        transaction
+            .execute(
+                "INSERT INTO history_archive_items (\
+                   terminal_instance_id, broker_server, login_account, platform, item_kind,\
+                   item_id, event_time_msc, position_id, order_ticket, symbol, payload_json, updated_at_utc_msc\
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)\
+                 ON CONFLICT(terminal_instance_id, broker_server, login_account, item_kind, item_id)\
+                 DO UPDATE SET platform = excluded.platform, event_time_msc = excluded.event_time_msc,\
+                   position_id = excluded.position_id, order_ticket = excluded.order_ticket,\
+                   symbol = excluded.symbol, payload_json = excluded.payload_json,\
+                   updated_at_utc_msc = excluded.updated_at_utc_msc;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    terminal.platform,
+                    item_kind,
+                    item_id,
+                    event_time_msc,
+                    position_id,
+                    order_ticket,
+                    symbol,
+                    payload_json,
+                    observed_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_item_write_failed"))?;
+    }
+    Ok(())
+}
+
+fn read_json_rows<P: rusqlite::Params>(
+    statement: &mut rusqlite::Statement<'_>,
+    params: P,
+) -> Result<Vec<serde_json::Value>, StoreError> {
+    let rows = statement
+        .query_map(params, |row| row.get::<_, String>(0))
+        .map_err(|_| StoreError::new("bridge_store_history_page_query_failed"))?;
+    rows.map(|row| {
+        let value = row.map_err(|_| StoreError::new("bridge_store_history_page_query_failed"))?;
+        serde_json::from_str(&value)
+            .ok()
+            .filter(serde_json::Value::is_object)
+            .ok_or_else(|| StoreError::new("bridge_store_history_payload_invalid"))
+    })
+    .collect()
+}
+
+fn read_history_state_locked(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+) -> Result<HistoryArchiveState, StoreError> {
+    connection
+        .query_row(
+            "SELECT cursor_value, is_complete, updated_at_utc_msc FROM history_archive_state \
+             WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE \
+               AND login_account = ?3 LIMIT 1;",
+            params![
+                terminal.terminal_instance_id,
+                terminal.account_ref.broker_server,
+                terminal.account_ref.login
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_state_query_failed"))?
+        .map(|(cursor, complete, updated_at)| {
+            if !matches!(complete, 0 | 1) || updated_at <= 0 {
+                return Err(StoreError::new("bridge_store_history_state_invalid"));
+            }
+            Ok(HistoryArchiveState {
+                cursor: parse_history_cursor(&cursor)?,
+                is_complete: complete == 1,
+                updated_at_utc_msc: updated_at,
+            })
+        })
+        .transpose()
+        .map(|state| {
+            state.unwrap_or(HistoryArchiveState {
+                cursor: HistoryCursor::default(),
+                is_complete: false,
+                updated_at_utc_msc: 0,
+            })
+        })
+}
+
+fn read_history_evidence(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    trades: &[serde_json::Value],
+) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, bool), StoreError> {
+    let mut positions = Vec::new();
+    let mut orders = Vec::new();
+    for trade in trades {
+        let Some(object) = trade.as_object() else {
+            continue;
+        };
+        if let Some(value) = history_scalar(object, &["position_id", "position"]) {
+            positions.push(value);
+        }
+        if let Some(value) = history_scalar(object, &["order_ticket", "order"]) {
+            orders.push(value);
+        }
+    }
+    positions.sort();
+    positions.dedup();
+    orders.sort();
+    orders.dedup();
+    if positions.is_empty() && orders.is_empty() {
+        return Ok((Vec::new(), Vec::new(), false));
+    }
+    let deals = query_history_evidence(connection, terminal, "deal", &positions, &orders)?;
+    let history_orders =
+        query_history_evidence(connection, terminal, "history_order", &positions, &orders)?;
+    let truncated = deals.len() > MAX_HISTORY_EVIDENCE_ITEMS
+        || history_orders.len() > MAX_HISTORY_EVIDENCE_ITEMS;
+    Ok((
+        deals.into_iter().take(MAX_HISTORY_EVIDENCE_ITEMS).collect(),
+        history_orders
+            .into_iter()
+            .take(MAX_HISTORY_EVIDENCE_ITEMS)
+            .collect(),
+        truncated,
+    ))
+}
+
+fn query_history_evidence(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    kind: &str,
+    positions: &[String],
+    orders: &[String],
+) -> Result<Vec<serde_json::Value>, StoreError> {
+    let position_placeholders = std::iter::repeat_n("?", positions.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let order_placeholders = std::iter::repeat_n("?", orders.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut predicates = Vec::new();
+    if !positions.is_empty() {
+        predicates.push(format!("position_id IN ({position_placeholders})"));
+    }
+    if !orders.is_empty() {
+        if kind == "history_order" {
+            predicates.push(format!(
+                "(order_ticket IN ({order_placeholders}) OR item_id IN ({order_placeholders}))"
+            ));
+        } else {
+            predicates.push(format!("order_ticket IN ({order_placeholders})"));
+        }
+    }
+    let query = format!(
+        "SELECT payload_json FROM history_archive_items \
+         WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
+           AND login_account = ? AND item_kind = ? AND ({}) \
+         ORDER BY event_time_msc, item_id LIMIT ?;",
+        predicates.join(" OR ")
+    );
+    let mut values = vec![
+        SqlValue::Text(terminal.terminal_instance_id.clone()),
+        SqlValue::Text(terminal.account_ref.broker_server.clone()),
+        SqlValue::Text(terminal.account_ref.login.clone()),
+        SqlValue::Text(kind.to_owned()),
+    ];
+    values.extend(positions.iter().cloned().map(SqlValue::Text));
+    values.extend(orders.iter().cloned().map(SqlValue::Text));
+    if kind == "history_order" {
+        values.extend(orders.iter().cloned().map(SqlValue::Text));
+    }
+    values.push(SqlValue::Integer((MAX_HISTORY_EVIDENCE_ITEMS + 1) as i64));
+    let mut statement = connection
+        .prepare(&query)
+        .map_err(|_| StoreError::new("bridge_store_history_page_query_failed"))?;
+    read_json_rows(&mut statement, params_from_iter(values))
+}
+
+fn enforce_history_payload_budget(payload: &mut serde_json::Value) -> Result<(), StoreError> {
+    let encoded_len = |value: &serde_json::Value| {
+        serde_json::to_vec(value)
+            .map(|encoded| encoded.len())
+            .map_err(|_| StoreError::new("bridge_store_history_payload_invalid"))
+    };
+    if encoded_len(payload)? <= MAX_HISTORY_PAGE_PAYLOAD_BYTES {
+        return Ok(());
+    }
+    let Some(object) = payload.as_object_mut() else {
+        return Err(StoreError::new("bridge_store_history_payload_invalid"));
+    };
+    object["history_sync"]["evidence_truncated"] = serde_json::Value::Bool(true);
+    for key in ["deals", "history_orders"] {
+        loop {
+            if encoded_len(&serde_json::Value::Object(object.clone()))?
+                <= MAX_HISTORY_PAGE_PAYLOAD_BYTES
+            {
+                return Ok(());
+            }
+            let removed = object
+                .get_mut(key)
+                .and_then(serde_json::Value::as_array_mut)
+                .and_then(Vec::pop);
+            if removed.is_none() {
+                break;
+            }
+        }
+    }
+    Err(StoreError::new("bridge_store_history_page_too_large"))
+}
+
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, StoreError> {
     connection
         .query_row(
@@ -2134,6 +2701,169 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove binding fixture");
+    }
+
+    #[test]
+    fn history_archive_is_atomic_paginated_and_isolated_by_account() {
+        let root = unique_test_directory("history-archive");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("history store");
+        let terminal = history_terminal("123456");
+        let batch = HistoryArchiveBatch {
+            deals: vec![serde_json::json!({
+                "deal_ticket": 5001,
+                "order": 1001,
+                "position_id": 42,
+                "time_msc": 1_700_000_000_100_i64,
+                "symbol": "XAUUSD"
+            })],
+            history_orders: vec![serde_json::json!({
+                "ticket": 1001,
+                "position_id": 42,
+                "time_msc": 1_700_000_000_050_i64,
+                "symbol": "XAUUSD"
+            })],
+            trades: vec![serde_json::json!({
+                "deal_ticket": 5001,
+                "order_ticket": 1001,
+                "position_id": 42,
+                "close_time_msc": 1_700_000_000_100_i64,
+                "symbol": "XAUUSD",
+                "profit": 12.5
+            })],
+            next_cursor: HistoryCursor {
+                time_msc: 1_700_000_000_100,
+                ticket: "5001".to_owned(),
+            },
+            has_more: false,
+            observed_at_utc_msc: 1_700_000_000_200,
+        };
+        store
+            .persist_history_archive_batch(&terminal, &batch)
+            .expect("persist history batch");
+        store
+            .persist_history_archive_batch(&terminal, &batch)
+            .expect("same cursor is idempotent");
+        assert_eq!(
+            store
+                .history_archive_state(&terminal.terminal_instance_id, &terminal.account_ref)
+                .expect("history state"),
+            HistoryArchiveState {
+                cursor: batch.next_cursor.clone(),
+                is_complete: true,
+                updated_at_utc_msc: batch.observed_at_utc_msc,
+            }
+        );
+
+        let page = store
+            .read_history_archive_page(&terminal, 1, 20, true)
+            .expect("history page");
+        assert_eq!(page["orders"].as_array().expect("trades").len(), 1);
+        assert_eq!(page["deals"].as_array().expect("deals").len(), 1);
+        assert_eq!(
+            page["history_orders"]
+                .as_array()
+                .expect("history orders")
+                .len(),
+            1
+        );
+        assert_eq!(page["pagination"]["total_count"], 1);
+        assert_eq!(page["source"], "mt5_sqlite");
+
+        let other_account = history_terminal("654321");
+        let other_page = store
+            .read_history_archive_page(&other_account, 1, 20, true)
+            .expect("isolated empty page");
+        assert_eq!(other_page["pagination"]["total_count"], 0);
+        assert!(other_page["orders"].as_array().expect("orders").is_empty());
+
+        let mut regressed = batch.clone();
+        regressed.trades = vec![serde_json::json!({
+            "deal_ticket": 5002,
+            "close_time_msc": 1_700_000_000_101_i64
+        })];
+        regressed.next_cursor = HistoryCursor {
+            time_msc: 1_699_999_999_999,
+            ticket: "5002".to_owned(),
+        };
+        assert_eq!(
+            store
+                .persist_history_archive_batch(&terminal, &regressed)
+                .expect_err("cursor regression must roll back")
+                .code(),
+            "bridge_store_history_cursor_regression"
+        );
+        let page_after_rollback = store
+            .read_history_archive_page(&terminal, 1, 20, false)
+            .expect("history page after rollback");
+        assert_eq!(page_after_rollback["pagination"]["total_count"], 1);
+
+        let mut oversized = batch;
+        oversized.trades = (1..=MAX_HISTORY_BATCH_ITEMS + 1)
+            .map(|ticket| {
+                serde_json::json!({
+                    "deal_ticket": ticket,
+                    "close_time_msc": 1_700_000_100_000_i64 + ticket as i64
+                })
+            })
+            .collect();
+        assert_eq!(
+            store
+                .persist_history_archive_batch(&terminal, &oversized)
+                .expect_err("oversized batch rejected")
+                .code(),
+            "bridge_store_history_batch_invalid"
+        );
+        assert_eq!(
+            store
+                .read_history_archive_page(&terminal, 0, 20, false)
+                .expect_err("invalid page")
+                .code(),
+            "history_pagination_invalid"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove history fixture");
+    }
+
+    #[test]
+    fn history_response_budget_discards_evidence_but_never_the_requested_page() {
+        let oversized_evidence = "x".repeat(MAX_HISTORY_PAGE_PAYLOAD_BYTES);
+        let mut payload = serde_json::json!({
+            "orders": [{ "deal_ticket": 1, "close_time_msc": 1 }],
+            "deals": [{ "deal_ticket": 1, "comment": oversized_evidence }],
+            "history_orders": [],
+            "history_sync": { "evidence_truncated": false }
+        });
+        enforce_history_payload_budget(&mut payload).expect("evidence trimmed");
+        assert!(payload["deals"].as_array().expect("deals").is_empty());
+        assert_eq!(payload["orders"].as_array().expect("orders").len(), 1);
+        assert_eq!(payload["history_sync"]["evidence_truncated"], true);
+
+        let mut oversized_page = serde_json::json!({
+            "orders": [{ "deal_ticket": 1, "comment": "x".repeat(MAX_HISTORY_PAGE_PAYLOAD_BYTES) }],
+            "deals": [],
+            "history_orders": [],
+            "history_sync": { "evidence_truncated": false }
+        });
+        assert_eq!(
+            enforce_history_payload_budget(&mut oversized_page)
+                .expect_err("requested page cannot be silently truncated")
+                .code(),
+            "bridge_store_history_page_too_large"
+        );
+    }
+
+    fn history_terminal(login: &str) -> TerminalDescriptor {
+        TerminalDescriptor {
+            terminal_instance_id: "mt5_terminal_history_01".to_owned(),
+            platform: "mt5".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: login.to_owned(),
+            },
+            connection_epoch: 3,
+            worker_version: Some("3.0.0".to_owned()),
+        }
     }
 
     #[test]

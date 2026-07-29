@@ -436,7 +436,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 ### 阶段 3：MT5 只读链路
 
-- [进行中] 已拆出一终端一 Python Worker，并完成账户、报价、持仓和挂单只读 IPC；品种、K 线和历史分页留到后续数据批次。
+- [进行中] 已拆出一终端一 Python Worker，并完成账户、报价、持仓和挂单只读 IPC；Rust SQLite 历史权威层已完成账户隔离、最多 250 条原子批次、单调游标、最多 200 条主交易分页、当前页关联证据和 4 MiB 前置字节预算。MT5 Worker 的历史增量回填、Core `data_request` 路由，以及品种和 K 线仍留在后续数据批次，当前尚未对服务器开放该历史接口。
 - [已完成] 报价经经纪商时区校准后输出 UTC；时钟未可信、账户改变、终端断开或返回数据无效时失败关闭。
 - [已完成] 已完成账户/持仓/挂单 data delta 的 Native 合同、revision/SQLite 最新投影/服务器 Outbox 原子提交，以及从 SQLite 恢复的快照投影器；投影器按 ticket 计算 upsert/delete，支持首次、epoch 变化、主动 reconciliation 和 gap 后 full snapshot。采集协调器按空闲 1 秒、活跃 250 毫秒动态轮询，支持交易后唤醒、Worker 恢复退避、停止取消和投影前账户路由复核。
 - [已完成] Worker 崩溃和 MT5 终端关闭/重启恢复已完成；Core 会检测 SQLite 中账户、终端路径和 epoch 的运行期变化，有序关闭旧服务器会话与 Worker 后重新加载绑定。独立进程测试已验证新路径、新账户和更高 epoch 的 Hello/状态恢复，以及已 ACK 交易不重放；真实终端的账户/路径人工切换仍作为发布前实机验收项。
