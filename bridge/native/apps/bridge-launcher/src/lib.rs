@@ -28,6 +28,11 @@ const READY_STABILITY_DELAY: Duration = Duration::from_secs(2);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
 static FILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+pub use uninstall::{
+    DataRemovalMode, InstallationLayout, LauncherCommand, UninstallWorkerRequest,
+    parse_launcher_command, run_uninstall_worker, spawn_uninstall_worker, uninstall_preflight,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LauncherError {
     code: &'static str,
@@ -717,3 +722,4 @@ mod tests {
         ))
     }
 }
+mod uninstall;

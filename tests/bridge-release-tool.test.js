@@ -265,6 +265,8 @@ describe('bridge release tooling', () => {
     expect(fullInstallerBuilder).toContain("installer_type='full-offline-v3'")
     expect(fullInstallerBuilder).toContain('Compression=lzma2/ultra64')
     expect(fullInstallerBuilder).toContain('OutputBaseFilename=LiangjianBridgeSetup')
+    expect(fullInstallerBuilder).toContain('#define MyAppURL "$(Escape-Inno $ServerUrl)"')
+    expect(fullInstallerBuilder).not.toContain('https://www.cnfxtrade.com')
     expect(fullInstallerBuilder).toContain('Uninstallable=no')
     expect(fullInstallerBuilder).toContain("bootstrapper-metadata.json")
     expect(fullInstallerBuilder).toContain('--offline-bundle-root')

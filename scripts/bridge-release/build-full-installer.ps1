@@ -186,7 +186,7 @@ Filename: "{localappdata}\AURUM\LiangjianBridge\AURUMBridge.Launcher.exe"; Descr
 #define MyAppName "$(Escape-Inno $productName)"
 #define MyAppVersion "$(Escape-Inno ([string]$manifest.release_version))"
 #define MyAppPublisher "$(Escape-Inno $publisherName)"
-#define MyAppURL "https://www.cnfxtrade.com"
+#define MyAppURL "$(Escape-Inno $ServerUrl)"
 
 [Setup]
 AppId={{AURUM-LiangjianBridge-V3}
