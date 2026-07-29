@@ -1,6 +1,8 @@
 #![windows_subsystem = "windows"]
 
-use bridge_foundation::{DEFAULT_PROFILE_ID, validate_profile_id};
+mod log_viewer;
+
+use bridge_foundation::{DEFAULT_PROFILE_ID, default_data_directory, validate_profile_id};
 use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
     LocalControlResult, UiStateSnapshot,
@@ -126,6 +128,7 @@ struct AppState {
     brand_icon_small: HICON,
     tray_added: bool,
     terminal_choices_fingerprint: String,
+    log_window: HWND,
 }
 
 fn main() {
@@ -160,6 +163,7 @@ fn main() {
             brand_icon_small: null_mut(),
             tray_added: false,
             terminal_choices_fingerprint: String::new(),
+            log_window: null_mut(),
         });
     }
 }
@@ -512,7 +516,7 @@ unsafe fn create_controls(hwnd: HWND, state: &mut AppState) {
         EnableWindow(state.controls.observer, 0);
         EnableWindow(state.controls.mt4_expert, 0);
         EnableWindow(state.controls.detect, 1);
-        EnableWindow(state.controls.logs, 0);
+        EnableWindow(state.controls.logs, 1);
         EnableWindow(state.controls.settings, 0);
         EnableWindow(state.controls.update, 0);
     }
@@ -1197,6 +1201,20 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
             }
         }
         CONTROL_DETECT => unsafe { begin_action(hwnd, app, LocalControlAction::Redetect) },
+        CONTROL_LOGS => match default_data_directory(&app.profile_id) {
+            Ok(data_directory) => match unsafe {
+                log_viewer::show_or_refresh(
+                    app.log_window,
+                    hwnd,
+                    &data_directory.join("logs"),
+                    app.brand_icon,
+                )
+            } {
+                Ok(log_window) => app.log_window = log_window,
+                Err(code) => show_error(hwnd, code),
+            },
+            Err(code) => show_error(hwnd, code),
+        },
         CONTROL_PAIR => unsafe { begin_action(hwnd, app, LocalControlAction::Pair) },
         CONTROL_LOGOUT => unsafe { begin_action(hwnd, app, LocalControlAction::Logout) },
         CONTROL_EXIT | MENU_EXIT_COMMAND => unsafe {

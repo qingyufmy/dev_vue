@@ -1,9 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,9 +15,12 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_WRITE_THROUGH, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemTime;
+use windows_sys::Win32::System::Time::SystemTimeToTzSpecificLocalTime;
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const DEFAULT_RETAINED_FILES: usize = 10;
+const DEFAULT_RECENT_LOG_LINES: usize = 1_000;
+const MAX_RECENT_LOG_LINES: usize = 10_000;
 const SECRET_NAMES: [&str; 7] = [
     "access_token",
     "refresh_token",
@@ -56,6 +60,106 @@ pub struct LoggerConfig {
     pub log_directory: PathBuf,
     pub max_file_bytes: u64,
     pub retained_files: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct BridgeLogReader {
+    log_directory: PathBuf,
+}
+
+#[derive(Deserialize)]
+struct DisplayLogRecord {
+    #[serde(default)]
+    timestamp_utc: String,
+    #[serde(default)]
+    level: String,
+    #[serde(default)]
+    event_name: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+impl BridgeLogReader {
+    pub fn new(log_directory: impl AsRef<Path>) -> Result<Self, LogError> {
+        Ok(Self {
+            log_directory: absolute_path(log_directory.as_ref(), "bridge_log_reader_path_invalid")?,
+        })
+    }
+
+    pub fn read_recent_text(&self, max_lines: Option<usize>) -> Result<String, LogError> {
+        let max_lines = max_lines
+            .unwrap_or(DEFAULT_RECENT_LOG_LINES)
+            .clamp(1, MAX_RECENT_LOG_LINES);
+        if !self.log_directory.is_dir() {
+            return Ok("暂无日志。".to_owned());
+        }
+        let mut files = fs::read_dir(&self.log_directory)
+            .map_err(|_| LogError::new("bridge_log_read_failed"))?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| is_bridge_log_path(path))
+            .collect::<Vec<_>>();
+        files.sort_by(|left, right| {
+            let left_modified = fs::metadata(left)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            let right_modified = fs::metadata(right)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            right_modified.cmp(&left_modified).then_with(|| {
+                right
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_ascii_lowercase())
+                    .cmp(
+                        &left
+                            .file_name()
+                            .map(|value| value.to_string_lossy().to_ascii_lowercase()),
+                    )
+            })
+        });
+        let mut blocks = Vec::new();
+        let mut collected_lines = 0_usize;
+        for path in files {
+            let remaining = max_lines.saturating_sub(collected_lines);
+            if remaining == 0 {
+                break;
+            }
+            let file = fs::File::open(path).map_err(|_| LogError::new("bridge_log_read_failed"))?;
+            let mut reader = BufReader::with_capacity(16 * 1024, file);
+            let mut line = String::new();
+            let mut file_lines = VecDeque::with_capacity(remaining);
+            loop {
+                line.clear();
+                let read = reader
+                    .read_line(&mut line)
+                    .map_err(|_| LogError::new("bridge_log_read_failed"))?;
+                if read == 0 {
+                    break;
+                }
+                let line = line.trim_end_matches(['\r', '\n']);
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if file_lines.len() == remaining {
+                    file_lines.pop_front();
+                }
+                file_lines.push_back(format_display_log_line(line));
+            }
+            if !file_lines.is_empty() {
+                collected_lines += file_lines.len();
+                blocks.push(file_lines.into_iter().collect::<Vec<_>>());
+            }
+        }
+        if collected_lines == 0 {
+            return Ok("暂无日志。".to_owned());
+        }
+        Ok(blocks
+            .into_iter()
+            .rev()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\r\n"))
+    }
 }
 
 impl LoggerConfig {
@@ -544,6 +648,80 @@ fn absolute_path(path: &Path, error_code: &'static str) -> Result<PathBuf, LogEr
     }
 }
 
+fn is_bridge_log_path(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    let file_name = file_name.to_ascii_lowercase();
+    file_name.starts_with("bridge-") && file_name.ends_with(".log")
+}
+
+fn format_display_log_line(line: &str) -> String {
+    let Ok(record) = serde_json::from_str::<DisplayLogRecord>(line) else {
+        return line.to_owned();
+    };
+    let timestamp = format_local_log_timestamp(&record.timestamp_utc)
+        .unwrap_or_else(|| record.timestamp_utc.trim().to_owned());
+    let level = match record.level.as_str() {
+        "warning" => "警告",
+        "error" => "错误",
+        _ => "信息",
+    };
+    match record.message.as_deref().map(str::trim) {
+        Some(message) if !message.is_empty() => {
+            format!("{timestamp}  [{level}]  {}  {message}", record.event_name)
+        }
+        _ => format!("{timestamp}  [{level}]  {}", record.event_name),
+    }
+}
+
+fn format_local_log_timestamp(value: &str) -> Option<String> {
+    let bytes = value.trim().as_bytes();
+    if bytes.len() < 20
+        || bytes.get(4) != Some(&b'-')
+        || bytes.get(7) != Some(&b'-')
+        || bytes.get(10) != Some(&b'T')
+        || bytes.get(13) != Some(&b':')
+        || bytes.get(16) != Some(&b':')
+        || bytes.last() != Some(&b'Z')
+    {
+        return None;
+    }
+    let utc = SYSTEMTIME {
+        wYear: parse_u16(&bytes[0..4])?,
+        wMonth: parse_u16(&bytes[5..7])?,
+        wDayOfWeek: 0,
+        wDay: parse_u16(&bytes[8..10])?,
+        wHour: parse_u16(&bytes[11..13])?,
+        wMinute: parse_u16(&bytes[14..16])?,
+        wSecond: parse_u16(&bytes[17..19])?,
+        wMilliseconds: 0,
+    };
+    let mut local = SYSTEMTIME::default();
+    let converted = unsafe { SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) };
+    if converted == 0 {
+        return None;
+    }
+    Some(format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond
+    ))
+}
+
+fn parse_u16(bytes: &[u8]) -> Option<u16> {
+    if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    bytes.iter().try_fold(0_u16, |value, byte| {
+        value
+            .checked_mul(10)?
+            .checked_add(u16::from(byte.saturating_sub(b'0')))
+    })
+}
+
 struct UtcTimestamp {
     date: String,
     rfc3339: String,
@@ -726,6 +904,40 @@ mod tests {
             .collect::<String>();
         assert!(text.contains("native_previous_unclean_shutdown"));
         fs::remove_dir_all(root).expect("remove marker fixture");
+    }
+
+    #[test]
+    fn recent_log_reader_matches_the_dotnet_display_contract_and_line_budget() {
+        let root = unique_test_directory("reader");
+        fs::create_dir_all(&root).expect("reader directory");
+        fs::write(
+            root.join("bridge-20260729.log"),
+            concat!(
+                "{\"timestamp_utc\":\"2026-07-29T12:34:56.789Z\",\"level\":\"info\",\"event_name\":\"first\",\"message\":null}\n",
+                "\n",
+                "{\"timestamp_utc\":\"2026-07-29T12:35:56.789Z\",\"level\":\"warning\",\"event_name\":\"second\",\"message\":\"detail\"}\n",
+                "raw fallback line\n",
+            ),
+        )
+        .expect("reader fixture");
+        fs::write(root.join("ignored.txt"), "must not be visible").expect("ignored fixture");
+        let reader = BridgeLogReader::new(&root).expect("reader");
+        let text = reader.read_recent_text(Some(2)).expect("recent text");
+        assert!(!text.contains("first"));
+        assert!(text.contains("[警告]  second  detail"));
+        assert!(text.ends_with("raw fallback line"));
+        assert!(!text.contains("must not be visible"));
+        fs::remove_dir_all(root).expect("remove reader fixture");
+    }
+
+    #[test]
+    fn recent_log_reader_uses_the_same_empty_state_as_dotnet() {
+        let root = unique_test_directory("reader-empty");
+        let reader = BridgeLogReader::new(&root).expect("reader");
+        assert_eq!(
+            reader.read_recent_text(None).expect("empty state"),
+            "暂无日志。"
+        );
     }
 
     fn logger(root: impl AsRef<Path>, max_file_bytes: u64, retained_files: usize) -> BridgeLogger {

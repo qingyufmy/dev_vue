@@ -896,6 +896,7 @@ version = "3.0.0-alpha.1"
 dependencies = [
  "bridge-foundation",
  "bridge-local-control",
+ "bridge-observability",
  "bridge-ui-model",
  "tokio",
  "windows-sys 0.61.2",
