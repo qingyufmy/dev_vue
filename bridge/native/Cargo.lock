@@ -195,6 +195,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-ui-model"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "bridge-foundation",
+ "bridge-local-control",
+]
+
+[[package]]
 name = "bridge-worker-host"
 version = "3.0.0-alpha.1"
 dependencies = [

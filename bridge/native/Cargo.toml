@@ -14,6 +14,7 @@ members = [
   "crates/bridge-terminal-data",
   "crates/bridge-terminal-session",
   "crates/bridge-transport",
+  "crates/bridge-ui-model",
   "crates/bridge-worker-host",
 ]
 resolver = "3"
