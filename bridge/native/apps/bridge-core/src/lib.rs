@@ -1263,6 +1263,7 @@ impl NativeRuntimeStatusSnapshot {
             // role is carried into Core state; ordinary users must never see observer controls.
             can_manage_observer_sources: false,
             is_administrator: false,
+            observer_sources: Vec::new(),
             observer_profiles: Vec::new(),
             update_notice: None,
             autostart_enabled: false,
@@ -1387,6 +1388,7 @@ impl NativeRuntimeStatusHandle {
             // receives administrator observer controls.
             can_manage_observer_sources: false,
             is_administrator: false,
+            observer_sources: Vec::new(),
             observer_profiles: Vec::new(),
             update_notice: None,
             autostart_enabled: false,

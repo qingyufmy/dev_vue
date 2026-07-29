@@ -95,6 +95,61 @@ async fn refresh_ticket_hello_heartbeat_and_binary_rejection_work_end_to_end() {
 }
 
 #[tokio::test]
+async fn administrator_observer_sources_are_refreshed_and_validated() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("observer source bind");
+    let address = listener.local_addr().expect("observer source address");
+    let server = tokio::spawn(async move {
+        let refresh = read_http_request(listener.accept().await.expect("refresh accept").0).await;
+        assert!(
+            refresh
+                .1
+                .starts_with("POST /api/auth/bridge-refresh HTTP/1.1")
+        );
+        write_http_json(
+            refresh,
+            r#"{"ok":true,"token":"access_fixture","refreshExpiresInSeconds":3600,"bridgeRole":"admin"}"#,
+        )
+        .await;
+        let sources = read_http_request(listener.accept().await.expect("sources accept").0).await;
+        assert!(
+            sources
+                .1
+                .starts_with("POST /api/auth/bridge-observer-sources HTTP/1.1")
+        );
+        assert!(
+            sources
+                .1
+                .to_ascii_lowercase()
+                .contains("authorization: bearer access_fixture")
+        );
+        write_http_json(
+            sources,
+            r#"{"ok":true,"sources":[{"bridge_user_id":29,"email":"source@example.com","nickname":"观摩账户","source_id":5,"source_name":"黄金默认行情","source_status":"enabled","trading_account_id":9,"login_account":"596520","broker_server":"DooTechnology-Demo"}]}"#,
+        )
+        .await;
+    });
+    let endpoints = ServerEndpoints::normalize(&format!("http://{address}/"), "ws://127.0.0.1:1/")
+        .expect("observer source endpoints");
+    let auth = BridgeAuthClient::new(endpoints, "LiangJian-Bridge-Native-Test/4")
+        .expect("observer source client");
+    let access = auth
+        .managed_observer_access("refresh_fixture")
+        .await
+        .expect("managed observer access");
+    assert_eq!(access.bridge_role, "admin");
+    assert_eq!(access.sources.len(), 1);
+    assert_eq!(access.sources[0].bridge_user_id, 29);
+    assert_eq!(access.sources[0].display_name(), "黄金默认行情");
+    assert_eq!(
+        access.sources[0].account_summary(),
+        "596520 · DooTechnology-Demo"
+    );
+    server.await.expect("observer source server");
+}
+
+#[tokio::test]
 async fn auth_preserves_stable_api_codes_and_rejects_html_error_pages() {
     let code = acquire_error_code(
         "HTTP/1.1 503 Service Unavailable",

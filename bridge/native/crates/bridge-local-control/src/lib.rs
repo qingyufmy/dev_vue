@@ -252,6 +252,7 @@ pub struct UiStateSnapshot {
     pub bridge_version: String,
     pub can_manage_observer_sources: bool,
     pub is_administrator: bool,
+    pub observer_sources: Vec<UiObserverSource>,
     pub observer_profiles: Vec<UiObserverProfile>,
     pub update_notice: Option<UiUpdateNotice>,
     pub autostart_enabled: bool,
@@ -324,10 +325,12 @@ impl UiStateSnapshot {
             || !valid_timestamp(self.last_data_sync_utc_msc, self.observed_at_utc_msc)
             || !valid_text(&self.bridge_version, 64)
             || self.observer_profiles.len() > MAX_OBSERVER_PROFILES
+            || self.observer_sources.len() > MAX_OBSERVER_PROFILES
             || (self.can_manage_observer_sources
                 && (!self.is_administrator || self.profile_id != DEFAULT_PROFILE_ID))
             || (!self.can_manage_observer_sources && !self.observer_profiles.is_empty())
             || (self.is_administrator && self.profile_id != DEFAULT_PROFILE_ID)
+            || (!self.is_administrator && !self.observer_sources.is_empty())
         {
             return Err("bridge_local_control_state_invalid");
         }
@@ -358,6 +361,14 @@ impl UiStateSnapshot {
         }) {
             return Err("bridge_local_control_state_invalid");
         }
+        let mut source_ids = BTreeSet::new();
+        if self
+            .observer_sources
+            .iter()
+            .any(|source| !source.validate() || !source_ids.insert(source.bridge_user_id))
+        {
+            return Err("bridge_local_control_state_invalid");
+        }
         if self
             .update_notice
             .as_ref()
@@ -366,6 +377,22 @@ impl UiStateSnapshot {
             return Err("bridge_local_control_state_invalid");
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiObserverSource {
+    pub bridge_user_id: i64,
+    pub display_name: String,
+    pub account_summary: String,
+}
+
+impl UiObserverSource {
+    fn validate(&self) -> bool {
+        self.bridge_user_id > 0
+            && valid_text(&self.display_name, 256)
+            && valid_text(&self.account_summary, 256)
     }
 }
 
@@ -634,6 +661,7 @@ mod tests {
             bridge_version: "3.0.0-alpha.1".to_owned(),
             can_manage_observer_sources: false,
             is_administrator: false,
+            observer_sources: Vec::new(),
             observer_profiles: Vec::new(),
             update_notice: None,
             autostart_enabled: true,

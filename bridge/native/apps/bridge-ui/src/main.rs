@@ -92,7 +92,7 @@ const WM_TRAY: u32 = WM_APP + 3;
 
 #[derive(Clone)]
 enum UiMessage {
-    State(Result<UiStateSnapshot, String>),
+    State(Box<Result<UiStateSnapshot, String>>),
     Action {
         action: LocalControlAction,
         result: Result<LocalControlResult, String>,
@@ -224,7 +224,9 @@ fn main() {
 
 #[cfg(debug_assertions)]
 fn demo_state(profile_id: &str) -> UiStateSnapshot {
-    use bridge_local_control::{UiObserverProfile, UiTerminalCandidate, UiTerminalStatus};
+    use bridge_local_control::{
+        UiObserverProfile, UiObserverSource, UiTerminalCandidate, UiTerminalStatus,
+    };
 
     UiStateSnapshot {
         schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
@@ -277,6 +279,11 @@ fn demo_state(profile_id: &str) -> UiStateSnapshot {
         bridge_version: "3.0.0".to_owned(),
         can_manage_observer_sources: true,
         is_administrator: true,
+        observer_sources: vec![UiObserverSource {
+            bridge_user_id: 9,
+            display_name: "一号观摩源".to_owned(),
+            account_summary: "596520 · DooTechnology-Demo".to_owned(),
+        }],
         observer_profiles: vec![UiObserverProfile {
             observer_profile_id: "source-1".to_owned(),
             platform: Some("mt5".to_owned()),
@@ -326,6 +333,7 @@ fn initial_state(profile_id: &str) -> UiStateSnapshot {
         bridge_version: env!("CARGO_PKG_VERSION").to_owned(),
         can_manage_observer_sources: false,
         is_administrator: false,
+        observer_sources: Vec::new(),
         observer_profiles: Vec::new(),
         update_notice: None,
         autostart_enabled: false,
@@ -1576,7 +1584,7 @@ unsafe fn begin_state_poll(hwnd: HWND, app: &AppState) {
             _ => Err("bridge_local_control_response_invalid".to_owned()),
         });
         if let Ok(mut messages) = inbox.messages.lock() {
-            messages.push_back(UiMessage::State(result));
+            messages.push_back(UiMessage::State(Box::new(result)));
         }
         inbox.poll_running.store(false, Ordering::Release);
         unsafe { PostMessageW(hwnd_value as HWND, WM_STATE_READY, 0, 0) };
@@ -1651,9 +1659,10 @@ unsafe fn receive_background_message(hwnd: HWND, app: &mut AppState) {
         }
     }
     match message {
-        Some(UiMessage::State(Ok(state))) => {
-            if let Ok(view) =
-                build_main_window_view(&state, &app.busy_observer_profiles, format_local_time)
+        Some(UiMessage::State(result)) => {
+            if let Ok(state) = *result
+                && let Ok(view) =
+                    build_main_window_view(&state, &app.busy_observer_profiles, format_local_time)
             {
                 app.state = state;
                 app.view = view;
@@ -1683,7 +1692,7 @@ unsafe fn receive_background_message(hwnd: HWND, app: &mut AppState) {
         | Some(UiMessage::Action {
             result: Err(code), ..
         }) => show_error(hwnd, &code),
-        Some(UiMessage::State(Err(_))) | None => {}
+        None => {}
         Some(UiMessage::Action { result: Ok(_), .. }) => {}
     }
 }

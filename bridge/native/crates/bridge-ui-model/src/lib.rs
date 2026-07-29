@@ -778,6 +778,7 @@ mod tests {
             bridge_version: "3.0.0".to_owned(),
             can_manage_observer_sources: false,
             is_administrator: false,
+            observer_sources: Vec::new(),
             observer_profiles: Vec::new(),
             update_notice: None,
             autostart_enabled: false,

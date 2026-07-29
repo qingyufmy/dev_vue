@@ -425,6 +425,71 @@ pub struct SessionBootstrap {
     pub ticket: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedObserverSource {
+    pub bridge_user_id: i64,
+    pub email: String,
+    pub nickname: Option<String>,
+    pub source_id: Option<i64>,
+    pub source_name: Option<String>,
+    pub source_status: Option<String>,
+    pub trading_account_id: Option<i64>,
+    pub login_account: Option<String>,
+    pub broker_server: Option<String>,
+}
+
+impl ManagedObserverSource {
+    pub fn display_name(&self) -> &str {
+        self.source_name
+            .as_deref()
+            .or(self.nickname.as_deref())
+            .unwrap_or(&self.email)
+    }
+
+    pub fn account_summary(&self) -> String {
+        match (self.login_account.as_deref(), self.broker_server.as_deref()) {
+            (None, _) => "首次连接后自动识别交易账户".to_owned(),
+            (Some(login), Some(server)) if !server.trim().is_empty() => {
+                format!("{login} · {server}")
+            }
+            (Some(login), _) => login.to_owned(),
+        }
+    }
+
+    fn validate(&self) -> bool {
+        self.bridge_user_id > 0
+            && valid_api_text(&self.email, 320)
+            && self
+                .nickname
+                .as_deref()
+                .is_none_or(|value| valid_api_text(value, 256))
+            && self.source_id.is_none_or(|value| value > 0)
+            && self
+                .source_name
+                .as_deref()
+                .is_none_or(|value| valid_api_text(value, 256))
+            && self
+                .source_status
+                .as_deref()
+                .is_none_or(|value| valid_api_text(value, 64))
+            && self.trading_account_id.is_none_or(|value| value > 0)
+            && self
+                .login_account
+                .as_deref()
+                .is_none_or(|value| valid_api_text(value, 64))
+            && self
+                .broker_server
+                .as_deref()
+                .is_none_or(|value| valid_api_text(value, 128))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedObserverAccess {
+    pub bridge_role: String,
+    pub sources: Vec<ManagedObserverSource>,
+}
+
 pub struct BridgeAuthClient {
     client: reqwest::Client,
     endpoints: ServerEndpoints,
@@ -479,6 +544,56 @@ impl BridgeAuthClient {
             refresh_expires_in_seconds: refresh.refresh_expires_in_seconds,
             bridge_role: refresh.bridge_role,
             ticket: ticket.ticket,
+        })
+    }
+
+    pub async fn managed_observer_access(
+        &self,
+        refresh_token: &str,
+    ) -> Result<ManagedObserverAccess, TransportError> {
+        if refresh_token.trim().is_empty() || refresh_token.len() > 16_384 {
+            return Err(TransportError::new("bridge_not_paired"));
+        }
+        let refresh: RefreshResponse = self
+            .post_json(
+                "/api/auth/bridge-refresh",
+                &serde_json::json!({ "refreshToken": refresh_token }),
+                None,
+            )
+            .await?;
+        if refresh.token.trim().is_empty()
+            || refresh.refresh_expires_in_seconds == 0
+            || !matches!(refresh.bridge_role.as_str(), "user" | "admin")
+        {
+            return Err(TransportError::new("bridge_refresh_response_invalid"));
+        }
+        if refresh.bridge_role != "admin" {
+            return Ok(ManagedObserverAccess {
+                bridge_role: refresh.bridge_role,
+                sources: Vec::new(),
+            });
+        }
+        let response: ObserverSourcesResponse = self
+            .post_json(
+                "/api/auth/bridge-observer-sources",
+                &serde_json::json!({}),
+                Some(&refresh.token),
+            )
+            .await?;
+        let mut source_ids = std::collections::BTreeSet::new();
+        if response.sources.len() > 64
+            || response
+                .sources
+                .iter()
+                .any(|source| !source.validate() || !source_ids.insert(source.bridge_user_id))
+        {
+            return Err(TransportError::new(
+                "bridge_observer_sources_response_invalid",
+            ));
+        }
+        Ok(ManagedObserverAccess {
+            bridge_role: refresh.bridge_role,
+            sources: response.sources,
         })
     }
 
@@ -584,6 +699,47 @@ struct RefreshResponse {
 #[derive(Deserialize)]
 struct TicketResponse {
     ticket: String,
+}
+
+#[derive(Deserialize)]
+struct ObserverSourcesResponse {
+    sources: Vec<ManagedObserverSource>,
+}
+
+impl<'de> Deserialize<'de> for ManagedObserverSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireSource {
+            bridge_user_id: i64,
+            email: String,
+            nickname: Option<String>,
+            source_id: Option<i64>,
+            source_name: Option<String>,
+            source_status: Option<String>,
+            trading_account_id: Option<i64>,
+            login_account: Option<String>,
+            broker_server: Option<String>,
+        }
+        let source = WireSource::deserialize(deserializer)?;
+        Ok(Self {
+            bridge_user_id: source.bridge_user_id,
+            email: source.email,
+            nickname: source.nickname,
+            source_id: source.source_id,
+            source_name: source.source_name,
+            source_status: source.source_status,
+            trading_account_id: source.trading_account_id,
+            login_account: source.login_account,
+            broker_server: source.broker_server,
+        })
+    }
+}
+
+fn valid_api_text(value: &str, maximum: usize) -> bool {
+    !value.trim().is_empty() && value.len() <= maximum && !value.chars().any(char::is_control)
 }
 
 type BridgeSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;

@@ -6,8 +6,8 @@ use bridge_foundation::{
 };
 use bridge_local_control::{
     EndpointSettingsSelection, LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction,
-    LocalControlPipeServer, LocalControlResponse, LocalControlResult, UiStateSnapshot,
-    UiStateStore, UiTerminalCandidate,
+    LocalControlPipeServer, LocalControlResponse, LocalControlResult, UiObserverSource,
+    UiStateSnapshot, UiStateStore, UiTerminalCandidate,
 };
 use bridge_observability::{BridgeLogger, LoggerConfig};
 use bridge_preferences::{BridgePreferencesStore, BridgeUserPreferences};
@@ -18,8 +18,8 @@ use bridge_runtime_win::{
 use bridge_security_win::CredentialStore;
 use bridge_terminal_session::TerminalSessionState;
 use bridge_transport::{
-    ConnectionState, CredentialSource, ENDPOINT_SETTINGS_FILE_NAME, ServerEndpoints,
-    SessionCancellation, clear_endpoint_settings, load_packaged_server_endpoints,
+    BridgeAuthClient, ConnectionState, CredentialSource, ENDPOINT_SETTINGS_FILE_NAME,
+    ServerEndpoints, SessionCancellation, clear_endpoint_settings, load_packaged_server_endpoints,
     resolve_server_endpoints, save_endpoint_settings, test_server_endpoints,
 };
 use liangjian_bridge_core::{
@@ -32,10 +32,11 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::watch;
+use tokio::sync::{Mutex as AsyncMutex, watch};
 use tokio::time::Instant;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const ADMINISTRATOR_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 enum ProfileRuntimeTrigger {
     Completed(Result<(), liangjian_bridge_core::CoreBootstrapError>),
@@ -88,6 +89,119 @@ struct RuntimeStatusMonitorContext {
     ui_state: UiStateStore,
     preferences_store: BridgePreferencesStore,
     logger: BridgeLogger,
+}
+
+#[derive(Default)]
+struct AdministratorCache {
+    is_administrator: bool,
+    observer_sources: Vec<UiObserverSource>,
+    last_refresh: Option<Instant>,
+    last_error_code: Option<String>,
+    refresh_in_progress: bool,
+    generation: u64,
+}
+
+impl AdministratorCache {
+    fn schedule_refresh(&mut self, profile_id: &str) -> Option<u64> {
+        if profile_id != DEFAULT_PROFILE_ID
+            || self.refresh_in_progress
+            || self
+                .last_refresh
+                .is_some_and(|value| value.elapsed() < ADMINISTRATOR_REFRESH_INTERVAL)
+        {
+            return None;
+        }
+        self.refresh_in_progress = true;
+        self.last_refresh = Some(Instant::now());
+        Some(self.generation)
+    }
+
+    fn complete_refresh(
+        &mut self,
+        generation: u64,
+        result: Result<(bool, Vec<UiObserverSource>), String>,
+        logger: &BridgeLogger,
+    ) {
+        if generation != self.generation {
+            return;
+        }
+        self.refresh_in_progress = false;
+        match result {
+            Ok((is_administrator, observer_sources)) => {
+                self.is_administrator = is_administrator;
+                self.observer_sources = observer_sources;
+                self.last_error_code = None;
+            }
+            Err(code) => self.log_refresh_error(logger, &code),
+        }
+    }
+
+    fn decorate(&self, profile_id: &str, state: &mut UiStateSnapshot) {
+        if profile_id != DEFAULT_PROFILE_ID {
+            return;
+        }
+        state.is_administrator = self.is_administrator;
+        state.observer_sources = if self.is_administrator {
+            self.observer_sources.clone()
+        } else {
+            Vec::new()
+        };
+        // Keep the existing .NET observer-management surface hidden until every original
+        // dialog action has a real native backend. A partially wired replacement is not shown.
+        state.can_manage_observer_sources = false;
+    }
+
+    fn clear(&mut self) {
+        self.generation = self.generation.saturating_add(1);
+        self.is_administrator = false;
+        self.observer_sources.clear();
+        self.last_refresh = None;
+        self.last_error_code = None;
+        self.refresh_in_progress = false;
+    }
+
+    fn log_refresh_error(&mut self, logger: &BridgeLogger, code: &str) {
+        if self.last_error_code.as_deref() != Some(code) {
+            logger.warning("native_administrator_refresh_failed", Some(code));
+            self.last_error_code = Some(code.to_owned());
+        }
+    }
+}
+
+async fn refresh_administrator_access(
+    application_directory: &std::path::Path,
+    root_data_directory: &std::path::Path,
+    credential_store: &CredentialStore,
+) -> Result<(bool, Vec<UiObserverSource>), String> {
+    let Some(credential) = credential_store
+        .load()
+        .map_err(|error| error.code().to_owned())?
+    else {
+        return Ok((false, Vec::new()));
+    };
+    let endpoints = resolve_server_endpoints(application_directory, root_data_directory)
+        .map_err(|error| error.code().to_owned())?;
+    let client = BridgeAuthClient::new(endpoints, &format!("LiangJianBridge/{VERSION}"))
+        .map_err(|error| error.code().to_owned())?;
+    let access = client
+        .managed_observer_access(&credential.refresh_token)
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    let is_administrator = access.bridge_role == "admin";
+    let observer_sources = if is_administrator {
+        access
+            .sources
+            .into_iter()
+            .map(|source| UiObserverSource {
+                bridge_user_id: source.bridge_user_id,
+                display_name: source.display_name().to_owned(),
+                account_summary: source.account_summary(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok((is_administrator, observer_sources))
 }
 
 fn main() {
@@ -335,6 +449,7 @@ async fn run_local_control_server(
         "native_local_control_started",
         Some(&format!("profile={}", server.endpoint().profile_id())),
     );
+    let administrator_cache = Arc::new(AsyncMutex::new(AdministratorCache::default()));
     loop {
         let accepted = tokio::select! {
             result = server.accept() => result,
@@ -368,9 +483,38 @@ async fn run_local_control_server(
             let exit_requested = matches!(&request.action, LocalControlAction::BridgeExit);
             let result = match request.action {
                 LocalControlAction::GetState => match ui_state.snapshot() {
-                    Ok(state) => LocalControlResult::State {
-                        state: Box::new(state),
-                    },
+                    Ok(mut state) => {
+                        let refresh_generation = {
+                            let mut cache = administrator_cache.lock().await;
+                            let refresh_generation =
+                                cache.schedule_refresh(server.endpoint().profile_id());
+                            cache.decorate(server.endpoint().profile_id(), &mut state);
+                            refresh_generation
+                        };
+                        if let Some(refresh_generation) = refresh_generation {
+                            let cache = Arc::clone(&administrator_cache);
+                            let application_directory = application_directory.clone();
+                            let root_data_directory = root_data_directory.clone();
+                            let credential_store = credential_store.clone();
+                            let logger = logger.clone();
+                            tokio::spawn(async move {
+                                let result = refresh_administrator_access(
+                                    &application_directory,
+                                    &root_data_directory,
+                                    &credential_store,
+                                )
+                                .await;
+                                cache.lock().await.complete_refresh(
+                                    refresh_generation,
+                                    result,
+                                    &logger,
+                                );
+                            });
+                        }
+                        LocalControlResult::State {
+                            state: Box::new(state),
+                        }
+                    }
                     Err(code) => LocalControlResult::Rejected {
                         code: code.to_owned(),
                     },
@@ -388,7 +532,10 @@ async fn run_local_control_server(
                     }
                 }
                 LocalControlAction::Logout => match credential_store.clear() {
-                    Ok(()) => LocalControlResult::Accepted,
+                    Ok(()) => {
+                        administrator_cache.lock().await.clear();
+                        LocalControlResult::Accepted
+                    }
                     Err(error) => LocalControlResult::Rejected {
                         code: error.code().to_owned(),
                     },
@@ -437,7 +584,12 @@ async fn run_local_control_server(
                     LocalControlResult::Accepted
                 }
                 LocalControlAction::SettingsTest { settings } => {
-                    if !endpoint_settings_allowed(&ui_state, server.endpoint().profile_id()) {
+                    let is_administrator = administrator_cache.lock().await.is_administrator;
+                    if !endpoint_settings_allowed(
+                        &ui_state,
+                        server.endpoint().profile_id(),
+                        is_administrator,
+                    ) {
                         LocalControlResult::Rejected {
                             code: "bridge_endpoint_settings_forbidden".to_owned(),
                         }
@@ -463,7 +615,12 @@ async fn run_local_control_server(
                     }
                 }
                 LocalControlAction::SettingsSave { settings } => {
-                    if !endpoint_settings_allowed(&ui_state, server.endpoint().profile_id()) {
+                    let is_administrator = administrator_cache.lock().await.is_administrator;
+                    if !endpoint_settings_allowed(
+                        &ui_state,
+                        server.endpoint().profile_id(),
+                        is_administrator,
+                    ) {
                         LocalControlResult::Rejected {
                             code: "bridge_endpoint_settings_forbidden".to_owned(),
                         }
@@ -475,6 +632,9 @@ async fn run_local_control_server(
                             &settings,
                         ) {
                             Ok(control_changed) => {
+                                if control_changed {
+                                    administrator_cache.lock().await.clear();
+                                }
                                 signal_preference_change(&preference_change_sender);
                                 logger.info(
                                     "native_endpoint_settings_saved",
@@ -496,7 +656,12 @@ async fn run_local_control_server(
                     }
                 }
                 LocalControlAction::SettingsRestoreOfficial => {
-                    if !endpoint_settings_allowed(&ui_state, server.endpoint().profile_id()) {
+                    let is_administrator = administrator_cache.lock().await.is_administrator;
+                    if !endpoint_settings_allowed(
+                        &ui_state,
+                        server.endpoint().profile_id(),
+                        is_administrator,
+                    ) {
                         LocalControlResult::Rejected {
                             code: "bridge_endpoint_settings_forbidden".to_owned(),
                         }
@@ -511,6 +676,9 @@ async fn run_local_control_server(
                             )
                         }) {
                             Ok(control_changed) => {
+                                if control_changed {
+                                    administrator_cache.lock().await.clear();
+                                }
                                 signal_preference_change(&preference_change_sender);
                                 logger.info(
                                     "native_endpoint_settings_restored",
@@ -875,14 +1043,23 @@ fn apply_autostart_selection(
     Ok(())
 }
 
-fn endpoint_settings_allowed(ui_state: &UiStateStore, profile_id: &str) -> bool {
-    ui_state
-        .snapshot()
-        .is_ok_and(|state| endpoint_settings_allowed_for_state(profile_id, &state))
+fn endpoint_settings_allowed(
+    ui_state: &UiStateStore,
+    profile_id: &str,
+    cached_administrator: bool,
+) -> bool {
+    ui_state.snapshot().is_ok_and(|state| {
+        endpoint_settings_allowed_for_state(profile_id, &state, cached_administrator)
+    })
 }
 
-fn endpoint_settings_allowed_for_state(profile_id: &str, state: &UiStateSnapshot) -> bool {
-    profile_id == DEFAULT_PROFILE_ID && (state.is_administrator || !state.server_connected)
+fn endpoint_settings_allowed_for_state(
+    profile_id: &str,
+    state: &UiStateSnapshot,
+    cached_administrator: bool,
+) -> bool {
+    profile_id == DEFAULT_PROFILE_ID
+        && (state.is_administrator || cached_administrator || !state.server_connected)
 }
 
 fn resolve_endpoint_selection(
@@ -1084,6 +1261,7 @@ fn publish_selection_ui_state(
         bridge_version: VERSION.to_owned(),
         can_manage_observer_sources: false,
         is_administrator: false,
+        observer_sources: Vec::new(),
         observer_profiles: Vec::new(),
         update_notice: None,
         autostart_enabled: preferences.auto_start_enabled,
@@ -1394,19 +1572,69 @@ mod tests {
         .expect("UI state");
         assert!(endpoint_settings_allowed_for_state(
             DEFAULT_PROFILE_ID,
-            &state
+            &state,
+            false,
         ));
-        assert!(!endpoint_settings_allowed_for_state("source-1", &state));
+        assert!(!endpoint_settings_allowed_for_state(
+            "source-1", &state, true,
+        ));
         state.server_connected = true;
         assert!(!endpoint_settings_allowed_for_state(
             DEFAULT_PROFILE_ID,
-            &state
+            &state,
+            false,
+        ));
+        assert!(endpoint_settings_allowed_for_state(
+            DEFAULT_PROFILE_ID,
+            &state,
+            true,
         ));
         state.is_administrator = true;
         assert!(endpoint_settings_allowed_for_state(
             DEFAULT_PROFILE_ID,
-            &state
+            &state,
+            false,
         ));
+    }
+
+    #[test]
+    fn administrator_cache_only_decorates_the_default_profile_without_exposing_dead_actions() {
+        let mut state = NativeRuntimeStatusSnapshot::inactive(
+            DEFAULT_PROFILE_ID,
+            VERSION,
+            now_utc_msc(),
+            "starting",
+            "stopped",
+            None,
+        )
+        .expect("runtime status")
+        .to_ui_state(1)
+        .expect("UI state");
+        let cache = AdministratorCache {
+            is_administrator: true,
+            observer_sources: vec![UiObserverSource {
+                bridge_user_id: 9,
+                display_name: "一号观摩源".to_owned(),
+                account_summary: "596520 · DooTechnology-Demo".to_owned(),
+            }],
+            ..AdministratorCache::default()
+        };
+        cache.decorate(DEFAULT_PROFILE_ID, &mut state);
+        assert!(state.is_administrator);
+        assert_eq!(state.observer_sources.len(), 1);
+        assert!(!state.can_manage_observer_sources);
+        state
+            .validate(DEFAULT_PROFILE_ID)
+            .expect("decorated default state");
+
+        let mut observer_state = state.clone();
+        observer_state.profile_id = "source-1".to_owned();
+        observer_state.is_administrator = false;
+        observer_state.observer_sources.clear();
+        cache.decorate("source-1", &mut observer_state);
+        assert!(!observer_state.is_administrator);
+        assert!(observer_state.observer_sources.is_empty());
+        assert!(!observer_state.can_manage_observer_sources);
     }
 
     #[test]
