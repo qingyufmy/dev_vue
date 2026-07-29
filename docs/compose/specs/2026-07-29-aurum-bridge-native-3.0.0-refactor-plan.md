@@ -426,7 +426,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - 已完成异步 Worker supervisor：真实监控进程与通道健康，按 1/2/4/8/10 秒退避重启，稳定运行后清零失败计数，停止、被取代及异常退出均先撤销路由并终止 Job Object。
 - 已提供基于注册表的 `CommandWorker` 适配器，并将本地请求超时限制在服务器命令 deadline 以内。
 - 已完成最小 MT5 Python 只读 Worker、严格 `snapshot` / `quote` 操作、终端路径受控启动参数、账户身份逐请求复核、经纪商时间校准和注册表数据路由；Rust 测试通过真实 Python 子进程与 Windows 命名管道验证互操作。
-- 待完成 Core 轮询/增量同步、Worker 路径与账户切换恢复、凭据存储适配及真实服务器故障矩阵。
+- 已完成可由 Core 托管的轮询/增量同步协调器；待完成真实授权配置接线、Worker 路径与账户切换编排、凭据存储适配及真实服务器故障矩阵。
 
 交付门：断网、乱序、重复 ACK、超大包、HTML 错页和服务器重启不会丢高优先消息。
 
@@ -434,7 +434,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 - [进行中] 已拆出一终端一 Python Worker，并完成账户、报价、持仓和挂单只读 IPC；品种、K 线和历史分页留到后续数据批次。
 - [已完成] 报价经经纪商时区校准后输出 UTC；时钟未可信、账户改变、终端断开或返回数据无效时失败关闭。
-- [进行中] 已完成账户/持仓/挂单 data delta 的 Native 合同、revision/SQLite 最新投影/服务器 Outbox 原子提交，以及从 SQLite 恢复的快照投影器；投影器按 ticket 计算 upsert/delete，支持首次、epoch 变化、主动 reconciliation 和 gap 后 full snapshot。待接 Core 定时采集。
+- [已完成] 已完成账户/持仓/挂单 data delta 的 Native 合同、revision/SQLite 最新投影/服务器 Outbox 原子提交，以及从 SQLite 恢复的快照投影器；投影器按 ticket 计算 upsert/delete，支持首次、epoch 变化、主动 reconciliation 和 gap 后 full snapshot。采集协调器按空闲 1 秒、活跃 250 毫秒动态轮询，支持交易后唤醒、Worker 恢复退避、停止取消和投影前账户路由复核。
 - Worker 崩溃、MT5 重启、账户切换和路径切换恢复。
 
 交付门：页面数据满足现有服务器和产品功能合同，24 小时运行无串账户、无持续内存增长、历史响应不超限。
@@ -581,4 +581,4 @@ bridge/native/
 - 已完成当前用户 SID 限定的 Windows 命名管道和受 Job Object 管理的 Worker 启动会话；真实子进程启动、握手、交付及终止已经过本机测试。
 - 已完成 Worker 代际注册表、请求前后 fencing、崩溃自动重启及账户切换 supervisor 取代；真实测试覆盖了进程连续崩溃重启、客户端换代和两个账户不争抢同一终端路由。
 - 当前 Native Core 尚未接入真实凭据、服务器会话或 MT Worker，不会误执行生产交易。
-- 下一批接入 Core MT5 采集协调器：组合 WorkerDataRouter、SnapshotProjector 和 supervisor 生命周期，按活跃交易状态调节采集频率，并补账户切换与进程恢复测试。
+- 下一批接入 Core 终端会话编排：把 Worker supervisor、采集协调器和账户 epoch 生命周期组合起来，保证账户/平台/安装路径切换时旧采集器先停止、新路由完成初始 full snapshot 后再开放数据就绪状态。

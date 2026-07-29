@@ -10,4 +10,5 @@ bridge-contract = { path = "../bridge-contract" }
 bridge-store = { path = "../bridge-store" }
 bridge-worker-host = { path = "../bridge-worker-host" }
 serde_json.workspace = true
+tokio.workspace = true
 windows-sys.workspace = true

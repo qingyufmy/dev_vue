@@ -210,7 +210,7 @@ pub struct TerminalSnapshot {
 }
 
 impl TerminalSnapshot {
-    fn validate_for(
+    pub fn validate_for(
         &self,
         request: &SnapshotRequest,
         route: &WorkerRoute,

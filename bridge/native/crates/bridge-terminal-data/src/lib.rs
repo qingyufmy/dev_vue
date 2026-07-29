@@ -1,3 +1,10 @@
+mod collector;
+
+pub use collector::{
+    CollectorHandle, CollectorLifecycleState, CollectorPolicy, CollectorStatus, SnapshotCollector,
+    SnapshotSource,
+};
+
 use bridge_contract::DataDeltaMessage;
 use bridge_store::{
     OutboxStore, PersistDeltaResult, PersistDeltaStatus, StoreError, StoredStreamProjection,
@@ -345,6 +352,10 @@ fn collection_items(
 }
 
 fn new_message_id() -> Result<String, ProjectionError> {
+    new_random_id("delta_")
+}
+
+fn new_random_id(prefix: &str) -> Result<String, ProjectionError> {
     let mut bytes = [0_u8; 16];
     // SAFETY: BCryptGenRandom writes exactly the supplied mutable buffer length.
     let status = unsafe {
@@ -358,7 +369,7 @@ fn new_message_id() -> Result<String, ProjectionError> {
     if status != 0 {
         return Err(ProjectionError::new("terminal_projection_random_failed"));
     }
-    let mut message_id = String::from("delta_");
+    let mut message_id = String::from(prefix);
     for byte in bytes {
         write!(&mut message_id, "{byte:02x}")
             .map_err(|_| ProjectionError::new("terminal_projection_random_failed"))?;

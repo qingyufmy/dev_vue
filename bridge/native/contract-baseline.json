@@ -102,6 +102,17 @@
     "retry_after_counter_cap": true,
     "kill_process_tree_on_owner_exit": true
   },
+  "terminal_collection_contract": {
+    "streams": ["account", "positions", "orders"],
+    "active_interval_milliseconds": 250,
+    "idle_interval_milliseconds": 1000,
+    "retry_initial_milliseconds": 500,
+    "retry_max_milliseconds": 10000,
+    "post_command_wake_control_available": true,
+    "full_snapshot_reconciliation": true,
+    "account_route_revalidated_before_projection": true,
+    "worker_restart_is_retriable": true
+  },
   "server_transport_contract": {
     "protocol_version": 3,
     "websocket_path": "/aurum-api/bridge/v3/ws",

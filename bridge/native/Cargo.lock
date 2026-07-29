@@ -134,6 +134,7 @@ dependencies = [
  "bridge-store",
  "bridge-worker-host",
  "serde_json",
+ "tokio",
  "windows-sys 0.61.2",
 ]
 
