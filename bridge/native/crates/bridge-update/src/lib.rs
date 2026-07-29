@@ -1,7 +1,9 @@
+mod activation;
 mod coordinator;
 mod manifest;
 mod staging;
 
+pub use activation::{ReleaseActivationPointer, pending_launcher_handoff};
 pub use coordinator::{
     BridgeUpdateCoordinator, BridgeUpdateEnvironment, StagedRelease, UPDATE_CHECK_INTERVAL,
 };

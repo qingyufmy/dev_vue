@@ -17,7 +17,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, Notify, Semaphore};
 use tokio::time::timeout;
@@ -498,6 +498,26 @@ pub struct ManagedObserverCredential {
     pub refresh_expires_in_seconds: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaintenanceLeaseRequest {
+    pub installation_id: String,
+    pub target_version: String,
+    pub priority: String,
+    pub manual_request: bool,
+    pub terminal_instance_ids: Vec<String>,
+    pub observer_bridge_user_ids: Vec<i64>,
+    pub expected_downtime_seconds: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaintenanceLeaseDecision {
+    pub acquired: bool,
+    pub lease_id: Option<String>,
+    pub expires_at_utc_msc: Option<i64>,
+    pub reason_code: Option<String>,
+    pub retry_after_seconds: u32,
+}
+
 pub struct BridgeAuthClient {
     client: reqwest::Client,
     endpoints: ServerEndpoints,
@@ -660,6 +680,133 @@ impl BridgeAuthClient {
         })
     }
 
+    pub async fn acquire_maintenance_lease(
+        &self,
+        refresh_token: &str,
+        request: &MaintenanceLeaseRequest,
+    ) -> Result<MaintenanceLeaseDecision, TransportError> {
+        validate_maintenance_request(request)?;
+        let access_token = self.refresh_access_token(refresh_token).await?;
+        let response: MaintenanceLeaseResponse = self
+            .post_json(
+                "/api/bridge/v3/maintenance-leases",
+                &serde_json::json!({
+                    "installation_id": request.installation_id,
+                    "target_version": request.target_version,
+                    "priority": request.priority,
+                    "manual_request": request.manual_request,
+                    "terminal_instance_ids": request.terminal_instance_ids,
+                    "observer_bridge_user_ids": request.observer_bridge_user_ids,
+                    "expected_downtime_seconds": request.expected_downtime_seconds,
+                }),
+                Some(&access_token),
+            )
+            .await?;
+        let retry_after_seconds = response.retry_after_seconds.clamp(1, 300);
+        if response.acquired {
+            if !response
+                .lease_id
+                .as_deref()
+                .is_some_and(valid_maintenance_lease_id)
+                || response
+                    .expires_at_utc_msc
+                    .is_none_or(|value| value <= now_utc_msc())
+            {
+                return Err(TransportError::new(
+                    "bridge_maintenance_lease_response_invalid",
+                ));
+            }
+        } else if response
+            .reason_code
+            .as_deref()
+            .is_none_or(|code| !valid_protocol_code(code))
+        {
+            return Err(TransportError::new(
+                "bridge_maintenance_lease_response_invalid",
+            ));
+        }
+        Ok(MaintenanceLeaseDecision {
+            acquired: response.acquired,
+            lease_id: response.lease_id,
+            expires_at_utc_msc: response.expires_at_utc_msc,
+            reason_code: response.reason_code,
+            retry_after_seconds,
+        })
+    }
+
+    pub async fn renew_maintenance_lease(
+        &self,
+        refresh_token: &str,
+        lease_id: &str,
+    ) -> Result<i64, TransportError> {
+        if !valid_maintenance_lease_id(lease_id) {
+            return Err(TransportError::new("bridge_maintenance_lease_invalid"));
+        }
+        let access_token = self.refresh_access_token(refresh_token).await?;
+        let response: MaintenanceLeaseResponse = self
+            .post_json(
+                &format!("/api/bridge/v3/maintenance-leases/{lease_id}/renew"),
+                &serde_json::json!({}),
+                Some(&access_token),
+            )
+            .await?;
+        if response.renewed != Some(true)
+            || response.lease_id.as_deref() != Some(lease_id)
+            || response
+                .expires_at_utc_msc
+                .is_none_or(|value| value <= now_utc_msc())
+        {
+            return Err(TransportError::new(
+                "bridge_maintenance_lease_response_invalid",
+            ));
+        }
+        Ok(response.expires_at_utc_msc.expect("validated lease expiry"))
+    }
+
+    pub async fn release_maintenance_lease(
+        &self,
+        refresh_token: &str,
+        lease_id: &str,
+    ) -> Result<(), TransportError> {
+        if !valid_maintenance_lease_id(lease_id) {
+            return Err(TransportError::new("bridge_maintenance_lease_invalid"));
+        }
+        let access_token = self.refresh_access_token(refresh_token).await?;
+        let response: MaintenanceLeaseResponse = self
+            .post_json(
+                &format!("/api/bridge/v3/maintenance-leases/{lease_id}/release"),
+                &serde_json::json!({}),
+                Some(&access_token),
+            )
+            .await?;
+        if response.released != Some(true) || response.lease_id.as_deref() != Some(lease_id) {
+            return Err(TransportError::new(
+                "bridge_maintenance_lease_response_invalid",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn refresh_access_token(&self, refresh_token: &str) -> Result<String, TransportError> {
+        if refresh_token.trim().is_empty() || refresh_token.len() > 16_384 {
+            return Err(TransportError::new("bridge_not_paired"));
+        }
+        let refresh: RefreshResponse = self
+            .post_json(
+                "/api/auth/bridge-refresh",
+                &serde_json::json!({ "refreshToken": refresh_token }),
+                None,
+            )
+            .await?;
+        if refresh.token.trim().is_empty()
+            || refresh.refresh_expires_in_seconds == 0
+            || !matches!(refresh.bridge_role.as_str(), "user" | "admin")
+        {
+            return Err(TransportError::new("bridge_refresh_response_invalid"));
+        }
+        Ok(refresh.token)
+    }
+
     async fn post_json<T: for<'de> Deserialize<'de>>(
         &self,
         path: &str,
@@ -779,6 +926,93 @@ struct ManagedObserverCredentialResponse {
     refresh_token: String,
     #[serde(rename = "refreshExpiresInSeconds")]
     refresh_expires_in_seconds: u64,
+}
+
+#[derive(Deserialize)]
+struct MaintenanceLeaseResponse {
+    #[serde(default)]
+    acquired: bool,
+    #[serde(default)]
+    renewed: Option<bool>,
+    #[serde(default)]
+    released: Option<bool>,
+    #[serde(default)]
+    lease_id: Option<String>,
+    #[serde(default)]
+    expires_at_utc_msc: Option<i64>,
+    #[serde(default)]
+    reason_code: Option<String>,
+    #[serde(default = "default_maintenance_retry_seconds")]
+    retry_after_seconds: u32,
+}
+
+fn default_maintenance_retry_seconds() -> u32 {
+    5
+}
+
+fn validate_maintenance_request(request: &MaintenanceLeaseRequest) -> Result<(), TransportError> {
+    let mut terminal_ids = std::collections::BTreeSet::new();
+    let mut observer_ids = std::collections::BTreeSet::new();
+    if request.installation_id.len() < 16
+        || request.installation_id.len() > 128
+        || !request.installation_id.starts_with("install_")
+        || !request
+            .installation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        || !valid_release_version(&request.target_version)
+        || !matches!(request.priority.as_str(), "normal" | "urgent")
+        || request.terminal_instance_ids.is_empty()
+        || request.terminal_instance_ids.len() > 64
+        || request
+            .terminal_instance_ids
+            .iter()
+            .any(|value| !valid_managed_terminal_id(value) || !terminal_ids.insert(value))
+        || request.observer_bridge_user_ids.len() > 32
+        || request
+            .observer_bridge_user_ids
+            .iter()
+            .any(|value| *value <= 0 || !observer_ids.insert(*value))
+        || !(30..=300).contains(&request.expected_downtime_seconds)
+    {
+        return Err(TransportError::new("bridge_maintenance_request_invalid"));
+    }
+    Ok(())
+}
+
+fn valid_maintenance_lease_id(value: &str) -> bool {
+    value.starts_with("lease_")
+        && (8..=128).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn valid_release_version(value: &str) -> bool {
+    let components = value.split('.').collect::<Vec<_>>();
+    (2..=4).contains(&components.len())
+        && components.iter().all(|component| {
+            !component.is_empty()
+                && component.len() <= 10
+                && component.bytes().all(|byte| byte.is_ascii_digit())
+                && component.parse::<u32>().is_ok()
+        })
+}
+
+fn valid_protocol_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn now_utc_msc() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0)
 }
 
 fn valid_managed_terminal_id(value: &str) -> bool {
@@ -1617,6 +1851,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[derive(Default)]
     struct FakeOutbox {
@@ -1865,6 +2101,144 @@ mod tests {
             }
         );
         server.join().expect("probe server");
+    }
+
+    #[tokio::test]
+    async fn maintenance_lease_uses_fresh_bearer_tokens_and_exact_server_routes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("listener address");
+        let expiry = now_utc_msc() + 90_000;
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let server_requests = Arc::clone(&requests);
+        let server = tokio::spawn(async move {
+            let responses = [
+                serde_json::json!({
+                    "ok": true,
+                    "token": "access_01JMAINTENANCE",
+                    "refreshExpiresInSeconds": 3600,
+                    "bridgeRole": "user"
+                }),
+                serde_json::json!({
+                    "ok": true,
+                    "acquired": true,
+                    "lease_id": "lease_01JTESTLEASE",
+                    "expires_at_utc_msc": expiry
+                }),
+                serde_json::json!({
+                    "ok": true,
+                    "token": "access_01JMAINTENANCE",
+                    "refreshExpiresInSeconds": 3600,
+                    "bridgeRole": "user"
+                }),
+                serde_json::json!({
+                    "ok": true,
+                    "renewed": true,
+                    "lease_id": "lease_01JTESTLEASE",
+                    "expires_at_utc_msc": expiry
+                }),
+                serde_json::json!({
+                    "ok": true,
+                    "token": "access_01JMAINTENANCE",
+                    "refreshExpiresInSeconds": 3600,
+                    "bridgeRole": "user"
+                }),
+                serde_json::json!({
+                    "ok": true,
+                    "released": true,
+                    "lease_id": "lease_01JTESTLEASE"
+                }),
+            ];
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let request = read_http_request(&mut stream).await;
+                server_requests.lock().expect("requests").push(request);
+                let body = response.to_string();
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .expect("response");
+            }
+        });
+        let endpoints =
+            ServerEndpoints::from_server_url(&format!("http://{address}")).expect("endpoints");
+        let client = BridgeAuthClient::new(endpoints, "LiangJianBridge/test").expect("client");
+        let decision = client
+            .acquire_maintenance_lease(
+                "refresh_01JMAINTENANCE",
+                &MaintenanceLeaseRequest {
+                    installation_id: "install_0123456789abcdef0123456789abcdef".to_owned(),
+                    target_version: "3.1.0".to_owned(),
+                    priority: "normal".to_owned(),
+                    manual_request: false,
+                    terminal_instance_ids: vec!["mt5_terminal_01".to_owned()],
+                    observer_bridge_user_ids: Vec::new(),
+                    expected_downtime_seconds: 60,
+                },
+            )
+            .await
+            .expect("acquire");
+        assert!(decision.acquired);
+        assert_eq!(
+            client
+                .renew_maintenance_lease("refresh_01JMAINTENANCE", "lease_01JTESTLEASE")
+                .await
+                .expect("renew"),
+            expiry
+        );
+        client
+            .release_maintenance_lease("refresh_01JMAINTENANCE", "lease_01JTESTLEASE")
+            .await
+            .expect("release");
+        server.await.expect("server");
+        let requests = requests.lock().expect("requests");
+        assert_eq!(requests.len(), 6);
+        assert!(requests[0].starts_with("POST /api/auth/bridge-refresh HTTP/1.1"));
+        assert!(requests[1].starts_with("POST /api/bridge/v3/maintenance-leases HTTP/1.1"));
+        assert!(
+            requests[1]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer access_01jmaintenance")
+        );
+        assert!(requests[3].starts_with(
+            "POST /api/bridge/v3/maintenance-leases/lease_01JTESTLEASE/renew HTTP/1.1"
+        ));
+        assert!(requests[5].starts_with(
+            "POST /api/bridge/v3/maintenance-leases/lease_01JTESTLEASE/release HTTP/1.1"
+        ));
+    }
+
+    async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {
+        let mut payload = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let mut expected_length = None;
+        loop {
+            let read = stream.read(&mut buffer).await.expect("request read");
+            assert!(read > 0, "request closed before completion");
+            payload.extend_from_slice(&buffer[..read]);
+            if expected_length.is_none()
+                && let Some(header_end) = payload.windows(4).position(|value| value == b"\r\n\r\n")
+            {
+                let headers = String::from_utf8_lossy(&payload[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().expect("content length"))
+                    })
+                    .unwrap_or(0);
+                expected_length = Some(header_end + 4 + content_length);
+            }
+            if expected_length.is_some_and(|length| payload.len() >= length) {
+                return String::from_utf8(payload).expect("utf8 request");
+            }
+        }
     }
 
     #[test]

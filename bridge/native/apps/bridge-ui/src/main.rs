@@ -746,8 +746,41 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam == TIMER_POLL => {
             if !state.demo_mode {
+                let mut update_handoff = None;
+                let mut update_handoff_error = None;
                 if let Some(core_host) = state.core_host.as_mut() {
-                    let _ = core_host.poll();
+                    match core_host.poll() {
+                        Ok(core_host::CoreProcessPoll::UpdateHandoff(launcher)) => {
+                            update_handoff = Some(launcher);
+                        }
+                        Ok(
+                            core_host::CoreProcessPoll::Running | core_host::CoreProcessPoll::Idle,
+                        ) => {}
+                        Err(code @ "bridge_ui_update_handoff_invalid") => {
+                            update_handoff_error = Some(code);
+                        }
+                        Err(_) => {}
+                    }
+                }
+                if let Some(code) = update_handoff_error {
+                    if let Some(core_host) = state.core_host.as_mut() {
+                        core_host.disable_restart();
+                    }
+                    state.ui_instance.take();
+                    show_error(hwnd, code);
+                    unsafe { DestroyWindow(hwnd) };
+                    return 0;
+                }
+                if let Some(launcher) = update_handoff {
+                    if let Some(core_host) = state.core_host.as_mut() {
+                        core_host.disable_restart();
+                    }
+                    state.ui_instance.take();
+                    if let Err(code) = core_host::start_launcher(&launcher) {
+                        show_error(hwnd, code);
+                    }
+                    unsafe { DestroyWindow(hwnd) };
+                    return 0;
                 }
                 if let Some(ui_instance) = state.ui_instance.as_ref() {
                     match ui_instance.wait_for_signal(Duration::ZERO) {
@@ -2260,6 +2293,10 @@ fn show_error(hwnd: HWND, code: &str) {
         }
         "bridge_update_runtime_unavailable" => "当前运行方式不支持自动更新，请使用正式安装版本。",
         "bridge_update_not_ready" => "当前没有已下载并通过校验的更新。",
+        "bridge_ui_update_launcher_invalid" | "bridge_ui_update_handoff_invalid" => {
+            "更新启动信息无效，请重新打开量见智桥后再试。"
+        }
+        "bridge_ui_update_launcher_start_failed" => "无法启动更新程序，请手动重新打开量见智桥。",
         "update_state_invalid" | "update_state_io_failed" => {
             "更新状态暂时不可用，当前桥接和交易不受影响。"
         }

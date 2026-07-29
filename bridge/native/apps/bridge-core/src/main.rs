@@ -4,8 +4,8 @@ mod observer_terminal;
 use bridge_foundation::{
     CliMode, DEFAULT_PROFILE_ID, HealthCheckOptions, StartupReadyOptions, default_data_directory,
     default_root_data_directory, list_observer_profiles, parse_cli, profile_instance_id,
-    resolve_installed_root, resolve_profile_paths, run_health_check, write_runtime_status_snapshot,
-    write_startup_ready_signal,
+    read_runtime_status_snapshot, resolve_installed_root, resolve_profile_paths, run_health_check,
+    write_runtime_status_snapshot, write_startup_ready_signal,
 };
 use bridge_local_control::{
     EndpointSettingsSelection, LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction,
@@ -25,12 +25,14 @@ use bridge_store::{OutboxStore, TerminalBinding};
 use bridge_terminal_session::TerminalSessionState;
 use bridge_transport::{
     BridgeAuthClient, ConnectionState, CredentialSource, ENDPOINT_SETTINGS_FILE_NAME,
-    ManagedObserverSource, ServerEndpoints, SessionCancellation, clear_endpoint_settings,
-    load_packaged_server_endpoints, resolve_server_endpoints, save_endpoint_settings,
-    test_server_endpoints,
+    MaintenanceLeaseRequest, ManagedObserverSource, ServerEndpoints, SessionCancellation,
+    clear_endpoint_settings, load_packaged_server_endpoints, resolve_server_endpoints,
+    save_endpoint_settings, test_server_endpoints,
 };
 use bridge_update::{
-    BridgeUpdateCoordinator, BridgeUpdateStateStore, UPDATE_CHECK_INTERVAL, UPDATE_STATE_FILE_NAME,
+    BridgeUpdateCoordinator, BridgeUpdateStateStore, STATE_ACQUIRING_LEASE, STATE_ACTIVATING,
+    STATE_DRAINING, STATE_ROLLED_BACK, STATE_VERIFYING, STATE_WAITING_WINDOW, StagedRelease,
+    UPDATE_CHECK_INTERVAL, UPDATE_STATE_FILE_NAME,
 };
 use liangjian_bridge_core::{
     ActiveMt5Sessions, CoreConnectionState, CredentialState, NativeConnectedRuntime,
@@ -74,6 +76,7 @@ struct LocalControlContext {
     application_directory: PathBuf,
     root_data_directory: PathBuf,
     update_state_store: Option<BridgeUpdateStateStore>,
+    update_wake_sender: watch::Sender<u64>,
     stop: SessionCancellation,
     logger: BridgeLogger,
     observer_runtimes: Option<Arc<ObserverRuntimeManager>>,
@@ -113,6 +116,40 @@ struct RuntimeStatusMonitorContext {
     ui_state: UiStateStore,
     preferences_store: BridgePreferencesStore,
     logger: BridgeLogger,
+}
+
+struct UpdateCoordinatorContext {
+    application_directory: PathBuf,
+    root_data_directory: PathBuf,
+    credential_store: CredentialStore,
+    ui_state: UiStateStore,
+    stop: SessionCancellation,
+    logger: BridgeLogger,
+}
+
+struct ProfileLifecycleRuntime {
+    ready_file: Option<PathBuf>,
+    expected_terminal_instance_ids: Vec<String>,
+    update_state_store: Option<BridgeUpdateStateStore>,
+    stop: SessionCancellation,
+    ui_state: UiStateStore,
+    preferences_store: BridgePreferencesStore,
+    preference_change_receiver: watch::Receiver<u64>,
+}
+
+struct StartupReadyContext {
+    application_directory: PathBuf,
+    root_data_directory: PathBuf,
+    credential_store: CredentialStore,
+    update_state_store: Option<BridgeUpdateStateStore>,
+    logger: BridgeLogger,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UpdateRuntimeScope {
+    terminal_instance_ids: Vec<String>,
+    observer_bridge_user_ids: Vec<i64>,
+    primary_ready: bool,
 }
 
 struct ObserverRuntimeEntry {
@@ -509,13 +546,20 @@ async fn run_connected_profile(
         }
     }
     let (preference_change_sender, preference_change_receiver) = watch::channel(0_u64);
+    let (update_wake_sender, update_wake_receiver) = watch::channel(0_u64);
+    let lifecycle_update_state_store = update_state_store.clone();
     let update_task = update_coordinator.map(|coordinator| {
         tokio::spawn(run_periodic_update_checks(
             coordinator,
-            application_directory.clone(),
-            root_data_directory.clone(),
-            stop.clone(),
-            logger.clone(),
+            UpdateCoordinatorContext {
+                application_directory: application_directory.clone(),
+                root_data_directory: root_data_directory.clone(),
+                credential_store: credential_store.clone(),
+                ui_state: ui_state.clone(),
+                stop: stop.clone(),
+                logger: logger.clone(),
+            },
+            update_wake_receiver,
         ))
     });
     let control_stop = stop.clone();
@@ -529,6 +573,7 @@ async fn run_connected_profile(
             application_directory: application_directory.clone(),
             root_data_directory: root_data_directory.clone(),
             update_state_store,
+            update_wake_sender,
             stop: control_stop,
             logger: logger.clone(),
             observer_runtimes: observer_runtimes.clone(),
@@ -557,12 +602,15 @@ async fn run_connected_profile(
             profile_id: &profile_id,
             logger: &logger,
         },
-        ready_file,
-        expected_terminal_instance_ids,
-        stop.clone(),
-        ui_state.clone(),
-        preferences_store.clone(),
-        preference_change_receiver,
+        ProfileLifecycleRuntime {
+            ready_file,
+            expected_terminal_instance_ids,
+            update_state_store: lifecycle_update_state_store,
+            stop: stop.clone(),
+            ui_state: ui_state.clone(),
+            preferences_store: preferences_store.clone(),
+            preference_change_receiver,
+        },
     )
     .await;
     stop.cancel();
@@ -623,51 +671,551 @@ async fn run_connected_profile(
 
 async fn run_periodic_update_checks(
     mut coordinator: BridgeUpdateCoordinator,
-    application_directory: PathBuf,
-    root_data_directory: PathBuf,
-    stop: SessionCancellation,
-    logger: BridgeLogger,
+    context: UpdateCoordinatorContext,
+    mut update_wake_receiver: watch::Receiver<u64>,
 ) {
+    let UpdateCoordinatorContext {
+        application_directory,
+        root_data_directory,
+        credential_store,
+        ui_state,
+        stop,
+        logger,
+    } = context;
+    recover_interrupted_update(
+        &coordinator,
+        &application_directory,
+        &root_data_directory,
+        &credential_store,
+        &logger,
+    )
+    .await;
+    let mut next_check_at = Instant::now();
     loop {
-        let endpoints = match resolve_server_endpoints(&application_directory, &root_data_directory)
-        {
-            Ok(endpoints) => endpoints,
+        if stop.is_cancelled() {
+            return;
+        }
+        let state = match coordinator.load_state() {
+            Ok(state) => state,
             Err(error) => {
-                logger.warning("native_update_endpoint_unavailable", Some(error.code()));
-                if wait_for_update_interval(&stop).await {
-                    return;
-                }
-                continue;
+                logger.warning("native_update_state_read_failed", Some(error.code()));
+                None
             }
         };
-        let server_base = endpoints.control_base().clone();
-        let check = coordinator.check_and_stage(server_base);
-        let result = tokio::select! {
-            _ = stop.cancelled() => return,
-            result = check => result,
-        };
-        match result {
-            Ok(Some(staged)) => logger.info(
-                "native_update_staged",
-                Some(&format!(
-                    "version={};priority={}",
-                    staged.version, staged.priority
-                )),
-            ),
-            Ok(None) => {}
-            Err(error) => logger.warning("native_update_check_failed", Some(error.code())),
+        let activation_in_progress = state.as_ref().is_some_and(|state| {
+            matches!(
+                state.state.as_str(),
+                STATE_ACQUIRING_LEASE | STATE_DRAINING | STATE_ACTIVATING | STATE_VERIFYING
+            )
+        });
+        if !activation_in_progress && Instant::now() >= next_check_at {
+            match resolve_server_endpoints(&application_directory, &root_data_directory) {
+                Ok(endpoints) => {
+                    let check = coordinator.check_and_stage(endpoints.control_base().clone());
+                    let result = tokio::select! {
+                        _ = stop.cancelled() => return,
+                        result = check => result,
+                    };
+                    let check_succeeded = result.is_ok();
+                    match result {
+                        Ok(Some(staged)) => logger.info(
+                            "native_update_staged",
+                            Some(&format!(
+                                "version={};priority={}",
+                                staged.version, staged.priority
+                            )),
+                        ),
+                        Ok(None) => {}
+                        Err(error) => {
+                            logger.warning("native_update_check_failed", Some(error.code()))
+                        }
+                    }
+                    next_check_at = Instant::now()
+                        + if check_succeeded {
+                            UPDATE_CHECK_INTERVAL
+                        } else {
+                            Duration::from_secs(30)
+                        };
+                }
+                Err(error) => {
+                    logger.warning("native_update_endpoint_unavailable", Some(error.code()));
+                    next_check_at = Instant::now() + Duration::from_secs(30);
+                }
+            }
         }
-        if wait_for_update_interval(&stop).await {
-            return;
+        let state = coordinator.load_state().ok().flatten();
+        if state.as_ref().is_some_and(|state| {
+            state.state == STATE_WAITING_WINDOW
+                && state
+                    .next_retry_at_utc_msc
+                    .is_none_or(|retry| retry <= now_utc_msc())
+        }) {
+            let activation = try_apply_staged_update(
+                &coordinator,
+                &application_directory,
+                &root_data_directory,
+                &credential_store,
+                &ui_state,
+                &stop,
+                &logger,
+            );
+            match tokio::select! {
+                _ = stop.cancelled() => return,
+                result = activation => result,
+            } {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(code) => logger.warning("native_update_activation_failed", Some(&code)),
+            }
+        }
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            changed = update_wake_receiver.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
         }
     }
 }
 
-async fn wait_for_update_interval(stop: &SessionCancellation) -> bool {
-    tokio::select! {
-        _ = stop.cancelled() => true,
-        _ = tokio::time::sleep(UPDATE_CHECK_INTERVAL) => false,
+async fn recover_interrupted_update(
+    coordinator: &BridgeUpdateCoordinator,
+    application_directory: &std::path::Path,
+    root_data_directory: &std::path::Path,
+    credential_store: &CredentialStore,
+    logger: &BridgeLogger,
+) {
+    let Ok(Some(state)) = coordinator.load_state() else {
+        return;
+    };
+    if !matches!(
+        state.state.as_str(),
+        STATE_ACQUIRING_LEASE | STATE_DRAINING | STATE_ACTIVATING
+    ) {
+        return;
     }
+    if let Some(lease_id) = state.maintenance_lease_id.as_deref() {
+        release_maintenance_lease_best_effort(
+            application_directory,
+            root_data_directory,
+            credential_store,
+            lease_id,
+            logger,
+        )
+        .await;
+    }
+    match coordinator.restore_staged_release() {
+        Ok(Some(staged)) => {
+            if let Err(error) = coordinator.save_activation_phase(
+                &staged,
+                STATE_WAITING_WINDOW,
+                state.manual_activation_requested,
+                None,
+                None,
+                Some(now_utc_msc().saturating_add(15_000)),
+                Some("update_recovered_after_restart".to_owned()),
+            ) {
+                logger.warning("native_update_recovery_failed", Some(error.code()));
+            } else {
+                logger.info(
+                    "native_update_recovered_after_restart",
+                    Some(&format!("version={}", staged.version)),
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(error) => logger.warning("native_update_recovery_failed", Some(error.code())),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn try_apply_staged_update(
+    coordinator: &BridgeUpdateCoordinator,
+    application_directory: &std::path::Path,
+    root_data_directory: &std::path::Path,
+    credential_store: &CredentialStore,
+    ui_state: &UiStateStore,
+    stop: &SessionCancellation,
+    logger: &BridgeLogger,
+) -> Result<bool, String> {
+    let Some(state) = coordinator
+        .load_state()
+        .map_err(|error| error.code().to_owned())?
+    else {
+        return Ok(false);
+    };
+    if state.state != STATE_WAITING_WINDOW {
+        return Ok(false);
+    }
+    let Some(staged) = coordinator
+        .restore_staged_release()
+        .map_err(|error| error.code().to_owned())?
+    else {
+        return Ok(false);
+    };
+    let scope = match capture_update_runtime_scope(root_data_directory, ui_state) {
+        Ok(scope) => scope,
+        Err(code) => {
+            return defer_staged_update(
+                coordinator,
+                &staged,
+                state.manual_activation_requested,
+                15,
+                code,
+            );
+        }
+    };
+    if !scope.primary_ready || scope.terminal_instance_ids.is_empty() {
+        coordinator
+            .save_activation_phase(
+                &staged,
+                STATE_WAITING_WINDOW,
+                state.manual_activation_requested,
+                None,
+                None,
+                Some(now_utc_msc().saturating_add(15_000)),
+                Some(if scope.primary_ready {
+                    "bridge_update_no_connected_terminal".to_owned()
+                } else {
+                    "bridge_update_primary_not_ready".to_owned()
+                }),
+            )
+            .map_err(|error| error.code().to_owned())?;
+        return Ok(false);
+    }
+    let credential = match credential_store.load() {
+        Ok(Some(credential)) => credential,
+        Ok(None) => {
+            return defer_staged_update(
+                coordinator,
+                &staged,
+                state.manual_activation_requested,
+                30,
+                "bridge_not_paired".to_owned(),
+            );
+        }
+        Err(error) => {
+            return defer_staged_update(
+                coordinator,
+                &staged,
+                state.manual_activation_requested,
+                30,
+                error.code().to_owned(),
+            );
+        }
+    };
+    let endpoints = match resolve_server_endpoints(application_directory, root_data_directory) {
+        Ok(endpoints) => endpoints,
+        Err(error) => {
+            return defer_staged_update(
+                coordinator,
+                &staged,
+                state.manual_activation_requested,
+                30,
+                error.code().to_owned(),
+            );
+        }
+    };
+    let client = match BridgeAuthClient::new(endpoints, &format!("LiangJianBridge/{VERSION}")) {
+        Ok(client) => client,
+        Err(error) => {
+            return defer_staged_update(
+                coordinator,
+                &staged,
+                state.manual_activation_requested,
+                30,
+                error.code().to_owned(),
+            );
+        }
+    };
+    coordinator
+        .save_activation_phase(
+            &staged,
+            STATE_ACQUIRING_LEASE,
+            state.manual_activation_requested,
+            None,
+            None,
+            None,
+            None,
+        )
+        .map_err(|error| error.code().to_owned())?;
+    let decision = match client
+        .acquire_maintenance_lease(
+            &credential.refresh_token,
+            &MaintenanceLeaseRequest {
+                installation_id: coordinator.installation_id().to_owned(),
+                target_version: staged.version.clone(),
+                priority: staged.priority.clone(),
+                manual_request: state.manual_activation_requested,
+                terminal_instance_ids: scope.terminal_instance_ids.clone(),
+                observer_bridge_user_ids: scope.observer_bridge_user_ids,
+                expected_downtime_seconds: staged.minimum_idle_seconds.clamp(30, 300),
+            },
+        )
+        .await
+    {
+        Ok(decision) => decision,
+        Err(error) => {
+            let code = error.code().to_owned();
+            coordinator
+                .save_activation_phase(
+                    &staged,
+                    STATE_WAITING_WINDOW,
+                    state.manual_activation_requested,
+                    None,
+                    None,
+                    Some(now_utc_msc().saturating_add(30_000)),
+                    Some(code.clone()),
+                )
+                .map_err(|error| error.code().to_owned())?;
+            return Err(code);
+        }
+    };
+    if !decision.acquired {
+        let retry_seconds = decision.retry_after_seconds.clamp(1, 300);
+        coordinator
+            .save_activation_phase(
+                &staged,
+                STATE_WAITING_WINDOW,
+                state.manual_activation_requested,
+                None,
+                None,
+                Some(now_utc_msc().saturating_add(i64::from(retry_seconds).saturating_mul(1_000))),
+                decision
+                    .reason_code
+                    .or_else(|| Some("bridge_maintenance_denied".to_owned())),
+            )
+            .map_err(|error| error.code().to_owned())?;
+        return Ok(false);
+    }
+    let lease_id = decision
+        .lease_id
+        .ok_or_else(|| "bridge_maintenance_lease_response_invalid".to_owned())?;
+    let lease_expiry = decision
+        .expires_at_utc_msc
+        .ok_or_else(|| "bridge_maintenance_lease_response_invalid".to_owned())?;
+    let activation = async {
+        coordinator
+            .save_activation_phase(
+                &staged,
+                STATE_DRAINING,
+                state.manual_activation_requested,
+                Some(lease_id.clone()),
+                Some(lease_expiry),
+                None,
+                None,
+            )
+            .map_err(|error| error.code().to_owned())?;
+        logger.info(
+            "native_update_drain_started",
+            Some(&format!(
+                "version={};terminals={}",
+                staged.version,
+                scope.terminal_instance_ids.len()
+            )),
+        );
+        let renewed_expiry = client
+            .renew_maintenance_lease(&credential.refresh_token, &lease_id)
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        coordinator
+            .save_activation_phase(
+                &staged,
+                STATE_ACTIVATING,
+                state.manual_activation_requested,
+                Some(lease_id.clone()),
+                Some(renewed_expiry),
+                None,
+                None,
+            )
+            .map_err(|error| error.code().to_owned())?;
+        coordinator
+            .prepare_activation(&staged, &scope.terminal_instance_ids)
+            .map_err(|error| error.code().to_owned())?;
+        Ok::<(), String>(())
+    }
+    .await;
+    if let Err(code) = activation {
+        release_maintenance_lease_best_effort(
+            application_directory,
+            root_data_directory,
+            credential_store,
+            &lease_id,
+            logger,
+        )
+        .await;
+        coordinator
+            .save_activation_phase(
+                &staged,
+                STATE_WAITING_WINDOW,
+                state.manual_activation_requested,
+                None,
+                None,
+                Some(now_utc_msc().saturating_add(15_000)),
+                Some(code.clone()),
+            )
+            .map_err(|error| error.code().to_owned())?;
+        return Err(code);
+    }
+    logger.info(
+        "native_update_activation_prepared",
+        Some(&format!("version={};lease={lease_id}", staged.version)),
+    );
+    stop.cancel();
+    Ok(true)
+}
+
+fn defer_staged_update(
+    coordinator: &BridgeUpdateCoordinator,
+    staged: &StagedRelease,
+    manual_activation_requested: bool,
+    retry_after_seconds: u32,
+    error_code: String,
+) -> Result<bool, String> {
+    coordinator
+        .save_activation_phase(
+            staged,
+            STATE_WAITING_WINDOW,
+            manual_activation_requested,
+            None,
+            None,
+            Some(
+                now_utc_msc().saturating_add(i64::from(retry_after_seconds.clamp(1, 300)) * 1_000),
+            ),
+            Some(error_code.clone()),
+        )
+        .map_err(|error| error.code().to_owned())?;
+    Err(error_code)
+}
+
+fn capture_update_runtime_scope(
+    root_data_directory: &std::path::Path,
+    ui_state: &UiStateStore,
+) -> Result<UpdateRuntimeScope, String> {
+    let state = ui_state.snapshot().map_err(str::to_owned)?;
+    let now = now_utc_msc();
+    let mut terminal_ids = std::collections::BTreeSet::new();
+    let mut primary_terminal_count = 0usize;
+    let primary_ready = state.phase == "online"
+        && state.server_connected
+        && now.saturating_sub(state.observed_at_utc_msc) <= 5_000;
+    if primary_ready {
+        for terminal in state.terminals.iter().filter(|terminal| {
+            terminal.observer_profile_id.is_none() && terminal.runtime_state == "running"
+        }) {
+            if !terminal_ids.insert(terminal.terminal_instance_id.clone()) {
+                return Err("bridge_update_terminal_scope_conflict".to_owned());
+            }
+            primary_terminal_count = primary_terminal_count.saturating_add(1);
+        }
+    }
+    let mut observer_user_ids = std::collections::BTreeSet::new();
+    for profile_id in list_observer_profiles(root_data_directory).map_err(str::to_owned)? {
+        let paths =
+            resolve_profile_paths(root_data_directory, &profile_id).map_err(str::to_owned)?;
+        let preferences =
+            BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+                .map_err(|error| error.code().to_owned())?
+                .load();
+        if !preferences.observer_enabled {
+            continue;
+        }
+        let Some(observer_user_id) = preferences.observer_bridge_user_id else {
+            continue;
+        };
+        let Ok(runtime) =
+            read_runtime_status_snapshot(&paths.runtime_status_path, &profile_id, now)
+        else {
+            continue;
+        };
+        if runtime.server_state != "connected" || runtime.is_stale(now, 5_000) {
+            continue;
+        }
+        let mut included = false;
+        for terminal in runtime
+            .terminals
+            .iter()
+            .filter(|terminal| terminal.state == "ready")
+        {
+            if !terminal_ids.insert(terminal.terminal_instance_id.clone()) {
+                return Err("bridge_update_terminal_scope_conflict".to_owned());
+            }
+            included = true;
+        }
+        if included {
+            observer_user_ids.insert(observer_user_id);
+        }
+    }
+    Ok(UpdateRuntimeScope {
+        terminal_instance_ids: terminal_ids.into_iter().collect(),
+        observer_bridge_user_ids: observer_user_ids.into_iter().collect(),
+        primary_ready: primary_ready && primary_terminal_count > 0,
+    })
+}
+
+async fn release_maintenance_lease_best_effort(
+    application_directory: &std::path::Path,
+    root_data_directory: &std::path::Path,
+    credential_store: &CredentialStore,
+    lease_id: &str,
+    logger: &BridgeLogger,
+) {
+    let result = async {
+        let credential = credential_store
+            .load()
+            .map_err(|error| error.code().to_owned())?
+            .ok_or_else(|| "bridge_not_paired".to_owned())?;
+        let endpoints = resolve_server_endpoints(application_directory, root_data_directory)
+            .map_err(|error| error.code().to_owned())?;
+        let client = BridgeAuthClient::new(endpoints, &format!("LiangJianBridge/{VERSION}"))
+            .map_err(|error| error.code().to_owned())?;
+        client
+            .release_maintenance_lease(&credential.refresh_token, lease_id)
+            .await
+            .map_err(|error| error.code().to_owned())
+    }
+    .await;
+    match result {
+        Ok(()) => logger.info(
+            "native_update_maintenance_released",
+            Some(&format!("lease={lease_id}")),
+        ),
+        Err(code) => logger.warning("native_update_maintenance_release_failed", Some(&code)),
+    }
+}
+
+async fn release_startup_maintenance_lease(
+    update_state_store: Option<&BridgeUpdateStateStore>,
+    application_directory: &std::path::Path,
+    root_data_directory: &std::path::Path,
+    credential_store: &CredentialStore,
+    logger: &BridgeLogger,
+) {
+    let Some(update_state_store) = update_state_store else {
+        return;
+    };
+    let Ok(Some(state)) = update_state_store.load() else {
+        return;
+    };
+    if !matches!(
+        state.state.as_str(),
+        STATE_VERIFYING | STATE_ACTIVATING | STATE_ROLLED_BACK
+    ) {
+        return;
+    }
+    let Some(lease_id) = state.maintenance_lease_id.as_deref() else {
+        return;
+    };
+    release_maintenance_lease_best_effort(
+        application_directory,
+        root_data_directory,
+        credential_store,
+        lease_id,
+        logger,
+    )
+    .await;
 }
 
 async fn run_local_control_server(
@@ -682,6 +1230,7 @@ async fn run_local_control_server(
         application_directory,
         root_data_directory,
         update_state_store,
+        update_wake_sender,
         stop,
         logger,
         observer_runtimes,
@@ -848,9 +1397,11 @@ async fn run_local_control_server(
                     )
                     .await
                 }
-                LocalControlAction::UpdateActivate => {
-                    request_manual_update_activation(update_state_store.as_ref(), &logger)
-                }
+                LocalControlAction::UpdateActivate => request_manual_update_activation(
+                    update_state_store.as_ref(),
+                    &update_wake_sender,
+                    &logger,
+                ),
                 LocalControlAction::SettingsTest { settings } => {
                     let is_administrator = administrator_cache.lock().await.is_administrator;
                     if !endpoint_settings_allowed(
@@ -1126,6 +1677,7 @@ fn project_update_notice(
 
 fn request_manual_update_activation(
     store: Option<&BridgeUpdateStateStore>,
+    update_wake_sender: &watch::Sender<u64>,
     logger: &BridgeLogger,
 ) -> LocalControlResult {
     let Some(store) = store else {
@@ -1133,6 +1685,7 @@ fn request_manual_update_activation(
     };
     match store.request_manual_activation() {
         Ok(Some(state)) => {
+            signal_preference_change(update_wake_sender);
             logger.info(
                 "native_update_manual_activation_requested",
                 state
@@ -1499,12 +2052,7 @@ fn rejected(code: &str) -> LocalControlResult {
 
 async fn run_profile_lifecycle(
     context: ProfileLifecycleContext<'_>,
-    ready_file: Option<PathBuf>,
-    expected_terminal_instance_ids: Vec<String>,
-    stop: SessionCancellation,
-    ui_state: UiStateStore,
-    preferences_store: BridgePreferencesStore,
-    mut preference_change_receiver: watch::Receiver<u64>,
+    runtime: ProfileLifecycleRuntime,
 ) -> Result<(), Box<dyn Error>> {
     let ProfileLifecycleContext {
         application_directory,
@@ -1512,6 +2060,15 @@ async fn run_profile_lifecycle(
         profile_id,
         logger,
     } = context;
+    let ProfileLifecycleRuntime {
+        ready_file,
+        expected_terminal_instance_ids,
+        update_state_store,
+        stop,
+        ui_state,
+        preferences_store,
+        mut preference_change_receiver,
+    } = runtime;
     loop {
         let mut bootstrap =
             NativeProfileBootstrap::load(application_directory, root_data_directory, profile_id)?;
@@ -1683,6 +2240,7 @@ async fn run_profile_lifecycle(
             return Err("bridge_expected_terminal_missing".into());
         }
         let endpoints = resolve_server_endpoints(application_directory, root_data_directory)?;
+        let startup_credential_store = CredentialStore::new(&bootstrap.paths.credential_path)?;
         let binding_source = ProfileTerminalBindingSource::new(Arc::clone(&bootstrap.store))?;
         publish_inactive_status(
             logger,
@@ -1708,6 +2266,9 @@ async fn run_profile_lifecycle(
         let ready_logger = logger.clone();
         let runtime_ready_file = ready_file.clone();
         let runtime_expected_terminal_instance_ids = expected_terminal_instance_ids.clone();
+        let ready_application_directory = application_directory.to_path_buf();
+        let ready_root_data_directory = root_data_directory.to_path_buf();
+        let ready_update_state_store = update_state_store.clone();
         let ready_waiter = tokio::spawn(async move {
             wait_and_write_ready(
                 runtime_ready_file,
@@ -1715,7 +2276,13 @@ async fn run_profile_lifecycle(
                 connection_state,
                 active_sessions,
                 ready_stop,
-                ready_logger,
+                StartupReadyContext {
+                    application_directory: ready_application_directory,
+                    root_data_directory: ready_root_data_directory,
+                    credential_store: startup_credential_store,
+                    update_state_store: ready_update_state_store,
+                    logger: ready_logger,
+                },
             )
             .await
         });
@@ -2261,8 +2828,15 @@ async fn wait_and_write_ready(
     connection_state: Arc<CoreConnectionState>,
     active_sessions: Arc<ActiveMt5Sessions>,
     stop: SessionCancellation,
-    logger: BridgeLogger,
+    context: StartupReadyContext,
 ) -> Result<(), String> {
+    let StartupReadyContext {
+        application_directory,
+        root_data_directory,
+        credential_store,
+        update_state_store,
+        logger,
+    } = context;
     let Some(output) = ready_file else {
         return Ok(());
     };
@@ -2285,6 +2859,14 @@ async fn wait_and_write_ready(
                 .iter()
                 .all(|terminal_id| running_terminal_ids.contains(terminal_id))
         {
+            release_startup_maintenance_lease(
+                update_state_store.as_ref(),
+                &application_directory,
+                &root_data_directory,
+                &credential_store,
+                &logger,
+            )
+            .await;
             let write_result = write_startup_ready_signal(&StartupReadyOptions {
                 output: output.clone(),
                 version: VERSION.split('-').next().unwrap_or(VERSION).to_owned(),
@@ -2528,6 +3110,122 @@ mod tests {
         preferences.observer_bridge_user_id = None;
         assert!(!observer_preferences_configured(&preferences));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn update_scope_combines_the_ready_primary_and_connected_observer_without_leaking_accounts() {
+        let root = unique_test_directory("update-scope");
+        std::fs::create_dir_all(&root).expect("root");
+        let now = now_utc_msc();
+        let mut state = NativeRuntimeStatusSnapshot::inactive(
+            DEFAULT_PROFILE_ID,
+            VERSION,
+            now,
+            "starting",
+            "connecting",
+            None,
+        )
+        .expect("runtime status")
+        .to_ui_state(1)
+        .expect("UI state");
+        state.phase = "online".to_owned();
+        state.server_connected = true;
+        state
+            .terminals
+            .push(bridge_local_control::UiTerminalStatus {
+                terminal_instance_id: "mt5_aaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                platform: "mt5".to_owned(),
+                broker_server: "Broker-Demo".to_owned(),
+                login: "100001".to_owned(),
+                runtime_state: "running".to_owned(),
+                error_code: None,
+                observer_profile_id: None,
+                terminal_trading_allowed: Some(true),
+                program_trading_allowed: None,
+                account_trading_allowed: Some(true),
+                account_expert_trading_allowed: Some(true),
+                mt4_expert_restart_required: false,
+            });
+        let ui_state = UiStateStore::new(state).expect("UI store");
+
+        let observer_paths = resolve_profile_paths(&root, "source-1").expect("observer paths");
+        let terminal = root.join("terminal64.exe");
+        std::fs::write(&terminal, b"terminal").expect("terminal executable");
+        BridgePreferencesStore::new(observer_paths.data_directory.join("preferences.json"))
+            .expect("observer preferences")
+            .save_observer_profile(&ObserverProfilePreferences {
+                platform: "mt5".to_owned(),
+                terminal_instance_id: "mt5_bbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+                terminal_path: terminal.display().to_string(),
+                bridge_user_id: 42,
+                observer_account_label: Some("一号观摩源".to_owned()),
+                trading_account_id: Some(9),
+                trading_account_label: Some("观摩账户".to_owned()),
+            })
+            .expect("save observer");
+        std::fs::create_dir_all(&observer_paths.data_directory).expect("observer directory");
+        let runtime = serde_json::json!({
+            "schema_version": 1,
+            "bridge_version": VERSION,
+            "profile_id": "source-1",
+            "observed_at_utc_msc": now,
+            "phase": "online",
+            "server_state": "connected",
+            "server_error_code": null,
+            "terminals": [{
+                "terminal_instance_id": "mt5_bbbbbbbbbbbbbbbbbbbbbbbb",
+                "platform": "mt5",
+                "connection_epoch": 1,
+                "state": "ready",
+                "worker_state": "ready",
+                "collector_state": "ready",
+                "data_ready": true,
+                "worker_consecutive_failures": 0,
+                "collector_consecutive_failures": 0,
+                "last_success_at_utc_msc": now,
+                "error_code": null
+            }],
+            "reconciliation": {
+                "last_run_at_utc_msc": now,
+                "inspected": 0,
+                "resolved": 0,
+                "pending": 0,
+                "error_codes": [],
+                "consecutive_failures": 0,
+                "fatal_error_code": null
+            }
+        });
+        write_runtime_status_snapshot(
+            &observer_paths.runtime_status_path,
+            &serde_json::to_vec(&runtime).expect("runtime payload"),
+        )
+        .expect("write observer runtime");
+
+        assert_eq!(
+            capture_update_runtime_scope(&root, &ui_state).expect("update scope"),
+            UpdateRuntimeScope {
+                terminal_instance_ids: vec![
+                    "mt5_aaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                    "mt5_bbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+                ],
+                observer_bridge_user_ids: vec![42],
+                primary_ready: true,
+            }
+        );
+        let mut observer_only_state = ui_state.snapshot().expect("observer-only UI state");
+        observer_only_state.terminals.clear();
+        ui_state
+            .publish(observer_only_state)
+            .expect("publish observer-only UI state");
+        assert_eq!(
+            capture_update_runtime_scope(&root, &ui_state).expect("observer-only scope"),
+            UpdateRuntimeScope {
+                terminal_instance_ids: vec!["mt5_bbbbbbbbbbbbbbbbbbbbbbbb".to_owned()],
+                observer_bridge_user_ids: vec![42],
+                primary_ready: false,
+            }
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

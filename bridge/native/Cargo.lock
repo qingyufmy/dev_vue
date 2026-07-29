@@ -1067,6 +1067,7 @@ dependencies = [
  "bridge-runtime-win",
  "bridge-transport",
  "bridge-ui-model",
+ "bridge-update",
  "tokio",
  "windows-sys 0.61.2",
 ]

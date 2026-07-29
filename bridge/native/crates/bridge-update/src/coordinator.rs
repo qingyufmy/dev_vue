@@ -1,9 +1,11 @@
+use crate::activation::ReleaseActivationStore;
 use crate::manifest::DotNetVersion;
 use crate::{
     BridgeUpdateState, BridgeUpdateStateStore, ReleaseManifest, ReleaseManifestClient,
-    ReleaseManifestVerifier, ReleasePackageStager, STATE_CHECKING, STATE_DOWNLOADING, STATE_FAILED,
-    STATE_ROLLED_BACK, STATE_WAITING_WINDOW, UpdateError, extract_verified_package,
-    verified_expanded_size, verify_package_file,
+    ReleaseManifestVerifier, ReleasePackageStager, STATE_ACQUIRING_LEASE, STATE_ACTIVATING,
+    STATE_CHECKING, STATE_DOWNLOADING, STATE_DRAINING, STATE_FAILED, STATE_ROLLED_BACK,
+    STATE_WAITING_WINDOW, UpdateError, extract_verified_package, verified_expanded_size,
+    verify_package_file,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -112,6 +114,7 @@ pub struct BridgeUpdateCoordinator {
     environment: BridgeUpdateEnvironment,
     verifier: ReleaseManifestVerifier,
     state_store: BridgeUpdateStateStore,
+    activation_store: ReleaseActivationStore,
     package_stager: ReleasePackageStager,
     http_client: Client,
     manifest_client: Option<(Url, ReleaseManifestClient)>,
@@ -153,10 +156,13 @@ impl BridgeUpdateCoordinator {
         )?
         .load_or_create()?;
         let rollout_channel = read_rollout_channel(&environment.install_root)?;
+        let activation_store =
+            ReleaseActivationStore::new(environment.install_root.join(VERSION_POINTER_FILE_NAME))?;
         Ok(Some(Self {
             environment,
             verifier,
             state_store,
+            activation_store,
             package_stager,
             http_client,
             manifest_client: None,
@@ -177,10 +183,13 @@ impl BridgeUpdateCoordinator {
             http_client.clone(),
             environment.install_root.join("cache").join("packages"),
         )?;
+        let activation_store =
+            ReleaseActivationStore::new(environment.install_root.join(VERSION_POINTER_FILE_NAME))?;
         Ok(Self {
             environment,
             verifier,
             state_store,
+            activation_store,
             package_stager,
             http_client,
             manifest_client: None,
@@ -191,6 +200,150 @@ impl BridgeUpdateCoordinator {
 
     pub fn environment(&self) -> &BridgeUpdateEnvironment {
         &self.environment
+    }
+
+    pub fn installation_id(&self) -> &str {
+        &self.installation_id
+    }
+
+    pub fn load_state(&self) -> Result<Option<BridgeUpdateState>, UpdateError> {
+        self.state_store.load()
+    }
+
+    pub fn restore_staged_release(&self) -> Result<Option<StagedRelease>, UpdateError> {
+        let Some(state) = self.state_store.load()? else {
+            return Ok(None);
+        };
+        if !matches!(
+            state.state.as_str(),
+            STATE_WAITING_WINDOW | STATE_ACQUIRING_LEASE | STATE_DRAINING | STATE_ACTIVATING
+        ) {
+            return Ok(None);
+        }
+        let target_version = state
+            .target_version
+            .as_deref()
+            .ok_or_else(|| UpdateError::new("update_staged_release_state_mismatch"))?;
+        let current = DotNetVersion::parse(&self.environment.current_version)
+            .ok_or_else(|| UpdateError::new("update_current_version_invalid"))?;
+        let target = DotNetVersion::parse(target_version)
+            .ok_or_else(|| UpdateError::new("update_release_version_invalid"))?;
+        if target <= current {
+            return Err(UpdateError::new("update_staged_release_invalid"));
+        }
+        let directory = self
+            .environment
+            .install_root
+            .join("versions")
+            .join(target_version);
+        let marker_path = directory.join(RELEASE_MARKER_FILE_NAME);
+        let marker_metadata = fs::metadata(&marker_path)
+            .map_err(|_| UpdateError::new("update_staged_release_missing"))?;
+        if !marker_metadata.is_file()
+            || marker_metadata.len() == 0
+            || marker_metadata.len() > 128 * 1024
+        {
+            return Err(UpdateError::new("update_staged_release_invalid"));
+        }
+        let marker =
+            fs::read(marker_path).map_err(|_| UpdateError::new("update_staged_release_missing"))?;
+        let manifest = serde_json::from_slice::<ReleaseManifest>(&marker)
+            .map_err(|_| UpdateError::new("update_staged_release_invalid"))?;
+        self.verifier
+            .verify(&manifest, &self.environment.launcher_version)?;
+        let priority = manifest
+            .priority
+            .clone()
+            .unwrap_or_else(|| "normal".to_owned());
+        if manifest.release_version != target_version
+            || manifest.release_id != state.release_id
+            || state.priority.as_deref() != Some(priority.as_str())
+            || manifest.minimum_idle_seconds.unwrap_or(120) != state.minimum_idle_seconds
+            || manifest.activation_deadline_utc_msc != state.activation_deadline_utc_msc
+        {
+            return Err(UpdateError::new("update_staged_release_state_mismatch"));
+        }
+        validate_existing_release(&directory, &manifest)?;
+        Ok(Some(describe_staged_release(&manifest, directory)))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_activation_phase(
+        &self,
+        staged: &StagedRelease,
+        phase: &str,
+        manual_activation_requested: bool,
+        lease_id: Option<String>,
+        lease_expires_at_utc_msc: Option<i64>,
+        next_retry_at_utc_msc: Option<i64>,
+        last_error_code: Option<String>,
+    ) -> Result<BridgeUpdateState, UpdateError> {
+        if !matches!(
+            phase,
+            STATE_WAITING_WINDOW | STATE_ACQUIRING_LEASE | STATE_DRAINING | STATE_ACTIVATING
+        ) {
+            return Err(UpdateError::new("update_activation_phase_invalid"));
+        }
+        let previous = self.state_store.load()?;
+        let now = now_utc_msc();
+        let same_release = previous
+            .as_ref()
+            .is_some_and(|state| state.target_version.as_deref() == Some(staged.version.as_str()));
+        let staged_at_utc_msc = if same_release {
+            previous
+                .as_ref()
+                .and_then(|state| state.staged_at_utc_msc)
+                .or(Some(now))
+        } else {
+            Some(now)
+        };
+        let activation_started_at_utc_msc = if phase == STATE_WAITING_WINDOW {
+            None
+        } else if same_release
+            && previous
+                .as_ref()
+                .is_some_and(|state| state.state != STATE_WAITING_WINDOW)
+        {
+            previous
+                .as_ref()
+                .and_then(|state| state.activation_started_at_utc_msc)
+                .or(Some(now))
+        } else {
+            Some(now)
+        };
+        self.state_store.save(BridgeUpdateState {
+            schema_version: 1,
+            state: phase.to_owned(),
+            target_version: Some(staged.version.clone()),
+            release_id: staged.release_id.clone(),
+            priority: Some(staged.priority.clone()),
+            manual_activation_requested: manual_activation_requested
+                || previous
+                    .as_ref()
+                    .is_some_and(|state| state.manual_activation_requested),
+            staged_at_utc_msc,
+            activation_started_at_utc_msc,
+            minimum_idle_seconds: staged.minimum_idle_seconds,
+            activation_deadline_utc_msc: staged.activation_deadline_utc_msc,
+            maintenance_lease_id: lease_id,
+            maintenance_lease_expires_at_utc_msc: lease_expires_at_utc_msc,
+            next_retry_at_utc_msc,
+            last_error_code,
+            updated_at_utc_msc: now,
+        })
+    }
+
+    pub fn prepare_activation(
+        &self,
+        staged: &StagedRelease,
+        expected_terminal_instance_ids: &[String],
+    ) -> Result<(), UpdateError> {
+        self.activation_store.prepare(
+            staged,
+            &self.environment.current_version,
+            expected_terminal_instance_ids,
+            now_utc_msc(),
+        )
     }
 
     pub async fn check_and_stage(
@@ -786,6 +939,12 @@ mod tests {
     async fn signed_loopback_release_is_downloaded_and_staged_as_one_native_version() {
         let root = test_directory("signed-stage");
         fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(root.join("versions/3.0.0")).expect("current version");
+        fs::write(
+            root.join(VERSION_POINTER_FILE_NAME),
+            br#"{"active_version":"3.0.0","last_known_good_version":"3.0.0","status":"healthy","expected_terminal_instance_ids":[],"updated_at_utc_msc":1}"#,
+        )
+        .expect("version pointer");
         let core_archive = zip_payload(&[
             ("AURUMBridge.exe", b"native ui"),
             ("AURUMBridge.Core.exe", b"native core"),
@@ -946,6 +1105,42 @@ mod tests {
         let state = state_store.load().expect("state").expect("persisted state");
         assert_eq!(state.state, STATE_WAITING_WINDOW);
         assert_eq!(state.target_version.as_deref(), Some("3.1.0"));
+        assert_eq!(
+            coordinator
+                .restore_staged_release()
+                .expect("restore staged release"),
+            Some(staged.clone())
+        );
+        coordinator
+            .save_activation_phase(&staged, STATE_ACQUIRING_LEASE, true, None, None, None, None)
+            .expect("acquiring state");
+        coordinator
+            .save_activation_phase(
+                &staged,
+                STATE_DRAINING,
+                true,
+                Some("lease_01JUPDATE".to_owned()),
+                Some(1_800_000_090_000),
+                None,
+                None,
+            )
+            .expect("draining state");
+        coordinator
+            .prepare_activation(
+                &staged,
+                &["mt5_terminal_b".to_owned(), "mt4_terminal_a".to_owned()],
+            )
+            .expect("prepare activation");
+        let pointer = coordinator
+            .activation_store
+            .load()
+            .expect("pending pointer");
+        assert_eq!(pointer.active_version, "3.1.0");
+        assert_eq!(pointer.status, "pending");
+        assert_eq!(
+            pointer.expected_terminal_instance_ids,
+            vec!["mt4_terminal_a".to_owned(), "mt5_terminal_b".to_owned()]
+        );
         let requests = observed_requests.lock().expect("observed requests");
         let manifest_request = requests
             .iter()

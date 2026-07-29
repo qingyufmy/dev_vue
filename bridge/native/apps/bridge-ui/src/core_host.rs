@@ -28,6 +28,13 @@ pub struct CoreProcessHost {
     restart_enabled: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CoreProcessPoll {
+    Running,
+    Idle,
+    UpdateHandoff(PathBuf),
+}
+
 impl CoreProcessHost {
     pub fn start(
         application_directory: &Path,
@@ -70,7 +77,7 @@ impl CoreProcessHost {
         Ok(Some(host))
     }
 
-    pub fn poll(&mut self) -> Result<(), &'static str> {
+    pub fn poll(&mut self) -> Result<CoreProcessPoll, &'static str> {
         let Some(child) = self.child.as_mut() else {
             if self.restart_enabled
                 && self
@@ -78,15 +85,23 @@ impl CoreProcessHost {
                     .is_some_and(|deadline| Instant::now() >= deadline)
             {
                 self.spawn()?;
+                return Ok(CoreProcessPoll::Running);
             }
-            return Ok(());
+            return Ok(CoreProcessPoll::Idle);
         };
         match child.try_wait() {
-            Ok(None) => Ok(()),
+            Ok(None) => Ok(CoreProcessPoll::Running),
             Ok(Some(status)) => {
                 self.child = None;
                 self.schedule_restart(status);
-                Ok(())
+                if status.success()
+                    && let Some(launcher) =
+                        bridge_update::pending_launcher_handoff(&self.working_directory)
+                            .map_err(|_| "bridge_ui_update_handoff_invalid")?
+                {
+                    return Ok(CoreProcessPoll::UpdateHandoff(launcher));
+                }
+                Ok(CoreProcessPoll::Idle)
             }
             Err(_) => Err("bridge_ui_core_process_wait_failed"),
         }
@@ -122,6 +137,22 @@ impl CoreProcessHost {
             .min(RESTART_DELAYS.len() - 1);
         self.restart_after = Some(Instant::now() + RESTART_DELAYS[index]);
     }
+}
+
+pub fn start_launcher(executable: &Path) -> Result<(), &'static str> {
+    if executable.file_name().and_then(|value| value.to_str()) != Some("AURUMBridge.Launcher.exe")
+        || !executable.is_file()
+    {
+        return Err("bridge_ui_update_launcher_invalid");
+    }
+    Command::new(executable)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "bridge_ui_update_launcher_start_failed")
 }
 
 pub fn run_health_check(
@@ -223,6 +254,53 @@ mod tests {
         assert!(failed_host.restart_enabled);
         assert_eq!(failed_host.failures, 1);
         assert!(failed_host.restart_after.is_some());
+    }
+
+    #[test]
+    fn clean_core_exit_hands_a_pending_version_to_the_stable_launcher() {
+        let root = temporary_directory("update-handoff");
+        let current = root.join("versions/3.0.0");
+        let target = root.join("versions/3.1.0");
+        fs::create_dir_all(&current).expect("current version");
+        fs::create_dir_all(&target).expect("target version");
+        fs::write(root.join("AURUMBridge.Launcher.exe"), []).expect("launcher");
+        fs::write(target.join("AURUMBridge.exe"), []).expect("target UI");
+        fs::write(
+            root.join("current.json"),
+            br#"{"active_version":"3.1.0","last_known_good_version":"3.0.0","status":"pending","expected_terminal_instance_ids":[],"updated_at_utc_msc":1800000000000}"#,
+        )
+        .expect("pointer");
+        let command = PathBuf::from(std::env::var_os("SystemRoot").expect("system root"))
+            .join("System32")
+            .join("cmd.exe");
+        let child = Command::new(&command)
+            .args(["/d", "/c", "exit", "0"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .expect("clean child");
+        let mut host = CoreProcessHost {
+            executable: command,
+            working_directory: current,
+            arguments: Vec::new(),
+            child: Some(child),
+            failures: 0,
+            restart_after: None,
+            restart_enabled: true,
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match host.poll().expect("poll") {
+                CoreProcessPoll::Running if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                CoreProcessPoll::UpdateHandoff(launcher) => {
+                    assert_eq!(launcher, root.join("AURUMBridge.Launcher.exe"));
+                    break;
+                }
+                outcome => panic!("unexpected poll outcome: {outcome:?}"),
+            }
+        }
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     fn host_for_exit_policy(command: &Path) -> CoreProcessHost {

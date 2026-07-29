@@ -12,5 +12,6 @@ bridge-observability = { path = "../../crates/bridge-observability" }
 bridge-runtime-win = { path = "../../crates/bridge-runtime-win" }
 bridge-transport = { path = "../../crates/bridge-transport" }
 bridge-ui-model = { path = "../../crates/bridge-ui-model" }
+bridge-update = { path = "../../crates/bridge-update" }
 tokio.workspace = true
 windows-sys.workspace = true
