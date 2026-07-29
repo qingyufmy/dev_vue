@@ -158,7 +158,12 @@
     "account_list_scroll_inputs": ["mouse_wheel", "scrollbar", "keyboard"],
     "account_list_reserves_dotnet_scrollbar_gutter": true,
     "account_list_clips_cards_to_viewport": true,
-    "account_list_clamps_scroll_after_resize_dpi_and_account_changes": true
+    "account_list_clamps_scroll_after_resize_dpi_and_account_changes": true,
+    "user_exit_requires_confirmation": true,
+    "internal_shutdown_skips_user_confirmation": true,
+    "taskbar_created_readds_tray_icon": true,
+    "tray_failure_falls_back_to_taskbar": true,
+    "session_end_does_not_block_windows": true
   },
   "worker_supervision_contract": {
     "restart_delays_seconds": [1, 2, 4, 8, 10],

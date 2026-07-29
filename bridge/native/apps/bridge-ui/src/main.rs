@@ -60,17 +60,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, BS_OWNERDRAW, CB_SETITEMHEIGHT, CBN_SELCHANGE, CBS_DROPDOWNLIST,
     CBS_OWNERDRAWFIXED, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateIconFromResourceEx,
     CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
-    DrawMenuBar, GWLP_USERDATA, GetClientRect, GetMessageW, GetScrollInfo, GetSystemMetrics,
-    GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, LR_DEFAULTCOLOR,
-    LoadCursorW, LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG,
-    MoveWindow, PostMessageW, RegisterClassExW, SB_BOTTOM, SB_CTL, SB_LINEDOWN, SB_LINEUP,
-    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SBS_VERT, SCROLLINFO,
-    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW,
-    SW_SHOWNORMAL, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-    TrackPopupMenu, TranslateMessage, WHEEL_DELTA, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE,
-    WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP,
-    WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    GWLP_USERDATA, GetClientRect, GetMessageW, GetScrollInfo, GetSystemMetrics, GetWindowLongPtrW,
+    HICON, HMENU, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, LR_DEFAULTCOLOR, LoadCursorW,
+    LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MoveWindow,
+    PostMessageW, RegisterClassExW, RegisterWindowMessageW, SB_BOTTOM, SB_CTL, SB_LINEDOWN,
+    SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SBS_VERT,
+    SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE,
+    SW_MINIMIZE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WHEEL_DELTA, WM_APP,
+    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION,
+    WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_SETFONT,
+    WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
     WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
     WS_VISIBLE,
 };
@@ -168,6 +169,7 @@ struct AppState {
     brand_icon: HICON,
     brand_icon_small: HICON,
     tray_added: bool,
+    taskbar_created_message: u32,
     terminal_choices_fingerprint: String,
     account_action_controls: Vec<AccountActionControl>,
     account_action_fingerprint: String,
@@ -279,6 +281,37 @@ fn build_tray_menu_view(
     }
 }
 
+fn register_taskbar_created_message() -> u32 {
+    let name = wide("TaskbarCreated");
+    unsafe { RegisterWindowMessageW(name.as_ptr()) }
+}
+
+fn initial_window_show_command(start_minimized: bool, tray_added: bool) -> i32 {
+    if !start_minimized {
+        SW_SHOW
+    } else if tray_added {
+        SW_HIDE
+    } else {
+        SW_MINIMIZE
+    }
+}
+
+fn close_window_show_command(tray_added: bool) -> i32 {
+    if tray_added { SW_HIDE } else { SW_MINIMIZE }
+}
+
+fn is_user_exit_command(id: i32) -> bool {
+    matches!(id, CONTROL_EXIT | MENU_EXIT_COMMAND)
+}
+
+fn user_exit_confirmation_message() -> String {
+    format!("确定退出{PRODUCT_NAME}？\n\n退出只会停止数据与指令转发，不会撤单、平仓或关闭 MT。")
+}
+
+fn confirm_user_exit(hwnd: HWND) -> bool {
+    show_confirmation(hwnd, &user_exit_confirmation_message(), "退出桥接")
+}
+
 fn main() {
     let raw_arguments: Vec<_> = std::env::args_os().skip(1).collect();
     let profile_id = parse_profile_id();
@@ -371,6 +404,7 @@ fn main() {
             brand_icon: null_mut(),
             brand_icon_small: null_mut(),
             tray_added: false,
+            taskbar_created_message: 0,
             terminal_choices_fingerprint: String::new(),
             account_action_controls: Vec::new(),
             account_action_fingerprint: String::new(),
@@ -671,6 +705,7 @@ impl Controls {
 
 unsafe fn run_window(mut state: AppState) {
     let instance = unsafe { GetModuleHandleW(null()) };
+    state.taskbar_created_message = register_taskbar_created_message();
     state.brand_icon =
         load_brand_icon(32).unwrap_or_else(|| unsafe { LoadIconW(null_mut(), IDI_APPLICATION) });
     state.brand_icon_small =
@@ -728,11 +763,7 @@ unsafe fn run_window(mut state: AppState) {
     unsafe {
         ShowWindow(
             hwnd,
-            if (*state_ptr).start_minimized {
-                SW_HIDE
-            } else {
-                SW_SHOW
-            },
+            initial_window_show_command((*state_ptr).start_minimized, (*state_ptr).tray_added),
         )
     };
     let mut message = MSG::default();
@@ -775,6 +806,13 @@ unsafe extern "system" fn window_proc(
         return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
     }
     let state = unsafe { &mut *state_ptr };
+    if state.taskbar_created_message != 0 && message == state.taskbar_created_message {
+        unsafe {
+            remove_tray_icon(hwnd, state);
+            add_tray_icon(hwnd, state);
+        }
+        return 0;
+    }
     match message {
         WM_CREATE => {
             unsafe {
@@ -940,7 +978,18 @@ unsafe extern "system" fn window_proc(
         WM_CLOSE => {
             state.hovered_permission_account = None;
             unsafe { permission_tooltip::hide(state.permission_tooltip) };
-            unsafe { ShowWindow(hwnd, SW_HIDE) };
+            unsafe { ShowWindow(hwnd, close_window_show_command(state.tray_added)) };
+            0
+        }
+        WM_QUERYENDSESSION => 1,
+        WM_ENDSESSION => {
+            if wparam != 0 {
+                if let Some(core_host) = state.core_host.as_mut() {
+                    core_host.disable_restart();
+                }
+                state.ui_instance.take();
+                unsafe { DestroyWindow(hwnd) };
+            }
             0
         }
         WM_TRAY => {
@@ -2558,7 +2607,7 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
         },
         CONTROL_PAIR => unsafe { begin_action(hwnd, app, LocalControlAction::Pair) },
         CONTROL_LOGOUT => unsafe { begin_action(hwnd, app, LocalControlAction::Logout) },
-        CONTROL_EXIT | MENU_EXIT_COMMAND => unsafe {
+        id if is_user_exit_command(id) && confirm_user_exit(hwnd) => unsafe {
             begin_action(hwnd, app, LocalControlAction::BridgeExit)
         },
         MENU_OPEN_COMMAND => unsafe {
@@ -3072,7 +3121,7 @@ unsafe fn handle_tray(hwnd: HWND, app: &AppState, event: u32) {
             null(),
         );
         DestroyMenu(menu);
-        DrawMenuBar(hwnd);
+        PostMessageW(hwnd, WM_NULL, 0, 0);
     }
 }
 
@@ -3321,6 +3370,29 @@ mod tests {
     #[test]
     fn formats_current_timestamp_in_local_time() {
         assert_ne!(format_local_time(now_utc_msc()), "--:--:--");
+    }
+
+    #[test]
+    fn window_lifecycle_preserves_dotnet_tray_and_exit_semantics() {
+        assert_eq!(initial_window_show_command(false, false), SW_SHOW);
+        assert_eq!(initial_window_show_command(true, true), SW_HIDE);
+        assert_eq!(initial_window_show_command(true, false), SW_MINIMIZE);
+        assert_eq!(close_window_show_command(true), SW_HIDE);
+        assert_eq!(close_window_show_command(false), SW_MINIMIZE);
+        assert!(is_user_exit_command(CONTROL_EXIT));
+        assert!(is_user_exit_command(MENU_EXIT_COMMAND));
+        assert!(!is_user_exit_command(CONTROL_LOGOUT));
+        assert_eq!(
+            user_exit_confirmation_message(),
+            format!(
+                "确定退出{PRODUCT_NAME}？\n\n退出只会停止数据与指令转发，不会撤单、平仓或关闭 MT。"
+            )
+        );
+    }
+
+    #[test]
+    fn taskbar_restart_message_is_registered_for_tray_recovery() {
+        assert!(register_taskbar_created_message() >= 0xC000);
     }
 
     #[test]
