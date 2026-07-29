@@ -53,6 +53,11 @@
       "full_close",
       "unique_object_cleanup"
     ],
+    "demo_trade_rejection_matrix": [
+      "local_volume_validation",
+      "broker_order_check_rejection",
+      "unique_object_cleanup"
+    ],
     "modify_order_requires_expected_state": true,
     "partial_close_requires_exact_remaining_volume": true,
     "fault_injection_unknown_results_are_not_replayed": true,
@@ -234,6 +239,9 @@
     "loopback_process_test_covers_command_dispatch_and_result_ack": true,
     "loopback_process_test_covers_interrupted_command_reconciliation_without_replay": true,
     "loopback_process_test_covers_disconnect_reconnect": true,
+    "loopback_process_test_observes_reconnecting_status": true,
+    "loopback_process_test_covers_worker_termination_and_restart": true,
+    "loopback_process_test_covers_nonfatal_status_write_failure": true,
     "loopback_process_test_verifies_worker_exit": true
   },
   "endpoint_authority_contract": {

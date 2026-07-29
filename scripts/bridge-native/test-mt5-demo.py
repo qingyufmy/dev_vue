@@ -145,6 +145,61 @@ def cleanup_test_objects(mt5, executor: Mt5TradeExecutor, route: WorkerRoute,
     return cleanup
 
 
+def execute_rejection_matrix(mt5, executor: Mt5TradeExecutor, route: WorkerRoute,
+                             requested_symbol: str, symbol: str, info, volume: float) -> dict:
+    suffix = str(int(time.time() * 1000))[-10:]
+    comment = f"LJ3R-{suffix}"
+    report: dict = {"comment": comment}
+    try:
+        below_minimum = max(volume / 2, 1e-10)
+        local_rejection = executor.execute(command(route, "place_order", {
+            "symbol": requested_symbol,
+            "side": "buy",
+            "order_kind": "market",
+            "volume": below_minimum,
+            "magic": SYSTEM_MAGIC,
+            "comment": comment,
+        }, f"command_demo_local_rejection_{suffix}"))
+        report["local_validation"] = safe_result(local_rejection)
+        if local_rejection.get("status") != "rejected" \
+                or local_rejection.get("error_code") != "order_volume_below_minimum":
+            raise RuntimeError("local_validation_rejection_mismatch")
+
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            raise RuntimeError("symbol_tick_unavailable")
+        point = float(getattr(info, "point", 0) or 0)
+        minimum_points = max(int(getattr(info, "trade_stops_level", 0) or 0), 10)
+        invalid_stop = normalized_price(info, float(tick.ask) + point * minimum_points)
+        broker_rejection = executor.execute(command(route, "place_order", {
+            "symbol": requested_symbol,
+            "side": "buy",
+            "order_kind": "market",
+            "volume": volume,
+            "stop_loss": invalid_stop,
+            "magic": SYSTEM_MAGIC,
+            "comment": comment,
+        }, f"command_demo_broker_rejection_{suffix}"))
+        raw = broker_rejection.get("raw_result") or {}
+        check = raw.get("check") if isinstance(raw, dict) else None
+        report["broker_rule"] = {
+            **safe_result(broker_rejection),
+            "check_retcode": check.get("retcode") if isinstance(check, dict) else None,
+        }
+        error_code = str(broker_rejection.get("error_code") or "")
+        if broker_rejection.get("status") != "rejected" \
+                or not error_code.startswith(("mt5_check_retcode_", "mt5_retcode_")):
+            raise RuntimeError("broker_rule_rejection_mismatch")
+    except Exception as error:
+        report["failure"] = str(error)
+    finally:
+        report["cleanup"] = cleanup_test_objects(
+            mt5, executor, route, symbol, comment, suffix
+        )
+    report["passed"] = "failure" not in report and report["cleanup"]["cleaned"] is True
+    return report
+
+
 def execute_full_matrix(mt5, executor: Mt5TradeExecutor, route: WorkerRoute,
                         requested_symbol: str, symbol: str, info, volume: float) -> dict:
     suffix = str(int(time.time() * 1000))[-10:]
@@ -280,9 +335,13 @@ def main() -> int:
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--matrix", action="store_true",
                         help="exercise pending, modify, cancel, protection and close")
+    parser.add_argument("--faults", action="store_true",
+                        help="exercise local and broker rejection paths without leaving trades")
     args = parser.parse_args()
-    if args.matrix and not args.execute:
-        parser.error("--matrix requires --execute")
+    if (args.matrix or args.faults) and not args.execute:
+        parser.error("--matrix and --faults require --execute")
+    if args.matrix and args.faults:
+        parser.error("--matrix and --faults are mutually exclusive")
 
     import MetaTrader5 as mt5
 
@@ -341,6 +400,13 @@ def main() -> int:
             raise RuntimeError("mt5_trade_permission_unavailable")
 
         executor = Mt5TradeExecutor(mt5, route, adapter._ensure_identity, adapter._resolve_symbol)
+        if args.faults:
+            faults = execute_rejection_matrix(
+                mt5, executor, route, args.symbol, symbol, info, readiness["volume_min"]
+            )
+            print(json.dumps({"mode": "faults", "readiness": readiness, **faults},
+                             ensure_ascii=False))
+            return 0 if faults["passed"] else 5
         if args.matrix:
             matrix = execute_full_matrix(
                 mt5, executor, route, args.symbol, symbol, info, readiness["volume_min"]

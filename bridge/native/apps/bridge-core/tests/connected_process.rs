@@ -7,6 +7,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
+use std::fs::OpenOptions;
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -20,8 +22,10 @@ use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    TerminateProcess,
 };
 
 const RECOVERED_COMMAND_ID: &str = "command_01JRECOVER01";
@@ -112,16 +116,78 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         "startup reconciliation must query terminal facts without replaying the interrupted order"
     );
 
+    let status_before_lock = runtime_status["observed_at_utc_msc"]
+        .as_i64()
+        .expect("status timestamp");
+    let status_lock = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&paths.runtime_status_path)
+        .expect("lock runtime status without delete sharing");
+    wait_until(&mut child, Duration::from_secs(8), || {
+        log_events(&paths.data_directory)
+            .iter()
+            .any(|event| event == "native_runtime_status_failed")
+    });
+    assert!(
+        child
+            .child_mut()
+            .try_wait()
+            .expect("poll native core")
+            .is_none(),
+        "status projection failure must not stop the native core"
+    );
+    drop(status_lock);
+    wait_until(&mut child, Duration::from_secs(8), || {
+        runtime_status_json(&paths.runtime_status_path)
+            .and_then(|status| status["observed_at_utc_msc"].as_i64())
+            .is_some_and(|observed_at| observed_at > status_before_lock)
+    });
+
     server.disconnect_first();
+    wait_until(&mut child, Duration::from_secs(8), || {
+        runtime_status_json(&paths.runtime_status_path).is_some_and(|status| {
+            status["phase"] == "degraded" && status["server_state"] == "reconnecting"
+        })
+    });
     wait_until(&mut child, Duration::from_secs(15), || {
         server.websocket_connections() >= 2 && server.full_snapshot_count(terminal_id) >= 6
+    });
+    wait_until(&mut child, Duration::from_secs(8), || {
+        runtime_status_json(&paths.runtime_status_path)
+            .is_some_and(|status| status["phase"] == "online")
+    });
+
+    terminate_process(worker_pid);
+    wait_until(&mut child, Duration::from_secs(8), || {
+        runtime_status_json(&paths.runtime_status_path).is_some_and(|status| {
+            status["phase"] == "degraded"
+                && status["terminals"][0]["worker_consecutive_failures"]
+                    .as_u64()
+                    .is_some_and(|failures| failures >= 1)
+        })
+    });
+    let mut restarted_worker_pid = worker_pid;
+    wait_until(&mut child, Duration::from_secs(20), || {
+        let Ok(value) = fs::read_to_string(&worker_pid_file) else {
+            return false;
+        };
+        let Ok(process_id) = value.trim().parse::<u32>() else {
+            return false;
+        };
+        if process_id == worker_pid || !process_is_running(process_id) {
+            return false;
+        }
+        restarted_worker_pid = process_id;
+        runtime_status_json(&paths.runtime_status_path)
+            .is_some_and(|status| status["phase"] == "online")
     });
     SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
         .expect("request shutdown");
     let output = child.wait_with_output();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
-    wait_for_process_exit(worker_pid, Duration::from_secs(5));
+    wait_for_process_exit(restarted_worker_pid, Duration::from_secs(5));
     let events = log_events(&paths.data_directory);
     assert!(
         events
@@ -798,6 +864,34 @@ fn process_is_running(process_id: u32) -> bool {
     // SAFETY: this function owns the handle returned by OpenProcess.
     unsafe { CloseHandle(handle) };
     succeeded && exit_code == 259
+}
+
+fn terminate_process(process_id: u32) {
+    // SAFETY: the PID belongs to the isolated fake Worker created by this test. The handle is
+    // opened only for termination/query and is closed exactly once.
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            process_id,
+        )
+    };
+    assert!(!handle.is_null(), "open isolated worker for termination");
+    // SAFETY: handle is a valid process handle for the isolated fake Worker.
+    assert_ne!(
+        unsafe { TerminateProcess(handle, 86) },
+        0,
+        "terminate isolated worker"
+    );
+    // SAFETY: this function owns the handle returned by OpenProcess.
+    unsafe { CloseHandle(handle) };
+    wait_for_process_exit(process_id, Duration::from_secs(5));
+}
+
+fn runtime_status_json(path: &Path) -> Option<Value> {
+    fs::read(path)
+        .ok()
+        .and_then(|payload| serde_json::from_slice(&payload).ok())
 }
 
 fn log_events(data_directory: &Path) -> Vec<String> {
