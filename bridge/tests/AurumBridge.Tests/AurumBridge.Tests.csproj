@@ -17,4 +17,12 @@
     <ProjectReference Include="../../launcher/AurumBridge.Launcher/AurumBridge.Launcher.csproj" />
     <ProjectReference Include="../../tools/AurumBridge.ReleaseSigner/AurumBridge.ReleaseSigner.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="../../update-contract/manifest-v2.json"
+          Link="update-contract/manifest-v2.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../update-contract/release-public-key.pem"
+          Link="update-contract/release-public-key.pem"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

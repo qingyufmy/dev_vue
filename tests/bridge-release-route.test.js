@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import express from 'express'
 import http from 'node:http'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -9,6 +9,7 @@ import {
   isInstallationInRollout,
   summarizeBridgeReleaseHealth,
   validateBridgeReleaseManifest,
+  verifyBridgeReleaseSignatures,
 } from '../server/routes/bridge-release.js'
 
 function manifest(overrides = {}) {
@@ -133,6 +134,16 @@ function mutate(router, routePath, body, headers = {}) {
 }
 
 describe('bridge release manifest route', () => {
+  it('shares the native and dotnet P-256 golden manifest contract', async () => {
+    const fixtureRoot = path.resolve('bridge/update-contract')
+    const value = JSON.parse(await readFile(path.join(fixtureRoot, 'manifest-v2.json'), 'utf8'))
+    const publicKey = await readFile(path.join(fixtureRoot, 'release-public-key.pem'), 'utf8')
+
+    expect(validateBridgeReleaseManifest(value, 1_800_000_000_100)).toBe(true)
+    expect(verifyBridgeReleaseSignatures(value, publicKey)).toBe(true)
+    expect(verifyBridgeReleaseSignatures({ ...value, priority:'urgent' }, publicKey)).toBe(false)
+  })
+
   it('counts connected installations once and recommends stopping on rollback', () => {
     const value = summarizeBridgeReleaseHealth({
       manifest:manifestV2({ rollout_percentage:50 }),

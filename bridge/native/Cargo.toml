@@ -29,13 +29,15 @@ license = "UNLICENSED"
 publish = false
 
 [workspace.dependencies]
+base64 = "=0.22.1"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 futures-util = "=0.3.33"
+p256 = { version = "=0.13.2", default-features = false, features = ["ecdsa", "pem", "std"] }
 reqwest = { version = "=0.13.4", default-features = false, features = ["json", "rustls", "system-proxy"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.10.9"
-tokio = { version = "=1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "rustls-tls-native-roots", "url"] }
 url = { version = "=2.5.8", features = ["serde"] }
 windows-sys = { version = "0.61.2", features = [
@@ -57,6 +59,7 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [profile.release]
 codegen-units = 1

@@ -1,3 +1,12 @@
+mod manifest;
+mod staging;
+
+pub use manifest::{
+    ReleaseManifest, ReleaseManifestClient, ReleaseManifestVerifier, ReleasePackage,
+    canonicalize_manifest, canonicalize_package,
+};
+pub use staging::{ReleasePackageStager, extract_verified_package};
+
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::{Display, Formatter};

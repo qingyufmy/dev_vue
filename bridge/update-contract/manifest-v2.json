@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "release_version": "3.1.0",
+  "release_id": "release-fixture-3.1.0",
+  "generated_at_utc_msc": 1800000000000,
+  "published_at_utc_msc": 1800000000000,
+  "expires_at_utc_msc": 4102444800000,
+  "priority": "normal",
+  "minimum_launcher_version": "3.0.0",
+  "minimum_idle_seconds": 120,
+  "activation_deadline_utc_msc": null,
+  "rollout_channel": "stable",
+  "rollout_percentage": 100,
+  "packages": [
+    {
+      "module_id": "core",
+      "version": "3.1.0",
+      "url": "http://127.0.0.1:3000/bridge/releases/core.zip",
+      "size_bytes": 101,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signature": "7kHtkUmQJSJfbR/F5wQVUuWFauU3LkHbipNQBBnYwNXxAarT+jrAVhnHtYnS43dXBW8i9ZueuhHfw3NBV6Rhjw==",
+      "minimum_core_version": null,
+      "maximum_core_version": null
+    },
+    {
+      "module_id": "adapter.mt5.python",
+      "version": "3.1.0",
+      "url": "http://127.0.0.1:3000/bridge/releases/mt5.zip",
+      "size_bytes": 102,
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "signature": "RW9bRf2rI2RFDg5XEu/GeyIzpoh23sokEqlT6vgtew0hX24mwAepHWH6ziPetwIaF202Av0HPixQXt0RzGNOHQ==",
+      "minimum_core_version": "3.1.0",
+      "maximum_core_version": "3.1.0"
+    },
+    {
+      "module_id": "adapter.mt4",
+      "version": "3.1.0",
+      "url": "http://127.0.0.1:3000/bridge/releases/mt4.zip",
+      "size_bytes": 103,
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "signature": "blAzsvEAvyA/lEhez7U//Qs1x6gyftVzeAiTlTOaFPQzDCFNp8jQWfD9/4uBEpm2JEDna6qTOqlaYnTnbvyfRA==",
+      "minimum_core_version": "3.1.0",
+      "maximum_core_version": "3.1.0"
+    }
+  ],
+  "signature": "qf/BAz2CinkOMPdB86AtukHVRpU4Hb0lJUV4/f0/JMtCet7UC+FaMy/jo/xG6DHwFsP76VmfH2ZWB+ZvqisouQ=="
+}

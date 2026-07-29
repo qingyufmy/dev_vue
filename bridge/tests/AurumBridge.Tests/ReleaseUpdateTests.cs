@@ -46,6 +46,23 @@ public sealed class ReleaseUpdateTests
     }
 
     [TestMethod]
+    public void SharedNativeManifestFixturePreservesTheDotNetP256Contract()
+    {
+        var fixtureRoot = Path.Combine(AppContext.BaseDirectory, "update-contract");
+        var manifest = JsonSerializer.Deserialize<ReleaseManifest>(File.ReadAllText(
+            Path.Combine(fixtureRoot, "manifest-v2.json")))
+            ?? throw new InvalidDataException("update_manifest_invalid");
+        using var verifier = new ReleaseManifestVerifier(
+            File.ReadAllText(Path.Combine(fixtureRoot, "release-public-key.pem")),
+            () => 1_800_000_000_100);
+
+        verifier.Verify(manifest, new Version(3, 0, 0));
+
+        Assert.AreEqual("release-fixture-3.1.0", manifest.ReleaseId);
+        Assert.AreEqual(3, manifest.Packages.Count);
+    }
+
+    [TestMethod]
     public void PreservesTheV1CanonicalSignatureContract()
     {
         var value = Manifest(new string('a', 64), 100, "manifest-signature");
