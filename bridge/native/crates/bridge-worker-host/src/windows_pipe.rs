@@ -1,23 +1,13 @@
 use crate::{ExpectedWorker, WorkerClient, WorkerHostError};
-use std::ffi::c_void;
-use std::mem::size_of;
+use bridge_runtime_win::CurrentUserPipeSecurity;
 use std::ptr::null_mut;
 use std::time::Duration;
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tokio::time::{Instant, timeout};
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
-use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
-};
 use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
 };
-use windows_sys::Win32::Security::{
-    GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
-};
-use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, OpenProcessToken,
-};
+use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 
 const PIPE_PREFIX: &str = "liangjian.bridge.v3";
 const NONCE_BYTES: usize = 32;
@@ -115,7 +105,8 @@ impl WorkerPipeListener {
     }
 
     fn bind(endpoint: WorkerEndpoint) -> Result<Self, WorkerHostError> {
-        let security = CurrentUserSecurity::new()?;
+        let security = CurrentUserPipeSecurity::new()
+            .map_err(|_| WorkerHostError::new("worker_pipe_security_descriptor_failed"))?;
         let mut options = ServerOptions::new();
         options
             .first_pipe_instance(true)
@@ -131,119 +122,6 @@ impl WorkerPipeListener {
         }
         .map_err(|_| WorkerHostError::new("worker_pipe_create_failed"))?;
         Ok(Self { endpoint, server })
-    }
-}
-
-struct CurrentUserSecurity {
-    descriptor: *mut c_void,
-    attributes: SECURITY_ATTRIBUTES,
-}
-
-impl CurrentUserSecurity {
-    fn new() -> Result<Self, WorkerHostError> {
-        let sid = current_user_sid_string()?;
-        let sddl = format!("D:P(A;;GA;;;{sid})");
-        let wide = to_wide(&sddl);
-        let mut descriptor = null_mut();
-        // SAFETY: wide is NUL terminated, descriptor is an out pointer and LocalFree owns the
-        // returned self-relative security descriptor.
-        if unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                wide.as_ptr(),
-                SDDL_REVISION_1,
-                &mut descriptor,
-                null_mut(),
-            )
-        } == 0
-        {
-            return Err(WorkerHostError::new(
-                "worker_pipe_security_descriptor_failed",
-            ));
-        }
-        let attributes = SECURITY_ATTRIBUTES {
-            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: descriptor,
-            bInheritHandle: 0,
-        };
-        Ok(Self {
-            descriptor,
-            attributes,
-        })
-    }
-
-    fn attributes_ptr(&self) -> *mut c_void {
-        (&raw const self.attributes).cast_mut().cast()
-    }
-}
-
-impl Drop for CurrentUserSecurity {
-    fn drop(&mut self) {
-        if !self.descriptor.is_null() {
-            // SAFETY: ConvertStringSecurityDescriptorToSecurityDescriptorW allocated this block.
-            unsafe { LocalFree(self.descriptor) };
-            self.descriptor = null_mut();
-        }
-    }
-}
-
-fn current_user_sid_string() -> Result<String, WorkerHostError> {
-    let mut token = null_mut();
-    // SAFETY: GetCurrentProcess returns a pseudo-handle valid for OpenProcessToken.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
-        return Err(WorkerHostError::new("worker_pipe_user_token_failed"));
-    }
-    let token = OwnedHandle(token);
-    let mut required = 0_u32;
-    // The first call intentionally obtains the required buffer size.
-    unsafe {
-        GetTokenInformation(token.0, TokenUser, null_mut(), 0, &mut required);
-    }
-    if required < size_of::<TOKEN_USER>() as u32 {
-        return Err(WorkerHostError::new("worker_pipe_user_token_invalid"));
-    }
-    let words = (required as usize).div_ceil(size_of::<usize>());
-    let mut buffer = vec![0_usize; words];
-    // SAFETY: buffer is pointer-aligned, writable, and at least `required` bytes long.
-    if unsafe {
-        GetTokenInformation(
-            token.0,
-            TokenUser,
-            buffer.as_mut_ptr().cast(),
-            required,
-            &mut required,
-        )
-    } == 0
-    {
-        return Err(WorkerHostError::new("worker_pipe_user_token_failed"));
-    }
-    // SAFETY: successful TokenUser query wrote a TOKEN_USER at the start of the aligned buffer.
-    let user = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() };
-    if user.User.Sid.is_null() {
-        return Err(WorkerHostError::new("worker_pipe_user_sid_invalid"));
-    }
-    let mut sid_text = null_mut();
-    // SAFETY: the token buffer remains alive and contains a valid user SID.
-    if unsafe { ConvertSidToStringSidW(user.User.Sid, &mut sid_text) } == 0 || sid_text.is_null() {
-        return Err(WorkerHostError::new("worker_pipe_user_sid_failed"));
-    }
-    let sid = wide_ptr_to_string(sid_text);
-    // SAFETY: ConvertSidToStringSidW allocated this NUL-terminated string with LocalAlloc.
-    unsafe { LocalFree(sid_text.cast()) };
-    sid
-}
-
-fn wide_ptr_to_string(value: *const u16) -> Result<String, WorkerHostError> {
-    let mut length = 0_usize;
-    // SAFETY: callers pass a valid NUL-terminated Windows string.
-    unsafe {
-        while *value.add(length) != 0 {
-            length += 1;
-            if length > 256 {
-                return Err(WorkerHostError::new("worker_pipe_user_sid_invalid"));
-            }
-        }
-        String::from_utf16(std::slice::from_raw_parts(value, length))
-            .map_err(|_| WorkerHostError::new("worker_pipe_user_sid_invalid"))
     }
 }
 
@@ -287,22 +165,6 @@ fn validate_nonce(value: &str) -> Result<(), WorkerHostError> {
         return Err(WorkerHostError::new("worker_pipe_nonce_invalid"));
     }
     Ok(())
-}
-
-fn to_wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-struct OwnedHandle(HANDLE);
-
-impl Drop for OwnedHandle {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            // SAFETY: this wrapper exclusively owns the process-token handle.
-            unsafe { CloseHandle(self.0) };
-            self.0 = null_mut();
-        }
-    }
 }
 
 #[cfg(test)]

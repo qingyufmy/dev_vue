@@ -2,6 +2,9 @@ use serde_json::Value;
 use std::fmt::{Display, Formatter};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+mod connection;
+pub use connection::{EaConnection, EaIdentity, EaPipeListener, REGISTRATION_PIPE_NAME};
+
 pub const CURRENT_PROTOCOL_VERSION: i32 = 3;
 pub const CURRENT_ADAPTER_VERSION: &str = "3.2.4";
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;

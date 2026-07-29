@@ -26,6 +26,9 @@ use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CreateEventW, SetEvent, WaitForMultipleObjects,
 };
 
+mod pipe_security;
+pub use pipe_security::CurrentUserPipeSecurity;
+
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
