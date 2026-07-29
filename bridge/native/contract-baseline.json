@@ -25,6 +25,15 @@
     ],
     "request_correlation_field": "request_id",
     "query_execution_separate_operation": true,
+    "trade_command_params_validated_before_worker_io": true,
+    "trade_command_param_actions": [
+      "place_order",
+      "cancel_order",
+      "modify_order",
+      "modify_position",
+      "close_position",
+      "query_execution"
+    ],
     "read_only_operations": ["collect_snapshot", "quote"],
     "mt5_read_only_capabilities": ["snapshot", "quote"],
     "windows_pipe_security": {

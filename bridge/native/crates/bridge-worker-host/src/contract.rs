@@ -4,6 +4,7 @@ use bridge_contract::{
     validate_id,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
 pub const WORKER_IPC_VERSION: u16 = 1;
@@ -394,6 +395,7 @@ impl WorkerRequest {
                 if !self.route.matches_command(command) || self.request_id != command.command_id {
                     return Err(WorkerHostError::new("worker_request_route_mismatch"));
                 }
+                validate_command_params(command)?;
             }
             WorkerOperation::CollectSnapshot { request } => request.validate()?,
             WorkerOperation::Quote { request } => request.validate()?,
@@ -422,6 +424,318 @@ impl WorkerRequest {
         }
         Ok(())
     }
+}
+
+fn validate_command_params(command: &CommandMessage) -> Result<(), WorkerHostError> {
+    let params = command
+        .params
+        .as_object()
+        .ok_or_else(|| WorkerHostError::new("worker_command_params_invalid"))?;
+    let valid = match command.action.as_str() {
+        "place_order" => validate_place_order(params),
+        "cancel_order" => validate_cancel_order(params),
+        "modify_order" => validate_modify_order(params),
+        "modify_position" => validate_modify_position(params),
+        "close_position" => validate_close_position(params),
+        "query_execution" => validate_query_execution(params),
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(WorkerHostError::new("worker_command_params_invalid"))
+    }
+}
+
+fn validate_place_order(params: &Map<String, Value>) -> bool {
+    exact_keys(
+        params,
+        &["symbol", "side", "volume"],
+        &[
+            "order_kind",
+            "price",
+            "stop_loss",
+            "take_profit",
+            "stop_limit_price",
+            "deviation",
+            "magic",
+            "expiration",
+            "type_time",
+            "type_filling",
+            "comment",
+        ],
+    ) && valid_symbol(params.get("symbol"))
+        && matches!(text(params.get("side")), Some("buy" | "sell"))
+        && positive_number(params.get("volume"))
+        && matches!(
+            text(params.get("order_kind")).unwrap_or("market"),
+            "market" | "limit" | "stop" | "stop_limit"
+        )
+        && optional_positive_number(params.get("price"))
+        && optional_positive_number(params.get("stop_loss"))
+        && optional_positive_number(params.get("take_profit"))
+        && optional_positive_number(params.get("stop_limit_price"))
+        && optional_nonnegative_integer(params.get("deviation"))
+        && optional_integer(params.get("magic"))
+        && optional_positive_integer(params.get("expiration"))
+        && optional_nonnegative_integer(params.get("type_time"))
+        && optional_nonnegative_integer(params.get("type_filling"))
+        && optional_text(params.get("comment"), 31)
+        && match text(params.get("order_kind")).unwrap_or("market") {
+            "market" => params.get("stop_limit_price").is_none(),
+            "limit" | "stop" => {
+                positive_number(params.get("price")) && params.get("stop_limit_price").is_none()
+            }
+            "stop_limit" => {
+                positive_number(params.get("price"))
+                    && positive_number(params.get("stop_limit_price"))
+            }
+            _ => false,
+        }
+}
+
+fn validate_cancel_order(params: &Map<String, Value>) -> bool {
+    exact_keys(
+        params,
+        &["ticket"],
+        &["volume", "magic", "symbol", "side", "expected_state"],
+    ) && valid_ticket(params.get("ticket"))
+        && optional_positive_number(params.get("volume"))
+        && optional_integer(params.get("magic"))
+        && optional_symbol(params.get("symbol"))
+        && optional_side(params.get("side"))
+        && optional_expected_state(params.get("expected_state"))
+}
+
+fn validate_modify_order(params: &Map<String, Value>) -> bool {
+    exact_keys(
+        params,
+        &["ticket"],
+        &[
+            "price",
+            "stop_loss",
+            "take_profit",
+            "stop_limit_price",
+            "expiration",
+        ],
+    ) && valid_ticket(params.get("ticket"))
+        && [
+            "price",
+            "stop_loss",
+            "take_profit",
+            "stop_limit_price",
+            "expiration",
+        ]
+        .iter()
+        .any(|key| params.contains_key(*key))
+        && optional_positive_number(params.get("price"))
+        && optional_positive_number(params.get("stop_loss"))
+        && optional_positive_number(params.get("take_profit"))
+        && optional_positive_number(params.get("stop_limit_price"))
+        && optional_positive_integer(params.get("expiration"))
+}
+
+fn validate_modify_position(params: &Map<String, Value>) -> bool {
+    exact_keys(
+        params,
+        &[
+            "ticket",
+            "symbol",
+            "side",
+            "volume",
+            "magic",
+            "expected_state",
+        ],
+        &[
+            "stop_loss",
+            "take_profit",
+            "expected_stop_loss",
+            "expected_take_profit",
+        ],
+    ) && valid_ticket(params.get("ticket"))
+        && valid_symbol(params.get("symbol"))
+        && optional_side(params.get("side"))
+        && positive_number(params.get("volume"))
+        && optional_integer(params.get("magic"))
+        && valid_expected_state(params.get("expected_state"))
+        && (params.contains_key("stop_loss") || params.contains_key("take_profit"))
+        && optional_nullable_positive_number(params.get("stop_loss"))
+        && optional_nullable_positive_number(params.get("take_profit"))
+        && optional_nonnegative_number(params.get("expected_stop_loss"))
+        && optional_nonnegative_number(params.get("expected_take_profit"))
+}
+
+fn validate_close_position(params: &Map<String, Value>) -> bool {
+    exact_keys(
+        params,
+        &["ticket"],
+        &[
+            "volume",
+            "deviation",
+            "magic",
+            "symbol",
+            "side",
+            "expected_state",
+        ],
+    ) && valid_ticket(params.get("ticket"))
+        && optional_positive_number(params.get("volume"))
+        && optional_nonnegative_integer(params.get("deviation"))
+        && optional_integer(params.get("magic"))
+        && optional_symbol(params.get("symbol"))
+        && optional_side(params.get("side"))
+        && optional_expected_state(params.get("expected_state"))
+}
+
+fn validate_query_execution(params: &Map<String, Value>) -> bool {
+    exact_keys(
+        params,
+        &["expected_kind"],
+        &[
+            "symbol",
+            "bridge_command_ref",
+            "trade_ticket",
+            "pending_ticket",
+            "ticket",
+            "lookback_seconds",
+        ],
+    ) && matches!(text(params.get("expected_kind")), Some("trade" | "pending"))
+        && optional_symbol(params.get("symbol"))
+        && optional_text(params.get("bridge_command_ref"), 64)
+        && optional_ticket(params.get("trade_ticket"))
+        && optional_ticket(params.get("pending_ticket"))
+        && optional_ticket(params.get("ticket"))
+        && params
+            .get("lookback_seconds")
+            .is_none_or(|value| integer_in_range(value, 3_600, 315_360_000))
+        && [
+            "bridge_command_ref",
+            "trade_ticket",
+            "pending_ticket",
+            "ticket",
+        ]
+        .iter()
+        .any(|key| params.contains_key(*key))
+}
+
+fn valid_expected_state(value: Option<&Value>) -> bool {
+    let Some(state) = value.and_then(Value::as_object) else {
+        return false;
+    };
+    exact_keys(
+        state,
+        &["ticket", "symbol", "direction", "magic", "volume"],
+        &[
+            "broker_server_key",
+            "login_account",
+            "stop_loss",
+            "take_profit",
+        ],
+    ) && valid_ticket(state.get("ticket"))
+        && valid_symbol(state.get("symbol"))
+        && matches!(text(state.get("direction")), Some("buy" | "sell"))
+        && integer(state.get("magic"))
+        && positive_number(state.get("volume"))
+        && optional_text(state.get("broker_server_key"), 128)
+        && optional_text(state.get("login_account"), 64)
+        && optional_nonnegative_number(state.get("stop_loss"))
+        && optional_nonnegative_number(state.get("take_profit"))
+}
+
+fn optional_expected_state(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| valid_expected_state(Some(value)))
+}
+
+fn exact_keys(params: &Map<String, Value>, required: &[&str], optional: &[&str]) -> bool {
+    required.iter().all(|key| params.contains_key(*key))
+        && params
+            .keys()
+            .all(|key| required.contains(&key.as_str()) || optional.contains(&key.as_str()))
+}
+
+fn text(value: Option<&Value>) -> Option<&str> {
+    value
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+fn optional_text(value: Option<&Value>, maximum: usize) -> bool {
+    value.is_none_or(|value| {
+        value
+            .as_str()
+            .is_some_and(|value| !value.is_empty() && value.len() <= maximum)
+    })
+}
+
+fn valid_symbol(value: Option<&Value>) -> bool {
+    text(value).is_some_and(|value| value.trim() == value && value.len() <= 64)
+}
+
+fn optional_symbol(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| valid_symbol(Some(value)))
+}
+
+fn optional_side(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| matches!(value.as_str(), Some("buy" | "sell")))
+}
+
+fn number(value: Option<&Value>) -> Option<f64> {
+    value
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+}
+
+fn positive_number(value: Option<&Value>) -> bool {
+    number(value).is_some_and(|value| value > 0.0)
+}
+
+fn optional_positive_number(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| positive_number(Some(value)))
+}
+
+fn optional_nullable_positive_number(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| value.is_null() || positive_number(Some(value)))
+}
+
+fn optional_nonnegative_number(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| number(Some(value)).is_some_and(|value| value >= 0.0))
+}
+
+fn integer(value: Option<&Value>) -> bool {
+    value.is_some_and(|value| value.as_i64().is_some() || value.as_u64().is_some())
+}
+
+fn optional_integer(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| integer(Some(value)))
+}
+
+fn optional_nonnegative_integer(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| value.as_u64().is_some())
+}
+
+fn optional_positive_integer(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| value.as_u64().is_some_and(|value| value > 0))
+}
+
+fn integer_in_range(value: &Value, minimum: u64, maximum: u64) -> bool {
+    value
+        .as_u64()
+        .is_some_and(|value| (minimum..=maximum).contains(&value))
+}
+
+fn valid_ticket(value: Option<&Value>) -> bool {
+    value.is_some_and(|value| {
+        value.as_u64().is_some_and(|value| value > 0)
+            || value.as_str().is_some_and(|value| {
+                !value.is_empty()
+                    && value.len() <= 32
+                    && value.bytes().all(|byte| byte.is_ascii_digit())
+                    && value.bytes().any(|byte| byte != b'0')
+            })
+    })
+}
+
+fn optional_ticket(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| valid_ticket(Some(value)))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -600,6 +914,146 @@ mod tests {
                 .code(),
             "worker_execute_action_invalid"
         );
+    }
+
+    #[test]
+    fn trade_command_params_match_the_server_business_adapter_contract() {
+        let cases = [
+            (
+                "place_order",
+                serde_json::json!({
+                    "symbol": "XAUUSD",
+                    "side": "buy",
+                    "order_kind": "market",
+                    "volume": 0.01,
+                    "stop_loss": 2_290.0,
+                    "take_profit": 2_320.0,
+                    "deviation": 20,
+                    "magic": 234000,
+                    "comment": "AI-2S"
+                }),
+            ),
+            (
+                "place_order",
+                serde_json::json!({
+                    "symbol": "XAUUSD",
+                    "side": "sell",
+                    "order_kind": "stop_limit",
+                    "volume": 0.1,
+                    "price": 2_300.0,
+                    "stop_limit_price": 2_302.0,
+                    "expiration": 1_900_000_000,
+                    "type_time": 2
+                }),
+            ),
+            ("cancel_order", serde_json::json!({ "ticket": "2001" })),
+            (
+                "modify_order",
+                serde_json::json!({ "ticket": "2001", "price": 2_301.0 }),
+            ),
+            (
+                "modify_position",
+                serde_json::json!({
+                    "ticket": "1001",
+                    "symbol": "XAUUSD",
+                    "side": "buy",
+                    "volume": 0.1,
+                    "magic": 234000,
+                    "stop_loss": 2_295.0,
+                    "take_profit": null,
+                    "expected_stop_loss": 2_290.0,
+                    "expected_take_profit": 2_320.0,
+                    "expected_state": {
+                        "ticket": "1001",
+                        "symbol": "XAUUSD",
+                        "direction": "buy",
+                        "magic": 234000,
+                        "volume": 0.1,
+                        "stop_loss": 2_290.0,
+                        "take_profit": 2_320.0
+                    }
+                }),
+            ),
+            (
+                "close_position",
+                serde_json::json!({ "ticket": "1001", "volume": 0.05 }),
+            ),
+            (
+                "query_execution",
+                serde_json::json!({
+                    "expected_kind": "trade",
+                    "trade_ticket": "1001",
+                    "lookback_seconds": 172800
+                }),
+            ),
+        ];
+
+        for (action, params) in cases {
+            let mut message = command(action);
+            message.params = params;
+            WorkerRequest::from_command(route(), message)
+                .expect("request")
+                .validate(1_700_000_000_001)
+                .unwrap_or_else(|error| panic!("{action}: {}", error.code()));
+        }
+    }
+
+    #[test]
+    fn trade_command_params_fail_closed_before_reaching_a_worker() {
+        let cases = [
+            (
+                "place_order",
+                serde_json::json!({ "symbol": "XAUUSD", "volume": 0.01 }),
+            ),
+            (
+                "place_order",
+                serde_json::json!({
+                    "symbol": "XAUUSD",
+                    "side": "buy",
+                    "order_kind": "limit",
+                    "volume": 0.01
+                }),
+            ),
+            ("cancel_order", serde_json::json!({ "ticket": "0" })),
+            ("modify_order", serde_json::json!({ "ticket": "2001" })),
+            (
+                "modify_position",
+                serde_json::json!({
+                    "ticket": "1001",
+                    "symbol": "XAUUSD",
+                    "side": "buy",
+                    "volume": 0.1,
+                    "magic": 234000,
+                    "stop_loss": 2_295.0
+                }),
+            ),
+            (
+                "close_position",
+                serde_json::json!({ "ticket": "1001", "volume": -0.01 }),
+            ),
+            (
+                "query_execution",
+                serde_json::json!({ "expected_kind": "trade" }),
+            ),
+            (
+                "cancel_order",
+                serde_json::json!({ "ticket": "2001", "unexpected": true }),
+            ),
+        ];
+
+        for (action, params) in cases {
+            let mut message = command(action);
+            message.params = params;
+            let request = WorkerRequest::from_command(route(), message).expect("request");
+            assert_eq!(
+                request
+                    .validate(1_700_000_000_001)
+                    .expect_err("invalid params")
+                    .code(),
+                "worker_command_params_invalid",
+                "{action}"
+            );
+        }
     }
 
     #[test]

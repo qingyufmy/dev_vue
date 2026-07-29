@@ -209,7 +209,11 @@ mod tests {
             issued_at_utc_msc: NOW,
             deadline_utc_msc: NOW + 10_000,
             action: "place_order".to_owned(),
-            params: serde_json::json!({ "symbol": "XAUUSD", "volume": 0.01 }),
+            params: serde_json::json!({
+                "symbol": "XAUUSD",
+                "side": "buy",
+                "volume": 0.01
+            }),
         }
     }
 

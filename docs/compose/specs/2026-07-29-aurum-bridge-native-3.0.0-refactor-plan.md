@@ -445,6 +445,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 ### 阶段 4：MT5 交易链路
 
+- [已完成] Core → Worker 交易参数合同按服务器实际映射冻结；六类动作在进入 Python 管道前校验必填字段、票号、数值、管理目标快照与未知字段，正式交易 Dispatcher 尚未启用。
 - command ledger、幂等、过期和 epoch fencing。
 - 开仓、挂单、撤单、平仓、修改止损止盈完整矩阵。
 - 原始 MT5 返回码、中文结果和 uncertain reconciliation。
