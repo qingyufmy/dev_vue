@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod log_viewer;
+mod permission_tooltip;
 mod settings;
 
 use bridge_foundation::{DEFAULT_PROFILE_ID, default_data_directory, validate_profile_id};
@@ -19,7 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows_sys::Win32::Foundation::{
-    COLORREF, FILETIME, HINSTANCE, HWND, LPARAM, LRESULT, RECT, SYSTEMTIME, WPARAM,
+    COLORREF, FILETIME, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
@@ -33,10 +34,12 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Time::FileTimeToSystemTime;
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, InitCommonControls, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON,
-    WC_COMBOBOXW,
+    WC_COMBOBOXW, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    EnableWindow, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+};
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
     ShellExecuteW,
@@ -50,9 +53,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW,
     ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE,
     WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK,
-    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION,
-    WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP,
-    WS_THICKFRAME, WS_VISIBLE,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SIZE,
+    WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX,
+    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -131,6 +134,10 @@ struct AppState {
     terminal_choices_fingerprint: String,
     log_window: HWND,
     settings_window: HWND,
+    permission_tooltip: HWND,
+    hovered_permission_account: Option<usize>,
+    tracking_mouse_leave: bool,
+    busy_observer_profiles: BTreeSet<String>,
 }
 
 fn main() {
@@ -167,6 +174,10 @@ fn main() {
             terminal_choices_fingerprint: String::new(),
             log_window: null_mut(),
             settings_window: null_mut(),
+            permission_tooltip: null_mut(),
+            hovered_permission_account: None,
+            tracking_mouse_leave: false,
+            busy_observer_profiles: BTreeSet::new(),
         });
     }
 }
@@ -426,12 +437,28 @@ unsafe extern "system" fn window_proc(
             };
             0
         }
+        WM_MOUSEMOVE => {
+            unsafe { handle_mouse_move(hwnd, state, point_from_lparam(lparam)) };
+            0
+        }
+        WM_MOUSELEAVE => {
+            state.tracking_mouse_leave = false;
+            state.hovered_permission_account = None;
+            unsafe { permission_tooltip::hide(state.permission_tooltip) };
+            0
+        }
+        WM_LBUTTONUP => {
+            unsafe { handle_account_click(hwnd, state, point_from_lparam(lparam)) };
+            0
+        }
         WM_DRAWITEM => unsafe { draw_button(lparam) },
         WM_PAINT => {
             unsafe { paint_window(hwnd, state) };
             0
         }
         WM_CLOSE => {
+            state.hovered_permission_account = None;
+            unsafe { permission_tooltip::hide(state.permission_tooltip) };
             unsafe { ShowWindow(hwnd, SW_HIDE) };
             0
         }
@@ -443,6 +470,10 @@ unsafe extern "system" fn window_proc(
             unsafe {
                 windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(hwnd, TIMER_POLL);
                 remove_tray_icon(hwnd, state);
+                if !state.permission_tooltip.is_null() {
+                    DestroyWindow(state.permission_tooltip);
+                    state.permission_tooltip = null_mut();
+                }
                 windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
             }
             0
@@ -921,24 +952,45 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
 }
 
 fn draw_account_cards(hdc: HDC, app: &AppState, bounds: RECT) {
-    let available_width = bounds.right - bounds.left;
-    let columns = resolve_account_column_count(available_width);
-    let gap = 8;
-    let card_width = ((available_width - gap * (columns - 1)) / columns).max(240);
-    for (index, account) in app.view.accounts.iter().enumerate() {
-        let column = index as i32 % columns;
-        let row = index as i32 / columns;
-        let left = bounds.left + column * (card_width + gap);
-        let top = bounds.top + row * 96;
-        if top + 88 > bounds.bottom {
+    for (account, card_bounds) in app
+        .view
+        .accounts
+        .iter()
+        .zip(account_card_rects(&app.view.accounts, bounds))
+    {
+        if card_bounds.top >= bounds.bottom {
             break;
         }
-        draw_account_card(
-            hdc,
-            app,
-            account,
-            rect(left, top, left + card_width, top + 88),
-        );
+        draw_account_card(hdc, app, account, card_bounds);
+    }
+}
+
+fn account_card_rects(accounts: &[AccountCardView], bounds: RECT) -> Vec<RECT> {
+    const GAP: i32 = 8;
+    let available_width = bounds.right - bounds.left;
+    let columns = resolve_account_column_count(available_width).max(1);
+    let card_width = ((available_width - GAP * (columns - 1)) / columns).max(240);
+    let mut result = Vec::with_capacity(accounts.len());
+    let mut row_top = bounds.top;
+    for row in accounts.chunks(columns as usize) {
+        let row_height = row.iter().map(account_card_height).max().unwrap_or(70);
+        for (column, account) in row.iter().enumerate() {
+            let left = bounds.left + column as i32 * (card_width + GAP);
+            let height = account_card_height(account);
+            result.push(rect(left, row_top, left + card_width, row_top + height));
+        }
+        row_top += row_height + GAP;
+    }
+    result
+}
+
+fn account_card_height(account: &AccountCardView) -> i32 {
+    if account.permission.is_none() {
+        70
+    } else if account.mt4_expert_update.is_some() {
+        112
+    } else {
+        88
     }
 }
 
@@ -956,9 +1008,9 @@ fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds
         hdc,
         rect(
             bounds.left + 16,
-            bounds.top + 37,
+            bounds.top + (bounds.bottom - bounds.top - 8) / 2,
             bounds.left + 24,
-            bounds.top + 45,
+            bounds.top + (bounds.bottom - bounds.top - 8) / 2 + 8,
         ),
         account.state_color,
     );
@@ -989,31 +1041,35 @@ fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
     );
     if let Some(permission) = &account.permission {
-        let badge_width = 100;
-        fill(
-            hdc,
-            rect(
-                bounds.left + 34,
-                bounds.top + 58,
-                bounds.left + 34 + badge_width,
-                bounds.top + 82,
-            ),
-            permission.background,
-        );
+        let badge = permission_badge_rect(bounds);
+        fill(hdc, badge, permission.background);
         draw_text(
             hdc,
             &permission.summary,
-            rect(
-                bounds.left + 42,
-                bounds.top + 58,
-                bounds.left + 34 + badge_width - 6,
-                bounds.top + 82,
-            ),
+            rect(badge.left + 8, badge.top, badge.right - 6, badge.bottom),
             app.fonts.small,
             permission.foreground,
             DT_LEFT | DT_SINGLELINE | DT_VCENTER,
         );
     }
+    if let Some(expert_update) = &account.mt4_expert_update {
+        let badge = rect(
+            bounds.left + 34,
+            bounds.top + 85,
+            (bounds.left + 244).min(copy_right),
+            bounds.top + 109,
+        );
+        fill(hdc, badge, Rgb(254, 243, 199));
+        draw_text(
+            hdc,
+            expert_update,
+            rect(badge.left + 8, badge.top, badge.right - 6, badge.bottom),
+            app.fonts.small,
+            Rgb(146, 64, 14),
+            DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
+        );
+    }
+    let button_top = bounds.top + (bounds.bottom - bounds.top - 34) / 2;
     let mut button_left = action_left;
     if let Some(action) = account.primary_action {
         let primary = matches!(
@@ -1025,9 +1081,9 @@ fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds
             app,
             rect(
                 button_left + 3,
-                bounds.top + 27,
+                button_top,
                 button_left + 73,
-                bounds.top + 61,
+                button_top + 34,
             ),
             account.primary_action_text.as_deref().unwrap_or("处理中…"),
             primary,
@@ -1041,15 +1097,193 @@ fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds
             app,
             rect(
                 button_left + 3,
-                bounds.top + 27,
+                button_top,
                 button_left + 73,
-                bounds.top + 61,
+                button_top + 34,
             ),
             "设置",
             false,
             account.actions_busy,
         );
     }
+}
+
+fn permission_badge_rect(card: RECT) -> RECT {
+    rect(
+        card.left + 34,
+        card.top + 58,
+        card.left + 134,
+        card.top + 82,
+    )
+}
+
+fn accounts_bounds(client: RECT, app: &AppState) -> RECT {
+    let width = client.right - client.left;
+    let height = client.bottom - client.top;
+    let mut y = 96;
+    if app.view.update_banner.is_some() {
+        y += 76;
+    }
+    y += 52;
+    if app.view.terminal_selector_visible {
+        y += 52;
+    }
+    if app.view.show_mt4_setup {
+        y += 72;
+    }
+    rect(52, y + 154, width - 52, height - 112)
+}
+
+fn point_in_rect(point: POINT, bounds: RECT) -> bool {
+    point.x >= bounds.left
+        && point.x < bounds.right
+        && point.y >= bounds.top
+        && point.y < bounds.bottom
+}
+
+fn point_from_lparam(lparam: LPARAM) -> POINT {
+    POINT {
+        x: (lparam as u16 as i16) as i32,
+        y: ((lparam >> 16) as u16 as i16) as i32,
+    }
+}
+
+unsafe fn handle_mouse_move(hwnd: HWND, app: &mut AppState, point: POINT) {
+    if !app.tracking_mouse_leave {
+        let mut tracking = TRACKMOUSEEVENT {
+            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_LEAVE,
+            hwndTrack: hwnd,
+            dwHoverTime: 0,
+        };
+        app.tracking_mouse_leave = unsafe { TrackMouseEvent(&mut tracking) } != 0;
+    }
+    let mut client = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut client) };
+    let bounds = accounts_bounds(client, app);
+    let cards = account_card_rects(&app.view.accounts, bounds);
+    let hovered =
+        app.view
+            .accounts
+            .iter()
+            .zip(cards)
+            .enumerate()
+            .find_map(|(index, (account, card))| {
+                account
+                    .permission
+                    .as_ref()
+                    .filter(|_| point_in_rect(point, permission_badge_rect(card)))
+                    .map(|permission| (index, permission, permission_badge_rect(card)))
+            });
+    match hovered {
+        Some((index, permission, badge)) if app.hovered_permission_account != Some(index) => {
+            match unsafe {
+                permission_tooltip::show_or_update(
+                    app.permission_tooltip,
+                    hwnd,
+                    permission,
+                    badge,
+                    app.brand_icon_small,
+                )
+            } {
+                Ok(tooltip) => {
+                    app.permission_tooltip = tooltip;
+                    app.hovered_permission_account = Some(index);
+                }
+                Err(_) => {
+                    app.hovered_permission_account = None;
+                    unsafe { permission_tooltip::hide(app.permission_tooltip) };
+                }
+            }
+        }
+        Some(_) => {}
+        None => {
+            app.hovered_permission_account = None;
+            unsafe { permission_tooltip::hide(app.permission_tooltip) };
+        }
+    }
+}
+
+unsafe fn handle_account_click(hwnd: HWND, app: &mut AppState, point: POINT) {
+    if app.inbox.action_running.load(Ordering::Acquire) {
+        return;
+    }
+    let mut client = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut client) };
+    let cards = account_card_rects(&app.view.accounts, accounts_bounds(client, app));
+    let clicked = app
+        .view
+        .accounts
+        .iter()
+        .zip(cards)
+        .find_map(|(account, bounds)| {
+            if account.actions_busy {
+                return None;
+            }
+            if account_primary_action_rect(account, bounds)
+                .is_some_and(|region| point_in_rect(point, region))
+            {
+                return Some((account, account.primary_action));
+            }
+            if account_settings_action_rect(account, bounds)
+                .is_some_and(|region| point_in_rect(point, region))
+            {
+                return Some((account, Some(ObserverAction::Configure)));
+            }
+            None
+        });
+    let Some((account, Some(action))) = clicked else {
+        return;
+    };
+    let profile_id = account.role.clone();
+    let Some(local_action) = observer_local_action(&profile_id, action) else {
+        show_error(hwnd, "bridge_local_control_action_unavailable");
+        return;
+    };
+    app.busy_observer_profiles.insert(profile_id);
+    if let Ok(view) =
+        build_main_window_view(&app.state, &app.busy_observer_profiles, format_local_time)
+    {
+        app.view = view;
+        unsafe { apply_layout(hwnd, app) };
+    }
+    unsafe { begin_action(hwnd, app, local_action) };
+}
+
+fn observer_local_action(profile_id: &str, action: ObserverAction) -> Option<LocalControlAction> {
+    match action {
+        ObserverAction::Start => Some(LocalControlAction::ObserverStart {
+            observer_profile_id: profile_id.to_owned(),
+        }),
+        ObserverAction::Pause => Some(LocalControlAction::ObserverPause {
+            observer_profile_id: profile_id.to_owned(),
+        }),
+        ObserverAction::Retry => Some(LocalControlAction::ObserverRetry {
+            observer_profile_id: profile_id.to_owned(),
+        }),
+        ObserverAction::Bind | ObserverAction::Configure => None,
+    }
+}
+
+fn account_primary_action_rect(account: &AccountCardView, bounds: RECT) -> Option<RECT> {
+    account.primary_action?;
+    let action_count =
+        i32::from(account.settings_visible) + i32::from(account.primary_action.is_some());
+    let action_left = bounds.right - action_count * 76;
+    let top = bounds.top + (bounds.bottom - bounds.top - 34) / 2;
+    Some(rect(action_left + 3, top, action_left + 73, top + 34))
+}
+
+fn account_settings_action_rect(account: &AccountCardView, bounds: RECT) -> Option<RECT> {
+    if !account.settings_visible {
+        return None;
+    }
+    let action_count =
+        i32::from(account.settings_visible) + i32::from(account.primary_action.is_some());
+    let action_left = bounds.right - action_count * 76;
+    let settings_left = action_left + i32::from(account.primary_action.is_some()) * 76;
+    let top = bounds.top + (bounds.bottom - bounds.top - 34) / 2;
+    Some(rect(settings_left + 3, top, settings_left + 73, top + 34))
 }
 
 fn draw_compact_button(
@@ -1343,9 +1577,22 @@ unsafe fn receive_background_message(hwnd: HWND, app: &mut AppState) {
         .lock()
         .ok()
         .and_then(|mut messages| messages.pop_front());
+    if let Some(UiMessage::Action { action, .. }) = &message
+        && let Some(profile_id) = observer_profile_id(action)
+    {
+        app.busy_observer_profiles.remove(profile_id);
+        if let Ok(view) =
+            build_main_window_view(&app.state, &app.busy_observer_profiles, format_local_time)
+        {
+            app.view = view;
+            unsafe { apply_layout(hwnd, app) };
+        }
+    }
     match message {
         Some(UiMessage::State(Ok(state))) => {
-            if let Ok(view) = build_main_window_view(&state, &BTreeSet::new(), format_local_time) {
+            if let Ok(view) =
+                build_main_window_view(&state, &app.busy_observer_profiles, format_local_time)
+            {
                 app.state = state;
                 app.view = view;
                 unsafe { apply_layout(hwnd, app) };
@@ -1376,6 +1623,27 @@ unsafe fn receive_background_message(hwnd: HWND, app: &mut AppState) {
         }) => show_error(hwnd, &code),
         Some(UiMessage::State(Err(_))) | None => {}
         Some(UiMessage::Action { result: Ok(_), .. }) => {}
+    }
+}
+
+fn observer_profile_id(action: &LocalControlAction) -> Option<&str> {
+    match action {
+        LocalControlAction::ObserverStart {
+            observer_profile_id,
+        }
+        | LocalControlAction::ObserverPause {
+            observer_profile_id,
+        }
+        | LocalControlAction::ObserverRetry {
+            observer_profile_id,
+        }
+        | LocalControlAction::ObserverBind {
+            observer_profile_id,
+            ..
+        } => Some(observer_profile_id),
+        LocalControlAction::ObserverUpdate { observer }
+        | LocalControlAction::ObserverCreate { observer } => Some(&observer.observer_profile_id),
+        _ => None,
     }
 }
 
@@ -1677,6 +1945,7 @@ fn now_utc_msc() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bridge_ui_model::{PermissionDetailView, PermissionView};
 
     #[test]
     fn formats_current_timestamp_in_local_time() {
@@ -1687,5 +1956,108 @@ mod tests {
     fn loads_the_same_embedded_brand_icon_as_dotnet() {
         assert!(load_brand_icon(16).is_some());
         assert!(load_brand_icon(32).is_some());
+    }
+
+    #[test]
+    fn account_cards_follow_dotnet_heights_and_responsive_rows() {
+        let accounts = vec![
+            account_fixture(true, false, false),
+            account_fixture(true, true, true),
+            account_fixture(false, false, false),
+        ];
+        let narrow = account_card_rects(&accounts, rect(0, 0, 516, 500))
+            .into_iter()
+            .map(rect_coordinates)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            narrow,
+            vec![(0, 0, 516, 88), (0, 96, 516, 208), (0, 216, 516, 286)]
+        );
+        let wide = account_card_rects(&accounts, rect(0, 0, 824, 500))
+            .into_iter()
+            .map(rect_coordinates)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            wide,
+            vec![(0, 0, 408, 88), (416, 0, 824, 112), (0, 120, 408, 190)]
+        );
+    }
+
+    #[test]
+    fn account_hit_regions_match_the_drawn_badge_and_buttons() {
+        let account = account_fixture(true, false, true);
+        let bounds = rect(0, 0, 408, 88);
+        assert_eq!(
+            rect_coordinates(permission_badge_rect(bounds)),
+            (34, 58, 134, 82)
+        );
+        assert_eq!(
+            account_primary_action_rect(&account, bounds).map(rect_coordinates),
+            Some((259, 27, 329, 61))
+        );
+        assert_eq!(
+            account_settings_action_rect(&account, bounds).map(rect_coordinates),
+            Some((335, 27, 405, 61))
+        );
+    }
+
+    #[test]
+    fn observer_runtime_buttons_dispatch_the_matching_local_actions() {
+        assert!(matches!(
+            observer_local_action("source-1", ObserverAction::Start),
+            Some(LocalControlAction::ObserverStart { observer_profile_id })
+                if observer_profile_id == "source-1"
+        ));
+        assert!(matches!(
+            observer_local_action("source-1", ObserverAction::Pause),
+            Some(LocalControlAction::ObserverPause { observer_profile_id })
+                if observer_profile_id == "source-1"
+        ));
+        assert!(matches!(
+            observer_local_action("source-1", ObserverAction::Retry),
+            Some(LocalControlAction::ObserverRetry { observer_profile_id })
+                if observer_profile_id == "source-1"
+        ));
+        assert!(observer_local_action("source-1", ObserverAction::Bind).is_none());
+        assert!(observer_local_action("source-1", ObserverAction::Configure).is_none());
+    }
+
+    fn account_fixture(
+        has_permission: bool,
+        expert_update: bool,
+        observer_actions: bool,
+    ) -> AccountCardView {
+        AccountCardView {
+            role: if observer_actions {
+                "source-1"
+            } else {
+                "主账户"
+            }
+            .to_owned(),
+            title: "账户".to_owned(),
+            state: "运行中".to_owned(),
+            state_color: Rgb(5, 150, 105),
+            permission: has_permission.then(|| PermissionView {
+                summary: "交易权限正常".to_owned(),
+                accessible_description: "账户交易权限：已开启".to_owned(),
+                action: "交易所需开关均已开启。".to_owned(),
+                foreground: Rgb(4, 120, 87),
+                background: Rgb(209, 250, 229),
+                details: vec![PermissionDetailView {
+                    label: "账户交易权限".to_owned(),
+                    allowed: Some(true),
+                    color: Rgb(4, 120, 87),
+                }],
+            }),
+            mt4_expert_update: expert_update.then(|| "EA 已更新，重启 MT4 后生效".to_owned()),
+            primary_action: observer_actions.then_some(ObserverAction::Pause),
+            primary_action_text: observer_actions.then(|| "暂停".to_owned()),
+            settings_visible: observer_actions,
+            actions_busy: false,
+        }
+    }
+
+    fn rect_coordinates(bounds: RECT) -> (i32, i32, i32, i32) {
+        (bounds.left, bounds.top, bounds.right, bounds.bottom)
     }
 }
