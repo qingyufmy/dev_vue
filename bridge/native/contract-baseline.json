@@ -183,6 +183,20 @@
     "bindings_ordered_by_terminal_instance_id": true,
     "runtime_change_detection_fields": ["terminal_instance_id", "platform", "terminal_path", "account_ref", "connection_epoch", "updated_at_utc_msc"]
   },
+  "mt5_first_provisioning_contract": {
+    "fresh_profile_does_not_require_dotnet_seed_data": true,
+    "discovery_sources": ["running_process", "metaquotes_registry_hkcu", "metaquotes_registry_hklm_64", "metaquotes_registry_hklm_32", "metaquotes_terminal_data_origin"],
+    "running_installations_are_prioritized": true,
+    "probe_uses_packaged_python_and_mt5_worker": true,
+    "probe_timeout_seconds": 15,
+    "probe_output_maximum_bytes": 16384,
+    "probe_output_fields": ["probe_version", "terminal_path", "account_ref"],
+    "terminal_path_and_account_route_are_strictly_validated": true,
+    "successful_probe_activates_sqlite_binding": true,
+    "single_terminal_is_selected_automatically": true,
+    "multiple_terminals_require_user_selection": true,
+    "probe_is_read_only": true
+  },
   "core_bootstrap_contract": {
     "profile_paths_are_authoritative": true,
     "credential_state_loaded_from_dpapi_store": true,

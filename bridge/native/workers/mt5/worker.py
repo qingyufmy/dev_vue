@@ -5,6 +5,7 @@ import json
 import math
 import os
 import struct
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -1285,7 +1286,41 @@ def run(mt5: Any) -> None:
         adapter.shutdown()
 
 
+def probe_terminal(mt5: Any, terminal_path: str) -> dict[str, Any]:
+    resolved_path = str(Path(terminal_path).resolve())
+    if not Path(resolved_path).is_file():
+        raise WorkerError("mt5_terminal_not_found")
+    if not mt5.initialize(path=resolved_path, timeout=10_000, portable=False):
+        raise WorkerError("mt5_initialize_failed")
+    try:
+        account = mt5.account_info()
+        terminal = mt5.terminal_info()
+        broker_server = str(getattr(account, "server", "") or "").strip()
+        login = str(getattr(account, "login", "") or "").strip()
+        if account is None or terminal is None or not broker_server or not login:
+            raise WorkerError("mt5_account_unavailable")
+        if not bool(getattr(terminal, "connected", False)):
+            raise WorkerError("mt5_terminal_disconnected")
+        return {
+            "probe_version": 1,
+            "terminal_path": resolved_path,
+            "account_ref": {"broker_server": broker_server, "login": login},
+        }
+    finally:
+        mt5.shutdown()
+
+
+def main(mt5: Any, arguments: list[str]) -> None:
+    if arguments:
+        if len(arguments) != 3 or arguments[0] != "--probe" or arguments[1] != "--terminal":
+            raise WorkerError("worker_arguments_invalid")
+        print(json.dumps(probe_terminal(mt5, arguments[2]), ensure_ascii=False,
+                         separators=(",", ":")))
+        return
+    run(mt5)
+
+
 if __name__ == "__main__":
     import MetaTrader5 as mt5
 
-    run(mt5)
+    main(mt5, sys.argv[1:])

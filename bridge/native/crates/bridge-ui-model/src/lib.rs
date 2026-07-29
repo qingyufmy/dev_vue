@@ -697,6 +697,17 @@ fn describe_code(code: Option<&str>, fallback: &str) -> String {
             "交易终端连续恢复失败，已暂停该终端；请确认 MT 正常后点击“重新检测”。"
         }
         Some("mt5_probe_timeout") => "MT5 响应超时，程序会自动重试。",
+        Some("mt5_python_runtime_not_found") => {
+            "未找到 MT5 Python 运行组件，请重新安装或修复量见智桥。"
+        }
+        Some("mt5_worker_script_not_found") => {
+            "未找到 MT5 桥接模块，请重新安装或修复量见智桥。"
+        }
+        Some(
+            "mt5_probe_failed"
+            | "mt5_probe_process_start_failed"
+            | "mt5_probe_response_invalid",
+        ) => "MT5 账户检测失败，请确认 MT5 已启动并登录后点击“重新检测”。",
         Some("mt5_terminal_already_in_use") => {
             "该 MT5 已被另一个桥接档案使用；每个观摩源需要独立的 MT5 安装目录。"
         }
@@ -891,5 +902,17 @@ mod tests {
         assert_eq!(resolve_account_column_count(0), 1);
         assert_eq!(resolve_account_column_count(407), 1);
         assert_eq!(resolve_account_column_count(808), 2);
+    }
+
+    #[test]
+    fn mt5_first_detection_failures_have_actionable_chinese_copy() {
+        assert_eq!(
+            describe_code(Some("mt5_python_runtime_not_found"), "fallback"),
+            "未找到 MT5 Python 运行组件，请重新安装或修复量见智桥。"
+        );
+        assert_eq!(
+            describe_code(Some("mt5_probe_response_invalid"), "fallback"),
+            "MT5 账户检测失败，请确认 MT5 已启动并登录后点击“重新检测”。"
+        );
     }
 }

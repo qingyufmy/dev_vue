@@ -19,6 +19,7 @@ from worker import (  # noqa: E402
     Mt5Worker,
     WorkerError,
     WorkerRoute,
+    probe_terminal,
     read_frame,
     write_frame,
 )
@@ -211,6 +212,19 @@ class WorkerTests(unittest.TestCase):
         self.adapter.connect()
         self.worker = Mt5Worker(self.adapter, self.route)
         self.worker.trade._clock_msc = lambda: self.now
+
+    def test_probe_terminal_returns_only_strict_identity_and_closes_mt5(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Path(directory) / "terminal64.exe"
+            terminal.write_bytes(b"terminal")
+            result = probe_terminal(self.mt5, str(terminal))
+        self.assertEqual(1, result["probe_version"])
+        self.assertEqual(str(terminal.resolve()), result["terminal_path"])
+        self.assertEqual(
+            {"broker_server": "Broker-Demo", "login": "123456"},
+            result["account_ref"],
+        )
+        self.assertFalse(self.mt5.initialized)
 
     def tearDown(self):
         self.temporary.cleanup()

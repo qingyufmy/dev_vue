@@ -1,11 +1,13 @@
 mod mt4_expert_installer;
+mod mt5_terminal_discovery;
 mod observer_terminal;
 
 use bridge_foundation::{
-    CliMode, DEFAULT_PROFILE_ID, HealthCheckOptions, StartupReadyOptions, default_data_directory,
-    default_root_data_directory, list_observer_profiles, parse_cli, profile_instance_id,
-    read_runtime_status_snapshot, resolve_installed_root, resolve_profile_paths, run_health_check,
-    write_runtime_status_snapshot, write_startup_ready_signal,
+    CliMode, DEFAULT_PROFILE_ID, HealthCheckOptions, MT5_WORKER_RELATIVE_PATH,
+    PYTHON_RELATIVE_PATH, StartupReadyOptions, default_data_directory, default_root_data_directory,
+    list_observer_profiles, parse_cli, profile_instance_id, read_runtime_status_snapshot,
+    resolve_installed_root, resolve_profile_paths, run_health_check, write_runtime_status_snapshot,
+    write_startup_ready_signal,
 };
 use bridge_local_control::{
     EndpointSettingsSelection, LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction,
@@ -51,10 +53,14 @@ use tokio::sync::{Mutex as AsyncMutex, watch};
 use tokio::time::Instant;
 
 use mt4_expert_installer::{deploy_expert, resolve_expert_source};
+use mt5_terminal_discovery::{
+    Mt5Installation, Mt5ProbeResult, probe_terminal, selected_or_discovered,
+};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const ADMINISTRATOR_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const OBSERVER_UI_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const MT5_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 enum ProfileRuntimeTrigger {
     Completed(Result<(), liangjian_bridge_core::CoreBootstrapError>),
@@ -2399,6 +2405,22 @@ async fn run_profile_lifecycle(
         mut preference_change_receiver,
     } = runtime;
     loop {
+        let preferences_before_bootstrap = preferences_store.load();
+        let mt5_provision_error = if preferences_before_bootstrap.platform.as_deref() == Some("mt5")
+        {
+            provision_mt5_bindings_if_missing(
+                application_directory,
+                root_data_directory,
+                profile_id,
+                &preferences_store,
+                &preferences_before_bootstrap,
+                logger,
+            )
+            .await
+            .err()
+        } else {
+            None
+        };
         let mut bootstrap =
             NativeProfileBootstrap::load(application_directory, root_data_directory, profile_id)?;
         let preferences = preferences_store.load();
@@ -2451,7 +2473,7 @@ async fn run_profile_lifecycle(
                 Some(if platform == "mt4" {
                     "mt4_terminal_not_found"
                 } else {
-                    "mt5_terminal_not_found"
+                    mt5_provision_error.unwrap_or("mt5_terminal_not_found")
                 }),
                 candidates,
             );
@@ -2682,6 +2704,117 @@ async fn run_profile_lifecycle(
         stop.cancel();
         return Ok(());
     }
+}
+
+async fn provision_mt5_bindings_if_missing(
+    application_directory: &std::path::Path,
+    root_data_directory: &std::path::Path,
+    profile_id: &str,
+    preferences_store: &BridgePreferencesStore,
+    preferences: &BridgeUserPreferences,
+    logger: &BridgeLogger,
+) -> Result<(), &'static str> {
+    let paths = resolve_profile_paths(root_data_directory, profile_id)?;
+    let store = OutboxStore::open_or_create(&paths.database_path).map_err(|error| error.code())?;
+    if store
+        .terminal_bindings()
+        .map_err(|error| error.code())?
+        .iter()
+        .any(|binding| binding.platform == "mt5")
+    {
+        return Ok(());
+    }
+    let installations = selected_or_discovered(preferences.mt5_terminal_path.as_deref());
+    if installations.is_empty() {
+        return Err("mt5_terminal_not_found");
+    }
+    let python = application_directory.join(PYTHON_RELATIVE_PATH);
+    let worker = application_directory.join(MT5_WORKER_RELATIVE_PATH);
+    if !python.is_file() {
+        return Err("mt5_python_runtime_not_found");
+    }
+    if !worker.is_file() {
+        return Err("mt5_worker_script_not_found");
+    }
+    let preferred = preferences.mt5_terminal_instance_id.as_deref();
+    let mut accepted = Vec::new();
+    let mut last_error = "mt5_probe_failed";
+    for installation in installations {
+        if preferred.is_some_and(|value| value != installation.terminal_instance_id) {
+            continue;
+        }
+        let python = python.clone();
+        let worker = worker.clone();
+        let terminal = installation.executable_path.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            probe_terminal(&python, &worker, &terminal, MT5_PROBE_TIMEOUT)
+        })
+        .await
+        .map_err(|_| "mt5_probe_join_failed")?;
+        let probe = match result {
+            Ok(probe) => probe,
+            Err(code) => {
+                last_error = code;
+                logger.warning(
+                    "native_mt5_terminal_probe_failed",
+                    Some(&format!(
+                        "terminal_id={};code={code}",
+                        installation.terminal_instance_id
+                    )),
+                );
+                continue;
+            }
+        };
+        if let Err(code) = persist_mt5_probe(&store, &installation, &probe, now_utc_msc()) {
+            last_error = code;
+            continue;
+        }
+        logger.info(
+            "native_mt5_terminal_provisioned",
+            Some(&format!(
+                "profile={profile_id};terminal_id={}",
+                installation.terminal_instance_id
+            )),
+        );
+        accepted.push(installation.terminal_instance_id);
+    }
+    if accepted.is_empty() {
+        return Err(if preferred.is_some() {
+            "mt5_probe_identity_mismatch"
+        } else {
+            last_error
+        });
+    }
+    if accepted.len() == 1 && preferred.is_none() {
+        preferences_store
+            .save_terminal("mt5", &accepted[0])
+            .map_err(|error| error.code())?;
+    }
+    Ok(())
+}
+
+fn persist_mt5_probe(
+    store: &OutboxStore,
+    installation: &Mt5Installation,
+    probe: &Mt5ProbeResult,
+    observed_at_utc_msc: i64,
+) -> Result<(), &'static str> {
+    if observer_terminal::mt5_terminal_instance_id(&probe.executable_path)?
+        != installation.terminal_instance_id
+        || probe.executable_path != installation.executable_path
+    {
+        return Err("mt5_probe_identity_mismatch");
+    }
+    store
+        .activate_terminal_binding(
+            &installation.terminal_instance_id,
+            "mt5",
+            &probe.executable_path,
+            &probe.account_ref,
+            observed_at_utc_msc,
+        )
+        .map(|_| ())
+        .map_err(|error| error.code())
 }
 
 fn signal_preference_change(sender: &watch::Sender<u64>) {
@@ -3604,6 +3737,47 @@ mod tests {
         );
         assert!(stale.terminals.is_empty());
         std::fs::remove_dir_all(root).expect("remove observer projection fixture");
+    }
+
+    #[test]
+    fn mt5_probe_persists_the_exact_discovered_account_route() {
+        let root = unique_test_directory("mt5-probe-binding");
+        std::fs::create_dir_all(&root).expect("probe binding root");
+        let terminal = std::path::absolute(root.join("terminal64.exe")).unwrap();
+        std::fs::write(&terminal, b"terminal").expect("probe terminal");
+        let terminal_instance_id =
+            observer_terminal::mt5_terminal_instance_id(&terminal).expect("terminal identity");
+        let installation = Mt5Installation {
+            executable_path: terminal.clone(),
+            terminal_instance_id: terminal_instance_id.clone(),
+            is_running: true,
+        };
+        let probe = Mt5ProbeResult {
+            executable_path: terminal.clone(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+        };
+        let store = OutboxStore::open_or_create(root.join("bridge.db")).expect("probe store");
+        persist_mt5_probe(&store, &installation, &probe, now_utc_msc())
+            .expect("persist probe binding");
+        let bindings = store.terminal_bindings().expect("probe bindings");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].terminal_instance_id, terminal_instance_id);
+        assert_eq!(bindings[0].account_ref, probe.account_ref);
+        assert_eq!(bindings[0].terminal_path, terminal);
+
+        let mismatched = Mt5ProbeResult {
+            executable_path: root.join("other").join("terminal64.exe"),
+            account_ref: probe.account_ref,
+        };
+        assert_eq!(
+            persist_mt5_probe(&store, &installation, &mismatched, now_utc_msc()),
+            Err("mt5_probe_identity_mismatch")
+        );
+        drop(store);
+        std::fs::remove_dir_all(root).expect("remove probe binding fixture");
     }
 
     #[test]

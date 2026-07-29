@@ -4,7 +4,7 @@ use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
     LocalControlResult, UiStateSnapshot,
 };
-use bridge_preferences::BridgePreferencesStore;
+use bridge_preferences::{BridgePreferencesStore, ObserverProfilePreferences};
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
 use bridge_store::OutboxStore;
@@ -456,8 +456,20 @@ fn authorized_profile_without_a_terminal_waits_for_redetection() {
         .expect("credential");
     BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
         .expect("preferences store")
-        .save_platform("mt5")
-        .expect("save platform");
+        .save_observer_profile(&ObserverProfilePreferences {
+            platform: "mt5".to_owned(),
+            terminal_instance_id: "mt5_0123456789abcdef01234567".to_owned(),
+            terminal_path: root
+                .join("missing-mt5")
+                .join("terminal64.exe")
+                .display()
+                .to_string(),
+            bridge_user_id: 7,
+            observer_account_label: Some("测试观摩源".to_owned()),
+            trading_account_id: None,
+            trading_account_label: None,
+        })
+        .expect("save selected missing terminal");
     let child = spawn_core(&root, &profile_id);
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {

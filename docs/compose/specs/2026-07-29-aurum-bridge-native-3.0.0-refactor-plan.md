@@ -442,6 +442,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - [已完成] 报价经经纪商时区校准后输出 UTC；时钟未可信、账户改变、终端断开或返回数据无效时失败关闭。
 - [已完成] 已完成账户/持仓/挂单 data delta 的 Native 合同、revision/SQLite 最新投影/服务器 Outbox 原子提交，以及从 SQLite 恢复的快照投影器；投影器按 ticket 计算 upsert/delete，支持首次、epoch 变化、主动 reconciliation 和 gap 后 full snapshot。采集协调器按空闲 1 秒、活跃 250 毫秒动态轮询，支持交易后唤醒、Worker 恢复退避、停止取消和投影前账户路由复核。
 - [已完成] Worker 崩溃和 MT5 终端关闭/重启恢复已完成；Core 会检测 SQLite 中账户、终端路径和 epoch 的运行期变化，有序关闭旧服务器会话与 Worker 后重新加载绑定。独立进程测试已验证新路径、新账户和更高 epoch 的 Hello/状态恢复，以及已 ACK 交易不重放；真实终端的账户/路径人工切换仍作为发布前实机验收项。
+- [已完成] 全新 Native Profile 的 MT5 首次发现与绑定：Windows 进程和 MetaQuotes 数据目录来源合并去重，受控 Python Worker 只读探测精确终端路径、Broker 和登录号，15 秒超时、16 KiB 输出上限及严格字段校验后才原子激活 SQLite 路由；单终端自动选中，多终端保留用户选择。该链路同样供管理员 MT5 观摩源使用，不再依赖旧 .NET 数据库。
 
 交付门：页面数据满足现有服务器和产品功能合同，24 小时运行无串账户、无持续内存增长、历史响应不超限。
 
