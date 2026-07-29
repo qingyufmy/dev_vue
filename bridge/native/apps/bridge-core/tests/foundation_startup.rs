@@ -1,5 +1,9 @@
 use bridge_contract::AccountRef;
 use bridge_foundation::{profile_instance_id, resolve_profile_paths};
+use bridge_local_control::{
+    LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
+    LocalControlResult,
+};
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
 use bridge_store::OutboxStore;
@@ -27,6 +31,27 @@ fn missing_authorization_waits_without_a_browser_and_honors_shutdown() {
     .expect("pairing runtime json");
     assert_eq!(pairing["phase"], "pairing_required");
     assert_eq!(pairing["server_state"], "pairing_required");
+    let local_state = tokio::runtime::Runtime::new()
+        .expect("local control runtime")
+        .block_on(async {
+            let mut client = LocalControlPipeClient::connect(&profile_id, Duration::from_secs(2))
+                .await
+                .expect("local control client");
+            client
+                .request(&LocalControlRequest {
+                    schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                    request_id: "request-pairing-state".to_owned(),
+                    profile_id: profile_id.clone(),
+                    action: LocalControlAction::GetState,
+                })
+                .await
+                .expect("local control state")
+        });
+    let LocalControlResult::State { state } = local_state.result else {
+        panic!("expected local control state");
+    };
+    assert_eq!(state.phase, "pairing_required");
+    assert!(!state.server_connected);
 
     SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
         .expect("request shutdown");

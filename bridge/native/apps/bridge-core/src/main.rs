@@ -4,10 +4,15 @@ use bridge_foundation::{
     resolve_profile_paths, run_health_check, write_runtime_status_snapshot,
     write_startup_ready_signal,
 };
+use bridge_local_control::{
+    LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeServer, LocalControlResponse,
+    LocalControlResult, UiStateStore,
+};
 use bridge_observability::{BridgeLogger, LoggerConfig};
 use bridge_runtime_win::{
     InstanceAcquireResult, InstanceSignal, SingleInstanceGuard, default_lock_directory,
 };
+use bridge_security_win::CredentialStore;
 use bridge_terminal_session::TerminalSessionState;
 use bridge_transport::{
     ConnectionState, CredentialSource, SessionCancellation, resolve_server_endpoints,
@@ -31,6 +36,13 @@ enum ProfileRuntimeTrigger {
     BindingChanged,
     BindingWatchFailed(liangjian_bridge_core::CoreBootstrapError),
     Stopped,
+}
+
+struct ProfileLifecycleContext<'a> {
+    application_directory: &'a std::path::Path,
+    root_data_directory: &'a std::path::Path,
+    profile_id: &'a str,
+    logger: &'a BridgeLogger,
 }
 
 fn main() {
@@ -132,6 +144,28 @@ async fn run_connected_profile(
     logger: BridgeLogger,
 ) -> Result<(), Box<dyn Error>> {
     let stop = SessionCancellation::default();
+    let profile_paths = resolve_profile_paths(&root_data_directory, &profile_id)?;
+    let initial_runtime_status = NativeRuntimeStatusSnapshot::inactive(
+        &profile_id,
+        VERSION,
+        now_utc_msc(),
+        "starting",
+        "stopped",
+        None,
+    )?;
+    let ui_state = UiStateStore::new(initial_runtime_status.to_ui_state(1)?)?;
+    let local_control_server = LocalControlPipeServer::bind(&profile_id)?;
+    let credential_store = CredentialStore::new(&profile_paths.credential_path)?;
+    let control_stop = stop.clone();
+    let control_task = tokio::spawn(run_local_control_server(
+        local_control_server,
+        ui_state.clone(),
+        credential_store,
+        application_directory.clone(),
+        root_data_directory.clone(),
+        control_stop,
+        logger.clone(),
+    ));
     let signal_stop = stop.clone();
     let signal_waiter = tokio::task::spawn_blocking(move || {
         loop {
@@ -149,20 +183,26 @@ async fn run_connected_profile(
     });
 
     let profile_result = run_profile_lifecycle(
-        &application_directory,
-        &root_data_directory,
-        &profile_id,
+        ProfileLifecycleContext {
+            application_directory: &application_directory,
+            root_data_directory: &root_data_directory,
+            profile_id: &profile_id,
+            logger: &logger,
+        },
         ready_file,
         expected_terminal_instance_ids,
         stop.clone(),
-        &logger,
+        ui_state.clone(),
     )
     .await;
     stop.cancel();
+    control_task
+        .await
+        .map_err(|_| "bridge_local_control_task_failed")?;
     signal_waiter
         .await
         .map_err(|_| "bridge_instance_wait_failed")??;
-    let status_path = resolve_profile_paths(&root_data_directory, &profile_id)?.runtime_status_path;
+    let status_path = profile_paths.runtime_status_path;
     match &profile_result {
         Ok(()) => {
             publish_inactive_status(
@@ -172,6 +212,7 @@ async fn run_connected_profile(
                 "stopped",
                 "stopped",
                 None,
+                &ui_state,
             );
             logger.info(
                 "native_runtime_stopped",
@@ -187,6 +228,7 @@ async fn run_connected_profile(
                 "degraded",
                 "stopped",
                 Some(&error_code),
+                &ui_state,
             );
             logger.error("native_runtime_failed", Some(&error_code));
         }
@@ -194,15 +236,116 @@ async fn run_connected_profile(
     profile_result
 }
 
+async fn run_local_control_server(
+    mut server: LocalControlPipeServer,
+    ui_state: UiStateStore,
+    credential_store: CredentialStore,
+    application_directory: PathBuf,
+    root_data_directory: PathBuf,
+    stop: SessionCancellation,
+    logger: BridgeLogger,
+) {
+    logger.info(
+        "native_local_control_started",
+        Some(&format!("profile={}", server.endpoint().profile_id())),
+    );
+    loop {
+        let accepted = tokio::select! {
+            result = server.accept() => result,
+            _ = stop.cancelled() => return,
+        };
+        if let Err(error) = accepted {
+            logger.warning("native_local_control_accept_failed", Some(error.code()));
+            tokio::select! {
+                _ = stop.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+            }
+            continue;
+        }
+
+        loop {
+            let request = tokio::select! {
+                result = server.receive() => match result {
+                    Ok(request) => request,
+                    Err(error) => {
+                        if error.code() != "bridge_local_control_pipe_closed" {
+                            logger.warning("native_local_control_request_failed", Some(error.code()));
+                        }
+                        break;
+                    }
+                },
+                _ = stop.cancelled() => {
+                    let _ = server.disconnect();
+                    return;
+                }
+            };
+            let exit_requested = matches!(&request.action, LocalControlAction::BridgeExit);
+            let result = match request.action {
+                LocalControlAction::GetState => match ui_state.snapshot() {
+                    Ok(state) => LocalControlResult::State {
+                        state: Box::new(state),
+                    },
+                    Err(code) => LocalControlResult::Rejected {
+                        code: code.to_owned(),
+                    },
+                },
+                LocalControlAction::Pair => {
+                    match resolve_server_endpoints(&application_directory, &root_data_directory)
+                        .and_then(|endpoints| endpoints.api_url("/bridge/pair"))
+                    {
+                        Ok(url) => LocalControlResult::PairingUrl {
+                            url: url.to_string(),
+                        },
+                        Err(error) => LocalControlResult::Rejected {
+                            code: error.code().to_owned(),
+                        },
+                    }
+                }
+                LocalControlAction::Logout => match credential_store.clear() {
+                    Ok(()) => LocalControlResult::Accepted,
+                    Err(error) => LocalControlResult::Rejected {
+                        code: error.code().to_owned(),
+                    },
+                },
+                LocalControlAction::BridgeExit => LocalControlResult::Accepted,
+                _ => LocalControlResult::Rejected {
+                    code: "bridge_local_control_action_unavailable".to_owned(),
+                },
+            };
+            let response = LocalControlResponse {
+                schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                request_id: request.request_id,
+                result,
+            };
+            if let Err(error) = server.send(&response).await {
+                logger.warning("native_local_control_response_failed", Some(error.code()));
+                break;
+            }
+            if exit_requested {
+                stop.cancel();
+                let _ = server.disconnect();
+                return;
+            }
+        }
+        if let Err(error) = server.disconnect() {
+            logger.warning("native_local_control_disconnect_failed", Some(error.code()));
+        }
+    }
+}
+
 async fn run_profile_lifecycle(
-    application_directory: &PathBuf,
-    root_data_directory: &PathBuf,
-    profile_id: &str,
+    context: ProfileLifecycleContext<'_>,
     ready_file: Option<PathBuf>,
     expected_terminal_instance_ids: Vec<String>,
     stop: SessionCancellation,
-    logger: &BridgeLogger,
+    ui_state: UiStateStore,
 ) -> Result<(), Box<dyn Error>> {
+    let ProfileLifecycleContext {
+        application_directory,
+        root_data_directory,
+        profile_id,
+        logger,
+    } = context;
     loop {
         let bootstrap =
             NativeProfileBootstrap::load(application_directory, root_data_directory, profile_id)?;
@@ -227,6 +370,7 @@ async fn run_profile_lifecycle(
                 "pairing_required",
                 "pairing_required",
                 None,
+                &ui_state,
             );
             logger.info("native_runtime_pairing_required", None);
             let credentials = ProfileCredentialSource::new(bootstrap.credential_store)?;
@@ -245,6 +389,7 @@ async fn run_profile_lifecycle(
                             "pairing_required",
                             "pairing_required",
                             None,
+                            &ui_state,
                         );
                     }
                 }
@@ -280,6 +425,7 @@ async fn run_profile_lifecycle(
             "connecting",
             "connecting",
             None,
+            &ui_state,
         );
         let clock: Arc<dyn Fn() -> i64 + Send + Sync> = Arc::new(now_utc_msc);
         let connected =
@@ -310,6 +456,7 @@ async fn run_profile_lifecycle(
             status_path.clone(),
             profile_id.to_owned(),
             status_stop.clone(),
+            ui_state.clone(),
             logger.clone(),
         ));
         let runtime = connected.run(runtime_stop.clone());
@@ -333,6 +480,7 @@ async fn run_profile_lifecycle(
             Ok(snapshot) => publish_runtime_status_or_warn(logger, &status_path, &snapshot),
             Err(error) => logger.warning("native_runtime_status_failed", Some(error.code())),
         }
+        publish_active_ui_state_or_warn(logger, &runtime_status, profile_id, &ui_state);
         status_stop.cancel();
         status_monitor
             .await
@@ -359,6 +507,7 @@ async fn monitor_runtime_status(
     status_path: PathBuf,
     profile_id: String,
     stop: SessionCancellation,
+    ui_state: UiStateStore,
     logger: BridgeLogger,
 ) {
     let mut last_fingerprint = None;
@@ -379,6 +528,7 @@ async fn monitor_runtime_status(
         let changed = last_fingerprint.as_ref() != Some(&fingerprint);
         if changed || last_publish.elapsed() >= Duration::from_secs(5) {
             publish_runtime_status_or_warn(&logger, &status_path, &snapshot);
+            publish_active_ui_state_or_warn(&logger, &handle, &profile_id, &ui_state);
             last_publish = Instant::now();
         }
         if changed {
@@ -399,6 +549,7 @@ fn publish_inactive_status(
     phase: &str,
     server_state: &str,
     error_code: Option<&str>,
+    ui_state: &UiStateStore,
 ) {
     let snapshot = match NativeRuntimeStatusSnapshot::inactive(
         profile_id,
@@ -415,6 +566,14 @@ fn publish_inactive_status(
         }
     };
     publish_runtime_status_or_warn(logger, status_path, &snapshot);
+    match snapshot.to_ui_state(1) {
+        Ok(state) => {
+            if let Err(error_code) = ui_state.publish(state) {
+                logger.warning("native_ui_state_publish_failed", Some(error_code));
+            }
+        }
+        Err(error) => logger.warning("native_ui_state_publish_failed", Some(error.code())),
+    }
 }
 
 fn publish_runtime_status(
@@ -434,6 +593,22 @@ fn publish_runtime_status_or_warn(
 ) {
     if let Err(error_code) = publish_runtime_status(status_path, snapshot) {
         logger.warning("native_runtime_status_failed", Some(&error_code));
+    }
+}
+
+fn publish_active_ui_state_or_warn(
+    logger: &BridgeLogger,
+    handle: &NativeRuntimeStatusHandle,
+    profile_id: &str,
+    ui_state: &UiStateStore,
+) {
+    match handle.ui_snapshot(profile_id, VERSION, now_utc_msc(), 1) {
+        Ok(state) => {
+            if let Err(error_code) = ui_state.publish(state) {
+                logger.warning("native_ui_state_publish_failed", Some(error_code));
+            }
+        }
+        Err(error) => logger.warning("native_ui_state_publish_failed", Some(error.code())),
     }
 }
 

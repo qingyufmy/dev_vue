@@ -11,6 +11,9 @@ use bridge_foundation::{
     BridgeProfilePaths, DEFAULT_PROFILE_ID, MT5_WORKER_RELATIVE_PATH, PYTHON_RELATIVE_PATH,
     resolve_profile_paths, validate_profile_id,
 };
+use bridge_local_control::{
+    LOCAL_CONTROL_SCHEMA_VERSION, UiStateSnapshot, UiTerminalCandidate, UiTerminalStatus,
+};
 use bridge_mt4::{EaIdentity, EaRegistrationHub, EaRegistrationHubHandle};
 use bridge_runtime_win::RestartPolicy;
 use bridge_security_win::CredentialStore;
@@ -1231,6 +1234,45 @@ impl NativeRuntimeStatusSnapshot {
             },
         })
     }
+
+    pub fn to_ui_state(&self, revision: u64) -> Result<UiStateSnapshot, CoreBootstrapError> {
+        if revision == 0 || !self.terminals.is_empty() {
+            return Err(CoreBootstrapError::new(
+                "bridge_local_control_state_invalid",
+            ));
+        }
+        let detail_code = self
+            .server_error_code
+            .clone()
+            .or_else(|| self.reconciliation.fatal_error_code.clone());
+        let state = UiStateSnapshot {
+            schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+            revision,
+            profile_id: self.profile_id.clone(),
+            observed_at_utc_msc: self.observed_at_utc_msc,
+            phase: self.phase.clone(),
+            detail_code,
+            selected_platform: None,
+            selected_terminal_instance_id: None,
+            terminal_candidates: Vec::new(),
+            terminals: Vec::new(),
+            server_connected: self.server_state == "connected",
+            last_data_sync_utc_msc: None,
+            bridge_version: self.bridge_version.clone(),
+            // Authorization/observer projections are intentionally fail-closed until the server
+            // role is carried into Core state; ordinary users must never see observer controls.
+            can_manage_observer_sources: false,
+            is_administrator: false,
+            observer_profiles: Vec::new(),
+            update_notice: None,
+            autostart_enabled: false,
+            custom_endpoint_active: false,
+        };
+        state
+            .validate(&self.profile_id)
+            .map_err(CoreBootstrapError::new)?;
+        Ok(state)
+    }
 }
 
 fn valid_status_code(value: &str) -> bool {
@@ -1257,6 +1299,105 @@ pub struct NativeRuntimeStatusHandle {
 }
 
 impl NativeRuntimeStatusHandle {
+    pub fn ui_snapshot(
+        &self,
+        profile_id: &str,
+        bridge_version: &str,
+        observed_at_utc_msc: i64,
+        revision: u64,
+    ) -> Result<UiStateSnapshot, CoreBootstrapError> {
+        if revision == 0 {
+            return Err(CoreBootstrapError::new(
+                "bridge_local_control_state_invalid",
+            ));
+        }
+        let runtime = self.snapshot(profile_id, bridge_version, observed_at_utc_msc)?;
+        let session_statuses = self.active_sessions.statuses();
+        let terminal_candidates = session_statuses
+            .iter()
+            .map(|status| UiTerminalCandidate {
+                terminal_instance_id: status.route.terminal_instance_id.clone(),
+                platform: status.route.platform.clone(),
+                broker_server: status.route.account_ref.broker_server.clone(),
+                login: status.route.account_ref.login.clone(),
+                display_name: Some(format!(
+                    "{} · {}",
+                    status.route.account_ref.login, status.route.account_ref.broker_server
+                )),
+            })
+            .collect::<Vec<_>>();
+        let terminals = session_statuses
+            .iter()
+            .map(|status| UiTerminalStatus {
+                terminal_instance_id: status.route.terminal_instance_id.clone(),
+                platform: status.route.platform.clone(),
+                broker_server: status.route.account_ref.broker_server.clone(),
+                login: status.route.account_ref.login.clone(),
+                runtime_state: match status.state {
+                    bridge_terminal_session::TerminalSessionState::Ready => "running",
+                    bridge_terminal_session::TerminalSessionState::Degraded => "restarting",
+                    bridge_terminal_session::TerminalSessionState::Superseded
+                    | bridge_terminal_session::TerminalSessionState::Stopped => "stopped",
+                    bridge_terminal_session::TerminalSessionState::Starting => "starting",
+                }
+                .to_owned(),
+                error_code: status
+                    .error_code
+                    .clone()
+                    .map(|code| sanitized_status_code(&code, "terminal_runtime_failed")),
+                observer_profile_id: None,
+                // Permission flags arrive in terminal account snapshots. Until that projection is
+                // connected, None means "not reported" rather than pretending a switch is on.
+                terminal_trading_allowed: None,
+                program_trading_allowed: None,
+                account_trading_allowed: None,
+                account_expert_trading_allowed: None,
+                mt4_expert_restart_required: false,
+            })
+            .collect::<Vec<_>>();
+        let selected = terminals.first();
+        let detail_code = runtime
+            .server_error_code
+            .clone()
+            .or_else(|| {
+                terminals
+                    .iter()
+                    .find_map(|terminal| terminal.error_code.clone())
+            })
+            .or_else(|| runtime.reconciliation.fatal_error_code.clone());
+        let state = UiStateSnapshot {
+            schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+            revision,
+            profile_id: runtime.profile_id.clone(),
+            observed_at_utc_msc: runtime.observed_at_utc_msc,
+            phase: runtime.phase,
+            detail_code,
+            selected_platform: selected.map(|terminal| terminal.platform.clone()),
+            selected_terminal_instance_id: selected
+                .map(|terminal| terminal.terminal_instance_id.clone()),
+            terminal_candidates,
+            terminals,
+            server_connected: runtime.server_state == "connected",
+            last_data_sync_utc_msc: session_statuses
+                .iter()
+                .filter_map(|status| status.last_success_at_utc_msc)
+                .max(),
+            bridge_version: runtime.bridge_version,
+            // Server role projection is added separately; fail closed so an ordinary user never
+            // receives administrator observer controls.
+            can_manage_observer_sources: false,
+            is_administrator: false,
+            observer_profiles: Vec::new(),
+            update_notice: None,
+            autostart_enabled: false,
+            custom_endpoint_active: false,
+        };
+        state
+            .validate(profile_id)
+            .map_err(CoreBootstrapError::new)?;
+        Ok(state)
+    }
+
     pub fn snapshot(
         &self,
         profile_id: &str,
@@ -2033,19 +2174,27 @@ mod tests {
             },
             1_700_000_000_102,
         );
-        let runtime_status = NativeRuntimeStatusHandle {
+        let status_handle = NativeRuntimeStatusHandle {
             active_sessions: Arc::clone(&active),
             connection_state: connection,
             reconciliation_state: reconciliation,
-        }
-        .snapshot("default", "3.0.0", 1_700_000_000_103)
-        .expect("runtime status");
+        };
+        let runtime_status = status_handle
+            .snapshot("default", "3.0.0", 1_700_000_000_103)
+            .expect("runtime status");
         assert_eq!(runtime_status.server_state, "connected");
         assert_eq!(runtime_status.reconciliation.pending, 1);
         assert_eq!(runtime_status.terminals.len(), 1);
         let serialized = serde_json::to_string(&runtime_status).expect("status json");
         assert!(!serialized.contains("Broker-Demo"));
         assert!(!serialized.contains("123456"));
+        let ui_status = status_handle
+            .ui_snapshot("default", "3.0.0", 1_700_000_000_103, 1)
+            .expect("UI status");
+        assert_eq!(ui_status.terminals[0].broker_server, "Broker-Demo");
+        assert_eq!(ui_status.terminals[0].login, "123456");
+        assert_eq!(ui_status.terminals[0].runtime_state, "starting");
+        drop(status_handle);
 
         active.stop().await.expect("stop active sessions");
         assert!(

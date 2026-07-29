@@ -1,7 +1,16 @@
 use bridge_foundation::{DEFAULT_PROFILE_ID, validate_profile_id};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::sync::{Arc, RwLock};
 use url::{Host, Url};
+
+#[cfg(windows)]
+mod windows_pipe;
+
+#[cfg(windows)]
+pub use windows_pipe::{
+    LocalControlEndpoint, LocalControlError, LocalControlPipeClient, LocalControlPipeServer,
+};
 
 pub const LOCAL_CONTROL_SCHEMA_VERSION: u32 = 1;
 pub const MAX_LOCAL_CONTROL_BYTES: usize = 512 * 1024;
@@ -247,6 +256,47 @@ pub struct UiStateSnapshot {
     pub update_notice: Option<UiUpdateNotice>,
     pub autostart_enabled: bool,
     pub custom_endpoint_active: bool,
+}
+
+/// Authoritative in-memory state shared by Bridge Core and the desktop UI channel.
+/// `runtime-status.json` remains a crash/fallback diagnostic and is not read by this store.
+#[derive(Clone)]
+pub struct UiStateStore {
+    state: Arc<RwLock<UiStateSnapshot>>,
+}
+
+impl UiStateStore {
+    pub fn new(state: UiStateSnapshot) -> Result<Self, &'static str> {
+        state.validate(&state.profile_id)?;
+        Ok(Self {
+            state: Arc::new(RwLock::new(state)),
+        })
+    }
+
+    pub fn snapshot(&self) -> Result<UiStateSnapshot, &'static str> {
+        self.state
+            .read()
+            .map(|state| state.clone())
+            .map_err(|_| "bridge_local_control_state_unavailable")
+    }
+
+    pub fn publish(&self, mut next: UiStateSnapshot) -> Result<u64, &'static str> {
+        let mut current = self
+            .state
+            .write()
+            .map_err(|_| "bridge_local_control_state_unavailable")?;
+        if next.profile_id != current.profile_id {
+            return Err("bridge_local_control_state_invalid");
+        }
+        next.revision = current.revision.saturating_add(1);
+        if next.revision == 0 {
+            return Err("bridge_local_control_state_invalid");
+        }
+        next.validate(&current.profile_id)?;
+        let revision = next.revision;
+        *current = next;
+        Ok(revision)
+    }
 }
 
 impl UiStateSnapshot {
@@ -708,6 +758,23 @@ mod tests {
         assert_eq!(
             validate_pairing_url("http://example.com/bridge/pair"),
             Err("bridge_local_control_response_invalid")
+        );
+    }
+
+    #[test]
+    fn state_store_owns_revision_and_rejects_cross_profile_publish() {
+        let store = UiStateStore::new(state()).expect("state store");
+        let mut next = store.snapshot().expect("snapshot");
+        next.phase = "degraded".to_owned();
+        next.detail_code = Some("terminal_runtime_failed".to_owned());
+        assert_eq!(store.publish(next), Ok(8));
+        assert_eq!(store.snapshot().expect("published").revision, 8);
+
+        let mut wrong_profile = store.snapshot().expect("snapshot");
+        wrong_profile.profile_id = "source-1".to_owned();
+        assert_eq!(
+            store.publish(wrong_profile),
+            Err("bridge_local_control_state_invalid")
         );
     }
 }

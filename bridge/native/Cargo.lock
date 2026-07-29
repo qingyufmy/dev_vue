@@ -96,8 +96,10 @@ name = "bridge-local-control"
 version = "3.0.0-alpha.1"
 dependencies = [
  "bridge-foundation",
+ "bridge-runtime-win",
  "serde",
  "serde_json",
+ "tokio",
  "url",
 ]
 
@@ -851,6 +853,7 @@ dependencies = [
  "bridge-command",
  "bridge-contract",
  "bridge-foundation",
+ "bridge-local-control",
  "bridge-mt4",
  "bridge-observability",
  "bridge-runtime-win",

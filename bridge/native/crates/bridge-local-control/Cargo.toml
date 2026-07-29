@@ -7,6 +7,8 @@ publish.workspace = true
 
 [dependencies]
 bridge-foundation = { path = "../bridge-foundation" }
+bridge-runtime-win = { path = "../bridge-runtime-win" }
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 url.workspace = true
