@@ -36,6 +36,10 @@
 
 ## 本地验证
 
+开发构建和本地验收只使用 `config/development/server-endpoints.json` 中的
+`http://127.0.0.1:3000`。统一验证脚本会在 Release 构建完成后把这份配置复制到
+Core 旁边。正式服务器地址不写入 Native 源码，只能在用户明确要求最终打包时由发布流程注入。
+
 ```powershell
 $cargo = "$env:USERPROFILE\.cargo\bin\cargo.exe"
 Push-Location .\bridge\native

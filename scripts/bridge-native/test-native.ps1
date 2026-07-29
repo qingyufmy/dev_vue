@@ -8,6 +8,13 @@ $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $nativeRoot = Join-Path $repo 'bridge\native'
 $manifest = Join-Path $nativeRoot 'Cargo.toml'
 $pythonTests = Join-Path $nativeRoot 'workers\mt5\tests'
+$developmentEndpoints = Join-Path $nativeRoot 'config\development\server-endpoints.json'
+$developmentEndpointConfig = Get-Content -LiteralPath $developmentEndpoints -Raw |
+    ConvertFrom-Json
+if ($developmentEndpointConfig.schema_version -ne 1 -or
+    $developmentEndpointConfig.server_url -ne 'http://127.0.0.1:3000') {
+    throw 'native_development_endpoint_must_be_loopback'
+}
 $cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
 $cargo = if ($null -ne $cargoCommand) {
     $cargoCommand.Source
@@ -41,6 +48,16 @@ try {
     if (-not $SkipRelease) {
         & $cargo build --locked --manifest-path $manifest --workspace --release
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        $releaseDirectory = Join-Path $nativeRoot 'target\x86_64-pc-windows-msvc\release'
+        $releaseCore = Join-Path $releaseDirectory 'liangjian-bridge-core.exe'
+        if (-not (Test-Path -LiteralPath $releaseCore)) {
+            throw 'native_release_core_not_found'
+        }
+        Copy-Item -LiteralPath $developmentEndpoints `
+            -Destination (Join-Path $releaseDirectory 'server-endpoints.json') `
+            -Force
+        Write-Host 'Native development endpoint: http://127.0.0.1:3000'
     }
 } finally {
     Pop-Location

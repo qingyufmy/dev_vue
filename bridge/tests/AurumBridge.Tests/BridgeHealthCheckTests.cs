@@ -22,7 +22,7 @@ public sealed class BridgeHealthCheckTests
                 runtime,
                 worker,
                 null,
-                new("https://www.cnfxtrade.com"));
+                new("http://127.0.0.1:3000"));
 
             await BridgeHealthCheck.RunAsync(paths, healthFile, healthRoot);
             using var document = JsonDocument.Parse(await File.ReadAllBytesAsync(healthFile));

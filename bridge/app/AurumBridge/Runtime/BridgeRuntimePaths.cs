@@ -14,7 +14,7 @@ public sealed record BridgeRuntimePaths(
 
 public static class BridgeRuntimePathResolver
 {
-    private const string DefaultServerUrl = "https://www.cnfxtrade.com";
+    private const string DefaultServerUrl = "http://127.0.0.1:3000";
 
     public static string ResolveInstallRoot(string applicationDirectory)
     {

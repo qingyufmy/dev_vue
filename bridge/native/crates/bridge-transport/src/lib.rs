@@ -1732,25 +1732,21 @@ mod tests {
 
     #[test]
     fn endpoint_contract_matches_v3_and_never_silently_downgrades() {
-        let endpoints = ServerEndpoints::from_server_url("https://www.cnfxtrade.com/")
+        let endpoints = ServerEndpoints::from_server_url("https://server.example/")
             .expect("production endpoint");
-        assert_eq!(
-            endpoints.control_base().as_str(),
-            "https://www.cnfxtrade.com/"
-        );
+        assert_eq!(endpoints.control_base().as_str(), "https://server.example/");
         assert_eq!(endpoints.realtime_base().scheme(), "wss");
         assert_eq!(
             endpoints
                 .websocket_url("opaque ticket")
                 .expect("websocket")
                 .as_str(),
-            "wss://www.cnfxtrade.com/aurum-api/bridge/v3/ws?ticket=opaque+ticket"
+            "wss://server.example/aurum-api/bridge/v3/ws?ticket=opaque+ticket"
         );
         assert!(ServerEndpoints::from_server_url("http://example.com/").is_err());
         assert!(ServerEndpoints::from_server_url("http://127.0.0.1:3000/").is_ok());
         assert!(
-            ServerEndpoints::normalize("https://www.cnfxtrade.com/", "ws://www.cnfxtrade.com/")
-                .is_ok()
+            ServerEndpoints::normalize("https://server.example/", "ws://server.example/").is_ok()
         );
     }
 

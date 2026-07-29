@@ -26,9 +26,7 @@ public sealed class BridgeRuntimePathResolverTests
 
         var paths = BridgeRuntimePathResolver.Resolve(
             _directory,
-            name => name == "AURUM_BRIDGE_SERVER_URL"
-                ? "https://www.cnfxtrade.com"
-                : null);
+            _ => null);
 
         Assert.AreEqual(python, paths.PythonExecutable);
         Assert.AreEqual(worker, paths.Mt5WorkerScript);
@@ -37,8 +35,8 @@ public sealed class BridgeRuntimePathResolverTests
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "AURUM", "BridgeV3", "credential.dat"),
             paths.CredentialPath);
-        Assert.AreEqual(new Uri("https://www.cnfxtrade.com"), paths.ServerBaseUri);
-        Assert.AreEqual(new Uri("wss://www.cnfxtrade.com"), paths.RealtimeBaseUri);
+        Assert.AreEqual(new Uri("http://127.0.0.1:3000"), paths.ServerBaseUri);
+        Assert.AreEqual(new Uri("ws://127.0.0.1:3000"), paths.RealtimeBaseUri);
     }
 
     [TestMethod]
@@ -178,7 +176,7 @@ public sealed class BridgeRuntimePathResolverTests
     }
 
     [TestMethod]
-    public void DamagedAdminSettingsFallBackToThePackagedOfficialAddress()
+    public void DamagedAdminSettingsFallBackToTheDevelopmentAddress()
     {
         CreateFile("runtime", "python", "python.exe");
         CreateFile("modules", "adapter.mt5.python", "worker.py");
@@ -196,7 +194,7 @@ public sealed class BridgeRuntimePathResolverTests
             _directory,
             name => values.GetValueOrDefault(name));
 
-        Assert.AreEqual(new Uri("https://www.cnfxtrade.com"), paths.ServerBaseUri);
+        Assert.AreEqual(new Uri("http://127.0.0.1:3000"), paths.ServerBaseUri);
     }
 
     [TestMethod]

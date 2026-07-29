@@ -163,7 +163,7 @@ public sealed class ReleaseUpdateTests
         using var http = new HttpClient(new StaticResponseHandler(
             Encoding.UTF8.GetBytes(JsonSerializer.Serialize(signed))));
         using var verifier = new ReleaseManifestVerifier(signingKey.ExportSubjectPublicKeyInfoPem());
-        var client = new ReleaseManifestClient(new Uri("https://www.cnfxtrade.com"), http);
+        var client = new ReleaseManifestClient(new Uri("http://127.0.0.1:3000"), http);
 
         var fetched = await client.FetchVerifiedAsync(
             verifier,
@@ -192,7 +192,7 @@ public sealed class ReleaseUpdateTests
             Encoding.UTF8.GetBytes(JsonSerializer.Serialize(signed)));
         using var http = new HttpClient(handler);
         using var verifier = new ReleaseManifestVerifier(signingKey.ExportSubjectPublicKeyInfoPem());
-        var client = new ReleaseManifestClient(new Uri("https://www.cnfxtrade.com"), http);
+        var client = new ReleaseManifestClient(new Uri("http://127.0.0.1:3000"), http);
 
         var first = await client.FetchVerifiedAsync(
             verifier, new Version(1, 0, 0),
@@ -226,7 +226,7 @@ public sealed class ReleaseUpdateTests
     public void AcceptsOnlyTheCurrentAndBootstrapReleaseEndpoints()
     {
         using var http = new HttpClient(new StaticResponseHandler([]));
-        var server = new Uri("https://www.cnfxtrade.com");
+        var server = new Uri("http://127.0.0.1:3000");
 
         _ = new ReleaseManifestClient(server, http, "/api/bridge/v3/releases/current");
         _ = new ReleaseManifestClient(server, http, "/api/bridge/v3/releases/bootstrap");
@@ -939,7 +939,7 @@ public sealed class ReleaseUpdateTests
         };
         if (includeServerEndpoints)
         {
-            files.Add(("server-endpoints.json", "{\"schema_version\":1,\"server_url\":\"https://www.cnfxtrade.com\"}"));
+            files.Add(("server-endpoints.json", "{\"schema_version\":1,\"server_url\":\"http://127.0.0.1:3000\"}"));
         }
         if (includeSqlite)
         {

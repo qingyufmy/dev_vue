@@ -772,7 +772,7 @@ mod tests {
     #[test]
     fn pairing_url_allows_https_and_local_development_only() {
         assert_eq!(
-            validate_pairing_url("https://www.cnfxtrade.com/bridge/pair"),
+            validate_pairing_url("https://server.example/bridge/pair"),
             Ok(())
         );
         assert_eq!(

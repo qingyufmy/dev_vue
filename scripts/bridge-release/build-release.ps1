@@ -5,7 +5,7 @@ param(
   [Parameter(Mandatory=$true)][ValidateRange(1,100)][int]$RolloutPercentage,
   [Parameter(Mandatory=$true)][string]$PythonRuntimeDirectory,
   [Parameter(Mandatory=$true)][string]$CdnDomain,
-  [string]$ServerUrl = 'https://www.cnfxtrade.com',
+  [string]$ServerUrl = 'http://127.0.0.1:3000',
   [string]$ReleaseId,
   [string]$OutputDirectory,
   [int]$MinimumIdleSeconds = 120,
@@ -43,6 +43,9 @@ if ($TargetEnvironment -eq 'production' -and (-not $MetaEditorExe -or -not (Test
 $domain = $CdnDomain.TrimEnd('/')
 $domainUri = $null
 if (-not [Uri]::TryCreate($domain, [UriKind]::Absolute, [ref]$domainUri)) { throw 'release_cdn_domain_invalid' }
+if ($TargetEnvironment -eq 'production' -and $ServerUrl -eq 'http://127.0.0.1:3000') {
+  throw 'release_production_server_url_required'
+}
 $localTestCdn = $TargetEnvironment -eq 'test' -and
   $domainUri.Scheme -eq 'http' -and $domainUri.IsLoopback
 if (
