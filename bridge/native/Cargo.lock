@@ -127,6 +127,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-terminal-data"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "bridge-contract",
+ "bridge-store",
+ "bridge-worker-host",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "bridge-transport"
 version = "3.0.0-alpha.1"
 dependencies = [

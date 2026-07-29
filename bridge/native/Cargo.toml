@@ -9,6 +9,7 @@ members = [
   "crates/bridge-runtime-win",
   "crates/bridge-security-win",
   "crates/bridge-store",
+  "crates/bridge-terminal-data",
   "crates/bridge-transport",
   "crates/bridge-worker-host",
 ]

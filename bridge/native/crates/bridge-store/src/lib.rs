@@ -1,4 +1,6 @@
-use bridge_contract::{CommandMessage, CommandResultMessage, DataDeltaMessage, validate_id};
+use bridge_contract::{
+    AccountRef, CommandMessage, CommandResultMessage, DataDeltaMessage, validate_id,
+};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter};
 use serde::Serialize;
@@ -349,6 +351,19 @@ pub struct PersistDeltaResult {
     pub next_revision: i64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredStreamProjection {
+    pub revision: i64,
+    pub items: Vec<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredTerminalProjection {
+    pub account: StoredStreamProjection,
+    pub positions: StoredStreamProjection,
+    pub orders: StoredStreamProjection,
+}
+
 pub struct OutboxStore {
     connection: Mutex<Connection>,
 }
@@ -558,6 +573,70 @@ impl OutboxStore {
             status: PersistDeltaStatus::Applied,
             current_revision: message.revision,
             next_revision: message.revision + 1,
+        })
+    }
+
+    pub fn load_terminal_projection(
+        &self,
+        terminal_instance_id: &str,
+        account_ref: &AccountRef,
+        connection_epoch: i64,
+    ) -> Result<StoredTerminalProjection, StoreError> {
+        if validate_id(terminal_instance_id).is_err()
+            || account_ref.validate().is_err()
+            || connection_epoch <= 0
+        {
+            return Err(StoreError::new("bridge_store_projection_route_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let account = load_stored_stream(
+            &connection,
+            terminal_instance_id,
+            connection_epoch,
+            "account",
+        )?;
+        let positions = load_stored_stream(
+            &connection,
+            terminal_instance_id,
+            connection_epoch,
+            "positions",
+        )?;
+        let orders = load_stored_stream(
+            &connection,
+            terminal_instance_id,
+            connection_epoch,
+            "orders",
+        )?;
+        if account.items.len() > 1 {
+            return Err(StoreError::new("bridge_store_projection_account_invalid"));
+        }
+        if let Some(value) = account.items.first() {
+            let Some(object) = value.as_object() else {
+                return Err(StoreError::new("bridge_store_projection_account_invalid"));
+            };
+            let login_matches = object.get("login").is_some_and(|value| {
+                value.as_str() == Some(account_ref.login.as_str())
+                    || value
+                        .as_u64()
+                        .is_some_and(|login| login.to_string() == account_ref.login)
+            });
+            let server_matches = object
+                .get("server")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|server| server == account_ref.broker_server);
+            if !login_matches || !server_matches {
+                return Err(StoreError::new(
+                    "bridge_store_projection_account_route_mismatch",
+                ));
+            }
+        }
+        Ok(StoredTerminalProjection {
+            account,
+            positions,
+            orders,
         })
     }
 
@@ -1217,6 +1296,81 @@ fn read_latest_stream(
     .collect()
 }
 
+fn load_stored_stream(
+    connection: &Connection,
+    terminal_instance_id: &str,
+    connection_epoch: i64,
+    stream: &str,
+) -> Result<StoredStreamProjection, StoreError> {
+    let stored_revision = connection
+        .query_row(
+            "SELECT revision FROM stream_revisions \
+             WHERE terminal_instance_id = ?1 AND connection_epoch = ?2 AND stream = ?3;",
+            params![terminal_instance_id, connection_epoch, stream],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_projection_revision_query_failed"))?;
+    if stored_revision.is_some_and(|revision| revision <= 0) {
+        return Err(StoreError::new("bridge_store_projection_revision_invalid"));
+    }
+    let revision = stored_revision.unwrap_or(0);
+    let items = if stream == "account" {
+        connection
+            .query_row(
+                "SELECT payload_json FROM account_latest \
+                 WHERE terminal_instance_id = ?1 AND connection_epoch = ?2;",
+                params![terminal_instance_id, connection_epoch],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_projection_query_failed"))?
+            .map(|payload| parse_projection_payload(&payload))
+            .transpose()?
+            .into_iter()
+            .collect()
+    } else {
+        let table = match stream {
+            "positions" => "positions_latest",
+            "orders" => "orders_latest",
+            _ => return Err(StoreError::new("bridge_store_projection_stream_invalid")),
+        };
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT ticket, payload_json FROM {table} \
+                 WHERE terminal_instance_id = ?1 AND connection_epoch = ?2 ORDER BY ticket;"
+            ))
+            .map_err(|_| StoreError::new("bridge_store_projection_query_failed"))?;
+        let rows = statement
+            .query_map(params![terminal_instance_id, connection_epoch], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|_| StoreError::new("bridge_store_projection_query_failed"))?;
+        rows.map(|row| {
+            let (stored_ticket, payload) =
+                row.map_err(|_| StoreError::new("bridge_store_projection_query_failed"))?;
+            let value = parse_projection_payload(&payload)?;
+            if object_ticket(&value)? != stored_ticket {
+                return Err(StoreError::new("bridge_store_projection_ticket_mismatch"));
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, StoreError>>()?
+    };
+    if revision == 0 && !items.is_empty() || stream == "account" && revision > 0 && items.len() != 1
+    {
+        return Err(StoreError::new("bridge_store_projection_state_invalid"));
+    }
+    Ok(StoredStreamProjection { revision, items })
+}
+
+fn parse_projection_payload(payload: &str) -> Result<serde_json::Value, StoreError> {
+    serde_json::from_str(payload)
+        .ok()
+        .filter(serde_json::Value::is_object)
+        .ok_or_else(|| StoreError::new("bridge_store_projection_payload_invalid"))
+}
+
 fn object_ticket(item: &serde_json::Value) -> Result<String, StoreError> {
     item.as_object()
         .and_then(|object| object.get("ticket"))
@@ -1526,6 +1680,40 @@ mod tests {
         store
             .persist_data_delta(&replacement)
             .expect("replacement full snapshot");
+        let restored = store
+            .load_terminal_projection(
+                &replacement.terminal_instance_id,
+                &replacement.account_ref,
+                replacement.connection_epoch,
+            )
+            .expect("restored projection");
+        assert_eq!(restored.account.revision, 1);
+        assert_eq!(restored.positions.revision, 3);
+        assert_eq!(restored.positions.items, replacement.upserts);
+        assert_eq!(restored.orders.revision, 0);
+        assert!(restored.orders.items.is_empty());
+        let switched = store
+            .load_terminal_projection(
+                &replacement.terminal_instance_id,
+                &replacement.account_ref,
+                replacement.connection_epoch + 1,
+            )
+            .expect("new epoch projection");
+        assert_eq!(switched.account.revision, 0);
+        assert!(switched.account.items.is_empty());
+        let mut wrong_account = replacement.account_ref.clone();
+        wrong_account.login = "999999".to_owned();
+        assert_eq!(
+            store
+                .load_terminal_projection(
+                    &replacement.terminal_instance_id,
+                    &wrong_account,
+                    replacement.connection_epoch,
+                )
+                .expect_err("account route mismatch")
+                .code(),
+            "bridge_store_projection_account_route_mismatch"
+        );
 
         let gap = data_delta(
             "positions",

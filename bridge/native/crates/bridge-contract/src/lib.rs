@@ -414,7 +414,9 @@ impl DataDeltaMessage {
         self.account_ref.validate()?;
         if self.connection_epoch <= 0
             || self.revision <= 0
+            || self.revision == i64::MAX
             || self.base_revision < 0
+            || self.base_revision == i64::MAX
             || self.observed_at_utc_msc <= 0
             || self.source_time_msc.is_some_and(|value| value < 0)
             || self.upserts.len() > 10_000

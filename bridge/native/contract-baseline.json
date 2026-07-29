@@ -125,6 +125,9 @@
     "journal_mode": "wal",
     "synchronous": "full",
     "single_writer": "bridge-core",
+    "terminal_projection_restore": true,
+    "data_delta_atomic_with_outbox": true,
+    "gap_recovery_uses_store_revision": true,
     "required_tables": [
       "terminal_bindings",
       "stream_revisions",

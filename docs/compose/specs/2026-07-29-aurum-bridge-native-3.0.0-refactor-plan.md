@@ -434,7 +434,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 - [进行中] 已拆出一终端一 Python Worker，并完成账户、报价、持仓和挂单只读 IPC；品种、K 线和历史分页留到后续数据批次。
 - [已完成] 报价经经纪商时区校准后输出 UTC；时钟未可信、账户改变、终端断开或返回数据无效时失败关闭。
-- [进行中] 已完成账户/持仓/挂单 data delta 的 Native 合同，以及 revision、SQLite 最新投影和服务器 Outbox 原子提交；待接 Core 定时采集、差异计算与定期 reconciliation。
+- [进行中] 已完成账户/持仓/挂单 data delta 的 Native 合同、revision/SQLite 最新投影/服务器 Outbox 原子提交，以及从 SQLite 恢复的快照投影器；投影器按 ticket 计算 upsert/delete，支持首次、epoch 变化、主动 reconciliation 和 gap 后 full snapshot。待接 Core 定时采集。
 - Worker 崩溃、MT5 重启、账户切换和路径切换恢复。
 
 交付门：页面数据满足现有服务器和产品功能合同，24 小时运行无串账户、无持续内存增长、历史响应不超限。
@@ -546,6 +546,7 @@ bridge/native/
     bridge-runtime-win/   # 单实例、Job Object、进程监管
     bridge-transport/     # HTTPS、WS、会话、优先队列
     bridge-store/         # SQLite、Outbox、command ledger
+    bridge-terminal-data/ # 快照恢复、差异投影和 full snapshot 协调
     bridge-worker-host/   # Worker 生命周期及本地 IPC
     bridge-update/        # Manifest、下载、切换、回滚
   workers/
@@ -580,4 +581,4 @@ bridge/native/
 - 已完成当前用户 SID 限定的 Windows 命名管道和受 Job Object 管理的 Worker 启动会话；真实子进程启动、握手、交付及终止已经过本机测试。
 - 已完成 Worker 代际注册表、请求前后 fencing、崩溃自动重启及账户切换 supervisor 取代；真实测试覆盖了进程连续崩溃重启、客户端换代和两个账户不争抢同一终端路由。
 - 当前 Native Core 尚未接入真实凭据、服务器会话或 MT Worker，不会误执行生产交易。
-- 下一批实现 MT5 快照投影器与 Core 采集循环：从 SQLite 恢复 revision/当前集合，计算 upsert/delete，调用原子 data delta 提交，并补账户切换与进程恢复测试。
+- 下一批接入 Core MT5 采集协调器：组合 WorkerDataRouter、SnapshotProjector 和 supervisor 生命周期，按活跃交易状态调节采集频率，并补账户切换与进程恢复测试。
