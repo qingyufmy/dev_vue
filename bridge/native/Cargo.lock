@@ -92,6 +92,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-mt4"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "bridge-observability"
 version = "3.0.0-alpha.1"
 dependencies = [

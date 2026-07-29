@@ -5,6 +5,7 @@ members = [
   "crates/bridge-contract",
   "crates/bridge-command",
   "crates/bridge-foundation",
+  "crates/bridge-mt4",
   "crates/bridge-observability",
   "crates/bridge-runtime-win",
   "crates/bridge-security-win",
