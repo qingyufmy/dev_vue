@@ -1064,6 +1064,7 @@ dependencies = [
  "bridge-foundation",
  "bridge-local-control",
  "bridge-observability",
+ "bridge-runtime-win",
  "bridge-transport",
  "bridge-ui-model",
  "tokio",

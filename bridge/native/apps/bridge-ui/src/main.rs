@@ -1,15 +1,22 @@
 #![windows_subsystem = "windows"]
 
+mod core_host;
 mod log_viewer;
 mod observer_profile_dialog;
 mod permission_tooltip;
 mod settings;
 mod terminal_directory;
 
-use bridge_foundation::{DEFAULT_PROFILE_ID, default_data_directory, validate_profile_id};
+use bridge_foundation::{
+    CliMode, DEFAULT_PROFILE_ID, default_data_directory, parse_cli, profile_instance_id,
+    validate_profile_id,
+};
 use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
     LocalControlResult, UiStateSnapshot,
+};
+use bridge_runtime_win::{
+    InstanceAcquireResult, InstanceSignal, SingleInstanceGuard, default_lock_directory,
 };
 use bridge_ui_model::{
     AccountCardView, MainWindowView, ObserverAction, PRODUCT_NAME, Rgb, SAFETY_COPY,
@@ -153,6 +160,9 @@ struct AppState {
     busy_observer_profiles: BTreeSet<String>,
     open_observer_demo: bool,
     demo_mode: bool,
+    start_minimized: bool,
+    core_host: Option<core_host::CoreProcessHost>,
+    ui_instance: Option<SingleInstanceGuard>,
     dpi: u32,
 }
 
@@ -245,6 +255,7 @@ fn build_tray_menu_view(
 }
 
 fn main() {
+    let raw_arguments: Vec<_> = std::env::args_os().skip(1).collect();
     let profile_id = parse_profile_id();
     #[cfg(debug_assertions)]
     let open_observer_demo = std::env::args().any(|argument| argument == "--observer-dialog-demo");
@@ -259,6 +270,50 @@ fn main() {
     #[cfg(not(debug_assertions))]
     let demo_scenario: Option<()> = None;
     let demo_mode = demo_scenario.is_some();
+    let (start_minimized, core_host, ui_instance) = if demo_mode {
+        (false, None, None)
+    } else {
+        let mode = match parse_cli(raw_arguments.clone()) {
+            Ok(mode) => mode,
+            Err(_) => return,
+        };
+        let executable = match std::env::current_exe() {
+            Ok(executable) => executable,
+            Err(_) => return,
+        };
+        let Some(application_directory) = executable.parent() else {
+            return;
+        };
+        if matches!(mode, CliMode::HealthCheck { .. }) {
+            let healthy =
+                core_host::run_health_check(application_directory, &raw_arguments).unwrap_or(false);
+            std::process::exit(if healthy { 0 } else { 1 });
+        }
+        let CliMode::Run {
+            ref profile_id,
+            start_minimized,
+            ..
+        } = mode
+        else {
+            return;
+        };
+        let ui_instance_id = match profile_instance_id(profile_id) {
+            Ok(instance_id) => format!("{instance_id}.ui"),
+            Err(_) => return,
+        };
+        let ui_instance = match default_lock_directory().and_then(|directory| {
+            SingleInstanceGuard::try_acquire(&ui_instance_id, directory, true)
+        }) {
+            Ok(InstanceAcquireResult::Acquired(instance)) => instance,
+            Ok(InstanceAcquireResult::Duplicate) | Err(_) => return,
+        };
+        let core_host =
+            match core_host::CoreProcessHost::start(application_directory, raw_arguments, &mode) {
+                Ok(host) => host,
+                Err(_) => return,
+            };
+        (start_minimized, core_host, Some(ui_instance))
+    };
     #[cfg(debug_assertions)]
     let state = demo_scenario
         .map(|scenario| demo_state(&profile_id, scenario))
@@ -300,6 +355,9 @@ fn main() {
             busy_observer_profiles: BTreeSet::new(),
             open_observer_demo,
             demo_mode,
+            start_minimized,
+            core_host,
+            ui_instance,
             dpi,
         });
     }
@@ -589,7 +647,16 @@ unsafe fn run_window(mut state: AppState) {
         unsafe { drop(Box::from_raw(state_ptr)) };
         return;
     }
-    unsafe { ShowWindow(hwnd, SW_SHOW) };
+    unsafe {
+        ShowWindow(
+            hwnd,
+            if (*state_ptr).start_minimized {
+                SW_HIDE
+            } else {
+                SW_SHOW
+            },
+        )
+    };
     let mut message = MSG::default();
     while unsafe { GetMessageW(&mut message, null_mut(), 0, 0) } > 0 {
         unsafe {
@@ -679,6 +746,21 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam == TIMER_POLL => {
             if !state.demo_mode {
+                if let Some(core_host) = state.core_host.as_mut() {
+                    let _ = core_host.poll();
+                }
+                if let Some(ui_instance) = state.ui_instance.as_ref() {
+                    match ui_instance.wait_for_signal(Duration::ZERO) {
+                        Ok(InstanceSignal::Activation) => unsafe {
+                            ShowWindow(hwnd, SW_SHOWNORMAL);
+                            windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+                        },
+                        Ok(InstanceSignal::Shutdown) => unsafe {
+                            begin_action(hwnd, state, LocalControlAction::BridgeExit);
+                        },
+                        Ok(InstanceSignal::Timeout) | Err(_) => {}
+                    }
+                }
                 unsafe { begin_state_poll(hwnd, state) };
             }
             0
@@ -2104,6 +2186,9 @@ unsafe fn receive_background_message(hwnd: HWND, app: &mut AppState) {
             result: Ok(LocalControlResult::Accepted),
         }) => {
             if action == LocalControlAction::BridgeExit {
+                if let Some(core_host) = app.core_host.as_mut() {
+                    core_host.disable_restart();
+                }
                 unsafe { DestroyWindow(hwnd) };
             } else {
                 unsafe { begin_state_poll(hwnd, app) };

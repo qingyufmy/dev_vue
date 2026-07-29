@@ -17,6 +17,7 @@
 - `liangjian-bridge-core` 已使用真实 Profile 启动准备链路：校验并读取 DPAPI 凭据状态、创建或打开该 Profile 的 SQLite、读取终端绑定；MT5 绑定会校验安装目录中的最小 Python 与 Worker，MT4 绑定会建立当前用户专用的 EA 管道会话，两者都使用与账户 epoch 完全一致的路由。该步骤不记录令牌或账户内容；缺少授权时不会启动终端会话。
 - `liangjian-bridge-core` 的正式入口已接入共同生命周期：终端目录统一启动/倒序停止多个 MT5 会话，凭据源检测首次授权与主动退出，服务器监督器与 Worker 共享取消边界；Core 每 500 毫秒检测 SQLite 终端绑定指纹，账户、平台、路径或 epoch 变化时先有序停止旧服务器会话与全部 Worker，再从权威存储重建新会话和 Hello 路由，已 ACK 的交易命令不会重放。服务器 gap 只允许命中当前 terminal/epoch 后请求 full snapshot，真实执行且回执已持久化的成功命令只唤醒一次对应采集器。未授权时 Core 常驻等待且不启动 Worker、不打开浏览器；主动退出会关闭当前服务器会话并回到等待授权。心跳 freshness 来自当前采集状态，版本通知保留给后续 Native UI/Updater。
 - Native UI 的“安装 / 修复 EA”已经接通 Core：只处理当前 Profile 中唯一或明确选中的 MT4 SQLite 绑定；EA 按正式模块、显式开发覆盖和仓库开发目录解析，限制为 16 MiB，写入前使用 SHA-256 判断是否已是当前版本，并通过同目录临时文件和 Windows write-through 原子替换部署到 `MQL4/Experts/AURUMBridgeEA.ex4`。成功后界面会按现有 .NET 版提示刷新导航器、挂载 EA、开启两层自动交易开关，且明确说明无需 DLL 或 WebRequest。
+- Native UI 同时保持现有 Launcher 的稳定入口合同：发布时仍命名为 `AURUMBridge.exe`，后台静默托管同目录 `AURUMBridge.Core.exe`，原样转发健康检查、ready 文件、预期终端和最小化启动参数。UI 使用独立单实例锁，重复启动只唤醒已有窗口；Core 异常退出按有界退避恢复，用户主动“退出桥接”后停止恢复。观摩源仍由默认 Core 管理，不额外打开窗口，也不各自运行更新器。
 - `bridge-update` 已冻结与 .NET Launcher 共用的 `update-state.json` 合同：严格校验全部阶段、版本、暂存时间、维护租约和错误字段，以 write-through 原子替换持久化；默认 Profile 会把已存在的可信暂存状态投影到原有更新条幅，“重启更新”只把 `manual_activation_requested` 从 `false` 原子改为 `true`。观摩源进程、开发目录和缺少 Launcher/公钥/版本指针的非安装布局不会启用更新控制；本阶段不下载、不解压、也不启动任何未通过签名清单校验的内容。
 - `bridge-update` 已兼容现有 .NET / Node 发布链的 P-256 双层签名合同：清单与每个模块均独立验签，规范化文本由跨运行时黄金夹具共同锁定；清单最多 128 KiB，模块最多 512 MiB，只接受 HTTPS 或本机回环 HTTP。下载按声明长度和 SHA-256 流式校验后进入内容寻址缓存，ZIP 在写入前完整预检路径穿越、符号链接、NTFS ADS/设备名、大小写碰撞、条目数量和 1 GiB 解压上限，并只允许解压到全新隔离目录。本阶段仍未启动周期更新协调器，也不会切换版本指针或重启进程。
 - `bridge-command` 已建立持久化命令账本和进程内单航班执行：命令先落盘再分发，重复命令复用同一回执，超时、Worker panic、路由错配及重启中断都会持久化为 `uncertain`，不会自动重放交易。周期核对服务只读取 `dispatched` 无回执命令和服务器已 ACK 的 uncertain 回执；只读核对无证据、超时、panic 或返回非法路由时保持待核对，只有同路由的最终事实才会原子生成新交易回执并重新等待服务器 ACK。MT5 只读核对适配器已接入正式 Core：启动后立即核对、随后每 5 秒分批运行，每次生成全新查询 ID，优先采用原回执票号，否则按原命令的 comment/magic 查询终端事实；30 秒结算窗口内无证据继续等待，窗口后才产生明确失败。核对任务与服务器及 Worker 共用取消边界，退出不会等待完整批次。
@@ -74,6 +75,14 @@ Pop-Location
 
 ```powershell
 .\scripts\bridge-native\test-native.ps1
+```
+
+安装入口的 Release 冒烟测试会把 UI/Core 按最终文件名放入隔离的临时
+`versions/3.0.0` 目录，验证 Launcher 健康检查转发、最小化 UI 常驻、后台 Core
+子进程和本地服务器配置；脚本只按本次启动的精确 PID 清理测试进程：
+
+```powershell
+.\scripts\bridge-native\test-ui-host.ps1
 ```
 
 只读检查现有默认 Profile：
