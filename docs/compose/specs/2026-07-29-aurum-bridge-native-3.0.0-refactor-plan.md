@@ -6,7 +6,7 @@
 >
 > 产品版本：Rust Native 直接作为正式 3.0.0；现有 .NET Bridge 仅作功能与协议对照
 >
-> 当前进度：阶段 0 / 1 已完成；阶段 2 已完成传输、会话编排、命令准入、持久化单航班、ACK 账本闭环及首版 Worker IPC 合同，真实 Worker 与 Core 接线待实施
+> 当前进度：阶段 0 / 1 已完成；阶段 2 已完成传输、会话编排、命令准入、持久化单航班、ACK 账本闭环、安全 Worker IPC 及受管单次 Worker 会话，真实 Worker 与 Core 接线待实施
 
 ## 1. 结论
 
@@ -418,8 +418,10 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - 已完成 `command_result_ack` 到 Native 命令账本 `acked` 的同事务闭环，支持服务器重复 ACK 幂等处理。
 - 已完成可选 Dispatcher 的安全入站接线；Core 未配置真实 Worker 时继续返回 `native_bridge_runtime_not_ready`，不会误执行交易。
 - 已完成首版版本化 Worker IPC：4 MiB 有界帧、随机会话 nonce、能力协商、终端/账户/epoch 路由及 request ID 关联；握手或回包错配失败关闭，I/O 开始后的超时会熔断通道并要求重启 Worker。
-- 已将 `query_execution` 固定为独立只读 Worker 操作，并提供 `CommandWorker` 适配层；当前仅使用内存双工流验证，尚未连接正式命名管道、Python Worker 或 Core。
-- 待完成正式命名管道与 ACL、Worker 进程生命周期接线、报价/数据请求 Worker 路由、凭据存储适配、Core 接线及真实服务器故障矩阵。
+- 已将 `query_execution` 固定为独立只读 Worker 操作，并提供 `CommandWorker` 适配层。
+- 已完成正式 Windows 命名管道创建：DACL 仅授权当前用户 SID、拒绝远程客户端、首实例防抢占，管道名和会话 nonce 均使用系统 CSPRNG；调试输出不得暴露端点或 nonce。
+- 已完成受管单次 Worker 会话：受保护启动环境不可被调用方覆盖，子进程加入 Kill-on-close Job Object，只有进程连接管道并通过 nonce、版本、能力和完整路由握手后才交付客户端；启动失败自动清理子进程树。
+- 待完成 Worker 自动重启后的客户端注册表替换、Python Worker 实现、报价/数据请求 Worker 路由、凭据存储适配、Core 接线及真实服务器故障矩阵。
 
 交付门：断网、乱序、重复 ACK、超大包、HTML 错页和服务器重启不会丢高优先消息。
 
@@ -570,5 +572,6 @@ bridge/native/
 - 已完成 Native Outbox 兼容层，保留 2/4/8/16/30 秒持久化重试、applied / duplicate 删除及 gap 当前会话抑制语义。
 - 已完成本地 HTTP + WebSocket 端到端握手和二进制帧拒绝故障测试。
 - 已完成首版 Core ↔ Worker IPC 合同和 `CommandWorker` 适配层；`query_execution` 与交易操作物理分离，路由、能力、关联 ID 和超时通道状态均已覆盖测试。
+- 已完成当前用户 SID 限定的 Windows 命名管道和受 Job Object 管理的 Worker 启动会话；真实子进程启动、握手、交付及终止已经过本机测试。
 - 当前 Native Core 尚未接入真实凭据、服务器会话或 MT Worker，不会误执行生产交易。
-- 下一批进入正式 Windows 命名管道、Worker 启动握手和生命周期监管接线；随后拆分 MT5 Python Worker 的只读链路。
+- 下一批拆分 MT5 Python Worker 的只读链路，并建立自动重启后的客户端注册表替换与数据路由。

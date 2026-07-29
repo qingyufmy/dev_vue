@@ -24,7 +24,23 @@
       "connection_epoch"
     ],
     "request_correlation_field": "request_id",
-    "query_execution_separate_operation": true
+    "query_execution_separate_operation": true,
+    "windows_pipe_security": {
+      "dacl_scope": "current-user-sid-only",
+      "reject_remote_clients": true,
+      "first_pipe_instance": true,
+      "random_pipe_suffix": true
+    },
+    "startup_environment_fields": [
+      "AURUM_BRIDGE_WORKER_PIPE",
+      "AURUM_BRIDGE_WORKER_NONCE",
+      "AURUM_BRIDGE_WORKER_IPC_VERSION",
+      "AURUM_BRIDGE_WORKER_TERMINAL_ID",
+      "AURUM_BRIDGE_WORKER_PLATFORM",
+      "AURUM_BRIDGE_WORKER_BROKER_SERVER",
+      "AURUM_BRIDGE_WORKER_LOGIN",
+      "AURUM_BRIDGE_WORKER_CONNECTION_EPOCH"
+    ]
   },
   "mt4_ea_protocol": {
     "wire_format": "little-endian-u32-length-prefixed-binary",

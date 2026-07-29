@@ -31,6 +31,8 @@ tokio-tungstenite = { version = "=0.30.0", default-features = false, features = 
 url = { version = "=2.5.8", features = ["serde"] }
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
   "Win32_Security_Cryptography",
   "Win32_Storage_FileSystem",
   "Win32_System_JobObjects",

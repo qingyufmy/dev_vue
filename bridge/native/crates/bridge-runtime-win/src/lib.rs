@@ -422,7 +422,7 @@ impl ProcessSupervisor {
                     exit_code: None,
                 },
             );
-            let mut managed = match ManagedChild::spawn(&self.spec) {
+            let mut managed = match ManagedProcess::spawn(&self.spec) {
                 Ok(child) => child,
                 Err(error) => {
                     failures = increment_failures(failures, self.policy.maximum_failure_counter);
@@ -528,13 +528,13 @@ impl ProcessSupervisor {
     }
 }
 
-struct ManagedChild {
+pub struct ManagedProcess {
     child: Child,
     job: KillOnCloseJob,
 }
 
-impl ManagedChild {
-    fn spawn(spec: &ProcessSpec) -> Result<Self, RuntimeError> {
+impl ManagedProcess {
+    pub fn spawn(spec: &ProcessSpec) -> Result<Self, RuntimeError> {
         let job = KillOnCloseJob::new()?;
         let mut command = Command::new(&spec.executable);
         command
@@ -558,17 +558,17 @@ impl ManagedChild {
         Ok(Self { child, job })
     }
 
-    fn id(&self) -> u32 {
+    pub fn id(&self) -> u32 {
         self.child.id()
     }
 
-    fn try_wait(&mut self) -> Result<Option<ExitStatus>, RuntimeError> {
+    pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, RuntimeError> {
         self.child
             .try_wait()
             .map_err(|_| RuntimeError::new("bridge_worker_process_wait_failed"))
     }
 
-    fn terminate(&mut self) -> Result<(), RuntimeError> {
+    pub fn terminate(&mut self) -> Result<(), RuntimeError> {
         if self.try_wait()?.is_none() {
             self.job.terminate()?;
             self.child
@@ -579,7 +579,7 @@ impl ManagedChild {
     }
 }
 
-impl Drop for ManagedChild {
+impl Drop for ManagedProcess {
     fn drop(&mut self) {
         let _ = self.terminate();
     }
@@ -827,7 +827,7 @@ mod tests {
             .arg("/D")
             .arg("/C")
             .arg("ping -n 30 127.0.0.1 >NUL");
-        let mut child = ManagedChild::spawn(&spec).expect("managed child");
+        let mut child = ManagedProcess::spawn(&spec).expect("managed child");
         assert!(child.try_wait().expect("initial wait").is_none());
         child.terminate().expect("terminate job");
         assert!(child.try_wait().expect("final wait").is_some());
