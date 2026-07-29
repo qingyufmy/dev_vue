@@ -5,8 +5,12 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use windows_sys::Win32::Storage::FileSystem::{
+    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+};
 
 pub const DEFAULT_PROFILE_ID: &str = "default";
 pub const MT5_WORKER_RELATIVE_PATH: &str = "modules/adapter.mt5.python/worker.py";
@@ -263,6 +267,48 @@ struct HealthPayload<'a> {
     checks: [&'static str; 3],
 }
 
+#[derive(Clone, Debug)]
+pub struct StartupReadyOptions {
+    pub output: PathBuf,
+    pub version: String,
+    pub server_connected: bool,
+    pub running_terminal_instance_ids: Vec<String>,
+    pub ready_at_utc_msc: i64,
+}
+
+#[derive(Serialize)]
+struct StartupReadyPayload<'a> {
+    ready: bool,
+    version: &'a str,
+    server_connected: bool,
+    running_terminal_instance_ids: &'a [String],
+    ready_at_utc_msc: i64,
+}
+
+pub fn write_startup_ready_signal(options: &StartupReadyOptions) -> Result<(), Box<dyn Error>> {
+    if !options.output.is_absolute()
+        || !is_numeric_version(&options.version)
+        || !options.server_connected
+        || options.ready_at_utc_msc <= 0
+    {
+        return Err("bridge_startup_signal_invalid".into());
+    }
+    let mut terminal_ids = options.running_terminal_instance_ids.clone();
+    if terminal_ids.len() > 64 || terminal_ids.iter().any(|value| !is_terminal_id(value)) {
+        return Err("bridge_startup_signal_invalid".into());
+    }
+    terminal_ids.sort();
+    terminal_ids.dedup();
+    let payload = serde_json::to_vec(&StartupReadyPayload {
+        ready: true,
+        version: &options.version,
+        server_connected: true,
+        running_terminal_instance_ids: &terminal_ids,
+        ready_at_utc_msc: options.ready_at_utc_msc,
+    })?;
+    write_atomic_replace(&options.output, &payload)
+}
+
 pub fn run_health_check(options: &HealthCheckOptions) -> Result<(), Box<dyn Error>> {
     require_file(
         &options.application_directory.join(PYTHON_RELATIVE_PATH),
@@ -369,6 +415,57 @@ fn write_atomic_new(output: &Path, payload: &[u8]) -> Result<(), Box<dyn Error>>
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+fn write_atomic_replace(output: &Path, payload: &[u8]) -> Result<(), Box<dyn Error>> {
+    let parent = output.parent().ok_or("bridge_startup_signal_invalid")?;
+    fs::create_dir_all(parent)?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let file_name = output
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("bridge_startup_signal_invalid")?;
+    let temporary = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), stamp));
+    let result = (|| -> Result<(), Box<dyn Error>> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        file.write_all(payload)?;
+        file.sync_all()?;
+        let source = wide_null(temporary.as_os_str());
+        let destination = wide_null(output.as_os_str());
+        // SAFETY: both paths are valid, null-terminated UTF-16 strings. The temporary file is in
+        // the destination directory, and MoveFileExW performs the replace before this function
+        // releases ownership of either path buffer.
+        if unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        } == 0
+        {
+            return Err("bridge_startup_signal_write_failed".into());
+        }
+        Ok(())
+    })();
+    if temporary.exists() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn wide_null(value: &std::ffi::OsStr) -> Vec<u16> {
+    value.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+fn is_terminal_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 pub fn resolve_installed_root(application_directory: &Path) -> Result<PathBuf, &'static str> {
@@ -606,6 +703,49 @@ mod tests {
             "bridge_health_path_invalid"
         );
         fs::remove_dir_all(root).expect("remove health fixture");
+    }
+
+    #[test]
+    fn startup_ready_signal_is_atomic_sorted_and_replaceable() {
+        let root = unique_test_directory("ready");
+        let output = root.join("ready.json");
+        write_startup_ready_signal(&StartupReadyOptions {
+            output: output.clone(),
+            version: "3.0.0".to_owned(),
+            server_connected: true,
+            running_terminal_instance_ids: vec![
+                "mt5_b".to_owned(),
+                "mt5_a".to_owned(),
+                "mt5_b".to_owned(),
+            ],
+            ready_at_utc_msc: 1_800_000_000_000,
+        })
+        .expect("initial ready signal");
+        write_startup_ready_signal(&StartupReadyOptions {
+            output: output.clone(),
+            version: "3.0.1".to_owned(),
+            server_connected: true,
+            running_terminal_instance_ids: vec!["mt5_c".to_owned()],
+            ready_at_utc_msc: 1_800_000_000_001,
+        })
+        .expect("replacement ready signal");
+
+        let payload: Value =
+            serde_json::from_slice(&fs::read(&output).expect("ready payload")).expect("ready json");
+        assert_eq!(payload["ready"], true);
+        assert_eq!(payload["version"], "3.0.1");
+        assert_eq!(payload["server_connected"], true);
+        assert_eq!(payload["running_terminal_instance_ids"][0], "mt5_c");
+        assert_eq!(payload["ready_at_utc_msc"], 1_800_000_000_001_i64);
+        assert_eq!(
+            fs::read_dir(&root)
+                .expect("ready directory")
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+                .count(),
+            0
+        );
+        fs::remove_dir_all(root).expect("remove ready fixture");
     }
 
     fn unique_test_directory(suffix: &str) -> PathBuf {

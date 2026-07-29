@@ -128,7 +128,13 @@ impl SessionSupervisor {
                 continue;
             };
 
-            let session = self.connector.connect(refresh_token).await;
+            let session = tokio::select! {
+                _ = stop.cancelled() => {
+                    self.publish(machine.stop());
+                    return Ok(());
+                }
+                session = self.connector.connect(refresh_token) => session,
+            };
             if stop.is_cancelled() {
                 self.publish(machine.stop());
                 return Ok(());
@@ -145,11 +151,30 @@ impl SessionSupervisor {
 
             self.publish(machine.connected());
             machine.stable();
-            let outcome = self.runtime.run(session, stop.clone()).await;
-            if stop.is_cancelled() {
-                self.publish(machine.stop());
-                return Ok(());
-            }
+            let session_stop = SessionCancellation::default();
+            let session_run = self.runtime.run(session, session_stop.clone());
+            tokio::pin!(session_run);
+            let outcome = tokio::select! {
+                outcome = &mut session_run => outcome,
+                _ = stop.cancelled() => {
+                    session_stop.cancel();
+                    let _ = session_run.await;
+                    self.publish(machine.stop());
+                    return Ok(());
+                }
+                changed = self.credentials.changed() => {
+                    changed?;
+                    session_stop.cancel();
+                    let _ = session_run.await;
+                    credential = self.read_credential()?;
+                    if credential.is_some() {
+                        self.publish(machine.start(true));
+                    } else {
+                        self.publish(machine.failed("bridge_not_paired"));
+                    }
+                    continue;
+                }
+            };
             let error = outcome
                 .err()
                 .unwrap_or_else(|| TransportError::new("bridge_session_loop_stopped"));
@@ -220,8 +245,10 @@ mod tests {
     };
     use bridge_store::{OutboxRecord, StoreError};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::sync::watch;
+    use tokio::time::timeout;
 
     struct CredentialSlot {
         value: Mutex<Option<String>>,
@@ -275,6 +302,80 @@ mod tests {
                 .push(refresh_token.to_owned());
             self.stop.cancel();
             Box::pin(async { Err(TransportError::new("bridge_server_unavailable")) })
+        }
+    }
+
+    struct CredentialAwareConnector {
+        connects: AtomicUsize,
+        closes: Arc<AtomicUsize>,
+        starts: Arc<AtomicUsize>,
+    }
+
+    #[derive(Default)]
+    struct PendingConnector(AtomicUsize);
+
+    impl SessionConnector for PendingConnector {
+        fn connect(
+            &self,
+            _refresh_token: &str,
+        ) -> BoxFuture<'_, Result<Box<dyn SessionChannel>, TransportError>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::pending())
+        }
+    }
+
+    impl SessionConnector for CredentialAwareConnector {
+        fn connect(
+            &self,
+            _refresh_token: &str,
+        ) -> BoxFuture<'_, Result<Box<dyn SessionChannel>, TransportError>> {
+            self.connects.fetch_add(1, Ordering::SeqCst);
+            let closes = Arc::clone(&self.closes);
+            let starts = Arc::clone(&self.starts);
+            Box::pin(async move {
+                Ok(Box::new(BlockingChannel { closes, starts }) as Box<dyn SessionChannel>)
+            })
+        }
+    }
+
+    struct BlockingChannel {
+        closes: Arc<AtomicUsize>,
+        starts: Arc<AtomicUsize>,
+    }
+
+    impl SessionChannel for BlockingChannel {
+        fn session_id(&self) -> &str {
+            "session_credential_change"
+        }
+
+        fn terminals(&self) -> Vec<bridge_contract::TerminalDescriptor> {
+            vec![bridge_contract::TerminalDescriptor {
+                terminal_instance_id: "mt5_credential_fixture".to_owned(),
+                platform: "mt5".to_owned(),
+                account_ref: bridge_contract::AccountRef {
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "123456".to_owned(),
+                },
+                connection_epoch: 1,
+                worker_version: Some("3.0.0".to_owned()),
+            }]
+        }
+
+        fn send_json(
+            &mut self,
+            _payload_json: String,
+        ) -> BoxFuture<'_, Result<(), TransportError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn receive_json(&mut self) -> BoxFuture<'_, Result<String, TransportError>> {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::pending())
+        }
+
+        fn close(&mut self) -> BoxFuture<'_, Result<(), TransportError>> {
+            self.closes.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -382,6 +483,113 @@ mod tests {
                 ConnectionState::Connecting,
                 ConnectionState::Stopped
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn active_logout_closes_the_session_and_waits_for_explicit_pairing() {
+        let stop = SessionCancellation::default();
+        let credentials = Arc::new(CredentialSlot::new(Some("refresh_fixture".to_owned())));
+        let closes = Arc::new(AtomicUsize::new(0));
+        let starts = Arc::new(AtomicUsize::new(0));
+        let connector = Arc::new(CredentialAwareConnector {
+            connects: AtomicUsize::new(0),
+            closes: Arc::clone(&closes),
+            starts: Arc::clone(&starts),
+        });
+        let states = Arc::new(CapturingStates::default());
+        let supervisor = SessionSupervisor::new(
+            credentials.clone(),
+            connector.clone(),
+            unused_runtime(),
+            states.clone(),
+        );
+        let task = tokio::spawn({
+            let stop = stop.clone();
+            async move { supervisor.run(stop).await }
+        });
+        timeout(Duration::from_secs(1), async {
+            while !states
+                .0
+                .lock()
+                .expect("states")
+                .contains(&ConnectionState::Connected)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("connected");
+        timeout(Duration::from_secs(1), async {
+            while starts.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session started");
+
+        credentials.set(None);
+        timeout(Duration::from_secs(1), async {
+            while !states
+                .0
+                .lock()
+                .expect("states")
+                .contains(&ConnectionState::PairingRequired)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pairing required");
+        assert_eq!(connector.connects.load(Ordering::SeqCst), 1);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+
+        stop.cancel();
+        task.await.expect("join").expect("stop");
+        assert_eq!(
+            states.0.lock().expect("states").as_slice(),
+            &[
+                ConnectionState::Connecting,
+                ConnectionState::Connected,
+                ConnectionState::PairingRequired,
+                ConnectionState::Stopped,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_interrupts_an_inflight_server_connection() {
+        let stop = SessionCancellation::default();
+        let credentials = Arc::new(CredentialSlot::new(Some("refresh_fixture".to_owned())));
+        let connector = Arc::new(PendingConnector::default());
+        let states = Arc::new(CapturingStates::default());
+        let supervisor = SessionSupervisor::new(
+            credentials,
+            connector.clone(),
+            unused_runtime(),
+            states.clone(),
+        );
+        let task = tokio::spawn({
+            let stop = stop.clone();
+            async move { supervisor.run(stop).await }
+        });
+        timeout(Duration::from_secs(1), async {
+            while connector.0.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("connection started");
+
+        stop.cancel();
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("prompt shutdown")
+            .expect("join")
+            .expect("stop");
+        assert_eq!(
+            states.0.lock().expect("states").as_slice(),
+            &[ConnectionState::Connecting, ConnectionState::Stopped]
         );
     }
 

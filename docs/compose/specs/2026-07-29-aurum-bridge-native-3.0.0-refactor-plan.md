@@ -6,7 +6,7 @@
 >
 > 产品版本：Rust Native 直接作为正式 3.0.0；现有 .NET Bridge 仅作功能与协议对照
 >
-> 当前进度：阶段 0 / 1 / 2 已完成；阶段 3 已完成 MT5 Python Worker、增量投影、Profile 准备及服务器/Worker 共同生命周期，正式入口、端点权威源和真实故障矩阵待实施
+> 当前进度：阶段 0 / 1 / 2 已完成；阶段 3 已完成 MT5 Python Worker、增量投影、Profile 准备、服务器/Worker 共同生命周期、端点权威源与 Core 正式入口，真实服务器故障矩阵仍待实施
 
 ## 1. 结论
 
@@ -399,7 +399,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - 锁文件、激活/退出事件和 Windows Job Object。
 - 子进程重启退避和异常运行标记。
 
-当前 Core 固定返回 `native_bridge_runtime_not_ready`，不会连接服务器或 MT。
+阶段 1 的失败关闭占位入口已在阶段 3 被正式生命周期替换。
 
 ### 阶段 2：服务器传输
 
@@ -420,7 +420,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - 已锁定 rustls HTTP / WebSocket 依赖；构建审计必须继续证明目标产物不依赖 OpenSSL 或 native-tls。
 - 已完成持久化命令单航班：命令先落盘，重复命令复用同一回执，超时、Worker panic、回执路由错配及进程中断统一进入 `uncertain` 且不得重放。
 - 已完成 `command_result_ack` 到 Native 命令账本 `acked` 的同事务闭环，支持服务器重复 ACK 幂等处理。
-- 已完成可选 Dispatcher 的安全入站接线；Core 未配置真实 Worker 时继续返回 `native_bridge_runtime_not_ready`，不会误执行交易。
+- 已完成可选 Dispatcher 的安全入站接线；Core 当前只配置 MT5 数据 Worker，未配置交易 Dispatcher，交易命令继续失败关闭且不会误执行。
 - 已完成首版版本化 Worker IPC：4 MiB 有界帧、随机会话 nonce、能力协商、终端/账户/epoch 路由及 request ID 关联；握手或回包错配失败关闭，I/O 开始后的超时会熔断通道并要求重启 Worker。
 - 已将 `query_execution` 固定为独立只读 Worker 操作，并提供 `CommandWorker` 适配层。
 - 已完成正式 Windows 命名管道创建：DACL 仅授权当前用户 SID、拒绝远程客户端、首实例防抢占，管道名和会话 nonce 均使用系统 CSPRNG；调试输出不得暴露端点或 nonce。
@@ -430,7 +430,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - 已完成异步 Worker supervisor：真实监控进程与通道健康，按 1/2/4/8/10 秒退避重启，稳定运行后清零失败计数，停止、被取代及异常退出均先撤销路由并终止 Job Object。
 - 已提供基于注册表的 `CommandWorker` 适配器，并将本地请求超时限制在服务器命令 deadline 以内。
 - 已完成最小 MT5 Python 只读 Worker、严格 `snapshot` / `quote` 操作、终端路径受控启动参数、账户身份逐请求复核、经纪商时间校准和注册表数据路由；Rust 测试通过真实 Python 子进程与 Windows 命名管道验证互操作。
-- 已完成可由 Core 托管的轮询/增量同步协调器；待完成真实授权配置接线、Worker 路径与账户切换编排、凭据存储适配及真实服务器故障矩阵。
+- 已完成可由 Core 正式入口托管的轮询/增量同步协调器、凭据存储适配、Worker 路径和账户 epoch 编排；待完成真实服务器故障矩阵。
 
 交付门：断网、乱序、重复 ACK、超大包、HTML 错页和服务器重启不会丢高优先消息。
 
@@ -585,7 +585,8 @@ bridge/native/
 - 已完成首版 Core ↔ Worker IPC 合同和 `CommandWorker` 适配层；`query_execution` 与交易操作物理分离，路由、能力、关联 ID 和超时通道状态均已覆盖测试。
 - 已完成当前用户 SID 限定的 Windows 命名管道和受 Job Object 管理的 Worker 启动会话；真实子进程启动、握手、交付及终止已经过本机测试。
 - 已完成 Worker 代际注册表、请求前后 fencing、崩溃自动重启及账户切换 supervisor 取代；真实测试覆盖了进程连续崩溃重启、客户端换代和两个账户不争抢同一终端路由。
-- 当前 Native Core 尚未接入真实凭据、服务器会话或 MT Worker，不会误执行生产交易。
+- Native Core 正式入口已接入 DPAPI 凭据、服务器会话和 MT5 只读数据 Worker；交易 Dispatcher 仍未配置，不会误执行生产交易。
 - 已完成 Core 可托管的 MT5 终端会话编排：账户切换要求 epoch 单调递增，旧采集器和 Worker 依次完全停止后才启动新路由；真实 Python Worker 测试验证旧句柄失效、旧路由拒绝和新会话初始投影 Ready。
 - 已完成签名包内 `server-endpoints.json` 与管理员 `endpoint-settings.json` 的 Native 地址权威解析：有效管理员覆盖优先，损坏覆盖安全退回包内地址；包内地址缺失时失败关闭，公网明文 HTTP 不会被静默接受。
-- 下一批把共同生命周期接入 Core 正式入口，并补齐无授权、无终端、网络中断和关闭信号矩阵。
+- 已完成 Core 正式入口：无授权时常驻等待且不打开浏览器、不启动 Worker；授权但无终端时失败关闭；单实例退出信号取消服务器与终端；Launcher ready 仅在服务器连接且期望终端 Ready 后原子写入。主动退出授权会立即关闭当前会话并回到等待授权。
+- 下一批补齐本地假服务器驱动的网络中断/恢复和 Core ready 端到端矩阵，再进入 MT5 交易 Worker。

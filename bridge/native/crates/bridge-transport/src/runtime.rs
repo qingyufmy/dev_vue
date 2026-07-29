@@ -124,7 +124,7 @@ impl SessionCancellation {
         *self.sender.borrow()
     }
 
-    pub(crate) async fn cancelled(&self) {
+    pub async fn cancelled(&self) {
         let mut receiver = self.sender.subscribe();
         if *receiver.borrow() {
             return;

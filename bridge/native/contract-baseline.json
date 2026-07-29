@@ -139,12 +139,22 @@
   },
   "core_connected_runtime_contract": {
     "credential_changes_detect_pair_and_logout": true,
+    "active_logout_closes_current_server_session": true,
     "server_and_terminal_sessions_share_cancellation": true,
     "terminal_shutdown_order_is_reverse_start_order": true,
     "gap_requires_current_terminal_epoch": true,
     "successful_persisted_command_wakes_collector_once": true,
     "heartbeat_uses_terminal_collector_freshness": true,
     "post_execution_observer_failure_does_not_change_receipt": true
+  },
+  "core_process_lifecycle_contract": {
+    "missing_authorization_waits_without_opening_browser": true,
+    "workers_do_not_start_before_authorization": true,
+    "single_instance_shutdown_cancels_server_and_terminals": true,
+    "authorized_profile_requires_a_terminal": true,
+    "launcher_ready_requires_server_connected": true,
+    "launcher_ready_requires_expected_terminals_ready": true,
+    "launcher_ready_signal_is_atomic": true
   },
   "endpoint_authority_contract": {
     "administrator_override_file": "%APPDATA%/AURUM/BridgeV3/endpoint-settings.json",
