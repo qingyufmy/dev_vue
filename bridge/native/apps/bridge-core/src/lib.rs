@@ -27,6 +27,7 @@ use bridge_worker_host::{
     RegistryCommandWorker, RegistryReconciliationWorker, WorkerProgram, WorkerRegistry, WorkerRoute,
 };
 use futures_util::{FutureExt, future::BoxFuture};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -416,23 +417,319 @@ impl HelloProvider for CoreHelloProvider {
 
 #[derive(Default)]
 pub struct CoreConnectionState {
-    transition: Mutex<Option<SessionTransition>>,
+    snapshot: Mutex<Option<(SessionTransition, Option<String>)>>,
 }
 
 impl CoreConnectionState {
     pub fn current(&self) -> Result<Option<SessionTransition>, CoreBootstrapError> {
-        self.transition
+        self.snapshot
             .lock()
-            .map(|transition| *transition)
+            .map(|snapshot| snapshot.as_ref().map(|value| value.0))
+            .map_err(|_| CoreBootstrapError::new("bridge_connection_state_failed"))
+    }
+
+    pub fn current_error_code(&self) -> Result<Option<String>, CoreBootstrapError> {
+        self.snapshot
+            .lock()
+            .map(|snapshot| snapshot.as_ref().and_then(|value| value.1.clone()))
             .map_err(|_| CoreBootstrapError::new("bridge_connection_state_failed"))
     }
 }
 
 impl SupervisorStateSink for CoreConnectionState {
     fn transition(&self, transition: SessionTransition) {
-        if let Ok(mut current) = self.transition.lock() {
-            *current = Some(transition);
+        if let Ok(mut current) = self.snapshot.lock() {
+            *current = Some((transition, None));
         }
+    }
+
+    fn transition_with_error(&self, transition: SessionTransition, error_code: &str) {
+        if let Ok(mut current) = self.snapshot.lock() {
+            *current = Some((
+                transition,
+                Some(sanitized_status_code(
+                    error_code,
+                    "bridge_connection_failed",
+                )),
+            ));
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ReconciliationStateSnapshot {
+    last_run_at_utc_msc: Option<i64>,
+    inspected: usize,
+    resolved: usize,
+    pending: usize,
+    error_codes: Vec<String>,
+    consecutive_failures: u32,
+    fatal_error_code: Option<String>,
+}
+
+#[derive(Default)]
+struct CoreReconciliationState {
+    snapshot: Mutex<ReconciliationStateSnapshot>,
+}
+
+impl CoreReconciliationState {
+    fn current(&self) -> Result<ReconciliationStateSnapshot, CoreBootstrapError> {
+        self.snapshot
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .map_err(|_| CoreBootstrapError::new("bridge_reconciliation_state_failed"))
+    }
+
+    fn record_run(&self, run: bridge_command::ReconciliationRun, observed_at_utc_msc: i64) {
+        if let Ok(mut snapshot) = self.snapshot.lock() {
+            *snapshot = ReconciliationStateSnapshot {
+                last_run_at_utc_msc: Some(observed_at_utc_msc),
+                inspected: run.inspected,
+                resolved: run.resolved,
+                pending: run.pending,
+                error_codes: run
+                    .error_codes
+                    .into_iter()
+                    .map(|code| sanitized_status_code(&code, "bridge_reconciliation_failed"))
+                    .collect(),
+                consecutive_failures: 0,
+                fatal_error_code: None,
+            };
+        }
+    }
+
+    fn record_failure(&self, error_code: &str, observed_at_utc_msc: i64) {
+        if let Ok(mut snapshot) = self.snapshot.lock() {
+            snapshot.last_run_at_utc_msc = Some(observed_at_utc_msc);
+            snapshot.consecutive_failures = snapshot.consecutive_failures.saturating_add(1);
+            snapshot.fatal_error_code = Some(sanitized_status_code(
+                error_code,
+                "bridge_reconciliation_failed",
+            ));
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NativeTerminalRuntimeStatus {
+    pub terminal_instance_id: String,
+    pub platform: String,
+    pub connection_epoch: i64,
+    pub state: String,
+    pub worker_state: String,
+    pub collector_state: String,
+    pub data_ready: bool,
+    pub worker_consecutive_failures: u32,
+    pub collector_consecutive_failures: u32,
+    pub last_success_at_utc_msc: Option<i64>,
+    pub error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NativeReconciliationRuntimeStatus {
+    pub last_run_at_utc_msc: Option<i64>,
+    pub inspected: usize,
+    pub resolved: usize,
+    pub pending: usize,
+    pub error_codes: Vec<String>,
+    pub consecutive_failures: u32,
+    pub fatal_error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NativeRuntimeStatusSnapshot {
+    pub schema_version: u32,
+    pub bridge_version: String,
+    pub profile_id: String,
+    pub observed_at_utc_msc: i64,
+    pub phase: String,
+    pub server_state: String,
+    pub server_error_code: Option<String>,
+    pub terminals: Vec<NativeTerminalRuntimeStatus>,
+    pub reconciliation: NativeReconciliationRuntimeStatus,
+}
+
+impl NativeRuntimeStatusSnapshot {
+    pub fn inactive(
+        profile_id: &str,
+        bridge_version: &str,
+        observed_at_utc_msc: i64,
+        phase: &str,
+        server_state: &str,
+        error_code: Option<&str>,
+    ) -> Result<Self, CoreBootstrapError> {
+        if profile_id.is_empty()
+            || bridge_version.is_empty()
+            || observed_at_utc_msc <= 0
+            || !matches!(
+                phase,
+                "starting" | "pairing_required" | "connecting" | "degraded" | "stopped"
+            )
+            || !matches!(
+                server_state,
+                "stopped" | "pairing_required" | "connecting" | "reconnecting"
+            )
+            || error_code.is_some_and(|code| !valid_status_code(code))
+        {
+            return Err(CoreBootstrapError::new("bridge_runtime_status_invalid"));
+        }
+        Ok(Self {
+            schema_version: 1,
+            bridge_version: bridge_version.to_owned(),
+            profile_id: profile_id.to_owned(),
+            observed_at_utc_msc,
+            phase: phase.to_owned(),
+            server_state: server_state.to_owned(),
+            server_error_code: error_code.map(str::to_owned),
+            terminals: Vec::new(),
+            reconciliation: NativeReconciliationRuntimeStatus {
+                last_run_at_utc_msc: None,
+                inspected: 0,
+                resolved: 0,
+                pending: 0,
+                error_codes: Vec::new(),
+                consecutive_failures: 0,
+                fatal_error_code: None,
+            },
+        })
+    }
+}
+
+fn valid_status_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn sanitized_status_code(value: &str, fallback: &'static str) -> String {
+    if valid_status_code(value) {
+        value.to_owned()
+    } else {
+        fallback.to_owned()
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeRuntimeStatusHandle {
+    active_sessions: Arc<ActiveMt5Sessions>,
+    connection_state: Arc<CoreConnectionState>,
+    reconciliation_state: Arc<CoreReconciliationState>,
+}
+
+impl NativeRuntimeStatusHandle {
+    pub fn snapshot(
+        &self,
+        profile_id: &str,
+        bridge_version: &str,
+        observed_at_utc_msc: i64,
+    ) -> Result<NativeRuntimeStatusSnapshot, CoreBootstrapError> {
+        if profile_id.is_empty() || bridge_version.is_empty() || observed_at_utc_msc <= 0 {
+            return Err(CoreBootstrapError::new("bridge_runtime_status_invalid"));
+        }
+        let connection = self.connection_state.current()?;
+        let server_error_code = self.connection_state.current_error_code()?;
+        let server_state = connection
+            .map(|value| connection_state_name(value.state))
+            .unwrap_or("starting")
+            .to_owned();
+        let terminals = self
+            .active_sessions
+            .statuses()
+            .into_iter()
+            .map(|status| NativeTerminalRuntimeStatus {
+                terminal_instance_id: status.route.terminal_instance_id,
+                platform: status.route.platform,
+                connection_epoch: status.route.connection_epoch,
+                state: terminal_state_name(status.state).to_owned(),
+                worker_state: worker_state_name(status.worker_state).to_owned(),
+                collector_state: collector_state_name(status.collector_state).to_owned(),
+                data_ready: status.data_ready,
+                worker_consecutive_failures: status.worker_consecutive_failures,
+                collector_consecutive_failures: status.collector_consecutive_failures,
+                last_success_at_utc_msc: status.last_success_at_utc_msc,
+                error_code: status
+                    .error_code
+                    .map(|code| sanitized_status_code(&code, "terminal_runtime_failed")),
+            })
+            .collect::<Vec<_>>();
+        let all_ready = !terminals.is_empty() && terminals.iter().all(|status| status.data_ready);
+        let any_degraded = terminals
+            .iter()
+            .any(|status| matches!(status.state.as_str(), "degraded" | "superseded" | "stopped"));
+        let phase = if server_state == "connected" && all_ready {
+            "online"
+        } else if server_state == "reconnecting" || any_degraded {
+            "degraded"
+        } else if server_state == "pairing_required" {
+            "pairing_required"
+        } else if server_state == "stopped"
+            && terminals.iter().all(|status| status.state == "stopped")
+        {
+            "stopped"
+        } else {
+            "connecting"
+        };
+        let reconciliation = self.reconciliation_state.current()?;
+        Ok(NativeRuntimeStatusSnapshot {
+            schema_version: 1,
+            bridge_version: bridge_version.to_owned(),
+            profile_id: profile_id.to_owned(),
+            observed_at_utc_msc,
+            phase: phase.to_owned(),
+            server_state,
+            server_error_code,
+            terminals,
+            reconciliation: NativeReconciliationRuntimeStatus {
+                last_run_at_utc_msc: reconciliation.last_run_at_utc_msc,
+                inspected: reconciliation.inspected,
+                resolved: reconciliation.resolved,
+                pending: reconciliation.pending,
+                error_codes: reconciliation.error_codes,
+                consecutive_failures: reconciliation.consecutive_failures,
+                fatal_error_code: reconciliation.fatal_error_code,
+            },
+        })
+    }
+}
+
+fn connection_state_name(state: bridge_transport::ConnectionState) -> &'static str {
+    match state {
+        bridge_transport::ConnectionState::Stopped => "stopped",
+        bridge_transport::ConnectionState::PairingRequired => "pairing_required",
+        bridge_transport::ConnectionState::Connecting => "connecting",
+        bridge_transport::ConnectionState::Connected => "connected",
+        bridge_transport::ConnectionState::Reconnecting => "reconnecting",
+    }
+}
+
+fn terminal_state_name(state: bridge_terminal_session::TerminalSessionState) -> &'static str {
+    match state {
+        bridge_terminal_session::TerminalSessionState::Starting => "starting",
+        bridge_terminal_session::TerminalSessionState::Ready => "ready",
+        bridge_terminal_session::TerminalSessionState::Degraded => "degraded",
+        bridge_terminal_session::TerminalSessionState::Superseded => "superseded",
+        bridge_terminal_session::TerminalSessionState::Stopped => "stopped",
+    }
+}
+
+fn worker_state_name(state: bridge_worker_host::WorkerLifecycleState) -> &'static str {
+    match state {
+        bridge_worker_host::WorkerLifecycleState::Starting => "starting",
+        bridge_worker_host::WorkerLifecycleState::Ready => "ready",
+        bridge_worker_host::WorkerLifecycleState::Restarting => "restarting",
+        bridge_worker_host::WorkerLifecycleState::Superseded => "superseded",
+        bridge_worker_host::WorkerLifecycleState::Stopped => "stopped",
+    }
+}
+
+fn collector_state_name(state: bridge_terminal_data::CollectorLifecycleState) -> &'static str {
+    match state {
+        bridge_terminal_data::CollectorLifecycleState::Starting => "starting",
+        bridge_terminal_data::CollectorLifecycleState::Ready => "ready",
+        bridge_terminal_data::CollectorLifecycleState::Retrying => "retrying",
+        bridge_terminal_data::CollectorLifecycleState::Stopped => "stopped",
     }
 }
 
@@ -440,7 +737,9 @@ pub struct NativeConnectedRuntime {
     active_sessions: Arc<ActiveMt5Sessions>,
     supervisor: SessionSupervisor,
     command_reconciler: Arc<CommandReconciler>,
+    reconciliation_state: Arc<CoreReconciliationState>,
     connection_state: Arc<CoreConnectionState>,
+    clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 impl NativeConnectedRuntime {
@@ -522,6 +821,7 @@ impl NativeConnectedRuntime {
                 )
                 .map_err(|error| CoreBootstrapError::new(error.code()))?,
             );
+            let reconciliation_state = Arc::new(CoreReconciliationState::default());
             let outbox = Arc::new(OutboxPump::new(store, queue.clone(), Some(terminal_ids)));
             let events: Arc<dyn InboundEventSink> = active_sessions.clone();
             let inbound = Arc::new(
@@ -543,7 +843,7 @@ impl NativeConnectedRuntime {
             );
             let hello: Arc<dyn HelloProvider> = Arc::new(CoreHelloProvider {
                 terminals: active_sessions.terminal_descriptors(),
-                clock,
+                clock: Arc::clone(&clock),
             });
             let connector: Arc<dyn SessionConnector> = Arc::new(
                 V3SessionConnector::new(
@@ -563,7 +863,9 @@ impl NativeConnectedRuntime {
                 active_sessions: active_sessions.clone(),
                 supervisor,
                 command_reconciler,
+                reconciliation_state,
                 connection_state,
+                clock,
             })
         })();
         result.map_err(|error| (active_sessions, error))
@@ -577,11 +879,21 @@ impl NativeConnectedRuntime {
         Arc::clone(&self.connection_state)
     }
 
+    pub fn status_handle(&self) -> NativeRuntimeStatusHandle {
+        NativeRuntimeStatusHandle {
+            active_sessions: Arc::clone(&self.active_sessions),
+            connection_state: Arc::clone(&self.connection_state),
+            reconciliation_state: Arc::clone(&self.reconciliation_state),
+        }
+    }
+
     pub async fn run(self, stop: SessionCancellation) -> Result<(), CoreBootstrapError> {
         let NativeConnectedRuntime {
             active_sessions,
             supervisor,
             command_reconciler,
+            reconciliation_state,
+            clock,
             ..
         } = self;
         let server_stop = stop.clone();
@@ -596,6 +908,8 @@ impl NativeConnectedRuntime {
         let reconciliation = async move {
             let result = AssertUnwindSafe(run_command_reconciliation(
                 command_reconciler,
+                reconciliation_state,
+                clock,
                 reconciliation_stop.clone(),
             ))
             .catch_unwind()
@@ -621,6 +935,8 @@ impl NativeConnectedRuntime {
 
 async fn run_command_reconciliation(
     reconciler: Arc<CommandReconciler>,
+    state: Arc<CoreReconciliationState>,
+    clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     stop: SessionCancellation,
 ) -> Result<(), CoreBootstrapError> {
     loop {
@@ -631,7 +947,13 @@ async fn run_command_reconciliation(
             _ = stop.cancelled() => return Ok(()),
             result = reconciler.reconcile_once(RECONCILIATION_BATCH_LIMIT) => result,
         };
-        run.map_err(|error| CoreBootstrapError::new(error.code()))?;
+        match run {
+            Ok(run) => state.record_run(run, (clock)()),
+            Err(error) => {
+                state.record_failure(error.code(), (clock)());
+                return Err(CoreBootstrapError::new(error.code()));
+            }
+        }
         tokio::select! {
             _ = stop.cancelled() => return Ok(()),
             _ = sleep(RECONCILIATION_INTERVAL) => {}
@@ -769,6 +1091,69 @@ mod tests {
     use bridge_security_win::BridgeCredential;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn connection_failure_preserves_only_the_stable_error_code_until_the_next_transition() {
+        let state = CoreConnectionState::default();
+        SupervisorStateSink::transition_with_error(
+            &state,
+            SessionTransition {
+                state: bridge_transport::ConnectionState::Reconnecting,
+                retry_after: Some(Duration::from_secs(2)),
+            },
+            "bridge_server_unreachable",
+        );
+        assert_eq!(
+            state.current().expect("connection state"),
+            Some(SessionTransition {
+                state: bridge_transport::ConnectionState::Reconnecting,
+                retry_after: Some(Duration::from_secs(2)),
+            })
+        );
+        assert_eq!(
+            state.current_error_code().expect("error code").as_deref(),
+            Some("bridge_server_unreachable")
+        );
+
+        SupervisorStateSink::transition(
+            &state,
+            SessionTransition {
+                state: bridge_transport::ConnectionState::Connecting,
+                retry_after: None,
+            },
+        );
+        assert_eq!(state.current_error_code().expect("cleared error"), None);
+    }
+
+    #[test]
+    fn inactive_runtime_status_is_versioned_and_rejects_unstructured_errors() {
+        let status = NativeRuntimeStatusSnapshot::inactive(
+            "default",
+            "3.0.0",
+            1_800_000_000_000,
+            "pairing_required",
+            "pairing_required",
+            None,
+        )
+        .expect("pairing status");
+        let payload = serde_json::to_value(status).expect("status json");
+        assert_eq!(payload["schema_version"], 1);
+        assert_eq!(payload["phase"], "pairing_required");
+        assert_eq!(payload["terminals"].as_array().map(Vec::len), Some(0));
+        assert_eq!(
+            NativeRuntimeStatusSnapshot::inactive(
+                "default",
+                "3.0.0",
+                1_800_000_000_000,
+                "degraded",
+                "stopped",
+                Some("password=secret")
+            )
+            .expect_err("unstructured errors are not persisted")
+            .code(),
+            "bridge_runtime_status_invalid"
+        );
+    }
 
     #[test]
     fn fresh_profile_opens_without_requiring_an_mt5_runtime() {
@@ -985,6 +1370,38 @@ mod tests {
                 },
             },
         );
+
+        let connection = Arc::new(CoreConnectionState::default());
+        SupervisorStateSink::transition(
+            connection.as_ref(),
+            SessionTransition {
+                state: bridge_transport::ConnectionState::Connected,
+                retry_after: None,
+            },
+        );
+        let reconciliation = Arc::new(CoreReconciliationState::default());
+        reconciliation.record_run(
+            bridge_command::ReconciliationRun {
+                inspected: 2,
+                resolved: 1,
+                pending: 1,
+                error_codes: vec!["reconciliation_settlement_pending".to_owned()],
+            },
+            1_700_000_000_102,
+        );
+        let runtime_status = NativeRuntimeStatusHandle {
+            active_sessions: Arc::clone(&active),
+            connection_state: connection,
+            reconciliation_state: reconciliation,
+        }
+        .snapshot("default", "3.0.0", 1_700_000_000_103)
+        .expect("runtime status");
+        assert_eq!(runtime_status.server_state, "connected");
+        assert_eq!(runtime_status.reconciliation.pending, 1);
+        assert_eq!(runtime_status.terminals.len(), 1);
+        let serialized = serde_json::to_string(&runtime_status).expect("status json");
+        assert!(!serialized.contains("Broker-Demo"));
+        assert!(!serialized.contains("123456"));
 
         active.stop().await.expect("stop active sessions");
         assert!(

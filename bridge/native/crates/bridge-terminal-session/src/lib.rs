@@ -86,6 +86,9 @@ pub struct TerminalSessionStatus {
     pub worker_state: WorkerLifecycleState,
     pub collector_state: CollectorLifecycleState,
     pub data_ready: bool,
+    pub worker_consecutive_failures: u32,
+    pub collector_consecutive_failures: u32,
+    pub last_success_at_utc_msc: Option<i64>,
     pub error_code: Option<String>,
 }
 
@@ -128,6 +131,9 @@ impl TerminalSessionHandle {
             worker_state: worker.state,
             collector_state: collector.state,
             data_ready,
+            worker_consecutive_failures: worker.consecutive_failures,
+            collector_consecutive_failures: collector.consecutive_failures,
+            last_success_at_utc_msc: collector.last_success_at_utc_msc,
             error_code: collector.error_code.or(worker.error_code),
         }
     }

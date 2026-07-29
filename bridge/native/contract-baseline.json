@@ -124,6 +124,18 @@
     "retained_files": 10,
     "secrets_redacted": true
   },
+  "runtime_status_contract": {
+    "schema_version": 1,
+    "path": "{profile_data_directory}/runtime-status.json",
+    "atomic_replace": true,
+    "heartbeat_seconds": 5,
+    "maximum_bytes": 262144,
+    "phases": ["starting", "pairing_required", "connecting", "online", "degraded", "stopped"],
+    "server_states": ["stopped", "pairing_required", "connecting", "connected", "reconnecting"],
+    "includes_terminal_worker_collector_and_reconciliation_state": true,
+    "excludes_account_login_broker_server_and_credentials": true,
+    "read_only_ui_projection": true
+  },
   "worker_supervision_contract": {
     "restart_delays_seconds": [1, 2, 4, 8, 10],
     "stable_run_reset_seconds": 30,

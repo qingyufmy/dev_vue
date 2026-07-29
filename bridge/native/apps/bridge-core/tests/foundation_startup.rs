@@ -21,6 +21,12 @@ fn missing_authorization_waits_without_a_browser_and_honors_shutdown() {
         &paths.data_directory,
         "native_runtime_pairing_required",
     );
+    let pairing: Value = serde_json::from_slice(
+        &fs::read(&paths.runtime_status_path).expect("pairing runtime status"),
+    )
+    .expect("pairing runtime json");
+    assert_eq!(pairing["phase"], "pairing_required");
+    assert_eq!(pairing["server_state"], "pairing_required");
 
     SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
         .expect("request shutdown");
@@ -44,6 +50,11 @@ fn missing_authorization_waits_without_a_browser_and_honors_shutdown() {
             .exists()
     );
     assert!(!root.join("ready.json").exists());
+    let stopped: Value = serde_json::from_slice(
+        &fs::read(&paths.runtime_status_path).expect("stopped runtime status"),
+    )
+    .expect("stopped runtime json");
+    assert_eq!(stopped["phase"], "stopped");
 
     fs::remove_dir_all(root).expect("remove native pairing fixture");
 }
@@ -83,6 +94,12 @@ fn authorized_profile_without_a_terminal_fails_closed() {
             "native_runtime_failed",
         ]
     );
+    let status: Value = serde_json::from_slice(
+        &fs::read(&paths.runtime_status_path).expect("failed runtime status"),
+    )
+    .expect("failed runtime json");
+    assert_eq!(status["phase"], "degraded");
+    assert_eq!(status["server_error_code"], "bridge_terminals_invalid");
     assert!(
         !paths
             .data_directory

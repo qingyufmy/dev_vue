@@ -71,6 +71,10 @@ impl SessionConnector for V3SessionConnector {
 
 pub trait SupervisorStateSink: Send + Sync {
     fn transition(&self, transition: SessionTransition);
+
+    fn transition_with_error(&self, transition: SessionTransition, _error_code: &str) {
+        self.transition(transition);
+    }
 }
 
 #[derive(Default)]
@@ -191,7 +195,7 @@ impl SessionSupervisor {
         stop: &SessionCancellation,
     ) -> Result<Option<String>, TransportError> {
         let transition = machine.failed(error_code);
-        self.publish(transition);
+        self.states.transition_with_error(transition, error_code);
         if transition.state == ConnectionState::PairingRequired {
             tokio::select! {
                 _ = stop.cancelled() => return Ok(None),

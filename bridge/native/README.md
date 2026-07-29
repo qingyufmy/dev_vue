@@ -20,7 +20,7 @@
 - MT5 交易动作参数合同已在 Core → Worker IPC 边界冻结：`place_order`、`cancel_order`、`modify_order`、`modify_position`、`close_position` 与只读 `query_execution` 按服务器业务适配器的实际字段逐项校验；缺失必填字段、非法票号/数值、管理目标快照不完整或未知字段均在写入 Worker 管道前失败关闭。正式 Core 已启用 MT5 Dispatcher，但只有服务器确认当前账户、持仓和挂单三类初始全量快照后才放行交易。
 - `workers/mt5` 已实现独立的 MT5 Python Worker：每次请求复核终端、经纪商服务器、登录号和连接状态；账户、持仓和挂单字段无损转发，列表带 ticket 且受 4 MiB 帧限制；报价保留经纪商时区校准，时钟未可信时失败关闭。交易侧已声明 `execute_command` / `query_execution` 能力，在 `order_check` 前及 `order_send` 前重复校验账户和算法交易权限，执行结果缺失或发送异常只返回 `uncertain` 且按 command id 缓存，绝不在 Worker 内自动重放。Rust 测试会启动真实 Python 子进程并通过受保护命名管道验证快照、报价和交易回执互操作；Core 独立进程测试覆盖服务器命令、SQLite 账本、Dispatcher、Worker 回执、交易 Outbox 与结果 ACK 闭环。
 - `scripts/bridge-native/test-mt5-demo.py` 提供显式 `--execute` 的 MT5 demo 验收入口：只允许 demo 账户和无既有仓位的测试品种，所有测试对象使用唯一 comment 并在失败路径自动清理。`--matrix` 会按经纪商最小手数依次完成限价挂单、改单、撤单、开仓、修改 SL/TP、部分平仓和全部平仓。2026-07-29 已在真实 MT5 demo 上完成 0.01 手挂单管理以及 0.02 → 0.01 → 0 手持仓管理闭环，结束后复查测试品种持仓和挂单均为 0；该真实测试验证 Worker 交易适配，正式 Core 则已通过隔离假 MT5 的端到端命令闭环测试。
-- `bridge-observability` 写入现有内置日志查看器可直接读取的脱敏 JSONL，并持久化 panic 与非正常退出证据。
+- `bridge-observability` 写入现有内置日志查看器可直接读取的脱敏 JSONL，并持久化 panic 与非正常退出证据。Core 同时为每个 Profile 原子发布有界的 `runtime-status.json`：启动、待授权、连接、在线、降级和停止状态包含服务器、Worker、采集器、最后同步、连续失败及命令核验摘要，状态变化会生成脱敏事件，文件每 5 秒刷新存活时间。该只读投影不包含登录号、Broker Server 或凭据，供后续 Native UI/受限本地 IPC 消费，不能用于控制 Core 或批准交易。
 - `bridge-runtime-win` 与 .NET V3 共用锁文件及 `Local\*.activate/.shutdown` 事件，并用 Windows Job Object 监管、清理和退避重启子进程树。
 - `bridge-transport` 已完成统一端点解析、rustls HTTP / WebSocket、refresh / ticket、Hello / ACK、心跳包络、严格优先队列、重连状态机和 Outbox 泵基础。服务器地址以管理员数据目录中的 `endpoint-settings.json` 为优先权威源；文件缺失或损坏时退回安装目录随签名包发布的 `server-endpoints.json`。单一 `server_url` 会派生实时地址，公网明文 HTTP 不被接受，本机回环地址仅供开发使用。
 - 原生会话编排器现已联动 WebSocket 收发、10 秒心跳、200 ms Outbox 轮询和整组取消；任一循环失败都会关闭本次会话并保留原始稳定错误码。
@@ -30,7 +30,7 @@
 - 本地端到端测试会真实执行 refresh → ticket → WebSocket ticket → Hello / ACK → Heartbeat，并验证二进制帧失败关闭。
 - Core 级回环测试会启动真实 `liangjian-bridge-core.exe`、隔离 Python 运行入口和假 MT5 Worker，验证 DPAPI、SQLite、命名管道、`data_delta` 转发、初始快照 ACK 门禁、交易命令执行、启动时中断命令只读核对且不重放、`command_result` / ACK 账本闭环、Launcher ready、WebSocket 断线重连、单实例退出以及 Python 子进程随 Core 清理。
 - `liangjian-bridge-compat-probe` 目前仅作为开发期本地合同探针，不代表 3.0.0 需要接管旧 .NET Bridge 的生产数据。
-- `bridge-core` 普通运行现在会建立日志、单实例和运行标记，未授权时等待凭据文件变化；授权、终端绑定和地址均有效后启动 MT5 数据会话与服务器监督器。单实例退出事件会取消整组会话；只有服务器已连接且 Launcher 指定的终端全部 Ready 时，才原子写入 ready 信号。MT4 与真实交易执行尚未接入该入口。
+- `bridge-core` 普通运行现在会建立日志、单实例、运行标记和 Profile 状态投影，未授权时等待凭据文件变化；授权、终端绑定和地址均有效后启动 MT5 数据会话与服务器监督器。服务器失败状态保留稳定错误码直至下次连接迁移；单实例退出事件会取消整组会话；只有服务器已连接且 Launcher 指定的终端全部 Ready 时，才原子写入 ready 信号。MT4 尚未接入该入口。
 
 ## 本地验证
 

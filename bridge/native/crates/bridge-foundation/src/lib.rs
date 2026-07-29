@@ -182,6 +182,7 @@ pub struct BridgeProfilePaths {
     pub data_directory: PathBuf,
     pub credential_path: PathBuf,
     pub database_path: PathBuf,
+    pub runtime_status_path: PathBuf,
 }
 
 pub fn resolve_profile_paths(
@@ -199,8 +200,24 @@ pub fn resolve_profile_paths(
         root_data_directory: root,
         credential_path: data_directory.join("credential.dat"),
         database_path: data_directory.join("bridge.db"),
+        runtime_status_path: data_directory.join("runtime-status.json"),
         data_directory,
     })
+}
+
+pub const MAX_RUNTIME_STATUS_BYTES: usize = 256 * 1024;
+
+pub fn write_runtime_status_snapshot(output: &Path, payload: &[u8]) -> Result<(), Box<dyn Error>> {
+    if !output.is_absolute()
+        || output.file_name().and_then(|value| value.to_str()) != Some("runtime-status.json")
+        || payload.is_empty()
+        || payload.len() > MAX_RUNTIME_STATUS_BYTES
+        || !serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(payload).is_ok()
+    {
+        return Err("bridge_runtime_status_invalid".into());
+    }
+    write_atomic_replace(output, payload)
+        .map_err(|_| -> Box<dyn Error> { "bridge_runtime_status_write_failed".into() })
 }
 
 pub fn list_observer_profiles(
@@ -562,6 +579,10 @@ mod tests {
             default.database_path,
             default.data_directory.join("bridge.db")
         );
+        assert_eq!(
+            default.runtime_status_path,
+            default.data_directory.join("runtime-status.json")
+        );
 
         let observer = resolve_profile_paths(&default.root_data_directory, "Source-A")
             .expect("observer paths");
@@ -746,6 +767,41 @@ mod tests {
             0
         );
         fs::remove_dir_all(root).expect("remove ready fixture");
+    }
+
+    #[test]
+    fn runtime_status_snapshot_is_bounded_valid_json_and_atomically_replaceable() {
+        let root = unique_test_directory("runtime-status");
+        let output = root.join("runtime-status.json");
+        write_runtime_status_snapshot(&output, br#"{"schema_version":1,"phase":"starting"}"#)
+            .expect("initial runtime status");
+        write_runtime_status_snapshot(&output, br#"{"schema_version":1,"phase":"online"}"#)
+            .expect("replacement runtime status");
+
+        let payload: Value = serde_json::from_slice(&fs::read(&output).expect("status payload"))
+            .expect("status json");
+        assert_eq!(payload["phase"], "online");
+        assert_eq!(
+            write_runtime_status_snapshot(&root.join("other.json"), b"{}")
+                .expect_err("fixed filename required")
+                .to_string(),
+            "bridge_runtime_status_invalid"
+        );
+        assert_eq!(
+            write_runtime_status_snapshot(&output, b"[]")
+                .expect_err("object required")
+                .to_string(),
+            "bridge_runtime_status_invalid"
+        );
+        assert_eq!(
+            fs::read_dir(&root)
+                .expect("status directory")
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+                .count(),
+            0
+        );
+        fs::remove_dir_all(root).expect("remove status fixture");
     }
 
     fn unique_test_directory(suffix: &str) -> PathBuf {

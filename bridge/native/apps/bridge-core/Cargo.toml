@@ -18,10 +18,11 @@ bridge-terminal-session = { path = "../../crates/bridge-terminal-session" }
 bridge-transport = { path = "../../crates/bridge-transport" }
 bridge-worker-host = { path = "../../crates/bridge-worker-host" }
 futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 windows-sys.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tokio-tungstenite.workspace = true

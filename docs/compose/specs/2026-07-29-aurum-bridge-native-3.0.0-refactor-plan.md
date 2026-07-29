@@ -6,7 +6,7 @@
 >
 > 产品版本：Rust Native 直接作为正式 3.0.0；现有 .NET Bridge 仅作功能与协议对照
 >
-> 当前进度：阶段 0 / 1 / 2 已完成；阶段 3 已完成 MT5 Python Worker、增量投影、Profile 准备、服务器/Worker 共同生命周期、端点权威源与 Core 正式入口；阶段 4 已接通正式 MT5 Dispatcher、主动执行核对和真实 MT5 管理动作矩阵，审计展示及休市等外部故障验收仍待实施
+> 当前进度：阶段 0 / 1 / 2 已完成；阶段 3 已完成 MT5 Python Worker、增量投影、Profile 准备、服务器/Worker 共同生命周期、端点权威源与 Core 正式入口；阶段 4 已接通正式 MT5 Dispatcher、主动执行核对、真实 MT5 管理动作矩阵及脱敏运行状态投影，休市等外部故障验收仍待实施
 
 ## 1. 结论
 
@@ -450,7 +450,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - [已完成] 正式 Core 已接通 command ledger、幂等、过期、初始同步门禁和 epoch fencing；独立进程测试证明 WebSocket 命令经 Dispatcher 到 Python Worker，再由交易 Outbox 返回并在服务器 ACK 后落为 `acked`。
 - [进行中] 已完成主动核对的 SQLite 单向状态迁移和周期服务：`dispatched` 无回执命令可以直接落最终事实；uncertain 回执必须先获服务器 ACK，随后才能被更新、更晚且同路由的最终事实替换，并产生新的交易优先回执重新等待 ACK。查询无证据、超时、panic 或非法结果均保持待核对，绝不重放原交易。MT5 `query_execution` 适配器优先按原回执票号、否则按 comment/magic 查询事实，每次使用全新查询 ID，并在结算窗口内无证据时继续等待；该服务已接入 Core 启动和周期生命周期，且可随整体退出立即取消。进程级测试证明启动前中断的命令只产生查询和最终 ACK，不会调用第二次 `order_send`。
 - [已完成] 开仓、挂单、改单、撤单、部分/全部平仓、修改止损止盈真实 MT5 demo 矩阵；改单在执行前必须匹配完整目标快照，部分平仓只有剩余手数精确符合命令时才成功。
-- 原始 MT5 返回码、中文结果和 uncertain reconciliation。
+- [进行中] Core 已按 Profile 原子写入版本化、有界的 `runtime-status.json`，状态覆盖服务器、Worker、采集器、最后成功同步、连续失败与 uncertain reconciliation 摘要；服务器断线保留稳定错误码，状态变化写入脱敏 JSONL。运行状态明确排除登录号、Broker Server 和凭据，未来 UI 只读消费，控制动作仍必须走受限 IPC。原始 MT5 返回码到中文结果的 UI 映射仍待 Native UI 阶段完成。
 
 交付门：demo 账户故障注入无重复订单；所有结果可在审计日志闭环。
 
@@ -593,4 +593,4 @@ bridge/native/
 - 已完成签名包内 `server-endpoints.json` 与管理员 `endpoint-settings.json` 的 Native 地址权威解析：有效管理员覆盖优先，损坏覆盖安全退回包内地址；包内地址缺失时失败关闭，公网明文 HTTP 不会被静默接受。
 - 已完成 Core 正式入口：无授权时常驻等待且不打开浏览器、不启动 Worker；授权但无终端时失败关闭；单实例退出信号取消服务器与终端；Launcher ready 仅在服务器连接且期望终端 Ready 后原子写入。主动退出授权会立即关闭当前会话并回到等待授权。
 - 已完成 Core 级真实进程回环矩阵：隔离 Python 假 MT5 Worker 经命名管道产生 `data_delta`，本地 refresh/ticket/WebSocket 完成 Hello/ACK、三类初始快照 ACK、命令执行、交易结果 ACK 和 Launcher ready；主动断开首个 WebSocket 后 Core 自动建立第二个会话，退出信号完成 Core 与 Python Worker 进程树清理。
-- 下一批补齐 MT5 核验/故障状态的脱敏运维日志与 UI 可消费状态，并继续验证休市、经纪商拒单等依赖外部状态的场景；随后进入 MT4 Native 适配。
+- 下一批继续验证休市、经纪商拒单、终端关闭和网络切换等依赖外部状态的 MT5 故障场景，并根据实测结果补强状态码；随后进入 MT4 Native 适配。

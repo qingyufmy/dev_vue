@@ -72,6 +72,21 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     assert_eq!(payload["version"], "3.0.0");
     assert_eq!(payload["server_connected"], true);
     assert_eq!(payload["running_terminal_instance_ids"][0], terminal_id);
+    let runtime_status: Value = serde_json::from_slice(
+        &fs::read(&paths.runtime_status_path).expect("runtime status payload"),
+    )
+    .expect("runtime status json");
+    assert_eq!(runtime_status["schema_version"], 1);
+    assert_eq!(runtime_status["phase"], "online");
+    assert_eq!(runtime_status["server_state"], "connected");
+    assert_eq!(
+        runtime_status["terminals"][0]["terminal_instance_id"],
+        terminal_id
+    );
+    assert_eq!(runtime_status["terminals"][0]["data_ready"], true);
+    let runtime_text = serde_json::to_string(&runtime_status).expect("runtime status text");
+    assert!(!runtime_text.contains("Broker-Demo"));
+    assert!(!runtime_text.contains("123456"));
     assert_eq!(server.websocket_connections(), 1);
     assert!(
         server.saw_routed_full_snapshot(terminal_id),
@@ -130,6 +145,11 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
             .join("native-bridge-core.active")
             .exists()
     );
+    let stopped_status: Value = serde_json::from_slice(
+        &fs::read(&paths.runtime_status_path).expect("stopped status payload"),
+    )
+    .expect("stopped status json");
+    assert_eq!(stopped_status["phase"], "stopped");
 
     server.stop();
     fs::remove_dir_all(root).expect("remove connected process fixture");
