@@ -60,18 +60,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, BS_OWNERDRAW, CB_SETITEMHEIGHT, CBN_SELCHANGE, CBS_DROPDOWNLIST,
     CBS_OWNERDRAWFIXED, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateIconFromResourceEx,
     CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
-    GWLP_USERDATA, GetClientRect, GetMessageW, GetScrollInfo, GetSystemMetrics, GetWindowLongPtrW,
-    HICON, HMENU, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, LR_DEFAULTCOLOR, LoadCursorW,
-    LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MoveWindow,
-    PostMessageW, RegisterClassExW, RegisterWindowMessageW, SB_BOTTOM, SB_CTL, SB_LINEDOWN,
-    SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SBS_VERT,
-    SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE,
-    SW_MINIMIZE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WHEEL_DELTA, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION,
-    WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_SETFONT,
-    WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    GA_ROOT, GWLP_USERDATA, GetAncestor, GetClientRect, GetMessageW, GetScrollInfo,
+    GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION,
+    IsDialogMessageW, LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
+    MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW, RegisterClassExW, RegisterWindowMessageW,
+    SB_BOTTOM, SB_CTL, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
+    SB_THUMBTRACK, SB_TOP, SBS_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
+    SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW,
+    SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage,
+    WHEEL_DELTA, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM,
+    WM_ENDSESSION, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_QUERYENDSESSION, WM_RBUTTONUP,
+    WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
     WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
     WS_VISIBLE,
 };
@@ -310,6 +310,14 @@ fn user_exit_confirmation_message() -> String {
 
 fn confirm_user_exit(hwnd: HWND) -> bool {
     show_confirmation(hwnd, &user_exit_confirmation_message(), "退出桥接")
+}
+
+fn dialog_message_root(main_window: HWND, message_window: HWND) -> HWND {
+    if message_window.is_null() {
+        return main_window;
+    }
+    let root = unsafe { GetAncestor(message_window, GA_ROOT) };
+    if root.is_null() { main_window } else { root }
 }
 
 fn main() {
@@ -769,6 +777,12 @@ unsafe fn run_window(mut state: AppState) {
     let mut message = MSG::default();
     while unsafe { GetMessageW(&mut message, null_mut(), 0, 0) } > 0 {
         unsafe {
+            let handled_log_input = log_viewer::handle_dialog_tab(
+                (*state_ptr).log_window,
+                message.hwnd,
+                message.message,
+                message.wParam,
+            );
             let handled_account_input = match message.message {
                 WM_MOUSEWHEEL => handle_account_mouse_wheel(
                     hwnd,
@@ -781,7 +795,11 @@ unsafe fn run_window(mut state: AppState) {
                 }
                 _ => false,
             };
-            if !handled_account_input && IsDialogMessageW(hwnd, &message) == 0 {
+            let dialog_root = dialog_message_root(hwnd, message.hwnd);
+            if !handled_log_input
+                && !handled_account_input
+                && IsDialogMessageW(dialog_root, &message) == 0
+            {
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
@@ -3393,6 +3411,12 @@ mod tests {
     #[test]
     fn taskbar_restart_message_is_registered_for_tray_recovery() {
         assert!(register_taskbar_created_message() >= 0xC000);
+    }
+
+    #[test]
+    fn dialog_routing_falls_back_to_the_main_window_for_thread_messages() {
+        let main_window = 1_usize as HWND;
+        assert_eq!(dialog_message_root(main_window, null_mut()), main_window);
     }
 
     #[test]

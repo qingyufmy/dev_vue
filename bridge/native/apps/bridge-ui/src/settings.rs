@@ -49,8 +49,8 @@ const CONTROL_CUSTOM: i32 = 3001;
 const CONTROL_SERVER_URL: i32 = 3002;
 const CONTROL_TEST: i32 = 3003;
 const CONTROL_RESTORE: i32 = 3004;
-const CONTROL_CANCEL: i32 = 3005;
-const CONTROL_SAVE: i32 = 3006;
+const CONTROL_CANCEL: i32 = 2;
+const CONTROL_SAVE: i32 = 1;
 const WM_SETTINGS_RESULT: u32 = WM_APP + 30;
 const SETTINGS_TIMEOUT: Duration = Duration::from_secs(8);
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -928,5 +928,11 @@ mod tests {
         assert_eq!(scale(WINDOW_CLIENT_HEIGHT, 144), 735);
         assert_eq!(scale(WINDOW_MIN_WIDTH, 120), 725);
         assert_eq!(scale(WINDOW_MIN_HEIGHT, 144), 705);
+    }
+
+    #[test]
+    fn settings_accept_and_cancel_ids_match_the_standard_dialog_contract() {
+        assert_eq!(CONTROL_SAVE, 1);
+        assert_eq!(CONTROL_CANCEL, 2);
     }
 }

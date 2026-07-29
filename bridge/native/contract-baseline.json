@@ -163,7 +163,10 @@
     "internal_shutdown_skips_user_confirmation": true,
     "taskbar_created_readds_tray_icon": true,
     "tray_failure_falls_back_to_taskbar": true,
-    "session_end_does_not_block_windows": true
+    "session_end_does_not_block_windows": true,
+    "modeless_child_windows_use_their_own_dialog_keyboard_routing": true,
+    "settings_accept_and_cancel_keys_match_dotnet": true,
+    "log_multiline_content_releases_tab_navigation": true
   },
   "worker_supervision_contract": {
     "restart_delays_seconds": [1, 2, 4, 8, 10],

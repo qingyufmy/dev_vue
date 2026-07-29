@@ -17,19 +17,21 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
     BST_CHECKED, EM_GETSEL, EM_SCROLLCARET, EM_SETLIMITTEXT, EM_SETSEL, InitCommonControls,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    EnableWindow, GetKeyState, SetFocus, VK_SHIFT, VK_TAB,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, CREATESTRUCTW, CS_HREDRAW,
     CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, ES_AUTOHSCROLL,
-    ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW,
-    GetWindowRect, GetWindowTextLengthW, HICON, HMENU, IDC_ARROW, IsWindow, KillTimer, LoadCursorW,
-    MINMAXINFO, MoveWindow, PostMessageW, RegisterClassExW, SB_LEFT, SW_SHOW, SW_SHOWNORMAL,
-    SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-    WM_APP, WM_CLOSE, WM_COMMAND, WM_COPY, WM_CREATE, WM_CTLCOLORSTATIC, WM_DPICHANGED,
-    WM_DRAWITEM, WM_GETMINMAXINFO, WM_HSCROLL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFONT,
-    WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_HSCROLL,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
-    WS_VISIBLE, WS_VSCROLL,
+    ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetDlgCtrlID,
+    GetNextDlgTabItem, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, HICON, HMENU,
+    IDC_ARROW, IsChild, IsWindow, KillTimer, LoadCursorW, MINMAXINFO, MoveWindow, PostMessageW,
+    RegisterClassExW, SB_LEFT, SW_SHOW, SW_SHOWNORMAL, SendMessageW, SetForegroundWindow, SetTimer,
+    SetWindowLongPtrW, SetWindowTextW, ShowWindow, WM_APP, WM_CLOSE, WM_COMMAND, WM_COPY,
+    WM_CREATE, WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_HSCROLL,
+    WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
+    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_HSCROLL, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use super::{PRODUCT_NAME, Rgb, draw_button, draw_text, fill, rect, scale, wide, window_dpi};
@@ -62,6 +64,38 @@ struct LogViewerState {
     mono_font: windows_sys::Win32::Graphics::Gdi::HFONT,
     background_brush: HBRUSH,
     refresh_status: String,
+}
+
+fn is_content_tab_message(message: u32, key: WPARAM, control_id: i32) -> bool {
+    message == WM_KEYDOWN && key == usize::from(VK_TAB) && control_id == CONTROL_CONTENT
+}
+
+pub(super) unsafe fn handle_dialog_tab(
+    log_window: HWND,
+    message_window: HWND,
+    message: u32,
+    key: WPARAM,
+) -> bool {
+    if log_window.is_null()
+        || message_window.is_null()
+        || message != WM_KEYDOWN
+        || key != usize::from(VK_TAB)
+    {
+        return false;
+    }
+    if unsafe { IsWindow(log_window) } == 0
+        || unsafe { IsChild(log_window, message_window) } == 0
+        || !is_content_tab_message(message, key, unsafe { GetDlgCtrlID(message_window) })
+    {
+        return false;
+    }
+    let previous = unsafe { GetKeyState(VK_SHIFT as i32) } < 0;
+    let next = unsafe { GetNextDlgTabItem(log_window, message_window, i32::from(previous)) };
+    if next.is_null() {
+        return false;
+    }
+    unsafe { SetFocus(next) };
+    true
 }
 
 pub(super) unsafe fn show_or_refresh(
@@ -611,5 +645,24 @@ mod tests {
         assert_eq!(scale(WINDOW_CLIENT_HEIGHT, 144), 780);
         assert_eq!(scale(WINDOW_MIN_WIDTH, 120), 800);
         assert_eq!(scale(WINDOW_MIN_HEIGHT, 144), 630);
+    }
+
+    #[test]
+    fn only_tab_from_the_multiline_log_content_needs_manual_dialog_navigation() {
+        assert!(is_content_tab_message(
+            WM_KEYDOWN,
+            usize::from(VK_TAB),
+            CONTROL_CONTENT
+        ));
+        assert!(!is_content_tab_message(
+            WM_KEYDOWN,
+            usize::from(VK_TAB),
+            CONTROL_REFRESH
+        ));
+        assert!(!is_content_tab_message(
+            WM_COMMAND,
+            usize::from(VK_TAB),
+            CONTROL_CONTENT
+        ));
     }
 }
