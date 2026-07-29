@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn resolves_only_versioned_install_layout() {
         assert_eq!(
-            resolve_installed_root(Path::new(r"C:\AURUM\versions\4.0.0")),
+            resolve_installed_root(Path::new(r"C:\AURUM\versions\3.0.0")),
             Ok(PathBuf::from(r"C:\AURUM"))
         );
         assert_eq!(
@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn health_check_requires_runtime_and_verifies_sqlite_wal() {
         let root = unique_test_directory("health-ok");
-        let application = root.join("versions").join("4.0.0");
+        let application = root.join("versions").join("3.0.0");
         let data = root.join("data");
         let health = root.join("health").join("health-fixture.json");
         fs::create_dir_all(application.join("runtime/python")).expect("python directory");
@@ -561,14 +561,14 @@ mod tests {
             install_root: root.clone(),
             data_directory: data.clone(),
             health_file: health.clone(),
-            version: "4.0.0-test".to_owned(),
+            version: "3.0.0-test".to_owned(),
         })
         .expect("health check");
 
         let payload: Value = serde_json::from_slice(&fs::read(&health).expect("health payload"))
             .expect("health json");
         assert_eq!(payload["ok"], Value::Bool(true));
-        assert_eq!(payload["version"], "4.0.0-test");
+        assert_eq!(payload["version"], "3.0.0-test");
         assert_eq!(payload["implementation"], "rust-native-foundation");
         let connection = Connection::open(data.join("bridge.db")).expect("health sqlite");
         let journal_mode: String = connection
@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn health_check_rejects_output_outside_install_health_directory() {
         let root = unique_test_directory("health-path");
-        let application = root.join("versions").join("4.0.0");
+        let application = root.join("versions").join("3.0.0");
         let data = root.join("data");
         fs::create_dir_all(application.join("runtime/python")).expect("python directory");
         fs::create_dir_all(application.join("modules/adapter.mt5.python"))
@@ -596,7 +596,7 @@ mod tests {
             install_root: root.clone(),
             data_directory: data,
             health_file: root.join("health-escaped.json"),
-            version: "4.0.0-test".to_owned(),
+            version: "3.0.0-test".to_owned(),
         });
 
         assert_eq!(

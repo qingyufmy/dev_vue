@@ -1,4 +1,5 @@
 use crate::TransportError;
+use bridge_command::{CommandAdmissionPolicy, CommandDispatchError};
 use bridge_contract::{CommandMessage, TerminalDescriptor, same_terminal_route, validate_id};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -191,6 +192,17 @@ impl NativeCommandAdmission {
     }
 }
 
+impl CommandAdmissionPolicy for NativeCommandAdmission {
+    fn validate(
+        &self,
+        command: &CommandMessage,
+        now_utc_msc: i64,
+    ) -> Result<(), CommandDispatchError> {
+        NativeCommandAdmission::validate(self, command, now_utc_msc)
+            .map_err(|error| CommandDispatchError::new(error.code()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,7 +217,7 @@ mod tests {
                 login: "123456".to_owned(),
             },
             connection_epoch: 7,
-            worker_version: Some("4.0.0".to_owned()),
+            worker_version: Some("3.0.0".to_owned()),
         }
     }
 

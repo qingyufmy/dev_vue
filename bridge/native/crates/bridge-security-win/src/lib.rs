@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn dpapi_round_trip_uses_current_user_and_v3_entropy() {
-        let plaintext = b"native-v4-dpapi-fixture";
+        let plaintext = b"native-3.0.0-dpapi-fixture";
         let encrypted = protect_current_user(plaintext).expect("protect fixture");
         assert_ne!(encrypted, plaintext);
         assert_eq!(

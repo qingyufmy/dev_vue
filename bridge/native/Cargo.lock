@@ -53,8 +53,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-command"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "bridge-contract",
+ "bridge-store",
+ "futures-util",
+ "rusqlite",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "bridge-contract"
-version = "4.0.0-alpha.1"
+version = "3.0.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -62,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-foundation"
-version = "4.0.0-alpha.1"
+version = "3.0.0-alpha.1"
 dependencies = [
  "rusqlite",
  "serde",
@@ -71,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-observability"
-version = "4.0.0-alpha.1"
+version = "3.0.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -80,14 +92,14 @@ dependencies = [
 
 [[package]]
 name = "bridge-runtime-win"
-version = "4.0.0-alpha.1"
+version = "3.0.0-alpha.1"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "bridge-security-win"
-version = "4.0.0-alpha.1"
+version = "3.0.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -96,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-store"
-version = "4.0.0-alpha.1"
+version = "3.0.0-alpha.1"
 dependencies = [
  "bridge-contract",
  "rusqlite",
@@ -106,12 +118,14 @@ dependencies = [
 
 [[package]]
 name = "bridge-transport"
-version = "4.0.0-alpha.1"
+version = "3.0.0-alpha.1"
 dependencies = [
+ "bridge-command",
  "bridge-contract",
  "bridge-store",
  "futures-util",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",
@@ -709,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "liangjian-bridge-compat-probe"
-version = "4.0.0-alpha.1"
+version = "3.0.0-alpha.1"
 dependencies = [
  "bridge-foundation",
  "bridge-security-win",
@@ -720,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "liangjian-bridge-core"
-version = "4.0.0-alpha.1"
+version = "3.0.0-alpha.1"
 dependencies = [
  "bridge-foundation",
  "bridge-observability",

@@ -3,6 +3,7 @@ members = [
   "apps/bridge-compat-probe",
   "apps/bridge-core",
   "crates/bridge-contract",
+  "crates/bridge-command",
   "crates/bridge-foundation",
   "crates/bridge-observability",
   "crates/bridge-runtime-win",
@@ -13,7 +14,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "4.0.0-alpha.1"
+version = "3.0.0-alpha.1"
 edition = "2024"
 license = "UNLICENSED"
 publish = false

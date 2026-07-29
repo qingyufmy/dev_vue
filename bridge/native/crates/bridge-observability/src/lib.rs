@@ -652,7 +652,7 @@ mod tests {
         let logger = logger(&root, DEFAULT_MAX_FILE_BYTES, DEFAULT_RETAINED_FILES);
         logger.write_crash_record(
             "bridge-core",
-            "4.0.0-alpha.1",
+            "3.0.0-alpha.1",
             "main",
             "fixture.rs:1:1",
             "refresh_token=panic-secret",
@@ -696,7 +696,7 @@ mod tests {
             DEFAULT_MAX_FILE_BYTES,
             DEFAULT_RETAINED_FILES,
         );
-        logger.install_panic_hook("bridge-core", "4.0.0-alpha.1");
+        logger.install_panic_hook("bridge-core", "3.0.0-alpha.1");
         panic!("refresh_token=child-secret");
     }
 
@@ -710,13 +710,13 @@ mod tests {
             DEFAULT_RETAINED_FILES,
         );
         let marker = logger
-            .begin_run_marker(&data, "bridge-core", "4.0.0-alpha.1")
+            .begin_run_marker(&data, "bridge-core", "3.0.0-alpha.1")
             .expect("first marker");
         let marker_path = marker.path().to_path_buf();
         std::mem::forget(marker);
 
         let replacement = logger
-            .begin_run_marker(&data, "bridge-core", "4.0.0-alpha.1")
+            .begin_run_marker(&data, "bridge-core", "3.0.0-alpha.1")
             .expect("replacement marker");
         replacement.finish().expect("finish marker");
         assert!(!marker_path.exists());

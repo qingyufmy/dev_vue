@@ -606,7 +606,7 @@ mod tests {
             message_id: "hello_01JTEST0001".to_owned(),
             sent_at_utc_msc: 1_700_000_000_000,
             session_id: "session_01JTEST01".to_owned(),
-            bridge_version: "4.0.0-alpha.1".to_owned(),
+            bridge_version: "3.0.0-alpha.1".to_owned(),
             installation_id: None,
             update_report: None,
             terminals: vec![TerminalDescriptor {
@@ -617,7 +617,7 @@ mod tests {
                     login: "123456".to_owned(),
                 },
                 connection_epoch: 1,
-                worker_version: Some("4.0.0-alpha.1".to_owned()),
+                worker_version: Some("3.0.0-alpha.1".to_owned()),
             }],
         }
     }
@@ -652,7 +652,7 @@ mod tests {
         hello.installation_id = Some("install_0123456789abcdef0123456789abcdef".to_owned());
         hello.update_report = Some(BridgeClientUpdateReport {
             release_id: "release_01JTEST001".to_owned(),
-            target_version: "4.0.0".to_owned(),
+            target_version: "3.0.0".to_owned(),
             state: "healthy".to_owned(),
             started_at_utc_msc: None,
             updated_at_utc_msc: hello.sent_at_utc_msc,

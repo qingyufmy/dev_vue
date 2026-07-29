@@ -1,6 +1,6 @@
-# 量见智桥 Native V4
+# 量见智桥 3.0.0 Native
 
-本目录承载量见智桥的渐进式 Rust 重构。当前 .NET V3、MT5 Python Worker、MT4 EA、服务器 V3 JSON 协议、SQLite 数据语义和签名更新链路仍是生产基线。
+本目录承载量见智桥 3.0.0 的 Rust 原生实现。现有 .NET Bridge 只作为功能与协议对照，不作为正式双栈、迁移接管或回退目标；服务器 V3 JSON 协议继续作为对外通信合同。
 
 ## 当前阶段
 
@@ -10,15 +10,16 @@
 - `bridge-security-win` 与 V3 共用 DPAPI CurrentUser、固定 entropy、JSON 字段和原子凭据轮换合同。
 - `bridge-store` 只读检查现有 V3 SQLite 完整性、WAL 模式及必需表/列；测试直接对照当前 C# 建库源码以阻止静默漂移。
 - `bridge-store` 另提供未接入生产入口的 V3 Outbox 与执行回执兼容层，严格保留交易优先、持久化重试、回执/Outbox 同事务写入和 applied / duplicate 删除语义。
+- `bridge-command` 已建立持久化命令账本和进程内单航班执行：命令先落盘再分发，重复命令复用同一回执，超时、Worker panic、路由错配及重启中断都会持久化为 `uncertain`，不会自动重放交易。
 - `bridge-observability` 写入现有内置日志查看器可直接读取的脱敏 JSONL，并持久化 panic 与非正常退出证据。
 - `bridge-runtime-win` 与 .NET V3 共用锁文件及 `Local\*.activate/.shutdown` 事件，并用 Windows Job Object 监管、清理和退避重启子进程树。
 - `bridge-transport` 已完成统一端点解析、rustls HTTP / WebSocket、refresh / ticket、Hello / ACK、心跳包络、严格优先队列、重连状态机和 Outbox 泵基础。
 - 原生会话编排器现已联动 WebSocket 收发、10 秒心跳、200 ms Outbox 轮询和整组取消；任一循环失败都会关闭本次会话并保留原始稳定错误码。
 - 入站路由已安全处理 `data_ack`、gap 全量恢复通知、版本通知、心跳、服务器错误和 `command_result_ack`；ACK 会严格核对持久化回执或待发送结果的账户、终端及 epoch。
-- 交易命令准入已冻结过期、动作、账户、终端、epoch、暂停状态和初始全量同步门禁；终端 Worker 尚未接入，因此通过准入的命令仍以 `native_bridge_runtime_not_ready` 失败关闭，报价/数据请求同样不会执行。
+- 交易命令准入已冻结过期、动作、账户、终端、epoch、暂停状态和初始全量同步门禁；入站路由支持显式注入命令 Dispatcher，执行回执与交易 Outbox 同事务保存，服务器 ACK 后账本原子推进为 `acked`。正式 Worker 尚未接入 Core，因此默认入口仍以 `native_bridge_runtime_not_ready` 失败关闭，报价/数据请求同样不会执行。
 - 原生连接监督器已保留 V3 的 1/2/4/8/10 秒退避，并在凭据缺失时等待明确的授权变化，不会自行打开浏览器。
 - 本地端到端测试会真实执行 refresh → ticket → WebSocket ticket → Hello / ACK → Heartbeat，并验证二进制帧失败关闭。
-- `liangjian-bridge-compat-probe` 可在不输出令牌或业务数据的情况下检查默认账户或观摩源的本地迁移兼容性。
+- `liangjian-bridge-compat-probe` 目前仅作为开发期本地合同探针，不代表 3.0.0 需要接管旧 .NET Bridge 的生产数据。
 - `bridge-core` 普通运行现在会建立日志、单实例和运行标记后以 `native_bridge_runtime_not_ready` 失败关闭；会话编排器尚未接入 Core，仍不生成 Launcher ready 信号，也不连接服务器或 MT。
 
 ## 本地验证

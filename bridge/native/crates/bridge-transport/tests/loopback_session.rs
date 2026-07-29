@@ -18,7 +18,7 @@ fn hello() -> HelloMessage {
         message_id: "hello_01JLOOPBACK".to_owned(),
         sent_at_utc_msc: 1_700_000_000_000,
         session_id: "session_01JLOOPBACK".to_owned(),
-        bridge_version: "4.0.0-alpha.1".to_owned(),
+        bridge_version: "3.0.0-alpha.1".to_owned(),
         installation_id: None,
         update_report: None,
         terminals: vec![TerminalDescriptor {
@@ -29,7 +29,7 @@ fn hello() -> HelloMessage {
                 login: "123456".to_owned(),
             },
             connection_epoch: 7,
-            worker_version: Some("4.0.0-alpha.1".to_owned()),
+            worker_version: Some("3.0.0-alpha.1".to_owned()),
         }],
     }
 }

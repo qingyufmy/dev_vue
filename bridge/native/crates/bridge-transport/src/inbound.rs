@@ -1,4 +1,5 @@
 use crate::{DataAckDisposition, NativeCommandAdmission, OutboxPump, TransportError};
+use bridge_command::CommandDispatcher;
 use bridge_contract::{BridgeEnvelope, CommandMessage, TerminalDescriptor};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -52,6 +53,7 @@ pub struct NativeInboundRouter {
     outbox: Arc<OutboxPump>,
     events: Arc<dyn InboundEventSink>,
     command_admission: Arc<NativeCommandAdmission>,
+    command_dispatcher: Option<Arc<CommandDispatcher>>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
@@ -61,6 +63,7 @@ impl NativeInboundRouter {
             outbox,
             events,
             command_admission: Arc::new(NativeCommandAdmission::default()),
+            command_dispatcher: None,
             clock: Arc::new(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -77,6 +80,11 @@ impl NativeInboundRouter {
     ) -> Self {
         self.command_admission = command_admission;
         self.clock = clock;
+        self
+    }
+
+    pub fn with_command_dispatcher(mut self, command_dispatcher: Arc<CommandDispatcher>) -> Self {
+        self.command_dispatcher = Some(command_dispatcher);
         self
     }
 
@@ -153,8 +161,15 @@ impl NativeInboundRouter {
             "command" => {
                 let command: CommandMessage = serde_json::from_str(payload_json)
                     .map_err(|_| TransportError::new("bridge_command_invalid"))?;
-                self.command_admission.validate(&command, (self.clock)())?;
-                Err(TransportError::new("native_bridge_runtime_not_ready"))
+                let Some(dispatcher) = &self.command_dispatcher else {
+                    self.command_admission.validate(&command, (self.clock)())?;
+                    return Err(TransportError::new("native_bridge_runtime_not_ready"));
+                };
+                dispatcher
+                    .dispatch(command)
+                    .await
+                    .map_err(|error| TransportError::new(error.code()))?;
+                Ok(())
             }
             "quote_request" | "data_request" => {
                 Err(TransportError::new("native_bridge_runtime_not_ready"))
@@ -227,9 +242,20 @@ impl ServerErrorWire {
 mod tests {
     use super::*;
     use crate::{MessagePriority, OutboxPersistence, PriorityMessageQueue};
-    use bridge_contract::{AccountRef, TerminalDescriptor};
-    use bridge_store::{OutboxRecord, StoreError};
+    use bridge_command::{CommandDispatcher, CommandWorker, CommandWorkerError};
+    use bridge_contract::{
+        AccountRef, CommandResultMessage, ExecutionEvidence, TerminalDescriptor,
+    };
+    use bridge_store::{
+        BRIDGE_DATABASE_FILE_NAME, OutboxRecord, OutboxStore, REQUIRED_SCHEMA, StoreError,
+    };
+    use futures_util::future::BoxFuture;
+    use rusqlite::Connection;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[derive(Default)]
     struct FakeOutbox {
@@ -308,6 +334,43 @@ mod tests {
         NativeInboundRouter::new(pump, events)
     }
 
+    struct SuccessfulWorker {
+        calls: AtomicUsize,
+    }
+
+    impl CommandWorker for SuccessfulWorker {
+        fn execute(
+            &self,
+            command: CommandMessage,
+        ) -> BoxFuture<'_, Result<CommandResultMessage, CommandWorkerError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(CommandResultMessage {
+                    v: 3,
+                    message_type: "command_result".to_owned(),
+                    message_id: format!("result_{}", command.command_id),
+                    sent_at_utc_msc: 1_700_000_000_003,
+                    command_id: command.command_id,
+                    terminal_instance_id: command.terminal_instance_id,
+                    account_ref: command.account_ref,
+                    connection_epoch: command.connection_epoch,
+                    status: "succeeded".to_owned(),
+                    completed_at_utc_msc: 1_700_000_000_003,
+                    error_code: None,
+                    error_message: None,
+                    raw_result: Some(serde_json::json!({ "retcode": 10009 })),
+                    evidence: ExecutionEvidence {
+                        observed_at_utc_msc: 1_700_000_000_003,
+                        order_tickets: vec!["1001".to_owned()],
+                        position_tickets: Vec::new(),
+                        deal_tickets: Vec::new(),
+                        broker_retcode: Some(10009),
+                    },
+                })
+            })
+        }
+    }
+
     #[tokio::test]
     async fn gap_is_route_checked_before_requesting_a_full_snapshot() {
         let store = Arc::new(FakeOutbox::default());
@@ -378,7 +441,7 @@ mod tests {
                         login: "123456".to_owned(),
                     },
                     connection_epoch: 7,
-                    worker_version: Some("4.0.0".to_owned()),
+                    worker_version: Some("3.0.0".to_owned()),
                 }],
             )
             .expect("session");
@@ -462,7 +525,7 @@ mod tests {
                         login: "123456".to_owned(),
                     },
                     connection_epoch: 7,
-                    worker_version: Some("4.0.0".to_owned()),
+                    worker_version: Some("3.0.0".to_owned()),
                 }],
             )
             .expect("session");
@@ -542,5 +605,151 @@ mod tests {
                 .code(),
             "native_bridge_runtime_not_ready"
         );
+    }
+
+    #[tokio::test]
+    async fn configured_dispatcher_persists_and_deduplicates_a_routed_command() {
+        let root = unique_test_directory("inbound-command");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path);
+        let store = Arc::new(OutboxStore::open_existing(&path).expect("store"));
+        let admission = Arc::new(NativeCommandAdmission::default());
+        let terminal = TerminalDescriptor {
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            platform: "mt5".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            worker_version: Some("3.0.0".to_owned()),
+        };
+        admission
+            .begin_session("session_01JROUTEDCMD", std::slice::from_ref(&terminal))
+            .expect("session");
+        for stream in ["account", "positions", "orders"] {
+            admission
+                .acknowledge_initial_snapshot(&terminal.terminal_instance_id, 7, stream)
+                .expect("snapshot");
+        }
+        let worker = Arc::new(SuccessfulWorker {
+            calls: AtomicUsize::new(0),
+        });
+        let dispatcher = Arc::new(
+            CommandDispatcher::new(
+                store.clone(),
+                admission.clone(),
+                worker.clone(),
+                Arc::new(|| 1_700_000_000_002),
+                Duration::from_secs(1),
+            )
+            .expect("dispatcher"),
+        );
+        let pump = Arc::new(OutboxPump::new(
+            store.clone(),
+            PriorityMessageQueue::new(2, 2).expect("queue"),
+            None,
+        ));
+        let router = NativeInboundRouter::new(pump.clone(), Arc::new(CapturingEvents::default()))
+            .with_command_admission(admission, Arc::new(|| 1_700_000_000_002))
+            .with_command_dispatcher(dispatcher.clone());
+        let command = serde_json::json!({
+            "v": 3,
+            "type": "command",
+            "message_id": "message_01JROUTEDCMD1",
+            "sent_at_utc_msc": 1_700_000_000_001_i64,
+            "command_id": "command_01JROUTEDCMD",
+            "terminal_instance_id": terminal.terminal_instance_id,
+            "account_ref": terminal.account_ref,
+            "connection_epoch": 7,
+            "issued_at_utc_msc": 1_700_000_000_000_i64,
+            "deadline_utc_msc": 1_700_000_010_000_i64,
+            "action": "place_order",
+            "params": { "symbol": "XAUUSD", "volume": 0.01 }
+        })
+        .to_string();
+        router.route(&command).await.expect("first command");
+        router.route(&command).await.expect("duplicate command");
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+        let receipt = store
+            .execution_receipt("command_01JROUTEDCMD")
+            .expect("receipt")
+            .expect("persisted receipt");
+        assert_eq!(receipt.status, "succeeded");
+        assert!(
+            store
+                .pending(&receipt.message_id)
+                .expect("outbox")
+                .is_some()
+        );
+
+        drop(router);
+        drop(dispatcher);
+        drop(pump);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    fn create_schema_fixture(path: &Path) {
+        let connection = Connection::open(path).expect("fixture sqlite");
+        connection
+            .pragma_update(None, "journal_mode", "WAL")
+            .expect("fixture wal");
+        for (table, columns) in REQUIRED_SCHEMA {
+            match *table {
+                "outbox_messages" => connection
+                    .execute_batch(
+                        "CREATE TABLE outbox_messages (
+                           id INTEGER PRIMARY KEY AUTOINCREMENT,
+                           message_id TEXT NOT NULL UNIQUE,
+                           message_type TEXT NOT NULL,
+                           terminal_instance_id TEXT NOT NULL,
+                           connection_epoch INTEGER NOT NULL,
+                           priority TEXT NOT NULL,
+                           payload_json TEXT NOT NULL,
+                           attempt_count INTEGER NOT NULL DEFAULT 0,
+                           next_attempt_at_utc_msc INTEGER,
+                           created_at_utc_msc INTEGER NOT NULL,
+                           acked_at_utc_msc INTEGER
+                         );",
+                    )
+                    .expect("outbox schema"),
+                "execution_receipts" => connection
+                    .execute_batch(
+                        "CREATE TABLE execution_receipts (
+                           command_id TEXT PRIMARY KEY,
+                           terminal_instance_id TEXT NOT NULL,
+                           connection_epoch INTEGER NOT NULL,
+                           status TEXT NOT NULL,
+                           result_json TEXT NOT NULL,
+                           completed_at_utc_msc INTEGER NOT NULL
+                         );",
+                    )
+                    .expect("receipt schema"),
+                _ => {
+                    let definitions = columns
+                        .iter()
+                        .map(|column| format!("{column} TEXT"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    connection
+                        .execute_batch(&format!("CREATE TABLE {table} ({definitions});"))
+                        .expect("fixture table");
+                }
+            }
+        }
+    }
+
+    fn unique_test_directory(suffix: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "liangjian-bridge-inbound-{}-{}-{suffix}",
+            std::process::id(),
+            stamp
+        ))
     }
 }

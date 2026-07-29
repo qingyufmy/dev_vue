@@ -34,7 +34,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let database = inspect_existing_schema(&paths.database_path)?;
     let report = ProbeReport {
         ok: database.is_compatible(),
-        implementation: "rust-native-v4-compat-probe",
+        implementation: "rust-native-3.0.0-compat-probe",
         profile_id,
         credential_status,
         database,

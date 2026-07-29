@@ -630,6 +630,16 @@ pub trait OutboxPersistence: Send + Sync {
         acknowledgement_status: &str,
     ) -> Result<bool, bridge_store::StoreError>;
 
+    fn acknowledge_command_result(
+        &self,
+        message_id: &str,
+        _command_id: &str,
+        acknowledgement_status: &str,
+        _acknowledged_at_utc_msc: i64,
+    ) -> Result<bool, bridge_store::StoreError> {
+        self.acknowledge(message_id, acknowledgement_status)
+    }
+
     fn execution_receipt(
         &self,
         _command_id: &str,
@@ -672,6 +682,22 @@ impl OutboxPersistence for OutboxStore {
         acknowledgement_status: &str,
     ) -> Result<bool, bridge_store::StoreError> {
         OutboxStore::acknowledge(self, message_id, acknowledgement_status)
+    }
+
+    fn acknowledge_command_result(
+        &self,
+        message_id: &str,
+        command_id: &str,
+        acknowledgement_status: &str,
+        acknowledged_at_utc_msc: i64,
+    ) -> Result<bool, bridge_store::StoreError> {
+        OutboxStore::acknowledge_command_result(
+            self,
+            message_id,
+            command_id,
+            acknowledgement_status,
+            acknowledged_at_utc_msc,
+        )
     }
 
     fn execution_receipt(
@@ -896,16 +922,15 @@ impl OutboxPump {
                 "bridge_command_result_ack_route_mismatch",
             ));
         }
-        if pending.is_none() {
-            return Ok(true);
-        }
-        self.handle_verified_acknowledgement(
+        self.handle_verified_command_result_acknowledgement(
             &acknowledgement.acked_message_id,
+            &acknowledgement.command_id,
             &acknowledgement.status,
+            acknowledgement.sent_at_utc_msc,
         )
         .await
-        .and_then(|removed| {
-            if removed {
+        .and_then(|acknowledged| {
+            if acknowledged {
                 Ok(true)
             } else {
                 Err(TransportError::new("bridge_command_result_ack_unknown"))
@@ -943,6 +968,35 @@ impl OutboxPump {
         .map_err(|_| TransportError::new("bridge_outbox_ack_failed"))?;
         self.release(message_id)?;
         Ok(removed)
+    }
+
+    async fn handle_verified_command_result_acknowledgement(
+        &self,
+        message_id: &str,
+        command_id: &str,
+        status: &str,
+        acknowledged_at_utc_msc: i64,
+    ) -> Result<bool, TransportError> {
+        if !matches!(status, "applied" | "duplicate") {
+            return Ok(false);
+        }
+        let store = Arc::clone(&self.store);
+        let persisted_message_id = message_id.to_owned();
+        let persisted_command_id = command_id.to_owned();
+        let persisted_status = status.to_owned();
+        let acknowledged = tokio::task::spawn_blocking(move || {
+            store.acknowledge_command_result(
+                &persisted_message_id,
+                &persisted_command_id,
+                &persisted_status,
+                acknowledged_at_utc_msc,
+            )
+        })
+        .await
+        .map_err(|_| TransportError::new("bridge_outbox_worker_failed"))?
+        .map_err(|_| TransportError::new("bridge_outbox_ack_failed"))?;
+        self.release(message_id)?;
+        Ok(acknowledged)
     }
 
     fn try_claim(&self, record: &OutboxRecord, now_utc_msc: i64) -> Result<bool, TransportError> {
@@ -1186,7 +1240,7 @@ mod tests {
             message_id: "hello_01JTRANSPORT".to_owned(),
             sent_at_utc_msc: 1_700_000_000_000,
             session_id: "session_01JTRANSPORT".to_owned(),
-            bridge_version: "4.0.0-alpha.1".to_owned(),
+            bridge_version: "3.0.0-alpha.1".to_owned(),
             installation_id: None,
             update_report: None,
             terminals: vec![TerminalDescriptor {
@@ -1197,7 +1251,7 @@ mod tests {
                     login: "123456".to_owned(),
                 },
                 connection_epoch: 1,
-                worker_version: Some("4.0.0-alpha.1".to_owned()),
+                worker_version: Some("3.0.0-alpha.1".to_owned()),
             }],
         }
     }

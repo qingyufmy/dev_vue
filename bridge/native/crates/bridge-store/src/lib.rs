@@ -1,4 +1,4 @@
-use bridge_contract::{CommandResultMessage, validate_id};
+use bridge_contract::{CommandMessage, CommandResultMessage, validate_id};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
 use serde::Serialize;
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 pub const BRIDGE_DATABASE_FILE_NAME: &str = "bridge.db";
 
-const REQUIRED_SCHEMA: &[(&str, &[&str])] = &[
+pub const REQUIRED_SCHEMA: &[(&str, &[&str])] = &[
     (
         "terminal_bindings",
         &[
@@ -317,6 +317,22 @@ pub struct NewOutboxRecord {
     pub created_at_utc_msc: i64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandLedgerRecord {
+    pub command_id: String,
+    pub payload_json: String,
+    pub status: String,
+    pub result_message_id: Option<String>,
+    pub created_at_utc_msc: i64,
+    pub updated_at_utc_msc: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordedCommand {
+    pub created: bool,
+    pub record: CommandLedgerRecord,
+}
+
 pub struct OutboxStore {
     connection: Mutex<Connection>,
 }
@@ -339,6 +355,7 @@ impl OutboxStore {
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(|_| StoreError::new("bridge_store_synchronous_failed"))?;
+        ensure_native_command_ledger_schema(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -516,6 +533,85 @@ impl OutboxStore {
             .map_err(|_| StoreError::new("bridge_store_outbox_ack_failed"))
     }
 
+    pub fn acknowledge_command_result(
+        &self,
+        message_id: &str,
+        command_id: &str,
+        acknowledgement_status: &str,
+        acknowledged_at_utc_msc: i64,
+    ) -> Result<bool, StoreError> {
+        if !matches!(acknowledgement_status, "applied" | "duplicate") {
+            return Ok(false);
+        }
+        if acknowledged_at_utc_msc <= 0
+            || validate_id(message_id).is_err()
+            || validate_id(command_id).is_err()
+        {
+            return Err(StoreError::new("bridge_store_command_ack_invalid"));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_command_ack_failed"))?;
+        let receipt_matches = transaction
+            .query_row(
+                "SELECT EXISTS (
+                   SELECT 1 FROM execution_receipts
+                   WHERE command_id = ?1
+                     AND json_valid(result_json) = 1
+                     AND json_extract(result_json, '$.message_id') = ?2
+                 );",
+                params![command_id, message_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| StoreError::new("bridge_store_command_ack_failed"))?
+            == 1;
+        if !receipt_matches {
+            return Err(StoreError::new("bridge_store_command_ack_unknown"));
+        }
+        let ledger = transaction
+            .query_row(
+                "SELECT status, result_message_id
+                 FROM native_command_ledger WHERE command_id = ?1 LIMIT 1;",
+                [command_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_command_ack_failed"))?;
+        if ledger.as_ref().is_some_and(|(status, result_message_id)| {
+            !matches!(status.as_str(), "confirmed" | "uncertain" | "acked")
+                || result_message_id.as_deref() != Some(message_id)
+        }) {
+            return Err(StoreError::new("bridge_store_command_ack_mismatch"));
+        }
+        transaction
+            .execute(
+                "DELETE FROM outbox_messages
+                 WHERE message_id = ?1
+                   AND message_type = 'command_result'
+                   AND acked_at_utc_msc IS NULL;",
+                [message_id],
+            )
+            .map_err(|_| StoreError::new("bridge_store_command_ack_failed"))?;
+        transaction
+            .execute(
+                "UPDATE native_command_ledger
+                 SET status = 'acked', updated_at_utc_msc = ?3
+                 WHERE command_id = ?1
+                   AND result_message_id = ?2
+                   AND status IN ('confirmed', 'uncertain', 'acked');",
+                params![command_id, message_id, acknowledged_at_utc_msc],
+            )
+            .map_err(|_| StoreError::new("bridge_store_command_ack_failed"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_command_ack_failed"))?;
+        Ok(true)
+    }
+
     pub fn execution_receipt(
         &self,
         command_id: &str,
@@ -570,18 +666,26 @@ impl OutboxStore {
         let transaction = connection
             .transaction()
             .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+        let existing_receipt = transaction
+            .query_row(
+                "SELECT result_json FROM execution_receipts WHERE command_id = ?1 LIMIT 1;",
+                [&result.command_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+        if let Some(existing) = existing_receipt {
+            if existing == payload {
+                return Ok(());
+            }
+            return Err(StoreError::new("bridge_store_execution_receipt_conflict"));
+        }
         transaction
             .execute(
                 "INSERT INTO execution_receipts (
                    command_id, terminal_instance_id, connection_epoch, status,
                    result_json, completed_at_utc_msc
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(command_id) DO UPDATE SET
-                   terminal_instance_id = excluded.terminal_instance_id,
-                   connection_epoch = excluded.connection_epoch,
-                   status = excluded.status,
-                   result_json = excluded.result_json,
-                   completed_at_utc_msc = excluded.completed_at_utc_msc;",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
                 params![
                     result.command_id,
                     result.terminal_instance_id,
@@ -592,7 +696,7 @@ impl OutboxStore {
                 ],
             )
             .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
-        transaction
+        let outbox_inserted = transaction
             .execute(
                 "INSERT INTO outbox_messages (
                    message_id, message_type, terminal_instance_id, connection_epoch, priority,
@@ -605,6 +709,42 @@ impl OutboxStore {
                     result.connection_epoch,
                     payload,
                     result.sent_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+        if outbox_inserted == 0 {
+            let matching_outbox = transaction
+                .query_row(
+                    "SELECT EXISTS (
+                       SELECT 1 FROM outbox_messages
+                       WHERE message_id = ?1
+                         AND message_type = 'command_result'
+                         AND payload_json = ?2
+                     );",
+                    params![result.message_id, payload],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?
+                == 1;
+            if !matching_outbox {
+                return Err(StoreError::new("bridge_store_execution_receipt_conflict"));
+            }
+        }
+        transaction
+            .execute(
+                "UPDATE native_command_ledger
+                 SET status = ?2, result_message_id = ?3, updated_at_utc_msc = ?4
+                 WHERE command_id = ?1
+                   AND status IN ('persisted', 'dispatched', 'uncertain');",
+                params![
+                    result.command_id,
+                    if result.status == "uncertain" {
+                        "uncertain"
+                    } else {
+                        "confirmed"
+                    },
+                    result.message_id,
+                    result.completed_at_utc_msc,
                 ],
             )
             .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
@@ -643,6 +783,133 @@ impl OutboxStore {
             .map(|count| count.max(0) as usize)
             .map_err(|_| StoreError::new("bridge_store_execution_receipt_query_failed"))
     }
+
+    pub fn record_command(
+        &self,
+        command: &CommandMessage,
+        now_utc_msc: i64,
+    ) -> Result<RecordedCommand, StoreError> {
+        if now_utc_msc <= 0 {
+            return Err(StoreError::new("bridge_store_command_invalid"));
+        }
+        command
+            .validate(command.issued_at_utc_msc.saturating_sub(1))
+            .map_err(|_| StoreError::new("bridge_store_command_invalid"))?;
+        let payload_json = serde_json::to_string(command)
+            .map_err(|_| StoreError::new("bridge_store_command_invalid"))?;
+        if payload_json.len() > 4 * 1024 * 1024 {
+            return Err(StoreError::new("bridge_store_command_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let affected = connection
+            .execute(
+                "INSERT INTO native_command_ledger (
+                   command_id, payload_json, status, result_message_id,
+                   created_at_utc_msc, updated_at_utc_msc
+                 ) VALUES (?1, ?2, 'persisted', NULL, ?3, ?3)
+                 ON CONFLICT(command_id) DO NOTHING;",
+                params![command.command_id, payload_json, now_utc_msc],
+            )
+            .map_err(|_| StoreError::new("bridge_store_command_write_failed"))?;
+        let record = read_command_ledger_record(&connection, &command.command_id)?
+            .ok_or_else(|| StoreError::new("bridge_store_command_write_failed"))?;
+        if record.payload_json != payload_json {
+            return Err(StoreError::new("bridge_command_id_conflict"));
+        }
+        Ok(RecordedCommand {
+            created: affected == 1,
+            record,
+        })
+    }
+
+    pub fn command_ledger(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<CommandLedgerRecord>, StoreError> {
+        validate_id(command_id)
+            .map_err(|_| StoreError::new("bridge_store_command_query_invalid"))?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        read_command_ledger_record(&connection, command_id)
+    }
+
+    pub fn mark_command_dispatched(
+        &self,
+        command_id: &str,
+        now_utc_msc: i64,
+    ) -> Result<(), StoreError> {
+        if now_utc_msc <= 0 || validate_id(command_id).is_err() {
+            return Err(StoreError::new("bridge_store_command_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let affected = connection
+            .execute(
+                "UPDATE native_command_ledger
+                 SET status = 'dispatched', updated_at_utc_msc = ?2
+                 WHERE command_id = ?1 AND status = 'persisted';",
+                params![command_id, now_utc_msc],
+            )
+            .map_err(|_| StoreError::new("bridge_store_command_write_failed"))?;
+        if affected == 1 {
+            return Ok(());
+        }
+        match read_command_ledger_record(&connection, command_id)? {
+            None => Err(StoreError::new("bridge_store_command_unknown")),
+            Some(_) => Err(StoreError::new("bridge_command_reconciliation_required")),
+        }
+    }
+}
+
+fn ensure_native_command_ledger_schema(connection: &Connection) -> Result<(), StoreError> {
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS native_command_ledger (
+               command_id TEXT PRIMARY KEY,
+               payload_json TEXT NOT NULL,
+               status TEXT NOT NULL CHECK (
+                 status IN ('persisted', 'dispatched', 'confirmed', 'uncertain', 'acked')
+               ),
+               result_message_id TEXT,
+               created_at_utc_msc INTEGER NOT NULL,
+               updated_at_utc_msc INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_native_command_ledger_status
+               ON native_command_ledger (status, updated_at_utc_msc);",
+        )
+        .map_err(|_| StoreError::new("bridge_store_command_schema_failed"))
+}
+
+fn read_command_ledger_record(
+    connection: &Connection,
+    command_id: &str,
+) -> Result<Option<CommandLedgerRecord>, StoreError> {
+    connection
+        .query_row(
+            "SELECT command_id, payload_json, status, result_message_id,
+                    created_at_utc_msc, updated_at_utc_msc
+             FROM native_command_ledger WHERE command_id = ?1 LIMIT 1;",
+            [command_id],
+            |row| {
+                Ok(CommandLedgerRecord {
+                    command_id: row.get(0)?,
+                    payload_json: row.get(1)?,
+                    status: row.get(2)?,
+                    result_message_id: row.get(3)?,
+                    created_at_utc_msc: row.get(4)?,
+                    updated_at_utc_msc: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_command_query_failed"))
 }
 
 fn validate_new_outbox_record(record: &NewOutboxRecord) -> Result<(), StoreError> {
@@ -912,6 +1179,123 @@ mod tests {
         }
     }
 
+    fn command_message() -> CommandMessage {
+        CommandMessage {
+            v: 3,
+            message_type: "command".to_owned(),
+            message_id: "message_01JLEDGER001".to_owned(),
+            sent_at_utc_msc: 1_700_000_000_000,
+            command_id: "command_01JLEDGER01".to_owned(),
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            account_ref: bridge_contract::AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            issued_at_utc_msc: 1_700_000_000_000,
+            deadline_utc_msc: 1_700_000_010_000,
+            action: "place_order".to_owned(),
+            params: serde_json::json!({ "symbol": "XAUUSD", "volume": 0.01 }),
+        }
+    }
+
+    #[test]
+    fn native_command_ledger_is_immutable_and_dispatched_commands_require_reconciliation() {
+        let root = unique_test_directory("command-ledger");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path, None);
+        let store = OutboxStore::open_existing(&path).expect("store");
+        let command = command_message();
+        let recorded = store
+            .record_command(&command, 1_700_000_000_001)
+            .expect("record command");
+        assert!(recorded.created);
+        assert_eq!(recorded.record.status, "persisted");
+        assert!(
+            !store
+                .record_command(&command, 1_700_000_000_002)
+                .expect("idempotent command")
+                .created
+        );
+        let mut conflicting = command.clone();
+        conflicting.params = serde_json::json!({ "symbol": "XAUUSD", "volume": 1.0 });
+        assert_eq!(
+            store
+                .record_command(&conflicting, 1_700_000_000_003)
+                .expect_err("command id conflict")
+                .code(),
+            "bridge_command_id_conflict"
+        );
+
+        store
+            .mark_command_dispatched(&command.command_id, 1_700_000_000_004)
+            .expect("dispatch");
+        assert_eq!(
+            store
+                .mark_command_dispatched(&command.command_id, 1_700_000_000_005)
+                .expect_err("no redispatch")
+                .code(),
+            "bridge_command_reconciliation_required"
+        );
+        let mut uncertain = command_result(
+            &command.command_id,
+            "result_01JLEDGER001",
+            1_700_000_000_006,
+        );
+        uncertain.status = "uncertain".to_owned();
+        uncertain.error_code = Some("worker_execution_interrupted".to_owned());
+        store
+            .save_execution_receipt(&uncertain, 10_000)
+            .expect("uncertain receipt");
+        let ledger = store
+            .command_ledger(&command.command_id)
+            .expect("ledger")
+            .expect("command");
+        assert_eq!(ledger.status, "uncertain");
+        assert_eq!(
+            ledger.result_message_id.as_deref(),
+            Some(uncertain.message_id.as_str())
+        );
+        assert!(
+            store
+                .acknowledge_command_result(
+                    &uncertain.message_id,
+                    &command.command_id,
+                    "applied",
+                    1_700_000_000_007,
+                )
+                .expect("ack command result")
+        );
+        assert!(
+            store
+                .pending(&uncertain.message_id)
+                .expect("pending result")
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .command_ledger(&command.command_id)
+                .expect("ledger")
+                .expect("command")
+                .status,
+            "acked"
+        );
+        assert!(
+            store
+                .acknowledge_command_result(
+                    &uncertain.message_id,
+                    &command.command_id,
+                    "duplicate",
+                    1_700_000_000_008,
+                )
+                .expect("idempotent command result ack")
+        );
+
+        drop(store);
+        fs::remove_dir_all(root).expect("remove ledger fixture");
+    }
+
     #[test]
     fn execution_receipt_and_trade_outbox_commit_atomically_and_trim_only_acknowledged_rows() {
         let root = unique_test_directory("execution-receipts");
@@ -975,6 +1359,60 @@ mod tests {
 
         drop(store);
         fs::remove_dir_all(root).expect("remove receipt fixture");
+    }
+
+    #[test]
+    fn execution_receipts_are_immutable_and_message_id_collisions_roll_back() {
+        let root = unique_test_directory("execution-receipt-conflicts");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path, None);
+        let store = OutboxStore::open_existing(&path).expect("store");
+        let original = command_result(
+            "command_01JIMMUTABLE1",
+            "result_01JIMMUTABLE01",
+            1_700_000_000_001,
+        );
+        store
+            .save_execution_receipt(&original, 10)
+            .expect("original receipt");
+        store
+            .save_execution_receipt(&original, 10)
+            .expect("idempotent receipt");
+
+        let mut conflicting_result = original.clone();
+        conflicting_result.status = "failed".to_owned();
+        conflicting_result.error_code = Some("worker_execution_failed".to_owned());
+        assert_eq!(
+            store
+                .save_execution_receipt(&conflicting_result, 10)
+                .expect_err("immutable command result")
+                .code(),
+            "bridge_store_execution_receipt_conflict"
+        );
+
+        let mut colliding_message = command_result(
+            "command_01JIMMUTABLE2",
+            "result_01JIMMUTABLE02",
+            1_700_000_000_002,
+        );
+        colliding_message.message_id = original.message_id.clone();
+        assert_eq!(
+            store
+                .save_execution_receipt(&colliding_message, 10)
+                .expect_err("message id collision")
+                .code(),
+            "bridge_store_execution_receipt_conflict"
+        );
+        assert!(
+            store
+                .execution_receipt(&colliding_message.command_id)
+                .expect("rolled back receipt")
+                .is_none()
+        );
+
+        drop(store);
+        fs::remove_dir_all(root).expect("remove receipt conflict fixture");
     }
 
     fn extract_csharp_create_table_columns<'a>(source: &'a str, table: &str) -> Vec<&'a str> {

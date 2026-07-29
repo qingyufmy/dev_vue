@@ -442,7 +442,7 @@ mod tests {
                     login: "123456".to_owned(),
                 },
                 connection_epoch: 1,
-                worker_version: Some("4.0.0".to_owned()),
+                worker_version: Some("3.0.0".to_owned()),
             }]
         }
         fn send_json(&mut self, payload_json: String) -> BoxFuture<'_, Result<(), TransportError>> {

@@ -1,5 +1,5 @@
 {
-  "baseline_name": "aurum-bridge-native-v4-phase-0",
+  "baseline_name": "aurum-bridge-native-3.0.0-phase-0",
   "source_branch": "refactor/aurum-bridge-v3",
   "source_commit": "906b9f88faf736d285b1099b0c688277db3c0757",
   "server_protocol": {

@@ -1,22 +1,22 @@
-# 量见智桥 Native V4 详细重构方案
+# 量见智桥 3.0.0 Rust Native 详细重构方案
 
 > 文档状态：实施基线 1.0
 >
 > 基线分支：`refactor/aurum-bridge-v3`
 >
-> 生产基线：现有 .NET V3 + Python MT5 Worker + MT4 EA 继续可用
+> 产品版本：Rust Native 直接作为正式 3.0.0；现有 .NET Bridge 仅作功能与协议对照
 >
-> Native V4 当前进度：阶段 0 / 1 已完成，阶段 2 传输基础已完成、生产会话编排待实施
+> 当前进度：阶段 0 / 1 已完成；阶段 2 已完成传输、会话编排、命令准入、持久化单航班和 ACK 账本闭环，真实 Worker 与 Core 接线待实施
 
 ## 1. 结论
 
-V4 采用“Rust 原生总控 + 独立平台 Worker”的渐进式架构：
+3.0.0 采用“Rust 原生总控 + 独立平台 Worker”的架构：
 
 - Rust 接管总控、服务器通信、命令账本、SQLite、进程监管、托盘界面、安装和更新。
 - MT5 暂时保留官方 Python `MetaTrader5` 接口，但从大体量 GUI 程序中剥离成一个终端一个 Worker。
 - MT4 保留 EA，EA 只负责终端内采集和交易，Rust Worker 负责本地通信、缓存、路由和恢复。
 - 现有服务器 V3 协议、账户绑定、授权方式、普通用户单账户、管理员观摩源、默认行情源等业务合同保持不变。
-- Native V4 在完成交易正确性和稳定性验收前不得替换 V3；每个阶段都能独立关闭并回退。
+- Rust Native 是唯一正式客户端目标，不设计与旧 .NET Bridge 双栈运行、生产迁移接管或回退；旧实现只用于核对功能和服务器合同。
 
 这不是把 Python 全部翻译成 Rust。当前主要性能问题来自共享锁、串行全量采集、全量 JSON、交易与历史共用队列及进程耦合，仅替换语言无法解决这些问题。
 
@@ -51,12 +51,12 @@ V4 采用“Rust 原生总控 + 独立平台 Worker”的渐进式架构：
 
 ## 3. 不变合同
 
-以下内容在 V4 中冻结，除非另开迁移协议：
+以下内容在 3.0.0 中冻结，除非另开协议版本：
 
 - Bridge 只负责连接、转发、执行、回传、恢复和更新，不承载 AI、策略计算或业务风控。
 - 普通用户一个软件只连接一个主账户；管理员可以添加多个相互隔离的观摩源。
 - 服务器 V3 JSON 消息类型、字段名称、错误码和 ACK 语义保持兼容。
-- MT5 继续使用官方 Python 终端接口；V4 不假设存在可替代它的公开 C++ 客户端 API。
+- MT5 继续使用官方 Python 终端接口；3.0.0 不假设存在可替代它的公开 C++ 客户端 API。
 - MT4 继续通过 EA 访问终端能力，用户仍需把 EA 挂载到图表并开启所需权限。
 - 一个终端实例对应一个 Worker；同一 Profile 同时只允许一个 Core 持有运行权。
 - 命令先持久化再执行；重复、过期、错账户、错平台和错连接 epoch 的命令失败关闭。
@@ -116,7 +116,7 @@ Core 运行在当前登录用户会话中，不默认注册为系统服务，原
 
 ### 5.1 保留 Python 的原因
 
-MT5 官方 Python 包已经覆盖终端初始化、账户、行情、持仓、订单、历史和交易请求。V4 保留它是兼容性选择，不是长期把所有逻辑继续留在 Python 中。
+MT5 官方 Python 包已经覆盖终端初始化、账户、行情、持仓、订单、历史和交易请求。3.0.0 保留它是终端适配选择，不是继续保留 Python 总控。
 
 Python Worker 只做四件事：
 
@@ -414,7 +414,10 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - 已完成 `command_result_ack` 的待发送结果/持久化回执双路径核验，账户、终端、epoch 或消息 ID 不一致均失败关闭。
 - 已完成命令准入状态机：命令过期、动作、账户、终端、epoch、暂停状态和账户/持仓/挂单初始全量确认均严格校验；Worker 未接入前不会执行命令。
 - 已锁定 rustls HTTP / WebSocket 依赖；构建审计必须继续证明目标产物不依赖 OpenSSL 或 native-tls。
-- 待完成命令单航班执行与 Worker uncertain reconciliation、报价/数据请求 Worker 路由、凭据存储适配、Core 接线及真实服务器灰度前故障矩阵。
+- 已完成持久化命令单航班：命令先落盘，重复命令复用同一回执，超时、Worker panic、回执路由错配及进程中断统一进入 `uncertain` 且不得重放。
+- 已完成 `command_result_ack` 到 Native 命令账本 `acked` 的同事务闭环，支持服务器重复 ACK 幂等处理。
+- 已完成可选 Dispatcher 的安全入站接线；Core 未配置真实 Worker 时继续返回 `native_bridge_runtime_not_ready`，不会误执行交易。
+- 待完成 Worker 的主动 `uncertain` 事实核对、报价/数据请求 Worker 路由、凭据存储适配、Core 接线及真实服务器故障矩阵。
 
 交付门：断网、乱序、重复 ACK、超大包、HTML 错页和服务器重启不会丢高优先消息。
 
@@ -425,7 +428,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - 全量初始化 + delta + 定期 reconciliation。
 - Worker 崩溃、MT5 重启、账户切换和路径切换恢复。
 
-交付门：页面数据与 V3 一致，24 小时运行无串账户、无持续内存增长、历史响应不超限。
+交付门：页面数据满足现有服务器和产品功能合同，24 小时运行无串账户、无持续内存增长、历史响应不超限。
 
 ### 阶段 4：MT5 交易链路
 
@@ -469,12 +472,12 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 交付门：干净 Windows 10/11 无预装运行时安装成功，包体达标或有逐项证据说明超出原因。
 
-### 阶段 9：灰度替换
+### 阶段 9：正式验收与发布
 
-- 现有 .NET Launcher 先灰度启动 Rust Core。
-- 灰度顺序：内部 demo → 管理员观摩源 → 5% → 25% → 100%。
-- Core 稳定后再替换 Native Launcher 和 UI，避免一次替换全部组件。
-- V3 保留至少一个完整稳定周期作为自动回滚目标。
+- 验收顺序：内部 demo → 管理员观摩源 → 多终端实机 → Windows 10 / 11 干净环境安装。
+- 所有交易、长稳、安装、更新和故障注入门通过后，直接构建并发布量见智桥 3.0.0 正式安装器。
+- 正式包不包含旧 .NET Core、旧 Launcher 或旧 Python GUI，也不提供切回旧 Bridge 的产品入口。
+- 3.0.0 以后模块更新继续使用原子版本目录和 last-known-good，仅用于同一 Rust 产品线更新失败恢复。
 
 ## 15. 验证矩阵
 
@@ -506,12 +509,12 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 ## 16. 立即停止线
 
-出现以下任一情况，停止灰度并恢复 V3：
+出现以下任一情况，停止 3.0.0 发布并继续修复：
 
 - 重复订单、错账户路由、旧 epoch 命令被执行。
 - uncertain 命令未经核对被重放。
 - 未 ACK 的交易结果或关键账户变化丢失。
-- SQLite 迁移后 V3 无法重新读取。
+- SQLite 状态机出现不可恢复、跨账户污染或命令账本与终端事实不一致。
 - 普通用户获得管理员观摩源能力。
 - WSS 在未明确配置时自动降级 WS。
 - 更新包未验签即执行，或健康检查失败不能自动回滚。
@@ -525,7 +528,7 @@ bridge/native/
     bridge-core/          # 后台总控
     bridge-ui/            # 窗口与托盘
     bridge-launcher/      # 启动、更新、回滚
-    bridge-compat-probe/  # 迁移兼容检查
+    bridge-compat-probe/  # 开发期合同检查
   crates/
     bridge-contract/      # V3 和本地 IPC 合同
     bridge-foundation/    # 路径、Profile、CLI、健康检查
@@ -546,7 +549,7 @@ bridge/native/
 ## 18. 每批交付规则
 
 - 一批只解决一个可验证边界，避免 Core、Worker、UI、安装器同时大改。
-- 开始前记录当前合同和回退点，完成后执行与风险相称的测试。
+- 开始前记录当前合同和 Git 提交边界，完成后执行与风险相称的测试。
 - 真实交易测试只使用明确授权的 demo 账户。
 - 每批形成窄范围提交并推送 Gitee `origin/refactor/aurum-bridge-v3`。
 - 未通过交付门的代码只能留在 Native 实验入口，不进入稳定安装清单。
@@ -554,15 +557,15 @@ bridge/native/
 
 ## 19. 当前实施状态
 
-- 已完成 Native workspace、V3 包络黄金样本、Launcher CLI、路径和健康检查。
-- 已完成默认账户及管理员观摩源 Profile 路径兼容。
-- 已完成 V3 `credential.dat` 的 DPAPI 双向兼容。
-- 已完成现有 `bridge.db` schema / WAL 只读检查。
+- 已完成 3.0.0 Native workspace、服务器 V3 包络黄金样本、Launcher CLI、路径和健康检查。
+- 已完成默认账户及管理员观摩源的隔离 Profile 路径。
+- 已完成 DPAPI CurrentUser 凭据保护能力；旧凭据双向读取只作为当前开发验证，不构成正式迁移要求。
+- 已完成 `bridge.db` schema / WAL 检查以及 Native 命令账本扩展。
 - 已完成脱敏 JSONL、滚动保留、panic 和非正常退出证据。
 - 已完成 .NET / Rust 锁文件、激活/退出事件双向互通。
 - 已完成 Job Object 子进程托管及 1/2/4/8/10 秒重启退避。
 - 已完成 Native V3 端点、refresh / ticket、WebSocket Hello / ACK、Heartbeat、优先队列和重连状态机。
 - 已完成 Native Outbox 兼容层，保留 2/4/8/16/30 秒持久化重试、applied / duplicate 删除及 gap 当前会话抑制语义。
 - 已完成本地 HTTP + WebSocket 端到端握手和二进制帧拒绝故障测试。
-- 当前 Native Core 不写 V3 SQLite、不接管凭据、不连接服务器或 MT，不会误成为生产 Core。
-- 下一批继续完成阶段 2 的生产会话编排和入站路由；通过后再进入 MT5 Worker 拆分。
+- 当前 Native Core 尚未接入真实凭据、服务器会话或 MT Worker，不会误执行生产交易。
+- 下一批进入阶段 2 收尾：实现 `uncertain` 查询核对接口与 Worker IPC 合同；随后进入 MT5 Worker 拆分。
