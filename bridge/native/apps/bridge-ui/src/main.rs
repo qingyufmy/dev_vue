@@ -59,15 +59,15 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CBS_OWNERDRAWFIXED, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateIconFromResourceEx,
     CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
     DrawMenuBar, GWLP_USERDATA, GetClientRect, GetMessageW, GetSystemMetrics, GetWindowLongPtrW,
-    HICON, HMENU, IDC_ARROW, IDI_APPLICATION, LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED,
-    MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW,
-    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW,
-    SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage,
-    WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM,
-    WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
-    WM_PAINT, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
-    WS_VISIBLE,
+    HICON, HMENU, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, LR_DEFAULTCOLOR, LoadCursorW,
+    LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MoveWindow,
+    PostMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
+    SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu,
+    TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
+    WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
+    WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION,
+    WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_SYSMENU,
+    WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -86,6 +86,7 @@ const CONTROL_DETECT: i32 = 111;
 const CONTROL_LOGS: i32 = 112;
 const CONTROL_SETTINGS: i32 = 113;
 const CONTROL_EXIT: i32 = 114;
+const CONTROL_ACCOUNT_ACTION_BASE: i32 = 2_000;
 const MENU_OPEN: usize = 201;
 const MENU_EXIT: usize = 202;
 const MENU_AUTOSTART: usize = 203;
@@ -141,6 +142,15 @@ struct Controls {
     exit: HWND,
 }
 
+#[derive(Clone, Copy)]
+struct AccountActionControl {
+    hwnd: HWND,
+    id: i32,
+    account_index: usize,
+    action: ObserverAction,
+    primary: bool,
+}
+
 struct AppState {
     profile_id: String,
     state: UiStateSnapshot,
@@ -152,6 +162,8 @@ struct AppState {
     brand_icon_small: HICON,
     tray_added: bool,
     terminal_choices_fingerprint: String,
+    account_action_controls: Vec<AccountActionControl>,
+    account_action_fingerprint: String,
     log_window: HWND,
     settings_window: HWND,
     permission_tooltip: HWND,
@@ -347,6 +359,8 @@ fn main() {
             brand_icon_small: null_mut(),
             tray_added: false,
             terminal_choices_fingerprint: String::new(),
+            account_action_controls: Vec::new(),
+            account_action_fingerprint: String::new(),
             log_window: null_mut(),
             settings_window: null_mut(),
             permission_tooltip: null_mut(),
@@ -621,16 +635,17 @@ unsafe fn run_window(mut state: AppState) {
     let state_ptr = Box::into_raw(boxed);
     let title = wide(&unsafe { &*state_ptr }.view.window_title);
     let window_style = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME | WS_CLIPCHILDREN;
+    let window_ex_style = WS_EX_APPWINDOW | WS_EX_CONTROLPARENT;
     let mut outer = RECT {
         left: 0,
         top: 0,
         right: scale(WINDOW_WIDTH, unsafe { &*state_ptr }.dpi),
         bottom: scale(WINDOW_HEIGHT, unsafe { &*state_ptr }.dpi),
     };
-    unsafe { AdjustWindowRectEx(&mut outer, window_style, 0, WS_EX_APPWINDOW) };
+    unsafe { AdjustWindowRectEx(&mut outer, window_style, 0, window_ex_style) };
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_APPWINDOW,
+            window_ex_style,
             class_name.as_ptr(),
             title.as_ptr(),
             window_style,
@@ -661,8 +676,10 @@ unsafe fn run_window(mut state: AppState) {
     let mut message = MSG::default();
     while unsafe { GetMessageW(&mut message, null_mut(), 0, 0) } > 0 {
         unsafe {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
+            if IsDialogMessageW(hwnd, &message) == 0 {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
         }
     }
 }
@@ -944,6 +961,16 @@ unsafe fn apply_control_fonts(state: &AppState) {
             );
         }
     }
+    for control in &state.account_action_controls {
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                control.hwnd,
+                WM_SETFONT,
+                state.fonts.body as usize,
+                1,
+            );
+        }
+    }
     unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
             state.controls.platform,
@@ -1003,6 +1030,85 @@ fn create_button(hwnd: HWND, instance: HINSTANCE, id: i32, text: &str) -> HWND {
     }
 }
 
+fn account_action_code(action: ObserverAction) -> &'static str {
+    match action {
+        ObserverAction::Start => "start",
+        ObserverAction::Pause => "pause",
+        ObserverAction::Retry => "retry",
+        ObserverAction::Bind => "bind",
+        ObserverAction::Configure => "configure",
+    }
+}
+
+fn account_action_fingerprint(accounts: &[AccountCardView]) -> String {
+    account_action_bindings(accounts)
+        .into_iter()
+        .map(|(_, index, action, _)| {
+            format!(
+                "{index}:{}:{}",
+                accounts[index].role,
+                account_action_code(action)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+fn account_action_bindings(
+    accounts: &[AccountCardView],
+) -> Vec<(i32, usize, ObserverAction, bool)> {
+    let mut bindings = Vec::new();
+    for (account_index, account) in accounts.iter().enumerate() {
+        if let Some(action) = account.primary_action {
+            bindings.push((
+                CONTROL_ACCOUNT_ACTION_BASE + account_index as i32 * 2,
+                account_index,
+                action,
+                matches!(
+                    action,
+                    ObserverAction::Start | ObserverAction::Retry | ObserverAction::Bind
+                ),
+            ));
+        }
+        if account.settings_visible {
+            bindings.push((
+                CONTROL_ACCOUNT_ACTION_BASE + account_index as i32 * 2 + 1,
+                account_index,
+                ObserverAction::Configure,
+                false,
+            ));
+        }
+    }
+    bindings
+}
+
+unsafe fn sync_account_action_controls(hwnd: HWND, app: &mut AppState) {
+    let fingerprint = account_action_fingerprint(&app.view.accounts);
+    if app.account_action_fingerprint != fingerprint {
+        for control in app.account_action_controls.drain(..) {
+            unsafe { DestroyWindow(control.hwnd) };
+        }
+        let instance = unsafe { GetModuleHandleW(null()) };
+        for (id, account_index, action, primary) in account_action_bindings(&app.view.accounts) {
+            let account = &app.view.accounts[account_index];
+            let text = if action == ObserverAction::Configure {
+                "设置"
+            } else {
+                account.primary_action_text.as_deref().unwrap_or("处理中…")
+            };
+            app.account_action_controls.push(AccountActionControl {
+                hwnd: create_button(hwnd, instance, id, text),
+                id,
+                account_index,
+                action,
+                primary,
+            });
+        }
+        app.account_action_fingerprint = fingerprint;
+        unsafe { apply_control_fonts(app) };
+    }
+}
+
 fn send_combo_text(combo: HWND, text: &str) {
     let value = wide(text);
     unsafe {
@@ -1019,6 +1125,7 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
     sync_combo_selection(app);
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
+    unsafe { sync_account_action_controls(hwnd, app) };
     let s = |value| scale(value, app.dpi);
     let width = (client.right - client.left).max(s(WINDOW_MIN_WIDTH));
     let height = (client.bottom - client.top).max(s(WINDOW_MIN_HEIGHT));
@@ -1119,6 +1226,46 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
     }
     if app.view.show_mt4_setup {
         y += s(56);
+    }
+    let account_bounds = accounts_bounds(client, app);
+    let account_cards = account_card_rects(&app.view.accounts, account_bounds, app.dpi);
+    let idle = !app.inbox.action_running.load(Ordering::Acquire);
+    for control in &app.account_action_controls {
+        let account = &app.view.accounts[control.account_index];
+        let card = account_cards[control.account_index];
+        let target = if control.action == ObserverAction::Configure {
+            account_settings_action_rect(account, card, app.dpi)
+        } else {
+            account_primary_action_rect(account, card, app.dpi)
+        };
+        let visible = target.is_some_and(|target| {
+            target.top < account_bounds.bottom && target.bottom > account_bounds.top
+        });
+        if let Some(target) = target {
+            unsafe {
+                move_show(
+                    control.hwnd,
+                    target.left,
+                    target.top,
+                    target.right - target.left,
+                    target.bottom - target.top,
+                    visible,
+                );
+                let text = if control.action == ObserverAction::Configure {
+                    "设置"
+                } else {
+                    account.primary_action_text.as_deref().unwrap_or("处理中…")
+                };
+                let text = wide(text);
+                SetWindowTextW(control.hwnd, text.as_ptr());
+                EnableWindow(
+                    control.hwnd,
+                    i32::from(idle && !account.actions_busy && visible),
+                );
+            }
+        } else {
+            unsafe { ShowWindow(control.hwnd, SW_HIDE) };
+        }
     }
     let bottom_y = height - s(60);
     let mut right = width - s(32);
@@ -1533,43 +1680,6 @@ fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds
             DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
         );
     }
-    let button_top = bounds.top + (bounds.bottom - bounds.top - s(34)) / 2;
-    let mut button_left = action_left;
-    if let Some(action) = account.primary_action {
-        let primary = matches!(
-            action,
-            ObserverAction::Start | ObserverAction::Retry | ObserverAction::Bind
-        );
-        draw_compact_button(
-            hdc,
-            app,
-            rect(
-                button_left + s(3),
-                button_top,
-                button_left + s(73),
-                button_top + s(34),
-            ),
-            account.primary_action_text.as_deref().unwrap_or("处理中…"),
-            primary,
-            account.actions_busy,
-        );
-        button_left += s(76);
-    }
-    if account.settings_visible {
-        draw_compact_button(
-            hdc,
-            app,
-            rect(
-                button_left + s(3),
-                button_top,
-                button_left + s(73),
-                button_top + s(34),
-            ),
-            "设置",
-            false,
-            account.actions_busy,
-        );
-    }
 }
 
 fn permission_badge_rect(card: RECT, dpi: u32) -> RECT {
@@ -1677,30 +1787,45 @@ unsafe fn handle_account_click(hwnd: HWND, app: &mut AppState, point: POINT) {
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
     let cards = account_card_rects(&app.view.accounts, accounts_bounds(client, app), app.dpi);
-    let clicked = app
-        .view
-        .accounts
-        .iter()
-        .zip(cards)
-        .find_map(|(account, bounds)| {
+    let clicked = app.view.accounts.iter().zip(cards).enumerate().find_map(
+        |(account_index, (account, bounds))| {
             if account.actions_busy {
                 return None;
             }
             if account_primary_action_rect(account, bounds, app.dpi)
                 .is_some_and(|region| point_in_rect(point, region))
             {
-                return Some((account, account.primary_action));
+                return account.primary_action.map(|action| (account_index, action));
             }
             if account_settings_action_rect(account, bounds, app.dpi)
                 .is_some_and(|region| point_in_rect(point, region))
             {
-                return Some((account, Some(ObserverAction::Configure)));
+                return Some((account_index, ObserverAction::Configure));
             }
             None
-        });
-    let Some((account, Some(action))) = clicked else {
+        },
+    );
+    let Some((account_index, action)) = clicked else {
         return;
     };
+    unsafe { handle_account_action(hwnd, app, account_index, action) };
+}
+
+unsafe fn handle_account_action(
+    hwnd: HWND,
+    app: &mut AppState,
+    account_index: usize,
+    action: ObserverAction,
+) {
+    if app.inbox.action_running.load(Ordering::Acquire) {
+        return;
+    }
+    let Some(account) = app.view.accounts.get(account_index) else {
+        return;
+    };
+    if account.actions_busy {
+        return;
+    }
     let profile_id = account.role.clone();
     if matches!(action, ObserverAction::Bind | ObserverAction::Configure) {
         unsafe { open_existing_observer_dialog(hwnd, app, &profile_id) };
@@ -1766,42 +1891,6 @@ fn account_settings_action_rect(account: &AccountCardView, bounds: RECT, dpi: u3
     ))
 }
 
-fn draw_compact_button(
-    hdc: HDC,
-    app: &AppState,
-    bounds: RECT,
-    text: &str,
-    primary: bool,
-    disabled: bool,
-) {
-    let background = if disabled {
-        Rgb(226, 232, 240)
-    } else if primary {
-        Rgb(37, 99, 235)
-    } else {
-        Rgb(255, 255, 255)
-    };
-    let foreground = if disabled {
-        Rgb(148, 163, 184)
-    } else if primary {
-        Rgb(255, 255, 255)
-    } else {
-        Rgb(30, 41, 59)
-    };
-    fill(hdc, bounds, background);
-    if !primary {
-        draw_border(hdc, bounds, Rgb(203, 213, 225));
-    }
-    draw_text(
-        hdc,
-        text,
-        bounds,
-        app.fonts.body,
-        foreground,
-        windows_sys::Win32::Graphics::Gdi::DT_CENTER | DT_SINGLELINE | DT_VCENTER,
-    );
-}
-
 fn draw_border(hdc: HDC, bounds: RECT, color: Rgb) {
     fill(
         hdc,
@@ -1835,10 +1924,16 @@ unsafe fn draw_control(app: &AppState, lparam: LPARAM) -> LRESULT {
         draw_platform_item(app, item);
         return 1;
     }
-    unsafe { draw_button(lparam) }
+    let control_id = item.CtlID as i32;
+    let primary = matches!(control_id, CONTROL_PAIR | CONTROL_UPDATE)
+        || app
+            .account_action_controls
+            .iter()
+            .any(|control| control.id == control_id && control.primary);
+    unsafe { draw_button(lparam, primary) }
 }
 
-unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
+unsafe fn draw_button(lparam: LPARAM, primary: bool) -> LRESULT {
     let item = lparam as *const DRAWITEMSTRUCT;
     if item.is_null() {
         return 0;
@@ -1847,7 +1942,6 @@ unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
     if item.CtlType != ODT_BUTTON {
         return 0;
     }
-    let primary = matches!(item.CtlID as i32, CONTROL_PAIR | CONTROL_UPDATE);
     let disabled = item.itemState & ODS_DISABLED != 0;
     let selected = item.itemState & ODS_SELECTED != 0;
     let (background, foreground) = button_colors(primary, disabled, selected);
@@ -1956,6 +2050,16 @@ fn system_color(index: i32) -> Rgb {
 }
 
 unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: u32) {
+    if notification == 0
+        && let Some((account_index, action)) = app
+            .account_action_controls
+            .iter()
+            .find(|control| control.id == id)
+            .map(|control| (control.account_index, control.action))
+    {
+        unsafe { handle_account_action(hwnd, app, account_index, action) };
+        return;
+    }
     if app.demo_mode
         && matches!(
             id,
@@ -2854,6 +2958,33 @@ mod tests {
             account_settings_action_rect(&account, bounds, 96).map(rect_coordinates),
             Some((335, 27, 405, 61))
         );
+    }
+
+    #[test]
+    fn observer_actions_use_stable_native_button_ids_and_primary_roles() {
+        let main = account_fixture(true, false, false);
+        let pause = account_fixture(true, false, true);
+        let mut start = account_fixture(false, false, true);
+        start.role = "source-2".to_owned();
+        start.primary_action = Some(ObserverAction::Start);
+        start.primary_action_text = Some("启动".to_owned());
+        let accounts = vec![main, pause, start];
+        assert_eq!(
+            account_action_bindings(&accounts),
+            vec![
+                (2_002, 1, ObserverAction::Pause, false),
+                (2_003, 1, ObserverAction::Configure, false),
+                (2_004, 2, ObserverAction::Start, true),
+                (2_005, 2, ObserverAction::Configure, false),
+            ]
+        );
+        let fingerprint = account_action_fingerprint(&accounts);
+        let mut busy_accounts = accounts.clone();
+        busy_accounts[1].actions_busy = true;
+        busy_accounts[1].primary_action_text = Some("处理中…".to_owned());
+        assert_eq!(fingerprint, account_action_fingerprint(&busy_accounts));
+        busy_accounts[1].primary_action = Some(ObserverAction::Retry);
+        assert_ne!(fingerprint, account_action_fingerprint(&busy_accounts));
     }
 
     #[test]

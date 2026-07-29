@@ -148,6 +148,13 @@
     "excludes_account_login_broker_server_and_credentials": true,
     "read_only_ui_projection": true
   },
+  "native_ui_contract": {
+    "account_action_control_type": "native_owner_draw_button",
+    "account_actions": ["start", "pause", "retry", "bind", "configure"],
+    "dotnet_account_action_geometry_preserved": true,
+    "keyboard_navigation_uses_dialog_message_routing": true,
+    "screen_reader_exposes_account_action_labels": true
+  },
   "worker_supervision_contract": {
     "restart_delays_seconds": [1, 2, 4, 8, 10],
     "stable_run_reset_seconds": 30,

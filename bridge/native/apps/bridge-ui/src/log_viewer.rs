@@ -272,7 +272,7 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
-        WM_DRAWITEM => unsafe { draw_button(lparam) },
+        WM_DRAWITEM => unsafe { draw_button(lparam, false) },
         WM_CTLCOLORSTATIC => {
             let hdc = wparam as windows_sys::Win32::Graphics::Gdi::HDC;
             unsafe {
