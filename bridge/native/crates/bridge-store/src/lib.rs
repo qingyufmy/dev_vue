@@ -7,6 +7,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -369,6 +370,27 @@ pub struct OutboxStore {
 }
 
 impl OutboxStore {
+    pub fn open_or_create(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let path = path.as_ref();
+        if path.exists() {
+            let report = inspect_existing_schema(path)?;
+            if report.status == SchemaCompatibilityStatus::Compatible {
+                return Self::open_existing(path);
+            }
+            if !database_is_empty(path)? {
+                return Err(StoreError::new("bridge_store_schema_incompatible"));
+            }
+        } else if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)
+                .map_err(|_| StoreError::new("bridge_store_directory_create_failed"))?;
+        }
+        initialize_fresh_database(path)?;
+        Self::open_existing(path)
+    }
+
     pub fn open_existing(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = path.as_ref();
         let report = inspect_existing_schema(path)?;
@@ -386,6 +408,9 @@ impl OutboxStore {
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(|_| StoreError::new("bridge_store_synchronous_failed"))?;
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .map_err(|_| StoreError::new("bridge_store_foreign_keys_failed"))?;
         ensure_native_command_ledger_schema(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -1120,6 +1145,61 @@ impl OutboxStore {
     }
 }
 
+fn database_is_empty(path: &Path) -> Result<bool, StoreError> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| StoreError::new("bridge_store_open_failed"))?;
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%';",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count == 0)
+        .map_err(|_| StoreError::new("bridge_store_schema_query_failed"))
+}
+
+fn initialize_fresh_database(path: &Path) -> Result<(), StoreError> {
+    let mut connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
+    )
+    .map_err(|_| StoreError::new("bridge_store_create_failed"))?;
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .map_err(|_| StoreError::new("bridge_store_busy_timeout_failed"))?;
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .map_err(|_| StoreError::new("bridge_store_journal_mode_failed"))?;
+    let journal_mode: String = connection
+        .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
+        .map_err(|_| StoreError::new("bridge_store_journal_mode_failed"))?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Err(StoreError::new("bridge_store_journal_mode_failed"));
+    }
+    connection
+        .pragma_update(None, "synchronous", "FULL")
+        .map_err(|_| StoreError::new("bridge_store_synchronous_failed"))?;
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .map_err(|_| StoreError::new("bridge_store_foreign_keys_failed"))?;
+    let transaction = connection
+        .transaction()
+        .map_err(|_| StoreError::new("bridge_store_schema_transaction_failed"))?;
+    transaction
+        .execute_batch(include_str!("schema.sql"))
+        .map_err(|_| StoreError::new("bridge_store_schema_create_failed"))?;
+    transaction
+        .commit()
+        .map_err(|_| StoreError::new("bridge_store_schema_commit_failed"))?;
+    ensure_native_command_ledger_schema(&connection)
+}
+
 fn ensure_native_command_ledger_schema(connection: &Connection) -> Result<(), StoreError> {
     connection
         .execute_batch(
@@ -1429,6 +1509,102 @@ mod tests {
         let report = inspect_existing_schema(path).expect("missing database report");
         assert_eq!(report.status, SchemaCompatibilityStatus::NotPresent);
         assert!(report.is_compatible());
+    }
+
+    #[test]
+    fn native_store_creates_a_complete_fresh_database_and_recovers_an_empty_file() {
+        for suffix in ["fresh", "empty"] {
+            let root = unique_test_directory(suffix);
+            let path = root.join("nested").join(BRIDGE_DATABASE_FILE_NAME);
+            if suffix == "empty" {
+                fs::create_dir_all(path.parent().expect("database parent"))
+                    .expect("empty database directory");
+                fs::write(&path, []).expect("empty database file");
+            }
+            {
+                let store = OutboxStore::open_or_create(&path).expect("native fresh store");
+                assert!(
+                    store
+                        .enqueue(&NewOutboxRecord {
+                            message_id: format!("fresh_message_{suffix}"),
+                            message_type: "heartbeat".to_owned(),
+                            terminal_instance_id: "mt5_terminal_fresh_01".to_owned(),
+                            connection_epoch: 1,
+                            priority: "data".to_owned(),
+                            payload_json: "{}".to_owned(),
+                            created_at_utc_msc: 1_700_000_000_000,
+                        })
+                        .expect("fresh outbox write")
+                );
+            }
+            let report = inspect_existing_schema(&path).expect("fresh schema report");
+            assert_eq!(report.status, SchemaCompatibilityStatus::Compatible);
+            assert_eq!(report.journal_mode.as_deref(), Some("wal"));
+            let connection = Connection::open_with_flags(
+                &path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .expect("fresh schema connection");
+            for (table, expected_columns) in REQUIRED_SCHEMA {
+                assert_eq!(
+                    table_columns(&connection, table).expect("fresh table columns"),
+                    expected_columns
+                        .iter()
+                        .map(|column| (*column).to_owned())
+                        .collect::<Vec<_>>(),
+                    "fresh native schema drifted for {table}"
+                );
+            }
+            let mut statement = connection
+                .prepare(
+                    "SELECT name FROM sqlite_master \
+                     WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name;",
+                )
+                .expect("fresh index query");
+            let indices = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .expect("fresh index rows")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("fresh indices");
+            assert_eq!(
+                indices,
+                vec![
+                    "idx_deals_pending_cursor",
+                    "idx_execution_receipts_completed",
+                    "idx_history_archive_page",
+                    "idx_history_archive_position",
+                    "idx_native_command_ledger_status",
+                    "idx_outbox_ready",
+                    "idx_outbox_retry_ready",
+                    "idx_outbox_stream_scope",
+                    "idx_terminal_data_cache_freshness",
+                ]
+            );
+            drop(statement);
+            drop(connection);
+            fs::remove_dir_all(root).expect("remove fresh database fixture");
+        }
+    }
+
+    #[test]
+    fn native_store_never_repairs_a_partially_compatible_database_in_place() {
+        let root = unique_test_directory("no-repair");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path, Some(("account_latest", "payload_json")));
+        assert_eq!(
+            OutboxStore::open_or_create(&path)
+                .err()
+                .expect("incompatible database rejected")
+                .code(),
+            "bridge_store_schema_incompatible"
+        );
+        let report = inspect_existing_schema(&path).expect("unchanged incompatible schema");
+        assert_eq!(
+            report.missing_columns,
+            vec!["account_latest.payload_json".to_owned()]
+        );
+        fs::remove_dir_all(root).expect("remove incompatible fixture");
     }
 
     #[test]

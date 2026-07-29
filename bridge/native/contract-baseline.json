@@ -136,6 +136,8 @@
     "journal_mode": "wal",
     "synchronous": "full",
     "single_writer": "bridge-core",
+    "native_fresh_database_initialization": true,
+    "partial_schema_repair_in_place": false,
     "terminal_projection_restore": true,
     "data_delta_atomic_with_outbox": true,
     "gap_recovery_uses_store_revision": true,

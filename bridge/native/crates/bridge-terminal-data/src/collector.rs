@@ -515,6 +515,20 @@ mod tests {
         .expect("collector calls");
     }
 
+    async fn wait_for_order_revision(store: &MemoryStore, expected: i64) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !store
+                .messages()
+                .iter()
+                .any(|message| message.stream == "orders" && message.revision == expected)
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("order revision persisted");
+    }
+
     #[tokio::test]
     async fn collection_detects_activity_and_revalidates_the_account_route() {
         let store = Arc::new(MemoryStore::empty());
@@ -594,12 +608,7 @@ mod tests {
             .request_full_snapshot("orders")
             .expect("reconcile orders");
         wait_for_calls(&source, 4).await;
-        assert!(
-            store
-                .messages()
-                .iter()
-                .any(|message| message.stream == "orders" && message.revision == 2)
-        );
+        wait_for_order_revision(&store, 2).await;
         assert_eq!(
             handle
                 .request_full_snapshot("history")
