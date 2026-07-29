@@ -19,6 +19,10 @@ MAX_SNAPSHOT_ITEMS = 10_000
 DEFAULT_TIMEZONE_OFFSET_MINUTES = 180
 CLOCK_FRESHNESS_TOLERANCE_MS = 30_000
 CLOCK_STALE_AFTER_MS = 120_000
+TERMINAL_SESSION_FATAL_ERRORS = frozenset({
+    "mt5_account_unavailable",
+    "mt5_terminal_disconnected",
+})
 
 
 class WorkerError(RuntimeError):
@@ -328,12 +332,24 @@ class Mt5Worker:
     def __init__(self, adapter: ReadOnlyMt5Adapter, route: WorkerRoute):
         self.adapter = adapter
         self.route = route
+        self.restart_error_code: str | None = None
         self.trade = Mt5TradeExecutor(
             adapter.mt5,
             route,
-            adapter._ensure_identity,
+            self._ensure_trade_identity,
             adapter._resolve_symbol,
         )
+
+    def _ensure_trade_identity(self) -> tuple[Any, Any]:
+        try:
+            return self.adapter._ensure_identity()
+        except WorkerError as error:
+            self._record_restart_error(error.code)
+            raise
+
+    def _record_restart_error(self, error_code: str) -> None:
+        if error_code in TERMINAL_SESSION_FATAL_ERRORS:
+            self.restart_error_code = error_code
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         request_id = str(request.get("request_id") or "")
@@ -368,10 +384,12 @@ class Mt5Worker:
                     raise WorkerError("worker_request_payload_invalid")
                 command = body["command"]
                 self._validate_command(request_id, operation, command)
+                self.adapter._ensure_identity()
                 result = self.trade.execute(command, read_only=operation == "query_execution")
                 return self._response(request_id, "command_result", {"result": result})
             raise WorkerError("worker_operation_unsupported")
         except WorkerError as error:
+            self._record_restart_error(error.code)
             return self._response(request_id, "error", {"error_code": error.code})
         except Exception:
             return self._response(request_id, "error", {"error_code": "mt5_worker_internal_error"})
@@ -452,6 +470,8 @@ def run(mt5: Any) -> None:
             })
             while True:
                 write_frame(stream, worker.handle(read_frame(stream)))
+                if worker.restart_error_code is not None:
+                    return
     except EOFError:
         pass
     finally:

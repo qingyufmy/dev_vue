@@ -58,6 +58,9 @@
       "broker_order_check_rejection",
       "unique_object_cleanup"
     ],
+    "demo_terminal_recovery_watch_is_read_only": true,
+    "terminal_session_loss_exits_worker_for_supervised_restart": true,
+    "account_route_mismatch_does_not_restart_worker": true,
     "modify_order_requires_expected_state": true,
     "partial_close_requires_exact_remaining_volume": true,
     "fault_injection_unknown_results_are_not_replayed": true,

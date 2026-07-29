@@ -240,6 +240,56 @@ class WorkerTests(unittest.TestCase):
         )
         response = self.worker.handle(self.request("collect_snapshot", {"streams": ["account"]}))
         self.assertEqual("mt5_login_mismatch", response["payload"]["error_code"])
+        self.assertIsNone(self.worker.restart_error_code)
+
+    def test_terminal_session_loss_requests_a_supervised_worker_restart(self):
+        self.mt5.account_info = lambda: None
+
+        response = self.worker.handle(self.request("collect_snapshot", {"streams": ["account"]}))
+
+        self.assertEqual("error", response["outcome"])
+        self.assertEqual("mt5_account_unavailable", response["payload"]["error_code"])
+        self.assertEqual("mt5_account_unavailable", self.worker.restart_error_code)
+
+    def test_disconnected_terminal_requests_a_supervised_worker_restart(self):
+        self.mt5.terminal_info = lambda: Terminal(False, True, False)
+
+        response = self.worker.handle(self.request("collect_snapshot", {"streams": ["account"]}))
+
+        self.assertEqual("error", response["outcome"])
+        self.assertEqual("mt5_terminal_disconnected", response["payload"]["error_code"])
+        self.assertEqual("mt5_terminal_disconnected", self.worker.restart_error_code)
+
+    def test_trade_request_detects_terminal_loss_before_execution(self):
+        self.mt5.account_info = lambda: None
+
+        response = self.worker.handle(self.command_request("execute_command", self.command()))
+
+        self.assertEqual("error", response["outcome"])
+        self.assertEqual("mt5_account_unavailable", response["payload"]["error_code"])
+        self.assertEqual("mt5_account_unavailable", self.worker.restart_error_code)
+        self.assertEqual([], self.mt5.checks)
+        self.assertEqual([], self.mt5.sent)
+
+    def test_terminal_loss_during_trade_precheck_is_uncertain_and_restarts_worker(self):
+        original_account_info = self.mt5.account_info
+        calls = 0
+
+        def account_info():
+            nonlocal calls
+            calls += 1
+            return original_account_info() if calls == 1 else None
+
+        self.mt5.account_info = account_info
+
+        response = self.worker.handle(self.command_request("execute_command", self.command()))
+
+        result = response["payload"]["result"]
+        self.assertEqual("uncertain", result["status"])
+        self.assertEqual("mt5_execution_exception", result["error_code"])
+        self.assertEqual("mt5_account_unavailable", self.worker.restart_error_code)
+        self.assertEqual([], self.mt5.checks)
+        self.assertEqual([], self.mt5.sent)
 
     def test_non_finite_json_is_not_written(self):
         with self.assertRaises(WorkerError) as context:

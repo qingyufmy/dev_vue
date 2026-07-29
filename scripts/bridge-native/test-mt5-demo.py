@@ -12,7 +12,12 @@ WORKER_DIRECTORY = REPOSITORY / "bridge" / "native" / "workers" / "mt5"
 sys.path.insert(0, str(WORKER_DIRECTORY))
 
 from trade import Mt5TradeExecutor  # noqa: E402
-from worker import ReadOnlyMt5Adapter, WorkerRoute  # noqa: E402
+from worker import (  # noqa: E402
+    ReadOnlyMt5Adapter,
+    TERMINAL_SESSION_FATAL_ERRORS,
+    WorkerError,
+    WorkerRoute,
+)
 
 SYSTEM_MAGIC = 234000
 
@@ -200,6 +205,45 @@ def execute_rejection_matrix(mt5, executor: Mt5TradeExecutor, route: WorkerRoute
     return report
 
 
+def observe_terminal_recovery(adapter: ReadOnlyMt5Adapter, duration_seconds: float) -> dict:
+    started = time.monotonic()
+    deadline = started + duration_seconds
+    transitions: list[dict] = []
+    restart_attempts = 0
+    last_state = None
+    while time.monotonic() < deadline:
+        try:
+            adapter._ensure_identity()
+            state = "online"
+        except WorkerError as error:
+            state = error.code
+        except Exception:
+            state = "mt5_probe_exception"
+        if state != last_state:
+            transitions.append({
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
+                "state": state,
+            })
+            print(json.dumps({"mode": "recovery_transition", **transitions[-1]},
+                             ensure_ascii=False), flush=True)
+            last_state = state
+        if state in TERMINAL_SESSION_FATAL_ERRORS:
+            restart_attempts += 1
+            adapter.shutdown()
+            delays = (1.0, 2.0, 4.0, 8.0, 10.0)
+            time.sleep(delays[min(restart_attempts - 1, len(delays) - 1)])
+            try:
+                adapter.connect()
+            except WorkerError:
+                pass
+        time.sleep(0.25)
+    states = [transition["state"] for transition in transitions]
+    passed = bool(states) and states[0] == "online" and states[-1] == "online" \
+        and any(state != "online" for state in states[1:-1])
+    return {"transitions": transitions, "restart_attempts": restart_attempts,
+            "passed": passed}
+
+
 def execute_full_matrix(mt5, executor: Mt5TradeExecutor, route: WorkerRoute,
                         requested_symbol: str, symbol: str, info, volume: float) -> dict:
     suffix = str(int(time.time() * 1000))[-10:]
@@ -337,11 +381,17 @@ def main() -> int:
                         help="exercise pending, modify, cancel, protection and close")
     parser.add_argument("--faults", action="store_true",
                         help="exercise local and broker rejection paths without leaving trades")
+    parser.add_argument("--observe-recovery-seconds", type=float, default=0,
+                        help="observe a manual terminal close/restart without sending trades")
     args = parser.parse_args()
     if (args.matrix or args.faults) and not args.execute:
         parser.error("--matrix and --faults require --execute")
     if args.matrix and args.faults:
         parser.error("--matrix and --faults are mutually exclusive")
+    if args.observe_recovery_seconds and args.execute:
+        parser.error("--observe-recovery-seconds is read-only and cannot be combined with --execute")
+    if args.observe_recovery_seconds and not 10 <= args.observe_recovery_seconds <= 180:
+        parser.error("--observe-recovery-seconds must be between 10 and 180")
 
     import MetaTrader5 as mt5
 
@@ -380,6 +430,13 @@ def main() -> int:
             "terminal_trade_allowed": bool(getattr(terminal, "trade_allowed", False)),
             "terminal_tradeapi_disabled": bool(getattr(terminal, "tradeapi_disabled", False)),
         }
+        if args.observe_recovery_seconds:
+            print(json.dumps({"mode": "recovery_ready", "readiness": readiness},
+                             ensure_ascii=False), flush=True)
+            recovery = observe_terminal_recovery(adapter, args.observe_recovery_seconds)
+            print(json.dumps({"mode": "recovery", "readiness": readiness, **recovery},
+                             ensure_ascii=False))
+            return 0 if recovery["passed"] else 6
         if not args.execute:
             print(json.dumps({"mode": "read_only", "readiness": readiness}, ensure_ascii=False))
             return 0
