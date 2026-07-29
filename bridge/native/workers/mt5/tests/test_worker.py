@@ -427,6 +427,112 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("filled", lookup["final_state"])
         self.assertEqual("history_order", lookup["current_state"])
 
+    def test_place_order_reconciliation_waits_before_final_not_found(self):
+        self.mt5.positions = []
+        original = {"symbol": "XAUUSD", "side": "buy", "volume": 0.01}
+        params = {
+            "symbol": "XAUUSD", "expected_kind": "trade",
+            "bridge_command_ref": "AI-MISSING", "magic": 234000,
+            "lookback_seconds": 3600, "original_action": "place_order",
+            "original_params": original, "original_command_id": "command_01JORIGINAL1",
+            "original_issued_at_utc_msc": self.now, "settle_after_msc": 15_000,
+        }
+
+        pending = self.worker.handle(self.command_request(
+            "query_execution",
+            self.command("query_execution", params, "query_01JRECON001"),
+        ))
+        self.assertEqual(
+            {"status": "pending", "error_code": "reconciliation_settlement_pending"},
+            pending["payload"]["result"]["raw_result"]["resolution"],
+        )
+
+        self.now += 15_001
+        failed = self.worker.handle(self.command_request(
+            "query_execution",
+            self.command("query_execution", params, "query_01JRECON002"),
+        ))
+        self.assertEqual(
+            {"status": "failed", "error_code": "execution_not_found_after_settlement"},
+            failed["payload"]["result"]["raw_result"]["resolution"],
+        )
+        self.assertEqual([], self.mt5.sent)
+
+    def test_reconciliation_resolves_observed_place_cancel_and_position_modify(self):
+        self.mt5.positions = [SimpleNamespace(
+            ticket=501, symbol="XAUUSD.s", volume=0.01, type=0, magic=777,
+            sl=2295.0, tp=2325.0, comment="AI-OBSERVED",
+        )]
+        place_params = {
+            "symbol": "XAUUSD", "expected_kind": "trade",
+            "bridge_command_ref": "AI-OBSERVED", "magic": 777,
+            "original_action": "place_order",
+            "original_params": {"symbol": "XAUUSD", "side": "buy", "volume": 0.01,
+                                "magic": 777, "comment": "AI-OBSERVED"},
+            "original_command_id": "command_01JPLACE001",
+            "original_issued_at_utc_msc": self.now, "settle_after_msc": 15_000,
+        }
+        placed = self.worker.handle(self.command_request(
+            "query_execution", self.command("query_execution", place_params, "query_01JPLACE001")
+        ))
+        placed_raw = placed["payload"]["result"]["raw_result"]
+        self.assertEqual({"status": "succeeded"}, placed_raw["resolution"])
+        self.assertEqual(777, placed_raw["magic"])
+
+        cancel_params = {
+            "expected_kind": "pending", "ticket": "999",
+            "original_action": "cancel_order", "original_params": {"ticket": "999"},
+            "original_command_id": "command_01JCANCEL99",
+            "original_issued_at_utc_msc": self.now, "settle_after_msc": 15_000,
+        }
+        cancelled = self.worker.handle(self.command_request(
+            "query_execution", self.command("query_execution", cancel_params, "query_01JCANCEL99")
+        ))
+        self.assertEqual(
+            {"status": "succeeded"},
+            cancelled["payload"]["result"]["raw_result"]["resolution"],
+        )
+
+        modify_params = {
+            "expected_kind": "trade", "ticket": "501", "symbol": "XAUUSD",
+            "original_action": "modify_position",
+            "original_params": {"ticket": "501", "symbol": "XAUUSD",
+                                "side": "buy", "volume": 0.01, "magic": 777,
+                                "stop_loss": 2295.0, "take_profit": 2325.0},
+            "original_command_id": "command_01JMODPOS01",
+            "original_issued_at_utc_msc": self.now, "settle_after_msc": 15_000,
+        }
+        modified = self.worker.handle(self.command_request(
+            "query_execution", self.command("query_execution", modify_params, "query_01JMODPOS01")
+        ))
+        self.assertEqual(
+            {"status": "succeeded"},
+            modified["payload"]["result"]["raw_result"]["resolution"],
+        )
+        self.assertEqual([], self.mt5.sent)
+
+    def test_reconciliation_prefers_durable_ticket_when_broker_changes_comment(self):
+        self.mt5.positions = [SimpleNamespace(
+            ticket=501, symbol="XAUUSD.s", volume=0.01, type=0, magic=777,
+            sl=0.0, tp=0.0, comment="BROKER-REWRITTEN",
+        )]
+        params = {
+            "symbol": "XAUUSD", "expected_kind": "trade", "ticket": "501",
+            "bridge_command_ref": "AI-ORIGINAL", "magic": 777,
+            "original_action": "place_order",
+            "original_params": {"symbol": "XAUUSD", "side": "buy", "volume": 0.01,
+                                "magic": 777, "comment": "AI-ORIGINAL"},
+            "original_command_id": "command_01JTICKET01",
+            "original_issued_at_utc_msc": self.now, "settle_after_msc": 15_000,
+        }
+        response = self.worker.handle(self.command_request(
+            "query_execution", self.command("query_execution", params, "query_01JTICKET01")
+        ))
+        raw = response["payload"]["result"]["raw_result"]
+        self.assertTrue(raw["found"])
+        self.assertEqual("BROKER-REWRITTEN", raw["comment"])
+        self.assertEqual({"status": "succeeded"}, raw["resolution"])
+
 
 if __name__ == "__main__":
     unittest.main()

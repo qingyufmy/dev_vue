@@ -189,6 +189,9 @@
     "resolution_creates_new_trade_priority_outbox_message": true,
     "resolved_result_requires_new_server_ack": true,
     "periodic_service_implemented": true,
+    "mt5_query_adapter_implemented": true,
+    "mt5_query_uses_fresh_command_id": true,
+    "mt5_query_settlement_window_is_fail_closed": true,
     "mt5_query_adapter_connected": false
   },
   "core_process_lifecycle_contract": {

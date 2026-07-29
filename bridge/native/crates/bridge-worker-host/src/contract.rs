@@ -597,6 +597,12 @@ fn validate_query_execution(params: &Map<String, Value>) -> bool {
             "pending_ticket",
             "ticket",
             "lookback_seconds",
+            "magic",
+            "original_action",
+            "original_params",
+            "original_command_id",
+            "original_issued_at_utc_msc",
+            "settle_after_msc",
         ],
     ) && matches!(text(params.get("expected_kind")), Some("trade" | "pending"))
         && optional_symbol(params.get("symbol"))
@@ -604,6 +610,7 @@ fn validate_query_execution(params: &Map<String, Value>) -> bool {
         && optional_ticket(params.get("trade_ticket"))
         && optional_ticket(params.get("pending_ticket"))
         && optional_ticket(params.get("ticket"))
+        && optional_integer(params.get("magic"))
         && params
             .get("lookback_seconds")
             .is_none_or(|value| integer_in_range(value, 3_600, 315_360_000))
@@ -615,6 +622,46 @@ fn validate_query_execution(params: &Map<String, Value>) -> bool {
         ]
         .iter()
         .any(|key| params.contains_key(*key))
+        && validate_reconciliation_query_fields(params)
+}
+
+fn validate_reconciliation_query_fields(params: &Map<String, Value>) -> bool {
+    let keys = [
+        "original_action",
+        "original_params",
+        "original_command_id",
+        "original_issued_at_utc_msc",
+    ];
+    let supplied = keys.iter().filter(|key| params.contains_key(**key)).count();
+    if supplied == 0 {
+        return params.get("settle_after_msc").is_none();
+    }
+    if supplied != keys.len()
+        || !params
+            .get("original_command_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| validate_id(value).is_ok())
+        || !optional_positive_integer(params.get("original_issued_at_utc_msc"))
+        || !params
+            .get("settle_after_msc")
+            .is_none_or(|value| integer_in_range(value, 1_000, 300_000))
+    {
+        return false;
+    }
+    let Some(action) = text(params.get("original_action")) else {
+        return false;
+    };
+    let Some(original) = params.get("original_params").and_then(Value::as_object) else {
+        return false;
+    };
+    match action {
+        "place_order" => validate_place_order(original),
+        "cancel_order" => validate_cancel_order(original),
+        "modify_order" => validate_modify_order(original),
+        "modify_position" => validate_modify_position(original),
+        "close_position" => validate_close_position(original),
+        _ => false,
+    }
 }
 
 fn valid_expected_state(value: Option<&Value>) -> bool {
@@ -1054,6 +1101,61 @@ mod tests {
                 "{action}"
             );
         }
+    }
+
+    #[test]
+    fn internal_reconciliation_query_requires_a_complete_valid_original_command() {
+        let original = serde_json::json!({
+            "symbol": "XAUUSD",
+            "side": "buy",
+            "order_kind": "market",
+            "volume": 0.01,
+            "magic": 234000,
+            "comment": "AURUM-1"
+        });
+        let mut valid = command("query_execution");
+        valid.params = serde_json::json!({
+            "expected_kind": "trade",
+            "bridge_command_ref": "AURUM-1",
+            "magic": 234000,
+            "lookback_seconds": 172800,
+            "original_action": "place_order",
+            "original_params": original,
+            "original_command_id": "command_01JORIGINAL1",
+            "original_issued_at_utc_msc": 1_700_000_000_000_i64,
+            "settle_after_msc": 15_000
+        });
+        WorkerRequest::from_command(route(), valid.clone())
+            .expect("request")
+            .validate(1_700_000_000_001)
+            .expect("valid reconciliation query");
+
+        let mut incomplete = valid.clone();
+        incomplete
+            .params
+            .as_object_mut()
+            .expect("params")
+            .remove("original_params");
+        assert_eq!(
+            WorkerRequest::from_command(route(), incomplete)
+                .expect("request")
+                .validate(1_700_000_000_001)
+                .expect_err("incomplete original command")
+                .code(),
+            "worker_command_params_invalid"
+        );
+
+        let mut invalid_original = valid;
+        invalid_original.params["original_params"] =
+            serde_json::json!({ "symbol": "XAUUSD", "volume": 0.01 });
+        assert_eq!(
+            WorkerRequest::from_command(route(), invalid_original)
+                .expect("request")
+                .validate(1_700_000_000_001)
+                .expect_err("invalid original command")
+                .code(),
+            "worker_command_params_invalid"
+        );
     }
 
     #[test]

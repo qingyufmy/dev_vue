@@ -348,6 +348,7 @@ class Mt5TradeExecutor:
         kind = str(params["expected_kind"])
         symbol = self._resolve_symbol(str(params["symbol"])) if params.get("symbol") else ""
         reference = str(params.get("bridge_command_ref") or "")
+        expected_magic = params.get("magic")
         tickets = {str(params.get(key) or "") for key in ("trade_ticket", "pending_ticket", "ticket")}
         tickets.discard("")
         lookback = int(params.get("lookback_seconds") or 172_800)
@@ -355,13 +356,14 @@ class Mt5TradeExecutor:
         def matches(row: Any) -> bool:
             if symbol and str(getattr(row, "symbol", "")) != symbol:
                 return False
-            if int(getattr(row, "magic", 0) or 0) != 234000:
+            if expected_magic is not None \
+                    and int(getattr(row, "magic", 0) or 0) != int(expected_magic):
                 return False
-            if reference:
-                return str(getattr(row, "comment", "") or "") == reference
             row_tickets = {str(getattr(row, field, "") or "")
                            for field in ("ticket", "order", "position_id")}
-            return bool(tickets & row_tickets)
+            if tickets:
+                return bool(tickets & row_tickets)
+            return bool(reference) and str(getattr(row, "comment", "") or "") == reference
 
         active = self.mt5.orders_get(symbol=symbol) if kind == "pending" and symbol \
             else self.mt5.orders_get() if kind == "pending" \
@@ -400,6 +402,15 @@ class Mt5TradeExecutor:
             raw.update({"kind": kind, "ticket": position or order, "order": order,
                         "position_id": position, "deal": deal_ticket,
                         "symbol": getattr(found, "symbol", symbol),
+                        "magic": int(getattr(found, "magic", 0) or 0),
+                        "volume": float(getattr(found, "volume", None)
+                                        or getattr(found, "volume_current", None)
+                                        or getattr(found, "volume_initial", 0) or 0),
+                        "price": float(getattr(found, "price_open", 0) or 0),
+                        "stop_loss": float(getattr(found, "sl", 0) or 0),
+                        "take_profit": float(getattr(found, "tp", 0) or 0),
+                        "stop_limit_price": float(getattr(found, "price_stoplimit", 0) or 0),
+                        "expiration": int(getattr(found, "time_expiration", 0) or 0),
                         "comment": str(getattr(found, "comment", "") or ""),
                         "current_state": source})
             if kind == "pending":
@@ -427,7 +438,79 @@ class Mt5TradeExecutor:
                 "deal_tickets": [str(deal_ticket)] if deal_ticket else [],
                 "broker_retcode": None,
             }
+        if params.get("original_action"):
+            raw["resolution"] = self._resolve_reconciliation(params, raw, source)
         return self._result(command, "succeeded", raw=raw, evidence=evidence)
+
+    def _resolve_reconciliation(self, params: dict[str, Any], observed: dict[str, Any],
+                                source: str) -> dict[str, Any]:
+        action = str(params["original_action"])
+        original = params["original_params"]
+        elapsed = self._clock_msc() - int(params["original_issued_at_utc_msc"])
+        settled = elapsed >= int(params.get("settle_after_msc") or 15_000)
+
+        def unresolved(code: str) -> dict[str, Any]:
+            return {"status": "failed", "error_code": code} if settled \
+                else {"status": "pending", "error_code": "reconciliation_settlement_pending"}
+
+        if action == "place_order":
+            if not observed["found"]:
+                return unresolved("execution_not_found_after_settlement")
+            if observed.get("pending_state") in {"cancelled", "rejected", "expired"}:
+                return {"status": "failed",
+                        "error_code": f"pending_order_{observed['pending_state']}"}
+            return {"status": "succeeded"}
+
+        if action == "cancel_order":
+            if source == "active_order":
+                return unresolved("pending_order_still_active")
+            if observed.get("pending_state") in {"filled", "partially_filled"}:
+                return {"status": "failed", "error_code": "pending_order_already_filled"}
+            return {"status": "succeeded"}
+
+        if action == "close_position":
+            if source != "active_position":
+                return {"status": "succeeded"}
+            expected = original.get("expected_state") or {}
+            before = float(expected.get("volume") or 0)
+            requested = float(original.get("volume") or before)
+            if before > 0 and float(observed.get("volume") or 0) <= max(0.0, before - requested) + 1e-8:
+                return {"status": "succeeded"}
+            return unresolved("position_still_open")
+
+        if action == "modify_order":
+            if source != "active_order":
+                return unresolved("pending_order_not_active")
+            aliases = {"price": "price", "stop_loss": "stop_loss",
+                       "take_profit": "take_profit", "stop_limit_price": "stop_limit_price",
+                       "expiration": "expiration"}
+            tolerance = self._price_tolerance(str(observed.get("symbol") or ""))
+            for expected_key, actual_key in aliases.items():
+                if expected_key not in original:
+                    continue
+                expected = float(original[expected_key])
+                actual = float(observed.get(actual_key) or 0)
+                if expected_key == "expiration":
+                    if int(expected) != int(actual):
+                        return unresolved("pending_order_change_not_applied")
+                elif abs(expected - actual) > tolerance:
+                    return unresolved("pending_order_change_not_applied")
+            return {"status": "succeeded"}
+
+        if action == "modify_position":
+            if source != "active_position":
+                return unresolved("position_not_active")
+            tolerance = self._price_tolerance(str(observed.get("symbol") or ""))
+            for expected_key in ("stop_loss", "take_profit"):
+                if expected_key not in original:
+                    continue
+                expected = float(original[expected_key] or 0)
+                actual = float(observed.get(expected_key) or 0)
+                if abs(expected - actual) > tolerance:
+                    return unresolved("position_protection_not_applied")
+            return {"status": "succeeded"}
+
+        return {"status": "pending", "error_code": "reconciliation_action_unsupported"}
 
     def _validate_target(self, expected: dict[str, Any], target: Any, kind: str) -> None:
         if str(expected["ticket"]) != str(getattr(target, "ticket", "")):
