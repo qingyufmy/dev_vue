@@ -58,6 +58,37 @@ impl ReleaseActivationStore {
         Ok(pointer)
     }
 
+    pub fn initialize_healthy(
+        &self,
+        active_version: &str,
+        now_utc_msc: i64,
+    ) -> Result<ReleaseActivationPointer, UpdateError> {
+        if DotNetVersion::parse(active_version).is_none() || now_utc_msc <= 0 {
+            return Err(UpdateError::new("update_activation_invalid"));
+        }
+        let install_root = self
+            .pointer_path
+            .parent()
+            .ok_or_else(|| UpdateError::new("update_activation_invalid"))?;
+        if !install_root
+            .join("versions")
+            .join(active_version)
+            .join("AURUMBridge.exe")
+            .is_file()
+        {
+            return Err(UpdateError::new("update_activation_invalid"));
+        }
+        let pointer = ReleaseActivationPointer {
+            active_version: active_version.to_owned(),
+            last_known_good_version: active_version.to_owned(),
+            status: "healthy".to_owned(),
+            expected_terminal_instance_ids: Vec::new(),
+            updated_at_utc_msc: now_utc_msc,
+        };
+        self.save(&pointer)?;
+        Ok(pointer)
+    }
+
     pub(crate) fn prepare(
         &self,
         staged: &StagedRelease,

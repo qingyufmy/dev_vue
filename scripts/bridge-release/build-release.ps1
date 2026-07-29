@@ -96,6 +96,10 @@ if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$serverUri) -or
   ($serverUri.Scheme -ne 'https' -and -not ($TargetEnvironment -eq 'test' -and $serverUri.Scheme -eq 'http' -and $serverUri.IsLoopback))) {
   throw 'release_server_url_invalid'
 }
+if ($TargetEnvironment -eq 'test' -and
+  ($serverUri.Scheme -ne 'http' -or -not $serverUri.IsLoopback)) {
+  throw 'release_test_server_must_be_loopback'
+}
 $serverUrlValue = $serverUri.GetLeftPart([UriPartial]::Authority)
 $ReleaseId = if ($ReleaseId) { $ReleaseId } else { "bridge-$ReleaseVersion-$([DateTimeOffset]::UtcNow.ToString('yyyyMMdd.HHmmss'))" }
 $outputRoot = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $repo "bridge\release-artifacts\$ReleaseId" }

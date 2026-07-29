@@ -9,6 +9,7 @@ pub use activation::{
 };
 pub use coordinator::{
     BridgeUpdateCoordinator, BridgeUpdateEnvironment, StagedRelease, UPDATE_CHECK_INTERVAL,
+    validate_native_release_layout, validate_release_package_compatibility,
 };
 pub use manifest::{
     ReleaseManifest, ReleaseManifestClient, ReleaseManifestVerifier, ReleasePackage,

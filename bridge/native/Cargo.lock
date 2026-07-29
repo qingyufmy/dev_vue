@@ -1058,6 +1058,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "liangjian-bridge-installer"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "base64",
+ "bridge-update",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "url",
+ "windows-registry",
+ "windows-sys 0.61.2",
+ "zip",
+]
+
+[[package]]
 name = "liangjian-bridge-launcher"
 version = "3.0.0-alpha.1"
 dependencies = [

@@ -24,6 +24,9 @@ if (($uri.Scheme -ne 'https' -and -not $localTestServer) -or
   $uri.UserInfo -or $uri.Query -or $uri.Fragment -or $uri.AbsolutePath -ne '/') {
   throw 'bootstrap_server_url_invalid'
 }
+if ($TargetEnvironment -eq 'test' -and -not $localTestServer) {
+  throw 'bootstrap_test_server_must_be_loopback'
+}
 $loopbackServerValue = ''
 if ($TargetEnvironment -eq 'test') {
   $loopbackUri = $null

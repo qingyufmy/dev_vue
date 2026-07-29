@@ -141,7 +141,7 @@ describe('bridge release tooling', () => {
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
       '-ReleaseVersion', '9.9.7', '-Priority', 'normal', '-RolloutChannel', 'internal',
       '-RolloutPercentage', '100', '-PythonRuntimeDirectory', runtime,
-      '-CdnDomain', cdnDomain, '-ServerUrl', 'https://bridge.example',
+      '-CdnDomain', cdnDomain, '-ServerUrl', 'http://127.0.0.1:3000',
       '-OutputDirectory', path.join(temporary, 'release-output'),
       '-TargetEnvironment', 'test', '-DryRun',
     ])
@@ -150,6 +150,16 @@ describe('bridge release tooling', () => {
       expect(JSON.parse(stdout)).toMatchObject({ ok:true, dry_run:true, environment:'test' })
       await expect(invoke('http://cdn.example')).rejects.toMatchObject({
         stderr:expect.stringContaining('release_cdn_domain_invalid'),
+      })
+      await expect(execFileAsync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+        '-ReleaseVersion', '9.9.7', '-Priority', 'normal', '-RolloutChannel', 'internal',
+        '-RolloutPercentage', '100', '-PythonRuntimeDirectory', runtime,
+        '-CdnDomain', 'http://127.0.0.1:3102', '-ServerUrl', 'https://bridge.example',
+        '-OutputDirectory', path.join(temporary, 'release-output'),
+        '-TargetEnvironment', 'test', '-DryRun',
+      ])).rejects.toMatchObject({
+        stderr:expect.stringContaining('release_test_server_must_be_loopback'),
       })
     } finally {
       await rm(temporary, { recursive:true, force:true })
@@ -238,8 +248,9 @@ describe('bridge release tooling', () => {
     expect(solution).toContain('tools/AurumBridge.UpdateRehearsal/AurumBridge.UpdateRehearsal.csproj')
   })
 
-  it('builds a self-contained installer that pins the signed native launcher from core', async () => {
+  it('builds a standard offline installer with a Rust backend and pins the signed native launcher from core', async () => {
     const bootstrapBuilder = await readFile(new URL('../scripts/bridge-release/build-bootstrapper.ps1', import.meta.url), 'utf8')
+    const nativeInstallerBuilder = await readFile(new URL('../scripts/bridge-release/build-native-installer-backend.ps1', import.meta.url), 'utf8')
     const fullInstallerBuilder = await readFile(new URL('../scripts/bridge-release/build-full-installer.ps1', import.meta.url), 'utf8')
     const bootstrapUploader = await readFile(new URL('../scripts/bridge-release/upload-bootstrapper-qiniu.ps1', import.meta.url), 'utf8')
     const bootstrapProject = await readFile(new URL('../bridge/bootstrapper/AurumBridge.Bootstrapper/AurumBridge.Bootstrapper.csproj', import.meta.url), 'utf8')
@@ -261,6 +272,11 @@ describe('bridge release tooling', () => {
     expect(bootstrapBuilder).toContain('-p:AurumLoopbackServerUrl=$loopbackServerValue')
     expect(bootstrapBuilder).toContain('single_runtime_installer=$true')
     expect(bootstrapBuilder).not.toContain('AurumBootstrapLauncherZip')
+    expect(nativeInstallerBuilder).toContain("-p liangjian-bridge-installer")
+    expect(nativeInstallerBuilder).toContain('native_offline_backend=$true')
+    expect(nativeInstallerBuilder).toContain('AURUM_INSTALLER_PUBLIC_KEY_PATH')
+    expect(nativeInstallerBuilder).toContain('AURUM_INSTALLER_TARGET_ENVIRONMENT')
+    expect(nativeInstallerBuilder).not.toContain('dotnet publish')
     expect(manifestClient).toContain('/api/bridge/v3/releases/bootstrap')
     const bootstrapProgram = await readFile(
       new URL('../bridge/bootstrapper/AurumBridge.Bootstrapper/Program.cs', import.meta.url),
@@ -285,9 +301,15 @@ describe('bridge release tooling', () => {
     expect(bootstrapProgram).toContain('LoadOfflineManifestAsync(')
     expect(bootstrapProgram).toContain('ReleaseStager.VerifyPackageFileAsync(')
     expect(fullInstallerBuilder).toContain("installer_type='full-offline-v3'")
+    expect(fullInstallerBuilder).toContain('build-native-installer-backend.ps1')
+    expect(fullInstallerBuilder).not.toContain("'build-bootstrapper.ps1'")
+    expect(fullInstallerBuilder).toContain("installer_backend='rust-native-v3'")
+    expect(fullInstallerBuilder).toContain('LiangjianBridgeInstallBackend.exe')
+    expect(fullInstallerBuilder).toContain('[Icons]')
     expect(fullInstallerBuilder).toContain('Compression=lzma2/ultra64')
     expect(fullInstallerBuilder).toContain('OutputBaseFilename=LiangjianBridgeSetup')
-    expect(fullInstallerBuilder).toContain('#define MyAppURL "$(Escape-Inno $ServerUrl)"')
+    expect(fullInstallerBuilder).toContain('#define MyAppURL "$(Escape-Inno $serverUrlValue)"')
+    expect(fullInstallerBuilder).toContain('full_installer_server_url_invalid')
     expect(fullInstallerBuilder).not.toContain('https://www.cnfxtrade.com')
     expect(fullInstallerBuilder).toContain('Uninstallable=no')
     expect(fullInstallerBuilder).toContain("bootstrapper-metadata.json")
@@ -344,7 +366,7 @@ describe('bridge release tooling', () => {
         '-ReleaseDirectory', temporary,
         '-ManifestPath', manifestPath,
         '-PublicKey', publicKey,
-        '-ServerUrl', 'https://www.cnfxtrade.com',
+        '-ServerUrl', 'http://127.0.0.1:3000',
         '-TargetEnvironment', 'test',
         '-MinimumOfflineValidityDays', '90',
         '-DryRun',
@@ -381,6 +403,9 @@ describe('bridge release tooling', () => {
       })
       await expect(invoke('test', 'http://bootstrap.example')).rejects.toMatchObject({
         stderr:expect.stringContaining('bootstrap_server_url_invalid'),
+      })
+      await expect(invoke('test', 'https://bootstrap.example')).rejects.toMatchObject({
+        stderr:expect.stringContaining('bootstrap_test_server_must_be_loopback'),
       })
     } finally {
       await rm(temporary, { recursive:true, force:true })

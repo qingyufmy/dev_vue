@@ -540,7 +540,7 @@ impl BridgeUpdateCoordinator {
                     .ok_or_else(|| UpdateError::new("update_package_cache_missing"))?;
                 extract_verified_package(package, archive, destination)?;
             }
-            validate_staged_layout(&temporary_directory)?;
+            validate_native_release_layout(&temporary_directory)?;
             write_release_marker(&temporary_directory, manifest)?;
             fs::rename(&temporary_directory, &final_directory)
                 .map_err(|_| UpdateError::new("update_version_publish_failed"))?;
@@ -651,6 +651,14 @@ fn validate_package_set(
     Ok(())
 }
 
+pub fn validate_release_package_compatibility(
+    manifest: &ReleaseManifest,
+) -> Result<(), UpdateError> {
+    let target = DotNetVersion::parse(&manifest.release_version)
+        .ok_or_else(|| UpdateError::new("update_release_version_invalid"))?;
+    validate_package_set(manifest, target)
+}
+
 fn state_for_manifest(
     state: &str,
     manifest: &ReleaseManifest,
@@ -699,7 +707,7 @@ fn validate_existing_release(
     directory: &Path,
     expected: &ReleaseManifest,
 ) -> Result<(), UpdateError> {
-    validate_staged_layout(directory)?;
+    validate_native_release_layout(directory)?;
     let marker = fs::read(directory.join(RELEASE_MARKER_FILE_NAME))
         .map_err(|_| UpdateError::new("update_staged_release_missing"))?;
     let actual = serde_json::from_slice::<ReleaseManifest>(&marker)
@@ -712,7 +720,7 @@ fn validate_existing_release(
     Ok(())
 }
 
-fn validate_staged_layout(directory: &Path) -> Result<(), UpdateError> {
+pub fn validate_native_release_layout(directory: &Path) -> Result<(), UpdateError> {
     if REQUIRED_CORE_FILES
         .iter()
         .any(|path| !directory.join(path).is_file())
@@ -1234,10 +1242,10 @@ mod tests {
             fs::create_dir_all(path.parent().expect("parent")).expect("directory");
             fs::write(path, b"adapter").expect("adapter");
         }
-        assert_eq!(validate_staged_layout(&root), Ok(()));
+        assert_eq!(validate_native_release_layout(&root), Ok(()));
         fs::remove_file(root.join("AURUMBridge.Core.exe")).expect("remove core");
         assert_eq!(
-            validate_staged_layout(&root)
+            validate_native_release_layout(&root)
                 .expect_err("missing core")
                 .code(),
             "update_core_component_missing"
@@ -1245,7 +1253,7 @@ mod tests {
         fs::write(root.join("AURUMBridge.Core.exe"), b"component").expect("restore core");
         fs::write(root.join("AURUMBridge.dll"), b"legacy").expect("legacy component");
         assert_eq!(
-            validate_staged_layout(&root)
+            validate_native_release_layout(&root)
                 .expect_err("legacy core layout")
                 .code(),
             "update_core_component_missing"

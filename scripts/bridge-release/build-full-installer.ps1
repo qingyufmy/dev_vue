@@ -63,6 +63,17 @@ $manifestFile = if ($ManifestPath) {
   (Resolve-Path -LiteralPath (Join-Path $releaseRoot 'manifest.signed.json')).Path
 }
 if (Test-Path -LiteralPath $output) { throw 'full_installer_output_exists' }
+$serverUri = $null
+$localTestServer = $TargetEnvironment -eq 'test' -and
+  [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$serverUri) -and
+  $serverUri.Scheme -eq 'http' -and $serverUri.IsLoopback
+if (-not $serverUri -or $serverUri.UserInfo -or $serverUri.Query -or
+  $serverUri.Fragment -or $serverUri.AbsolutePath -ne '/' -or
+  ($TargetEnvironment -eq 'test' -and -not $localTestServer) -or
+  ($TargetEnvironment -eq 'production' -and $serverUri.Scheme -ne 'https')) {
+  throw 'full_installer_server_url_invalid'
+}
+$serverUrlValue = $serverUri.GetLeftPart([UriPartial]::Authority)
 $rehearsalInstallRoot = $null
 if ($TestRehearsalInstallRoot) {
   if ($TargetEnvironment -ne 'test') { throw 'full_installer_rehearsal_not_allowed' }
@@ -136,26 +147,17 @@ New-Item -ItemType Directory -Path $work | Out-Null
 New-Item -ItemType Directory -Path $output | Out-Null
 $succeeded = $false
 try {
-  $bootstrapperOutput = Join-Path $work 'bootstrapper'
-  $bootstrapperArguments = @{
-    OutputDirectory = $bootstrapperOutput
+  $installerBackendOutput = Join-Path $work 'installer-backend'
+  $installerBackendArguments = @{
+    OutputDirectory = $installerBackendOutput
     PublicKey = $publicKeyPath
-    ServerUrl = $ServerUrl
     LauncherVersion = $LauncherVersion
     TargetEnvironment = $TargetEnvironment
-    TestLoopbackServerUrl = $TestLoopbackServerUrl
-    TimestampServer = $TimestampServer
   }
-  if ($AuthenticodeCertificateThumbprint) {
-    $bootstrapperArguments.AuthenticodeCertificateThumbprint = $AuthenticodeCertificateThumbprint
-  }
-  if ($AllowUnsignedInstaller) {
-    $bootstrapperArguments.AllowUnsignedInstaller = $true
-  }
-  & (Join-Path $PSScriptRoot 'build-bootstrapper.ps1') @bootstrapperArguments | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'full_installer_bootstrapper_build_failed' }
+  & (Join-Path $PSScriptRoot 'build-native-installer-backend.ps1') @installerBackendArguments | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'full_installer_backend_build_failed' }
 
-  $bootstrapper = Join-Path $bootstrapperOutput 'LiangjianBridgeSetup.exe'
+  $installerBackend = Join-Path $installerBackendOutput 'LiangjianBridgeInstallBackend.exe'
   $icon = (Resolve-Path -LiteralPath (Join-Path $repo 'bridge\assets\liangjian-bridge.ico')).Path
   $innoScript = Join-Path $work 'LiangjianBridgeSetup.iss'
   $installArgumentCode = if ($rehearsalInstallRoot) {
@@ -173,6 +175,13 @@ try {
 Filename: "{localappdata}\AURUM\LiangjianBridge\AURUMBridge.Launcher.exe"; Description: "{cm:LaunchProgram,$(Escape-Inno $productName)}"; Flags: nowait postinstall skipifsilent
 "@
   }
+  $iconSection = if ($rehearsalInstallRoot) { '' } else {
+@"
+[Icons]
+Name: "{autodesktop}\$(Escape-Inno $productName)"; Filename: "{localappdata}\AURUM\LiangjianBridge\AURUMBridge.Launcher.exe"; WorkingDir: "{localappdata}\AURUM\LiangjianBridge"
+Name: "{userprograms}\$(Escape-Inno $productName)"; Filename: "{localappdata}\AURUM\LiangjianBridge\AURUMBridge.Launcher.exe"; WorkingDir: "{localappdata}\AURUM\LiangjianBridge"
+"@
+  }
   $publisherName = ConvertFrom-CodePoints @(0x91CF,0x89C1)
   $installFailedMessage = ConvertFrom-CodePoints @(
     0x91CF,0x89C1,0x667A,0x6865,0x6838,0x5FC3,0x7EC4,0x4EF6,
@@ -186,7 +195,7 @@ Filename: "{localappdata}\AURUM\LiangjianBridge\AURUMBridge.Launcher.exe"; Descr
 #define MyAppName "$(Escape-Inno $productName)"
 #define MyAppVersion "$(Escape-Inno ([string]$manifest.release_version))"
 #define MyAppPublisher "$(Escape-Inno $publisherName)"
-#define MyAppURL "$(Escape-Inno $ServerUrl)"
+#define MyAppURL "$(Escape-Inno $serverUrlValue)"
 
 [Setup]
 AppId={{AURUM-LiangjianBridge-V3}
@@ -221,13 +230,14 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.i
 chinesesimplified.InstallFailed=$(Escape-Inno $installFailedMessage)
 
 [Files]
-Source: "$(Escape-Inno $bootstrapper)"; Flags: dontcopy
+Source: "$(Escape-Inno $installerBackend)"; Flags: dontcopy
 Source: "$(Escape-Inno $manifestFile)"; DestName: "manifest.signed.json"; Flags: dontcopy
 Source: "$(Escape-Inno $($packageFiles['core']))"; DestName: "core.zip"; Flags: dontcopy
 Source: "$(Escape-Inno $($packageFiles['adapter.mt5.python']))"; DestName: "adapter.mt5.python.zip"; Flags: dontcopy
 Source: "$(Escape-Inno $($packageFiles['adapter.mt4']))"; DestName: "adapter.mt4.zip"; Flags: dontcopy
 
 $runSection
+$iconSection
 
 [Code]
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -237,13 +247,13 @@ var
 begin
   if CurStep <> ssInstall then
     exit;
-  ExtractTemporaryFile('LiangjianBridgeSetup.exe');
+  ExtractTemporaryFile('LiangjianBridgeInstallBackend.exe');
   ExtractTemporaryFile('manifest.signed.json');
   ExtractTemporaryFile('core.zip');
   ExtractTemporaryFile('adapter.mt5.python.zip');
   ExtractTemporaryFile('adapter.mt4.zip');
 $installArgumentCode
-  if (not Exec(ExpandConstant('{tmp}\LiangjianBridgeSetup.exe'), Arguments,
+  if (not Exec(ExpandConstant('{tmp}\LiangjianBridgeInstallBackend.exe'), Arguments,
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
     RaiseException(CustomMessage('InstallFailed'));
 end;
@@ -278,7 +288,8 @@ end;
     release_version=[string]$manifest.release_version
     manifest_sha256=(Get-FileHash -LiteralPath $manifestFile -Algorithm SHA256).Hash.ToLowerInvariant()
     embedded_package_size_bytes=($manifest.packages | Measure-Object size_bytes -Sum).Sum
-    bootstrapper_sha256=(Get-FileHash -LiteralPath $bootstrapper -Algorithm SHA256).Hash.ToLowerInvariant()
+    installer_backend='rust-native-v3'
+    installer_backend_sha256=(Get-FileHash -LiteralPath $installerBackend -Algorithm SHA256).Hash.ToLowerInvariant()
     installer_size_bytes=(Get-Item -LiteralPath $installer).Length
     installer_sha256=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
     authenticode_signed=$authenticodeSigned
