@@ -10,9 +10,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::net::IpAddr;
-use std::path::Path;
+use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -21,6 +24,9 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::protocol::{Message, WebSocketConfig};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_with_config};
 use url::Url;
+use windows_sys::Win32::Storage::FileSystem::{
+    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+};
 
 mod admission;
 mod inbound;
@@ -48,6 +54,7 @@ pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 pub const OUTBOX_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const MAXIMUM_API_RESPONSE_BYTES: usize = 1024 * 1024;
+static ENDPOINT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransportError {
@@ -93,6 +100,12 @@ impl Error for TransportError {}
 pub struct ServerEndpoints {
     control_base: Url,
     realtime_base: Url,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EndpointConnectivity {
+    pub control_reachable: bool,
+    pub realtime_reachable: bool,
 }
 
 impl ServerEndpoints {
@@ -174,6 +187,100 @@ pub fn load_endpoint_settings(path: impl AsRef<Path>) -> Result<ServerEndpoints,
         .map_err(|_| TransportError::new("bridge_endpoint_settings_invalid"))
 }
 
+pub fn save_endpoint_settings(
+    root_data_directory: impl AsRef<Path>,
+    endpoints: &ServerEndpoints,
+) -> Result<(), TransportError> {
+    let root_data_directory = root_data_directory.as_ref();
+    if !root_data_directory.is_absolute() {
+        return Err(TransportError::new("bridge_endpoint_directory_invalid"));
+    }
+    fs::create_dir_all(root_data_directory)
+        .map_err(|_| TransportError::new("bridge_endpoint_settings_write_failed"))?;
+    let path = root_data_directory.join(ENDPOINT_SETTINGS_FILE_NAME);
+    let payload = serde_json::to_vec(&EndpointSettingsDocument {
+        schema_version: 1,
+        control_url: endpoints
+            .control_base()
+            .as_str()
+            .trim_end_matches('/')
+            .to_owned(),
+        realtime_url: endpoints
+            .realtime_base()
+            .as_str()
+            .trim_end_matches('/')
+            .to_owned(),
+    })
+    .map_err(|_| TransportError::new("bridge_endpoint_settings_encode_failed"))?;
+    let temporary = endpoint_temporary_path(&path)?;
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|_| TransportError::new("bridge_endpoint_settings_write_failed"))?;
+        file.write_all(&payload)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| TransportError::new("bridge_endpoint_settings_write_failed"))?;
+        replace_endpoint_file(&temporary, &path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+pub fn clear_endpoint_settings(
+    root_data_directory: impl AsRef<Path>,
+) -> Result<(), TransportError> {
+    let root_data_directory = root_data_directory.as_ref();
+    if !root_data_directory.is_absolute() {
+        return Err(TransportError::new("bridge_endpoint_directory_invalid"));
+    }
+    let path = root_data_directory.join(ENDPOINT_SETTINGS_FILE_NAME);
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(TransportError::new("bridge_endpoint_settings_clear_failed")),
+    }
+}
+
+pub async fn test_server_endpoints(
+    endpoints: &ServerEndpoints,
+    deadline: Duration,
+) -> EndpointConnectivity {
+    let control = async {
+        let Ok(url) = endpoints.api_url("/health") else {
+            return false;
+        };
+        let Ok(client) = reqwest::Client::builder().timeout(deadline).build() else {
+            return false;
+        };
+        timeout(deadline, client.get(url).send())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .is_some_and(|response| response.status().is_success())
+    };
+    let realtime = async {
+        let url = endpoints.realtime_base();
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        let port = url
+            .port_or_known_default()
+            .unwrap_or_else(|| if url.scheme() == "wss" { 443 } else { 80 });
+        timeout(deadline, TcpStream::connect((host, port)))
+            .await
+            .is_ok_and(|result| result.is_ok())
+    };
+    let (control_reachable, realtime_reachable) = tokio::join!(control, realtime);
+    EndpointConnectivity {
+        control_reachable,
+        realtime_reachable,
+    }
+}
+
 pub fn load_packaged_server_endpoints(
     path: impl AsRef<Path>,
 ) -> Result<ServerEndpoints, TransportError> {
@@ -218,6 +325,49 @@ fn read_small_json(path: &Path, code: &'static str) -> Result<Vec<u8>, Transport
         return Err(TransportError::new(code));
     }
     fs::read(path).map_err(|_| TransportError::new(code))
+}
+
+fn endpoint_temporary_path(path: &Path) -> Result<PathBuf, TransportError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| TransportError::new("bridge_endpoint_settings_path_invalid"))?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| TransportError::new("bridge_endpoint_settings_path_invalid"))?;
+    let sequence = ENDPOINT_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    Ok(parent.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        sequence
+    )))
+}
+
+fn replace_endpoint_file(source: &Path, destination: &Path) -> Result<(), TransportError> {
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replaced = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(TransportError::new(
+            "bridge_endpoint_settings_replace_failed",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
@@ -1416,6 +1566,71 @@ mod tests {
             "bridge_server_endpoints_missing"
         );
         fs::remove_dir_all(root).expect("remove endpoint fixture");
+    }
+
+    #[test]
+    fn endpoint_settings_are_atomically_saved_and_can_restore_official_authority() {
+        let root = unique_endpoint_directory();
+        fs::create_dir_all(&root).expect("endpoint directory");
+        let first =
+            ServerEndpoints::from_server_url("https://first.example").expect("first endpoints");
+        save_endpoint_settings(&root, &first).expect("save first endpoints");
+        assert_eq!(
+            load_endpoint_settings(root.join(ENDPOINT_SETTINGS_FILE_NAME))
+                .expect("load first endpoints"),
+            first
+        );
+        let second =
+            ServerEndpoints::from_server_url("http://127.0.0.1:3000").expect("second endpoints");
+        save_endpoint_settings(&root, &second).expect("replace endpoints");
+        assert_eq!(
+            load_endpoint_settings(root.join(ENDPOINT_SETTINGS_FILE_NAME))
+                .expect("load second endpoints"),
+            second
+        );
+        assert!(
+            fs::read_dir(&root)
+                .expect("read endpoint directory")
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".tmp"))
+        );
+        clear_endpoint_settings(&root).expect("restore official endpoints");
+        assert!(!root.join(ENDPOINT_SETTINGS_FILE_NAME).exists());
+        clear_endpoint_settings(&root).expect("idempotent restore");
+        fs::remove_dir_all(root).expect("remove endpoint settings fixture");
+    }
+
+    #[tokio::test]
+    async fn endpoint_connectivity_matches_the_dotnet_health_and_realtime_port_probe() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("connectivity listener");
+        let port = listener.local_addr().expect("listener address").port();
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept probe");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .expect("read timeout");
+                let mut request = [0_u8; 256];
+                if stream.read(&mut request).unwrap_or_default() > 0 {
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+                        .expect("health response");
+                }
+            }
+        });
+        let endpoints = ServerEndpoints::from_server_url(&format!("http://127.0.0.1:{port}"))
+            .expect("local endpoints");
+        assert_eq!(
+            test_server_endpoints(&endpoints, Duration::from_secs(2)).await,
+            EndpointConnectivity {
+                control_reachable: true,
+                realtime_reachable: true,
+            }
+        );
+        server.join().expect("probe server");
     }
 
     #[test]

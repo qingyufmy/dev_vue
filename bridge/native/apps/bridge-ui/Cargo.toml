@@ -9,6 +9,7 @@ publish.workspace = true
 bridge-foundation = { path = "../../crates/bridge-foundation" }
 bridge-local-control = { path = "../../crates/bridge-local-control" }
 bridge-observability = { path = "../../crates/bridge-observability" }
+bridge-transport = { path = "../../crates/bridge-transport" }
 bridge-ui-model = { path = "../../crates/bridge-ui-model" }
 tokio.workspace = true
 windows-sys.workspace = true

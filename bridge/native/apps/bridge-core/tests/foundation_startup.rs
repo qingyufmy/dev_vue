@@ -220,6 +220,38 @@ fn terminal_selection_action_persists_dotnet_preferences_and_restarts_the_cycle(
 }
 
 #[test]
+fn observer_profile_cannot_change_global_endpoint_settings() {
+    let root = unique_test_directory();
+    let profile_id = unique_profile_id();
+    let child = spawn_core(&root, &profile_id);
+    let initial = wait_for_ui_phase(&profile_id, "platform_selection_required");
+    assert!(!initial.server_connected);
+    let save_result = local_control_request(
+        &profile_id,
+        "request-save-endpoint",
+        LocalControlAction::SettingsSave {
+            settings: bridge_local_control::EndpointSettingsSelection {
+                follow_official: false,
+                server_url: "http://127.0.0.1:3000/".to_owned(),
+            },
+        },
+    );
+    assert_eq!(
+        save_result,
+        LocalControlResult::Rejected {
+            code: "bridge_endpoint_settings_forbidden".to_owned()
+        }
+    );
+    assert!(!root.join("endpoint-settings.json").exists());
+    SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
+        .expect("request shutdown");
+    let output = child.wait_with_output().expect("wait native core");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    fs::remove_dir_all(root).expect("remove observer endpoint fixture");
+}
+
+#[test]
 fn authorized_profile_without_a_terminal_waits_for_redetection() {
     let root = unique_test_directory();
     let profile_id = unique_profile_id();

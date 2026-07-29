@@ -1,12 +1,13 @@
 use bridge_foundation::{
-    CliMode, HealthCheckOptions, StartupReadyOptions, default_data_directory,
+    CliMode, DEFAULT_PROFILE_ID, HealthCheckOptions, StartupReadyOptions, default_data_directory,
     default_root_data_directory, parse_cli, profile_instance_id, resolve_installed_root,
     resolve_profile_paths, run_health_check, write_runtime_status_snapshot,
     write_startup_ready_signal,
 };
 use bridge_local_control::{
-    LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeServer, LocalControlResponse,
-    LocalControlResult, UiStateSnapshot, UiStateStore, UiTerminalCandidate,
+    EndpointSettingsSelection, LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction,
+    LocalControlPipeServer, LocalControlResponse, LocalControlResult, UiStateSnapshot,
+    UiStateStore, UiTerminalCandidate,
 };
 use bridge_observability::{BridgeLogger, LoggerConfig};
 use bridge_preferences::{BridgePreferencesStore, BridgeUserPreferences};
@@ -16,7 +17,9 @@ use bridge_runtime_win::{
 use bridge_security_win::CredentialStore;
 use bridge_terminal_session::TerminalSessionState;
 use bridge_transport::{
-    ConnectionState, CredentialSource, SessionCancellation, resolve_server_endpoints,
+    ConnectionState, CredentialSource, ENDPOINT_SETTINGS_FILE_NAME, ServerEndpoints,
+    SessionCancellation, clear_endpoint_settings, load_packaged_server_endpoints,
+    resolve_server_endpoints, save_endpoint_settings, test_server_endpoints,
 };
 use liangjian_bridge_core::{
     ActiveMt5Sessions, CoreConnectionState, CredentialState, NativeConnectedRuntime,
@@ -61,11 +64,29 @@ struct LocalControlContext {
 
 struct InactiveStatus<'a> {
     status_path: &'a std::path::Path,
+    root_data_directory: &'a std::path::Path,
     profile_id: &'a str,
     phase: &'a str,
     server_state: &'a str,
     error_code: Option<&'a str>,
     preferences: Option<&'a BridgeUserPreferences>,
+}
+
+struct SelectionUiContext<'a> {
+    logger: &'a BridgeLogger,
+    ui_state: &'a UiStateStore,
+    profile_id: &'a str,
+    root_data_directory: &'a std::path::Path,
+    preferences: &'a BridgeUserPreferences,
+}
+
+struct RuntimeStatusMonitorContext {
+    status_path: PathBuf,
+    profile_id: String,
+    root_data_directory: PathBuf,
+    ui_state: UiStateStore,
+    preferences_store: BridgePreferencesStore,
+    logger: BridgeLogger,
 }
 
 fn main() {
@@ -243,6 +264,7 @@ async fn run_connected_profile(
                 &ui_state,
                 InactiveStatus {
                     status_path: &status_path,
+                    root_data_directory: &root_data_directory,
                     profile_id: &profile_id,
                     phase: "stopped",
                     server_state: "stopped",
@@ -262,6 +284,7 @@ async fn run_connected_profile(
                 &ui_state,
                 InactiveStatus {
                     status_path: &status_path,
+                    root_data_directory: &root_data_directory,
                     profile_id: &profile_id,
                     phase: "degraded",
                     server_state: "stopped",
@@ -394,6 +417,94 @@ async fn run_local_control_server(
                     signal_preference_change(&preference_change_sender);
                     LocalControlResult::Accepted
                 }
+                LocalControlAction::SettingsTest { settings } => {
+                    if !endpoint_settings_allowed(&ui_state, server.endpoint().profile_id()) {
+                        LocalControlResult::Rejected {
+                            code: "bridge_endpoint_settings_forbidden".to_owned(),
+                        }
+                    } else {
+                        match resolve_endpoint_selection(&application_directory, &settings) {
+                            Ok(endpoints) => {
+                                let connectivity =
+                                    test_server_endpoints(&endpoints, Duration::from_secs(8)).await;
+                                LocalControlResult::ConnectivityTest {
+                                    success: connectivity.control_reachable
+                                        && connectivity.realtime_reachable,
+                                    description: endpoint_connectivity_description(
+                                        connectivity.control_reachable,
+                                        connectivity.realtime_reachable,
+                                    )
+                                    .to_owned(),
+                                }
+                            }
+                            Err(code) => LocalControlResult::Rejected {
+                                code: code.to_owned(),
+                            },
+                        }
+                    }
+                }
+                LocalControlAction::SettingsSave { settings } => {
+                    if !endpoint_settings_allowed(&ui_state, server.endpoint().profile_id()) {
+                        LocalControlResult::Rejected {
+                            code: "bridge_endpoint_settings_forbidden".to_owned(),
+                        }
+                    } else {
+                        match apply_endpoint_selection(
+                            &application_directory,
+                            &root_data_directory,
+                            &credential_store,
+                            &settings,
+                        ) {
+                            Ok(control_changed) => {
+                                signal_preference_change(&preference_change_sender);
+                                logger.info(
+                                    "native_endpoint_settings_saved",
+                                    Some(&format!(
+                                        "mode={};control_changed={control_changed}",
+                                        if settings.follow_official {
+                                            "official"
+                                        } else {
+                                            "custom"
+                                        }
+                                    )),
+                                );
+                                LocalControlResult::Accepted
+                            }
+                            Err(code) => LocalControlResult::Rejected {
+                                code: code.to_owned(),
+                            },
+                        }
+                    }
+                }
+                LocalControlAction::SettingsRestoreOfficial => {
+                    if !endpoint_settings_allowed(&ui_state, server.endpoint().profile_id()) {
+                        LocalControlResult::Rejected {
+                            code: "bridge_endpoint_settings_forbidden".to_owned(),
+                        }
+                    } else {
+                        let official = resolve_official_endpoint_selection(&application_directory);
+                        match official.and_then(|settings| {
+                            apply_endpoint_selection(
+                                &application_directory,
+                                &root_data_directory,
+                                &credential_store,
+                                &settings,
+                            )
+                        }) {
+                            Ok(control_changed) => {
+                                signal_preference_change(&preference_change_sender);
+                                logger.info(
+                                    "native_endpoint_settings_restored",
+                                    Some(&format!("control_changed={control_changed}")),
+                                );
+                                LocalControlResult::Accepted
+                            }
+                            Err(code) => LocalControlResult::Rejected {
+                                code: code.to_owned(),
+                            },
+                        }
+                    }
+                }
                 LocalControlAction::BridgeExit => LocalControlResult::Accepted,
                 _ => LocalControlResult::Rejected {
                     code: "bridge_local_control_action_unavailable".to_owned(),
@@ -457,10 +568,13 @@ async fn run_profile_lifecycle(
             None => {
                 let candidates = bootstrap_terminal_candidates(&bootstrap, None);
                 publish_selection_ui_state(
-                    logger,
-                    &ui_state,
-                    profile_id,
-                    &preferences,
+                    SelectionUiContext {
+                        logger,
+                        ui_state: &ui_state,
+                        profile_id,
+                        root_data_directory,
+                        preferences: &preferences,
+                    },
                     "platform_selection_required",
                     None,
                     candidates,
@@ -474,10 +588,13 @@ async fn run_profile_lifecycle(
         let candidates = bootstrap_terminal_candidates(&bootstrap, Some(platform));
         if candidates.is_empty() {
             publish_selection_ui_state(
-                logger,
-                &ui_state,
-                profile_id,
-                &preferences,
+                SelectionUiContext {
+                    logger,
+                    ui_state: &ui_state,
+                    profile_id,
+                    root_data_directory,
+                    preferences: &preferences,
+                },
                 "terminal_not_found",
                 Some(if platform == "mt4" {
                     "mt4_terminal_not_found"
@@ -503,10 +620,13 @@ async fn run_profile_lifecycle(
         };
         let Some(selected_terminal) = selected_terminal else {
             publish_selection_ui_state(
-                logger,
-                &ui_state,
-                profile_id,
-                &preferences,
+                SelectionUiContext {
+                    logger,
+                    ui_state: &ui_state,
+                    profile_id,
+                    root_data_directory,
+                    preferences: &preferences,
+                },
                 "terminal_selection_required",
                 None,
                 candidates,
@@ -523,6 +643,7 @@ async fn run_profile_lifecycle(
                 &ui_state,
                 InactiveStatus {
                     status_path: &status_path,
+                    root_data_directory,
                     profile_id,
                     phase: "pairing_required",
                     server_state: "pairing_required",
@@ -545,6 +666,7 @@ async fn run_profile_lifecycle(
                             &ui_state,
                             InactiveStatus {
                                 status_path: &status_path,
+                                root_data_directory,
                                 profile_id,
                                 phase: "pairing_required",
                                 server_state: "pairing_required",
@@ -584,6 +706,7 @@ async fn run_profile_lifecycle(
             &ui_state,
             InactiveStatus {
                 status_path: &status_path,
+                root_data_directory,
                 profile_id,
                 phase: "connecting",
                 server_state: "connecting",
@@ -617,12 +740,15 @@ async fn run_profile_lifecycle(
         let status_stop = SessionCancellation::default();
         let status_monitor = tokio::spawn(monitor_runtime_status(
             runtime_status.clone(),
-            status_path.clone(),
-            profile_id.to_owned(),
             status_stop.clone(),
-            ui_state.clone(),
-            preferences_store.clone(),
-            logger.clone(),
+            RuntimeStatusMonitorContext {
+                status_path: status_path.clone(),
+                profile_id: profile_id.to_owned(),
+                root_data_directory: root_data_directory.to_path_buf(),
+                ui_state: ui_state.clone(),
+                preferences_store: preferences_store.clone(),
+                logger: logger.clone(),
+            },
         ));
         let runtime = connected.run(runtime_stop.clone());
         tokio::pin!(runtime);
@@ -654,6 +780,7 @@ async fn run_profile_lifecycle(
             logger,
             &runtime_status,
             profile_id,
+            root_data_directory,
             &ui_state,
             &preferences_store,
         );
@@ -680,6 +807,98 @@ async fn run_profile_lifecycle(
 
 fn signal_preference_change(sender: &watch::Sender<u64>) {
     sender.send_modify(|revision| *revision = revision.saturating_add(1));
+}
+
+fn endpoint_settings_allowed(ui_state: &UiStateStore, profile_id: &str) -> bool {
+    ui_state
+        .snapshot()
+        .is_ok_and(|state| endpoint_settings_allowed_for_state(profile_id, &state))
+}
+
+fn endpoint_settings_allowed_for_state(profile_id: &str, state: &UiStateSnapshot) -> bool {
+    profile_id == DEFAULT_PROFILE_ID && (state.is_administrator || !state.server_connected)
+}
+
+fn resolve_endpoint_selection(
+    application_directory: &std::path::Path,
+    settings: &EndpointSettingsSelection,
+) -> Result<ServerEndpoints, &'static str> {
+    if settings.follow_official {
+        load_packaged_server_endpoints(application_directory.join("server-endpoints.json"))
+            .map_err(|error| stable_endpoint_error(error.code()))
+    } else {
+        ServerEndpoints::from_server_url(&settings.server_url)
+            .map_err(|error| stable_endpoint_error(error.code()))
+    }
+}
+
+fn resolve_official_endpoint_selection(
+    application_directory: &std::path::Path,
+) -> Result<EndpointSettingsSelection, &'static str> {
+    let official =
+        load_packaged_server_endpoints(application_directory.join("server-endpoints.json"))
+            .map_err(|error| stable_endpoint_error(error.code()))?;
+    Ok(EndpointSettingsSelection {
+        follow_official: true,
+        server_url: official.control_base().as_str().to_owned(),
+    })
+}
+
+fn apply_endpoint_selection(
+    application_directory: &std::path::Path,
+    root_data_directory: &std::path::Path,
+    credential_store: &CredentialStore,
+    settings: &EndpointSettingsSelection,
+) -> Result<bool, &'static str> {
+    let selected = resolve_endpoint_selection(application_directory, settings)?;
+    let current = resolve_server_endpoints(application_directory, root_data_directory).ok();
+    let control_changed = current
+        .as_ref()
+        .is_none_or(|value| value.control_base() != selected.control_base());
+    if control_changed {
+        credential_store
+            .clear()
+            .map_err(|error| stable_endpoint_error(error.code()))?;
+    }
+    if settings.follow_official {
+        clear_endpoint_settings(root_data_directory)
+            .map_err(|error| stable_endpoint_error(error.code()))?;
+    } else {
+        save_endpoint_settings(root_data_directory, &selected)
+            .map_err(|error| stable_endpoint_error(error.code()))?;
+    }
+    Ok(control_changed)
+}
+
+fn stable_endpoint_error(code: &str) -> &'static str {
+    match code {
+        "bridge_control_url_invalid"
+        | "bridge_server_url_invalid"
+        | "bridge_realtime_url_invalid"
+        | "bridge_server_endpoints_invalid"
+        | "bridge_server_endpoints_missing"
+        | "bridge_endpoint_settings_invalid"
+        | "bridge_endpoint_settings_write_failed"
+        | "bridge_endpoint_settings_encode_failed"
+        | "bridge_endpoint_settings_replace_failed"
+        | "bridge_endpoint_settings_clear_failed"
+        | "bridge_endpoint_settings_path_invalid"
+        | "bridge_endpoint_directory_invalid" => "bridge_endpoint_settings_invalid",
+        "bridge_credential_clear_failed" => "bridge_credential_clear_failed",
+        _ => "bridge_endpoint_settings_failed",
+    }
+}
+
+fn endpoint_connectivity_description(
+    control_reachable: bool,
+    realtime_reachable: bool,
+) -> &'static str {
+    match (control_reachable, realtime_reachable) {
+        (true, true) => "控制服务正常，实时通道端口可达。",
+        (false, false) => "控制服务和实时通道端口均无法连接，请检查地址或网络。",
+        (true, false) => "控制服务正常，但实时通道端口无法连接。",
+        (false, true) => "实时通道端口可达，但控制服务健康检查失败。",
+    }
 }
 
 async fn wait_for_preference_change(
@@ -743,8 +962,15 @@ fn retain_selected_terminal(
     }
 }
 
-fn apply_preferences_to_ui_state(state: &mut UiStateSnapshot, preferences: &BridgeUserPreferences) {
+fn apply_preferences_to_ui_state(
+    state: &mut UiStateSnapshot,
+    preferences: &BridgeUserPreferences,
+    root_data_directory: &std::path::Path,
+) {
     state.autostart_enabled = preferences.auto_start_enabled;
+    state.custom_endpoint_active = root_data_directory
+        .join(ENDPOINT_SETTINGS_FILE_NAME)
+        .is_file();
     if state.selected_platform.is_none() {
         state.selected_platform = preferences.platform.clone();
     }
@@ -756,14 +982,18 @@ fn apply_preferences_to_ui_state(state: &mut UiStateSnapshot, preferences: &Brid
 }
 
 fn publish_selection_ui_state(
-    logger: &BridgeLogger,
-    ui_state: &UiStateStore,
-    profile_id: &str,
-    preferences: &BridgeUserPreferences,
+    context: SelectionUiContext<'_>,
     phase: &str,
     detail_code: Option<&str>,
     terminal_candidates: Vec<UiTerminalCandidate>,
 ) {
+    let SelectionUiContext {
+        logger,
+        ui_state,
+        profile_id,
+        root_data_directory,
+        preferences,
+    } = context;
     let selected_terminal_instance_id = preferences
         .selected_terminal_instance_id()
         .filter(|selected| {
@@ -791,7 +1021,9 @@ fn publish_selection_ui_state(
         observer_profiles: Vec::new(),
         update_notice: None,
         autostart_enabled: preferences.auto_start_enabled,
-        custom_endpoint_active: false,
+        custom_endpoint_active: root_data_directory
+            .join(ENDPOINT_SETTINGS_FILE_NAME)
+            .is_file(),
     };
     if let Err(error_code) = ui_state.publish(state) {
         logger.warning("native_ui_state_publish_failed", Some(error_code));
@@ -800,13 +1032,17 @@ fn publish_selection_ui_state(
 
 async fn monitor_runtime_status(
     handle: NativeRuntimeStatusHandle,
-    status_path: PathBuf,
-    profile_id: String,
     stop: SessionCancellation,
-    ui_state: UiStateStore,
-    preferences_store: BridgePreferencesStore,
-    logger: BridgeLogger,
+    context: RuntimeStatusMonitorContext,
 ) {
+    let RuntimeStatusMonitorContext {
+        status_path,
+        profile_id,
+        root_data_directory,
+        ui_state,
+        preferences_store,
+        logger,
+    } = context;
     let mut last_fingerprint = None;
     let mut last_publish = Instant::now() - Duration::from_secs(10);
     loop {
@@ -829,6 +1065,7 @@ async fn monitor_runtime_status(
                 &logger,
                 &handle,
                 &profile_id,
+                &root_data_directory,
                 &ui_state,
                 &preferences_store,
             );
@@ -852,6 +1089,7 @@ fn publish_inactive_status(
 ) {
     let InactiveStatus {
         status_path,
+        root_data_directory,
         profile_id,
         phase,
         server_state,
@@ -876,7 +1114,7 @@ fn publish_inactive_status(
     match snapshot.to_ui_state(1) {
         Ok(mut state) => {
             if let Some(preferences) = preferences {
-                apply_preferences_to_ui_state(&mut state, preferences);
+                apply_preferences_to_ui_state(&mut state, preferences, root_data_directory);
             }
             if let Err(error_code) = ui_state.publish(state) {
                 logger.warning("native_ui_state_publish_failed", Some(error_code));
@@ -910,12 +1148,17 @@ fn publish_active_ui_state_or_warn(
     logger: &BridgeLogger,
     handle: &NativeRuntimeStatusHandle,
     profile_id: &str,
+    root_data_directory: &std::path::Path,
     ui_state: &UiStateStore,
     preferences_store: &BridgePreferencesStore,
 ) {
     match handle.ui_snapshot(profile_id, VERSION, now_utc_msc(), 1) {
         Ok(mut state) => {
-            apply_preferences_to_ui_state(&mut state, &preferences_store.load());
+            apply_preferences_to_ui_state(
+                &mut state,
+                &preferences_store.load(),
+                root_data_directory,
+            );
             if let Err(error_code) = ui_state.publish(state) {
                 logger.warning("native_ui_state_publish_failed", Some(error_code));
             }
@@ -1062,4 +1305,98 @@ fn now_utc_msc() -> i64 {
         .ok()
         .and_then(|duration| i64::try_from(duration.as_millis()).ok())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bridge_security_win::BridgeCredential;
+    use bridge_transport::load_endpoint_settings;
+
+    #[test]
+    fn endpoint_settings_permission_matches_the_dotnet_recovery_rule() {
+        let mut state = NativeRuntimeStatusSnapshot::inactive(
+            DEFAULT_PROFILE_ID,
+            VERSION,
+            now_utc_msc(),
+            "starting",
+            "stopped",
+            None,
+        )
+        .expect("runtime status")
+        .to_ui_state(1)
+        .expect("UI state");
+        assert!(endpoint_settings_allowed_for_state(
+            DEFAULT_PROFILE_ID,
+            &state
+        ));
+        assert!(!endpoint_settings_allowed_for_state("source-1", &state));
+        state.server_connected = true;
+        assert!(!endpoint_settings_allowed_for_state(
+            DEFAULT_PROFILE_ID,
+            &state
+        ));
+        state.is_administrator = true;
+        assert!(endpoint_settings_allowed_for_state(
+            DEFAULT_PROFILE_ID,
+            &state
+        ));
+    }
+
+    #[test]
+    fn endpoint_selection_uses_dotnet_storage_and_clears_old_authorization() {
+        let root = unique_test_directory("endpoint-selection");
+        let application = root.join("application");
+        let data = root.join("data");
+        std::fs::create_dir_all(&application).expect("application directory");
+        std::fs::create_dir_all(&data).expect("data directory");
+        std::fs::write(
+            application.join("server-endpoints.json"),
+            br#"{"schema_version":1,"server_url":"https://official.example"}"#,
+        )
+        .expect("official endpoints");
+        let credential_store =
+            CredentialStore::new(data.join("credential.dat")).expect("credential store");
+        credential_store
+            .save(&BridgeCredential {
+                refresh_token: "r".repeat(48),
+                expires_at_utc_msc: 1_900_000_000_000,
+            })
+            .expect("credential");
+        let custom = EndpointSettingsSelection {
+            follow_official: false,
+            server_url: "http://127.0.0.1:3000/".to_owned(),
+        };
+        assert_eq!(
+            apply_endpoint_selection(&application, &data, &credential_store, &custom),
+            Ok(true)
+        );
+        assert_eq!(
+            load_endpoint_settings(data.join(ENDPOINT_SETTINGS_FILE_NAME))
+                .expect("custom endpoints")
+                .control_base()
+                .as_str(),
+            "http://127.0.0.1:3000/"
+        );
+        assert_eq!(credential_store.load().expect("cleared credential"), None);
+        let official =
+            resolve_official_endpoint_selection(&application).expect("official endpoint selection");
+        assert_eq!(
+            apply_endpoint_selection(&application, &data, &credential_store, &official),
+            Ok(true)
+        );
+        assert!(!data.join(ENDPOINT_SETTINGS_FILE_NAME).exists());
+        std::fs::remove_dir_all(root).expect("remove endpoint selection fixture");
+    }
+
+    fn unique_test_directory(suffix: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "liangjian-bridge-core-main-{}-{stamp}-{suffix}",
+            std::process::id()
+        ))
+    }
 }

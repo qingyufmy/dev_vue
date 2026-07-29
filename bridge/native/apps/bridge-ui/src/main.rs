@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod log_viewer;
+mod settings;
 
 use bridge_foundation::{DEFAULT_PROFILE_ID, default_data_directory, validate_profile_id};
 use bridge_local_control::{
@@ -42,16 +43,16 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, BS_OWNERDRAW, CBN_SELCHANGE, CBS_DROPDOWNLIST, CREATESTRUCTW, CS_HREDRAW,
-    CS_VREDRAW, CW_USEDEFAULT, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar, GWLP_USERDATA,
-    GetClientRect, GetMessageW, GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION,
+    CS_VREDRAW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+    DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar, GWLP_USERDATA, GetClientRect,
+    GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION,
     LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW,
-    RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow,
-    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND,
-    WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_NCCREATE,
-    WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
-    WS_VISIBLE,
+    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW,
+    ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK,
+    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION,
+    WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP,
+    WS_THICKFRAME, WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -129,6 +130,7 @@ struct AppState {
     tray_added: bool,
     terminal_choices_fingerprint: String,
     log_window: HWND,
+    settings_window: HWND,
 }
 
 fn main() {
@@ -164,6 +166,7 @@ fn main() {
             tray_added: false,
             terminal_choices_fingerprint: String::new(),
             log_window: null_mut(),
+            settings_window: null_mut(),
         });
     }
 }
@@ -323,7 +326,7 @@ unsafe fn run_window(mut state: AppState) {
     }
     let boxed = Box::new(state);
     let state_ptr = Box::into_raw(boxed);
-    let title = wide(PRODUCT_NAME);
+    let title = wide(&unsafe { &*state_ptr }.view.window_title);
     let window_style = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME | WS_CLIPCHILDREN;
     let mut outer = RECT {
         left: 0,
@@ -338,8 +341,8 @@ unsafe fn run_window(mut state: AppState) {
             class_name.as_ptr(),
             title.as_ptr(),
             window_style,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
+            ((GetSystemMetrics(SM_CXSCREEN) - (outer.right - outer.left)) / 2).max(0),
+            ((GetSystemMetrics(SM_CYSCREEN) - (outer.bottom - outer.top)) / 2).max(0),
             outer.right - outer.left,
             outer.bottom - outer.top,
             null_mut(),
@@ -606,9 +609,26 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
         );
     }
     unsafe {
+        let idle = !app.inbox.action_running.load(Ordering::Acquire);
+        EnableWindow(app.controls.platform, i32::from(idle));
+        EnableWindow(
+            app.controls.observer,
+            i32::from(idle && app.view.show_observer_sources),
+        );
+        EnableWindow(app.controls.logout, i32::from(idle && app.view.show_logout));
+        EnableWindow(
+            app.controls.mt4_expert,
+            i32::from(idle && app.view.show_mt4_setup),
+        );
+        EnableWindow(app.controls.pair, i32::from(idle && app.view.show_pair));
+        EnableWindow(app.controls.detect, i32::from(idle));
+        EnableWindow(
+            app.controls.settings,
+            i32::from(idle && app.view.show_settings),
+        );
         EnableWindow(
             app.controls.terminal,
-            i32::from(app.view.terminal_selector_visible),
+            i32::from(idle && app.view.terminal_selector_visible),
         );
     }
     y += 52;
@@ -1103,18 +1123,24 @@ unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
     let background = if disabled {
         Rgb(226, 232, 240)
     } else if primary && selected {
-        Rgb(29, 78, 216)
+        Rgb(194, 150, 35)
     } else if primary {
-        Rgb(37, 99, 235)
+        Rgb(212, 175, 55)
     } else if selected {
         Rgb(241, 245, 249)
     } else {
         Rgb(255, 255, 255)
     };
     fill(item.hDC, item.rcItem, background);
-    if !primary {
-        draw_border(item.hDC, item.rcItem, Rgb(203, 213, 225));
-    }
+    draw_border(
+        item.hDC,
+        item.rcItem,
+        if primary {
+            Rgb(212, 175, 55)
+        } else {
+            Rgb(203, 213, 225)
+        },
+    );
     let mut buffer = [0_u16; 128];
     let length = unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW(
@@ -1126,7 +1152,7 @@ unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
     let foreground = if disabled {
         Rgb(148, 163, 184)
     } else if primary {
-        Rgb(255, 255, 255)
+        Rgb(15, 23, 42)
     } else {
         Rgb(30, 41, 59)
     };
@@ -1213,6 +1239,12 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
                 Ok(log_window) => app.log_window = log_window,
                 Err(code) => show_error(hwnd, code),
             },
+            Err(code) => show_error(hwnd, code),
+        },
+        CONTROL_SETTINGS => match unsafe {
+            settings::show_or_focus(app.settings_window, hwnd, &app.profile_id, app.brand_icon)
+        } {
+            Ok(settings_window) => app.settings_window = settings_window,
             Err(code) => show_error(hwnd, code),
         },
         CONTROL_PAIR => unsafe { begin_action(hwnd, app, LocalControlAction::Pair) },
