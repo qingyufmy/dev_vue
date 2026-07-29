@@ -113,6 +113,14 @@
     "account_route_revalidated_before_projection": true,
     "worker_restart_is_retriable": true
   },
+  "terminal_session_contract": {
+    "manager_scope": "one-terminal-instance",
+    "account_change_requires_monotonic_epoch": true,
+    "replacement_order": ["stop_old_collector", "stop_old_worker", "start_new_session"],
+    "invalid_replacement_preserves_current_session": true,
+    "data_ready_requires_worker_and_collector_ready": true,
+    "stale_control_handle_rejected": true
+  },
   "server_transport_contract": {
     "protocol_version": 3,
     "websocket_path": "/aurum-api/bridge/v3/ws",

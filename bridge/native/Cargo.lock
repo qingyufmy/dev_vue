@@ -139,6 +139,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-terminal-session"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "bridge-contract",
+ "bridge-runtime-win",
+ "bridge-store",
+ "bridge-terminal-data",
+ "bridge-worker-host",
+ "tokio",
+]
+
+[[package]]
 name = "bridge-transport"
 version = "3.0.0-alpha.1"
 dependencies = [

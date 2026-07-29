@@ -62,7 +62,7 @@ impl Default for CollectorPolicy {
 }
 
 impl CollectorPolicy {
-    fn validate(&self) -> Result<(), ProjectionError> {
+    pub fn validate(&self) -> Result<(), ProjectionError> {
         if self.active_interval.is_zero()
             || self.idle_interval.is_zero()
             || self.retry_initial.is_zero()

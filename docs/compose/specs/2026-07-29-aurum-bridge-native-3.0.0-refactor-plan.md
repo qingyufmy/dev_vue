@@ -548,6 +548,7 @@ bridge/native/
     bridge-transport/     # HTTPS、WS、会话、优先队列
     bridge-store/         # SQLite、Outbox、command ledger
     bridge-terminal-data/ # 快照恢复、差异投影和 full snapshot 协调
+    bridge-terminal-session/ # Worker、采集器和账户 epoch 会话编排
     bridge-worker-host/   # Worker 生命周期及本地 IPC
     bridge-update/        # Manifest、下载、切换、回滚
   workers/
@@ -582,4 +583,5 @@ bridge/native/
 - 已完成当前用户 SID 限定的 Windows 命名管道和受 Job Object 管理的 Worker 启动会话；真实子进程启动、握手、交付及终止已经过本机测试。
 - 已完成 Worker 代际注册表、请求前后 fencing、崩溃自动重启及账户切换 supervisor 取代；真实测试覆盖了进程连续崩溃重启、客户端换代和两个账户不争抢同一终端路由。
 - 当前 Native Core 尚未接入真实凭据、服务器会话或 MT Worker，不会误执行生产交易。
-- 下一批接入 Core 终端会话编排：把 Worker supervisor、采集协调器和账户 epoch 生命周期组合起来，保证账户/平台/安装路径切换时旧采集器先停止、新路由完成初始 full snapshot 后再开放数据就绪状态。
+- 已完成 Core 可托管的 MT5 终端会话编排：账户切换要求 epoch 单调递增，旧采集器和 Worker 依次完全停止后才启动新路由；真实 Python Worker 测试验证旧句柄失效、旧路由拒绝和新会话初始投影 Ready。
+- 下一批把会话管理器接入 Native Core 的 Profile/授权配置，并将命令执行成功后的唤醒控制与服务器 gap reconciliation 路由到当前会话。
