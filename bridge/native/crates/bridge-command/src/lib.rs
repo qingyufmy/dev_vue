@@ -1,5 +1,5 @@
 use bridge_contract::{CommandMessage, CommandResultMessage, ExecutionEvidence};
-use bridge_store::{CommandLedgerRecord, OutboxStore, StoreError};
+use bridge_store::{OutboxStore, StoreError};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use std::collections::HashMap;
@@ -71,6 +71,127 @@ pub trait CommandWorker: Send + Sync {
 
 pub trait CommandExecutionObserver: Send + Sync {
     fn command_succeeded(&self, result: &CommandResultMessage);
+}
+
+pub trait ExecutionReconciliationWorker: Send + Sync {
+    fn reconcile(
+        &self,
+        command: CommandMessage,
+        uncertain_receipt: Option<CommandResultMessage>,
+    ) -> BoxFuture<'_, Result<Option<CommandResultMessage>, CommandWorkerError>>;
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReconciliationRun {
+    pub inspected: usize,
+    pub resolved: usize,
+    pub pending: usize,
+    pub error_codes: Vec<String>,
+}
+
+pub struct CommandReconciler {
+    store: Arc<OutboxStore>,
+    worker: Arc<dyn ExecutionReconciliationWorker>,
+    query_timeout: Duration,
+}
+
+impl CommandReconciler {
+    pub fn new(
+        store: Arc<OutboxStore>,
+        worker: Arc<dyn ExecutionReconciliationWorker>,
+        query_timeout: Duration,
+    ) -> Result<Self, CommandDispatchError> {
+        if query_timeout.is_zero() {
+            return Err(CommandDispatchError::new(
+                "bridge_reconciliation_timeout_invalid",
+            ));
+        }
+        Ok(Self {
+            store,
+            worker,
+            query_timeout,
+        })
+    }
+
+    pub async fn reconcile_once(
+        &self,
+        limit: usize,
+    ) -> Result<ReconciliationRun, CommandDispatchError> {
+        let store = Arc::clone(&self.store);
+        let candidates =
+            tokio::task::spawn_blocking(move || store.reconciliation_candidates(limit))
+                .await
+                .map_err(|_| CommandDispatchError::new("bridge_command_store_worker_failed"))?
+                .map_err(store_error)?;
+        let mut run = ReconciliationRun {
+            inspected: candidates.len(),
+            ..ReconciliationRun::default()
+        };
+        for candidate in candidates {
+            let command = candidate.command.clone();
+            let execution = AssertUnwindSafe(
+                self.worker
+                    .reconcile(command.clone(), candidate.uncertain_receipt.clone()),
+            )
+            .catch_unwind();
+            let result = match timeout(self.query_timeout, execution).await {
+                Err(_) => {
+                    run.pending += 1;
+                    run.error_codes
+                        .push("reconciliation_query_timeout".to_owned());
+                    continue;
+                }
+                Ok(Err(_)) => {
+                    run.pending += 1;
+                    run.error_codes
+                        .push("reconciliation_query_exception".to_owned());
+                    continue;
+                }
+                Ok(Ok(Err(error))) => {
+                    run.pending += 1;
+                    run.error_codes
+                        .push(normalized_worker_error_code(error.code()).to_owned());
+                    continue;
+                }
+                Ok(Ok(Ok(None))) => {
+                    run.pending += 1;
+                    continue;
+                }
+                Ok(Ok(Ok(Some(result)))) => result,
+            };
+            if result.validate().is_err()
+                || !result.matches_command(&command)
+                || !matches!(result.status.as_str(), "succeeded" | "rejected" | "failed")
+            {
+                run.pending += 1;
+                run.error_codes
+                    .push("reconciliation_result_invalid".to_owned());
+                continue;
+            }
+            let store = Arc::clone(&self.store);
+            let acknowledged_uncertain = candidate.uncertain_receipt.is_some();
+            let persisted = tokio::task::spawn_blocking(move || {
+                if acknowledged_uncertain {
+                    store
+                        .resolve_acknowledged_uncertain_receipt(&result)
+                        .map(|_| ())
+                } else {
+                    store.save_execution_receipt(&result, DEFAULT_RECEIPT_LIMIT)
+                }
+            })
+            .await
+            .map_err(|_| CommandDispatchError::new("bridge_command_store_worker_failed"))?
+            .map_err(store_error);
+            match persisted {
+                Ok(()) => run.resolved += 1,
+                Err(error) => {
+                    run.pending += 1;
+                    run.error_codes.push(error.code().to_owned());
+                }
+            }
+        }
+        Ok(run)
+    }
 }
 
 pub struct CommandDispatcher {
@@ -335,10 +456,6 @@ fn normalized_worker_error_code(code: &str) -> &str {
     }
 }
 
-pub fn ledger_requires_reconciliation(record: &CommandLedgerRecord) -> bool {
-    matches!(record.status.as_str(), "dispatched" | "uncertain")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,6 +560,38 @@ mod tests {
         }
     }
 
+    struct ResolvingWorker(AtomicUsize);
+
+    impl ExecutionReconciliationWorker for ResolvingWorker {
+        fn reconcile(
+            &self,
+            command: CommandMessage,
+            _uncertain_receipt: Option<CommandResultMessage>,
+        ) -> BoxFuture<'_, Result<Option<CommandResultMessage>, CommandWorkerError>> {
+            self.0.fetch_add(1, AtomicOrdering::SeqCst);
+            Box::pin(async move {
+                let mut result = success(&command);
+                result.message_id = format!("reconciled_{}", command.command_id);
+                result.sent_at_utc_msc = NOW + 100;
+                result.completed_at_utc_msc = NOW + 100;
+                result.evidence.observed_at_utc_msc = NOW + 100;
+                Ok(Some(result))
+            })
+        }
+    }
+
+    struct PanickingReconciliationWorker;
+
+    impl ExecutionReconciliationWorker for PanickingReconciliationWorker {
+        fn reconcile(
+            &self,
+            _command: CommandMessage,
+            _uncertain_receipt: Option<CommandResultMessage>,
+        ) -> BoxFuture<'_, Result<Option<CommandResultMessage>, CommandWorkerError>> {
+            Box::pin(async { panic!("simulated reconciliation panic") })
+        }
+    }
+
     fn terminal() -> TerminalDescriptor {
         TerminalDescriptor {
             terminal_instance_id: "mt5_terminal_01".to_owned(),
@@ -508,6 +657,127 @@ mod tests {
             CommandDispatcher::new(store, admission, worker, Arc::new(|| NOW), worker_timeout)
                 .expect("dispatcher"),
         )
+    }
+
+    #[tokio::test]
+    async fn reconciler_finalizes_interrupted_and_acknowledged_uncertain_commands_without_replay() {
+        let fixture = StoreFixture::new("reconciler-finalize");
+        let interrupted = command("command_01JRECONCILE1");
+        fixture
+            .store_ref()
+            .record_command(&interrupted, NOW)
+            .expect("record interrupted");
+        fixture
+            .store_ref()
+            .mark_command_dispatched(&interrupted.command_id, NOW + 1)
+            .expect("mark interrupted");
+
+        let uncertain_command = command("command_01JRECONCILE2");
+        fixture
+            .store_ref()
+            .record_command(&uncertain_command, NOW)
+            .expect("record uncertain");
+        fixture
+            .store_ref()
+            .mark_command_dispatched(&uncertain_command.command_id, NOW + 1)
+            .expect("mark uncertain");
+        let mut uncertain = success(&uncertain_command);
+        uncertain.status = "uncertain".to_owned();
+        uncertain.error_code = Some("worker_execution_timeout".to_owned());
+        fixture
+            .store_ref()
+            .save_execution_receipt(&uncertain, 10_000)
+            .expect("save uncertain");
+        fixture
+            .store_ref()
+            .acknowledge_command_result(
+                &uncertain.message_id,
+                &uncertain.command_id,
+                "applied",
+                NOW + 2,
+            )
+            .expect("ack uncertain");
+
+        let worker = Arc::new(ResolvingWorker(AtomicUsize::new(0)));
+        let reconciler =
+            CommandReconciler::new(fixture.store(), worker.clone(), Duration::from_secs(1))
+                .expect("reconciler");
+        let run = reconciler.reconcile_once(10).await.expect("reconcile");
+        assert_eq!(
+            run,
+            ReconciliationRun {
+                inspected: 2,
+                resolved: 2,
+                pending: 0,
+                error_codes: Vec::new(),
+            }
+        );
+        assert_eq!(worker.0.load(AtomicOrdering::SeqCst), 2);
+        for command in [&interrupted, &uncertain_command] {
+            assert_eq!(
+                fixture
+                    .store_ref()
+                    .command_ledger(&command.command_id)
+                    .expect("ledger")
+                    .expect("command")
+                    .status,
+                "confirmed"
+            );
+            assert_eq!(
+                fixture
+                    .store_ref()
+                    .execution_receipt(&command.command_id)
+                    .expect("receipt")
+                    .expect("resolved")
+                    .status,
+                "succeeded"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn reconciliation_faults_remain_pending_and_never_become_trade_failures() {
+        let fixture = StoreFixture::new("reconciler-panic");
+        let command = command("command_01JRECONPANIC");
+        fixture
+            .store_ref()
+            .record_command(&command, NOW)
+            .expect("record command");
+        fixture
+            .store_ref()
+            .mark_command_dispatched(&command.command_id, NOW + 1)
+            .expect("mark dispatched");
+        let reconciler = CommandReconciler::new(
+            fixture.store(),
+            Arc::new(PanickingReconciliationWorker),
+            Duration::from_secs(1),
+        )
+        .expect("reconciler");
+        assert_eq!(
+            reconciler.reconcile_once(10).await.expect("reconcile"),
+            ReconciliationRun {
+                inspected: 1,
+                resolved: 0,
+                pending: 1,
+                error_codes: vec!["reconciliation_query_exception".to_owned()],
+            }
+        );
+        assert_eq!(
+            fixture
+                .store_ref()
+                .command_ledger(&command.command_id)
+                .expect("ledger")
+                .expect("command")
+                .status,
+            "dispatched"
+        );
+        assert!(
+            fixture
+                .store_ref()
+                .execution_receipt(&command.command_id)
+                .expect("receipt")
+                .is_none()
+        );
     }
 
     #[tokio::test]

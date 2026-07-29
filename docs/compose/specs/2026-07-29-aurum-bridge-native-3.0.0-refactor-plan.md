@@ -448,6 +448,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - [已完成] Core → Worker 交易参数合同按服务器实际映射冻结；六类动作在进入 Python 管道前校验必填字段、票号、数值、管理目标快照与未知字段。
 - [已完成] MT5 Python Worker 已实现开仓/挂单、撤单、改单、修改 SL/TP、平仓与只读执行核对；交易权限双重复核、`order_check`、后置事实核对、回执缓存及 unknown-result 不重放均有模拟 MT5 测试，并通过真实 Python 子进程与 Rust 命名管道交易回执互操作。2026-07-29 已使用 0.01 手在真实 MT5 demo 完成开仓、定位唯一测试仓位、平仓和清理闭环。
 - [已完成] 正式 Core 已接通 command ledger、幂等、过期、初始同步门禁和 epoch fencing；独立进程测试证明 WebSocket 命令经 Dispatcher 到 Python Worker，再由交易 Outbox 返回并在服务器 ACK 后落为 `acked`。
+- [进行中] 已完成主动核对的 SQLite 单向状态迁移和周期服务：`dispatched` 无回执命令可以直接落最终事实；uncertain 回执必须先获服务器 ACK，随后才能被更新、更晚且同路由的最终事实替换，并产生新的交易优先回执重新等待 ACK。查询无证据、超时、panic 或非法结果均保持待核对，绝不重放原交易。MT5 `query_execution` 适配与 Core 生命周期接入留在下一批。
 - 开仓、挂单、撤单、平仓、修改止损止盈完整矩阵。
 - 原始 MT5 返回码、中文结果和 uncertain reconciliation。
 

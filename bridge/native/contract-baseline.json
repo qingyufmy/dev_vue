@@ -176,6 +176,21 @@
       "server_ack_to_ledger_acked"
     ]
   },
+  "command_reconciliation_contract": {
+    "original_trade_command_is_never_replayed": true,
+    "eligible_states": [
+      "dispatched_without_receipt",
+      "acked_with_uncertain_receipt"
+    ],
+    "unacknowledged_uncertain_waits_for_server_ack": true,
+    "worker_query_failure_remains_pending": true,
+    "only_final_same_route_results_can_resolve": true,
+    "uncertain_resolution_is_monotonic": true,
+    "resolution_creates_new_trade_priority_outbox_message": true,
+    "resolved_result_requires_new_server_ack": true,
+    "periodic_service_implemented": true,
+    "mt5_query_adapter_connected": false
+  },
   "core_process_lifecycle_contract": {
     "missing_authorization_waits_without_opening_browser": true,
     "workers_do_not_start_before_authorization": true,

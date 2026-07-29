@@ -349,6 +349,13 @@ pub struct RecordedCommand {
     pub record: CommandLedgerRecord,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconciliationCandidate {
+    pub command: CommandMessage,
+    pub record: CommandLedgerRecord,
+    pub uncertain_receipt: Option<CommandResultMessage>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PersistDeltaStatus {
     Applied,
@@ -1192,6 +1199,238 @@ impl OutboxStore {
         transaction
             .commit()
             .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))
+    }
+
+    pub fn reconciliation_candidates(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ReconciliationCandidate>, StoreError> {
+        if !(1..=10_000).contains(&limit) {
+            return Err(StoreError::new("bridge_store_reconciliation_query_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let mut statement = connection
+            .prepare(
+                "SELECT ledger.command_id, ledger.payload_json, ledger.status,
+                        ledger.result_message_id, ledger.created_at_utc_msc,
+                        ledger.updated_at_utc_msc, receipt.result_json
+                 FROM native_command_ledger ledger
+                 LEFT JOIN execution_receipts receipt
+                   ON receipt.command_id = ledger.command_id
+                 WHERE ledger.status = 'dispatched'
+                    OR (ledger.status = 'acked' AND receipt.status = 'uncertain')
+                 ORDER BY ledger.updated_at_utc_msc ASC, ledger.command_id ASC
+                 LIMIT ?1;",
+            )
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_query_failed"))?;
+        let rows = statement
+            .query_map([limit as i64], |row| {
+                Ok((
+                    CommandLedgerRecord {
+                        command_id: row.get(0)?,
+                        payload_json: row.get(1)?,
+                        status: row.get(2)?,
+                        result_message_id: row.get(3)?,
+                        created_at_utc_msc: row.get(4)?,
+                        updated_at_utc_msc: row.get(5)?,
+                    },
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_query_failed"))?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            let (record, receipt_json) =
+                row.map_err(|_| StoreError::new("bridge_store_reconciliation_query_failed"))?;
+            let command: CommandMessage = serde_json::from_str(&record.payload_json)
+                .map_err(|_| StoreError::new("bridge_store_reconciliation_record_invalid"))?;
+            command
+                .validate(command.issued_at_utc_msc.saturating_sub(1))
+                .map_err(|_| StoreError::new("bridge_store_reconciliation_record_invalid"))?;
+            if command.command_id != record.command_id {
+                return Err(StoreError::new(
+                    "bridge_store_reconciliation_record_invalid",
+                ));
+            }
+            let uncertain_receipt = receipt_json
+                .map(|payload| {
+                    let receipt: CommandResultMessage =
+                        serde_json::from_str(&payload).map_err(|_| {
+                            StoreError::new("bridge_store_reconciliation_record_invalid")
+                        })?;
+                    receipt.validate().map_err(|_| {
+                        StoreError::new("bridge_store_reconciliation_record_invalid")
+                    })?;
+                    if receipt.status != "uncertain" || !receipt.matches_command(&command) {
+                        return Err(StoreError::new(
+                            "bridge_store_reconciliation_record_invalid",
+                        ));
+                    }
+                    Ok(receipt)
+                })
+                .transpose()?;
+            if record.status == "dispatched" && uncertain_receipt.is_some()
+                || record.status == "acked"
+                    && uncertain_receipt.as_ref().is_none_or(|receipt| {
+                        record.result_message_id.as_deref() != Some(receipt.message_id.as_str())
+                    })
+            {
+                return Err(StoreError::new(
+                    "bridge_store_reconciliation_record_invalid",
+                ));
+            }
+            candidates.push(ReconciliationCandidate {
+                command,
+                record,
+                uncertain_receipt,
+            });
+        }
+        Ok(candidates)
+    }
+
+    pub fn resolve_acknowledged_uncertain_receipt(
+        &self,
+        result: &CommandResultMessage,
+    ) -> Result<bool, StoreError> {
+        result
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_result_invalid"))?;
+        if !matches!(result.status.as_str(), "succeeded" | "rejected" | "failed") {
+            return Err(StoreError::new(
+                "bridge_store_reconciliation_result_invalid",
+            ));
+        }
+        let result_json = serde_json::to_string(result)
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_result_invalid"))?;
+        if result_json.len() > 4 * 1024 * 1024 {
+            return Err(StoreError::new(
+                "bridge_store_reconciliation_result_invalid",
+            ));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_write_failed"))?;
+        let ledger = transaction
+            .query_row(
+                "SELECT payload_json, status, result_message_id
+                 FROM native_command_ledger WHERE command_id = ?1 LIMIT 1;",
+                [&result.command_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_write_failed"))?
+            .ok_or_else(|| StoreError::new("bridge_store_command_unknown"))?;
+        let command: CommandMessage = serde_json::from_str(&ledger.0)
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_record_invalid"))?;
+        if !result.matches_command(&command) {
+            return Err(StoreError::new(
+                "bridge_store_reconciliation_transition_invalid",
+            ));
+        }
+        let existing_json = transaction
+            .query_row(
+                "SELECT result_json FROM execution_receipts WHERE command_id = ?1 LIMIT 1;",
+                [&result.command_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_write_failed"))?
+            .ok_or_else(|| StoreError::new("bridge_store_reconciliation_receipt_missing"))?;
+        if existing_json == result_json {
+            return Ok(false);
+        }
+        if ledger.1 != "acked" {
+            return Err(StoreError::new(
+                "bridge_store_reconciliation_transition_invalid",
+            ));
+        }
+        let existing: CommandResultMessage = serde_json::from_str(&existing_json)
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_record_invalid"))?;
+        existing
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_record_invalid"))?;
+        if existing.status != "uncertain"
+            || !existing.matches_command(&command)
+            || ledger.2.as_deref() != Some(existing.message_id.as_str())
+            || result.message_id == existing.message_id
+            || result.completed_at_utc_msc < existing.completed_at_utc_msc
+            || result.evidence.observed_at_utc_msc < existing.evidence.observed_at_utc_msc
+        {
+            return Err(StoreError::new(
+                "bridge_store_reconciliation_transition_invalid",
+            ));
+        }
+        transaction
+            .execute(
+                "UPDATE execution_receipts
+                 SET terminal_instance_id = ?2, connection_epoch = ?3, status = ?4,
+                     result_json = ?5, completed_at_utc_msc = ?6
+                 WHERE command_id = ?1 AND status = 'uncertain';",
+                params![
+                    result.command_id,
+                    result.terminal_instance_id,
+                    result.connection_epoch,
+                    result.status,
+                    result_json,
+                    result.completed_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_write_failed"))?;
+        let inserted = transaction
+            .execute(
+                "INSERT INTO outbox_messages (
+                   message_id, message_type, terminal_instance_id, connection_epoch, priority,
+                   payload_json, created_at_utc_msc
+                 ) VALUES (?1, 'command_result', ?2, ?3, 'trade', ?4, ?5)
+                 ON CONFLICT(message_id) DO NOTHING;",
+                params![
+                    result.message_id,
+                    result.terminal_instance_id,
+                    result.connection_epoch,
+                    result_json,
+                    result.sent_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_write_failed"))?;
+        if inserted != 1 {
+            return Err(StoreError::new(
+                "bridge_store_reconciliation_result_conflict",
+            ));
+        }
+        let updated = transaction
+            .execute(
+                "UPDATE native_command_ledger
+                 SET status = 'confirmed', result_message_id = ?2, updated_at_utc_msc = ?3
+                 WHERE command_id = ?1 AND status = 'acked';",
+                params![
+                    result.command_id,
+                    result.message_id,
+                    result.completed_at_utc_msc
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_write_failed"))?;
+        if updated != 1 {
+            return Err(StoreError::new(
+                "bridge_store_reconciliation_transition_invalid",
+            ));
+        }
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_reconciliation_write_failed"))?;
+        Ok(true)
     }
 
     pub fn count_execution_receipts(&self) -> Result<usize, StoreError> {
@@ -2436,6 +2675,19 @@ mod tests {
             .expect("dispatch");
         assert_eq!(
             store
+                .reconciliation_candidates(10)
+                .expect("interrupted candidate"),
+            vec![ReconciliationCandidate {
+                command: command.clone(),
+                record: store
+                    .command_ledger(&command.command_id)
+                    .expect("ledger")
+                    .expect("command"),
+                uncertain_receipt: None,
+            }]
+        );
+        assert_eq!(
+            store
                 .mark_command_dispatched(&command.command_id, 1_700_000_000_005)
                 .expect_err("no redispatch")
                 .code(),
@@ -2451,6 +2703,12 @@ mod tests {
         store
             .save_execution_receipt(&uncertain, 10_000)
             .expect("uncertain receipt");
+        assert!(
+            store
+                .reconciliation_candidates(10)
+                .expect("unacknowledged uncertain is not eligible")
+                .is_empty()
+        );
         let ledger = store
             .command_ledger(&command.command_id)
             .expect("ledger")
@@ -2493,6 +2751,88 @@ mod tests {
                     1_700_000_000_008,
                 )
                 .expect("idempotent command result ack")
+        );
+        let candidates = store
+            .reconciliation_candidates(10)
+            .expect("acknowledged uncertain candidate");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].command, command);
+        assert_eq!(candidates[0].uncertain_receipt.as_ref(), Some(&uncertain));
+
+        let resolved = command_result(
+            &command.command_id,
+            "result_01JLEDGER002",
+            1_700_000_000_009,
+        );
+        assert!(
+            store
+                .resolve_acknowledged_uncertain_receipt(&resolved)
+                .expect("resolve uncertain")
+        );
+        assert!(
+            !store
+                .resolve_acknowledged_uncertain_receipt(&resolved)
+                .expect("idempotent resolution")
+        );
+        assert_eq!(
+            store
+                .execution_receipt(&command.command_id)
+                .expect("resolved receipt")
+                .expect("receipt"),
+            resolved
+        );
+        assert_eq!(
+            store
+                .pending(&resolved.message_id)
+                .expect("resolved outbox")
+                .expect("pending result")
+                .priority,
+            "trade"
+        );
+        let resolved_ledger = store
+            .command_ledger(&command.command_id)
+            .expect("resolved ledger")
+            .expect("command");
+        assert_eq!(resolved_ledger.status, "confirmed");
+        assert_eq!(
+            resolved_ledger.result_message_id.as_deref(),
+            Some(resolved.message_id.as_str())
+        );
+        assert!(
+            store
+                .acknowledge_command_result(
+                    &resolved.message_id,
+                    &command.command_id,
+                    "applied",
+                    1_700_000_000_010,
+                )
+                .expect("ack resolved result")
+        );
+        assert_eq!(
+            store
+                .command_ledger(&command.command_id)
+                .expect("final ledger")
+                .expect("command")
+                .status,
+            "acked"
+        );
+        assert!(
+            store
+                .reconciliation_candidates(10)
+                .expect("resolved candidates")
+                .is_empty()
+        );
+
+        let mut conflicting_final = resolved.clone();
+        conflicting_final.message_id = "result_01JLEDGER003".to_owned();
+        conflicting_final.status = "failed".to_owned();
+        conflicting_final.error_code = Some("reconciliation_conflict".to_owned());
+        assert_eq!(
+            store
+                .resolve_acknowledged_uncertain_receipt(&conflicting_final)
+                .expect_err("final result is immutable")
+                .code(),
+            "bridge_store_reconciliation_transition_invalid"
         );
 
         drop(store);
