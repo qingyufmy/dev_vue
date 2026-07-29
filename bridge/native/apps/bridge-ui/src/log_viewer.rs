@@ -25,14 +25,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowRect, GetWindowTextLengthW, HICON, HMENU, IDC_ARROW, IsWindow, KillTimer, LoadCursorW,
     MINMAXINFO, MoveWindow, PostMessageW, RegisterClassExW, SB_LEFT, SW_SHOW, SW_SHOWNORMAL,
     SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-    WM_APP, WM_CLOSE, WM_COMMAND, WM_COPY, WM_CREATE, WM_CTLCOLORSTATIC, WM_DRAWITEM,
-    WM_GETMINMAXINFO, WM_HSCROLL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFONT, WM_SIZE,
-    WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_HSCROLL,
+    WM_APP, WM_CLOSE, WM_COMMAND, WM_COPY, WM_CREATE, WM_CTLCOLORSTATIC, WM_DPICHANGED,
+    WM_DRAWITEM, WM_GETMINMAXINFO, WM_HSCROLL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFONT,
+    WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_HSCROLL,
     WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
     WS_VISIBLE, WS_VSCROLL,
 };
 
-use super::{PRODUCT_NAME, Rgb, draw_button, draw_text, fill, rect, wide};
+use super::{PRODUCT_NAME, Rgb, draw_button, draw_text, fill, rect, scale, wide, window_dpi};
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeLogViewer";
 const WINDOW_CLIENT_WIDTH: i32 = 780;
@@ -48,6 +48,7 @@ const WM_LOG_READY: u32 = WM_APP + 20;
 const WM_LOG_REFRESH_REQUEST: u32 = WM_APP + 21;
 
 struct LogViewerState {
+    dpi: u32,
     reader: BridgeLogReader,
     inbox: Arc<Mutex<Option<Result<String, &'static str>>>>,
     refresh_running: Arc<AtomicBool>,
@@ -82,7 +83,9 @@ pub(super) unsafe fn show_or_refresh(
     let instance = unsafe { GetModuleHandleW(null()) };
     register_window_class(instance, icon)?;
     let lifetime_transferred = Arc::new(AtomicBool::new(false));
+    let dpi = window_dpi(owner);
     let state = Box::new(LogViewerState {
+        dpi,
         reader,
         inbox: Arc::new(Mutex::new(None)),
         refresh_running: Arc::new(AtomicBool::new(false)),
@@ -91,9 +94,9 @@ pub(super) unsafe fn show_or_refresh(
         refresh: null_mut(),
         copy: null_mut(),
         auto_refresh: null_mut(),
-        body_font: create_named_font("Microsoft YaHei UI", 14, FW_NORMAL as i32),
-        title_font: create_named_font("Microsoft YaHei UI", 17, FW_BOLD as i32),
-        mono_font: create_named_font("Consolas", 14, FW_NORMAL as i32),
+        body_font: create_point_font("Microsoft YaHei UI", 90, dpi, FW_NORMAL as i32),
+        title_font: create_point_font("Microsoft YaHei UI", 120, dpi, FW_BOLD as i32),
+        mono_font: create_point_font("Consolas", 90, dpi, FW_NORMAL as i32),
         background_brush: unsafe { CreateSolidBrush(color_ref(Rgb(248, 250, 252))) },
         refresh_status: "等待刷新".to_owned(),
     });
@@ -108,8 +111,8 @@ pub(super) unsafe fn show_or_refresh(
     let mut outer = RECT {
         left: 0,
         top: 0,
-        right: WINDOW_CLIENT_WIDTH,
-        bottom: WINDOW_CLIENT_HEIGHT,
+        right: scale(WINDOW_CLIENT_WIDTH, dpi),
+        bottom: scale(WINDOW_CLIENT_HEIGHT, dpi),
     };
     unsafe { AdjustWindowRectEx(&mut outer, style, 0, 0) };
     let width = outer.right - outer.left;
@@ -217,12 +220,32 @@ unsafe extern "system" fn window_proc(
             unsafe { layout_controls(hwnd, state) };
             0
         }
+        WM_DPICHANGED => {
+            let new_dpi = (wparam & 0xffff) as u32;
+            let suggested = lparam as *const RECT;
+            if new_dpi >= 96 && !suggested.is_null() {
+                unsafe {
+                    apply_dpi(state, new_dpi);
+                    let bounds = *suggested;
+                    MoveWindow(
+                        hwnd,
+                        bounds.left,
+                        bounds.top,
+                        bounds.right - bounds.left,
+                        bounds.bottom - bounds.top,
+                        1,
+                    );
+                    layout_controls(hwnd, state);
+                }
+            }
+            0
+        }
         WM_GETMINMAXINFO => {
             let info = lparam as *mut MINMAXINFO;
             if !info.is_null() {
                 unsafe {
-                    (*info).ptMinTrackSize.x = WINDOW_MIN_WIDTH;
-                    (*info).ptMinTrackSize.y = WINDOW_MIN_HEIGHT;
+                    (*info).ptMinTrackSize.x = scale(WINDOW_MIN_WIDTH, state.dpi);
+                    (*info).ptMinTrackSize.y = scale(WINDOW_MIN_HEIGHT, state.dpi);
                 }
             }
             0
@@ -333,24 +356,32 @@ unsafe fn layout_controls(hwnd: HWND, state: &LogViewerState) {
     unsafe { GetClientRect(hwnd, &mut client) };
     let width = client.right - client.left;
     let height = client.bottom - client.top;
-    let content_bottom = (height - 68).max(96);
+    let s = |value| scale(value, state.dpi);
+    let content_bottom = (height - s(68)).max(s(96));
     unsafe {
         MoveWindow(
             state.content,
-            20,
-            56,
-            (width - 40).max(100),
-            (content_bottom - 56).max(40),
+            s(20),
+            s(56),
+            (width - s(40)).max(s(100)),
+            (content_bottom - s(56)).max(s(40)),
             1,
         );
-        MoveWindow(state.refresh, width - 116, height - 56, 96, 36, 1);
-        MoveWindow(state.copy, width - 220, height - 56, 96, 36, 1);
+        MoveWindow(
+            state.refresh,
+            width - s(116),
+            height - s(56),
+            s(96),
+            s(36),
+            1,
+        );
+        MoveWindow(state.copy, width - s(220), height - s(56), s(96), s(36), 1);
         MoveWindow(
             state.auto_refresh,
-            (width - 332).max(20),
-            height - 56,
-            104,
-            36,
+            (width - s(332)).max(s(20)),
+            height - s(56),
+            s(104),
+            s(36),
             1,
         );
         ShowWindow(state.refresh, SW_SHOW);
@@ -364,11 +395,12 @@ unsafe fn paint_window(hwnd: HWND, state: &LogViewerState) {
     let hdc = unsafe { windows_sys::Win32::Graphics::Gdi::BeginPaint(hwnd, &mut paint) };
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
+    let s = |value| scale(value, state.dpi);
     fill(hdc, client, Rgb(248, 250, 252));
     draw_text(
         hdc,
         "运行日志",
-        rect(20, 18, client.right - 180, 44),
+        rect(s(20), s(18), client.right - s(180), s(44)),
         state.title_font,
         Rgb(15, 23, 42),
         windows_sys::Win32::Graphics::Gdi::DT_LEFT
@@ -378,7 +410,7 @@ unsafe fn paint_window(hwnd: HWND, state: &LogViewerState) {
     draw_text(
         hdc,
         &state.refresh_status,
-        rect(client.right - 220, 18, client.right - 20, 44),
+        rect(client.right - s(220), s(18), client.right - s(20), s(44)),
         state.body_font,
         Rgb(100, 116, 139),
         windows_sys::Win32::Graphics::Gdi::DT_RIGHT
@@ -386,6 +418,28 @@ unsafe fn paint_window(hwnd: HWND, state: &LogViewerState) {
             | windows_sys::Win32::Graphics::Gdi::DT_VCENTER,
     );
     unsafe { windows_sys::Win32::Graphics::Gdi::EndPaint(hwnd, &paint) };
+}
+
+unsafe fn apply_dpi(state: &mut LogViewerState, dpi: u32) {
+    let body = create_point_font("Microsoft YaHei UI", 90, dpi, FW_NORMAL as i32);
+    let title = create_point_font("Microsoft YaHei UI", 120, dpi, FW_BOLD as i32);
+    let mono = create_point_font("Consolas", 90, dpi, FW_NORMAL as i32);
+    unsafe {
+        SendMessageW(state.content, WM_SETFONT, mono as usize, 1);
+        for control in [state.refresh, state.copy, state.auto_refresh] {
+            SendMessageW(control, WM_SETFONT, body as usize, 1);
+        }
+    }
+    let previous = [state.body_font, state.title_font, state.mono_font];
+    state.dpi = dpi;
+    state.body_font = body;
+    state.title_font = title;
+    state.mono_font = mono;
+    for font in previous {
+        if !font.is_null() {
+            unsafe { DeleteObject(font as HGDIOBJ) };
+        }
+    }
 }
 
 unsafe fn begin_reload(hwnd: HWND, state: &LogViewerState) {
@@ -515,12 +569,14 @@ fn centered_position(owner: HWND, width: i32, height: i32) -> (i32, i32) {
     )
 }
 
-fn create_named_font(
+fn create_point_font(
     family: &str,
-    pixel_height: i32,
+    point_size_tenths: i32,
+    dpi: u32,
     weight: i32,
 ) -> windows_sys::Win32::Graphics::Gdi::HFONT {
     let face = wide(family);
+    let pixel_height = ((point_size_tenths as i64 * i64::from(dpi) + 360) / 720) as i32;
     unsafe {
         CreateFontW(
             -pixel_height,
@@ -543,4 +599,17 @@ fn create_named_font(
 
 fn color_ref(color: Rgb) -> u32 {
     color.0 as u32 | ((color.1 as u32) << 8) | ((color.2 as u32) << 16)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_viewer_geometry_tracks_dotnet_dpi_scaling() {
+        assert_eq!(scale(WINDOW_CLIENT_WIDTH, 120), 975);
+        assert_eq!(scale(WINDOW_CLIENT_HEIGHT, 144), 780);
+        assert_eq!(scale(WINDOW_MIN_WIDTH, 120), 800);
+        assert_eq!(scale(WINDOW_MIN_HEIGHT, 144), 630);
+    }
 }

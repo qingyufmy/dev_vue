@@ -29,12 +29,15 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowTextW, HICON, HMENU, IDC_ARROW, IsWindow, LoadCursorW, MINMAXINFO, MoveWindow,
     PostMessageW, RegisterClassExW, SW_SHOW, SW_SHOWNORMAL, SendMessageW, SetForegroundWindow,
     SetWindowLongPtrW, SetWindowTextW, ShowWindow, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
-    WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_GETMINMAXINFO, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
-    WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_GROUP,
-    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_NCCREATE, WM_NCDESTROY,
+    WM_PAINT, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_GROUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
-use super::{PRODUCT_NAME, Rgb, color_ref, create_font, draw_border, draw_text, fill, rect, wide};
+use super::{
+    PRODUCT_NAME, Rgb, color_ref, create_point_font, draw_border, draw_text, fill, rect, scale,
+    wide, window_dpi,
+};
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeSettings";
 const WINDOW_CLIENT_WIDTH: i32 = 620;
@@ -64,6 +67,7 @@ struct RequestResult {
 }
 
 struct SettingsState {
+    dpi: u32,
     owner: HWND,
     profile_id: String,
     official_url: String,
@@ -119,9 +123,11 @@ pub(super) unsafe fn show_or_focus(
         .is_file();
     let official_url = normalized_url(&official);
     let effective_url = normalized_url(&effective);
+    let dpi = window_dpi(owner);
     let instance = unsafe { GetModuleHandleW(null()) };
     register_window_class(instance, icon)?;
     let state = Box::new(SettingsState {
+        dpi,
         owner,
         profile_id: profile_id.to_owned(),
         official_url,
@@ -138,9 +144,9 @@ pub(super) unsafe fn show_or_focus(
         restore: null_mut(),
         cancel: null_mut(),
         save: null_mut(),
-        body_font: create_font(14, FW_NORMAL as i32),
-        body_bold_font: create_font(14, FW_BOLD as i32),
-        heading_font: create_font(22, FW_BOLD as i32),
+        body_font: create_point_font(90, dpi, FW_NORMAL as i32),
+        body_bold_font: create_point_font(90, dpi, FW_BOLD as i32),
+        heading_font: create_point_font(160, dpi, FW_BOLD as i32),
         background_brush: unsafe { CreateSolidBrush(color_ref(Rgb(248, 250, 252))) },
         white_brush: unsafe { CreateSolidBrush(color_ref(Rgb(255, 255, 255))) },
         disabled_brush: unsafe { CreateSolidBrush(color_ref(Rgb(245, 247, 250))) },
@@ -152,8 +158,8 @@ pub(super) unsafe fn show_or_focus(
     let mut outer = RECT {
         left: 0,
         top: 0,
-        right: WINDOW_CLIENT_WIDTH,
-        bottom: WINDOW_CLIENT_HEIGHT,
+        right: scale(WINDOW_CLIENT_WIDTH, dpi),
+        bottom: scale(WINDOW_CLIENT_HEIGHT, dpi),
     };
     unsafe { AdjustWindowRectEx(&mut outer, style, 0, 0) };
     let width = outer.right - outer.left;
@@ -254,12 +260,32 @@ unsafe extern "system" fn window_proc(
             unsafe { layout_controls(hwnd, state) };
             0
         }
+        WM_DPICHANGED => {
+            let new_dpi = (wparam & 0xffff) as u32;
+            let suggested = lparam as *const RECT;
+            if new_dpi >= 96 && !suggested.is_null() {
+                unsafe {
+                    apply_dpi(state, new_dpi);
+                    let bounds = *suggested;
+                    MoveWindow(
+                        hwnd,
+                        bounds.left,
+                        bounds.top,
+                        bounds.right - bounds.left,
+                        bounds.bottom - bounds.top,
+                        1,
+                    );
+                    layout_controls(hwnd, state);
+                }
+            }
+            0
+        }
         WM_GETMINMAXINFO => {
             let info = lparam as *mut MINMAXINFO;
             if !info.is_null() {
                 unsafe {
-                    (*info).ptMinTrackSize.x = WINDOW_MIN_WIDTH;
-                    (*info).ptMinTrackSize.y = WINDOW_MIN_HEIGHT;
+                    (*info).ptMinTrackSize.x = scale(WINDOW_MIN_WIDTH, state.dpi);
+                    (*info).ptMinTrackSize.y = scale(WINDOW_MIN_HEIGHT, state.dpi);
                 }
             }
             0
@@ -436,14 +462,36 @@ unsafe fn layout_controls(hwnd: HWND, state: &SettingsState) {
     unsafe { GetClientRect(hwnd, &mut client) };
     let width = client.right - client.left;
     let height = client.bottom - client.top;
+    let s = |value| scale(value, state.dpi);
     unsafe {
-        MoveWindow(state.official, 28, 96, 120, 28, 1);
-        MoveWindow(state.custom, 150, 96, 190, 28, 1);
-        MoveWindow(state.server_url, 46, 180, (width - 92).max(100), 36, 1);
-        MoveWindow(state.test, width - 124, 270, 96, 36, 1);
-        MoveWindow(state.save, width - 140, height - 58, 112, 36, 1);
-        MoveWindow(state.cancel, width - 244, height - 58, 96, 36, 1);
-        MoveWindow(state.restore, width - 380, height - 58, 128, 36, 1);
+        MoveWindow(state.official, s(28), s(96), s(120), s(28), 1);
+        MoveWindow(state.custom, s(150), s(96), s(190), s(28), 1);
+        MoveWindow(
+            state.server_url,
+            s(46),
+            s(180),
+            (width - s(92)).max(s(100)),
+            s(36),
+            1,
+        );
+        MoveWindow(state.test, width - s(124), s(270), s(96), s(36), 1);
+        MoveWindow(state.save, width - s(140), height - s(58), s(112), s(36), 1);
+        MoveWindow(
+            state.cancel,
+            width - s(244),
+            height - s(58),
+            s(96),
+            s(36),
+            1,
+        );
+        MoveWindow(
+            state.restore,
+            width - s(380),
+            height - s(58),
+            s(128),
+            s(36),
+            1,
+        );
     }
     unsafe { InvalidateRect(hwnd, null(), 1) };
 }
@@ -666,12 +714,12 @@ unsafe fn paint_window(hwnd: HWND, state: &SettingsState) {
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
     let width = client.right - client.left;
-    let height = client.bottom - client.top;
+    let s = |value| scale(value, state.dpi);
     fill(hdc, client, Rgb(248, 250, 252));
     draw_text(
         hdc,
         "连接设置",
-        rect(28, 18, width - 28, 51),
+        rect(s(28), s(18), width - s(28), s(51)),
         state.heading_font,
         Rgb(15, 23, 42),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
@@ -679,16 +727,20 @@ unsafe fn paint_window(hwnd: HWND, state: &SettingsState) {
     draw_text(
         hdc,
         "统一设置桥接服务器地址，行情、交易指令和授权通道会自动完成配置。",
-        rect(28, 51, width - 28, 80),
+        rect(s(28), s(51), width - s(28), s(80)),
         state.body_font,
         Rgb(71, 85, 105),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
     );
-    fill(hdc, rect(28, 136, width - 28, 250), Rgb(255, 255, 255));
+    fill(
+        hdc,
+        rect(s(28), s(136), width - s(28), s(250)),
+        Rgb(255, 255, 255),
+    );
     draw_text(
         hdc,
         "服务器地址",
-        rect(46, 147, width - 46, 175),
+        rect(s(46), s(147), width - s(46), s(175)),
         state.body_bold_font,
         Rgb(51, 65, 85),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
@@ -696,7 +748,7 @@ unsafe fn paint_window(hwnd: HWND, state: &SettingsState) {
     draw_text(
         hdc,
         "远程地址需使用 HTTPS；本机测试可使用 HTTP。实时通道会自动配置。",
-        rect(46, 218, width - 46, 246),
+        rect(s(46), s(218), width - s(46), s(246)),
         state.body_font,
         Rgb(71, 85, 105),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
@@ -704,22 +756,52 @@ unsafe fn paint_window(hwnd: HWND, state: &SettingsState) {
     draw_text(
         hdc,
         &state.test_status,
-        rect(32, 269, width - 138, 306),
+        rect(s(32), s(269), width - s(138), s(306)),
         state.body_font,
         state.test_status_color,
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
     );
-    fill(hdc, rect(28, 316, width - 28, 352), Rgb(255, 251, 235));
+    fill(
+        hdc,
+        rect(s(28), s(316), width - s(28), s(352)),
+        Rgb(255, 251, 235),
+    );
     draw_text(
         hdc,
         "切换控制服务时会清除旧服务器授权，重启后需在新服务器重新授权一次。",
-        rect(40, 316, width - 40, 352),
+        rect(s(40), s(316), width - s(40), s(352)),
         state.body_font,
         Rgb(146, 64, 14),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
     );
-    let _ = height;
     unsafe { windows_sys::Win32::Graphics::Gdi::EndPaint(hwnd, &paint) };
+}
+
+unsafe fn apply_dpi(state: &mut SettingsState, dpi: u32) {
+    let body = create_point_font(90, dpi, FW_NORMAL as i32);
+    let body_bold = create_point_font(90, dpi, FW_BOLD as i32);
+    let heading = create_point_font(160, dpi, FW_BOLD as i32);
+    for control in [
+        state.official,
+        state.custom,
+        state.server_url,
+        state.test,
+        state.restore,
+        state.cancel,
+        state.save,
+    ] {
+        unsafe { SendMessageW(control, WM_SETFONT, body as usize, 1) };
+    }
+    let previous = [state.body_font, state.body_bold_font, state.heading_font];
+    state.dpi = dpi;
+    state.body_font = body;
+    state.body_bold_font = body_bold;
+    state.heading_font = heading;
+    for font in previous {
+        if !font.is_null() {
+            unsafe { DeleteObject(font as HGDIOBJ) };
+        }
+    }
 }
 
 unsafe fn draw_settings_button(lparam: LPARAM) -> LRESULT {
@@ -834,4 +916,17 @@ fn now_utc_msc() -> i64 {
         .ok()
         .and_then(|duration| i64::try_from(duration.as_millis()).ok())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_geometry_tracks_dotnet_dpi_scaling() {
+        assert_eq!(scale(WINDOW_CLIENT_WIDTH, 120), 775);
+        assert_eq!(scale(WINDOW_CLIENT_HEIGHT, 144), 735);
+        assert_eq!(scale(WINDOW_MIN_WIDTH, 120), 725);
+        assert_eq!(scale(WINDOW_MIN_HEIGHT, 144), 705);
+    }
 }

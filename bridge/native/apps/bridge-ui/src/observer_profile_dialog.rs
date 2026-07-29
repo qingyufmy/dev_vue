@@ -22,12 +22,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     HMENU, IDC_ARROW, IsDialogMessageW, IsWindow, LoadCursorW, MB_ICONWARNING, MB_OK, MINMAXINFO,
     MSG, MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassExW, SW_SHOW, SendMessageW,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_GETMINMAXINFO, WM_NCCREATE, WM_NCDESTROY,
-    WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_GETMINMAXINFO, WM_NCCREATE,
+    WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
+    WS_VISIBLE,
 };
 
-use super::{create_font, terminal_directory, wide};
+use super::{create_point_font, scale, terminal_directory, wide, window_dpi};
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeObserverProfile";
 const WINDOW_CLIENT_WIDTH: i32 = 560;
@@ -51,6 +52,7 @@ pub(super) struct ExistingObserverProfile {
 }
 
 struct ObserverDialogState {
+    dpi: u32,
     result: Arc<Mutex<Option<ObserverProfileMutation>>>,
     sources: Vec<UiObserverSource>,
     existing: Option<ExistingObserverProfile>,
@@ -88,7 +90,9 @@ pub(super) unsafe fn show_modal(
         .as_ref()
         .map(|value| value.terminal_directory.clone())
         .unwrap_or_default();
+    let dpi = window_dpi(owner);
     let state = Box::new(ObserverDialogState {
+        dpi,
         result: Arc::clone(&result),
         sources: sources.to_vec(),
         existing,
@@ -100,8 +104,8 @@ pub(super) unsafe fn show_modal(
         confirm: null_mut(),
         cancel: null_mut(),
         labels: Vec::new(),
-        body_font: create_font(14, FW_NORMAL as i32),
-        heading_font: create_font(15, FW_BOLD as i32),
+        body_font: create_point_font(90, dpi, FW_NORMAL as i32),
+        heading_font: create_point_font(100, dpi, FW_BOLD as i32),
         mt5_path: if !initial_is_mt4 {
             initial_path.clone()
         } else {
@@ -120,8 +124,8 @@ pub(super) unsafe fn show_modal(
     let mut outer = RECT {
         left: 0,
         top: 0,
-        right: WINDOW_CLIENT_WIDTH,
-        bottom: WINDOW_CLIENT_HEIGHT,
+        right: scale(WINDOW_CLIENT_WIDTH, dpi),
+        bottom: scale(WINDOW_CLIENT_HEIGHT, dpi),
     };
     unsafe { AdjustWindowRectEx(&mut outer, style, 0, WS_EX_DLGMODALFRAME) };
     let width = outer.right - outer.left;
@@ -244,12 +248,32 @@ unsafe extern "system" fn window_proc(
             unsafe { layout_controls(hwnd, state) };
             0
         }
+        WM_DPICHANGED => {
+            let new_dpi = (wparam & 0xffff) as u32;
+            let suggested = lparam as *const RECT;
+            if new_dpi >= 96 && !suggested.is_null() {
+                unsafe {
+                    apply_dpi(state, new_dpi);
+                    let bounds = *suggested;
+                    MoveWindow(
+                        hwnd,
+                        bounds.left,
+                        bounds.top,
+                        bounds.right - bounds.left,
+                        bounds.bottom - bounds.top,
+                        1,
+                    );
+                    layout_controls(hwnd, state);
+                }
+            }
+            0
+        }
         WM_GETMINMAXINFO => {
             let info = lparam as *mut MINMAXINFO;
             if !info.is_null() {
                 unsafe {
-                    (*info).ptMinTrackSize.x = WINDOW_MIN_WIDTH;
-                    (*info).ptMinTrackSize.y = WINDOW_MIN_HEIGHT;
+                    (*info).ptMinTrackSize.x = scale(WINDOW_MIN_WIDTH, state.dpi);
+                    (*info).ptMinTrackSize.y = scale(WINDOW_MIN_HEIGHT, state.dpi);
                 }
             }
             0
@@ -506,27 +530,82 @@ unsafe fn layout_controls(hwnd: HWND, state: &ObserverDialogState) {
     unsafe { GetClientRect(hwnd, &mut client) };
     let width = client.right - client.left;
     let height = client.bottom - client.top;
-    let content_width = (width - 40).max(300);
+    let s = |value| scale(value, state.dpi);
+    let content_width = (width - s(40)).max(s(300));
     let positions = [
-        (20, 18, content_width, 24),
-        (20, 42, content_width, 24),
-        (20, 112, content_width, 24),
-        (20, 136, content_width, 24),
-        (20, 206, content_width, 24),
-        (20, 270, content_width, 24),
-        (20, 294, content_width, 40),
+        (s(20), s(18), content_width, s(24)),
+        (s(20), s(42), content_width, s(24)),
+        (s(20), s(112), content_width, s(24)),
+        (s(20), s(136), content_width, s(24)),
+        (s(20), s(206), content_width, s(24)),
+        (s(20), s(270), content_width, s(24)),
+        (s(20), s(294), content_width, s(40)),
     ];
     for (control, (x, y, control_width, control_height)) in state.labels.iter().zip(positions) {
         unsafe { MoveWindow(*control, x, y, control_width, control_height, 1) };
     }
     unsafe {
-        MoveWindow(state.profile, 20, 72, content_width, 28, 1);
-        MoveWindow(state.source, 20, 164, content_width, 220, 1);
-        MoveWindow(state.platform, 20, 232, content_width, 140, 1);
-        MoveWindow(state.directory, 20, 340, content_width - 88, 28, 1);
-        MoveWindow(state.browse, width - 100, 340, 80, 28, 1);
-        MoveWindow(state.confirm, width - 132, height - 52, 112, 32, 1);
-        MoveWindow(state.cancel, width - 236, height - 52, 96, 32, 1);
+        MoveWindow(state.profile, s(20), s(72), content_width, s(28), 1);
+        MoveWindow(state.source, s(20), s(164), content_width, s(220), 1);
+        MoveWindow(state.platform, s(20), s(232), content_width, s(140), 1);
+        MoveWindow(
+            state.directory,
+            s(20),
+            s(340),
+            content_width - s(88),
+            s(28),
+            1,
+        );
+        MoveWindow(state.browse, width - s(100), s(340), s(80), s(28), 1);
+        MoveWindow(
+            state.confirm,
+            width - s(132),
+            height - s(52),
+            s(112),
+            s(32),
+            1,
+        );
+        MoveWindow(
+            state.cancel,
+            width - s(236),
+            height - s(52),
+            s(96),
+            s(32),
+            1,
+        );
+    }
+}
+
+unsafe fn apply_dpi(state: &mut ObserverDialogState, dpi: u32) {
+    let body = create_point_font(90, dpi, FW_NORMAL as i32);
+    let heading = create_point_font(100, dpi, FW_BOLD as i32);
+    for (index, label) in state.labels.iter().enumerate() {
+        let font = if matches!(index, 0 | 2 | 4 | 5) {
+            heading
+        } else {
+            body
+        };
+        unsafe { SendMessageW(*label, WM_SETFONT, font as usize, 1) };
+    }
+    for control in [
+        state.profile,
+        state.source,
+        state.platform,
+        state.directory,
+        state.browse,
+        state.confirm,
+        state.cancel,
+    ] {
+        unsafe { SendMessageW(control, WM_SETFONT, body as usize, 1) };
+    }
+    let previous = [state.body_font, state.heading_font];
+    state.dpi = dpi;
+    state.body_font = body;
+    state.heading_font = heading;
+    for font in previous {
+        if !font.is_null() {
+            unsafe { windows_sys::Win32::Graphics::Gdi::DeleteObject(font as _) };
+        }
     }
 }
 
@@ -919,6 +998,14 @@ fn cleanup_state(state: ObserverDialogState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observer_dialog_geometry_tracks_dotnet_dpi_scaling() {
+        assert_eq!(scale(WINDOW_CLIENT_WIDTH, 120), 700);
+        assert_eq!(scale(WINDOW_CLIENT_HEIGHT, 144), 750);
+        assert_eq!(scale(WINDOW_MIN_WIDTH, 120), 675);
+        assert_eq!(scale(WINDOW_MIN_HEIGHT, 144), 720);
+    }
 
     #[test]
     fn terminal_executable_names_match_the_dotnet_dialog() {

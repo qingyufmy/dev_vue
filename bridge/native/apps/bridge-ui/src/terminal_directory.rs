@@ -29,12 +29,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     IsWindow, LoadCursorW, MINMAXINFO, MSG, MoveWindow, PostMessageW, PostQuitMessage,
     RegisterClassExW, SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowTextW, ShowWindow, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE,
-    WM_CTLCOLORSTATIC, WM_GETMINMAXINFO, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETFONT, WM_SIZE,
-    WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
-    WS_EX_DLGMODALFRAME, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_GETMINMAXINFO, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
+    WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
-use super::{create_font, wide};
+use super::{create_point_font, scale, wide, window_dpi};
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeTerminalDirectory";
 const WINDOW_CLIENT_WIDTH: i32 = 620;
@@ -55,6 +55,7 @@ struct DirectoryReadResult {
 }
 
 struct DirectoryState {
+    dpi: u32,
     result: Arc<Mutex<Option<PathBuf>>>,
     tree: HWND,
     help: HWND,
@@ -78,7 +79,9 @@ pub(super) unsafe fn show_modal(
     let instance = unsafe { GetModuleHandleW(null()) };
     register_window_class(instance, icon)?;
     let result = Arc::new(Mutex::new(None));
+    let dpi = window_dpi(owner);
     let state = Box::new(DirectoryState {
+        dpi,
         result: Arc::clone(&result),
         tree: null_mut(),
         help: null_mut(),
@@ -88,16 +91,16 @@ pub(super) unsafe fn show_modal(
         cancel: null_mut(),
         nodes: HashMap::new(),
         loaded: HashSet::new(),
-        body_font: create_font(14, FW_NORMAL as i32),
-        body_bold_font: create_font(14, FW_BOLD as i32),
+        body_font: create_point_font(90, dpi, FW_NORMAL as i32),
+        body_bold_font: create_point_font(90, dpi, FW_BOLD as i32),
     });
     let state_pointer = Box::into_raw(state);
     let style = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN;
     let mut outer = RECT {
         left: 0,
         top: 0,
-        right: WINDOW_CLIENT_WIDTH,
-        bottom: WINDOW_CLIENT_HEIGHT,
+        right: scale(WINDOW_CLIENT_WIDTH, dpi),
+        bottom: scale(WINDOW_CLIENT_HEIGHT, dpi),
     };
     unsafe { AdjustWindowRectEx(&mut outer, style, 0, WS_EX_DLGMODALFRAME) };
     let width = outer.right - outer.left;
@@ -218,12 +221,32 @@ unsafe extern "system" fn window_proc(
             unsafe { layout_controls(hwnd, state) };
             0
         }
+        WM_DPICHANGED => {
+            let new_dpi = (wparam & 0xffff) as u32;
+            let suggested = lparam as *const RECT;
+            if new_dpi >= 96 && !suggested.is_null() {
+                unsafe {
+                    apply_dpi(state, new_dpi);
+                    let bounds = *suggested;
+                    MoveWindow(
+                        hwnd,
+                        bounds.left,
+                        bounds.top,
+                        bounds.right - bounds.left,
+                        bounds.bottom - bounds.top,
+                        1,
+                    );
+                    layout_controls(hwnd, state);
+                }
+            }
+            0
+        }
         WM_GETMINMAXINFO => {
             let info = lparam as *mut MINMAXINFO;
             if !info.is_null() {
                 unsafe {
-                    (*info).ptMinTrackSize.x = WINDOW_MIN_WIDTH;
-                    (*info).ptMinTrackSize.y = WINDOW_MIN_HEIGHT;
+                    (*info).ptMinTrackSize.x = scale(WINDOW_MIN_WIDTH, state.dpi);
+                    (*info).ptMinTrackSize.y = scale(WINDOW_MIN_HEIGHT, state.dpi);
                 }
             }
             0
@@ -389,30 +412,76 @@ unsafe fn layout_controls(hwnd: HWND, state: &DirectoryState) {
     unsafe { GetClientRect(hwnd, &mut client) };
     let width = client.right - client.left;
     let height = client.bottom - client.top;
-    let content_width = (width - 32).max(200);
+    let s = |value| scale(value, state.dpi);
+    let content_width = (width - s(32)).max(s(200));
     unsafe {
-        MoveWindow(state.help, 16, 16, content_width, 22, 1);
+        MoveWindow(state.help, s(16), s(16), content_width, s(22), 1);
         MoveWindow(
             state.tree,
-            16,
-            48,
+            s(16),
+            s(48),
             content_width,
-            (height - 168).max(180),
+            (height - s(168)).max(s(180)),
             1,
         );
         MoveWindow(
             state.selected_heading,
-            16,
-            height - 122,
+            s(16),
+            height - s(122),
             content_width,
-            22,
+            s(22),
             1,
         );
-        MoveWindow(state.selected_path, 16, height - 90, content_width, 28, 1);
-        MoveWindow(state.confirm, width - 120, height - 48, 104, 32, 1);
-        MoveWindow(state.cancel, width - 224, height - 48, 96, 32, 1);
+        MoveWindow(
+            state.selected_path,
+            s(16),
+            height - s(90),
+            content_width,
+            s(28),
+            1,
+        );
+        MoveWindow(
+            state.confirm,
+            width - s(120),
+            height - s(48),
+            s(104),
+            s(32),
+            1,
+        );
+        MoveWindow(
+            state.cancel,
+            width - s(224),
+            height - s(48),
+            s(96),
+            s(32),
+            1,
+        );
     }
     invalidate(hwnd);
+}
+
+unsafe fn apply_dpi(state: &mut DirectoryState, dpi: u32) {
+    let body = create_point_font(90, dpi, FW_NORMAL as i32);
+    let body_bold = create_point_font(90, dpi, FW_BOLD as i32);
+    for control in [
+        state.tree,
+        state.help,
+        state.selected_path,
+        state.confirm,
+        state.cancel,
+    ] {
+        unsafe { SendMessageW(control, WM_SETFONT, body as usize, 1) };
+    }
+    unsafe { SendMessageW(state.selected_heading, WM_SETFONT, body_bold as usize, 1) };
+    let previous = [state.body_font, state.body_bold_font];
+    state.dpi = dpi;
+    state.body_font = body;
+    state.body_bold_font = body_bold;
+    for font in previous {
+        if !font.is_null() {
+            unsafe { windows_sys::Win32::Graphics::Gdi::DeleteObject(font as _) };
+        }
+    }
 }
 
 unsafe fn populate_roots(
@@ -710,6 +779,14 @@ fn cleanup_state(state: DirectoryState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_dialog_geometry_tracks_dotnet_dpi_scaling() {
+        assert_eq!(scale(WINDOW_CLIENT_WIDTH, 120), 775);
+        assert_eq!(scale(WINDOW_CLIENT_HEIGHT, 144), 705);
+        assert_eq!(scale(WINDOW_MIN_WIDTH, 120), 700);
+        assert_eq!(scale(WINDOW_MIN_HEIGHT, 144), 630);
+    }
 
     #[test]
     fn platform_titles_match_the_dotnet_directory_dialog() {

@@ -32,7 +32,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     OUT_DEFAULT_PRECIS, ReleaseDC, SelectObject, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
 };
 use windows_sys::Win32::Storage::FileSystem::FileTimeToLocalFileTime;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Time::FileTimeToSystemTime;
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, InitCommonControls, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON,
@@ -2039,13 +2039,12 @@ unsafe fn create_fonts(dpi: u32) -> Fonts {
 }
 
 fn create_point_font(point_size_tenths: i32, dpi: u32, weight: i32) -> HFONT {
-    let face = wide("Microsoft YaHei UI");
-    let pixel_height = ((point_size_tenths as i64 * i64::from(dpi) + 360) / 720) as i32;
-    create_named_font(&face, pixel_height, weight)
+    create_point_font_family("Microsoft YaHei UI", point_size_tenths, dpi, weight)
 }
 
-fn create_font(pixel_height: i32, weight: i32) -> HFONT {
-    let face = wide("Microsoft YaHei UI");
+fn create_point_font_family(family: &str, point_size_tenths: i32, dpi: u32, weight: i32) -> HFONT {
+    let face = wide(family);
+    let pixel_height = ((point_size_tenths as i64 * i64::from(dpi) + 360) / 720) as i32;
     create_named_font(&face, pixel_height, weight)
 }
 
@@ -2085,6 +2084,26 @@ fn system_dpi() -> u32 {
         .ok()
         .filter(|value| *value >= 96)
         .unwrap_or(96)
+}
+
+fn window_dpi(hwnd: HWND) -> u32 {
+    if hwnd.is_null() {
+        return system_dpi();
+    }
+    let module_name = wide("user32.dll");
+    let module = unsafe { GetModuleHandleW(module_name.as_ptr()) };
+    if !module.is_null()
+        && let Some(procedure) =
+            unsafe { GetProcAddress(module, c"GetDpiForWindow".as_ptr().cast()) }
+    {
+        let get_dpi_for_window: unsafe extern "system" fn(HWND) -> u32 =
+            unsafe { std::mem::transmute(procedure) };
+        let dpi = unsafe { get_dpi_for_window(hwnd) };
+        if dpi >= 96 {
+            return dpi;
+        }
+    }
+    system_dpi()
 }
 
 impl Drop for Fonts {
