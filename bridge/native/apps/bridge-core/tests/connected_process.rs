@@ -182,6 +182,56 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         runtime_status_json(&paths.runtime_status_path)
             .is_some_and(|status| status["phase"] == "online")
     });
+
+    let worker_before_binding_change = restarted_worker_pid;
+    let replacement_terminal = root.join("terminal-replacement64.exe");
+    fs::write(&replacement_terminal, b"replacement terminal fixture")
+        .expect("replacement terminal fixture");
+    let store =
+        OutboxStore::open_or_create(&paths.database_path).expect("binding replacement store");
+    let replacement = store
+        .activate_terminal_binding(
+            terminal_id,
+            "mt5",
+            &replacement_terminal,
+            &AccountRef {
+                broker_server: "Broker-Replacement".to_owned(),
+                login: "654321".to_owned(),
+            },
+            now_utc_msc(),
+        )
+        .expect("activate replacement binding");
+    assert_eq!(replacement.connection_epoch, 2);
+    drop(store);
+    wait_for_process_exit(worker_before_binding_change, Duration::from_secs(10));
+    wait_until(&mut child, Duration::from_secs(20), || {
+        let Ok(value) = fs::read_to_string(&worker_pid_file) else {
+            return false;
+        };
+        let Ok(process_id) = value.trim().parse::<u32>() else {
+            return false;
+        };
+        if process_id == worker_before_binding_change || !process_is_running(process_id) {
+            return false;
+        }
+        restarted_worker_pid = process_id;
+        true
+    });
+    wait_until(&mut child, Duration::from_secs(20), || {
+        server.saw_hello_route(terminal_id, 2, "Broker-Replacement", "654321")
+    });
+    wait_until(&mut child, Duration::from_secs(20), || {
+        runtime_status_json(&paths.runtime_status_path).is_some_and(|status| {
+            status["phase"] == "online" && status["terminals"][0]["connection_epoch"] == 2
+        })
+    });
+    assert_eq!(
+        fs::read_to_string(&order_send_count_file)
+            .expect("order send count after binding change")
+            .trim(),
+        "1",
+        "binding reload must not replay an acknowledged trade"
+    );
     SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
         .expect("request shutdown");
     let output = child.wait_with_output();
@@ -200,6 +250,12 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
             .iter()
             .any(|event| event == "startup_ready_confirmed"),
         "ready log missing"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "native_runtime_binding_changed"),
+        "binding reload log missing"
     );
     assert!(
         events.iter().any(|event| event == "native_runtime_stopped"),
@@ -384,6 +440,22 @@ impl LoopbackBridgeServer {
             .any(|value| value == &format!("command_result_id:{RECOVERED_COMMAND_ID}:succeeded"))
     }
 
+    fn saw_hello_route(
+        &self,
+        terminal_id: &str,
+        connection_epoch: i64,
+        broker_server: &str,
+        login: &str,
+    ) -> bool {
+        self.message_types
+            .lock()
+            .expect("message types")
+            .iter()
+            .any(|value| {
+                value == &format!("hello:{terminal_id}:{connection_epoch}:{broker_server}:{login}")
+            })
+    }
+
     fn stop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(thread) = self.thread.take() {
@@ -459,6 +531,15 @@ async fn serve_realtime(
             .expect("hello text");
         let hello: HelloMessage = serde_json::from_str(&hello_json).expect("hello json");
         hello.validate().expect("valid hello");
+        for terminal in &hello.terminals {
+            message_types.lock().expect("message types").push(format!(
+                "hello:{}:{}:{}:{}",
+                terminal.terminal_instance_id,
+                terminal.connection_epoch,
+                terminal.account_ref.broker_server,
+                terminal.account_ref.login
+            ));
+        }
         let terminal_ids = hello
             .terminals
             .iter()
@@ -496,7 +577,11 @@ async fn serve_realtime(
                 let _ = socket.close(None).await;
                 break;
             }
-            if let Ok(Some(frame)) = timeout(Duration::from_millis(20), socket.next()).await {
+            let received = timeout(Duration::from_millis(20), socket.next()).await;
+            if matches!(received, Ok(None)) {
+                break;
+            }
+            if let Ok(Some(frame)) = received {
                 let Ok(frame) = frame else {
                     break;
                 };

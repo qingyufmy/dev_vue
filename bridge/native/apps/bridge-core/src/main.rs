@@ -15,7 +15,7 @@ use bridge_transport::{
 use liangjian_bridge_core::{
     ActiveMt5Sessions, CoreConnectionState, CredentialState, NativeConnectedRuntime,
     NativeProfileBootstrap, NativeRuntimeStatusHandle, NativeRuntimeStatusSnapshot,
-    ProfileCredentialSource,
+    ProfileCredentialSource, ProfileTerminalBindingSource,
 };
 use std::env;
 use std::error::Error;
@@ -25,6 +25,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::Instant;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+enum ProfileRuntimeTrigger {
+    Completed(Result<(), liangjian_bridge_core::CoreBootstrapError>),
+    BindingChanged,
+    BindingWatchFailed(liangjian_bridge_core::CoreBootstrapError),
+    Stopped,
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -264,6 +271,7 @@ async fn run_profile_lifecycle(
             return Err("bridge_expected_terminal_missing".into());
         }
         let endpoints = resolve_server_endpoints(application_directory, root_data_directory)?;
+        let binding_source = ProfileTerminalBindingSource::new(Arc::clone(&bootstrap.store))?;
         publish_inactive_status(
             logger,
             &status_path,
@@ -278,12 +286,15 @@ async fn run_profile_lifecycle(
         let connection_state = connected.connection_state();
         let active_sessions = connected.active_sessions();
         let runtime_status = connected.status_handle();
-        let ready_stop = stop.clone();
+        let runtime_stop = SessionCancellation::default();
+        let ready_stop = runtime_stop.clone();
         let ready_logger = logger.clone();
+        let runtime_ready_file = ready_file.clone();
+        let runtime_expected_terminal_instance_ids = expected_terminal_instance_ids.clone();
         let ready_waiter = tokio::spawn(async move {
             wait_and_write_ready(
-                ready_file,
-                expected_terminal_instance_ids,
+                runtime_ready_file,
+                runtime_expected_terminal_instance_ids,
                 connection_state,
                 active_sessions,
                 ready_stop,
@@ -300,7 +311,23 @@ async fn run_profile_lifecycle(
             status_stop.clone(),
             logger.clone(),
         ));
-        let runtime_result = connected.run(stop.clone()).await;
+        let runtime = connected.run(runtime_stop.clone());
+        tokio::pin!(runtime);
+        let trigger = tokio::select! {
+            result = &mut runtime => ProfileRuntimeTrigger::Completed(result),
+            changed = binding_source.changed() => match changed {
+                Ok(()) => ProfileRuntimeTrigger::BindingChanged,
+                Err(error) => ProfileRuntimeTrigger::BindingWatchFailed(error),
+            },
+            _ = stop.cancelled() => ProfileRuntimeTrigger::Stopped,
+        };
+        runtime_stop.cancel();
+        let (runtime_result, reload_bindings, binding_watch_error) = match trigger {
+            ProfileRuntimeTrigger::Completed(result) => (result, false, None),
+            ProfileRuntimeTrigger::BindingChanged => (runtime.await, true, None),
+            ProfileRuntimeTrigger::BindingWatchFailed(error) => (runtime.await, false, Some(error)),
+            ProfileRuntimeTrigger::Stopped => (runtime.await, false, None),
+        };
         match runtime_status.snapshot(profile_id, VERSION, now_utc_msc()) {
             Ok(snapshot) => publish_runtime_status_or_warn(logger, &status_path, &snapshot),
             Err(error) => logger.warning("native_runtime_status_failed", Some(error.code())),
@@ -309,12 +336,20 @@ async fn run_profile_lifecycle(
         status_monitor
             .await
             .map_err(|_| "bridge_runtime_status_task_failed")?;
-        stop.cancel();
         ready_waiter
             .await
             .map_err(|_| "bridge_startup_signal_task_failed")?
             .map_err(|error| -> Box<dyn Error> { error.into() })?;
-        return runtime_result.map_err(Into::into);
+        if let Some(error) = binding_watch_error {
+            return Err(error.into());
+        }
+        runtime_result.map_err(|error| -> Box<dyn Error> { error.into() })?;
+        if reload_bindings && !stop.is_cancelled() {
+            logger.info("native_runtime_binding_changed", None);
+            continue;
+        }
+        stop.cancel();
+        return Ok(());
     }
 }
 

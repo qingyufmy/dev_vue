@@ -52,6 +52,7 @@ const RECONCILIATION_SETTLE_AFTER: Duration = Duration::from_secs(30);
 const RECONCILIATION_INTERVAL: Duration = Duration::from_secs(5);
 const RECONCILIATION_BATCH_LIMIT: usize = 100;
 const CREDENTIAL_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const TERMINAL_BINDING_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_CREDENTIAL_FILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -354,6 +355,71 @@ impl ProfileCredentialSource {
             current;
         Ok(())
     }
+}
+
+pub struct ProfileTerminalBindingSource {
+    store: Arc<OutboxStore>,
+    fingerprint: Mutex<[u8; 32]>,
+    poll_interval: Duration,
+}
+
+impl ProfileTerminalBindingSource {
+    pub fn new(store: Arc<OutboxStore>) -> Result<Self, CoreBootstrapError> {
+        Self::with_poll_interval(store, TERMINAL_BINDING_POLL_INTERVAL)
+    }
+
+    fn with_poll_interval(
+        store: Arc<OutboxStore>,
+        poll_interval: Duration,
+    ) -> Result<Self, CoreBootstrapError> {
+        if poll_interval.is_zero() {
+            return Err(CoreBootstrapError::new(
+                "bridge_terminal_binding_watch_invalid",
+            ));
+        }
+        let fingerprint = terminal_binding_fingerprint(&store)?;
+        Ok(Self {
+            store,
+            fingerprint: Mutex::new(fingerprint),
+            poll_interval,
+        })
+    }
+
+    pub async fn changed(&self) -> Result<(), CoreBootstrapError> {
+        loop {
+            sleep(self.poll_interval).await;
+            let current = terminal_binding_fingerprint(&self.store)?;
+            let mut observed = self
+                .fingerprint
+                .lock()
+                .map_err(|_| CoreBootstrapError::new("bridge_terminal_binding_watch_failed"))?;
+            if *observed != current {
+                *observed = current;
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn terminal_binding_fingerprint(store: &OutboxStore) -> Result<[u8; 32], CoreBootstrapError> {
+    let bindings = store.terminal_bindings().map_err(store_error)?;
+    let mut digest = Sha256::new();
+    for binding in bindings {
+        update_binding_fingerprint(&mut digest, &binding.terminal_instance_id);
+        update_binding_fingerprint(&mut digest, &binding.platform);
+        update_binding_fingerprint(&mut digest, &binding.terminal_path.to_string_lossy());
+        update_binding_fingerprint(&mut digest, &binding.account_ref.broker_server);
+        update_binding_fingerprint(&mut digest, &binding.account_ref.login);
+        digest.update(binding.connection_epoch.to_le_bytes());
+        digest.update(binding.updated_at_utc_msc.to_le_bytes());
+    }
+    Ok(digest.finalize().into())
+}
+
+fn update_binding_fingerprint(digest: &mut Sha256, value: &str) {
+    let bytes = value.as_bytes();
+    digest.update(bytes.len().to_le_bytes());
+    digest.update(bytes);
 }
 
 impl CredentialSource for ProfileCredentialSource {
@@ -1477,6 +1543,72 @@ mod tests {
             None
         );
         fs::remove_dir_all(root).expect("remove credential fixture");
+    }
+
+    #[tokio::test]
+    async fn terminal_binding_source_detects_account_path_and_epoch_changes() {
+        let root = unique_test_directory("binding-watch");
+        fs::create_dir_all(&root).expect("binding watch fixture root");
+        let paths = resolve_profile_paths(&root, "default").expect("profile paths");
+        let first_terminal = root.join("terminal-first64.exe");
+        let replacement_terminal = root.join("terminal-replacement64.exe");
+        fs::write(&first_terminal, b"first").expect("first terminal");
+        fs::write(&replacement_terminal, b"replacement").expect("replacement terminal");
+        let store = Arc::new(
+            OutboxStore::open_or_create(&paths.database_path).expect("binding watch store"),
+        );
+        store
+            .activate_terminal_binding(
+                "mt5_binding_watch_01",
+                "mt5",
+                &first_terminal,
+                &AccountRef {
+                    broker_server: "Broker-First".to_owned(),
+                    login: "111111".to_owned(),
+                },
+                1_700_000_000_000,
+            )
+            .expect("first binding");
+        let source = ProfileTerminalBindingSource::with_poll_interval(
+            Arc::clone(&store),
+            Duration::from_millis(10),
+        )
+        .expect("binding source");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), source.changed())
+                .await
+                .is_err(),
+            "an unchanged binding must not request a runtime reload"
+        );
+
+        let (_, replacement) = tokio::join!(
+            async {
+                tokio::time::timeout(Duration::from_secs(2), source.changed())
+                    .await
+                    .expect("binding change timeout")
+                    .expect("binding change")
+            },
+            async {
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                store.activate_terminal_binding(
+                    "mt5_binding_watch_01",
+                    "mt5",
+                    &replacement_terminal,
+                    &AccountRef {
+                        broker_server: "Broker-Replacement".to_owned(),
+                        login: "222222".to_owned(),
+                    },
+                    1_700_000_000_100,
+                )
+            }
+        );
+        assert_eq!(
+            replacement.expect("replacement binding").connection_epoch,
+            2
+        );
+        drop(source);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove binding watch fixture");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

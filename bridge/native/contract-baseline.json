@@ -176,7 +176,8 @@
     "activation_advances_epoch_atomically": true,
     "invalid_activation_does_not_consume_epoch": true,
     "account_switch_prunes_only_stale_data_sync_state": true,
-    "bindings_ordered_by_terminal_instance_id": true
+    "bindings_ordered_by_terminal_instance_id": true,
+    "runtime_change_detection_fields": ["terminal_instance_id", "platform", "terminal_path", "account_ref", "connection_epoch", "updated_at_utc_msc"]
   },
   "core_bootstrap_contract": {
     "profile_paths_are_authoritative": true,
@@ -198,6 +199,9 @@
     "mt5_command_dispatcher_enabled": true,
     "trade_admission_requires_acknowledged_initial_account_positions_orders": true,
     "every_server_reconnect_forces_new_initial_snapshots": true,
+    "runtime_binding_change_restarts_server_and_workers": true,
+    "runtime_binding_change_requires_higher_epoch": true,
+    "runtime_binding_change_does_not_replay_acked_commands": true,
     "command_path": [
       "websocket_inbound",
       "sqlite_command_ledger",

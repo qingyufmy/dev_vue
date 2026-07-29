@@ -439,7 +439,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - [进行中] 已拆出一终端一 Python Worker，并完成账户、报价、持仓和挂单只读 IPC；品种、K 线和历史分页留到后续数据批次。
 - [已完成] 报价经经纪商时区校准后输出 UTC；时钟未可信、账户改变、终端断开或返回数据无效时失败关闭。
 - [已完成] 已完成账户/持仓/挂单 data delta 的 Native 合同、revision/SQLite 最新投影/服务器 Outbox 原子提交，以及从 SQLite 恢复的快照投影器；投影器按 ticket 计算 upsert/delete，支持首次、epoch 变化、主动 reconciliation 和 gap 后 full snapshot。采集协调器按空闲 1 秒、活跃 250 毫秒动态轮询，支持交易后唤醒、Worker 恢复退避、停止取消和投影前账户路由复核。
-- [进行中] Worker 崩溃和 MT5 终端关闭/重启恢复已完成；账户切换和路径切换恢复仍需继续验收。
+- [已完成] Worker 崩溃和 MT5 终端关闭/重启恢复已完成；Core 会检测 SQLite 中账户、终端路径和 epoch 的运行期变化，有序关闭旧服务器会话与 Worker 后重新加载绑定。独立进程测试已验证新路径、新账户和更高 epoch 的 Hello/状态恢复，以及已 ACK 交易不重放；真实终端的账户/路径人工切换仍作为发布前实机验收项。
 
 交付门：页面数据满足现有服务器和产品功能合同，24 小时运行无串账户、无持续内存增长、历史响应不超限。
 
@@ -593,4 +593,4 @@ bridge/native/
 - 已完成签名包内 `server-endpoints.json` 与管理员 `endpoint-settings.json` 的 Native 地址权威解析：有效管理员覆盖优先，损坏覆盖安全退回包内地址；包内地址缺失时失败关闭，公网明文 HTTP 不会被静默接受。
 - 已完成 Core 正式入口：无授权时常驻等待且不打开浏览器、不启动 Worker；授权但无终端时失败关闭；单实例退出信号取消服务器与终端；Launcher ready 仅在服务器连接且期望终端 Ready 后原子写入。主动退出授权会立即关闭当前会话并回到等待授权。
 - 已完成 Core 级真实进程回环矩阵：隔离 Python 假 MT5 Worker 经命名管道产生 `data_delta`，本地 refresh/ticket/WebSocket 完成 Hello/ACK、三类初始快照 ACK、命令执行、交易结果 ACK 和 Launcher ready；主动断开首个 WebSocket 后 Core 自动建立第二个会话，退出信号完成 Core 与 Python Worker 进程树清理。
-- 已完成真实经纪商拒单、服务器网络断开、Worker 进程终止、真实 MT5 终端关闭/重启和状态投影写失败的故障验证；下一批继续验证账户/路径切换恢复。休市拒绝只能在真实休市窗口验收，不以人工伪造结果替代；随后进入 MT4 Native 适配。
+- 已完成真实经纪商拒单、服务器网络断开、Worker 进程终止、真实 MT5 终端关闭/重启和状态投影写失败的故障验证；账户/路径/epoch 的运行期切换已通过 Core 独立进程闭环，发布前仍需用真实终端执行人工切换验收。休市拒绝只能在真实休市窗口验收，不以人工伪造结果替代；随后进入 MT4 Native 适配。
