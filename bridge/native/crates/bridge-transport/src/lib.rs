@@ -1,6 +1,7 @@
 use bridge_contract::{
-    BridgeEnvelope, DataAcknowledgement, HelloAcknowledgement, HelloMessage,
-    SERVER_DATA_QUEUE_CAPACITY, SERVER_MAX_MESSAGE_BYTES, SERVER_TRADE_QUEUE_CAPACITY,
+    BridgeEnvelope, CommandResultAcknowledgement, CommandResultMessage, DataAcknowledgement,
+    HelloAcknowledgement, HelloMessage, SERVER_DATA_QUEUE_CAPACITY, SERVER_MAX_MESSAGE_BYTES,
+    SERVER_TRADE_QUEUE_CAPACITY, same_terminal_route,
 };
 use bridge_store::{OutboxRecord, OutboxStore};
 use futures_util::{SinkExt, StreamExt};
@@ -21,10 +22,12 @@ use tokio_tungstenite::tungstenite::protocol::{Message, WebSocketConfig};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_with_config};
 use url::Url;
 
+mod admission;
 mod inbound;
 mod runtime;
 mod supervisor;
 
+pub use admission::NativeCommandAdmission;
 pub use inbound::{
     InboundEventSink, NativeInboundRouter, NoopInboundEventSink, ReleaseAvailableNotification,
 };
@@ -626,6 +629,13 @@ pub trait OutboxPersistence: Send + Sync {
         message_id: &str,
         acknowledgement_status: &str,
     ) -> Result<bool, bridge_store::StoreError>;
+
+    fn execution_receipt(
+        &self,
+        _command_id: &str,
+    ) -> Result<Option<CommandResultMessage>, bridge_store::StoreError> {
+        Ok(None)
+    }
 }
 
 impl OutboxPersistence for OutboxStore {
@@ -662,6 +672,13 @@ impl OutboxPersistence for OutboxStore {
         acknowledgement_status: &str,
     ) -> Result<bool, bridge_store::StoreError> {
         OutboxStore::acknowledge(self, message_id, acknowledgement_status)
+    }
+
+    fn execution_receipt(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<CommandResultMessage>, bridge_store::StoreError> {
+        OutboxStore::execution_receipt(self, command_id)
     }
 }
 
@@ -811,10 +828,88 @@ impl OutboxPump {
                 &acknowledgement.status,
             )
             .await?;
-        Ok(if removed {
+        Ok(if removed && delta.full_snapshot {
+            DataAckDisposition::AppliedSnapshot {
+                terminal_instance_id: acknowledgement.terminal_instance_id,
+                connection_epoch: acknowledgement.connection_epoch,
+                stream: acknowledgement.stream,
+            }
+        } else if removed {
             DataAckDisposition::Applied
         } else {
             DataAckDisposition::Unknown
+        })
+    }
+
+    pub async fn handle_command_result_acknowledgement(
+        &self,
+        payload_json: &str,
+    ) -> Result<bool, TransportError> {
+        let acknowledgement: CommandResultAcknowledgement = serde_json::from_str(payload_json)
+            .map_err(|_| TransportError::new("bridge_command_result_ack_invalid"))?;
+        acknowledgement.validate().map_err(TransportError::new)?;
+
+        let store = Arc::clone(&self.store);
+        let acked_message_id = acknowledgement.acked_message_id.clone();
+        let pending = tokio::task::spawn_blocking(move || store.pending(&acked_message_id))
+            .await
+            .map_err(|_| TransportError::new("bridge_outbox_worker_failed"))?
+            .map_err(|_| TransportError::new("bridge_outbox_read_failed"))?;
+        if pending
+            .as_ref()
+            .is_some_and(|record| record.message_type != "command_result")
+        {
+            return Err(TransportError::new(
+                "bridge_command_result_ack_type_mismatch",
+            ));
+        }
+
+        let result = if let Some(record) = &pending {
+            serde_json::from_str::<CommandResultMessage>(&record.payload_json)
+                .map_err(|_| TransportError::new("bridge_command_result_ack_unknown"))?
+        } else {
+            let store = Arc::clone(&self.store);
+            let command_id = acknowledgement.command_id.clone();
+            tokio::task::spawn_blocking(move || store.execution_receipt(&command_id))
+                .await
+                .map_err(|_| TransportError::new("bridge_outbox_worker_failed"))?
+                .map_err(|_| TransportError::new("bridge_execution_receipt_read_failed"))?
+                .ok_or_else(|| TransportError::new("bridge_command_result_ack_unknown"))?
+        };
+        result
+            .validate()
+            .map_err(|_| TransportError::new("bridge_command_result_ack_unknown"))?;
+        if result.message_id != acknowledgement.acked_message_id {
+            return Err(TransportError::new("bridge_command_result_ack_unknown"));
+        }
+        if result.command_id != acknowledgement.command_id
+            || !same_terminal_route(
+                &result.terminal_instance_id,
+                &result.account_ref,
+                result.connection_epoch,
+                &acknowledgement.terminal_instance_id,
+                &acknowledgement.account_ref,
+                acknowledgement.connection_epoch,
+            )
+        {
+            return Err(TransportError::new(
+                "bridge_command_result_ack_route_mismatch",
+            ));
+        }
+        if pending.is_none() {
+            return Ok(true);
+        }
+        self.handle_verified_acknowledgement(
+            &acknowledgement.acked_message_id,
+            &acknowledgement.status,
+        )
+        .await
+        .and_then(|removed| {
+            if removed {
+                Ok(true)
+            } else {
+                Err(TransportError::new("bridge_command_result_ack_unknown"))
+            }
         })
     }
 
@@ -883,6 +978,11 @@ impl OutboxPump {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataAckDisposition {
     Applied,
+    AppliedSnapshot {
+        terminal_instance_id: String,
+        connection_epoch: i64,
+        stream: String,
+    },
     Gap {
         terminal_instance_id: String,
         connection_epoch: i64,
@@ -901,6 +1001,8 @@ struct DataDeltaRoute {
     connection_epoch: i64,
     stream: String,
     revision: i64,
+    #[serde(default)]
+    full_snapshot: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1005,6 +1107,7 @@ mod tests {
         records: StdMutex<Vec<OutboxRecord>>,
         attempts: StdMutex<Vec<(String, i64, i64)>>,
         acknowledgements: StdMutex<Vec<(String, String)>>,
+        receipts: StdMutex<HashMap<String, CommandResultMessage>>,
     }
 
     impl OutboxPersistence for FakeOutbox {
@@ -1061,6 +1164,18 @@ mod tests {
                 .expect("acknowledgements")
                 .push((message_id.to_owned(), acknowledgement_status.to_owned()));
             Ok(true)
+        }
+
+        fn execution_receipt(
+            &self,
+            command_id: &str,
+        ) -> Result<Option<CommandResultMessage>, bridge_store::StoreError> {
+            Ok(self
+                .receipts
+                .lock()
+                .expect("receipts")
+                .get(command_id)
+                .cloned())
         }
     }
 
@@ -1287,5 +1402,99 @@ mod tests {
             }],
         };
         heartbeat.validate().expect("heartbeat");
+    }
+
+    fn command_result() -> CommandResultMessage {
+        CommandResultMessage {
+            v: 3,
+            message_type: "command_result".to_owned(),
+            message_id: "result_01JACKTEST001".to_owned(),
+            sent_at_utc_msc: 1_700_000_000_001,
+            command_id: "command_01JACKTEST01".to_owned(),
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            status: "succeeded".to_owned(),
+            completed_at_utc_msc: 1_700_000_000_001,
+            error_code: None,
+            error_message: None,
+            raw_result: None,
+            evidence: bridge_contract::ExecutionEvidence {
+                observed_at_utc_msc: 1_700_000_000_001,
+                order_tickets: vec!["1001".to_owned()],
+                position_tickets: Vec::new(),
+                deal_tickets: Vec::new(),
+                broker_retcode: Some(10009),
+            },
+        }
+    }
+
+    fn command_result_ack(result: &CommandResultMessage) -> String {
+        serde_json::json!({
+            "v": 3,
+            "type": "command_result_ack",
+            "message_id": "ack_01JACKTEST0001",
+            "sent_at_utc_msc": 1_700_000_000_002_i64,
+            "acked_message_id": result.message_id,
+            "command_id": result.command_id,
+            "terminal_instance_id": result.terminal_instance_id,
+            "account_ref": result.account_ref,
+            "connection_epoch": result.connection_epoch,
+            "status": "applied"
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn command_result_ack_is_route_checked_and_accepts_a_receipt_backed_replay() {
+        let store = Arc::new(FakeOutbox::default());
+        let result = command_result();
+        store.records.lock().expect("records").push(OutboxRecord {
+            id: 1,
+            message_id: result.message_id.clone(),
+            message_type: "command_result".to_owned(),
+            terminal_instance_id: result.terminal_instance_id.clone(),
+            connection_epoch: result.connection_epoch,
+            priority: "trade".to_owned(),
+            payload_json: serde_json::to_string(&result).expect("result json"),
+            attempt_count: 0,
+            created_at_utc_msc: result.sent_at_utc_msc,
+        });
+        let pump = OutboxPump::new(
+            store.clone(),
+            PriorityMessageQueue::new(2, 2).expect("queue"),
+            None,
+        );
+        assert!(
+            pump.handle_command_result_acknowledgement(&command_result_ack(&result))
+                .await
+                .expect("pending acknowledgement")
+        );
+
+        store.records.lock().expect("records").clear();
+        store
+            .receipts
+            .lock()
+            .expect("receipts")
+            .insert(result.command_id.clone(), result.clone());
+        assert!(
+            pump.handle_command_result_acknowledgement(&command_result_ack(&result))
+                .await
+                .expect("receipt replay")
+        );
+
+        let mut mismatched: serde_json::Value =
+            serde_json::from_str(&command_result_ack(&result)).expect("ack json");
+        mismatched["account_ref"]["login"] = serde_json::json!("999999");
+        assert_eq!(
+            pump.handle_command_result_acknowledgement(&mismatched.to_string())
+                .await
+                .expect_err("route mismatch")
+                .code(),
+            "bridge_command_result_ack_route_mismatch"
+        );
     }
 }

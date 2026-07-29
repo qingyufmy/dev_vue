@@ -98,6 +98,7 @@ dependencies = [
 name = "bridge-store"
 version = "4.0.0-alpha.1"
 dependencies = [
+ "bridge-contract",
  "rusqlite",
  "serde",
  "serde_json",

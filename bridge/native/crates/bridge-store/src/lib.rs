@@ -1,3 +1,4 @@
+use bridge_contract::{CommandResultMessage, validate_id};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
 use serde::Serialize;
@@ -514,6 +515,134 @@ impl OutboxStore {
             .map(|affected| affected == 1)
             .map_err(|_| StoreError::new("bridge_store_outbox_ack_failed"))
     }
+
+    pub fn execution_receipt(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<CommandResultMessage>, StoreError> {
+        validate_id(command_id)
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_query_invalid"))?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let payload = connection
+            .query_row(
+                "SELECT result_json FROM execution_receipts WHERE command_id = ?1 LIMIT 1;",
+                [command_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_query_failed"))?;
+        payload
+            .map(|payload| {
+                let result: CommandResultMessage = serde_json::from_str(&payload)
+                    .map_err(|_| StoreError::new("bridge_store_execution_receipt_invalid"))?;
+                result
+                    .validate()
+                    .map_err(|_| StoreError::new("bridge_store_execution_receipt_invalid"))?;
+                if result.command_id != command_id {
+                    return Err(StoreError::new("bridge_store_execution_receipt_invalid"));
+                }
+                Ok(result)
+            })
+            .transpose()
+    }
+
+    pub fn save_execution_receipt(
+        &self,
+        result: &CommandResultMessage,
+        receipt_limit: usize,
+    ) -> Result<(), StoreError> {
+        result
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_invalid"))?;
+        let receipt_limit = receipt_limit.clamp(1, 100_000);
+        let payload = serde_json::to_string(result)
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_invalid"))?;
+        if payload.len() > 4 * 1024 * 1024 {
+            return Err(StoreError::new("bridge_store_execution_receipt_invalid"));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+        transaction
+            .execute(
+                "INSERT INTO execution_receipts (
+                   command_id, terminal_instance_id, connection_epoch, status,
+                   result_json, completed_at_utc_msc
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(command_id) DO UPDATE SET
+                   terminal_instance_id = excluded.terminal_instance_id,
+                   connection_epoch = excluded.connection_epoch,
+                   status = excluded.status,
+                   result_json = excluded.result_json,
+                   completed_at_utc_msc = excluded.completed_at_utc_msc;",
+                params![
+                    result.command_id,
+                    result.terminal_instance_id,
+                    result.connection_epoch,
+                    result.status,
+                    payload,
+                    result.completed_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+        transaction
+            .execute(
+                "INSERT INTO outbox_messages (
+                   message_id, message_type, terminal_instance_id, connection_epoch, priority,
+                   payload_json, created_at_utc_msc
+                 ) VALUES (?1, 'command_result', ?2, ?3, 'trade', ?4, ?5)
+                 ON CONFLICT(message_id) DO NOTHING;",
+                params![
+                    result.message_id,
+                    result.terminal_instance_id,
+                    result.connection_epoch,
+                    payload,
+                    result.sent_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM execution_receipts
+                 WHERE command_id IN (
+                   SELECT command_id FROM execution_receipts
+                   ORDER BY completed_at_utc_msc DESC, command_id DESC
+                   LIMIT -1 OFFSET ?1
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM outbox_messages pending
+                   WHERE pending.acked_at_utc_msc IS NULL
+                     AND pending.message_type = 'command_result'
+                     AND json_valid(pending.payload_json) = 1
+                     AND json_extract(pending.payload_json, '$.command_id') = execution_receipts.command_id
+                 );",
+                [receipt_limit as i64],
+            )
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))
+    }
+
+    pub fn count_execution_receipts(&self) -> Result<usize, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        connection
+            .query_row("SELECT COUNT(*) FROM execution_receipts;", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|count| count.max(0) as usize)
+            .map_err(|_| StoreError::new("bridge_store_execution_receipt_query_failed"))
+    }
 }
 
 fn validate_new_outbox_record(record: &NewOutboxRecord) -> Result<(), StoreError> {
@@ -652,6 +781,21 @@ mod tests {
                     .expect("fixture outbox table");
                 continue;
             }
+            if *table == "execution_receipts" && omitted.is_none() {
+                connection
+                    .execute_batch(
+                        "CREATE TABLE execution_receipts (\
+                           command_id TEXT PRIMARY KEY,\
+                           terminal_instance_id TEXT NOT NULL,\
+                           connection_epoch INTEGER NOT NULL,\
+                           status TEXT NOT NULL,\
+                           result_json TEXT NOT NULL,\
+                           completed_at_utc_msc INTEGER NOT NULL\
+                         );",
+                    )
+                    .expect("fixture execution receipts table");
+                continue;
+            }
             let definitions = columns
                 .iter()
                 .filter(|column| omitted != Some((table, **column)))
@@ -734,6 +878,103 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove outbox fixture");
+    }
+
+    fn command_result(
+        command_id: &str,
+        message_id: &str,
+        completed_at: i64,
+    ) -> CommandResultMessage {
+        CommandResultMessage {
+            v: 3,
+            message_type: "command_result".to_owned(),
+            message_id: message_id.to_owned(),
+            sent_at_utc_msc: completed_at,
+            command_id: command_id.to_owned(),
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            account_ref: bridge_contract::AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            status: "succeeded".to_owned(),
+            completed_at_utc_msc: completed_at,
+            error_code: None,
+            error_message: None,
+            raw_result: Some(serde_json::json!({ "retcode": 10009 })),
+            evidence: bridge_contract::ExecutionEvidence {
+                observed_at_utc_msc: completed_at,
+                order_tickets: vec!["1001".to_owned()],
+                position_tickets: Vec::new(),
+                deal_tickets: Vec::new(),
+                broker_retcode: Some(10009),
+            },
+        }
+    }
+
+    #[test]
+    fn execution_receipt_and_trade_outbox_commit_atomically_and_trim_only_acknowledged_rows() {
+        let root = unique_test_directory("execution-receipts");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path, None);
+        let store = OutboxStore::open_existing(&path).expect("store");
+        let first = command_result(
+            "command_01JRECEIPT01",
+            "result_01JRECEIPT001",
+            1_700_000_000_001,
+        );
+        let second = command_result(
+            "command_01JRECEIPT02",
+            "result_01JRECEIPT002",
+            1_700_000_000_002,
+        );
+        store
+            .save_execution_receipt(&first, 1)
+            .expect("first receipt");
+        store
+            .save_execution_receipt(&second, 1)
+            .expect("second receipt");
+        assert_eq!(store.count_execution_receipts().expect("count"), 2);
+        assert_eq!(
+            store
+                .execution_receipt(&first.command_id)
+                .expect("first")
+                .expect("first receipt"),
+            first
+        );
+        assert_eq!(
+            store
+                .pending(&second.message_id)
+                .expect("second outbox")
+                .expect("pending")
+                .priority,
+            "trade"
+        );
+
+        assert!(
+            store
+                .acknowledge(&first.message_id, "applied")
+                .expect("ack first")
+        );
+        let third = command_result(
+            "command_01JRECEIPT03",
+            "result_01JRECEIPT003",
+            1_700_000_000_003,
+        );
+        store
+            .save_execution_receipt(&third, 1)
+            .expect("third receipt");
+        assert!(
+            store
+                .execution_receipt(&first.command_id)
+                .expect("trimmed")
+                .is_none()
+        );
+        assert_eq!(store.count_execution_receipts().expect("count"), 2);
+
+        drop(store);
+        fs::remove_dir_all(root).expect("remove receipt fixture");
     }
 
     fn extract_csharp_create_table_columns<'a>(source: &'a str, table: &str) -> Vec<&'a str> {

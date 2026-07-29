@@ -2,7 +2,7 @@ use crate::{
     BridgeWebSocketSession, MessagePriority, NativeInboundRouter, OutboundMessage, OutboxPump,
     PriorityMessageQueue, TransportError,
 };
-use bridge_contract::{HeartbeatMessage, TerminalStreamFreshness};
+use bridge_contract::{HeartbeatMessage, TerminalDescriptor, TerminalStreamFreshness};
 use futures_util::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,6 +13,7 @@ use tokio::time::{MissedTickBehavior, interval, timeout};
 
 pub trait SessionChannel: Send + 'static {
     fn session_id(&self) -> &str;
+    fn terminals(&self) -> Vec<TerminalDescriptor>;
     fn send_json(&mut self, payload_json: String) -> BoxFuture<'_, Result<(), TransportError>>;
     fn receive_json(&mut self) -> BoxFuture<'_, Result<String, TransportError>>;
     fn close(&mut self) -> BoxFuture<'_, Result<(), TransportError>>;
@@ -21,6 +22,10 @@ pub trait SessionChannel: Send + 'static {
 impl SessionChannel for BridgeWebSocketSession {
     fn session_id(&self) -> &str {
         &self.hello().session_id
+    }
+
+    fn terminals(&self) -> Vec<TerminalDescriptor> {
+        self.hello().terminals.clone()
     }
 
     fn send_json(&mut self, payload_json: String) -> BoxFuture<'_, Result<(), TransportError>> {
@@ -42,6 +47,10 @@ where
 {
     fn session_id(&self) -> &str {
         (**self).session_id()
+    }
+
+    fn terminals(&self) -> Vec<TerminalDescriptor> {
+        (**self).terminals()
     }
 
     fn send_json(&mut self, payload_json: String) -> BoxFuture<'_, Result<(), TransportError>> {
@@ -138,6 +147,17 @@ pub struct SessionRuntime {
     heartbeat_sequence: Arc<AtomicU64>,
 }
 
+struct SessionAdmissionGuard {
+    inbound: Arc<NativeInboundRouter>,
+    session_id: String,
+}
+
+impl Drop for SessionAdmissionGuard {
+    fn drop(&mut self) {
+        let _ = self.inbound.end_session(&self.session_id);
+    }
+}
+
 impl SessionRuntime {
     pub fn new(
         queue: PriorityMessageQueue,
@@ -167,6 +187,12 @@ impl SessionRuntime {
         if session_id.trim().is_empty() {
             return Err(TransportError::new("bridge_session_id_invalid"));
         }
+        self.inbound
+            .begin_session(&session_id, &channel.terminals())?;
+        let _admission = SessionAdmissionGuard {
+            inbound: Arc::clone(&self.inbound),
+            session_id: session_id.clone(),
+        };
 
         let cancellation = SessionCancellation::default();
         let mut tasks = JoinSet::new();
@@ -406,6 +432,18 @@ mod tests {
     impl SessionChannel for FakeChannel {
         fn session_id(&self) -> &str {
             &self.session_id
+        }
+        fn terminals(&self) -> Vec<TerminalDescriptor> {
+            vec![TerminalDescriptor {
+                terminal_instance_id: "mt5_terminal_01".to_owned(),
+                platform: "mt5".to_owned(),
+                account_ref: bridge_contract::AccountRef {
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "123456".to_owned(),
+                },
+                connection_epoch: 1,
+                worker_version: Some("4.0.0".to_owned()),
+            }]
         }
         fn send_json(&mut self, payload_json: String) -> BoxFuture<'_, Result<(), TransportError>> {
             let send_error = self.send_error;

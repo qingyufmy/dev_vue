@@ -227,6 +227,153 @@ impl HelloAcknowledgement {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CommandMessage {
+    pub v: u16,
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub message_id: String,
+    pub sent_at_utc_msc: i64,
+    pub command_id: String,
+    pub terminal_instance_id: String,
+    pub account_ref: AccountRef,
+    pub connection_epoch: i64,
+    pub issued_at_utc_msc: i64,
+    pub deadline_utc_msc: i64,
+    pub action: String,
+    pub params: Value,
+}
+
+impl CommandMessage {
+    pub fn validate(&self, now_utc_msc: i64) -> Result<(), &'static str> {
+        validate_typed_envelope(
+            self.v,
+            &self.message_type,
+            "command",
+            &self.message_id,
+            self.sent_at_utc_msc,
+        )?;
+        validate_id(&self.command_id)?;
+        validate_id(&self.terminal_instance_id)?;
+        self.account_ref.validate()?;
+        if self.connection_epoch <= 0
+            || self.issued_at_utc_msc <= 0
+            || self.deadline_utc_msc <= 0
+            || self.deadline_utc_msc < self.issued_at_utc_msc
+            || self.deadline_utc_msc <= now_utc_msc
+            || !matches!(
+                self.action.as_str(),
+                "place_order"
+                    | "cancel_order"
+                    | "modify_order"
+                    | "modify_position"
+                    | "close_position"
+                    | "query_execution"
+            )
+            || !self.params.is_object()
+        {
+            return Err("bridge_command_invalid");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionEvidence {
+    pub observed_at_utc_msc: i64,
+    #[serde(default)]
+    pub order_tickets: Vec<String>,
+    #[serde(default)]
+    pub position_tickets: Vec<String>,
+    #[serde(default)]
+    pub deal_tickets: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub broker_retcode: Option<i64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CommandResultMessage {
+    pub v: u16,
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub message_id: String,
+    pub sent_at_utc_msc: i64,
+    pub command_id: String,
+    pub terminal_instance_id: String,
+    pub account_ref: AccountRef,
+    pub connection_epoch: i64,
+    pub status: String,
+    pub completed_at_utc_msc: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_result: Option<Value>,
+    pub evidence: ExecutionEvidence,
+}
+
+impl CommandResultMessage {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        validate_typed_envelope(
+            self.v,
+            &self.message_type,
+            "command_result",
+            &self.message_id,
+            self.sent_at_utc_msc,
+        )?;
+        validate_id(&self.command_id)?;
+        validate_id(&self.terminal_instance_id)?;
+        self.account_ref.validate()?;
+        if self.connection_epoch <= 0
+            || !matches!(
+                self.status.as_str(),
+                "succeeded" | "rejected" | "failed" | "uncertain"
+            )
+            || self.completed_at_utc_msc <= 0
+            || self.evidence.observed_at_utc_msc <= 0
+            || self.error_code.as_ref().is_some_and(|value| {
+                value.is_empty()
+                    || value.len() > 128
+                    || !value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            })
+        {
+            return Err("bridge_command_result_invalid");
+        }
+        Ok(())
+    }
+
+    pub fn matches_command(&self, command: &CommandMessage) -> bool {
+        self.command_id == command.command_id
+            && same_terminal_route(
+                &self.terminal_instance_id,
+                &self.account_ref,
+                self.connection_epoch,
+                &command.terminal_instance_id,
+                &command.account_ref,
+                command.connection_epoch,
+            )
+    }
+}
+
+pub fn same_terminal_route(
+    left_terminal_instance_id: &str,
+    left_account_ref: &AccountRef,
+    left_connection_epoch: i64,
+    right_terminal_instance_id: &str,
+    right_account_ref: &AccountRef,
+    right_connection_epoch: i64,
+) -> bool {
+    left_terminal_instance_id == right_terminal_instance_id
+        && left_connection_epoch == right_connection_epoch
+        && left_account_ref.login == right_account_ref.login
+        && left_account_ref
+            .broker_server
+            .eq_ignore_ascii_case(&right_account_ref.broker_server)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalStreamFreshness {
     pub terminal_instance_id: String,
     pub connection_epoch: i64,
@@ -519,5 +666,66 @@ mod tests {
         let report = value["update_report"].as_object().expect("update report");
         assert!(!report.contains_key("started_at_utc_msc"));
         assert!(!report.contains_key("error_code"));
+    }
+
+    fn command_fixture() -> CommandMessage {
+        CommandMessage {
+            v: 3,
+            message_type: "command".to_owned(),
+            message_id: "message_01JCOMMAND01".to_owned(),
+            sent_at_utc_msc: 1_700_000_000_000,
+            command_id: "command_01JCOMMAND01".to_owned(),
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            issued_at_utc_msc: 1_700_000_000_000,
+            deadline_utc_msc: 1_700_000_010_000,
+            action: "place_order".to_owned(),
+            params: serde_json::json!({ "symbol": "XAUUSD", "volume": 0.01 }),
+        }
+    }
+
+    #[test]
+    fn command_contract_rejects_expiry_and_route_drift() {
+        let command = command_fixture();
+        command.validate(1_700_000_000_001).expect("valid command");
+        assert_eq!(
+            command.validate(command.deadline_utc_msc),
+            Err("bridge_command_invalid")
+        );
+
+        let result = CommandResultMessage {
+            v: 3,
+            message_type: "command_result".to_owned(),
+            message_id: "result_01JCOMMAND001".to_owned(),
+            sent_at_utc_msc: 1_700_000_000_100,
+            command_id: command.command_id.clone(),
+            terminal_instance_id: command.terminal_instance_id.clone(),
+            account_ref: AccountRef {
+                broker_server: "broker-demo".to_owned(),
+                login: command.account_ref.login.clone(),
+            },
+            connection_epoch: command.connection_epoch,
+            status: "succeeded".to_owned(),
+            completed_at_utc_msc: 1_700_000_000_100,
+            error_code: None,
+            error_message: None,
+            raw_result: Some(serde_json::json!({ "retcode": 10009 })),
+            evidence: ExecutionEvidence {
+                observed_at_utc_msc: 1_700_000_000_100,
+                order_tickets: vec!["1001".to_owned()],
+                position_tickets: Vec::new(),
+                deal_tickets: Vec::new(),
+                broker_retcode: Some(10009),
+            },
+        };
+        result.validate().expect("result");
+        assert!(result.matches_command(&command));
+        let mut wrong_account = result;
+        wrong_account.account_ref.login = "999999".to_owned();
+        assert!(!wrong_account.matches_command(&command));
     }
 }
