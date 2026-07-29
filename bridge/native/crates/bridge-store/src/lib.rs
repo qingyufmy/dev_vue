@@ -1307,34 +1307,41 @@ impl OutboxStore {
             connection_epoch,
             "orders",
         )?;
-        if account.items.len() > 1 {
-            return Err(StoreError::new("bridge_store_projection_account_invalid"));
-        }
-        if let Some(value) = account.items.first() {
-            let Some(object) = value.as_object() else {
-                return Err(StoreError::new("bridge_store_projection_account_invalid"));
-            };
-            let login_matches = object.get("login").is_some_and(|value| {
-                value.as_str() == Some(account_ref.login.as_str())
-                    || value
-                        .as_u64()
-                        .is_some_and(|login| login.to_string() == account_ref.login)
-            });
-            let server_matches = object
-                .get("server")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|server| server == account_ref.broker_server);
-            if !login_matches || !server_matches {
-                return Err(StoreError::new(
-                    "bridge_store_projection_account_route_mismatch",
-                ));
-            }
-        }
+        validate_account_projection_route(&account, account_ref)?;
         Ok(StoredTerminalProjection {
             account,
             positions,
             orders,
         })
+    }
+
+    /// Reads only the current account projection for lightweight status surfaces. The same
+    /// terminal/account/epoch fencing as the full projection is retained, without loading every
+    /// active position and order merely to render connection or trading-permission state.
+    pub fn load_account_projection(
+        &self,
+        terminal_instance_id: &str,
+        account_ref: &AccountRef,
+        connection_epoch: i64,
+    ) -> Result<StoredStreamProjection, StoreError> {
+        if validate_id(terminal_instance_id).is_err()
+            || account_ref.validate().is_err()
+            || connection_epoch <= 0
+        {
+            return Err(StoreError::new("bridge_store_projection_route_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let account = load_stored_stream(
+            &connection,
+            terminal_instance_id,
+            connection_epoch,
+            "account",
+        )?;
+        validate_account_projection_route(&account, account_ref)?;
+        Ok(account)
     }
 
     pub fn ready_for_terminals(
@@ -2317,6 +2324,36 @@ fn read_latest_stream(
             .map_err(|_| StoreError::new("bridge_store_latest_payload_invalid"))
     })
     .collect()
+}
+
+fn validate_account_projection_route(
+    account: &StoredStreamProjection,
+    account_ref: &AccountRef,
+) -> Result<(), StoreError> {
+    if account.items.len() > 1 {
+        return Err(StoreError::new("bridge_store_projection_account_invalid"));
+    }
+    if let Some(value) = account.items.first() {
+        let Some(object) = value.as_object() else {
+            return Err(StoreError::new("bridge_store_projection_account_invalid"));
+        };
+        let login_matches = object.get("login").is_some_and(|value| {
+            value.as_str() == Some(account_ref.login.as_str())
+                || value
+                    .as_u64()
+                    .is_some_and(|login| login.to_string() == account_ref.login)
+        });
+        let server_matches = object
+            .get("server")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|server| server == account_ref.broker_server);
+        if !login_matches || !server_matches {
+            return Err(StoreError::new(
+                "bridge_store_projection_account_route_mismatch",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn load_stored_stream(
@@ -3909,6 +3946,14 @@ mod tests {
         assert_eq!(restored.positions.items, replacement.upserts);
         assert_eq!(restored.orders.revision, 0);
         assert!(restored.orders.items.is_empty());
+        let account_only = store
+            .load_account_projection(
+                &replacement.terminal_instance_id,
+                &replacement.account_ref,
+                replacement.connection_epoch,
+            )
+            .expect("account-only projection");
+        assert_eq!(account_only, restored.account);
         let switched = store
             .load_terminal_projection(
                 &replacement.terminal_instance_id,
@@ -3928,6 +3973,17 @@ mod tests {
                     replacement.connection_epoch,
                 )
                 .expect_err("account route mismatch")
+                .code(),
+            "bridge_store_projection_account_route_mismatch"
+        );
+        assert_eq!(
+            store
+                .load_account_projection(
+                    &replacement.terminal_instance_id,
+                    &wrong_account,
+                    replacement.connection_epoch,
+                )
+                .expect_err("account-only route mismatch")
                 .code(),
             "bridge_store_projection_account_route_mismatch"
         );

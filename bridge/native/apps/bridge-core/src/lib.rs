@@ -61,6 +61,7 @@ const RECONCILIATION_INTERVAL: Duration = Duration::from_secs(5);
 const RECONCILIATION_BATCH_LIMIT: usize = 100;
 const CREDENTIAL_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const TERMINAL_BINDING_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const UI_TRADING_PERMISSION_MAX_AGE_MSC: i64 = 5_000;
 const MAX_CREDENTIAL_FILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1299,6 +1300,62 @@ pub struct NativeRuntimeStatusHandle {
     reconciliation_state: Arc<CoreReconciliationState>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TerminalTradingPermissions {
+    terminal_trading_allowed: Option<bool>,
+    program_trading_allowed: Option<bool>,
+    account_trading_allowed: Option<bool>,
+    account_expert_trading_allowed: Option<bool>,
+}
+
+fn terminal_trading_permissions(
+    store: &OutboxStore,
+    status: &TerminalSessionStatus,
+    observed_at_utc_msc: i64,
+) -> TerminalTradingPermissions {
+    if !permission_snapshot_is_fresh(status, observed_at_utc_msc) {
+        return TerminalTradingPermissions::default();
+    }
+    let Ok(account) = store.load_account_projection(
+        &status.route.terminal_instance_id,
+        &status.route.account_ref,
+        status.route.connection_epoch,
+    ) else {
+        return TerminalTradingPermissions::default();
+    };
+    parse_terminal_trading_permissions(&status.route.platform, account.items.first())
+}
+
+fn permission_snapshot_is_fresh(status: &TerminalSessionStatus, observed_at_utc_msc: i64) -> bool {
+    let Some(last_success_at_utc_msc) = status.last_success_at_utc_msc else {
+        return false;
+    };
+    status.state == bridge_terminal_session::TerminalSessionState::Ready
+        && observed_at_utc_msc > 0
+        && last_success_at_utc_msc > 0
+        && last_success_at_utc_msc <= observed_at_utc_msc.saturating_add(1_000)
+        && observed_at_utc_msc.saturating_sub(last_success_at_utc_msc)
+            <= UI_TRADING_PERMISSION_MAX_AGE_MSC
+}
+
+fn parse_terminal_trading_permissions(
+    platform: &str,
+    account: Option<&serde_json::Value>,
+) -> TerminalTradingPermissions {
+    let Some(account) = account.and_then(serde_json::Value::as_object) else {
+        return TerminalTradingPermissions::default();
+    };
+    let boolean = |name: &str| account.get(name).and_then(serde_json::Value::as_bool);
+    TerminalTradingPermissions {
+        terminal_trading_allowed: boolean("terminal_trade_allowed"),
+        program_trading_allowed: (platform == "mt4")
+            .then(|| boolean("program_trade_allowed"))
+            .flatten(),
+        account_trading_allowed: boolean("trade_allowed"),
+        account_expert_trading_allowed: boolean("trade_expert"),
+    }
+}
+
 impl NativeRuntimeStatusHandle {
     pub fn ui_snapshot(
         &self,
@@ -1329,31 +1386,36 @@ impl NativeRuntimeStatusHandle {
             .collect::<Vec<_>>();
         let terminals = session_statuses
             .iter()
-            .map(|status| UiTerminalStatus {
-                terminal_instance_id: status.route.terminal_instance_id.clone(),
-                platform: status.route.platform.clone(),
-                broker_server: status.route.account_ref.broker_server.clone(),
-                login: status.route.account_ref.login.clone(),
-                runtime_state: match status.state {
-                    bridge_terminal_session::TerminalSessionState::Ready => "running",
-                    bridge_terminal_session::TerminalSessionState::Degraded => "restarting",
-                    bridge_terminal_session::TerminalSessionState::Superseded
-                    | bridge_terminal_session::TerminalSessionState::Stopped => "stopped",
-                    bridge_terminal_session::TerminalSessionState::Starting => "starting",
+            .map(|status| {
+                let permissions = terminal_trading_permissions(
+                    &self.active_sessions.store,
+                    status,
+                    observed_at_utc_msc,
+                );
+                UiTerminalStatus {
+                    terminal_instance_id: status.route.terminal_instance_id.clone(),
+                    platform: status.route.platform.clone(),
+                    broker_server: status.route.account_ref.broker_server.clone(),
+                    login: status.route.account_ref.login.clone(),
+                    runtime_state: match status.state {
+                        bridge_terminal_session::TerminalSessionState::Ready => "running",
+                        bridge_terminal_session::TerminalSessionState::Degraded => "restarting",
+                        bridge_terminal_session::TerminalSessionState::Superseded
+                        | bridge_terminal_session::TerminalSessionState::Stopped => "stopped",
+                        bridge_terminal_session::TerminalSessionState::Starting => "starting",
+                    }
+                    .to_owned(),
+                    error_code: status
+                        .error_code
+                        .clone()
+                        .map(|code| sanitized_status_code(&code, "terminal_runtime_failed")),
+                    observer_profile_id: None,
+                    terminal_trading_allowed: permissions.terminal_trading_allowed,
+                    program_trading_allowed: permissions.program_trading_allowed,
+                    account_trading_allowed: permissions.account_trading_allowed,
+                    account_expert_trading_allowed: permissions.account_expert_trading_allowed,
+                    mt4_expert_restart_required: false,
                 }
-                .to_owned(),
-                error_code: status
-                    .error_code
-                    .clone()
-                    .map(|code| sanitized_status_code(&code, "terminal_runtime_failed")),
-                observer_profile_id: None,
-                // Permission flags arrive in terminal account snapshots. Until that projection is
-                // connected, None means "not reported" rather than pretending a switch is on.
-                terminal_trading_allowed: None,
-                program_trading_allowed: None,
-                account_trading_allowed: None,
-                account_expert_trading_allowed: None,
-                mt4_expert_restart_required: false,
             })
             .collect::<Vec<_>>();
         let selected = terminals.first();
@@ -1874,7 +1936,7 @@ fn random_id(prefix: &str) -> Result<String, TransportError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bridge_contract::{AccountRef, ExecutionEvidence};
+    use bridge_contract::{AccountRef, DataDeltaMessage, ExecutionEvidence};
     use bridge_security_win::BridgeCredential;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1940,6 +2002,151 @@ mod tests {
             .code(),
             "bridge_runtime_status_invalid"
         );
+    }
+
+    #[test]
+    fn ui_trading_permissions_use_platform_specific_boolean_fields_only() {
+        let account = serde_json::json!({
+            "login": 123456,
+            "server": "Broker-Demo",
+            "terminal_trade_allowed": false,
+            "program_trade_allowed": true,
+            "trade_allowed": false,
+            "trade_expert": true,
+        });
+        assert_eq!(
+            parse_terminal_trading_permissions("mt4", Some(&account)),
+            TerminalTradingPermissions {
+                terminal_trading_allowed: Some(false),
+                program_trading_allowed: Some(true),
+                account_trading_allowed: Some(false),
+                account_expert_trading_allowed: Some(true),
+            }
+        );
+        assert_eq!(
+            parse_terminal_trading_permissions("mt5", Some(&account)),
+            TerminalTradingPermissions {
+                terminal_trading_allowed: Some(false),
+                program_trading_allowed: None,
+                account_trading_allowed: Some(false),
+                account_expert_trading_allowed: Some(true),
+            }
+        );
+        let malformed = serde_json::json!({
+            "terminal_trade_allowed": "true",
+            "trade_allowed": true,
+        });
+        assert_eq!(
+            parse_terminal_trading_permissions("mt5", Some(&malformed)),
+            TerminalTradingPermissions {
+                terminal_trading_allowed: None,
+                program_trading_allowed: None,
+                account_trading_allowed: Some(true),
+                account_expert_trading_allowed: None,
+            }
+        );
+    }
+
+    #[test]
+    fn ui_trading_permissions_fail_closed_when_the_terminal_or_snapshot_is_stale() {
+        let now = 1_700_000_010_000;
+        let mut status = permission_status(
+            bridge_terminal_session::TerminalSessionState::Ready,
+            Some(now - UI_TRADING_PERMISSION_MAX_AGE_MSC),
+        );
+        assert!(permission_snapshot_is_fresh(&status, now));
+        status.last_success_at_utc_msc = Some(now - UI_TRADING_PERMISSION_MAX_AGE_MSC - 1);
+        assert!(!permission_snapshot_is_fresh(&status, now));
+        status.last_success_at_utc_msc = Some(now + 1_001);
+        assert!(!permission_snapshot_is_fresh(&status, now));
+        status.last_success_at_utc_msc = Some(now);
+        status.state = bridge_terminal_session::TerminalSessionState::Degraded;
+        assert!(!permission_snapshot_is_fresh(&status, now));
+        status.state = bridge_terminal_session::TerminalSessionState::Ready;
+        status.last_success_at_utc_msc = None;
+        assert!(!permission_snapshot_is_fresh(&status, now));
+    }
+
+    #[test]
+    fn ui_trading_permissions_are_projected_from_the_current_sqlite_account_route() {
+        let root = unique_test_directory("permission-projection");
+        fs::create_dir_all(&root).expect("permission fixture directory");
+        let store = OutboxStore::open_or_create(root.join("bridge.db"))
+            .expect("permission projection store");
+        let now = 1_700_000_010_000;
+        let mut status = permission_status(
+            bridge_terminal_session::TerminalSessionState::Ready,
+            Some(now),
+        );
+        let message = DataDeltaMessage {
+            v: 3,
+            message_type: "data_delta".to_owned(),
+            message_id: "msg_permission_projection_000001".to_owned(),
+            sent_at_utc_msc: now,
+            terminal_instance_id: status.route.terminal_instance_id.clone(),
+            account_ref: status.route.account_ref.clone(),
+            connection_epoch: status.route.connection_epoch,
+            stream: "account".to_owned(),
+            revision: 1,
+            base_revision: 0,
+            observed_at_utc_msc: now,
+            source_time_msc: Some(now),
+            full_snapshot: true,
+            upserts: vec![serde_json::json!({
+                "login": 123456,
+                "server": "Broker-Demo",
+                "terminal_trade_allowed": true,
+                "program_trade_allowed": false,
+                "trade_allowed": true,
+                "trade_expert": false,
+            })],
+            deletes: Vec::new(),
+        };
+        store
+            .persist_data_delta(&message)
+            .expect("persist permission account snapshot");
+        assert_eq!(
+            terminal_trading_permissions(&store, &status, now),
+            TerminalTradingPermissions {
+                terminal_trading_allowed: Some(true),
+                program_trading_allowed: None,
+                account_trading_allowed: Some(true),
+                account_expert_trading_allowed: Some(false),
+            }
+        );
+
+        status.route.connection_epoch += 1;
+        assert_eq!(
+            terminal_trading_permissions(&store, &status, now),
+            TerminalTradingPermissions::default()
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove permission fixture");
+    }
+
+    fn permission_status(
+        state: bridge_terminal_session::TerminalSessionState,
+        last_success_at_utc_msc: Option<i64>,
+    ) -> TerminalSessionStatus {
+        TerminalSessionStatus {
+            route: WorkerRoute {
+                terminal_instance_id: "mt5_terminal_permission".to_owned(),
+                platform: "mt5".to_owned(),
+                account_ref: AccountRef {
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "123456".to_owned(),
+                },
+                connection_epoch: 1,
+            },
+            state,
+            worker_state: bridge_worker_host::WorkerLifecycleState::Ready,
+            collector_state: bridge_terminal_data::CollectorLifecycleState::Ready,
+            data_ready: true,
+            worker_consecutive_failures: 0,
+            collector_consecutive_failures: 0,
+            last_success_at_utc_msc,
+            error_code: None,
+        }
     }
 
     #[test]
