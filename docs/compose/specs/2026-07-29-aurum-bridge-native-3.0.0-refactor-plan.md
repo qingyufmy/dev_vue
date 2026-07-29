@@ -589,4 +589,5 @@ bridge/native/
 - 已完成 Core 可托管的 MT5 终端会话编排：账户切换要求 epoch 单调递增，旧采集器和 Worker 依次完全停止后才启动新路由；真实 Python Worker 测试验证旧句柄失效、旧路由拒绝和新会话初始投影 Ready。
 - 已完成签名包内 `server-endpoints.json` 与管理员 `endpoint-settings.json` 的 Native 地址权威解析：有效管理员覆盖优先，损坏覆盖安全退回包内地址；包内地址缺失时失败关闭，公网明文 HTTP 不会被静默接受。
 - 已完成 Core 正式入口：无授权时常驻等待且不打开浏览器、不启动 Worker；授权但无终端时失败关闭；单实例退出信号取消服务器与终端；Launcher ready 仅在服务器连接且期望终端 Ready 后原子写入。主动退出授权会立即关闭当前会话并回到等待授权。
-- 下一批补齐本地假服务器驱动的网络中断/恢复和 Core ready 端到端矩阵，再进入 MT5 交易 Worker。
+- 已完成 Core 级真实进程回环矩阵：隔离 Python 假 MT5 Worker 经命名管道产生 `data_delta`，本地 refresh/ticket/WebSocket 完成 Hello/ACK 并写入 Launcher ready；主动断开首个 WebSocket 后 Core 自动建立第二个会话，退出信号完成 Core 与 Python Worker 进程树清理。
+- 下一批进入 MT5 交易 Worker：冻结交易操作合同，接入 `CommandWorker` / Dispatcher，并以模拟账户适配器覆盖开仓、挂单、撤单、平仓、修改 SL/TP 和不确定结果核对。

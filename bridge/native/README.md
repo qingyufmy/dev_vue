@@ -26,6 +26,7 @@
 - 交易命令准入已冻结过期、动作、账户、终端、epoch、暂停状态和初始全量同步门禁；入站路由支持显式注入命令 Dispatcher，执行回执与交易 Outbox 同事务保存，服务器 ACK 后账本原子推进为 `acked`。正式 Core 当前只接入 MT5 数据 Worker，尚未配置交易 Dispatcher，因此交易命令继续失败关闭，不会误执行。
 - 原生连接监督器已保留 V3 的 1/2/4/8/10 秒退避，并在凭据缺失时等待明确的授权变化，不会自行打开浏览器。
 - 本地端到端测试会真实执行 refresh → ticket → WebSocket ticket → Hello / ACK → Heartbeat，并验证二进制帧失败关闭。
+- Core 级回环测试会启动真实 `liangjian-bridge-core.exe`、隔离 Python 运行入口和假 MT5 Worker，验证 DPAPI、SQLite、命名管道、`data_delta` 转发、Launcher ready、WebSocket 断线重连、单实例退出以及 Python 子进程随 Core 清理。
 - `liangjian-bridge-compat-probe` 目前仅作为开发期本地合同探针，不代表 3.0.0 需要接管旧 .NET Bridge 的生产数据。
 - `bridge-core` 普通运行现在会建立日志、单实例和运行标记，未授权时等待凭据文件变化；授权、终端绑定和地址均有效后启动 MT5 数据会话与服务器监督器。单实例退出事件会取消整组会话；只有服务器已连接且 Launcher 指定的终端全部 Ready 时，才原子写入 ready 信号。MT4 与真实交易执行尚未接入该入口。
 

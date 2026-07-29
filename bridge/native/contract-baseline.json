@@ -154,7 +154,11 @@
     "authorized_profile_requires_a_terminal": true,
     "launcher_ready_requires_server_connected": true,
     "launcher_ready_requires_expected_terminals_ready": true,
-    "launcher_ready_signal_is_atomic": true
+    "launcher_ready_signal_is_atomic": true,
+    "loopback_process_test_covers_real_python_worker": true,
+    "loopback_process_test_covers_data_forwarding": true,
+    "loopback_process_test_covers_disconnect_reconnect": true,
+    "loopback_process_test_verifies_worker_exit": true
   },
   "endpoint_authority_contract": {
     "administrator_override_file": "%APPDATA%/AURUM/BridgeV3/endpoint-settings.json",
