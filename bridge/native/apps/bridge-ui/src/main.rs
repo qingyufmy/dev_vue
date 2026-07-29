@@ -49,8 +49,8 @@ use windows_sys::Win32::UI::Controls::{
 };
 use windows_sys::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END, VK_HOME, VK_NEXT,
-    VK_PRIOR, VK_UP,
+    EnableWindow, IsWindowEnabled, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END,
+    VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -60,17 +60,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, BS_OWNERDRAW, CB_SETITEMHEIGHT, CBN_SELCHANGE, CBS_DROPDOWNLIST,
     CBS_OWNERDRAWFIXED, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateIconFromResourceEx,
     CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
-    GA_ROOT, GWLP_USERDATA, GetAncestor, GetClientRect, GetMessageW, GetScrollInfo,
-    GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION,
-    IsDialogMessageW, LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
-    MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW, RegisterClassExW, RegisterWindowMessageW,
-    SB_BOTTOM, SB_CTL, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
-    SB_THUMBTRACK, SB_TOP, SBS_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
-    SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW,
-    SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage,
-    WHEEL_DELTA, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM,
-    WM_ENDSESSION, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_QUERYENDSESSION, WM_RBUTTONUP,
+    GA_ROOT, GWLP_USERDATA, GetAncestor, GetClientRect, GetDlgCtrlID, GetMessageW, GetScrollInfo,
+    GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU, HTCLIENT, IDC_ARROW, IDC_HAND,
+    IDI_APPLICATION, IsDialogMessageW, LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED,
+    MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW,
+    RegisterClassExW, RegisterWindowMessageW, SB_BOTTOM, SB_CTL, SB_LINEDOWN, SB_LINEUP,
+    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SBS_VERT, SCROLLINFO,
+    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_MINIMIZE,
+    SW_SHOW, SW_SHOWNORMAL, SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WHEEL_DELTA, WM_APP,
+    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION,
+    WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_SETCURSOR,
     WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
     WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
     WS_VISIBLE,
@@ -318,6 +319,44 @@ fn dialog_message_root(main_window: HWND, message_window: HWND) -> HWND {
     }
     let root = unsafe { GetAncestor(message_window, GA_ROOT) };
     if root.is_null() { main_window } else { root }
+}
+
+fn is_main_action_button(control_id: i32) -> bool {
+    matches!(
+        control_id,
+        CONTROL_OBSERVER
+            | CONTROL_LOGOUT
+            | CONTROL_MT4_EXPERT
+            | CONTROL_UPDATE
+            | CONTROL_PAIR
+            | CONTROL_DETECT
+            | CONTROL_LOGS
+            | CONTROL_SETTINGS
+            | CONTROL_EXIT
+    )
+}
+
+unsafe fn apply_hand_cursor<F>(wparam: WPARAM, lparam: LPARAM, is_action: F) -> bool
+where
+    F: FnOnce(i32) -> bool,
+{
+    if (lparam as usize & 0xffff) as u32 != HTCLIENT {
+        return false;
+    }
+    let control = wparam as HWND;
+    if control.is_null() || unsafe { IsWindowEnabled(control) } == 0 {
+        return false;
+    }
+    let control_id = unsafe { GetDlgCtrlID(control) };
+    if !is_action(control_id) {
+        return false;
+    }
+    let cursor = unsafe { LoadCursorW(null_mut(), IDC_HAND) };
+    if cursor.is_null() {
+        return false;
+    }
+    unsafe { SetCursor(cursor) };
+    true
 }
 
 fn main() {
@@ -989,6 +1028,19 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_DRAWITEM => unsafe { draw_control(state, lparam) },
+        WM_SETCURSOR
+            if unsafe {
+                apply_hand_cursor(wparam, lparam, |control_id| {
+                    is_main_action_button(control_id)
+                        || state
+                            .account_action_controls
+                            .iter()
+                            .any(|control| control.id == control_id)
+                })
+            } =>
+        {
+            1
+        }
         WM_PAINT => {
             unsafe { paint_window(hwnd, state) };
             0
@@ -3417,6 +3469,25 @@ mod tests {
     fn dialog_routing_falls_back_to_the_main_window_for_thread_messages() {
         let main_window = 1_usize as HWND;
         assert_eq!(dialog_message_root(main_window, null_mut()), main_window);
+    }
+
+    #[test]
+    fn only_main_action_buttons_use_the_dotnet_hand_cursor() {
+        for control_id in [
+            CONTROL_OBSERVER,
+            CONTROL_LOGOUT,
+            CONTROL_MT4_EXPERT,
+            CONTROL_UPDATE,
+            CONTROL_PAIR,
+            CONTROL_DETECT,
+            CONTROL_LOGS,
+            CONTROL_SETTINGS,
+            CONTROL_EXIT,
+        ] {
+            assert!(is_main_action_button(control_id));
+        }
+        assert!(!is_main_action_button(CONTROL_PLATFORM));
+        assert!(!is_main_action_button(CONTROL_TERMINAL));
     }
 
     #[test]

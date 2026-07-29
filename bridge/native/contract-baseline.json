@@ -166,7 +166,9 @@
     "session_end_does_not_block_windows": true,
     "modeless_child_windows_use_their_own_dialog_keyboard_routing": true,
     "settings_accept_and_cancel_keys_match_dotnet": true,
-    "log_multiline_content_releases_tab_navigation": true
+    "log_multiline_content_releases_tab_navigation": true,
+    "action_buttons_use_dotnet_hand_cursor": true,
+    "settings_buttons_draw_keyboard_focus": true
   },
   "worker_supervision_contract": {
     "restart_delays_seconds": [1, 2, 4, 8, 10],

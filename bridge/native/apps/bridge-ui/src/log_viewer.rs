@@ -29,12 +29,15 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SB_LEFT, SW_SHOW, SW_SHOWNORMAL, SendMessageW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, SetWindowTextW, ShowWindow, WM_APP, WM_CLOSE, WM_COMMAND, WM_COPY,
     WM_CREATE, WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_HSCROLL,
-    WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
-    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_HSCROLL, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SIZE, WM_TIMER,
+    WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_HSCROLL, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
-use super::{PRODUCT_NAME, Rgb, draw_button, draw_text, fill, rect, scale, wide, window_dpi};
+use super::{
+    PRODUCT_NAME, Rgb, apply_hand_cursor, draw_button, draw_text, fill, rect, scale, wide,
+    window_dpi,
+};
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeLogViewer";
 const WINDOW_CLIENT_WIDTH: i32 = 780;
@@ -68,6 +71,10 @@ struct LogViewerState {
 
 fn is_content_tab_message(message: u32, key: WPARAM, control_id: i32) -> bool {
     message == WM_KEYDOWN && key == usize::from(VK_TAB) && control_id == CONTROL_CONTENT
+}
+
+fn is_log_action_button(control_id: i32) -> bool {
+    matches!(control_id, CONTROL_REFRESH | CONTROL_COPY)
 }
 
 pub(super) unsafe fn handle_dialog_tab(
@@ -307,6 +314,7 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_DRAWITEM => unsafe { draw_button(lparam, false) },
+        WM_SETCURSOR if unsafe { apply_hand_cursor(wparam, lparam, is_log_action_button) } => 1,
         WM_CTLCOLORSTATIC => {
             let hdc = wparam as windows_sys::Win32::Graphics::Gdi::HDC;
             unsafe {
@@ -664,5 +672,13 @@ mod tests {
             usize::from(VK_TAB),
             CONTROL_CONTENT
         ));
+    }
+
+    #[test]
+    fn log_action_buttons_use_the_dotnet_hand_cursor_but_the_checkbox_does_not() {
+        assert!(is_log_action_button(CONTROL_REFRESH));
+        assert!(is_log_action_button(CONTROL_COPY));
+        assert!(!is_log_action_button(CONTROL_AUTO_REFRESH));
+        assert!(!is_log_action_button(CONTROL_CONTENT));
     }
 }

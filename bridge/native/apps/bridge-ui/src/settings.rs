@@ -16,8 +16,8 @@ use windows_sys::Win32::Foundation::{
     ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DeleteObject, FW_BOLD, FW_NORMAL, HBRUSH,
-    HGDIOBJ, InvalidateRect, SetBkColor, SetTextColor,
+    CreateSolidBrush, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawFocusRect, FW_BOLD,
+    FW_NORMAL, HBRUSH, HGDIOBJ, InvalidateRect, SetBkColor, SetTextColor,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED, EM_SETLIMITTEXT};
@@ -30,13 +30,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     PostMessageW, RegisterClassExW, SW_SHOW, SW_SHOWNORMAL, SendMessageW, SetForegroundWindow,
     SetWindowLongPtrW, SetWindowTextW, ShowWindow, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
     WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_NCCREATE, WM_NCDESTROY,
-    WM_PAINT, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_GROUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_GROUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
 use super::{
-    PRODUCT_NAME, Rgb, color_ref, create_point_font, draw_border, draw_text, fill, rect, scale,
-    wide, window_dpi,
+    PRODUCT_NAME, Rgb, apply_hand_cursor, color_ref, create_point_font, draw_border, draw_text,
+    fill, rect, scale, wide, window_dpi,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeSettings";
@@ -59,6 +59,21 @@ static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 enum RequestKind {
     Test,
     Save,
+}
+
+fn is_settings_action_button(control_id: i32) -> bool {
+    matches!(
+        control_id,
+        CONTROL_TEST | CONTROL_RESTORE | CONTROL_CANCEL | CONTROL_SAVE
+    )
+}
+
+fn settings_focus_rect(mut bounds: RECT) -> RECT {
+    bounds.left += 3;
+    bounds.top += 3;
+    bounds.right -= 3;
+    bounds.bottom -= 3;
+    bounds
 }
 
 struct RequestResult {
@@ -329,6 +344,9 @@ unsafe extern "system" fn window_proc(
             state.background_brush as LRESULT
         }
         WM_DRAWITEM => unsafe { draw_settings_button(lparam) },
+        WM_SETCURSOR if unsafe { apply_hand_cursor(wparam, lparam, is_settings_action_button) } => {
+            1
+        }
         WM_PAINT => {
             unsafe { paint_window(hwnd, state) };
             0
@@ -847,6 +865,9 @@ unsafe fn draw_settings_button(lparam: LPARAM) -> LRESULT {
         },
         windows_sys::Win32::Graphics::Gdi::DT_CENTER | DT_SINGLELINE | DT_VCENTER,
     );
+    if item.itemState & windows_sys::Win32::UI::Controls::ODS_FOCUS != 0 {
+        unsafe { DrawFocusRect(item.hDC, &settings_focus_rect(item.rcItem)) };
+    }
     1
 }
 
@@ -934,5 +955,24 @@ mod tests {
     fn settings_accept_and_cancel_ids_match_the_standard_dialog_contract() {
         assert_eq!(CONTROL_SAVE, 1);
         assert_eq!(CONTROL_CANCEL, 2);
+    }
+
+    #[test]
+    fn settings_actions_use_hand_cursor_and_draw_an_inset_focus_rect() {
+        for control_id in [CONTROL_TEST, CONTROL_RESTORE, CONTROL_CANCEL, CONTROL_SAVE] {
+            assert!(is_settings_action_button(control_id));
+        }
+        assert!(!is_settings_action_button(CONTROL_OFFICIAL));
+        assert!(!is_settings_action_button(CONTROL_SERVER_URL));
+        let focus = settings_focus_rect(RECT {
+            left: 0,
+            top: 0,
+            right: 96,
+            bottom: 36,
+        });
+        assert_eq!(
+            (focus.left, focus.top, focus.right, focus.bottom),
+            (3, 3, 93, 33)
+        );
     }
 }

@@ -473,6 +473,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - [已完成] 管理员多观摩源账户区已按 .NET `FlowLayoutPanel.AutoScroll` 行为补齐独立原生滚动条、固定滚动条预留宽度、卡片视口裁剪、鼠标滚轮及键盘 Home / End / PageUp / PageDown / 方向键；窗口尺寸、DPI 和账户数量变化时会缩放并钳制滚动位置，顶部与底部控件不随账户区滚动。
 - [已完成] 主窗体关闭、托盘菜单和退出流程已与 .NET 版对齐：用户主动退出必须确认，内部关机和 Windows 会话结束不弹确认；Explorer 重启后会恢复托盘图标，托盘创建失败时窗口退化为任务栏最小化，避免界面彻底丢失。
 - [已完成] 主消息循环会按每条键盘消息所属的顶层窗口分别执行 Win32 对话框导航，连接设置与内置日志不再把 Tab / Shift+Tab 错误路由到主窗体；日志多行只读框会主动释放 Tab 以继续遍历刷新、复制和自动刷新控件；连接设置沿用标准 OK / Cancel 控件 ID，保持 .NET 的 Enter 保存与 Esc 取消语义。
+- [已完成] 与 .NET `Cursors.Hand` 约定一致，主界面固定操作、管理员账户操作、连接设置及日志按钮仅在可用时显示手型光标；连接设置的自绘按钮补齐内缩焦点框，键盘焦点位置可见且不改变既有布局和品牌配色。
 - 按 `BridgeMainForm`、`BridgeSettingsForm`、`BridgeObserverProfileDialog`、`BridgeTerminalDirectoryDialog`、`BridgeLogViewerForm` 和 `BridgeApplicationContext` 逐项等价迁移托盘、主界面、内置日志、开机自启、授权、退出。
 - 保留现有平台选择、终端选择、MT4 EA 安装、自适应账户卡片、交易权限彩色 tooltip、更新条幅、管理员控件显隐及全部中文文案语义。
 - 管理员服务器设置及多个观摩源的后台启停、绑定和隔离。
