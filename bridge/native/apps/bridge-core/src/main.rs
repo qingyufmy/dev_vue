@@ -251,18 +251,19 @@ async fn run_profile_lifecycle(
             }
             continue;
         }
-        if bootstrap.mt5_sessions.is_empty() {
-            return Err(if bootstrap.mt4_bindings.is_empty() {
-                "bridge_terminals_invalid"
-            } else {
-                "bridge_mt4_runtime_not_ready"
-            }
-            .into());
+        if bootstrap.mt5_sessions.is_empty() && bootstrap.mt4_bindings.is_empty() {
+            return Err("bridge_terminals_invalid".into());
         }
         let configured_terminal_ids = bootstrap
             .mt5_sessions
             .iter()
             .map(|session| session.binding.terminal_instance_id.as_str())
+            .chain(
+                bootstrap
+                    .mt4_bindings
+                    .iter()
+                    .map(|binding| binding.terminal_instance_id.as_str()),
+            )
             .collect::<std::collections::BTreeSet<_>>();
         if expected_terminal_instance_ids
             .iter()

@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 bridge-contract = { path = "../bridge-contract" }
+bridge-mt4 = { path = "../bridge-mt4" }
 bridge-runtime-win = { path = "../bridge-runtime-win" }
 bridge-store = { path = "../bridge-store" }
 bridge-terminal-data = { path = "../bridge-terminal-data" }

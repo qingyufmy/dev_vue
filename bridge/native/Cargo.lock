@@ -95,7 +95,10 @@ dependencies = [
 name = "bridge-mt4"
 version = "3.0.0-alpha.1"
 dependencies = [
+ "bridge-contract",
  "bridge-runtime-win",
+ "bridge-terminal-data",
+ "bridge-worker-host",
  "serde_json",
  "tokio",
 ]
@@ -153,6 +156,7 @@ name = "bridge-terminal-session"
 version = "3.0.0-alpha.1"
 dependencies = [
  "bridge-contract",
+ "bridge-mt4",
  "bridge-runtime-win",
  "bridge-store",
  "bridge-terminal-data",
@@ -837,6 +841,7 @@ dependencies = [
  "bridge-command",
  "bridge-contract",
  "bridge-foundation",
+ "bridge-mt4",
  "bridge-observability",
  "bridge-runtime-win",
  "bridge-security-win",

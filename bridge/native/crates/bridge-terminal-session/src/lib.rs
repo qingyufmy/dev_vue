@@ -1,4 +1,5 @@
 use bridge_contract::TerminalStreamFreshness;
+use bridge_mt4::{Mt4EaSnapshotSource, Mt4SnapshotSourceSpec};
 use bridge_runtime_win::RestartPolicy;
 use bridge_store::{HistoryArchiveBatch, HistoryCursor, OutboxStore};
 use bridge_terminal_data::{
@@ -15,7 +16,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::windows::named_pipe::NamedPipeServer;
-use tokio::sync::{Mutex, Notify, watch};
+use tokio::sync::{Mutex, Notify, mpsc, watch};
 use tokio::task::JoinHandle;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
@@ -56,6 +57,28 @@ pub struct Mt5SessionSpec {
     pub request_timeout: Duration,
     pub worker_restart_policy: RestartPolicy,
     pub collector_policy: CollectorPolicy,
+}
+
+pub struct Mt4SessionSpec {
+    pub route: WorkerRoute,
+    pub terminal_data_path: std::path::PathBuf,
+    pub accept_timeout: Duration,
+    pub request_timeout: Duration,
+    pub collector_policy: CollectorPolicy,
+}
+
+impl Mt4SessionSpec {
+    fn validate(&self, terminal_instance_id: &str) -> Result<(), TerminalSessionError> {
+        self.route.validate().map_err(worker_error)?;
+        if self.route.platform != "mt4"
+            || self.route.terminal_instance_id != terminal_instance_id
+            || self.accept_timeout.is_zero()
+            || self.request_timeout.is_zero()
+        {
+            return Err(TerminalSessionError::new("terminal_session_spec_invalid"));
+        }
+        self.collector_policy.validate().map_err(projection_error)
+    }
 }
 
 impl Mt5SessionSpec {
@@ -105,6 +128,73 @@ pub struct TerminalSessionHandle {
     data: Arc<WorkerDataRouter<NamedPipeServer>>,
     collector: CollectorHandle,
     history: HistorySyncHandle,
+}
+
+#[derive(Clone)]
+pub struct Mt4SessionHandle {
+    route: WorkerRoute,
+    source: Arc<Mt4EaSnapshotSource>,
+    collector: CollectorHandle,
+}
+
+impl Mt4SessionHandle {
+    pub fn route(&self) -> &WorkerRoute {
+        &self.route
+    }
+
+    pub fn status(&self) -> TerminalSessionStatus {
+        let collector = self.collector.status();
+        let data_ready = collector.state == CollectorLifecycleState::Ready;
+        let worker_state = match collector.state {
+            CollectorLifecycleState::Starting => WorkerLifecycleState::Starting,
+            CollectorLifecycleState::Ready => WorkerLifecycleState::Ready,
+            CollectorLifecycleState::Retrying => WorkerLifecycleState::Restarting,
+            CollectorLifecycleState::Stopped => WorkerLifecycleState::Stopped,
+        };
+        let state = match collector.state {
+            CollectorLifecycleState::Starting => TerminalSessionState::Starting,
+            CollectorLifecycleState::Ready => TerminalSessionState::Ready,
+            CollectorLifecycleState::Retrying => TerminalSessionState::Degraded,
+            CollectorLifecycleState::Stopped => TerminalSessionState::Stopped,
+        };
+        TerminalSessionStatus {
+            route: self.route.clone(),
+            state,
+            worker_state,
+            collector_state: collector.state,
+            data_ready,
+            worker_consecutive_failures: collector.consecutive_failures,
+            collector_consecutive_failures: collector.consecutive_failures,
+            last_success_at_utc_msc: collector.last_success_at_utc_msc,
+            error_code: collector.error_code,
+        }
+    }
+
+    pub fn request_full_snapshot(&self, stream: &str) -> Result<(), TerminalSessionError> {
+        self.collector
+            .request_full_snapshot(stream)
+            .map_err(projection_error)
+    }
+
+    pub fn freshness(&self) -> TerminalStreamFreshness {
+        let streams = self
+            .collector
+            .status()
+            .last_success_at_utc_msc
+            .filter(|observed| *observed > 0)
+            .map(|observed| {
+                ["account", "positions", "orders"]
+                    .into_iter()
+                    .map(|stream| (stream.to_owned(), observed))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        TerminalStreamFreshness {
+            terminal_instance_id: self.route.terminal_instance_id.clone(),
+            connection_epoch: self.route.connection_epoch,
+            streams,
+        }
+    }
 }
 
 impl TerminalSessionHandle {
@@ -198,6 +288,63 @@ pub struct Mt5SessionManager {
     store: Arc<OutboxStore>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     current: Mutex<Option<RunningSession>>,
+}
+
+pub struct Mt4SessionManager {
+    terminal_instance_id: String,
+    store: Arc<OutboxStore>,
+    clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    current: Mutex<Option<RunningMt4Session>>,
+}
+
+impl Mt4SessionManager {
+    pub fn new(
+        terminal_instance_id: String,
+        store: Arc<OutboxStore>,
+        clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    ) -> Result<Self, TerminalSessionError> {
+        if terminal_instance_id.trim() != terminal_instance_id || terminal_instance_id.is_empty() {
+            return Err(TerminalSessionError::new("terminal_session_id_invalid"));
+        }
+        Ok(Self {
+            terminal_instance_id,
+            store,
+            clock,
+            current: Mutex::new(None),
+        })
+    }
+
+    pub async fn replace(
+        &self,
+        spec: Mt4SessionSpec,
+        registration_rx: mpsc::Receiver<bridge_mt4::EaConnection>,
+    ) -> Result<Mt4SessionHandle, TerminalSessionError> {
+        spec.validate(&self.terminal_instance_id)?;
+        let mut current = self.current.lock().await;
+        if let Some(active) = current.as_ref() {
+            validate_transition(active.handle.route(), &spec.route)?;
+        }
+        if let Some(active) = current.take() {
+            active.stop().await?;
+        }
+        let active = RunningMt4Session::start(
+            spec,
+            registration_rx,
+            Arc::clone(&self.store),
+            Arc::clone(&self.clock),
+        )?;
+        let handle = active.handle.clone();
+        *current = Some(active);
+        Ok(handle)
+    }
+
+    pub async fn stop(&self) -> Result<(), TerminalSessionError> {
+        let mut current = self.current.lock().await;
+        if let Some(active) = current.take() {
+            active.stop().await?;
+        }
+        Ok(())
+    }
 }
 
 impl Mt5SessionManager {
@@ -376,6 +523,55 @@ impl RunningSession {
     }
 }
 
+struct RunningMt4Session {
+    handle: Mt4SessionHandle,
+    collector_task: JoinHandle<()>,
+}
+
+impl RunningMt4Session {
+    fn start(
+        spec: Mt4SessionSpec,
+        registration_rx: mpsc::Receiver<bridge_mt4::EaConnection>,
+        store: Arc<OutboxStore>,
+        clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    ) -> Result<Self, TerminalSessionError> {
+        let source = Arc::new(
+            Mt4EaSnapshotSource::new(
+                Mt4SnapshotSourceSpec {
+                    route: spec.route.clone(),
+                    terminal_data_path: spec.terminal_data_path,
+                    accept_timeout: spec.accept_timeout,
+                    request_timeout: spec.request_timeout,
+                },
+                registration_rx,
+            )
+            .map_err(|error| TerminalSessionError::new(error.code()))?,
+        );
+        let projector =
+            SnapshotProjector::restore(store, spec.route.clone()).map_err(projection_error)?;
+        let (collector, collector_handle) =
+            SnapshotCollector::new(Arc::clone(&source), projector, clock, spec.collector_policy)
+                .map_err(projection_error)?;
+        let collector_task = tokio::spawn(collector.run());
+        Ok(Self {
+            handle: Mt4SessionHandle {
+                route: spec.route,
+                source,
+                collector: collector_handle,
+            },
+            collector_task,
+        })
+    }
+
+    async fn stop(mut self) -> Result<(), TerminalSessionError> {
+        self.handle.source.request_stop();
+        self.handle.collector.stop();
+        await_task(&mut self.collector_task, "terminal_collector_stop_timeout").await?;
+        self.handle.source.close().await;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 struct HistorySyncHandle {
     stop_tx: watch::Sender<bool>,
@@ -520,10 +716,16 @@ fn projection_error(error: bridge_terminal_data::ProjectionError) -> TerminalSes
 mod tests {
     use super::*;
     use bridge_contract::AccountRef;
+    use bridge_mt4::{
+        CURRENT_PROTOCOL_VERSION, CollectionStreams, Hello, MessageType, Snapshot, decode_collect,
+        decode_message_type, decode_welcome, encode_hello, encode_message_type, encode_snapshot,
+        read_frame, reconnect_pipe_name, write_frame,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
 
     fn route(epoch: i64) -> WorkerRoute {
         WorkerRoute {
@@ -596,6 +798,219 @@ mod tests {
         })
         .await
         .expect("session ready");
+    }
+
+    async fn wait_mt4_ready(handle: &Mt4SessionHandle) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while handle.status().state != TerminalSessionState::Ready {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("MT4 session ready");
+    }
+
+    async fn open_pipe_when_ready(path: &str) -> NamedPipeClient {
+        for _ in 0..200 {
+            match ClientOptions::new().open(path) {
+                Ok(client) => return client,
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+        panic!("pipe did not become ready: {path}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn mt4_snapshot_session_projects_account_positions_and_orders_to_the_outbox() {
+        let root = unique_test_directory();
+        fs::create_dir_all(&root).expect("session test directory");
+        let terminal_data_path = root.join("terminal-data");
+        fs::create_dir_all(&terminal_data_path).expect("terminal data directory");
+        let store =
+            Arc::new(OutboxStore::open_or_create(root.join("bridge.db")).expect("session store"));
+        let terminal_id = format!(
+            "mt4_{:024x}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        let route = WorkerRoute {
+            terminal_instance_id: terminal_id.clone(),
+            platform: "mt4".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "12345678".to_owned(),
+            },
+            connection_epoch: 3,
+        };
+        let manager = Mt4SessionManager::new(
+            terminal_id.clone(),
+            Arc::clone(&store),
+            Arc::new(|| 1_800_000_100_000),
+        )
+        .expect("MT4 manager");
+        let (registration_tx, registration_rx) = mpsc::channel(1);
+        let handle = manager
+            .replace(
+                Mt4SessionSpec {
+                    route: route.clone(),
+                    terminal_data_path: terminal_data_path.clone(),
+                    accept_timeout: Duration::from_secs(3),
+                    request_timeout: Duration::from_secs(1),
+                    collector_policy: CollectorPolicy {
+                        active_interval: Duration::from_millis(100),
+                        idle_interval: Duration::from_millis(100),
+                        retry_initial: Duration::from_millis(20),
+                        retry_max: Duration::from_millis(100),
+                    },
+                },
+                registration_rx,
+            )
+            .await
+            .expect("MT4 session");
+        let reconnect = reconnect_pipe_name(&terminal_id).expect("reconnect pipe");
+        let ea_terminal_id = terminal_id.clone();
+        let ea_terminal_data_path = terminal_data_path.clone();
+        let ea = tokio::spawn(async move {
+            let pipe_path = format!(r"\\.\pipe\{reconnect}");
+            let mut pipe = open_pipe_when_ready(&pipe_path).await;
+            write_frame(
+                &mut pipe,
+                &encode_hello(&Hello {
+                    protocol_version: CURRENT_PROTOCOL_VERSION,
+                    adapter_version: "3.2.4-test".to_owned(),
+                    terminal_data_path: ea_terminal_data_path.to_string_lossy().into_owned(),
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "12345678".to_owned(),
+                    connected: true,
+                    trade_allowed: true,
+                })
+                .expect("hello"),
+            )
+            .await
+            .expect("write hello");
+            let welcome = decode_welcome(&read_frame(&mut pipe).await.expect("welcome"))
+                .expect("decode welcome");
+            assert_eq!(welcome.terminal_instance_id, ea_terminal_id);
+            loop {
+                let frame = read_frame(&mut pipe).await.expect("request");
+                if decode_message_type(&frame, MessageType::Shutdown).is_ok() {
+                    write_frame(&mut pipe, &encode_message_type(MessageType::ShutdownAck))
+                        .await
+                        .expect("shutdown ack");
+                    break;
+                }
+                assert_eq!(
+                    decode_collect(&frame).expect("collect"),
+                    CollectionStreams::ALL
+                );
+                write_frame(
+                    &mut pipe,
+                    &encode_snapshot(&Snapshot {
+                        source_time_msc: 1_800_000_000_000,
+                        account: serde_json::json!({
+                            "login": 12345678,
+                            "server": "Broker-Demo",
+                            "balance": 10000.0
+                        }),
+                        positions: vec![serde_json::json!({
+                            "ticket": "9007199254740993",
+                            "symbol": "XAUUSD"
+                        })],
+                        orders: vec![serde_json::json!({
+                            "ticket": "42",
+                            "symbol": "XAUUSD"
+                        })],
+                    })
+                    .expect("snapshot"),
+                )
+                .await
+                .expect("write snapshot");
+            }
+        });
+
+        wait_mt4_ready(&handle).await;
+        let projection = store
+            .load_terminal_projection(&terminal_id, &route.account_ref, route.connection_epoch)
+            .expect("projection");
+        assert_eq!(projection.account.revision, 1);
+        assert_eq!(projection.positions.revision, 1);
+        assert_eq!(projection.orders.revision, 1);
+        assert_eq!(projection.positions.items[0]["ticket"], "9007199254740993");
+        let outbox = store
+            .ready_for_terminals(
+                1_800_000_100_000,
+                Some(std::slice::from_ref(&terminal_id)),
+                10,
+            )
+            .expect("outbox");
+        assert_eq!(outbox.len(), 3);
+        assert!(outbox.iter().all(|item| item.message_type == "data_delta"));
+        assert_eq!(handle.freshness().streams.len(), 3);
+
+        manager.stop().await.expect("stop MT4 manager");
+        ea.await.expect("EA task");
+        drop(registration_tx);
+        drop(manager);
+        drop(handle);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove session test directory");
+    }
+
+    #[tokio::test]
+    async fn mt4_session_stops_promptly_while_waiting_for_the_ea() {
+        let root = unique_test_directory();
+        fs::create_dir_all(&root).expect("session test directory");
+        let terminal_data_path = root.join("terminal-data");
+        fs::create_dir_all(&terminal_data_path).expect("terminal data directory");
+        let store =
+            Arc::new(OutboxStore::open_or_create(root.join("bridge.db")).expect("session store"));
+        let terminal_id = format!(
+            "mt4_{:024x}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        let route = WorkerRoute {
+            terminal_instance_id: terminal_id.clone(),
+            platform: "mt4".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "12345678".to_owned(),
+            },
+            connection_epoch: 1,
+        };
+        let manager = Mt4SessionManager::new(
+            terminal_id,
+            Arc::clone(&store),
+            Arc::new(|| 1_800_000_100_000),
+        )
+        .expect("manager");
+        let (_registration_tx, registration_rx) = mpsc::channel(1);
+        let handle = manager
+            .replace(
+                Mt4SessionSpec {
+                    route,
+                    terminal_data_path,
+                    accept_timeout: Duration::from_secs(20),
+                    request_timeout: Duration::from_secs(10),
+                    collector_policy: CollectorPolicy::default(),
+                },
+                registration_rx,
+            )
+            .await
+            .expect("session");
+        tokio::time::timeout(Duration::from_secs(1), manager.stop())
+            .await
+            .expect("stop should interrupt pipe accept")
+            .expect("stop session");
+        assert_eq!(handle.status().state, TerminalSessionState::Stopped);
+        drop(handle);
+        drop(manager);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove session test directory");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

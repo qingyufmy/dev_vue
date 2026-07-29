@@ -3,7 +3,13 @@ use std::fmt::{Display, Formatter};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 mod connection;
-pub use connection::{EaConnection, EaIdentity, EaPipeListener, REGISTRATION_PIPE_NAME};
+mod session;
+pub use connection::{
+    EaConnection, EaIdentity, EaPipeListener, REGISTRATION_PIPE_NAME, reconnect_pipe_name,
+};
+pub use session::{
+    EaRegistrationHub, EaRegistrationHubHandle, Mt4EaSnapshotSource, Mt4SnapshotSourceSpec,
+};
 
 pub const CURRENT_PROTOCOL_VERSION: i32 = 3;
 pub const CURRENT_ADAPTER_VERSION: &str = "3.2.4";

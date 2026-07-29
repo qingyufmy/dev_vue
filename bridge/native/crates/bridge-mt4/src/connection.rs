@@ -39,7 +39,7 @@ impl EaIdentity {
         })
     }
 
-    fn validate(&self, hello: &Hello) -> Result<(), Mt4ProtocolError> {
+    pub fn validate(&self, hello: &Hello) -> Result<(), Mt4ProtocolError> {
         if hello.protocol_version != CURRENT_PROTOCOL_VERSION {
             return Err(Mt4ProtocolError::new("mt4_ea_protocol_incompatible"));
         }
@@ -55,6 +55,29 @@ impl EaIdentity {
         }
         Ok(())
     }
+
+    pub fn equivalent(&self, other: &Self) -> bool {
+        paths_equal_ordinal_ignore_case(&self.terminal_data_path, &other.terminal_data_path)
+            && self
+                .broker_server
+                .eq_ignore_ascii_case(&other.broker_server)
+            && self.login == other.login
+    }
+}
+
+pub fn reconnect_pipe_name(terminal_instance_id: &str) -> Result<String, Mt4ProtocolError> {
+    let suffix = terminal_instance_id.strip_prefix("mt4_");
+    if terminal_instance_id.len() > 64
+        || suffix.is_none_or(|value| {
+            value.is_empty()
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        })
+    {
+        return Err(Mt4ProtocolError::new("mt4_terminal_instance_id_invalid"));
+    }
+    Ok(format!("aurum_{terminal_instance_id}"))
 }
 
 pub struct EaPipeListener {
@@ -86,6 +109,18 @@ impl EaPipeListener {
         accept_timeout: Duration,
         request_timeout: Duration,
     ) -> Result<EaConnection, Mt4ProtocolError> {
+        let connection = self
+            .accept_unverified(accept_timeout, request_timeout)
+            .await?;
+        connection.verify_identity(expected)?;
+        Ok(connection)
+    }
+
+    pub async fn accept_unverified(
+        self,
+        accept_timeout: Duration,
+        request_timeout: Duration,
+    ) -> Result<EaConnection, Mt4ProtocolError> {
         if accept_timeout.is_zero() || request_timeout.is_zero() {
             return Err(Mt4ProtocolError::new("mt4_ea_timeout_invalid"));
         }
@@ -103,7 +138,6 @@ impl EaPipeListener {
             .await
             .map_err(|_| Mt4ProtocolError::new("mt4_ea_accept_timeout"))??;
         let hello = decode_hello(&payload)?;
-        expected.validate(&hello)?;
         Ok(EaConnection {
             pipe: server,
             hello,
@@ -152,6 +186,10 @@ impl EaConnection {
 
     pub fn is_ready(&self) -> bool {
         self.welcomed && !self.faulted
+    }
+
+    pub fn verify_identity(&self, expected: &EaIdentity) -> Result<(), Mt4ProtocolError> {
+        expected.validate(&self.hello)
     }
 
     pub async fn send_welcome(&mut self, welcome: &Welcome) -> Result<(), Mt4ProtocolError> {

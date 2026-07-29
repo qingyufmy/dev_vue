@@ -8,14 +8,17 @@ use bridge_contract::{
     TerminalStreamFreshness,
 };
 use bridge_foundation::{
-    BridgeProfilePaths, MT5_WORKER_RELATIVE_PATH, PYTHON_RELATIVE_PATH, resolve_profile_paths,
+    BridgeProfilePaths, DEFAULT_PROFILE_ID, MT5_WORKER_RELATIVE_PATH, PYTHON_RELATIVE_PATH,
+    resolve_profile_paths, validate_profile_id,
 };
+use bridge_mt4::{EaIdentity, EaRegistrationHub, EaRegistrationHubHandle};
 use bridge_runtime_win::RestartPolicy;
 use bridge_security_win::CredentialStore;
 use bridge_store::{OutboxStore, TerminalBinding};
 use bridge_terminal_data::CollectorPolicy;
 use bridge_terminal_session::{
-    Mt5SessionManager, Mt5SessionSpec, TerminalSessionHandle, TerminalSessionStatus,
+    Mt4SessionHandle, Mt4SessionManager, Mt4SessionSpec, Mt5SessionManager, Mt5SessionSpec,
+    TerminalSessionHandle, TerminalSessionStatus,
 };
 use bridge_transport::{
     CredentialSource, HelloProvider, InboundDataHandler, InboundEventSink, NativeCommandAdmission,
@@ -48,6 +51,7 @@ use windows_sys::Win32::Security::Cryptography::{
 
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const MT4_ACCEPT_TIMEOUT: Duration = Duration::from_secs(20);
 const RECONCILIATION_QUERY_TIMEOUT: Duration = Duration::from_secs(12);
 const RECONCILIATION_SETTLE_AFTER: Duration = Duration::from_secs(30);
 const RECONCILIATION_INTERVAL: Duration = Duration::from_secs(5);
@@ -92,6 +96,7 @@ pub struct PreparedMt5Session {
 }
 
 pub struct NativeProfileBootstrap {
+    pub profile_id: String,
     pub paths: BridgeProfilePaths,
     pub credential_state: CredentialState,
     pub credential_store: CredentialStore,
@@ -107,7 +112,8 @@ impl NativeProfileBootstrap {
         profile_id: &str,
     ) -> Result<Self, CoreBootstrapError> {
         let application_directory = require_absolute_directory(application_directory.as_ref())?;
-        let paths = resolve_profile_paths(root_data_directory, profile_id)
+        let profile_id = validate_profile_id(Some(profile_id)).map_err(CoreBootstrapError::new)?;
+        let paths = resolve_profile_paths(root_data_directory, &profile_id)
             .map_err(CoreBootstrapError::new)?;
         let credential_store =
             CredentialStore::new(&paths.credential_path).map_err(security_error)?;
@@ -129,6 +135,7 @@ impl NativeProfileBootstrap {
         }
         let mt5_sessions = prepare_mt5_sessions(&application_directory, mt5_bindings)?;
         Ok(Self {
+            profile_id,
             paths,
             credential_state,
             credential_store,
@@ -145,8 +152,16 @@ struct ActiveMt5Session {
     data_cache_gate: tokio::sync::Mutex<()>,
 }
 
+struct ActiveMt4Session {
+    manager: Arc<Mt4SessionManager>,
+    handle: Mt4SessionHandle,
+}
+
 pub struct ActiveMt5Sessions {
     sessions: BTreeMap<String, ActiveMt5Session>,
+    mt4_sessions: BTreeMap<String, ActiveMt4Session>,
+    mt4_registration: Option<EaRegistrationHubHandle>,
+    mt4_registration_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     registry: Arc<WorkerRegistry<NamedPipeServer>>,
     store: Arc<OutboxStore>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
@@ -159,6 +174,16 @@ impl ActiveMt5Sessions {
         store: Arc<OutboxStore>,
         clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     ) -> Result<Arc<Self>, CoreBootstrapError> {
+        Self::start_all(prepared, Vec::new(), false, store, clock).await
+    }
+
+    pub async fn start_all(
+        prepared: Vec<PreparedMt5Session>,
+        mt4_bindings: Vec<TerminalBinding>,
+        accept_mt4_registrations: bool,
+        store: Arc<OutboxStore>,
+        clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    ) -> Result<Arc<Self>, CoreBootstrapError> {
         let registry = Arc::new(WorkerRegistry::<NamedPipeServer>::new());
         let mut sessions = BTreeMap::new();
         for prepared_session in prepared {
@@ -168,13 +193,18 @@ impl ActiveMt5Sessions {
                 return Err(CoreBootstrapError::new("bridge_terminal_duplicate"));
             }
             let manager = Arc::new(
-                Mt5SessionManager::new(
+                match Mt5SessionManager::new(
                     terminal_instance_id.clone(),
                     Arc::clone(&registry),
                     Arc::clone(&store),
                     Arc::clone(&clock),
-                )
-                .map_err(terminal_session_error)?,
+                ) {
+                    Ok(manager) => manager,
+                    Err(error) => {
+                        stop_started_sessions(&sessions).await;
+                        return Err(terminal_session_error(error));
+                    }
+                },
             );
             let handle = match manager.replace(prepared_session.spec).await {
                 Ok(handle) => handle,
@@ -192,8 +222,111 @@ impl ActiveMt5Sessions {
                 },
             );
         }
+        let mut mt4_sessions = BTreeMap::new();
+        let (mt4_registration, mt4_registration_task) = if mt4_bindings.is_empty() {
+            (None, None)
+        } else {
+            let hub_registration = if accept_mt4_registrations {
+                match EaRegistrationHub::bind(WORKER_REQUEST_TIMEOUT) {
+                    Ok(result) => Some(result),
+                    Err(error) => {
+                        stop_started_sessions(&sessions).await;
+                        return Err(CoreBootstrapError::new(error.code()));
+                    }
+                }
+            } else {
+                None
+            };
+            for binding in mt4_bindings {
+                let terminal_instance_id = binding.terminal_instance_id.clone();
+                if sessions.contains_key(&terminal_instance_id)
+                    || mt4_sessions.contains_key(&terminal_instance_id)
+                {
+                    stop_started_sessions(&sessions).await;
+                    stop_started_mt4_sessions(&mt4_sessions).await;
+                    return Err(CoreBootstrapError::new("bridge_terminal_duplicate"));
+                }
+                let route = WorkerRoute {
+                    terminal_instance_id: terminal_instance_id.clone(),
+                    platform: "mt4".to_owned(),
+                    account_ref: binding.account_ref.clone(),
+                    connection_epoch: binding.connection_epoch,
+                };
+                let registration_rx = if let Some((_, registration)) = &hub_registration {
+                    let identity = match EaIdentity::new(
+                        &binding.terminal_path,
+                        binding.account_ref.broker_server.clone(),
+                        binding.account_ref.login.clone(),
+                    ) {
+                        Ok(identity) => identity,
+                        Err(error) => {
+                            stop_started_sessions(&sessions).await;
+                            stop_started_mt4_sessions(&mt4_sessions).await;
+                            return Err(CoreBootstrapError::new(error.code()));
+                        }
+                    };
+                    match registration.subscribe(identity) {
+                        Ok(receiver) => receiver,
+                        Err(error) => {
+                            stop_started_sessions(&sessions).await;
+                            stop_started_mt4_sessions(&mt4_sessions).await;
+                            return Err(CoreBootstrapError::new(error.code()));
+                        }
+                    }
+                } else {
+                    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+                    drop(sender);
+                    receiver
+                };
+                let manager = Arc::new(
+                    match Mt4SessionManager::new(
+                        terminal_instance_id.clone(),
+                        Arc::clone(&store),
+                        Arc::clone(&clock),
+                    ) {
+                        Ok(manager) => manager,
+                        Err(error) => {
+                            stop_started_sessions(&sessions).await;
+                            stop_started_mt4_sessions(&mt4_sessions).await;
+                            return Err(terminal_session_error(error));
+                        }
+                    },
+                );
+                let handle = match manager
+                    .replace(
+                        Mt4SessionSpec {
+                            route,
+                            terminal_data_path: binding.terminal_path,
+                            accept_timeout: MT4_ACCEPT_TIMEOUT,
+                            request_timeout: WORKER_REQUEST_TIMEOUT,
+                            collector_policy: CollectorPolicy::default(),
+                        },
+                        registration_rx,
+                    )
+                    .await
+                {
+                    Ok(handle) => handle,
+                    Err(error) => {
+                        stop_started_sessions(&sessions).await;
+                        stop_started_mt4_sessions(&mt4_sessions).await;
+                        return Err(terminal_session_error(error));
+                    }
+                };
+                mt4_sessions.insert(terminal_instance_id, ActiveMt4Session { manager, handle });
+            }
+            match hub_registration {
+                Some((hub, registration)) => {
+                    let task = tokio::spawn(hub.run());
+                    (Some(registration), Some(task))
+                }
+                None => (None, None),
+            }
+        };
         Ok(Arc::new(Self {
             sessions,
+            mt4_sessions,
+            mt4_registration,
+            mt4_registration_task: Mutex::new(mt4_registration_task),
             registry,
             store,
             clock,
@@ -202,11 +335,11 @@ impl ActiveMt5Sessions {
     }
 
     pub fn len(&self) -> usize {
-        self.sessions.len()
+        self.sessions.len() + self.mt4_sessions.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.sessions.is_empty()
+        self.sessions.is_empty() && self.mt4_sessions.is_empty()
     }
 
     pub fn terminal_descriptors(&self) -> Vec<TerminalDescriptor> {
@@ -219,6 +352,17 @@ impl ActiveMt5Sessions {
                 connection_epoch: session.handle.route().connection_epoch,
                 worker_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
             })
+            .chain(
+                self.mt4_sessions
+                    .values()
+                    .map(|session| TerminalDescriptor {
+                        terminal_instance_id: session.handle.route().terminal_instance_id.clone(),
+                        platform: session.handle.route().platform.clone(),
+                        account_ref: session.handle.route().account_ref.clone(),
+                        connection_epoch: session.handle.route().connection_epoch,
+                        worker_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+                    }),
+            )
             .collect()
     }
 
@@ -226,6 +370,11 @@ impl ActiveMt5Sessions {
         self.sessions
             .values()
             .map(|session| session.handle.status())
+            .chain(
+                self.mt4_sessions
+                    .values()
+                    .map(|session| session.handle.status()),
+            )
             .collect()
     }
 
@@ -250,6 +399,27 @@ impl ActiveMt5Sessions {
             {
                 first_error = Some(terminal_session_error(error));
             }
+        }
+        for session in self.mt4_sessions.values().rev() {
+            if let Err(error) = session.manager.stop().await
+                && first_error.is_none()
+            {
+                first_error = Some(terminal_session_error(error));
+            }
+        }
+        if let Some(registration) = &self.mt4_registration {
+            registration.stop();
+        }
+        let registration_task = self
+            .mt4_registration_task
+            .lock()
+            .map_err(|_| CoreBootstrapError::new("mt4_registration_state_failed"))?
+            .take();
+        if let Some(task) = registration_task
+            && task.await.is_err()
+            && first_error.is_none()
+        {
+            first_error = Some(CoreBootstrapError::new("mt4_registration_stop_failed"));
         }
         match first_error {
             Some(error) => Err(error),
@@ -280,6 +450,11 @@ impl TerminalFreshnessProvider for ActiveMt5Sessions {
             .sessions
             .values()
             .map(|session| session.handle.freshness())
+            .chain(
+                self.mt4_sessions
+                    .values()
+                    .map(|session| session.handle.freshness()),
+            )
             .collect())
     }
 }
@@ -292,10 +467,22 @@ impl InboundEventSink for ActiveMt5Sessions {
         stream: &str,
         _expected_revision: i64,
     ) -> Result<(), TransportError> {
-        self.session_for_route(terminal_instance_id, connection_epoch)?
-            .handle
-            .request_full_snapshot(stream)
-            .map_err(|_| TransportError::from_static_code("terminal_reconciliation_failed"))
+        if let Some(session) = self.mt4_sessions.get(terminal_instance_id) {
+            if session.handle.route().connection_epoch != connection_epoch {
+                return Err(TransportError::from_static_code(
+                    "bridge_message_route_mismatch",
+                ));
+            }
+            session
+                .handle
+                .request_full_snapshot(stream)
+                .map_err(|_| TransportError::from_static_code("terminal_reconciliation_failed"))
+        } else {
+            self.session_for_route(terminal_instance_id, connection_epoch)?
+                .handle
+                .request_full_snapshot(stream)
+                .map_err(|_| TransportError::from_static_code("terminal_reconciliation_failed"))
+        }
     }
 
     fn release_available(
@@ -333,6 +520,23 @@ impl InboundDataHandler for ActiveMt5Sessions {
                     | "pending_order_state"
                     | "diagnostics"
             ) {
+                return Err(TransportError::from_static_code(
+                    "terminal_data_action_unavailable",
+                ));
+            }
+            if let Some(session) = self.mt4_sessions.get(&request.terminal_instance_id) {
+                let route = session.handle.route();
+                if route.connection_epoch != request.connection_epoch
+                    || route.account_ref.login != request.account_ref.login
+                    || !route
+                        .account_ref
+                        .broker_server
+                        .eq_ignore_ascii_case(&request.account_ref.broker_server)
+                {
+                    return Err(TransportError::from_static_code(
+                        "bridge_message_route_mismatch",
+                    ));
+                }
                 return Err(TransportError::from_static_code(
                     "terminal_data_action_unavailable",
                 ));
@@ -473,6 +677,12 @@ impl CommandExecutionObserver for ActiveMt5Sessions {
 }
 
 async fn stop_started_sessions(sessions: &BTreeMap<String, ActiveMt5Session>) {
+    for session in sessions.values().rev() {
+        let _ = session.manager.stop().await;
+    }
+}
+
+async fn stop_started_mt4_sessions(sessions: &BTreeMap<String, ActiveMt4Session>) {
     for session in sessions.values().rev() {
         let _ = session.manager.stop().await;
     }
@@ -979,16 +1189,24 @@ impl NativeConnectedRuntime {
         clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     ) -> Result<Self, CoreBootstrapError> {
         let NativeProfileBootstrap {
+            profile_id,
             credential_store,
             mt5_sessions,
+            mt4_bindings,
             store,
             ..
         } = bootstrap;
-        if mt5_sessions.is_empty() {
+        if mt5_sessions.is_empty() && mt4_bindings.is_empty() {
             return Err(CoreBootstrapError::new("bridge_terminals_invalid"));
         }
-        let active_sessions =
-            ActiveMt5Sessions::start(mt5_sessions, Arc::clone(&store), Arc::clone(&clock)).await?;
+        let active_sessions = ActiveMt5Sessions::start_all(
+            mt5_sessions,
+            mt4_bindings,
+            profile_id == DEFAULT_PROFILE_ID,
+            Arc::clone(&store),
+            Arc::clone(&clock),
+        )
+        .await?;
         match Self::build(active_sessions, credential_store, store, endpoints, clock) {
             Ok(runtime) => Ok(runtime),
             Err((active_sessions, error)) => {
@@ -1654,6 +1872,60 @@ mod tests {
         );
         drop(active);
         fs::remove_dir_all(root).expect("remove active sessions fixture");
+    }
+
+    #[tokio::test]
+    async fn mt4_only_profile_advertises_the_bound_terminal_without_claiming_registration() {
+        let root = unique_test_directory("mt4-active");
+        let terminal_data_path = root.join("terminal-data");
+        fs::create_dir_all(&terminal_data_path).expect("terminal data directory");
+        let store = Arc::new(
+            OutboxStore::open_or_create(root.join("bridge.db")).expect("MT4 active store"),
+        );
+        let binding = TerminalBinding {
+            terminal_instance_id: "mt4_terminal_active_01".to_owned(),
+            platform: "mt4".to_owned(),
+            terminal_path: terminal_data_path,
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "654321".to_owned(),
+            },
+            connection_epoch: 4,
+            updated_at_utc_msc: 1_700_000_000_000,
+        };
+        let active = ActiveMt5Sessions::start_all(
+            Vec::new(),
+            vec![binding],
+            false,
+            Arc::clone(&store),
+            Arc::new(|| 1_700_000_000_100),
+        )
+        .await
+        .expect("MT4-only active sessions");
+        assert_eq!(active.len(), 1);
+        let descriptors = active.terminal_descriptors();
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(
+            descriptors[0].terminal_instance_id,
+            "mt4_terminal_active_01"
+        );
+        assert_eq!(descriptors[0].platform, "mt4");
+        assert_eq!(descriptors[0].connection_epoch, 4);
+        assert_eq!(active.statuses()[0].route.account_ref.login, "654321");
+        assert_eq!(
+            TerminalFreshnessProvider::snapshot(active.as_ref())
+                .expect("freshness")
+                .len(),
+            1
+        );
+        active.stop().await.expect("stop MT4-only sessions");
+        assert_eq!(
+            active.statuses()[0].state,
+            bridge_terminal_session::TerminalSessionState::Stopped
+        );
+        drop(active);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove MT4 active fixture");
     }
 
     #[tokio::test]

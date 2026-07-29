@@ -9,6 +9,7 @@ publish.workspace = true
 bridge-command = { path = "../../crates/bridge-command" }
 bridge-contract = { path = "../../crates/bridge-contract" }
 bridge-foundation = { path = "../../crates/bridge-foundation" }
+bridge-mt4 = { path = "../../crates/bridge-mt4" }
 bridge-observability = { path = "../../crates/bridge-observability" }
 bridge-runtime-win = { path = "../../crates/bridge-runtime-win" }
 bridge-security-win = { path = "../../crates/bridge-security-win" }
