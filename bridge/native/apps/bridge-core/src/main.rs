@@ -12,7 +12,8 @@ use bridge_local_control::{
 use bridge_observability::{BridgeLogger, LoggerConfig};
 use bridge_preferences::{BridgePreferencesStore, BridgeUserPreferences};
 use bridge_runtime_win::{
-    InstanceAcquireResult, InstanceSignal, SingleInstanceGuard, default_lock_directory,
+    AutoStartRegistration, InstanceAcquireResult, InstanceSignal, SingleInstanceGuard,
+    default_lock_directory,
 };
 use bridge_security_win::CredentialStore;
 use bridge_terminal_session::TerminalSessionState;
@@ -202,6 +203,24 @@ async fn run_connected_profile(
     let credential_store = CredentialStore::new(&profile_paths.credential_path)?;
     let preferences_store =
         BridgePreferencesStore::new(profile_paths.data_directory.join("preferences.json"))?;
+    if profile_id == DEFAULT_PROFILE_ID {
+        let enabled = preferences_store.load().auto_start_enabled;
+        match AutoStartRegistration::ensure_for_installed_application(
+            &application_directory,
+            enabled,
+        ) {
+            Ok(true) => logger.info(
+                if enabled {
+                    "autostart_registered"
+                } else {
+                    "autostart_removed"
+                },
+                None,
+            ),
+            Ok(false) => {}
+            Err(error) => logger.warning("autostart_registration_failed", Some(error.code())),
+        }
+    }
     let (preference_change_sender, preference_change_receiver) = watch::channel(0_u64);
     let control_stop = stop.clone();
     let control_task = tokio::spawn(run_local_control_server(
@@ -496,6 +515,35 @@ async fn run_local_control_server(
                                 logger.info(
                                     "native_endpoint_settings_restored",
                                     Some(&format!("control_changed={control_changed}")),
+                                );
+                                LocalControlResult::Accepted
+                            }
+                            Err(code) => LocalControlResult::Rejected {
+                                code: code.to_owned(),
+                            },
+                        }
+                    }
+                }
+                LocalControlAction::AutostartSet { enabled } => {
+                    if server.endpoint().profile_id() != DEFAULT_PROFILE_ID {
+                        LocalControlResult::Rejected {
+                            code: "bridge_autostart_forbidden".to_owned(),
+                        }
+                    } else {
+                        match apply_autostart_selection(
+                            &application_directory,
+                            &preferences_store,
+                            enabled,
+                        ) {
+                            Ok(()) => {
+                                signal_preference_change(&preference_change_sender);
+                                logger.info(
+                                    if enabled {
+                                        "autostart_enabled_by_user"
+                                    } else {
+                                        "autostart_disabled_by_user"
+                                    },
+                                    None,
                                 );
                                 LocalControlResult::Accepted
                             }
@@ -807,6 +855,24 @@ async fn run_profile_lifecycle(
 
 fn signal_preference_change(sender: &watch::Sender<u64>) {
     sender.send_modify(|revision| *revision = revision.saturating_add(1));
+}
+
+fn apply_autostart_selection(
+    application_directory: &std::path::Path,
+    preferences_store: &BridgePreferencesStore,
+    enabled: bool,
+) -> Result<(), &'static str> {
+    let previous = preferences_store.load().auto_start_enabled;
+    AutoStartRegistration::set_enabled_for_installed_application(application_directory, enabled)
+        .map_err(|error| error.code())?;
+    if let Err(error) = preferences_store.save_autostart_enabled(enabled) {
+        let _ = AutoStartRegistration::set_enabled_for_installed_application(
+            application_directory,
+            previous,
+        );
+        return Err(error.code());
+    }
+    Ok(())
 }
 
 fn endpoint_settings_allowed(ui_state: &UiStateStore, profile_id: &str) -> bool {
@@ -1387,6 +1453,24 @@ mod tests {
         );
         assert!(!data.join(ENDPOINT_SETTINGS_FILE_NAME).exists());
         std::fs::remove_dir_all(root).expect("remove endpoint selection fixture");
+    }
+
+    #[test]
+    fn autostart_selection_fails_without_an_installed_launcher_and_preserves_preferences() {
+        let root = unique_test_directory("autostart-selection");
+        let application = root.join("application");
+        let preferences_path = root.join("preferences.json");
+        std::fs::create_dir_all(&application).expect("application directory");
+        let preferences =
+            BridgePreferencesStore::new(&preferences_path).expect("preferences store");
+        assert!(preferences.load().auto_start_enabled);
+        assert_eq!(
+            apply_autostart_selection(&application, &preferences, true),
+            Err("bridge_autostart_launcher_unavailable")
+        );
+        assert!(preferences.load().auto_start_enabled);
+        assert!(!preferences_path.exists());
+        std::fs::remove_dir_all(root).expect("remove autostart selection fixture");
     }
 
     fn unique_test_directory(suffix: &str) -> PathBuf {

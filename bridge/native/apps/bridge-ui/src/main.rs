@@ -49,13 +49,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CS_VREDRAW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar, GWLP_USERDATA, GetClientRect,
     GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION,
-    LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW,
-    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW,
-    ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SIZE,
-    WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX,
-    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
+    MINMAXINFO, MSG, MoveWindow, PostMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE,
+    SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
+    WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
+    WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
+    WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -76,8 +77,14 @@ const CONTROL_SETTINGS: i32 = 113;
 const CONTROL_EXIT: i32 = 114;
 const MENU_OPEN: usize = 201;
 const MENU_EXIT: usize = 202;
+const MENU_AUTOSTART: usize = 203;
+const MENU_SETTINGS: usize = 204;
+const MENU_RECOVER_OFFICIAL: usize = 205;
 const MENU_OPEN_COMMAND: i32 = MENU_OPEN as i32;
 const MENU_EXIT_COMMAND: i32 = MENU_EXIT as i32;
+const MENU_AUTOSTART_COMMAND: i32 = MENU_AUTOSTART as i32;
+const MENU_SETTINGS_COMMAND: i32 = MENU_SETTINGS as i32;
+const MENU_RECOVER_OFFICIAL_COMMAND: i32 = MENU_RECOVER_OFFICIAL as i32;
 const TIMER_POLL: usize = 1;
 const WM_STATE_READY: u32 = WM_APP + 1;
 const WM_ACTION_READY: u32 = WM_APP + 2;
@@ -138,6 +145,39 @@ struct AppState {
     hovered_permission_account: Option<usize>,
     tracking_mouse_leave: bool,
     busy_observer_profiles: BTreeSet<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct TrayMenuView {
+    show_administration: bool,
+    autostart_checked: bool,
+    settings_text: &'static str,
+    show_settings: bool,
+    show_recovery: bool,
+    actions_enabled: bool,
+}
+
+fn build_tray_menu_view(
+    profile_id: &str,
+    state: &UiStateSnapshot,
+    show_settings: bool,
+    action_running: bool,
+) -> TrayMenuView {
+    let show_administration = profile_id == DEFAULT_PROFILE_ID;
+    TrayMenuView {
+        show_administration,
+        autostart_checked: state.autostart_enabled,
+        settings_text: if state.server_connected {
+            "连接设置"
+        } else {
+            "切换服务器"
+        },
+        show_settings: show_administration && show_settings,
+        show_recovery: show_administration
+            && state.custom_endpoint_active
+            && !state.server_connected,
+        actions_enabled: !action_running,
+    }
 }
 
 fn main() {
@@ -1490,6 +1530,28 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
             ShowWindow(hwnd, SW_SHOWNORMAL);
             windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
         },
+        MENU_AUTOSTART_COMMAND => unsafe {
+            begin_action(
+                hwnd,
+                app,
+                LocalControlAction::AutostartSet {
+                    enabled: !app.state.autostart_enabled,
+                },
+            )
+        },
+        MENU_SETTINGS_COMMAND => match unsafe {
+            settings::show_or_focus(app.settings_window, hwnd, &app.profile_id, app.brand_icon)
+        } {
+            Ok(settings_window) => app.settings_window = settings_window,
+            Err(code) => show_error(hwnd, code),
+        },
+        MENU_RECOVER_OFFICIAL_COMMAND
+            if show_confirmation(
+                hwnd,
+                "确定恢复更新包携带的官方服务器地址？\n\n旧服务器授权将被清除，恢复后桥接会自动重启。",
+                "恢复官方连接",
+            ) =>
+        unsafe { begin_action(hwnd, app, LocalControlAction::SettingsRestoreOfficial) },
         _ => {}
     }
 }
@@ -1681,6 +1743,21 @@ fn show_error(hwnd: HWND, code: &str) {
     }
 }
 
+fn show_confirmation(hwnd: HWND, message: &str, title: &str) -> bool {
+    let text = wide(message);
+    let title = wide(title);
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+            hwnd,
+            text.as_ptr(),
+            title.as_ptr(),
+            windows_sys::Win32::UI::WindowsAndMessaging::MB_YESNO
+                | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONWARNING
+                | windows_sys::Win32::UI::WindowsAndMessaging::MB_DEFBUTTON2,
+        ) == windows_sys::Win32::UI::WindowsAndMessaging::IDYES
+    }
+}
+
 unsafe fn add_tray_icon(hwnd: HWND, app: &mut AppState) {
     let mut data = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -1721,7 +1798,16 @@ unsafe fn handle_tray(hwnd: HWND, app: &AppState, event: u32) {
         return;
     }
     let menu = unsafe { CreatePopupMenu() };
+    let view = build_tray_menu_view(
+        &app.profile_id,
+        &app.state,
+        app.view.show_settings,
+        app.inbox.action_running.load(Ordering::Acquire),
+    );
     let open = wide("打开量见智桥");
+    let autostart = wide("开机自动启动（推荐）");
+    let settings = wide(view.settings_text);
+    let recover = wide("恢复官方连接");
     let exit = wide("退出桥接");
     unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
@@ -1730,6 +1816,39 @@ unsafe fn handle_tray(hwnd: HWND, app: &AppState, event: u32) {
             MENU_OPEN,
             open.as_ptr(),
         );
+        if view.show_administration {
+            windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu, MF_SEPARATOR, 0, null());
+            let disabled = if view.actions_enabled { 0 } else { MF_GRAYED };
+            windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
+                menu,
+                MF_STRING
+                    | disabled
+                    | if view.autostart_checked {
+                        MF_CHECKED
+                    } else {
+                        0
+                    },
+                MENU_AUTOSTART,
+                autostart.as_ptr(),
+            );
+            if view.show_settings {
+                windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
+                    menu,
+                    MF_STRING | disabled,
+                    MENU_SETTINGS,
+                    settings.as_ptr(),
+                );
+            }
+            if view.show_recovery {
+                windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
+                    menu,
+                    MF_STRING | disabled,
+                    MENU_RECOVER_OFFICIAL,
+                    recover.as_ptr(),
+                );
+            }
+        }
+        windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu, MF_SEPARATOR, 0, null());
         windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
             menu,
             MF_STRING,
@@ -1751,7 +1870,6 @@ unsafe fn handle_tray(hwnd: HWND, app: &AppState, event: u32) {
         DestroyMenu(menu);
         DrawMenuBar(hwnd);
     }
-    let _ = app;
 }
 
 fn format_local_time(timestamp: i64) -> String {
@@ -2020,6 +2138,33 @@ mod tests {
         ));
         assert!(observer_local_action("source-1", ObserverAction::Bind).is_none());
         assert!(observer_local_action("source-1", ObserverAction::Configure).is_none());
+    }
+
+    #[test]
+    fn tray_menu_matches_dotnet_visibility_and_recovery_rules() {
+        let mut state = demo_state(DEFAULT_PROFILE_ID);
+        let connected = build_tray_menu_view(DEFAULT_PROFILE_ID, &state, true, false);
+        assert_eq!(
+            connected,
+            TrayMenuView {
+                show_administration: true,
+                autostart_checked: true,
+                settings_text: "连接设置",
+                show_settings: true,
+                show_recovery: false,
+                actions_enabled: true,
+            }
+        );
+        state.server_connected = false;
+        state.custom_endpoint_active = true;
+        let recovering = build_tray_menu_view(DEFAULT_PROFILE_ID, &state, true, true);
+        assert_eq!(recovering.settings_text, "切换服务器");
+        assert!(recovering.show_recovery);
+        assert!(!recovering.actions_enabled);
+        let observer = build_tray_menu_view("source-1", &state, true, false);
+        assert!(!observer.show_administration);
+        assert!(!observer.show_settings);
+        assert!(!observer.show_recovery);
     }
 
     fn account_fixture(

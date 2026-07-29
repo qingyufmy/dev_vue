@@ -7,20 +7,25 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::ptr::null;
+use std::ptr::{null, null_mut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, HANDLE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, ERROR_FILE_NOT_FOUND, GetLastError, HANDLE, WAIT_FAILED, WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_WRITE_THROUGH;
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject,
+};
+use windows_sys::Win32::System::Registry::{
+    HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegCreateKeyExW,
+    RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CreateEventW, SetEvent, WaitForMultipleObjects,
@@ -30,6 +35,219 @@ mod pipe_security;
 pub use pipe_security::CurrentUserPipeSecurity;
 
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+const AUTOSTART_VALUE_NAME: &str = "AURUMBridge";
+const AUTOSTART_RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const STABLE_LAUNCHER_FILE_NAME: &str = "AURUMBridge.Launcher.exe";
+
+pub struct AutoStartRegistration;
+
+impl AutoStartRegistration {
+    pub fn ensure_for_installed_application(
+        application_directory: impl AsRef<Path>,
+        enabled: bool,
+    ) -> Result<bool, RuntimeError> {
+        if !enabled {
+            return Self::disable();
+        }
+        let Some(launcher) = resolve_stable_launcher(application_directory.as_ref()) else {
+            return Ok(false);
+        };
+        write_autostart_command(&build_autostart_command(&launcher))
+    }
+
+    pub fn set_enabled_for_installed_application(
+        application_directory: impl AsRef<Path>,
+        enabled: bool,
+    ) -> Result<bool, RuntimeError> {
+        if !enabled {
+            return Self::disable();
+        }
+        let launcher = resolve_stable_launcher(application_directory.as_ref())
+            .ok_or_else(|| RuntimeError::new("bridge_autostart_launcher_unavailable"))?;
+        write_autostart_command(&build_autostart_command(&launcher))
+    }
+
+    pub fn disable() -> Result<bool, RuntimeError> {
+        let key = open_run_key(KEY_QUERY_VALUE | KEY_SET_VALUE, false)?;
+        let Some(key) = key else {
+            return Ok(false);
+        };
+        let value_name = wide_string(AUTOSTART_VALUE_NAME);
+        let existing = read_registry_string(key.0, &value_name)?;
+        if existing.is_none() {
+            return Ok(false);
+        }
+        let deleted = unsafe { RegDeleteValueW(key.0, value_name.as_ptr()) };
+        if deleted != 0 {
+            return Err(RuntimeError::windows_code(
+                "bridge_autostart_registry_write_failed",
+                deleted,
+            ));
+        }
+        Ok(true)
+    }
+}
+
+fn resolve_stable_launcher(application_directory: &Path) -> Option<PathBuf> {
+    let version_directory = fs::canonicalize(application_directory).ok()?;
+    let version = version_directory.file_name()?.to_str()?;
+    if !is_version_directory_name(version) {
+        return None;
+    }
+    let versions_directory = version_directory.parent()?;
+    if !versions_directory
+        .file_name()?
+        .to_string_lossy()
+        .eq_ignore_ascii_case("versions")
+    {
+        return None;
+    }
+    let launcher = versions_directory.parent()?.join(STABLE_LAUNCHER_FILE_NAME);
+    launcher.is_file().then_some(launcher)
+}
+
+fn is_version_directory_name(value: &str) -> bool {
+    let parts = value.split('.').collect::<Vec<_>>();
+    (2..=4).contains(&parts.len())
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn build_autostart_command(launcher: &Path) -> String {
+    format!("\"{}\" --autostart", launcher.display())
+}
+
+fn write_autostart_command(command: &str) -> Result<bool, RuntimeError> {
+    let key = open_run_key(KEY_QUERY_VALUE | KEY_SET_VALUE, true)?
+        .ok_or_else(|| RuntimeError::new("bridge_autostart_registry_unavailable"))?;
+    let value_name = wide_string(AUTOSTART_VALUE_NAME);
+    if read_registry_string(key.0, &value_name)?.as_deref() == Some(command) {
+        return Ok(false);
+    }
+    let payload = wide_string(command);
+    let bytes = u32::try_from(payload.len().saturating_mul(std::mem::size_of::<u16>()))
+        .map_err(|_| RuntimeError::new("bridge_autostart_registry_write_failed"))?;
+    let written = unsafe {
+        RegSetValueExW(
+            key.0,
+            value_name.as_ptr(),
+            0,
+            REG_SZ,
+            payload.as_ptr().cast(),
+            bytes,
+        )
+    };
+    if written != 0 {
+        return Err(RuntimeError::windows_code(
+            "bridge_autostart_registry_write_failed",
+            written,
+        ));
+    }
+    Ok(true)
+}
+
+fn open_run_key(access: u32, create: bool) -> Result<Option<RegistryKey>, RuntimeError> {
+    let path = wide_string(AUTOSTART_RUN_KEY);
+    let mut key = std::ptr::null_mut();
+    let result = if create {
+        let mut disposition = 0;
+        unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                path.as_ptr(),
+                0,
+                null_mut(),
+                0,
+                access,
+                null(),
+                &mut key,
+                &mut disposition,
+            )
+        }
+    } else {
+        unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, access, &mut key) }
+    };
+    if result == ERROR_FILE_NOT_FOUND && !create {
+        return Ok(None);
+    }
+    if result != 0 || key.is_null() {
+        return Err(RuntimeError::windows_code(
+            "bridge_autostart_registry_unavailable",
+            result,
+        ));
+    }
+    Ok(Some(RegistryKey(key)))
+}
+
+fn read_registry_string(
+    key: windows_sys::Win32::System::Registry::HKEY,
+    value_name: &[u16],
+) -> Result<Option<String>, RuntimeError> {
+    let mut value_type = 0;
+    let mut size = 0;
+    let measured = unsafe {
+        RegQueryValueExW(
+            key,
+            value_name.as_ptr(),
+            null_mut(),
+            &mut value_type,
+            null_mut(),
+            &mut size,
+        )
+    };
+    if measured == ERROR_FILE_NOT_FOUND {
+        return Ok(None);
+    }
+    if measured != 0 {
+        return Err(RuntimeError::windows_code(
+            "bridge_autostart_registry_read_failed",
+            measured,
+        ));
+    }
+    if value_type != REG_SZ || size == 0 || size > 32 * 1024 || size % 2 != 0 {
+        return Err(RuntimeError::new("bridge_autostart_registry_read_failed"));
+    }
+    let mut buffer = vec![0_u16; size as usize / std::mem::size_of::<u16>()];
+    let read = unsafe {
+        RegQueryValueExW(
+            key,
+            value_name.as_ptr(),
+            null_mut(),
+            &mut value_type,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if read != 0 {
+        return Err(RuntimeError::windows_code(
+            "bridge_autostart_registry_read_failed",
+            read,
+        ));
+    }
+    if value_type != REG_SZ || size == 0 || size % 2 != 0 {
+        return Err(RuntimeError::new("bridge_autostart_registry_read_failed"));
+    }
+    buffer.truncate(size as usize / std::mem::size_of::<u16>());
+    if buffer.last() == Some(&0) {
+        buffer.pop();
+    }
+    String::from_utf16(&buffer)
+        .map(Some)
+        .map_err(|_| RuntimeError::new("bridge_autostart_registry_read_failed"))
+}
+
+struct RegistryKey(windows_sys::Win32::System::Registry::HKEY);
+
+impl Drop for RegistryKey {
+    fn drop(&mut self) {
+        unsafe { RegCloseKey(self.0) };
+    }
+}
+
+fn wide_string(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeError {
@@ -54,6 +272,13 @@ impl RuntimeError {
             code,
             // SAFETY: GetLastError has no preconditions and is read immediately after failure.
             windows_error: Some(unsafe { GetLastError() }),
+        }
+    }
+
+    fn windows_code(code: &'static str, windows_error: u32) -> Self {
+        Self {
+            code,
+            windows_error: Some(windows_error),
         }
     }
 }
@@ -835,6 +1060,28 @@ mod tests {
         assert!(child.try_wait().expect("initial wait").is_none());
         child.terminate().expect("terminate job");
         assert!(child.try_wait().expect("final wait").is_some());
+    }
+
+    #[test]
+    fn autostart_resolves_the_same_stable_launcher_layout_as_dotnet() {
+        let root = unique_test_directory("autostart-layout");
+        let version_directory = root.join("versions").join("3.0.0");
+        fs::create_dir_all(&version_directory).expect("version directory");
+        let launcher = root.join(STABLE_LAUNCHER_FILE_NAME);
+        fs::write(&launcher, b"fixture").expect("launcher fixture");
+        let resolved = resolve_stable_launcher(&version_directory).expect("stable launcher");
+        assert_eq!(
+            resolved,
+            fs::canonicalize(&launcher).expect("canonical launcher")
+        );
+        assert_eq!(
+            build_autostart_command(&resolved),
+            format!("\"{}\" --autostart", resolved.display())
+        );
+        assert!(is_version_directory_name("3.0"));
+        assert!(is_version_directory_name("3.0.0.1"));
+        assert!(!is_version_directory_name("3.0.0-alpha"));
+        fs::remove_dir_all(root).expect("remove autostart fixture");
     }
 
     fn command_interpreter() -> PathBuf {
