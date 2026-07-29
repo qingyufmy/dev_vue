@@ -382,6 +382,140 @@ pub struct TerminalStreamFreshness {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct QuoteRequestMessage {
+    pub v: u16,
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub message_id: String,
+    pub sent_at_utc_msc: i64,
+    pub request_id: String,
+    pub terminal_instance_id: String,
+    pub account_ref: AccountRef,
+    pub connection_epoch: i64,
+    pub symbol: String,
+}
+
+impl QuoteRequestMessage {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        validate_typed_envelope(
+            self.v,
+            &self.message_type,
+            "quote_request",
+            &self.message_id,
+            self.sent_at_utc_msc,
+        )?;
+        validate_id(&self.request_id)?;
+        validate_id(&self.terminal_instance_id)?;
+        self.account_ref.validate()?;
+        if self.connection_epoch <= 0
+            || self.symbol.is_empty()
+            || self.symbol.trim() != self.symbol
+            || self.symbol.len() > 64
+        {
+            return Err("bridge_quote_request_invalid");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuoteMessage {
+    pub v: u16,
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub message_id: String,
+    pub sent_at_utc_msc: i64,
+    pub request_id: String,
+    pub terminal_instance_id: String,
+    pub account_ref: AccountRef,
+    pub connection_epoch: i64,
+    pub symbol: String,
+    pub observed_at_utc_msc: i64,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bid: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol_trade_mode: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_connected: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digits: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub point: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone_offset_minutes: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clock_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+impl QuoteMessage {
+    pub fn validate_for(&self, request: &QuoteRequestMessage) -> Result<(), &'static str> {
+        validate_typed_envelope(
+            self.v,
+            &self.message_type,
+            "quote",
+            &self.message_id,
+            self.sent_at_utc_msc,
+        )?;
+        if self.request_id != request.request_id
+            || !same_terminal_route(
+                &self.terminal_instance_id,
+                &self.account_ref,
+                self.connection_epoch,
+                &request.terminal_instance_id,
+                &request.account_ref,
+                request.connection_epoch,
+            )
+            || self.symbol != request.symbol
+            || self.observed_at_utc_msc <= 0
+            || !matches!(self.status.as_str(), "succeeded" | "rejected")
+            || self
+                .bid
+                .is_some_and(|value| !value.is_finite() || value <= 0.0)
+            || self
+                .ask
+                .is_some_and(|value| !value.is_finite() || value <= 0.0)
+            || self
+                .last
+                .is_some_and(|value| !value.is_finite() || value < 0.0)
+            || self.ask.zip(self.bid).is_some_and(|(ask, bid)| ask < bid)
+            || self
+                .symbol_trade_mode
+                .is_some_and(|value| !(0..=4).contains(&value))
+            || self.digits.is_some_and(|value| !(0..=16).contains(&value))
+            || self
+                .point
+                .is_some_and(|value| !value.is_finite() || value <= 0.0)
+            || self
+                .timezone_offset_minutes
+                .is_some_and(|value| !(-840..=840).contains(&value))
+            || self
+                .clock_status
+                .as_ref()
+                .is_some_and(|value| value.is_empty() || value.len() > 64)
+            || self
+                .error_code
+                .as_ref()
+                .is_some_and(|value| value.is_empty() || value.len() > 128)
+            || self.status == "succeeded"
+                && (self.bid.is_none() || self.ask.is_none() || self.error_code.is_some())
+            || self.status == "rejected" && self.error_code.is_none()
+        {
+            return Err("bridge_quote_response_invalid");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DataRequestMessage {
     pub v: u16,
     #[serde(rename = "type")]

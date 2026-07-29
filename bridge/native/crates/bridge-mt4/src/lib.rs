@@ -3,9 +3,18 @@ use std::fmt::{Display, Formatter};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 mod connection;
+mod read_api;
 mod session;
 pub use connection::{
     EaConnection, EaIdentity, EaPipeListener, REGISTRATION_PIPE_NAME, reconnect_pipe_name,
+};
+pub use read_api::{
+    DataResult, DealsBatch, DealsRequest, ExtendedDataRequest, PerformanceDailyRequest, Quote,
+    QuoteRequest, RatesRequest, RiskSnapshotRequest, RouteFields, SymbolSnapshotRequest,
+    decode_deals, decode_extended_data, decode_performance_daily, decode_quote, decode_rates,
+    decode_risk_snapshot, decode_symbol_snapshot, encode_deals, encode_deals_request,
+    encode_extended_data_request, encode_performance_daily_request, encode_quote_request,
+    encode_rates_request, encode_risk_snapshot_request, encode_symbol_snapshot_request,
 };
 pub use session::{
     EaRegistrationHub, EaRegistrationHubHandle, Mt4EaSnapshotSource, Mt4SnapshotSourceSpec,
@@ -14,7 +23,7 @@ pub use session::{
 pub const CURRENT_PROTOCOL_VERSION: i32 = 3;
 pub const CURRENT_ADAPTER_VERSION: &str = "3.2.4";
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
-const MAX_STRING_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_STRING_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 #[repr(i32)]
@@ -352,30 +361,30 @@ fn validate_frame_size(size: usize) -> Result<(), Mt4ProtocolError> {
     }
 }
 
-struct PayloadWriter {
+pub(crate) struct PayloadWriter {
     bytes: Vec<u8>,
 }
 
 impl PayloadWriter {
-    fn new(message_type: MessageType) -> Self {
+    pub(crate) fn new(message_type: MessageType) -> Self {
         Self {
             bytes: (message_type as i32).to_le_bytes().to_vec(),
         }
     }
 
-    fn i32(&mut self, value: i32) {
+    pub(crate) fn i32(&mut self, value: i32) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn i64(&mut self, value: i64) {
+    pub(crate) fn i64(&mut self, value: i64) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn boolean(&mut self, value: bool) {
+    pub(crate) fn boolean(&mut self, value: bool) {
         self.i32(i32::from(value));
     }
 
-    fn string(&mut self, value: &str) -> Result<(), Mt4ProtocolError> {
+    pub(crate) fn string(&mut self, value: &str) -> Result<(), Mt4ProtocolError> {
         let bytes = value.as_bytes();
         if bytes.len() > MAX_STRING_BYTES || bytes.len() > i32::MAX as usize {
             return Err(Mt4ProtocolError::new("mt4_pipe_string_too_large"));
@@ -391,19 +400,19 @@ impl PayloadWriter {
         self.string(&text)
     }
 
-    fn finish(self) -> Result<Vec<u8>, Mt4ProtocolError> {
+    pub(crate) fn finish(self) -> Result<Vec<u8>, Mt4ProtocolError> {
         validate_frame_size(self.bytes.len())?;
         Ok(self.bytes)
     }
 }
 
-struct PayloadReader<'a> {
+pub(crate) struct PayloadReader<'a> {
     payload: &'a [u8],
     offset: usize,
 }
 
 impl<'a> PayloadReader<'a> {
-    fn new(payload: &'a [u8], expected: MessageType) -> Result<Self, Mt4ProtocolError> {
+    pub(crate) fn new(payload: &'a [u8], expected: MessageType) -> Result<Self, Mt4ProtocolError> {
         validate_frame_size(payload.len())?;
         let mut result = Self { payload, offset: 0 };
         if result.i32()? != expected as i32 {
@@ -425,7 +434,7 @@ impl<'a> PayloadReader<'a> {
         Ok(value)
     }
 
-    fn i32(&mut self) -> Result<i32, Mt4ProtocolError> {
+    pub(crate) fn i32(&mut self) -> Result<i32, Mt4ProtocolError> {
         let bytes: [u8; 4] = self
             .take(4)?
             .try_into()
@@ -433,7 +442,7 @@ impl<'a> PayloadReader<'a> {
         Ok(i32::from_le_bytes(bytes))
     }
 
-    fn i64(&mut self) -> Result<i64, Mt4ProtocolError> {
+    pub(crate) fn i64(&mut self) -> Result<i64, Mt4ProtocolError> {
         let bytes: [u8; 8] = self
             .take(8)?
             .try_into()
@@ -441,7 +450,7 @@ impl<'a> PayloadReader<'a> {
         Ok(i64::from_le_bytes(bytes))
     }
 
-    fn boolean(&mut self) -> Result<bool, Mt4ProtocolError> {
+    pub(crate) fn boolean(&mut self) -> Result<bool, Mt4ProtocolError> {
         match self.i32()? {
             0 => Ok(false),
             1 => Ok(true),
@@ -449,7 +458,7 @@ impl<'a> PayloadReader<'a> {
         }
     }
 
-    fn string(&mut self, limit: usize) -> Result<String, Mt4ProtocolError> {
+    pub(crate) fn string(&mut self, limit: usize) -> Result<String, Mt4ProtocolError> {
         let size = self.i32()?;
         if size < 0 {
             return Err(Mt4ProtocolError::new("mt4_pipe_string_size_invalid"));
@@ -469,7 +478,11 @@ impl<'a> PayloadReader<'a> {
         serde_json::from_str(&text).map_err(|_| Mt4ProtocolError::new(error_code))
     }
 
-    fn finish(self) -> Result<(), Mt4ProtocolError> {
+    pub(crate) fn remaining(&self) -> usize {
+        self.payload.len().saturating_sub(self.offset)
+    }
+
+    pub(crate) fn finish(self) -> Result<(), Mt4ProtocolError> {
         if self.offset == self.payload.len() {
             Ok(())
         } else {

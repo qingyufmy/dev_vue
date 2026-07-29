@@ -2,7 +2,8 @@ use crate::admission::REQUIRED_INITIAL_STREAMS;
 use crate::{DataAckDisposition, NativeCommandAdmission, OutboxPump, TransportError};
 use bridge_command::CommandDispatcher;
 use bridge_contract::{
-    BridgeEnvelope, CommandMessage, DataRequestMessage, DataResponseMessage, TerminalDescriptor,
+    BridgeEnvelope, CommandMessage, DataRequestMessage, DataResponseMessage, QuoteMessage,
+    QuoteRequestMessage, TerminalDescriptor,
 };
 use serde::Deserialize;
 use std::future::Future;
@@ -42,6 +43,27 @@ pub trait InboundDataHandler: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, TransportError>> + Send + 'a>>;
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct InboundQuoteResult {
+    pub observed_at_utc_msc: i64,
+    pub bid: f64,
+    pub ask: f64,
+    pub last: Option<f64>,
+    pub symbol_trade_mode: Option<i32>,
+    pub terminal_connected: Option<bool>,
+    pub digits: Option<i32>,
+    pub point: Option<f64>,
+    pub timezone_offset_minutes: Option<i32>,
+    pub clock_status: Option<String>,
+}
+
+pub trait InboundQuoteHandler: Send + Sync {
+    fn handle<'a>(
+        &'a self,
+        request: &'a QuoteRequestMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<InboundQuoteResult, TransportError>> + Send + 'a>>;
+}
+
 #[derive(Default)]
 pub struct NoopInboundEventSink;
 
@@ -70,6 +92,7 @@ pub struct NativeInboundRouter {
     command_admission: Arc<NativeCommandAdmission>,
     command_dispatcher: Option<Arc<CommandDispatcher>>,
     data_handler: Option<Arc<dyn InboundDataHandler>>,
+    quote_handler: Option<Arc<dyn InboundQuoteHandler>>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     response_sequence: AtomicU64,
 }
@@ -82,6 +105,7 @@ impl NativeInboundRouter {
             command_admission: Arc::new(NativeCommandAdmission::default()),
             command_dispatcher: None,
             data_handler: None,
+            quote_handler: None,
             clock: Arc::new(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -109,6 +133,11 @@ impl NativeInboundRouter {
 
     pub fn with_data_handler(mut self, data_handler: Arc<dyn InboundDataHandler>) -> Self {
         self.data_handler = Some(data_handler);
+        self
+    }
+
+    pub fn with_quote_handler(mut self, quote_handler: Arc<dyn InboundQuoteHandler>) -> Self {
+        self.quote_handler = Some(quote_handler);
         self
     }
 
@@ -271,7 +300,77 @@ impl NativeInboundRouter {
                     priority: MessagePriority::Data,
                 }))
             }
-            "quote_request" => Err(TransportError::new("native_bridge_runtime_not_ready")),
+            "quote_request" => {
+                let request: QuoteRequestMessage = serde_json::from_str(payload_json)
+                    .map_err(|_| TransportError::new("bridge_quote_request_invalid"))?;
+                request.validate().map_err(TransportError::new)?;
+                let Some(handler) = &self.quote_handler else {
+                    return Err(TransportError::new("native_bridge_runtime_not_ready"));
+                };
+                let sent_at = (self.clock)();
+                if sent_at <= 0 {
+                    return Err(TransportError::new("bridge_message_timestamp_invalid"));
+                }
+                let sequence = self.response_sequence.fetch_add(1, Ordering::Relaxed);
+                let result = handler.handle(&request).await;
+                let response = match result {
+                    Ok(quote) => QuoteMessage {
+                        v: 3,
+                        message_type: "quote".to_owned(),
+                        message_id: format!("quote_{sent_at:x}_{sequence:x}"),
+                        sent_at_utc_msc: sent_at,
+                        request_id: request.request_id.clone(),
+                        terminal_instance_id: request.terminal_instance_id.clone(),
+                        account_ref: request.account_ref.clone(),
+                        connection_epoch: request.connection_epoch,
+                        symbol: request.symbol.clone(),
+                        observed_at_utc_msc: quote.observed_at_utc_msc,
+                        status: "succeeded".to_owned(),
+                        bid: Some(quote.bid),
+                        ask: Some(quote.ask),
+                        last: quote.last,
+                        symbol_trade_mode: quote.symbol_trade_mode,
+                        terminal_connected: quote.terminal_connected,
+                        digits: quote.digits,
+                        point: quote.point,
+                        timezone_offset_minutes: quote.timezone_offset_minutes,
+                        clock_status: quote.clock_status,
+                        error_code: None,
+                    },
+                    Err(error) => QuoteMessage {
+                        v: 3,
+                        message_type: "quote".to_owned(),
+                        message_id: format!("quote_{sent_at:x}_{sequence:x}"),
+                        sent_at_utc_msc: sent_at,
+                        request_id: request.request_id.clone(),
+                        terminal_instance_id: request.terminal_instance_id.clone(),
+                        account_ref: request.account_ref.clone(),
+                        connection_epoch: request.connection_epoch,
+                        symbol: request.symbol.clone(),
+                        observed_at_utc_msc: sent_at,
+                        status: "rejected".to_owned(),
+                        bid: None,
+                        ask: None,
+                        last: None,
+                        symbol_trade_mode: None,
+                        terminal_connected: None,
+                        digits: None,
+                        point: None,
+                        timezone_offset_minutes: None,
+                        clock_status: None,
+                        error_code: Some(error.code().to_owned()),
+                    },
+                };
+                response
+                    .validate_for(&request)
+                    .map_err(TransportError::new)?;
+                Ok(Some(OutboundMessage {
+                    message_id: response.message_id.clone(),
+                    payload_json: serde_json::to_string(&response)
+                        .map_err(|_| TransportError::new("bridge_quote_response_invalid"))?,
+                    priority: MessagePriority::Data,
+                }))
+            }
             _ => Err(TransportError::new("bridge_message_type_unexpected")),
         }
     }
@@ -438,6 +537,31 @@ mod tests {
 
     struct HistoryDataHandler;
 
+    struct FixedQuoteHandler;
+
+    impl InboundQuoteHandler for FixedQuoteHandler {
+        fn handle<'a>(
+            &'a self,
+            _request: &'a QuoteRequestMessage,
+        ) -> Pin<Box<dyn Future<Output = Result<InboundQuoteResult, TransportError>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Ok(InboundQuoteResult {
+                    observed_at_utc_msc: 1_700_000_000_050,
+                    bid: 2_000.1,
+                    ask: 2_000.3,
+                    last: Some(2_000.2),
+                    symbol_trade_mode: Some(4),
+                    terminal_connected: Some(true),
+                    digits: Some(2),
+                    point: Some(0.01),
+                    timezone_offset_minutes: Some(180),
+                    clock_status: Some("verified".to_owned()),
+                })
+            })
+        }
+    }
+
     impl InboundDataHandler for HistoryDataHandler {
         fn handle<'a>(
             &'a self,
@@ -493,6 +617,42 @@ mod tests {
             response.payload.expect("payload")["pagination"]["current_page"],
             2
         );
+        assert!(store.records.lock().expect("records").is_empty());
+    }
+
+    #[tokio::test]
+    async fn quote_request_returns_a_transient_correlated_quote_without_using_outbox() {
+        let store = Arc::new(FakeOutbox::default());
+        let router = router(store.clone(), Arc::new(CapturingEvents::default()))
+            .with_command_admission(
+                Arc::new(NativeCommandAdmission::default()),
+                Arc::new(|| 1_700_000_000_100),
+            )
+            .with_quote_handler(Arc::new(FixedQuoteHandler));
+        let request = serde_json::json!({
+            "v": 3,
+            "type": "quote_request",
+            "message_id": "message_01JQUOTEREQ01",
+            "sent_at_utc_msc": 1_700_000_000_000_i64,
+            "request_id": "quote_01JQUOTEREQ01",
+            "terminal_instance_id": "mt4_terminal_01",
+            "account_ref": { "broker_server": "Broker-Demo", "login": "123456" },
+            "connection_epoch": 7,
+            "symbol": "XAUUSD.s"
+        });
+        let outbound = router
+            .route(&request.to_string())
+            .await
+            .expect("quote route")
+            .expect("direct response");
+        assert_eq!(outbound.priority, MessagePriority::Data);
+        let response: QuoteMessage =
+            serde_json::from_str(&outbound.payload_json).expect("quote response");
+        response
+            .validate_for(&serde_json::from_value(request).expect("request"))
+            .expect("correlated response");
+        assert_eq!(response.bid, Some(2_000.1));
+        assert_eq!(response.timezone_offset_minutes, Some(180));
         assert!(store.records.lock().expect("records").is_empty());
     }
 

@@ -1,7 +1,13 @@
 use crate::{
-    CURRENT_PROTOCOL_VERSION, CollectionStreams, Hello, MessageType, Mt4ProtocolError, Snapshot,
-    Welcome, decode_hello, decode_message_type, decode_snapshot, encode_collect,
-    encode_message_type, encode_welcome, read_frame, write_frame,
+    CURRENT_PROTOCOL_VERSION, CollectionStreams, DataResult, DealsBatch, DealsRequest,
+    ExtendedDataRequest, Hello, MessageType, Mt4ProtocolError, PerformanceDailyRequest, Quote,
+    QuoteRequest, RatesRequest, RiskSnapshotRequest, Snapshot, SymbolSnapshotRequest, Welcome,
+    decode_deals, decode_extended_data, decode_hello, decode_message_type,
+    decode_performance_daily, decode_quote, decode_rates, decode_risk_snapshot, decode_snapshot,
+    decode_symbol_snapshot, encode_collect, encode_deals_request, encode_extended_data_request,
+    encode_message_type, encode_performance_daily_request, encode_quote_request,
+    encode_rates_request, encode_risk_snapshot_request, encode_symbol_snapshot_request,
+    encode_welcome, read_frame, write_frame,
 };
 use bridge_runtime_win::CurrentUserPipeSecurity;
 use std::path::{Path, PathBuf};
@@ -212,23 +218,66 @@ impl EaConnection {
         &mut self,
         streams: CollectionStreams,
     ) -> Result<Snapshot, Mt4ProtocolError> {
-        if !self.is_ready() {
-            return Err(Mt4ProtocolError::new("mt4_ea_not_ready"));
-        }
         let payload = encode_collect(streams)?;
-        let operation = async {
-            write_frame(&mut self.pipe, &payload).await?;
-            let response = read_frame(&mut self.pipe).await?;
-            decode_snapshot(&response)
-        };
-        match timeout(self.request_timeout, operation).await {
-            Ok(Ok(snapshot)) => Ok(snapshot),
-            Ok(Err(error)) => {
-                self.disconnect();
-                Err(error)
-            }
-            Err(_) => self.poison("mt4_ea_request_timeout"),
-        }
+        let response = self.request(payload).await?;
+        decode_snapshot(&response).inspect_err(|_| self.disconnect())
+    }
+
+    pub async fn get_quote(&mut self, request: &QuoteRequest) -> Result<Quote, Mt4ProtocolError> {
+        let response = self.request(encode_quote_request(request)?).await?;
+        decode_quote(&response).inspect_err(|_| self.disconnect())
+    }
+
+    pub async fn get_rates(
+        &mut self,
+        request: &RatesRequest,
+    ) -> Result<DataResult, Mt4ProtocolError> {
+        let response = self.request(encode_rates_request(request)?).await?;
+        decode_rates(&response).inspect_err(|_| self.disconnect())
+    }
+
+    pub async fn get_symbol_snapshot(
+        &mut self,
+        request: &SymbolSnapshotRequest,
+    ) -> Result<DataResult, Mt4ProtocolError> {
+        let response = self
+            .request(encode_symbol_snapshot_request(request)?)
+            .await?;
+        decode_symbol_snapshot(&response).inspect_err(|_| self.disconnect())
+    }
+
+    pub async fn get_risk_snapshot(
+        &mut self,
+        request: &RiskSnapshotRequest,
+    ) -> Result<DataResult, Mt4ProtocolError> {
+        let response = self.request(encode_risk_snapshot_request(request)?).await?;
+        decode_risk_snapshot(&response).inspect_err(|_| self.disconnect())
+    }
+
+    pub async fn get_performance_daily(
+        &mut self,
+        request: &PerformanceDailyRequest,
+    ) -> Result<DataResult, Mt4ProtocolError> {
+        let response = self
+            .request(encode_performance_daily_request(request)?)
+            .await?;
+        decode_performance_daily(&response).inspect_err(|_| self.disconnect())
+    }
+
+    pub async fn get_extended_data(
+        &mut self,
+        request: &ExtendedDataRequest,
+    ) -> Result<DataResult, Mt4ProtocolError> {
+        let response = self.request(encode_extended_data_request(request)?).await?;
+        decode_extended_data(&response).inspect_err(|_| self.disconnect())
+    }
+
+    pub async fn collect_deals(
+        &mut self,
+        request: &DealsRequest,
+    ) -> Result<DealsBatch, Mt4ProtocolError> {
+        let response = self.request(encode_deals_request(request)?).await?;
+        decode_deals(&response).inspect_err(|_| self.disconnect())
     }
 
     pub async fn close(mut self) -> Result<(), Mt4ProtocolError> {
@@ -255,6 +304,24 @@ impl EaConnection {
     fn disconnect(&mut self) {
         self.faulted = true;
         let _ = self.pipe.disconnect();
+    }
+
+    async fn request(&mut self, payload: Vec<u8>) -> Result<Vec<u8>, Mt4ProtocolError> {
+        if !self.is_ready() {
+            return Err(Mt4ProtocolError::new("mt4_ea_not_ready"));
+        }
+        let operation = async {
+            write_frame(&mut self.pipe, &payload).await?;
+            read_frame(&mut self.pipe).await
+        };
+        match timeout(self.request_timeout, operation).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => {
+                self.disconnect();
+                Err(error)
+            }
+            Err(_) => self.poison("mt4_ea_request_timeout"),
+        }
     }
 }
 
@@ -285,7 +352,9 @@ fn paths_equal_ordinal_ignore_case(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{decode_collect, decode_welcome, encode_hello, encode_snapshot};
+    use crate::{
+        PayloadWriter, RouteFields, decode_collect, decode_welcome, encode_hello, encode_snapshot,
+    };
     use tokio::net::windows::named_pipe::ClientOptions;
 
     fn unique_pipe(label: &str) -> String {
@@ -347,6 +416,22 @@ mod tests {
             )
             .await
             .expect("write snapshot");
+            let rates = read_frame(&mut pipe).await.expect("rates frame");
+            assert_eq!(
+                i32::from_le_bytes(rates[..4].try_into().expect("message type")),
+                MessageType::RatesRequest as i32
+            );
+            let mut response = PayloadWriter::new(MessageType::Rates);
+            response.string("rates_01").expect("request id");
+            response.i64(1_800_000_000_001);
+            response.i32(1);
+            response
+                .string(r#"{"source":"mt4","rates":[]}"#)
+                .expect("payload");
+            response.string("").expect("error");
+            write_frame(&mut pipe, &response.finish().expect("rates response"))
+                .await
+                .expect("write rates");
             let shutdown = read_frame(&mut pipe).await.expect("shutdown frame");
             decode_message_type(&shutdown, MessageType::Shutdown).expect("shutdown");
             write_frame(&mut pipe, &encode_message_type(MessageType::ShutdownAck))
@@ -374,6 +459,24 @@ mod tests {
                 .expect("collect snapshot"),
             expected_snapshot
         );
+        let rates = connection
+            .get_rates(&RatesRequest {
+                route: RouteFields {
+                    request_id: "rates_01".to_owned(),
+                    terminal_instance_id: "mt4_0123456789abcdef01234567".to_owned(),
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "12345678".to_owned(),
+                    connection_epoch: 9,
+                },
+                symbol: "XAUUSD".to_owned(),
+                timeframe: "M5".to_owned(),
+                count: 100,
+                start_utc_msc: 0,
+                end_utc_msc: 0,
+            })
+            .await
+            .expect("rates");
+        assert_eq!(rates.payload.expect("rates payload")["source"], "mt4");
         connection.close().await.expect("close");
         client.await.expect("client task");
     }

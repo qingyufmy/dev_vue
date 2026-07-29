@@ -135,6 +135,7 @@ pub struct Mt4SessionHandle {
     route: WorkerRoute,
     source: Arc<Mt4EaSnapshotSource>,
     collector: CollectorHandle,
+    history: HistorySyncHandle,
 }
 
 impl Mt4SessionHandle {
@@ -174,6 +175,33 @@ impl Mt4SessionHandle {
         self.collector
             .request_full_snapshot(stream)
             .map_err(projection_error)
+    }
+
+    pub async fn request_data(
+        &self,
+        request_id: String,
+        action: String,
+        params: serde_json::Value,
+    ) -> Result<WorkerDataResult, TerminalSessionError> {
+        self.source
+            .request_data(request_id, action, params)
+            .await
+            .map_err(worker_error)
+    }
+
+    pub async fn request_quote(
+        &self,
+        request_id: String,
+        symbol: String,
+    ) -> Result<bridge_mt4::Quote, TerminalSessionError> {
+        self.source
+            .request_quote(request_id, symbol)
+            .await
+            .map_err(|error| TerminalSessionError::new(error.code()))
+    }
+
+    pub fn request_history_refresh(&self) {
+        self.history.wake();
     }
 
     pub fn freshness(&self) -> TerminalStreamFreshness {
@@ -258,6 +286,17 @@ impl TerminalSessionHandle {
     ) -> Result<WorkerDataResult, TerminalSessionError> {
         self.data
             .data(self.route.clone(), request_id, action, params)
+            .await
+            .map_err(worker_error)
+    }
+
+    pub async fn request_quote(
+        &self,
+        request_id: String,
+        symbol: String,
+    ) -> Result<bridge_worker_host::TerminalQuote, TerminalSessionError> {
+        self.data
+            .quote(self.route.clone(), request_id, symbol)
             .await
             .map_err(worker_error)
     }
@@ -526,6 +565,7 @@ impl RunningSession {
 struct RunningMt4Session {
     handle: Mt4SessionHandle,
     collector_task: JoinHandle<()>,
+    history_task: JoinHandle<()>,
 }
 
 impl RunningMt4Session {
@@ -547,6 +587,31 @@ impl RunningMt4Session {
             )
             .map_err(|error| TerminalSessionError::new(error.code()))?,
         );
+        let terminal = bridge_contract::TerminalDescriptor {
+            terminal_instance_id: spec.route.terminal_instance_id.clone(),
+            platform: spec.route.platform.clone(),
+            account_ref: spec.route.account_ref.clone(),
+            connection_epoch: spec.route.connection_epoch,
+            worker_version: None,
+        };
+        let history_state = store
+            .history_archive_state(&terminal.terminal_instance_id, &terminal.account_ref)
+            .map_err(|error| TerminalSessionError::new(error.code()))?;
+        let initial_cursor = if history_state.cursor == HistoryCursor::default() {
+            HistoryCursor {
+                time_msc: HISTORY_ARCHIVE_START_MSC,
+                ticket: "0".to_owned(),
+            }
+        } else {
+            history_state.cursor
+        };
+        let (history, history_task) = start_mt4_history_sync(
+            Arc::clone(&source),
+            Arc::clone(&store),
+            terminal,
+            initial_cursor,
+            history_state.is_complete,
+        );
         let projector =
             SnapshotProjector::restore(store, spec.route.clone()).map_err(projection_error)?;
         let (collector, collector_handle) =
@@ -558,8 +623,10 @@ impl RunningMt4Session {
                 route: spec.route,
                 source,
                 collector: collector_handle,
+                history,
             },
             collector_task,
+            history_task,
         })
     }
 
@@ -567,6 +634,8 @@ impl RunningMt4Session {
         self.handle.source.request_stop();
         self.handle.collector.stop();
         await_task(&mut self.collector_task, "terminal_collector_stop_timeout").await?;
+        self.handle.history.stop();
+        await_task(&mut self.history_task, "terminal_history_stop_timeout").await?;
         self.handle.source.close().await;
         Ok(())
     }
@@ -690,6 +759,159 @@ where
     (handle, task)
 }
 
+fn start_mt4_history_sync(
+    source: Arc<Mt4EaSnapshotSource>,
+    store: Arc<OutboxStore>,
+    terminal: bridge_contract::TerminalDescriptor,
+    initial_cursor: HistoryCursor,
+    initially_complete: bool,
+) -> (HistorySyncHandle, JoinHandle<()>) {
+    let (stop_tx, mut stop_rx) = watch::channel(false);
+    let wake = Arc::new(Notify::new());
+    let handle = HistorySyncHandle {
+        stop_tx,
+        wake: Arc::clone(&wake),
+    };
+    let task = tokio::spawn(async move {
+        let mut cursor = initial_cursor;
+        let mut complete = initially_complete;
+        let mut failures = 0_u32;
+        loop {
+            if *stop_rx.borrow() {
+                return;
+            }
+            let delay = if failures > 0 {
+                HISTORY_RETRY_MINIMUM
+                    .saturating_mul(1_u32 << failures.min(4))
+                    .min(HISTORY_RETRY_MAXIMUM)
+            } else if complete {
+                HISTORY_COMPLETE_INTERVAL
+            } else {
+                Duration::from_millis(25)
+            };
+            tokio::select! {
+                biased;
+                changed = stop_rx.changed() => {
+                    if changed.is_err() || *stop_rx.borrow() { return; }
+                    continue;
+                }
+                _ = wake.notified() => {}
+                _ = tokio::time::sleep(delay) => {}
+            }
+            if *stop_rx.borrow() {
+                return;
+            }
+            let cursor_ticket = match cursor.ticket.parse::<i64>() {
+                Ok(ticket) if ticket >= 0 => ticket,
+                _ => {
+                    failures = failures.saturating_add(1);
+                    continue;
+                }
+            };
+            let batch = source
+                .collect_deals(
+                    cursor.time_msc,
+                    cursor_ticket,
+                    i32::from(HISTORY_BATCH_LIMIT),
+                    30 * 24 * 60 * 60 * 1_000,
+                )
+                .await;
+            let Ok(batch) = batch else {
+                failures = failures.saturating_add(1);
+                continue;
+            };
+            let trades = batch
+                .items
+                .iter()
+                .filter(|item| {
+                    item.get("category")
+                        .and_then(serde_json::Value::as_str)
+                        .is_none_or(|category| category == "trade")
+                })
+                .map(build_mt4_history_trade)
+                .collect::<Vec<_>>();
+            let stored = HistoryArchiveBatch {
+                deals: batch.items.clone(),
+                history_orders: batch.items,
+                trades,
+                next_cursor: HistoryCursor {
+                    time_msc: batch.next_time_msc,
+                    ticket: batch.next_ticket.to_string(),
+                },
+                has_more: batch.has_more,
+                observed_at_utc_msc: batch.source_time_msc,
+            };
+            let next_cursor = stored.next_cursor.clone();
+            let has_more = stored.has_more;
+            let persist_store = Arc::clone(&store);
+            let persist_terminal = terminal.clone();
+            let persisted = tokio::task::spawn_blocking(move || {
+                persist_store.persist_history_archive_batch(&persist_terminal, &stored)
+            })
+            .await;
+            match persisted {
+                Ok(Ok(())) => {
+                    cursor = next_cursor;
+                    complete = !has_more;
+                    failures = 0;
+                }
+                _ => failures = failures.saturating_add(1),
+            }
+        }
+    });
+    (handle, task)
+}
+
+fn build_mt4_history_trade(item: &serde_json::Value) -> serde_json::Value {
+    let side = item
+        .get("side")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let profit = history_number(item, "profit");
+    let commission = history_number(item, "commission");
+    let swap = history_number(item, "swap");
+    let ticket = history_scalar(item, "ticket");
+    serde_json::json!({
+        "ticket": ticket,
+        "deal_ticket": history_scalar(item, "deal_ticket").or_else(|| ticket.clone()),
+        "order": history_scalar(item, "order_ticket").or_else(|| ticket.clone()),
+        "position_id": history_scalar(item, "position_id").or_else(|| ticket.clone()),
+        "symbol": item.get("symbol").and_then(serde_json::Value::as_str).unwrap_or_default(),
+        "type": if side.eq_ignore_ascii_case("buy") { "BUY" } else { "SELL" },
+        "volume": history_number(item, "volume"),
+        "entry_price": history_number(item, "price_open"),
+        "exit_price": history_number(item, "price_close"),
+        "price": history_number(item, "price_close"),
+        "profit": profit,
+        "commission": commission,
+        "swap": swap,
+        "fee": 0.0,
+        "net_profit": profit + commission + swap,
+        "entry_time": item.get("entry_time").and_then(serde_json::Value::as_str).unwrap_or_default(),
+        "close_time": item.get("close_time").and_then(serde_json::Value::as_str).unwrap_or_default(),
+        "time": item.get("close_time").and_then(serde_json::Value::as_str).unwrap_or_default(),
+        "time_msc": item.get("time_msc").and_then(serde_json::Value::as_i64).unwrap_or_default(),
+        "comment": item.get("comment").and_then(serde_json::Value::as_str).unwrap_or_default(),
+        "take_profit": history_number(item, "tp"),
+        "stop_loss": history_number(item, "sl")
+    })
+}
+
+fn history_scalar(item: &serde_json::Value, name: &str) -> Option<String> {
+    match item.get(name) {
+        Some(serde_json::Value::String(value)) => Some(value.clone()),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn history_number(item: &serde_json::Value, name: &str) -> f64 {
+    item.get(name)
+        .and_then(serde_json::Value::as_f64)
+        .filter(|value| value.is_finite())
+        .unwrap_or_default()
+}
+
 async fn await_task<T>(
     task: &mut JoinHandle<T>,
     timeout_code: &'static str,
@@ -717,9 +939,9 @@ mod tests {
     use super::*;
     use bridge_contract::AccountRef;
     use bridge_mt4::{
-        CURRENT_PROTOCOL_VERSION, CollectionStreams, Hello, MessageType, Snapshot, decode_collect,
-        decode_message_type, decode_welcome, encode_hello, encode_message_type, encode_snapshot,
-        read_frame, reconnect_pipe_name, write_frame,
+        CURRENT_PROTOCOL_VERSION, CollectionStreams, DealsBatch, Hello, MessageType, Snapshot,
+        decode_collect, decode_message_type, decode_welcome, encode_deals, encode_hello,
+        encode_message_type, encode_snapshot, read_frame, reconnect_pipe_name, write_frame,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -901,6 +1123,44 @@ mod tests {
                         .expect("shutdown ack");
                     break;
                 }
+                let message_type = i32::from_le_bytes(
+                    frame
+                        .get(..4)
+                        .expect("message type")
+                        .try_into()
+                        .expect("message type bytes"),
+                );
+                if message_type == MessageType::DealsRequest as i32 {
+                    write_frame(
+                        &mut pipe,
+                        &encode_deals(&DealsBatch {
+                            source_time_msc: 1_800_000_000_000,
+                            items: vec![serde_json::json!({
+                                "category": "trade",
+                                "ticket": "77",
+                                "deal_ticket": "77",
+                                "order_ticket": "77",
+                                "position_id": "77",
+                                "time_msc": 1_785_333_000_000_i64,
+                                "side": "buy",
+                                "symbol": "XAUUSD",
+                                "volume": 0.01,
+                                "price_open": 2000.0,
+                                "price_close": 2001.0,
+                                "profit": 1.0,
+                                "commission": -0.1,
+                                "swap": 0.0
+                            })],
+                            next_time_msc: 1_785_333_000_000,
+                            next_ticket: 77,
+                            has_more: false,
+                        })
+                        .expect("deals"),
+                    )
+                    .await
+                    .expect("write deals");
+                    continue;
+                }
                 assert_eq!(
                     decode_collect(&frame).expect("collect"),
                     CollectionStreams::ALL
@@ -948,6 +1208,34 @@ mod tests {
         assert_eq!(outbox.len(), 3);
         assert!(outbox.iter().all(|item| item.message_type == "data_delta"));
         assert_eq!(handle.freshness().streams.len(), 3);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let state = store
+                    .history_archive_state(&terminal_id, &route.account_ref)
+                    .expect("history state");
+                if state.is_complete {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("MT4 history archived");
+        let history = store
+            .read_history_archive_page(
+                &bridge_contract::TerminalDescriptor {
+                    terminal_instance_id: terminal_id.clone(),
+                    platform: "mt4".to_owned(),
+                    account_ref: route.account_ref.clone(),
+                    connection_epoch: route.connection_epoch,
+                    worker_version: None,
+                },
+                &serde_json::json!({ "page": 1, "page_size": 20, "include_deals": true }),
+            )
+            .expect("history page");
+        assert_eq!(history["orders"].as_array().expect("orders").len(), 1);
+        assert_eq!(history["deals"].as_array().expect("deals").len(), 1);
+        assert_eq!(history["orders"][0]["net_profit"], 0.9);
 
         manager.stop().await.expect("stop MT4 manager");
         ea.await.expect("EA task");

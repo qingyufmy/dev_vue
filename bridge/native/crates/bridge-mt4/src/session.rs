@@ -1,11 +1,15 @@
 use crate::{
-    CollectionStreams, EaConnection, EaIdentity, EaPipeListener, Mt4ProtocolError,
-    REGISTRATION_PIPE_NAME, Welcome, reconnect_pipe_name,
+    CollectionStreams, DataResult, DealsBatch, DealsRequest, EaConnection, EaIdentity,
+    EaPipeListener, ExtendedDataRequest, Mt4ProtocolError, PerformanceDailyRequest, Quote,
+    QuoteRequest, REGISTRATION_PIPE_NAME, RatesRequest, RiskSnapshotRequest, RouteFields,
+    SymbolSnapshotRequest, Welcome, reconnect_pipe_name,
 };
 use bridge_terminal_data::SnapshotSource;
 use bridge_worker_host::{
-    SnapshotStream, SnapshotStreams, TerminalSnapshot, WorkerHostError, WorkerRoute,
+    SnapshotStream, SnapshotStreams, TerminalSnapshot, WorkerDataResult, WorkerHostError,
+    WorkerRoute,
 };
+use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -201,6 +205,197 @@ impl Mt4EaSnapshotSource {
         }
     }
 
+    pub async fn request_data(
+        &self,
+        request_id: String,
+        action: String,
+        params: Value,
+    ) -> Result<WorkerDataResult, WorkerHostError> {
+        let route = RouteFields {
+            request_id: request_id.clone(),
+            terminal_instance_id: self.route.terminal_instance_id.clone(),
+            broker_server: self.route.account_ref.broker_server.clone(),
+            login: self.route.account_ref.login.clone(),
+            connection_epoch: self.route.connection_epoch,
+        };
+        let object = params
+            .as_object()
+            .ok_or_else(|| WorkerHostError::new("bridge_data_params_invalid"))?;
+        let mut active = self.connection.lock().await;
+        if active.is_none() {
+            *active = Some(self.connect().await.map_err(mt4_worker_error)?);
+        }
+        let connection = active
+            .as_mut()
+            .ok_or_else(|| WorkerHostError::new("mt4_ea_not_ready"))?;
+        let result = match action.as_str() {
+            "rates" => {
+                let request = RatesRequest {
+                    route,
+                    symbol: string_param(object, "symbol")?.unwrap_or_default(),
+                    timeframe: string_param(object, "timeframe")?
+                        .unwrap_or_else(|| "M30".to_owned())
+                        .to_ascii_uppercase(),
+                    count: i32_param(object, "count")?.unwrap_or(100),
+                    start_utc_msc: i64_param(object, "start_utc_msc")?.unwrap_or(0),
+                    end_utc_msc: i64_param(object, "end_utc_msc")?.unwrap_or(0),
+                };
+                connection.get_rates(&request).await
+            }
+            "symbol_snapshot" => {
+                let request = SymbolSnapshotRequest {
+                    route,
+                    symbol: string_param(object, "symbol")?.unwrap_or_default(),
+                };
+                connection.get_symbol_snapshot(&request).await
+            }
+            "risk_snapshot" => {
+                let proposed = object.get("proposed_order");
+                if proposed.is_some_and(|value| !value.is_null() && !value.is_object()) {
+                    return Err(WorkerHostError::new("mt4_risk_snapshot_request_invalid"));
+                }
+                let proposed = proposed.and_then(Value::as_object);
+                let request = RiskSnapshotRequest {
+                    route,
+                    symbol: string_param(object, "symbol")?.unwrap_or_default(),
+                    last_deal_time_msc: i64_param(object, "last_deal_time_msc")?.unwrap_or(0),
+                    last_deal_ticket: i64_param(object, "last_deal_ticket")?.unwrap_or(0),
+                    baseline_from_utc_msc: i64_param(object, "baseline_from_utc_msc")?.unwrap_or(0),
+                    proposed_symbol: optional_object_string(proposed, "symbol")?,
+                    proposed_order_type: optional_object_string(proposed, "order_type")?
+                        .to_ascii_lowercase(),
+                    proposed_volume: optional_object_f64(proposed, "volume")?,
+                    proposed_entry_price: optional_object_f64(proposed, "entry_price")?,
+                    proposed_stop_loss: optional_object_f64(proposed, "sl")?,
+                };
+                connection.get_risk_snapshot(&request).await
+            }
+            "performance_daily" => {
+                let request = PerformanceDailyRequest {
+                    route,
+                    date_from: string_param(object, "date_from")?.unwrap_or_default(),
+                    date_to: string_param(object, "date_to")?.unwrap_or_default(),
+                };
+                connection.get_performance_daily(&request).await
+            }
+            "symbols" | "pending_order_state" | "diagnostics" => {
+                if !connection.hello().supports_extended_data() {
+                    return Err(WorkerHostError::new("mt4_ea_update_required"));
+                }
+                let expected = object.get("expected_state");
+                if expected.is_some_and(|value| !value.is_null() && !value.is_object()) {
+                    return Err(WorkerHostError::new("management_expected_state_invalid"));
+                }
+                let expected = expected.and_then(Value::as_object);
+                let request = ExtendedDataRequest {
+                    route,
+                    action: action.clone(),
+                    date_from: string_param(object, "date_from")?.unwrap_or_default(),
+                    date_to: string_param(object, "date_to")?.unwrap_or_default(),
+                    entry_from: string_param(object, "entry_from")?.unwrap_or_default(),
+                    entry_to: string_param(object, "entry_to")?.unwrap_or_default(),
+                    direction: string_param(object, "direction")?
+                        .unwrap_or_default()
+                        .to_ascii_lowercase(),
+                    profit_filter: string_param(object, "profit_filter")?
+                        .unwrap_or_default()
+                        .to_ascii_lowercase(),
+                    page: i32_param(object, "page")?.unwrap_or(1),
+                    page_size: i32_param(object, "page_size")?.unwrap_or(20),
+                    include_deals: bool_param(object, "include_deals")?.unwrap_or(false),
+                    compact: bool_param(object, "compact")?.unwrap_or(false),
+                    ticket: i64_param(object, "ticket")?.unwrap_or(0),
+                    expected_broker_server: optional_object_string(expected, "broker_server_key")?,
+                    expected_login: optional_object_string(expected, "login_account")?,
+                    expected_ticket: optional_object_i64(expected, "ticket")?.unwrap_or(0),
+                    expected_symbol: optional_object_string(expected, "symbol")?,
+                    expected_direction: optional_object_string(expected, "direction")?
+                        .to_ascii_lowercase(),
+                    expected_volume: optional_object_f64(expected, "volume")?,
+                    expected_magic: optional_object_i32(expected, "magic")?.unwrap_or(0),
+                };
+                connection.get_extended_data(&request).await
+            }
+            _ => return Err(WorkerHostError::new("terminal_data_action_unavailable")),
+        };
+        match result {
+            Ok(result) => data_result(request_id, action, result),
+            Err(error) => {
+                active.take();
+                Err(mt4_worker_error(error))
+            }
+        }
+    }
+
+    pub async fn collect_deals(
+        &self,
+        cursor_time_msc: i64,
+        cursor_ticket: i64,
+        limit: i32,
+        window_msc: i64,
+    ) -> Result<DealsBatch, Mt4ProtocolError> {
+        let mut active = self.connection.lock().await;
+        if active.is_none() {
+            *active = Some(self.connect().await?);
+        }
+        let connection = active
+            .as_mut()
+            .ok_or_else(|| Mt4ProtocolError::new("mt4_ea_not_ready"))?;
+        if !connection.hello().supports_deals() {
+            return Err(Mt4ProtocolError::new("mt4_ea_update_required"));
+        }
+        let result = connection
+            .collect_deals(&DealsRequest {
+                terminal_instance_id: self.route.terminal_instance_id.clone(),
+                broker_server: self.route.account_ref.broker_server.clone(),
+                login: self.route.account_ref.login.clone(),
+                connection_epoch: self.route.connection_epoch,
+                cursor_time_msc,
+                cursor_ticket,
+                limit,
+                window_msc,
+            })
+            .await;
+        if result.is_err() {
+            active.take();
+        }
+        result
+    }
+
+    pub async fn request_quote(
+        &self,
+        request_id: String,
+        symbol: String,
+    ) -> Result<Quote, Mt4ProtocolError> {
+        let mut active = self.connection.lock().await;
+        if active.is_none() {
+            *active = Some(self.connect().await?);
+        }
+        let connection = active
+            .as_mut()
+            .ok_or_else(|| Mt4ProtocolError::new("mt4_ea_not_ready"))?;
+        let result = connection
+            .get_quote(&QuoteRequest {
+                route: RouteFields {
+                    request_id: request_id.clone(),
+                    terminal_instance_id: self.route.terminal_instance_id.clone(),
+                    broker_server: self.route.account_ref.broker_server.clone(),
+                    login: self.route.account_ref.login.clone(),
+                    connection_epoch: self.route.connection_epoch,
+                },
+                symbol: symbol.clone(),
+            })
+            .await;
+        match result {
+            Ok(quote) if quote.request_id == request_id && quote.symbol == symbol => Ok(quote),
+            Ok(_) => Err(Mt4ProtocolError::new("mt4_quote_route_mismatch")),
+            Err(error) => {
+                active.take();
+                Err(error)
+            }
+        }
+    }
+
     async fn collect(
         &self,
         streams: Vec<SnapshotStream>,
@@ -297,6 +492,116 @@ fn collection_streams(streams: &[SnapshotStream]) -> Result<CollectionStreams, M
         };
     }
     CollectionStreams::from_bits(bits)
+}
+
+fn data_result(
+    request_id: String,
+    action: String,
+    result: DataResult,
+) -> Result<WorkerDataResult, WorkerHostError> {
+    if result.request_id != request_id {
+        return Err(WorkerHostError::new("mt4_data_route_mismatch"));
+    }
+    match (result.payload, result.error_code) {
+        (Some(payload), None) => Ok(WorkerDataResult {
+            action,
+            observed_at_utc_msc: result.observed_at_utc_msc,
+            payload,
+        }),
+        (None, Some(code)) => Err(WorkerHostError::new(code)),
+        _ => Err(WorkerHostError::new("mt4_data_result_invalid")),
+    }
+}
+
+fn mt4_worker_error(error: Mt4ProtocolError) -> WorkerHostError {
+    WorkerHostError::new(error.code())
+}
+
+fn string_param(
+    object: &serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<Option<String>, WorkerHostError> {
+    match object.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        _ => Err(WorkerHostError::new("bridge_data_params_invalid")),
+    }
+}
+
+fn i64_param(
+    object: &serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<Option<i64>, WorkerHostError> {
+    match object.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| WorkerHostError::new("bridge_data_params_invalid")),
+    }
+}
+
+fn i32_param(
+    object: &serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<Option<i32>, WorkerHostError> {
+    i64_param(object, name)?
+        .map(i32::try_from)
+        .transpose()
+        .map_err(|_| WorkerHostError::new("bridge_data_params_invalid"))
+}
+
+fn bool_param(
+    object: &serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<Option<bool>, WorkerHostError> {
+    match object.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_bool()
+            .map(Some)
+            .ok_or_else(|| WorkerHostError::new("bridge_data_params_invalid")),
+    }
+}
+
+fn optional_object_string(
+    object: Option<&serde_json::Map<String, Value>>,
+    name: &str,
+) -> Result<String, WorkerHostError> {
+    object
+        .map_or(Ok(None), |object| string_param(object, name))
+        .map(Option::unwrap_or_default)
+}
+
+fn optional_object_i64(
+    object: Option<&serde_json::Map<String, Value>>,
+    name: &str,
+) -> Result<Option<i64>, WorkerHostError> {
+    object.map_or(Ok(None), |object| i64_param(object, name))
+}
+
+fn optional_object_i32(
+    object: Option<&serde_json::Map<String, Value>>,
+    name: &str,
+) -> Result<Option<i32>, WorkerHostError> {
+    object.map_or(Ok(None), |object| i32_param(object, name))
+}
+
+fn optional_object_f64(
+    object: Option<&serde_json::Map<String, Value>>,
+    name: &str,
+) -> Result<Option<f64>, WorkerHostError> {
+    let Some(value) = object.and_then(|object| object.get(name)) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_f64()
+        .filter(|number| number.is_finite())
+        .map(Some)
+        .ok_or_else(|| WorkerHostError::new("bridge_data_params_invalid"))
 }
 
 #[cfg(test)]

@@ -3,9 +3,9 @@ use bridge_command::{
     ExecutionReconciliationWorker,
 };
 use bridge_contract::{
-    CommandResultMessage, DataRequestMessage, HelloMessage, SERVER_DATA_QUEUE_CAPACITY,
-    SERVER_PROTOCOL_VERSION, SERVER_TRADE_QUEUE_CAPACITY, TerminalDescriptor,
-    TerminalStreamFreshness,
+    CommandResultMessage, DataRequestMessage, HelloMessage, QuoteRequestMessage,
+    SERVER_DATA_QUEUE_CAPACITY, SERVER_PROTOCOL_VERSION, SERVER_TRADE_QUEUE_CAPACITY,
+    TerminalDescriptor, TerminalStreamFreshness,
 };
 use bridge_foundation::{
     BridgeProfilePaths, DEFAULT_PROFILE_ID, MT5_WORKER_RELATIVE_PATH, PYTHON_RELATIVE_PATH,
@@ -21,11 +21,11 @@ use bridge_terminal_session::{
     TerminalSessionHandle, TerminalSessionStatus,
 };
 use bridge_transport::{
-    CredentialSource, HelloProvider, InboundDataHandler, InboundEventSink, NativeCommandAdmission,
-    NativeInboundRouter, OutboxPump, PriorityMessageQueue, ReleaseAvailableNotification,
-    ServerEndpoints, SessionCancellation, SessionConnector, SessionIntervals, SessionRuntime,
-    SessionSupervisor, SessionTransition, SupervisorStateSink, TerminalFreshnessProvider,
-    TransportError, V3SessionConnector,
+    CredentialSource, HelloProvider, InboundDataHandler, InboundEventSink, InboundQuoteHandler,
+    InboundQuoteResult, NativeCommandAdmission, NativeInboundRouter, OutboxPump,
+    PriorityMessageQueue, ReleaseAvailableNotification, ServerEndpoints, SessionCancellation,
+    SessionConnector, SessionIntervals, SessionRuntime, SessionSupervisor, SessionTransition,
+    SupervisorStateSink, TerminalFreshnessProvider, TransportError, V3SessionConnector,
 };
 use bridge_worker_host::{
     RegistryCommandWorker, RegistryReconciliationWorker, WorkerProgram, WorkerRegistry, WorkerRoute,
@@ -155,6 +155,13 @@ struct ActiveMt5Session {
 struct ActiveMt4Session {
     manager: Arc<Mt4SessionManager>,
     handle: Mt4SessionHandle,
+    data_cache_gate: tokio::sync::Mutex<()>,
+}
+
+#[derive(Clone, Copy)]
+enum PreparedDataSession<'a> {
+    Mt4(&'a ActiveMt4Session),
+    Mt5(&'a ActiveMt5Session),
 }
 
 pub struct ActiveMt5Sessions {
@@ -312,7 +319,14 @@ impl ActiveMt5Sessions {
                         return Err(terminal_session_error(error));
                     }
                 };
-                mt4_sessions.insert(terminal_instance_id, ActiveMt4Session { manager, handle });
+                mt4_sessions.insert(
+                    terminal_instance_id,
+                    ActiveMt4Session {
+                        manager,
+                        handle,
+                        data_cache_gate: tokio::sync::Mutex::new(()),
+                    },
+                );
             }
             match hub_registration {
                 Some((hub, registration)) => {
@@ -537,8 +551,28 @@ impl InboundDataHandler for ActiveMt5Sessions {
                         "bridge_message_route_mismatch",
                     ));
                 }
-                return Err(TransportError::from_static_code(
-                    "terminal_data_action_unavailable",
+                if matches!(request.action.as_str(), "history" | "chart_data")
+                    && request
+                        .params
+                        .get("force_refresh")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+                {
+                    session.handle.request_history_refresh();
+                }
+                return Ok((
+                    Arc::clone(&self.store),
+                    TerminalDescriptor {
+                        terminal_instance_id: route.terminal_instance_id.clone(),
+                        platform: route.platform.clone(),
+                        account_ref: route.account_ref.clone(),
+                        connection_epoch: route.connection_epoch,
+                        worker_version: None,
+                    },
+                    request.params.clone(),
+                    request.request_id.clone(),
+                    request.action.clone(),
+                    PreparedDataSession::Mt4(session),
                 ));
             }
             let session =
@@ -575,7 +609,7 @@ impl InboundDataHandler for ActiveMt5Sessions {
                 request.params.clone(),
                 request.request_id.clone(),
                 request.action.clone(),
-                session,
+                PreparedDataSession::Mt5(session),
             ))
         })();
         Box::pin(async move {
@@ -597,12 +631,26 @@ impl InboundDataHandler for ActiveMt5Sessions {
                 .map_err(|error| TransportError::from_static_code(error.code()));
             }
 
-            let _gate = session.data_cache_gate.lock().await;
+            let _gate = match session {
+                PreparedDataSession::Mt4(session) => session.data_cache_gate.lock().await,
+                PreparedDataSession::Mt5(session) => session.data_cache_gate.lock().await,
+            };
             if !data_action_is_cacheable(&action) {
-                return session
-                    .handle
-                    .request_data(request_id, action, parameters)
-                    .await
+                let result = match session {
+                    PreparedDataSession::Mt4(session) => {
+                        session
+                            .handle
+                            .request_data(request_id, action, parameters)
+                            .await
+                    }
+                    PreparedDataSession::Mt5(session) => {
+                        session
+                            .handle
+                            .request_data(request_id, action, parameters)
+                            .await
+                    }
+                };
+                return result
                     .map(|result| result.payload)
                     .map_err(|error| TransportError::from_code(error.code().to_owned()));
             }
@@ -630,11 +678,21 @@ impl InboundDataHandler for ActiveMt5Sessions {
                 return Ok(cached.payload);
             }
 
-            let result = session
-                .handle
-                .request_data(request_id, action.clone(), parameters.clone())
-                .await
-                .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+            let result = match session {
+                PreparedDataSession::Mt4(session) => {
+                    session
+                        .handle
+                        .request_data(request_id, action.clone(), parameters.clone())
+                        .await
+                }
+                PreparedDataSession::Mt5(session) => {
+                    session
+                        .handle
+                        .request_data(request_id, action.clone(), parameters.clone())
+                        .await
+                }
+            }
+            .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
             let payload = result.payload;
             let persisted_payload = payload.clone();
             let _ = tokio::task::spawn_blocking(move || {
@@ -651,6 +709,98 @@ impl InboundDataHandler for ActiveMt5Sessions {
             Ok(payload)
         })
     }
+}
+
+impl InboundQuoteHandler for ActiveMt5Sessions {
+    fn handle<'a>(
+        &'a self,
+        request: &'a QuoteRequestMessage,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<InboundQuoteResult, TransportError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        let prepared = (|| {
+            if let Some(session) = self.mt4_sessions.get(&request.terminal_instance_id) {
+                let route = session.handle.route();
+                validate_quote_route(route, request)?;
+                return Ok(PreparedDataSession::Mt4(session));
+            }
+            let session =
+                self.session_for_route(&request.terminal_instance_id, request.connection_epoch)?;
+            validate_quote_route(session.handle.route(), request)?;
+            Ok(PreparedDataSession::Mt5(session))
+        })();
+        Box::pin(async move {
+            match prepared? {
+                PreparedDataSession::Mt4(session) => {
+                    let quote = session
+                        .handle
+                        .request_quote(request.request_id.clone(), request.symbol.clone())
+                        .await
+                        .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+                    if let Some(error) = quote.error_code {
+                        return Err(TransportError::from_code(error));
+                    }
+                    Ok(InboundQuoteResult {
+                        observed_at_utc_msc: quote.observed_at_utc_msc,
+                        bid: quote
+                            .bid
+                            .ok_or_else(|| TransportError::from_static_code("mt4_quote_invalid"))?,
+                        ask: quote
+                            .ask
+                            .ok_or_else(|| TransportError::from_static_code("mt4_quote_invalid"))?,
+                        last: None,
+                        symbol_trade_mode: quote.symbol_trade_mode,
+                        terminal_connected: Some(true),
+                        digits: quote.digits,
+                        point: quote.point,
+                        timezone_offset_minutes: quote.timezone_offset_minutes,
+                        clock_status: quote.clock_status,
+                    })
+                }
+                PreparedDataSession::Mt5(session) => {
+                    let quote = session
+                        .handle
+                        .request_quote(request.request_id.clone(), request.symbol.clone())
+                        .await
+                        .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+                    Ok(InboundQuoteResult {
+                        observed_at_utc_msc: quote.observed_at_utc_msc,
+                        bid: quote.bid,
+                        ask: quote.ask,
+                        last: Some(quote.last),
+                        symbol_trade_mode: i32::try_from(quote.symbol_trade_mode).ok(),
+                        terminal_connected: Some(quote.terminal_connected),
+                        digits: Some(i32::from(quote.digits)),
+                        point: Some(quote.point),
+                        timezone_offset_minutes: Some(i32::from(quote.timezone_offset_minutes)),
+                        clock_status: Some(quote.clock_status),
+                    })
+                }
+            }
+        })
+    }
+}
+
+fn validate_quote_route(
+    route: &WorkerRoute,
+    request: &QuoteRequestMessage,
+) -> Result<(), TransportError> {
+    if route.connection_epoch != request.connection_epoch
+        || route.account_ref.login != request.account_ref.login
+        || !route
+            .account_ref
+            .broker_server
+            .eq_ignore_ascii_case(&request.account_ref.broker_server)
+    {
+        return Err(TransportError::from_static_code(
+            "bridge_message_route_mismatch",
+        ));
+    }
+    Ok(())
 }
 
 fn data_action_is_cacheable(action: &str) -> bool {
@@ -1276,7 +1426,8 @@ impl NativeConnectedRuntime {
                 NativeInboundRouter::new(Arc::clone(&outbox), events)
                     .with_command_admission(command_admission, Arc::clone(&clock))
                     .with_command_dispatcher(command_dispatcher)
-                    .with_data_handler(active_sessions.clone()),
+                    .with_data_handler(active_sessions.clone())
+                    .with_quote_handler(active_sessions.clone()),
             );
             let freshness: Arc<dyn TerminalFreshnessProvider> = active_sessions.clone();
             let session_runtime = Arc::new(
