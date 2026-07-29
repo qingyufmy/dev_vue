@@ -881,6 +881,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "liangjian-bridge-ui"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "bridge-foundation",
+ "bridge-local-control",
+ "bridge-ui-model",
+ "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"

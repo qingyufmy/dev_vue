@@ -1,0 +1,13 @@
+[package]
+name = "liangjian-bridge-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bridge-foundation = { path = "../../crates/bridge-foundation" }
+bridge-local-control = { path = "../../crates/bridge-local-control" }
+bridge-ui-model = { path = "../../crates/bridge-ui-model" }
+tokio.workspace = true
+windows-sys.workspace = true
