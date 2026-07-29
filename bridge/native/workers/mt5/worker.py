@@ -7,7 +7,7 @@ import os
 import struct
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -364,6 +364,18 @@ class ReadOnlyMt5Adapter:
         self._ensure_identity()
         if action == "rates":
             return self._rates(params)
+        if action == "symbol_snapshot":
+            return self._symbol_snapshot(params)
+        if action == "risk_snapshot":
+            return self._risk_snapshot(params)
+        if action == "performance_daily":
+            return self._performance_daily(params)
+        if action == "pending_order_state":
+            return self._pending_order_state(params)
+        if action == "diagnostics":
+            if params:
+                raise WorkerError("worker_data_params_invalid")
+            return self._diagnostics()
         if action == "symbols":
             if params:
                 raise WorkerError("worker_data_params_invalid")
@@ -447,6 +459,482 @@ class ReadOnlyMt5Adapter:
             "timezone_offset_minutes": self.clock.offset_minutes,
             "clock_status": self.clock.status,
         }
+
+    def _symbol_snapshot(self, params: dict[str, Any]) -> dict[str, Any]:
+        if set(params) != {"symbol"}:
+            raise WorkerError("worker_symbol_snapshot_params_invalid")
+        symbol = self._resolve_symbol(params.get("symbol"))
+        info = self.mt5.symbol_info(symbol)
+        account = self.mt5.account_info()
+        tick = self.mt5.symbol_info_tick(symbol)
+        if info is None:
+            raise WorkerError("symbol_info_unavailable")
+        if account is None:
+            raise WorkerError("mt5_account_unavailable")
+        buy_price = float(getattr(tick, "ask", 0.0) or 0.0) if tick else 0.0
+        sell_price = float(getattr(tick, "bid", 0.0) or 0.0) if tick else 0.0
+        minimum = float(getattr(info, "volume_min", 0.0) or 0.0)
+        maximum = float(getattr(info, "volume_max", 0.0) or 0.0)
+        step = float(getattr(info, "volume_step", 0.0) or 0.0)
+        probe = max(minimum, min(1.0, maximum)) if maximum > 0 else 1.0
+        if step > 0:
+            probe = max(minimum, min(round(probe / step) * step, maximum))
+
+        def margin_per_lot(order_type: int, price: float) -> float | None:
+            calculator = getattr(self.mt5, "order_calc_margin", None)
+            if not callable(calculator) or price <= 0 or probe <= 0:
+                return None
+            try:
+                value = calculator(order_type, symbol, probe, price)
+                return float(value) / probe if value is not None and float(value) >= 0 else None
+            except (TypeError, ValueError, RuntimeError):
+                return None
+
+        instrument = {
+            "name": str(getattr(info, "name", symbol) or symbol),
+            "digits": int(getattr(info, "digits", 0) or 0),
+            "trade_mode": int(getattr(info, "trade_mode", 0) or 0),
+            "trade_calc_mode": int(getattr(info, "trade_calc_mode", 0) or 0),
+            "trade_exemode": int(getattr(info, "trade_exemode", 0) or 0),
+            "trade_stops_level": int(getattr(info, "trade_stops_level", 0) or 0),
+            "trade_freeze_level": int(getattr(info, "trade_freeze_level", 0) or 0),
+            "filling_mode": int(getattr(info, "filling_mode", 0) or 0),
+            "order_mode": int(getattr(info, "order_mode", 0) or 0),
+            "point": float(getattr(info, "point", 0.0) or 0.0),
+            "spread": int(getattr(info, "spread", 0) or 0),
+            "spread_float": bool(getattr(info, "spread_float", False)),
+            "tick_size": float(getattr(info, "trade_tick_size", 0.0) or 0.0),
+            "tick_value": float(getattr(info, "trade_tick_value", 0.0) or 0.0),
+            "contract_size": float(getattr(info, "trade_contract_size", 0.0) or 0.0),
+            "margin_initial": float(getattr(info, "margin_initial", 0.0) or 0.0),
+            "margin_maintenance": float(getattr(info, "margin_maintenance", 0.0) or 0.0),
+            "margin_hedged": float(getattr(info, "margin_hedged", 0.0) or 0.0),
+            "margin_per_lot_buy": margin_per_lot(self.mt5.ORDER_TYPE_BUY, buy_price),
+            "margin_per_lot_sell": margin_per_lot(self.mt5.ORDER_TYPE_SELL, sell_price),
+            "margin_reference_price_buy": buy_price if buy_price > 0 else None,
+            "margin_reference_price_sell": sell_price if sell_price > 0 else None,
+            "margin_profile_currency": str(getattr(account, "currency", "") or ""),
+            "margin_profile_volume": probe,
+            "volume_min": minimum,
+            "volume_max": maximum,
+            "volume_step": step,
+            "volume_limit": float(getattr(info, "volume_limit", 0.0) or 0.0),
+            "swap_mode": int(getattr(info, "swap_mode", 0) or 0),
+            "swap_rollover3days": int(getattr(info, "swap_rollover3days", 0) or 0),
+            "swap_long": float(getattr(info, "swap_long", 0.0) or 0.0),
+            "swap_short": float(getattr(info, "swap_short", 0.0) or 0.0),
+            "currency_base": str(getattr(info, "currency_base", "") or ""),
+            "currency_profit": str(getattr(info, "currency_profit", "") or ""),
+            "currency_margin": str(getattr(info, "currency_margin", "") or ""),
+        }
+        for day in ("sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"):
+            value = getattr(info, f"swap_{day}", None)
+            instrument[f"swap_{day}"] = float(value) if value is not None else None
+        return {
+            "symbol": symbol,
+            "source": "mt5",
+            "account": {
+                "currency": str(getattr(account, "currency", "") or ""),
+                "balance": float(getattr(account, "balance", 0.0) or 0.0),
+                "equity": float(getattr(account, "equity", 0.0) or 0.0),
+                "leverage": int(getattr(account, "leverage", 0) or 0),
+                "margin_mode": int(getattr(account, "margin_mode", 0) or 0),
+                "margin_so_mode": int(getattr(account, "margin_so_mode", 0) or 0),
+                "margin_so_call": float(getattr(account, "margin_so_call", 0.0) or 0.0),
+                "margin_so_so": float(getattr(account, "margin_so_so", 0.0) or 0.0),
+            },
+            "instrument": instrument,
+        }
+
+    def _diagnostics(self) -> dict[str, Any]:
+        account, terminal = self._ensure_identity()
+        return {
+            "mt5_connected": bool(getattr(terminal, "connected", False)),
+            "account": {
+                "login": getattr(account, "login", None),
+                "server": getattr(account, "server", None),
+                "balance": float(getattr(account, "balance", 0.0) or 0.0),
+                "equity": float(getattr(account, "equity", 0.0) or 0.0),
+                "trade_allowed": bool(getattr(account, "trade_allowed", False)),
+                "trade_expert": bool(getattr(account, "trade_expert", False)),
+            },
+            "terminal": {
+                "build": int(getattr(terminal, "build", 0) or 0),
+                "connected": bool(getattr(terminal, "connected", False)),
+                "trade_allowed": bool(getattr(terminal, "trade_allowed", False)),
+            },
+            "source": "mt5",
+        }
+
+    def _pending_order_state(self, params: dict[str, Any]) -> dict[str, Any]:
+        if set(params) - {"ticket", "expected_state"}:
+            raise WorkerError("worker_pending_order_state_params_invalid")
+        try:
+            ticket = int(str(params.get("ticket") or ""))
+        except (TypeError, ValueError) as error:
+            raise WorkerError("ticket_required") from error
+        if ticket <= 0:
+            raise WorkerError("ticket_required")
+        account = self.mt5.account_info()
+        if account is None:
+            raise WorkerError("mt5_account_unavailable")
+        expected = params.get("expected_state")
+        if expected is not None and not isinstance(expected, dict):
+            raise WorkerError("management_expected_state_invalid")
+        current = self.mt5.orders_get(ticket=ticket)
+        if current is None:
+            raise WorkerError("orders_query_failed")
+        account_row = {"login": getattr(account, "login", None), "server": getattr(account, "server", None)}
+        if current:
+            order = current[0]
+            row = self._pending_order_row(order)
+            error = self._expected_order_error(expected, order) if expected else None
+            return {"account": account_row, "current_state": "identity_changed" if error else "pending",
+                    "final_state": "unknown" if error else None, "order": row,
+                    **({"precondition_error": error} if error else {}), "source": "mt5"}
+        history = self.mt5.history_orders_get(ticket=ticket)
+        if history is None:
+            raise WorkerError("history_orders_query_failed")
+        if not history:
+            return {"account": account_row, "current_state": "absent", "final_state": "unknown",
+                    "order": None, "source": "mt5"}
+        order = history[-1]
+        row = self._pending_order_row(order)
+        error = self._expected_order_error(expected, order) if expected else None
+        states = {
+            int(getattr(self.mt5, "ORDER_STATE_FILLED", 4)): "filled",
+            int(getattr(self.mt5, "ORDER_STATE_PARTIAL", 3)): "partially_filled",
+            int(getattr(self.mt5, "ORDER_STATE_CANCELED", 2)): "cancelled",
+            int(getattr(self.mt5, "ORDER_STATE_EXPIRED", 6)): "expired",
+            int(getattr(self.mt5, "ORDER_STATE_REJECTED", 5)): "rejected",
+        }
+        return {"account": account_row, "current_state": "history",
+                "final_state": "unknown" if error else states.get(int(getattr(order, "state", -1)), "unknown"),
+                "position_id": row.get("position_id"), "order": row,
+                **({"precondition_error": error} if error else {}), "source": "mt5"}
+
+    def _pending_order_row(self, order: Any) -> dict[str, Any]:
+        buy_types = {int(self.mt5.ORDER_TYPE_BUY_LIMIT), int(self.mt5.ORDER_TYPE_BUY_STOP),
+                     int(self.mt5.ORDER_TYPE_BUY_STOP_LIMIT)}
+        order_type = int(getattr(order, "type", -1))
+        return {"ticket": getattr(order, "ticket", None),
+                "position_id": getattr(order, "position_id", 0) or None,
+                "symbol": str(getattr(order, "symbol", "") or ""),
+                "side": "buy" if order_type in buy_types else "sell",
+                "type": order_type, "state": int(getattr(order, "state", -1)),
+                "volume_initial": float(getattr(order, "volume_initial", 0.0) or 0.0),
+                "volume": float(getattr(order, "volume_current", 0.0) or 0.0),
+                "price": float(getattr(order, "price_open", 0.0) or 0.0),
+                "magic": int(getattr(order, "magic", 0) or 0),
+                "comment": str(getattr(order, "comment", "") or "")}
+
+    def _expected_order_error(self, expected: dict[str, Any], order: Any) -> str | None:
+        checks = (("ticket", str(getattr(order, "ticket", "")), "management_ticket_mismatch"),
+                  ("symbol", str(getattr(order, "symbol", "")), "management_symbol_mismatch"),
+                  ("magic", int(getattr(order, "magic", 0) or 0), "management_magic_mismatch"))
+        for key, actual, code in checks:
+            if key not in expected or str(expected[key]) != str(actual):
+                return code
+        actual_volume = float(getattr(order, "volume_current", 0.0)
+                              or getattr(order, "volume_initial", 0.0) or 0.0)
+        if "volume" not in expected or abs(float(expected["volume"]) - actual_volume) > 1e-8:
+            return "management_volume_mismatch"
+        buy_types = {int(self.mt5.ORDER_TYPE_BUY_LIMIT), int(self.mt5.ORDER_TYPE_BUY_STOP),
+                     int(self.mt5.ORDER_TYPE_BUY_STOP_LIMIT)}
+        direction = "buy" if int(getattr(order, "type", -1)) in buy_types else "sell"
+        if str(expected.get("direction") or "").lower() != direction:
+            return "management_direction_mismatch"
+        if expected.get("broker_server_key") and str(expected["broker_server_key"]).upper() != self.route.broker_server.upper():
+            return "management_account_server_mismatch"
+        if expected.get("login_account") and str(expected["login_account"]) != self.route.login:
+            return "management_account_login_mismatch"
+        return None
+
+    def _performance_daily(self, params: dict[str, Any]) -> dict[str, Any]:
+        if set(params) != {"date_from", "date_to"}:
+            raise WorkerError("worker_performance_daily_params_invalid")
+        try:
+            start_date = datetime.strptime(str(params["date_from"]), "%Y-%m-%d")
+            end_date = datetime.strptime(str(params["date_to"]), "%Y-%m-%d")
+        except (TypeError, ValueError) as error:
+            raise WorkerError("performance_date_range_required") from error
+        if end_date < start_date:
+            raise WorkerError("performance_date_range_invalid")
+        if (end_date - start_date).days > 30:
+            raise WorkerError("performance_date_range_too_large")
+        account = self.mt5.account_info()
+        if account is None:
+            raise WorkerError("performance_account_unavailable")
+        deals = self.mt5.history_deals_get(
+            (start_date - timedelta(days=1)).replace(tzinfo=timezone.utc),
+            (end_date + timedelta(days=2)).replace(tzinfo=timezone.utc),
+        )
+        if deals is None:
+            raise WorkerError("performance_history_unavailable")
+        trade_types = {int(getattr(self.mt5, "DEAL_TYPE_BUY", 0)),
+                       int(getattr(self.mt5, "DEAL_TYPE_SELL", 1))}
+        balance_type = int(getattr(self.mt5, "DEAL_TYPE_BALANCE", 2))
+        credit_type = int(getattr(self.mt5, "DEAL_TYPE_CREDIT", 3))
+        other_capital = {int(getattr(self.mt5, name, value)) for name, value in
+                         (("DEAL_TYPE_CORRECTION", 5), ("DEAL_TYPE_BONUS", 6))}
+        adjustments = {int(getattr(self.mt5, name, value)) for name, value in (
+            ("DEAL_TYPE_CHARGE", 4), ("DEAL_TYPE_COMMISSION", 7),
+            ("DEAL_TYPE_COMMISSION_DAILY", 8), ("DEAL_TYPE_COMMISSION_MONTHLY", 9),
+            ("DEAL_TYPE_COMMISSION_AGENT_DAILY", 10),
+            ("DEAL_TYPE_COMMISSION_AGENT_MONTHLY", 11), ("DEAL_TYPE_INTEREST", 12),
+            ("DEAL_TYPE_DIVIDEND", 15), ("DEAL_TYPE_DIVIDEND_FRANKED", 16),
+            ("DEAL_TYPE_TAX", 17))}
+        exits = {int(getattr(self.mt5, name, value)) for name, value in (
+            ("DEAL_ENTRY_OUT", 1), ("DEAL_ENTRY_INOUT", 2), ("DEAL_ENTRY_OUT_BY", 3))}
+
+        def empty_day(day: str) -> dict[str, Any]:
+            return {"business_date": day, "trade_profit": 0.0, "commission": 0.0,
+                    "swap": 0.0, "fee": 0.0, "pnl_adjustment": 0.0,
+                    "realized_net": 0.0, "deposit": 0.0, "withdrawal": 0.0,
+                    "credit_change": 0.0, "other_capital_change": 0.0,
+                    "exit_deal_count": 0, "closed_position_count": 0,
+                    "winning_exit_count": 0, "losing_exit_count": 0,
+                    "closed_volume": 0.0, "first_deal_time_msc": 0,
+                    "last_deal_time_msc": 0, "last_deal_ticket": 0,
+                    "data_complete": True, "data_issues": [], "_positions": set()}
+
+        start_text, end_text = start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+        daily: dict[str, dict[str, Any]] = {}
+        for item in deals:
+            raw = _plain(item)
+            if not isinstance(raw, dict):
+                raise WorkerError("performance_history_invalid")
+            event_ms = int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000)
+            day = datetime.fromtimestamp(event_ms / 1000.0, timezone.utc).strftime("%Y-%m-%d")
+            if not start_text <= day <= end_text:
+                continue
+            row = daily.setdefault(day, empty_day(day))
+            ticket = int(raw.get("ticket") or 0)
+            if not row["first_deal_time_msc"] or event_ms < row["first_deal_time_msc"]:
+                row["first_deal_time_msc"] = event_ms
+            if (event_ms, ticket) > (row["last_deal_time_msc"], row["last_deal_ticket"]):
+                row["last_deal_time_msc"], row["last_deal_ticket"] = event_ms, ticket
+            deal_type = int(raw.get("type") if raw.get("type") is not None else -1)
+            values = {key: float(raw.get(key) or 0.0) for key in ("profit", "commission", "swap", "fee")}
+            net = sum(values.values())
+            if deal_type in trade_types:
+                for key in ("trade_profit", "commission", "swap", "fee"):
+                    row[key] += values["profit" if key == "trade_profit" else key]
+                row["realized_net"] += net
+                if int(raw.get("entry") if raw.get("entry") is not None else -1) in exits:
+                    row["exit_deal_count"] += 1
+                    row["closed_volume"] += float(raw.get("volume") or 0.0)
+                    if int(raw.get("position_id") or 0):
+                        row["_positions"].add(int(raw["position_id"]))
+                    row["winning_exit_count" if net > 0 else "losing_exit_count" if net < 0 else "exit_deal_count"] += int(net != 0)
+            elif deal_type == balance_type:
+                row["deposit" if net >= 0 else "withdrawal"] += abs(net)
+            elif deal_type == credit_type:
+                row["credit_change"] += net
+            elif deal_type in other_capital:
+                row["other_capital_change"] += net
+            elif deal_type in adjustments:
+                row["pnl_adjustment"] += net
+                row["realized_net"] += net
+            else:
+                row["data_complete"] = False
+                row["data_issues"].append(f"unknown_deal_type:{deal_type}")
+        numeric = ("trade_profit", "commission", "swap", "fee", "pnl_adjustment",
+                   "realized_net", "deposit", "withdrawal", "credit_change",
+                   "other_capital_change", "closed_volume")
+        rows = []
+        for day in sorted(daily):
+            row = daily[day]
+            row["closed_position_count"] = len(row.pop("_positions"))
+            row["data_issues"] = sorted(set(row["data_issues"]))
+            for field in numeric:
+                row[field] = round(float(row[field]), 8)
+            digest = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            row["source_hash"] = hashlib.sha256(digest.encode("utf-8")).hexdigest()
+            rows.append(row)
+        return {"performance_version": 1, "date_from": start_text, "date_to": end_text,
+                "timezone_offset_minutes": 0, "clock_status": "utc_direct",
+                "account": {"login": int(account.login), "server": str(account.server),
+                            "currency": str(getattr(account, "currency", "") or "")},
+                "daily": rows, "scanned_deal_count": len(deals), "source": "mt5"}
+
+    def _risk_snapshot(self, params: dict[str, Any]) -> dict[str, Any]:
+        allowed = {"symbol", "last_deal_time_msc", "last_deal_ticket",
+                   "baseline_from_utc_msc", "proposed_order"}
+        if set(params) - allowed:
+            raise WorkerError("worker_risk_snapshot_params_invalid")
+        symbol = self._resolve_symbol(params.get("symbol"))
+        try:
+            requested_ms = int(params.get("last_deal_time_msc") or 0)
+            requested_ticket = int(params.get("last_deal_ticket") or 0)
+            baseline_ms = int(params.get("baseline_from_utc_msc") or 0)
+        except (TypeError, ValueError) as error:
+            raise WorkerError("risk_snapshot_cursor_invalid") from error
+        if min(requested_ms, requested_ticket, baseline_ms) < 0:
+            raise WorkerError("risk_snapshot_cursor_invalid")
+        account = self.mt5.account_info()
+        positions, pending = self.mt5.positions_get(), self.mt5.orders_get()
+        if account is None:
+            raise WorkerError("risk_snapshot_account_unavailable")
+        if positions is None:
+            raise WorkerError("risk_snapshot_positions_unavailable")
+        if pending is None:
+            raise WorkerError("risk_snapshot_orders_unavailable")
+        position_rows = [{"ticket": int(item.ticket),
+                          "identifier": int(getattr(item, "identifier", item.ticket) or item.ticket),
+                          "symbol": str(item.symbol),
+                          "type": "buy" if int(item.type) == int(getattr(self.mt5, "POSITION_TYPE_BUY", 0)) else "sell",
+                          "volume": float(item.volume), "price_open": float(getattr(item, "price_open", 0.0) or 0.0),
+                          "price_current": float(getattr(item, "price_current", 0.0) or 0.0),
+                          "profit": float(getattr(item, "profit", 0.0) or 0.0),
+                          "swap": float(getattr(item, "swap", 0.0) or 0.0)} for item in positions]
+        pending_names = {int(getattr(self.mt5, "ORDER_TYPE_BUY_LIMIT", 2)): "buy_limit",
+                         int(getattr(self.mt5, "ORDER_TYPE_SELL_LIMIT", 3)): "sell_limit",
+                         int(getattr(self.mt5, "ORDER_TYPE_BUY_STOP", 4)): "buy_stop",
+                         int(getattr(self.mt5, "ORDER_TYPE_SELL_STOP", 5)): "sell_stop",
+                         int(getattr(self.mt5, "ORDER_TYPE_BUY_STOP_LIMIT", 6)): "buy_stop_limit",
+                         int(getattr(self.mt5, "ORDER_TYPE_SELL_STOP_LIMIT", 7)): "sell_stop_limit"}
+        pending_rows = [{"ticket": int(item.ticket), "symbol": str(item.symbol),
+                         "type": pending_names.get(int(item.type), str(item.type)),
+                         "volume": float(getattr(item, "volume_current", 0.0)
+                                         or getattr(item, "volume_initial", 0.0) or 0.0),
+                         "volume_current": float(getattr(item, "volume_current", 0.0) or 0.0),
+                         "volume_initial": float(getattr(item, "volume_initial", 0.0) or 0.0),
+                         "price": float(getattr(item, "price_open", 0.0) or 0.0)} for item in pending]
+        raw_start = requested_ms or baseline_ms or self.clock.now_utc_msc()
+        deals = self.mt5.history_deals_get(
+            datetime.fromtimestamp(max(0, raw_start - 300_000) / 1000.0, timezone.utc),
+            datetime.now(timezone.utc) + timedelta(days=1))
+        if deals is None:
+            raise WorkerError("risk_snapshot_deals_unavailable")
+        deal_rows = [_plain(item) for item in deals]
+        if not all(isinstance(item, dict) for item in deal_rows):
+            raise WorkerError("risk_snapshot_deals_invalid")
+        deal_rows.sort(key=lambda item: (int(item.get("time_msc") or int(item.get("time") or 0) * 1000),
+                                         int(item.get("ticket") or 0)))
+        cursor = (requested_ms or raw_start, requested_ticket)
+        new_deals = [item for item in deal_rows if
+                     (int(item.get("time_msc") or int(item.get("time") or 0) * 1000),
+                      int(item.get("ticket") or 0)) > cursor]
+        trade_types = {int(getattr(self.mt5, "DEAL_TYPE_BUY", 0)), int(getattr(self.mt5, "DEAL_TYPE_SELL", 1))}
+        exits = {int(getattr(self.mt5, name, value)) for name, value in
+                 (("DEAL_ENTRY_OUT", 1), ("DEAL_ENTRY_INOUT", 2), ("DEAL_ENTRY_OUT_BY", 3))}
+        active_ids = {int(getattr(item, "identifier", item.ticket) or item.ticket) for item in positions}
+        closed, issues, seen = [], [], set()
+        for deal in new_deals:
+            if int(deal.get("type", -1)) not in trade_types or int(deal.get("entry", -1)) not in exits:
+                continue
+            position_id = int(deal.get("position_id") or 0)
+            if not position_id or position_id in active_ids or position_id in seen:
+                continue
+            seen.add(position_id)
+            group = self.mt5.history_deals_get(position=position_id)
+            if group is None:
+                issues.append("position_history_unavailable")
+                continue
+            net = sum(sum(float(getattr(item, key, 0.0) or 0.0)
+                          for key in ("profit", "commission", "swap", "fee")) for item in group)
+            close_ms = int(deal.get("time_msc") or int(deal.get("time") or 0) * 1000)
+            closed.append({"position_id": position_id, "close_time_msc": close_ms,
+                           "close_time_utc_msc": close_ms, "close_deal_ticket": int(deal.get("ticket") or 0),
+                           "business_date": datetime.fromtimestamp(close_ms / 1000.0, timezone.utc).strftime("%Y-%m-%d"),
+                           "net": round(net, 8)})
+        capital_types = {int(getattr(self.mt5, name, value)) for name, value in (
+            ("DEAL_TYPE_BALANCE", 2), ("DEAL_TYPE_CREDIT", 3),
+            ("DEAL_TYPE_CORRECTION", 5), ("DEAL_TYPE_BONUS", 6))}
+        adjustment_types = {int(getattr(self.mt5, name, value)) for name, value in (
+            ("DEAL_TYPE_CHARGE", 4), ("DEAL_TYPE_COMMISSION", 7),
+            ("DEAL_TYPE_COMMISSION_DAILY", 8), ("DEAL_TYPE_COMMISSION_MONTHLY", 9),
+            ("DEAL_TYPE_COMMISSION_AGENT_DAILY", 10),
+            ("DEAL_TYPE_COMMISSION_AGENT_MONTHLY", 11), ("DEAL_TYPE_INTEREST", 12),
+            ("DEAL_TYPE_DIVIDEND", 15), ("DEAL_TYPE_DIVIDEND_FRANKED", 16),
+            ("DEAL_TYPE_TAX", 17))}
+        account_events = []
+        for deal in new_deals:
+            deal_type = int(deal.get("type", -1))
+            if deal_type in trade_types:
+                continue
+            amount = sum(float(deal.get(key) or 0.0)
+                         for key in ("profit", "commission", "swap", "fee"))
+            event_ms = int(deal.get("time_msc") or int(deal.get("time") or 0) * 1000)
+            if deal_type in capital_types:
+                category = "capital"
+            elif deal_type in adjustment_types:
+                category = "pnl_adjustment"
+            else:
+                category = "unknown"
+                issues.append(f"unknown_deal_type:{deal_type}")
+            account_events.append({"ticket": int(deal.get("ticket") or 0),
+                                   "time_msc": event_ms,
+                                   "business_date": datetime.fromtimestamp(
+                                       event_ms / 1000.0, timezone.utc).strftime("%Y-%m-%d"),
+                                   "deal_type": deal_type, "category": category,
+                                   "amount": round(amount, 8)})
+        relevant = {row["symbol"] for row in position_rows + pending_rows if row.get("symbol")} | {symbol}
+        instruments = {}
+        for name in relevant:
+            info = self.mt5.symbol_info(name)
+            if info is None:
+                issues.append(f"symbol_info_unavailable:{name}")
+                continue
+            instruments[name] = {"name": str(getattr(info, "name", name) or name),
+                                 "digits": int(getattr(info, "digits", 0) or 0),
+                                 "trade_mode": int(getattr(info, "trade_mode", 0) or 0),
+                                 "trade_calc_mode": int(getattr(info, "trade_calc_mode", 0) or 0),
+                                 "point": float(getattr(info, "point", 0.0) or 0.0),
+                                 "tick_size": float(getattr(info, "trade_tick_size", 0.0) or 0.0),
+                                 "tick_value": float(getattr(info, "trade_tick_value", 0.0) or 0.0),
+                                 "contract_size": float(getattr(info, "trade_contract_size", 0.0) or 0.0),
+                                 "margin_initial": float(getattr(info, "margin_initial", 0.0) or 0.0),
+                                 "volume_min": float(getattr(info, "volume_min", 0.0) or 0.0),
+                                 "volume_max": float(getattr(info, "volume_max", 0.0) or 0.0),
+                                 "volume_step": float(getattr(info, "volume_step", 0.0) or 0.0),
+                                 "currency_profit": str(getattr(info, "currency_profit", "") or ""),
+                                 "currency_margin": str(getattr(info, "currency_margin", "") or "")}
+        broker_calculation, warnings = None, []
+        proposed = params.get("proposed_order")
+        if proposed:
+            try:
+                side = str(proposed.get("order_type") or "").lower()
+                order_type = self.mt5.ORDER_TYPE_BUY if side.startswith("buy") else self.mt5.ORDER_TYPE_SELL
+                values = {key: float(proposed.get(key) or 0.0) for key in ("volume", "entry_price", "sl")}
+                loss = self.mt5.order_calc_profit(order_type, str(proposed["symbol"]), values["volume"], values["entry_price"], values["sl"])
+                margin = self.mt5.order_calc_margin(order_type, str(proposed["symbol"]), values["volume"], values["entry_price"])
+                if loss is not None and margin is not None:
+                    broker_calculation = {"symbol": str(proposed["symbol"]), "order_type": side,
+                                          **values, "loss_to_sl": round(abs(float(loss)), 8),
+                                          "required_margin": round(float(margin), 8)}
+            except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as error:
+                warnings.append(f"broker_calculation_unavailable:{type(error).__name__}")
+        through = cursor if not new_deals else (
+            int(new_deals[-1].get("time_msc") or int(new_deals[-1].get("time") or 0) * 1000),
+            int(new_deals[-1].get("ticket") or 0))
+        tick = self.mt5.symbol_info_tick(symbol)
+        if tick is None:
+            raise WorkerError("symbol_tick_unavailable")
+        raw_observed = int(getattr(tick, "time_msc", 0) or 0)
+        observed = self.clock.calibrate(raw_observed)
+        return {"snapshot_version": 1, "source": "mt5", "complete": not issues,
+                "incomplete_reasons": sorted(set(issues)), "warnings": sorted(set(warnings)),
+                "business_date": datetime.fromtimestamp(observed / 1000.0, timezone.utc).strftime("%Y-%m-%d"),
+                "mt5_time_msc": raw_observed, "time_msc": raw_observed, "time_utc_msc": observed,
+                "timezone_offset_minutes": self.clock.offset_minutes, "clock_status": self.clock.status,
+                "clock_residual_ms": self.clock.residual_ms, "captured_at_utc_msc": self.clock.now_utc_msc(),
+                "account": {"login": int(account.login), "server": str(account.server),
+                            "currency": str(getattr(account, "currency", "") or ""),
+                            **{key: float(getattr(account, key, 0.0) or 0.0) for key in
+                               ("balance", "equity", "credit", "profit", "margin", "margin_free", "margin_level")},
+                            "leverage": int(getattr(account, "leverage", 0) or 0),
+                            "margin_mode": int(getattr(account, "margin_mode", 0) or 0),
+                            "margin_so_mode": int(getattr(account, "margin_so_mode", 0) or 0),
+                            "margin_so_call": float(getattr(account, "margin_so_call", 0.0) or 0.0),
+                            "margin_so_so": float(getattr(account, "margin_so_so", 0.0) or 0.0)},
+                "positions": position_rows, "pending": pending_rows, "instruments": instruments,
+                "increment": {"requested_cursor": {"time_msc": requested_ms, "ticket": requested_ticket},
+                              "through_cursor": {"time_msc": through[0], "ticket": through[1]},
+                              "closed_positions": closed, "account_events": account_events,
+                              "scanned_deal_count": len(deal_rows), "new_deal_count": len(new_deals)},
+                "broker_calculation": broker_calculation}
 
     def _symbols(self) -> dict[str, Any]:
         values = self.mt5.symbols_get()
@@ -687,7 +1175,8 @@ class Mt5Worker:
                 if set(payload) != {"action", "params"} or not isinstance(payload.get("params"), dict):
                     raise WorkerError("worker_request_payload_invalid")
                 action = payload.get("action")
-                if action not in {"rates", "symbols"}:
+                if action not in {"rates", "symbols", "symbol_snapshot", "risk_snapshot",
+                                  "performance_daily", "pending_order_state", "diagnostics"}:
                     raise WorkerError("worker_data_action_invalid")
                 return self._response(request_id, "data", {"data": {
                     "action": action,

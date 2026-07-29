@@ -321,7 +321,17 @@ impl InboundDataHandler for ActiveMt5Sessions {
         >,
     > {
         let prepared = (|| {
-            if !matches!(request.action.as_str(), "history" | "rates" | "symbols") {
+            if !matches!(
+                request.action.as_str(),
+                "history"
+                    | "rates"
+                    | "symbols"
+                    | "symbol_snapshot"
+                    | "risk_snapshot"
+                    | "performance_daily"
+                    | "pending_order_state"
+                    | "diagnostics"
+            ) {
                 return Err(TransportError::from_static_code(
                     "terminal_data_action_unavailable",
                 ));
@@ -375,6 +385,14 @@ impl InboundDataHandler for ActiveMt5Sessions {
             }
 
             let _gate = session.data_cache_gate.lock().await;
+            if !data_action_is_cacheable(&action) {
+                return session
+                    .handle
+                    .request_data(request_id, action, parameters)
+                    .await
+                    .map(|result| result.payload)
+                    .map_err(|error| TransportError::from_code(error.code().to_owned()));
+            }
             let now_utc_msc = (self.clock)();
             if now_utc_msc <= 0 {
                 return Err(TransportError::from_static_code(
@@ -422,10 +440,15 @@ impl InboundDataHandler for ActiveMt5Sessions {
     }
 }
 
+fn data_action_is_cacheable(action: &str) -> bool {
+    matches!(action, "rates" | "symbols" | "performance_daily")
+}
+
 fn data_cache_max_age_msc(action: &str) -> i64 {
     match action {
         "symbols" => 5 * 60 * 1_000,
         "rates" => 2 * 1_000,
+        "performance_daily" => 30 * 1_000,
         _ => 0,
     }
 }

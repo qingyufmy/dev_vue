@@ -250,10 +250,120 @@ impl WorkerDataRequest {
             .as_object()
             .ok_or_else(|| WorkerHostError::new("worker_data_params_invalid"))?;
         match self.action.as_str() {
-            "symbols" if params.is_empty() => Ok(()),
+            "symbols" | "diagnostics" if params.is_empty() => Ok(()),
             "rates" => validate_rates_params(params),
+            "symbol_snapshot" => validate_symbol_snapshot_params(params),
+            "risk_snapshot" => validate_risk_snapshot_params(params),
+            "performance_daily" => validate_performance_daily_params(params),
+            "pending_order_state" => validate_pending_order_state_params(params),
             _ => Err(WorkerHostError::new("worker_data_action_invalid")),
         }
+    }
+}
+
+fn validate_symbol_snapshot_params(params: &Map<String, Value>) -> Result<(), WorkerHostError> {
+    if exact_keys(params, &["symbol"], &[]) && valid_symbol(params.get("symbol")) {
+        Ok(())
+    } else {
+        Err(WorkerHostError::new(
+            "worker_symbol_snapshot_params_invalid",
+        ))
+    }
+}
+
+fn validate_risk_snapshot_params(params: &Map<String, Value>) -> Result<(), WorkerHostError> {
+    let valid_proposed = params.get("proposed_order").is_none_or(|value| {
+        let Some(order) = value.as_object() else {
+            return false;
+        };
+        exact_keys(
+            order,
+            &["symbol", "order_type", "volume", "entry_price", "sl"],
+            &[],
+        ) && valid_symbol(order.get("symbol"))
+            && matches!(
+                text(order.get("order_type")),
+                Some(
+                    "buy"
+                        | "sell"
+                        | "buy_limit"
+                        | "sell_limit"
+                        | "buy_stop"
+                        | "sell_stop"
+                        | "buy_stop_limit"
+                        | "sell_stop_limit"
+                )
+            )
+            && positive_number(order.get("volume"))
+            && positive_number(order.get("entry_price"))
+            && positive_number(order.get("sl"))
+    });
+    if !exact_keys(
+        params,
+        &[
+            "symbol",
+            "last_deal_time_msc",
+            "last_deal_ticket",
+            "baseline_from_utc_msc",
+        ],
+        &["proposed_order"],
+    ) || !valid_symbol(params.get("symbol"))
+        || [
+            "last_deal_time_msc",
+            "last_deal_ticket",
+            "baseline_from_utc_msc",
+        ]
+        .iter()
+        .any(|key| {
+            params
+                .get(*key)
+                .and_then(Value::as_i64)
+                .is_none_or(|value| value < 0)
+        })
+        || !valid_proposed
+    {
+        return Err(WorkerHostError::new("worker_risk_snapshot_params_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_performance_daily_params(params: &Map<String, Value>) -> Result<(), WorkerHostError> {
+    let valid_date = |key: &str| {
+        params.get(key).and_then(Value::as_str).is_some_and(|date| {
+            date.len() == 10
+                && date.as_bytes().get(4) == Some(&b'-')
+                && date.as_bytes().get(7) == Some(&b'-')
+                && date
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, value)| matches!(index, 4 | 7) || value.is_ascii_digit())
+        })
+    };
+    if exact_keys(params, &["date_from", "date_to"], &[])
+        && valid_date("date_from")
+        && valid_date("date_to")
+    {
+        Ok(())
+    } else {
+        Err(WorkerHostError::new(
+            "worker_performance_daily_params_invalid",
+        ))
+    }
+}
+
+fn validate_pending_order_state_params(params: &Map<String, Value>) -> Result<(), WorkerHostError> {
+    let ticket = params.get("ticket").and_then(Value::as_str).unwrap_or("");
+    if exact_keys(params, &["ticket"], &["expected_state"])
+        && !ticket.is_empty()
+        && ticket.len() <= 32
+        && ticket.bytes().all(|value| value.is_ascii_digit())
+        && optional_expected_state(params.get("expected_state"))
+    {
+        Ok(())
+    } else {
+        Err(WorkerHostError::new(
+            "worker_pending_order_state_params_invalid",
+        ))
     }
 }
 
@@ -363,6 +473,43 @@ fn valid_data_payload(request: &WorkerDataRequest, payload: &Value) -> bool {
                 && object.get("count").and_then(Value::as_u64) == Some(rates.len() as u64)
                 && rates.len() as u64 <= requested_count
                 && rates.iter().all(valid_rate_row)
+        }
+        "symbol_snapshot" => {
+            valid_symbol(object.get("symbol"))
+                && object.get("account").is_some_and(Value::is_object)
+                && object.get("instrument").is_some_and(Value::is_object)
+        }
+        "risk_snapshot" => {
+            object.get("snapshot_version").and_then(Value::as_u64) == Some(1)
+                && object.get("complete").and_then(Value::as_bool).is_some()
+                && object.get("account").is_some_and(Value::is_object)
+                && object.get("positions").is_some_and(Value::is_array)
+                && object.get("pending").is_some_and(Value::is_array)
+                && object.get("instruments").is_some_and(Value::is_object)
+                && object.get("increment").is_some_and(Value::is_object)
+        }
+        "performance_daily" => {
+            object.get("performance_version").and_then(Value::as_u64) == Some(1)
+                && object.get("account").is_some_and(Value::is_object)
+                && object
+                    .get("daily")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| rows.len() <= 31)
+        }
+        "pending_order_state" => {
+            object.get("account").is_some_and(Value::is_object)
+                && object
+                    .get("current_state")
+                    .and_then(Value::as_str)
+                    .is_some()
+        }
+        "diagnostics" => {
+            object
+                .get("mt5_connected")
+                .and_then(Value::as_bool)
+                .is_some()
+                && object.get("account").is_some_and(Value::is_object)
+                && object.get("terminal").is_some_and(Value::is_object)
         }
         _ => false,
     }
@@ -1601,6 +1748,90 @@ mod tests {
                 .expect_err("invalid rates")
                 .code(),
             "worker_rates_params_invalid"
+        );
+    }
+
+    #[test]
+    fn extended_read_only_data_contracts_are_bounded_and_fail_closed() {
+        let cases = [
+            (
+                "symbol_snapshot",
+                serde_json::json!({ "symbol": "XAUUSD" }),
+                serde_json::json!({
+                    "symbol": "XAUUSD.s", "account": {}, "instrument": {}, "source": "mt5"
+                }),
+            ),
+            (
+                "risk_snapshot",
+                serde_json::json!({
+                    "symbol": "XAUUSD", "last_deal_time_msc": 0,
+                    "last_deal_ticket": 0, "baseline_from_utc_msc": 1_700_000_000_000_i64
+                }),
+                serde_json::json!({
+                    "snapshot_version": 1, "complete": true, "account": {},
+                    "positions": [], "pending": [], "instruments": {}, "increment": {},
+                    "source": "mt5"
+                }),
+            ),
+            (
+                "performance_daily",
+                serde_json::json!({ "date_from": "2026-07-01", "date_to": "2026-07-29" }),
+                serde_json::json!({
+                    "performance_version": 1, "account": {}, "daily": [], "source": "mt5"
+                }),
+            ),
+            (
+                "pending_order_state",
+                serde_json::json!({ "ticket": "2001" }),
+                serde_json::json!({
+                    "account": {}, "current_state": "pending", "source": "mt5"
+                }),
+            ),
+            (
+                "diagnostics",
+                serde_json::json!({}),
+                serde_json::json!({
+                    "mt5_connected": true, "account": {}, "terminal": {}, "source": "mt5"
+                }),
+            ),
+        ];
+        for (index, (action, params, payload)) in cases.into_iter().enumerate() {
+            let request = WorkerRequest::data(
+                route(),
+                format!("request_01JEXTDATA{index:02}"),
+                action.to_owned(),
+                params,
+            );
+            request.validate(1_700_000_000_001).expect("valid request");
+            WorkerResponse {
+                ipc_v: WORKER_IPC_VERSION,
+                message_type: "worker_response".to_owned(),
+                request_id: request.request_id.clone(),
+                route: request.route.clone(),
+                body: WorkerResponseBody::Data {
+                    data: Box::new(WorkerDataResult {
+                        action: action.to_owned(),
+                        observed_at_utc_msc: 1_700_000_000_001,
+                        payload,
+                    }),
+                },
+            }
+            .validate_for(&request)
+            .expect("valid response");
+        }
+
+        let invalid = WorkerRequest::data(
+            route(),
+            "request_01JEXTBAD01".to_owned(),
+            "pending_order_state".to_owned(),
+            serde_json::json!({ "ticket": "2001", "expected_state": {} }),
+        );
+        assert_eq!(
+            invalid
+                .validate(1_700_000_000_001)
+                .expect_err("incomplete identity snapshot")
+                .code(),
+            "worker_pending_order_state_params_invalid"
         );
     }
 }

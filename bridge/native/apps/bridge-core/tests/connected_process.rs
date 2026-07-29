@@ -64,6 +64,11 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
             && server.saw_history_response()
             && server.saw_data_response("rates")
             && server.saw_data_response("symbols")
+            && server.saw_data_response("symbol_snapshot")
+            && server.saw_data_response("risk_snapshot")
+            && server.saw_data_response("performance_daily")
+            && server.saw_data_response("pending_order_state")
+            && server.saw_data_response("diagnostics")
             && command_is_acked(&paths.database_path)
             && command_is_acked_by_id(&paths.database_path, RECOVERED_COMMAND_ID)
     });
@@ -123,6 +128,18 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         server.saw_data_response("symbols"),
         "symbols request did not reach MT5 Worker"
     );
+    for action in [
+        "symbol_snapshot",
+        "risk_snapshot",
+        "performance_daily",
+        "pending_order_state",
+        "diagnostics",
+    ] {
+        assert!(
+            server.saw_data_response(action),
+            "{action} request did not reach MT5 Worker"
+        );
+    }
     let cache_store = OutboxStore::open_existing(&paths.database_path).expect("open cache store");
     let cached_rates = cache_store
         .read_terminal_data_cache(
@@ -746,6 +763,41 @@ async fn serve_realtime(
                                     "data_01JSYMBOLREQ1",
                                     "message_01JSYMBOLS01",
                                     "symbols",
+                                    serde_json::json!({}),
+                                ),
+                                (
+                                    "data_01JSYMSNAP01",
+                                    "message_01JSYMSNAP01",
+                                    "symbol_snapshot",
+                                    serde_json::json!({ "symbol": "XAUUSD" }),
+                                ),
+                                (
+                                    "data_01JRISKREQ001",
+                                    "message_01JRISKREQ01",
+                                    "risk_snapshot",
+                                    serde_json::json!({
+                                        "symbol": "XAUUSD", "last_deal_time_msc": 0,
+                                        "last_deal_ticket": 0, "baseline_from_utc_msc": now
+                                    }),
+                                ),
+                                (
+                                    "data_01JPERFREQ001",
+                                    "message_01JPERFREQ01",
+                                    "performance_daily",
+                                    serde_json::json!({
+                                        "date_from": "2026-07-01", "date_to": "2026-07-29"
+                                    }),
+                                ),
+                                (
+                                    "data_01JPENDREQ001",
+                                    "message_01JPENDREQ01",
+                                    "pending_order_state",
+                                    serde_json::json!({ "ticket": "999999" }),
+                                ),
+                                (
+                                    "data_01JDIAGREQ001",
+                                    "message_01JDIAGREQ01",
+                                    "diagnostics",
                                     serde_json::json!({}),
                                 ),
                             ] {

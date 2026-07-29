@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from collections import namedtuple
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -318,6 +319,56 @@ class WorkerTests(unittest.TestCase):
         }, "request_01JINVALIDDATA"))
         self.assertEqual("error", invalid["outcome"])
         self.assertEqual("worker_rates_params_invalid", invalid["payload"]["error_code"])
+
+    def test_extended_read_only_data_contracts_preserve_identity_and_clock(self):
+        symbol = self.worker.handle(self.request("data", {
+            "action": "symbol_snapshot", "params": {"symbol": "XAUUSD"},
+        }, "request_01JSYMBOLSNAP"))["payload"]["data"]["payload"]
+        self.assertEqual("XAUUSD.s", symbol["symbol"])
+        self.assertEqual(0.01, symbol["instrument"]["volume_min"])
+        self.assertEqual(10_000.0, symbol["account"]["balance"])
+
+        diagnostics = self.worker.handle(self.request("data", {
+            "action": "diagnostics", "params": {},
+        }, "request_01JDIAGNOSTIC"))["payload"]["data"]["payload"]
+        self.assertTrue(diagnostics["mt5_connected"])
+        self.assertEqual(123456, diagnostics["account"]["login"])
+
+        pending = self.worker.handle(self.request("data", {
+            "action": "pending_order_state", "params": {"ticket": "202"},
+        }, "request_01JPENDINGSTATE"))["payload"]["data"]["payload"]
+        self.assertEqual("pending", pending["current_state"])
+        self.assertEqual(202, pending["order"]["ticket"])
+
+        event_day = datetime.fromtimestamp(
+            self.mt5.history_deals[-1].time, timezone.utc).strftime("%Y-%m-%d")
+        performance = self.worker.handle(self.request("data", {
+            "action": "performance_daily",
+            "params": {"date_from": event_day, "date_to": event_day},
+        }, "request_01JPERFORMANCE"))["payload"]["data"]["payload"]
+        self.assertEqual(1, performance["performance_version"])
+        self.assertEqual(1, performance["daily"][0]["closed_position_count"])
+        self.assertAlmostEqual(9.7, performance["daily"][0]["realized_net"])
+
+        risk = self.worker.handle(self.request("data", {
+            "action": "risk_snapshot",
+            "params": {"symbol": "XAUUSD", "last_deal_time_msc": 0,
+                       "last_deal_ticket": 0,
+                       "baseline_from_utc_msc": self.mt5.history_deals[0].time_msc - 1},
+        }, "request_01JRISKDATA"))["payload"]["data"]["payload"]
+        self.assertEqual(1, risk["snapshot_version"])
+        self.assertEqual(self.now, risk["time_utc_msc"])
+        self.assertEqual(180, risk["timezone_offset_minutes"])
+        self.assertIn("XAUUSD.s", risk["instruments"])
+        self.assertEqual(1, len(risk["increment"]["closed_positions"]))
+
+    def test_extended_data_rejects_unknown_parameters_before_mt5_queries(self):
+        response = self.worker.handle(self.request("data", {
+            "action": "symbol_snapshot", "params": {"symbol": "XAUUSD", "extra": True},
+        }, "request_01JINVALIDEXT"))
+        self.assertEqual("error", response["outcome"])
+        self.assertEqual("worker_symbol_snapshot_params_invalid",
+                         response["payload"]["error_code"])
 
     def test_history_sync_is_bounded_cursor_ordered_and_builds_related_evidence(self):
         cursor_time = self.mt5.history_deals[0].time_msc - 1

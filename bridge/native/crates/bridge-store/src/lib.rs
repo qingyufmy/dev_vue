@@ -2438,7 +2438,10 @@ fn terminal_data_cache_key(
     terminal
         .validate()
         .map_err(|_| StoreError::new("bridge_store_data_cache_key_invalid"))?;
-    if !matches!(action, "rates" | "symbols") || !parameters.is_object() || timestamp_utc_msc < 0 {
+    if !matches!(action, "rates" | "symbols" | "performance_daily")
+        || !parameters.is_object()
+        || timestamp_utc_msc < 0
+    {
         return Err(StoreError::new("bridge_store_data_cache_key_invalid"));
     }
     let encoded = serde_json::to_vec(parameters)

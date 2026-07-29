@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sys
@@ -387,6 +388,8 @@ def main() -> int:
                         help="read one bounded recent history batch without sending trades")
     parser.add_argument("--market-data-smoke", action="store_true",
                         help="read symbols and one bounded M5 rates page without sending trades")
+    parser.add_argument("--extended-data-smoke", action="store_true",
+                        help="read symbol, risk, performance, pending state and diagnostics")
     args = parser.parse_args()
     if (args.matrix or args.faults) and not args.execute:
         parser.error("--matrix and --faults require --execute")
@@ -398,8 +401,10 @@ def main() -> int:
         parser.error("--history-smoke is read-only and cannot be combined with --execute")
     if args.market_data_smoke and args.execute:
         parser.error("--market-data-smoke is read-only and cannot be combined with --execute")
-    if args.history_smoke and args.market_data_smoke:
-        parser.error("--history-smoke and --market-data-smoke are mutually exclusive")
+    if args.extended_data_smoke and args.execute:
+        parser.error("--extended-data-smoke is read-only and cannot be combined with --execute")
+    if sum((args.history_smoke, args.market_data_smoke, args.extended_data_smoke)) > 1:
+        parser.error("read-only smoke modes are mutually exclusive")
     if args.observe_recovery_seconds and not 10 <= args.observe_recovery_seconds <= 180:
         parser.error("--observe-recovery-seconds must be between 10 and 180")
 
@@ -499,6 +504,73 @@ def main() -> int:
             }
             print(json.dumps({"mode": "market_data_smoke", "readiness": readiness,
                               "market_data": report}, ensure_ascii=False))
+            return 0
+        if args.extended_data_smoke:
+            now_utc_msc = int(time.time() * 1000)
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None or info is None:
+                raise RuntimeError("mt5_extended_data_symbol_unavailable")
+            symbol_snapshot = adapter.data("symbol_snapshot", {"symbol": args.symbol})
+            diagnostics = adapter.data("diagnostics", {})
+            risk = adapter.data("risk_snapshot", {
+                "symbol": args.symbol,
+                "last_deal_time_msc": 0,
+                "last_deal_ticket": 0,
+                "baseline_from_utc_msc": now_utc_msc - 24 * 60 * 60 * 1000,
+                "proposed_order": {
+                    "symbol": symbol,
+                    "order_type": "buy",
+                    "volume": float(getattr(info, "volume_min", 0) or 0),
+                    "entry_price": float(tick.ask),
+                    "sl": float(tick.bid),
+                },
+            })
+            today = datetime.now(timezone.utc).date()
+            performance = adapter.data("performance_daily", {
+                "date_from": str(today - timedelta(days=6)),
+                "date_to": str(today),
+            })
+            active_orders = mt5.orders_get()
+            history_orders = mt5.history_orders_get(
+                datetime.now(timezone.utc) - timedelta(days=30),
+                datetime.now(timezone.utc) + timedelta(days=1),
+            )
+            if active_orders is None or history_orders is None:
+                raise RuntimeError("mt5_extended_data_orders_unavailable")
+            order = active_orders[-1] if active_orders else (
+                history_orders[-1] if history_orders else None)
+            pending_state = adapter.data("pending_order_state", {
+                "ticket": str(order.ticket),
+            }) if order is not None else None
+            if (symbol_snapshot["symbol"] != symbol
+                    or diagnostics["account"]["login"] != account.login
+                    or risk["snapshot_version"] != 1
+                    or risk["complete"] is not True
+                    or risk["clock_status"] != "verified"
+                    or symbol not in risk["instruments"]
+                    or performance["performance_version"] != 1
+                    or len(performance["daily"]) > 7
+                    or pending_state is not None
+                    and pending_state["current_state"] not in {
+                        "pending", "history", "identity_changed", "absent"
+                    }):
+                raise RuntimeError("mt5_extended_data_smoke_contract_invalid")
+            report = {
+                "resolved_symbol": symbol_snapshot["symbol"],
+                "clock_status": risk["clock_status"],
+                "timezone_offset_minutes": risk["timezone_offset_minutes"],
+                "risk_complete": risk["complete"],
+                "positions": len(risk["positions"]),
+                "pending_orders": len(risk["pending"]),
+                "new_deals": risk["increment"]["new_deal_count"],
+                "broker_calculation": risk["broker_calculation"] is not None,
+                "performance_days": len(performance["daily"]),
+                "performance_scanned_deals": performance["scanned_deal_count"],
+                "pending_state": pending_state["current_state"] if pending_state else "no_recent_order",
+                "terminal_trade_allowed": diagnostics["terminal"]["trade_allowed"],
+            }
+            print(json.dumps({"mode": "extended_data_smoke", "readiness": readiness,
+                              "extended_data": report}, ensure_ascii=False))
             return 0
         if not args.execute:
             print(json.dumps({"mode": "read_only", "readiness": readiness}, ensure_ascii=False))
