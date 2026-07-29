@@ -36,19 +36,21 @@ use windows_sys::Win32::Graphics::Gdi::{
     DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE,
     DT_VCENTER, DT_WORDBREAK, DeleteObject, DrawFocusRect, DrawTextW, FF_DONTCARE, FW_BOLD,
     FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetStockObject, GetSysColor, HBRUSH, HDC, HFONT,
-    HGDIOBJ, InvalidateRect, LOGPIXELSX, OUT_DEFAULT_PRECIS, ReleaseDC, SelectObject, SetBkMode,
-    SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    HGDIOBJ, IntersectClipRect, InvalidateRect, LOGPIXELSX, OUT_DEFAULT_PRECIS, ReleaseDC,
+    RestoreDC, SaveDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    WHITE_BRUSH,
 };
 use windows_sys::Win32::Storage::FileSystem::FileTimeToLocalFileTime;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Time::FileTimeToSystemTime;
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, InitCommonControls, ODS_COMBOBOXEDIT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED,
-    ODT_BUTTON, ODT_COMBOBOX, WC_COMBOBOXW, WM_MOUSELEAVE,
+    ODT_BUTTON, ODT_COMBOBOX, SetScrollInfo, WC_COMBOBOXW, WC_SCROLLBARW, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    EnableWindow, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END, VK_HOME, VK_NEXT,
+    VK_PRIOR, VK_UP,
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -58,16 +60,19 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, BS_OWNERDRAW, CB_SETITEMHEIGHT, CBN_SELCHANGE, CBS_DROPDOWNLIST,
     CBS_OWNERDRAWFIXED, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateIconFromResourceEx,
     CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
-    DrawMenuBar, GWLP_USERDATA, GetClientRect, GetMessageW, GetSystemMetrics, GetWindowLongPtrW,
-    HICON, HMENU, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, LR_DEFAULTCOLOR, LoadCursorW,
-    LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MoveWindow,
-    PostMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
-    SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu,
-    TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
-    WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
-    WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION,
-    WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_SYSMENU,
-    WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    DrawMenuBar, GWLP_USERDATA, GetClientRect, GetMessageW, GetScrollInfo, GetSystemMetrics,
+    GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, LR_DEFAULTCOLOR,
+    LoadCursorW, LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG,
+    MoveWindow, PostMessageW, RegisterClassExW, SB_BOTTOM, SB_CTL, SB_LINEDOWN, SB_LINEUP,
+    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SBS_VERT, SCROLLINFO,
+    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW,
+    SW_SHOWNORMAL, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TrackPopupMenu, TranslateMessage, WHEEL_DELTA, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE,
+    WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP,
+    WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
+    WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -86,6 +91,7 @@ const CONTROL_DETECT: i32 = 111;
 const CONTROL_LOGS: i32 = 112;
 const CONTROL_SETTINGS: i32 = 113;
 const CONTROL_EXIT: i32 = 114;
+const CONTROL_ACCOUNT_SCROLL: i32 = 115;
 const CONTROL_ACCOUNT_ACTION_BASE: i32 = 2_000;
 const MENU_OPEN: usize = 201;
 const MENU_EXIT: usize = 202;
@@ -140,6 +146,7 @@ struct Controls {
     logs: HWND,
     settings: HWND,
     exit: HWND,
+    account_scroll: HWND,
 }
 
 #[derive(Clone, Copy)]
@@ -164,6 +171,9 @@ struct AppState {
     terminal_choices_fingerprint: String,
     account_action_controls: Vec<AccountActionControl>,
     account_action_fingerprint: String,
+    account_scroll_offset: i32,
+    account_scroll_max: i32,
+    account_wheel_remainder: i32,
     log_window: HWND,
     settings_window: HWND,
     permission_tooltip: HWND,
@@ -183,6 +193,7 @@ struct AppState {
 enum DemoScenario {
     OrdinaryMt5,
     AdminMultiAccount,
+    AdminManyAccounts,
     PairingRequired,
     ServerOffline,
     UpdateDownloading,
@@ -196,9 +207,10 @@ enum DemoScenario {
 
 #[cfg(debug_assertions)]
 impl DemoScenario {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::OrdinaryMt5,
         Self::AdminMultiAccount,
+        Self::AdminManyAccounts,
         Self::PairingRequired,
         Self::ServerOffline,
         Self::UpdateDownloading,
@@ -220,6 +232,7 @@ impl DemoScenario {
         match self {
             Self::OrdinaryMt5 => "ordinary-mt5",
             Self::AdminMultiAccount => "admin-multi-account",
+            Self::AdminManyAccounts => "admin-many-accounts",
             Self::PairingRequired => "pairing-required",
             Self::ServerOffline => "server-offline",
             Self::UpdateDownloading => "update-downloading",
@@ -361,6 +374,9 @@ fn main() {
             terminal_choices_fingerprint: String::new(),
             account_action_controls: Vec::new(),
             account_action_fingerprint: String::new(),
+            account_scroll_offset: 0,
+            account_scroll_max: 0,
+            account_wheel_remainder: 0,
             log_window: null_mut(),
             settings_window: null_mut(),
             permission_tooltip: null_mut(),
@@ -488,6 +504,51 @@ fn demo_state(profile_id: &str, scenario: DemoScenario) -> UiStateSnapshot {
                 runtime_detail_code: None,
             }];
         }
+        DemoScenario::AdminManyAccounts => {
+            state = demo_state(profile_id, DemoScenario::AdminMultiAccount);
+            for index in 2_i64..=7 {
+                let profile_id = format!("source-{index}");
+                let terminal_instance_id = format!("observer-{index}-terminal");
+                let platform = if index % 2 == 0 { "mt5" } else { "mt4" };
+                let login = format!("5965{index:02}");
+                let source_name = format!("{index}号观摩源");
+                let running = index != 7;
+                state.observer_sources.push(UiObserverSource {
+                    bridge_user_id: index + 8,
+                    display_name: source_name.clone(),
+                    account_summary: format!("{login} · DooTechnology-Demo"),
+                });
+                state.observer_profiles.push(UiObserverProfile {
+                    observer_profile_id: profile_id.clone(),
+                    platform: Some(platform.to_owned()),
+                    terminal_directory: Some(format!(r"C:\Broker {platform}-{index}")),
+                    configured: true,
+                    enabled: running,
+                    terminal_instance_id: running.then_some(terminal_instance_id.clone()),
+                    bridge_user_id: Some(index + 8),
+                    observer_account_label: Some(source_name),
+                    trading_account_label: Some(format!("{login} · DooTechnology-Demo")),
+                    runtime_phase: Some(if running { "online" } else { "stopped" }.to_owned()),
+                    runtime_detail_code: None,
+                });
+                if running {
+                    state.terminals.push(UiTerminalStatus {
+                        terminal_instance_id,
+                        platform: platform.to_owned(),
+                        broker_server: "DooTechnology-Demo".to_owned(),
+                        login,
+                        runtime_state: "running".to_owned(),
+                        error_code: None,
+                        observer_profile_id: Some(profile_id),
+                        terminal_trading_allowed: Some(true),
+                        program_trading_allowed: (platform == "mt4").then_some(true),
+                        account_trading_allowed: Some(true),
+                        account_expert_trading_allowed: Some(true),
+                        mt4_expert_restart_required: false,
+                    });
+                }
+            }
+        }
         DemoScenario::PairingRequired => {
             state.phase = "pairing_required".to_owned();
             state.selected_terminal_instance_id = None;
@@ -603,6 +664,7 @@ impl Controls {
             logs: null_mut(),
             settings: null_mut(),
             exit: null_mut(),
+            account_scroll: null_mut(),
         }
     }
 }
@@ -676,7 +738,19 @@ unsafe fn run_window(mut state: AppState) {
     let mut message = MSG::default();
     while unsafe { GetMessageW(&mut message, null_mut(), 0, 0) } > 0 {
         unsafe {
-            if IsDialogMessageW(hwnd, &message) == 0 {
+            let handled_account_input = match message.message {
+                WM_MOUSEWHEEL => handle_account_mouse_wheel(
+                    hwnd,
+                    &mut *state_ptr,
+                    message.wParam,
+                    message.lParam,
+                ),
+                WM_KEYDOWN => {
+                    handle_account_scroll_key(hwnd, &mut *state_ptr, message.hwnd, message.wParam)
+                }
+                _ => false,
+            };
+            if !handled_account_input && IsDialogMessageW(hwnd, &message) == 0 {
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
@@ -727,6 +801,8 @@ unsafe extern "system" fn window_proc(
             let new_dpi = (wparam & 0xffff) as u32;
             let suggested = lparam as *const RECT;
             if new_dpi >= 96 && !suggested.is_null() {
+                state.account_scroll_offset =
+                    rescale_scroll_offset(state.account_scroll_offset, state.dpi, new_dpi);
                 state.dpi = new_dpi;
                 state.fonts = unsafe { create_fonts(new_dpi) };
                 unsafe {
@@ -836,6 +912,12 @@ unsafe extern "system" fn window_proc(
             };
             0
         }
+        WM_VSCROLL => {
+            unsafe {
+                handle_account_vertical_scroll(hwnd, state, wparam, lparam as HWND);
+            }
+            0
+        }
         WM_MOUSEMOVE => {
             unsafe { handle_mouse_move(hwnd, state, point_from_lparam(lparam)) };
             0
@@ -924,6 +1006,22 @@ unsafe fn create_controls(hwnd: HWND, state: &mut AppState) {
             240,
             hwnd,
             CONTROL_TERMINAL as HMENU,
+            instance,
+            null(),
+        )
+    };
+    state.controls.account_scroll = unsafe {
+        CreateWindowExW(
+            0,
+            WC_SCROLLBARW,
+            null(),
+            WS_CHILD | WS_TABSTOP | SBS_VERT as u32,
+            0,
+            0,
+            17,
+            100,
+            hwnd,
+            CONTROL_ACCOUNT_SCROLL as HMENU,
             instance,
             null(),
         )
@@ -1109,6 +1207,76 @@ unsafe fn sync_account_action_controls(hwnd: HWND, app: &mut AppState) {
     }
 }
 
+unsafe fn sync_account_scrollbar(app: &mut AppState, viewport: RECT) -> AccountScrollMetrics {
+    let metrics = account_scroll_metrics(&app.view.accounts, viewport, app.dpi);
+    app.account_scroll_max = metrics.max_offset;
+    app.account_scroll_offset = app.account_scroll_offset.clamp(0, metrics.max_offset);
+    if !metrics.scrollbar_visible {
+        app.account_wheel_remainder = 0;
+    }
+    unsafe {
+        move_show(
+            app.controls.account_scroll,
+            metrics.scrollbar.left,
+            metrics.scrollbar.top,
+            metrics.scrollbar.right - metrics.scrollbar.left,
+            metrics.scrollbar.bottom - metrics.scrollbar.top,
+            metrics.scrollbar_visible,
+        );
+        let info = SCROLLINFO {
+            cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+            fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+            nMin: 0,
+            nMax: (metrics.content_height - 1).max(0),
+            nPage: (metrics.content.bottom - metrics.content.top).max(0) as u32,
+            nPos: app.account_scroll_offset,
+            nTrackPos: 0,
+        };
+        SetScrollInfo(app.controls.account_scroll, SB_CTL, &info, 1);
+    }
+    metrics
+}
+
+unsafe fn sync_tab_order(app: &AppState) {
+    let mut handles = vec![
+        app.controls.platform,
+        app.controls.observer,
+        app.controls.logout,
+        app.controls.terminal,
+        app.controls.mt4_expert,
+    ];
+    handles.extend(
+        app.account_action_controls
+            .iter()
+            .map(|control| control.hwnd),
+    );
+    handles.extend([
+        app.controls.account_scroll,
+        app.controls.pair,
+        app.controls.detect,
+        app.controls.logs,
+        app.controls.settings,
+        app.controls.exit,
+    ]);
+    let mut insert_after = windows_sys::Win32::UI::WindowsAndMessaging::HWND_TOP;
+    for handle in handles.into_iter().filter(|handle| !handle.is_null()) {
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::SetWindowPos(
+                handle,
+                insert_after,
+                0,
+                0,
+                0,
+                0,
+                windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE
+                    | windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOMOVE
+                    | windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOSIZE,
+            );
+        }
+        insert_after = handle;
+    }
+}
+
 fn send_combo_text(combo: HWND, text: &str) {
     let value = wide(text);
     unsafe {
@@ -1126,7 +1294,8 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
     unsafe { sync_account_action_controls(hwnd, app) };
-    let s = |value| scale(value, app.dpi);
+    let dpi = app.dpi;
+    let s = |value| scale(value, dpi);
     let width = (client.right - client.left).max(s(WINDOW_MIN_WIDTH));
     let height = (client.bottom - client.top).max(s(WINDOW_MIN_HEIGHT));
     let content_width = width - s(64);
@@ -1228,7 +1397,13 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
         y += s(56);
     }
     let account_bounds = accounts_bounds(client, app);
-    let account_cards = account_card_rects(&app.view.accounts, account_bounds, app.dpi);
+    let account_scroll = unsafe { sync_account_scrollbar(app, account_bounds) };
+    let account_cards = account_card_rects_scrolled(
+        &app.view.accounts,
+        account_scroll,
+        app.dpi,
+        app.account_scroll_offset,
+    );
     let idle = !app.inbox.action_running.load(Ordering::Acquire);
     for control in &app.account_action_controls {
         let account = &app.view.accounts[control.account_index];
@@ -1239,7 +1414,7 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
             account_primary_action_rect(account, card, app.dpi)
         };
         let visible = target.is_some_and(|target| {
-            target.top < account_bounds.bottom && target.bottom > account_bounds.top
+            target.top >= account_bounds.top && target.bottom <= account_bounds.bottom
         });
         if let Some(target) = target {
             unsafe {
@@ -1285,6 +1460,7 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
             unsafe { ShowWindow(handle, SW_HIDE) };
         }
     }
+    unsafe { sync_tab_order(app) };
     let _ = y;
     unsafe { InvalidateRect(hwnd, null(), 1) };
 }
@@ -1544,17 +1720,25 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
 }
 
 fn draw_account_cards(hdc: HDC, app: &AppState, bounds: RECT) {
-    for (account, card_bounds) in
-        app.view
-            .accounts
-            .iter()
-            .zip(account_card_rects(&app.view.accounts, bounds, app.dpi))
-    {
-        if card_bounds.top >= bounds.bottom {
-            break;
-        }
-        draw_account_card(hdc, app, account, card_bounds);
+    let metrics = account_scroll_metrics(&app.view.accounts, bounds, app.dpi);
+    let saved = unsafe { SaveDC(hdc) };
+    if saved == 0 {
+        return;
     }
+    unsafe {
+        IntersectClipRect(hdc, bounds.left, bounds.top, bounds.right, bounds.bottom);
+    }
+    for (account, card_bounds) in app.view.accounts.iter().zip(account_card_rects_scrolled(
+        &app.view.accounts,
+        metrics,
+        app.dpi,
+        app.account_scroll_offset,
+    )) {
+        if card_bounds.bottom > bounds.top && card_bounds.top < bounds.bottom {
+            draw_account_card(hdc, app, account, card_bounds);
+        }
+    }
+    unsafe { RestoreDC(hdc, saved) };
 }
 
 fn account_card_rects(accounts: &[AccountCardView], bounds: RECT, dpi: u32) -> Vec<RECT> {
@@ -1579,6 +1763,80 @@ fn account_card_rects(accounts: &[AccountCardView], bounds: RECT, dpi: u32) -> V
         row_top += row_height + gap;
     }
     result
+}
+
+#[derive(Clone, Copy)]
+struct AccountScrollMetrics {
+    content: RECT,
+    scrollbar: RECT,
+    content_height: i32,
+    max_offset: i32,
+    scrollbar_visible: bool,
+}
+
+fn account_scroll_metrics(
+    accounts: &[AccountCardView],
+    viewport: RECT,
+    dpi: u32,
+) -> AccountScrollMetrics {
+    let scrollbar_width = scale(17, dpi);
+    let scrollbar_gap = scale(4, dpi);
+    let content = rect(
+        viewport.left,
+        viewport.top,
+        (viewport.right - scrollbar_width - scrollbar_gap).max(viewport.left),
+        viewport.bottom,
+    );
+    let scrollbar = rect(
+        content.right + scrollbar_gap,
+        viewport.top,
+        viewport.right,
+        viewport.bottom,
+    );
+    let cards = account_card_rects(accounts, content, dpi);
+    let content_height = cards
+        .iter()
+        .map(|card| card.bottom)
+        .max()
+        .map(|bottom| bottom - content.top)
+        .unwrap_or(0)
+        .max(0);
+    let viewport_height = (content.bottom - content.top).max(0);
+    let max_offset = (content_height - viewport_height).max(0);
+    AccountScrollMetrics {
+        content,
+        scrollbar,
+        content_height,
+        max_offset,
+        scrollbar_visible: max_offset > 0,
+    }
+}
+
+fn account_card_rects_scrolled(
+    accounts: &[AccountCardView],
+    metrics: AccountScrollMetrics,
+    dpi: u32,
+    offset: i32,
+) -> Vec<RECT> {
+    let offset = offset.clamp(0, metrics.max_offset);
+    account_card_rects(accounts, metrics.content, dpi)
+        .into_iter()
+        .map(|card| {
+            rect(
+                card.left,
+                card.top - offset,
+                card.right,
+                card.bottom - offset,
+            )
+        })
+        .collect()
+}
+
+fn rescale_scroll_offset(offset: i32, old_dpi: u32, new_dpi: u32) -> i32 {
+    if old_dpi == 0 {
+        return offset.max(0);
+    }
+    ((i64::from(offset.max(0)) * i64::from(new_dpi)) / i64::from(old_dpi)) as i32
 }
 
 fn account_card_height(account: &AccountCardView, dpi: u32) -> i32 {
@@ -1723,6 +1981,139 @@ fn point_from_lparam(lparam: LPARAM) -> POINT {
     }
 }
 
+fn account_scroll_target(
+    current: i32,
+    max_offset: i32,
+    viewport_height: i32,
+    line_height: i32,
+    command: i32,
+    thumb_position: i32,
+) -> i32 {
+    let page = (viewport_height - line_height).max(line_height);
+    let target = match command {
+        SB_LINEUP => current - line_height,
+        SB_LINEDOWN => current + line_height,
+        SB_PAGEUP => current - page,
+        SB_PAGEDOWN => current + page,
+        SB_THUMBPOSITION | SB_THUMBTRACK => thumb_position,
+        SB_TOP => 0,
+        SB_BOTTOM => max_offset,
+        _ => current,
+    };
+    target.clamp(0, max_offset.max(0))
+}
+
+unsafe fn scroll_accounts_to(hwnd: HWND, app: &mut AppState, target: i32) -> bool {
+    let target = target.clamp(0, app.account_scroll_max.max(0));
+    if app.account_scroll_offset == target {
+        return false;
+    }
+    app.account_scroll_offset = target;
+    app.hovered_permission_account = None;
+    unsafe {
+        permission_tooltip::hide(app.permission_tooltip);
+        apply_layout(hwnd, app);
+    }
+    true
+}
+
+unsafe fn handle_account_vertical_scroll(
+    hwnd: HWND,
+    app: &mut AppState,
+    wparam: WPARAM,
+    source: HWND,
+) -> bool {
+    if source != app.controls.account_scroll || app.account_scroll_max <= 0 {
+        return false;
+    }
+    let command = (wparam & 0xffff) as i32;
+    let mut scroll_info = SCROLLINFO {
+        cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+        fMask: SIF_TRACKPOS,
+        ..SCROLLINFO::default()
+    };
+    unsafe { GetScrollInfo(app.controls.account_scroll, SB_CTL, &mut scroll_info) };
+    let mut client = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut client) };
+    let metrics = account_scroll_metrics(&app.view.accounts, accounts_bounds(client, app), app.dpi);
+    let target = account_scroll_target(
+        app.account_scroll_offset,
+        metrics.max_offset,
+        metrics.content.bottom - metrics.content.top,
+        scale(40, app.dpi),
+        command,
+        scroll_info.nTrackPos,
+    );
+    unsafe { scroll_accounts_to(hwnd, app, target) };
+    true
+}
+
+unsafe fn handle_account_mouse_wheel(
+    hwnd: HWND,
+    app: &mut AppState,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> bool {
+    if app.account_scroll_max <= 0 {
+        return false;
+    }
+    let mut point = point_from_lparam(lparam);
+    unsafe { ScreenToClient(hwnd, &mut point) };
+    let mut client = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut client) };
+    if !point_in_rect(point, accounts_bounds(client, app)) {
+        return false;
+    }
+    let delta = ((wparam >> 16) as u16 as i16) as i32;
+    app.account_wheel_remainder += delta;
+    let steps = app.account_wheel_remainder / WHEEL_DELTA as i32;
+    app.account_wheel_remainder %= WHEEL_DELTA as i32;
+    if steps != 0 {
+        let target = app.account_scroll_offset - steps * scale(120, app.dpi);
+        unsafe { scroll_accounts_to(hwnd, app, target) };
+    }
+    true
+}
+
+unsafe fn handle_account_scroll_key(
+    hwnd: HWND,
+    app: &mut AppState,
+    source: HWND,
+    key: WPARAM,
+) -> bool {
+    if app.account_scroll_max <= 0
+        || (source != app.controls.account_scroll
+            && !app
+                .account_action_controls
+                .iter()
+                .any(|control| control.hwnd == source))
+    {
+        return false;
+    }
+    let command = match key as u16 {
+        VK_UP => SB_LINEUP,
+        VK_DOWN => SB_LINEDOWN,
+        VK_PRIOR => SB_PAGEUP,
+        VK_NEXT => SB_PAGEDOWN,
+        VK_HOME => SB_TOP,
+        VK_END => SB_BOTTOM,
+        _ => return false,
+    };
+    let mut client = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut client) };
+    let metrics = account_scroll_metrics(&app.view.accounts, accounts_bounds(client, app), app.dpi);
+    let target = account_scroll_target(
+        app.account_scroll_offset,
+        metrics.max_offset,
+        metrics.content.bottom - metrics.content.top,
+        scale(40, app.dpi),
+        command,
+        0,
+    );
+    unsafe { scroll_accounts_to(hwnd, app, target) };
+    true
+}
+
 unsafe fn handle_mouse_move(hwnd: HWND, app: &mut AppState, point: POINT) {
     if !app.tracking_mouse_leave {
         let mut tracking = TRACKMOUSEEVENT {
@@ -1736,7 +2127,18 @@ unsafe fn handle_mouse_move(hwnd: HWND, app: &mut AppState, point: POINT) {
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
     let bounds = accounts_bounds(client, app);
-    let cards = account_card_rects(&app.view.accounts, bounds, app.dpi);
+    if !point_in_rect(point, bounds) {
+        app.hovered_permission_account = None;
+        unsafe { permission_tooltip::hide(app.permission_tooltip) };
+        return;
+    }
+    let metrics = account_scroll_metrics(&app.view.accounts, bounds, app.dpi);
+    let cards = account_card_rects_scrolled(
+        &app.view.accounts,
+        metrics,
+        app.dpi,
+        app.account_scroll_offset,
+    );
     let hovered =
         app.view
             .accounts
@@ -1786,7 +2188,17 @@ unsafe fn handle_account_click(hwnd: HWND, app: &mut AppState, point: POINT) {
     }
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
-    let cards = account_card_rects(&app.view.accounts, accounts_bounds(client, app), app.dpi);
+    let bounds = accounts_bounds(client, app);
+    if !point_in_rect(point, bounds) {
+        return;
+    }
+    let metrics = account_scroll_metrics(&app.view.accounts, bounds, app.dpi);
+    let cards = account_card_rects_scrolled(
+        &app.view.accounts,
+        metrics,
+        app.dpi,
+        app.account_scroll_offset,
+    );
     let clicked = app.view.accounts.iter().zip(cards).enumerate().find_map(
         |(account_index, (account, bounds))| {
             if account.actions_busy {
@@ -2940,6 +3352,55 @@ mod tests {
             wide,
             vec![(0, 0, 408, 88), (416, 0, 824, 112), (0, 120, 408, 190)]
         );
+    }
+
+    #[test]
+    fn account_scroll_matches_dotnet_gutter_overflow_and_dynamic_clamping() {
+        let accounts = vec![account_fixture(true, false, false); 6];
+        let narrow = account_scroll_metrics(&accounts, rect(0, 0, 516, 180), 96);
+        assert_eq!(rect_coordinates(narrow.content), (0, 0, 495, 180));
+        assert_eq!(rect_coordinates(narrow.scrollbar), (499, 0, 516, 180));
+        assert_eq!(narrow.content_height, 568);
+        assert_eq!(narrow.max_offset, 388);
+        assert!(narrow.scrollbar_visible);
+        let scrolled = account_card_rects_scrolled(&accounts, narrow, 96, narrow.max_offset)
+            .into_iter()
+            .map(rect_coordinates)
+            .collect::<Vec<_>>();
+        assert_eq!(scrolled.first(), Some(&(0, -388, 495, -300)));
+        assert_eq!(scrolled.last(), Some(&(0, 92, 495, 180)));
+
+        let wide = account_scroll_metrics(&accounts, rect(0, 0, 900, 500), 96);
+        assert_eq!(rect_coordinates(wide.content), (0, 0, 879, 500));
+        assert_eq!(wide.content_height, 280);
+        assert_eq!(wide.max_offset, 0);
+        assert!(!wide.scrollbar_visible);
+        assert_eq!(
+            account_scroll_target(388, wide.max_offset, 500, 40, SB_PAGEDOWN, 0),
+            0
+        );
+    }
+
+    #[test]
+    fn account_scroll_commands_and_dpi_changes_remain_bounded() {
+        assert_eq!(account_scroll_target(100, 500, 180, 40, SB_LINEUP, 0), 60);
+        assert_eq!(
+            account_scroll_target(100, 500, 180, 40, SB_LINEDOWN, 0),
+            140
+        );
+        assert_eq!(account_scroll_target(100, 500, 180, 40, SB_PAGEUP, 0), 0);
+        assert_eq!(
+            account_scroll_target(100, 500, 180, 40, SB_PAGEDOWN, 0),
+            240
+        );
+        assert_eq!(
+            account_scroll_target(100, 500, 180, 40, SB_THUMBTRACK, 377),
+            377
+        );
+        assert_eq!(account_scroll_target(100, 500, 180, 40, SB_TOP, 0), 0);
+        assert_eq!(account_scroll_target(100, 500, 180, 40, SB_BOTTOM, 0), 500);
+        assert_eq!(rescale_scroll_offset(160, 96, 120), 200);
+        assert_eq!(rescale_scroll_offset(200, 120, 96), 160);
     }
 
     #[test]

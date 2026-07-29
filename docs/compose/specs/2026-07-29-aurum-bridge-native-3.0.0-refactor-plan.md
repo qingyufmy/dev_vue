@@ -470,6 +470,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 ### 阶段 6：Native UI 和管理员观摩源
 
 - [已完成] 管理员账户卡片的启动、暂停、重试、绑定和设置操作已由手绘点击区迁移为保持 .NET 几何与配色的原生 owner-draw 按钮；按钮进入 Windows 辅助功能树并支持标准 Tab / Shift+Tab 键盘导航，动态状态刷新不重建同一语义按钮。
+- [已完成] 管理员多观摩源账户区已按 .NET `FlowLayoutPanel.AutoScroll` 行为补齐独立原生滚动条、固定滚动条预留宽度、卡片视口裁剪、鼠标滚轮及键盘 Home / End / PageUp / PageDown / 方向键；窗口尺寸、DPI 和账户数量变化时会缩放并钳制滚动位置，顶部与底部控件不随账户区滚动。
 - 按 `BridgeMainForm`、`BridgeSettingsForm`、`BridgeObserverProfileDialog`、`BridgeTerminalDirectoryDialog`、`BridgeLogViewerForm` 和 `BridgeApplicationContext` 逐项等价迁移托盘、主界面、内置日志、开机自启、授权、退出。
 - 保留现有平台选择、终端选择、MT4 EA 安装、自适应账户卡片、交易权限彩色 tooltip、更新条幅、管理员控件显隐及全部中文文案语义。
 - 管理员服务器设置及多个观摩源的后台启停、绑定和隔离。

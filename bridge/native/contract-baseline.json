@@ -153,7 +153,12 @@
     "account_actions": ["start", "pause", "retry", "bind", "configure"],
     "dotnet_account_action_geometry_preserved": true,
     "keyboard_navigation_uses_dialog_message_routing": true,
-    "screen_reader_exposes_account_action_labels": true
+    "screen_reader_exposes_account_action_labels": true,
+    "account_list_scroll_control_type": "native_vertical_scrollbar",
+    "account_list_scroll_inputs": ["mouse_wheel", "scrollbar", "keyboard"],
+    "account_list_reserves_dotnet_scrollbar_gutter": true,
+    "account_list_clips_cards_to_viewport": true,
+    "account_list_clamps_scroll_after_resize_dpi_and_account_changes": true
   },
   "worker_supervision_contract": {
     "restart_delays_seconds": [1, 2, 4, 8, 10],
