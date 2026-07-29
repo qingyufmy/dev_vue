@@ -43,6 +43,19 @@
     ],
     "demo_trade_acceptance_script": "../../scripts/bridge-native/test-mt5-demo.py",
     "demo_trade_acceptance_requires_empty_symbol_position": true,
+    "demo_trade_management_matrix": [
+      "pending_place",
+      "pending_modify",
+      "pending_cancel",
+      "market_open",
+      "position_protection_modify",
+      "partial_close",
+      "full_close",
+      "unique_object_cleanup"
+    ],
+    "modify_order_requires_expected_state": true,
+    "partial_close_requires_exact_remaining_volume": true,
+    "fault_injection_unknown_results_are_not_replayed": true,
     "windows_pipe_security": {
       "dacl_scope": "current-user-sid-only",
       "reject_remote_clients": true,

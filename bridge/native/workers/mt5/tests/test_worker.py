@@ -129,8 +129,13 @@ class FakeMt5:
                 price_open=request.get("price", item.price_open),
             ) if item.ticket == request["order"] else item for item in self.orders]
         elif action == self.TRADE_ACTION_DEAL and request.get("position"):
-            self.positions = [item for item in self.positions
-                              if item.ticket != request["position"]]
+            self.positions = [
+                item._replace(volume=round(item.volume - request["volume"], 8))
+                if item.ticket == request["position"] and request["volume"] < item.volume
+                else item
+                for item in self.positions
+                if item.ticket != request["position"] or request["volume"] < item.volume
+            ]
         return SimpleNamespace(retcode=10009, order=1001, deal=2001, comment="done")
 
     def history_orders_get(self, *_args, **_kwargs):
@@ -334,10 +339,29 @@ class WorkerTests(unittest.TestCase):
                                  "AI-MODIFY", 2280.0, 2270.0, 2310.0, 0.0, 0)]
         modify = self.command("modify_order", {
             "ticket": "303", "price": 2299.0,
+            "expected_state": {
+                "ticket": "303", "symbol": "XAUUSD.s", "direction": "buy",
+                "magic": 234000, "volume": 0.02,
+            },
         }, "command_01JMODIFY01")
         modified = self.worker.handle(self.command_request("execute_command", modify))
         self.assertEqual("succeeded", modified["payload"]["result"]["status"])
         self.assertEqual(self.mt5.TRADE_ACTION_MODIFY, self.mt5.sent[-1]["action"])
+
+    def test_modify_pending_order_rejects_a_stale_target_snapshot_before_send(self):
+        modify = self.command("modify_order", {
+            "ticket": "202", "price": 2299.0,
+            "expected_state": {
+                "ticket": "202", "symbol": "XAUUSD.s", "direction": "buy",
+                "magic": 234000, "volume": 0.03,
+            },
+        }, "command_01JMODSTALE")
+        response = self.worker.handle(self.command_request("execute_command", modify))
+        self.assertEqual("rejected", response["payload"]["result"]["status"])
+        self.assertEqual(
+            "management_volume_mismatch", response["payload"]["result"]["error_code"]
+        )
+        self.assertEqual([], self.mt5.sent)
 
     def test_guarded_position_modify_and_close_are_post_verified(self):
         expected = {"ticket": "101", "symbol": "XAUUSD.s", "direction": "buy",
@@ -359,6 +383,23 @@ class WorkerTests(unittest.TestCase):
         closed = self.worker.handle(self.command_request("execute_command", close))
         self.assertEqual("succeeded", closed["payload"]["result"]["status"])
         self.assertEqual([], self.mt5.positions)
+
+    def test_requested_partial_close_succeeds_only_at_the_exact_remaining_volume(self):
+        self.mt5.positions = [Position(404, "XAUUSD.s", 0.02, 0, 234000, 2290.0, 2320.0)]
+        expected = {
+            "ticket": "404", "symbol": "XAUUSD.s", "direction": "buy",
+            "magic": 234000, "volume": 0.02,
+            "stop_loss": 2290.0, "take_profit": 2320.0,
+        }
+        partial = self.command("close_position", {
+            "ticket": "404", "volume": 0.01, "expected_state": expected,
+        }, "command_01JPARTCLOSE")
+        result = self.worker.handle(self.command_request("execute_command", partial))
+        raw = result["payload"]["result"]["raw_result"]
+        self.assertEqual("succeeded", result["payload"]["result"]["status"])
+        self.assertEqual(0.01, raw["remaining_volume"])
+        self.assertTrue(raw["partial_close"])
+        self.assertEqual(0.01, self.mt5.positions[0].volume)
 
     def test_query_execution_is_read_only_and_matches_durable_comment(self):
         self.mt5.positions = [Position(501, "XAUUSD.s", 0.01, 0, 234000, 0.0, 0.0)]
@@ -406,6 +447,49 @@ class WorkerTests(unittest.TestCase):
         uncertain = self.worker.handle(self.command_request("execute_command", uncertain_command))
         self.assertEqual("uncertain", uncertain["payload"]["result"]["status"])
         self.assertEqual("mt5_order_send_exception", uncertain["payload"]["result"]["error_code"])
+
+    def test_partial_and_unverified_broker_results_are_uncertain_and_never_replayed(self):
+        def partial_send(request):
+            self.mt5.sent.append(dict(request))
+            return SimpleNamespace(
+                retcode=self.mt5.TRADE_RETCODE_DONE_PARTIAL,
+                order=7001, deal=8001, comment="partial",
+            )
+
+        self.mt5.order_send = partial_send
+        partial_command = self.command(command_id="command_01JPARTIAL01")
+        partial_request = self.command_request("execute_command", partial_command)
+        first = self.worker.handle(partial_request)
+        second = self.worker.handle(partial_request)
+        self.assertEqual("uncertain", first["payload"]["result"]["status"])
+        self.assertEqual(
+            "mt5_execution_requires_reconciliation",
+            first["payload"]["result"]["error_code"],
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(1, len(self.mt5.sent))
+
+        def ineffective_cancel(request):
+            self.mt5.sent.append(dict(request))
+            return SimpleNamespace(retcode=10009, order=202, deal=0, comment="done")
+
+        self.mt5.order_send = ineffective_cancel
+        cancel = self.command("cancel_order", {
+            "ticket": "202",
+            "expected_state": {
+                "ticket": "202", "symbol": "XAUUSD.s", "direction": "buy",
+                "magic": 234000, "volume": 0.02,
+            },
+        }, "command_01JVERIFYCAN")
+        cancel_request = self.command_request("execute_command", cancel)
+        cancelled = self.worker.handle(cancel_request)
+        repeated = self.worker.handle(cancel_request)
+        self.assertEqual("uncertain", cancelled["payload"]["result"]["status"])
+        self.assertEqual(
+            "pending_order_still_active", cancelled["payload"]["result"]["error_code"]
+        )
+        self.assertEqual(cancelled, repeated)
+        self.assertEqual(2, len(self.mt5.sent))
 
     def test_query_execution_maps_historical_pending_final_state(self):
         self.mt5.orders = []

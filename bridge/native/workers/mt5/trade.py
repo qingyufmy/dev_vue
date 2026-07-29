@@ -156,6 +156,10 @@ class Mt5TradeExecutor:
             raise TradeError("orders_query_failed")
         if len(current) != 1:
             raise TradeError("pending_order_not_found")
+        expected = params.get("expected_state")
+        if not isinstance(expected, dict):
+            raise TradeError("management_expected_state_required")
+        self._validate_target(expected, current[0], "pending")
         request: dict[str, Any] = {
             "action": self.mt5.TRADE_ACTION_MODIFY,
             "order": ticket,
@@ -300,12 +304,24 @@ class Mt5TradeExecutor:
                                 raw=sent.get("raw_result"), evidence=sent.get("evidence"))
         raw = dict(sent.get("raw_result") or {})
         raw["position"] = ticket
-        if not remaining:
+        expected_remaining = max(0.0, float(position.volume) - volume)
+        volume_step = float(getattr(info, "volume_step", 0) or 0)
+        volume_tolerance = max(1e-8, volume_step / 2)
+        if not remaining and expected_remaining <= volume_tolerance:
             return self._result(command, "succeeded", raw=raw, evidence=sent.get("evidence"))
-        raw["remaining_volume"] = float(remaining[0].volume)
-        return self._result(command, "uncertain", "close_position_partial"
-                            if float(remaining[0].volume) < float(position.volume)
-                            else "position_still_open", raw=raw, evidence=sent.get("evidence"))
+        if len(remaining) == 1:
+            actual_remaining = float(remaining[0].volume)
+            raw["remaining_volume"] = actual_remaining
+            if abs(actual_remaining - expected_remaining) <= volume_tolerance:
+                raw["partial_close"] = expected_remaining > volume_tolerance
+                return self._result(command, "succeeded", raw=raw,
+                                    evidence=sent.get("evidence"))
+            error = "close_position_volume_mismatch" \
+                if actual_remaining < float(position.volume) else "position_still_open"
+        else:
+            error = "close_position_volume_mismatch"
+        return self._result(command, "uncertain", error,
+                            raw=raw, evidence=sent.get("evidence"))
 
     def _send(self, command: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
         self._ensure_trade_allowed()

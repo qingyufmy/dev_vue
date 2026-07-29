@@ -510,7 +510,7 @@ fn validate_cancel_order(params: &Map<String, Value>) -> bool {
 fn validate_modify_order(params: &Map<String, Value>) -> bool {
     exact_keys(
         params,
-        &["ticket"],
+        &["ticket", "expected_state"],
         &[
             "price",
             "stop_loss",
@@ -519,6 +519,7 @@ fn validate_modify_order(params: &Map<String, Value>) -> bool {
             "expiration",
         ],
     ) && valid_ticket(params.get("ticket"))
+        && valid_expected_state(params.get("expected_state"))
         && [
             "price",
             "stop_loss",
@@ -996,7 +997,17 @@ mod tests {
             ("cancel_order", serde_json::json!({ "ticket": "2001" })),
             (
                 "modify_order",
-                serde_json::json!({ "ticket": "2001", "price": 2_301.0 }),
+                serde_json::json!({
+                    "ticket": "2001",
+                    "price": 2_301.0,
+                    "expected_state": {
+                        "ticket": "2001",
+                        "symbol": "XAUUSD",
+                        "direction": "buy",
+                        "magic": 234000,
+                        "volume": 0.1
+                    }
+                }),
             ),
             (
                 "modify_position",
