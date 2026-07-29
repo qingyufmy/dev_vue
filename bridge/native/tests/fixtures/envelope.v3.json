@@ -1,0 +1,8 @@
+{
+  "v": 3,
+  "type": "heartbeat",
+  "message_id": "fixture:heartbeat:1",
+  "sent_at_utc_msc": 1785268800000,
+  "session_id": "fixture-session",
+  "terminals": []
+}

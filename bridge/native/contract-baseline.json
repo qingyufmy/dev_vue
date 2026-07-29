@@ -1,0 +1,38 @@
+{
+  "baseline_name": "aurum-bridge-native-v4-phase-0",
+  "source_branch": "refactor/aurum-bridge-v3",
+  "source_commit": "297528e25e982490998a60871593f4e16ad14a56",
+  "server_protocol": {
+    "version": 3,
+    "schema_directory": "../protocol/v3-json-schema",
+    "wire_format": "versioned-json"
+  },
+  "mt5_worker_protocol": {
+    "version": 3,
+    "wire_format": "little-endian-u32-length-prefixed-json",
+    "maximum_frame_bytes": 4194304
+  },
+  "mt4_ea_protocol": {
+    "wire_format": "little-endian-u32-length-prefixed-binary",
+    "maximum_frame_bytes": 4194304
+  },
+  "launcher_arguments": [
+    "--health-check",
+    "--health-file",
+    "--ready-file",
+    "--expected-terminal",
+    "--start-minimized",
+    "--profile",
+    "--background"
+  ],
+  "credential_contract": {
+    "provider": "windows-dpapi-current-user",
+    "entropy_utf8": "AURUM Bridge v3 refresh credential"
+  },
+  "sqlite_contract": {
+    "journal_mode": "wal",
+    "synchronous": "full",
+    "single_writer": "bridge-core"
+  },
+  "migration_rule": "preserve-wire-and-storage-contracts-before-optimizing"
+}

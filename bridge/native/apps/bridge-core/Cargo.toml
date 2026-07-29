@@ -1,0 +1,9 @@
+[package]
+name = "liangjian-bridge-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bridge-foundation = { path = "../../crates/bridge-foundation" }
