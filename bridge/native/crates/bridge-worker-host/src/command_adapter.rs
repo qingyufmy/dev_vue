@@ -438,7 +438,8 @@ fn map_response(body: WorkerResponseBody) -> Result<CommandResultMessage, Comman
         WorkerResponseBody::Error { error_code, .. } => Err(CommandWorkerError::new(error_code)),
         WorkerResponseBody::Snapshot { .. }
         | WorkerResponseBody::Quote { .. }
-        | WorkerResponseBody::HistoryBatch { .. } => Err(CommandWorkerError::new(
+        | WorkerResponseBody::HistoryBatch { .. }
+        | WorkerResponseBody::Data { .. } => Err(CommandWorkerError::new(
             "worker_response_operation_mismatch",
         )),
     }

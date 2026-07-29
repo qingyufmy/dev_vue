@@ -411,6 +411,13 @@ pub struct HistoryArchiveState {
     pub updated_at_utc_msc: i64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminalDataCacheEntry {
+    pub observed_at_utc_msc: i64,
+    pub cached_at_utc_msc: i64,
+    pub payload: serde_json::Value,
+}
+
 pub struct OutboxStore {
     connection: Mutex<Connection>,
 }
@@ -623,6 +630,122 @@ impl OutboxStore {
             })
         })
         .collect()
+    }
+
+    pub fn read_terminal_data_cache(
+        &self,
+        terminal: &TerminalDescriptor,
+        action: &str,
+        parameters: &serde_json::Value,
+        cached_after_utc_msc: i64,
+    ) -> Result<Option<TerminalDataCacheEntry>, StoreError> {
+        let params_hash =
+            terminal_data_cache_key(terminal, action, parameters, cached_after_utc_msc)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let row = connection
+            .query_row(
+                "SELECT observed_at_utc_msc, cached_at_utc_msc, payload_json \
+                 FROM terminal_data_cache \
+                 WHERE terminal_instance_id = ?1 \
+                   AND broker_server = ?2 COLLATE NOCASE \
+                   AND login_account = ?3 AND connection_epoch = ?4 \
+                   AND action = ?5 AND params_hash = ?6 \
+                   AND cached_at_utc_msc > ?7 LIMIT 1;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    terminal.connection_epoch,
+                    action,
+                    params_hash,
+                    cached_after_utc_msc,
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_data_cache_query_failed"))?;
+        row.map(|(observed_at_utc_msc, cached_at_utc_msc, payload_json)| {
+            let payload = serde_json::from_str::<serde_json::Value>(&payload_json)
+                .map_err(|_| StoreError::new("bridge_store_data_cache_payload_invalid"))?;
+            if !payload.is_object() {
+                return Err(StoreError::new("bridge_store_data_cache_payload_invalid"));
+            }
+            Ok(TerminalDataCacheEntry {
+                observed_at_utc_msc,
+                cached_at_utc_msc,
+                payload,
+            })
+        })
+        .transpose()
+    }
+
+    pub fn persist_terminal_data_cache(
+        &self,
+        terminal: &TerminalDescriptor,
+        action: &str,
+        parameters: &serde_json::Value,
+        observed_at_utc_msc: i64,
+        cached_at_utc_msc: i64,
+        payload: &serde_json::Value,
+    ) -> Result<(), StoreError> {
+        let params_hash = terminal_data_cache_key(terminal, action, parameters, cached_at_utc_msc)?;
+        if observed_at_utc_msc <= 0 || !payload.is_object() {
+            return Err(StoreError::new("bridge_store_data_cache_payload_invalid"));
+        }
+        let payload_json = serde_json::to_string(payload)
+            .map_err(|_| StoreError::new("bridge_store_data_cache_payload_invalid"))?;
+        if payload_json.len() > MAX_HISTORY_PAGE_PAYLOAD_BYTES {
+            return Err(StoreError::new("bridge_store_data_cache_payload_too_large"));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_data_cache_write_failed"))?;
+        transaction
+            .execute(
+                "INSERT INTO terminal_data_cache (terminal_instance_id, broker_server, \
+                    login_account, connection_epoch, action, params_hash, observed_at_utc_msc, \
+                    cached_at_utc_msc, payload_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+                 ON CONFLICT (terminal_instance_id, broker_server, login_account, \
+                    connection_epoch, action, params_hash) DO UPDATE SET \
+                    observed_at_utc_msc = excluded.observed_at_utc_msc, \
+                    cached_at_utc_msc = excluded.cached_at_utc_msc, \
+                    payload_json = excluded.payload_json;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    terminal.connection_epoch,
+                    action,
+                    params_hash,
+                    observed_at_utc_msc,
+                    cached_at_utc_msc,
+                    payload_json,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_data_cache_write_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM terminal_data_cache WHERE cached_at_utc_msc < ?1;",
+                params![cached_at_utc_msc.saturating_sub(7 * 24 * 60 * 60 * 1_000)],
+            )
+            .map_err(|_| StoreError::new("bridge_store_data_cache_write_failed"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_data_cache_commit_failed"))
     }
 
     pub fn history_archive_state(
@@ -2306,6 +2429,23 @@ fn history_scope_values(terminal: &TerminalDescriptor) -> Vec<SqlValue> {
     ]
 }
 
+fn terminal_data_cache_key(
+    terminal: &TerminalDescriptor,
+    action: &str,
+    parameters: &serde_json::Value,
+    timestamp_utc_msc: i64,
+) -> Result<String, StoreError> {
+    terminal
+        .validate()
+        .map_err(|_| StoreError::new("bridge_store_data_cache_key_invalid"))?;
+    if !matches!(action, "rates" | "symbols") || !parameters.is_object() || timestamp_utc_msc < 0 {
+        return Err(StoreError::new("bridge_store_data_cache_key_invalid"));
+    }
+    let encoded = serde_json::to_vec(parameters)
+        .map_err(|_| StoreError::new("bridge_store_data_cache_key_invalid"))?;
+    Ok(format!("{:x}", Sha256::digest(encoded)))
+}
+
 fn read_history_statistics(
     connection: &Connection,
     terminal: &TerminalDescriptor,
@@ -2944,6 +3084,73 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove binding fixture");
+    }
+
+    #[test]
+    fn terminal_data_cache_is_fresh_parameter_and_account_scoped() {
+        let root = unique_test_directory("terminal-data-cache");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("cache store");
+        let terminal = history_terminal("123456");
+        let parameters = serde_json::json!({
+            "symbol": "XAUUSD",
+            "timeframe": "M5",
+            "count": 100
+        });
+        let payload = serde_json::json!({
+            "symbol": "XAUUSD.s",
+            "timeframe": "M5",
+            "count": 0,
+            "rates": [],
+            "source": "mt5"
+        });
+        store
+            .persist_terminal_data_cache(
+                &terminal,
+                "rates",
+                &parameters,
+                1_800_000_000_000,
+                1_800_000_000_100,
+                &payload,
+            )
+            .expect("persist cache");
+        assert_eq!(
+            store
+                .read_terminal_data_cache(&terminal, "rates", &parameters, 1_800_000_000_000,)
+                .expect("fresh cache")
+                .expect("cache entry")
+                .payload,
+            payload
+        );
+        assert!(
+            store
+                .read_terminal_data_cache(&terminal, "rates", &parameters, 1_800_000_000_100,)
+                .expect("strict freshness")
+                .is_none()
+        );
+        assert!(
+            store
+                .read_terminal_data_cache(
+                    &terminal,
+                    "rates",
+                    &serde_json::json!({
+                        "symbol": "XAUUSD",
+                        "timeframe": "M5",
+                        "count": 200
+                    }),
+                    0,
+                )
+                .expect("other parameters")
+                .is_none()
+        );
+        assert!(
+            store
+                .read_terminal_data_cache(&history_terminal("654321"), "rates", &parameters, 0)
+                .expect("other account")
+                .is_none()
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove cache fixture");
     }
 
     #[test]

@@ -148,6 +148,7 @@ dependencies = [
  "bridge-store",
  "bridge-terminal-data",
  "bridge-worker-host",
+ "serde_json",
  "tokio",
 ]
 

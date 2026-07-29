@@ -1,6 +1,7 @@
 use crate::{
-    SnapshotStream, TerminalQuote, TerminalSnapshot, WorkerHistoryBatch, WorkerHistoryCursor,
-    WorkerHostError, WorkerRegistry, WorkerRequest, WorkerResponseBody, WorkerRoute,
+    SnapshotStream, TerminalQuote, TerminalSnapshot, WorkerDataResult, WorkerHistoryBatch,
+    WorkerHistoryCursor, WorkerHostError, WorkerRegistry, WorkerRequest, WorkerResponseBody,
+    WorkerRoute,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,6 +70,21 @@ where
         let request = WorkerRequest::history_sync(route.clone(), request_id, cursor, limit);
         match self.request(route, request).await?.body {
             WorkerResponseBody::HistoryBatch { batch } => Ok(*batch),
+            WorkerResponseBody::Error { error_code, .. } => Err(WorkerHostError::new(error_code)),
+            _ => Err(WorkerHostError::new("worker_response_operation_mismatch")),
+        }
+    }
+
+    pub async fn data(
+        &self,
+        route: WorkerRoute,
+        request_id: String,
+        action: String,
+        params: serde_json::Value,
+    ) -> Result<WorkerDataResult, WorkerHostError> {
+        let request = WorkerRequest::data(route.clone(), request_id, action, params);
+        match self.request(route, request).await?.body {
+            WorkerResponseBody::Data { data } => Ok(*data),
             WorkerResponseBody::Error { error_code, .. } => Err(WorkerHostError::new(error_code)),
             _ => Err(WorkerHostError::new("worker_response_operation_mismatch")),
         }

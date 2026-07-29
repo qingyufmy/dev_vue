@@ -40,6 +40,7 @@ HistoryOrder = namedtuple(
 
 
 class FakeMt5:
+    TIMEFRAME_M5 = 5
     TRADE_ACTION_DEAL = 1
     TRADE_ACTION_PENDING = 5
     TRADE_ACTION_SLTP = 6
@@ -138,6 +139,17 @@ class FakeMt5:
 
     def symbol_info_tick(self, _symbol):
         return Tick(2300.0, 2300.2, 2300.1, self.now + 180 * 60_000)
+
+    def copy_rates_from_pos(self, _symbol, _timeframe, _offset, count):
+        server_now = self.now // 1000 + 180 * 60
+        return tuple(
+            (server_now - (count - index) * 300, 2300.0 + index, 2301.0 + index,
+             2299.0 + index, 2300.5 + index, 100 + index, 20)
+            for index in range(count)
+        )
+
+    def copy_rates_range(self, symbol, timeframe, _start, _end):
+        return self.copy_rates_from_pos(symbol, timeframe, 0, 3)
 
     def order_check(self, request):
         self.checks.append(dict(request))
@@ -256,6 +268,56 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.now, quote["observed_at_utc_msc"])
         self.assertEqual(180, quote["timezone_offset_minutes"])
         self.assertEqual("verified", quote["clock_status"])
+
+    def test_data_rates_are_bounded_suffix_resolved_and_utc_normalized(self):
+        response = self.worker.handle(self.request("data", {
+            "action": "rates",
+            "params": {"symbol": "XAUUSD", "timeframe": "M5", "count": 4},
+        }))
+        self.assertEqual("data", response["outcome"])
+        result = response["payload"]["data"]
+        self.assertEqual("rates", result["action"])
+        self.assertEqual(self.now, result["observed_at_utc_msc"])
+        payload = result["payload"]
+        self.assertEqual("XAUUSD.s", payload["symbol"])
+        self.assertEqual(4, payload["count"])
+        self.assertEqual(self.now - 4 * 300_000, payload["rates"][0]["time_utc_msc"])
+        self.assertEqual(180, payload["timezone_offset_minutes"])
+        self.assertEqual("verified", payload["clock_status"])
+
+        ranged = self.worker.handle(self.request("data", {
+            "action": "rates",
+            "params": {
+                "symbol": "XAUUSD",
+                "timeframe": "M5",
+                "count": 2,
+                "start_utc_msc": self.now - 3_600_000,
+                "end_utc_msc": self.now,
+            },
+        }, "request_01JRANGEDATA1"))["payload"]["data"]["payload"]
+        self.assertTrue(ranged["range_complete"])
+        self.assertEqual(2, ranged["count"])
+        self.assertEqual(self.now - 3_600_000, ranged["range_start_utc_msc"])
+        self.assertEqual(self.now, ranged["range_end_utc_msc"])
+
+    def test_data_symbols_are_sorted_and_invalid_data_params_fail_closed(self):
+        self.mt5.symbols_get = lambda: (
+            self.mt5.symbol_info("XAUUSD.s")._replace(name="XAUUSD.s"),
+            self.mt5.symbol_info("AUDUSD.s")._replace(name="AUDUSD.s"),
+        )
+        response = self.worker.handle(self.request("data", {
+            "action": "symbols", "params": {},
+        }))
+        self.assertEqual(["AUDUSD.s", "XAUUSD.s"], [
+            item["name"] for item in response["payload"]["data"]["payload"]["symbols"]
+        ])
+
+        invalid = self.worker.handle(self.request("data", {
+            "action": "rates",
+            "params": {"symbol": "XAUUSD", "timeframe": "S1", "count": 4},
+        }, "request_01JINVALIDDATA"))
+        self.assertEqual("error", invalid["outcome"])
+        self.assertEqual("worker_rates_params_invalid", invalid["payload"]["error_code"])
 
     def test_history_sync_is_bounded_cursor_ordered_and_builds_related_evidence(self):
         cursor_time = self.mt5.history_deals[0].time_msc - 1

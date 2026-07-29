@@ -11,4 +11,5 @@ bridge-runtime-win = { path = "../bridge-runtime-win" }
 bridge-store = { path = "../bridge-store" }
 bridge-terminal-data = { path = "../bridge-terminal-data" }
 bridge-worker-host = { path = "../bridge-worker-host" }
+serde_json.workspace = true
 tokio.workspace = true

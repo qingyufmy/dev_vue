@@ -385,6 +385,8 @@ def main() -> int:
                         help="observe a manual terminal close/restart without sending trades")
     parser.add_argument("--history-smoke", action="store_true",
                         help="read one bounded recent history batch without sending trades")
+    parser.add_argument("--market-data-smoke", action="store_true",
+                        help="read symbols and one bounded M5 rates page without sending trades")
     args = parser.parse_args()
     if (args.matrix or args.faults) and not args.execute:
         parser.error("--matrix and --faults require --execute")
@@ -394,6 +396,10 @@ def main() -> int:
         parser.error("--observe-recovery-seconds is read-only and cannot be combined with --execute")
     if args.history_smoke and args.execute:
         parser.error("--history-smoke is read-only and cannot be combined with --execute")
+    if args.market_data_smoke and args.execute:
+        parser.error("--market-data-smoke is read-only and cannot be combined with --execute")
+    if args.history_smoke and args.market_data_smoke:
+        parser.error("--history-smoke and --market-data-smoke are mutually exclusive")
     if args.observe_recovery_seconds and not 10 <= args.observe_recovery_seconds <= 180:
         parser.error("--observe-recovery-seconds must be between 10 and 180")
 
@@ -457,6 +463,42 @@ def main() -> int:
                 raise RuntimeError("mt5_history_smoke_contract_invalid")
             print(json.dumps({"mode": "history_smoke", "readiness": readiness,
                               "history": history}, ensure_ascii=False))
+            return 0
+        if args.market_data_smoke:
+            symbols = adapter.data("symbols", {})
+            rates = adapter.data("rates", {
+                "symbol": args.symbol,
+                "timeframe": "M5",
+                "count": 100,
+            })
+            now_utc_msc = int(time.time() * 1000)
+            ranged = adapter.data("rates", {
+                "symbol": args.symbol,
+                "timeframe": "M5",
+                "count": 100,
+                "start_utc_msc": now_utc_msc - 24 * 60 * 60 * 1000,
+                "end_utc_msc": now_utc_msc,
+            })
+            names = [item["name"] for item in symbols["symbols"]]
+            rows = rates["rates"]
+            if (symbols["count"] != len(names) or rates["count"] != len(rows)
+                    or rates["count"] > 100 or rates["symbol"] != symbol
+                    or symbol not in names or rates["clock_status"] != "verified"
+                    or not ranged["range_complete"] or ranged["count"] > 100):
+                raise RuntimeError("mt5_market_data_smoke_contract_invalid")
+            report = {
+                "symbols": symbols["count"],
+                "resolved_symbol": rates["symbol"],
+                "timeframe": rates["timeframe"],
+                "rates": rates["count"],
+                "range_rates": ranged["count"],
+                "first_utc_msc": rows[0]["time_utc_msc"] if rows else None,
+                "last_utc_msc": rows[-1]["time_utc_msc"] if rows else None,
+                "timezone_offset_minutes": rates["timezone_offset_minutes"],
+                "clock_status": rates["clock_status"],
+            }
+            print(json.dumps({"mode": "market_data_smoke", "readiness": readiness,
+                              "market_data": report}, ensure_ascii=False))
             return 0
         if not args.execute:
             print(json.dumps({"mode": "read_only", "readiness": readiness}, ensure_ascii=False))

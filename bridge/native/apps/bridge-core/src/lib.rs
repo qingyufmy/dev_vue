@@ -142,12 +142,14 @@ impl NativeProfileBootstrap {
 struct ActiveMt5Session {
     manager: Arc<Mt5SessionManager>,
     handle: TerminalSessionHandle,
+    data_cache_gate: tokio::sync::Mutex<()>,
 }
 
 pub struct ActiveMt5Sessions {
     sessions: BTreeMap<String, ActiveMt5Session>,
     registry: Arc<WorkerRegistry<NamedPipeServer>>,
     store: Arc<OutboxStore>,
+    clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     latest_release: Mutex<Option<ReleaseAvailableNotification>>,
 }
 
@@ -181,12 +183,20 @@ impl ActiveMt5Sessions {
                     return Err(terminal_session_error(error));
                 }
             };
-            sessions.insert(terminal_instance_id, ActiveMt5Session { manager, handle });
+            sessions.insert(
+                terminal_instance_id,
+                ActiveMt5Session {
+                    manager,
+                    handle,
+                    data_cache_gate: tokio::sync::Mutex::new(()),
+                },
+            );
         }
         Ok(Arc::new(Self {
             sessions,
             registry,
             store,
+            clock,
             latest_release: Mutex::new(None),
         }))
     }
@@ -311,7 +321,7 @@ impl InboundDataHandler for ActiveMt5Sessions {
         >,
     > {
         let prepared = (|| {
-            if request.action != "history" {
+            if !matches!(request.action.as_str(), "history" | "rates" | "symbols") {
                 return Err(TransportError::from_static_code(
                     "terminal_data_action_unavailable",
                 ));
@@ -329,11 +339,12 @@ impl InboundDataHandler for ActiveMt5Sessions {
                     "bridge_message_route_mismatch",
                 ));
             }
-            if request
-                .params
-                .get("force_refresh")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true)
+            if request.action == "history"
+                && request
+                    .params
+                    .get("force_refresh")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
             {
                 session.handle.request_history_refresh();
             }
@@ -347,17 +358,75 @@ impl InboundDataHandler for ActiveMt5Sessions {
                     worker_version: None,
                 },
                 request.params.clone(),
+                request.request_id.clone(),
+                request.action.clone(),
+                session,
             ))
         })();
         Box::pin(async move {
-            let (store, terminal, parameters) = prepared?;
-            tokio::task::spawn_blocking(move || {
-                store.read_history_archive_page(&terminal, &parameters)
+            let (store, terminal, parameters, request_id, action, session) = prepared?;
+            if action == "history" {
+                return tokio::task::spawn_blocking(move || {
+                    store.read_history_archive_page(&terminal, &parameters)
+                })
+                .await
+                .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))?
+                .map_err(|error| TransportError::from_static_code(error.code()));
+            }
+
+            let _gate = session.data_cache_gate.lock().await;
+            let now_utc_msc = (self.clock)();
+            if now_utc_msc <= 0 {
+                return Err(TransportError::from_static_code(
+                    "terminal_data_clock_invalid",
+                ));
+            }
+            let cached_after = now_utc_msc.saturating_sub(data_cache_max_age_msc(&action));
+            let cached = {
+                let store = Arc::clone(&store);
+                let terminal = terminal.clone();
+                let action = action.clone();
+                let parameters = parameters.clone();
+                tokio::task::spawn_blocking(move || {
+                    store.read_terminal_data_cache(&terminal, &action, &parameters, cached_after)
+                })
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+            };
+            if let Some(cached) = cached {
+                return Ok(cached.payload);
+            }
+
+            let result = session
+                .handle
+                .request_data(request_id, action.clone(), parameters.clone())
+                .await
+                .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+            let payload = result.payload;
+            let persisted_payload = payload.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                store.persist_terminal_data_cache(
+                    &terminal,
+                    &action,
+                    &parameters,
+                    result.observed_at_utc_msc,
+                    now_utc_msc,
+                    &persisted_payload,
+                )
             })
-            .await
-            .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))?
-            .map_err(|error| TransportError::from_static_code(error.code()))
+            .await;
+            Ok(payload)
         })
+    }
+}
+
+fn data_cache_max_age_msc(action: &str) -> i64 {
+    match action {
+        "symbols" => 5 * 60 * 1_000,
+        "rates" => 2 * 1_000,
+        _ => 0,
     }
 }
 

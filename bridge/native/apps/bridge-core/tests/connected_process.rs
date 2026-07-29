@@ -62,6 +62,8 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
             && server.saw_succeeded_command_result()
             && server.saw_recovered_command_result()
             && server.saw_history_response()
+            && server.saw_data_response("rates")
+            && server.saw_data_response("symbols")
             && command_is_acked(&paths.database_path)
             && command_is_acked_by_id(&paths.database_path, RECOVERED_COMMAND_ID)
     });
@@ -113,6 +115,37 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         server.saw_history_response(),
         "history data request did not complete through SQLite"
     );
+    assert!(
+        server.saw_data_response("rates"),
+        "rates request did not reach MT5 Worker"
+    );
+    assert!(
+        server.saw_data_response("symbols"),
+        "symbols request did not reach MT5 Worker"
+    );
+    let cache_store = OutboxStore::open_existing(&paths.database_path).expect("open cache store");
+    let cached_rates = cache_store
+        .read_terminal_data_cache(
+            &bridge_contract::TerminalDescriptor {
+                terminal_instance_id: terminal_id.to_owned(),
+                platform: "mt5".to_owned(),
+                account_ref: AccountRef {
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "123456".to_owned(),
+                },
+                connection_epoch: 1,
+                worker_version: None,
+            },
+            "rates",
+            &serde_json::json!({ "symbol": "XAUUSD", "timeframe": "M5", "count": 20 }),
+            0,
+        )
+        .expect("read rates cache");
+    assert!(
+        cached_rates.is_some(),
+        "successful rates response was not cached"
+    );
+    drop(cache_store);
     assert_eq!(
         fs::read_to_string(&order_send_count_file)
             .expect("order send count")
@@ -446,11 +479,15 @@ impl LoopbackBridgeServer {
     }
 
     fn saw_history_response(&self) -> bool {
+        self.saw_data_response("history")
+    }
+
+    fn saw_data_response(&self, action: &str) -> bool {
         self.message_types
             .lock()
             .expect("message types")
             .iter()
-            .any(|value| value == "data_response:history:succeeded")
+            .any(|value| value == &format!("data_response:{action}:succeeded"))
     }
 
     fn saw_hello_route(
@@ -694,6 +731,44 @@ async fn serve_realtime(
                                 ))
                                 .await
                                 .expect("history request send");
+                            for (request_id, message_id, action, params) in [
+                                (
+                                    "data_01JRATESREQ01",
+                                    "message_01JRATES001",
+                                    "rates",
+                                    serde_json::json!({
+                                        "symbol": "XAUUSD",
+                                        "timeframe": "M5",
+                                        "count": 20
+                                    }),
+                                ),
+                                (
+                                    "data_01JSYMBOLREQ1",
+                                    "message_01JSYMBOLS01",
+                                    "symbols",
+                                    serde_json::json!({}),
+                                ),
+                            ] {
+                                socket
+                                    .send(Message::Text(
+                                        serde_json::json!({
+                                            "v": 3,
+                                            "type": "data_request",
+                                            "message_id": message_id,
+                                            "sent_at_utc_msc": now,
+                                            "request_id": request_id,
+                                            "terminal_instance_id": terminal.terminal_instance_id,
+                                            "account_ref": terminal.account_ref,
+                                            "connection_epoch": terminal.connection_epoch,
+                                            "action": action,
+                                            "params": params
+                                        })
+                                        .to_string()
+                                        .into(),
+                                    ))
+                                    .await
+                                    .expect("market data request send");
+                            }
                         }
                         if initial_ready && !command_sent.swap(true, Ordering::SeqCst) {
                             let now = now_utc_msc();

@@ -18,6 +18,7 @@ WORKER_VERSION = "3.0.0-alpha.1"
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_SNAPSHOT_ITEMS = 10_000
 MAX_HISTORY_BATCH_ITEMS = 250
+MAX_SYMBOL_ITEMS = 10_000
 HISTORY_WINDOW_MSC = 30 * 24 * 60 * 60 * 1000
 DEFAULT_TIMEZONE_OFFSET_MINUTES = 180
 CLOCK_FRESHNESS_TOLERANCE_MS = 30_000
@@ -25,6 +26,10 @@ CLOCK_STALE_AFTER_MS = 120_000
 TERMINAL_SESSION_FATAL_ERRORS = frozenset({
     "mt5_account_unavailable",
     "mt5_terminal_disconnected",
+})
+RATE_TIMEFRAMES = frozenset({
+    "M1", "M2", "M3", "M4", "M5", "M6", "M10", "M12", "M15", "M20", "M30",
+    "H1", "H2", "H3", "H4", "H6", "H8", "H12", "D1", "W1", "MN1",
 })
 
 
@@ -170,6 +175,12 @@ class BrokerClock:
 
     def normalize(self, raw_msc: int) -> int:
         return raw_msc - self.offset_minutes * 60_000
+
+    def server_from_utc(self, utc_msc: int) -> int:
+        return utc_msc + self.offset_minutes * 60_000
+
+    def now_utc_msc(self) -> int:
+        return int(self._clock_msc())
 
     def calibrate(self, raw_msc: int) -> int:
         host_msc = int(self._clock_msc())
@@ -348,6 +359,121 @@ class ReadOnlyMt5Adapter:
             has_more = window_end < now_msc
         return self._history_batch(
             [item[2] for item in selected], next_time, next_ticket, has_more, now_msc)
+
+    def data(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_identity()
+        if action == "rates":
+            return self._rates(params)
+        if action == "symbols":
+            if params:
+                raise WorkerError("worker_data_params_invalid")
+            return self._symbols()
+        raise WorkerError("worker_data_action_invalid")
+
+    def _rates(self, params: dict[str, Any]) -> dict[str, Any]:
+        allowed = {"symbol", "timeframe", "count", "start_utc_msc", "end_utc_msc"}
+        if set(params) - allowed:
+            raise WorkerError("worker_rates_params_invalid")
+        symbol = self._resolve_symbol(params.get("symbol"))
+        timeframe = str(params.get("timeframe") or "").strip().upper()
+        try:
+            count = int(params.get("count"))
+            start_utc_msc = int(params.get("start_utc_msc") or 0)
+            end_utc_msc = int(params.get("end_utc_msc") or 0)
+        except (TypeError, ValueError) as error:
+            raise WorkerError("worker_rates_params_invalid") from error
+        if (timeframe not in RATE_TIMEFRAMES or count < 2 or count > 5_000
+                or start_utc_msc < 0 or end_utc_msc < 0
+                or ((start_utc_msc or end_utc_msc)
+                    and not (start_utc_msc > 0 and end_utc_msc > start_utc_msc))):
+            raise WorkerError("worker_rates_params_invalid")
+        tick = self.mt5.symbol_info_tick(symbol)
+        if tick is None:
+            raise WorkerError("symbol_tick_unavailable")
+        self.clock.calibrate(int(getattr(tick, "time_msc", 0) or 0))
+        timeframe_value = getattr(self.mt5, f"TIMEFRAME_{timeframe}", None)
+        if timeframe_value is None:
+            raise WorkerError("rates_timeframe_unavailable")
+        range_complete = bool(start_utc_msc and end_utc_msc)
+        if range_complete:
+            raw_start_msc = self.clock.server_from_utc(start_utc_msc)
+            raw_end_msc = self.clock.server_from_utc(end_utc_msc)
+            rates = self.mt5.copy_rates_range(
+                symbol,
+                timeframe_value,
+                datetime.fromtimestamp(raw_start_msc / 1000.0, timezone.utc),
+                datetime.fromtimestamp(raw_end_msc / 1000.0, timezone.utc),
+            )
+            if rates is not None and len(rates) > count:
+                rates = rates[-count:]
+        else:
+            rates = self.mt5.copy_rates_from_pos(symbol, timeframe_value, 0, count)
+        if rates is None:
+            raise WorkerError("rates_unavailable")
+        captured_at = self.clock.now_utc_msc()
+        output: list[dict[str, Any]] = []
+        for rate in rates:
+            server_msc = int(rate[0]) * 1000
+            utc_msc = self.clock.normalize(server_msc)
+            if utc_msc > captured_at + CLOCK_FRESHNESS_TOLERANCE_MS:
+                continue
+            output.append({
+                "time": datetime.fromtimestamp(server_msc / 1000.0, timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S"),
+                "time_msc": server_msc,
+                "time_server_msc": server_msc,
+                "time_utc_msc": utc_msc,
+                "open": float(rate[1]),
+                "high": float(rate[2]),
+                "low": float(rate[3]),
+                "close": float(rate[4]),
+                "tick_volume": int(rate[5]),
+                "spread": int(rate[6]) if len(rate) > 6 else 0,
+                "captured_at_utc_msc": captured_at,
+                "timezone_offset_minutes": self.clock.offset_minutes,
+                "clock_status": self.clock.status,
+            })
+        if len(rates) and not output:
+            raise WorkerError("rates_future_timestamp_invalid")
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "count": len(output),
+            "rates": output,
+            "source": "mt5",
+            "range_complete": range_complete,
+            "range_start_utc_msc": start_utc_msc or None,
+            "range_end_utc_msc": end_utc_msc or None,
+            "timezone_offset_minutes": self.clock.offset_minutes,
+            "clock_status": self.clock.status,
+        }
+
+    def _symbols(self) -> dict[str, Any]:
+        values = self.mt5.symbols_get()
+        if values is None:
+            raise WorkerError("mt5_symbols_unavailable")
+        if len(values) > MAX_SYMBOL_ITEMS:
+            raise WorkerError("mt5_symbols_too_large")
+        rows = []
+        for value in values:
+            name = str(getattr(value, "name", "") or "").strip()
+            if not name:
+                continue
+            rows.append({
+                "name": name,
+                "description": str(getattr(value, "description", "") or ""),
+                "digits": int(getattr(value, "digits", 0) or 0),
+                "trade_mode": int(getattr(value, "trade_mode", 0) or 0),
+                "point": float(getattr(value, "point", 0.0) or 0.0),
+                "tick_size": float(getattr(value, "trade_tick_size", 0.0) or 0.0),
+                "tick_value": float(getattr(value, "trade_tick_value", 0.0) or 0.0),
+                "contract_size": float(getattr(value, "trade_contract_size", 0.0) or 0.0),
+                "volume_min": float(getattr(value, "volume_min", 0.0) or 0.0),
+                "volume_max": float(getattr(value, "volume_max", 0.0) or 0.0),
+                "volume_step": float(getattr(value, "volume_step", 0.0) or 0.0),
+            })
+        rows.sort(key=lambda item: item["name"].upper())
+        return {"symbols": rows, "count": len(rows), "source": "mt5"}
 
     def _history_batch(self, raw_deals: list[dict[str, Any]], next_time: int,
                        next_ticket: int, has_more: bool, observed_at: int) -> dict[str, Any]:
@@ -556,6 +682,18 @@ class Mt5Worker:
                 return self._response(request_id, "history_batch", {
                     "batch": self.adapter.history_sync(cursor, payload.get("limit"))
                 })
+            if operation == "data":
+                payload = self._request_payload(body)
+                if set(payload) != {"action", "params"} or not isinstance(payload.get("params"), dict):
+                    raise WorkerError("worker_request_payload_invalid")
+                action = payload.get("action")
+                if action not in {"rates", "symbols"}:
+                    raise WorkerError("worker_data_action_invalid")
+                return self._response(request_id, "data", {"data": {
+                    "action": action,
+                    "observed_at_utc_msc": self.adapter.clock.now_utc_msc(),
+                    "payload": self.adapter.data(action, payload["params"]),
+                }})
             if operation in {"execute_command", "query_execution"}:
                 if set(body) != {"command"} or not isinstance(body.get("command"), dict):
                     raise WorkerError("worker_request_payload_invalid")
@@ -644,7 +782,8 @@ def run(mt5: Any) -> None:
                 "worker_version": WORKER_VERSION,
                 "route": route.payload(),
                 "capabilities": [
-                    "snapshot", "quote", "history_sync", "execute_command", "query_execution"
+                    "snapshot", "quote", "data", "history_sync",
+                    "execute_command", "query_execution"
                 ],
             })
             while True:

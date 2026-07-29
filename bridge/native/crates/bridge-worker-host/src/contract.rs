@@ -134,13 +134,17 @@ pub enum WorkerOperation {
     CollectSnapshot { request: SnapshotRequest },
     Quote { request: QuoteRequest },
     HistorySync { request: HistorySyncRequest },
+    Data { request: WorkerDataRequest },
 }
 
 impl WorkerOperation {
     pub fn command(&self) -> Option<&CommandMessage> {
         match self {
             Self::ExecuteCommand { command } | Self::QueryExecution { command } => Some(command),
-            Self::CollectSnapshot { .. } | Self::Quote { .. } | Self::HistorySync { .. } => None,
+            Self::CollectSnapshot { .. }
+            | Self::Quote { .. }
+            | Self::HistorySync { .. }
+            | Self::Data { .. } => None,
         }
     }
 
@@ -151,6 +155,7 @@ impl WorkerOperation {
             Self::CollectSnapshot { .. } => WorkerCapability::Snapshot,
             Self::Quote { .. } => WorkerCapability::Quote,
             Self::HistorySync { .. } => WorkerCapability::HistorySync,
+            Self::Data { .. } => WorkerCapability::Data,
         }
     }
 }
@@ -229,6 +234,153 @@ impl HistorySyncRequest {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerDataRequest {
+    pub action: String,
+    pub params: serde_json::Value,
+}
+
+impl WorkerDataRequest {
+    fn validate(&self) -> Result<(), WorkerHostError> {
+        let params = self
+            .params
+            .as_object()
+            .ok_or_else(|| WorkerHostError::new("worker_data_params_invalid"))?;
+        match self.action.as_str() {
+            "symbols" if params.is_empty() => Ok(()),
+            "rates" => validate_rates_params(params),
+            _ => Err(WorkerHostError::new("worker_data_action_invalid")),
+        }
+    }
+}
+
+fn validate_rates_params(params: &Map<String, Value>) -> Result<(), WorkerHostError> {
+    const KEYS: &[&str] = &[
+        "symbol",
+        "timeframe",
+        "count",
+        "start_utc_msc",
+        "end_utc_msc",
+    ];
+    if params.keys().any(|key| !KEYS.contains(&key.as_str())) {
+        return Err(WorkerHostError::new("worker_rates_params_invalid"));
+    }
+    let symbol = params.get("symbol").and_then(Value::as_str).unwrap_or("");
+    let timeframe = params
+        .get("timeframe")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let count = params.get("count").and_then(Value::as_i64).unwrap_or(0);
+    let start = params
+        .get("start_utc_msc")
+        .map(Value::as_i64)
+        .unwrap_or(Some(0));
+    let end = params
+        .get("end_utc_msc")
+        .map(Value::as_i64)
+        .unwrap_or(Some(0));
+    const TIMEFRAMES: &[&str] = &[
+        "M1", "M2", "M3", "M4", "M5", "M6", "M10", "M12", "M15", "M20", "M30", "H1", "H2", "H3",
+        "H4", "H6", "H8", "H12", "D1", "W1", "MN1",
+    ];
+    let valid_range = matches!((start, end), (Some(0), Some(0)))
+        || matches!((start, end), (Some(start), Some(end)) if start > 0 && end > start);
+    if symbol.trim() != symbol
+        || symbol.is_empty()
+        || symbol.len() > 64
+        || !TIMEFRAMES.contains(&timeframe)
+        || !(2..=5_000).contains(&count)
+        || !valid_range
+    {
+        return Err(WorkerHostError::new("worker_rates_params_invalid"));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerDataResult {
+    pub action: String,
+    pub observed_at_utc_msc: i64,
+    pub payload: serde_json::Value,
+}
+
+impl WorkerDataResult {
+    fn validate_for(&self, request: &WorkerDataRequest) -> Result<(), WorkerHostError> {
+        if self.action != request.action
+            || self.observed_at_utc_msc <= 0
+            || !self.payload.is_object()
+            || !valid_data_payload(request, &self.payload)
+        {
+            return Err(WorkerHostError::new("worker_data_result_invalid"));
+        }
+        Ok(())
+    }
+}
+
+fn valid_data_payload(request: &WorkerDataRequest, payload: &Value) -> bool {
+    let Some(object) = payload.as_object() else {
+        return false;
+    };
+    if object.get("source").and_then(Value::as_str) != Some("mt5") {
+        return false;
+    }
+    match request.action.as_str() {
+        "symbols" => {
+            let Some(symbols) = object.get("symbols").and_then(Value::as_array) else {
+                return false;
+            };
+            symbols.len() <= 10_000
+                && object.get("count").and_then(Value::as_u64) == Some(symbols.len() as u64)
+                && symbols.iter().all(|value| {
+                    value
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| {
+                            !name.is_empty() && name.len() <= 64 && name.trim() == name
+                        })
+                })
+        }
+        "rates" => {
+            let Some(rates) = object.get("rates").and_then(Value::as_array) else {
+                return false;
+            };
+            let Some(params) = request.params.as_object() else {
+                return false;
+            };
+            let requested_count = params.get("count").and_then(Value::as_u64).unwrap_or(0);
+            object
+                .get("symbol")
+                .and_then(Value::as_str)
+                .is_some_and(|symbol| {
+                    !symbol.is_empty() && symbol.len() <= 64 && symbol.trim() == symbol
+                })
+                && object.get("timeframe").and_then(Value::as_str)
+                    == params.get("timeframe").and_then(Value::as_str)
+                && object.get("count").and_then(Value::as_u64) == Some(rates.len() as u64)
+                && rates.len() as u64 <= requested_count
+                && rates.iter().all(valid_rate_row)
+        }
+        _ => false,
+    }
+}
+
+fn valid_rate_row(value: &Value) -> bool {
+    let finite = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_f64)
+            .is_some_and(f64::is_finite)
+    };
+    value
+        .get("time_utc_msc")
+        .and_then(Value::as_i64)
+        .is_some_and(|time| time > 0)
+        && ["open", "high", "low", "close"].into_iter().all(finite)
+        && value.get("tick_volume").and_then(Value::as_u64).is_some()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -481,6 +633,23 @@ impl WorkerRequest {
         }
     }
 
+    pub fn data(
+        route: WorkerRoute,
+        request_id: String,
+        action: String,
+        params: serde_json::Value,
+    ) -> Self {
+        Self {
+            ipc_v: WORKER_IPC_VERSION,
+            message_type: "worker_request".to_owned(),
+            request_id,
+            route,
+            operation: WorkerOperation::Data {
+                request: WorkerDataRequest { action, params },
+            },
+        }
+    }
+
     pub fn validate(&self, now_utc_msc: i64) -> Result<(), WorkerHostError> {
         if self.ipc_v != WORKER_IPC_VERSION || self.message_type != "worker_request" {
             return Err(WorkerHostError::new("worker_request_protocol_invalid"));
@@ -502,6 +671,7 @@ impl WorkerRequest {
             WorkerOperation::CollectSnapshot { request } => request.validate()?,
             WorkerOperation::Quote { request } => request.validate()?,
             WorkerOperation::HistorySync { request } => request.validate()?,
+            WorkerOperation::Data { request } => request.validate()?,
         }
         match &self.operation {
             WorkerOperation::ExecuteCommand { command } => {
@@ -525,7 +695,8 @@ impl WorkerRequest {
             }
             WorkerOperation::CollectSnapshot { .. }
             | WorkerOperation::Quote { .. }
-            | WorkerOperation::HistorySync { .. } => {}
+            | WorkerOperation::HistorySync { .. }
+            | WorkerOperation::Data { .. } => {}
         }
         Ok(())
     }
@@ -906,6 +1077,9 @@ pub enum WorkerResponseBody {
     HistoryBatch {
         batch: Box<WorkerHistoryBatch>,
     },
+    Data {
+        data: Box<WorkerDataResult>,
+    },
     Error {
         error_code: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -979,6 +1153,12 @@ impl WorkerResponse {
                     return Err(WorkerHostError::new("worker_response_operation_mismatch"));
                 };
                 batch.validate_for(request)?;
+            }
+            WorkerResponseBody::Data { data } => {
+                let WorkerOperation::Data { request } = &request.operation else {
+                    return Err(WorkerHostError::new("worker_response_operation_mismatch"));
+                };
+                data.validate_for(request)?;
             }
             WorkerResponseBody::Error {
                 error_code,
@@ -1363,6 +1543,64 @@ mod tests {
                 .expect_err("unverified clock")
                 .code(),
             "worker_quote_invalid"
+        );
+    }
+
+    #[test]
+    fn data_contract_bounds_rates_and_matches_the_requested_action() {
+        let request = WorkerRequest::data(
+            route(),
+            "request_01JDATA001".to_owned(),
+            "rates".to_owned(),
+            serde_json::json!({
+                "symbol": "XAUUSD",
+                "timeframe": "M5",
+                "count": 100
+            }),
+        );
+        request.validate(1_700_000_000_001).expect("valid request");
+        let response = WorkerResponse {
+            ipc_v: WORKER_IPC_VERSION,
+            message_type: "worker_response".to_owned(),
+            request_id: request.request_id.clone(),
+            route: request.route.clone(),
+            body: WorkerResponseBody::Data {
+                data: Box::new(WorkerDataResult {
+                    action: "rates".to_owned(),
+                    observed_at_utc_msc: 1_700_000_000_001,
+                    payload: serde_json::json!({
+                        "symbol": "XAUUSD.s",
+                        "timeframe": "M5",
+                        "count": 1,
+                        "rates": [{
+                            "time_utc_msc": 1_700_000_000_000_i64,
+                            "open": 2300.0,
+                            "high": 2301.0,
+                            "low": 2299.0,
+                            "close": 2300.5,
+                            "tick_volume": 100
+                        }],
+                        "source": "mt5"
+                    }),
+                }),
+            },
+        };
+        response
+            .validate_for(&request)
+            .expect("valid data response");
+
+        let invalid = WorkerRequest::data(
+            route(),
+            "request_01JDATA002".to_owned(),
+            "rates".to_owned(),
+            serde_json::json!({ "symbol": "XAUUSD", "timeframe": "S1", "count": 100 }),
+        );
+        assert_eq!(
+            invalid
+                .validate(1_700_000_000_001)
+                .expect_err("invalid rates")
+                .code(),
+            "worker_rates_params_invalid"
         );
     }
 }

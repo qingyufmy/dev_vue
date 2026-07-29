@@ -12,9 +12,9 @@ pub use client::{ExpectedWorker, WorkerClient};
 pub use command_adapter::{IpcCommandWorker, RegistryCommandWorker, RegistryReconciliationWorker};
 pub use contract::{
     HistorySyncRequest, QuoteRequest, SnapshotRequest, SnapshotStream, SnapshotStreams,
-    TerminalQuote, TerminalSnapshot, WORKER_IPC_VERSION, WorkerCapability, WorkerHello,
-    WorkerHistoryBatch, WorkerHistoryCursor, WorkerOperation, WorkerRequest, WorkerResponse,
-    WorkerResponseBody, WorkerRoute,
+    TerminalQuote, TerminalSnapshot, WORKER_IPC_VERSION, WorkerCapability, WorkerDataRequest,
+    WorkerDataResult, WorkerHello, WorkerHistoryBatch, WorkerHistoryCursor, WorkerOperation,
+    WorkerRequest, WorkerResponse, WorkerResponseBody, WorkerRoute,
 };
 pub use data_router::WorkerDataRouter;
 pub use frame::{MAX_WORKER_FRAME_BYTES, read_frame, write_frame};

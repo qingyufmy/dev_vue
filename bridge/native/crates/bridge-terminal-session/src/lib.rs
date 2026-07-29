@@ -5,8 +5,9 @@ use bridge_terminal_data::{
     CollectorHandle, CollectorLifecycleState, CollectorPolicy, SnapshotCollector, SnapshotProjector,
 };
 use bridge_worker_host::{
-    WorkerCapability, WorkerDataRouter, WorkerHistoryCursor, WorkerHostError, WorkerLifecycleState,
-    WorkerProgram, WorkerRegistry, WorkerRoute, WorkerSupervisor, WorkerSupervisorHandle,
+    WorkerCapability, WorkerDataResult, WorkerDataRouter, WorkerHistoryCursor, WorkerHostError,
+    WorkerLifecycleState, WorkerProgram, WorkerRegistry, WorkerRoute, WorkerSupervisor,
+    WorkerSupervisorHandle,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -101,6 +102,7 @@ pub struct TerminalSessionStatus {
 pub struct TerminalSessionHandle {
     route: WorkerRoute,
     worker: WorkerSupervisorHandle,
+    data: Arc<WorkerDataRouter<NamedPipeServer>>,
     collector: CollectorHandle,
     history: HistorySyncHandle,
 }
@@ -156,6 +158,18 @@ impl TerminalSessionHandle {
 
     pub fn request_history_refresh(&self) {
         self.history.wake();
+    }
+
+    pub async fn request_data(
+        &self,
+        request_id: String,
+        action: String,
+        params: serde_json::Value,
+    ) -> Result<WorkerDataResult, TerminalSessionError> {
+        self.data
+            .data(self.route.clone(), request_id, action, params)
+            .await
+            .map_err(worker_error)
     }
 
     pub fn freshness(&self) -> TerminalStreamFreshness {
@@ -281,6 +295,7 @@ impl RunningSession {
                 [
                     WorkerCapability::Snapshot,
                     WorkerCapability::Quote,
+                    WorkerCapability::Data,
                     WorkerCapability::HistorySync,
                 ]
                 .into(),
@@ -323,7 +338,7 @@ impl RunningSession {
             history_state.cursor
         };
         let (history, history_task) = start_history_sync(
-            router,
+            Arc::clone(&router),
             Arc::clone(&store),
             terminal,
             initial_cursor,
@@ -339,6 +354,7 @@ impl RunningSession {
             handle: TerminalSessionHandle {
                 route: spec.route,
                 worker,
+                data: router,
                 collector: collector_handle,
                 history,
             },

@@ -15,6 +15,7 @@ Tick = namedtuple("Tick", "bid ask last time_msc")
 
 
 class FakeMt5:
+    TIMEFRAME_M5 = 5
     TRADE_ACTION_DEAL = 1
     TRADE_ACTION_PENDING = 5
     TRADE_ACTION_SLTP = 6
@@ -90,6 +91,17 @@ class FakeMt5:
     def symbol_info_tick(self, _symbol):
         now = int(time.time() * 1000)
         return Tick(2300.0, 2300.2, 2300.1, now + 180 * 60_000)
+
+    def copy_rates_from_pos(self, _symbol, _timeframe, _offset, count):
+        now = int(time.time()) + 180 * 60
+        return tuple(
+            (now - (count - index) * 300, 2300.0 + index, 2301.0 + index,
+             2299.0 + index, 2300.5 + index, 100 + index, 20)
+            for index in range(count)
+        )
+
+    def copy_rates_range(self, symbol, timeframe, _start, _end):
+        return self.copy_rates_from_pos(symbol, timeframe, 0, 3)
 
     def order_check(self, _request):
         return SimpleNamespace(retcode=0, comment="ok")

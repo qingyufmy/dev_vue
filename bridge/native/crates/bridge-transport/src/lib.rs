@@ -56,6 +56,19 @@ pub struct TransportError {
 
 impl TransportError {
     pub fn from_static_code(code: &'static str) -> Self {
+        Self::from_code(code)
+    }
+
+    pub fn from_code(code: impl Into<String>) -> Self {
+        let code = code.into();
+        if code.is_empty()
+            || code.len() > 128
+            || code
+                .bytes()
+                .any(|byte| !byte.is_ascii_alphanumeric() && byte != b'_')
+        {
+            return Self::new("bridge_transport_error_invalid");
+        }
         Self::new(code)
     }
 
@@ -1315,6 +1328,18 @@ mod tests {
                 worker_version: Some("3.0.0-alpha.1".to_owned()),
             }],
         }
+    }
+
+    #[test]
+    fn dynamic_transport_errors_preserve_only_safe_protocol_codes() {
+        assert_eq!(
+            TransportError::from_code("rates_unavailable".to_owned()).code(),
+            "rates_unavailable"
+        );
+        assert_eq!(
+            TransportError::from_code("unsafe-code".to_owned()).code(),
+            "bridge_transport_error_invalid"
+        );
     }
 
     #[test]
