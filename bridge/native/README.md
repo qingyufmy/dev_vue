@@ -9,10 +9,13 @@
 - `bridge-foundation` 固定 Launcher 参数、安装目录、Profile 隔离、运行时文件和 SQLite WAL 健康检查合同。
 - `bridge-security-win` 与 V3 共用 DPAPI CurrentUser、固定 entropy、JSON 字段和原子凭据轮换合同。
 - `bridge-store` 只读检查现有 V3 SQLite 完整性、WAL 模式及必需表/列；测试直接对照当前 C# 建库源码以阻止静默漂移。
+- `bridge-store` 另提供未接入生产入口的 V3 Outbox 兼容层，严格保留交易优先、持久化重试和 applied / duplicate 删除语义。
 - `bridge-observability` 写入现有内置日志查看器可直接读取的脱敏 JSONL，并持久化 panic 与非正常退出证据。
 - `bridge-runtime-win` 与 .NET V3 共用锁文件及 `Local\*.activate/.shutdown` 事件，并用 Windows Job Object 监管、清理和退避重启子进程树。
+- `bridge-transport` 已完成统一端点解析、rustls HTTP / WebSocket、refresh / ticket、Hello / ACK、心跳包络、严格优先队列、重连状态机和 Outbox 泵基础。
+- 本地端到端测试会真实执行 refresh → ticket → WebSocket ticket → Hello / ACK → Heartbeat，并验证二进制帧失败关闭。
 - `liangjian-bridge-compat-probe` 可在不输出令牌或业务数据的情况下检查默认账户或观摩源的本地迁移兼容性。
-- `bridge-core` 普通运行现在会建立日志、单实例和运行标记后以 `native_bridge_runtime_not_ready` 失败关闭；仍不生成 Launcher ready 信号，也不连接服务器或 MT。
+- `bridge-core` 普通运行现在会建立日志、单实例和运行标记后以 `native_bridge_runtime_not_ready` 失败关闭；传输层尚未接入 Core，仍不生成 Launcher ready 信号，也不连接服务器或 MT。
 
 ## 本地验证
 
@@ -20,8 +23,8 @@
 $cargo = "$env:USERPROFILE\.cargo\bin\cargo.exe"
 Push-Location .\bridge\native
 & $cargo fmt --all --check
-& $cargo clippy --workspace --all-targets -- -D warnings
-& $cargo test --workspace
+& $cargo clippy --locked --workspace --all-targets -- -D warnings
+& $cargo test --locked --workspace
 Pop-Location
 ```
 

@@ -22,14 +22,14 @@ try {
     & $cargo fmt --manifest-path $manifest --all --check
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    & $cargo clippy --manifest-path $manifest --workspace --all-targets -- -D warnings
+    & $cargo clippy --locked --manifest-path $manifest --workspace --all-targets -- -D warnings
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    & $cargo test --manifest-path $manifest --workspace
+    & $cargo test --locked --manifest-path $manifest --workspace
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     if (-not $SkipRelease) {
-        & $cargo build --manifest-path $manifest --workspace --release
+        & $cargo build --locked --manifest-path $manifest --workspace --release
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 } finally {

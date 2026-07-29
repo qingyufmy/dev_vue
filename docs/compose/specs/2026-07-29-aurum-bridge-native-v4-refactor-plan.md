@@ -6,7 +6,7 @@
 >
 > 生产基线：现有 .NET V3 + Python MT5 Worker + MT4 EA 继续可用
 >
-> Native V4 当前进度：阶段 0 / 1 已完成，阶段 2 待实施
+> Native V4 当前进度：阶段 0 / 1 已完成，阶段 2 传输基础已完成、生产会话编排待实施
 
 ## 1. 结论
 
@@ -403,11 +403,12 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 ### 阶段 2：服务器传输
 
-- 统一服务器地址解析及 HTTPS/WSS/WS 推导。
-- refresh token、ticket、hello / hello_ack、heartbeat。
-- 交易/数据双优先队列和 4 MiB 入站限制。
-- 持久化 Outbox、ACK、重连和故障注入测试。
-- 锁定无 OpenSSL 的网络依赖并生成依赖审计清单。
+- 已完成统一服务器地址解析及 HTTPS/WSS/WS 推导。
+- 已完成 refresh token、ticket、hello / hello_ack 和 heartbeat 合同及 loopback 端到端测试。
+- 已完成交易/数据双优先队列、4 MiB 入站限制和二进制帧失败关闭。
+- 已完成现有 V3 SQLite Outbox 的原生兼容访问、ACK、重试、gap 抑制和重连状态机。
+- 已锁定 rustls HTTP / WebSocket 依赖；构建审计必须继续证明目标产物不依赖 OpenSSL 或 native-tls。
+- 待完成生产会话编排、入站命令安全路由、数据 ACK 完整路由及真实服务器灰度前故障矩阵。
 
 交付门：断网、乱序、重复 ACK、超大包、HTML 错页和服务器重启不会丢高优先消息。
 
@@ -554,5 +555,8 @@ bridge/native/
 - 已完成脱敏 JSONL、滚动保留、panic 和非正常退出证据。
 - 已完成 .NET / Rust 锁文件、激活/退出事件双向互通。
 - 已完成 Job Object 子进程托管及 1/2/4/8/10 秒重启退避。
-- 当前不写 V3 SQLite、不接管凭据、不连接服务器或 MT，不会误成为生产 Core。
-- 下一批只实施“阶段 2：服务器传输”，完成后再进入 MT5 Worker 拆分。
+- 已完成 Native V3 端点、refresh / ticket、WebSocket Hello / ACK、Heartbeat、优先队列和重连状态机。
+- 已完成 Native Outbox 兼容层，保留 2/4/8/16/30 秒持久化重试、applied / duplicate 删除及 gap 当前会话抑制语义。
+- 已完成本地 HTTP + WebSocket 端到端握手和二进制帧拒绝故障测试。
+- 当前 Native Core 不写 V3 SQLite、不接管凭据、不连接服务器或 MT，不会误成为生产 Core。
+- 下一批继续完成阶段 2 的生产会话编排和入站路由；通过后再进入 MT5 Worker 拆分。

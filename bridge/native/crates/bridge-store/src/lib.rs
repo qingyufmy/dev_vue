@@ -1,8 +1,10 @@
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
 use serde::Serialize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 
 pub const BRIDGE_DATABASE_FILE_NAME: &str = "bridge.db";
@@ -290,6 +292,247 @@ pub fn inspect_existing_schema(
     })
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutboxRecord {
+    pub id: i64,
+    pub message_id: String,
+    pub message_type: String,
+    pub terminal_instance_id: String,
+    pub connection_epoch: i64,
+    pub priority: String,
+    pub payload_json: String,
+    pub attempt_count: i64,
+    pub created_at_utc_msc: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NewOutboxRecord {
+    pub message_id: String,
+    pub message_type: String,
+    pub terminal_instance_id: String,
+    pub connection_epoch: i64,
+    pub priority: String,
+    pub payload_json: String,
+    pub created_at_utc_msc: i64,
+}
+
+pub struct OutboxStore {
+    connection: Mutex<Connection>,
+}
+
+impl OutboxStore {
+    pub fn open_existing(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let path = path.as_ref();
+        let report = inspect_existing_schema(path)?;
+        if report.status != SchemaCompatibilityStatus::Compatible {
+            return Err(StoreError::new("bridge_store_schema_incompatible"));
+        }
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
+        )
+        .map_err(|_| StoreError::new("bridge_store_open_failed"))?;
+        connection
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(|_| StoreError::new("bridge_store_busy_timeout_failed"))?;
+        connection
+            .pragma_update(None, "synchronous", "FULL")
+            .map_err(|_| StoreError::new("bridge_store_synchronous_failed"))?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
+    }
+
+    pub fn enqueue(&self, record: &NewOutboxRecord) -> Result<bool, StoreError> {
+        validate_new_outbox_record(record)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        connection
+            .execute(
+                "INSERT INTO outbox_messages (\
+                   message_id, message_type, terminal_instance_id, connection_epoch, priority, \
+                   payload_json, attempt_count, next_attempt_at_utc_msc, created_at_utc_msc, acked_at_utc_msc\
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, NULL, ?7, NULL)\
+                 ON CONFLICT(message_id) DO NOTHING;",
+                params![
+                    record.message_id,
+                    record.message_type,
+                    record.terminal_instance_id,
+                    record.connection_epoch,
+                    record.priority,
+                    record.payload_json,
+                    record.created_at_utc_msc,
+                ],
+            )
+            .map(|affected| affected == 1)
+            .map_err(|_| StoreError::new("bridge_store_outbox_enqueue_failed"))
+    }
+
+    pub fn ready_for_terminals(
+        &self,
+        now_utc_msc: i64,
+        terminal_instance_ids: Option<&[String]>,
+        limit: usize,
+    ) -> Result<Vec<OutboxRecord>, StoreError> {
+        if now_utc_msc <= 0 || !(1..=1_000).contains(&limit) {
+            return Err(StoreError::new("bridge_store_outbox_query_invalid"));
+        }
+        if terminal_instance_ids.is_some_and(|values| values.is_empty()) {
+            return Ok(Vec::new());
+        }
+        let mut values = vec![SqlValue::Integer(now_utc_msc)];
+        let terminal_filter = terminal_instance_ids
+            .map(|identifiers| {
+                values.extend(identifiers.iter().cloned().map(SqlValue::Text));
+                format!(
+                    " AND terminal_instance_id IN ({})",
+                    (0..identifiers.len())
+                        .map(|index| format!("?{}", index + 2))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+            .unwrap_or_default();
+        values.push(SqlValue::Integer(limit as i64));
+        let limit_parameter = values.len();
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT id, message_id, message_type, terminal_instance_id, connection_epoch, \
+                        priority, payload_json, attempt_count, created_at_utc_msc \
+                 FROM outbox_messages \
+                 WHERE acked_at_utc_msc IS NULL \
+                   AND (next_attempt_at_utc_msc IS NULL OR next_attempt_at_utc_msc <= ?1) \
+                   {terminal_filter} \
+                 ORDER BY CASE priority WHEN 'trade' THEN 0 ELSE 1 END, id \
+                 LIMIT ?{limit_parameter};"
+            ))
+            .map_err(|_| StoreError::new("bridge_store_outbox_query_failed"))?;
+        let rows = statement
+            .query_map(params_from_iter(values), |row| {
+                Ok(OutboxRecord {
+                    id: row.get(0)?,
+                    message_id: row.get(1)?,
+                    message_type: row.get(2)?,
+                    terminal_instance_id: row.get(3)?,
+                    connection_epoch: row.get(4)?,
+                    priority: row.get(5)?,
+                    payload_json: row.get(6)?,
+                    attempt_count: row.get(7)?,
+                    created_at_utc_msc: row.get(8)?,
+                })
+            })
+            .map_err(|_| StoreError::new("bridge_store_outbox_query_failed"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|_| StoreError::new("bridge_store_outbox_query_failed"))
+    }
+
+    pub fn record_attempt(
+        &self,
+        message_id: &str,
+        expected_attempt_count: i64,
+        next_attempt_at_utc_msc: i64,
+    ) -> Result<bool, StoreError> {
+        if message_id.trim().is_empty()
+            || expected_attempt_count < 0
+            || next_attempt_at_utc_msc <= 0
+        {
+            return Err(StoreError::new("bridge_store_outbox_attempt_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        connection
+            .execute(
+                "UPDATE outbox_messages \
+                 SET attempt_count = attempt_count + 1, next_attempt_at_utc_msc = ?1 \
+                 WHERE message_id = ?2 AND acked_at_utc_msc IS NULL AND attempt_count = ?3;",
+                params![next_attempt_at_utc_msc, message_id, expected_attempt_count],
+            )
+            .map(|affected| affected == 1)
+            .map_err(|_| StoreError::new("bridge_store_outbox_attempt_failed"))
+    }
+
+    pub fn pending(&self, message_id: &str) -> Result<Option<OutboxRecord>, StoreError> {
+        if message_id.trim().is_empty() {
+            return Err(StoreError::new("bridge_store_outbox_query_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        connection
+            .query_row(
+                "SELECT id, message_id, message_type, terminal_instance_id, connection_epoch, \
+                        priority, payload_json, attempt_count, created_at_utc_msc \
+                 FROM outbox_messages \
+                 WHERE message_id = ?1 AND acked_at_utc_msc IS NULL \
+                 LIMIT 1;",
+                [message_id],
+                |row| {
+                    Ok(OutboxRecord {
+                        id: row.get(0)?,
+                        message_id: row.get(1)?,
+                        message_type: row.get(2)?,
+                        terminal_instance_id: row.get(3)?,
+                        connection_epoch: row.get(4)?,
+                        priority: row.get(5)?,
+                        payload_json: row.get(6)?,
+                        attempt_count: row.get(7)?,
+                        created_at_utc_msc: row.get(8)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_outbox_query_failed"))
+    }
+
+    pub fn acknowledge(
+        &self,
+        message_id: &str,
+        acknowledgement_status: &str,
+    ) -> Result<bool, StoreError> {
+        if !matches!(acknowledgement_status, "applied" | "duplicate") {
+            return Ok(false);
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        connection
+            .execute(
+                "DELETE FROM outbox_messages \
+                 WHERE message_id = ?1 AND acked_at_utc_msc IS NULL;",
+                [message_id],
+            )
+            .map(|affected| affected == 1)
+            .map_err(|_| StoreError::new("bridge_store_outbox_ack_failed"))
+    }
+}
+
+fn validate_new_outbox_record(record: &NewOutboxRecord) -> Result<(), StoreError> {
+    const MAXIMUM_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
+    if record.message_id.trim().is_empty()
+        || record.message_type.trim().is_empty()
+        || record.terminal_instance_id.trim().is_empty()
+        || record.connection_epoch <= 0
+        || !matches!(record.priority.as_str(), "trade" | "data")
+        || record.payload_json.len() > MAXIMUM_PAYLOAD_BYTES
+        || record.created_at_utc_msc <= 0
+        || !serde_json::from_str::<serde_json::Value>(&record.payload_json)
+            .is_ok_and(|value| value.is_object())
+    {
+        return Err(StoreError::new("bridge_store_outbox_record_invalid"));
+    }
+    Ok(())
+}
+
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, StoreError> {
     connection
         .query_row(
@@ -389,6 +632,26 @@ mod tests {
             .pragma_update(None, "journal_mode", "WAL")
             .expect("fixture wal");
         for (table, columns) in REQUIRED_SCHEMA {
+            if *table == "outbox_messages" && omitted.is_none() {
+                connection
+                    .execute_batch(
+                        "CREATE TABLE outbox_messages (\
+                           id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                           message_id TEXT NOT NULL UNIQUE,\
+                           message_type TEXT NOT NULL,\
+                           terminal_instance_id TEXT NOT NULL,\
+                           connection_epoch INTEGER NOT NULL,\
+                           priority TEXT NOT NULL,\
+                           payload_json TEXT NOT NULL,\
+                           attempt_count INTEGER NOT NULL DEFAULT 0,\
+                           next_attempt_at_utc_msc INTEGER,\
+                           created_at_utc_msc INTEGER NOT NULL,\
+                           acked_at_utc_msc INTEGER\
+                         );",
+                    )
+                    .expect("fixture outbox table");
+                continue;
+            }
             let definitions = columns
                 .iter()
                 .filter(|column| omitted != Some((table, **column)))
@@ -399,6 +662,78 @@ mod tests {
                 .execute_batch(&format!("CREATE TABLE {table} ({definitions});"))
                 .expect("fixture table");
         }
+    }
+
+    #[test]
+    fn native_outbox_preserves_v3_priority_retry_and_ack_semantics() {
+        let root = unique_test_directory("native-outbox");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path, None);
+        let store = OutboxStore::open_existing(&path).expect("outbox store");
+        let data = NewOutboxRecord {
+            message_id: "data_01JTEST0001".to_owned(),
+            message_type: "data_delta".to_owned(),
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            connection_epoch: 1,
+            priority: "data".to_owned(),
+            payload_json: "{\"v\":3,\"type\":\"data_delta\"}".to_owned(),
+            created_at_utc_msc: 1_700_000_000_000,
+        };
+        let trade = NewOutboxRecord {
+            message_id: "result_01JTEST01".to_owned(),
+            message_type: "command_result".to_owned(),
+            priority: "trade".to_owned(),
+            payload_json: "{\"v\":3,\"type\":\"command_result\"}".to_owned(),
+            ..data.clone()
+        };
+        assert!(store.enqueue(&data).expect("enqueue data"));
+        assert!(store.enqueue(&trade).expect("enqueue trade"));
+        assert!(!store.enqueue(&trade).expect("duplicate is idempotent"));
+
+        let ready = store
+            .ready_for_terminals(1_700_000_000_001, None, 10)
+            .expect("ready");
+        assert_eq!(
+            ready
+                .iter()
+                .map(|record| record.message_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["result_01JTEST01", "data_01JTEST0001"]
+        );
+        assert!(
+            store
+                .record_attempt("result_01JTEST01", 0, 1_700_000_002_000)
+                .expect("attempt")
+        );
+        let ready = store
+            .ready_for_terminals(1_700_000_000_001, None, 10)
+            .expect("deferred ready");
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].message_id, "data_01JTEST0001");
+        assert!(
+            !store
+                .acknowledge("data_01JTEST0001", "gap")
+                .expect("gap retained")
+        );
+        assert!(
+            store
+                .acknowledge("data_01JTEST0001", "applied")
+                .expect("applied removed")
+        );
+        assert!(
+            store
+                .acknowledge("result_01JTEST01", "duplicate")
+                .expect("duplicate removed")
+        );
+        assert!(
+            store
+                .ready_for_terminals(1_700_000_100_000, None, 10)
+                .expect("empty")
+                .is_empty()
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove outbox fixture");
     }
 
     fn extract_csharp_create_table_columns<'a>(source: &'a str, table: &str) -> Vec<&'a str> {

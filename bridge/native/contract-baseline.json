@@ -61,6 +61,24 @@
     "retry_after_counter_cap": true,
     "kill_process_tree_on_owner_exit": true
   },
+  "server_transport_contract": {
+    "protocol_version": 3,
+    "websocket_path": "/aurum-api/bridge/v3/ws",
+    "hello_timeout_seconds": 10,
+    "heartbeat_interval_seconds": 10,
+    "outbox_poll_interval_milliseconds": 200,
+    "maximum_message_bytes": 4194304,
+    "trade_queue_capacity": 256,
+    "data_queue_capacity": 2048,
+    "reconnect_delays_seconds": [1, 2, 4, 8, 10],
+    "outbox_retry_delays_seconds": [2, 4, 8, 16, 30],
+    "control_transport": "https-except-loopback-http",
+    "realtime_transport": "configured-wss-or-ws-without-silent-downgrade",
+    "tls_backend": "rustls",
+    "native_tls_enabled": false,
+    "openssl_runtime_required": false,
+    "binary_websocket_messages_accepted": false
+  },
   "sqlite_contract": {
     "file_name": "bridge.db",
     "journal_mode": "wal",
