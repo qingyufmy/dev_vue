@@ -6,9 +6,10 @@ use bridge_foundation::{
 };
 use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeServer, LocalControlResponse,
-    LocalControlResult, UiStateStore,
+    LocalControlResult, UiStateSnapshot, UiStateStore, UiTerminalCandidate,
 };
 use bridge_observability::{BridgeLogger, LoggerConfig};
+use bridge_preferences::{BridgePreferencesStore, BridgeUserPreferences};
 use bridge_runtime_win::{
     InstanceAcquireResult, InstanceSignal, SingleInstanceGuard, default_lock_directory,
 };
@@ -27,6 +28,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -34,6 +36,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 enum ProfileRuntimeTrigger {
     Completed(Result<(), liangjian_bridge_core::CoreBootstrapError>),
     BindingChanged,
+    PreferenceChanged,
     BindingWatchFailed(liangjian_bridge_core::CoreBootstrapError),
     Stopped,
 }
@@ -43,6 +46,26 @@ struct ProfileLifecycleContext<'a> {
     root_data_directory: &'a std::path::Path,
     profile_id: &'a str,
     logger: &'a BridgeLogger,
+}
+
+struct LocalControlContext {
+    ui_state: UiStateStore,
+    credential_store: CredentialStore,
+    preferences_store: BridgePreferencesStore,
+    preference_change_sender: watch::Sender<u64>,
+    application_directory: PathBuf,
+    root_data_directory: PathBuf,
+    stop: SessionCancellation,
+    logger: BridgeLogger,
+}
+
+struct InactiveStatus<'a> {
+    status_path: &'a std::path::Path,
+    profile_id: &'a str,
+    phase: &'a str,
+    server_state: &'a str,
+    error_code: Option<&'a str>,
+    preferences: Option<&'a BridgeUserPreferences>,
 }
 
 fn main() {
@@ -156,15 +179,22 @@ async fn run_connected_profile(
     let ui_state = UiStateStore::new(initial_runtime_status.to_ui_state(1)?)?;
     let local_control_server = LocalControlPipeServer::bind(&profile_id)?;
     let credential_store = CredentialStore::new(&profile_paths.credential_path)?;
+    let preferences_store =
+        BridgePreferencesStore::new(profile_paths.data_directory.join("preferences.json"))?;
+    let (preference_change_sender, preference_change_receiver) = watch::channel(0_u64);
     let control_stop = stop.clone();
     let control_task = tokio::spawn(run_local_control_server(
         local_control_server,
-        ui_state.clone(),
-        credential_store,
-        application_directory.clone(),
-        root_data_directory.clone(),
-        control_stop,
-        logger.clone(),
+        LocalControlContext {
+            ui_state: ui_state.clone(),
+            credential_store,
+            preferences_store: preferences_store.clone(),
+            preference_change_sender,
+            application_directory: application_directory.clone(),
+            root_data_directory: root_data_directory.clone(),
+            stop: control_stop,
+            logger: logger.clone(),
+        },
     ));
     let signal_stop = stop.clone();
     let signal_waiter = tokio::task::spawn_blocking(move || {
@@ -193,6 +223,8 @@ async fn run_connected_profile(
         expected_terminal_instance_ids,
         stop.clone(),
         ui_state.clone(),
+        preferences_store.clone(),
+        preference_change_receiver,
     )
     .await;
     stop.cancel();
@@ -203,16 +235,20 @@ async fn run_connected_profile(
         .await
         .map_err(|_| "bridge_instance_wait_failed")??;
     let status_path = profile_paths.runtime_status_path;
+    let final_preferences = preferences_store.load();
     match &profile_result {
         Ok(()) => {
             publish_inactive_status(
                 &logger,
-                &status_path,
-                &profile_id,
-                "stopped",
-                "stopped",
-                None,
                 &ui_state,
+                InactiveStatus {
+                    status_path: &status_path,
+                    profile_id: &profile_id,
+                    phase: "stopped",
+                    server_state: "stopped",
+                    error_code: None,
+                    preferences: Some(&final_preferences),
+                },
             );
             logger.info(
                 "native_runtime_stopped",
@@ -223,12 +259,15 @@ async fn run_connected_profile(
             let error_code = stable_runtime_error_code(&error.to_string());
             publish_inactive_status(
                 &logger,
-                &status_path,
-                &profile_id,
-                "degraded",
-                "stopped",
-                Some(&error_code),
                 &ui_state,
+                InactiveStatus {
+                    status_path: &status_path,
+                    profile_id: &profile_id,
+                    phase: "degraded",
+                    server_state: "stopped",
+                    error_code: Some(&error_code),
+                    preferences: Some(&final_preferences),
+                },
             );
             logger.error("native_runtime_failed", Some(&error_code));
         }
@@ -238,13 +277,18 @@ async fn run_connected_profile(
 
 async fn run_local_control_server(
     mut server: LocalControlPipeServer,
-    ui_state: UiStateStore,
-    credential_store: CredentialStore,
-    application_directory: PathBuf,
-    root_data_directory: PathBuf,
-    stop: SessionCancellation,
-    logger: BridgeLogger,
+    context: LocalControlContext,
 ) {
+    let LocalControlContext {
+        ui_state,
+        credential_store,
+        preferences_store,
+        preference_change_sender,
+        application_directory,
+        root_data_directory,
+        stop,
+        logger,
+    } = context;
     logger.info(
         "native_local_control_started",
         Some(&format!("profile={}", server.endpoint().profile_id())),
@@ -307,6 +351,49 @@ async fn run_local_control_server(
                         code: error.code().to_owned(),
                     },
                 },
+                LocalControlAction::SelectPlatform { platform } => {
+                    match preferences_store.save_platform(&platform) {
+                        Ok(()) => {
+                            signal_preference_change(&preference_change_sender);
+                            LocalControlResult::Accepted
+                        }
+                        Err(error) => LocalControlResult::Rejected {
+                            code: error.code().to_owned(),
+                        },
+                    }
+                }
+                LocalControlAction::SelectTerminal {
+                    terminal_instance_id,
+                } => {
+                    let state = ui_state.snapshot();
+                    match state.and_then(|state| {
+                        let platform = state
+                            .selected_platform
+                            .ok_or("bridge_terminal_selection_platform_missing")?;
+                        let valid = state.terminal_candidates.iter().any(|candidate| {
+                            candidate.terminal_instance_id == terminal_instance_id
+                                && candidate.platform == platform
+                        });
+                        if !valid {
+                            return Err("bridge_terminal_selection_invalid");
+                        }
+                        preferences_store
+                            .save_terminal(&platform, &terminal_instance_id)
+                            .map_err(|error| error.code())
+                    }) {
+                        Ok(()) => {
+                            signal_preference_change(&preference_change_sender);
+                            LocalControlResult::Accepted
+                        }
+                        Err(code) => LocalControlResult::Rejected {
+                            code: code.to_owned(),
+                        },
+                    }
+                }
+                LocalControlAction::Redetect => {
+                    signal_preference_change(&preference_change_sender);
+                    LocalControlResult::Accepted
+                }
                 LocalControlAction::BridgeExit => LocalControlResult::Accepted,
                 _ => LocalControlResult::Rejected {
                     code: "bridge_local_control_action_unavailable".to_owned(),
@@ -339,6 +426,8 @@ async fn run_profile_lifecycle(
     expected_terminal_instance_ids: Vec<String>,
     stop: SessionCancellation,
     ui_state: UiStateStore,
+    preferences_store: BridgePreferencesStore,
+    mut preference_change_receiver: watch::Receiver<u64>,
 ) -> Result<(), Box<dyn Error>> {
     let ProfileLifecycleContext {
         application_directory,
@@ -347,8 +436,9 @@ async fn run_profile_lifecycle(
         logger,
     } = context;
     loop {
-        let bootstrap =
+        let mut bootstrap =
             NativeProfileBootstrap::load(application_directory, root_data_directory, profile_id)?;
+        let preferences = preferences_store.load();
         let status_path = bootstrap.paths.runtime_status_path.clone();
         logger.info(
             "native_runtime_profile_loaded",
@@ -362,15 +452,83 @@ async fn run_profile_lifecycle(
                 bootstrap.mt4_bindings.len()
             )),
         );
+        let platform = match preferences.platform.as_deref() {
+            Some(platform) => platform,
+            None => {
+                let candidates = bootstrap_terminal_candidates(&bootstrap, None);
+                publish_selection_ui_state(
+                    logger,
+                    &ui_state,
+                    profile_id,
+                    &preferences,
+                    "platform_selection_required",
+                    None,
+                    candidates,
+                );
+                if !wait_for_preference_change(&mut preference_change_receiver, &stop).await? {
+                    return Ok(());
+                }
+                continue;
+            }
+        };
+        let candidates = bootstrap_terminal_candidates(&bootstrap, Some(platform));
+        if candidates.is_empty() {
+            publish_selection_ui_state(
+                logger,
+                &ui_state,
+                profile_id,
+                &preferences,
+                "terminal_not_found",
+                Some(if platform == "mt4" {
+                    "mt4_terminal_not_found"
+                } else {
+                    "mt5_terminal_not_found"
+                }),
+                candidates,
+            );
+            if !wait_for_preference_change(&mut preference_change_receiver, &stop).await? {
+                return Ok(());
+            }
+            continue;
+        }
+        let preferred_terminal = preferences.selected_terminal_instance_id();
+        let selected_terminal = if candidates.len() == 1 {
+            Some(candidates[0].terminal_instance_id.as_str())
+        } else {
+            preferred_terminal.filter(|preferred| {
+                candidates
+                    .iter()
+                    .any(|candidate| candidate.terminal_instance_id == *preferred)
+            })
+        };
+        let Some(selected_terminal) = selected_terminal else {
+            publish_selection_ui_state(
+                logger,
+                &ui_state,
+                profile_id,
+                &preferences,
+                "terminal_selection_required",
+                None,
+                candidates,
+            );
+            if !wait_for_preference_change(&mut preference_change_receiver, &stop).await? {
+                return Ok(());
+            }
+            continue;
+        };
+        retain_selected_terminal(&mut bootstrap, platform, selected_terminal);
         if bootstrap.credential_state == CredentialState::Missing {
             publish_inactive_status(
                 logger,
-                &status_path,
-                profile_id,
-                "pairing_required",
-                "pairing_required",
-                None,
                 &ui_state,
+                InactiveStatus {
+                    status_path: &status_path,
+                    profile_id,
+                    phase: "pairing_required",
+                    server_state: "pairing_required",
+                    error_code: None,
+                    preferences: Some(&preferences),
+                },
             );
             logger.info("native_runtime_pairing_required", None);
             let credentials = ProfileCredentialSource::new(bootstrap.credential_store)?;
@@ -384,12 +542,15 @@ async fn run_profile_lifecycle(
                     _ = tokio::time::sleep(Duration::from_secs(5)) => {
                         publish_inactive_status(
                             logger,
-                            &status_path,
-                            profile_id,
-                            "pairing_required",
-                            "pairing_required",
-                            None,
                             &ui_state,
+                            InactiveStatus {
+                                status_path: &status_path,
+                                profile_id,
+                                phase: "pairing_required",
+                                server_state: "pairing_required",
+                                error_code: None,
+                                preferences: Some(&preferences),
+                            },
                         );
                     }
                 }
@@ -420,12 +581,15 @@ async fn run_profile_lifecycle(
         let binding_source = ProfileTerminalBindingSource::new(Arc::clone(&bootstrap.store))?;
         publish_inactive_status(
             logger,
-            &status_path,
-            profile_id,
-            "connecting",
-            "connecting",
-            None,
             &ui_state,
+            InactiveStatus {
+                status_path: &status_path,
+                profile_id,
+                phase: "connecting",
+                server_state: "connecting",
+                error_code: None,
+                preferences: Some(&preferences),
+            },
         );
         let clock: Arc<dyn Fn() -> i64 + Send + Sync> = Arc::new(now_utc_msc);
         let connected =
@@ -457,6 +621,7 @@ async fn run_profile_lifecycle(
             profile_id.to_owned(),
             status_stop.clone(),
             ui_state.clone(),
+            preferences_store.clone(),
             logger.clone(),
         ));
         let runtime = connected.run(runtime_stop.clone());
@@ -467,12 +632,17 @@ async fn run_profile_lifecycle(
                 Ok(()) => ProfileRuntimeTrigger::BindingChanged,
                 Err(error) => ProfileRuntimeTrigger::BindingWatchFailed(error),
             },
+            changed = preference_change_receiver.changed() => match changed {
+                Ok(()) => ProfileRuntimeTrigger::PreferenceChanged,
+                Err(_) => ProfileRuntimeTrigger::Stopped,
+            },
             _ = stop.cancelled() => ProfileRuntimeTrigger::Stopped,
         };
         runtime_stop.cancel();
         let (runtime_result, reload_bindings, binding_watch_error) = match trigger {
             ProfileRuntimeTrigger::Completed(result) => (result, false, None),
             ProfileRuntimeTrigger::BindingChanged => (runtime.await, true, None),
+            ProfileRuntimeTrigger::PreferenceChanged => (runtime.await, true, None),
             ProfileRuntimeTrigger::BindingWatchFailed(error) => (runtime.await, false, Some(error)),
             ProfileRuntimeTrigger::Stopped => (runtime.await, false, None),
         };
@@ -480,7 +650,13 @@ async fn run_profile_lifecycle(
             Ok(snapshot) => publish_runtime_status_or_warn(logger, &status_path, &snapshot),
             Err(error) => logger.warning("native_runtime_status_failed", Some(error.code())),
         }
-        publish_active_ui_state_or_warn(logger, &runtime_status, profile_id, &ui_state);
+        publish_active_ui_state_or_warn(
+            logger,
+            &runtime_status,
+            profile_id,
+            &ui_state,
+            &preferences_store,
+        );
         status_stop.cancel();
         status_monitor
             .await
@@ -502,12 +678,133 @@ async fn run_profile_lifecycle(
     }
 }
 
+fn signal_preference_change(sender: &watch::Sender<u64>) {
+    sender.send_modify(|revision| *revision = revision.saturating_add(1));
+}
+
+async fn wait_for_preference_change(
+    receiver: &mut watch::Receiver<u64>,
+    stop: &SessionCancellation,
+) -> Result<bool, &'static str> {
+    tokio::select! {
+        changed = receiver.changed() => changed
+            .map(|()| true)
+            .map_err(|_| "bridge_preference_watch_failed"),
+        _ = stop.cancelled() => Ok(false),
+    }
+}
+
+fn bootstrap_terminal_candidates(
+    bootstrap: &NativeProfileBootstrap,
+    platform: Option<&str>,
+) -> Vec<UiTerminalCandidate> {
+    let mut candidates = bootstrap
+        .mt5_sessions
+        .iter()
+        .map(|session| &session.binding)
+        .chain(bootstrap.mt4_bindings.iter())
+        .filter(|binding| platform.is_none_or(|value| binding.platform == value))
+        .map(|binding| UiTerminalCandidate {
+            terminal_instance_id: binding.terminal_instance_id.clone(),
+            platform: binding.platform.clone(),
+            broker_server: binding.account_ref.broker_server.clone(),
+            login: binding.account_ref.login.clone(),
+            display_name: Some(format!(
+                "{} · {}",
+                binding.account_ref.login, binding.account_ref.broker_server
+            )),
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.platform
+            .cmp(&right.platform)
+            .then_with(|| left.login.cmp(&right.login))
+            .then_with(|| left.broker_server.cmp(&right.broker_server))
+            .then_with(|| left.terminal_instance_id.cmp(&right.terminal_instance_id))
+    });
+    candidates
+}
+
+fn retain_selected_terminal(
+    bootstrap: &mut NativeProfileBootstrap,
+    platform: &str,
+    terminal_instance_id: &str,
+) {
+    if platform == "mt4" {
+        bootstrap.mt5_sessions.clear();
+        bootstrap
+            .mt4_bindings
+            .retain(|binding| binding.terminal_instance_id == terminal_instance_id);
+    } else {
+        bootstrap.mt4_bindings.clear();
+        bootstrap
+            .mt5_sessions
+            .retain(|session| session.binding.terminal_instance_id == terminal_instance_id);
+    }
+}
+
+fn apply_preferences_to_ui_state(state: &mut UiStateSnapshot, preferences: &BridgeUserPreferences) {
+    state.autostart_enabled = preferences.auto_start_enabled;
+    if state.selected_platform.is_none() {
+        state.selected_platform = preferences.platform.clone();
+    }
+    if state.selected_terminal_instance_id.is_none() {
+        state.selected_terminal_instance_id = preferences
+            .selected_terminal_instance_id()
+            .map(str::to_owned);
+    }
+}
+
+fn publish_selection_ui_state(
+    logger: &BridgeLogger,
+    ui_state: &UiStateStore,
+    profile_id: &str,
+    preferences: &BridgeUserPreferences,
+    phase: &str,
+    detail_code: Option<&str>,
+    terminal_candidates: Vec<UiTerminalCandidate>,
+) {
+    let selected_terminal_instance_id = preferences
+        .selected_terminal_instance_id()
+        .filter(|selected| {
+            terminal_candidates
+                .iter()
+                .any(|candidate| candidate.terminal_instance_id == *selected)
+        })
+        .map(str::to_owned);
+    let state = UiStateSnapshot {
+        schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+        revision: 1,
+        profile_id: profile_id.to_owned(),
+        observed_at_utc_msc: now_utc_msc(),
+        phase: phase.to_owned(),
+        detail_code: detail_code.map(str::to_owned),
+        selected_platform: preferences.platform.clone(),
+        selected_terminal_instance_id,
+        terminal_candidates,
+        terminals: Vec::new(),
+        server_connected: false,
+        last_data_sync_utc_msc: None,
+        bridge_version: VERSION.to_owned(),
+        can_manage_observer_sources: false,
+        is_administrator: false,
+        observer_profiles: Vec::new(),
+        update_notice: None,
+        autostart_enabled: preferences.auto_start_enabled,
+        custom_endpoint_active: false,
+    };
+    if let Err(error_code) = ui_state.publish(state) {
+        logger.warning("native_ui_state_publish_failed", Some(error_code));
+    }
+}
+
 async fn monitor_runtime_status(
     handle: NativeRuntimeStatusHandle,
     status_path: PathBuf,
     profile_id: String,
     stop: SessionCancellation,
     ui_state: UiStateStore,
+    preferences_store: BridgePreferencesStore,
     logger: BridgeLogger,
 ) {
     let mut last_fingerprint = None;
@@ -528,7 +825,13 @@ async fn monitor_runtime_status(
         let changed = last_fingerprint.as_ref() != Some(&fingerprint);
         if changed || last_publish.elapsed() >= Duration::from_secs(5) {
             publish_runtime_status_or_warn(&logger, &status_path, &snapshot);
-            publish_active_ui_state_or_warn(&logger, &handle, &profile_id, &ui_state);
+            publish_active_ui_state_or_warn(
+                &logger,
+                &handle,
+                &profile_id,
+                &ui_state,
+                &preferences_store,
+            );
             last_publish = Instant::now();
         }
         if changed {
@@ -544,13 +847,17 @@ async fn monitor_runtime_status(
 
 fn publish_inactive_status(
     logger: &BridgeLogger,
-    status_path: &std::path::Path,
-    profile_id: &str,
-    phase: &str,
-    server_state: &str,
-    error_code: Option<&str>,
     ui_state: &UiStateStore,
+    status: InactiveStatus<'_>,
 ) {
+    let InactiveStatus {
+        status_path,
+        profile_id,
+        phase,
+        server_state,
+        error_code,
+        preferences,
+    } = status;
     let snapshot = match NativeRuntimeStatusSnapshot::inactive(
         profile_id,
         VERSION,
@@ -567,7 +874,10 @@ fn publish_inactive_status(
     };
     publish_runtime_status_or_warn(logger, status_path, &snapshot);
     match snapshot.to_ui_state(1) {
-        Ok(state) => {
+        Ok(mut state) => {
+            if let Some(preferences) = preferences {
+                apply_preferences_to_ui_state(&mut state, preferences);
+            }
             if let Err(error_code) = ui_state.publish(state) {
                 logger.warning("native_ui_state_publish_failed", Some(error_code));
             }
@@ -601,9 +911,11 @@ fn publish_active_ui_state_or_warn(
     handle: &NativeRuntimeStatusHandle,
     profile_id: &str,
     ui_state: &UiStateStore,
+    preferences_store: &BridgePreferencesStore,
 ) {
     match handle.ui_snapshot(profile_id, VERSION, now_utc_msc(), 1) {
-        Ok(state) => {
+        Ok(mut state) => {
+            apply_preferences_to_ui_state(&mut state, &preferences_store.load());
             if let Err(error_code) = ui_state.publish(state) {
                 logger.warning("native_ui_state_publish_failed", Some(error_code));
             }

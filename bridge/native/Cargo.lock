@@ -125,6 +125,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-preferences"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "bridge-runtime-win"
 version = "3.0.0-alpha.1"
 dependencies = [
@@ -864,6 +873,7 @@ dependencies = [
  "bridge-local-control",
  "bridge-mt4",
  "bridge-observability",
+ "bridge-preferences",
  "bridge-runtime-win",
  "bridge-security-win",
  "bridge-store",

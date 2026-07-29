@@ -2,8 +2,9 @@ use bridge_contract::AccountRef;
 use bridge_foundation::{profile_instance_id, resolve_profile_paths};
 use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
-    LocalControlResult,
+    LocalControlResult, UiStateSnapshot,
 };
+use bridge_preferences::BridgePreferencesStore;
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
 use bridge_store::OutboxStore;
@@ -17,8 +18,31 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[test]
 fn missing_authorization_waits_without_a_browser_and_honors_shutdown() {
     let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("fixture root");
     let profile_id = unique_profile_id();
     let paths = resolve_profile_paths(&root, &profile_id).expect("profile paths");
+    let terminal_id = "mt4_0123456789abcdef01234567";
+    let terminal_path = root.join("mt4-terminal-data");
+    fs::write(&terminal_path, b"terminal fixture").expect("terminal fixture");
+    OutboxStore::open_or_create(&paths.database_path)
+        .expect("store")
+        .activate_terminal_binding(
+            terminal_id,
+            "mt4",
+            &terminal_path,
+            &AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            1_800_000_000_000,
+        )
+        .expect("terminal binding");
+    let preferences = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("preferences store");
+    preferences.save_platform("mt4").expect("save platform");
+    preferences
+        .save_terminal("mt4", terminal_id)
+        .expect("save terminal");
     let mut child = spawn_core(&root, &profile_id);
     wait_for_log_event(
         &mut child,
@@ -85,7 +109,118 @@ fn missing_authorization_waits_without_a_browser_and_honors_shutdown() {
 }
 
 #[test]
-fn authorized_profile_without_a_terminal_fails_closed() {
+fn platform_selection_action_persists_dotnet_preferences_and_restarts_the_cycle() {
+    let root = unique_test_directory();
+    let profile_id = unique_profile_id();
+    let paths = resolve_profile_paths(&root, &profile_id).expect("profile paths");
+    let terminal_id = "mt4_89abcdef0123456701234567";
+    let terminal_path = root.join("mt4-terminal-data");
+    fs::create_dir_all(&terminal_path).expect("terminal fixture");
+    OutboxStore::open_or_create(&paths.database_path)
+        .expect("store")
+        .activate_terminal_binding(
+            terminal_id,
+            "mt4",
+            &terminal_path,
+            &AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            1_800_000_000_000,
+        )
+        .expect("terminal binding");
+    let child = spawn_core(&root, &profile_id);
+    let initial = wait_for_ui_phase(&profile_id, "platform_selection_required");
+    assert_eq!(initial.selected_platform, None);
+    let selected = local_control_request(
+        &profile_id,
+        "request-select-platform",
+        LocalControlAction::SelectPlatform {
+            platform: "mt4".to_owned(),
+        },
+    );
+    assert_eq!(selected, LocalControlResult::Accepted);
+    let pairing = wait_for_ui_phase(&profile_id, "pairing_required");
+    assert_eq!(pairing.selected_platform.as_deref(), Some("mt4"));
+    assert_eq!(
+        BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+            .expect("preferences store")
+            .load()
+            .platform
+            .as_deref(),
+        Some("mt4")
+    );
+    SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
+        .expect("request shutdown");
+    let output = child.wait_with_output().expect("wait native core");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    fs::remove_dir_all(root).expect("remove platform selection fixture");
+}
+
+#[test]
+fn terminal_selection_action_persists_dotnet_preferences_and_restarts_the_cycle() {
+    let root = unique_test_directory();
+    let profile_id = unique_profile_id();
+    let paths = resolve_profile_paths(&root, &profile_id).expect("profile paths");
+    let first_terminal_id = "mt4_111111111111111111111111";
+    let selected_terminal_id = "mt4_222222222222222222222222";
+    let store = OutboxStore::open_or_create(&paths.database_path).expect("store");
+    for (terminal_id, login) in [
+        (first_terminal_id, "111111"),
+        (selected_terminal_id, "222222"),
+    ] {
+        let terminal_path = root.join(format!("mt4-terminal-{login}"));
+        fs::create_dir_all(&terminal_path).expect("terminal fixture");
+        store
+            .activate_terminal_binding(
+                terminal_id,
+                "mt4",
+                &terminal_path,
+                &AccountRef {
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: login.to_owned(),
+                },
+                1_800_000_000_000,
+            )
+            .expect("terminal binding");
+    }
+    drop(store);
+    let preferences = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("preferences store");
+    preferences.save_platform("mt4").expect("save platform");
+    let child = spawn_core(&root, &profile_id);
+    let selecting = wait_for_ui_phase(&profile_id, "terminal_selection_required");
+    assert_eq!(selecting.selected_platform.as_deref(), Some("mt4"));
+    assert_eq!(selecting.terminal_candidates.len(), 2);
+    assert_eq!(selecting.selected_terminal_instance_id, None);
+    let selected = local_control_request(
+        &profile_id,
+        "request-select-terminal",
+        LocalControlAction::SelectTerminal {
+            terminal_instance_id: selected_terminal_id.to_owned(),
+        },
+    );
+    assert_eq!(selected, LocalControlResult::Accepted);
+    let pairing = wait_for_ui_phase(&profile_id, "pairing_required");
+    assert_eq!(
+        pairing.selected_terminal_instance_id.as_deref(),
+        Some(selected_terminal_id)
+    );
+    assert_eq!(
+        preferences.load().mt4_terminal_instance_id.as_deref(),
+        Some(selected_terminal_id)
+    );
+    SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
+        .expect("request shutdown");
+    let output = child.wait_with_output().expect("wait native core");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    fs::remove_dir_all(root).expect("remove terminal selection fixture");
+}
+
+#[test]
+fn authorized_profile_without_a_terminal_waits_for_redetection() {
     let root = unique_test_directory();
     let profile_id = unique_profile_id();
     let paths = resolve_profile_paths(&root, &profile_id).expect("profile paths");
@@ -96,35 +231,49 @@ fn authorized_profile_without_a_terminal_fails_closed() {
             expires_at_utc_msc: 1_900_000_000_000,
         })
         .expect("credential");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_liangjian-bridge-core"))
-        .args(["--profile", &profile_id, "--background"])
-        .env("AURUM_BRIDGE_DATA_DIR", &root)
-        .env("LOCALAPPDATA", root.join("local"))
-        .output()
-        .expect("run native core");
-
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(
-        String::from_utf8(output.stderr)
-            .expect("native stderr")
-            .trim(),
-        "bridge_terminals_invalid"
-    );
-    assert_eq!(
-        log_events(&paths.data_directory),
-        vec![
-            "native_runtime_foundation_started",
-            "native_runtime_profile_loaded",
-            "native_runtime_failed",
-        ]
-    );
-    let status: Value = serde_json::from_slice(
-        &fs::read(&paths.runtime_status_path).expect("failed runtime status"),
-    )
-    .expect("failed runtime json");
-    assert_eq!(status["phase"], "degraded");
-    assert_eq!(status["server_error_code"], "bridge_terminals_invalid");
+    BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("preferences store")
+        .save_platform("mt5")
+        .expect("save platform");
+    let child = spawn_core(&root, &profile_id);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let state = tokio::runtime::Runtime::new()
+            .expect("local control runtime")
+            .block_on(async {
+                let mut client =
+                    LocalControlPipeClient::connect(&profile_id, Duration::from_millis(250))
+                        .await
+                        .ok()?;
+                client
+                    .request(&LocalControlRequest {
+                        schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                        request_id: "request-terminal-not-found".to_owned(),
+                        profile_id: profile_id.clone(),
+                        action: LocalControlAction::GetState,
+                    })
+                    .await
+                    .ok()
+            });
+        if let Some(response) = state
+            && let LocalControlResult::State { state } = response.result
+            && state.phase == "terminal_not_found"
+        {
+            assert_eq!(state.selected_platform.as_deref(), Some("mt5"));
+            assert_eq!(state.detail_code.as_deref(), Some("mt5_terminal_not_found"));
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "terminal-not-found state timed out"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+    SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
+        .expect("request shutdown");
+    let output = child.wait_with_output().expect("wait native core");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
     assert!(
         !paths
             .data_directory
@@ -249,6 +398,65 @@ fn spawn_core(root: &Path, profile_id: &str) -> Child {
         .expect("spawn native core")
 }
 
+fn wait_for_ui_phase(profile_id: &str, phase: &str) -> UiStateSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(LocalControlResult::State { state }) = try_local_control_request(
+            profile_id,
+            &format!("request-wait-{phase}"),
+            LocalControlAction::GetState,
+        ) && state.phase == phase
+        {
+            return *state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for UI phase {phase}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn local_control_request(
+    profile_id: &str,
+    request_id: &str,
+    action: LocalControlAction,
+) -> LocalControlResult {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(result) = try_local_control_request(profile_id, request_id, action.clone()) {
+            return result;
+        }
+        assert!(Instant::now() < deadline, "local control request timed out");
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn try_local_control_request(
+    profile_id: &str,
+    request_id: &str,
+    action: LocalControlAction,
+) -> Option<LocalControlResult> {
+    tokio::runtime::Runtime::new()
+        .expect("local control runtime")
+        .block_on(async {
+            let mut client =
+                LocalControlPipeClient::connect(profile_id, Duration::from_millis(250))
+                    .await
+                    .ok()?;
+            client
+                .request(&LocalControlRequest {
+                    schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                    request_id: request_id.to_owned(),
+                    profile_id: profile_id.to_owned(),
+                    action,
+                })
+                .await
+                .ok()
+                .map(|response| response.result)
+        })
+}
+
 fn prepare_authorized_mt5_profile(
     root: &Path,
     profile_id: &str,
@@ -266,7 +474,7 @@ fn prepare_authorized_mt5_profile(
     OutboxStore::open_or_create(&paths.database_path)
         .expect("store")
         .activate_terminal_binding(
-            "mt5_endpoint_fixture",
+            "mt5_89abcdef0123456701234567",
             "mt5",
             &terminal_path,
             &AccountRef {
@@ -276,6 +484,12 @@ fn prepare_authorized_mt5_profile(
             1_800_000_000_000,
         )
         .expect("terminal binding");
+    let preferences = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("preferences store");
+    preferences.save_platform("mt5").expect("save platform");
+    preferences
+        .save_terminal("mt5", "mt5_89abcdef0123456701234567")
+        .expect("save terminal");
     paths
 }
 

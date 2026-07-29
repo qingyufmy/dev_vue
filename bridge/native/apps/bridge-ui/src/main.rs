@@ -10,6 +10,7 @@ use bridge_ui_model::{
     build_main_window_view, resolve_account_column_count,
 };
 use std::collections::BTreeSet;
+use std::collections::VecDeque;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,16 +39,17 @@ use windows_sys::Win32::UI::Shell::{
     ShellExecuteW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, BS_OWNERDRAW, CBS_DROPDOWNLIST, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar, GWLP_USERDATA, GetClientRect,
-    GetMessageW, GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION, LR_DEFAULTCOLOR,
-    LoadCursorW, LoadIconW, MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW, RegisterClassExW,
-    SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-    TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
-    WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
-    WM_RBUTTONUP, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    AdjustWindowRectEx, BS_OWNERDRAW, CBN_SELCHANGE, CBS_DROPDOWNLIST, CREATESTRUCTW, CS_HREDRAW,
+    CS_VREDRAW, CW_USEDEFAULT, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
+    DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar, GWLP_USERDATA,
+    GetClientRect, GetMessageW, GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION,
+    LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW,
+    RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND,
+    WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_NCCREATE,
+    WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
+    WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -85,8 +87,9 @@ enum UiMessage {
 }
 
 struct SharedInbox {
-    message: Mutex<Option<UiMessage>>,
+    messages: Mutex<VecDeque<UiMessage>>,
     poll_running: AtomicBool,
+    action_running: AtomicBool,
     sequence: AtomicU64,
 }
 
@@ -122,6 +125,7 @@ struct AppState {
     brand_icon: HICON,
     brand_icon_small: HICON,
     tray_added: bool,
+    terminal_choices_fingerprint: String,
 }
 
 fn main() {
@@ -145,8 +149,9 @@ fn main() {
             state,
             view,
             inbox: Arc::new(SharedInbox {
-                message: Mutex::new(None),
+                messages: Mutex::new(VecDeque::new()),
                 poll_running: AtomicBool::new(false),
+                action_running: AtomicBool::new(false),
                 sequence: AtomicU64::new(1),
             }),
             fonts: create_fonts(),
@@ -154,6 +159,7 @@ fn main() {
             brand_icon: null_mut(),
             brand_icon_small: null_mut(),
             tray_added: false,
+            terminal_choices_fingerprint: String::new(),
         });
     }
 }
@@ -403,7 +409,14 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_COMMAND => {
-            unsafe { handle_command(hwnd, state, (wparam & 0xffff) as i32) };
+            unsafe {
+                handle_command(
+                    hwnd,
+                    state,
+                    (wparam & 0xffff) as i32,
+                    ((wparam >> 16) & 0xffff) as u32,
+                )
+            };
             0
         }
         WM_DRAWITEM => unsafe { draw_button(lparam) },
@@ -494,11 +507,11 @@ unsafe fn create_controls(hwnd: HWND, state: &mut AppState) {
         }
     }
     unsafe {
-        EnableWindow(state.controls.platform, 0);
+        EnableWindow(state.controls.platform, 1);
         EnableWindow(state.controls.terminal, 0);
         EnableWindow(state.controls.observer, 0);
         EnableWindow(state.controls.mt4_expert, 0);
-        EnableWindow(state.controls.detect, 0);
+        EnableWindow(state.controls.detect, 1);
         EnableWindow(state.controls.logs, 0);
         EnableWindow(state.controls.settings, 0);
         EnableWindow(state.controls.update, 0);
@@ -588,6 +601,12 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
             app.view.show_logout,
         );
     }
+    unsafe {
+        EnableWindow(
+            app.controls.terminal,
+            i32::from(app.view.terminal_selector_visible),
+        );
+    }
     y += 52;
     unsafe {
         move_show(
@@ -636,19 +655,80 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
     unsafe { InvalidateRect(hwnd, null(), 1) };
 }
 
-fn sync_combo_selection(app: &AppState) {
+fn sync_combo_selection(app: &mut AppState) {
     let platform_index = match app.state.selected_platform.as_deref() {
         Some("mt5") => 0,
         Some("mt4") => 1,
         _ => -1,
     };
     unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+        let current = windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
             app.controls.platform,
-            windows_sys::Win32::UI::WindowsAndMessaging::CB_SETCURSEL,
-            platform_index as usize,
+            windows_sys::Win32::UI::WindowsAndMessaging::CB_GETCURSEL,
             0,
-        );
+            0,
+        ) as i32;
+        if current != platform_index {
+            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                app.controls.platform,
+                windows_sys::Win32::UI::WindowsAndMessaging::CB_SETCURSEL,
+                platform_index as usize,
+                0,
+            );
+        }
+    }
+    let fingerprint = app
+        .view
+        .terminal_choices
+        .iter()
+        .map(|choice| {
+            format!(
+                "{}\u{1f}{}",
+                choice.terminal_instance_id, choice.display_name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\u{1e}");
+    if fingerprint != app.terminal_choices_fingerprint {
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                app.controls.terminal,
+                windows_sys::Win32::UI::WindowsAndMessaging::CB_RESETCONTENT,
+                0,
+                0,
+            );
+        }
+        for choice in &app.view.terminal_choices {
+            send_combo_text(app.controls.terminal, &choice.display_name);
+        }
+        app.terminal_choices_fingerprint = fingerprint;
+    }
+    let selected_terminal_index = app
+        .view
+        .selected_terminal_instance_id
+        .as_deref()
+        .and_then(|selected| {
+            app.view
+                .terminal_choices
+                .iter()
+                .position(|choice| choice.terminal_instance_id == selected)
+        })
+        .map_or(-1, |index| index as i32);
+    unsafe {
+        let current = windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+            app.controls.terminal,
+            windows_sys::Win32::UI::WindowsAndMessaging::CB_GETCURSEL,
+            0,
+            0,
+        ) as i32;
+        if current != selected_terminal_index {
+            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                app.controls.terminal,
+                windows_sys::Win32::UI::WindowsAndMessaging::CB_SETCURSEL,
+                selected_terminal_index as usize,
+                0,
+            );
+        }
     }
 }
 
@@ -1065,8 +1145,58 @@ unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
     1
 }
 
-unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32) {
+unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: u32) {
     match id {
+        CONTROL_PLATFORM if notification == CBN_SELCHANGE => {
+            let selected = unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                    app.controls.platform,
+                    windows_sys::Win32::UI::WindowsAndMessaging::CB_GETCURSEL,
+                    0,
+                    0,
+                )
+            } as i32;
+            let platform = match selected {
+                0 => Some("mt5"),
+                1 => Some("mt4"),
+                _ => None,
+            };
+            if let Some(platform) = platform {
+                unsafe {
+                    begin_action(
+                        hwnd,
+                        app,
+                        LocalControlAction::SelectPlatform {
+                            platform: platform.to_owned(),
+                        },
+                    )
+                };
+            }
+        }
+        CONTROL_TERMINAL if notification == CBN_SELCHANGE => {
+            let selected = unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                    app.controls.terminal,
+                    windows_sys::Win32::UI::WindowsAndMessaging::CB_GETCURSEL,
+                    0,
+                    0,
+                )
+            } as i32;
+            if selected >= 0
+                && let Some(choice) = app.view.terminal_choices.get(selected as usize)
+            {
+                unsafe {
+                    begin_action(
+                        hwnd,
+                        app,
+                        LocalControlAction::SelectTerminal {
+                            terminal_instance_id: choice.terminal_instance_id.clone(),
+                        },
+                    )
+                };
+            }
+        }
+        CONTROL_DETECT => unsafe { begin_action(hwnd, app, LocalControlAction::Redetect) },
         CONTROL_PAIR => unsafe { begin_action(hwnd, app, LocalControlAction::Pair) },
         CONTROL_LOGOUT => unsafe { begin_action(hwnd, app, LocalControlAction::Logout) },
         CONTROL_EXIT | MENU_EXIT_COMMAND => unsafe {
@@ -1099,8 +1229,8 @@ unsafe fn begin_state_poll(hwnd: HWND, app: &AppState) {
             LocalControlResult::Rejected { code } => Err(code),
             _ => Err("bridge_local_control_response_invalid".to_owned()),
         });
-        if let Ok(mut slot) = inbox.message.lock() {
-            *slot = Some(UiMessage::State(result));
+        if let Ok(mut messages) = inbox.messages.lock() {
+            messages.push_back(UiMessage::State(result));
         }
         inbox.poll_running.store(false, Ordering::Release);
         unsafe { PostMessageW(hwnd_value as HWND, WM_STATE_READY, 0, 0) };
@@ -1108,14 +1238,18 @@ unsafe fn begin_state_poll(hwnd: HWND, app: &AppState) {
 }
 
 unsafe fn begin_action(hwnd: HWND, app: &AppState, action: LocalControlAction) {
+    if app.inbox.action_running.swap(true, Ordering::AcqRel) {
+        return;
+    }
     let profile_id = app.profile_id.clone();
     let inbox = Arc::clone(&app.inbox);
     let hwnd_value = hwnd as usize;
     std::thread::spawn(move || {
         let result = run_local_request(&profile_id, &inbox, action.clone(), Duration::from_secs(2));
-        if let Ok(mut slot) = inbox.message.lock() {
-            *slot = Some(UiMessage::Action { action, result });
+        if let Ok(mut messages) = inbox.messages.lock() {
+            messages.push_back(UiMessage::Action { action, result });
         }
+        inbox.action_running.store(false, Ordering::Release);
         unsafe { PostMessageW(hwnd_value as HWND, WM_ACTION_READY, 0, 0) };
     });
 }
@@ -1155,10 +1289,10 @@ fn run_local_request(
 unsafe fn receive_background_message(hwnd: HWND, app: &mut AppState) {
     let message = app
         .inbox
-        .message
+        .messages
         .lock()
         .ok()
-        .and_then(|mut slot| slot.take());
+        .and_then(|mut messages| messages.pop_front());
     match message {
         Some(UiMessage::State(Ok(state))) => {
             if let Ok(view) = build_main_window_view(&state, &BTreeSet::new(), format_local_time) {

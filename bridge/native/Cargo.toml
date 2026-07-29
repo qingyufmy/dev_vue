@@ -9,6 +9,7 @@ members = [
   "crates/bridge-local-control",
   "crates/bridge-mt4",
   "crates/bridge-observability",
+  "crates/bridge-preferences",
   "crates/bridge-runtime-win",
   "crates/bridge-security-win",
   "crates/bridge-store",

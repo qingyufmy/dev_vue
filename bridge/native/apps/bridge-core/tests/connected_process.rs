@@ -1,5 +1,6 @@
 use bridge_contract::{AccountRef, CommandMessage, HelloAcknowledgement, HelloMessage};
 use bridge_foundation::{profile_instance_id, resolve_profile_paths};
+use bridge_preferences::BridgePreferencesStore;
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
 use bridge_store::OutboxStore;
@@ -34,7 +35,7 @@ const RECOVERED_COMMAND_ID: &str = "command_01JRECOVER01";
 fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     let root = unique_test_directory();
     let profile_id = unique_profile_id();
-    let terminal_id = "mt5_connected_process";
+    let terminal_id = "mt5_aabbccddeeffaabbccddeeff";
     let mut server = LoopbackBridgeServer::start();
     let application = prepare_application(&root);
     let paths = prepare_profile(
@@ -1049,6 +1050,12 @@ fn prepare_profile(
             now_utc_msc(),
         )
         .expect("terminal binding");
+    let preferences = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("preferences store");
+    preferences.save_platform("mt5").expect("save platform");
+    preferences
+        .save_terminal("mt5", terminal_id)
+        .expect("save terminal");
     let now = now_utc_msc();
     let interrupted = CommandMessage {
         v: 3,

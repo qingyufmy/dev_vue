@@ -12,6 +12,7 @@ bridge-foundation = { path = "../../crates/bridge-foundation" }
 bridge-local-control = { path = "../../crates/bridge-local-control" }
 bridge-mt4 = { path = "../../crates/bridge-mt4" }
 bridge-observability = { path = "../../crates/bridge-observability" }
+bridge-preferences = { path = "../../crates/bridge-preferences" }
 bridge-runtime-win = { path = "../../crates/bridge-runtime-win" }
 bridge-security-win = { path = "../../crates/bridge-security-win" }
 bridge-store = { path = "../../crates/bridge-store" }
