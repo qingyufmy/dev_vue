@@ -17,7 +17,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-use super::{create_font, draw_border, draw_text, fill, rect, wide};
+use super::{create_point_font, draw_border, draw_text, fill, rect, scale, wide};
 
 const WINDOW_CLASS: &str = "LiangJianBridgePermissionTooltip";
 const TOOLTIP_WIDTH: i32 = 360;
@@ -30,6 +30,7 @@ struct TooltipState {
     permission: PermissionView,
     body_font: windows_sys::Win32::Graphics::Gdi::HFONT,
     bold_font: windows_sys::Win32::Graphics::Gdi::HFONT,
+    dpi: u32,
 }
 
 pub(super) unsafe fn show_or_update(
@@ -38,6 +39,7 @@ pub(super) unsafe fn show_or_update(
     permission: &PermissionView,
     badge_bounds: RECT,
     icon: HICON,
+    dpi: u32,
 ) -> Result<HWND, &'static str> {
     let hwnd = if !existing.is_null() && unsafe { IsWindow(existing) } != 0 {
         let pointer = unsafe { GetWindowLongPtrW(existing, GWLP_USERDATA) } as *mut TooltipState;
@@ -47,24 +49,27 @@ pub(super) unsafe fn show_or_update(
         unsafe { (*pointer).permission = permission.clone() };
         existing
     } else {
-        create_tooltip(owner, permission.clone(), icon)?
+        create_tooltip(owner, permission.clone(), icon, dpi)?
     };
-    let height = tooltip_height(permission);
+    let height = tooltip_height(permission, dpi);
+    let width = scale(TOOLTIP_WIDTH, dpi);
     let mut position = POINT {
         x: badge_bounds.left,
-        y: badge_bounds.bottom + 4,
+        y: badge_bounds.bottom + scale(4, dpi),
     };
     unsafe { ClientToScreen(owner, &mut position) };
     let screen_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
     let screen_height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-    position.x = position.x.min((screen_width - TOOLTIP_WIDTH - 8).max(0));
-    if position.y + height > screen_height - 8 {
+    position.x = position
+        .x
+        .min((screen_width - width - scale(8, dpi)).max(0));
+    if position.y + height > screen_height - scale(8, dpi) {
         let mut above = POINT {
             x: badge_bounds.left,
-            y: badge_bounds.top - height - 4,
+            y: badge_bounds.top - height - scale(4, dpi),
         };
         unsafe { ClientToScreen(owner, &mut above) };
-        position.y = above.y.max(8);
+        position.y = above.y.max(scale(8, dpi));
     }
     unsafe {
         SetWindowPos(
@@ -72,7 +77,7 @@ pub(super) unsafe fn show_or_update(
             -1_isize as HWND,
             position.x,
             position.y,
-            TOOLTIP_WIDTH,
+            width,
             height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
@@ -93,14 +98,16 @@ fn create_tooltip(
     owner: HWND,
     permission: PermissionView,
     icon: HICON,
+    dpi: u32,
 ) -> Result<HWND, &'static str> {
     let instance = unsafe { GetModuleHandleW(null()) };
     register_window_class(instance, icon)?;
-    let height = tooltip_height(&permission);
+    let height = tooltip_height(&permission, dpi);
     let state = Box::new(TooltipState {
         permission,
-        body_font: create_font(14, FW_NORMAL as i32),
-        bold_font: create_font(14, FW_BOLD as i32),
+        body_font: create_point_font(90, dpi, FW_NORMAL as i32),
+        bold_font: create_point_font(90, dpi, FW_BOLD as i32),
+        dpi,
     });
     let state_pointer = Box::into_raw(state);
     let class_name = wide(WINDOW_CLASS);
@@ -112,7 +119,7 @@ fn create_tooltip(
             WS_POPUP,
             0,
             0,
-            TOOLTIP_WIDTH,
+            scale(TOOLTIP_WIDTH, dpi),
             height,
             owner,
             null_mut(),
@@ -190,35 +197,37 @@ unsafe extern "system" fn window_proc(
 unsafe fn paint_window(hwnd: HWND, state: &TooltipState) {
     let mut paint = windows_sys::Win32::Graphics::Gdi::PAINTSTRUCT::default();
     let hdc = unsafe { windows_sys::Win32::Graphics::Gdi::BeginPaint(hwnd, &mut paint) };
-    let height = tooltip_height(&state.permission);
-    let bounds = rect(0, 0, TOOLTIP_WIDTH, height);
+    let s = |value| scale(value, state.dpi);
+    let width = s(TOOLTIP_WIDTH);
+    let height = tooltip_height(&state.permission, state.dpi);
+    let bounds = rect(0, 0, width, height);
     fill(hdc, bounds, Rgb(255, 255, 255));
     draw_border(hdc, bounds, Rgb(203, 213, 225));
     draw_text(
         hdc,
         "交易权限详情",
         rect(
-            HORIZONTAL_PADDING,
-            11,
-            TOOLTIP_WIDTH - HORIZONTAL_PADDING,
-            11 + TITLE_HEIGHT,
+            s(HORIZONTAL_PADDING),
+            s(11),
+            width - s(HORIZONTAL_PADDING),
+            s(11 + TITLE_HEIGHT),
         ),
         state.bold_font,
         Rgb(15, 23, 42),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
     );
-    let detail_top = 11 + TITLE_HEIGHT;
-    let label_width = permission_label_width(&state.permission.details);
+    let detail_top = s(11 + TITLE_HEIGHT);
+    let label_width = permission_label_width(&state.permission.details, state.dpi);
     for (index, detail) in state.permission.details.iter().enumerate() {
-        let top = detail_top + index as i32 * DETAIL_LINE_HEIGHT;
+        let top = detail_top + index as i32 * s(DETAIL_LINE_HEIGHT);
         draw_text(
             hdc,
             &format!("{}：", detail.label),
             rect(
-                HORIZONTAL_PADDING,
+                s(HORIZONTAL_PADDING),
                 top,
-                HORIZONTAL_PADDING + label_width,
-                top + DETAIL_LINE_HEIGHT,
+                s(HORIZONTAL_PADDING) + label_width,
+                top + s(DETAIL_LINE_HEIGHT),
             ),
             state.body_font,
             Rgb(71, 85, 105),
@@ -228,24 +237,25 @@ unsafe fn paint_window(hwnd: HWND, state: &TooltipState) {
             hdc,
             &format!("● {}", permission_state_text(detail.allowed)),
             rect(
-                HORIZONTAL_PADDING + label_width + 8,
+                s(HORIZONTAL_PADDING) + label_width + s(8),
                 top,
-                TOOLTIP_WIDTH - HORIZONTAL_PADDING,
-                top + DETAIL_LINE_HEIGHT,
+                width - s(HORIZONTAL_PADDING),
+                top + s(DETAIL_LINE_HEIGHT),
             ),
             state.bold_font,
             detail.color,
             DT_LEFT | DT_SINGLELINE | DT_VCENTER,
         );
     }
-    let divider_top = detail_top + state.permission.details.len() as i32 * DETAIL_LINE_HEIGHT + 5;
+    let divider_top =
+        detail_top + state.permission.details.len() as i32 * s(DETAIL_LINE_HEIGHT) + s(5);
     fill(
         hdc,
         rect(
-            HORIZONTAL_PADDING,
+            s(HORIZONTAL_PADDING),
             divider_top,
-            TOOLTIP_WIDTH - HORIZONTAL_PADDING,
-            divider_top + 1,
+            width - s(HORIZONTAL_PADDING),
+            divider_top + s(1),
         ),
         Rgb(226, 232, 240),
     );
@@ -253,10 +263,10 @@ unsafe fn paint_window(hwnd: HWND, state: &TooltipState) {
         hdc,
         &state.permission.action,
         rect(
-            HORIZONTAL_PADDING,
-            divider_top + 8,
-            TOOLTIP_WIDTH - HORIZONTAL_PADDING,
-            height - HORIZONTAL_PADDING,
+            s(HORIZONTAL_PADDING),
+            divider_top + s(8),
+            width - s(HORIZONTAL_PADDING),
+            height - s(HORIZONTAL_PADDING),
         ),
         state.body_font,
         Rgb(51, 65, 85),
@@ -265,24 +275,30 @@ unsafe fn paint_window(hwnd: HWND, state: &TooltipState) {
     unsafe { windows_sys::Win32::Graphics::Gdi::EndPaint(hwnd, &paint) };
 }
 
-fn tooltip_height(permission: &PermissionView) -> i32 {
-    HORIZONTAL_PADDING
-        + TITLE_HEIGHT
-        + permission.details.len() as i32 * DETAIL_LINE_HEIGHT
-        + 13
-        + ACTION_HEIGHT
-        + HORIZONTAL_PADDING
+fn tooltip_height(permission: &PermissionView, dpi: u32) -> i32 {
+    scale(
+        HORIZONTAL_PADDING
+            + TITLE_HEIGHT
+            + permission.details.len() as i32 * DETAIL_LINE_HEIGHT
+            + 13
+            + ACTION_HEIGHT
+            + HORIZONTAL_PADDING,
+        dpi,
+    )
 }
 
-fn permission_label_width(details: &[PermissionDetailView]) -> i32 {
-    if details
-        .iter()
-        .any(|detail| detail.label.contains("允许实时自动交易"))
-    {
-        178
-    } else {
-        156
-    }
+fn permission_label_width(details: &[PermissionDetailView], dpi: u32) -> i32 {
+    scale(
+        if details
+            .iter()
+            .any(|detail| detail.label.contains("允许实时自动交易"))
+        {
+            178
+        } else {
+            156
+        },
+        dpi,
+    )
 }
 
 fn permission_state_text(allowed: Option<bool>) -> &'static str {
@@ -337,7 +353,9 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(tooltip_height(&permission), 204);
-        assert_eq!(permission_label_width(&permission.details), 178);
+        assert_eq!(tooltip_height(&permission, 96), 204);
+        assert_eq!(permission_label_width(&permission.details, 96), 178);
+        assert_eq!(tooltip_height(&permission, 120), 255);
+        assert_eq!(permission_label_width(&permission.details, 120), 223);
     }
 }

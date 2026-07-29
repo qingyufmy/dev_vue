@@ -27,9 +27,9 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Graphics::Gdi::{
     CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
     DEFAULT_QUALITY, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK,
-    DeleteObject, DrawFocusRect, DrawTextW, FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect,
-    GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, OUT_DEFAULT_PRECIS, SelectObject,
-    SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    DeleteObject, DrawFocusRect, DrawTextW, FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, GetDC,
+    GetDeviceCaps, GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, LOGPIXELSX,
+    OUT_DEFAULT_PRECIS, ReleaseDC, SelectObject, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
 };
 use windows_sys::Win32::Storage::FileSystem::FileTimeToLocalFileTime;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -55,10 +55,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MINMAXINFO, MSG, MoveWindow, PostMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE,
     SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
     TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
-    WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
-    WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
-    WS_VISIBLE,
+    WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP,
+    WS_THICKFRAME, WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -149,6 +149,7 @@ struct AppState {
     tracking_mouse_leave: bool,
     busy_observer_profiles: BTreeSet<String>,
     open_observer_demo: bool,
+    dpi: u32,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -204,6 +205,7 @@ fn main() {
     unsafe {
         SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
         InitCommonControls();
+        let dpi = system_dpi();
         run_window(AppState {
             profile_id,
             state,
@@ -214,7 +216,7 @@ fn main() {
                 action_running: AtomicBool::new(false),
                 sequence: AtomicU64::new(1),
             }),
-            fonts: create_fonts(),
+            fonts: create_fonts(dpi),
             controls: Controls::empty(),
             brand_icon: null_mut(),
             brand_icon_small: null_mut(),
@@ -227,6 +229,7 @@ fn main() {
             tracking_mouse_leave: false,
             busy_observer_profiles: BTreeSet::new(),
             open_observer_demo,
+            dpi,
         });
     }
 }
@@ -399,8 +402,8 @@ unsafe fn run_window(mut state: AppState) {
     let mut outer = RECT {
         left: 0,
         top: 0,
-        right: WINDOW_WIDTH,
-        bottom: WINDOW_HEIGHT,
+        right: scale(WINDOW_WIDTH, unsafe { &*state_ptr }.dpi),
+        bottom: scale(WINDOW_HEIGHT, unsafe { &*state_ptr }.dpi),
     };
     unsafe { AdjustWindowRectEx(&mut outer, window_style, 0, WS_EX_APPWINDOW) };
     let hwnd = unsafe {
@@ -468,12 +471,41 @@ unsafe extern "system" fn window_proc(
             unsafe { apply_layout(hwnd, state) };
             0
         }
+        WM_DPICHANGED => {
+            let new_dpi = (wparam & 0xffff) as u32;
+            let suggested = lparam as *const RECT;
+            if new_dpi >= 96 && !suggested.is_null() {
+                state.dpi = new_dpi;
+                state.fonts = unsafe { create_fonts(new_dpi) };
+                unsafe {
+                    if !state.permission_tooltip.is_null() {
+                        DestroyWindow(state.permission_tooltip);
+                        state.permission_tooltip = null_mut();
+                        state.hovered_permission_account = None;
+                    }
+                    apply_control_fonts(state);
+                    let bounds = *suggested;
+                    windows_sys::Win32::UI::WindowsAndMessaging::SetWindowPos(
+                        hwnd,
+                        null_mut(),
+                        bounds.left,
+                        bounds.top,
+                        bounds.right - bounds.left,
+                        bounds.bottom - bounds.top,
+                        windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE
+                            | windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOZORDER,
+                    );
+                    apply_layout(hwnd, state);
+                }
+            }
+            0
+        }
         WM_GETMINMAXINFO => {
             let info = lparam as *mut MINMAXINFO;
             if !info.is_null() {
                 unsafe {
-                    (*info).ptMinTrackSize.x = WINDOW_MIN_WIDTH;
-                    (*info).ptMinTrackSize.y = WINDOW_MIN_HEIGHT;
+                    (*info).ptMinTrackSize.x = scale(WINDOW_MIN_WIDTH, state.dpi);
+                    (*info).ptMinTrackSize.y = scale(WINDOW_MIN_HEIGHT, state.dpi);
                 }
             }
             0
@@ -599,16 +631,7 @@ unsafe fn create_controls(hwnd: HWND, state: &mut AppState) {
     state.controls.logs = create_button(hwnd, instance, CONTROL_LOGS, "查看日志");
     state.controls.settings = create_button(hwnd, instance, CONTROL_SETTINGS, "连接设置");
     state.controls.exit = create_button(hwnd, instance, CONTROL_EXIT, "退出桥接");
-    for control in control_handles(&state.controls) {
-        unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
-                control,
-                windows_sys::Win32::UI::WindowsAndMessaging::WM_SETFONT,
-                state.fonts.body as usize,
-                1,
-            );
-        }
-    }
+    unsafe { apply_control_fonts(state) };
     unsafe {
         EnableWindow(state.controls.platform, 1);
         EnableWindow(state.controls.terminal, 0);
@@ -618,6 +641,19 @@ unsafe fn create_controls(hwnd: HWND, state: &mut AppState) {
         EnableWindow(state.controls.logs, 1);
         EnableWindow(state.controls.settings, 0);
         EnableWindow(state.controls.update, 0);
+    }
+}
+
+unsafe fn apply_control_fonts(state: &AppState) {
+    for control in control_handles(&state.controls) {
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                control,
+                WM_SETFONT,
+                state.fonts.body as usize,
+                1,
+            );
+        }
     }
 }
 
@@ -674,33 +710,42 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
     sync_combo_selection(app);
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
-    let width = (client.right - client.left).max(WINDOW_MIN_WIDTH);
-    let height = (client.bottom - client.top).max(WINDOW_MIN_HEIGHT);
-    let x = 32;
-    let content_width = width - 64;
-    let mut y = 96;
+    let s = |value| scale(value, app.dpi);
+    let width = (client.right - client.left).max(s(WINDOW_MIN_WIDTH));
+    let height = (client.bottom - client.top).max(s(WINDOW_MIN_HEIGHT));
+    let content_width = width - s(64);
+    let mut y = s(96);
     if app.view.update_banner.is_some() {
-        unsafe { move_show(app.controls.update, width - 148, y + 14, 104, 36, true) };
-        y += 76;
+        unsafe {
+            move_show(
+                app.controls.update,
+                width - s(148),
+                y + s(14),
+                s(104),
+                s(36),
+                true,
+            )
+        };
+        y += s(76);
     } else {
         unsafe { ShowWindow(app.controls.update, SW_HIDE) };
     }
     unsafe {
-        move_show(app.controls.platform, 156, y, 136, 240, true);
+        move_show(app.controls.platform, s(156), y, s(136), s(240), true);
         move_show(
             app.controls.observer,
-            width - 264,
+            width - s(264),
             y,
-            108,
-            36,
+            s(108),
+            s(36),
             app.view.show_observer_sources,
         );
         move_show(
             app.controls.logout,
-            width - 148,
+            width - s(148),
             y,
-            96,
-            36,
+            s(96),
+            s(36),
             app.view.show_logout,
         );
     }
@@ -727,35 +772,35 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
             i32::from(idle && app.view.terminal_selector_visible),
         );
     }
-    y += 52;
+    y += s(52);
     unsafe {
         move_show(
             app.controls.terminal,
-            112,
+            s(112),
             y,
-            content_width - 80,
-            240,
+            content_width - s(80),
+            s(240),
             app.view.terminal_selector_visible,
         );
     }
     if app.view.terminal_selector_visible {
-        y += 52;
+        y += s(52);
     }
     unsafe {
         move_show(
             app.controls.mt4_expert,
-            width - 180,
-            y + 10,
-            128,
-            36,
+            width - s(180),
+            y + s(10),
+            s(128),
+            s(36),
             app.view.show_mt4_setup,
         );
     }
     if app.view.show_mt4_setup {
-        y += 56;
+        y += s(56);
     }
-    let bottom_y = height - 60;
-    let mut right = width - 32;
+    let bottom_y = height - s(60);
+    let mut right = width - s(32);
     for (handle, visible, button_width) in [
         (app.controls.pair, app.view.show_pair, 104),
         (app.controls.detect, true, 104),
@@ -764,14 +809,15 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
         (app.controls.exit, true, 104),
     ] {
         if visible {
+            let button_width = s(button_width);
             right -= button_width;
-            unsafe { move_show(handle, right, bottom_y, button_width, 36, true) };
-            right -= 8;
+            unsafe { move_show(handle, right, bottom_y, button_width, s(36), true) };
+            right -= s(8);
         } else {
             unsafe { ShowWindow(handle, SW_HIDE) };
         }
     }
-    let _ = (x, y);
+    let _ = y;
     unsafe { InvalidateRect(hwnd, null(), 1) };
 }
 
@@ -865,12 +911,13 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
     fill(hdc, client, Rgb(248, 250, 252));
+    let s = |value| scale(value, app.dpi);
     let width = client.right - client.left;
     let height = client.bottom - client.top;
     draw_text(
         hdc,
         &app.view.heading,
-        rect(32, 22, width - 32, 52),
+        rect(s(32), s(22), width - s(32), s(52)),
         app.fonts.heading,
         Rgb(15, 23, 42),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
@@ -878,18 +925,22 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
     draw_text(
         hdc,
         &app.view.subtitle,
-        rect(32, 54, width - 32, 78),
+        rect(s(32), s(54), width - s(32), s(78)),
         app.fonts.body,
         Rgb(71, 85, 105),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
     );
-    let mut y = 96;
+    let mut y = s(96);
     if let Some(banner) = &app.view.update_banner {
-        fill(hdc, rect(32, y, width - 32, y + 64), banner.background);
+        fill(
+            hdc,
+            rect(s(32), y, width - s(32), y + s(64)),
+            banner.background,
+        );
         draw_text(
             hdc,
             &banner.title,
-            rect(46, y + 8, width - 166, y + 30),
+            rect(s(46), y + s(8), width - s(166), y + s(30)),
             app.fonts.body_bold,
             banner.title_color,
             DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
@@ -897,53 +948,61 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
         draw_text(
             hdc,
             &banner.description,
-            rect(46, y + 30, width - 166, y + 57),
+            rect(s(46), y + s(30), width - s(166), y + s(57)),
             app.fonts.small,
             banner.description_color,
             DT_LEFT | DT_WORDBREAK,
         );
-        y += 76;
+        y += s(76);
     }
     draw_text(
         hdc,
         "选择交易平台",
-        rect(32, y, 148, y + 36),
+        rect(s(32), y, s(148), y + s(36)),
         app.fonts.body_bold,
         Rgb(51, 65, 85),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
     );
-    y += 52;
+    y += s(52);
     if app.view.terminal_selector_visible {
         draw_text(
             hdc,
             &app.view.terminal_selector_label,
-            rect(32, y, 104, y + 36),
+            rect(s(32), y, s(104), y + s(36)),
             app.fonts.body,
             Rgb(51, 65, 85),
             DT_LEFT | DT_SINGLELINE | DT_VCENTER,
         );
-        y += 52;
+        y += s(52);
     }
     if app.view.show_mt4_setup {
-        fill(hdc, rect(32, y, width - 32, y + 56), Rgb(239, 246, 255));
+        fill(
+            hdc,
+            rect(s(32), y, width - s(32), y + s(56)),
+            Rgb(239, 246, 255),
+        );
         draw_text(
             hdc,
             "MT4 重装或 EA 丢失时，可随时重新安装。",
-            rect(44, y + 10, width - 190, y + 46),
+            rect(s(44), y + s(10), width - s(190), y + s(46)),
             app.fonts.body,
             Rgb(30, 64, 175),
             DT_LEFT | DT_SINGLELINE | DT_VCENTER,
         );
-        y += 72;
+        y += s(72);
     }
-    let card_bottom = height - 104;
-    let card = rect(32, y, width - 32, card_bottom);
+    let card_bottom = height - s(104);
+    let card = rect(s(32), y, width - s(32), card_bottom);
     fill(hdc, card, Rgb(255, 255, 255));
-    fill(hdc, rect(52, y + 28, 60, y + 36), app.view.status.accent);
+    fill(
+        hdc,
+        rect(s(52), y + s(28), s(60), y + s(36)),
+        app.view.status.accent,
+    );
     draw_text(
         hdc,
         &app.view.status.title,
-        rect(72, y + 18, width - 52, y + 46),
+        rect(s(72), y + s(18), width - s(52), y + s(46)),
         app.fonts.title,
         Rgb(15, 23, 42),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
@@ -951,7 +1010,7 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
     draw_text(
         hdc,
         &app.view.status.description,
-        rect(72, y + 48, width - 52, y + 82),
+        rect(s(72), y + s(48), width - s(52), y + s(82)),
         app.fonts.body,
         Rgb(71, 85, 105),
         DT_LEFT | DT_WORDBREAK,
@@ -959,20 +1018,20 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
     draw_text(
         hdc,
         &app.view.runtime_summary,
-        rect(72, y + 82, width - 52, y + 108),
+        rect(s(72), y + s(82), width - s(52), y + s(108)),
         app.fonts.small,
         Rgb(100, 116, 139),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
     );
     fill(
         hdc,
-        rect(52, y + 116, width - 52, y + 117),
+        rect(s(52), y + s(116), width - s(52), y + s(117)),
         Rgb(226, 232, 240),
     );
     draw_text(
         hdc,
         "账户连接",
-        rect(52, y + 124, width - 120, y + 148),
+        rect(s(52), y + s(124), width - s(120), y + s(148)),
         app.fonts.body_bold,
         Rgb(51, 65, 85),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
@@ -980,12 +1039,12 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
     draw_text(
         hdc,
         &app.view.account_count_text,
-        rect(width - 120, y + 124, width - 52, y + 148),
+        rect(width - s(120), y + s(124), width - s(52), y + s(148)),
         app.fonts.body,
         Rgb(100, 116, 139),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
     );
-    let accounts_top = y + 154;
+    let accounts_top = y + s(154);
     if app.view.accounts.is_empty() {
         draw_text(
             hdc,
@@ -993,7 +1052,7 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
                 .empty_accounts_text
                 .as_deref()
                 .unwrap_or("尚未识别到交易账户"),
-            rect(52, accounts_top, width - 52, accounts_top + 40),
+            rect(s(52), accounts_top, width - s(52), accounts_top + s(40)),
             app.fonts.body,
             Rgb(100, 116, 139),
             DT_LEFT | DT_SINGLELINE | DT_VCENTER,
@@ -1002,13 +1061,13 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
         draw_account_cards(
             hdc,
             app,
-            rect(52, accounts_top, width - 52, card_bottom - 8),
+            rect(s(52), accounts_top, width - s(52), card_bottom - s(8)),
         );
     }
     draw_text(
         hdc,
         SAFETY_COPY,
-        rect(32, height - 100, width - 32, height - 68),
+        rect(s(32), height - s(100), width - s(32), height - s(68)),
         app.fonts.small,
         Rgb(100, 116, 139),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
@@ -1017,11 +1076,11 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
 }
 
 fn draw_account_cards(hdc: HDC, app: &AppState, bounds: RECT) {
-    for (account, card_bounds) in app
-        .view
-        .accounts
-        .iter()
-        .zip(account_card_rects(&app.view.accounts, bounds))
+    for (account, card_bounds) in
+        app.view
+            .accounts
+            .iter()
+            .zip(account_card_rects(&app.view.accounts, bounds, app.dpi))
     {
         if card_bounds.top >= bounds.bottom {
             break;
@@ -1030,52 +1089,61 @@ fn draw_account_cards(hdc: HDC, app: &AppState, bounds: RECT) {
     }
 }
 
-fn account_card_rects(accounts: &[AccountCardView], bounds: RECT) -> Vec<RECT> {
-    const GAP: i32 = 8;
+fn account_card_rects(accounts: &[AccountCardView], bounds: RECT, dpi: u32) -> Vec<RECT> {
+    let gap = scale(8, dpi);
     let available_width = bounds.right - bounds.left;
-    let columns = resolve_account_column_count(available_width).max(1);
-    let card_width = ((available_width - GAP * (columns - 1)) / columns).max(240);
+    let logical_available_width = ((i64::from(available_width) * 96) / i64::from(dpi)) as i32;
+    let columns = resolve_account_column_count(logical_available_width).max(1);
+    let card_width = ((available_width - gap * (columns - 1)) / columns).max(scale(240, dpi));
     let mut result = Vec::with_capacity(accounts.len());
     let mut row_top = bounds.top;
     for row in accounts.chunks(columns as usize) {
-        let row_height = row.iter().map(account_card_height).max().unwrap_or(70);
+        let row_height = row
+            .iter()
+            .map(|account| account_card_height(account, dpi))
+            .max()
+            .unwrap_or_else(|| scale(70, dpi));
         for (column, account) in row.iter().enumerate() {
-            let left = bounds.left + column as i32 * (card_width + GAP);
-            let height = account_card_height(account);
+            let left = bounds.left + column as i32 * (card_width + gap);
+            let height = account_card_height(account, dpi);
             result.push(rect(left, row_top, left + card_width, row_top + height));
         }
-        row_top += row_height + GAP;
+        row_top += row_height + gap;
     }
     result
 }
 
-fn account_card_height(account: &AccountCardView) -> i32 {
-    if account.permission.is_none() {
-        70
-    } else if account.mt4_expert_update.is_some() {
-        112
-    } else {
-        88
-    }
+fn account_card_height(account: &AccountCardView, dpi: u32) -> i32 {
+    scale(
+        if account.permission.is_none() {
+            70
+        } else if account.mt4_expert_update.is_some() {
+            112
+        } else {
+            88
+        },
+        dpi,
+    )
 }
 
 fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds: RECT) {
+    let s = |value| scale(value, app.dpi);
     fill(hdc, bounds, Rgb(248, 250, 252));
     let action_count =
         usize::from(account.settings_visible) + usize::from(account.primary_action.is_some());
-    let action_left = bounds.right - action_count as i32 * 76;
+    let action_left = bounds.right - action_count as i32 * s(76);
     let copy_right = if action_count == 0 {
-        bounds.right - 8
+        bounds.right - s(8)
     } else {
-        action_left - 8
+        action_left - s(8)
     };
     fill(
         hdc,
         rect(
-            bounds.left + 16,
-            bounds.top + (bounds.bottom - bounds.top - 8) / 2,
-            bounds.left + 24,
-            bounds.top + (bounds.bottom - bounds.top - 8) / 2 + 8,
+            bounds.left + s(16),
+            bounds.top + (bounds.bottom - bounds.top - s(8)) / 2,
+            bounds.left + s(24),
+            bounds.top + (bounds.bottom - bounds.top - s(8)) / 2 + s(8),
         ),
         account.state_color,
     );
@@ -1083,10 +1151,10 @@ fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds
         hdc,
         &account.title,
         rect(
-            bounds.left + 34,
-            bounds.top + 7,
+            bounds.left + s(34),
+            bounds.top + s(7),
             copy_right,
-            bounds.top + 30,
+            bounds.top + s(30),
         ),
         app.fonts.body_bold,
         Rgb(30, 41, 59),
@@ -1096,22 +1164,27 @@ fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds
         hdc,
         &account.state,
         rect(
-            bounds.left + 34,
-            bounds.top + 30,
+            bounds.left + s(34),
+            bounds.top + s(30),
             copy_right,
-            bounds.top + 54,
+            bounds.top + s(54),
         ),
         app.fonts.body,
         Rgb(71, 85, 105),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
     );
     if let Some(permission) = &account.permission {
-        let badge = permission_badge_rect(bounds);
+        let badge = permission_badge_rect(bounds, app.dpi);
         fill(hdc, badge, permission.background);
         draw_text(
             hdc,
             &permission.summary,
-            rect(badge.left + 8, badge.top, badge.right - 6, badge.bottom),
+            rect(
+                badge.left + s(8),
+                badge.top,
+                badge.right - s(6),
+                badge.bottom,
+            ),
             app.fonts.small,
             permission.foreground,
             DT_LEFT | DT_SINGLELINE | DT_VCENTER,
@@ -1119,22 +1192,27 @@ fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds
     }
     if let Some(expert_update) = &account.mt4_expert_update {
         let badge = rect(
-            bounds.left + 34,
-            bounds.top + 85,
-            (bounds.left + 244).min(copy_right),
-            bounds.top + 109,
+            bounds.left + s(34),
+            bounds.top + s(85),
+            (bounds.left + s(244)).min(copy_right),
+            bounds.top + s(109),
         );
         fill(hdc, badge, Rgb(254, 243, 199));
         draw_text(
             hdc,
             expert_update,
-            rect(badge.left + 8, badge.top, badge.right - 6, badge.bottom),
+            rect(
+                badge.left + s(8),
+                badge.top,
+                badge.right - s(6),
+                badge.bottom,
+            ),
             app.fonts.small,
             Rgb(146, 64, 14),
             DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
         );
     }
-    let button_top = bounds.top + (bounds.bottom - bounds.top - 34) / 2;
+    let button_top = bounds.top + (bounds.bottom - bounds.top - s(34)) / 2;
     let mut button_left = action_left;
     if let Some(action) = account.primary_action {
         let primary = matches!(
@@ -1145,26 +1223,26 @@ fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds
             hdc,
             app,
             rect(
-                button_left + 3,
+                button_left + s(3),
                 button_top,
-                button_left + 73,
-                button_top + 34,
+                button_left + s(73),
+                button_top + s(34),
             ),
             account.primary_action_text.as_deref().unwrap_or("处理中…"),
             primary,
             account.actions_busy,
         );
-        button_left += 76;
+        button_left += s(76);
     }
     if account.settings_visible {
         draw_compact_button(
             hdc,
             app,
             rect(
-                button_left + 3,
+                button_left + s(3),
                 button_top,
-                button_left + 73,
-                button_top + 34,
+                button_left + s(73),
+                button_top + s(34),
             ),
             "设置",
             false,
@@ -1173,30 +1251,31 @@ fn draw_account_card(hdc: HDC, app: &AppState, account: &AccountCardView, bounds
     }
 }
 
-fn permission_badge_rect(card: RECT) -> RECT {
+fn permission_badge_rect(card: RECT, dpi: u32) -> RECT {
     rect(
-        card.left + 34,
-        card.top + 58,
-        card.left + 134,
-        card.top + 82,
+        card.left + scale(34, dpi),
+        card.top + scale(58, dpi),
+        card.left + scale(134, dpi),
+        card.top + scale(82, dpi),
     )
 }
 
 fn accounts_bounds(client: RECT, app: &AppState) -> RECT {
+    let s = |value| scale(value, app.dpi);
     let width = client.right - client.left;
     let height = client.bottom - client.top;
-    let mut y = 96;
+    let mut y = s(96);
     if app.view.update_banner.is_some() {
-        y += 76;
+        y += s(76);
     }
-    y += 52;
+    y += s(52);
     if app.view.terminal_selector_visible {
-        y += 52;
+        y += s(52);
     }
     if app.view.show_mt4_setup {
-        y += 72;
+        y += s(72);
     }
-    rect(52, y + 154, width - 52, height - 112)
+    rect(s(52), y + s(154), width - s(52), height - s(112))
 }
 
 fn point_in_rect(point: POINT, bounds: RECT) -> bool {
@@ -1226,7 +1305,7 @@ unsafe fn handle_mouse_move(hwnd: HWND, app: &mut AppState, point: POINT) {
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
     let bounds = accounts_bounds(client, app);
-    let cards = account_card_rects(&app.view.accounts, bounds);
+    let cards = account_card_rects(&app.view.accounts, bounds, app.dpi);
     let hovered =
         app.view
             .accounts
@@ -1237,8 +1316,8 @@ unsafe fn handle_mouse_move(hwnd: HWND, app: &mut AppState, point: POINT) {
                 account
                     .permission
                     .as_ref()
-                    .filter(|_| point_in_rect(point, permission_badge_rect(card)))
-                    .map(|permission| (index, permission, permission_badge_rect(card)))
+                    .filter(|_| point_in_rect(point, permission_badge_rect(card, app.dpi)))
+                    .map(|permission| (index, permission, permission_badge_rect(card, app.dpi)))
             });
     match hovered {
         Some((index, permission, badge)) if app.hovered_permission_account != Some(index) => {
@@ -1249,6 +1328,7 @@ unsafe fn handle_mouse_move(hwnd: HWND, app: &mut AppState, point: POINT) {
                     permission,
                     badge,
                     app.brand_icon_small,
+                    app.dpi,
                 )
             } {
                 Ok(tooltip) => {
@@ -1275,7 +1355,7 @@ unsafe fn handle_account_click(hwnd: HWND, app: &mut AppState, point: POINT) {
     }
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
-    let cards = account_card_rects(&app.view.accounts, accounts_bounds(client, app));
+    let cards = account_card_rects(&app.view.accounts, accounts_bounds(client, app), app.dpi);
     let clicked = app
         .view
         .accounts
@@ -1285,12 +1365,12 @@ unsafe fn handle_account_click(hwnd: HWND, app: &mut AppState, point: POINT) {
             if account.actions_busy {
                 return None;
             }
-            if account_primary_action_rect(account, bounds)
+            if account_primary_action_rect(account, bounds, app.dpi)
                 .is_some_and(|region| point_in_rect(point, region))
             {
                 return Some((account, account.primary_action));
             }
-            if account_settings_action_rect(account, bounds)
+            if account_settings_action_rect(account, bounds, app.dpi)
                 .is_some_and(|region| point_in_rect(point, region))
             {
                 return Some((account, Some(ObserverAction::Configure)));
@@ -1330,25 +1410,35 @@ fn observer_local_action(profile_id: &str, action: ObserverAction) -> Option<Loc
     }
 }
 
-fn account_primary_action_rect(account: &AccountCardView, bounds: RECT) -> Option<RECT> {
+fn account_primary_action_rect(account: &AccountCardView, bounds: RECT, dpi: u32) -> Option<RECT> {
     account.primary_action?;
     let action_count =
         i32::from(account.settings_visible) + i32::from(account.primary_action.is_some());
-    let action_left = bounds.right - action_count * 76;
-    let top = bounds.top + (bounds.bottom - bounds.top - 34) / 2;
-    Some(rect(action_left + 3, top, action_left + 73, top + 34))
+    let action_left = bounds.right - action_count * scale(76, dpi);
+    let top = bounds.top + (bounds.bottom - bounds.top - scale(34, dpi)) / 2;
+    Some(rect(
+        action_left + scale(3, dpi),
+        top,
+        action_left + scale(73, dpi),
+        top + scale(34, dpi),
+    ))
 }
 
-fn account_settings_action_rect(account: &AccountCardView, bounds: RECT) -> Option<RECT> {
+fn account_settings_action_rect(account: &AccountCardView, bounds: RECT, dpi: u32) -> Option<RECT> {
     if !account.settings_visible {
         return None;
     }
     let action_count =
         i32::from(account.settings_visible) + i32::from(account.primary_action.is_some());
-    let action_left = bounds.right - action_count * 76;
-    let settings_left = action_left + i32::from(account.primary_action.is_some()) * 76;
-    let top = bounds.top + (bounds.bottom - bounds.top - 34) / 2;
-    Some(rect(settings_left + 3, top, settings_left + 73, top + 34))
+    let action_left = bounds.right - action_count * scale(76, dpi);
+    let settings_left = action_left + i32::from(account.primary_action.is_some()) * scale(76, dpi);
+    let top = bounds.top + (bounds.bottom - bounds.top - scale(34, dpi)) / 2;
+    Some(rect(
+        settings_left + scale(3, dpi),
+        top,
+        settings_left + scale(73, dpi),
+        top + scale(34, dpi),
+    ))
 }
 
 fn draw_compact_button(
@@ -1938,18 +2028,28 @@ fn format_local_time(timestamp: i64) -> String {
     )
 }
 
-unsafe fn create_fonts() -> Fonts {
+unsafe fn create_fonts(dpi: u32) -> Fonts {
     Fonts {
-        body: create_font(14, FW_NORMAL as i32),
-        body_bold: create_font(14, FW_BOLD as i32),
-        heading: create_font(24, FW_BOLD as i32),
-        title: create_font(17, FW_BOLD as i32),
-        small: create_font(12, FW_NORMAL as i32),
+        body: create_point_font(90, dpi, FW_NORMAL as i32),
+        body_bold: create_point_font(90, dpi, FW_BOLD as i32),
+        heading: create_point_font(180, dpi, FW_BOLD as i32),
+        title: create_point_font(120, dpi, FW_BOLD as i32),
+        small: create_point_font(85, dpi, FW_NORMAL as i32),
     }
+}
+
+fn create_point_font(point_size_tenths: i32, dpi: u32, weight: i32) -> HFONT {
+    let face = wide("Microsoft YaHei UI");
+    let pixel_height = ((point_size_tenths as i64 * i64::from(dpi) + 360) / 720) as i32;
+    create_named_font(&face, pixel_height, weight)
 }
 
 fn create_font(pixel_height: i32, weight: i32) -> HFONT {
     let face = wide("Microsoft YaHei UI");
+    create_named_font(&face, pixel_height, weight)
+}
+
+fn create_named_font(face: &[u16], pixel_height: i32, weight: i32) -> HFONT {
     unsafe {
         CreateFontW(
             -pixel_height,
@@ -1968,6 +2068,23 @@ fn create_font(pixel_height: i32, weight: i32) -> HFONT {
             face.as_ptr(),
         )
     }
+}
+
+fn scale(value: i32, dpi: u32) -> i32 {
+    ((i64::from(value) * i64::from(dpi) + 48) / 96) as i32
+}
+
+fn system_dpi() -> u32 {
+    let screen = unsafe { GetDC(null_mut()) };
+    if screen.is_null() {
+        return 96;
+    }
+    let dpi = unsafe { GetDeviceCaps(screen, LOGPIXELSX as i32) };
+    unsafe { ReleaseDC(null_mut(), screen) };
+    u32::try_from(dpi)
+        .ok()
+        .filter(|value| *value >= 96)
+        .unwrap_or(96)
 }
 
 impl Drop for Fonts {
@@ -2122,7 +2239,7 @@ mod tests {
             account_fixture(true, true, true),
             account_fixture(false, false, false),
         ];
-        let narrow = account_card_rects(&accounts, rect(0, 0, 516, 500))
+        let narrow = account_card_rects(&accounts, rect(0, 0, 516, 500), 96)
             .into_iter()
             .map(rect_coordinates)
             .collect::<Vec<_>>();
@@ -2130,7 +2247,7 @@ mod tests {
             narrow,
             vec![(0, 0, 516, 88), (0, 96, 516, 208), (0, 216, 516, 286)]
         );
-        let wide = account_card_rects(&accounts, rect(0, 0, 824, 500))
+        let wide = account_card_rects(&accounts, rect(0, 0, 824, 500), 96)
             .into_iter()
             .map(rect_coordinates)
             .collect::<Vec<_>>();
@@ -2145,16 +2262,34 @@ mod tests {
         let account = account_fixture(true, false, true);
         let bounds = rect(0, 0, 408, 88);
         assert_eq!(
-            rect_coordinates(permission_badge_rect(bounds)),
+            rect_coordinates(permission_badge_rect(bounds, 96)),
             (34, 58, 134, 82)
         );
         assert_eq!(
-            account_primary_action_rect(&account, bounds).map(rect_coordinates),
+            account_primary_action_rect(&account, bounds, 96).map(rect_coordinates),
             Some((259, 27, 329, 61))
         );
         assert_eq!(
-            account_settings_action_rect(&account, bounds).map(rect_coordinates),
+            account_settings_action_rect(&account, bounds, 96).map(rect_coordinates),
             Some((335, 27, 405, 61))
+        );
+    }
+
+    #[test]
+    fn dotnet_logical_geometry_scales_at_common_windows_dpi_values() {
+        assert_eq!(scale(620, 96), 620);
+        assert_eq!(scale(700, 96), 700);
+        assert_eq!(scale(620, 120), 775);
+        assert_eq!(scale(700, 120), 875);
+        assert_eq!(scale(620, 144), 930);
+        assert_eq!(scale(700, 144), 1_050);
+
+        let accounts = vec![account_fixture(true, false, false)];
+        let card = account_card_rects(&accounts, rect(0, 0, 645, 625), 120)[0];
+        assert_eq!(rect_coordinates(card), (0, 0, 645, 110));
+        assert_eq!(
+            rect_coordinates(permission_badge_rect(card, 120)),
+            (43, 73, 168, 103)
         );
     }
 
