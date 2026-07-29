@@ -7,10 +7,24 @@
     "schema_directory": "../protocol/v3-json-schema",
     "wire_format": "versioned-json"
   },
-  "mt5_worker_protocol": {
+  "legacy_mt5_worker_protocol": {
     "version": 3,
     "wire_format": "little-endian-u32-length-prefixed-json",
     "maximum_frame_bytes": 4194304
+  },
+  "native_worker_ipc_protocol": {
+    "version": 1,
+    "wire_format": "little-endian-u32-length-prefixed-json",
+    "maximum_frame_bytes": 4194304,
+    "session_nonce_required": true,
+    "route_fields": [
+      "terminal_instance_id",
+      "platform",
+      "account_ref",
+      "connection_epoch"
+    ],
+    "request_correlation_field": "request_id",
+    "query_execution_separate_operation": true
   },
   "mt4_ea_protocol": {
     "wire_format": "little-endian-u32-length-prefixed-binary",

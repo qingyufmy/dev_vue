@@ -1,0 +1,14 @@
+[package]
+name = "bridge-worker-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bridge-command = { path = "../bridge-command" }
+bridge-contract = { path = "../bridge-contract" }
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

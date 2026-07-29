@@ -134,6 +134,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-worker-host"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "bridge-command",
+ "bridge-contract",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

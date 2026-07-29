@@ -10,6 +10,7 @@ members = [
   "crates/bridge-security-win",
   "crates/bridge-store",
   "crates/bridge-transport",
+  "crates/bridge-worker-host",
 ]
 resolver = "3"
 
