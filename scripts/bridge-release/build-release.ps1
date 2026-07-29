@@ -21,6 +21,40 @@ $ErrorActionPreference = 'Stop'
 function Write-Utf8NoBom([string]$Path, [string]$Content) {
   [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
 }
+function Assert-NativeReleaseLayout(
+  [string]$CoreDirectory,
+  [string]$Mt5Directory,
+  [string]$Mt4Directory,
+  [string]$LauncherPath
+) {
+  $required = @(
+    (Join-Path $CoreDirectory 'AURUMBridge.exe'),
+    (Join-Path $CoreDirectory 'AURUMBridge.Core.exe'),
+    (Join-Path $CoreDirectory 'server-endpoints.json'),
+    (Join-Path $CoreDirectory 'runtime\python\python.exe'),
+    (Join-Path $Mt5Directory 'worker.py'),
+    (Join-Path $Mt5Directory 'trade.py'),
+    (Join-Path $Mt4Directory 'AURUMBridgeEA.ex4'),
+    $LauncherPath
+  )
+  if ($required | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }) {
+    throw 'release_native_layout_incomplete'
+  }
+  $legacyDotNetFiles = @(
+    'AURUMBridge.dll',
+    'AURUMBridge.deps.json',
+    'AURUMBridge.runtimeconfig.json',
+    'hostfxr.dll',
+    'coreclr.dll',
+    'e_sqlite3.dll',
+    'Microsoft.Data.Sqlite.dll'
+  )
+  if ($legacyDotNetFiles | Where-Object {
+    Test-Path -LiteralPath (Join-Path $CoreDirectory $_) -PathType Leaf
+  }) {
+    throw 'release_legacy_dotnet_artifact_present'
+  }
+}
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $branch = git -C $repo branch --show-current
 $commit = git -C $repo rev-parse HEAD
@@ -75,12 +109,51 @@ $work = Join-Path ([IO.Path]::GetTempPath()) "aurum-release-$([Guid]::NewGuid().
 New-Item -ItemType Directory -Path $work | Out-Null
 $buildSucceeded = $false
 try {
-  $dotnet = if ($env:AURUM_DOTNET_EXE) { $env:AURUM_DOTNET_EXE } elseif (Get-Command dotnet -ErrorAction SilentlyContinue) { 'dotnet' } else { Join-Path $env:USERPROFILE '.cache\aurum-dotnet\dotnet.exe' }
+  $cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
+  $cargo = if ($null -ne $cargoCommand) {
+    $cargoCommand.Source
+  } else {
+    Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
+  }
+  if (-not (Test-Path -LiteralPath $cargo -PathType Leaf)) {
+    throw 'release_native_cargo_missing'
+  }
+  $nativeRoot = Join-Path $repo 'bridge\native'
+  Push-Location $nativeRoot
+  try {
+    & $cargo build --locked --release -p liangjian-bridge-ui -p liangjian-bridge-core `
+      -p liangjian-bridge-launcher
+    if ($LASTEXITCODE -ne 0) { throw 'release_native_build_failed' }
+  }
+  finally {
+    Pop-Location
+  }
+
+  $nativeRelease = Join-Path $nativeRoot 'target\x86_64-pc-windows-msvc\release'
+  $nativeUi = Join-Path $nativeRelease 'liangjian-bridge-ui.exe'
+  $nativeCore = Join-Path $nativeRelease 'liangjian-bridge-core.exe'
+  $nativeLauncher = Join-Path $nativeRelease 'liangjian-bridge-launcher.exe'
+  foreach ($nativeExecutable in @($nativeUi, $nativeCore, $nativeLauncher)) {
+    if (-not (Test-Path -LiteralPath $nativeExecutable -PathType Leaf)) {
+      throw 'release_native_artifact_missing'
+    }
+    $nativeProductVersion = (Get-Item -LiteralPath $nativeExecutable).VersionInfo.ProductVersion
+    $nativeVersion = $null
+    if (-not [Version]::TryParse(($nativeProductVersion -split '[+-]')[0], [ref]$nativeVersion) -or
+      $nativeVersion.Major -ne $parsedVersion.Major -or
+      $nativeVersion.Minor -ne $parsedVersion.Minor -or
+      $nativeVersion.Build -ne $parsedVersion.Build) {
+      throw 'release_core_version_mismatch'
+    }
+  }
+
   $core = Join-Path $work 'core'
-  & $dotnet publish (Join-Path $repo 'bridge\app\AurumBridge\AurumBridge.csproj') -c Release -r win-x64 --self-contained true -p:Version=$ReleaseVersion -o $core
-  if ($LASTEXITCODE -ne 0) { throw 'release_dotnet_publish_failed' }
-  $publishedAssembly = [Reflection.AssemblyName]::GetAssemblyName((Join-Path $core 'AURUMBridge.dll')).Version
-  if ($publishedAssembly.Major -ne $parsedVersion.Major -or $publishedAssembly.Minor -ne $parsedVersion.Minor -or $publishedAssembly.Build -ne $parsedVersion.Build) { throw 'release_core_version_mismatch' }
+  New-Item -ItemType Directory -Path $core -Force | Out-Null
+  Copy-Item -LiteralPath $nativeUi -Destination (Join-Path $core 'AURUMBridge.exe')
+  Copy-Item -LiteralPath $nativeCore -Destination (Join-Path $core 'AURUMBridge.Core.exe')
+  $launcherArtifact = Join-Path $core 'launcher\AURUMBridge.Launcher.exe'
+  New-Item -ItemType Directory -Path (Split-Path $launcherArtifact -Parent) -Force | Out-Null
+  Copy-Item -LiteralPath $nativeLauncher -Destination $launcherArtifact
   $runtimeTarget = Join-Path $core 'runtime\python'
   New-Item -ItemType Directory -Path $runtimeTarget -Force | Out-Null
   Copy-Item -Path (Join-Path $pythonRoot '*') -Destination $runtimeTarget -Recurse -Force
@@ -91,7 +164,11 @@ try {
   $moduleRoot = Join-Path $work 'modules'
   New-Item -ItemType Directory -Path (Join-Path $moduleRoot 'adapter.mt5.python') -Force | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $moduleRoot 'adapter.mt4') -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $repo 'bridge\adapters\mt5-python\worker.py') -Destination (Join-Path $moduleRoot 'adapter.mt5.python\worker.py')
+  $nativeMt5Worker = Join-Path $nativeRoot 'workers\mt5'
+  Copy-Item -LiteralPath (Join-Path $nativeMt5Worker 'worker.py') `
+    -Destination (Join-Path $moduleRoot 'adapter.mt5.python\worker.py')
+  Copy-Item -LiteralPath (Join-Path $nativeMt5Worker 'trade.py') `
+    -Destination (Join-Path $moduleRoot 'adapter.mt5.python\trade.py')
   $mt4Target = Join-Path $moduleRoot 'adapter.mt4'
   if ($MetaEditorExe -and (Test-Path -LiteralPath $MetaEditorExe -PathType Leaf)) {
     $mq4 = Join-Path $mt4Target 'AURUMBridgeEA.mq4'
@@ -109,6 +186,11 @@ try {
     if (-not (Test-Path -LiteralPath $committedEx4 -PathType Leaf) -or (Get-Item -LiteralPath $committedEx4).Length -le 0) { throw 'release_mt4_artifact_missing' }
     Copy-Item -LiteralPath $committedEx4 -Destination (Join-Path $mt4Target 'AURUMBridgeEA.ex4')
   }
+  Assert-NativeReleaseLayout `
+    -CoreDirectory $core `
+    -Mt5Directory (Join-Path $moduleRoot 'adapter.mt5.python') `
+    -Mt4Directory $mt4Target `
+    -LauncherPath $launcherArtifact
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   $sources = [ordered]@{ 'core'=$core; 'adapter.mt5.python'=(Join-Path $moduleRoot 'adapter.mt5.python'); 'adapter.mt4'=(Join-Path $moduleRoot 'adapter.mt4') }
   $packages = @()
@@ -131,7 +213,19 @@ try {
   }
   $manifestPath = Join-Path $outputRoot 'manifest.unsigned.json'
   Write-Utf8NoBom -Path $manifestPath -Content ($manifest | ConvertTo-Json -Depth 8)
-  $buildResult = [pscustomobject]@{ ok=$true; operation='build'; release_id=$ReleaseId; release_notes=$ReleaseNotes; git_branch=$branch; git_commit=$commit; source_dirty=$dirty; server_url=$serverUrlValue; output=$outputRoot; manifest=$manifestPath; packages=$packages }
+  $buildResult = [pscustomobject]@{
+    ok=$true; operation='build'; implementation='rust-native'
+    release_id=$ReleaseId; release_notes=$ReleaseNotes
+    git_branch=$branch; git_commit=$commit; source_dirty=$dirty
+    server_url=$serverUrlValue; output=$outputRoot; manifest=$manifestPath
+    launcher=[ordered]@{
+      package_module='core'
+      package_relative_path='launcher/AURUMBridge.Launcher.exe'
+      size_bytes=(Get-Item -LiteralPath $launcherArtifact).Length
+      sha256=(Get-FileHash -LiteralPath $launcherArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    packages=$packages
+  }
   Write-Utf8NoBom -Path (Join-Path $outputRoot 'build-result.json') -Content ($buildResult | ConvertTo-Json -Depth 8)
   $buildSucceeded = $true
   Get-Content -LiteralPath (Join-Path $outputRoot 'build-result.json') -Raw

@@ -438,7 +438,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 ### 阶段 3：MT5 只读链路
 
-- [进行中] 已拆出一终端一 Python Worker，并完成账户、报价、持仓、挂单、品种列表和 K 线只读 IPC；MT5 Worker 已按最多 250 条的有界批次增量回填历史成交、历史订单和规范化交易，Rust SQLite 历史权威层按账户隔离、单调游标原子归档。Core 已接通 `data_request: history / symbols / rates`：历史按最多 200 条主交易分页返回当前页关联证据并在 4 MiB 协议上限前裁剪，K 线最多 5,000 根；品种和 K 线通过既有 SQLite 数据缓存按终端、账户、epoch 和完整参数隔离。假 Worker 进程闭环与真实 MT5 demo 只读历史/市场数据冒烟均已通过。其余 `symbol_snapshot`、风控、表现、诊断等扩展数据动作仍留在后续批次。
+- [已完成] 已拆出一终端一 Python Worker，并完成账户、报价、持仓、挂单、品种列表和 K 线只读 IPC；MT5 Worker 已按最多 250 条的有界批次增量回填历史成交、历史订单和规范化交易，Rust SQLite 历史权威层按账户隔离、单调游标原子归档。Core 已接通 `history`、`symbols`、`rates`、`chart_data`、`symbol_snapshot`、`risk_snapshot`、`performance_daily`、`pending_order_state` 和 `diagnostics` 全部现有数据动作：历史按最多 200 条主交易分页返回当前页关联证据并在 4 MiB 协议上限前裁剪，K 线最多 5,000 根；品种、K 线和日表现通过 SQLite 数据缓存按终端、账户、epoch 和完整参数隔离。假 Worker 进程闭环、真实 MT5 demo 只读历史/市场数据冒烟及 Core 回环数据动作矩阵均已通过。
 - [已完成] 报价经经纪商时区校准后输出 UTC；时钟未可信、账户改变、终端断开或返回数据无效时失败关闭。
 - [已完成] 已完成账户/持仓/挂单 data delta 的 Native 合同、revision/SQLite 最新投影/服务器 Outbox 原子提交，以及从 SQLite 恢复的快照投影器；投影器按 ticket 计算 upsert/delete，支持首次、epoch 变化、主动 reconciliation 和 gap 后 full snapshot。采集协调器按空闲 1 秒、活跃 250 毫秒动态轮询，支持交易后唤醒、Worker 恢复退避、停止取消和投影前账户路由复核。
 - [已完成] Worker 崩溃和 MT5 终端关闭/重启恢复已完成；Core 会检测 SQLite 中账户、终端路径和 epoch 的运行期变化，有序关闭旧服务器会话与 Worker 后重新加载绑定。独立进程测试已验证新路径、新账户和更高 epoch 的 Hello/状态恢复，以及已 ACK 交易不重放；真实终端的账户/路径人工切换仍作为发布前实机验收项。
@@ -454,7 +454,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - [已完成] 正式 Core 已接通 command ledger、幂等、过期、初始同步门禁和 epoch fencing；独立进程测试证明 WebSocket 命令经 Dispatcher 到 Python Worker，再由交易 Outbox 返回并在服务器 ACK 后落为 `acked`。
 - [进行中] 已完成主动核对的 SQLite 单向状态迁移和周期服务：`dispatched` 无回执命令可以直接落最终事实；uncertain 回执必须先获服务器 ACK，随后才能被更新、更晚且同路由的最终事实替换，并产生新的交易优先回执重新等待 ACK。查询无证据、超时、panic 或非法结果均保持待核对，绝不重放原交易。MT5 `query_execution` 适配器优先按原回执票号、否则按 comment/magic 查询事实，每次使用全新查询 ID，并在结算窗口内无证据时继续等待；该服务已接入 Core 启动和周期生命周期，且可随整体退出立即取消。进程级测试证明启动前中断的命令只产生查询和最终 ACK，不会调用第二次 `order_send`。
 - [已完成] 开仓、挂单、改单、撤单、部分/全部平仓、修改止损止盈真实 MT5 demo 矩阵；改单在执行前必须匹配完整目标快照，部分平仓只有剩余手数精确符合命令时才成功。
-- [进行中] Core 已按 Profile 原子写入版本化、有界的 `runtime-status.json`，状态覆盖服务器、Worker、采集器、最后成功同步、连续失败与 uncertain reconciliation 摘要；服务器断线保留稳定错误码，状态变化写入脱敏 JSONL。隔离进程测试已证明服务器断线会进入 `reconnecting/degraded` 并恢复、Worker 被终止后会记录失败并以新 PID 恢复 `online`，且状态文件暂时不可替换只产生告警、不会终止 Core。真实 MT5 进一步证明旧 Python IPC 在终端重开后不会自行恢复，因此终端会话失效现在会结束 Worker，由 supervisor 重新初始化；实测一次重启后约 4.1 秒恢复在线。运行状态明确排除登录号、Broker Server 和凭据，未来 UI 只读消费，控制动作仍必须走受限 IPC。原始 MT5 返回码到中文结果的 UI 映射仍待 Native UI 阶段完成。
+- [进行中] Core 已按 Profile 原子写入版本化、有界的 `runtime-status.json`，状态覆盖服务器、Worker、采集器、最后成功同步、连续失败与 uncertain reconciliation 摘要；服务器断线保留稳定错误码，状态变化写入脱敏 JSONL。隔离进程测试已证明服务器断线会进入 `reconnecting/degraded` 并恢复、Worker 被终止后会记录失败并以新 PID 恢复 `online`，且状态文件暂时不可替换只产生告警、不会终止 Core。真实 MT5 进一步证明旧 Python IPC 在终端重开后不会自行恢复，因此终端会话失效现在会结束 Worker，由 supervisor 重新初始化；实测一次重启后约 4.1 秒恢复在线。运行状态明确排除登录号、Broker Server 和凭据，Native UI 只读消费，控制动作仍必须走受限 IPC。交易回执继续由服务器审计页按实际 MT4/MT5 平台统一中文化，桌面桥接不复制第二套回执解释逻辑。
 
 交付门：demo 账户故障注入无重复订单；所有结果可在审计日志闭环。
 
@@ -474,6 +474,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - [已完成] 主窗体关闭、托盘菜单和退出流程已与 .NET 版对齐：用户主动退出必须确认，内部关机和 Windows 会话结束不弹确认；Explorer 重启后会恢复托盘图标，托盘创建失败时窗口退化为任务栏最小化，避免界面彻底丢失。
 - [已完成] 主消息循环会按每条键盘消息所属的顶层窗口分别执行 Win32 对话框导航，连接设置与内置日志不再把 Tab / Shift+Tab 错误路由到主窗体；日志多行只读框会主动释放 Tab 以继续遍历刷新、复制和自动刷新控件；连接设置沿用标准 OK / Cancel 控件 ID，保持 .NET 的 Enter 保存与 Esc 取消语义。
 - [已完成] 与 .NET `Cursors.Hand` 约定一致，主界面固定操作、管理员账户操作、连接设置及日志按钮仅在可用时显示手型光标；连接设置的自绘按钮补齐内缩焦点框，键盘焦点位置可见且不改变既有布局和品牌配色。
+- [已完成] 版本包构建器已停止发布旧 .NET 主程序，改为构建并输出 Rust `AURUMBridge.exe`、`AURUMBridge.Core.exe` 和原生 MT5 Worker，并把稳定 `AURUMBridge.Launcher.exe` 放入 `core.zip/launcher` 共同接受模块签名；现有 core / adapter.mt5.python / adapter.mt4 三模块签名清单合同保持不变，开发构建继续写入本地服务器地址。
 - 按 `BridgeMainForm`、`BridgeSettingsForm`、`BridgeObserverProfileDialog`、`BridgeTerminalDirectoryDialog`、`BridgeLogViewerForm` 和 `BridgeApplicationContext` 逐项等价迁移托盘、主界面、内置日志、开机自启、授权、退出。
 - 保留现有平台选择、终端选择、MT4 EA 安装、自适应账户卡片、交易权限彩色 tooltip、更新条幅、管理员控件显隐及全部中文文案语义。
 - 管理员服务器设置及多个观摩源的后台启停、绑定和隔离。
