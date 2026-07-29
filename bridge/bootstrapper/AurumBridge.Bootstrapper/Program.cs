@@ -13,11 +13,6 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        if (IsLauncherInvocation(args))
-        {
-            AurumBridge.Launcher.Program.Main(args).GetAwaiter().GetResult();
-            return Environment.ExitCode;
-        }
         if (args.Length > 0)
         {
             return RunCommandAsync(args).GetAwaiter().GetResult();
@@ -25,17 +20,6 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         Application.Run(new BootstrapperForm());
         return 0;
-    }
-
-    private static bool IsLauncherInvocation(IReadOnlyList<string> args)
-    {
-        var executableName = Path.GetFileName(Environment.ProcessPath);
-        return string.Equals(
-                executableName,
-                BridgeInstallationRegistration.LauncherFileName,
-                StringComparison.OrdinalIgnoreCase)
-            || args.Count > 0
-                && args[0] is "--autostart" or "--uninstall" or "--uninstall-worker";
     }
 
     private static async Task<int> RunCommandAsync(string[] args)
@@ -223,16 +207,23 @@ internal sealed class BootstrapInstaller
     private static readonly string[] RequiredCoreFiles =
     [
         "AURUMBridge.exe",
+        "AURUMBridge.Core.exe",
+        "launcher/AURUMBridge.Launcher.exe",
+        "server-endpoints.json",
+        "runtime/python/python.exe",
+        "modules/adapter.mt5.python/worker.py",
+        "modules/adapter.mt5.python/trade.py",
+        "modules/adapter.mt4/AURUMBridgeEA.ex4",
+    ];
+    private static readonly string[] RejectedLegacyCoreFiles =
+    [
         "AURUMBridge.dll",
+        "AURUMBridge.deps.json",
         "AURUMBridge.runtimeconfig.json",
         "hostfxr.dll",
         "coreclr.dll",
         "e_sqlite3.dll",
         "Microsoft.Data.Sqlite.dll",
-        "server-endpoints.json",
-        "runtime/python/python.exe",
-        "modules/adapter.mt5.python/worker.py",
-        "modules/adapter.mt4/AURUMBridgeEA.ex4",
     ];
     private readonly Assembly _assembly;
     private readonly Action<string> _status;
@@ -337,10 +328,9 @@ internal sealed class BootstrapInstaller
                 cancellationToken);
 
             _status("正在安装稳定启动组件…");
-            var launcherExecutable = ResolveCurrentExecutable();
-
             if (!_rehearsal) EnsureBridgeIsStopped();
             InstallVersion(versionDirectory, manifest.ReleaseVersion);
+            var launcherExecutable = ResolvePackagedLauncher(manifest.ReleaseVersion);
             CopyFileAtomically(
                 launcherExecutable,
                 Path.Combine(_installRoot, BridgeInstallationRegistration.LauncherFileName));
@@ -632,16 +622,24 @@ internal sealed class BootstrapInstaller
         return reader.ReadToEnd();
     }
 
-    private static string ResolveCurrentExecutable()
+    private string ResolvePackagedLauncher(string version)
     {
-        var executable = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(executable)
-            || !string.Equals(Path.GetExtension(executable), ".exe", StringComparison.OrdinalIgnoreCase)
-            || !File.Exists(executable))
+        if (!Version.TryParse(version, out _))
         {
-            throw new InvalidDataException("bootstrap_launcher_source_invalid");
+            throw new InvalidDataException("bootstrap_version_invalid");
         }
-        return Path.GetFullPath(executable);
+        var versions = Path.GetFullPath(Path.Combine(_installRoot, "versions"));
+        var launcher = Path.GetFullPath(Path.Combine(
+            versions,
+            version,
+            "launcher",
+            BridgeInstallationRegistration.LauncherFileName));
+        if (!launcher.StartsWith(versions + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(launcher))
+        {
+            throw new InvalidDataException("bootstrap_native_launcher_missing");
+        }
+        return launcher;
     }
 
     private static void ValidateManifestPackageSet(ReleaseManifest manifest)
@@ -659,7 +657,8 @@ internal sealed class BootstrapInstaller
 
     private static void ValidateVersionDirectory(string directory)
     {
-        if (RequiredCoreFiles.Any(relative => !File.Exists(Path.Combine(directory, relative))))
+        if (RequiredCoreFiles.Any(relative => !File.Exists(Path.Combine(directory, relative)))
+            || RejectedLegacyCoreFiles.Any(relative => File.Exists(Path.Combine(directory, relative))))
         {
             throw new InvalidDataException("bootstrap_version_layout_invalid");
         }

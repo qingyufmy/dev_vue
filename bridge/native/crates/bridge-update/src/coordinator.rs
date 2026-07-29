@@ -39,11 +39,21 @@ const MAXIMUM_IDENTITY_BYTES: u64 = 1024;
 const DISK_SAFETY_RESERVE_BYTES: u64 = 256 * 1024 * 1024;
 const ESTIMATED_EXPANSION_MULTIPLIER: u64 = 4;
 const REQUIRED_PACKAGE_IDS: [&str; 3] = ["core", "adapter.mt5.python", "adapter.mt4"];
-const REQUIRED_CORE_FILES: [&str; 4] = [
+const REQUIRED_CORE_FILES: [&str; 5] = [
     "AURUMBridge.exe",
     "AURUMBridge.Core.exe",
+    "launcher/AURUMBridge.Launcher.exe",
     "server-endpoints.json",
     "runtime/python/python.exe",
+];
+const REJECTED_LEGACY_CORE_FILES: [&str; 7] = [
+    "AURUMBridge.dll",
+    "AURUMBridge.deps.json",
+    "AURUMBridge.runtimeconfig.json",
+    "hostfxr.dll",
+    "coreclr.dll",
+    "e_sqlite3.dll",
+    "Microsoft.Data.Sqlite.dll",
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -706,8 +716,14 @@ fn validate_staged_layout(directory: &Path) -> Result<(), UpdateError> {
     if REQUIRED_CORE_FILES
         .iter()
         .any(|path| !directory.join(path).is_file())
+        || REJECTED_LEGACY_CORE_FILES
+            .iter()
+            .any(|path| directory.join(path).is_file())
         || !directory
             .join("modules/adapter.mt5.python/worker.py")
+            .is_file()
+        || !directory
+            .join("modules/adapter.mt5.python/trade.py")
             .is_file()
         || !directory
             .join("modules/adapter.mt4/AURUMBridgeEA.ex4")
@@ -948,13 +964,17 @@ mod tests {
         let core_archive = zip_payload(&[
             ("AURUMBridge.exe", b"native ui"),
             ("AURUMBridge.Core.exe", b"native core"),
+            ("launcher/AURUMBridge.Launcher.exe", b"native launcher"),
             (
                 "server-endpoints.json",
                 br#"{"schema_version":1,"server_url":"http://127.0.0.1:3000"}"#,
             ),
             ("runtime/python/python.exe", b"python runtime"),
         ]);
-        let mt5_archive = zip_payload(&[("worker.py", b"print('ready')")]);
+        let mt5_archive = zip_payload(&[
+            ("worker.py", b"print('ready')"),
+            ("trade.py", b"print('trade')"),
+        ]);
         let mt4_archive = zip_payload(&[("AURUMBridgeEA.ex4", b"compiled ea")]);
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
         let address = listener.local_addr().expect("server address");
@@ -1087,7 +1107,19 @@ mod tests {
         assert!(
             staged
                 .version_directory
+                .join("launcher/AURUMBridge.Launcher.exe")
+                .is_file()
+        );
+        assert!(
+            staged
+                .version_directory
                 .join("modules/adapter.mt5.python/worker.py")
+                .is_file()
+        );
+        assert!(
+            staged
+                .version_directory
+                .join("modules/adapter.mt5.python/trade.py")
                 .is_file()
         );
         assert!(
@@ -1195,6 +1227,7 @@ mod tests {
         .expect("endpoint");
         for relative in [
             "modules/adapter.mt5.python/worker.py",
+            "modules/adapter.mt5.python/trade.py",
             "modules/adapter.mt4/AURUMBridgeEA.ex4",
         ] {
             let path = root.join(relative);
@@ -1206,6 +1239,14 @@ mod tests {
         assert_eq!(
             validate_staged_layout(&root)
                 .expect_err("missing core")
+                .code(),
+            "update_core_component_missing"
+        );
+        fs::write(root.join("AURUMBridge.Core.exe"), b"component").expect("restore core");
+        fs::write(root.join("AURUMBridge.dll"), b"legacy").expect("legacy component");
+        assert_eq!(
+            validate_staged_layout(&root)
+                .expect_err("legacy core layout")
                 .code(),
             "update_core_component_missing"
         );

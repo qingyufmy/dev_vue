@@ -20,7 +20,6 @@
     <Compile Include="..\..\app\AurumBridge\Update\BridgeInstallationIdentityStore.cs" Link="Update\BridgeInstallationIdentityStore.cs" />
     <Compile Include="..\..\app\AurumBridge\Runtime\BridgeServerEndpointConfiguration.cs" Link="Runtime\BridgeServerEndpointConfiguration.cs" />
     <Compile Include="..\..\shared\BridgeInstallationRegistration.cs" Link="Installation\BridgeInstallationRegistration.cs" />
-    <Compile Include="..\..\launcher\AurumBridge.Launcher\*.cs" Link="Launcher\%(Filename)%(Extension)" />
     <EmbeddedResource Include="$(AurumBootstrapPublicKey)" LogicalName="AurumBridge.Bootstrapper.release-public-key.pem" />
     <AssemblyMetadata Include="AurumServerUrl" Value="$(AurumServerUrl)" />
     <AssemblyMetadata Include="AurumLoopbackServerUrl" Value="$(AurumLoopbackServerUrl)" />

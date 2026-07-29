@@ -238,7 +238,7 @@ describe('bridge release tooling', () => {
     expect(solution).toContain('tools/AurumBridge.UpdateRehearsal/AurumBridge.UpdateRehearsal.csproj')
   })
 
-  it('builds one self-contained binary that installs itself as the pinned launcher', async () => {
+  it('builds a self-contained installer that pins the signed native launcher from core', async () => {
     const bootstrapBuilder = await readFile(new URL('../scripts/bridge-release/build-bootstrapper.ps1', import.meta.url), 'utf8')
     const fullInstallerBuilder = await readFile(new URL('../scripts/bridge-release/build-full-installer.ps1', import.meta.url), 'utf8')
     const bootstrapUploader = await readFile(new URL('../scripts/bridge-release/upload-bootstrapper-qiniu.ps1', import.meta.url), 'utf8')
@@ -252,7 +252,7 @@ describe('bridge release tooling', () => {
     expect(bootstrapUploader).toContain("$signature.Status -eq 'Valid'")
     expect(bootstrapUploader).toContain('bootstrap_authenticode_metadata_mismatch')
     expect(bootstrapUploader).toContain('-AllowUnsignedInstaller:$AllowUnsignedInstaller')
-    expect(bootstrapProject).toContain('launcher\\AurumBridge.Launcher\\*.cs')
+    expect(bootstrapProject).not.toContain('launcher\\AurumBridge.Launcher\\*.cs')
     expect(bootstrapProject).not.toContain('AurumBridge.Bootstrapper.launcher.zip')
     expect(bootstrapProject).toContain('AurumBridge.Bootstrapper.release-public-key.pem')
     expect(bootstrapProject).toContain('AurumTargetEnvironment')
@@ -271,7 +271,13 @@ describe('bridge release tooling', () => {
     expect(bootstrapProgram).toContain('if (!_rehearsal) EnsureBridgeIsStopped()')
     expect(bootstrapProgram).toContain('CreateShortcuts()')
     expect(bootstrapProgram).toContain('BridgeInstallationRegistration.Register(')
-    expect(bootstrapProgram).toContain('ResolveCurrentExecutable()')
+    expect(bootstrapProgram).toContain('ResolvePackagedLauncher(manifest.ReleaseVersion)')
+    expect(bootstrapProgram).toContain('"launcher/AURUMBridge.Launcher.exe"')
+    expect(bootstrapProgram).toContain('"AURUMBridge.Core.exe"')
+    expect(bootstrapProgram).toContain('"modules/adapter.mt5.python/trade.py"')
+    expect(bootstrapProgram).toContain('RejectedLegacyCoreFiles')
+    expect(bootstrapProgram).not.toContain('ResolveCurrentExecutable()')
+    expect(bootstrapProgram).not.toContain('AurumBridge.Launcher.Program.Main')
     expect(bootstrapProgram).toContain('BridgeInstallationRegistration.LauncherFileName')
     expect(bootstrapProgram).toContain('BuildServerCandidates(')
     expect(bootstrapProgram).toContain('server.IsLoopback ? TimeSpan.FromSeconds(2)')

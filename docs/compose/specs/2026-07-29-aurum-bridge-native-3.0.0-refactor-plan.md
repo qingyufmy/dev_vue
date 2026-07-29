@@ -475,6 +475,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - [已完成] 主消息循环会按每条键盘消息所属的顶层窗口分别执行 Win32 对话框导航，连接设置与内置日志不再把 Tab / Shift+Tab 错误路由到主窗体；日志多行只读框会主动释放 Tab 以继续遍历刷新、复制和自动刷新控件；连接设置沿用标准 OK / Cancel 控件 ID，保持 .NET 的 Enter 保存与 Esc 取消语义。
 - [已完成] 与 .NET `Cursors.Hand` 约定一致，主界面固定操作、管理员账户操作、连接设置及日志按钮仅在可用时显示手型光标；连接设置的自绘按钮补齐内缩焦点框，键盘焦点位置可见且不改变既有布局和品牌配色。
 - [已完成] 版本包构建器已停止发布旧 .NET 主程序，改为构建并输出 Rust `AURUMBridge.exe`、`AURUMBridge.Core.exe` 和原生 MT5 Worker，并把稳定 `AURUMBridge.Launcher.exe` 放入 `core.zip/launcher` 共同接受模块签名；现有 core / adapter.mt5.python / adapter.mt4 三模块签名清单合同保持不变，开发构建继续写入本地服务器地址。
+- [已完成] 首次安装器从已验签的 `core` 模块安装 Rust 稳定 Launcher；首次安装与 Rust Updater staging 统一按 Rust UI / Core / Launcher / Python / MT4 / MT5 原生布局验收，MT5 `worker.py` 与 `trade.py` 必须同时存在；旧 .NET 主程序、运行时和托管 SQLite 文件会被拒绝，不再把安装器自身伪装为 Launcher。
 - 按 `BridgeMainForm`、`BridgeSettingsForm`、`BridgeObserverProfileDialog`、`BridgeTerminalDirectoryDialog`、`BridgeLogViewerForm` 和 `BridgeApplicationContext` 逐项等价迁移托盘、主界面、内置日志、开机自启、授权、退出。
 - 保留现有平台选择、终端选择、MT4 EA 安装、自适应账户卡片、交易权限彩色 tooltip、更新条幅、管理员控件显隐及全部中文文案语义。
 - 管理员服务器设置及多个观摩源的后台启停、绑定和隔离。
