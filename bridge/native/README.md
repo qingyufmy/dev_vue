@@ -40,6 +40,21 @@
 `http://127.0.0.1:3000`。统一验证脚本会在 Release 构建完成后把这份配置复制到
 Core 旁边。正式服务器地址不写入 Native 源码，只能在用户明确要求最终打包时由发布流程注入。
 
+### UI 黄金状态
+
+Debug 构建提供只读的确定性界面场景，用于和现有 .NET 版在同一状态下截图比对。场景不会轮询 Core，也不会向本地控制管道发送按钮动作；Release 构建不解析这些参数。`--demo` 保留为管理员多账户场景的兼容别名。
+
+```powershell
+$ui = ".\bridge\native\target\x86_64-pc-windows-msvc\debug\liangjian-bridge-ui.exe"
+& $ui --ui-demo ordinary-mt5
+& $ui --ui-demo admin-multi-account
+& $ui --ui-demo pairing-required
+& $ui --ui-demo server-offline
+& $ui --ui-demo update-ready
+```
+
+更新条幅还可以使用 `update-downloading`、`update-waiting`、`update-activating`、`update-failed`、`update-rolled-back` 和 `update-healthy`。所有场景固定显示同步时间 `13:19:09`，避免截图因为系统时区或采集时刻发生无关变化。
+
 ```powershell
 $cargo = "$env:USERPROFILE\.cargo\bin\cargo.exe"
 Push-Location .\bridge\native

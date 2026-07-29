@@ -53,12 +53,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION,
     LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
     MINMAXINFO, MSG, MoveWindow, PostMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE,
-    SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-    TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
-    WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP,
-    WS_THICKFRAME, WS_VISIBLE,
+    SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE,
+    WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX,
+    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -149,7 +149,63 @@ struct AppState {
     tracking_mouse_leave: bool,
     busy_observer_profiles: BTreeSet<String>,
     open_observer_demo: bool,
+    demo_mode: bool,
     dpi: u32,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DemoScenario {
+    OrdinaryMt5,
+    AdminMultiAccount,
+    PairingRequired,
+    ServerOffline,
+    UpdateDownloading,
+    UpdateReady,
+    UpdateWaiting,
+    UpdateActivating,
+    UpdateFailed,
+    UpdateRolledBack,
+    UpdateHealthy,
+}
+
+#[cfg(debug_assertions)]
+impl DemoScenario {
+    const ALL: [Self; 11] = [
+        Self::OrdinaryMt5,
+        Self::AdminMultiAccount,
+        Self::PairingRequired,
+        Self::ServerOffline,
+        Self::UpdateDownloading,
+        Self::UpdateReady,
+        Self::UpdateWaiting,
+        Self::UpdateActivating,
+        Self::UpdateFailed,
+        Self::UpdateRolledBack,
+        Self::UpdateHealthy,
+    ];
+
+    fn from_slug(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|scenario| scenario.slug() == value)
+    }
+
+    fn slug(self) -> &'static str {
+        match self {
+            Self::OrdinaryMt5 => "ordinary-mt5",
+            Self::AdminMultiAccount => "admin-multi-account",
+            Self::PairingRequired => "pairing-required",
+            Self::ServerOffline => "server-offline",
+            Self::UpdateDownloading => "update-downloading",
+            Self::UpdateReady => "update-ready",
+            Self::UpdateWaiting => "update-waiting",
+            Self::UpdateActivating => "update-activating",
+            Self::UpdateFailed => "update-failed",
+            Self::UpdateRolledBack => "update-rolled-back",
+            Self::UpdateHealthy => "update-healthy",
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -192,15 +248,26 @@ fn main() {
     #[cfg(not(debug_assertions))]
     let open_observer_demo = false;
     #[cfg(debug_assertions)]
-    let state = if open_observer_demo || std::env::args().any(|argument| argument == "--demo") {
-        demo_state(&profile_id)
+    let demo_scenario = if open_observer_demo {
+        Some(DemoScenario::AdminMultiAccount)
     } else {
-        initial_state(&profile_id)
+        parse_demo_scenario(std::env::args().skip(1))
     };
     #[cfg(not(debug_assertions))]
+    let demo_scenario: Option<()> = None;
+    let demo_mode = demo_scenario.is_some();
+    #[cfg(debug_assertions)]
+    let state = demo_scenario
+        .map(|scenario| demo_state(&profile_id, scenario))
+        .unwrap_or_else(|| initial_state(&profile_id));
+    #[cfg(not(debug_assertions))]
     let state = initial_state(&profile_id);
-    let view = build_main_window_view(&state, &BTreeSet::new(), format_local_time)
-        .expect("bridge_ui_initial_state_invalid");
+    let view = if demo_mode {
+        build_main_window_view(&state, &BTreeSet::new(), demo_format_local_time)
+    } else {
+        build_main_window_view(&state, &BTreeSet::new(), format_local_time)
+    }
+    .expect("bridge_ui_initial_state_invalid");
     // SAFETY: the Win32 UI is created and driven on this thread only.
     unsafe {
         SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
@@ -229,89 +296,182 @@ fn main() {
             tracking_mouse_leave: false,
             busy_observer_profiles: BTreeSet::new(),
             open_observer_demo,
+            demo_mode,
             dpi,
         });
     }
 }
 
 #[cfg(debug_assertions)]
-fn demo_state(profile_id: &str) -> UiStateSnapshot {
+fn demo_state(profile_id: &str, scenario: DemoScenario) -> UiStateSnapshot {
     use bridge_local_control::{
-        UiObserverProfile, UiObserverSource, UiTerminalCandidate, UiTerminalStatus,
+        UiObserverProfile, UiObserverSource, UiTerminalCandidate, UiTerminalStatus, UiUpdateNotice,
     };
 
-    UiStateSnapshot {
+    let mut state = UiStateSnapshot {
         schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
         revision: 7,
         profile_id: profile_id.to_owned(),
-        observed_at_utc_msc: now_utc_msc(),
+        observed_at_utc_msc: 1_800_000_000_000,
         phase: "online".to_owned(),
         detail_code: None,
-        selected_platform: Some("mt4".to_owned()),
-        selected_terminal_instance_id: Some("mt4-main".to_owned()),
+        selected_platform: Some("mt5".to_owned()),
+        selected_terminal_instance_id: Some("mt5-main".to_owned()),
         terminal_candidates: vec![UiTerminalCandidate {
-            terminal_instance_id: "mt4-main".to_owned(),
-            platform: "mt4".to_owned(),
-            broker_server: "DPrimeVU-Demo 5".to_owned(),
-            login: "8950701".to_owned(),
-            display_name: Some("8950701 · DPrimeVU-Demo 5".to_owned()),
+            terminal_instance_id: "mt5-main".to_owned(),
+            platform: "mt5".to_owned(),
+            broker_server: "DooTechnology-Demo".to_owned(),
+            login: "596520".to_owned(),
+            display_name: Some("596520 · DooTechnology-Demo".to_owned()),
         }],
-        terminals: vec![
-            UiTerminalStatus {
+        terminals: vec![UiTerminalStatus {
+            terminal_instance_id: "mt5-main".to_owned(),
+            platform: "mt5".to_owned(),
+            broker_server: "DooTechnology-Demo".to_owned(),
+            login: "596520".to_owned(),
+            runtime_state: "running".to_owned(),
+            error_code: None,
+            observer_profile_id: None,
+            terminal_trading_allowed: Some(true),
+            program_trading_allowed: None,
+            account_trading_allowed: Some(true),
+            account_expert_trading_allowed: Some(true),
+            mt4_expert_restart_required: false,
+        }],
+        server_connected: true,
+        last_data_sync_utc_msc: Some(1_800_000_000_000),
+        bridge_version: "3.0.0".to_owned(),
+        can_manage_observer_sources: false,
+        is_administrator: false,
+        observer_sources: Vec::new(),
+        observer_profiles: Vec::new(),
+        update_notice: None,
+        autostart_enabled: true,
+        custom_endpoint_active: false,
+    };
+
+    match scenario {
+        DemoScenario::OrdinaryMt5 => {}
+        DemoScenario::AdminMultiAccount => {
+            state.selected_platform = Some("mt4".to_owned());
+            state.selected_terminal_instance_id = Some("mt4-main".to_owned());
+            state.terminal_candidates = vec![UiTerminalCandidate {
                 terminal_instance_id: "mt4-main".to_owned(),
                 platform: "mt4".to_owned(),
                 broker_server: "DPrimeVU-Demo 5".to_owned(),
                 login: "8950701".to_owned(),
-                runtime_state: "running".to_owned(),
-                error_code: None,
-                observer_profile_id: None,
-                terminal_trading_allowed: Some(true),
-                program_trading_allowed: Some(true),
-                account_trading_allowed: Some(true),
-                account_expert_trading_allowed: Some(true),
-                mt4_expert_restart_required: false,
-            },
-            UiTerminalStatus {
-                terminal_instance_id: "observer-1-terminal".to_owned(),
-                platform: "mt5".to_owned(),
-                broker_server: "DooTechnology-Demo".to_owned(),
-                login: "596520".to_owned(),
-                runtime_state: "running".to_owned(),
-                error_code: None,
-                observer_profile_id: Some("source-1".to_owned()),
-                terminal_trading_allowed: Some(false),
-                program_trading_allowed: None,
-                account_trading_allowed: Some(true),
-                account_expert_trading_allowed: Some(true),
-                mt4_expert_restart_required: false,
-            },
-        ],
-        server_connected: true,
-        last_data_sync_utc_msc: Some(now_utc_msc()),
-        bridge_version: "3.0.0".to_owned(),
-        can_manage_observer_sources: true,
-        is_administrator: true,
-        observer_sources: vec![UiObserverSource {
-            bridge_user_id: 9,
-            display_name: "一号观摩源".to_owned(),
-            account_summary: "596520 · DooTechnology-Demo".to_owned(),
-        }],
-        observer_profiles: vec![UiObserverProfile {
-            observer_profile_id: "source-1".to_owned(),
-            platform: Some("mt5".to_owned()),
-            configured: true,
-            enabled: true,
-            terminal_instance_id: Some("observer-1-terminal".to_owned()),
-            bridge_user_id: Some(9),
-            observer_account_label: Some("一号观摩源".to_owned()),
-            trading_account_label: Some("596520 · DooTechnology-Demo".to_owned()),
-            runtime_phase: Some("online".to_owned()),
-            runtime_detail_code: None,
-        }],
-        update_notice: None,
-        autostart_enabled: true,
-        custom_endpoint_active: false,
+                display_name: Some("8950701 · DPrimeVU-Demo 5".to_owned()),
+            }];
+            state.terminals = vec![
+                UiTerminalStatus {
+                    terminal_instance_id: "mt4-main".to_owned(),
+                    platform: "mt4".to_owned(),
+                    broker_server: "DPrimeVU-Demo 5".to_owned(),
+                    login: "8950701".to_owned(),
+                    runtime_state: "running".to_owned(),
+                    error_code: None,
+                    observer_profile_id: None,
+                    terminal_trading_allowed: Some(true),
+                    program_trading_allowed: Some(true),
+                    account_trading_allowed: Some(true),
+                    account_expert_trading_allowed: Some(true),
+                    mt4_expert_restart_required: false,
+                },
+                UiTerminalStatus {
+                    terminal_instance_id: "observer-1-terminal".to_owned(),
+                    platform: "mt5".to_owned(),
+                    broker_server: "DooTechnology-Demo".to_owned(),
+                    login: "596520".to_owned(),
+                    runtime_state: "running".to_owned(),
+                    error_code: None,
+                    observer_profile_id: Some("source-1".to_owned()),
+                    terminal_trading_allowed: Some(false),
+                    program_trading_allowed: None,
+                    account_trading_allowed: Some(true),
+                    account_expert_trading_allowed: Some(true),
+                    mt4_expert_restart_required: false,
+                },
+            ];
+            state.can_manage_observer_sources = true;
+            state.is_administrator = true;
+            state.observer_sources = vec![UiObserverSource {
+                bridge_user_id: 9,
+                display_name: "一号观摩源".to_owned(),
+                account_summary: "596520 · DooTechnology-Demo".to_owned(),
+            }];
+            state.observer_profiles = vec![UiObserverProfile {
+                observer_profile_id: "source-1".to_owned(),
+                platform: Some("mt5".to_owned()),
+                configured: true,
+                enabled: true,
+                terminal_instance_id: Some("observer-1-terminal".to_owned()),
+                bridge_user_id: Some(9),
+                observer_account_label: Some("一号观摩源".to_owned()),
+                trading_account_label: Some("596520 · DooTechnology-Demo".to_owned()),
+                runtime_phase: Some("online".to_owned()),
+                runtime_detail_code: None,
+            }];
+        }
+        DemoScenario::PairingRequired => {
+            state.phase = "pairing_required".to_owned();
+            state.selected_terminal_instance_id = None;
+            state.terminal_candidates.clear();
+            state.terminals.clear();
+            state.server_connected = false;
+            state.last_data_sync_utc_msc = None;
+        }
+        DemoScenario::ServerOffline => {
+            state.phase = "degraded".to_owned();
+            state.detail_code = Some("bridge_connection_failure".to_owned());
+            state.server_connected = false;
+            state.last_data_sync_utc_msc = None;
+            state.custom_endpoint_active = true;
+        }
+        scenario => {
+            let (phase, urgent) = match scenario {
+                DemoScenario::UpdateDownloading => ("downloading", false),
+                DemoScenario::UpdateReady => ("ready", true),
+                DemoScenario::UpdateWaiting => ("waiting", true),
+                DemoScenario::UpdateActivating => ("activating", true),
+                DemoScenario::UpdateFailed => ("failed", false),
+                DemoScenario::UpdateRolledBack => ("rolled_back", false),
+                DemoScenario::UpdateHealthy => ("healthy", false),
+                _ => unreachable!(),
+            };
+            state.update_notice = Some(UiUpdateNotice {
+                version: "3.0.1".to_owned(),
+                urgent,
+                phase: phase.to_owned(),
+                manual_activation_requested: false,
+            });
+        }
     }
+    state
+}
+
+#[cfg(debug_assertions)]
+fn parse_demo_scenario<I, S>(arguments: I) -> Option<DemoScenario>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_ref() {
+            "--demo" => return Some(DemoScenario::AdminMultiAccount),
+            "--ui-demo" => {
+                return arguments
+                    .next()
+                    .and_then(|value| DemoScenario::from_slug(value.as_ref()));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn demo_format_local_time(_: i64) -> String {
+    "13:19:09".to_owned()
 }
 
 fn parse_profile_id() -> String {
@@ -458,8 +618,12 @@ unsafe extern "system" fn window_proc(
             unsafe {
                 create_controls(hwnd, state);
                 add_tray_icon(hwnd, state);
-                windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(hwnd, TIMER_POLL, 500, None);
-                begin_state_poll(hwnd, state);
+                if !state.demo_mode {
+                    windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(
+                        hwnd, TIMER_POLL, 500, None,
+                    );
+                    begin_state_poll(hwnd, state);
+                }
                 apply_layout(hwnd, state);
                 if state.open_observer_demo {
                     PostMessageW(hwnd, WM_OPEN_OBSERVER_DEMO, 0, 0);
@@ -511,7 +675,9 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_TIMER if wparam == TIMER_POLL => {
-            unsafe { begin_state_poll(hwnd, state) };
+            if !state.demo_mode {
+                unsafe { begin_state_poll(hwnd, state) };
+            }
             0
         }
         WM_STATE_READY | WM_ACTION_READY => {
@@ -715,16 +881,18 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
     let height = (client.bottom - client.top).max(s(WINDOW_MIN_HEIGHT));
     let content_width = width - s(64);
     let mut y = s(96);
-    if app.view.update_banner.is_some() {
+    if let Some(banner) = &app.view.update_banner {
         unsafe {
+            let button_text = wide(&banner.button_text);
+            SetWindowTextW(app.controls.update, button_text.as_ptr());
             move_show(
                 app.controls.update,
                 width - s(148),
                 y + s(14),
                 s(104),
                 s(36),
-                true,
-            )
+                banner.button_visible,
+            );
         };
         y += s(76);
     } else {
@@ -763,6 +931,16 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
         );
         EnableWindow(app.controls.pair, i32::from(idle && app.view.show_pair));
         EnableWindow(app.controls.detect, i32::from(idle));
+        EnableWindow(
+            app.controls.update,
+            i32::from(
+                idle && app
+                    .view
+                    .update_banner
+                    .as_ref()
+                    .is_some_and(|banner| banner.button_enabled),
+            ),
+        );
         EnableWindow(
             app.controls.settings,
             i32::from(idle && app.view.show_settings),
@@ -1565,6 +1743,18 @@ unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
 }
 
 unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: u32) {
+    if app.demo_mode
+        && matches!(
+            id,
+            CONTROL_SETTINGS | MENU_SETTINGS_COMMAND | MENU_RECOVER_OFFICIAL_COMMAND
+        )
+    {
+        return;
+    }
+    if let Some(action) = fixed_button_action(id) {
+        unsafe { begin_action(hwnd, app, action) };
+        return;
+    }
     match id {
         CONTROL_PLATFORM if notification == CBN_SELCHANGE => {
             let selected = unsafe {
@@ -1672,6 +1862,14 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
     }
 }
 
+fn fixed_button_action(id: i32) -> Option<LocalControlAction> {
+    match id {
+        CONTROL_MT4_EXPERT => Some(LocalControlAction::InstallMt4Ea),
+        CONTROL_UPDATE => Some(LocalControlAction::UpdateActivate),
+        _ => None,
+    }
+}
+
 unsafe fn open_observer_dialog(hwnd: HWND, app: &mut AppState) {
     match unsafe {
         observer_profile_dialog::show_modal(hwnd, app.brand_icon, &app.state.observer_sources, None)
@@ -1712,6 +1910,12 @@ unsafe fn begin_state_poll(hwnd: HWND, app: &AppState) {
 }
 
 unsafe fn begin_action(hwnd: HWND, app: &AppState, action: LocalControlAction) {
+    if app.demo_mode {
+        if action == LocalControlAction::BridgeExit {
+            unsafe { DestroyWindow(hwnd) };
+        }
+        return;
+    }
     if app.inbox.action_running.swap(true, Ordering::AcqRel) {
         return;
     }
@@ -2334,8 +2538,21 @@ mod tests {
     }
 
     #[test]
+    fn mt4_repair_and_update_buttons_dispatch_their_local_actions() {
+        assert_eq!(
+            fixed_button_action(CONTROL_MT4_EXPERT),
+            Some(LocalControlAction::InstallMt4Ea)
+        );
+        assert_eq!(
+            fixed_button_action(CONTROL_UPDATE),
+            Some(LocalControlAction::UpdateActivate)
+        );
+        assert_eq!(fixed_button_action(CONTROL_LOGS), None);
+    }
+
+    #[test]
     fn tray_menu_matches_dotnet_visibility_and_recovery_rules() {
-        let mut state = demo_state(DEFAULT_PROFILE_ID);
+        let mut state = demo_state(DEFAULT_PROFILE_ID, DemoScenario::AdminMultiAccount);
         let connected = build_tray_menu_view(DEFAULT_PROFILE_ID, &state, true, false);
         assert_eq!(
             connected,
@@ -2358,6 +2575,104 @@ mod tests {
         assert!(!observer.show_administration);
         assert!(!observer.show_settings);
         assert!(!observer.show_recovery);
+    }
+
+    #[test]
+    fn debug_demo_argument_contract_is_explicit_and_backward_compatible() {
+        assert_eq!(
+            parse_demo_scenario(["--ui-demo", "ordinary-mt5"]),
+            Some(DemoScenario::OrdinaryMt5)
+        );
+        assert_eq!(
+            parse_demo_scenario(["--demo"]),
+            Some(DemoScenario::AdminMultiAccount)
+        );
+        assert_eq!(parse_demo_scenario(["--ui-demo", "unknown"]), None);
+        assert_eq!(parse_demo_scenario(["--profile", "default"]), None);
+        for scenario in DemoScenario::ALL {
+            assert_eq!(DemoScenario::from_slug(scenario.slug()), Some(scenario));
+        }
+    }
+
+    #[test]
+    fn every_debug_demo_scenario_is_a_valid_renderable_snapshot() {
+        for scenario in DemoScenario::ALL {
+            let state = demo_state(DEFAULT_PROFILE_ID, scenario);
+            state
+                .validate(DEFAULT_PROFILE_ID)
+                .unwrap_or_else(|_| panic!("{}", scenario.slug()));
+            let view = build_main_window_view(&state, &BTreeSet::new(), demo_format_local_time)
+                .unwrap_or_else(|_| panic!("{}", scenario.slug()));
+            assert_eq!(
+                view.runtime_summary.contains("13:19:09"),
+                state.last_data_sync_utc_msc.is_some(),
+                "{}",
+                scenario.slug()
+            );
+        }
+    }
+
+    #[test]
+    fn golden_demo_states_cover_permissions_recovery_pairing_and_updates() {
+        let ordinary = demo_state(DEFAULT_PROFILE_ID, DemoScenario::OrdinaryMt5);
+        let ordinary_view =
+            build_main_window_view(&ordinary, &BTreeSet::new(), demo_format_local_time)
+                .expect("ordinary");
+        assert_eq!(
+            ordinary_view.selected_platform_label.as_deref(),
+            Some("MT5")
+        );
+        assert_eq!(ordinary_view.accounts.len(), 1);
+        assert!(!ordinary_view.show_observer_sources);
+        assert!(!ordinary_view.show_settings);
+
+        let administrator = demo_state(DEFAULT_PROFILE_ID, DemoScenario::AdminMultiAccount);
+        let administrator_view =
+            build_main_window_view(&administrator, &BTreeSet::new(), demo_format_local_time)
+                .expect("administrator");
+        assert_eq!(administrator_view.accounts.len(), 2);
+        assert!(administrator_view.show_observer_sources);
+        assert!(administrator_view.show_settings);
+
+        let pairing = demo_state(DEFAULT_PROFILE_ID, DemoScenario::PairingRequired);
+        let pairing_view =
+            build_main_window_view(&pairing, &BTreeSet::new(), demo_format_local_time)
+                .expect("pairing");
+        assert!(pairing_view.show_pair);
+        assert!(!pairing_view.show_logout);
+
+        let offline = demo_state(DEFAULT_PROFILE_ID, DemoScenario::ServerOffline);
+        let offline_view =
+            build_main_window_view(&offline, &BTreeSet::new(), demo_format_local_time)
+                .expect("offline");
+        assert_eq!(offline_view.status.title, "部分连接异常");
+        assert!(offline_view.show_settings);
+        assert!(offline.custom_endpoint_active);
+
+        for scenario in [
+            DemoScenario::UpdateDownloading,
+            DemoScenario::UpdateReady,
+            DemoScenario::UpdateWaiting,
+            DemoScenario::UpdateActivating,
+            DemoScenario::UpdateFailed,
+            DemoScenario::UpdateRolledBack,
+            DemoScenario::UpdateHealthy,
+        ] {
+            let state = demo_state(DEFAULT_PROFILE_ID, scenario);
+            let banner = build_main_window_view(&state, &BTreeSet::new(), demo_format_local_time)
+                .unwrap_or_else(|_| panic!("{}", scenario.slug()))
+                .update_banner
+                .unwrap_or_else(|| panic!("{}", scenario.slug()));
+            assert_eq!(
+                banner.button_enabled,
+                matches!(
+                    scenario,
+                    DemoScenario::UpdateReady | DemoScenario::UpdateRolledBack
+                ),
+                "{}",
+                scenario.slug()
+            );
+        }
     }
 
     fn account_fixture(
