@@ -220,6 +220,102 @@ fn terminal_selection_action_persists_dotnet_preferences_and_restarts_the_cycle(
 }
 
 #[test]
+fn mt4_expert_action_installs_and_rechecks_the_selected_terminal_over_local_control() {
+    let root = unique_test_directory();
+    let profile_id = unique_profile_id();
+    let paths = resolve_profile_paths(&root, &profile_id).expect("profile paths");
+    let terminal_id = "mt4_333333333333333333333333";
+    let terminal_path = root.join("mt4-terminal-data");
+    fs::create_dir_all(terminal_path.join("MQL4")).expect("terminal MQL4");
+    OutboxStore::open_or_create(&paths.database_path)
+        .expect("store")
+        .activate_terminal_binding(
+            terminal_id,
+            "mt4",
+            &terminal_path,
+            &AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "333333".to_owned(),
+            },
+            1_800_000_000_000,
+        )
+        .expect("terminal binding");
+    let preferences = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("preferences store");
+    preferences.save_platform("mt4").expect("save platform");
+    preferences
+        .save_terminal("mt4", terminal_id)
+        .expect("save terminal");
+    let source = root.join("AURUMBridgeEA.ex4");
+    fs::write(&source, b"compiled-ea-fixture").expect("EA source fixture");
+    let child = Command::new(env!("CARGO_BIN_EXE_liangjian-bridge-core"))
+        .args(["--profile", &profile_id, "--background"])
+        .env("AURUM_BRIDGE_DATA_DIR", &root)
+        .env("AURUM_BRIDGE_MT4_EA", &source)
+        .env("LOCALAPPDATA", root.join("local"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn native core");
+    let pairing = wait_for_ui_phase(&profile_id, "pairing_required");
+    assert_eq!(pairing.selected_platform.as_deref(), Some("mt4"));
+    assert_eq!(
+        pairing.selected_terminal_instance_id.as_deref(),
+        Some(terminal_id)
+    );
+    let destination = terminal_path
+        .join("MQL4")
+        .join("Experts")
+        .join("AURUMBridgeEA.ex4");
+    assert_eq!(
+        fs::read(&destination).expect("automatically installed EA"),
+        b"compiled-ea-fixture"
+    );
+    fs::remove_file(&destination).expect("simulate a deleted EA");
+    assert_eq!(
+        local_control_request(
+            &profile_id,
+            "request-install-mt4-ea",
+            LocalControlAction::InstallMt4Ea,
+        ),
+        LocalControlResult::Mt4EaDeployment {
+            status: "installed".to_owned()
+        }
+    );
+    assert_eq!(
+        fs::read(&destination).expect("installed EA"),
+        b"compiled-ea-fixture"
+    );
+    assert_eq!(
+        local_control_request(
+            &profile_id,
+            "request-recheck-mt4-ea",
+            LocalControlAction::InstallMt4Ea,
+        ),
+        LocalControlResult::Mt4EaDeployment {
+            status: "current".to_owned()
+        }
+    );
+
+    SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
+        .expect("request shutdown");
+    let output = child.wait_with_output().expect("wait native core");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    assert!(
+        log_events(&paths.data_directory)
+            .iter()
+            .filter(|event| **event == "native_mt4_ea_manual_deployment_completed")
+            .count()
+            >= 2
+    );
+    assert!(
+        log_events(&paths.data_directory).contains(&"native_mt4_ea_automatic_deployment_completed")
+    );
+    fs::remove_dir_all(root).expect("remove MT4 EA action fixture");
+}
+
+#[test]
 fn observer_profile_cannot_change_global_endpoint_settings() {
     let root = unique_test_directory();
     let profile_id = unique_profile_id();
@@ -570,6 +666,12 @@ fn known_event(value: &str) -> Option<&'static str> {
         "native_runtime_pairing_required" => Some("native_runtime_pairing_required"),
         "native_runtime_stopped" => Some("native_runtime_stopped"),
         "native_runtime_failed" => Some("native_runtime_failed"),
+        "native_mt4_ea_manual_deployment_completed" => {
+            Some("native_mt4_ea_manual_deployment_completed")
+        }
+        "native_mt4_ea_automatic_deployment_completed" => {
+            Some("native_mt4_ea_automatic_deployment_completed")
+        }
         _ => None,
     }
 }

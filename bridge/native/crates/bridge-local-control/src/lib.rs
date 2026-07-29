@@ -219,6 +219,13 @@ impl LocalControlResponse {
                     Err("bridge_local_control_response_invalid")
                 }
             }
+            LocalControlResult::Mt4EaDeployment { status } => {
+                if matches!(status.as_str(), "installed" | "current") {
+                    Ok(())
+                } else {
+                    Err("bridge_local_control_response_invalid")
+                }
+            }
             LocalControlResult::PairingUrl { url } => validate_pairing_url(url),
         }
     }
@@ -231,6 +238,7 @@ pub enum LocalControlResult {
     Accepted,
     Rejected { code: String },
     ConnectivityTest { success: bool, description: String },
+    Mt4EaDeployment { status: String },
     PairingUrl { url: String },
 }
 
@@ -681,6 +689,32 @@ mod tests {
         };
         let payload = serde_json::to_vec(&request).expect("serialize request");
         assert_eq!(decode_request(&payload), Ok(request));
+    }
+
+    #[test]
+    fn mt4_ea_deployment_result_accepts_only_the_fixed_status_contract() {
+        let response = LocalControlResponse {
+            schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+            request_id: "request-ea".to_owned(),
+            result: LocalControlResult::Mt4EaDeployment {
+                status: "installed".to_owned(),
+            },
+        };
+        assert_eq!(response.validate(DEFAULT_PROFILE_ID), Ok(()));
+        let payload = serde_json::to_vec(&response).expect("serialize deployment response");
+        assert_eq!(decode_response(&payload, DEFAULT_PROFILE_ID), Ok(response));
+
+        let invalid = LocalControlResponse {
+            schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+            request_id: "request-ea-invalid".to_owned(),
+            result: LocalControlResult::Mt4EaDeployment {
+                status: "updated".to_owned(),
+            },
+        };
+        assert_eq!(
+            invalid.validate(DEFAULT_PROFILE_ID),
+            Err("bridge_local_control_response_invalid")
+        );
     }
 
     #[test]

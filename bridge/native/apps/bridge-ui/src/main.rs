@@ -25,18 +25,19 @@ use windows_sys::Win32::Foundation::{
     COLORREF, FILETIME, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
-    DEFAULT_QUALITY, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK,
-    DeleteObject, DrawFocusRect, DrawTextW, FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, GetDC,
-    GetDeviceCaps, GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, LOGPIXELSX,
-    OUT_DEFAULT_PRECIS, ReleaseDC, SelectObject, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    CLIP_DEFAULT_PRECIS, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, CreateFontW, CreateSolidBrush,
+    DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE,
+    DT_VCENTER, DT_WORDBREAK, DeleteObject, DrawFocusRect, DrawTextW, FF_DONTCARE, FW_BOLD,
+    FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetStockObject, GetSysColor, HBRUSH, HDC, HFONT,
+    HGDIOBJ, InvalidateRect, LOGPIXELSX, OUT_DEFAULT_PRECIS, ReleaseDC, SelectObject, SetBkMode,
+    SetTextColor, TRANSPARENT, WHITE_BRUSH,
 };
 use windows_sys::Win32::Storage::FileSystem::FileTimeToLocalFileTime;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Time::FileTimeToSystemTime;
 use windows_sys::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, InitCommonControls, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON,
-    WC_COMBOBOXW, WM_MOUSELEAVE,
+    DRAWITEMSTRUCT, InitCommonControls, ODS_COMBOBOXEDIT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED,
+    ODT_BUTTON, ODT_COMBOBOX, WC_COMBOBOXW, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -47,18 +48,19 @@ use windows_sys::Win32::UI::Shell::{
     ShellExecuteW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, BS_OWNERDRAW, CBN_SELCHANGE, CBS_DROPDOWNLIST, CREATESTRUCTW, CS_HREDRAW,
-    CS_VREDRAW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar, GWLP_USERDATA, GetClientRect,
-    GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU, IDC_ARROW, IDI_APPLICATION,
-    LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
-    MINMAXINFO, MSG, MoveWindow, PostMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE,
-    SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE,
-    WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX,
-    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    AdjustWindowRectEx, BS_OWNERDRAW, CB_SETITEMHEIGHT, CBN_SELCHANGE, CBS_DROPDOWNLIST,
+    CBS_OWNERDRAWFIXED, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateIconFromResourceEx,
+    CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
+    DrawMenuBar, GWLP_USERDATA, GetClientRect, GetMessageW, GetSystemMetrics, GetWindowLongPtrW,
+    HICON, HMENU, IDC_ARROW, IDI_APPLICATION, LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED,
+    MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW,
+    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SetWindowLongPtrW,
+    SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage,
+    WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM,
+    WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
+    WM_PAINT, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
+    WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -112,6 +114,7 @@ struct SharedInbox {
 struct Fonts {
     body: HFONT,
     body_bold: HFONT,
+    platform: HFONT,
     heading: HFONT,
     title: HFONT,
     small: HFONT,
@@ -714,7 +717,7 @@ unsafe extern "system" fn window_proc(
             unsafe { handle_account_click(hwnd, state, point_from_lparam(lparam)) };
             0
         }
-        WM_DRAWITEM => unsafe { draw_button(lparam) },
+        WM_DRAWITEM => unsafe { draw_control(state, lparam) },
         WM_PAINT => {
             unsafe { paint_window(hwnd, state) };
             0
@@ -759,7 +762,11 @@ unsafe fn create_controls(hwnd: HWND, state: &mut AppState) {
             0,
             WC_COMBOBOXW,
             null(),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST as u32,
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_TABSTOP
+                | CBS_DROPDOWNLIST as u32
+                | CBS_OWNERDRAWFIXED as u32,
             0,
             0,
             136,
@@ -820,6 +827,26 @@ unsafe fn apply_control_fonts(state: &AppState) {
                 1,
             );
         }
+    }
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+            state.controls.platform,
+            WM_SETFONT,
+            state.fonts.platform as usize,
+            1,
+        );
+        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+            state.controls.platform,
+            CB_SETITEMHEIGHT,
+            0,
+            scale(28, state.dpi) as isize,
+        );
+        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+            state.controls.platform,
+            CB_SETITEMHEIGHT,
+            usize::MAX,
+            scale(28, state.dpi) as isize,
+        );
     }
 }
 
@@ -1678,36 +1705,36 @@ fn draw_border(hdc: HDC, bounds: RECT, color: Rgb) {
     );
 }
 
-unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
+unsafe fn draw_control(app: &AppState, lparam: LPARAM) -> LRESULT {
     let item = lparam as *const DRAWITEMSTRUCT;
-    if item.is_null() || unsafe { (*item).CtlType } != ODT_BUTTON {
+    if item.is_null() {
         return 0;
     }
     let item = unsafe { &*item };
+    if item.CtlType == ODT_COMBOBOX && item.CtlID as i32 == CONTROL_PLATFORM {
+        draw_platform_item(app, item);
+        return 1;
+    }
+    unsafe { draw_button(lparam) }
+}
+
+unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
+    let item = lparam as *const DRAWITEMSTRUCT;
+    if item.is_null() {
+        return 0;
+    }
+    let item = unsafe { &*item };
+    if item.CtlType != ODT_BUTTON {
+        return 0;
+    }
     let primary = matches!(item.CtlID as i32, CONTROL_PAIR | CONTROL_UPDATE);
     let disabled = item.itemState & ODS_DISABLED != 0;
     let selected = item.itemState & ODS_SELECTED != 0;
-    let background = if disabled {
-        Rgb(226, 232, 240)
-    } else if primary && selected {
-        Rgb(194, 150, 35)
-    } else if primary {
-        Rgb(212, 175, 55)
-    } else if selected {
-        Rgb(241, 245, 249)
-    } else {
-        Rgb(255, 255, 255)
-    };
+    let (background, foreground) = button_colors(primary, disabled, selected);
     fill(item.hDC, item.rcItem, background);
-    draw_border(
-        item.hDC,
-        item.rcItem,
-        if primary {
-            Rgb(212, 175, 55)
-        } else {
-            Rgb(203, 213, 225)
-        },
-    );
+    if !primary {
+        draw_border(item.hDC, item.rcItem, Rgb(203, 213, 225));
+    }
     let mut buffer = [0_u16; 128];
     let length = unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW(
@@ -1715,13 +1742,6 @@ unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
             buffer.as_mut_ptr(),
             buffer.len() as i32,
         )
-    };
-    let foreground = if disabled {
-        Rgb(148, 163, 184)
-    } else if primary {
-        Rgb(15, 23, 42)
-    } else {
-        Rgb(30, 41, 59)
     };
     draw_text_wide(
         item.hDC,
@@ -1740,6 +1760,79 @@ unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
         unsafe { DrawFocusRect(item.hDC, &focus) };
     }
     1
+}
+
+fn button_colors(primary: bool, disabled: bool, selected: bool) -> (Rgb, Rgb) {
+    if disabled {
+        return (Rgb(226, 232, 240), Rgb(148, 163, 184));
+    }
+    if primary {
+        return (
+            if selected {
+                Rgb(29, 78, 216)
+            } else {
+                Rgb(37, 99, 235)
+            },
+            Rgb(255, 255, 255),
+        );
+    }
+    (
+        if selected {
+            Rgb(241, 245, 249)
+        } else {
+            Rgb(255, 255, 255)
+        },
+        Rgb(30, 41, 59),
+    )
+}
+
+fn draw_platform_item(app: &AppState, item: &DRAWITEMSTRUCT) {
+    let edit_surface = item.itemState & ODS_COMBOBOXEDIT != 0;
+    let selected = !edit_surface && item.itemState & ODS_SELECTED != 0;
+    let disabled = item.itemState & ODS_DISABLED != 0;
+    let background = if disabled {
+        Rgb(248, 250, 252)
+    } else if selected {
+        system_color(COLOR_HIGHLIGHT)
+    } else {
+        Rgb(255, 255, 255)
+    };
+    let foreground = if disabled {
+        Rgb(100, 116, 139)
+    } else if selected {
+        system_color(COLOR_HIGHLIGHTTEXT)
+    } else {
+        Rgb(30, 41, 59)
+    };
+    fill(item.hDC, item.rcItem, background);
+    let text = match item.itemID {
+        0 => "MT5",
+        1 => "MT4",
+        _ => "",
+    };
+    let mut text_bounds = item.rcItem;
+    text_bounds.left += scale(8, app.dpi);
+    text_bounds.right -= scale(12, app.dpi);
+    draw_text(
+        item.hDC,
+        text,
+        text_bounds,
+        app.fonts.platform,
+        foreground,
+        DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+    );
+    if item.itemState & ODS_FOCUS != 0 && !edit_surface {
+        unsafe { DrawFocusRect(item.hDC, &item.rcItem) };
+    }
+}
+
+fn system_color(index: i32) -> Rgb {
+    let value = unsafe { GetSysColor(index) };
+    Rgb(
+        (value & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        ((value >> 16) & 0xff) as u8,
+    )
 }
 
 unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: u32) {
@@ -2000,6 +2093,13 @@ unsafe fn receive_background_message(hwnd: HWND, app: &mut AppState) {
             open_browser(&url);
         }
         Some(UiMessage::Action {
+            result: Ok(LocalControlResult::Mt4EaDeployment { status }),
+            ..
+        }) => {
+            show_mt4_expert_deployment(hwnd, &status);
+            unsafe { begin_state_poll(hwnd, app) };
+        }
+        Some(UiMessage::Action {
             action,
             result: Ok(LocalControlResult::Accepted),
         }) => {
@@ -2058,10 +2158,22 @@ fn open_browser(url: &str) {
 }
 
 fn show_error(hwnd: HWND, code: &str) {
-    let message = if code == "bridge_local_control_action_unavailable" {
-        "该功能正在迁移到新版核心，当前尚不可用。"
-    } else {
-        "量见智桥暂时无法完成操作，请稍后重试。"
+    let message = match code {
+        "bridge_local_control_action_unavailable" => "该功能正在迁移到新版核心，当前尚不可用。",
+        "mt4_platform_not_selected" => "请先将交易平台切换为 MT4。",
+        "mt4_terminal_not_found" => "未发现 MT4，请先打开一次 MT4，然后点击“重新检测”。",
+        "mt4_terminal_selection_required" => "检测到多个 MT4，请先选择需要安装 EA 的终端。",
+        "mt4_terminal_data_path_not_found" => "当前 MT4 数据目录已不存在，请重新选择 MT4。",
+        "mt4_ea_package_not_found" | "mt4_ea_package_invalid" => {
+            "MT4 EA 组件不完整，请重新安装或修复量见智桥。"
+        }
+        "mt4_ea_install_access_denied" => {
+            "无法写入 MT4 数据目录，请关闭 MT4 后重试，或检查当前 Windows 账户权限。"
+        }
+        "mt4_ea_install_io_failed" | "mt4_ea_install_failed" => {
+            "MT4 EA 暂时无法安装，请关闭 MT4 后重新尝试。"
+        }
+        _ => "量见智桥暂时无法完成操作，请稍后重试。",
     };
     let text = wide(message);
     let title = wide(PRODUCT_NAME);
@@ -2072,6 +2184,33 @@ fn show_error(hwnd: HWND, code: &str) {
             title.as_ptr(),
             windows_sys::Win32::UI::WindowsAndMessaging::MB_OK
                 | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONWARNING,
+        );
+    }
+}
+
+fn show_mt4_expert_deployment(hwnd: HWND, status: &str) {
+    let summary = if status == "installed" {
+        "EA 已安装到当前 MT4。"
+    } else {
+        "EA 已经是最新版本。"
+    };
+    let message = format!(
+        "{summary}\n\n接下来请在 MT4 中完成：\n\n\
+         1. 打开“导航器 → 智能交易系统”，右键刷新。\n\
+         2. 将 AURUMBridgeEA 拖到任意一个保持打开的图表。\n\
+         3. 在 EA 属性的“常用”页勾选“允许实时自动交易”。\n\
+         4. 确认 MT4 顶部“自动交易”按钮已开启。\n\n\
+         无需开启 DLL 导入或 WebRequest。"
+    );
+    let text = wide(&message);
+    let title = wide("安装 / 修复 MT4 EA");
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+            hwnd,
+            text.as_ptr(),
+            title.as_ptr(),
+            windows_sys::Win32::UI::WindowsAndMessaging::MB_OK
+                | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONINFORMATION,
         );
     }
 }
@@ -2236,6 +2375,7 @@ unsafe fn create_fonts(dpi: u32) -> Fonts {
     Fonts {
         body: create_point_font(90, dpi, FW_NORMAL as i32),
         body_bold: create_point_font(90, dpi, FW_BOLD as i32),
+        platform: create_point_font(95, dpi, FW_NORMAL as i32),
         heading: create_point_font(180, dpi, FW_BOLD as i32),
         title: create_point_font(120, dpi, FW_BOLD as i32),
         small: create_point_font(85, dpi, FW_NORMAL as i32),
@@ -2315,6 +2455,7 @@ impl Drop for Fonts {
         for font in [
             self.body,
             self.body_bold,
+            self.platform,
             self.heading,
             self.title,
             self.small,
@@ -2513,6 +2654,30 @@ mod tests {
         assert_eq!(
             rect_coordinates(permission_badge_rect(card, 120)),
             (43, 73, 168, 103)
+        );
+    }
+
+    #[test]
+    fn main_button_palette_matches_the_dotnet_flat_button_contract() {
+        assert_eq!(
+            button_colors(true, false, false),
+            (Rgb(37, 99, 235), Rgb(255, 255, 255))
+        );
+        assert_eq!(
+            button_colors(true, false, true),
+            (Rgb(29, 78, 216), Rgb(255, 255, 255))
+        );
+        assert_eq!(
+            button_colors(false, false, false),
+            (Rgb(255, 255, 255), Rgb(30, 41, 59))
+        );
+        assert_eq!(
+            button_colors(false, false, true),
+            (Rgb(241, 245, 249), Rgb(30, 41, 59))
+        );
+        assert_eq!(
+            button_colors(true, true, false),
+            (Rgb(226, 232, 240), Rgb(148, 163, 184))
         );
     }
 

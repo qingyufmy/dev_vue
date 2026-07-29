@@ -5,6 +5,7 @@
 ## 当前阶段
 
 - 已建立独立 Rust workspace，不覆盖现有 V3 构建入口。
+- Native 重构只替换实现语言和内部进程架构，不重新设计用户界面；现有 .NET 版的窗口尺寸、布局、控件文案、颜色、显示条件和托盘交互是 3.0.0 的固定产品合同。Rust UI 的新增状态只能落入同一套界面结构，不能另起一套视觉方案。
 - `bridge-contract` 固定首批外部协议常量和 JSON 包络校验。
 - `bridge-foundation` 固定 Launcher 参数、安装目录、Profile 隔离、运行时文件和 SQLite WAL 健康检查合同。
 - `bridge-security-win` 与 V3 共用 DPAPI CurrentUser、固定 entropy、JSON 字段和原子凭据轮换合同。
@@ -15,6 +16,7 @@
 - `bridge-terminal-session` 已把 MT5 Worker supervisor、数据路由、SQLite 投影和采集器组合成单终端会话。账户变化必须提升 `connection_epoch`；合法替换会先等待旧采集器退出，再停止旧 Worker，最后启动新会话。非法 epoch 或采集配置会在停止旧会话前拒绝，旧控制句柄在切换后失效；只有 Worker 与初始投影都 Ready 时会话才报告数据就绪。Core 共同生命周期可启动多个隔离管理器，并在服务器运行结束后倒序关闭。
 - `liangjian-bridge-core` 已使用真实 Profile 启动准备链路：校验并读取 DPAPI 凭据状态、创建或打开该 Profile 的 SQLite、读取终端绑定；MT5 绑定会校验安装目录中的最小 Python 与 Worker，MT4 绑定会建立当前用户专用的 EA 管道会话，两者都使用与账户 epoch 完全一致的路由。该步骤不记录令牌或账户内容；缺少授权时不会启动终端会话。
 - `liangjian-bridge-core` 的正式入口已接入共同生命周期：终端目录统一启动/倒序停止多个 MT5 会话，凭据源检测首次授权与主动退出，服务器监督器与 Worker 共享取消边界；Core 每 500 毫秒检测 SQLite 终端绑定指纹，账户、平台、路径或 epoch 变化时先有序停止旧服务器会话与全部 Worker，再从权威存储重建新会话和 Hello 路由，已 ACK 的交易命令不会重放。服务器 gap 只允许命中当前 terminal/epoch 后请求 full snapshot，真实执行且回执已持久化的成功命令只唤醒一次对应采集器。未授权时 Core 常驻等待且不启动 Worker、不打开浏览器；主动退出会关闭当前服务器会话并回到等待授权。心跳 freshness 来自当前采集状态，版本通知保留给后续 Native UI/Updater。
+- Native UI 的“安装 / 修复 EA”已经接通 Core：只处理当前 Profile 中唯一或明确选中的 MT4 SQLite 绑定；EA 按正式模块、显式开发覆盖和仓库开发目录解析，限制为 16 MiB，写入前使用 SHA-256 判断是否已是当前版本，并通过同目录临时文件和 Windows write-through 原子替换部署到 `MQL4/Experts/AURUMBridgeEA.ex4`。成功后界面会按现有 .NET 版提示刷新导航器、挂载 EA、开启两层自动交易开关，且明确说明无需 DLL 或 WebRequest。
 - `bridge-command` 已建立持久化命令账本和进程内单航班执行：命令先落盘再分发，重复命令复用同一回执，超时、Worker panic、路由错配及重启中断都会持久化为 `uncertain`，不会自动重放交易。周期核对服务只读取 `dispatched` 无回执命令和服务器已 ACK 的 uncertain 回执；只读核对无证据、超时、panic 或返回非法路由时保持待核对，只有同路由的最终事实才会原子生成新交易回执并重新等待服务器 ACK。MT5 只读核对适配器已接入正式 Core：启动后立即核对、随后每 5 秒分批运行，每次生成全新查询 ID，优先采用原回执票号，否则按原命令的 comment/magic 查询终端事实；30 秒结算窗口内无证据继续等待，窗口后才产生明确失败。核对任务与服务器及 Worker 共用取消边界，退出不会等待完整批次。
 - `bridge-worker-host` 已建立版本化 Core ↔ Worker IPC 合同：4 MiB 小端长度前缀 JSON 帧、会话 nonce、终端/账户/epoch 路由、请求关联、超时后通道熔断和能力协商均严格校验；`query_execution` 使用独立只读操作，不能进入交易执行操作。Windows 管道使用当前用户 SID 的保护 DACL、拒绝远程客户端和首实例防抢占；Worker 只有在受 Job Object 管理的子进程完成严格握手后才会交付客户端。注册表通过终端 claim 和单调代际号原子替换客户端，请求前后均执行 fencing；崩溃按 1/2/4/8/10 秒退避重启，新账户 claim 会终止旧 supervisor，避免路由争抢。
 - `bridge-mt4` 已冻结 Rust 与 MT4 EA / .NET 对照实现共用的本地二进制合同：4 MiB 小端长度前缀、严格 UTF-8、协议 3 的 Hello / Welcome、账户/持仓/挂单采集、扩展数据、历史分页、交易指令/结果和关闭消息。EA 3.2.5 的执行请求会同时核对终端实例、Broker、登录号、epoch、期限及 MT4 四层交易权限；响应 ID、格式或管道超时异常会熔断当前连接。交易完成后 Core 立即唤醒快照和历史采集；已 dispatch 但没有可信结果的命令进入持久化 `uncertain`，只允许根据 EA 返回的活动订单、活动持仓或历史事实核对，不自动重发交易。连接层使用当前用户 SID 保护 DACL、拒绝远程客户端并支持首实例防抢占，正式 Core 已接入默认 MT4 注册管道和按终端隔离的重连管道。

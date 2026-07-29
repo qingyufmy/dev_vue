@@ -1,3 +1,4 @@
+mod mt4_expert_installer;
 mod observer_terminal;
 
 use bridge_foundation::{
@@ -20,6 +21,7 @@ use bridge_runtime_win::{
     ProcessSupervisorHandle, RestartPolicy, SingleInstanceGuard, default_lock_directory,
 };
 use bridge_security_win::{BridgeCredential, CredentialStore};
+use bridge_store::{OutboxStore, TerminalBinding};
 use bridge_terminal_session::TerminalSessionState;
 use bridge_transport::{
     BridgeAuthClient, ConnectionState, CredentialSource, ENDPOINT_SETTINGS_FILE_NAME,
@@ -40,6 +42,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex as AsyncMutex, watch};
 use tokio::time::Instant;
+
+use mt4_expert_installer::{deploy_expert, resolve_expert_source};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const ADMINISTRATOR_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -739,6 +743,16 @@ async fn run_local_control_server(
                     signal_preference_change(&preference_change_sender);
                     LocalControlResult::Accepted
                 }
+                LocalControlAction::InstallMt4Ea => {
+                    install_selected_mt4_expert(
+                        &ui_state,
+                        &application_directory,
+                        &root_data_directory,
+                        server.endpoint().profile_id(),
+                        &logger,
+                    )
+                    .await
+                }
                 LocalControlAction::SettingsTest { settings } => {
                     let is_administrator = administrator_cache.lock().await.is_administrator;
                     if !endpoint_settings_allowed(
@@ -958,6 +972,92 @@ async fn run_local_control_server(
             logger.warning("native_local_control_disconnect_failed", Some(error.code()));
         }
     }
+}
+
+async fn install_selected_mt4_expert(
+    ui_state: &UiStateStore,
+    application_directory: &std::path::Path,
+    root_data_directory: &std::path::Path,
+    profile_id: &str,
+    logger: &BridgeLogger,
+) -> LocalControlResult {
+    let binding = (|| {
+        let state = ui_state.snapshot()?;
+        let paths = resolve_profile_paths(root_data_directory, profile_id)?;
+        let store =
+            OutboxStore::open_or_create(&paths.database_path).map_err(|error| error.code())?;
+        let bindings = store.terminal_bindings().map_err(|error| error.code())?;
+        resolve_selected_mt4_binding(&state, &bindings).cloned()
+    })();
+    let binding = match binding {
+        Ok(binding) => binding,
+        Err(code) => {
+            logger.warning("native_mt4_ea_manual_deployment_failed", Some(code));
+            return LocalControlResult::Rejected {
+                code: code.to_owned(),
+            };
+        }
+    };
+    let terminal_instance_id = binding.terminal_instance_id.clone();
+    let deployment = deploy_mt4_expert_for_binding(application_directory, &binding).await;
+    match deployment {
+        Ok(status) => {
+            logger.info(
+                "native_mt4_ea_manual_deployment_completed",
+                Some(&format!(
+                    "terminal_id={terminal_instance_id};status={}",
+                    status.as_str()
+                )),
+            );
+            LocalControlResult::Mt4EaDeployment {
+                status: status.as_str().to_owned(),
+            }
+        }
+        Err(code) => {
+            logger.warning("native_mt4_ea_manual_deployment_failed", Some(code));
+            LocalControlResult::Rejected {
+                code: code.to_owned(),
+            }
+        }
+    }
+}
+
+async fn deploy_mt4_expert_for_binding(
+    application_directory: &std::path::Path,
+    binding: &TerminalBinding,
+) -> Result<mt4_expert_installer::Mt4ExpertDeploymentStatus, &'static str> {
+    let source = resolve_expert_source(application_directory, env::var_os("AURUM_BRIDGE_MT4_EA"))?;
+    let terminal_data_path = binding.terminal_path.clone();
+    tokio::task::spawn_blocking(move || deploy_expert(&source, &terminal_data_path))
+        .await
+        .map_err(|_| "mt4_ea_install_failed")?
+}
+
+fn resolve_selected_mt4_binding<'a>(
+    state: &UiStateSnapshot,
+    bindings: &'a [TerminalBinding],
+) -> Result<&'a TerminalBinding, &'static str> {
+    if state.selected_platform.as_deref() != Some("mt4") {
+        return Err("mt4_platform_not_selected");
+    }
+    let mt4_bindings = bindings
+        .iter()
+        .filter(|binding| binding.platform == "mt4")
+        .collect::<Vec<_>>();
+    if mt4_bindings.is_empty() {
+        return Err("mt4_terminal_not_found");
+    }
+    if mt4_bindings.len() == 1 {
+        return Ok(mt4_bindings[0]);
+    }
+    let selected = state
+        .selected_terminal_instance_id
+        .as_deref()
+        .ok_or("mt4_terminal_selection_required")?;
+    mt4_bindings
+        .into_iter()
+        .find(|binding| binding.terminal_instance_id == selected)
+        .ok_or("mt4_terminal_selection_required")
 }
 
 async fn configure_observer_profile(
@@ -1320,6 +1420,23 @@ async fn run_profile_lifecycle(
             continue;
         };
         retain_selected_terminal(&mut bootstrap, platform, selected_terminal);
+        if platform == "mt4"
+            && let Some(binding) = bootstrap.mt4_bindings.first()
+        {
+            match deploy_mt4_expert_for_binding(application_directory, binding).await {
+                Ok(status) => logger.info(
+                    "native_mt4_ea_automatic_deployment_completed",
+                    Some(&format!(
+                        "terminal_id={};status={}",
+                        binding.terminal_instance_id,
+                        status.as_str()
+                    )),
+                ),
+                Err(code) => {
+                    logger.warning("native_mt4_ea_automatic_deployment_failed", Some(code))
+                }
+            }
+        }
         if bootstrap.credential_state == CredentialState::Missing {
             publish_inactive_status(
                 logger,
@@ -2021,6 +2138,7 @@ fn now_utc_msc() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bridge_contract::AccountRef;
     use bridge_security_win::BridgeCredential;
     use bridge_transport::load_endpoint_settings;
 
@@ -2062,6 +2180,48 @@ mod tests {
             &state,
             false,
         ));
+    }
+
+    #[test]
+    fn mt4_expert_repair_uses_the_only_binding_or_the_explicit_selection() {
+        let mut state = NativeRuntimeStatusSnapshot::inactive(
+            DEFAULT_PROFILE_ID,
+            VERSION,
+            now_utc_msc(),
+            "starting",
+            "stopped",
+            None,
+        )
+        .expect("runtime status")
+        .to_ui_state(1)
+        .expect("UI state");
+        let first = mt4_binding("mt4_0123456789abcdef01234567", "one");
+        let second = mt4_binding("mt4_89abcdef0123456789abcdef", "two");
+
+        assert_eq!(
+            resolve_selected_mt4_binding(&state, std::slice::from_ref(&first)),
+            Err("mt4_platform_not_selected")
+        );
+        state.selected_platform = Some("mt4".to_owned());
+        assert_eq!(
+            resolve_selected_mt4_binding(&state, &[]),
+            Err("mt4_terminal_not_found")
+        );
+        assert_eq!(
+            resolve_selected_mt4_binding(&state, std::slice::from_ref(&first))
+                .map(|binding| binding.terminal_instance_id.as_str()),
+            Ok(first.terminal_instance_id.as_str())
+        );
+        assert_eq!(
+            resolve_selected_mt4_binding(&state, &[first.clone(), second.clone()]),
+            Err("mt4_terminal_selection_required")
+        );
+        state.selected_terminal_instance_id = Some(second.terminal_instance_id.clone());
+        assert_eq!(
+            resolve_selected_mt4_binding(&state, &[first, second.clone()])
+                .map(|binding| binding.terminal_instance_id.as_str()),
+            Ok(second.terminal_instance_id.as_str())
+        );
     }
 
     #[test]
@@ -2202,5 +2362,19 @@ mod tests {
             "liangjian-bridge-core-main-{}-{stamp}-{suffix}",
             std::process::id()
         ))
+    }
+
+    fn mt4_binding(terminal_instance_id: &str, directory: &str) -> TerminalBinding {
+        TerminalBinding {
+            terminal_instance_id: terminal_instance_id.to_owned(),
+            platform: "mt4".to_owned(),
+            terminal_path: std::env::temp_dir().join(directory),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 1,
+            updated_at_utc_msc: 1_800_000_000_000,
+        }
     }
 }
