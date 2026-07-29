@@ -13,6 +13,6 @@
 
 安装完成后，用户只需把 EA 挂到任意一个图表一次。默认 Pipe 名为 `AURUMBridgeV3`，正常安装无需修改。
 
-MT4 不支持 MT5 的 stop-limit 类型，主程序会在发送到 EA 前明确拒绝。多 MT4 连接注册仍需继续实现；在完成 demo 账户下单、撤单与断线复核前，本模块不可用于生产交易。
+MT4 不支持 MT5 的 stop-limit 类型，主程序会在发送到 EA 前明确拒绝。Native 默认 Core 统一接收公共注册，按终端数据目录将主账户和观摩源分配到隔离 Profile，再切换到各终端专用重连管道；Profile 进程不会争抢公共入口。生产发布前仍需对最终安装包执行 demo 账户下单、撤单、账户切换与断线复核。
 
 实现依据：MetaQuotes 官方文档说明 MQL4 的 `FileOpen` 支持 `\\.\pipe\...`，并要求在 Named Pipe 读写切换之间调用 `FileFlush` 与 `FileSeek`；定时任务由 `EventSetTimer`/`OnTimer` 驱动。

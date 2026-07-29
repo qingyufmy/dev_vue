@@ -505,10 +505,47 @@ impl OutboxStore {
         account_ref: &AccountRef,
         updated_at_utc_msc: i64,
     ) -> Result<TerminalBinding, StoreError> {
-        let mut binding = normalize_terminal_binding(
+        self.activate_terminal_binding_internal(
             terminal_instance_id,
             platform,
             terminal_path.as_ref(),
+            account_ref,
+            updated_at_utc_msc,
+            false,
+        )
+    }
+
+    pub fn activate_terminal_binding_for_path(
+        &self,
+        terminal_instance_id: &str,
+        platform: &str,
+        terminal_path: impl AsRef<Path>,
+        account_ref: &AccountRef,
+        updated_at_utc_msc: i64,
+    ) -> Result<TerminalBinding, StoreError> {
+        self.activate_terminal_binding_internal(
+            terminal_instance_id,
+            platform,
+            terminal_path.as_ref(),
+            account_ref,
+            updated_at_utc_msc,
+            true,
+        )
+    }
+
+    fn activate_terminal_binding_internal(
+        &self,
+        terminal_instance_id: &str,
+        platform: &str,
+        terminal_path: &Path,
+        account_ref: &AccountRef,
+        updated_at_utc_msc: i64,
+        remove_other_accounts_for_path: bool,
+    ) -> Result<TerminalBinding, StoreError> {
+        let mut binding = normalize_terminal_binding(
+            terminal_instance_id,
+            platform,
+            terminal_path,
             account_ref,
             updated_at_utc_msc,
         )?;
@@ -558,6 +595,20 @@ impl OutboxStore {
                 ],
             )
             .map_err(|_| StoreError::new("bridge_store_binding_write_failed"))?;
+        if remove_other_accounts_for_path {
+            transaction
+                .execute(
+                    "DELETE FROM terminal_bindings \
+                     WHERE platform = ?1 AND terminal_path = ?2 COLLATE NOCASE \
+                       AND terminal_instance_id <> ?3;",
+                    params![
+                        binding.platform,
+                        terminal_path,
+                        binding.terminal_instance_id
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_binding_prune_failed"))?;
+        }
         transaction
             .execute(
                 "DELETE FROM outbox_messages \
@@ -3293,6 +3344,80 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove binding fixture");
+    }
+
+    #[test]
+    fn account_scoped_activation_atomically_replaces_only_the_same_platform_path() {
+        let root = unique_test_directory("terminal-binding-account-switch");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("account switch store");
+        let mt4_path = root.join("MT4 Data");
+        let other_mt4_path = root.join("Other MT4 Data");
+        let mt5_path = root.join("terminal64.exe");
+        let first_account = AccountRef {
+            broker_server: "Broker-Demo".to_owned(),
+            login: "1001".to_owned(),
+        };
+        store
+            .activate_terminal_binding(
+                "mt4_account_old",
+                "mt4",
+                &mt4_path,
+                &first_account,
+                1_700_000_000_000,
+            )
+            .expect("old MT4 account");
+        store
+            .activate_terminal_binding(
+                "mt4_account_other",
+                "mt4",
+                &other_mt4_path,
+                &first_account,
+                1_700_000_000_001,
+            )
+            .expect("other MT4 terminal");
+        store
+            .activate_terminal_binding(
+                "mt5_account",
+                "mt5",
+                &mt5_path,
+                &first_account,
+                1_700_000_000_002,
+            )
+            .expect("MT5 terminal");
+        let replacement_account = AccountRef {
+            broker_server: "Broker-Demo".to_owned(),
+            login: "1002".to_owned(),
+        };
+        let replacement = store
+            .activate_terminal_binding_for_path(
+                "mt4_account_new",
+                "mt4",
+                &mt4_path,
+                &replacement_account,
+                1_700_000_000_003,
+            )
+            .expect("replacement MT4 account");
+        assert_eq!(replacement.connection_epoch, 1);
+        let bindings = store.terminal_bindings().expect("account switch bindings");
+        assert!(
+            !bindings
+                .iter()
+                .any(|binding| binding.terminal_instance_id == "mt4_account_old")
+        );
+        assert!(bindings.iter().any(|binding| binding == &replacement));
+        assert!(
+            bindings
+                .iter()
+                .any(|binding| binding.terminal_instance_id == "mt4_account_other")
+        );
+        assert!(
+            bindings
+                .iter()
+                .any(|binding| binding.terminal_instance_id == "mt5_account")
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove account switch fixture");
     }
 
     #[test]

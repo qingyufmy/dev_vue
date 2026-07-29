@@ -8,8 +8,8 @@ use bridge_contract::{
     TerminalDescriptor, TerminalStreamFreshness,
 };
 use bridge_foundation::{
-    BridgeProfilePaths, DEFAULT_PROFILE_ID, MT5_WORKER_RELATIVE_PATH, PYTHON_RELATIVE_PATH,
-    resolve_profile_paths, validate_profile_id,
+    BridgeProfilePaths, MT5_WORKER_RELATIVE_PATH, PYTHON_RELATIVE_PATH, resolve_profile_paths,
+    validate_profile_id,
 };
 use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, UiStateSnapshot, UiTerminalCandidate, UiTerminalStatus,
@@ -1641,7 +1641,6 @@ impl NativeConnectedRuntime {
         clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     ) -> Result<Self, CoreBootstrapError> {
         let NativeProfileBootstrap {
-            profile_id,
             credential_store,
             mt5_sessions,
             mt4_bindings,
@@ -1654,7 +1653,7 @@ impl NativeConnectedRuntime {
         let active_sessions = ActiveMt5Sessions::start_all(
             mt5_sessions,
             mt4_bindings,
-            profile_id == DEFAULT_PROFILE_ID,
+            false,
             Arc::clone(&store),
             Arc::clone(&clock),
         )

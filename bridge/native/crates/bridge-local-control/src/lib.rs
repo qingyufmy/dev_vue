@@ -416,10 +416,17 @@ pub struct UiTerminalCandidate {
 
 impl UiTerminalCandidate {
     fn validate(&self) -> bool {
+        let account_identity_valid =
+            valid_text(&self.broker_server, 128) && valid_text(&self.login, 64);
+        let installation_only_valid = self.broker_server.is_empty()
+            && self.login.is_empty()
+            && self
+                .display_name
+                .as_deref()
+                .is_some_and(|value| valid_text(value, 256));
         valid_identifier(&self.terminal_instance_id, 128)
             && valid_platform(&self.platform)
-            && valid_text(&self.broker_server, 128)
-            && valid_text(&self.login, 64)
+            && (account_identity_valid || installation_only_valid)
             && self
                 .display_name
                 .as_deref()
@@ -694,6 +701,29 @@ mod tests {
         };
         let payload = serde_json::to_vec(&request).expect("serialize request");
         assert_eq!(decode_request(&payload), Ok(request));
+    }
+
+    #[test]
+    fn mt4_installation_candidate_is_valid_before_an_account_is_registered() {
+        let mut installation = state();
+        installation.selected_platform = Some("mt4".to_owned());
+        installation.selected_terminal_instance_id = Some("mt4_installation".to_owned());
+        installation.terminal_candidates = vec![UiTerminalCandidate {
+            terminal_instance_id: "mt4_installation".to_owned(),
+            platform: "mt4".to_owned(),
+            broker_server: String::new(),
+            login: String::new(),
+            display_name: Some("MetaTrader 4".to_owned()),
+        }];
+        installation.terminals.clear();
+        installation.server_connected = false;
+        installation.last_data_sync_utc_msc = None;
+        assert_eq!(installation.validate(DEFAULT_PROFILE_ID), Ok(()));
+        installation.terminal_candidates[0].display_name = None;
+        assert_eq!(
+            installation.validate(DEFAULT_PROFILE_ID),
+            Err("bridge_local_control_state_invalid")
+        );
     }
 
     #[test]

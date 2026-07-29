@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use bridge_runtime_win::machine_guid;
+use crate::mt4_terminal_discovery;
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,7 +56,7 @@ fn resolve_mt4(selected: &Path) -> Result<ResolvedObserverTerminal, &'static str
             .ok_or("bridge_observer_mt4_directory_invalid")?
     };
     let terminal_instance_id =
-        mt4_terminal_instance_id(&data_path, &machine_guid().map_err(|error| error.code())?)?;
+        mt4_terminal_discovery::installation_terminal_instance_id(&data_path)?;
     Ok(ResolvedObserverTerminal {
         platform: "mt4".to_owned(),
         terminal_instance_id,
@@ -134,20 +134,12 @@ pub(crate) fn mt5_terminal_instance_id(executable: &Path) -> Result<String, &'st
     Ok(hash_identity("mt5", normalized.as_bytes()))
 }
 
+#[cfg(test)]
 pub(crate) fn mt4_terminal_instance_id(
     terminal_data_path: &Path,
     device_namespace: &str,
 ) -> Result<String, &'static str> {
-    if device_namespace.trim().is_empty() {
-        return Err("bridge_machine_guid_unavailable");
-    }
-    let normalized = absolute(terminal_data_path, "bridge_observer_mt4_directory_invalid")?
-        .to_string_lossy()
-        .to_uppercase();
-    Ok(hash_identity(
-        "mt4",
-        format!("{}\n{normalized}", device_namespace.trim()).as_bytes(),
-    ))
+    mt4_terminal_discovery::terminal_instance_id(terminal_data_path, device_namespace, None)
 }
 
 fn hash_identity(prefix: &str, input: &[u8]) -> String {

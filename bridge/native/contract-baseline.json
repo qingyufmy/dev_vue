@@ -180,6 +180,7 @@
     "activation_advances_epoch_atomically": true,
     "invalid_activation_does_not_consume_epoch": true,
     "account_switch_prunes_only_stale_data_sync_state": true,
+    "same_platform_path_account_replacement_is_atomic": true,
     "bindings_ordered_by_terminal_instance_id": true,
     "runtime_change_detection_fields": ["terminal_instance_id", "platform", "terminal_path", "account_ref", "connection_epoch", "updated_at_utc_msc"]
   },
@@ -196,6 +197,24 @@
     "single_terminal_is_selected_automatically": true,
     "multiple_terminals_require_user_selection": true,
     "probe_is_read_only": true
+  },
+  "mt4_first_provisioning_contract": {
+    "fresh_profile_does_not_require_dotnet_seed_data": true,
+    "discovery_sources": ["running_process", "metaquotes_terminal_data_origin", "portable_installation"],
+    "running_installations_are_prioritized": true,
+    "single_terminal_is_selected_automatically": true,
+    "multiple_terminals_require_user_selection": true,
+    "expert_is_deployed_before_account_registration": true,
+    "manual_expert_repair_works_without_an_account_binding": true,
+    "global_registration_pipe_owner": "default_core",
+    "observer_profiles_never_claim_the_global_registration_pipe": true,
+    "observer_terminal_paths_are_reserved_before_default_fallback": true,
+    "paused_observer_registration_is_rejected": true,
+    "account_terminal_identity_fields": ["device_namespace", "terminal_data_path", "broker_server", "login"],
+    "successful_registration_activates_profile_sqlite_binding": true,
+    "same_path_account_switch_replaces_the_previous_binding": true,
+    "welcome_hands_the_ea_to_a_terminal_specific_reconnect_pipe": true,
+    "registration_does_not_execute_trades": true
   },
   "core_bootstrap_contract": {
     "profile_paths_are_authoritative": true,

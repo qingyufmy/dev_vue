@@ -1,4 +1,6 @@
 mod mt4_expert_installer;
+mod mt4_registration_coordinator;
+mod mt4_terminal_discovery;
 mod mt5_terminal_discovery;
 mod observer_terminal;
 
@@ -49,10 +51,12 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex as AsyncMutex, watch};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 use tokio::time::Instant;
 
 use mt4_expert_installer::{deploy_expert, resolve_expert_source};
+use mt4_registration_coordinator::Mt4RegistrationEvent;
+use mt4_terminal_discovery::Mt4Installation;
 use mt5_terminal_discovery::{
     Mt5Installation, Mt5ProbeResult, probe_terminal, selected_or_discovered,
 };
@@ -287,6 +291,44 @@ impl ObserverRuntimeManager {
                 self.logger
                     .warning("native_observer_runtime_stop_failed", Some(&code));
             }
+        }
+    }
+}
+
+async fn run_mt4_registration_events(
+    mut events: mpsc::Receiver<Mt4RegistrationEvent>,
+    preference_change_sender: watch::Sender<u64>,
+    observer_runtimes: Option<Arc<ObserverRuntimeManager>>,
+    stop: SessionCancellation,
+    logger: BridgeLogger,
+) {
+    loop {
+        let event = tokio::select! {
+            _ = stop.cancelled() => return,
+            event = events.recv() => event,
+        };
+        let Some(event) = event else {
+            return;
+        };
+        if event.profile_id == DEFAULT_PROFILE_ID {
+            signal_preference_change(&preference_change_sender);
+            continue;
+        }
+        let Some(observer_runtimes) = observer_runtimes.as_ref() else {
+            logger.warning(
+                "native_mt4_registration_profile_reload_failed",
+                Some("bridge_observer_runtime_unavailable"),
+            );
+            continue;
+        };
+        if let Err(code) = observer_runtimes.start(&event.profile_id).await {
+            logger.warning(
+                "native_mt4_registration_profile_reload_failed",
+                Some(&format!(
+                    "profile={};terminal_id={};code={code}",
+                    event.profile_id, event.terminal_instance_id
+                )),
+            );
         }
     }
 }
@@ -799,6 +841,25 @@ async fn run_connected_profile(
         }
     }
     let (preference_change_sender, preference_change_receiver) = watch::channel(0_u64);
+    let mt4_registration_tasks = if profile_id == DEFAULT_PROFILE_ID {
+        let (event_sender, event_receiver) = mpsc::channel(32);
+        let registration_task = tokio::spawn(mt4_registration_coordinator::run(
+            root_data_directory.clone(),
+            event_sender,
+            stop.clone(),
+            logger.clone(),
+        ));
+        let event_task = tokio::spawn(run_mt4_registration_events(
+            event_receiver,
+            preference_change_sender.clone(),
+            observer_runtimes.clone(),
+            stop.clone(),
+            logger.clone(),
+        ));
+        Some((registration_task, event_task))
+    } else {
+        None
+    };
     let (update_wake_sender, update_wake_receiver) = watch::channel(0_u64);
     let lifecycle_update_state_store = update_state_store.clone();
     let update_task = update_coordinator.map(|coordinator| {
@@ -867,6 +928,14 @@ async fn run_connected_profile(
     )
     .await;
     stop.cancel();
+    if let Some((registration_task, event_task)) = mt4_registration_tasks {
+        registration_task
+            .await
+            .map_err(|_| "bridge_mt4_registration_task_failed")?;
+        event_task
+            .await
+            .map_err(|_| "bridge_mt4_registration_event_task_failed")?;
+    }
     if let Some(manager) = observer_runtimes {
         manager.stop_all().await;
     }
@@ -1643,6 +1712,25 @@ async fn run_local_control_server(
                         if !valid {
                             return Err("bridge_terminal_selection_invalid");
                         }
+                        if platform == "mt4"
+                            && let Some(installation) = profile_mt4_installations(
+                                &root_data_directory,
+                                server.endpoint().profile_id(),
+                                &preferences_store.load(),
+                            )
+                            .into_iter()
+                            .find(|installation| {
+                                installation.terminal_instance_id == terminal_instance_id
+                            })
+                        {
+                            return preferences_store
+                                .save_terminal_installation(
+                                    &platform,
+                                    &terminal_instance_id,
+                                    installation.data_path,
+                                )
+                                .map_err(|error| error.code());
+                        }
                         preferences_store
                             .save_terminal(&platform, &terminal_instance_id)
                             .map_err(|error| error.code())
@@ -2005,16 +2093,52 @@ async fn install_selected_mt4_expert(
     profile_id: &str,
     logger: &BridgeLogger,
 ) -> LocalControlResult {
-    let binding = (|| {
+    let target = (|| {
         let state = ui_state.snapshot()?;
+        if state.selected_platform.as_deref() != Some("mt4") {
+            return Err("mt4_platform_not_selected");
+        }
         let paths = resolve_profile_paths(root_data_directory, profile_id)?;
         let store =
             OutboxStore::open_or_create(&paths.database_path).map_err(|error| error.code())?;
         let bindings = store.terminal_bindings().map_err(|error| error.code())?;
-        resolve_selected_mt4_binding(&state, &bindings).cloned()
+        if let Ok(binding) = resolve_selected_mt4_binding(&state, &bindings) {
+            return Ok((
+                binding.terminal_instance_id.clone(),
+                binding.terminal_path.clone(),
+            ));
+        }
+        let preferences =
+            BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+                .map_err(|error| error.code())?
+                .load();
+        let installations =
+            profile_mt4_installations(root_data_directory, profile_id, &preferences);
+        let selected = state
+            .selected_terminal_instance_id
+            .as_deref()
+            .or(preferences.mt4_terminal_instance_id.as_deref());
+        let installation = if installations.len() == 1 {
+            installations.first()
+        } else {
+            selected.and_then(|selected| {
+                installations
+                    .iter()
+                    .find(|installation| installation.terminal_instance_id == selected)
+            })
+        }
+        .ok_or(if installations.is_empty() {
+            "mt4_terminal_not_found"
+        } else {
+            "mt4_terminal_selection_required"
+        })?;
+        Ok((
+            installation.terminal_instance_id.clone(),
+            installation.data_path.clone(),
+        ))
     })();
-    let binding = match binding {
-        Ok(binding) => binding,
+    let (terminal_instance_id, terminal_data_path) = match target {
+        Ok(target) => target,
         Err(code) => {
             logger.warning("native_mt4_ea_manual_deployment_failed", Some(code));
             return LocalControlResult::Rejected {
@@ -2022,8 +2146,8 @@ async fn install_selected_mt4_expert(
             };
         }
     };
-    let terminal_instance_id = binding.terminal_instance_id.clone();
-    let deployment = deploy_mt4_expert_for_binding(application_directory, &binding).await;
+    let deployment =
+        deploy_mt4_expert_for_data_path(application_directory, &terminal_data_path).await;
     match deployment {
         Ok(status) => {
             logger.info(
@@ -2050,8 +2174,15 @@ async fn deploy_mt4_expert_for_binding(
     application_directory: &std::path::Path,
     binding: &TerminalBinding,
 ) -> Result<mt4_expert_installer::Mt4ExpertDeploymentStatus, &'static str> {
+    deploy_mt4_expert_for_data_path(application_directory, &binding.terminal_path).await
+}
+
+async fn deploy_mt4_expert_for_data_path(
+    application_directory: &std::path::Path,
+    terminal_data_path: &std::path::Path,
+) -> Result<mt4_expert_installer::Mt4ExpertDeploymentStatus, &'static str> {
     let source = resolve_expert_source(application_directory, env::var_os("AURUM_BRIDGE_MT4_EA"))?;
-    let terminal_data_path = binding.terminal_path.clone();
+    let terminal_data_path = terminal_data_path.to_path_buf();
     tokio::task::spawn_blocking(move || deploy_expert(&source, &terminal_data_path))
         .await
         .map_err(|_| "mt4_ea_install_failed")?
@@ -2406,6 +2537,15 @@ async fn run_profile_lifecycle(
     } = runtime;
     loop {
         let preferences_before_bootstrap = preferences_store.load();
+        let mt4_installations = if preferences_before_bootstrap.platform.as_deref() == Some("mt4") {
+            profile_mt4_installations(
+                root_data_directory,
+                profile_id,
+                &preferences_before_bootstrap,
+            )
+        } else {
+            Vec::new()
+        };
         let mt5_provision_error = if preferences_before_bootstrap.platform.as_deref() == Some("mt5")
         {
             provision_mt5_bindings_if_missing(
@@ -2459,7 +2599,11 @@ async fn run_profile_lifecycle(
                 continue;
             }
         };
-        let candidates = bootstrap_terminal_candidates(&bootstrap, Some(platform));
+        let candidates = if platform == "mt4" && bootstrap.mt4_bindings.is_empty() {
+            mt4_installation_candidates(&mt4_installations)
+        } else {
+            bootstrap_terminal_candidates(&bootstrap, Some(platform))
+        };
         if candidates.is_empty() {
             publish_selection_ui_state(
                 SelectionUiContext {
@@ -2510,6 +2654,67 @@ async fn run_profile_lifecycle(
             }
             continue;
         };
+        if platform == "mt4" && bootstrap.mt4_bindings.is_empty() {
+            let installation = mt4_installations
+                .iter()
+                .find(|installation| installation.terminal_instance_id == selected_terminal)
+                .ok_or("mt4_terminal_selection_required")?;
+            if preferences.mt4_terminal_instance_id.as_deref()
+                != Some(installation.terminal_instance_id.as_str())
+                || preferences.mt4_terminal_path.as_deref().is_none_or(|path| {
+                    !mt4_terminal_discovery::paths_equal(
+                        std::path::Path::new(path),
+                        &installation.data_path,
+                    )
+                })
+            {
+                preferences_store
+                    .save_terminal_installation(
+                        "mt4",
+                        &installation.terminal_instance_id,
+                        &installation.data_path,
+                    )
+                    .map_err(|error| error.code())?;
+            }
+            let detail = match deploy_mt4_expert_for_data_path(
+                application_directory,
+                &installation.data_path,
+            )
+            .await
+            {
+                Ok(status) => {
+                    logger.info(
+                        "native_mt4_ea_automatic_deployment_completed",
+                        Some(&format!(
+                            "terminal_id={};status={}",
+                            installation.terminal_instance_id,
+                            status.as_str()
+                        )),
+                    );
+                    "mt4_ea_attach_required"
+                }
+                Err(code) => {
+                    logger.warning("native_mt4_ea_automatic_deployment_failed", Some(code));
+                    code
+                }
+            };
+            publish_selection_ui_state(
+                SelectionUiContext {
+                    logger,
+                    ui_state: &ui_state,
+                    profile_id,
+                    root_data_directory,
+                    preferences: &preferences,
+                },
+                "terminal_not_found",
+                Some(detail),
+                candidates,
+            );
+            if !wait_for_preference_change(&mut preference_change_receiver, &stop).await? {
+                return Ok(());
+            }
+            continue;
+        }
         retain_selected_terminal(&mut bootstrap, platform, selected_terminal);
         if platform == "mt4"
             && let Some(binding) = bootstrap.mt4_bindings.first()
@@ -2981,6 +3186,52 @@ fn bootstrap_terminal_candidates(
             .then_with(|| left.terminal_instance_id.cmp(&right.terminal_instance_id))
     });
     candidates
+}
+
+fn profile_mt4_installations(
+    root_data_directory: &std::path::Path,
+    profile_id: &str,
+    preferences: &BridgeUserPreferences,
+) -> Vec<Mt4Installation> {
+    let mut installations =
+        mt4_terminal_discovery::selected_or_discovered(preferences.mt4_terminal_path.as_deref());
+    if profile_id != DEFAULT_PROFILE_ID {
+        return installations;
+    }
+    let reserved_paths = list_observer_profiles(root_data_directory)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|profile_id| {
+            let paths = resolve_profile_paths(root_data_directory, &profile_id).ok()?;
+            let preferences =
+                BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+                    .ok()?
+                    .load();
+            (preferences.platform.as_deref() == Some("mt4"))
+                .then_some(preferences.mt4_terminal_path)
+                .flatten()
+                .map(PathBuf::from)
+        })
+        .collect::<Vec<_>>();
+    installations.retain(|installation| {
+        !reserved_paths.iter().any(|reserved_path| {
+            mt4_terminal_discovery::paths_equal(reserved_path, &installation.data_path)
+        })
+    });
+    installations
+}
+
+fn mt4_installation_candidates(installations: &[Mt4Installation]) -> Vec<UiTerminalCandidate> {
+    installations
+        .iter()
+        .map(|installation| UiTerminalCandidate {
+            terminal_instance_id: installation.terminal_instance_id.clone(),
+            platform: "mt4".to_owned(),
+            broker_server: String::new(),
+            login: String::new(),
+            display_name: Some(installation.display_name.clone()),
+        })
+        .collect()
 }
 
 fn retain_selected_terminal(
@@ -3461,6 +3712,83 @@ mod tests {
                 .map(|binding| binding.terminal_instance_id.as_str()),
             Ok(second.terminal_instance_id.as_str())
         );
+    }
+
+    #[test]
+    fn fresh_mt4_installation_projects_a_selectable_candidate_without_an_account() {
+        let root = unique_test_directory("fresh-mt4-installation");
+        let terminal = root.join("Broker MT4");
+        std::fs::create_dir_all(terminal.join("MQL4")).expect("MQL4 directory");
+        std::fs::write(terminal.join("terminal.exe"), b"terminal").expect("terminal executable");
+        let paths = resolve_profile_paths(&root, DEFAULT_PROFILE_ID).expect("profile paths");
+        let store = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+            .expect("preferences");
+        store.save_platform("mt4").expect("platform");
+        let installation_id = mt4_terminal_discovery::installation_terminal_instance_id(&terminal)
+            .expect("installation ID");
+        store
+            .save_terminal_installation("mt4", &installation_id, &terminal)
+            .expect("selected installation");
+        let preferences = store.load();
+        let installations = profile_mt4_installations(&root, DEFAULT_PROFILE_ID, &preferences);
+        assert_eq!(installations.len(), 1);
+        assert_eq!(installations[0].terminal_instance_id, installation_id);
+        let candidates = mt4_installation_candidates(&installations);
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].broker_server.is_empty());
+        assert!(candidates[0].login.is_empty());
+        assert_eq!(candidates[0].display_name.as_deref(), Some("Broker MT4"));
+        std::fs::remove_dir_all(root).expect("remove fresh MT4 fixture");
+    }
+
+    #[test]
+    fn default_profile_excludes_mt4_data_path_reserved_by_an_observer() {
+        let root = unique_test_directory("reserved-observer-mt4");
+        let terminal = root.join("Observer Broker MT4");
+        std::fs::create_dir_all(terminal.join("MQL4")).expect("MQL4 directory");
+        std::fs::write(terminal.join("terminal.exe"), b"terminal").expect("terminal executable");
+        let default_paths =
+            resolve_profile_paths(&root, DEFAULT_PROFILE_ID).expect("default paths");
+        let default_store =
+            BridgePreferencesStore::new(default_paths.data_directory.join("preferences.json"))
+                .expect("default preferences");
+        default_store
+            .save_platform("mt4")
+            .expect("default platform");
+        default_store
+            .save_terminal_installation(
+                "mt4",
+                &mt4_terminal_discovery::installation_terminal_instance_id(&terminal)
+                    .expect("installation ID"),
+                &terminal,
+            )
+            .expect("default selected installation");
+        let observer_paths = resolve_profile_paths(&root, "source-a").expect("observer paths");
+        BridgePreferencesStore::new(observer_paths.data_directory.join("preferences.json"))
+            .expect("observer preferences")
+            .save_observer_profile(&ObserverProfilePreferences {
+                platform: "mt4".to_owned(),
+                terminal_instance_id: mt4_terminal_discovery::account_terminal_instance_id(
+                    &terminal,
+                    "Broker-Demo",
+                    "1001",
+                )
+                .expect("account-scoped terminal ID"),
+                terminal_path: std::path::absolute(&terminal)
+                    .expect("absolute terminal")
+                    .display()
+                    .to_string(),
+                bridge_user_id: 7,
+                observer_account_label: Some("一号观摩源".to_owned()),
+                trading_account_id: None,
+                trading_account_label: None,
+            })
+            .expect("observer profile");
+
+        let installations =
+            profile_mt4_installations(&root, DEFAULT_PROFILE_ID, &default_store.load());
+        assert!(installations.is_empty());
+        std::fs::remove_dir_all(root).expect("remove reserved observer fixture");
     }
 
     #[test]

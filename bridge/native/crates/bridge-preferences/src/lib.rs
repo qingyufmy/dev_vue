@@ -150,6 +150,38 @@ impl BridgePreferencesStore {
         })
     }
 
+    pub fn save_terminal_installation(
+        &self,
+        platform: &str,
+        terminal_instance_id: &str,
+        terminal_path: impl AsRef<Path>,
+    ) -> Result<(), PreferencesError> {
+        let platform = normalize_platform(Some(platform))
+            .ok_or_else(|| PreferencesError::new("bridge_preferences_platform_invalid"))?;
+        let id = normalize_terminal_id(Some(terminal_instance_id), &format!("{platform}_"))
+            .ok_or_else(|| PreferencesError::new("bridge_preferences_terminal_invalid"))?;
+        let path = terminal_path
+            .as_ref()
+            .to_str()
+            .and_then(|value| {
+                if platform == "mt4" {
+                    normalize_absolute_path(Some(value))
+                } else {
+                    normalize_mt5_path(Some(value))
+                }
+            })
+            .ok_or_else(|| PreferencesError::new("bridge_preferences_terminal_path_invalid"))?;
+        self.update(|preferences| {
+            if platform == "mt4" {
+                preferences.mt4_terminal_instance_id = Some(id);
+                preferences.mt4_terminal_path = Some(path);
+            } else {
+                preferences.mt5_terminal_instance_id = Some(id);
+                preferences.mt5_terminal_path = Some(path);
+            }
+        })
+    }
+
     pub fn save_observer_enabled(&self, enabled: bool) -> Result<(), PreferencesError> {
         self.update(|preferences| preferences.observer_enabled = enabled)
     }
@@ -443,10 +475,21 @@ mod tests {
         store
             .save_terminal("mt5", "mt5_89abcdef0123456701234567")
             .expect("save mt5 terminal");
+        store
+            .save_terminal_installation(
+                "mt4",
+                "mt4_0123456789abcdef01234567",
+                r"C:\Broker MT4 Data",
+            )
+            .expect("save MT4 installation");
         let loaded = store.load();
         assert_eq!(
             loaded.selected_terminal_instance_id(),
             Some("mt4_0123456789abcdef01234567")
+        );
+        assert_eq!(
+            loaded.mt4_terminal_path.as_deref(),
+            Some(r"C:\Broker MT4 Data")
         );
         assert!(
             store
