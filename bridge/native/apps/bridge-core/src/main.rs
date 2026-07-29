@@ -1,7 +1,9 @@
 use bridge_foundation::{
-    CliMode, HealthCheckOptions, default_data_directory, parse_cli, resolve_installed_root,
-    run_health_check,
+    CliMode, HealthCheckOptions, default_data_directory, parse_cli, profile_instance_id,
+    resolve_installed_root, run_health_check,
 };
+use bridge_observability::{BridgeLogger, LoggerConfig};
+use bridge_runtime_win::{InstanceAcquireResult, SingleInstanceGuard, default_lock_directory};
 use std::env;
 use std::error::Error;
 
@@ -38,6 +40,35 @@ fn run() -> Result<(), Box<dyn Error>> {
             })?;
             Ok(())
         }
-        CliMode::Run { .. } => Err("native_bridge_runtime_not_ready".into()),
+        CliMode::Run {
+            profile_id,
+            start_minimized,
+            ..
+        } => run_native_foundation(profile_id, start_minimized),
     }
+}
+
+fn run_native_foundation(profile_id: String, start_minimized: bool) -> Result<(), Box<dyn Error>> {
+    let data_directory = default_data_directory(&profile_id)?;
+    let logger = BridgeLogger::new(LoggerConfig::new(data_directory.join("logs"))?);
+    logger.install_panic_hook("bridge-core", VERSION);
+    let instance_id = profile_instance_id(&profile_id)?;
+    let single_instance = SingleInstanceGuard::try_acquire(
+        &instance_id,
+        default_lock_directory()?,
+        !start_minimized,
+    )?;
+    let InstanceAcquireResult::Acquired(_single_instance) = single_instance else {
+        return Ok(());
+    };
+    let _run_marker = logger.begin_run_marker(&data_directory, "bridge-core", VERSION)?;
+    logger.info(
+        "native_runtime_foundation_started",
+        Some(&format!("profile={profile_id}")),
+    );
+    logger.warning(
+        "native_runtime_not_ready",
+        Some("server_and_terminal_connections_disabled"),
+    );
+    Err("native_bridge_runtime_not_ready".into())
 }

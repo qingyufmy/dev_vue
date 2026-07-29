@@ -7,3 +7,8 @@ publish.workspace = true
 
 [dependencies]
 bridge-foundation = { path = "../../crates/bridge-foundation" }
+bridge-observability = { path = "../../crates/bridge-observability" }
+bridge-runtime-win = { path = "../../crates/bridge-runtime-win" }
+
+[dev-dependencies]
+serde_json.workspace = true

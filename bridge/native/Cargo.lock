@@ -26,6 +26,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-observability"
+version = "4.0.0-alpha.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "windows-sys",
+]
+
+[[package]]
+name = "bridge-runtime-win"
+version = "4.0.0-alpha.1"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "bridge-security-win"
 version = "4.0.0-alpha.1"
 dependencies = [
@@ -147,6 +163,9 @@ name = "liangjian-bridge-core"
 version = "4.0.0-alpha.1"
 dependencies = [
  "bridge-foundation",
+ "bridge-observability",
+ "bridge-runtime-win",
+ "serde_json",
 ]
 
 [[package]]

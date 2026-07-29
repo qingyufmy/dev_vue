@@ -39,6 +39,28 @@
     "observer_directory": "profiles/{profile_id}",
     "observer_instance_id": "AURUMBridge.v3.profile.{profile_id}"
   },
+  "single_instance_contract": {
+    "lock_directory": "%LOCALAPPDATA%/AURUMBridge/locks",
+    "lock_file": "{instance_id}.lock",
+    "activation_event": "Local\\{instance_id}.activate",
+    "shutdown_event": "Local\\{instance_id}.shutdown"
+  },
+  "logging_contract": {
+    "directory": "{profile_data_directory}/logs",
+    "active_file": "bridge-{utc_yyyyMMdd}.log",
+    "format": "json-lines",
+    "fields": ["timestamp_utc", "level", "event_name", "message"],
+    "maximum_file_bytes": 5242880,
+    "retained_files": 10,
+    "secrets_redacted": true
+  },
+  "worker_supervision_contract": {
+    "restart_delays_seconds": [1, 2, 4, 8, 10],
+    "stable_run_reset_seconds": 30,
+    "maximum_failure_counter": 8,
+    "retry_after_counter_cap": true,
+    "kill_process_tree_on_owner_exit": true
+  },
   "sqlite_contract": {
     "file_name": "bridge.db",
     "journal_mode": "wal",

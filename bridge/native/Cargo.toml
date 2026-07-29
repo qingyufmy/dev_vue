@@ -4,6 +4,8 @@ members = [
   "apps/bridge-core",
   "crates/bridge-contract",
   "crates/bridge-foundation",
+  "crates/bridge-observability",
+  "crates/bridge-runtime-win",
   "crates/bridge-security-win",
   "crates/bridge-store",
 ]
@@ -23,6 +25,9 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
   "Win32_Security_Cryptography",
   "Win32_Storage_FileSystem",
+  "Win32_System_JobObjects",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
 ] }
 
 [profile.release]
