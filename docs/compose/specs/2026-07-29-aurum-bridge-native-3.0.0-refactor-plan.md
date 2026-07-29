@@ -283,6 +283,8 @@ stateDiagram-v2
 - 界面较简单，优先使用 Rust + Win32 原生窗口和 DirectWrite/系统控件，避免捆绑浏览器内核。
 - 不采用 WebView 作为主 UI，可减少包体、内存和旧电脑运行时差异。
 - 所有按钮通过受限 IPC 请求 Core，UI 不直接操作数据库或 Worker。
+- Native UI 是现有 .NET `AurumBridge` 的等价语言迁移，不是产品精简或重新设计。主窗体、弹窗、托盘菜单、文案、显隐条件、按钮语义和自适应账户卡片必须保持一致；只能在不改变用户任务流的前提下修复已确认缺陷。
+- `runtime-status.json` 只用于 UI 判断 Core 是否存活和显示降级兜底，禁止用它替代完整界面状态。账户身份、管理员能力、终端候选、交易权限、观摩源和更新状态只通过当前用户 ACL 限制的本地 IPC 提供。
 
 ### 10.2 主界面
 
@@ -465,12 +467,12 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 ### 阶段 6：Native UI 和管理员观摩源
 
-- 托盘、主界面、内置日志、开机自启、授权、退出。
-- 自适应账户卡片和权限 tooltip。
+- 按 `BridgeMainForm`、`BridgeSettingsForm`、`BridgeObserverProfileDialog`、`BridgeTerminalDirectoryDialog`、`BridgeLogViewerForm` 和 `BridgeApplicationContext` 逐项等价迁移托盘、主界面、内置日志、开机自启、授权、退出。
+- 保留现有平台选择、终端选择、MT4 EA 安装、自适应账户卡片、交易权限彩色 tooltip、更新条幅、管理员控件显隐及全部中文文案语义。
 - 管理员服务器设置及多个观摩源的后台启停、绑定和隔离。
 - 默认观摩源行情规则：普通用户使用平台策略且品种一致时，K 线和平台时间由默认源提供；私人账户数据始终来自本人终端。
 
-交付门：普通用户看不到管理员控件；UI 退出或崩溃不影响 Core。
+交付门：完成 UI 等价矩阵逐项验收；普通用户看不到管理员控件；UI 退出或崩溃不影响 Core；任何 .NET 版已有核心入口缺失都视为未交付。
 
 ### 阶段 7：安装与更新
 

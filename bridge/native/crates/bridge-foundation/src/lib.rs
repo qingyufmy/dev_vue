@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -206,6 +206,177 @@ pub fn resolve_profile_paths(
 }
 
 pub const MAX_RUNTIME_STATUS_BYTES: usize = 256 * 1024;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeTerminalStatus {
+    pub terminal_instance_id: String,
+    pub platform: String,
+    pub connection_epoch: i64,
+    pub state: String,
+    pub worker_state: String,
+    pub collector_state: String,
+    pub data_ready: bool,
+    pub worker_consecutive_failures: u32,
+    pub collector_consecutive_failures: u32,
+    pub last_success_at_utc_msc: Option<i64>,
+    pub error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeReconciliationStatus {
+    pub last_run_at_utc_msc: Option<i64>,
+    pub inspected: usize,
+    pub resolved: usize,
+    pub pending: usize,
+    pub error_codes: Vec<String>,
+    pub consecutive_failures: u32,
+    pub fatal_error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeStatusDocument {
+    pub schema_version: u32,
+    pub bridge_version: String,
+    pub profile_id: String,
+    pub observed_at_utc_msc: i64,
+    pub phase: String,
+    pub server_state: String,
+    pub server_error_code: Option<String>,
+    pub terminals: Vec<RuntimeTerminalStatus>,
+    pub reconciliation: RuntimeReconciliationStatus,
+}
+
+impl RuntimeStatusDocument {
+    pub fn validate(
+        &self,
+        expected_profile_id: &str,
+        now_utc_msc: i64,
+    ) -> Result<(), &'static str> {
+        let expected_profile_id = validate_profile_id(Some(expected_profile_id))?;
+        if self.schema_version != 1
+            || self.profile_id != expected_profile_id
+            || self.bridge_version.is_empty()
+            || self.bridge_version.len() > 64
+            || self.observed_at_utc_msc <= 0
+            || now_utc_msc <= 0
+            || self.observed_at_utc_msc > now_utc_msc.saturating_add(60_000)
+            || !matches!(
+                self.phase.as_str(),
+                "starting" | "pairing_required" | "connecting" | "online" | "degraded" | "stopped"
+            )
+            || !matches!(
+                self.server_state.as_str(),
+                "starting"
+                    | "stopped"
+                    | "pairing_required"
+                    | "connecting"
+                    | "connected"
+                    | "reconnecting"
+            )
+            || self
+                .server_error_code
+                .as_deref()
+                .is_some_and(|code| !valid_runtime_status_code(code))
+            || self.terminals.len() > 64
+            || self.reconciliation.error_codes.len() > 64
+            || self
+                .reconciliation
+                .error_codes
+                .iter()
+                .any(|code| !valid_runtime_status_code(code))
+            || self
+                .reconciliation
+                .fatal_error_code
+                .as_deref()
+                .is_some_and(|code| !valid_runtime_status_code(code))
+        {
+            return Err("bridge_runtime_status_invalid");
+        }
+        let mut terminal_ids = std::collections::BTreeSet::new();
+        for terminal in &self.terminals {
+            if terminal.terminal_instance_id.is_empty()
+                || terminal.terminal_instance_id.len() > 128
+                || !terminal
+                    .terminal_instance_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                || !terminal_ids.insert(&terminal.terminal_instance_id)
+                || !matches!(terminal.platform.as_str(), "mt4" | "mt5")
+                || terminal.connection_epoch <= 0
+                || !matches!(
+                    terminal.state.as_str(),
+                    "starting" | "ready" | "degraded" | "superseded" | "stopped"
+                )
+                || !matches!(
+                    terminal.worker_state.as_str(),
+                    "starting" | "ready" | "restarting" | "superseded" | "stopped"
+                )
+                || !matches!(
+                    terminal.collector_state.as_str(),
+                    "starting" | "ready" | "retrying" | "stopped"
+                )
+                || terminal
+                    .last_success_at_utc_msc
+                    .is_some_and(|value| value <= 0 || value > now_utc_msc.saturating_add(60_000))
+                || terminal
+                    .error_code
+                    .as_deref()
+                    .is_some_and(|code| !valid_runtime_status_code(code))
+            {
+                return Err("bridge_runtime_status_invalid");
+            }
+        }
+        if self
+            .reconciliation
+            .last_run_at_utc_msc
+            .is_some_and(|value| value <= 0 || value > now_utc_msc.saturating_add(60_000))
+        {
+            return Err("bridge_runtime_status_invalid");
+        }
+        Ok(())
+    }
+
+    pub fn is_stale(&self, now_utc_msc: i64, max_age_msc: i64) -> bool {
+        now_utc_msc <= 0
+            || max_age_msc <= 0
+            || now_utc_msc.saturating_sub(self.observed_at_utc_msc) > max_age_msc
+    }
+}
+
+pub fn read_runtime_status_snapshot(
+    input: &Path,
+    expected_profile_id: &str,
+    now_utc_msc: i64,
+) -> Result<RuntimeStatusDocument, &'static str> {
+    if !input.is_absolute()
+        || input.file_name().and_then(|value| value.to_str()) != Some("runtime-status.json")
+    {
+        return Err("bridge_runtime_status_invalid");
+    }
+    let metadata = fs::metadata(input).map_err(|_| "bridge_runtime_status_unavailable")?;
+    if !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_RUNTIME_STATUS_BYTES as u64
+    {
+        return Err("bridge_runtime_status_invalid");
+    }
+    let payload = fs::read(input).map_err(|_| "bridge_runtime_status_unavailable")?;
+    let document: RuntimeStatusDocument =
+        serde_json::from_slice(&payload).map_err(|_| "bridge_runtime_status_invalid")?;
+    document.validate(expected_profile_id, now_utc_msc)?;
+    Ok(document)
+}
+
+fn valid_runtime_status_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
 
 pub fn write_runtime_status_snapshot(output: &Path, payload: &[u8]) -> Result<(), Box<dyn Error>> {
     if !output.is_absolute()
@@ -802,6 +973,112 @@ mod tests {
             0
         );
         fs::remove_dir_all(root).expect("remove status fixture");
+    }
+
+    #[test]
+    fn runtime_status_reader_accepts_current_core_contract_and_classifies_staleness() {
+        let root = unique_test_directory("runtime-status-reader");
+        let output = root.join("runtime-status.json");
+        let now = 1_800_000_000_000_i64;
+        let payload = runtime_status_fixture(now - 5_000);
+        write_runtime_status_snapshot(
+            &output,
+            &serde_json::to_vec(&payload).expect("status fixture json"),
+        )
+        .expect("write status fixture");
+
+        let document =
+            read_runtime_status_snapshot(&output, DEFAULT_PROFILE_ID, now).expect("read status");
+        assert_eq!(document.phase, "online");
+        assert_eq!(document.terminals[0].collector_state, "retrying");
+        assert!(!document.is_stale(now, 15_000));
+        assert!(document.is_stale(now + 20_001, 15_000));
+
+        fs::remove_dir_all(root).expect("remove status reader fixture");
+    }
+
+    #[test]
+    fn runtime_status_reader_rejects_unknown_fields_cross_profile_and_duplicate_terminals() {
+        let root = unique_test_directory("runtime-status-invalid");
+        fs::create_dir_all(&root).expect("status fixture directory");
+        let output = root.join("runtime-status.json");
+        let now = 1_800_000_000_000_i64;
+
+        let mut unknown = runtime_status_fixture(now);
+        unknown.as_object_mut().expect("status object").insert(
+            "secret".to_owned(),
+            Value::String("must-not-leak".to_owned()),
+        );
+        fs::write(
+            &output,
+            serde_json::to_vec(&unknown).expect("unknown field fixture"),
+        )
+        .expect("write unknown field fixture");
+        assert_eq!(
+            read_runtime_status_snapshot(&output, DEFAULT_PROFILE_ID, now),
+            Err("bridge_runtime_status_invalid")
+        );
+
+        fs::write(
+            &output,
+            serde_json::to_vec(&runtime_status_fixture(now)).expect("cross profile fixture"),
+        )
+        .expect("write cross profile fixture");
+        assert_eq!(
+            read_runtime_status_snapshot(&output, "source-a", now),
+            Err("bridge_runtime_status_invalid")
+        );
+
+        let mut duplicate = runtime_status_fixture(now);
+        let terminals = duplicate["terminals"]
+            .as_array_mut()
+            .expect("terminal array");
+        terminals.push(terminals[0].clone());
+        fs::write(
+            &output,
+            serde_json::to_vec(&duplicate).expect("duplicate terminal fixture"),
+        )
+        .expect("write duplicate fixture");
+        assert_eq!(
+            read_runtime_status_snapshot(&output, DEFAULT_PROFILE_ID, now),
+            Err("bridge_runtime_status_invalid")
+        );
+
+        fs::remove_dir_all(root).expect("remove invalid status fixture");
+    }
+
+    fn runtime_status_fixture(observed_at_utc_msc: i64) -> Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "bridge_version": "3.0.0-alpha.1",
+            "profile_id": DEFAULT_PROFILE_ID,
+            "observed_at_utc_msc": observed_at_utc_msc,
+            "phase": "online",
+            "server_state": "connected",
+            "server_error_code": null,
+            "terminals": [{
+                "terminal_instance_id": "mt4_demo_4250502",
+                "platform": "mt4",
+                "connection_epoch": 1,
+                "state": "ready",
+                "worker_state": "ready",
+                "collector_state": "retrying",
+                "data_ready": true,
+                "worker_consecutive_failures": 0,
+                "collector_consecutive_failures": 1,
+                "last_success_at_utc_msc": observed_at_utc_msc,
+                "error_code": null
+            }],
+            "reconciliation": {
+                "last_run_at_utc_msc": observed_at_utc_msc,
+                "inspected": 1,
+                "resolved": 1,
+                "pending": 0,
+                "error_codes": [],
+                "consecutive_failures": 0,
+                "fatal_error_code": null
+            }
+        })
     }
 
     fn unique_test_directory(suffix: &str) -> PathBuf {

@@ -92,6 +92,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-local-control"
+version = "3.0.0-alpha.1"
+dependencies = [
+ "bridge-foundation",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "bridge-mt4"
 version = "3.0.0-alpha.1"
 dependencies = [
