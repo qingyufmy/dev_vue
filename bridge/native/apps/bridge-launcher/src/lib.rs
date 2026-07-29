@@ -78,6 +78,63 @@ impl LauncherStartupOptions {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LauncherExecutionContext {
+    pub install_root: PathBuf,
+    pub staged_version: Option<String>,
+}
+
+impl LauncherExecutionContext {
+    pub fn resolve(executable: impl AsRef<Path>) -> Result<Self, LauncherError> {
+        let executable = std::path::absolute(executable.as_ref())
+            .map_err(|_| LauncherError::new("launcher_executable_invalid"))?;
+        if !executable.is_file()
+            || executable
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_none_or(|value| !value.eq_ignore_ascii_case(LAUNCHER_FILE_NAME))
+        {
+            return Err(LauncherError::new("launcher_executable_invalid"));
+        }
+        let parent = executable
+            .parent()
+            .ok_or_else(|| LauncherError::new("launcher_install_root_invalid"))?;
+        if parent
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("launcher"))
+        {
+            let version_directory = parent
+                .parent()
+                .ok_or_else(|| LauncherError::new("launcher_install_root_invalid"))?;
+            let version = version_directory
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| valid_numeric_version(value))
+                .ok_or_else(|| LauncherError::new("launcher_version_invalid"))?;
+            let versions_root = version_directory
+                .parent()
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|value| value.eq_ignore_ascii_case("versions"))
+                })
+                .ok_or_else(|| LauncherError::new("launcher_install_root_invalid"))?;
+            let install_root = versions_root
+                .parent()
+                .ok_or_else(|| LauncherError::new("launcher_install_root_invalid"))?;
+            return Ok(Self {
+                install_root: install_root.to_path_buf(),
+                staged_version: Some(version.to_owned()),
+            });
+        }
+        Ok(Self {
+            install_root: parent.to_path_buf(),
+            staged_version: None,
+        })
+    }
+}
+
 pub trait BridgeProcessRunner {
     fn run_health_check(&self, executable: &Path, timeout: Duration)
     -> Result<bool, LauncherError>;
@@ -558,6 +615,42 @@ mod tests {
                 .code(),
             "launcher_arguments_invalid"
         );
+    }
+
+    #[test]
+    fn execution_context_distinguishes_stable_and_versioned_launchers() {
+        let root = test_directory("execution-context");
+        let stable = root.join(LAUNCHER_FILE_NAME);
+        let staged = root
+            .join("versions/3.1.0/launcher")
+            .join(LAUNCHER_FILE_NAME);
+        fs::create_dir_all(staged.parent().expect("staged parent")).expect("staged directory");
+        fs::write(&stable, []).expect("stable launcher");
+        fs::write(&staged, []).expect("staged launcher");
+        assert_eq!(
+            LauncherExecutionContext::resolve(&stable),
+            Ok(LauncherExecutionContext {
+                install_root: root.clone(),
+                staged_version: None,
+            })
+        );
+        assert_eq!(
+            LauncherExecutionContext::resolve(&staged),
+            Ok(LauncherExecutionContext {
+                install_root: root.clone(),
+                staged_version: Some("3.1.0".to_owned()),
+            })
+        );
+        let invalid = root.join("other/3.1.0/launcher").join(LAUNCHER_FILE_NAME);
+        fs::create_dir_all(invalid.parent().expect("invalid parent")).expect("invalid directory");
+        fs::write(&invalid, []).expect("invalid launcher");
+        assert_eq!(
+            LauncherExecutionContext::resolve(&invalid)
+                .expect_err("unbounded staged launcher")
+                .code(),
+            "launcher_install_root_invalid"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

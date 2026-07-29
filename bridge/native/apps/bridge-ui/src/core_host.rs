@@ -257,14 +257,15 @@ mod tests {
     }
 
     #[test]
-    fn clean_core_exit_hands_a_pending_version_to_the_stable_launcher() {
+    fn clean_core_exit_hands_a_pending_version_to_its_verified_launcher() {
         let root = temporary_directory("update-handoff");
         let current = root.join("versions/3.0.0");
         let target = root.join("versions/3.1.0");
         fs::create_dir_all(&current).expect("current version");
-        fs::create_dir_all(&target).expect("target version");
+        fs::create_dir_all(target.join("launcher")).expect("target version");
         fs::write(root.join("AURUMBridge.Launcher.exe"), []).expect("launcher");
         fs::write(target.join("AURUMBridge.exe"), []).expect("target UI");
+        fs::write(target.join("launcher/AURUMBridge.Launcher.exe"), []).expect("target launcher");
         fs::write(
             root.join("current.json"),
             br#"{"active_version":"3.1.0","last_known_good_version":"3.0.0","status":"pending","expected_terminal_instance_ids":[],"updated_at_utc_msc":1800000000000}"#,
@@ -294,7 +295,7 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 CoreProcessPoll::UpdateHandoff(launcher) => {
-                    assert_eq!(launcher, root.join("AURUMBridge.Launcher.exe"));
+                    assert_eq!(launcher, target.join("launcher/AURUMBridge.Launcher.exe"));
                     break;
                 }
                 outcome => panic!("unexpected poll outcome: {outcome:?}"),

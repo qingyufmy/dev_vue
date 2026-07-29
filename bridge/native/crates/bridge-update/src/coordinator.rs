@@ -865,7 +865,7 @@ fn random_hex_16() -> Result<String, UpdateError> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn read_file_version(path: &Path) -> Result<String, UpdateError> {
+pub(crate) fn read_file_version(path: &Path) -> Result<String, UpdateError> {
     let wide = path
         .as_os_str()
         .encode_wide()

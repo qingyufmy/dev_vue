@@ -3,7 +3,10 @@ mod coordinator;
 mod manifest;
 mod staging;
 
-pub use activation::{ReleaseActivationPointer, ReleaseActivationStore, pending_launcher_handoff};
+pub use activation::{
+    ReleaseActivationPointer, ReleaseActivationStore, pending_launcher_handoff,
+    promote_staged_launcher,
+};
 pub use coordinator::{
     BridgeUpdateCoordinator, BridgeUpdateEnvironment, StagedRelease, UPDATE_CHECK_INTERVAL,
 };

@@ -1,13 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use liangjian_bridge_launcher::{
-    DataRemovalMode, InstallationLayout, LauncherCommand, LauncherEngine,
+    DataRemovalMode, InstallationLayout, LauncherCommand, LauncherEngine, LauncherExecutionContext,
     NativeBridgeProcessRunner, parse_launcher_command, run_uninstall_worker,
     spawn_uninstall_worker, uninstall_preflight,
 };
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     IDNO, IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK, MB_YESNOCANCEL,
@@ -58,18 +58,36 @@ fn run_launch(
     }
     let executable = current_launcher_executable()
         .map_err(|code| (code, FailureMode::Startup { automatic: false }))?;
-    let install_root = executable.parent().map(PathBuf::from).ok_or((
-        "launcher_install_root_invalid",
-        FailureMode::Startup { automatic: false },
-    ))?;
+    let context = LauncherExecutionContext::resolve(&executable)
+        .map_err(|error| (error.code(), FailureMode::Startup { automatic: false }))?;
+    let install_root = context.install_root;
     let automatic = startup.start_minimized && !startup.delay.is_zero();
     let runner = NativeBridgeProcessRunner::new(&install_root)
         .map_err(|error| (error.code(), FailureMode::Startup { automatic }))?;
-    LauncherEngine::new(&install_root, runner)
+    let launched_version = LauncherEngine::new(&install_root, runner)
         .map_err(|error| (error.code(), FailureMode::Startup { automatic }))?
         .launch(startup.start_minimized)
         .map_err(|error| (error.code(), FailureMode::Startup { automatic }))?;
+    if context.staged_version.as_deref() == Some(launched_version.as_str())
+        && let Err(error) = bridge_update::promote_staged_launcher(&executable, &launched_version)
+    {
+        record_launcher_promotion_failure(&install_root, &launched_version, error.code());
+    }
     Ok(())
+}
+
+fn record_launcher_promotion_failure(install_root: &Path, version: &str, code: &'static str) {
+    let Ok(store) = bridge_update::BridgeUpdateStateStore::new(
+        install_root.join(bridge_update::UPDATE_STATE_FILE_NAME),
+    ) else {
+        return;
+    };
+    let _ = store.mark_launcher_state(
+        bridge_update::STATE_HEALTHY,
+        version,
+        Some(code.to_owned()),
+        true,
+    );
 }
 
 fn run_interactive_uninstall() -> Result<(), (&'static str, FailureMode)> {
