@@ -4,7 +4,7 @@ use bridge_contract::{CommandMessage, TerminalDescriptor, same_terminal_route, v
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-const REQUIRED_INITIAL_STREAMS: [&str; 3] = ["account", "positions", "orders"];
+pub(crate) const REQUIRED_INITIAL_STREAMS: [&str; 3] = ["account", "positions", "orders"];
 
 #[derive(Default)]
 struct AdmissionState {

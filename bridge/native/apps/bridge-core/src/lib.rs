@@ -1,4 +1,4 @@
-use bridge_command::CommandExecutionObserver;
+use bridge_command::{CommandDispatcher, CommandExecutionObserver, CommandWorker};
 use bridge_contract::{
     CommandResultMessage, HelloMessage, SERVER_DATA_QUEUE_CAPACITY, SERVER_PROTOCOL_VERSION,
     SERVER_TRADE_QUEUE_CAPACITY, TerminalDescriptor, TerminalStreamFreshness,
@@ -14,12 +14,13 @@ use bridge_terminal_session::{
     Mt5SessionManager, Mt5SessionSpec, TerminalSessionHandle, TerminalSessionStatus,
 };
 use bridge_transport::{
-    CredentialSource, HelloProvider, InboundEventSink, NativeInboundRouter, OutboxPump,
-    PriorityMessageQueue, ReleaseAvailableNotification, ServerEndpoints, SessionCancellation,
-    SessionConnector, SessionIntervals, SessionRuntime, SessionSupervisor, SessionTransition,
-    SupervisorStateSink, TerminalFreshnessProvider, TransportError, V3SessionConnector,
+    CredentialSource, HelloProvider, InboundEventSink, NativeCommandAdmission, NativeInboundRouter,
+    OutboxPump, PriorityMessageQueue, ReleaseAvailableNotification, ServerEndpoints,
+    SessionCancellation, SessionConnector, SessionIntervals, SessionRuntime, SessionSupervisor,
+    SessionTransition, SupervisorStateSink, TerminalFreshnessProvider, TransportError,
+    V3SessionConnector,
 };
-use bridge_worker_host::{WorkerProgram, WorkerRegistry, WorkerRoute};
+use bridge_worker_host::{RegistryCommandWorker, WorkerProgram, WorkerRegistry, WorkerRoute};
 use futures_util::{FutureExt, future::BoxFuture};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -133,6 +134,7 @@ struct ActiveMt5Session {
 
 pub struct ActiveMt5Sessions {
     sessions: BTreeMap<String, ActiveMt5Session>,
+    registry: Arc<WorkerRegistry<NamedPipeServer>>,
     latest_release: Mutex<Option<ReleaseAvailableNotification>>,
 }
 
@@ -170,6 +172,7 @@ impl ActiveMt5Sessions {
         }
         Ok(Arc::new(Self {
             sessions,
+            registry,
             latest_release: Mutex::new(None),
         }))
     }
@@ -200,6 +203,10 @@ impl ActiveMt5Sessions {
             .values()
             .map(|session| session.handle.status())
             .collect()
+    }
+
+    fn worker_registry(&self) -> Arc<WorkerRegistry<NamedPipeServer>> {
+        Arc::clone(&self.registry)
     }
 
     pub fn latest_release(
@@ -468,9 +475,33 @@ impl NativeConnectedRuntime {
             let queue =
                 PriorityMessageQueue::new(SERVER_TRADE_QUEUE_CAPACITY, SERVER_DATA_QUEUE_CAPACITY)
                     .map_err(transport_error)?;
+            let command_admission = Arc::new(NativeCommandAdmission::default());
+            let command_worker: Arc<dyn CommandWorker> = Arc::new(
+                RegistryCommandWorker::new(
+                    active_sessions.worker_registry(),
+                    Arc::clone(&clock),
+                    WORKER_REQUEST_TIMEOUT,
+                )
+                .map_err(|error| CoreBootstrapError::new(error.code()))?,
+            );
+            let command_dispatcher = Arc::new(
+                CommandDispatcher::new(
+                    Arc::clone(&store),
+                    command_admission.clone(),
+                    command_worker,
+                    Arc::clone(&clock),
+                    WORKER_REQUEST_TIMEOUT,
+                )
+                .map_err(|error| CoreBootstrapError::new(error.code()))?
+                .with_execution_observer(active_sessions.clone()),
+            );
             let outbox = Arc::new(OutboxPump::new(store, queue.clone(), Some(terminal_ids)));
             let events: Arc<dyn InboundEventSink> = active_sessions.clone();
-            let inbound = Arc::new(NativeInboundRouter::new(Arc::clone(&outbox), events));
+            let inbound = Arc::new(
+                NativeInboundRouter::new(Arc::clone(&outbox), events)
+                    .with_command_admission(command_admission, Arc::clone(&clock))
+                    .with_command_dispatcher(command_dispatcher),
+            );
             let freshness: Arc<dyn TerminalFreshnessProvider> = active_sessions.clone();
             let session_runtime = Arc::new(
                 SessionRuntime::new(

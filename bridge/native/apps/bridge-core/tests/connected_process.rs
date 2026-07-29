@@ -5,6 +5,7 @@ use bridge_security_win::{BridgeCredential, CredentialStore};
 use bridge_store::OutboxStore;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -48,7 +49,11 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     );
 
     wait_until(&mut child, Duration::from_secs(20), || {
-        ready.is_file() && worker_pid_file.is_file() && server.saw_routed_full_snapshot(terminal_id)
+        ready.is_file()
+            && worker_pid_file.is_file()
+            && server.saw_routed_full_snapshot(terminal_id)
+            && server.saw_succeeded_command_result()
+            && command_is_acked(&paths.database_path)
     });
     let worker_pid = fs::read_to_string(&worker_pid_file)
         .expect("worker pid")
@@ -67,10 +72,18 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         server.saw_routed_full_snapshot(terminal_id),
         "forwarded full snapshot route missing"
     );
+    assert!(
+        server.saw_succeeded_command_result(),
+        "server command did not complete through the native dispatcher"
+    );
+    assert!(
+        command_is_acked(&paths.database_path),
+        "command result acknowledgement was not persisted"
+    );
 
     server.disconnect_first();
     wait_until(&mut child, Duration::from_secs(15), || {
-        server.websocket_connections() >= 2
+        server.websocket_connections() >= 2 && server.full_snapshot_count(terminal_id) >= 6
     });
     SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
         .expect("request shutdown");
@@ -173,12 +186,14 @@ impl LoopbackBridgeServer {
         let disconnect_first = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let websocket_connections = Arc::new(AtomicUsize::new(0));
+        let command_sent = Arc::new(AtomicBool::new(false));
         let message_types = Arc::new(Mutex::new(Vec::new()));
         let (addresses_tx, addresses_rx) = mpsc::sync_channel(1);
         let thread = {
             let disconnect_first = Arc::clone(&disconnect_first);
             let stop = Arc::clone(&stop);
             let websocket_connections = Arc::clone(&websocket_connections);
+            let command_sent = Arc::clone(&command_sent);
             let message_types = Arc::clone(&message_types);
             thread::spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread()
@@ -205,6 +220,7 @@ impl LoopbackBridgeServer {
                             disconnect_first,
                             Arc::clone(&stop),
                             websocket_connections,
+                            command_sent,
                             message_types,
                         )
                     );
@@ -234,11 +250,24 @@ impl LoopbackBridgeServer {
     }
 
     fn saw_routed_full_snapshot(&self, terminal_id: &str) -> bool {
+        self.full_snapshot_count(terminal_id) > 0
+    }
+
+    fn full_snapshot_count(&self, terminal_id: &str) -> usize {
         self.message_types
             .lock()
             .expect("message types")
             .iter()
-            .any(|value| value == &format!("data_delta:{terminal_id}:full"))
+            .filter(|value| *value == &format!("data_delta:{terminal_id}:full"))
+            .count()
+    }
+
+    fn saw_succeeded_command_result(&self) -> bool {
+        self.message_types
+            .lock()
+            .expect("message types")
+            .iter()
+            .any(|value| value == "command_result:succeeded:10009")
     }
 
     fn stop(&mut self) {
@@ -285,6 +314,7 @@ async fn serve_realtime(
     disconnect_first: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     websocket_connections: Arc<AtomicUsize>,
+    command_sent: Arc<AtomicBool>,
     message_types: Arc<Mutex<Vec<String>>>,
 ) {
     while !stop.load(Ordering::SeqCst) {
@@ -337,6 +367,13 @@ async fn serve_realtime(
             .await
             .expect("ack send");
         websocket_connections.fetch_add(1, Ordering::SeqCst);
+        let terminal = hello
+            .terminals
+            .first()
+            .expect("terminal descriptor")
+            .clone();
+        let mut acknowledged_initial_streams = BTreeSet::new();
+        let mut acknowledgement_sequence = 0_u64;
 
         loop {
             if stop.load(Ordering::SeqCst)
@@ -366,13 +403,112 @@ async fn serve_realtime(
                             }
                         )
                     } else {
-                        message_type.to_owned()
+                        if message_type == "command_result" {
+                            format!(
+                                "command_result:{}:{}",
+                                payload["status"].as_str().unwrap_or("missing"),
+                                payload["evidence"]["broker_retcode"]
+                                    .as_i64()
+                                    .map(|value| value.to_string())
+                                    .unwrap_or_else(|| "missing".to_owned())
+                            )
+                        } else {
+                            message_type.to_owned()
+                        }
                     };
                     message_types.lock().expect("message types").push(summary);
+
+                    if message_type == "data_delta"
+                        && payload["full_snapshot"].as_bool() == Some(true)
+                    {
+                        acknowledgement_sequence += 1;
+                        let stream = payload["stream"].as_str().expect("data stream");
+                        socket
+                            .send(Message::Text(
+                                serde_json::json!({
+                                    "v": 3,
+                                    "type": "data_ack",
+                                    "message_id": format!("data_ack_connected_{sequence}_{acknowledgement_sequence}"),
+                                    "sent_at_utc_msc": now_utc_msc(),
+                                    "acked_message_id": payload["message_id"],
+                                    "terminal_instance_id": payload["terminal_instance_id"],
+                                    "connection_epoch": payload["connection_epoch"],
+                                    "stream": stream,
+                                    "revision": payload["revision"],
+                                    "status": "applied"
+                                })
+                                .to_string()
+                                .into(),
+                            ))
+                            .await
+                            .expect("data acknowledgement send");
+                        acknowledged_initial_streams.insert(stream.to_owned());
+                        if ["account", "positions", "orders"]
+                            .into_iter()
+                            .all(|required| acknowledged_initial_streams.contains(required))
+                            && !command_sent.swap(true, Ordering::SeqCst)
+                        {
+                            let now = now_utc_msc();
+                            socket
+                                .send(Message::Text(
+                                    serde_json::json!({
+                                        "v": 3,
+                                        "type": "command",
+                                        "message_id": "message_01JCONNECTED1",
+                                        "sent_at_utc_msc": now,
+                                        "command_id": "command_01JCONNECTED1",
+                                        "terminal_instance_id": terminal.terminal_instance_id,
+                                        "account_ref": terminal.account_ref,
+                                        "connection_epoch": terminal.connection_epoch,
+                                        "issued_at_utc_msc": now,
+                                        "deadline_utc_msc": now + 30_000,
+                                        "action": "place_order",
+                                        "params": {
+                                            "symbol": "XAUUSD",
+                                            "side": "buy",
+                                            "volume": 0.01
+                                        }
+                                    })
+                                    .to_string()
+                                    .into(),
+                                ))
+                                .await
+                                .expect("command send");
+                        }
+                    } else if message_type == "command_result" {
+                        acknowledgement_sequence += 1;
+                        socket
+                            .send(Message::Text(
+                                serde_json::json!({
+                                    "v": 3,
+                                    "type": "command_result_ack",
+                                    "message_id": format!("result_ack_connected_{sequence}_{acknowledgement_sequence}"),
+                                    "sent_at_utc_msc": now_utc_msc(),
+                                    "acked_message_id": payload["message_id"],
+                                    "command_id": payload["command_id"],
+                                    "terminal_instance_id": payload["terminal_instance_id"],
+                                    "account_ref": payload["account_ref"],
+                                    "connection_epoch": payload["connection_epoch"],
+                                    "status": "applied"
+                                })
+                                .to_string()
+                                .into(),
+                            ))
+                            .await
+                            .expect("command result acknowledgement send");
+                    }
                 }
             }
         }
     }
+}
+
+fn command_is_acked(database_path: &Path) -> bool {
+    OutboxStore::open_existing(database_path)
+        .ok()
+        .and_then(|store| store.command_ledger("command_01JCONNECTED1").ok())
+        .flatten()
+        .is_some_and(|record| record.status == "acked")
 }
 
 async fn read_http_request(mut stream: TcpStream) -> (TcpStream, String) {

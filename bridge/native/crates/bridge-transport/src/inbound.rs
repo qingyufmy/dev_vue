@@ -1,3 +1,4 @@
+use crate::admission::REQUIRED_INITIAL_STREAMS;
 use crate::{DataAckDisposition, NativeCommandAdmission, OutboxPump, TransportError};
 use bridge_command::CommandDispatcher;
 use bridge_contract::{BridgeEnvelope, CommandMessage, TerminalDescriptor};
@@ -93,7 +94,22 @@ impl NativeInboundRouter {
         session_id: &str,
         terminals: &[TerminalDescriptor],
     ) -> Result<(), TransportError> {
-        self.command_admission.begin_session(session_id, terminals)
+        self.command_admission
+            .begin_session(session_id, terminals)?;
+        for terminal in terminals {
+            for stream in REQUIRED_INITIAL_STREAMS {
+                if let Err(error) = self.events.full_snapshot_required(
+                    &terminal.terminal_instance_id,
+                    terminal.connection_epoch,
+                    stream,
+                    1,
+                ) {
+                    let _ = self.command_admission.end_session(session_id);
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn end_session(&self, session_id: &str) -> Result<(), TransportError> {

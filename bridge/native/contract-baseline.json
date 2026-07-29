@@ -161,7 +161,20 @@
     "gap_requires_current_terminal_epoch": true,
     "successful_persisted_command_wakes_collector_once": true,
     "heartbeat_uses_terminal_collector_freshness": true,
-    "post_execution_observer_failure_does_not_change_receipt": true
+    "post_execution_observer_failure_does_not_change_receipt": true,
+    "mt5_command_dispatcher_enabled": true,
+    "trade_admission_requires_acknowledged_initial_account_positions_orders": true,
+    "every_server_reconnect_forces_new_initial_snapshots": true,
+    "command_path": [
+      "websocket_inbound",
+      "sqlite_command_ledger",
+      "rust_dispatcher",
+      "named_pipe",
+      "mt5_python_worker",
+      "sqlite_execution_receipt_and_trade_outbox",
+      "websocket_command_result",
+      "server_ack_to_ledger_acked"
+    ]
   },
   "core_process_lifecycle_contract": {
     "missing_authorization_waits_without_opening_browser": true,
@@ -173,6 +186,7 @@
     "launcher_ready_signal_is_atomic": true,
     "loopback_process_test_covers_real_python_worker": true,
     "loopback_process_test_covers_data_forwarding": true,
+    "loopback_process_test_covers_command_dispatch_and_result_ack": true,
     "loopback_process_test_covers_disconnect_reconnect": true,
     "loopback_process_test_verifies_worker_exit": true
   },

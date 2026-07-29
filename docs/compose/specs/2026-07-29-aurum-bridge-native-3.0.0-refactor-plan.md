@@ -6,7 +6,7 @@
 >
 > 产品版本：Rust Native 直接作为正式 3.0.0；现有 .NET Bridge 仅作功能与协议对照
 >
-> 当前进度：阶段 0 / 1 / 2 已完成；阶段 3 已完成 MT5 Python Worker、增量投影、Profile 准备、服务器/Worker 共同生命周期、端点权威源与 Core 正式入口，真实服务器故障矩阵仍待实施
+> 当前进度：阶段 0 / 1 / 2 已完成；阶段 3 已完成 MT5 Python Worker、增量投影、Profile 准备、服务器/Worker 共同生命周期、端点权威源与 Core 正式入口；阶段 4 已接通正式 MT5 Dispatcher，主动执行核对与完整 demo 故障矩阵仍待实施
 
 ## 1. 结论
 
@@ -420,7 +420,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 - 已锁定 rustls HTTP / WebSocket 依赖；构建审计必须继续证明目标产物不依赖 OpenSSL 或 native-tls。
 - 已完成持久化命令单航班：命令先落盘，重复命令复用同一回执，超时、Worker panic、回执路由错配及进程中断统一进入 `uncertain` 且不得重放。
 - 已完成 `command_result_ack` 到 Native 命令账本 `acked` 的同事务闭环，支持服务器重复 ACK 幂等处理。
-- 已完成可选 Dispatcher 的安全入站接线；Core 当前只配置 MT5 数据 Worker，未配置交易 Dispatcher，交易命令继续失败关闭且不会误执行。
+- 已完成正式 MT5 Dispatcher 接线：服务器命令先经过会话与三类初始全量 ACK 门禁，再依次进入 SQLite 命令账本、`RegistryCommandWorker`、受保护命名管道和 Python Worker；回执与交易 Outbox 同事务保存，服务器 ACK 后账本推进为 `acked`。每次服务器重连都会重新请求并确认本会话的三类全量快照，避免沿用旧会话同步状态或永久锁死交易。Core 独立进程测试覆盖完整闭环及重连后的二次全量同步。
 - 已完成首版版本化 Worker IPC：4 MiB 有界帧、随机会话 nonce、能力协商、终端/账户/epoch 路由及 request ID 关联；握手或回包错配失败关闭，I/O 开始后的超时会熔断通道并要求重启 Worker。
 - 已将 `query_execution` 固定为独立只读 Worker 操作，并提供 `CommandWorker` 适配层。
 - 已完成正式 Windows 命名管道创建：DACL 仅授权当前用户 SID、拒绝远程客户端、首实例防抢占，管道名和会话 nonce 均使用系统 CSPRNG；调试输出不得暴露端点或 nonce。
@@ -445,9 +445,9 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 ### 阶段 4：MT5 交易链路
 
-- [已完成] Core → Worker 交易参数合同按服务器实际映射冻结；六类动作在进入 Python 管道前校验必填字段、票号、数值、管理目标快照与未知字段，正式交易 Dispatcher 尚未启用。
-- [已完成] MT5 Python Worker 已实现开仓/挂单、撤单、改单、修改 SL/TP、平仓与只读执行核对；交易权限双重复核、`order_check`、后置事实核对、回执缓存及 unknown-result 不重放均有模拟 MT5 测试，并通过真实 Python 子进程与 Rust 命名管道交易回执互操作。2026-07-29 已使用 0.01 手在真实 MT5 demo 完成开仓、定位唯一测试仓位、平仓和清理闭环；正式 Core Dispatcher 端到端验收留在后续批次。
-- command ledger、幂等、过期和 epoch fencing。
+- [已完成] Core → Worker 交易参数合同按服务器实际映射冻结；六类动作在进入 Python 管道前校验必填字段、票号、数值、管理目标快照与未知字段。
+- [已完成] MT5 Python Worker 已实现开仓/挂单、撤单、改单、修改 SL/TP、平仓与只读执行核对；交易权限双重复核、`order_check`、后置事实核对、回执缓存及 unknown-result 不重放均有模拟 MT5 测试，并通过真实 Python 子进程与 Rust 命名管道交易回执互操作。2026-07-29 已使用 0.01 手在真实 MT5 demo 完成开仓、定位唯一测试仓位、平仓和清理闭环。
+- [已完成] 正式 Core 已接通 command ledger、幂等、过期、初始同步门禁和 epoch fencing；独立进程测试证明 WebSocket 命令经 Dispatcher 到 Python Worker，再由交易 Outbox 返回并在服务器 ACK 后落为 `acked`。
 - 开仓、挂单、撤单、平仓、修改止损止盈完整矩阵。
 - 原始 MT5 返回码、中文结果和 uncertain reconciliation。
 
@@ -587,9 +587,9 @@ bridge/native/
 - 已完成首版 Core ↔ Worker IPC 合同和 `CommandWorker` 适配层；`query_execution` 与交易操作物理分离，路由、能力、关联 ID 和超时通道状态均已覆盖测试。
 - 已完成当前用户 SID 限定的 Windows 命名管道和受 Job Object 管理的 Worker 启动会话；真实子进程启动、握手、交付及终止已经过本机测试。
 - 已完成 Worker 代际注册表、请求前后 fencing、崩溃自动重启及账户切换 supervisor 取代；真实测试覆盖了进程连续崩溃重启、客户端换代和两个账户不争抢同一终端路由。
-- Native Core 正式入口已接入 DPAPI 凭据、服务器会话和 MT5 只读数据 Worker；交易 Dispatcher 仍未配置，不会误执行生产交易。
+- Native Core 正式入口已接入 DPAPI 凭据、服务器会话、MT5 数据 Worker 与交易 Dispatcher；只有当前会话的账户、持仓和挂单全量快照均获服务器 ACK 后才允许执行交易命令。
 - 已完成 Core 可托管的 MT5 终端会话编排：账户切换要求 epoch 单调递增，旧采集器和 Worker 依次完全停止后才启动新路由；真实 Python Worker 测试验证旧句柄失效、旧路由拒绝和新会话初始投影 Ready。
 - 已完成签名包内 `server-endpoints.json` 与管理员 `endpoint-settings.json` 的 Native 地址权威解析：有效管理员覆盖优先，损坏覆盖安全退回包内地址；包内地址缺失时失败关闭，公网明文 HTTP 不会被静默接受。
 - 已完成 Core 正式入口：无授权时常驻等待且不打开浏览器、不启动 Worker；授权但无终端时失败关闭；单实例退出信号取消服务器与终端；Launcher ready 仅在服务器连接且期望终端 Ready 后原子写入。主动退出授权会立即关闭当前会话并回到等待授权。
-- 已完成 Core 级真实进程回环矩阵：隔离 Python 假 MT5 Worker 经命名管道产生 `data_delta`，本地 refresh/ticket/WebSocket 完成 Hello/ACK 并写入 Launcher ready；主动断开首个 WebSocket 后 Core 自动建立第二个会话，退出信号完成 Core 与 Python Worker 进程树清理。
-- 下一批进入 MT5 交易 Worker：冻结交易操作合同，接入 `CommandWorker` / Dispatcher，并以模拟账户适配器覆盖开仓、挂单、撤单、平仓、修改 SL/TP 和不确定结果核对。
+- 已完成 Core 级真实进程回环矩阵：隔离 Python 假 MT5 Worker 经命名管道产生 `data_delta`，本地 refresh/ticket/WebSocket 完成 Hello/ACK、三类初始快照 ACK、命令执行、交易结果 ACK 和 Launcher ready；主动断开首个 WebSocket 后 Core 自动建立第二个会话，退出信号完成 Core 与 Python Worker 进程树清理。
+- 下一批实现启动后和运行期的 `dispatched` / `uncertain` 主动事实核对器，随后扩展 MT5 demo 的挂单、撤单、保护修改与故障注入矩阵。
