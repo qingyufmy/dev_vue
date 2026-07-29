@@ -1,7 +1,7 @@
 {
   "baseline_name": "aurum-bridge-native-v4-phase-0",
   "source_branch": "refactor/aurum-bridge-v3",
-  "source_commit": "297528e25e982490998a60871593f4e16ad14a56",
+  "source_commit": "906b9f88faf736d285b1099b0c688277db3c0757",
   "server_protocol": {
     "version": 3,
     "schema_directory": "../protocol/v3-json-schema",
@@ -27,12 +27,39 @@
   ],
   "credential_contract": {
     "provider": "windows-dpapi-current-user",
-    "entropy_utf8": "AURUM Bridge v3 refresh credential"
+    "entropy_utf8": "AURUM Bridge v3 refresh credential",
+    "file_name": "credential.dat",
+    "lock_file_name": "credential.dat.lock",
+    "json_fields": ["RefreshToken", "ExpiresAtUtcMsc"],
+    "minimum_refresh_token_length": 40
+  },
+  "profile_contract": {
+    "default_profile_id": "default",
+    "default_instance_id": "AURUMBridge.v3",
+    "observer_directory": "profiles/{profile_id}",
+    "observer_instance_id": "AURUMBridge.v3.profile.{profile_id}"
   },
   "sqlite_contract": {
+    "file_name": "bridge.db",
     "journal_mode": "wal",
     "synchronous": "full",
-    "single_writer": "bridge-core"
+    "single_writer": "bridge-core",
+    "required_tables": [
+      "terminal_bindings",
+      "stream_revisions",
+      "account_latest",
+      "positions_latest",
+      "orders_latest",
+      "deals_pending",
+      "history_cursors",
+      "outbox_messages",
+      "execution_receipts",
+      "terminal_data_cache",
+      "module_versions",
+      "update_state",
+      "history_archive_items",
+      "history_archive_state"
+    ]
   },
   "migration_rule": "preserve-wire-and-storage-contracts-before-optimizing"
 }

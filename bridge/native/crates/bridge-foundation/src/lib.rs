@@ -38,7 +38,7 @@ where
             return Err("bridge_arguments_invalid");
         }
         profile_seen = true;
-        profile_id = validate_profile(value)?;
+        profile_id = validate_profile_id(value.to_str())?;
         Ok(())
     })?;
 
@@ -146,14 +146,14 @@ where
     Ok(())
 }
 
-fn validate_profile(value: &OsString) -> Result<String, &'static str> {
-    let profile = value
-        .to_str()
-        .ok_or("bridge_profile_id_invalid")?
-        .trim()
-        .to_ascii_lowercase();
-    if profile.is_empty()
-        || profile.len() > 40
+pub fn validate_profile_id(value: Option<&str>) -> Result<String, &'static str> {
+    let profile = value.unwrap_or_default().trim().to_ascii_lowercase();
+    let profile = if profile.is_empty() {
+        DEFAULT_PROFILE_ID.to_owned()
+    } else {
+        profile
+    };
+    if profile.len() > 40
         || !profile
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
@@ -161,6 +161,88 @@ fn validate_profile(value: &OsString) -> Result<String, &'static str> {
         return Err("bridge_profile_id_invalid");
     }
     Ok(profile)
+}
+
+pub fn profile_instance_id(profile_id: &str) -> Result<String, &'static str> {
+    let profile_id = validate_profile_id(Some(profile_id))?;
+    if profile_id == DEFAULT_PROFILE_ID {
+        Ok("AURUMBridge.v3".to_owned())
+    } else {
+        Ok(format!("AURUMBridge.v3.profile.{profile_id}"))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BridgeProfilePaths {
+    pub root_data_directory: PathBuf,
+    pub data_directory: PathBuf,
+    pub credential_path: PathBuf,
+    pub database_path: PathBuf,
+}
+
+pub fn resolve_profile_paths(
+    root_data_directory: impl AsRef<Path>,
+    profile_id: &str,
+) -> Result<BridgeProfilePaths, &'static str> {
+    let root = absolute_directory(root_data_directory.as_ref())?;
+    let profile_id = validate_profile_id(Some(profile_id))?;
+    let data_directory = if profile_id == DEFAULT_PROFILE_ID {
+        root.clone()
+    } else {
+        root.join("profiles").join(profile_id)
+    };
+    Ok(BridgeProfilePaths {
+        root_data_directory: root,
+        credential_path: data_directory.join("credential.dat"),
+        database_path: data_directory.join("bridge.db"),
+        data_directory,
+    })
+}
+
+pub fn list_observer_profiles(
+    root_data_directory: impl AsRef<Path>,
+) -> Result<Vec<String>, &'static str> {
+    let profiles_directory = absolute_directory(root_data_directory.as_ref())?.join("profiles");
+    if !profiles_directory.exists() {
+        return Ok(Vec::new());
+    }
+    let entries = fs::read_dir(profiles_directory).map_err(|_| "bridge_profiles_read_failed")?;
+    let mut profiles = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|_| "bridge_profiles_read_failed")?;
+        if !entry
+            .file_type()
+            .map_err(|_| "bridge_profiles_read_failed")?
+            .is_dir()
+        {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "bridge_profile_id_invalid")?;
+        let profile = validate_profile_id(Some(&name))?;
+        if profile == DEFAULT_PROFILE_ID {
+            return Err("bridge_profile_id_reserved");
+        }
+        profiles.push(profile);
+    }
+    profiles.sort();
+    profiles.dedup();
+    Ok(profiles)
+}
+
+fn absolute_directory(path: &Path) -> Result<PathBuf, &'static str> {
+    if path.as_os_str().is_empty() {
+        return Err("bridge_data_directory_invalid");
+    }
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        env::current_dir()
+            .map(|directory| directory.join(path))
+            .map_err(|_| "bridge_data_directory_invalid")
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -322,23 +404,16 @@ fn is_numeric_version(value: &str) -> bool {
 }
 
 pub fn default_data_directory(profile_id: &str) -> Result<PathBuf, &'static str> {
-    if let Some(value) = env::var_os("AURUM_BRIDGE_DATA_DIR") {
-        let root = PathBuf::from(value);
-        return Ok(resolve_profile_data_directory(root, profile_id));
-    }
-    let app_data = env::var_os("APPDATA").ok_or("bridge_appdata_unavailable")?;
-    Ok(resolve_profile_data_directory(
-        PathBuf::from(app_data).join("AURUM").join("BridgeV3"),
-        profile_id,
-    ))
+    resolve_profile_paths(default_root_data_directory()?, profile_id)
+        .map(|paths| paths.data_directory)
 }
 
-fn resolve_profile_data_directory(root: PathBuf, profile_id: &str) -> PathBuf {
-    if profile_id == DEFAULT_PROFILE_ID {
-        root
-    } else {
-        root.join("profiles").join(profile_id)
+pub fn default_root_data_directory() -> Result<PathBuf, &'static str> {
+    if let Some(value) = env::var_os("AURUM_BRIDGE_DATA_DIR") {
+        return absolute_directory(&PathBuf::from(value));
     }
+    let app_data = env::var_os("APPDATA").ok_or("bridge_appdata_unavailable")?;
+    absolute_directory(&PathBuf::from(app_data).join("AURUM").join("BridgeV3"))
 }
 
 #[cfg(test)]
@@ -375,6 +450,57 @@ mod tests {
                 expected_terminal_instance_ids: Vec::new(),
             })
         );
+    }
+
+    #[test]
+    fn profile_paths_match_v3_default_and_observer_layouts() {
+        let root = PathBuf::from(r"C:\Users\fixture\AppData\Roaming\AURUM\BridgeV3");
+        let default = resolve_profile_paths(&root, "default").expect("default paths");
+        assert_eq!(default.data_directory, root);
+        assert_eq!(
+            default.credential_path,
+            default.data_directory.join("credential.dat")
+        );
+        assert_eq!(
+            default.database_path,
+            default.data_directory.join("bridge.db")
+        );
+
+        let observer = resolve_profile_paths(&default.root_data_directory, "Source-A")
+            .expect("observer paths");
+        assert_eq!(
+            observer.data_directory,
+            default
+                .root_data_directory
+                .join("profiles")
+                .join("source-a")
+        );
+        assert_eq!(
+            profile_instance_id("source-a").expect("observer instance"),
+            "AURUMBridge.v3.profile.source-a"
+        );
+    }
+
+    #[test]
+    fn blank_profile_keeps_v3_default_compatibility() {
+        assert_eq!(
+            validate_profile_id(Some("  ")).expect("blank profile"),
+            DEFAULT_PROFILE_ID
+        );
+    }
+
+    #[test]
+    fn observer_profiles_are_validated_sorted_and_isolated() {
+        let root = unique_test_directory("profiles");
+        fs::create_dir_all(root.join("profiles").join("source-b")).expect("source b");
+        fs::create_dir_all(root.join("profiles").join("Source-A")).expect("source a");
+        fs::write(root.join("profiles").join("ignored.txt"), b"fixture").expect("file");
+
+        assert_eq!(
+            list_observer_profiles(&root).expect("observer profiles"),
+            vec!["source-a".to_owned(), "source-b".to_owned()]
+        );
+        fs::remove_dir_all(root).expect("remove profiles fixture");
     }
 
     #[test]

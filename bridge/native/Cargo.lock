@@ -26,6 +26,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-security-win"
+version = "4.0.0-alpha.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "windows-sys",
+]
+
+[[package]]
+name = "bridge-store"
+version = "4.0.0-alpha.1"
+dependencies = [
+ "rusqlite",
+ "serde",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -112,6 +129,17 @@ checksum = "53b44bfcdb3f8d5837a46dae1ca9660a837176eee74a28b229bc626816589102"
 dependencies = [
  "cfg-if",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "liangjian-bridge-compat-probe"
+version = "4.0.0-alpha.1"
+dependencies = [
+ "bridge-foundation",
+ "bridge-security-win",
+ "bridge-store",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -363,6 +391,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "windows-link"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-sys"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+dependencies = [
+ "windows-link",
 ]
 
 [[package]]
