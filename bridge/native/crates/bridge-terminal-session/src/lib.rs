@@ -1,12 +1,12 @@
 use bridge_contract::TerminalStreamFreshness;
 use bridge_runtime_win::RestartPolicy;
-use bridge_store::OutboxStore;
+use bridge_store::{HistoryArchiveBatch, HistoryCursor, OutboxStore};
 use bridge_terminal_data::{
     CollectorHandle, CollectorLifecycleState, CollectorPolicy, SnapshotCollector, SnapshotProjector,
 };
 use bridge_worker_host::{
-    WorkerCapability, WorkerDataRouter, WorkerHostError, WorkerLifecycleState, WorkerProgram,
-    WorkerRegistry, WorkerRoute, WorkerSupervisor, WorkerSupervisorHandle,
+    WorkerCapability, WorkerDataRouter, WorkerHistoryCursor, WorkerHostError, WorkerLifecycleState,
+    WorkerProgram, WorkerRegistry, WorkerRoute, WorkerSupervisor, WorkerSupervisorHandle,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -14,10 +14,15 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::windows::named_pipe::NamedPipeServer;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify, watch};
 use tokio::task::JoinHandle;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
+const HISTORY_ARCHIVE_START_MSC: i64 = 946_684_800_000;
+const HISTORY_BATCH_LIMIT: u16 = 250;
+const HISTORY_COMPLETE_INTERVAL: Duration = Duration::from_secs(30);
+const HISTORY_RETRY_MINIMUM: Duration = Duration::from_secs(2);
+const HISTORY_RETRY_MAXIMUM: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TerminalSessionError {
@@ -97,6 +102,7 @@ pub struct TerminalSessionHandle {
     route: WorkerRoute,
     worker: WorkerSupervisorHandle,
     collector: CollectorHandle,
+    history: HistorySyncHandle,
 }
 
 impl TerminalSessionHandle {
@@ -146,6 +152,10 @@ impl TerminalSessionHandle {
         self.collector
             .request_full_snapshot(stream)
             .map_err(projection_error)
+    }
+
+    pub fn request_history_refresh(&self) {
+        self.history.wake();
     }
 
     pub fn freshness(&self) -> TerminalStreamFreshness {
@@ -254,6 +264,7 @@ struct RunningSession {
     handle: TerminalSessionHandle,
     worker_task: JoinHandle<Result<(), WorkerHostError>>,
     collector_task: JoinHandle<()>,
+    history_task: JoinHandle<()>,
 }
 
 impl RunningSession {
@@ -267,7 +278,12 @@ impl RunningSession {
             WorkerSupervisor::new(
                 spec.program,
                 spec.route.clone(),
-                [WorkerCapability::Snapshot, WorkerCapability::Quote].into(),
+                [
+                    WorkerCapability::Snapshot,
+                    WorkerCapability::Quote,
+                    WorkerCapability::HistorySync,
+                ]
+                .into(),
                 spec.startup_timeout,
                 spec.worker_restart_policy,
                 Arc::clone(&registry),
@@ -279,11 +295,41 @@ impl RunningSession {
             WorkerDataRouter::new(registry, Arc::clone(&clock), spec.request_timeout)
                 .map_err(worker_error)?,
         );
-        let projector =
-            SnapshotProjector::restore(store, spec.route.clone()).map_err(projection_error)?;
-        let (collector, collector_handle) =
-            SnapshotCollector::new(router, projector, clock, spec.collector_policy)
-                .map_err(projection_error)?;
+        let projector = SnapshotProjector::restore(Arc::clone(&store), spec.route.clone())
+            .map_err(projection_error)?;
+        let (collector, collector_handle) = SnapshotCollector::new(
+            Arc::clone(&router),
+            projector,
+            Arc::clone(&clock),
+            spec.collector_policy,
+        )
+        .map_err(projection_error)?;
+        let terminal = bridge_contract::TerminalDescriptor {
+            terminal_instance_id: spec.route.terminal_instance_id.clone(),
+            platform: spec.route.platform.clone(),
+            account_ref: spec.route.account_ref.clone(),
+            connection_epoch: spec.route.connection_epoch,
+            worker_version: None,
+        };
+        let history_state = store
+            .history_archive_state(&terminal.terminal_instance_id, &terminal.account_ref)
+            .map_err(|error| TerminalSessionError::new(error.code()))?;
+        let initial_cursor = if history_state.cursor == HistoryCursor::default() {
+            HistoryCursor {
+                time_msc: HISTORY_ARCHIVE_START_MSC,
+                ticket: "0".to_owned(),
+            }
+        } else {
+            history_state.cursor
+        };
+        let (history, history_task) = start_history_sync(
+            router,
+            Arc::clone(&store),
+            terminal,
+            initial_cursor,
+            history_state.is_complete,
+            clock,
+        );
         let worker_task = tokio::spawn({
             let supervisor = Arc::clone(&supervisor);
             async move { supervisor.run().await }
@@ -294,20 +340,142 @@ impl RunningSession {
                 route: spec.route,
                 worker,
                 collector: collector_handle,
+                history,
             },
             worker_task,
             collector_task,
+            history_task,
         })
     }
 
     async fn stop(mut self) -> Result<(), TerminalSessionError> {
         self.handle.collector.stop();
         await_task(&mut self.collector_task, "terminal_collector_stop_timeout").await?;
+        self.handle.history.stop();
+        await_task(&mut self.history_task, "terminal_history_stop_timeout").await?;
         self.handle.worker.request_stop();
         let worker_result =
             await_task(&mut self.worker_task, "terminal_worker_stop_timeout").await?;
         worker_result.map_err(worker_error)
     }
+}
+
+#[derive(Clone)]
+struct HistorySyncHandle {
+    stop_tx: watch::Sender<bool>,
+    wake: Arc<Notify>,
+}
+
+impl HistorySyncHandle {
+    fn stop(&self) {
+        self.stop_tx.send_replace(true);
+        self.wake.notify_one();
+    }
+
+    fn wake(&self) {
+        self.wake.notify_one();
+    }
+}
+
+fn start_history_sync<S>(
+    router: Arc<WorkerDataRouter<S>>,
+    store: Arc<OutboxStore>,
+    terminal: bridge_contract::TerminalDescriptor,
+    initial_cursor: HistoryCursor,
+    initially_complete: bool,
+    clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+) -> (HistorySyncHandle, JoinHandle<()>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (stop_tx, mut stop_rx) = watch::channel(false);
+    let wake = Arc::new(Notify::new());
+    let handle = HistorySyncHandle {
+        stop_tx,
+        wake: Arc::clone(&wake),
+    };
+    let task = tokio::spawn(async move {
+        let mut cursor = initial_cursor;
+        let mut complete = initially_complete;
+        let mut failures = 0_u32;
+        let mut sequence = 0_u64;
+        loop {
+            if *stop_rx.borrow() {
+                return;
+            }
+            let delay = if failures > 0 {
+                HISTORY_RETRY_MINIMUM
+                    .saturating_mul(1_u32 << failures.min(4))
+                    .min(HISTORY_RETRY_MAXIMUM)
+            } else if complete {
+                HISTORY_COMPLETE_INTERVAL
+            } else {
+                Duration::from_millis(25)
+            };
+            tokio::select! {
+                biased;
+                changed = stop_rx.changed() => {
+                    if changed.is_err() || *stop_rx.borrow() { return; }
+                    continue;
+                }
+                _ = wake.notified() => {}
+                _ = tokio::time::sleep(delay) => {}
+            }
+            if *stop_rx.borrow() {
+                return;
+            }
+            sequence = sequence.wrapping_add(1);
+            let now = clock();
+            if now <= 0 {
+                failures = failures.saturating_add(1);
+                continue;
+            }
+            let request_cursor = WorkerHistoryCursor {
+                time_msc: cursor.time_msc,
+                ticket: cursor.ticket.clone(),
+            };
+            let result = router
+                .history_sync(
+                    WorkerRoute::from_terminal(&terminal).expect("validated history terminal"),
+                    format!("history_sync_{now:x}_{sequence:x}"),
+                    request_cursor,
+                    HISTORY_BATCH_LIMIT,
+                )
+                .await;
+            let Ok(batch) = result else {
+                failures = failures.saturating_add(1);
+                continue;
+            };
+            let stored = HistoryArchiveBatch {
+                deals: batch.deals,
+                history_orders: batch.history_orders,
+                trades: batch.trades,
+                next_cursor: HistoryCursor {
+                    time_msc: batch.next_cursor.time_msc,
+                    ticket: batch.next_cursor.ticket,
+                },
+                has_more: batch.has_more,
+                observed_at_utc_msc: batch.observed_at_utc_msc,
+            };
+            let next_cursor = stored.next_cursor.clone();
+            let has_more = stored.has_more;
+            let persist_store = Arc::clone(&store);
+            let persist_terminal = terminal.clone();
+            let persisted = tokio::task::spawn_blocking(move || {
+                persist_store.persist_history_archive_batch(&persist_terminal, &stored)
+            })
+            .await;
+            match persisted {
+                Ok(Ok(())) => {
+                    cursor = next_cursor;
+                    complete = !has_more;
+                    failures = 0;
+                }
+                _ => failures = failures.saturating_add(1),
+            }
+        }
+    });
+    (handle, task)
 }
 
 async fn await_task<T>(

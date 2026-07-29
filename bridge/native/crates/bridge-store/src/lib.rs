@@ -772,66 +772,64 @@ impl OutboxStore {
     pub fn read_history_archive_page(
         &self,
         terminal: &TerminalDescriptor,
-        page: i64,
-        page_size: i64,
-        include_evidence: bool,
+        parameters: &serde_json::Value,
     ) -> Result<serde_json::Value, StoreError> {
         terminal
             .validate()
             .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
-        if page < 1 || !(1..=200).contains(&page_size) {
-            return Err(StoreError::new("history_pagination_invalid"));
-        }
+        let request = parse_history_page_request(parameters)?;
         let connection = self
             .connection
             .lock()
             .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let scope = history_scope_values(terminal);
+        let mut filtered_values = scope.clone();
+        filtered_values.extend(request.filter_values.iter().cloned());
         let total = connection
             .query_row(
-                "SELECT COUNT(*) FROM history_archive_items \
-                 WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE \
-                   AND login_account = ?3 AND item_kind = 'trade';",
-                params![
-                    terminal.terminal_instance_id,
-                    terminal.account_ref.broker_server,
-                    terminal.account_ref.login
-                ],
+                &format!(
+                    "SELECT COUNT(*) FROM history_archive_items \
+                     WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
+                       AND login_account = ? AND item_kind = 'trade'{};",
+                    request.filter_sql
+                ),
+                params_from_iter(filtered_values.clone()),
                 |row| row.get::<_, i64>(0),
             )
             .map_err(|_| StoreError::new("bridge_store_history_page_query_failed"))?;
         let mut statement = connection
-            .prepare(
+            .prepare(&format!(
                 "SELECT payload_json FROM history_archive_items \
-                 WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE \
-                   AND login_account = ?3 AND item_kind = 'trade' \
-                 ORDER BY event_time_msc DESC, item_id DESC LIMIT ?4 OFFSET ?5;",
-            )
+                 WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
+                   AND login_account = ? AND item_kind = 'trade'{} \
+                 ORDER BY event_time_msc DESC, item_id DESC LIMIT ? OFFSET ?;",
+                request.filter_sql
+            ))
             .map_err(|_| StoreError::new("bridge_store_history_page_query_failed"))?;
-        let rows = read_json_rows(
-            &mut statement,
-            params![
-                terminal.terminal_instance_id,
-                terminal.account_ref.broker_server,
-                terminal.account_ref.login,
-                page_size,
-                (page - 1).saturating_mul(page_size)
-            ],
-        )?;
-        let (deals, history_orders, evidence_truncated) = if include_evidence {
+        let mut page_values = filtered_values.clone();
+        page_values.push(SqlValue::Integer(request.page_size));
+        page_values.push(SqlValue::Integer(
+            (request.page - 1).saturating_mul(request.page_size),
+        ));
+        let rows = read_json_rows(&mut statement, params_from_iter(page_values))?;
+        let (deals, history_orders, evidence_truncated) = if request.include_deals {
             read_history_evidence(&connection, terminal, &rows)?
         } else {
             (Vec::new(), Vec::new(), false)
         };
+        let statistics =
+            read_history_statistics(&connection, terminal, &request, total, filtered_values)?;
         let state = read_history_state_locked(&connection, terminal)?;
         let mut payload = serde_json::json!({
             "orders": rows,
             "deals": deals,
             "history_orders": history_orders,
+            "statistics": statistics,
             "pagination": {
-                "current_page": page,
-                "page_size": page_size,
+                "current_page": request.page,
+                "page_size": request.page_size,
                 "total_count": total,
-                "total_pages": std::cmp::max((total + page_size - 1) / page_size, 1),
+                "total_pages": std::cmp::max((total + request.page_size - 1) / request.page_size, 1),
             },
             "history_sync": {
                 "complete": state.is_complete,
@@ -2140,6 +2138,251 @@ fn scalar_ticket(value: &serde_json::Value) -> Result<String, StoreError> {
     Ok(ticket)
 }
 
+struct HistoryPageRequest {
+    page: i64,
+    page_size: i64,
+    include_deals: bool,
+    filter_sql: String,
+    filter_values: Vec<SqlValue>,
+    capital_filter_sql: String,
+    capital_filter_values: Vec<SqlValue>,
+}
+
+fn parse_history_page_request(
+    parameters: &serde_json::Value,
+) -> Result<HistoryPageRequest, StoreError> {
+    let object = parameters
+        .as_object()
+        .ok_or_else(|| StoreError::new("history_params_invalid"))?;
+    const ALLOWED: &[&str] = &[
+        "page",
+        "page_size",
+        "date_from",
+        "date_to",
+        "entry_from",
+        "entry_to",
+        "direction",
+        "profit_filter",
+        "force_refresh",
+        "include_deals",
+        "compact",
+    ];
+    if object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
+        || ["force_refresh", "include_deals", "compact"]
+            .iter()
+            .any(|key| object.get(*key).is_some_and(|value| !value.is_boolean()))
+    {
+        return Err(StoreError::new("history_params_invalid"));
+    }
+    let page = history_integer(object.get("page"), 1, 1, 1_000_000)?;
+    let page_size = history_integer(object.get("page_size"), 20, 1, 200)?;
+    let mut clauses = Vec::new();
+    let mut values = Vec::new();
+    let mut capital_clauses = Vec::new();
+    let mut capital_values = Vec::new();
+    for (key, comparison, end_of_day) in [
+        ("date_from", ">=", false),
+        ("entry_from", ">=", false),
+        ("date_to", "<=", true),
+        ("entry_to", "<=", true),
+    ] {
+        if let Some(value) = object.get(key) {
+            let text = value
+                .as_str()
+                .ok_or_else(|| StoreError::new("history_date_invalid"))?;
+            let mut timestamp = parse_utc_date_msc(text)?;
+            if end_of_day {
+                timestamp = timestamp.saturating_add(86_400_000 - 1);
+            }
+            clauses.push(format!(" AND event_time_msc {comparison} ?"));
+            values.push(SqlValue::Integer(timestamp));
+            if matches!(key, "date_from" | "date_to") {
+                capital_clauses.push(format!(" AND event_time_msc {comparison} ?"));
+                capital_values.push(SqlValue::Integer(timestamp));
+            }
+        }
+    }
+    if let Some(value) = object.get("direction") {
+        let direction = value
+            .as_str()
+            .filter(|value| matches!(*value, "BUY" | "SELL"))
+            .ok_or_else(|| StoreError::new("history_direction_invalid"))?;
+        clauses.push(
+            " AND UPPER(COALESCE(json_extract(payload_json, '$.type'), \
+             json_extract(payload_json, '$.side'), '')) = ?"
+                .to_owned(),
+        );
+        values.push(SqlValue::Text(direction.to_owned()));
+    }
+    if let Some(value) = object.get("profit_filter") {
+        match value.as_str() {
+            Some("profit") => clauses.push(
+                " AND CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
+                 json_extract(payload_json, '$.profit'), 0) AS REAL) > 0"
+                    .to_owned(),
+            ),
+            Some("loss") => clauses.push(
+                " AND CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
+                 json_extract(payload_json, '$.profit'), 0) AS REAL) < 0"
+                    .to_owned(),
+            ),
+            _ => return Err(StoreError::new("history_profit_filter_invalid")),
+        }
+    }
+    Ok(HistoryPageRequest {
+        page,
+        page_size,
+        include_deals: object
+            .get("include_deals")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        filter_sql: clauses.concat(),
+        filter_values: values,
+        capital_filter_sql: capital_clauses.concat(),
+        capital_filter_values: capital_values,
+    })
+}
+
+fn history_integer(
+    value: Option<&serde_json::Value>,
+    fallback: i64,
+    minimum: i64,
+    maximum: i64,
+) -> Result<i64, StoreError> {
+    let result = value.map_or(Some(fallback), serde_json::Value::as_i64);
+    result
+        .filter(|number| (minimum..=maximum).contains(number))
+        .ok_or_else(|| StoreError::new("history_pagination_invalid"))
+}
+
+fn parse_utc_date_msc(value: &str) -> Result<i64, StoreError> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| index != 4 && index != 7 && !byte.is_ascii_digit())
+    {
+        return Err(StoreError::new("history_date_invalid"));
+    }
+    let parse = |start: usize, end: usize| {
+        value[start..end]
+            .parse::<i64>()
+            .map_err(|_| StoreError::new("history_date_invalid"))
+    };
+    let year = parse(0, 4)?;
+    let month = parse(5, 7)?;
+    let day = parse(8, 10)?;
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let maximum_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => 0,
+    };
+    if !(1970..=9999).contains(&year) || day < 1 || day > maximum_day {
+        return Err(StoreError::new("history_date_invalid"));
+    }
+    let adjusted_year = year - i64::from(month <= 2);
+    let era = adjusted_year.div_euclid(400);
+    let year_of_era = adjusted_year - era * 400;
+    let adjusted_month = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * adjusted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days_since_epoch = era * 146_097 + day_of_era - 719_468;
+    days_since_epoch
+        .checked_mul(86_400_000)
+        .ok_or_else(|| StoreError::new("history_date_invalid"))
+}
+
+fn history_scope_values(terminal: &TerminalDescriptor) -> Vec<SqlValue> {
+    vec![
+        SqlValue::Text(terminal.terminal_instance_id.clone()),
+        SqlValue::Text(terminal.account_ref.broker_server.clone()),
+        SqlValue::Text(terminal.account_ref.login.clone()),
+    ]
+}
+
+fn read_history_statistics(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    request: &HistoryPageRequest,
+    total: i64,
+    filtered_values: Vec<SqlValue>,
+) -> Result<serde_json::Value, StoreError> {
+    let (total_profit, total_volume) = connection
+        .query_row(
+            &format!(
+                "SELECT \
+                   COALESCE(SUM(CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
+                     json_extract(payload_json, '$.profit'), 0) AS REAL)), 0), \
+                   COALESCE(SUM(CAST(COALESCE(json_extract(payload_json, '$.volume'), 0) AS REAL)), 0) \
+                 FROM history_archive_items WHERE terminal_instance_id = ? \
+                   AND broker_server = ? COLLATE NOCASE AND login_account = ? \
+                   AND item_kind = 'trade'{};",
+                request.filter_sql
+            ),
+            params_from_iter(filtered_values),
+            |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_statistics_query_failed"))?;
+    let mut capital_values = history_scope_values(terminal);
+    capital_values.extend(request.capital_filter_values.iter().cloned());
+    let (deposit, withdrawal, credit) = connection
+        .query_row(
+            &format!(
+                "SELECT \
+                   COALESCE(SUM(CASE WHEN CAST(COALESCE(json_extract(payload_json, '$.type'), -1) AS INTEGER) = 2 \
+                     AND CAST(COALESCE(json_extract(payload_json, '$.profit'), 0) AS REAL) >= 0 \
+                     THEN CAST(COALESCE(json_extract(payload_json, '$.profit'), 0) AS REAL) ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN CAST(COALESCE(json_extract(payload_json, '$.type'), -1) AS INTEGER) = 2 \
+                     AND CAST(COALESCE(json_extract(payload_json, '$.profit'), 0) AS REAL) < 0 \
+                     THEN -CAST(COALESCE(json_extract(payload_json, '$.profit'), 0) AS REAL) ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN CAST(COALESCE(json_extract(payload_json, '$.type'), -1) AS INTEGER) = 3 \
+                     THEN CAST(COALESCE(json_extract(payload_json, '$.profit'), 0) AS REAL) ELSE 0 END), 0) \
+                 FROM history_archive_items WHERE terminal_instance_id = ? \
+                   AND broker_server = ? COLLATE NOCASE AND login_account = ? \
+                   AND item_kind = 'deal'{};",
+                request.capital_filter_sql
+            ),
+            params_from_iter(capital_values),
+            |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_statistics_query_failed"))?;
+    let balance = connection
+        .query_row(
+            "SELECT CAST(COALESCE(json_extract(payload_json, '$.balance'), 0) AS REAL) \
+             FROM account_latest WHERE terminal_instance_id = ?1 AND connection_epoch = ?2 LIMIT 1;",
+            params![terminal.terminal_instance_id, terminal.connection_epoch],
+            |row| row.get::<_, f64>(0),
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_statistics_query_failed"))?
+        .unwrap_or(0.0);
+    let net_result = total_profit + credit + deposit - withdrawal;
+    let round = |value: f64| (value * 100.0).round() / 100.0;
+    Ok(serde_json::json!({
+        "account_principal": round(balance - net_result),
+        "account_balance": round(balance),
+        "total_profit": round(total_profit),
+        "credit": round(credit),
+        "deposit": round(deposit),
+        "withdrawal": round(withdrawal),
+        "net_result": round(net_result),
+        "trade_count": total,
+        "total_volume": round(total_volume),
+    }))
+}
+
 fn validate_history_scope(
     terminal_instance_id: &str,
     account_ref: &AccountRef,
@@ -2756,7 +2999,10 @@ mod tests {
         );
 
         let page = store
-            .read_history_archive_page(&terminal, 1, 20, true)
+            .read_history_archive_page(
+                &terminal,
+                &serde_json::json!({ "page": 1, "page_size": 20, "include_deals": true }),
+            )
             .expect("history page");
         assert_eq!(page["orders"].as_array().expect("trades").len(), 1);
         assert_eq!(page["deals"].as_array().expect("deals").len(), 1);
@@ -2769,10 +3015,37 @@ mod tests {
         );
         assert_eq!(page["pagination"]["total_count"], 1);
         assert_eq!(page["source"], "mt5_sqlite");
+        assert_eq!(page["statistics"]["total_profit"], 12.5);
+        let filtered = store
+            .read_history_archive_page(
+                &terminal,
+                &serde_json::json!({
+                    "page": 1,
+                    "page_size": 20,
+                    "direction": "SELL",
+                    "profit_filter": "profit"
+                }),
+            )
+            .expect("filtered history page");
+        assert_eq!(filtered["pagination"]["total_count"], 0);
+        assert_eq!(filtered["statistics"]["total_profit"], 0.0);
+        assert_eq!(
+            store
+                .read_history_archive_page(
+                    &terminal,
+                    &serde_json::json!({ "date_from": "2026-02-30" }),
+                )
+                .expect_err("invalid calendar date")
+                .code(),
+            "history_date_invalid"
+        );
 
         let other_account = history_terminal("654321");
         let other_page = store
-            .read_history_archive_page(&other_account, 1, 20, true)
+            .read_history_archive_page(
+                &other_account,
+                &serde_json::json!({ "page": 1, "page_size": 20, "include_deals": true }),
+            )
             .expect("isolated empty page");
         assert_eq!(other_page["pagination"]["total_count"], 0);
         assert!(other_page["orders"].as_array().expect("orders").is_empty());
@@ -2794,7 +3067,10 @@ mod tests {
             "bridge_store_history_cursor_regression"
         );
         let page_after_rollback = store
-            .read_history_archive_page(&terminal, 1, 20, false)
+            .read_history_archive_page(
+                &terminal,
+                &serde_json::json!({ "page": 1, "page_size": 20 }),
+            )
             .expect("history page after rollback");
         assert_eq!(page_after_rollback["pagination"]["total_count"], 1);
 
@@ -2816,7 +3092,10 @@ mod tests {
         );
         assert_eq!(
             store
-                .read_history_archive_page(&terminal, 0, 20, false)
+                .read_history_archive_page(
+                    &terminal,
+                    &serde_json::json!({ "page": 0, "page_size": 20 }),
+                )
                 .expect_err("invalid page")
                 .code(),
             "history_pagination_invalid"

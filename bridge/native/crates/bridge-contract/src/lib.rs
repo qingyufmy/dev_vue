@@ -382,6 +382,116 @@ pub struct TerminalStreamFreshness {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct DataRequestMessage {
+    pub v: u16,
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub message_id: String,
+    pub sent_at_utc_msc: i64,
+    pub request_id: String,
+    pub terminal_instance_id: String,
+    pub account_ref: AccountRef,
+    pub connection_epoch: i64,
+    pub action: String,
+    pub params: Value,
+}
+
+impl DataRequestMessage {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        validate_typed_envelope(
+            self.v,
+            &self.message_type,
+            "data_request",
+            &self.message_id,
+            self.sent_at_utc_msc,
+        )?;
+        validate_id(&self.request_id)?;
+        validate_id(&self.terminal_instance_id)?;
+        self.account_ref.validate()?;
+        if self.connection_epoch <= 0
+            || !matches!(
+                self.action.as_str(),
+                "rates"
+                    | "symbol_snapshot"
+                    | "risk_snapshot"
+                    | "performance_daily"
+                    | "symbols"
+                    | "history"
+                    | "chart_data"
+                    | "pending_order_state"
+                    | "diagnostics"
+            )
+            || !self.params.is_object()
+        {
+            return Err("bridge_data_request_invalid");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DataResponseMessage {
+    pub v: u16,
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub message_id: String,
+    pub sent_at_utc_msc: i64,
+    pub request_id: String,
+    pub terminal_instance_id: String,
+    pub account_ref: AccountRef,
+    pub connection_epoch: i64,
+    pub action: String,
+    pub params: Value,
+    pub observed_at_utc_msc: i64,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+impl DataResponseMessage {
+    pub fn validate_for(&self, request: &DataRequestMessage) -> Result<(), &'static str> {
+        validate_typed_envelope(
+            self.v,
+            &self.message_type,
+            "data_response",
+            &self.message_id,
+            self.sent_at_utc_msc,
+        )?;
+        if self.request_id != request.request_id
+            || self.action != request.action
+            || self.params != request.params
+            || !same_terminal_route(
+                &self.terminal_instance_id,
+                &self.account_ref,
+                self.connection_epoch,
+                &request.terminal_instance_id,
+                &request.account_ref,
+                request.connection_epoch,
+            )
+            || self.observed_at_utc_msc <= 0
+            || !matches!(self.status.as_str(), "succeeded" | "rejected")
+            || self.status == "succeeded"
+                && self.payload.as_ref().is_none_or(|value| !value.is_object())
+            || self.status == "rejected"
+                && self.error_code.as_ref().is_none_or(|value| {
+                    value.is_empty()
+                        || value.len() > 128
+                        || value
+                            .bytes()
+                            .any(|byte| !byte.is_ascii_alphanumeric() && byte != b'_')
+                })
+        {
+            return Err("bridge_data_response_invalid");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DataDeltaMessage {
     pub v: u16,
     #[serde(rename = "type")]

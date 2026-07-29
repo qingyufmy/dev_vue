@@ -383,6 +383,8 @@ def main() -> int:
                         help="exercise local and broker rejection paths without leaving trades")
     parser.add_argument("--observe-recovery-seconds", type=float, default=0,
                         help="observe a manual terminal close/restart without sending trades")
+    parser.add_argument("--history-smoke", action="store_true",
+                        help="read one bounded recent history batch without sending trades")
     args = parser.parse_args()
     if (args.matrix or args.faults) and not args.execute:
         parser.error("--matrix and --faults require --execute")
@@ -390,6 +392,8 @@ def main() -> int:
         parser.error("--matrix and --faults are mutually exclusive")
     if args.observe_recovery_seconds and args.execute:
         parser.error("--observe-recovery-seconds is read-only and cannot be combined with --execute")
+    if args.history_smoke and args.execute:
+        parser.error("--history-smoke is read-only and cannot be combined with --execute")
     if args.observe_recovery_seconds and not 10 <= args.observe_recovery_seconds <= 180:
         parser.error("--observe-recovery-seconds must be between 10 and 180")
 
@@ -437,6 +441,23 @@ def main() -> int:
             print(json.dumps({"mode": "recovery", "readiness": readiness, **recovery},
                              ensure_ascii=False))
             return 0 if recovery["passed"] else 6
+        if args.history_smoke:
+            cursor_time = int(time.time() * 1000) - 30 * 24 * 60 * 60 * 1000
+            batch = adapter.history_sync({"time_msc": cursor_time, "ticket": "0"}, 250)
+            history = {
+                "deals": len(batch["deals"]),
+                "history_orders": len(batch["history_orders"]),
+                "trades": len(batch["trades"]),
+                "next_cursor": batch["next_cursor"],
+                "has_more": batch["has_more"],
+                "observed_at_utc_msc": batch["observed_at_utc_msc"],
+            }
+            if (max(history["deals"], history["history_orders"], history["trades"]) > 250
+                    or int(history["next_cursor"]["time_msc"]) < cursor_time):
+                raise RuntimeError("mt5_history_smoke_contract_invalid")
+            print(json.dumps({"mode": "history_smoke", "readiness": readiness,
+                              "history": history}, ensure_ascii=False))
+            return 0
         if not args.execute:
             print(json.dumps({"mode": "read_only", "readiness": readiness}, ensure_ascii=False))
             return 0

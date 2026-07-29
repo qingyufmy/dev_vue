@@ -61,6 +61,7 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
             && server.saw_routed_full_snapshot(terminal_id)
             && server.saw_succeeded_command_result()
             && server.saw_recovered_command_result()
+            && server.saw_history_response()
             && command_is_acked(&paths.database_path)
             && command_is_acked_by_id(&paths.database_path, RECOVERED_COMMAND_ID)
     });
@@ -107,6 +108,10 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     assert!(
         server.saw_recovered_command_result(),
         "interrupted command was not reconciled from terminal facts"
+    );
+    assert!(
+        server.saw_history_response(),
+        "history data request did not complete through SQLite"
     );
     assert_eq!(
         fs::read_to_string(&order_send_count_file)
@@ -440,6 +445,14 @@ impl LoopbackBridgeServer {
             .any(|value| value == &format!("command_result_id:{RECOVERED_COMMAND_ID}:succeeded"))
     }
 
+    fn saw_history_response(&self) -> bool {
+        self.message_types
+            .lock()
+            .expect("message types")
+            .iter()
+            .any(|value| value == "data_response:history:succeeded")
+    }
+
     fn saw_hello_route(
         &self,
         terminal_id: &str,
@@ -569,6 +582,7 @@ async fn serve_realtime(
             .clone();
         let mut acknowledged_initial_streams = BTreeSet::new();
         let mut acknowledgement_sequence = 0_u64;
+        let mut history_requested = false;
 
         loop {
             if stop.load(Ordering::SeqCst)
@@ -600,6 +614,12 @@ async fn serve_realtime(
                             } else {
                                 "delta"
                             }
+                        )
+                    } else if message_type == "data_response" {
+                        format!(
+                            "data_response:{}:{}",
+                            payload["action"].as_str().unwrap_or("missing"),
+                            payload["status"].as_str().unwrap_or("missing")
                         )
                     } else {
                         if message_type == "command_result" {
@@ -649,11 +669,33 @@ async fn serve_realtime(
                             .await
                             .expect("data acknowledgement send");
                         acknowledged_initial_streams.insert(stream.to_owned());
-                        if ["account", "positions", "orders"]
+                        let initial_ready = ["account", "positions", "orders"]
                             .into_iter()
-                            .all(|required| acknowledged_initial_streams.contains(required))
-                            && !command_sent.swap(true, Ordering::SeqCst)
-                        {
+                            .all(|required| acknowledged_initial_streams.contains(required));
+                        if initial_ready && !history_requested {
+                            history_requested = true;
+                            let now = now_utc_msc();
+                            socket
+                                .send(Message::Text(
+                                    serde_json::json!({
+                                        "v": 3,
+                                        "type": "data_request",
+                                        "message_id": "message_01JHISTORY01",
+                                        "sent_at_utc_msc": now,
+                                        "request_id": "data_01JHISTORYREQ1",
+                                        "terminal_instance_id": terminal.terminal_instance_id,
+                                        "account_ref": terminal.account_ref,
+                                        "connection_epoch": terminal.connection_epoch,
+                                        "action": "history",
+                                        "params": { "page": 1, "page_size": 20, "include_deals": true }
+                                    })
+                                    .to_string()
+                                    .into(),
+                                ))
+                                .await
+                                .expect("history request send");
+                        }
+                        if initial_ready && !command_sent.swap(true, Ordering::SeqCst) {
                             let now = now_utc_msc();
                             socket
                                 .send(Message::Text(

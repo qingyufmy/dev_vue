@@ -3,8 +3,9 @@ use bridge_command::{
     ExecutionReconciliationWorker,
 };
 use bridge_contract::{
-    CommandResultMessage, HelloMessage, SERVER_DATA_QUEUE_CAPACITY, SERVER_PROTOCOL_VERSION,
-    SERVER_TRADE_QUEUE_CAPACITY, TerminalDescriptor, TerminalStreamFreshness,
+    CommandResultMessage, DataRequestMessage, HelloMessage, SERVER_DATA_QUEUE_CAPACITY,
+    SERVER_PROTOCOL_VERSION, SERVER_TRADE_QUEUE_CAPACITY, TerminalDescriptor,
+    TerminalStreamFreshness,
 };
 use bridge_foundation::{
     BridgeProfilePaths, MT5_WORKER_RELATIVE_PATH, PYTHON_RELATIVE_PATH, resolve_profile_paths,
@@ -17,11 +18,11 @@ use bridge_terminal_session::{
     Mt5SessionManager, Mt5SessionSpec, TerminalSessionHandle, TerminalSessionStatus,
 };
 use bridge_transport::{
-    CredentialSource, HelloProvider, InboundEventSink, NativeCommandAdmission, NativeInboundRouter,
-    OutboxPump, PriorityMessageQueue, ReleaseAvailableNotification, ServerEndpoints,
-    SessionCancellation, SessionConnector, SessionIntervals, SessionRuntime, SessionSupervisor,
-    SessionTransition, SupervisorStateSink, TerminalFreshnessProvider, TransportError,
-    V3SessionConnector,
+    CredentialSource, HelloProvider, InboundDataHandler, InboundEventSink, NativeCommandAdmission,
+    NativeInboundRouter, OutboxPump, PriorityMessageQueue, ReleaseAvailableNotification,
+    ServerEndpoints, SessionCancellation, SessionConnector, SessionIntervals, SessionRuntime,
+    SessionSupervisor, SessionTransition, SupervisorStateSink, TerminalFreshnessProvider,
+    TransportError, V3SessionConnector,
 };
 use bridge_worker_host::{
     RegistryCommandWorker, RegistryReconciliationWorker, WorkerProgram, WorkerRegistry, WorkerRoute,
@@ -146,6 +147,7 @@ struct ActiveMt5Session {
 pub struct ActiveMt5Sessions {
     sessions: BTreeMap<String, ActiveMt5Session>,
     registry: Arc<WorkerRegistry<NamedPipeServer>>,
+    store: Arc<OutboxStore>,
     latest_release: Mutex<Option<ReleaseAvailableNotification>>,
 }
 
@@ -184,6 +186,7 @@ impl ActiveMt5Sessions {
         Ok(Arc::new(Self {
             sessions,
             registry,
+            store,
             latest_release: Mutex::new(None),
         }))
     }
@@ -295,6 +298,66 @@ impl InboundEventSink for ActiveMt5Sessions {
             .map_err(|_| TransportError::from_static_code("bridge_release_state_failed"))? =
             Some(notification);
         Ok(())
+    }
+}
+
+impl InboundDataHandler for ActiveMt5Sessions {
+    fn handle<'a>(
+        &'a self,
+        request: &'a DataRequestMessage,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<serde_json::Value, TransportError>> + Send + 'a,
+        >,
+    > {
+        let prepared = (|| {
+            if request.action != "history" {
+                return Err(TransportError::from_static_code(
+                    "terminal_data_action_unavailable",
+                ));
+            }
+            let session =
+                self.session_for_route(&request.terminal_instance_id, request.connection_epoch)?;
+            let route = session.handle.route();
+            if route.account_ref.login != request.account_ref.login
+                || !route
+                    .account_ref
+                    .broker_server
+                    .eq_ignore_ascii_case(&request.account_ref.broker_server)
+            {
+                return Err(TransportError::from_static_code(
+                    "bridge_message_route_mismatch",
+                ));
+            }
+            if request
+                .params
+                .get("force_refresh")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                session.handle.request_history_refresh();
+            }
+            Ok((
+                Arc::clone(&self.store),
+                TerminalDescriptor {
+                    terminal_instance_id: route.terminal_instance_id.clone(),
+                    platform: route.platform.clone(),
+                    account_ref: route.account_ref.clone(),
+                    connection_epoch: route.connection_epoch,
+                    worker_version: None,
+                },
+                request.params.clone(),
+            ))
+        })();
+        Box::pin(async move {
+            let (store, terminal, parameters) = prepared?;
+            tokio::task::spawn_blocking(move || {
+                store.read_history_archive_page(&terminal, &parameters)
+            })
+            .await
+            .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))?
+            .map_err(|error| TransportError::from_static_code(error.code()))
+        })
     }
 }
 
@@ -893,7 +956,8 @@ impl NativeConnectedRuntime {
             let inbound = Arc::new(
                 NativeInboundRouter::new(Arc::clone(&outbox), events)
                     .with_command_admission(command_admission, Arc::clone(&clock))
-                    .with_command_dispatcher(command_dispatcher),
+                    .with_command_dispatcher(command_dispatcher)
+                    .with_data_handler(active_sessions.clone()),
             );
             let freshness: Arc<dyn TerminalFreshnessProvider> = active_sessions.clone();
             let session_runtime = Arc::new(

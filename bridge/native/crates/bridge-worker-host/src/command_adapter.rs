@@ -436,9 +436,11 @@ fn map_response(body: WorkerResponseBody) -> Result<CommandResultMessage, Comman
     match body {
         WorkerResponseBody::CommandResult { result } => Ok(*result),
         WorkerResponseBody::Error { error_code, .. } => Err(CommandWorkerError::new(error_code)),
-        WorkerResponseBody::Snapshot { .. } | WorkerResponseBody::Quote { .. } => Err(
-            CommandWorkerError::new("worker_response_operation_mismatch"),
-        ),
+        WorkerResponseBody::Snapshot { .. }
+        | WorkerResponseBody::Quote { .. }
+        | WorkerResponseBody::HistoryBatch { .. } => Err(CommandWorkerError::new(
+            "worker_response_operation_mismatch",
+        )),
     }
 }
 

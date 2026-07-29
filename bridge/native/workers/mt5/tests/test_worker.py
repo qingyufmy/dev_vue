@@ -33,6 +33,10 @@ Order = namedtuple(
 Symbol = namedtuple(
     "Symbol", "name trade_mode digits point trade_tick_size volume_min volume_max volume_step filling_mode")
 Tick = namedtuple("Tick", "bid ask last time_msc")
+Deal = namedtuple(
+    "Deal", "ticket order position_id symbol type entry magic reason comment volume price profit commission swap fee sl tp time time_msc")
+HistoryOrder = namedtuple(
+    "HistoryOrder", "ticket position_id symbol type state magic reason comment volume_initial volume_current price_open sl tp time_setup time_done time_setup_msc time_done_msc")
 
 
 class FakeMt5:
@@ -62,6 +66,11 @@ class FakeMt5:
     ORDER_STATE_FILLED = 4
     ORDER_STATE_REJECTED = 5
     ORDER_STATE_EXPIRED = 6
+    DEAL_ENTRY_IN = 0
+    DEAL_ENTRY_OUT = 1
+    DEAL_ENTRY_INOUT = 2
+    DEAL_ENTRY_OUT_BY = 3
+    DEAL_TYPE_BUY = 0
 
     def __init__(self, now: int):
         self.now = now
@@ -71,6 +80,25 @@ class FakeMt5:
         self.positions = [Position(101, "XAUUSD.s", 0.01, 0, 234000, 2290.0, 2320.0)]
         self.orders = [Order(202, "XAUUSD.s", 0.02, 0.02, 2, 234000, "AI-PENDING",
                              2280.0, 2270.0, 2310.0, 0.0, 0)]
+        event_seconds = int(time.time()) - 60
+        self.history_deals = [
+            Deal(4001, 3001, 2001, "XAUUSD.s", 0, 0, 234000, 0, "open",
+                 0.01, 2295.0, 0.0, 0.0, 0.0, 0.0, 2285.0, 2315.0,
+                 event_seconds - 60, (event_seconds - 60) * 1000),
+            Deal(4002, 3002, 2001, "XAUUSD.s", 1, 1, 234000, 0, "close",
+                 0.01, 2305.0, 10.0, -0.2, -0.1, 0.0, 0.0, 0.0,
+                 event_seconds, event_seconds * 1000),
+        ]
+        self.history_orders = {
+            3001: HistoryOrder(3001, 2001, "XAUUSD.s", 0, 4, 234000, 0, "open",
+                               0.01, 0.0, 2295.0, 2285.0, 2315.0,
+                               event_seconds - 60, event_seconds - 60,
+                               (event_seconds - 60) * 1000, (event_seconds - 60) * 1000),
+            3002: HistoryOrder(3002, 2001, "XAUUSD.s", 1, 4, 234000, 0, "close",
+                               0.01, 0.0, 2305.0, 0.0, 0.0,
+                               event_seconds, event_seconds,
+                               event_seconds * 1000, event_seconds * 1000),
+        }
 
     def initialize(self, **_kwargs):
         self.initialized = True
@@ -138,10 +166,18 @@ class FakeMt5:
             ]
         return SimpleNamespace(retcode=10009, order=1001, deal=2001, comment="done")
 
-    def history_orders_get(self, *_args, **_kwargs):
-        return ()
+    def history_orders_get(self, *_args, **kwargs):
+        ticket = kwargs.get("ticket")
+        return (self.history_orders[ticket],) if ticket in self.history_orders else ()
 
-    def history_deals_get(self, *_args, **_kwargs):
+    def history_deals_get(self, *args, **kwargs):
+        position = kwargs.get("position")
+        if position is not None:
+            return tuple(item for item in self.history_deals if item.position_id == position)
+        if len(args) == 2:
+            start, end = args
+            return tuple(item for item in self.history_deals
+                         if start.timestamp() <= item.time <= end.timestamp())
         return ()
 
 
@@ -220,6 +256,38 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.now, quote["observed_at_utc_msc"])
         self.assertEqual(180, quote["timezone_offset_minutes"])
         self.assertEqual("verified", quote["clock_status"])
+
+    def test_history_sync_is_bounded_cursor_ordered_and_builds_related_evidence(self):
+        cursor_time = self.mt5.history_deals[0].time_msc - 1
+        first = self.worker.handle(self.request("history_sync", {
+            "cursor": {"time_msc": cursor_time, "ticket": "0"}, "limit": 1
+        }))
+        self.assertEqual("history_batch", first["outcome"])
+        first_batch = first["payload"]["batch"]
+        self.assertEqual([4001], [item["deal_ticket"] for item in first_batch["deals"]])
+        self.assertEqual("4001", first_batch["next_cursor"]["ticket"])
+        self.assertTrue(first_batch["has_more"])
+        self.assertEqual([], first_batch["trades"])
+
+        second = self.worker.handle(self.request("history_sync", {
+            "cursor": first_batch["next_cursor"], "limit": 250
+        }, "request_01JHISTORY02"))
+        second_batch = second["payload"]["batch"]
+        self.assertEqual([4002], [item["deal_ticket"] for item in second_batch["deals"]])
+        self.assertEqual(1, len(second_batch["trades"]))
+        self.assertAlmostEqual(9.7, second_batch["trades"][0]["net_profit"])
+        self.assertEqual(3002, second_batch["trades"][0]["order_ticket"])
+        self.assertEqual([3002], [item["ticket"] for item in second_batch["history_orders"]])
+
+    def test_history_sync_rejects_zero_cursor_and_oversized_limit_before_mt5_query(self):
+        for payload in (
+            {"cursor": {"time_msc": 0, "ticket": "0"}, "limit": 250},
+            {"cursor": {"time_msc": 1, "ticket": "0"}, "limit": 251},
+        ):
+            with self.subTest(payload=payload):
+                response = self.worker.handle(self.request("history_sync", payload))
+                self.assertEqual("error", response["outcome"])
+                self.assertEqual("worker_history_cursor_invalid", response["payload"]["error_code"])
 
     def test_cross_account_request_is_rejected(self):
         request = self.request("quote", {"symbol": "XAUUSD"})

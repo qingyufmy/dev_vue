@@ -7,6 +7,7 @@ import os
 import struct
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -16,6 +17,8 @@ IPC_VERSION = 1
 WORKER_VERSION = "3.0.0-alpha.1"
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_SNAPSHOT_ITEMS = 10_000
+MAX_HISTORY_BATCH_ITEMS = 250
+HISTORY_WINDOW_MSC = 30 * 24 * 60 * 60 * 1000
 DEFAULT_TIMEZONE_OFFSET_MINUTES = 180
 CLOCK_FRESHNESS_TOLERANCE_MS = 30_000
 CLOCK_STALE_AFTER_MS = 120_000
@@ -299,6 +302,170 @@ class ReadOnlyMt5Adapter:
             "clock_status": self.clock.status,
         }
 
+    def history_sync(self, cursor: dict[str, Any], limit: int) -> dict[str, Any]:
+        self._ensure_identity()
+        try:
+            cursor_time = int(cursor.get("time_msc"))
+            cursor_ticket = int(cursor.get("ticket"))
+            limit = int(limit)
+        except (TypeError, ValueError) as error:
+            raise WorkerError("worker_history_cursor_invalid") from error
+        now_msc = int(time.time() * 1000)
+        if (cursor_time <= 0 or cursor_time > now_msc or cursor_ticket < 0
+                or limit < 1 or limit > MAX_HISTORY_BATCH_ITEMS):
+            raise WorkerError("worker_history_cursor_invalid")
+        window_end = min(cursor_time + HISTORY_WINDOW_MSC, now_msc)
+        if window_end <= cursor_time:
+            return self._history_batch([], cursor_time, cursor_ticket, False, now_msc)
+        date_from = datetime.fromtimestamp(max(0, cursor_time - 1_000) / 1000,
+                                           tz=timezone.utc)
+        date_to = datetime.fromtimestamp((window_end + 999) / 1000, tz=timezone.utc)
+        raw_deals = self.mt5.history_deals_get(date_from, date_to)
+        if raw_deals is None:
+            raise WorkerError("mt5_history_deals_unavailable")
+        rows: list[tuple[int, int, dict[str, Any]]] = []
+        for value in raw_deals:
+            raw = _plain(value)
+            if not isinstance(raw, dict):
+                raise WorkerError("mt5_history_deal_invalid")
+            try:
+                ticket = int(raw.get("ticket") or 0)
+                event_msc = int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000)
+            except (TypeError, ValueError) as error:
+                raise WorkerError("mt5_history_deal_invalid") from error
+            if ticket <= 0 or event_msc <= 0:
+                raise WorkerError("mt5_history_deal_invalid")
+            if (event_msc, ticket) > (cursor_time, cursor_ticket) and event_msc <= window_end:
+                rows.append((event_msc, ticket, raw))
+        rows.sort(key=lambda item: (item[0], item[1]))
+        selected = rows[:limit]
+        if len(rows) > limit:
+            next_time, next_ticket = selected[-1][0], selected[-1][1]
+            has_more = True
+        else:
+            next_time = window_end
+            next_ticket = selected[-1][1] if selected and selected[-1][0] == window_end else 0
+            has_more = window_end < now_msc
+        return self._history_batch(
+            [item[2] for item in selected], next_time, next_ticket, has_more, now_msc)
+
+    def _history_batch(self, raw_deals: list[dict[str, Any]], next_time: int,
+                       next_ticket: int, has_more: bool, observed_at: int) -> dict[str, Any]:
+        deals: list[dict[str, Any]] = []
+        history_orders: list[dict[str, Any]] = []
+        trades: list[dict[str, Any]] = []
+        orders_by_ticket: dict[int, dict[str, Any]] = {}
+        position_deals: dict[int, list[dict[str, Any]]] = {}
+        entry_in = int(getattr(self.mt5, "DEAL_ENTRY_IN", 0))
+        exit_entries = {
+            int(getattr(self.mt5, "DEAL_ENTRY_OUT", 1)),
+            int(getattr(self.mt5, "DEAL_ENTRY_INOUT", 2)),
+            int(getattr(self.mt5, "DEAL_ENTRY_OUT_BY", 3)),
+        }
+        buy_type = int(getattr(self.mt5, "DEAL_TYPE_BUY", 0))
+        for raw in raw_deals:
+            deals.append(self._history_deal_row(raw))
+            try:
+                entry = int(raw.get("entry") if raw.get("entry") is not None else -1)
+                position_id = int(raw.get("position_id") or 0)
+                order_ticket = int(raw.get("order") or 0)
+            except (TypeError, ValueError) as error:
+                raise WorkerError("mt5_history_item_invalid") from error
+            if order_ticket > 0 and order_ticket not in orders_by_ticket:
+                values = self.mt5.history_orders_get(ticket=order_ticket)
+                if values is None:
+                    raise WorkerError("mt5_history_orders_unavailable")
+                if values:
+                    order = self._history_order_row(_plain(values[-1]))
+                    orders_by_ticket[order_ticket] = order
+                    history_orders.append(order)
+            if entry not in exit_entries:
+                continue
+            if position_id > 0 and position_id not in position_deals:
+                values = self.mt5.history_deals_get(position=position_id)
+                if values is None:
+                    raise WorkerError("mt5_history_deals_unavailable")
+                position_deals[position_id] = [_plain(value) for value in values]
+            group = position_deals.get(position_id, [])
+            origin = next((value for value in group
+                           if isinstance(value, dict)
+                           and int(value.get("entry") if value.get("entry") is not None else -1)
+                           == entry_in), raw)
+            trades.append({
+                "ticket": origin.get("order") or position_id or raw.get("ticket"),
+                "deal_ticket": raw.get("ticket"),
+                "order": origin.get("order") or order_ticket or position_id,
+                "order_ticket": order_ticket or origin.get("order") or position_id,
+                "position_id": position_id or raw.get("order") or raw.get("ticket"),
+                "symbol": raw.get("symbol") or origin.get("symbol") or "",
+                "type": "BUY" if int(origin.get("type") or 0) == buy_type else "SELL",
+                "volume": float(raw.get("volume") or 0.0),
+                "entry_price": float(origin.get("price") or 0.0),
+                "exit_price": float(raw.get("price") or 0.0),
+                "price": float(raw.get("price") or 0.0),
+                "profit": float(raw.get("profit") or 0.0),
+                "swap": float(raw.get("swap") or 0.0),
+                "commission": float(raw.get("commission") or 0.0),
+                "fee": float(raw.get("fee") or 0.0),
+                "net_profit": sum(float(raw.get(key) or 0.0)
+                                  for key in ("profit", "swap", "commission", "fee")),
+                "entry_time": self._history_time(origin.get("time")),
+                "close_time": self._history_time(raw.get("time")),
+                "close_time_msc": int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000),
+                "time": self._history_time(raw.get("time")),
+                "time_msc": int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000),
+                "comment": str(raw.get("comment") or ""),
+                "take_profit": float(orders_by_ticket.get(order_ticket, {}).get("tp") or 0.0),
+                "stop_loss": float(orders_by_ticket.get(order_ticket, {}).get("sl") or 0.0),
+            })
+        return {
+            "deals": deals,
+            "history_orders": history_orders,
+            "trades": trades,
+            "next_cursor": {"time_msc": next_time, "ticket": str(next_ticket)},
+            "has_more": has_more,
+            "observed_at_utc_msc": observed_at,
+        }
+
+    @staticmethod
+    def _history_time(value: Any) -> str:
+        try:
+            return datetime.fromtimestamp(int(value or 0), tz=timezone.utc).isoformat().replace(
+                "+00:00", "Z")
+        except (OSError, OverflowError, TypeError, ValueError) as error:
+            raise WorkerError("mt5_history_time_invalid") from error
+
+    def _history_deal_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "deal_ticket": row.get("ticket"), "ticket": row.get("ticket"),
+            "order": row.get("order"), "order_ticket": row.get("order"),
+            "position_id": row.get("position_id"), "symbol": row.get("symbol"),
+            "type": row.get("type"), "entry": row.get("entry"), "magic": row.get("magic"),
+            "reason": row.get("reason"), "comment": row.get("comment"),
+            "volume": row.get("volume"), "price": row.get("price"),
+            "profit": row.get("profit"), "commission": row.get("commission"),
+            "swap": row.get("swap"), "fee": row.get("fee"), "sl": row.get("sl"),
+            "tp": row.get("tp"), "time": self._history_time(row.get("time")),
+            "time_msc": int(row.get("time_msc") or int(row.get("time") or 0) * 1000),
+        }
+
+    def _history_order_row(self, row: Any) -> dict[str, Any]:
+        if not isinstance(row, dict):
+            raise WorkerError("mt5_history_order_invalid")
+        return {
+            "ticket": row.get("ticket"), "order": row.get("ticket"),
+            "order_ticket": row.get("ticket"), "position_id": row.get("position_id"),
+            "symbol": row.get("symbol"), "type": row.get("type"), "state": row.get("state"),
+            "magic": row.get("magic"), "reason": row.get("reason"),
+            "comment": row.get("comment"), "volume_initial": row.get("volume_initial"),
+            "volume_current": row.get("volume_current"), "price_open": row.get("price_open"),
+            "sl": row.get("sl"), "tp": row.get("tp"),
+            "time_setup": self._history_time(row.get("time_setup")),
+            "time_done": self._history_time(row.get("time_done") or row.get("time_setup")),
+            "time_msc": int(row.get("time_done_msc") or row.get("time_setup_msc")
+                            or int(row.get("time_done") or row.get("time_setup") or 0) * 1000),
+        }
+
     def _resolve_symbol(self, requested: str) -> str:
         requested = str(requested or "").strip()
         if not requested or len(requested) > 64:
@@ -379,6 +546,16 @@ class Mt5Worker:
                 if not isinstance(symbol, str) or symbol.strip() != symbol or not symbol or len(symbol) > 64:
                     raise WorkerError("worker_quote_symbol_invalid")
                 return self._response(request_id, "quote", {"quote": self.adapter.quote(symbol)})
+            if operation == "history_sync":
+                payload = self._request_payload(body)
+                if set(payload) != {"cursor", "limit"} or not isinstance(payload.get("cursor"), dict):
+                    raise WorkerError("worker_request_payload_invalid")
+                cursor = payload["cursor"]
+                if set(cursor) != {"time_msc", "ticket"}:
+                    raise WorkerError("worker_history_cursor_invalid")
+                return self._response(request_id, "history_batch", {
+                    "batch": self.adapter.history_sync(cursor, payload.get("limit"))
+                })
             if operation in {"execute_command", "query_execution"}:
                 if set(body) != {"command"} or not isinstance(body.get("command"), dict):
                     raise WorkerError("worker_request_payload_invalid")
@@ -466,7 +643,9 @@ def run(mt5: Any) -> None:
                 "session_nonce": nonce,
                 "worker_version": WORKER_VERSION,
                 "route": route.payload(),
-                "capabilities": ["snapshot", "quote", "execute_command", "query_execution"],
+                "capabilities": [
+                    "snapshot", "quote", "history_sync", "execute_command", "query_execution"
+                ],
             })
             while True:
                 write_frame(stream, worker.handle(read_frame(stream)))

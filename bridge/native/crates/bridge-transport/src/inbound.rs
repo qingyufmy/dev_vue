@@ -1,9 +1,16 @@
 use crate::admission::REQUIRED_INITIAL_STREAMS;
 use crate::{DataAckDisposition, NativeCommandAdmission, OutboxPump, TransportError};
 use bridge_command::CommandDispatcher;
-use bridge_contract::{BridgeEnvelope, CommandMessage, TerminalDescriptor};
+use bridge_contract::{
+    BridgeEnvelope, CommandMessage, DataRequestMessage, DataResponseMessage, TerminalDescriptor,
+};
 use serde::Deserialize;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::{MessagePriority, OutboundMessage};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReleaseAvailableNotification {
@@ -26,6 +33,13 @@ pub trait InboundEventSink: Send + Sync {
         &self,
         notification: ReleaseAvailableNotification,
     ) -> Result<(), TransportError>;
+}
+
+pub trait InboundDataHandler: Send + Sync {
+    fn handle<'a>(
+        &'a self,
+        request: &'a DataRequestMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, TransportError>> + Send + 'a>>;
 }
 
 #[derive(Default)]
@@ -55,7 +69,9 @@ pub struct NativeInboundRouter {
     events: Arc<dyn InboundEventSink>,
     command_admission: Arc<NativeCommandAdmission>,
     command_dispatcher: Option<Arc<CommandDispatcher>>,
+    data_handler: Option<Arc<dyn InboundDataHandler>>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    response_sequence: AtomicU64,
 }
 
 impl NativeInboundRouter {
@@ -65,12 +81,14 @@ impl NativeInboundRouter {
             events,
             command_admission: Arc::new(NativeCommandAdmission::default()),
             command_dispatcher: None,
+            data_handler: None,
             clock: Arc::new(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
                     .unwrap_or(0)
             }),
+            response_sequence: AtomicU64::new(0),
         }
     }
 
@@ -86,6 +104,11 @@ impl NativeInboundRouter {
 
     pub fn with_command_dispatcher(mut self, command_dispatcher: Arc<CommandDispatcher>) -> Self {
         self.command_dispatcher = Some(command_dispatcher);
+        self
+    }
+
+    pub fn with_data_handler(mut self, data_handler: Arc<dyn InboundDataHandler>) -> Self {
+        self.data_handler = Some(data_handler);
         self
     }
 
@@ -116,7 +139,10 @@ impl NativeInboundRouter {
         self.command_admission.end_session(session_id)
     }
 
-    pub async fn route(&self, payload_json: &str) -> Result<(), TransportError> {
+    pub async fn route(
+        &self,
+        payload_json: &str,
+    ) -> Result<Option<OutboundMessage>, TransportError> {
         let envelope: BridgeEnvelope = serde_json::from_str(payload_json)
             .map_err(|_| TransportError::new("bridge_inbound_message_invalid"))?;
         envelope.validate_header().map_err(TransportError::new)?;
@@ -152,14 +178,15 @@ impl NativeInboundRouter {
                     }
                     DataAckDisposition::Applied | DataAckDisposition::Unknown => {}
                 }
-                Ok(())
+                Ok(None)
             }
-            "heartbeat" => Ok(()),
+            "heartbeat" => Ok(None),
             "release_available" => {
                 let release: ReleaseAvailableWire = serde_json::from_str(payload_json)
                     .map_err(|_| TransportError::new("bridge_release_notification_invalid"))?;
                 let notification = release.validate()?;
-                self.events.release_available(notification)
+                self.events.release_available(notification)?;
+                Ok(None)
             }
             "error" => {
                 let error: ServerErrorWire = serde_json::from_str(payload_json)
@@ -172,7 +199,7 @@ impl NativeInboundRouter {
                 self.outbox
                     .handle_command_result_acknowledgement(payload_json)
                     .await?;
-                Ok(())
+                Ok(None)
             }
             "command" => {
                 let command: CommandMessage = serde_json::from_str(payload_json)
@@ -185,11 +212,66 @@ impl NativeInboundRouter {
                     .dispatch(command)
                     .await
                     .map_err(|error| TransportError::new(error.code()))?;
-                Ok(())
+                Ok(None)
             }
-            "quote_request" | "data_request" => {
-                Err(TransportError::new("native_bridge_runtime_not_ready"))
+            "data_request" => {
+                let request: DataRequestMessage = serde_json::from_str(payload_json)
+                    .map_err(|_| TransportError::new("bridge_data_request_invalid"))?;
+                request.validate().map_err(TransportError::new)?;
+                let Some(handler) = &self.data_handler else {
+                    return Err(TransportError::new("native_bridge_runtime_not_ready"));
+                };
+                let observed_at = (self.clock)();
+                if observed_at <= 0 {
+                    return Err(TransportError::new("bridge_message_timestamp_invalid"));
+                }
+                let result = handler.handle(&request).await;
+                let sequence = self.response_sequence.fetch_add(1, Ordering::Relaxed);
+                let response = match result {
+                    Ok(payload) => DataResponseMessage {
+                        v: 3,
+                        message_type: "data_response".to_owned(),
+                        message_id: format!("data_{observed_at:x}_{sequence:x}"),
+                        sent_at_utc_msc: observed_at,
+                        request_id: request.request_id.clone(),
+                        terminal_instance_id: request.terminal_instance_id.clone(),
+                        account_ref: request.account_ref.clone(),
+                        connection_epoch: request.connection_epoch,
+                        action: request.action.clone(),
+                        params: request.params.clone(),
+                        observed_at_utc_msc: observed_at,
+                        status: "succeeded".to_owned(),
+                        payload: Some(payload),
+                        error_code: None,
+                    },
+                    Err(error) => DataResponseMessage {
+                        v: 3,
+                        message_type: "data_response".to_owned(),
+                        message_id: format!("data_{observed_at:x}_{sequence:x}"),
+                        sent_at_utc_msc: observed_at,
+                        request_id: request.request_id.clone(),
+                        terminal_instance_id: request.terminal_instance_id.clone(),
+                        account_ref: request.account_ref.clone(),
+                        connection_epoch: request.connection_epoch,
+                        action: request.action.clone(),
+                        params: request.params.clone(),
+                        observed_at_utc_msc: observed_at,
+                        status: "rejected".to_owned(),
+                        payload: None,
+                        error_code: Some(error.code().to_owned()),
+                    },
+                };
+                response
+                    .validate_for(&request)
+                    .map_err(TransportError::new)?;
+                Ok(Some(OutboundMessage {
+                    message_id: response.message_id.clone(),
+                    payload_json: serde_json::to_string(&response)
+                        .map_err(|_| TransportError::new("bridge_data_response_invalid"))?,
+                    priority: MessagePriority::Data,
+                }))
             }
+            "quote_request" => Err(TransportError::new("native_bridge_runtime_not_ready")),
             _ => Err(TransportError::new("bridge_message_type_unexpected")),
         }
     }
@@ -352,6 +434,66 @@ mod tests {
 
     struct SuccessfulWorker {
         calls: AtomicUsize,
+    }
+
+    struct HistoryDataHandler;
+
+    impl InboundDataHandler for HistoryDataHandler {
+        fn handle<'a>(
+            &'a self,
+            request: &'a DataRequestMessage,
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, TransportError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                if request.action != "history" {
+                    return Err(TransportError::new("terminal_data_action_unavailable"));
+                }
+                Ok(serde_json::json!({
+                    "orders": [],
+                    "pagination": { "current_page": request.params["page"] }
+                }))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn data_request_returns_a_direct_correlated_response_without_using_outbox() {
+        let store = Arc::new(FakeOutbox::default());
+        let router = router(store.clone(), Arc::new(CapturingEvents::default()))
+            .with_command_admission(
+                Arc::new(NativeCommandAdmission::default()),
+                Arc::new(|| 1_700_000_000_100),
+            )
+            .with_data_handler(Arc::new(HistoryDataHandler));
+        let request = serde_json::json!({
+            "v": 3,
+            "type": "data_request",
+            "message_id": "message_01JDATAREQ01",
+            "sent_at_utc_msc": 1_700_000_000_000_i64,
+            "request_id": "data_01JDATAREQ001",
+            "terminal_instance_id": "mt5_terminal_01",
+            "account_ref": { "broker_server": "Broker-Demo", "login": "123456" },
+            "connection_epoch": 7,
+            "action": "history",
+            "params": { "page": 2, "page_size": 20 }
+        });
+        let outbound = router
+            .route(&request.to_string())
+            .await
+            .expect("data route")
+            .expect("direct response");
+        assert_eq!(outbound.priority, MessagePriority::Data);
+        let response: DataResponseMessage =
+            serde_json::from_str(&outbound.payload_json).expect("data response");
+        response
+            .validate_for(&serde_json::from_value(request).expect("request"))
+            .expect("correlated response");
+        assert_eq!(response.status, "succeeded");
+        assert_eq!(
+            response.payload.expect("payload")["pagination"]["current_page"],
+            2
+        );
+        assert!(store.records.lock().expect("records").is_empty());
     }
 
     impl CommandWorker for SuccessfulWorker {

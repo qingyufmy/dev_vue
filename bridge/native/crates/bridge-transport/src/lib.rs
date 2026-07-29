@@ -29,7 +29,8 @@ mod supervisor;
 
 pub use admission::NativeCommandAdmission;
 pub use inbound::{
-    InboundEventSink, NativeInboundRouter, NoopInboundEventSink, ReleaseAvailableNotification,
+    InboundDataHandler, InboundEventSink, NativeInboundRouter, NoopInboundEventSink,
+    ReleaseAvailableNotification,
 };
 pub use runtime::{
     SessionCancellation, SessionChannel, SessionIntervals, SessionRuntime,

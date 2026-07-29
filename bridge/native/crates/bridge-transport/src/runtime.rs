@@ -277,8 +277,14 @@ async fn io_loop<C: SessionChannel>(
                     Ok(payload) => payload,
                     Err(error) => break Err(error),
                 };
-                if let Err(error) = inbound.route(&payload).await {
-                    break Err(error);
+                match inbound.route(&payload).await {
+                    Ok(Some(response)) => {
+                        if let Err(error) = channel.send_json(response.payload_json).await {
+                            break Err(error);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => break Err(error),
                 }
             }
         }

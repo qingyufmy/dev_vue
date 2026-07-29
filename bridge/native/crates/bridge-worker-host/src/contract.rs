@@ -133,13 +133,14 @@ pub enum WorkerOperation {
     QueryExecution { command: CommandMessage },
     CollectSnapshot { request: SnapshotRequest },
     Quote { request: QuoteRequest },
+    HistorySync { request: HistorySyncRequest },
 }
 
 impl WorkerOperation {
     pub fn command(&self) -> Option<&CommandMessage> {
         match self {
             Self::ExecuteCommand { command } | Self::QueryExecution { command } => Some(command),
-            Self::CollectSnapshot { .. } | Self::Quote { .. } => None,
+            Self::CollectSnapshot { .. } | Self::Quote { .. } | Self::HistorySync { .. } => None,
         }
     }
 
@@ -149,6 +150,7 @@ impl WorkerOperation {
             Self::QueryExecution { .. } => WorkerCapability::QueryExecution,
             Self::CollectSnapshot { .. } => WorkerCapability::Snapshot,
             Self::Quote { .. } => WorkerCapability::Quote,
+            Self::HistorySync { .. } => WorkerCapability::HistorySync,
         }
     }
 }
@@ -190,6 +192,89 @@ impl QuoteRequest {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerHistoryCursor {
+    pub time_msc: i64,
+    pub ticket: String,
+}
+
+impl WorkerHistoryCursor {
+    fn validate(&self) -> Result<(), WorkerHostError> {
+        if self.time_msc <= 0
+            || self.ticket.is_empty()
+            || self.ticket.len() > 32
+            || self.ticket.bytes().any(|byte| !byte.is_ascii_digit())
+        {
+            return Err(WorkerHostError::new("worker_history_cursor_invalid"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistorySyncRequest {
+    pub cursor: WorkerHistoryCursor,
+    pub limit: u16,
+}
+
+impl HistorySyncRequest {
+    fn validate(&self) -> Result<(), WorkerHostError> {
+        self.cursor.validate()?;
+        if !(1..=250).contains(&self.limit) {
+            return Err(WorkerHostError::new("worker_history_limit_invalid"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerHistoryBatch {
+    pub deals: Vec<serde_json::Value>,
+    pub history_orders: Vec<serde_json::Value>,
+    pub trades: Vec<serde_json::Value>,
+    pub next_cursor: WorkerHistoryCursor,
+    pub has_more: bool,
+    pub observed_at_utc_msc: i64,
+}
+
+impl WorkerHistoryBatch {
+    fn validate_for(&self, request: &HistorySyncRequest) -> Result<(), WorkerHostError> {
+        self.next_cursor.validate()?;
+        if self.observed_at_utc_msc <= 0
+            || self.deals.len() > usize::from(request.limit)
+            || self.history_orders.len() > usize::from(request.limit)
+            || self.trades.len() > usize::from(request.limit)
+            || self
+                .deals
+                .iter()
+                .chain(&self.history_orders)
+                .chain(&self.trades)
+                .any(|item| !item.is_object())
+            || compare_history_cursor(&self.next_cursor, &request.cursor).is_lt()
+        {
+            return Err(WorkerHostError::new("worker_history_batch_invalid"));
+        }
+        Ok(())
+    }
+}
+
+fn compare_history_cursor(
+    left: &WorkerHistoryCursor,
+    right: &WorkerHistoryCursor,
+) -> std::cmp::Ordering {
+    let left_ticket = left.ticket.trim_start_matches('0');
+    let right_ticket = right.ticket.trim_start_matches('0');
+    left.time_msc.cmp(&right.time_msc).then_with(|| {
+        left_ticket
+            .len()
+            .cmp(&right_ticket.len())
+            .then_with(|| left_ticket.cmp(right_ticket))
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -379,6 +464,23 @@ impl WorkerRequest {
         }
     }
 
+    pub fn history_sync(
+        route: WorkerRoute,
+        request_id: String,
+        cursor: WorkerHistoryCursor,
+        limit: u16,
+    ) -> Self {
+        Self {
+            ipc_v: WORKER_IPC_VERSION,
+            message_type: "worker_request".to_owned(),
+            request_id,
+            route,
+            operation: WorkerOperation::HistorySync {
+                request: HistorySyncRequest { cursor, limit },
+            },
+        }
+    }
+
     pub fn validate(&self, now_utc_msc: i64) -> Result<(), WorkerHostError> {
         if self.ipc_v != WORKER_IPC_VERSION || self.message_type != "worker_request" {
             return Err(WorkerHostError::new("worker_request_protocol_invalid"));
@@ -399,6 +501,7 @@ impl WorkerRequest {
             }
             WorkerOperation::CollectSnapshot { request } => request.validate()?,
             WorkerOperation::Quote { request } => request.validate()?,
+            WorkerOperation::HistorySync { request } => request.validate()?,
         }
         match &self.operation {
             WorkerOperation::ExecuteCommand { command } => {
@@ -420,7 +523,9 @@ impl WorkerRequest {
                     return Err(WorkerHostError::new("worker_query_action_invalid"));
                 }
             }
-            WorkerOperation::CollectSnapshot { .. } | WorkerOperation::Quote { .. } => {}
+            WorkerOperation::CollectSnapshot { .. }
+            | WorkerOperation::Quote { .. }
+            | WorkerOperation::HistorySync { .. } => {}
         }
         Ok(())
     }
@@ -798,6 +903,9 @@ pub enum WorkerResponseBody {
     Quote {
         quote: TerminalQuote,
     },
+    HistoryBatch {
+        batch: Box<WorkerHistoryBatch>,
+    },
     Error {
         error_code: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -865,6 +973,12 @@ impl WorkerResponse {
                     return Err(WorkerHostError::new("worker_response_operation_mismatch"));
                 };
                 quote.validate_for(request)?;
+            }
+            WorkerResponseBody::HistoryBatch { batch } => {
+                let WorkerOperation::HistorySync { request } = &request.operation else {
+                    return Err(WorkerHostError::new("worker_response_operation_mismatch"));
+                };
+                batch.validate_for(request)?;
             }
             WorkerResponseBody::Error {
                 error_code,
