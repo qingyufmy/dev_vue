@@ -24,8 +24,8 @@ use windows_sys::Win32::System::JobObjects::{
     SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Registry::{
-    HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegCreateKeyExW,
-    RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE, KEY_SET_VALUE, KEY_WOW64_64KEY, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CreateEventW, SetEvent, WaitForMultipleObjects,
@@ -38,6 +38,47 @@ const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 const AUTOSTART_VALUE_NAME: &str = "AURUMBridge";
 const AUTOSTART_RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const STABLE_LAUNCHER_FILE_NAME: &str = "AURUMBridge.Launcher.exe";
+const MACHINE_GUID_KEY: &str = "SOFTWARE\\Microsoft\\Cryptography";
+const MACHINE_GUID_VALUE: &str = "MachineGuid";
+
+pub fn machine_guid() -> Result<String, RuntimeError> {
+    let path = wide_string(MACHINE_GUID_KEY);
+    let mut key = null_mut();
+    let mut result = unsafe {
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            path.as_ptr(),
+            0,
+            KEY_QUERY_VALUE | KEY_WOW64_64KEY,
+            &mut key,
+        )
+    };
+    if result != 0 || key.is_null() {
+        key = null_mut();
+        result = unsafe {
+            RegOpenKeyExW(
+                HKEY_LOCAL_MACHINE,
+                path.as_ptr(),
+                0,
+                KEY_QUERY_VALUE,
+                &mut key,
+            )
+        };
+    }
+    if result != 0 || key.is_null() {
+        return Err(RuntimeError::windows_code(
+            "bridge_machine_guid_unavailable",
+            result,
+        ));
+    }
+    let key = RegistryKey(key);
+    let value = read_registry_string(key.0, &wide_string(MACHINE_GUID_VALUE))
+        .map_err(|_| RuntimeError::new("bridge_machine_guid_unavailable"))?
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| RuntimeError::new("bridge_machine_guid_unavailable"))?;
+    Ok(value)
+}
 
 pub struct AutoStartRegistration;
 

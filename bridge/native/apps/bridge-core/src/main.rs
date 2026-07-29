@@ -1,32 +1,38 @@
+mod observer_terminal;
+
 use bridge_foundation::{
     CliMode, DEFAULT_PROFILE_ID, HealthCheckOptions, StartupReadyOptions, default_data_directory,
-    default_root_data_directory, parse_cli, profile_instance_id, resolve_installed_root,
-    resolve_profile_paths, run_health_check, write_runtime_status_snapshot,
+    default_root_data_directory, list_observer_profiles, parse_cli, profile_instance_id,
+    resolve_installed_root, resolve_profile_paths, run_health_check, write_runtime_status_snapshot,
     write_startup_ready_signal,
 };
 use bridge_local_control::{
     EndpointSettingsSelection, LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction,
-    LocalControlPipeServer, LocalControlResponse, LocalControlResult, UiObserverSource,
-    UiStateSnapshot, UiStateStore, UiTerminalCandidate,
+    LocalControlPipeServer, LocalControlResponse, LocalControlResult, ObserverProfileMutation,
+    UiObserverSource, UiStateSnapshot, UiStateStore, UiTerminalCandidate,
 };
 use bridge_observability::{BridgeLogger, LoggerConfig};
-use bridge_preferences::{BridgePreferencesStore, BridgeUserPreferences};
-use bridge_runtime_win::{
-    AutoStartRegistration, InstanceAcquireResult, InstanceSignal, SingleInstanceGuard,
-    default_lock_directory,
+use bridge_preferences::{
+    BridgePreferencesStore, BridgeUserPreferences, ObserverProfilePreferences,
 };
-use bridge_security_win::CredentialStore;
+use bridge_runtime_win::{
+    AutoStartRegistration, InstanceAcquireResult, InstanceSignal, ProcessSpec, ProcessSupervisor,
+    ProcessSupervisorHandle, RestartPolicy, SingleInstanceGuard, default_lock_directory,
+};
+use bridge_security_win::{BridgeCredential, CredentialStore};
 use bridge_terminal_session::TerminalSessionState;
 use bridge_transport::{
     BridgeAuthClient, ConnectionState, CredentialSource, ENDPOINT_SETTINGS_FILE_NAME,
-    ServerEndpoints, SessionCancellation, clear_endpoint_settings, load_packaged_server_endpoints,
-    resolve_server_endpoints, save_endpoint_settings, test_server_endpoints,
+    ManagedObserverSource, ServerEndpoints, SessionCancellation, clear_endpoint_settings,
+    load_packaged_server_endpoints, resolve_server_endpoints, save_endpoint_settings,
+    test_server_endpoints,
 };
 use liangjian_bridge_core::{
     ActiveMt5Sessions, CoreConnectionState, CredentialState, NativeConnectedRuntime,
     NativeProfileBootstrap, NativeRuntimeStatusHandle, NativeRuntimeStatusSnapshot,
     ProfileCredentialSource, ProfileTerminalBindingSource,
 };
+use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
@@ -62,6 +68,7 @@ struct LocalControlContext {
     root_data_directory: PathBuf,
     stop: SessionCancellation,
     logger: BridgeLogger,
+    observer_runtimes: Option<Arc<ObserverRuntimeManager>>,
 }
 
 struct InactiveStatus<'a> {
@@ -82,6 +89,15 @@ struct SelectionUiContext<'a> {
     preferences: &'a BridgeUserPreferences,
 }
 
+struct ObserverProfileActionContext<'a> {
+    application_directory: &'a std::path::Path,
+    root_data_directory: &'a std::path::Path,
+    administrator_credential_store: &'a CredentialStore,
+    administrator_cache: &'a AsyncMutex<AdministratorCache>,
+    observer_runtimes: Option<&'a ObserverRuntimeManager>,
+    logger: &'a BridgeLogger,
+}
+
 struct RuntimeStatusMonitorContext {
     status_path: PathBuf,
     profile_id: String,
@@ -91,10 +107,134 @@ struct RuntimeStatusMonitorContext {
     logger: BridgeLogger,
 }
 
+struct ObserverRuntimeEntry {
+    stop: ProcessSupervisorHandle,
+    task: tokio::task::JoinHandle<Result<(), bridge_runtime_win::RuntimeError>>,
+}
+
+struct ObserverRuntimeManager {
+    executable: PathBuf,
+    application_directory: PathBuf,
+    root_data_directory: PathBuf,
+    entries: AsyncMutex<HashMap<String, ObserverRuntimeEntry>>,
+    logger: BridgeLogger,
+}
+
+impl ObserverRuntimeManager {
+    fn new(
+        executable: PathBuf,
+        application_directory: PathBuf,
+        root_data_directory: PathBuf,
+        logger: BridgeLogger,
+    ) -> Self {
+        Self {
+            executable,
+            application_directory,
+            root_data_directory,
+            entries: AsyncMutex::new(HashMap::new()),
+            logger,
+        }
+    }
+
+    async fn start_configured(&self) {
+        let profiles = match list_observer_profiles(&self.root_data_directory) {
+            Ok(profiles) => profiles,
+            Err(code) => {
+                self.logger
+                    .warning("native_observer_profiles_read_failed", Some(code));
+                return;
+            }
+        };
+        for profile_id in profiles {
+            let paths = match resolve_profile_paths(&self.root_data_directory, &profile_id) {
+                Ok(paths) => paths,
+                Err(code) => {
+                    self.logger
+                        .warning("native_observer_profile_path_failed", Some(code));
+                    continue;
+                }
+            };
+            let preferences =
+                match BridgePreferencesStore::new(paths.data_directory.join("preferences.json")) {
+                    Ok(store) => store.load(),
+                    Err(error) => {
+                        self.logger
+                            .warning("native_observer_preferences_failed", Some(error.code()));
+                        continue;
+                    }
+                };
+            if preferences.observer_enabled
+                && observer_preferences_configured(&preferences)
+                && let Err(code) = self.start(&profile_id).await
+            {
+                self.logger
+                    .warning("native_observer_runtime_start_failed", Some(&code));
+            }
+        }
+    }
+
+    async fn start(&self, profile_id: &str) -> Result<(), String> {
+        self.stop(profile_id).await?;
+        stop_external_observer_runtime(profile_id).await?;
+        let spec = ProcessSpec::new(&self.executable, &self.application_directory)
+            .map_err(|error| error.code().to_owned())?
+            .arg("--profile")
+            .arg(profile_id)
+            .arg("--background");
+        let supervisor = ProcessSupervisor::new(spec, RestartPolicy::default())
+            .map_err(|error| error.code().to_owned())?;
+        let stop = supervisor.handle();
+        let task = tokio::task::spawn_blocking(move || supervisor.run(None));
+        self.entries
+            .lock()
+            .await
+            .insert(profile_id.to_owned(), ObserverRuntimeEntry { stop, task });
+        self.logger.info(
+            "native_observer_runtime_started",
+            Some(&format!("profile={profile_id}")),
+        );
+        Ok(())
+    }
+
+    async fn stop(&self, profile_id: &str) -> Result<(), String> {
+        let entry = self.entries.lock().await.remove(profile_id);
+        let Some(entry) = entry else {
+            return Ok(());
+        };
+        entry.stop.request_stop();
+        entry
+            .task
+            .await
+            .map_err(|_| "bridge_observer_runtime_join_failed".to_owned())?
+            .map_err(|error| error.code().to_owned())?;
+        self.logger.info(
+            "native_observer_runtime_stopped",
+            Some(&format!("profile={profile_id}")),
+        );
+        Ok(())
+    }
+
+    async fn stop_all(&self) {
+        let profile_ids = self
+            .entries
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for profile_id in profile_ids {
+            if let Err(code) = self.stop(&profile_id).await {
+                self.logger
+                    .warning("native_observer_runtime_stop_failed", Some(&code));
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct AdministratorCache {
     is_administrator: bool,
-    observer_sources: Vec<UiObserverSource>,
+    observer_sources: Vec<ManagedObserverSource>,
     last_refresh: Option<Instant>,
     last_error_code: Option<String>,
     refresh_in_progress: bool,
@@ -119,7 +259,7 @@ impl AdministratorCache {
     fn complete_refresh(
         &mut self,
         generation: u64,
-        result: Result<(bool, Vec<UiObserverSource>), String>,
+        result: Result<(bool, Vec<ManagedObserverSource>), String>,
         logger: &BridgeLogger,
     ) {
         if generation != self.generation {
@@ -142,7 +282,14 @@ impl AdministratorCache {
         }
         state.is_administrator = self.is_administrator;
         state.observer_sources = if self.is_administrator {
-            self.observer_sources.clone()
+            self.observer_sources
+                .iter()
+                .map(|source| UiObserverSource {
+                    bridge_user_id: source.bridge_user_id,
+                    display_name: source.display_name().to_owned(),
+                    account_summary: source.account_summary(),
+                })
+                .collect()
         } else {
             Vec::new()
         };
@@ -172,7 +319,7 @@ async fn refresh_administrator_access(
     application_directory: &std::path::Path,
     root_data_directory: &std::path::Path,
     credential_store: &CredentialStore,
-) -> Result<(bool, Vec<UiObserverSource>), String> {
+) -> Result<(bool, Vec<ManagedObserverSource>), String> {
     let Some(credential) = credential_store
         .load()
         .map_err(|error| error.code().to_owned())?
@@ -189,15 +336,7 @@ async fn refresh_administrator_access(
         .map_err(|error| error.code().to_owned())?;
     let is_administrator = access.bridge_role == "admin";
     let observer_sources = if is_administrator {
-        access
-            .sources
-            .into_iter()
-            .map(|source| UiObserverSource {
-                bridge_user_id: source.bridge_user_id,
-                display_name: source.display_name().to_owned(),
-                account_summary: source.account_summary(),
-            })
-            .collect()
+        access.sources
     } else {
         Vec::new()
     };
@@ -317,6 +456,18 @@ async fn run_connected_profile(
     let credential_store = CredentialStore::new(&profile_paths.credential_path)?;
     let preferences_store =
         BridgePreferencesStore::new(profile_paths.data_directory.join("preferences.json"))?;
+    let observer_runtimes = if profile_id == DEFAULT_PROFILE_ID {
+        let manager = Arc::new(ObserverRuntimeManager::new(
+            env::current_exe()?,
+            application_directory.clone(),
+            root_data_directory.clone(),
+            logger.clone(),
+        ));
+        manager.start_configured().await;
+        Some(manager)
+    } else {
+        None
+    };
     if profile_id == DEFAULT_PROFILE_ID {
         let enabled = preferences_store.load().auto_start_enabled;
         match AutoStartRegistration::ensure_for_installed_application(
@@ -348,6 +499,7 @@ async fn run_connected_profile(
             root_data_directory: root_data_directory.clone(),
             stop: control_stop,
             logger: logger.clone(),
+            observer_runtimes: observer_runtimes.clone(),
         },
     ));
     let signal_stop = stop.clone();
@@ -382,6 +534,9 @@ async fn run_connected_profile(
     )
     .await;
     stop.cancel();
+    if let Some(manager) = observer_runtimes {
+        manager.stop_all().await;
+    }
     control_task
         .await
         .map_err(|_| "bridge_local_control_task_failed")?;
@@ -444,6 +599,7 @@ async fn run_local_control_server(
         root_data_directory,
         stop,
         logger,
+        observer_runtimes,
     } = context;
     logger.info(
         "native_local_control_started",
@@ -721,6 +877,63 @@ async fn run_local_control_server(
                         }
                     }
                 }
+                LocalControlAction::ObserverCreate { observer } => {
+                    configure_observer_profile(
+                        true,
+                        observer,
+                        ObserverProfileActionContext {
+                            application_directory: &application_directory,
+                            root_data_directory: &root_data_directory,
+                            administrator_credential_store: &credential_store,
+                            administrator_cache: &administrator_cache,
+                            observer_runtimes: observer_runtimes.as_deref(),
+                            logger: &logger,
+                        },
+                    )
+                    .await
+                }
+                LocalControlAction::ObserverUpdate { observer } => {
+                    configure_observer_profile(
+                        false,
+                        observer,
+                        ObserverProfileActionContext {
+                            application_directory: &application_directory,
+                            root_data_directory: &root_data_directory,
+                            administrator_credential_store: &credential_store,
+                            administrator_cache: &administrator_cache,
+                            observer_runtimes: observer_runtimes.as_deref(),
+                            logger: &logger,
+                        },
+                    )
+                    .await
+                }
+                LocalControlAction::ObserverStart {
+                    observer_profile_id,
+                }
+                | LocalControlAction::ObserverRetry {
+                    observer_profile_id,
+                } => {
+                    observer_runtime_enabled_action(
+                        &observer_profile_id,
+                        true,
+                        &root_data_directory,
+                        &administrator_cache,
+                        observer_runtimes.as_deref(),
+                    )
+                    .await
+                }
+                LocalControlAction::ObserverPause {
+                    observer_profile_id,
+                } => {
+                    observer_runtime_enabled_action(
+                        &observer_profile_id,
+                        false,
+                        &root_data_directory,
+                        &administrator_cache,
+                        observer_runtimes.as_deref(),
+                    )
+                    .await
+                }
                 LocalControlAction::BridgeExit => LocalControlResult::Accepted,
                 _ => LocalControlResult::Rejected {
                     code: "bridge_local_control_action_unavailable".to_owned(),
@@ -744,6 +957,260 @@ async fn run_local_control_server(
         if let Err(error) = server.disconnect() {
             logger.warning("native_local_control_disconnect_failed", Some(error.code()));
         }
+    }
+}
+
+async fn configure_observer_profile(
+    create: bool,
+    observer: ObserverProfileMutation,
+    context: ObserverProfileActionContext<'_>,
+) -> LocalControlResult {
+    let ObserverProfileActionContext {
+        application_directory,
+        root_data_directory,
+        administrator_credential_store,
+        administrator_cache,
+        observer_runtimes,
+        logger,
+    } = context;
+    let Some(observer_runtimes) = observer_runtimes else {
+        return rejected("bridge_observer_management_forbidden");
+    };
+    let source = {
+        let cache = administrator_cache.lock().await;
+        if !cache.is_administrator {
+            return rejected("bridge_observer_management_forbidden");
+        }
+        cache
+            .observer_sources
+            .iter()
+            .find(|source| source.bridge_user_id == observer.bridge_user_id)
+            .cloned()
+    };
+    let Some(source) = source else {
+        return rejected("bridge_pair_source_invalid");
+    };
+    let profiles = match list_observer_profiles(root_data_directory) {
+        Ok(profiles) => profiles,
+        Err(code) => return rejected(code),
+    };
+    let exists = profiles.contains(&observer.observer_profile_id);
+    if create == exists {
+        return rejected(if create {
+            "bridge_observer_profile_exists"
+        } else {
+            "bridge_observer_profile_not_found"
+        });
+    }
+    let resolved = match observer_terminal::resolve_observer_terminal(
+        &observer.platform,
+        std::path::Path::new(&observer.terminal_directory),
+    ) {
+        Ok(resolved) => resolved,
+        Err(code) => return rejected(code),
+    };
+    if let Err(code) = ensure_observer_terminal_available(
+        root_data_directory,
+        &observer.observer_profile_id,
+        &resolved.terminal_instance_id,
+    ) {
+        return rejected(code);
+    }
+    if let Err(code) = observer_runtimes.stop(&observer.observer_profile_id).await {
+        return rejected(&code);
+    }
+    let administrator_credential = match administrator_credential_store.load() {
+        Ok(Some(credential)) => credential,
+        Ok(None) => return rejected("bridge_not_paired"),
+        Err(error) => return rejected(error.code()),
+    };
+    let endpoints = match resolve_server_endpoints(application_directory, root_data_directory) {
+        Ok(endpoints) => endpoints,
+        Err(error) => return rejected(error.code()),
+    };
+    let client = match BridgeAuthClient::new(endpoints, &format!("LiangJianBridge/{VERSION}")) {
+        Ok(client) => client,
+        Err(error) => return rejected(error.code()),
+    };
+    let managed = match client
+        .managed_observer_credential(
+            &administrator_credential.refresh_token,
+            source.bridge_user_id,
+            &resolved.terminal_instance_id,
+        )
+        .await
+    {
+        Ok(credential) => credential,
+        Err(error) => return rejected(error.code()),
+    };
+    let expires_delta = match i64::try_from(managed.refresh_expires_in_seconds)
+        .ok()
+        .and_then(|seconds| seconds.checked_mul(1_000))
+    {
+        Some(value) => value,
+        None => return rejected("bridge_observer_session_response_invalid"),
+    };
+    let paths = match resolve_profile_paths(root_data_directory, &observer.observer_profile_id) {
+        Ok(paths) => paths,
+        Err(code) => return rejected(code),
+    };
+    let credential_store = match CredentialStore::new(&paths.credential_path) {
+        Ok(store) => store,
+        Err(error) => return rejected(error.code()),
+    };
+    if let Err(error) = credential_store.save(&BridgeCredential {
+        refresh_token: managed.refresh_token,
+        expires_at_utc_msc: now_utc_msc().saturating_add(expires_delta),
+    }) {
+        return rejected(error.code());
+    }
+    let preferences_store =
+        match BridgePreferencesStore::new(paths.data_directory.join("preferences.json")) {
+            Ok(store) => store,
+            Err(error) => return rejected(error.code()),
+        };
+    let account_label = if source.email.trim().is_empty() {
+        source.display_name().to_owned()
+    } else {
+        format!("{} · {}", source.display_name(), source.email)
+    };
+    if let Err(error) = preferences_store.save_observer_profile(&ObserverProfilePreferences {
+        platform: resolved.platform,
+        terminal_instance_id: resolved.terminal_instance_id,
+        terminal_path: resolved.preference_path.display().to_string(),
+        bridge_user_id: source.bridge_user_id,
+        observer_account_label: Some(account_label),
+        trading_account_id: source.trading_account_id,
+        trading_account_label: Some(source.account_summary()),
+    }) {
+        let _ = credential_store.clear();
+        return rejected(error.code());
+    }
+    if let Err(code) = observer_runtimes.start(&observer.observer_profile_id).await {
+        return rejected(&code);
+    }
+    logger.info(
+        if create {
+            "native_observer_profile_created"
+        } else {
+            "native_observer_profile_updated"
+        },
+        Some(&format!("profile={}", observer.observer_profile_id)),
+    );
+    LocalControlResult::Accepted
+}
+
+async fn observer_runtime_enabled_action(
+    profile_id: &str,
+    enabled: bool,
+    root_data_directory: &std::path::Path,
+    administrator_cache: &AsyncMutex<AdministratorCache>,
+    observer_runtimes: Option<&ObserverRuntimeManager>,
+) -> LocalControlResult {
+    let Some(observer_runtimes) = observer_runtimes else {
+        return rejected("bridge_observer_management_forbidden");
+    };
+    if !administrator_cache.lock().await.is_administrator {
+        return rejected("bridge_observer_management_forbidden");
+    }
+    let paths = match resolve_profile_paths(root_data_directory, profile_id) {
+        Ok(paths) if paths.data_directory.is_dir() => paths,
+        Ok(_) => return rejected("bridge_observer_profile_not_found"),
+        Err(code) => return rejected(code),
+    };
+    let store = match BridgePreferencesStore::new(paths.data_directory.join("preferences.json")) {
+        Ok(store) => store,
+        Err(error) => return rejected(error.code()),
+    };
+    if enabled && !observer_preferences_configured(&store.load()) {
+        return rejected("bridge_observer_profile_not_configured");
+    }
+    if let Err(error) = store.save_observer_enabled(enabled) {
+        return rejected(error.code());
+    }
+    let result = if enabled {
+        observer_runtimes.start(profile_id).await
+    } else {
+        observer_runtimes.stop(profile_id).await
+    };
+    match result {
+        Ok(()) => LocalControlResult::Accepted,
+        Err(code) => rejected(&code),
+    }
+}
+
+fn observer_preferences_configured(preferences: &BridgeUserPreferences) -> bool {
+    if preferences.observer_bridge_user_id.is_none()
+        || preferences.selected_terminal_instance_id().is_none()
+    {
+        return false;
+    }
+    match preferences.platform.as_deref() {
+        Some("mt5") => preferences
+            .mt5_terminal_path
+            .as_deref()
+            .is_some_and(|path| std::path::Path::new(path).is_file()),
+        Some("mt4") => preferences
+            .mt4_terminal_path
+            .as_deref()
+            .is_some_and(|path| std::path::Path::new(path).join("MQL4").is_dir()),
+        _ => false,
+    }
+}
+
+async fn stop_external_observer_runtime(profile_id: &str) -> Result<(), String> {
+    let instance_id = profile_instance_id(profile_id).map_err(str::to_owned)?;
+    let lock_directory = default_lock_directory().map_err(|error| error.code().to_owned())?;
+    let running = SingleInstanceGuard::is_running(&instance_id, &lock_directory)
+        .map_err(|error| error.code().to_owned())?;
+    if !running {
+        return Ok(());
+    }
+    SingleInstanceGuard::request_shutdown(&instance_id).map_err(|error| error.code().to_owned())?;
+    let released = tokio::task::spawn_blocking(move || {
+        SingleInstanceGuard::wait_for_release(&instance_id, lock_directory, Duration::from_secs(10))
+    })
+    .await
+    .map_err(|_| "bridge_observer_runtime_join_failed".to_owned())?
+    .map_err(|error| error.code().to_owned())?;
+    if released {
+        Ok(())
+    } else {
+        Err("bridge_observer_runtime_stop_timeout".to_owned())
+    }
+}
+
+fn ensure_observer_terminal_available(
+    root_data_directory: &std::path::Path,
+    profile_id: &str,
+    terminal_instance_id: &str,
+) -> Result<(), &'static str> {
+    let main_paths = resolve_profile_paths(root_data_directory, DEFAULT_PROFILE_ID)?;
+    let main = BridgePreferencesStore::new(main_paths.data_directory.join("preferences.json"))
+        .map_err(|error| error.code())?
+        .load();
+    if main.selected_terminal_instance_id() == Some(terminal_instance_id) {
+        return Err("observer_terminal_already_assigned");
+    }
+    for other_profile_id in list_observer_profiles(root_data_directory)? {
+        if other_profile_id == profile_id {
+            continue;
+        }
+        let paths = resolve_profile_paths(root_data_directory, &other_profile_id)?;
+        let preferences =
+            BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+                .map_err(|error| error.code())?
+                .load();
+        if preferences.selected_terminal_instance_id() == Some(terminal_instance_id) {
+            return Err("observer_terminal_already_assigned");
+        }
+    }
+    Ok(())
+}
+
+fn rejected(code: &str) -> LocalControlResult {
+    LocalControlResult::Rejected {
+        code: code.to_owned(),
     }
 }
 
@@ -1612,10 +2079,16 @@ mod tests {
         .expect("UI state");
         let cache = AdministratorCache {
             is_administrator: true,
-            observer_sources: vec![UiObserverSource {
+            observer_sources: vec![ManagedObserverSource {
                 bridge_user_id: 9,
-                display_name: "一号观摩源".to_owned(),
-                account_summary: "596520 · DooTechnology-Demo".to_owned(),
+                email: "source@example.com".to_owned(),
+                nickname: None,
+                source_id: Some(1),
+                source_name: Some("一号观摩源".to_owned()),
+                source_status: Some("active".to_owned()),
+                trading_account_id: Some(2),
+                login_account: Some("596520".to_owned()),
+                broker_server: Some("DooTechnology-Demo".to_owned()),
             }],
             ..AdministratorCache::default()
         };
@@ -1681,6 +2154,25 @@ mod tests {
         );
         assert!(!data.join(ENDPOINT_SETTINGS_FILE_NAME).exists());
         std::fs::remove_dir_all(root).expect("remove endpoint selection fixture");
+    }
+
+    #[test]
+    fn observer_runtime_starts_only_for_a_complete_dotnet_compatible_profile() {
+        let root = unique_test_directory("observer-configured");
+        let mt5 = root.join("terminal64.exe");
+        std::fs::create_dir_all(&root).expect("observer fixture directory");
+        std::fs::write(&mt5, b"fixture").expect("observer terminal fixture");
+        let mut preferences = BridgeUserPreferences {
+            platform: Some("mt5".to_owned()),
+            mt5_terminal_instance_id: Some("mt5_0123456789abcdef01234567".to_owned()),
+            mt5_terminal_path: Some(mt5.display().to_string()),
+            observer_bridge_user_id: Some(29),
+            ..BridgeUserPreferences::default()
+        };
+        assert!(observer_preferences_configured(&preferences));
+        preferences.observer_bridge_user_id = None;
+        assert!(!observer_preferences_configured(&preferences));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
