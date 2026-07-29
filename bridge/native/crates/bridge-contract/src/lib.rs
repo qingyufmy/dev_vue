@@ -380,6 +380,86 @@ pub struct TerminalStreamFreshness {
     pub streams: BTreeMap<String, i64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DataDeltaMessage {
+    pub v: u16,
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub message_id: String,
+    pub sent_at_utc_msc: i64,
+    pub terminal_instance_id: String,
+    pub account_ref: AccountRef,
+    pub connection_epoch: i64,
+    pub stream: String,
+    pub revision: i64,
+    pub base_revision: i64,
+    pub observed_at_utc_msc: i64,
+    pub source_time_msc: Option<i64>,
+    pub full_snapshot: bool,
+    pub upserts: Vec<serde_json::Value>,
+    pub deletes: Vec<serde_json::Value>,
+}
+
+impl DataDeltaMessage {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        validate_typed_envelope(
+            self.v,
+            &self.message_type,
+            "data_delta",
+            &self.message_id,
+            self.sent_at_utc_msc,
+        )?;
+        validate_id(&self.terminal_instance_id)?;
+        self.account_ref.validate()?;
+        if self.connection_epoch <= 0
+            || self.revision <= 0
+            || self.base_revision < 0
+            || self.observed_at_utc_msc <= 0
+            || self.source_time_msc.is_some_and(|value| value < 0)
+            || self.upserts.len() > 10_000
+            || self.deletes.len() > 10_000
+            || !matches!(
+                self.stream.as_str(),
+                "account" | "positions" | "orders" | "deals" | "symbols" | "quotes" | "rates"
+            )
+        {
+            return Err("bridge_data_delta_invalid");
+        }
+        if self.full_snapshot {
+            if self.base_revision != 0 || !self.deletes.is_empty() {
+                return Err("bridge_data_full_snapshot_invalid");
+            }
+        } else if self.revision != self.base_revision + 1 {
+            return Err("bridge_data_revision_not_next");
+        }
+        if self.stream == "account"
+            && (self.upserts.len() != 1 || !self.deletes.is_empty() || !self.upserts[0].is_object())
+        {
+            return Err("bridge_account_delta_invalid");
+        }
+        if self.stream == "account" {
+            let account = self.upserts[0]
+                .as_object()
+                .ok_or("bridge_account_delta_invalid")?;
+            let login_matches = account.get("login").is_some_and(|value| {
+                value.as_str() == Some(self.account_ref.login.as_str())
+                    || value
+                        .as_u64()
+                        .is_some_and(|login| login.to_string() == self.account_ref.login)
+            });
+            let server_matches = account
+                .get("server")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|server| server == self.account_ref.broker_server);
+            if !login_matches || !server_matches {
+                return Err("bridge_account_delta_route_mismatch");
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HeartbeatMessage {
     pub v: u16,
@@ -727,5 +807,36 @@ mod tests {
         let mut wrong_account = result;
         wrong_account.account_ref.login = "999999".to_owned();
         assert!(!wrong_account.matches_command(&command));
+    }
+
+    #[test]
+    fn data_delta_contract_requires_contiguous_revisions_and_full_snapshot_base_zero() {
+        let mut delta = DataDeltaMessage {
+            v: 3,
+            message_type: "data_delta".to_owned(),
+            message_id: "delta_01JCONTRACT01".to_owned(),
+            sent_at_utc_msc: 1_700_000_000_001,
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            stream: "positions".to_owned(),
+            revision: 2,
+            base_revision: 1,
+            observed_at_utc_msc: 1_700_000_000_001,
+            source_time_msc: Some(1_700_000_000_000),
+            full_snapshot: false,
+            upserts: vec![serde_json::json!({ "ticket": 101 })],
+            deletes: Vec::new(),
+        };
+        delta.validate().expect("incremental delta");
+        delta.base_revision = 0;
+        assert_eq!(delta.validate(), Err("bridge_data_revision_not_next"));
+        delta.full_snapshot = true;
+        delta.validate().expect("full snapshot");
+        delta.deletes.push(serde_json::json!(101));
+        assert_eq!(delta.validate(), Err("bridge_data_full_snapshot_invalid"));
     }
 }

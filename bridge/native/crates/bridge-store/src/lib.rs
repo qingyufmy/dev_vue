@@ -1,7 +1,8 @@
-use bridge_contract::{CommandMessage, CommandResultMessage, validate_id};
+use bridge_contract::{CommandMessage, CommandResultMessage, DataDeltaMessage, validate_id};
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
@@ -9,6 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 pub const BRIDGE_DATABASE_FILE_NAME: &str = "bridge.db";
+const DEFAULT_DATA_OUTBOX_LIMIT_PER_STREAM: i64 = 256;
 
 pub const REQUIRED_SCHEMA: &[(&str, &[&str])] = &[
     (
@@ -333,6 +335,20 @@ pub struct RecordedCommand {
     pub record: CommandLedgerRecord,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PersistDeltaStatus {
+    Applied,
+    Duplicate,
+    Gap,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistDeltaResult {
+    pub status: PersistDeltaStatus,
+    pub current_revision: i64,
+    pub next_revision: i64,
+}
+
 pub struct OutboxStore {
     connection: Mutex<Connection>,
 }
@@ -386,6 +402,163 @@ impl OutboxStore {
             )
             .map(|affected| affected == 1)
             .map_err(|_| StoreError::new("bridge_store_outbox_enqueue_failed"))
+    }
+
+    pub fn persist_data_delta(
+        &self,
+        message: &DataDeltaMessage,
+    ) -> Result<PersistDeltaResult, StoreError> {
+        message
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_data_delta_invalid"))?;
+        if !matches!(message.stream.as_str(), "account" | "positions" | "orders") {
+            return Err(StoreError::new("bridge_store_data_stream_not_implemented"));
+        }
+        let original_payload_json = serde_json::to_string(message)
+            .map_err(|_| StoreError::new("bridge_store_data_serialize_failed"))?;
+        if original_payload_json.len() > 4 * 1024 * 1024 {
+            return Err(StoreError::new("bridge_store_data_payload_too_large"));
+        }
+        let payload_hash = format!("{:x}", Sha256::digest(original_payload_json.as_bytes()));
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_data_transaction_failed"))?;
+        let current = transaction
+            .query_row(
+                "SELECT revision, message_id, payload_hash FROM stream_revisions \
+                 WHERE terminal_instance_id = ?1 AND connection_epoch = ?2 AND stream = ?3;",
+                params![
+                    message.terminal_instance_id,
+                    message.connection_epoch,
+                    message.stream
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_data_revision_query_failed"))?;
+        let current_revision = current.as_ref().map_or(0, |value| value.0);
+        if message.revision == current_revision {
+            let Some((_, current_message_id, current_hash)) = current else {
+                return Err(StoreError::new("bridge_store_data_revision_conflict"));
+            };
+            if current_message_id != message.message_id || current_hash != payload_hash {
+                return Err(StoreError::new("bridge_store_data_revision_conflict"));
+            }
+            return Ok(PersistDeltaResult {
+                status: PersistDeltaStatus::Duplicate,
+                current_revision,
+                next_revision: current_revision + 1,
+            });
+        }
+        if message.revision < current_revision
+            || (!message.full_snapshot && message.base_revision != current_revision)
+        {
+            return Ok(PersistDeltaResult {
+                status: PersistDeltaStatus::Gap,
+                current_revision,
+                next_revision: current_revision + 1,
+            });
+        }
+        persist_latest_stream(&transaction, message)?;
+        transaction
+            .execute(
+                "INSERT INTO stream_revisions (\
+                   terminal_instance_id, connection_epoch, stream, revision, message_id, payload_hash,\
+                   observed_at_utc_msc, source_time_msc\
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)\
+                 ON CONFLICT(terminal_instance_id, connection_epoch, stream) DO UPDATE SET \
+                   revision = excluded.revision, message_id = excluded.message_id,\
+                   payload_hash = excluded.payload_hash, observed_at_utc_msc = excluded.observed_at_utc_msc,\
+                   source_time_msc = excluded.source_time_msc;",
+                params![
+                    message.terminal_instance_id,
+                    message.connection_epoch,
+                    message.stream,
+                    message.revision,
+                    message.message_id,
+                    payload_hash,
+                    message.observed_at_utc_msc,
+                    message.source_time_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_data_revision_write_failed"))?;
+        let pending_for_stream = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM outbox_messages \
+                 WHERE acked_at_utc_msc IS NULL AND message_type = 'data_delta' \
+                   AND terminal_instance_id = ?1 AND connection_epoch = ?2 \
+                   AND json_valid(payload_json) = 1 \
+                   AND json_extract(payload_json, '$.stream') = ?3;",
+                params![
+                    message.terminal_instance_id,
+                    message.connection_epoch,
+                    message.stream
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| StoreError::new("bridge_store_data_outbox_query_failed"))?;
+        let compact =
+            message.full_snapshot || pending_for_stream >= DEFAULT_DATA_OUTBOX_LIMIT_PER_STREAM - 1;
+        let payload_json = if compact && !message.full_snapshot {
+            let mut full_snapshot = message.clone();
+            full_snapshot.base_revision = 0;
+            full_snapshot.full_snapshot = true;
+            full_snapshot.upserts = read_latest_stream(&transaction, message)?;
+            full_snapshot.deletes.clear();
+            serde_json::to_string(&full_snapshot)
+                .map_err(|_| StoreError::new("bridge_store_data_serialize_failed"))?
+        } else {
+            original_payload_json
+        };
+        if compact {
+            transaction
+                .execute(
+                    "DELETE FROM outbox_messages \
+                     WHERE acked_at_utc_msc IS NULL AND message_type = 'data_delta' \
+                       AND terminal_instance_id = ?1 AND connection_epoch = ?2 \
+                       AND json_valid(payload_json) = 1 \
+                       AND json_extract(payload_json, '$.stream') = ?3;",
+                    params![
+                        message.terminal_instance_id,
+                        message.connection_epoch,
+                        message.stream
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_data_outbox_compact_failed"))?;
+        }
+        transaction
+            .execute(
+                "INSERT INTO outbox_messages (\
+                   message_id, message_type, terminal_instance_id, connection_epoch, priority,\
+                   payload_json, attempt_count, next_attempt_at_utc_msc, created_at_utc_msc, acked_at_utc_msc\
+                 ) VALUES (?1, 'data_delta', ?2, ?3, 'data', ?4, 0, NULL, ?5, NULL);",
+                params![
+                    message.message_id,
+                    message.terminal_instance_id,
+                    message.connection_epoch,
+                    payload_json,
+                    message.sent_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_data_outbox_failed"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_data_commit_failed"))?;
+        Ok(PersistDeltaResult {
+            status: PersistDeltaStatus::Applied,
+            current_revision: message.revision,
+            next_revision: message.revision + 1,
+        })
     }
 
     pub fn ready_for_terminals(
@@ -929,6 +1102,138 @@ fn validate_new_outbox_record(record: &NewOutboxRecord) -> Result<(), StoreError
     Ok(())
 }
 
+fn persist_latest_stream(
+    transaction: &Transaction<'_>,
+    message: &DataDeltaMessage,
+) -> Result<(), StoreError> {
+    if message.stream == "account" {
+        let payload = serde_json::to_string(&message.upserts[0])
+            .map_err(|_| StoreError::new("bridge_store_data_serialize_failed"))?;
+        transaction
+            .execute(
+                "INSERT INTO account_latest (\
+                   terminal_instance_id, connection_epoch, revision, observed_at_utc_msc, source_time_msc, payload_json\
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)\
+                 ON CONFLICT(terminal_instance_id) DO UPDATE SET \
+                   connection_epoch = excluded.connection_epoch, revision = excluded.revision,\
+                   observed_at_utc_msc = excluded.observed_at_utc_msc,\
+                   source_time_msc = excluded.source_time_msc, payload_json = excluded.payload_json;",
+                params![
+                    message.terminal_instance_id,
+                    message.connection_epoch,
+                    message.revision,
+                    message.observed_at_utc_msc,
+                    message.source_time_msc,
+                    payload,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_account_write_failed"))?;
+        return Ok(());
+    }
+
+    let table = match message.stream.as_str() {
+        "positions" => "positions_latest",
+        "orders" => "orders_latest",
+        _ => return Err(StoreError::new("bridge_store_data_stream_not_implemented")),
+    };
+    if message.full_snapshot {
+        transaction
+            .execute(
+                &format!("DELETE FROM {table} WHERE terminal_instance_id = ?1;"),
+                [&message.terminal_instance_id],
+            )
+            .map_err(|_| StoreError::new("bridge_store_collection_clear_failed"))?;
+    }
+    for item in &message.upserts {
+        let ticket = object_ticket(item)?;
+        let payload = serde_json::to_string(item)
+            .map_err(|_| StoreError::new("bridge_store_data_serialize_failed"))?;
+        transaction
+            .execute(
+                &format!(
+                    "INSERT INTO {table} (\
+                       terminal_instance_id, ticket, connection_epoch, revision, observed_at_utc_msc, source_time_msc, payload_json\
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\
+                     ON CONFLICT(terminal_instance_id, ticket) DO UPDATE SET \
+                       connection_epoch = excluded.connection_epoch, revision = excluded.revision,\
+                       observed_at_utc_msc = excluded.observed_at_utc_msc,\
+                       source_time_msc = excluded.source_time_msc, payload_json = excluded.payload_json;"
+                ),
+                params![
+                    message.terminal_instance_id,
+                    ticket,
+                    message.connection_epoch,
+                    message.revision,
+                    message.observed_at_utc_msc,
+                    message.source_time_msc,
+                    payload,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_collection_write_failed"))?;
+    }
+    for item in &message.deletes {
+        let ticket = scalar_ticket(item)?;
+        transaction
+            .execute(
+                &format!("DELETE FROM {table} WHERE terminal_instance_id = ?1 AND ticket = ?2;"),
+                params![message.terminal_instance_id, ticket],
+            )
+            .map_err(|_| StoreError::new("bridge_store_collection_delete_failed"))?;
+    }
+    Ok(())
+}
+
+fn read_latest_stream(
+    transaction: &Transaction<'_>,
+    message: &DataDeltaMessage,
+) -> Result<Vec<serde_json::Value>, StoreError> {
+    let query = match message.stream.as_str() {
+        "account" => {
+            "SELECT payload_json FROM account_latest WHERE terminal_instance_id = ?1;".to_owned()
+        }
+        "positions" => {
+            "SELECT payload_json FROM positions_latest WHERE terminal_instance_id = ?1 ORDER BY ticket;"
+                .to_owned()
+        }
+        "orders" => {
+            "SELECT payload_json FROM orders_latest WHERE terminal_instance_id = ?1 ORDER BY ticket;"
+                .to_owned()
+        }
+        _ => return Err(StoreError::new("bridge_store_data_stream_not_implemented")),
+    };
+    let mut statement = transaction
+        .prepare(&query)
+        .map_err(|_| StoreError::new("bridge_store_latest_query_failed"))?;
+    let rows = statement
+        .query_map([&message.terminal_instance_id], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|_| StoreError::new("bridge_store_latest_query_failed"))?;
+    rows.map(|row| {
+        let payload = row.map_err(|_| StoreError::new("bridge_store_latest_query_failed"))?;
+        serde_json::from_str(&payload)
+            .map_err(|_| StoreError::new("bridge_store_latest_payload_invalid"))
+    })
+    .collect()
+}
+
+fn object_ticket(item: &serde_json::Value) -> Result<String, StoreError> {
+    item.as_object()
+        .and_then(|object| object.get("ticket"))
+        .ok_or_else(|| StoreError::new("bridge_store_collection_ticket_invalid"))
+        .and_then(scalar_ticket)
+}
+
+fn scalar_ticket(value: &serde_json::Value) -> Result<String, StoreError> {
+    let ticket = value
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| value.as_u64().map(|value| value.to_string()))
+        .filter(|value| value.parse::<u64>().is_ok_and(|value| value > 0))
+        .ok_or_else(|| StoreError::new("bridge_store_collection_ticket_invalid"))?;
+    Ok(ticket)
+}
+
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, StoreError> {
     connection
         .query_row(
@@ -1028,6 +1333,52 @@ mod tests {
             .pragma_update(None, "journal_mode", "WAL")
             .expect("fixture wal");
         for (table, columns) in REQUIRED_SCHEMA {
+            if omitted.is_none()
+                && matches!(
+                    *table,
+                    "stream_revisions" | "account_latest" | "positions_latest" | "orders_latest"
+                )
+            {
+                let schema = match *table {
+                    "stream_revisions" => {
+                        "CREATE TABLE stream_revisions (\
+                           terminal_instance_id TEXT NOT NULL, connection_epoch INTEGER NOT NULL,\
+                           stream TEXT NOT NULL, revision INTEGER NOT NULL, message_id TEXT NOT NULL,\
+                           payload_hash TEXT NOT NULL, observed_at_utc_msc INTEGER NOT NULL,\
+                           source_time_msc INTEGER,\
+                           PRIMARY KEY (terminal_instance_id, connection_epoch, stream)\
+                         );"
+                    }
+                    "account_latest" => {
+                        "CREATE TABLE account_latest (\
+                           terminal_instance_id TEXT PRIMARY KEY, connection_epoch INTEGER NOT NULL,\
+                           revision INTEGER NOT NULL, observed_at_utc_msc INTEGER NOT NULL,\
+                           source_time_msc INTEGER, payload_json TEXT NOT NULL\
+                         );"
+                    }
+                    "positions_latest" => {
+                        "CREATE TABLE positions_latest (\
+                           terminal_instance_id TEXT NOT NULL, ticket TEXT NOT NULL,\
+                           connection_epoch INTEGER NOT NULL, revision INTEGER NOT NULL,\
+                           observed_at_utc_msc INTEGER NOT NULL, source_time_msc INTEGER,\
+                           payload_json TEXT NOT NULL, PRIMARY KEY (terminal_instance_id, ticket)\
+                         );"
+                    }
+                    "orders_latest" => {
+                        "CREATE TABLE orders_latest (\
+                           terminal_instance_id TEXT NOT NULL, ticket TEXT NOT NULL,\
+                           connection_epoch INTEGER NOT NULL, revision INTEGER NOT NULL,\
+                           observed_at_utc_msc INTEGER NOT NULL, source_time_msc INTEGER,\
+                           payload_json TEXT NOT NULL, PRIMARY KEY (terminal_instance_id, ticket)\
+                         );"
+                    }
+                    _ => unreachable!(),
+                };
+                connection
+                    .execute_batch(schema)
+                    .expect("fixture data table");
+                continue;
+            }
             if *table == "outbox_messages" && omitted.is_none() {
                 connection
                     .execute_batch(
@@ -1073,6 +1424,204 @@ mod tests {
                 .execute_batch(&format!("CREATE TABLE {table} ({definitions});"))
                 .expect("fixture table");
         }
+    }
+
+    fn data_delta(
+        stream: &str,
+        revision: i64,
+        base_revision: i64,
+        full_snapshot: bool,
+        upserts: Vec<serde_json::Value>,
+        deletes: Vec<serde_json::Value>,
+    ) -> DataDeltaMessage {
+        DataDeltaMessage {
+            v: 3,
+            message_type: "data_delta".to_owned(),
+            message_id: format!("delta_mt5_terminal_01_{stream}_{revision}_01JTEST"),
+            sent_at_utc_msc: 1_700_000_000_000 + revision,
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            account_ref: bridge_contract::AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            stream: stream.to_owned(),
+            revision,
+            base_revision,
+            observed_at_utc_msc: 1_700_000_000_000 + revision,
+            source_time_msc: Some(1_700_000_000_000),
+            full_snapshot,
+            upserts,
+            deletes,
+        }
+    }
+
+    #[test]
+    fn data_delta_commits_latest_revision_and_outbox_atomically() {
+        let root = unique_test_directory("data-delta");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path, None);
+        let store = OutboxStore::open_existing(&path).expect("store");
+
+        let account = data_delta(
+            "account",
+            1,
+            0,
+            true,
+            vec![serde_json::json!({ "login": 123456, "server": "Broker-Demo" })],
+            Vec::new(),
+        );
+        assert_eq!(
+            store.persist_data_delta(&account).expect("account").status,
+            PersistDeltaStatus::Applied
+        );
+        assert_eq!(
+            store
+                .persist_data_delta(&account)
+                .expect("duplicate account")
+                .status,
+            PersistDeltaStatus::Duplicate
+        );
+        let mut conflicting_account = account.clone();
+        conflicting_account.message_id = "delta_01JCONFLICT01".to_owned();
+        assert_eq!(
+            store
+                .persist_data_delta(&conflicting_account)
+                .expect_err("revision conflict")
+                .code(),
+            "bridge_store_data_revision_conflict"
+        );
+
+        let positions = data_delta(
+            "positions",
+            1,
+            0,
+            true,
+            vec![
+                serde_json::json!({ "ticket": 101, "volume": 0.01 }),
+                serde_json::json!({ "ticket": "102", "volume": 0.02 }),
+            ],
+            Vec::new(),
+        );
+        store.persist_data_delta(&positions).expect("positions");
+        let incremental = data_delta(
+            "positions",
+            2,
+            1,
+            false,
+            vec![serde_json::json!({ "ticket": 101, "volume": 0.03 })],
+            vec![serde_json::json!("102")],
+        );
+        store.persist_data_delta(&incremental).expect("incremental");
+
+        let replacement = data_delta(
+            "positions",
+            3,
+            0,
+            true,
+            vec![serde_json::json!({ "ticket": 105, "volume": 0.05 })],
+            Vec::new(),
+        );
+        store
+            .persist_data_delta(&replacement)
+            .expect("replacement full snapshot");
+
+        let gap = data_delta(
+            "positions",
+            5,
+            4,
+            false,
+            vec![serde_json::json!({ "ticket": 104 })],
+            Vec::new(),
+        );
+        let gap_result = store.persist_data_delta(&gap).expect("gap result");
+        assert_eq!(gap_result.status, PersistDeltaStatus::Gap);
+        assert_eq!(gap_result.current_revision, 3);
+        assert!(
+            store
+                .pending(&gap.message_id)
+                .expect("gap outbox")
+                .is_none()
+        );
+
+        let invalid = data_delta(
+            "orders",
+            1,
+            0,
+            true,
+            vec![serde_json::json!({ "symbol": "XAUUSD" })],
+            Vec::new(),
+        );
+        assert_eq!(
+            store
+                .persist_data_delta(&invalid)
+                .expect_err("invalid ticket")
+                .code(),
+            "bridge_store_collection_ticket_invalid"
+        );
+        assert!(
+            store
+                .pending(&invalid.message_id)
+                .expect("invalid outbox")
+                .is_none()
+        );
+
+        let reader = Connection::open(&path).expect("reader");
+        let account_payload: String = reader
+            .query_row(
+                "SELECT payload_json FROM account_latest WHERE terminal_instance_id = ?1;",
+                [&account.terminal_instance_id],
+                |row| row.get(0),
+            )
+            .expect("account latest");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&account_payload).expect("account json"),
+            account.upserts[0]
+        );
+        let latest_positions: Vec<(String, String)> = {
+            let mut statement = reader
+                .prepare(
+                    "SELECT ticket, payload_json FROM positions_latest \
+                     WHERE terminal_instance_id = ?1 ORDER BY ticket;",
+                )
+                .expect("positions statement");
+            statement
+                .query_map([&positions.terminal_instance_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .expect("positions rows")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("positions")
+        };
+        assert_eq!(latest_positions.len(), 1);
+        assert_eq!(latest_positions[0].0, "105");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&latest_positions[0].1)
+                .expect("position json")["volume"],
+            0.05
+        );
+        let pending = store
+            .ready_for_terminals(1_700_000_000_100, None, 10)
+            .expect("outbox");
+        assert_eq!(pending.len(), 2);
+        let pending_position: DataDeltaMessage = serde_json::from_str(
+            &pending
+                .iter()
+                .find(|record| {
+                    record.terminal_instance_id == replacement.terminal_instance_id
+                        && record.message_id == replacement.message_id
+                })
+                .expect("replacement outbox")
+                .payload_json,
+        )
+        .expect("replacement payload");
+        assert!(pending_position.full_snapshot);
+        assert_eq!(pending_position.base_revision, 0);
+        assert_eq!(pending_position.upserts, replacement.upserts);
+        drop(reader);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove fixture");
     }
 
     #[test]
