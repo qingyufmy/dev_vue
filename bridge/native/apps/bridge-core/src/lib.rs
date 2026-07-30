@@ -1628,12 +1628,41 @@ fn collector_state_name(state: bridge_terminal_data::CollectorLifecycleState) ->
     }
 }
 
+#[derive(Clone)]
+pub struct NativeUpdateDrainHandle {
+    command_admission: Arc<NativeCommandAdmission>,
+    command_dispatcher: Arc<CommandDispatcher>,
+}
+
+impl NativeUpdateDrainHandle {
+    pub fn pause(&self) -> Result<(), CoreBootstrapError> {
+        self.command_admission.pause().map_err(transport_error)
+    }
+
+    pub async fn pause_and_drain(&self, timeout: Duration) -> Result<(), CoreBootstrapError> {
+        self.pause()?;
+        self.command_dispatcher
+            .wait_until_idle(timeout)
+            .await
+            .map_err(|error| CoreBootstrapError::new(error.code()))
+    }
+
+    pub fn resume(&self) -> Result<(), CoreBootstrapError> {
+        self.command_admission.resume().map_err(transport_error)
+    }
+
+    pub async fn in_flight_count(&self) -> usize {
+        self.command_dispatcher.in_flight_count().await
+    }
+}
+
 pub struct NativeConnectedRuntime {
     active_sessions: Arc<ActiveMt5Sessions>,
     supervisor: SessionSupervisor,
     command_reconciler: Arc<CommandReconciler>,
     reconciliation_state: Arc<CoreReconciliationState>,
     connection_state: Arc<CoreConnectionState>,
+    update_drain: NativeUpdateDrainHandle,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
@@ -1724,8 +1753,8 @@ impl NativeConnectedRuntime {
             let events: Arc<dyn InboundEventSink> = active_sessions.clone();
             let inbound = Arc::new(
                 NativeInboundRouter::new(Arc::clone(&outbox), events)
-                    .with_command_admission(command_admission, Arc::clone(&clock))
-                    .with_command_dispatcher(command_dispatcher)
+                    .with_command_admission(Arc::clone(&command_admission), Arc::clone(&clock))
+                    .with_command_dispatcher(Arc::clone(&command_dispatcher))
                     .with_data_handler(active_sessions.clone())
                     .with_quote_handler(active_sessions.clone()),
             );
@@ -1765,6 +1794,10 @@ impl NativeConnectedRuntime {
                 command_reconciler,
                 reconciliation_state,
                 connection_state,
+                update_drain: NativeUpdateDrainHandle {
+                    command_admission,
+                    command_dispatcher,
+                },
                 clock,
             })
         })();
@@ -1777,6 +1810,10 @@ impl NativeConnectedRuntime {
 
     pub fn connection_state(&self) -> Arc<CoreConnectionState> {
         Arc::clone(&self.connection_state)
+    }
+
+    pub fn update_drain_handle(&self) -> NativeUpdateDrainHandle {
+        self.update_drain.clone()
     }
 
     pub fn status_handle(&self) -> NativeRuntimeStatusHandle {

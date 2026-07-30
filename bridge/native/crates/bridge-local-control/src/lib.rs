@@ -83,6 +83,10 @@ pub enum LocalControlAction {
         enabled: bool,
     },
     UpdateActivate,
+    InternalUpdateDrain {
+        timeout_msc: u64,
+    },
+    InternalUpdateResume,
     BridgeExit,
 }
 
@@ -126,6 +130,11 @@ impl LocalControlAction {
             }
             Self::SettingsTest { settings } | Self::SettingsSave { settings } => {
                 settings.validate()
+            }
+            Self::InternalUpdateDrain { timeout_msc }
+                if *timeout_msc == 0 || *timeout_msc > 30_000 =>
+            {
+                Err("bridge_local_control_request_invalid")
             }
             _ => Ok(()),
         }
@@ -701,6 +710,33 @@ mod tests {
         };
         let payload = serde_json::to_vec(&request).expect("serialize request");
         assert_eq!(decode_request(&payload), Ok(request));
+    }
+
+    #[test]
+    fn internal_update_drain_is_bounded_and_round_trips_without_becoming_a_ui_action() {
+        let request = LocalControlRequest {
+            schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+            request_id: "update_drain_0000000000000001".to_owned(),
+            profile_id: DEFAULT_PROFILE_ID.to_owned(),
+            action: LocalControlAction::InternalUpdateDrain {
+                timeout_msc: 30_000,
+            },
+        };
+        let payload = serde_json::to_vec(&request).expect("serialize drain request");
+        assert_eq!(decode_request(&payload), Ok(request));
+
+        for timeout_msc in [0, 30_001] {
+            let invalid = LocalControlRequest {
+                schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                request_id: "update_drain_invalid".to_owned(),
+                profile_id: DEFAULT_PROFILE_ID.to_owned(),
+                action: LocalControlAction::InternalUpdateDrain { timeout_msc },
+            };
+            assert_eq!(
+                invalid.validate(),
+                Err("bridge_local_control_request_invalid")
+            );
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, OnceCell};
-use tokio::time::timeout;
+use tokio::time::{Instant, sleep, timeout};
 
 const DEFAULT_RECEIPT_LIMIT: usize = 10_000;
 type DispatchOutcome = Result<CommandResultMessage, CommandDispatchError>;
@@ -268,6 +268,28 @@ impl CommandDispatcher {
 
     pub async fn in_flight_count(&self) -> usize {
         self.in_flight.lock().await.len()
+    }
+
+    pub async fn wait_until_idle(
+        &self,
+        wait_timeout: Duration,
+    ) -> Result<(), CommandDispatchError> {
+        if wait_timeout.is_zero() {
+            return Err(CommandDispatchError::new(
+                "bridge_command_drain_timeout_invalid",
+            ));
+        }
+        let deadline = Instant::now() + wait_timeout;
+        loop {
+            if self.in_flight_count().await == 0 {
+                return Ok(());
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(CommandDispatchError::new("bridge_command_drain_timeout"));
+            }
+            sleep(Duration::from_millis(25).min(deadline - now)).await;
+        }
     }
 
     async fn dispatch_once(
@@ -828,6 +850,47 @@ mod tests {
         );
         assert_eq!(restarted_worker.calls.load(AtomicOrdering::SeqCst), 0);
         assert_eq!(observer.0.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn idle_wait_tracks_the_real_single_flight_and_fails_closed_on_timeout() {
+        let fixture = StoreFixture::new("drain");
+        let worker = Arc::new(FakeWorker::new(WorkerMode::Delay));
+        let dispatcher = dispatcher(
+            fixture.store(),
+            Arc::new(AllowAdmission),
+            worker.clone(),
+            Duration::from_secs(1),
+        );
+        let active = {
+            let dispatcher = Arc::clone(&dispatcher);
+            tokio::spawn(async move { dispatcher.dispatch(command("command_01JDRAIN0001")).await })
+        };
+        while worker.calls.load(AtomicOrdering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(dispatcher.in_flight_count().await, 1);
+        assert_eq!(
+            dispatcher
+                .wait_until_idle(Duration::from_millis(10))
+                .await
+                .expect_err("active worker must not be reported idle")
+                .code(),
+            "bridge_command_drain_timeout"
+        );
+        dispatcher
+            .wait_until_idle(Duration::from_secs(1))
+            .await
+            .expect("single flight drained");
+        assert_eq!(dispatcher.in_flight_count().await, 0);
+        assert_eq!(
+            active
+                .await
+                .expect("active task")
+                .expect("active command")
+                .status,
+            "succeeded"
+        );
     }
 
     #[tokio::test]

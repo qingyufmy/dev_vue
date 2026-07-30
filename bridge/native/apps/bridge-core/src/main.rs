@@ -13,9 +13,9 @@ use bridge_foundation::{
 };
 use bridge_local_control::{
     EndpointSettingsSelection, LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction,
-    LocalControlPipeServer, LocalControlResponse, LocalControlResult, ObserverProfileMutation,
-    UiObserverProfile, UiObserverSource, UiStateSnapshot, UiStateStore, UiTerminalCandidate,
-    UiTerminalStatus, UiUpdateNotice,
+    LocalControlPipeClient, LocalControlPipeServer, LocalControlRequest, LocalControlResponse,
+    LocalControlResult, ObserverProfileMutation, UiObserverProfile, UiObserverSource,
+    UiStateSnapshot, UiStateStore, UiTerminalCandidate, UiTerminalStatus, UiUpdateNotice,
 };
 use bridge_observability::{BridgeLogger, LoggerConfig};
 use bridge_preferences::{
@@ -42,14 +42,15 @@ use bridge_update::{
 use liangjian_bridge_core::{
     ActiveMt5Sessions, CoreConnectionState, CredentialState, NativeConnectedRuntime,
     NativeProfileBootstrap, NativeRuntimeStatusHandle, NativeRuntimeStatusSnapshot,
-    ProfileCredentialSource, ProfileTerminalBindingSource, TerminalPermissionQuery,
-    project_terminal_trading_permissions,
+    NativeUpdateDrainHandle, ProfileCredentialSource, ProfileTerminalBindingSource,
+    TerminalPermissionQuery, project_terminal_trading_permissions,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 use tokio::time::Instant;
@@ -65,6 +66,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const ADMINISTRATOR_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const OBSERVER_UI_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const MT5_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+const UPDATE_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+static UPDATE_DRAIN_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 enum ProfileRuntimeTrigger {
     Completed(Result<(), liangjian_bridge_core::CoreBootstrapError>),
@@ -93,6 +96,7 @@ struct LocalControlContext {
     stop: SessionCancellation,
     logger: BridgeLogger,
     observer_runtimes: Option<Arc<ObserverRuntimeManager>>,
+    update_drain: RuntimeUpdateDrainSlot,
 }
 
 struct InactiveStatus<'a> {
@@ -148,6 +152,7 @@ struct ProfileLifecycleRuntime {
     ui_state: UiStateStore,
     preferences_store: BridgePreferencesStore,
     preference_change_receiver: watch::Receiver<u64>,
+    update_drain: RuntimeUpdateDrainSlot,
 }
 
 struct StartupReadyContext {
@@ -162,7 +167,67 @@ struct StartupReadyContext {
 struct UpdateRuntimeScope {
     terminal_instance_ids: Vec<String>,
     observer_bridge_user_ids: Vec<i64>,
+    profile_ids: Vec<String>,
     primary_ready: bool,
+}
+
+#[derive(Clone, Default)]
+struct RuntimeUpdateDrainSlot {
+    handle: Arc<std::sync::Mutex<Option<NativeUpdateDrainHandle>>>,
+    paused: Arc<AtomicBool>,
+}
+
+impl RuntimeUpdateDrainSlot {
+    fn install(&self, handle: NativeUpdateDrainHandle) -> Result<(), String> {
+        if self.paused.load(Ordering::Acquire) {
+            handle.pause().map_err(|error| error.code().to_owned())?;
+        }
+        *self
+            .handle
+            .lock()
+            .map_err(|_| "bridge_update_drain_state_failed".to_owned())? = Some(handle);
+        Ok(())
+    }
+
+    fn clear(&self) -> Result<(), String> {
+        *self
+            .handle
+            .lock()
+            .map_err(|_| "bridge_update_drain_state_failed".to_owned())? = None;
+        Ok(())
+    }
+
+    async fn pause_and_drain(&self, timeout: Duration) -> Result<(), String> {
+        self.paused.store(true, Ordering::Release);
+        let handle = self
+            .handle
+            .lock()
+            .map_err(|_| "bridge_update_drain_state_failed".to_owned())?
+            .clone();
+        let Some(handle) = handle else {
+            self.paused.store(false, Ordering::Release);
+            return Err("bridge_update_runtime_unavailable".to_owned());
+        };
+        if let Err(error) = handle.pause_and_drain(timeout).await {
+            let code = error.code().to_owned();
+            let _ = self.resume();
+            return Err(code);
+        }
+        Ok(())
+    }
+
+    fn resume(&self) -> Result<(), String> {
+        self.paused.store(false, Ordering::Release);
+        let handle = self
+            .handle
+            .lock()
+            .map_err(|_| "bridge_update_drain_state_failed".to_owned())?
+            .clone();
+        if let Some(handle) = handle {
+            handle.resume().map_err(|error| error.code().to_owned())?;
+        }
+        Ok(())
+    }
 }
 
 struct ObserverRuntimeEntry {
@@ -867,6 +932,7 @@ async fn run_connected_profile(
         None
     };
     let (update_wake_sender, update_wake_receiver) = watch::channel(0_u64);
+    let update_drain = RuntimeUpdateDrainSlot::default();
     let lifecycle_update_state_store = update_state_store.clone();
     let update_task = update_coordinator.map(|coordinator| {
         tokio::spawn(run_periodic_update_checks(
@@ -897,6 +963,7 @@ async fn run_connected_profile(
             stop: control_stop,
             logger: logger.clone(),
             observer_runtimes: observer_runtimes.clone(),
+            update_drain: update_drain.clone(),
         },
     ));
     let signal_stop = stop.clone();
@@ -930,6 +997,7 @@ async fn run_connected_profile(
             ui_state: ui_state.clone(),
             preferences_store: preferences_store.clone(),
             preference_change_receiver,
+            update_drain,
         },
     )
     .await;
@@ -1324,6 +1392,7 @@ async fn try_apply_staged_update(
     let lease_expiry = decision
         .expires_at_utc_msc
         .ok_or_else(|| "bridge_maintenance_lease_response_invalid".to_owned())?;
+    let mut paused_profiles = None;
     let activation = async {
         coordinator
             .save_activation_phase(
@@ -1342,6 +1411,18 @@ async fn try_apply_staged_update(
                 "version={};terminals={}",
                 staged.version,
                 scope.terminal_instance_ids.len()
+            )),
+        );
+        paused_profiles = Some(
+            pause_and_drain_update_profiles(&scope.profile_ids, UPDATE_DRAIN_TIMEOUT, logger)
+                .await?,
+        );
+        logger.info(
+            "native_update_drain_completed",
+            Some(&format!(
+                "version={};profiles={}",
+                staged.version,
+                scope.profile_ids.len()
             )),
         );
         let renewed_expiry = client
@@ -1366,6 +1447,9 @@ async fn try_apply_staged_update(
     }
     .await;
     if let Err(code) = activation {
+        if let Some(paused_profiles) = paused_profiles {
+            paused_profiles.resume_all(logger).await;
+        }
         release_maintenance_lease_best_effort(
             application_directory,
             root_data_directory,
@@ -1393,6 +1477,124 @@ async fn try_apply_staged_update(
     );
     stop.cancel();
     Ok(true)
+}
+
+struct PausedUpdateProfiles {
+    profile_ids: Vec<String>,
+}
+
+impl PausedUpdateProfiles {
+    async fn resume_all(self, logger: &BridgeLogger) {
+        for profile_id in self.profile_ids.into_iter().rev() {
+            if let Err(code) = request_profile_update_resume(&profile_id).await {
+                logger.warning(
+                    "native_update_resume_failed",
+                    Some(&format!("profile={profile_id};code={code}")),
+                );
+            }
+        }
+    }
+}
+
+async fn pause_and_drain_update_profiles(
+    profile_ids: &[String],
+    timeout: Duration,
+    logger: &BridgeLogger,
+) -> Result<PausedUpdateProfiles, String> {
+    if profile_ids.is_empty() || timeout.is_zero() {
+        return Err("bridge_update_drain_scope_invalid".to_owned());
+    }
+    let deadline = Instant::now() + timeout;
+    let mut paused = Vec::with_capacity(profile_ids.len());
+    for profile_id in profile_ids {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            let group = PausedUpdateProfiles {
+                profile_ids: paused,
+            };
+            group.resume_all(logger).await;
+            return Err("bridge_command_drain_timeout".to_owned());
+        }
+        if let Err(code) = request_profile_update_drain(profile_id, remaining).await {
+            let group = PausedUpdateProfiles {
+                profile_ids: paused,
+            };
+            group.resume_all(logger).await;
+            return Err(code);
+        }
+        paused.push(profile_id.clone());
+    }
+    Ok(PausedUpdateProfiles {
+        profile_ids: paused,
+    })
+}
+
+async fn request_profile_update_drain(profile_id: &str, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    let mut client =
+        LocalControlPipeClient::connect(profile_id, timeout.min(Duration::from_secs(2)))
+            .await
+            .map_err(|error| error.code().to_owned())?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err("bridge_command_drain_timeout".to_owned());
+    }
+    request_profile_update_action_with_client(
+        profile_id,
+        &mut client,
+        LocalControlAction::InternalUpdateDrain {
+            timeout_msc: u64::try_from(remaining.as_millis())
+                .unwrap_or(u64::MAX)
+                .clamp(1, 30_000),
+        },
+        remaining,
+    )
+    .await
+}
+
+async fn request_profile_update_resume(profile_id: &str) -> Result<(), String> {
+    request_profile_update_action(
+        profile_id,
+        LocalControlAction::InternalUpdateResume,
+        Duration::from_secs(2),
+    )
+    .await
+}
+
+async fn request_profile_update_action(
+    profile_id: &str,
+    action: LocalControlAction,
+    timeout: Duration,
+) -> Result<(), String> {
+    let connect_timeout = timeout.min(Duration::from_secs(2));
+    let mut client = LocalControlPipeClient::connect(profile_id, connect_timeout)
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    request_profile_update_action_with_client(profile_id, &mut client, action, timeout).await
+}
+
+async fn request_profile_update_action_with_client(
+    profile_id: &str,
+    client: &mut LocalControlPipeClient,
+    action: LocalControlAction,
+    timeout: Duration,
+) -> Result<(), String> {
+    let sequence = UPDATE_DRAIN_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let request = LocalControlRequest {
+        schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+        request_id: format!("update_drain_{sequence:016x}"),
+        profile_id: profile_id.to_owned(),
+        action,
+    };
+    let response = tokio::time::timeout(timeout, client.request(&request))
+        .await
+        .map_err(|_| "bridge_command_drain_timeout".to_owned())?
+        .map_err(|error| error.code().to_owned())?;
+    match response.result {
+        LocalControlResult::Accepted => Ok(()),
+        LocalControlResult::Rejected { code } => Err(code),
+        _ => Err("bridge_update_drain_response_invalid".to_owned()),
+    }
 }
 
 fn defer_staged_update(
@@ -1425,6 +1627,7 @@ fn capture_update_runtime_scope(
     let state = ui_state.snapshot().map_err(str::to_owned)?;
     let now = now_utc_msc();
     let mut terminal_ids = std::collections::BTreeSet::new();
+    let mut profile_ids = std::collections::BTreeSet::new();
     let mut primary_terminal_count = 0usize;
     let primary_ready = state.phase == "online"
         && state.server_connected
@@ -1437,6 +1640,9 @@ fn capture_update_runtime_scope(
                 return Err("bridge_update_terminal_scope_conflict".to_owned());
             }
             primary_terminal_count = primary_terminal_count.saturating_add(1);
+        }
+        if primary_terminal_count > 0 {
+            profile_ids.insert(DEFAULT_PROFILE_ID.to_owned());
         }
     }
     let mut observer_user_ids = std::collections::BTreeSet::new();
@@ -1463,11 +1669,13 @@ fn capture_update_runtime_scope(
         if !terminal_ids.insert(terminal_id.to_owned()) {
             return Err("bridge_update_terminal_scope_conflict".to_owned());
         }
+        profile_ids.insert(profile_id);
         observer_user_ids.insert(observer_user_id);
     }
     Ok(UpdateRuntimeScope {
         terminal_instance_ids: terminal_ids.into_iter().collect(),
         observer_bridge_user_ids: observer_user_ids.into_iter().collect(),
+        profile_ids: profile_ids.into_iter().collect(),
         primary_ready: primary_ready && primary_terminal_count > 0,
     })
 }
@@ -1642,6 +1850,7 @@ async fn run_local_control_server(
         stop,
         logger,
         observer_runtimes,
+        update_drain,
     } = context;
     logger.info(
         "native_local_control_started",
@@ -2062,6 +2271,19 @@ async fn run_local_control_server(
                     )
                     .await
                 }
+                LocalControlAction::InternalUpdateDrain { timeout_msc } => {
+                    match update_drain
+                        .pause_and_drain(Duration::from_millis(timeout_msc))
+                        .await
+                    {
+                        Ok(()) => LocalControlResult::Accepted,
+                        Err(code) => rejected(&code),
+                    }
+                }
+                LocalControlAction::InternalUpdateResume => match update_drain.resume() {
+                    Ok(()) => LocalControlResult::Accepted,
+                    Err(code) => rejected(&code),
+                },
                 LocalControlAction::BridgeExit => LocalControlResult::Accepted,
             };
             let response = LocalControlResponse {
@@ -2620,6 +2842,7 @@ async fn run_profile_lifecycle(
         ui_state,
         preferences_store,
         mut preference_change_receiver,
+        update_drain,
     } = runtime;
     loop {
         let preferences_before_bootstrap = preferences_store.load();
@@ -2892,6 +3115,9 @@ async fn run_profile_lifecycle(
         let clock: Arc<dyn Fn() -> i64 + Send + Sync> = Arc::new(now_utc_msc);
         let connected =
             NativeConnectedRuntime::start(bootstrap, endpoints, Arc::clone(&clock)).await?;
+        update_drain
+            .install(connected.update_drain_handle())
+            .map_err(|code| -> Box<dyn Error> { code.into() })?;
         let connection_state = connected.connection_state();
         let active_sessions = connected.active_sessions();
         let runtime_status = connected.status_handle();
@@ -2956,6 +3182,9 @@ async fn run_profile_lifecycle(
             ProfileRuntimeTrigger::BindingWatchFailed(error) => (runtime.await, false, Some(error)),
             ProfileRuntimeTrigger::Stopped => (runtime.await, false, None),
         };
+        update_drain
+            .clear()
+            .map_err(|code| -> Box<dyn Error> { code.into() })?;
         match runtime_status.snapshot(profile_id, VERSION, now_utc_msc()) {
             Ok(snapshot) => publish_runtime_status_or_warn(logger, &status_path, &snapshot),
             Err(error) => logger.warning("native_runtime_status_failed", Some(error.code())),
@@ -4300,6 +4529,7 @@ mod tests {
                     "mt5_bbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
                 ],
                 observer_bridge_user_ids: vec![42],
+                profile_ids: vec!["default".to_owned(), "source-1".to_owned()],
                 primary_ready: true,
             }
         );
@@ -4313,6 +4543,7 @@ mod tests {
             UpdateRuntimeScope {
                 terminal_instance_ids: vec!["mt5_bbbbbbbbbbbbbbbbbbbbbbbb".to_owned()],
                 observer_bridge_user_ids: vec![42],
+                profile_ids: vec!["source-1".to_owned()],
                 primary_ready: false,
             }
         );
