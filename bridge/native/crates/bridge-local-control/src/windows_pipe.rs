@@ -284,11 +284,13 @@ mod tests {
     };
     use tokio::io::{AsyncWriteExt, duplex};
 
+    const ROUND_TRIP_PROFILE: &str = "test-local-control-round-trip";
+
     fn state() -> UiStateSnapshot {
         UiStateSnapshot {
             schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
             revision: 1,
-            profile_id: "default".to_owned(),
+            profile_id: ROUND_TRIP_PROFILE.to_owned(),
             observed_at_utc_msc: 1_800_000_000_000,
             phase: "starting".to_owned(),
             detail_code: None,
@@ -329,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn current_user_pipe_round_trips_validated_state_and_request_id() {
-        let mut server = LocalControlPipeServer::bind("default").expect("bind server");
+        let mut server = LocalControlPipeServer::bind(ROUND_TRIP_PROFILE).expect("bind server");
         let server_task = tokio::spawn(async move {
             server.accept().await.expect("accept client");
             let request = server.receive().await.expect("request");
@@ -345,14 +347,15 @@ mod tests {
                 .await
                 .expect("response");
         });
-        let mut client = LocalControlPipeClient::connect("default", Duration::from_secs(2))
-            .await
-            .expect("connect client");
+        let mut client =
+            LocalControlPipeClient::connect(ROUND_TRIP_PROFILE, Duration::from_secs(2))
+                .await
+                .expect("connect client");
         let response = client
             .request(&LocalControlRequest {
                 schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
                 request_id: "request-1".to_owned(),
-                profile_id: "default".to_owned(),
+                profile_id: ROUND_TRIP_PROFILE.to_owned(),
                 action: LocalControlAction::GetState,
             })
             .await

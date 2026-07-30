@@ -33,13 +33,13 @@ use windows_sys::Win32::Foundation::{
     COLORREF, FILETIME, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    CLIP_DEFAULT_PRECIS, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, CreateFontW, CreateSolidBrush,
-    DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE,
-    DT_VCENTER, DT_WORDBREAK, DeleteObject, DrawFocusRect, DrawTextW, FF_DONTCARE, FW_BOLD,
-    FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetStockObject, GetSysColor, HBRUSH, HDC, HFONT,
-    HGDIOBJ, IntersectClipRect, InvalidateRect, LOGPIXELSX, OUT_DEFAULT_PRECIS, ReleaseDC,
-    RestoreDC, SaveDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
-    WHITE_BRUSH,
+    BitBlt, CLIP_DEFAULT_PRECIS, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, CreateCompatibleBitmap,
+    CreateCompatibleDC, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
+    DEFAULT_QUALITY, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, DeleteDC,
+    DeleteObject, DrawFocusRect, DrawTextW, FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, GetDC,
+    GetDeviceCaps, GetSysColor, HDC, HFONT, HGDIOBJ, IntersectClipRect, InvalidateRect, LOGPIXELSX,
+    OUT_DEFAULT_PRECIS, ReleaseDC, RestoreDC, SRCCOPY, SaveDC, ScreenToClient, SelectObject,
+    SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::Storage::FileSystem::FileTimeToLocalFileTime;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
@@ -59,23 +59,23 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, BS_OWNERDRAW, CB_SETITEMHEIGHT, CBN_SELCHANGE, CBS_DROPDOWNLIST,
-    CBS_OWNERDRAWFIXED, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateIconFromResourceEx,
-    CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
-    GA_ROOT, GWLP_USERDATA, GetAncestor, GetClientRect, GetDlgCtrlID, GetMessageW, GetScrollInfo,
-    GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU, HTCLIENT, IDC_ARROW, IDC_HAND,
-    IDI_APPLICATION, IsDialogMessageW, LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED,
-    MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW,
-    RegisterClassExW, RegisterWindowMessageW, SB_BOTTOM, SB_CTL, SB_LINEDOWN, SB_LINEUP,
-    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SBS_VERT, SCROLLINFO,
-    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_MINIMIZE,
-    SW_SHOW, SW_SHOWNORMAL, SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu, TranslateMessage, WHEEL_DELTA, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION,
-    WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCCREATE, WM_NCDESTROY, WM_NULL, WM_PAINT, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_SETCURSOR,
-    WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
-    WS_VISIBLE,
+    CBS_OWNERDRAWFIXED, CREATESTRUCTW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
+    DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, GA_ROOT, GWLP_USERDATA,
+    GetAncestor, GetClientRect, GetDlgCtrlID, GetMessageW, GetParent, GetScrollInfo,
+    GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    HICON, HMENU, HTCLIENT, IDC_ARROW, IDC_HAND, IDI_APPLICATION, IsDialogMessageW,
+    IsWindowVisible, LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
+    MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW, RegisterClassExW, RegisterWindowMessageW,
+    SB_BOTTOM, SB_CTL, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
+    SB_THUMBTRACK, SB_TOP, SBS_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
+    SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWNORMAL, SetCursor,
+    SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu,
+    TranslateMessage, WHEEL_DELTA, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
+    WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN,
+    WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY,
+    WM_NULL, WM_PAINT, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
+    WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
+    WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -766,14 +766,14 @@ unsafe fn run_window(mut state: AppState) {
     let class_name = wide(WINDOW_CLASS);
     let class = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-        style: CS_HREDRAW | CS_VREDRAW,
+        style: 0,
         lpfnWndProc: Some(window_proc),
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: instance,
         hIcon: state.brand_icon,
         hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: unsafe { GetStockObject(WHITE_BRUSH) } as HBRUSH,
+        hbrBackground: null_mut(),
         lpszMenuName: null(),
         lpszClassName: class_name.as_ptr(),
         hIconSm: state.brand_icon_small,
@@ -1034,6 +1034,7 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_DRAWITEM => unsafe { draw_control(state, lparam) },
+        WM_ERASEBKGND => 1,
         WM_SETCURSOR
             if unsafe {
                 apply_hand_cursor(wparam, lparam, |control_id| {
@@ -1427,8 +1428,7 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
     let mut y = s(96);
     if let Some(banner) = &app.view.update_banner {
         unsafe {
-            let button_text = wide(&banner.button_text);
-            SetWindowTextW(app.controls.update, button_text.as_ptr());
+            set_window_text_if_changed(app.controls.update, &banner.button_text);
             move_show(
                 app.controls.update,
                 width - s(148),
@@ -1556,8 +1556,7 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
                 } else {
                     account.primary_action_text.as_deref().unwrap_or("处理中…")
                 };
-                let text = wide(text);
-                SetWindowTextW(control.hwnd, text.as_ptr());
+                set_window_text_if_changed(control.hwnd, text);
                 EnableWindow(
                     control.hwnd,
                     i32::from(idle && !account.actions_busy && visible),
@@ -1587,7 +1586,7 @@ unsafe fn apply_layout(hwnd: HWND, app: &mut AppState) {
     }
     unsafe { sync_tab_order(app) };
     let _ = y;
-    unsafe { InvalidateRect(hwnd, null(), 1) };
+    unsafe { InvalidateRect(hwnd, null(), 0) };
 }
 
 fn sync_combo_selection(app: &mut AppState) {
@@ -1668,17 +1667,72 @@ fn sync_combo_selection(app: &mut AppState) {
 }
 
 unsafe fn move_show(hwnd: HWND, x: i32, y: i32, width: i32, height: i32, visible: bool) {
+    let width = width.max(0);
+    let mut current = RECT::default();
+    let mut current_top_left = POINT::default();
+    let mut current_bottom_right = POINT::default();
+    let parent = unsafe { GetParent(hwnd) };
+    let position_changed = if !parent.is_null() && unsafe { GetWindowRect(hwnd, &mut current) } != 0
+    {
+        current_top_left.x = current.left;
+        current_top_left.y = current.top;
+        current_bottom_right.x = current.right;
+        current_bottom_right.y = current.bottom;
+        unsafe {
+            ScreenToClient(parent, &mut current_top_left);
+            ScreenToClient(parent, &mut current_bottom_right);
+        }
+        current_top_left.x != x
+            || current_top_left.y != y
+            || current_bottom_right.x - current_top_left.x != width
+            || current_bottom_right.y - current_top_left.y != height
+    } else {
+        true
+    };
     unsafe {
-        MoveWindow(hwnd, x, y, width.max(0), height, 1);
-        ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
+        if position_changed {
+            MoveWindow(hwnd, x, y, width, height, 1);
+        }
+        if (IsWindowVisible(hwnd) != 0) != visible {
+            ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
+        }
+    }
+}
+
+unsafe fn set_window_text_if_changed(hwnd: HWND, text: &str) {
+    let length = unsafe { GetWindowTextLengthW(hwnd) }.max(0) as usize;
+    let mut current = vec![0_u16; length + 1];
+    let copied =
+        unsafe { GetWindowTextW(hwnd, current.as_mut_ptr(), current.len() as i32) }.max(0) as usize;
+    let requested = wide(text);
+    if current[..copied] != requested[..requested.len().saturating_sub(1)] {
+        unsafe { SetWindowTextW(hwnd, requested.as_ptr()) };
     }
 }
 
 unsafe fn paint_window(hwnd: HWND, app: &AppState) {
     let mut paint = windows_sys::Win32::Graphics::Gdi::PAINTSTRUCT::default();
-    let hdc = unsafe { windows_sys::Win32::Graphics::Gdi::BeginPaint(hwnd, &mut paint) };
+    let paint_hdc = unsafe { windows_sys::Win32::Graphics::Gdi::BeginPaint(hwnd, &mut paint) };
     let mut client = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client) };
+    let client_width = (client.right - client.left).max(1);
+    let client_height = (client.bottom - client.top).max(1);
+    let memory_dc = unsafe { CreateCompatibleDC(paint_hdc) };
+    let memory_bitmap = if memory_dc.is_null() {
+        null_mut()
+    } else {
+        unsafe { CreateCompatibleBitmap(paint_hdc, client_width, client_height) }
+    };
+    let previous_bitmap = if memory_bitmap.is_null() {
+        null_mut()
+    } else {
+        unsafe { SelectObject(memory_dc, memory_bitmap as HGDIOBJ) }
+    };
+    let hdc = if previous_bitmap.is_null() {
+        paint_hdc
+    } else {
+        memory_dc
+    };
     fill(hdc, client, Rgb(248, 250, 252));
     let s = |value| scale(value, app.dpi);
     let width = client.right - client.left;
@@ -1841,6 +1895,26 @@ unsafe fn paint_window(hwnd: HWND, app: &AppState) {
         Rgb(100, 116, 139),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
     );
+    if !previous_bitmap.is_null() {
+        unsafe {
+            BitBlt(
+                paint_hdc,
+                0,
+                0,
+                client_width,
+                client_height,
+                memory_dc,
+                0,
+                0,
+                SRCCOPY,
+            );
+            SelectObject(memory_dc, previous_bitmap);
+            DeleteObject(memory_bitmap as HGDIOBJ);
+        }
+    }
+    if !memory_dc.is_null() {
+        unsafe { DeleteDC(memory_dc) };
+    }
     unsafe { windows_sys::Win32::Graphics::Gdi::EndPaint(hwnd, &paint) };
 }
 
@@ -2926,8 +3000,10 @@ unsafe fn receive_background_message(hwnd: HWND, app: &mut AppState) {
                     build_main_window_view(&state, &app.busy_observer_profiles, format_local_time)
             {
                 app.state = state;
-                app.view = view;
-                unsafe { apply_layout(hwnd, app) };
+                if app.view != view {
+                    app.view = view;
+                    unsafe { apply_layout(hwnd, app) };
+                }
             }
         }
         Some(UiMessage::Action {
