@@ -1112,6 +1112,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "liangjian-bridge-update-rehearsal"
+version = "3.0.0"
+dependencies = [
+ "bridge-update",
+ "liangjian-bridge-launcher",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"

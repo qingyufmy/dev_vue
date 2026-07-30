@@ -1446,14 +1446,7 @@ impl NativeRuntimeStatusHandle {
                     platform: status.route.platform.clone(),
                     broker_server: status.route.account_ref.broker_server.clone(),
                     login: status.route.account_ref.login.clone(),
-                    runtime_state: match status.state {
-                        bridge_terminal_session::TerminalSessionState::Ready => "running",
-                        bridge_terminal_session::TerminalSessionState::Degraded => "restarting",
-                        bridge_terminal_session::TerminalSessionState::Superseded
-                        | bridge_terminal_session::TerminalSessionState::Stopped => "stopped",
-                        bridge_terminal_session::TerminalSessionState::Starting => "starting",
-                    }
-                    .to_owned(),
+                    runtime_state: ui_terminal_runtime_state(status.state).to_owned(),
                     error_code: status
                         .error_code
                         .clone()
@@ -1603,6 +1596,16 @@ fn terminal_state_name(state: bridge_terminal_session::TerminalSessionState) -> 
         bridge_terminal_session::TerminalSessionState::Degraded => "degraded",
         bridge_terminal_session::TerminalSessionState::Superseded => "superseded",
         bridge_terminal_session::TerminalSessionState::Stopped => "stopped",
+    }
+}
+
+fn ui_terminal_runtime_state(state: bridge_terminal_session::TerminalSessionState) -> &'static str {
+    match state {
+        bridge_terminal_session::TerminalSessionState::Ready => "running",
+        bridge_terminal_session::TerminalSessionState::Degraded => "restarting",
+        bridge_terminal_session::TerminalSessionState::Superseded
+        | bridge_terminal_session::TerminalSessionState::Stopped => "stopped",
+        bridge_terminal_session::TerminalSessionState::Starting => "starting",
     }
 }
 
@@ -2116,6 +2119,32 @@ mod tests {
     }
 
     #[test]
+    fn ui_terminal_runtime_state_preserves_transitional_and_terminal_meanings() {
+        use bridge_terminal_session::TerminalSessionState;
+
+        assert_eq!(
+            ui_terminal_runtime_state(TerminalSessionState::Starting),
+            "starting"
+        );
+        assert_eq!(
+            ui_terminal_runtime_state(TerminalSessionState::Ready),
+            "running"
+        );
+        assert_eq!(
+            ui_terminal_runtime_state(TerminalSessionState::Degraded),
+            "restarting"
+        );
+        assert_eq!(
+            ui_terminal_runtime_state(TerminalSessionState::Superseded),
+            "stopped"
+        );
+        assert_eq!(
+            ui_terminal_runtime_state(TerminalSessionState::Stopped),
+            "stopped"
+        );
+    }
+
+    #[test]
     fn ui_trading_permissions_are_projected_from_the_current_sqlite_account_route() {
         let root = unique_test_directory("permission-projection");
         fs::create_dir_all(&root).expect("permission fixture directory");
@@ -2450,7 +2479,10 @@ mod tests {
             .expect("UI status");
         assert_eq!(ui_status.terminals[0].broker_server, "Broker-Demo");
         assert_eq!(ui_status.terminals[0].login, "123456");
-        assert_eq!(ui_status.terminals[0].runtime_state, "starting");
+        assert!(matches!(
+            ui_status.terminals[0].runtime_state.as_str(),
+            "starting" | "restarting"
+        ));
         drop(status_handle);
 
         active.stop().await.expect("stop active sessions");

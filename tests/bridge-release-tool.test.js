@@ -254,30 +254,39 @@ describe('bridge release tooling', () => {
 
   it('keeps the client activation rehearsal on loopback and reuses production update code', async () => {
     const tool = await readFile(
-      new URL('../bridge/tools/AurumBridge.UpdateRehearsal/Program.cs', import.meta.url),
+      new URL('../bridge/native/apps/bridge-update-rehearsal/src/main.rs', import.meta.url),
       'utf8',
     )
     const wrapper = await readFile(
       new URL('../scripts/bridge-release/test-local-client-update.ps1', import.meta.url),
       'utf8',
     )
+    const fixtureBuilder = await readFile(
+      new URL('../scripts/bridge-release/prepare-local-update-rehearsal.ps1', import.meta.url),
+      'utf8',
+    )
     const releaseTests = await readFile(
       new URL('../scripts/bridge-release/test-release.ps1', import.meta.url),
       'utf8',
     )
-    const solution = await readFile(new URL('../bridge/AurumBridge.slnx', import.meta.url), 'utf8')
-    expect(tool).toContain('uri.IsLoopback')
-    expect(tool).toContain('BridgeServerEndpointConfiguration.ParseServerUri')
-    expect(tool).toContain('new ReleaseManifestClient')
-    expect(tool).toContain('new ReleaseInstaller')
-    expect(tool).toContain('new LauncherEngine')
-    expect(tool).toContain('new BridgeProcessRunner')
+    const workspace = await readFile(new URL('../bridge/native/Cargo.toml', import.meta.url), 'utf8')
+    expect(tool).toContain('validate_loopback_server')
+    expect(tool).toContain('BridgeUpdateCoordinator::create_if_installed')
+    expect(tool).toContain('LauncherEngine::new')
+    expect(tool).toContain('NativeBridgeProcessRunner::new')
     expect(tool).toContain('AURUM_BRIDGE_RELEASE_API_TOKEN')
-    expect(tool).toContain('AURUM_BRIDGE_DATA_DIR')
     expect(tool).toContain('update_rehearsal_second_health_check_failed')
     expect(wrapper).not.toContain('-ReleaseToken')
+    expect(wrapper).toContain('-p liangjian-bridge-update-rehearsal')
+    expect(wrapper).toContain('$env:AURUM_BRIDGE_DATA_DIR')
+    expect(wrapper).toContain("$resultDocument.operation -ne 'client-update-rehearsal'")
+    expect(wrapper).toContain('$rehearsalExitCode -eq 0')
+    expect(wrapper).toContain('[IO.File]::WriteAllText($resultPath')
+    expect(fixtureBuilder).toContain("$serverUri.Host -ne '127.0.0.1'")
+    expect(fixtureBuilder).toContain("'sign-release.ps1'")
+    expect(fixtureBuilder).toContain("'verify-signatures.ps1'")
     expect(releaseTests).toContain('& $dotnet build $solution')
-    expect(solution).toContain('tools/AurumBridge.UpdateRehearsal/AurumBridge.UpdateRehearsal.csproj')
+    expect(workspace).toContain('"apps/bridge-update-rehearsal"')
   })
 
   it('builds a standard offline installer with a Rust backend and pins the signed native launcher from core', async () => {

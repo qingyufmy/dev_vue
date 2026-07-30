@@ -5,6 +5,7 @@ members = [
   "apps/bridge-installer",
   "apps/bridge-bootstrapper",
   "apps/bridge-launcher",
+  "apps/bridge-update-rehearsal",
   "apps/bridge-ui",
   "crates/bridge-contract",
   "crates/bridge-command",

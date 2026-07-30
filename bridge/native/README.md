@@ -107,6 +107,12 @@ Pop-Location
 测试结果写入输出目录的 `lifecycle-result.json`。正式服务器地址只有在用户明确要求
 最终打包时，才允许通过 production 发布参数注入。
 
+本地客户端更新演练已经由 Rust 原生工具接管。先用两份真实、版本一致的本地发布
+目录生成签名测试清单并启动 `local-rehearsal-server.mjs`，再运行
+`test-local-client-update.ps1`。客户端只接受 `127.0.0.1` HTTP 服务，第一版必须健康
+激活；第二个紧急版本会模拟启动就绪失败，并由正式 Rust Launcher 回滚到上一健康版。
+`-Result` 可把最终指针、更新状态和回滚错误码写成独立 JSON 证据。
+
 只读检查现有默认 Profile：
 
 ```powershell
