@@ -91,6 +91,22 @@ Pop-Location
 .\scripts\bridge-native\test-ui-host.ps1
 ```
 
+完整离线安装器的本地发布门会强制使用 HTTP 回环地址，构建测试环境安装器后在
+隔离目录完成首次安装、同版本修复、版本指针、原生文件布局、Core 健康检查、包体
+上限和正式域名残留扫描。它不会改动当前用户的正式安装目录，也不会接受公网地址：
+
+```powershell
+.\scripts\bridge-release\test-local-full-installer.ps1 `
+  -ReleaseDirectory '<本地签名发布目录>' `
+  -PublicKey '<本地测试公钥 PEM>' `
+  -OutputDirectory '<新的隔离输出目录>' `
+  -ServerUrl 'http://127.0.0.1:3000' `
+  -LauncherVersion '3.0.0'
+```
+
+测试结果写入输出目录的 `lifecycle-result.json`。正式服务器地址只有在用户明确要求
+最终打包时，才允许通过 production 发布参数注入。
+
 只读检查现有默认 Profile：
 
 ```powershell

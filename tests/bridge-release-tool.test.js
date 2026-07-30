@@ -293,6 +293,7 @@ describe('bridge release tooling', () => {
     const nativeInstaller = await readFile(new URL('../bridge/native/apps/bridge-installer/src/lib.rs', import.meta.url), 'utf8')
     const nativeReleaseValidator = await readFile(new URL('../bridge/native/crates/bridge-update/src/coordinator.rs', import.meta.url), 'utf8')
     const nativeCompliance = await readFile(new URL('../scripts/bridge-release/generate-native-compliance.ps1', import.meta.url), 'utf8')
+    const localInstallerLifecycle = await readFile(new URL('../scripts/bridge-release/test-local-full-installer.ps1', import.meta.url), 'utf8')
     const nativeWorkspace = await readFile(new URL('../bridge/native/Cargo.toml', import.meta.url), 'utf8')
     const mt5Worker = await readFile(new URL('../bridge/native/workers/mt5/worker.py', import.meta.url), 'utf8')
     expect(bootstrapBuilder).toContain('-p liangjian-bridge-bootstrapper')
@@ -375,6 +376,11 @@ describe('bridge release tooling', () => {
     expect(fullInstallerBuilder).toContain("$manifest.rollout_channel -ne 'stable'")
     expect(fullInstallerBuilder).toContain('$MinimumOfflineValidityDays')
     expect(fullInstallerBuilder).toContain('rehearsal_result_path=$rehearsalResultPath')
+    expect(localInstallerLifecycle).toContain("operation='test-local-full-installer'")
+    expect(localInstallerLifecycle).toContain('local_installer_server_must_be_loopback')
+    expect(localInstallerLifecycle).toContain('repair-sentinel.tmp')
+    expect(localInstallerLifecycle).toContain("'--health-check','--health-file'")
+    expect(localInstallerLifecycle).toContain("IndexOf('cnfxtrade.com'")
     expect(fullInstallerBuilder).toContain('function ConvertFrom-CodePoints')
     expect(fullInstallerBuilder).toContain('0x91CF,0x89C1,0x667A,0x6865')
     expect([...fullInstallerBuilder].some(character => character.codePointAt(0) > 0x7f)).toBe(false)
@@ -462,6 +468,33 @@ describe('bridge release tooling', () => {
       expect(JSON.parse(stdout)).toMatchObject({
         ok:true, operation:'build-full-installer', dry_run:true,
         release_id:manifest.release_id, release_version:'3.1.0',
+      })
+      const lifecycleScript = path.resolve('scripts/bridge-release/test-local-full-installer.ps1')
+      const lifecycle = await execFileAsync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', lifecycleScript,
+        '-ReleaseDirectory', temporary,
+        '-ManifestPath', manifestPath,
+        '-PublicKey', publicKey,
+        '-OutputDirectory', path.join(temporary, 'lifecycle-output'),
+        '-ServerUrl', 'http://127.0.0.1:3000',
+        '-LauncherVersion', '3.1.0',
+        '-DryRun',
+      ])
+      expect(JSON.parse(lifecycle.stdout)).toMatchObject({
+        ok:true, operation:'test-local-full-installer', dry_run:true,
+        release_version:'3.1.0', server_url:'http://127.0.0.1:3000',
+      })
+      await expect(execFileAsync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', lifecycleScript,
+        '-ReleaseDirectory', temporary,
+        '-ManifestPath', manifestPath,
+        '-PublicKey', publicKey,
+        '-OutputDirectory', path.join(temporary, 'remote-output'),
+        '-ServerUrl', 'https://www.cnfxtrade.com',
+        '-LauncherVersion', '3.1.0',
+        '-DryRun',
+      ])).rejects.toMatchObject({
+        stderr:expect.stringContaining('local_installer_server_must_be_loopback'),
       })
     } finally {
       await rm(temporary, { recursive:true, force:true })
