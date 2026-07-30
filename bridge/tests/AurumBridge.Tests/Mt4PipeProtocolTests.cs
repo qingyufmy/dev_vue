@@ -46,8 +46,8 @@ public sealed class Mt4PipeProtocolTests
         Assert.IsTrue(Mt4PipeProtocol.RequiresAdapterRestart(decoded.AdapterVersion));
         Assert.IsTrue(Mt4PipeProtocol.IsCurrentAdapterVersion(
             $"{Mt4PipeProtocol.CurrentAdapterVersion}-test"));
-        Assert.IsTrue(Mt4PipeProtocol.RequiresAdapterRestart("3.2.5"));
-        Assert.IsFalse(Mt4PipeProtocol.RequiresAdapterRestart("3.2.6"));
+        Assert.IsTrue(Mt4PipeProtocol.RequiresAdapterRestart("3.2.6"));
+        Assert.IsFalse(Mt4PipeProtocol.RequiresAdapterRestart("3.2.7"));
     }
 
     [TestMethod]
@@ -143,6 +143,44 @@ public sealed class Mt4PipeProtocolTests
         Assert.AreEqual(2295.0, decoded.StopLoss);
         Assert.AreEqual(2290.0, decoded.ExpectedStopLoss);
         Assert.AreEqual(2320.0, decoded.ExpectedTakeProfit);
+    }
+
+    [TestMethod]
+    public void PendingOrderModificationCarriesTheRequiredTargetGuard()
+    {
+        var command = Command("modify_order", new
+        {
+            ticket = "20",
+            price = 2280.0,
+            expected_state = new
+            {
+                ticket = "20", symbol = "XAUUSD", direction = "buy",
+                volume = 0.1, magic = 234000, stop_loss = 2200.0, take_profit = 2400.0,
+            },
+        });
+
+        var decoded = Mt4PipeProtocol.DecodeCommand(Mt4PipeProtocol.EncodeCommand(
+            Mt4PipeProtocol.CreateTradeCommand(command)));
+
+        Assert.AreEqual(Mt4TradeAction.ModifyOrder, decoded.Action);
+        Assert.AreEqual(20L, decoded.Ticket);
+        Assert.AreEqual("XAUUSD", decoded.Symbol);
+        Assert.AreEqual(Mt4OrderSide.Buy, decoded.Side);
+        Assert.AreEqual(0.1, decoded.ExpectedVolume);
+        Assert.AreEqual(2200.0, decoded.ExpectedStopLoss);
+        Assert.AreEqual(2400.0, decoded.ExpectedTakeProfit);
+    }
+
+    [TestMethod]
+    public void PendingOrderModificationWithoutTargetGuardFailsClosed()
+    {
+        var error = Assert.ThrowsExactly<InvalidDataException>(() =>
+            Mt4PipeProtocol.CreateTradeCommand(Command("modify_order", new
+            {
+                ticket = "20", price = 2280.0,
+            })));
+
+        Assert.AreEqual("management_expected_state_required", error.Message);
     }
 
     [TestMethod]

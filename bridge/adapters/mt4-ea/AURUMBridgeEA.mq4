@@ -1,9 +1,9 @@
 #property strict
-#property version   "3.26"
+#property version   "3.27"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.2.6"
+#define ADAPTER_VERSION "3.2.7"
 
 input string InpPipeName = "AURUMBridgeV3";
 
@@ -1627,8 +1627,10 @@ void ExecuteCommand(uchar &payload[], int &offset)
      }
    if(action == ACTION_MODIFY)
      {
-      ExecuteModify(command_id, (int)ticket_value, price_value,
-         stop_loss_value, take_profit_value, expiration);
+      ExecuteModify(command_id, (int)ticket_value, symbol, side, volume,
+         expected_volume_value, magic, price_value, stop_loss_value,
+         take_profit_value, expected_stop_loss_value,
+         expected_take_profit_value, expiration);
       return;
      }
    if(action == ACTION_CLOSE)
@@ -1752,25 +1754,104 @@ void ExecuteCancel(const string command_id, const int ticket, const string expec
       SendTradeFailure(command_id, "mt4_order_delete_failed", trade_error);
   }
 
-void ExecuteModify(const string command_id, const int ticket, const string price_value,
-   const string stop_loss_value, const string take_profit_value, const long expiration)
+void ExecuteModify(const string command_id, const int ticket,
+   const string expected_symbol, const int expected_side,
+   const double legacy_expected_volume, const string expected_volume_value,
+   const int expected_magic, const string price_value,
+   const string stop_loss_value, const string take_profit_value,
+   const string expected_stop_loss_value, const string expected_take_profit_value,
+   const long expiration)
   {
-   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+   double expected_volume = expected_volume_value == ""
+      ? legacy_expected_volume : StrToDouble(expected_volume_value);
+   if(expected_symbol == "" || expected_side == SIDE_NONE || expected_volume <= 0)
      {
-      SendTradeFailure(command_id, "order_not_found");
+      SendCommandResult(command_id, 2, "management_expected_state_required", "", 0, ticket);
       return;
      }
-   double price = (price_value == "") ? OrderOpenPrice() : StrToDouble(price_value);
-   double stop_loss = (stop_loss_value == "") ? OrderStopLoss() : StrToDouble(stop_loss_value);
-   double take_profit = (take_profit_value == "") ? OrderTakeProfit() : StrToDouble(take_profit_value);
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
+     {
+      SendCommandResult(command_id, 2, "pending_order_not_found", "", 0, ticket);
+      return;
+     }
+   int order_type = OrderType();
+   if(order_type == OP_BUY || order_type == OP_SELL || OrderCloseTime() > 0)
+     {
+      SendCommandResult(command_id, 2, "pending_order_not_found", "", 0, ticket);
+      return;
+     }
+   int actual_side = (order_type == OP_BUYLIMIT || order_type == OP_BUYSTOP)
+      ? SIDE_BUY : SIDE_SELL;
+   if(OrderSymbol() != expected_symbol)
+     {
+      SendCommandResult(command_id, 2, "management_symbol_mismatch", "", 0, ticket);
+      return;
+     }
+   if(actual_side != expected_side)
+     {
+      SendCommandResult(command_id, 2, "management_direction_mismatch", "", 0, ticket);
+      return;
+     }
+   if(OrderMagicNumber() != expected_magic)
+     {
+      SendCommandResult(command_id, 2, "management_magic_mismatch", "", 0, ticket);
+      return;
+     }
+   if(MathAbs(OrderLots() - expected_volume) > 0.00000001)
+     {
+      SendCommandResult(command_id, 2, "management_volume_mismatch", "", 0, ticket);
+      return;
+     }
+   double point = MarketInfo(OrderSymbol(), MODE_POINT);
+   double tolerance = MathMax(point / 2.0, 0.00000001);
+   if(expected_stop_loss_value != ""
+      && MathAbs(OrderStopLoss() - StrToDouble(expected_stop_loss_value)) > tolerance)
+     {
+      SendCommandResult(command_id, 2, "pending_stop_loss_changed", "", 0, ticket);
+      return;
+     }
+   if(expected_take_profit_value != ""
+      && MathAbs(OrderTakeProfit() - StrToDouble(expected_take_profit_value)) > tolerance)
+     {
+      SendCommandResult(command_id, 2, "pending_take_profit_changed", "", 0, ticket);
+      return;
+     }
+   int digits = (int)MarketInfo(OrderSymbol(), MODE_DIGITS);
+   double price = (price_value == "") ? OrderOpenPrice()
+      : NormalizeDouble(StrToDouble(price_value), digits);
+   double stop_loss = (stop_loss_value == "") ? OrderStopLoss()
+      : NormalizeDouble(StrToDouble(stop_loss_value), digits);
+   double take_profit = (take_profit_value == "") ? OrderTakeProfit()
+      : NormalizeDouble(StrToDouble(take_profit_value), digits);
    datetime expiry = (expiration == 0) ? OrderExpiration() : (datetime)expiration;
+   bool already_applied = MathAbs(OrderOpenPrice() - price) <= tolerance
+      && MathAbs(OrderStopLoss() - stop_loss) <= tolerance
+      && MathAbs(OrderTakeProfit() - take_profit) <= tolerance
+      && OrderExpiration() == expiry;
+   if(already_applied)
+     {
+      SendCommandResult(command_id, 1, "", "already_applied", 0, ticket);
+      return;
+     }
    ResetLastError();
    bool modified = OrderModify(ticket, price, stop_loss, take_profit, expiry, clrNONE);
    int trade_error = modified ? 0 : GetLastError();
-   if(modified)
-      SendCommandResult(command_id, 1, "", "", 0, ticket);
-   else
+   if(!modified)
+     {
       SendTradeFailure(command_id, "mt4_order_modify_failed", trade_error);
+      return;
+     }
+   if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)
+      || MathAbs(OrderOpenPrice() - price) > tolerance
+      || MathAbs(OrderStopLoss() - stop_loss) > tolerance
+      || MathAbs(OrderTakeProfit() - take_profit) > tolerance
+      || OrderExpiration() != expiry)
+     {
+      SendCommandResult(command_id, 3, "pending_order_modify_verify_failed", "",
+         GetLastError(), ticket);
+      return;
+     }
+   SendCommandResult(command_id, 1, "", "", 0, ticket);
   }
 
 void ExecuteClose(const string command_id, const int ticket, const string expected_symbol,
@@ -2295,6 +2376,8 @@ string ReadUtf8(uchar &buffer[], int &offset)
       offset = ArraySize(buffer);
       return("");
      }
+   if(length == 0)
+      return("");
    string value = CharArrayToString(buffer, offset, length, CP_UTF8);
    offset += length;
    return(value);

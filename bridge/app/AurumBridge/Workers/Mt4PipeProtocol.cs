@@ -271,7 +271,7 @@ public sealed record Mt4TradeResult(
 public static class Mt4PipeProtocol
 {
     public const int CurrentProtocolVersion = 3;
-    public const string CurrentAdapterVersion = "3.2.6";
+    public const string CurrentAdapterVersion = "3.2.7";
     public const int MaxFrameBytes = 4 * 1024 * 1024;
     private const int MaxStringBytes = 2 * 1024 * 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -1440,6 +1440,13 @@ public static class Mt4PipeProtocol
             && command.Volume > expectedVolume + 0.00000001)
         {
             throw new InvalidDataException("close_volume_invalid");
+        }
+        if (command.Action == Mt4TradeAction.ModifyOrder
+            && (string.IsNullOrWhiteSpace(command.Symbol)
+                || command.Side == Mt4OrderSide.None
+                || command.ExpectedVolume is null))
+        {
+            throw new InvalidDataException("management_expected_state_required");
         }
         if (command.Action == Mt4TradeAction.ModifyPosition
             && (string.IsNullOrWhiteSpace(command.Symbol)

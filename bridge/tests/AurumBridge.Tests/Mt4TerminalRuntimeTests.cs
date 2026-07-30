@@ -176,7 +176,19 @@ public sealed class Mt4TerminalRuntimeTests
         {
             ("place_order", new { symbol = "XAUUSD", side = "buy", order_kind = "market", volume = 0.1 }, Mt4TradeAction.PlaceOrder),
             ("cancel_order", new { ticket = "20" }, Mt4TradeAction.CancelOrder),
-            ("modify_order", new { ticket = "21", price = 2299.0, stop_loss = 2290.0 }, Mt4TradeAction.ModifyOrder),
+            ("modify_order", new
+            {
+                ticket = "21",
+                price = 2299.0,
+                stop_loss = 2290.0,
+                expected_state = new
+                {
+                    symbol = "XAUUSD",
+                    direction = "buy",
+                    magic = 234000,
+                    volume = 0.1,
+                },
+            }, Mt4TradeAction.ModifyOrder),
             ("modify_position", new { ticket = "22", symbol = "XAUUSD", side = "buy", volume = 0.1, stop_loss = 2295.0 }, Mt4TradeAction.ModifyPosition),
             ("close_position", new { ticket = "22", symbol = "XAUUSD", side = "buy", volume = 0.1 }, Mt4TradeAction.ClosePosition),
             ("query_execution", new { expected_kind = "trade", trade_ticket = "22" }, Mt4TradeAction.QueryExecution),

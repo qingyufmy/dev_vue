@@ -705,6 +705,13 @@ fn validate_command(command: &TradeCommand) -> Result<(), Mt4ProtocolError> {
     {
         return Err(Mt4ProtocolError::new("close_volume_invalid"));
     }
+    if command.action == TradeAction::ModifyOrder
+        && (command.symbol.is_empty()
+            || command.side == OrderSide::None
+            || command.expected_volume.is_none())
+    {
+        return Err(Mt4ProtocolError::new("management_expected_state_required"));
+    }
     if command.action == TradeAction::ModifyPosition
         && (command.symbol.is_empty()
             || command.side == OrderSide::None
@@ -914,6 +921,26 @@ mod tests {
         }
     }
 
+    fn bridge_command(action: &str, params: Value) -> CommandMessage {
+        CommandMessage {
+            v: 3,
+            message_type: "command".to_owned(),
+            message_id: "message_01JMT4COMMAND01".to_owned(),
+            sent_at_utc_msc: 1_800_000_000_000,
+            command_id: "command_01JMT4COMMAND01".to_owned(),
+            terminal_instance_id: "mt4_0123456789abcdef01234567".to_owned(),
+            account_ref: bridge_contract::AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "12345678".to_owned(),
+            },
+            connection_epoch: 7,
+            issued_at_utc_msc: 1_800_000_000_000,
+            deadline_utc_msc: 1_800_000_010_000,
+            action: action.to_owned(),
+            params,
+        }
+    }
+
     #[test]
     fn command_round_trip_matches_the_existing_dotnet_and_ea_field_order() {
         let mut expected = command();
@@ -1058,6 +1085,53 @@ mod tests {
         assert_eq!(local.volume, 0.01);
         assert_eq!(local.expected_volume, Some(0.02));
         assert_eq!(local.magic, 234000);
+    }
+
+    #[test]
+    fn pending_order_modification_carries_the_required_target_guard() {
+        let mut bridge = bridge_command(
+            "modify_order",
+            serde_json::json!({
+                "ticket": "20",
+                "price": 2280.0,
+                "expected_state": {
+                    "ticket": "20",
+                    "symbol": "XAUUSD",
+                    "direction": "buy",
+                    "volume": 0.1,
+                    "magic": 234000,
+                    "stop_loss": 2200.0,
+                    "take_profit": 2400.0
+                }
+            }),
+        );
+        bridge.command_id = "command_01JMT4MODORDER01".to_owned();
+
+        let local = command_from_bridge(&bridge).expect("modify pending command");
+        assert_eq!(local.action, TradeAction::ModifyOrder);
+        assert_eq!(local.ticket, 20);
+        assert_eq!(local.symbol, "XAUUSD");
+        assert_eq!(local.side, OrderSide::Buy);
+        assert_eq!(local.expected_volume, Some(0.1));
+        assert_eq!(local.expected_stop_loss, Some(2200.0));
+        assert_eq!(local.expected_take_profit, Some(2400.0));
+    }
+
+    #[test]
+    fn pending_order_modification_without_target_guard_fails_closed() {
+        let mut invalid = command();
+        invalid.action = TradeAction::ModifyOrder;
+        invalid.ticket = 20;
+        invalid.price = Some(2280.0);
+        invalid.symbol.clear();
+        invalid.side = OrderSide::None;
+
+        assert_eq!(
+            encode_command(&invalid)
+                .expect_err("missing management guard")
+                .code(),
+            "management_expected_state_required"
+        );
     }
 
     #[test]
