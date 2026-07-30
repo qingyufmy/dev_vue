@@ -41,6 +41,14 @@ try {
   if ($wheelhouse) { $pipArguments += @('--no-index','--find-links',$wheelhouse) }
   & $sourcePython @pipArguments
   if ($LASTEXITCODE -ne 0) { throw 'release_python_dependency_install_failed' }
+  $prunedExtensions = @('.pdb','.d','.rlib','.lib','.exp','.obj','.ilk','.map')
+  $prunedArtifacts = @(Get-ChildItem -LiteralPath $output -Recurse -File -Force | Where-Object {
+    $prunedExtensions -contains $_.Extension.ToLowerInvariant()
+  })
+  $prunedArtifactBytes = ($prunedArtifacts | Measure-Object Length -Sum).Sum
+  foreach ($artifact in $prunedArtifacts) {
+    Remove-Item -LiteralPath $artifact.FullName -Force
+  }
   $smoke = (& (Join-Path $output 'python.exe') -I -c "import json,MetaTrader5,numpy,platform; print(json.dumps({'python':platform.python_version(),'mt5':MetaTrader5.__version__,'numpy':numpy.__version__}))") | ConvertFrom-Json
   if ($LASTEXITCODE -ne 0 -or $smoke.mt5 -ne '5.0.5735' -or $smoke.numpy -ne '2.4.6') { throw 'release_python_runtime_smoke_test_failed' }
   $metadata = [ordered]@{
@@ -50,6 +58,8 @@ try {
     metatrader5_version=$smoke.mt5
     numpy_version=$smoke.numpy
     requirements_sha256=(Get-FileHash -LiteralPath $lock -Algorithm SHA256).Hash.ToLowerInvariant()
+    pruned_build_artifact_count=$prunedArtifacts.Count
+    pruned_build_artifact_bytes=[long]$prunedArtifactBytes
     built_at_utc_msc=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   }
   Write-Utf8NoBom -Path (Join-Path $output 'runtime-metadata.json') -Content ($metadata | ConvertTo-Json)

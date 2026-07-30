@@ -32,6 +32,9 @@ function Assert-NativeReleaseLayout(
     (Join-Path $CoreDirectory 'AURUMBridge.Core.exe'),
     (Join-Path $CoreDirectory 'server-endpoints.json'),
     (Join-Path $CoreDirectory 'runtime\python\python.exe'),
+    (Join-Path $CoreDirectory 'compliance\bridge-native.spdx.json'),
+    (Join-Path $CoreDirectory 'compliance\THIRD-PARTY-LICENSES.txt'),
+    (Join-Path $CoreDirectory 'compliance\native-dependency-audit.json'),
     (Join-Path $Mt5Directory 'worker.py'),
     (Join-Path $Mt5Directory 'trade.py'),
     (Join-Path $Mt4Directory 'AURUMBridgeEA.ex4'),
@@ -161,6 +164,14 @@ try {
   $runtimeTarget = Join-Path $core 'runtime\python'
   New-Item -ItemType Directory -Path $runtimeTarget -Force | Out-Null
   Copy-Item -Path (Join-Path $pythonRoot '*') -Destination $runtimeTarget -Recurse -Force
+  $prunedRuntimeExtensions = @('.pdb','.d','.rlib','.lib','.exp','.obj','.ilk','.map')
+  $prunedRuntimeArtifacts = @(Get-ChildItem -LiteralPath $runtimeTarget -Recurse -File -Force | Where-Object {
+    $prunedRuntimeExtensions -contains $_.Extension.ToLowerInvariant()
+  })
+  $prunedRuntimeBytes = ($prunedRuntimeArtifacts | Measure-Object Length -Sum).Sum
+  foreach ($artifact in $prunedRuntimeArtifacts) {
+    Remove-Item -LiteralPath $artifact.FullName -Force
+  }
   Write-Utf8NoBom -Path (Join-Path $core 'server-endpoints.json') -Content (([ordered]@{
     schema_version=1
     server_url=$serverUrlValue
@@ -190,6 +201,19 @@ try {
     if (-not (Test-Path -LiteralPath $committedEx4 -PathType Leaf) -or (Get-Item -LiteralPath $committedEx4).Length -le 0) { throw 'release_mt4_artifact_missing' }
     Copy-Item -LiteralPath $committedEx4 -Destination (Join-Path $mt4Target 'AURUMBridgeEA.ex4')
   }
+  $complianceWork = Join-Path $work 'compliance'
+  & (Join-Path $PSScriptRoot 'generate-native-compliance.ps1') `
+    -OutputDirectory $complianceWork `
+    -CargoManifest (Join-Path $nativeRoot 'Cargo.toml') `
+    -Target 'x86_64-pc-windows-msvc' `
+    -NativeExecutable @($nativeUi,$nativeCore,$nativeLauncher) `
+    -StagedDirectory @($core,(Join-Path $moduleRoot 'adapter.mt5.python'),$mt4Target) `
+    -PythonRuntimeDirectory $runtimeTarget | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'release_native_compliance_failed' }
+  $coreCompliance = Join-Path $core 'compliance'
+  $outputCompliance = Join-Path $outputRoot 'compliance'
+  Copy-Item -LiteralPath $complianceWork -Destination $coreCompliance -Recurse
+  Copy-Item -LiteralPath $complianceWork -Destination $outputCompliance -Recurse
   Assert-NativeReleaseLayout `
     -CoreDirectory $core `
     -Mt5Directory (Join-Path $moduleRoot 'adapter.mt5.python') `
@@ -222,11 +246,33 @@ try {
     release_id=$ReleaseId; release_notes=$ReleaseNotes
     git_branch=$branch; git_commit=$commit; source_dirty=$dirty
     server_url=$serverUrlValue; output=$outputRoot; manifest=$manifestPath
+    python_runtime_pruning=[ordered]@{
+      removed_file_count=$prunedRuntimeArtifacts.Count
+      removed_bytes=[long]$prunedRuntimeBytes
+    }
     launcher=[ordered]@{
       package_module='core'
       package_relative_path='launcher/AURUMBridge.Launcher.exe'
       size_bytes=(Get-Item -LiteralPath $launcherArtifact).Length
       sha256=(Get-FileHash -LiteralPath $launcherArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    compliance=[ordered]@{
+      directory=$outputCompliance
+      sbom=[ordered]@{
+        path=(Join-Path $outputCompliance 'bridge-native.spdx.json')
+        size_bytes=(Get-Item -LiteralPath (Join-Path $outputCompliance 'bridge-native.spdx.json')).Length
+        sha256=(Get-FileHash -LiteralPath (Join-Path $outputCompliance 'bridge-native.spdx.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+      }
+      licenses=[ordered]@{
+        path=(Join-Path $outputCompliance 'THIRD-PARTY-LICENSES.txt')
+        size_bytes=(Get-Item -LiteralPath (Join-Path $outputCompliance 'THIRD-PARTY-LICENSES.txt')).Length
+        sha256=(Get-FileHash -LiteralPath (Join-Path $outputCompliance 'THIRD-PARTY-LICENSES.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
+      }
+      audit=[ordered]@{
+        path=(Join-Path $outputCompliance 'native-dependency-audit.json')
+        size_bytes=(Get-Item -LiteralPath (Join-Path $outputCompliance 'native-dependency-audit.json')).Length
+        sha256=(Get-FileHash -LiteralPath (Join-Path $outputCompliance 'native-dependency-audit.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+      }
     }
     packages=$packages
   }

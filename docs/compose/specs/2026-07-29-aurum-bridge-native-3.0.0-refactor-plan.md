@@ -494,9 +494,9 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 ### 阶段 8：包体和保护
 
-- 最小 Python、重复文件清理、压缩参数和动态依赖审计。
-- Release 去符号、日志脱敏、IPC ACL、Defender 误报验证。
-- 生成 SBOM、第三方许可证和可复现依赖锁。
+- [进行中] 最小 Python、重复文件清理、压缩参数和动态依赖审计：Python 运行时构建及 Release 临时目录都会裁剪 PDB / LIB / RLIB / OBJ 等开发文件，真实旧运行时共移除 21 个 NumPy 链接库、393,706 字节；PE 导入表审计证明 UI / Core / Launcher 只依赖 Windows 系统 DLL，并硬拒绝 OpenSSL/native-tls、Python 和 .NET 动态运行时。本地完整 `core.zip` 为 36,023,223 字节且不含受禁扩展；更深的标准库裁剪仍需逐模块冒烟后继续。
+- [进行中] Release 已启用 LTO、`opt-level=s`、单 codegen unit、panic abort 和符号剥离，日志脱敏与命名管道 ACL 已有自动化证据；Defender 误报及干净 Windows 兼容验证留在最终安装验收。
+- [已完成] 发布构建会从锁定 Cargo 元数据与包内 Python 运行时生成 SPDX 2.3 SBOM、去重第三方许可证正文及 JSON 审计，覆盖 172 个 Rust 第三方包和 CPython / MetaTrader5 / NumPy 三个 Python 组件；三份合规文件同时留在发布目录并进入 `core.zip`，哈希写入 `build-result.json`。Cargo.lock 与 Python requirements 哈希共同作为可复现依赖证据，缺少许可证、非 registry Rust 依赖、受禁 TLS crate 或 Release 硬化配置时构建失败关闭。
 
 交付门：干净 Windows 10/11 无预装运行时安装成功，包体达标或有逐项证据说明超出原因。
 

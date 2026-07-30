@@ -251,12 +251,15 @@ describe('bridge release tooling', () => {
   it('builds a standard offline installer with a Rust backend and pins the signed native launcher from core', async () => {
     const bootstrapBuilder = await readFile(new URL('../scripts/bridge-release/build-bootstrapper.ps1', import.meta.url), 'utf8')
     const nativeInstallerBuilder = await readFile(new URL('../scripts/bridge-release/build-native-installer-backend.ps1', import.meta.url), 'utf8')
+    const releaseBuilder = await readFile(new URL('../scripts/bridge-release/build-release.ps1', import.meta.url), 'utf8')
+    const pythonRuntimeBuilder = await readFile(new URL('../scripts/bridge-release/build-python-runtime.ps1', import.meta.url), 'utf8')
     const fullInstallerBuilder = await readFile(new URL('../scripts/bridge-release/build-full-installer.ps1', import.meta.url), 'utf8')
     const bootstrapUploader = await readFile(new URL('../scripts/bridge-release/upload-bootstrapper-qiniu.ps1', import.meta.url), 'utf8')
     const nativeBootstrapMain = await readFile(new URL('../bridge/native/apps/bridge-bootstrapper/src/main.rs', import.meta.url), 'utf8')
     const nativeBootstrapGui = await readFile(new URL('../bridge/native/apps/bridge-bootstrapper/src/gui.rs', import.meta.url), 'utf8')
     const nativeInstaller = await readFile(new URL('../bridge/native/apps/bridge-installer/src/lib.rs', import.meta.url), 'utf8')
     const nativeReleaseValidator = await readFile(new URL('../bridge/native/crates/bridge-update/src/coordinator.rs', import.meta.url), 'utf8')
+    const nativeCompliance = await readFile(new URL('../scripts/bridge-release/generate-native-compliance.ps1', import.meta.url), 'utf8')
     expect(bootstrapBuilder).toContain('-p liangjian-bridge-bootstrapper')
     expect(bootstrapBuilder).toContain('AURUM_BOOTSTRAPPER_SERVER_URL')
     expect(bootstrapBuilder).toContain("implementation='rust-native'")
@@ -307,6 +310,18 @@ describe('bridge release tooling', () => {
     expect(fullInstallerBuilder).toContain('full_installer_server_url_invalid')
     expect(fullInstallerBuilder).not.toContain('https://www.cnfxtrade.com')
     expect(fullInstallerBuilder).toContain('Uninstallable=no')
+    expect(releaseBuilder).toContain('generate-native-compliance.ps1')
+    expect(releaseBuilder).toContain('bridge-native.spdx.json')
+    expect(releaseBuilder).toContain('THIRD-PARTY-LICENSES.txt')
+    expect(nativeCompliance).toContain("@('openssl','openssl-sys','native-tls','hyper-tls','tokio-native-tls')")
+    expect(nativeCompliance).toContain('release_forbidden_native_runtime_import')
+    expect(nativeCompliance).toContain("@('.pdb','.d','.rlib','.lib','.exp','.obj','.ilk','.map')")
+    expect(nativeCompliance).toContain("spdxVersion = 'SPDX-2.3'")
+    expect(nativeCompliance).toContain('PythonRuntimeDirectory')
+    expect(nativeCompliance).toContain("name = 'CPython'")
+    expect(nativeCompliance).toContain('pkg:pypi/')
+    expect(pythonRuntimeBuilder).toContain('pruned_build_artifact_count')
+    expect(releaseBuilder).toContain('python_runtime_pruning')
     expect(fullInstallerBuilder).toContain("bootstrapper-metadata.json")
     expect(fullInstallerBuilder).toContain('--offline-bundle-root')
     expect(fullInstallerBuilder).toContain("$manifest.rollout_channel -ne 'stable'")
@@ -325,6 +340,36 @@ describe('bridge release tooling', () => {
     expect(launcherProgram).toContain('["--uninstall"]')
     expect(launcherUninstaller).toContain('BridgeInstallationRegistration.IsDefaultInstallRoot')
     expect(launcherUninstaller).toContain('RemoveRegistrationAndShortcuts')
+  })
+
+  it('generates a locked Native SPDX inventory and deduplicated third-party license bundle', async () => {
+    if (process.platform !== 'win32') return
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'aurum-native-compliance-'))
+    const output = path.join(temporary, 'compliance')
+    try {
+      const script = path.resolve('scripts/bridge-release/generate-native-compliance.ps1')
+      const { stdout } = await execFileAsync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+        '-OutputDirectory', output,
+        '-CargoManifest', path.resolve('bridge/native/Cargo.toml'),
+      ], { maxBuffer:10 * 1024 * 1024 })
+      const result = JSON.parse(stdout)
+      const audit = JSON.parse(await readFile(path.join(output, 'native-dependency-audit.json'), 'utf8'))
+      const sbom = JSON.parse(await readFile(path.join(output, 'bridge-native.spdx.json'), 'utf8'))
+      const licenses = await readFile(path.join(output, 'THIRD-PARTY-LICENSES.txt'), 'utf8')
+      expect(result).toMatchObject({ ok:true, operation:'generate-native-compliance' })
+      expect(result.package_count).toBeGreaterThan(100)
+      expect(audit.third_party_package_count).toBe(result.package_count)
+      expect(audit.forbidden_tls_crates).toEqual([])
+      expect(Object.values(audit.release_profile).every(Boolean)).toBe(true)
+      expect(sbom).toMatchObject({ spdxVersion:'SPDX-2.3', dataLicense:'CC0-1.0' })
+      expect(sbom.packages).toHaveLength(result.package_count)
+      expect(sbom.documentNamespace).toMatch(/^urn:aurum:spdx:liangjian-bridge-native:[a-f0-9]{40}$/)
+      expect(licenses).toContain('reqwest 0.13.4')
+      expect(licenses).toContain('LICENSE TEXTS')
+    } finally {
+      await rm(temporary, { recursive:true, force:true })
+    }
   })
 
   it('validates a complete offline V3 bundle without building or publishing it', async () => {
