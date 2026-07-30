@@ -150,22 +150,40 @@ async fn handle_registration(
     )?;
     let paths = resolve_profile_paths(root_data_directory, &profile_id)?;
     let store = OutboxStore::open_or_create(&paths.database_path).map_err(|error| error.code())?;
-    let binding = store
-        .activate_terminal_binding_for_path(
-            &terminal_instance_id,
-            "mt4",
-            &terminal_data_path,
-            &account_ref,
-            now_utc_msc(),
-        )
-        .map_err(|error| error.code())?;
-    event_sender
-        .send(Mt4RegistrationEvent {
-            profile_id: profile_id.clone(),
-            terminal_instance_id: terminal_instance_id.clone(),
-        })
-        .await
-        .map_err(|_| "mt4_registration_event_closed")?;
+    let existing = store
+        .terminal_bindings()
+        .map_err(|error| error.code())?
+        .into_iter()
+        .find(|binding| {
+            binding.terminal_instance_id == terminal_instance_id
+                && binding.platform == "mt4"
+                && binding.account_ref == account_ref
+                && paths_equal(&binding.terminal_path, &terminal_data_path)
+        });
+    let (binding, binding_changed) = match existing {
+        Some(binding) => (binding, false),
+        None => (
+            store
+                .activate_terminal_binding_for_path(
+                    &terminal_instance_id,
+                    "mt4",
+                    &terminal_data_path,
+                    &account_ref,
+                    now_utc_msc(),
+                )
+                .map_err(|error| error.code())?,
+            true,
+        ),
+    };
+    if binding_changed {
+        event_sender
+            .send(Mt4RegistrationEvent {
+                profile_id: profile_id.clone(),
+                terminal_instance_id: terminal_instance_id.clone(),
+            })
+            .await
+            .map_err(|_| "mt4_registration_event_closed")?;
+    }
     connection
         .send_welcome(&Welcome {
             terminal_instance_id: terminal_instance_id.clone(),
@@ -399,6 +417,37 @@ mod tests {
         assert_eq!(bindings[0].account_ref.login, "12345678");
 
         drop(client);
+        let mut repeated_client = loop {
+            match ClientOptions::new().open(&pipe_path) {
+                Ok(client) => break client,
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        };
+        write_frame(
+            &mut repeated_client,
+            &encode_hello(&hello).expect("encode repeated hello"),
+        )
+        .await
+        .expect("send repeated hello");
+        let repeated_welcome = decode_welcome(
+            &read_frame(&mut repeated_client)
+                .await
+                .expect("repeated welcome frame"),
+        )
+        .expect("decode repeated welcome");
+        assert_eq!(
+            repeated_welcome.terminal_instance_id,
+            welcome.terminal_instance_id
+        );
+        assert_eq!(repeated_welcome.connection_epoch, welcome.connection_epoch);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), event_receiver.recv())
+                .await
+                .is_err(),
+            "unchanged registration must not trigger a runtime reload"
+        );
+        drop(repeated_client);
+
         let mut switched_client = loop {
             match ClientOptions::new().open(&pipe_path) {
                 Ok(client) => break client,

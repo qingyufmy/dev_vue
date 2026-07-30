@@ -1,9 +1,9 @@
 #property strict
-#property version   "3.28"
+#property version   "3.29"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.2.10"
+#define ADAPTER_VERSION "3.2.11"
 #define MAX_HISTORY_WINDOW_MSC 1576800000000
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -53,6 +53,7 @@ bool   g_welcomed = false;
 string g_terminal_id = "";
 long   g_connection_epoch = 0;
 string g_pipe_name = "";
+int    g_route_failures = 0;
 
 long CurrentServerOffsetMsc()
   {
@@ -160,8 +161,14 @@ void OnTimer()
       g_terminal_id = ReadUtf8(payload, offset);
       g_connection_epoch = ReadInt64(payload, offset);
       string reconnect_pipe = ReadUtf8(payload, offset);
-      if(StringLen(reconnect_pipe) > 0)
+      if(StringLen(reconnect_pipe) > 0 && reconnect_pipe != g_pipe_name)
+        {
          g_pipe_name = reconnect_pipe;
+         g_route_failures = 0;
+         DisconnectPipe(false);
+         return;
+        }
+      g_route_failures = 0;
       g_welcomed = (StringLen(g_terminal_id) > 0 && g_connection_epoch > 0
          && StringLen(g_pipe_name) > 0);
       return;
@@ -227,7 +234,10 @@ bool ConnectPipe()
    string pipe_path = "\\\\.\\pipe\\" + g_pipe_name;
    g_pipe = FileOpen(pipe_path, FILE_READ|FILE_WRITE|FILE_BIN|FILE_ANSI);
    if(g_pipe == INVALID_HANDLE)
+     {
+      DisconnectPipe(true);
       return(false);
+     }
    g_welcomed = false;
    uchar hello[];
    AppendInt32(hello, MSG_HELLO);
@@ -246,12 +256,22 @@ bool ConnectPipe()
    return(true);
   }
 
-void DisconnectPipe()
+void DisconnectPipe(const bool route_failed = true)
   {
    if(g_pipe != INVALID_HANDLE)
       FileClose(g_pipe);
    g_pipe = INVALID_HANDLE;
-   g_pipe_name = InpPipeName;
+   if(route_failed && g_pipe_name != InpPipeName)
+     {
+      g_route_failures++;
+      if(g_route_failures >= 5)
+        {
+         g_pipe_name = InpPipeName;
+         g_route_failures = 0;
+        }
+     }
+   else if(g_pipe_name == InpPipeName)
+      g_route_failures = 0;
    g_welcomed = false;
    g_terminal_id = "";
    g_connection_epoch = 0;

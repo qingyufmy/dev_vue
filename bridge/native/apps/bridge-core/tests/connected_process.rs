@@ -1,5 +1,5 @@
 use bridge_contract::{AccountRef, CommandMessage, HelloAcknowledgement, HelloMessage};
-use bridge_foundation::{profile_instance_id, resolve_profile_paths};
+use bridge_foundation::{DEFAULT_PROFILE_ID, profile_instance_id, resolve_profile_paths};
 use bridge_preferences::BridgePreferencesStore;
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
@@ -347,6 +347,77 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     fs::remove_dir_all(root).expect("remove connected process fixture");
 }
 
+#[test]
+#[ignore = "requires an explicitly configured live MT4 demo terminal"]
+fn native_core_serves_live_mt4_history_from_sqlite_without_commands() {
+    let terminal_data_path = std::env::var_os("AURUM_MT4_TEST_DATA_PATH")
+        .map(PathBuf::from)
+        .expect("AURUM_MT4_TEST_DATA_PATH");
+    let broker_server = std::env::var("AURUM_MT4_TEST_SERVER").expect("AURUM_MT4_TEST_SERVER");
+    let login = std::env::var("AURUM_MT4_TEST_LOGIN").expect("AURUM_MT4_TEST_LOGIN");
+    assert!(terminal_data_path.is_absolute());
+    assert!(terminal_data_path.join("MQL4").is_dir());
+    assert!(broker_server.to_ascii_lowercase().contains("demo"));
+    assert!(!login.trim().is_empty());
+
+    let root = unique_test_directory();
+    let profile_id = DEFAULT_PROFILE_ID.to_owned();
+    let mut server = LoopbackBridgeServer::start_read_only();
+    let application = prepare_application(&root);
+    let paths = prepare_mt4_discovery_profile(&root, &server.control_url, &server.realtime_url);
+    let ready = root.join("mt4-ready.json");
+    let update_state_path = root.join("mt4-update-state.json");
+    let mut child = ChildGuard::spawn_for_discovery(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        &profile_id,
+        &ready,
+        &update_state_path,
+    );
+
+    wait_until(&mut child, Duration::from_secs(30), || {
+        ready.is_file() && server.saw_complete_history_payload("mt4_sqlite")
+    });
+    let ready_payload: Value =
+        serde_json::from_slice(&fs::read(&ready).expect("MT4 ready payload"))
+            .expect("MT4 ready json");
+    assert_eq!(ready_payload["ready"], true);
+    assert_eq!(ready_payload["server_connected"], true);
+    assert!(server.saw_data_response("history"));
+    assert!(server.saw_complete_history_payload("mt4_sqlite"));
+    assert!(
+        !server.saw_succeeded_command_result(),
+        "read-only acceptance must not receive a trade result"
+    );
+    let store = OutboxStore::open_existing(&paths.database_path).expect("open MT4 history store");
+    let bindings = store.terminal_bindings().expect("MT4 bindings");
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].platform, "mt4");
+    assert_eq!(bindings[0].account_ref.broker_server, broker_server);
+    assert_eq!(bindings[0].account_ref.login, login);
+    let runtime_status: Value = serde_json::from_slice(
+        &fs::read(paths.data_directory.join("runtime-status.json"))
+            .expect("MT4 runtime status payload"),
+    )
+    .expect("MT4 runtime status json");
+    assert_eq!(
+        runtime_status["terminals"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(runtime_status["terminals"][0]["state"], "ready");
+    drop(store);
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id(&profile_id).expect("MT4 instance id"),
+    )
+    .expect("request MT4 core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    server.stop();
+    fs::remove_dir_all(root).expect("remove live MT4 fixture");
+}
+
 struct ChildGuard(Option<Child>);
 
 impl ChildGuard {
@@ -383,8 +454,50 @@ impl ChildGuard {
         Self(Some(child))
     }
 
+    fn spawn_for_discovery(
+        executable: PathBuf,
+        root: &Path,
+        profile_id: &str,
+        ready: &Path,
+        update_state_path: &Path,
+    ) -> Self {
+        let child = Command::new(executable)
+            .args([
+                "--profile",
+                profile_id,
+                "--ready-file",
+                ready.to_str().expect("ready path"),
+            ])
+            .env("AURUM_BRIDGE_DATA_DIR", root)
+            .env("AURUM_BRIDGE_UPDATE_STATE_PATH", update_state_path)
+            .env("LOCALAPPDATA", root.join("local"))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn native MT4 core");
+        Self(Some(child))
+    }
+
     fn child_mut(&mut self) -> &mut Child {
         self.0.as_mut().expect("child available")
+    }
+
+    fn assert_running(&mut self) {
+        let status = self.child_mut().try_wait().expect("poll native core");
+        if status.is_some() {
+            let output = self
+                .0
+                .take()
+                .expect("child available")
+                .wait_with_output()
+                .expect("collect native core output");
+            panic!(
+                "native core exited early: status={:?} stdout={} stderr={}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     fn wait_with_output(&mut self) -> std::process::Output {
@@ -418,6 +531,14 @@ struct LoopbackBridgeServer {
 
 impl LoopbackBridgeServer {
     fn start() -> Self {
+        Self::start_with_commands(true)
+    }
+
+    fn start_read_only() -> Self {
+        Self::start_with_commands(false)
+    }
+
+    fn start_with_commands(send_commands: bool) -> Self {
         let disconnect_first = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let websocket_connections = Arc::new(AtomicUsize::new(0));
@@ -459,6 +580,7 @@ impl LoopbackBridgeServer {
                             websocket_connections,
                             command_sent,
                             message_types,
+                            send_commands,
                         )
                     );
                 });
@@ -522,6 +644,23 @@ impl LoopbackBridgeServer {
 
     fn saw_history_response(&self) -> bool {
         self.saw_data_response("history")
+    }
+
+    fn saw_complete_history_payload(&self, source: &str) -> bool {
+        self.message_types
+            .lock()
+            .expect("message types")
+            .iter()
+            .any(|value| {
+                let fields = value.split(':').collect::<Vec<_>>();
+                fields.len() == 6
+                    && fields[0] == "history_payload"
+                    && fields[1] == source
+                    && fields[2].parse::<usize>().is_ok_and(|count| count > 0)
+                    && fields[3].parse::<usize>().is_ok_and(|count| count > 0)
+                    && fields[4].parse::<usize>().is_ok_and(|size| size <= 20)
+                    && fields[5] == "true"
+            })
     }
 
     fn saw_data_response(&self, action: &str) -> bool {
@@ -627,6 +766,7 @@ async fn serve_realtime(
     websocket_connections: Arc<AtomicUsize>,
     command_sent: Arc<AtomicBool>,
     message_types: Arc<Mutex<Vec<String>>>,
+    send_commands: bool,
 ) {
     while !stop.load(Ordering::SeqCst) {
         let accepted = tokio::select! {
@@ -695,6 +835,7 @@ async fn serve_realtime(
         let mut acknowledged_initial_streams = BTreeSet::new();
         let mut acknowledgement_sequence = 0_u64;
         let mut history_requested = false;
+        let mut history_retry_sequence = 0_u32;
 
         loop {
             if stop.load(Ordering::SeqCst)
@@ -748,6 +889,47 @@ async fn serve_realtime(
                         }
                     };
                     message_types.lock().expect("message types").push(summary);
+                    if message_type == "data_response"
+                        && payload["action"] == "history"
+                        && payload["status"] == "succeeded"
+                    {
+                        let history = &payload["payload"];
+                        let history_complete = history["history_sync"]["complete"]
+                            .as_bool()
+                            .unwrap_or(false);
+                        message_types.lock().expect("message types").push(format!(
+                            "history_payload:{}:{}:{}:{}:{}",
+                            history["source"].as_str().unwrap_or("missing"),
+                            history["pagination"]["total_count"].as_u64().unwrap_or(0),
+                            history["orders"].as_array().map_or(0, Vec::len),
+                            history["pagination"]["page_size"].as_u64().unwrap_or(0),
+                            history_complete
+                        ));
+                        if !send_commands && !history_complete && history_retry_sequence < 100 {
+                            history_retry_sequence += 1;
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            socket
+                                .send(Message::Text(
+                                    serde_json::json!({
+                                        "type": "data_request",
+                                        "message_id": format!("history-retry-{history_retry_sequence}"),
+                                        "server_request_id": format!("history-retry-{history_retry_sequence}"),
+                                        "terminal_instance_id": payload["terminal_instance_id"],
+                                        "connection_epoch": payload["connection_epoch"],
+                                        "action": "history",
+                                        "parameters": {
+                                            "page": 1,
+                                            "page_size": 20,
+                                            "include_deals": true
+                                        }
+                                    })
+                                    .to_string()
+                                    .into(),
+                                ))
+                                .await
+                                .expect("history retry send");
+                        }
+                    }
                     if message_type == "command_result" {
                         message_types.lock().expect("message types").push(format!(
                             "command_result_id:{}:{}",
@@ -886,7 +1068,10 @@ async fn serve_realtime(
                                     .expect("market data request send");
                             }
                         }
-                        if initial_ready && !command_sent.swap(true, Ordering::SeqCst) {
+                        if initial_ready
+                            && send_commands
+                            && !command_sent.swap(true, Ordering::SeqCst)
+                        {
                             let now = now_utc_msc();
                             socket
                                 .send(Message::Text(
@@ -1148,17 +1333,44 @@ fn prepare_profile(
     paths
 }
 
+fn prepare_mt4_discovery_profile(
+    root: &Path,
+    control_url: &str,
+    realtime_url: &str,
+) -> bridge_foundation::BridgeProfilePaths {
+    let paths = resolve_profile_paths(root, DEFAULT_PROFILE_ID).expect("MT4 profile paths");
+    CredentialStore::new(&paths.credential_path)
+        .expect("MT4 credential store")
+        .save(&BridgeCredential {
+            refresh_token: "r".repeat(48),
+            expires_at_utc_msc: 1_900_000_000_000,
+        })
+        .expect("MT4 credential");
+    OutboxStore::open_or_create(&paths.database_path).expect("MT4 store");
+    let preferences = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("MT4 preferences store");
+    preferences.save_platform("mt4").expect("MT4 platform");
+    fs::create_dir_all(&paths.root_data_directory).expect("MT4 root data directory");
+    fs::write(
+        paths.root_data_directory.join("endpoint-settings.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "control_url": control_url,
+            "realtime_url": realtime_url,
+        }))
+        .expect("MT4 endpoint json"),
+    )
+    .expect("MT4 endpoint settings");
+    paths
+}
+
 fn wait_until<F>(child: &mut ChildGuard, timeout: Duration, mut condition: F)
 where
     F: FnMut() -> bool,
 {
     let deadline = Instant::now() + timeout;
     loop {
-        assert_eq!(
-            child.child_mut().try_wait().expect("poll native core"),
-            None,
-            "native core exited early"
-        );
+        child.assert_running();
         if condition() {
             return;
         }
