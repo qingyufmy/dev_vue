@@ -32,6 +32,17 @@ use windows_sys::Win32::System::Threading::{
 };
 
 const RECOVERED_COMMAND_ID: &str = "command_01JRECOVER01";
+const CONNECTED_COMMAND_ID: &str = "command_01JCONNECTED1";
+const ROUND_TRIP_CLOSE_COMMAND_ID: &str = "command_01JCONNECTED2";
+
+#[derive(Clone)]
+struct RoundTripCommand {
+    symbol: String,
+    side: String,
+    volume: f64,
+    magic: i64,
+    comment: String,
+}
 
 #[test]
 fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
@@ -497,6 +508,112 @@ fn native_core_returns_and_acks_a_live_mt4_pretrade_rejection() {
 }
 
 #[test]
+#[ignore = "requires an explicitly configured live MT4 demo terminal and sends one market round trip"]
+fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
+    let terminal_data_path = std::env::var_os("AURUM_MT4_TEST_DATA_PATH")
+        .map(PathBuf::from)
+        .expect("AURUM_MT4_TEST_DATA_PATH");
+    let broker_server = std::env::var("AURUM_MT4_TEST_SERVER").expect("AURUM_MT4_TEST_SERVER");
+    let login = std::env::var("AURUM_MT4_TEST_LOGIN").expect("AURUM_MT4_TEST_LOGIN");
+    assert!(terminal_data_path.is_absolute());
+    assert!(terminal_data_path.join("MQL4").is_dir());
+    assert!(broker_server.to_ascii_lowercase().contains("demo"));
+    assert!(!login.trim().is_empty());
+
+    let marker = "AURUM:CORE-MT4-ROUNDTRIP";
+    let magic = 923_413;
+    let root = unique_test_directory();
+    let profile_id = DEFAULT_PROFILE_ID.to_owned();
+    let mut server = LoopbackBridgeServer::start_with_round_trip(RoundTripCommand {
+        symbol: "XAUUSD".to_owned(),
+        side: "buy".to_owned(),
+        volume: 0.01,
+        magic,
+        comment: marker.to_owned(),
+    });
+    let application = prepare_application(&root);
+    let paths = prepare_mt4_discovery_profile(&root, &server.control_url, &server.realtime_url);
+    let ready = root.join("mt4-round-trip-ready.json");
+    let update_state_path = root.join("mt4-round-trip-update-state.json");
+    let mut child = ChildGuard::spawn_for_discovery(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        &profile_id,
+        &ready,
+        &update_state_path,
+    );
+
+    wait_until(&mut child, Duration::from_secs(30), || {
+        ready.is_file()
+            && server.saw_command_result(CONNECTED_COMMAND_ID, "succeeded", "none")
+            && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
+            && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
+            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
+    });
+    thread::sleep(Duration::from_millis(500));
+    let store =
+        OutboxStore::open_existing(&paths.database_path).expect("open MT4 round-trip store");
+    for command_id in [CONNECTED_COMMAND_ID, ROUND_TRIP_CLOSE_COMMAND_ID] {
+        let ledger = store
+            .command_ledger(command_id)
+            .expect("MT4 round-trip ledger")
+            .expect("MT4 round-trip command");
+        assert_eq!(ledger.status, "acked");
+    }
+    let open_receipt = store
+        .execution_receipt(CONNECTED_COMMAND_ID)
+        .expect("MT4 open receipt")
+        .expect("MT4 open result");
+    let close_receipt = store
+        .execution_receipt(ROUND_TRIP_CLOSE_COMMAND_ID)
+        .expect("MT4 close receipt")
+        .expect("MT4 close result");
+    assert_eq!(open_receipt.status, "succeeded");
+    assert_eq!(close_receipt.status, "succeeded");
+    assert_eq!(open_receipt.evidence.broker_retcode, Some(0));
+    assert_eq!(close_receipt.evidence.broker_retcode, Some(0));
+    let open_ticket = open_receipt
+        .evidence
+        .order_tickets
+        .first()
+        .expect("MT4 opened ticket");
+    let closed_ticket = close_receipt
+        .evidence
+        .position_tickets
+        .first()
+        .expect("MT4 closed ticket");
+    assert_eq!(closed_ticket, open_ticket);
+    let bindings = store.terminal_bindings().expect("MT4 round-trip bindings");
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].platform, "mt4");
+    assert_eq!(bindings[0].account_ref.broker_server, broker_server);
+    assert_eq!(bindings[0].account_ref.login, login);
+    let projection = store
+        .load_terminal_projection(
+            &bindings[0].terminal_instance_id,
+            &bindings[0].account_ref,
+            bindings[0].connection_epoch,
+        )
+        .expect("MT4 round-trip projection");
+    let active_state =
+        serde_json::to_string(&(projection.positions.items, projection.orders.items))
+            .expect("MT4 round-trip active state json");
+    assert!(!active_state.contains(marker));
+    assert!(!active_state.contains(&magic.to_string()));
+    drop(store);
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id(&profile_id).expect("MT4 round-trip instance id"),
+    )
+    .expect("request MT4 round-trip core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    server.stop();
+    fs::remove_dir_all(root).expect("remove live MT4 round-trip fixture");
+}
+
+#[test]
 #[ignore = "requires an explicitly configured live MT5 demo terminal and bundled Python runtime"]
 fn native_core_serves_live_mt5_history_from_sqlite_without_commands() {
     let terminal_path = std::env::var_os("AURUM_MT5_TEST_TERMINAL")
@@ -787,18 +904,33 @@ struct LoopbackBridgeServer {
 
 impl LoopbackBridgeServer {
     fn start() -> Self {
-        Self::start_with_commands(true, None)
+        Self::start_with_commands(true, None, None)
     }
 
     fn start_read_only() -> Self {
-        Self::start_with_commands(false, None)
+        Self::start_with_commands(false, None, None)
     }
 
     fn start_with_rejected_command(params: Value) -> Self {
-        Self::start_with_commands(false, Some(params))
+        Self::start_with_commands(false, Some(params), None)
     }
 
-    fn start_with_commands(send_commands: bool, command_override: Option<Value>) -> Self {
+    fn start_with_round_trip(command: RoundTripCommand) -> Self {
+        let params = serde_json::json!({
+            "symbol": command.symbol,
+            "side": command.side,
+            "volume": command.volume,
+            "magic": command.magic,
+            "comment": command.comment,
+        });
+        Self::start_with_commands(false, Some(params), Some(command))
+    }
+
+    fn start_with_commands(
+        send_commands: bool,
+        command_override: Option<Value>,
+        round_trip: Option<RoundTripCommand>,
+    ) -> Self {
         let disconnect_first = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let websocket_connections = Arc::new(AtomicUsize::new(0));
@@ -842,6 +974,7 @@ impl LoopbackBridgeServer {
                             message_types,
                             send_commands,
                             command_override,
+                            round_trip,
                         })
                     );
                 });
@@ -1042,6 +1175,7 @@ struct RealtimeFixture {
     message_types: Arc<Mutex<Vec<String>>>,
     send_commands: bool,
     command_override: Option<Value>,
+    round_trip: Option<RoundTripCommand>,
 }
 
 #[allow(clippy::result_large_err)]
@@ -1055,6 +1189,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
         message_types,
         send_commands,
         command_override,
+        round_trip,
     } = fixture;
     while !stop.load(Ordering::SeqCst) {
         let accepted = tokio::select! {
@@ -1387,7 +1522,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                         "type": "command",
                                         "message_id": "message_01JCONNECTED1",
                                         "sent_at_utc_msc": now,
-                                        "command_id": "command_01JCONNECTED1",
+                                        "command_id": CONNECTED_COMMAND_ID,
                                         "terminal_instance_id": terminal.terminal_instance_id,
                                         "account_ref": terminal.account_ref,
                                         "connection_epoch": terminal.connection_epoch,
@@ -1423,6 +1558,56 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                             ))
                             .await
                             .expect("command result acknowledgement send");
+                        if payload["command_id"] == CONNECTED_COMMAND_ID
+                            && payload["status"] == "succeeded"
+                            && let Some(round_trip) = round_trip.as_ref()
+                        {
+                            let ticket = payload["evidence"]["order_tickets"]
+                                .as_array()
+                                .and_then(|tickets| tickets.first())
+                                .and_then(|ticket| {
+                                    ticket
+                                        .as_str()
+                                        .map(str::to_owned)
+                                        .or_else(|| ticket.as_i64().map(|value| value.to_string()))
+                                })
+                                .expect("round-trip open ticket");
+                            let now = now_utc_msc();
+                            socket
+                                .send(Message::Text(
+                                    serde_json::json!({
+                                        "v": 3,
+                                        "type": "command",
+                                        "message_id": "message_01JCONNECTED2",
+                                        "sent_at_utc_msc": now,
+                                        "command_id": ROUND_TRIP_CLOSE_COMMAND_ID,
+                                        "terminal_instance_id": terminal.terminal_instance_id,
+                                        "account_ref": terminal.account_ref,
+                                        "connection_epoch": terminal.connection_epoch,
+                                        "issued_at_utc_msc": now,
+                                        "deadline_utc_msc": now + 30_000,
+                                        "action": "close_position",
+                                        "params": {
+                                            "ticket": ticket,
+                                            "symbol": round_trip.symbol,
+                                            "side": round_trip.side,
+                                            "volume": round_trip.volume,
+                                            "magic": round_trip.magic,
+                                            "expected_state": {
+                                                "ticket": ticket,
+                                                "symbol": round_trip.symbol,
+                                                "direction": round_trip.side,
+                                                "volume": round_trip.volume,
+                                                "magic": round_trip.magic
+                                            }
+                                        }
+                                    })
+                                    .to_string()
+                                    .into(),
+                                ))
+                                .await
+                                .expect("round-trip close command send");
+                        }
                     }
                 }
             }
