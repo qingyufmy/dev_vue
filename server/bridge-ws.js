@@ -734,6 +734,7 @@ export function getPlatformMarketClockState(userId, tradingAccountId = null) {
       last_seen_at_utc_msc:bridge.lastSeen || null,
       broker_server:bridge.brokerServer || null,
       account_login:bridge.accountLogin || null,
+      platform:String(hb.platform || bridge.platform || bridgePlatform(numericUserId, tradingAccountId) || '').trim().toLowerCase() || null,
     }
   }
   const route = getBridgeDataRoute(numericUserId, tradingAccountId, {
@@ -751,6 +752,7 @@ export function getPlatformMarketClockState(userId, tradingAccountId = null) {
     last_seen_at_utc_msc:userConnection?.lastSeen || null,
     broker_server:route?.account_ref?.broker_server || null,
     account_login:route?.account_ref?.login || null,
+    platform:String(route?.platform || bridgePlatform(numericUserId, tradingAccountId) || '').trim().toLowerCase() || null,
   }
 }
 

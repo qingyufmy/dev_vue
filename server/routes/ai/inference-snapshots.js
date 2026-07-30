@@ -96,8 +96,11 @@ function stripEmbeddedKlines(market) {
   return result
 }
 
-function byteLength(value) {
-  return Buffer.byteLength(JSON.stringify(value), 'utf8')
+function snapshotStorageByteLength(stored) {
+  return Buffer.byteLength(String(stored?.system_prompt || ''), 'utf8')
+    + Buffer.byteLength(String(stored?.user_prompt || ''), 'utf8')
+    + Buffer.byteLength(JSON.stringify(stored?.market_snapshot || {}), 'utf8')
+    + Buffer.byteLength(encodeSnapshotJson(stored?.klines || {}), 'utf8')
 }
 
 export function encodeSnapshotJson(value, minimumBytes = SNAPSHOT_COMPRESSION_MIN_BYTES) {
@@ -136,13 +139,13 @@ function fitKlinesToSnapshotBudget(stored, maxBytes, minimumBars = 50) {
     return { ...stored, klines }
   }
   let best = buildCandidate(0)
-  if (byteLength(best) > maxBytes) return best
+  if (snapshotStorageByteLength(best) > maxBytes) return best
   let low = 0
   let high = 1
   for (let index = 0; index < 16; index += 1) {
     const middle = (low + high) / 2
     const candidate = buildCandidate(middle)
-    if (byteLength(candidate) <= maxBytes) {
+    if (snapshotStorageByteLength(candidate) <= maxBytes) {
       best = candidate
       low = middle
     } else {
@@ -163,28 +166,26 @@ export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHO
   // required to position Chan structures accurately.
   let stored = { ...full, market_snapshot: stripEmbeddedKlines(full.market_snapshot) }
   const omitted = []
-  if (byteLength(stored) > maxBytes) {
+  if (snapshotStorageByteLength(stored) > maxBytes) {
     stored = fitKlinesToSnapshotBudget(stored, maxBytes)
     omitted.push('klines_before_retained_window')
   }
-  if (byteLength(stored) > maxBytes) {
+  if (snapshotStorageByteLength(stored) > maxBytes) {
     stored.user_prompt = `[evidence omitted; sha256=${sha256(full.user_prompt)}]`
     omitted.push('rendered_user_prompt_body')
   }
-  if (byteLength(stored) > maxBytes) {
+  if (snapshotStorageByteLength(stored) > maxBytes) {
     stored.market_snapshot = { evidence_ref: `sha256:${sha256(JSON.stringify(full.market_snapshot))}` }
     omitted.push('market_snapshot_body')
   }
-  if (byteLength(stored) > maxBytes) {
+  if (snapshotStorageByteLength(stored) > maxBytes) {
     stored.system_prompt = `[evidence omitted; sha256=${sha256(full.system_prompt)}]`
     omitted.push('rendered_system_prompt_body')
   }
-  if (byteLength(stored) > maxBytes) throw new Error('inference_snapshot_exceeds_hard_limit')
-  // Trimming only the duplicated visualization K-line prefix does not remove
-  // the actual model input: the rendered prompts and technical snapshot are
-  // still retained verbatim. Treat only omitted prompt/snapshot bodies as a
-  // loss of review evidence.
-  const criticalOmissions = omitted.filter(field => field !== 'klines_before_retained_window')
+  if (snapshotStorageByteLength(stored) > maxBytes) throw new Error('inference_snapshot_exceeds_hard_limit')
+  // Any K-line prefix removal prevents exact Chan replay, even when the model
+  // only saw a shorter rendered excerpt. Mark it incomplete instead of
+  // presenting a chart-safe but structurally truncated snapshot as complete.
   return {
     ...input,
     systemPrompt: stored.system_prompt,
@@ -193,9 +194,9 @@ export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHO
     klines: stored.klines,
     promptHash: sha256(`${full.system_prompt}\n${full.user_prompt}`),
     contentHash,
-    evidenceStatus: criticalOmissions.length ? 'incomplete' : 'complete',
+    evidenceStatus: omitted.length ? 'incomplete' : 'complete',
     omittedFields: omitted,
-    byteSize: byteLength(stored),
+    byteSize: snapshotStorageByteLength(stored),
   }
 }
 

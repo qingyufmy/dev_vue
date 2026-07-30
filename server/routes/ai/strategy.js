@@ -391,6 +391,54 @@ export function resolveChanHistoryCount(userId, symbol, timeframe, requestedCoun
   return Math.max(requestedCount, preferred)
 }
 
+export function chanNeedsMoreHistory(chan) {
+  if (!chan) return false
+  const anchor = chan.structure_anchor || {}
+  const trustedAnchorMatched = anchor.matched === true
+    && Number(anchor.requested_time_utc_msc) > 0
+  if (trustedAnchorMatched) return false
+  const sourceHistoryCount = Number(chan.source_history_count || chan.received_history_count || 0)
+  const centerEntryMissing = !chan.latest_center?.entry_segment_stable_id
+    || !(Number(chan.latest_center?.entry_segment_id) > 0)
+  const recommendedAnchorMissing = !(Number(anchor.recommended_time_utc_msc) > 0)
+  return sourceHistoryCount < CHAN_MAX_HISTORY_COUNT
+    || Number(chan.segment_count) === 0
+    || Number(chan.center_count) === 0
+    || centerEntryMissing
+    || recommendedAnchorMissing
+}
+
+export function shouldPersistChanAnchor(useChan, chan, chanDataQuality) {
+  const anchor = chan?.structure_anchor || {}
+  const warnings = new Set(Array.isArray(chan?.warnings) ? chan.warnings : [])
+  const structureTimeKeyReliable = chan?.structure_time_key_reliable === true
+    || (chan?.structure_time_key_reliable == null && chan?.time_location_reliable === true)
+  return Boolean(useChan && chan?.window_stable === true && Number(chan?.segment_count) >= 2
+    && Number(chan?.source_history_count) >= CHAN_MAX_HISTORY_COUNT
+    && chan?.history_sufficient === true
+    && chan?.closed_history_sufficient === true
+    && structureTimeKeyReliable
+    && chan?.cache_internal_gap_unresolved === false
+    && chan?.reliability !== 'low'
+    && !warnings.has('confirmed_structure_stale')
+    && chan?.authoritative_terminal_chain_confirmed === true
+    && Number(anchor.recommended_time_utc_msc) > 0
+    && anchor.full_window_authoritative === true
+    && anchor.bootstrap_state === 'confirmed'
+    && anchor.bootstrap_identity
+    && anchor.bootstrap_core_stable_id
+    && anchor.bootstrap_entry_segment_stable_id
+    && Number(anchor.bootstrap_entry_start_time_utc_msc) === Number(anchor.recommended_time_utc_msc)
+    && Number(anchor.last_confirmed_segment_time_utc_msc) >= Number(anchor.recommended_time_utc_msc)
+    && Number(anchor.bootstrap_observation_time_utc_msc) >= Number(anchor.last_confirmed_segment_time_utc_msc)
+    && Number(chan?.temporal_closed_bar_support) >= 3
+    && Number(chan?.temporal_closed_bar_validator_count) >= 3
+    && chan?.temporal_identity_stable === true
+    && Number(chan?.cross_window_entry_support_count) >= 2
+    && Number(chan?.cross_window_entry_support_count) * 2 > Number(chan?.cross_window_entry_validator_count)
+    && Number(chanDataQuality?.source_id) > 0)
+}
+
 export function buildChanTimeframeAlignment(timeframes, primaryTimeframe, contextStatus = 'complete') {
   const frames = Object.entries(timeframes || {})
     .map(([timeframe, value]) => ({ timeframe, chan: value?.summary?.chan }))
@@ -536,8 +584,8 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
       requestedChanHistoryCount: historyCount,
       chanDataQuality,
     })
-    const chanNeedsMoreHistory = summary.chan && (summary.chan.segment_count === 0 || summary.chan.center_count === 0)
-    if (useChan && historyCount < CHAN_MAX_HISTORY_COUNT && (rates.length < historyCount || chanNeedsMoreHistory)) {
+    const needsMoreChanHistory = chanNeedsMoreHistory(summary.chan)
+    if (useChan && historyCount < CHAN_MAX_HISTORY_COUNT && (rates.length < historyCount || needsMoreChanHistory)) {
       rememberChanMaxHistory(historyHintKey)
       if (rates.length < CHAN_MAX_HISTORY_COUNT) {
         const retry = await platformRates(userId, { symbol, timeframe: tf, count: CHAN_MAX_HISTORY_COUNT })
@@ -555,7 +603,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
         }
       }
     }
-    if (useChan && summary.chan?.structure_anchor?.recommended_time_utc_msc && chanDataQuality?.source_id) {
+    if (shouldPersistChanAnchor(useChan, summary.chan, chanDataQuality)) {
       await saveChanStructureAnchor(chanDataQuality.source_id, symbol, tf, summary.chan.structure_anchor).catch(error => {
         console.warn(`[Chan] Failed to persist structure anchor for ${symbol} ${tf}: ${error.message}`)
       })

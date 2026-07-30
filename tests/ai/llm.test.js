@@ -101,6 +101,14 @@ describe('experience usage normalization', () => {
     expect(`${result.analysis}${result.reasoning}`).not.toMatch(/agreement|insufficient|unreliable_segments|reliability=/i)
     expect(localizeInferenceNarrative('H4 status=unreliable_segments，window_stable=false，alignment_with_higher=conflict'))
       .toBe('H4 线段结构尚不可靠，结构窗口不稳定，与高周期方向冲突')
+    expect(localizeInferenceNarrative('H1 status=segment_history_unresolved，segment_cross_window_unstable'))
+      .toBe('H1 历史窗口尚未收敛，暂不确认线段，不同历史窗口的线段边界尚未收敛')
+    expect(localizeInferenceNarrative('center_entry_unconfirmed；divergence_evidence_unavailable'))
+      .toBe('中枢已确认，但进入段缺少跨窗口共识，仅背驰暂不可判；背驰所需的有效力度证据不足')
+    expect(localizeInferenceNarrative('center_cross_window_unstable；forming_evidence_unavailable'))
+      .toBe('不同历史窗口对中枢形成核心尚未达成共识；候选背驰所需的有效证据不足')
+    expect(localizeInferenceNarrative('structure_anchor_bootstrap_pending'))
+      .toBe('结构锚点正在用连续三根已收盘K线确认，暂不使用依赖进入段的背驰与买卖点')
   })
 
   it('drops hallucinated experience ids from model output', () => {
@@ -860,6 +868,13 @@ describe('maybeAiSignal', () => {
     expect(body.messages[0].content).toContain('forming_divergence')
     expect(body.messages[0].content).toContain('entry_candidates')
     expect(body.messages[0].content).toContain('chan_timeframe_alignment')
+    expect(body.messages[0].content).toContain('连续三条已确认线段')
+    expect(body.messages[0].content).toContain('候选线段、单笔重叠和未确认结构不得称为中枢')
+    expect(body.messages[0].content).toContain('bi_center_count')
+    expect(body.messages[0].content).toContain('segment_history_unresolved')
+    expect(body.messages[0].content).toContain('必须区分“结构拓扑可靠”和“绝对时间定位精度”')
+    expect(body.messages[0].content).toContain('structure_topology_reliable=true')
+    expect(body.messages[0].content).toContain('不得仅因 time_location_reliable=false')
   })
 
   it('结构化开关启用时payload保留chan', async () => {

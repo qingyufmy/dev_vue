@@ -4345,6 +4345,39 @@ const migrations = [
         SET status = 'EXPIRED', completed_at = COALESCE(completed_at, NOW()), updated_at = NOW()
         WHERE task_type = 'pending_cancel' AND status = 'CANDIDATE'`)
     }
+  },
+  {
+    id: '149_chan_structure_anchor_version',
+    async up() {
+      const columns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chan_structure_anchors'
+          AND COLUMN_NAME = 'algorithm_version'`)
+      if (!columns.length) {
+        await queryRun(`ALTER TABLE chan_structure_anchors
+          ADD COLUMN algorithm_version VARCHAR(64) NOT NULL DEFAULT 'legacy' AFTER timeframe`)
+      }
+    }
+  },
+  {
+    id: '150_chan_structure_anchor_identity',
+    async up() {
+      const columns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chan_structure_anchors'
+          AND COLUMN_NAME IN ('bootstrap_core_stable_id', 'bootstrap_entry_segment_stable_id',
+            'bootstrap_observation_time_utc_msc')`)
+      const existing = new Set(columns.map(row => String(row.COLUMN_NAME)))
+      const additions = []
+      if (!existing.has('bootstrap_core_stable_id')) {
+        additions.push('ADD COLUMN bootstrap_core_stable_id VARCHAR(1024) DEFAULT NULL AFTER last_confirmed_segment_time_utc_msc')
+      }
+      if (!existing.has('bootstrap_entry_segment_stable_id')) {
+        additions.push('ADD COLUMN bootstrap_entry_segment_stable_id VARCHAR(255) DEFAULT NULL AFTER bootstrap_core_stable_id')
+      }
+      if (!existing.has('bootstrap_observation_time_utc_msc')) {
+        additions.push('ADD COLUMN bootstrap_observation_time_utc_msc BIGINT DEFAULT NULL AFTER bootstrap_entry_segment_stable_id')
+      }
+      if (additions.length) await queryRun(`ALTER TABLE chan_structure_anchors ${additions.join(', ')}`)
+    }
   }
 ]
 

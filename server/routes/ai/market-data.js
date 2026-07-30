@@ -2,7 +2,7 @@
 
 import { beijingNow } from '../../db.js'
 import { sendBridgeCommand } from '../../bridge-ws.js'
-import { round2, round3, round5, clamp, compactRates } from './utils.js'
+import { CHAN_ALGORITHM_VERSION, round2, round3, round5, clamp, compactRates } from './utils.js'
 
 export function computeAtr14(rates) {
   if (!Array.isArray(rates) || rates.length < 2) return 0
@@ -31,6 +31,13 @@ const DIVERGENCE_MIN_PEAK_RATIO = 0.95
 const MACD_WARMUP_BARS = 40
 const CHAN_ENTRY_MAX_AGE_BARS = 20
 const CHAN_STRUCTURE_MAX_AGE_BARS = 120
+const CHAN_BOOTSTRAP_MAX_BARS = 2000
+// Four center segments, two resynchronization segments and MACD warm-up need
+// about 130 bars at the theoretical minimum. Keep a conservative 150-bar
+// prefix before center evidence so boundary-truncated windows do not vote.
+const CHAN_CENTER_MIN_CONTEXT_BARS = 150
+const MT4_CLOCK_SAMPLE_MAX_AGE_MS = 5 * 60 * 1000
+const CHAN_RULE_PROFILE = 'new_bi_feature_sequence_quorum'
 const DEBUG_CHAN = process.env.DEBUG_CHAN === '1'
 
 function roundMacdEvidence(value) {
@@ -76,7 +83,11 @@ function normalizeBarsForChan(rates) {
     const c = parseFloat(rates[i].close)
     if (!Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(o) || !Number.isFinite(c)) continue
     if (h < l) continue
-    bars.push({ idx: bars.length, raw_idx: i, raw_start_idx: i, raw_end_idx: i, high: h, low: l, open: o, close: c, time: rates[i].time })
+    bars.push({
+      idx: bars.length, raw_idx: i, raw_start_idx: i, raw_end_idx: i,
+      high_raw_idx: i, low_raw_idx: i,
+      high: h, low: l, open: o, close: c, time: rates[i].time,
+    })
   }
   if (bars.length < 3) return bars.map((bar, idx) => ({ ...bar, idx }))
 
@@ -101,9 +112,23 @@ function normalizeBarsForChan(rates) {
         direction = inferInitialDirection(prev, i + 1)
       }
       if (direction > 0) {
-        merged[merged.length - 1] = { ...prev, high: Math.max(prev.high, cur.high), low: Math.max(prev.low, cur.low), raw_end_idx: cur.raw_end_idx }
+        merged[merged.length - 1] = {
+          ...prev,
+          high: Math.max(prev.high, cur.high),
+          low: Math.max(prev.low, cur.low),
+          high_raw_idx: prev.high >= cur.high ? prev.high_raw_idx : cur.high_raw_idx,
+          low_raw_idx: prev.low >= cur.low ? prev.low_raw_idx : cur.low_raw_idx,
+          raw_end_idx: cur.raw_end_idx,
+        }
       } else {
-        merged[merged.length - 1] = { ...prev, high: Math.min(prev.high, cur.high), low: Math.min(prev.low, cur.low), raw_end_idx: cur.raw_end_idx }
+        merged[merged.length - 1] = {
+          ...prev,
+          high: Math.min(prev.high, cur.high),
+          low: Math.min(prev.low, cur.low),
+          high_raw_idx: prev.high <= cur.high ? prev.high_raw_idx : cur.high_raw_idx,
+          low_raw_idx: prev.low <= cur.low ? prev.low_raw_idx : cur.low_raw_idx,
+          raw_end_idx: cur.raw_end_idx,
+        }
       }
     } else {
       direction = cur.high > prev.high ? 1 : -1
@@ -121,9 +146,9 @@ function detectFractals(bars) {
   for (let i = 1; i < bars.length - 1; i++) {
     const p = bars[i - 1], c = bars[i], n = bars[i + 1]
     if (c.high > p.high && c.high > n.high && c.low > p.low && c.low > n.low) {
-      fractals.push({ idx: c.idx, raw_start_idx: c.raw_start_idx, raw_end_idx: c.raw_end_idx, type: 'top', price: c.high, high: c.high, low: c.low, time: c.time })
+      fractals.push({ idx: c.idx, raw_start_idx: c.raw_start_idx, raw_end_idx: c.raw_end_idx, extreme_raw_idx: c.high_raw_idx, type: 'top', price: c.high, high: c.high, low: c.low, time: c.time })
     } else if (c.low < p.low && c.low < n.low && c.high < p.high && c.high < n.high) {
-      fractals.push({ idx: c.idx, raw_start_idx: c.raw_start_idx, raw_end_idx: c.raw_end_idx, type: 'bottom', price: c.low, high: c.high, low: c.low, time: c.time })
+      fractals.push({ idx: c.idx, raw_start_idx: c.raw_start_idx, raw_end_idx: c.raw_end_idx, extreme_raw_idx: c.low_raw_idx, type: 'bottom', price: c.low, high: c.high, low: c.low, time: c.time })
     }
   }
   // Ensure alternating and deduplicate same-type
@@ -153,43 +178,63 @@ function buildBis(fractals, bars) {
         pivots[pivots.length - 1] = f
       }
     } else {
-      if (f.idx - last.idx >= MIN_BARS_PER_BI - 1) {
+      const lastExtremeRawIndex = Number(last.extreme_raw_idx ?? last.raw_idx ?? last.raw_start_idx)
+      const currentExtremeRawIndex = Number(f.extreme_raw_idx ?? f.raw_idx ?? f.raw_start_idx)
+      const rawDistance = Number.isFinite(lastExtremeRawIndex) && Number.isFinite(currentExtremeRawIndex)
+        ? currentExtremeRawIndex - lastExtremeRawIndex
+        : f.idx - last.idx
+      if (rawDistance >= MIN_BARS_PER_BI - 1) {
         pivots.push(f)
       }
     }
   }
   const bis = []
+  const runs = []
   let invalidCount = 0
+  let runId = 1
+  let currentRun = []
+  let lastDiscontinuity = null
   let anchor = pivots[0]
   for (let i = 1; i < pivots.length; i++) {
     const s = anchor, e = pivots[i]
     const dir = s.type === 'bottom' ? 'up' : 'down'
     if ((dir === 'up' && e.price <= s.price) || (dir === 'down' && e.price >= s.price)) {
       invalidCount++
-      // The price topology is discontinuous. Restart from the newer pivot so
-      // confirmed bis before and after the break cannot enter one structure.
-      bis.length = 0
+      // Keep the confirmed prefix for audit/history, but start a new isolated
+      // run. Segments are never allowed to cross a discontinuous price jump.
+      if (currentRun.length > 0) runs.push(currentRun)
+      currentRun = []
+      runId++
+      lastDiscontinuity = {
+        pivot_index: i,
+        processed_index: Number(e.idx),
+        raw_index: Number(e.raw_start_idx ?? e.raw_idx),
+      }
       anchor = e
       continue
     }
-    bis.push({
+    const bi = {
       id: bis.length + 1, dir,
+      run_id: runId,
       start_idx: s.idx, end_idx: e.idx,
-      raw_start_idx: Math.min(s.raw_start_idx ?? s.raw_idx, e.raw_start_idx ?? e.raw_idx),
-      raw_end_idx: Math.max(s.raw_end_idx ?? s.raw_idx, e.raw_end_idx ?? e.raw_idx),
+      raw_start_idx: Math.min(s.extreme_raw_idx ?? s.raw_idx ?? s.raw_start_idx, e.extreme_raw_idx ?? e.raw_idx ?? e.raw_start_idx),
+      raw_end_idx: Math.max(s.extreme_raw_idx ?? s.raw_idx ?? s.raw_end_idx, e.extreme_raw_idx ?? e.raw_idx ?? e.raw_end_idx),
       start_price: s.price, end_price: e.price,
       high: Math.max(s.high, e.high), low: Math.min(s.low, e.low),
       confirmed: true,
-    })
+    }
+    bis.push(bi)
+    currentRun.push(bi)
     anchor = e
   }
+  if (currentRun.length > 0) runs.push(currentRun)
   if (DEBUG_CHAN) console.log(`[Chan] Bis(${bis.length}, invalid=${invalidCount}): ${bis.map(b => `${b.id}${b.dir[0]} ${b.start_price}→${b.end_price}${b.confirmed ? '' : '*'}`).join(' | ')}`)
-  return { bis, invalidCount, activePivot: anchor || null }
+  return { bis, runs, invalidCount, activeRunId: runId, activePivot: anchor || null, lastDiscontinuity }
 }
 
 function buildDevelopingBi(activePivot, rates) {
   if (!activePivot || !Array.isArray(rates) || rates.length === 0) return null
-  const pivotRawEnd = Number(activePivot.raw_end_idx ?? activePivot.raw_idx)
+  const pivotRawEnd = Number(activePivot.extreme_raw_idx ?? activePivot.raw_end_idx ?? activePivot.raw_idx)
   const afterPivotIndex = Number.isFinite(pivotRawEnd) ? pivotRawEnd + 1 : rates.length - 1
   const developingRates = rates.slice(Math.max(afterPivotIndex, 0))
   if (activePivot.type === 'bottom') {
@@ -347,16 +392,19 @@ function buildSegmentsFromAnchor(confirmedBis, options = {}) {
   const segments = []
   let startIndex = 0
   let resynced = false
+  let resyncEndpointCount = 0
   while (startIndex + MIN_BIS_PER_SEGMENT <= confirmedBis.length) {
     const dir = confirmedBis[startIndex].dir
     const endpoint = findSegmentEndpoint(confirmedBis, startIndex, dir)
     if (!endpoint) break
-    if (!trustedStart && !resynced && segments.length === 0) {
+    if (!trustedStart && resyncEndpointCount < 2 && segments.length === 0) {
       // A rolling rates window normally starts in the middle of an older
-      // segment. Use its first detectable endpoint only as the structure
-      // anchor; emitting the truncated prefix would repaint history.
+      // segment. The first apparent endpoint can itself depend on the missing
+      // prefix, so consume two complete endpoint transitions before emitting
+      // confirmation-grade segments.
       startIndex = endpoint.endpointIndex
-      resynced = true
+      resyncEndpointCount++
+      resynced = resyncEndpointCount >= 2
       continue
     }
     const segBis = confirmedBis.slice(startIndex, endpoint.endpointIndex)
@@ -413,68 +461,179 @@ function sameCandidate(a, b) {
   return a.bi_ids.length === b.bi_ids.length && a.bi_ids.every((id, index) => id === b.bi_ids[index])
 }
 
+function validatorEndsWithSegmentChain(validator, chain) {
+  const candidateSegments = Array.isArray(validator?.segments) ? validator.segments : []
+  const start = candidateSegments.length - chain.length
+  return start >= 0 && chain.every((segment, index) => (
+    sameSegmentBoundary(segment, candidateSegments[start + index])
+  ))
+}
+
 function buildSegments(confirmedBis, options = {}) {
   const primary = buildSegmentsFromAnchor(confirmedBis, options)
-  if (options.trustedStart !== false) return { ...primary, stable: true, historicalSegmentRuns: primary.segments.length >= 2 ? [primary.segments] : [] }
-  if (!primary.resynced) return { ...primary, candidate: null, stable: false, historicalSegmentRuns: [] }
-
-  const firstStructureBiId = primary.segments[0]?.start_bi_id ?? primary.candidate?.bi_ids?.[0]
-  const firstStructureIndex = confirmedBis.findIndex(bi => bi.id === firstStructureBiId)
-  const latestProbeStart = firstStructureIndex - MIN_BIS_PER_SEGMENT
-  if (latestProbeStart < 1) return { segments: [], candidate: null, resynced: true, stable: false, historicalSegmentRuns: [] }
-
-  // Validate the claimed terminal structure from every alternate start that
-  // still leaves room to resync before that structure begins. Two arbitrary
-  // truncated windows can agree on the same false internal endpoint; requiring
-  // consensus across all eligible starts exposes that ambiguity.
-  const decompositions = [primary]
-  for (let start = 1; start <= latestProbeStart; start++) {
-    const probe = buildSegmentsFromAnchor(confirmedBis.slice(start), { trustedStart: false })
-    if (probe.resynced) decompositions.push(probe)
+  if (options.trustedStart !== false) {
+    return {
+      ...primary,
+      stable: true,
+      supportCount: primary.segments.length >= 2 ? 1 : 0,
+      validatorCount: primary.segments.length >= 2 ? 1 : 0,
+      supportRatio: primary.segments.length >= 2 ? 1 : 0,
+      pairSupport: primary.segments.slice(0, -1).map((segment, index) => ({
+        previous_start_bi_id: segment.start_bi_id,
+        previous_end_bi_id: segment.end_bi_id,
+        current_start_bi_id: primary.segments[index + 1].start_bi_id,
+        current_end_bi_id: primary.segments[index + 1].end_bi_id,
+        support_count: 1,
+      })),
+      historicalSegmentRuns: primary.segments.length >= 2 ? [primary.segments] : [],
+    }
   }
-  if (decompositions.length < 2) return { segments: [], candidate: null, resynced: true, stable: false, historicalSegmentRuns: [] }
 
-  const segmentValidators = decompositions.filter(result => result.segments.length > 0)
-  let commonCount = 0
-  while (segmentValidators.length >= 2 && commonCount < primary.segments.length) {
-    const primarySegment = primary.segments[primary.segments.length - 1 - commonCount]
-    const agreed = segmentValidators.every(result => {
-      const segment = result.segments[result.segments.length - 1 - commonCount]
-      return sameSegmentBoundary(primarySegment, segment)
+  // A rates window can begin in any phase of an older segment. Decompose from
+  // every viable internal start, discard each truncated prefix via resync, and
+  // vote only on the last two complete segment boundaries. This keeps the
+  // anti-repaint guarantee without allowing one arbitrary start to veto every
+  // otherwise identical terminal structure.
+  const validators = []
+  const latestStart = Math.max(0, confirmedBis.length - (MIN_BIS_PER_SEGMENT * 2 + 1))
+  for (let start = 0; start <= latestStart; start++) {
+    const result = start === 0
+      ? primary
+      : buildSegmentsFromAnchor(confirmedBis.slice(start), { trustedStart: false })
+    if (result.resynced && result.segments.length >= 2) validators.push({ ...result, probeStart: start })
+  }
+  if (validators.length < 2) {
+    return {
+      segments: [], candidate: null, resynced: primary.resynced,
+      stable: false, supportCount: validators.length, validatorCount: validators.length,
+      supportRatio: validators.length === 1 ? 1 : 0,
+      pairSupport: [],
+      historicalSegmentRuns: [],
+    }
+  }
+
+  const groups = []
+  for (const validator of validators) {
+    const previous = validator.segments.at(-2)
+    const current = validator.segments.at(-1)
+    let group = groups.find(item => sameSegmentBoundary(item.previous, previous) && sameSegmentBoundary(item.current, current))
+    if (!group) {
+      group = { previous, current, validators: [] }
+      groups.push(group)
+    }
+    group.validators.push(validator)
+  }
+  groups.sort((a, b) => (
+    b.validators.length - a.validators.length
+    || Math.max(...b.validators.map(item => item.segments.length)) - Math.max(...a.validators.map(item => item.segments.length))
+    || Math.min(...a.validators.map(item => item.probeStart)) - Math.min(...b.validators.map(item => item.probeStart))
+  ))
+  const winner = groups[0]
+  const supportCount = winner?.validators.length || 0
+  const validatorCount = validators.length
+  const supportRatio = validatorCount > 0 ? supportCount / validatorCount : 0
+  const hasMajority = supportCount >= 2 && supportCount * 2 > validatorCount
+  if (!hasMajority) {
+    return {
+      segments: [], candidate: null, resynced: primary.resynced,
+      stable: false, supportCount, validatorCount, supportRatio,
+      pairSupport: [], historicalSegmentRuns: [],
+    }
+  }
+
+  const representative = [...winner.validators].sort((a, b) => (
+    b.segments.length - a.segments.length || a.probeStart - b.probeStart
+  ))[0]
+  let confirmedChain = null
+  for (let start = 0; start <= representative.segments.length - 2; start++) {
+    const chain = representative.segments.slice(start)
+    // A validator whose first emitted segment starts after this chain cannot
+    // observe it. Confirmation requires one coherent validator cohort to end
+    // with the entire chain; separate pair majorities cannot be stitched into
+    // a synthetic center.
+    const eligibleValidators = validators.filter(result => (
+      Number(result.segments[0]?.raw_start_idx) <= Number(chain[0]?.raw_start_idx)
+      && Number(result.segments.at(-1)?.raw_end_idx) >= Number(chain.at(-1)?.raw_end_idx)
+    ))
+    const chainSupport = eligibleValidators.filter(result => validatorEndsWithSegmentChain(result, chain)).length
+    const pairEvidence = chain.slice(0, -1).map((segment, index) => {
+      const suffix = chain.slice(index)
+      const next = suffix[1]
+      const pairEligible = validators.filter(result => (
+        Number(result.segments[0]?.raw_start_idx) <= Number(segment.raw_start_idx)
+        && Number(result.segments.at(-1)?.raw_end_idx) >= Number(next.raw_end_idx)
+      ))
+      const pairSupportCount = pairEligible.filter(result => validatorEndsWithSegmentChain(result, suffix)).length
+      return {
+        segment,
+        next,
+        supportCount:pairSupportCount,
+        eligibleCount:pairEligible.length,
+        supported:pairSupportCount >= 2 && pairSupportCount * 2 > pairEligible.length,
+      }
     })
-    if (!agreed) break
-    commonCount++
+    const chainSupported = chainSupport >= 2 && chainSupport * 2 > eligibleValidators.length
+    if (chainSupported && pairEvidence.every(item => item.supported)) {
+      confirmedChain = {
+        segments:chain,
+        supportCount:chainSupport,
+        validatorCount:eligibleValidators.length,
+        pairEvidence,
+      }
+      break
+    }
   }
-  // One matching terminal segment can still share a false endpoint when every
-  // available start is missing the same older context. Two consecutive common
-  // segments are the minimum evidence that decomposition phase has recovered.
-  const segments = commonCount >= 2 ? primary.segments.slice(-commonCount) : []
-  const supportedPairs = primary.segments.slice(0, -1).map((segment, index) => {
-    const next = primary.segments[index + 1]
-    return decompositions.filter(result => result.segments.some((candidate, candidateIndex) => (
-      sameSegmentBoundary(segment, candidate) && sameSegmentBoundary(next, result.segments[candidateIndex + 1])
-    ))).length >= 2
-  })
-  const historicalSegmentRuns = []
-  for (let index = 0; index < supportedPairs.length;) {
-    if (!supportedPairs[index]) { index++; continue }
-    const start = index
-    while (index + 1 < supportedPairs.length && supportedPairs[index + 1]) index++
-    historicalSegmentRuns.push(primary.segments.slice(start, index + 2))
-    index++
+  const segments = confirmedChain?.segments || []
+  const pairSupport = (confirmedChain?.pairEvidence || []).map(item => ({
+    previous_start_bi_id: item.segment.start_bi_id,
+    previous_end_bi_id: item.segment.end_bi_id,
+    current_start_bi_id: item.next.start_bi_id,
+    current_end_bi_id: item.next.end_bi_id,
+    support_count: item.supportCount,
+    validator_count: item.eligibleCount,
+  }))
+  const historicalSegmentRuns = segments.length >= 2 ? [segments] : []
+  const candidateGroups = []
+  const derivedValidators = segments.length >= 2
+    ? winner.validators.filter(item => item.candidate && validatorEndsWithSegmentChain(item, segments))
+    : []
+  for (const validator of derivedValidators) {
+    let group = candidateGroups.find(item => sameCandidate(item.candidate, validator.candidate))
+    if (!group) {
+      group = { candidate: validator.candidate, count: 0 }
+      candidateGroups.push(group)
+    }
+    group.count++
   }
-  const candidateValidators = decompositions.filter(result => result.candidate)
-  const candidate = primary.candidate && candidateValidators.length >= 2 && candidateValidators.every(result => sameCandidate(primary.candidate, result.candidate))
-    ? primary.candidate
+  candidateGroups.sort((a, b) => b.count - a.count)
+  const candidateWinner = candidateGroups[0]
+  const candidate = candidateWinner?.count >= 2 && candidateWinner.count * 2 > derivedValidators.length
+    ? candidateWinner.candidate
     : null
-  return { segments, candidate, resynced: true, stable: segments.length > 0, historicalSegmentRuns }
+  return {
+    segments,
+    candidate,
+    resynced: true,
+    stable: segments.length >= 2,
+    supportCount:confirmedChain?.supportCount || 0,
+    validatorCount:confirmedChain?.validatorCount || 0,
+    supportRatio:confirmedChain?.validatorCount
+      ? confirmedChain.supportCount / confirmedChain.validatorCount : 0,
+    pairSupport,
+    historicalSegmentRuns,
+  }
 }
 
 // === Chan Theory: Center (Zhongshu) Detection from confirmed segments ===
-function buildCenters(components) {
+function buildCenters(components, options = {}) {
   if (components.length < 3) return []
+  const componentLevel = options.componentLevel === 'bi' ? 'bi' : 'segment'
   const centers = []
-  let i = 0
+  // A trusted anchor is the start of the already-confirmed entry segment.
+  // Keep that leading segment outside the three-segment centre core so an
+  // anchored rebuild reproduces the same entry/core identity as the full
+  // authoritative history instead of shifting the centre forward by one.
+  let i = options.leadingSegmentIsEntry === true ? 1 : 0
   while (i + 2 < components.length) {
     const initial = components.slice(i, i + 3)
     const ranges = initial.map(item => [
@@ -489,9 +648,17 @@ function buildCenters(components) {
       id: centers.length + 1,
       zl,
       zh,
+      component_level: componentLevel,
+      entry_component_id: components[i - 1]?.id ?? null,
+      start_component_id: initial[0].id,
+      end_component_id: initial[2].id,
+      departure_component_id: null,
+      component_ids: initial.map(item => item.id),
       start_segment_id: initial[0].id,
       end_segment_id: initial[2].id,
       segment_ids: initial.map(item => item.id),
+      entry_segment_id: componentLevel === 'segment' ? (components[i - 1]?.id ?? null) : null,
+      departure_segment_id: null,
       fluctuation_low: Math.min(...ranges.map(range => range[0])),
       fluctuation_high: Math.max(...ranges.map(range => range[1])),
       level: '',
@@ -505,12 +672,16 @@ function buildCenters(components) {
       const high = Number.isFinite(item.high) ? item.high : Math.max(item.start_price, item.end_price)
       if (Math.max(center.zl, low) >= Math.min(center.zh, high)) {
         center.closed_by_segment_id = item.id
+        center.departure_component_id = item.id
+        if (componentLevel === 'segment') center.departure_segment_id = item.id
         break
       }
       center.fluctuation_low = Math.min(center.fluctuation_low, low)
       center.fluctuation_high = Math.max(center.fluctuation_high, high)
       center.segment_ids.push(item.id)
+      center.component_ids.push(item.id)
       center.end_segment_id = item.id
+      center.end_component_id = item.id
       center.status = 'extended'
       j++
     }
@@ -532,6 +703,35 @@ function divergenceResult(reason, overrides = {}) {
     area_ratio: null, peak_ratio: null, area_reduction_pct: null, peak_reduction_pct: null,
     price_extreme_cur: 0, price_extreme_prev: 0,
     ...overrides,
+  }
+}
+
+function summarizeBiCenter(center, timeframe, bis = [], rates = []) {
+  if (!center) return null
+  const startBi = bis.find(item => item.id === center.start_component_id)
+  const endBi = bis.find(item => item.id === center.end_component_id)
+  const startIndex = Number(startBi?.raw_start_idx)
+  const endIndex = Number(endBi?.raw_end_idx)
+  return {
+    id: center.id,
+    zl: round5(center.zl),
+    zh: round5(center.zh),
+    gg: round5(center.fluctuation_high),
+    dd: round5(center.fluctuation_low),
+    status: center.status,
+    source_timeframe: timeframe,
+    structure_level: 'bi',
+    start_bi_id: center.start_component_id,
+    end_bi_id: center.end_component_id,
+    closed_by_bi_id: center.departure_component_id,
+    start_index: Number.isFinite(startIndex) ? startIndex : null,
+    end_index: Number.isFinite(endIndex) ? endIndex : null,
+    start_time: Number.isFinite(startIndex) ? rates[startIndex]?.time ?? null : null,
+    end_time: Number.isFinite(endIndex) ? rates[endIndex]?.time ?? null : null,
+    start_time_utc_msc: Number.isFinite(startIndex) && Number.isFinite(Number(rates[startIndex]?.time_utc_msc))
+      ? Number(rates[startIndex].time_utc_msc) : null,
+    end_time_utc_msc: Number.isFinite(endIndex) && Number.isFinite(Number(rates[endIndex]?.time_utc_msc))
+      ? Number(rates[endIndex].time_utc_msc) : null,
   }
 }
 
@@ -603,13 +803,18 @@ function evaluateDivergence(current, segments, bis, macdHist, centers = [], rate
     return { area, peak }
   }
 
-  // Compare the latest departure segment with the same-direction segment that
-  // entered the same center. This prevents unrelated historical segments from
-  // being paired solely because their direction matches.
-  const eligibleCenters = centers.filter(c => current.id === (c.end_segment_id || 0) + 1)
+  // Compare the center's explicit entry/departure references. Inferring these
+  // as id +/- 1 fails after resync, discontinuities, and for the first center
+  // in a retained window.
+  const departureId = center => center.departure_segment_id
+    ?? center.closed_by_segment_id
+    ?? (center.component_level ? null : (center.end_segment_id || 0) + 1)
+  const eligibleCenters = centers.filter(c => current.id === departureId(c))
   if (eligibleCenters.length === 0) return emptyResult('not_after_center')
   const lastCenter = eligibleCenters[eligibleCenters.length - 1]
-  const prev = validSegs.find(s => s.id === lastCenter.start_segment_id - 1)
+  const entrySegmentId = lastCenter.entry_segment_id
+    ?? (lastCenter.component_level ? null : lastCenter.start_segment_id - 1)
+  const prev = validSegs.find(s => s.id === entrySegmentId)
   if (!prev || prev.dir !== current.dir) return emptyResult('no_entry_segment')
   const cur = current
   const entryLocation = segmentLocation(prev, bis, rates)
@@ -710,9 +915,19 @@ function buildFormingSegment(candidate, bis, nextId) {
 function detectFormingDivergence(candidate, segments, bis, macdHist, centers = [], rates = []) {
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   const formingSegment = buildFormingSegment(candidate, bis, (validSegs[validSegs.length - 1]?.id || 0) + 1)
-  return formingSegment
-    ? evaluateDivergence(formingSegment, validSegs, bis, macdHist, centers, rates, 'forming')
-    : emptyDivergence('no_forming_segment')
+  if (!formingSegment) return emptyDivergence('no_forming_segment')
+  const provisionalCenters = centers.map(center => {
+    if (center.departure_segment_id != null || center.closed_by_segment_id != null) return center
+    if (center.component_level !== 'segment' || Number(formingSegment.id) !== Number(center.end_segment_id) + 1) return center
+    const leavesCenter = Number(formingSegment.low) >= Number(center.zh) || Number(formingSegment.high) <= Number(center.zl)
+    return leavesCenter
+      ? { ...center, departure_segment_id:formingSegment.id, closed_by_segment_id:formingSegment.id }
+      : center
+  })
+  const result = evaluateDivergence(formingSegment, validSegs, bis, macdHist, provisionalCenters, rates, 'forming')
+  return result.reason === 'not_after_center'
+    ? divergenceResult('forming_departure_not_confirmed', { state:'forming' })
+    : result
 }
 
 function summarizeSegment(segment, bis = [], rates = []) {
@@ -742,12 +957,28 @@ function summarizeSegment(segment, bis = [], rates = []) {
 
 function summarizeCenter(center, timeframe, segments = [], bis = [], rates = []) {
   if (!center) return null
+  const entrySegment = segments.find(segment => segment.id === center.entry_segment_id)
   const startSegment = segments.find(segment => segment.id === center.start_segment_id)
   const endSegment = segments.find(segment => segment.id === center.end_segment_id)
+  const departureSegment = segments.find(segment => segment.id === center.departure_segment_id)
+  const entryLocation = segmentLocation(entrySegment, bis, rates)
   const startLocation = segmentLocation(startSegment, bis, rates)
   const endLocation = segmentLocation(endSegment, bis, rates)
+  const departureLocation = segmentLocation(departureSegment, bis, rates)
+  const coreSegmentStableIds = (center.segment_ids || [])
+    .slice(0, 3)
+    .map(id => segmentLocation(segments.find(segment => segment.id === id), bis, rates)?.stable_id || null)
+  const completeCoreSegmentStableIds = coreSegmentStableIds.length === 3 && coreSegmentStableIds.every(Boolean)
+    ? coreSegmentStableIds
+    : null
+  const stableId = startLocation?.stable_id && endLocation?.stable_id
+    ? `${startLocation.stable_id}|${endLocation.stable_id}`
+    : null
   return {
     id: center.id,
+    stable_id: stableId,
+    core_stable_id:completeCoreSegmentStableIds ? completeCoreSegmentStableIds.join('|') : null,
+    core_segment_stable_ids:completeCoreSegmentStableIds,
     zl: round5(center.zl),
     zh: round5(center.zh),
     gg: round5(center.fluctuation_high),
@@ -756,8 +987,17 @@ function summarizeCenter(center, timeframe, segments = [], bis = [], rates = [])
     source_timeframe: timeframe,
     structure_level: 'segment',
     level: timeframe,
+    component_level: center.component_level || 'segment',
+    entry_segment_id: center.entry_segment_id ?? null,
+    entry_segment_stable_id: entryLocation?.stable_id ?? null,
+    entry_segment_start_time_utc_msc: entryLocation?.start_time_utc_msc ?? null,
+    entry_segment_end_time_utc_msc: entryLocation?.end_time_utc_msc ?? null,
     start_segment_id: center.start_segment_id,
+    start_segment_stable_id: startLocation?.stable_id ?? null,
     end_segment_id: center.end_segment_id,
+    end_segment_stable_id: endLocation?.stable_id ?? null,
+    departure_segment_id: center.departure_segment_id ?? null,
+    departure_segment_stable_id: departureLocation?.stable_id ?? null,
     closed_by_segment_id: center.closed_by_segment_id,
     start_index: startLocation?.start_index ?? null,
     end_index: endLocation?.end_index ?? null,
@@ -790,7 +1030,10 @@ function capStructureConfidence(reliability, preferred = 'medium') {
 }
 
 function classifyChanTrend(segments, centers, latestPrice, divergence, reliability = 'low') {
-  const validSegments = segments.filter(segment => !segment.weak && Array.isArray(segment.bi_ids) && segment.bi_ids.length >= MIN_BIS_PER_SEGMENT)
+  const validSegments = segments.filter(segment => !segment.weak && (
+    (Array.isArray(segment.bi_ids) && segment.bi_ids.length >= MIN_BIS_PER_SEGMENT)
+    || Number(segment.bi_count) >= MIN_BIS_PER_SEGMENT
+  ))
   const latestSegment = validSegments.at(-1)
   const latestCenter = centers.at(-1)
   if (!latestSegment) return emptyTrendState('no_confirmed_segment')
@@ -875,15 +1118,44 @@ function classifyChanTrend(segments, centers, latestPrice, divergence, reliabili
   }
 }
 
-function detectChanEntryCandidates(segments, centers, divergence, recentDivergences, bis, rates, reliability, timeLocationReliable) {
+function detectChanEntryCandidates(segments, centers, divergence, recentDivergences, bis, rates, reliability, structureTimeKeyReliable, activeBiRunId = null) {
   const validSegments = segments.filter(segment => !segment.weak && Array.isArray(segment.bi_ids) && segment.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   const latestSegment = validSegments.at(-1)
   if (!latestSegment) return []
-  const structurallyUsable = reliability !== 'low' && timeLocationReliable !== false
+  const locatedSegments = validSegments.map(segment => ({
+    segment,
+    location:summarizeSegment(segment, bis, rates),
+  }))
+  const segmentByStableId = new Map(locatedSegments
+    .filter(item => item.location?.stable_id)
+    .map(item => [item.location.stable_id, item.segment]))
+  const segmentIndexByStableId = new Map(locatedSegments
+    .filter(item => item.location?.stable_id)
+    .map((item, index) => [item.location.stable_id, index]))
+  const locatedCenters = centers.map(center => ({
+    center,
+    location:summarizeCenter(center, null, validSegments, bis, rates),
+  }))
+  const stableSegmentId = evidence => evidence?.stable_id || null
+  const resolveEvidenceSegment = evidence => {
+    const stableId = stableSegmentId(evidence)
+    return stableId ? segmentByStableId.get(stableId) || null : null
+  }
+  const resolveEvidenceCenter = evidence => {
+    const entryStableId = stableSegmentId(evidence?.entry_segment)
+    const departureStableId = stableSegmentId(evidence?.departure_segment)
+    if (!entryStableId || !departureStableId) return null
+    return locatedCenters.find(item => (
+      item.location?.entry_segment_stable_id === entryStableId
+      && item.location?.departure_segment_stable_id === departureStableId
+    ))?.center || null
+  }
+  const structurallyUsable = reliability !== 'low' && structureTimeKeyReliable === true
   const confidence = preferred => capStructureConfidence(reliability, preferred)
   const results = []
   const add = ({ type, side, source, segment, center = null, referencePrice, invalidationPrice, preferredConfidence = 'medium' }) => {
     const location = summarizeSegment(segment, bis, rates)
+    const centerLocation = summarizeCenter(center, null, validSegments, bis, rates)
     const stablePart = location?.stable_id || `segment-${segment?.id ?? 'unknown'}`
     const pointEndIndex = Number(location?.end_index)
     const barsSincePoint = Number.isFinite(pointEndIndex) && rates.length > 0 ? Math.max(0, rates.length - 1 - pointEndIndex) : null
@@ -901,39 +1173,61 @@ function detectChanEntryCandidates(segments, centers, divergence, recentDivergen
       reference_price: Number.isFinite(Number(referencePrice)) ? round5(Number(referencePrice)) : null,
       invalidation_price: Number.isFinite(Number(invalidationPrice)) ? round5(Number(invalidationPrice)) : null,
       segment: location,
+      center: centerLocation,
     })
   }
 
   if (divergence?.confirmed && divergence.type === 'bottom') {
-    const segment = validSegments.find(item => item.id === divergence.departure_segment_id) || latestSegment
-    add({
+    const segment = resolveEvidenceSegment(divergence.departure_segment)
+    const center = resolveEvidenceCenter(divergence)
+    if (segment && center) add({
       type: 'first_buy', side: 'buy', source: 'confirmed_bottom_divergence', segment,
-      center: centers.find(item => item.id === divergence.center_id), referencePrice: segment.end_price,
+      center, referencePrice: segment.end_price,
       invalidationPrice: divergence.price_extreme_cur, preferredConfidence: divergence.strength === 'strong' ? 'high' : 'medium',
     })
   } else if (divergence?.confirmed && divergence.type === 'top') {
-    const segment = validSegments.find(item => item.id === divergence.departure_segment_id) || latestSegment
-    add({
+    const segment = resolveEvidenceSegment(divergence.departure_segment)
+    const center = resolveEvidenceCenter(divergence)
+    if (segment && center) add({
       type: 'first_sell', side: 'sell', source: 'confirmed_top_divergence', segment,
-      center: centers.find(item => item.id === divergence.center_id), referencePrice: segment.end_price,
+      center, referencePrice: segment.end_price,
       invalidationPrice: divergence.price_extreme_cur, preferredConfidence: divergence.strength === 'strong' ? 'high' : 'medium',
     })
   }
 
-  const priorDivergences = Array.isArray(recentDivergences) ? recentDivergences : []
+  const priorDivergences = (Array.isArray(recentDivergences) ? recentDivergences : [])
+    .filter(item => activeBiRunId == null
+      ? item?.bi_run_id == null
+      : String(item?.bi_run_id) === String(activeBiRunId))
   const lastBottom = [...priorDivergences].reverse().find(item => item.type === 'bottom' && item.confirmed)
   const lastTop = [...priorDivergences].reverse().find(item => item.type === 'top' && item.confirmed)
-  if (lastBottom && latestSegment.dir === 'down' && latestSegment.id >= Number(lastBottom.departure_segment_id) + 2 && latestSegment.low > Number(lastBottom.price_extreme_cur)) {
+  const latestStableId = locatedSegments.at(-1)?.location?.stable_id || null
+  const latestSegmentIndex = latestStableId ? segmentIndexByStableId.get(latestStableId) : null
+  const bottomDepartureStableId = stableSegmentId(lastBottom?.departure_segment)
+  const bottomDepartureIndex = bottomDepartureStableId ? segmentIndexByStableId.get(bottomDepartureStableId) : null
+  const bottomCenter = resolveEvidenceCenter(lastBottom)
+  const topDepartureStableId = stableSegmentId(lastTop?.departure_segment)
+  const topDepartureIndex = topDepartureStableId ? segmentIndexByStableId.get(topDepartureStableId) : null
+  const topCenter = resolveEvidenceCenter(lastTop)
+  if (lastBottom && latestSegment.dir === 'down'
+    && bottomCenter
+    && Number.isInteger(bottomDepartureIndex) && Number.isInteger(latestSegmentIndex)
+    && latestSegmentIndex >= bottomDepartureIndex + 2
+    && latestSegment.low > Number(lastBottom.price_extreme_cur)) {
     add({
       type: 'second_buy', side: 'buy', source: 'higher_low_after_first_buy', segment: latestSegment,
-      center: centers.find(item => item.id === lastBottom.center_id), referencePrice: latestSegment.end_price,
+      center: bottomCenter, referencePrice: latestSegment.end_price,
       invalidationPrice: lastBottom.price_extreme_cur,
     })
   }
-  if (lastTop && latestSegment.dir === 'up' && latestSegment.id >= Number(lastTop.departure_segment_id) + 2 && latestSegment.high < Number(lastTop.price_extreme_cur)) {
+  if (lastTop && latestSegment.dir === 'up'
+    && topCenter
+    && Number.isInteger(topDepartureIndex) && Number.isInteger(latestSegmentIndex)
+    && latestSegmentIndex >= topDepartureIndex + 2
+    && latestSegment.high < Number(lastTop.price_extreme_cur)) {
     add({
       type: 'second_sell', side: 'sell', source: 'lower_high_after_first_sell', segment: latestSegment,
-      center: centers.find(item => item.id === lastTop.center_id), referencePrice: latestSegment.end_price,
+      center: topCenter, referencePrice: latestSegment.end_price,
       invalidationPrice: lastTop.price_extreme_cur,
     })
   }
@@ -964,6 +1258,9 @@ function emptyDivergence(reason = 'structure_unavailable') {
 
 function emptyChanResult(overrides = {}) {
   return {
+    algorithm_version: CHAN_ALGORITHM_VERSION,
+    rule_profile: CHAN_RULE_PROFILE,
+    center_level: 'segment',
     status: 'insufficient_klines',
     reliability: 'low',
     requested_history_count: 0,
@@ -972,24 +1269,49 @@ function emptyChanResult(overrides = {}) {
     requested_closed_history_count: 0,
     closed_history_sufficient: false,
     clock_status: 'unknown',
+    clock_trust_level: 'untrusted',
     time_location_reliable: false,
+    structure_time_key_reliable: false,
+    structure_time_key_basis: 'untrusted',
+    structure_topology_reliable: false,
     cache_gap_refilled: false,
     cache_internal_gap_unresolved: false,
     window_resynced: false,
     window_stable: false,
+    segment_support_count: 0,
+    segment_validator_count: 0,
+    segment_support_ratio: 0,
+    segment_pair_support: [],
+    cross_window_support_count: 0,
+    cross_window_validator_count: 0,
+    cross_window_support_ratio: 0,
     structure_anchor: {
       requested_time_utc_msc: null,
       matched: false,
       recommended_time_utc_msc: null,
       last_confirmed_segment_time_utc_msc: null,
+      full_window_authoritative: false,
+      temporal_identity_stable: false,
+      temporal_closed_bar_support: 0,
+      temporal_closed_bar_validator_count: 0,
+      bootstrap_state: 'unavailable',
     },
+    window_start_time_utc_msc: null,
+    window_end_time_utc_msc: null,
     raw_bar_count: 0,
+    latest_price: null,
     closed_bar_count: 0,
     processed_bar_count: 0,
     fractal_count: 0,
     bi_count: 0,
+    active_bi_count: 0,
+    bi_run_count: 0,
+    active_bi_run_id: null,
+    bi_discontinuity_count: 0,
+    last_bi_discontinuity: null,
     segment_count: 0,
     center_count: 0,
+    bi_center_count: 0,
     historical_segment_run_count: 0,
     historical_segment_count: 0,
     current_bi: null,
@@ -1001,6 +1323,7 @@ function emptyChanResult(overrides = {}) {
     current_center: null,
     active_center: null,
     latest_center: null,
+    latest_bi_center: null,
     price_vs_center: 'none',
     divergence: emptyDivergence(),
     forming_divergence: emptyDivergence('no_forming_segment'),
@@ -1021,6 +1344,9 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   if (!historySufficient) warnings.push('history_bars_below_requested')
   const lastBarClosed = dataQuality?.last_bar_closed === true
   const closedRates = Array.isArray(rates) ? (lastBarClosed ? rates : rates.slice(0, -1)) : []
+  const latest = parseFloat(rates?.at?.(-1)?.close)
+  const windowStartTimeUtcMs = Number(closedRates[0]?.time_utc_msc || rates?.[0]?.time_utc_msc) || null
+  const windowEndTimeUtcMs = Number(closedRates.at(-1)?.time_utc_msc || rates?.at?.(-1)?.time_utc_msc) || null
   const requestedClosedHistoryCount = Math.max(requestedHistoryCount - (lastBarClosed ? 0 : 1), 0)
   const closedHistorySufficient = closedRates.length >= requestedClosedHistoryCount
   if (!closedHistorySufficient && historySufficient) warnings.push('closed_history_bars_below_requested')
@@ -1028,8 +1354,42 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   const utcLocationComplete = closedRates.length > 0 && utcTimes.every(value => Number.isFinite(value) && value > 0)
   const utcSequenceMonotonic = utcLocationComplete && utcTimes.every((value, index) => index === 0 || value > utcTimes[index - 1])
   const clockStatus = String(dataQuality?.clock_status || rates?.at?.(-1)?.clock_status || 'unknown')
-  const timeLocationReliable = dataQuality == null || (clockStatus === 'verified' && utcLocationComplete && utcSequenceMonotonic)
-  if (dataQuality && clockStatus !== 'verified') warnings.push('market_clock_unverified')
+  const platform = String(dataQuality?.platform || rates?.at?.(-1)?.platform || '').trim().toLowerCase()
+  const sourceId = Number(dataQuality?.source_id)
+  const timezoneOffsetMinutes = Number(dataQuality?.timezone_offset_minutes)
+  const clockSampleAgeMs = Number(dataQuality?.clock_sample_age_ms)
+  const sourceIdentityReliable = dataQuality == null || (
+    Number.isInteger(sourceId) && sourceId > 0 && (platform === 'mt4' || platform === 'mt5'))
+  const mt4OffsetValid = Number.isInteger(timezoneOffsetMinutes)
+    && timezoneOffsetMinutes >= -14 * 60 && timezoneOffsetMinutes <= 14 * 60
+    && timezoneOffsetMinutes % 15 === 0
+  const mt4ClockFresh = clockStatus === 'mt4_current_offset'
+    && Number.isFinite(clockSampleAgeMs) && clockSampleAgeMs >= 0
+    && clockSampleAgeMs <= MT4_CLOCK_SAMPLE_MAX_AGE_MS
+  const mt4HistoricalOffsetUnverified = platform === 'mt4'
+    && (clockStatus === 'mt4_current_offset' || clockStatus === 'mt4_cached_offset')
+  const clockStatusTrusted = clockStatus === 'verified'
+  const clockTrustLevel = clockStatus === 'verified'
+    ? 'verified'
+    : mt4HistoricalOffsetUnverified ? 'derived_unverified_history' : 'untrusted'
+  const timeLocationReliable = dataQuality == null || (sourceIdentityReliable
+    && clockStatusTrusted && utcLocationComplete && utcSequenceMonotonic)
+  // MT4 only exposes historical broker-server timestamps.  Applying the
+  // current server offset cannot prove an old candle's exact UTC instant
+  // across a DST boundary, but it is still a deterministic structure key
+  // while the market-data source remains scoped by account/server/offset.
+  // Keep that weaker guarantee separate from time_location_reliable so price
+  // structure can bootstrap without presenting an approximate UTC as exact.
+  const mt4OffsetScopedStructureKey = platform === 'mt4' && sourceIdentityReliable
+    && mt4OffsetValid && mt4ClockFresh && utcLocationComplete && utcSequenceMonotonic
+  const structureTimeKeyReliable = dataQuality == null
+    || (sourceIdentityReliable && utcLocationComplete && utcSequenceMonotonic
+      && (clockStatusTrusted || mt4OffsetScopedStructureKey))
+  const structureTimeKeyBasis = dataQuality == null || clockStatus === 'verified'
+    ? 'utc_verified'
+    : mt4OffsetScopedStructureKey ? 'mt4_current_offset_source_scoped' : 'untrusted'
+  if (dataQuality && !clockStatusTrusted) warnings.push('market_clock_unverified')
+  if (dataQuality && mt4HistoricalOffsetUnverified) warnings.push('mt4_historical_offset_unverified')
   if (dataQuality && !utcLocationComplete) warnings.push('utc_time_location_incomplete')
   if (dataQuality && utcLocationComplete && !utcSequenceMonotonic) warnings.push('utc_time_sequence_invalid')
   const cacheInternalGapUnresolved = Boolean(dataQuality?.cache_internal_gap_unresolved)
@@ -1044,10 +1404,16 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       requested_closed_history_count: requestedClosedHistoryCount,
       closed_history_sufficient: closedHistorySufficient,
       clock_status: clockStatus,
+      clock_trust_level: clockTrustLevel,
       time_location_reliable: timeLocationReliable,
+      structure_time_key_reliable: structureTimeKeyReliable,
+      structure_time_key_basis: structureTimeKeyBasis,
       cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
       cache_internal_gap_unresolved: cacheInternalGapUnresolved,
+      window_start_time_utc_msc: windowStartTimeUtcMs,
+      window_end_time_utc_msc: windowEndTimeUtcMs,
       raw_bar_count: rates?.length || 0,
+      latest_price: Number.isFinite(latest) ? round5(latest) : null,
       closed_bar_count: closedRates.length,
       divergence: emptyDivergence('insufficient_klines'),
       warnings: [...warnings, 'raw_bars_too_few'],
@@ -1056,13 +1422,15 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   const bars = normalizeBarsForChan(closedRates)
   if (bars.length < 10) warnings.push('processed_bars_too_few')
   const fractals = options.fractalsForTest || detectFractals(bars)
-  const { bis: allBis, invalidCount, activePivot } = buildBis(fractals, bars)
-  if (invalidCount > 0) warnings.push('invalid_bi_price_direction')
-  const confirmedBis = allBis.filter(b => b.confirmed !== false)
+  const { bis: allBis, runs: biRuns, invalidCount, activeRunId, activePivot, lastDiscontinuity } = buildBis(fractals, bars)
+  const confirmedBiRuns = biRuns
+    .map(run => run.filter(b => b.confirmed !== false))
+    .filter(run => run.length > 0)
+  const activeConfirmedBis = confirmedBiRuns.find(run => run[0]?.run_id === activeRunId) || []
   const developingBi = buildDevelopingBi(activePivot, rates)
-  if (confirmedBis.length < 3) {
+  if (activeConfirmedBis.length < 3) {
     warnings.push('insufficient_confirmed_bis')
-    const lastBi = allBis[allBis.length - 1]
+    const lastBi = activeConfirmedBis.at(-1) || null
     return emptyChanResult({
       status: 'insufficient_bis',
       requested_history_count: requestedHistoryCount,
@@ -1071,40 +1439,75 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       requested_closed_history_count: requestedClosedHistoryCount,
       closed_history_sufficient: closedHistorySufficient,
       clock_status: clockStatus,
+      clock_trust_level: clockTrustLevel,
       time_location_reliable: timeLocationReliable,
+      structure_time_key_reliable: structureTimeKeyReliable,
+      structure_time_key_basis: structureTimeKeyBasis,
       cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
       cache_internal_gap_unresolved: cacheInternalGapUnresolved,
+      window_start_time_utc_msc: windowStartTimeUtcMs,
+      window_end_time_utc_msc: windowEndTimeUtcMs,
       raw_bar_count: rates.length,
+      latest_price: Number.isFinite(latest) ? round5(latest) : null,
       closed_bar_count: closedRates.length,
       processed_bar_count: bars.length,
       fractal_count: fractals.length,
       bi_count: allBis.length,
+      active_bi_count: activeConfirmedBis.length,
+      bi_run_count: biRuns.length,
+      active_bi_run_id: activeRunId,
+      bi_discontinuity_count: invalidCount,
+      last_bi_discontinuity: lastDiscontinuity,
       current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
       developing_bi: developingBi,
-      recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
+      recent_bis: activeConfirmedBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
       divergence: emptyDivergence('insufficient_bis'),
       warnings,
     })
   }
-  const requestedStructureAnchor = Number(options.trustedStructureAnchorUtcMs)
+  const trustedStructureAnchor = options.trustedStructureAnchor && typeof options.trustedStructureAnchor === 'object'
+    ? options.trustedStructureAnchor : {}
+  const requestedStructureAnchor = Number(
+    trustedStructureAnchor.anchor_time_utc_msc ?? options.trustedStructureAnchorUtcMs)
+  const requestedAnchorCoreStableId = String(trustedStructureAnchor.bootstrap_core_stable_id || '').trim()
+  const requestedAnchorEntryStableId = String(trustedStructureAnchor.bootstrap_entry_segment_stable_id || '').trim()
+  const requestedAnchorLastConfirmedTime = Number(trustedStructureAnchor.last_confirmed_segment_time_utc_msc)
+  const requestedAnchorIdentityComplete = Boolean(requestedAnchorCoreStableId && requestedAnchorEntryStableId
+    && Number.isFinite(requestedAnchorLastConfirmedTime) && requestedAnchorLastConfirmedTime > 0)
   const anchoredBiIndex = Number.isFinite(requestedStructureAnchor) && requestedStructureAnchor > 0
-    ? confirmedBis.findIndex(bi => Number(closedRates[Number(bi.raw_start_idx)]?.time_utc_msc) === requestedStructureAnchor)
+    ? activeConfirmedBis.findIndex(bi => Number(closedRates[Number(bi.raw_start_idx)]?.time_utc_msc) === requestedStructureAnchor)
     : -1
-  const structureAnchorMatched = anchoredBiIndex >= 0
-  if (Number.isFinite(requestedStructureAnchor) && requestedStructureAnchor > 0 && !structureAnchorMatched) warnings.push('structure_anchor_not_found')
-  const segmentBis = structureAnchorMatched ? confirmedBis.slice(anchoredBiIndex) : confirmedBis
-  const { segments, candidate, resynced, stable: windowStable, historicalSegmentRuns = [] } = buildSegments(segmentBis, { trustedStart: structureAnchorMatched })
-  const windowResynced = structureAnchorMatched || resynced
+  const structureAnchorTimeMatched = anchoredBiIndex >= 0
+  if (Number.isFinite(requestedStructureAnchor) && requestedStructureAnchor > 0 && !structureAnchorTimeMatched) {
+    warnings.push('structure_anchor_not_found')
+  }
+  const segmentBis = structureAnchorTimeMatched ? activeConfirmedBis.slice(anchoredBiIndex) : activeConfirmedBis
+  const {
+    segments, candidate, resynced, stable: windowStable,
+    supportCount: segmentSupportCount = 0,
+    validatorCount: segmentValidatorCount = 0,
+    supportRatio: segmentSupportRatio = 0,
+    pairSupport: segmentPairSupport = [],
+    historicalSegmentRuns = [],
+  } = buildSegments(segmentBis, { trustedStart: structureAnchorTimeMatched })
+  const windowResynced = structureAnchorTimeMatched || resynced
   if (!windowResynced) warnings.push('segment_window_not_resynced')
   else if (!windowStable) warnings.push('segment_window_unstable')
+  else if (segmentValidatorCount > 0 && segmentSupportRatio < 1) warnings.push('segment_consensus_partial')
   const validSegs = segments.filter(s => !s.weak && s.bi_ids.length >= MIN_BIS_PER_SEGMENT)
   if (validSegs.length === 0) warnings.push('segments_not_confirmed')
-  const centers = buildCenters(validSegs)
+  const centers = buildCenters(validSegs, {
+    componentLevel:'segment',
+    leadingSegmentIsEntry:structureAnchorTimeMatched,
+  })
+  const biCenters = buildCenters(activeConfirmedBis, { componentLevel: 'bi' })
   if (centers.length === 0) warnings.push('no_valid_center')
   const latestCenter = centers.length > 0 ? centers[centers.length - 1] : null
+  const centerEntryUnconfirmed = Boolean(latestCenter && latestCenter.entry_segment_id == null)
+  const centerEntryConfirmed = Boolean(latestCenter && latestCenter.entry_segment_id != null)
+  if (centerEntryUnconfirmed) warnings.push('center_entry_unconfirmed')
   const lastSeg = validSegs.length > 0 ? validSegs[validSegs.length - 1] : null
-  const lastBi = allBis[allBis.length - 1]
-  const latest = parseFloat(rates[rates.length - 1].close)
+  const lastBi = activeConfirmedBis.at(-1) || null
   const activeCenter = latestCenter && latestCenter.status !== 'closed' && latest >= latestCenter.zl && latest <= latestCenter.zh
     ? latestCenter
     : null
@@ -1122,20 +1525,44 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     else if (latest < latestCenter.zl) priceVsCenter = 'below'
     else priceVsCenter = 'inside'
   }
-  const divergence = detectDivergence(validSegs, allBis, closedMacdHist, centers, closedRates)
+  const divergence = {
+    ...detectDivergence(validSegs, allBis, closedMacdHist, centers, closedRates),
+    bi_run_id: activeRunId,
+  }
   const historicalDivergenceMap = new Map()
+  const currentRunDivergenceMap = new Map()
+  const priorHistoricalSegmentRuns = []
+  const recordHistoricalDivergence = (item, biRunId, currentRun = false) => {
+    const tagged = { ...item, bi_run_id: biRunId }
+    const key = tagged.divergence_key || `${tagged.type}:${tagged.departure_segment_id}:${tagged.departure_segment?.end_index}`
+    historicalDivergenceMap.set(key, tagged)
+    if (currentRun) currentRunDivergenceMap.set(key, tagged)
+  }
+  for (const runBis of confirmedBiRuns.filter(run => run !== activeConfirmedBis)) {
+    const result = buildSegments(runBis, { trustedStart: false })
+    if (!result.stable || result.segments.length < 2) continue
+    priorHistoricalSegmentRuns.push(result.segments)
+    const biRunId = runBis[0]?.run_id ?? null
+    const runCenters = buildCenters(result.segments)
+    for (const item of detectDivergenceHistory(result.segments, allBis, closedMacdHist, runCenters, closedRates)) {
+      recordHistoricalDivergence(item, biRunId, false)
+    }
+  }
   for (const run of historicalSegmentRuns) {
     const runCenters = buildCenters(run)
     for (const item of detectDivergenceHistory(run, allBis, closedMacdHist, runCenters, closedRates)) {
-      const key = item.divergence_key || `${item.type}:${item.departure_segment_id}:${item.departure_segment?.end_index}`
-      historicalDivergenceMap.set(key, item)
+      recordHistoricalDivergence(item, activeRunId, true)
     }
   }
   if (divergence.type === 'top' || divergence.type === 'bottom') {
     const key = divergence.divergence_key || `${divergence.type}:${divergence.departure_segment_id}:${divergence.departure_segment?.end_index}`
     historicalDivergenceMap.set(key, divergence)
+    currentRunDivergenceMap.set(key, divergence)
   }
   const recentDivergences = [...historicalDivergenceMap.values()]
+    .sort((a, b) => Number(a.departure_segment?.end_index || 0) - Number(b.departure_segment?.end_index || 0))
+    .slice(-FEED_LAST_N_DIVERGENCES)
+  const currentRunRecentDivergences = [...currentRunDivergenceMap.values()]
     .sort((a, b) => Number(a.departure_segment?.end_index || 0) - Number(b.departure_segment?.end_index || 0))
     .slice(-FEED_LAST_N_DIVERGENCES)
   const formingSegment = buildFormingSegment(candidate, allBis, (lastSeg?.id || 0) + 1)
@@ -1146,26 +1573,62 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     warnings.push('divergence_skipped_invalid_macd')
   }
 
+  const lastSegmentRawIndex = Number(lastSeg?.raw_end_idx)
+  const lastConfirmedSegmentTime = Number.isFinite(lastSegmentRawIndex)
+    ? Number(closedRates[lastSegmentRawIndex]?.time_utc_msc) : null
+  const confirmedSegmentSummaries = validSegs.map(segment => summarizeSegment(segment, allBis, closedRates))
+  const confirmedCenterSummaries = centers.map(center => summarizeCenter(center, timeframe, validSegs, allBis, closedRates))
+  const latestCenterSummary = confirmedCenterSummaries.at(-1) || null
+  const requestedIdentityCenter = requestedAnchorIdentityComplete
+    ? confirmedCenterSummaries.find(center => (
+      center.core_stable_id === requestedAnchorCoreStableId
+      && center.entry_segment_stable_id === requestedAnchorEntryStableId
+      && Number(center.entry_segment_start_time_utc_msc) === requestedStructureAnchor
+    )) || null
+    : null
+  const structureAnchorIdentityMatched = Boolean(requestedIdentityCenter)
+  const structureAnchorLastConfirmedNotRegressed = requestedAnchorIdentityComplete
+    && Number.isFinite(lastConfirmedSegmentTime)
+    && lastConfirmedSegmentTime >= requestedAnchorLastConfirmedTime
+  const structureAnchorMatched = structureAnchorTimeMatched
+    && structureAnchorIdentityMatched && structureAnchorLastConfirmedNotRegressed
+  if (Number.isFinite(requestedStructureAnchor) && requestedStructureAnchor > 0) {
+    if (!requestedAnchorIdentityComplete) warnings.push('structure_anchor_identity_missing')
+    else if (structureAnchorTimeMatched && !structureAnchorIdentityMatched) warnings.push('structure_anchor_identity_mismatch')
+    else if (structureAnchorIdentityMatched && !structureAnchorLastConfirmedNotRegressed) {
+      warnings.push('structure_anchor_last_segment_regressed')
+    }
+  }
+
   let reliability = 'low'
   if (confirmedStructureStale || cacheInternalGapUnresolved) reliability = 'low'
   else if (historySufficient && closedHistorySufficient && timeLocationReliable && validSegs.length >= 2 && centers.length > 0 && warnings.length === 0) reliability = 'high'
   else if (historySufficient && closedHistorySufficient && validSegs.length > 0) reliability = 'medium'
 
   let status = 'ok'
-  if (validSegs.length === 0 && confirmedBis.length >= 3) status = 'unreliable_segments'
+  if (validSegs.length === 0 && activeConfirmedBis.length >= 3) status = 'unreliable_segments'
   else if (validSegs.length > 0 && centers.length === 0) status = 'partial'
   else if (warnings.length > 0) status = 'partial'
 
   const trendState = classifyChanTrend(validSegs, centers, latest, divergence, reliability)
-  const entryCandidates = detectChanEntryCandidates(validSegs, centers, divergence, recentDivergences, allBis, closedRates, reliability, timeLocationReliable)
-  const anchorSegment = validSegs[Math.max(0, validSegs.length - 8)] || null
-  const anchorRawIndex = Number(anchorSegment?.raw_start_idx)
-  const recommendedAnchorTime = Number.isFinite(anchorRawIndex) ? Number(closedRates[anchorRawIndex]?.time_utc_msc) : null
-  const lastSegmentRawIndex = Number(lastSeg?.raw_end_idx)
-  const lastConfirmedSegmentTime = Number.isFinite(lastSegmentRawIndex) ? Number(closedRates[lastSegmentRawIndex]?.time_utc_msc) : null
+  const entryCandidates = detectChanEntryCandidates(validSegs, centers, divergence, currentRunRecentDivergences, allBis, closedRates, reliability, structureTimeKeyReliable, activeRunId)
+  const entrySegment = latestCenter ? validSegs.find(segment => segment.id === latestCenter.entry_segment_id) || null : null
+  const anchorRawIndex = Number(entrySegment?.raw_start_idx)
+  const recommendedAnchorTime = centerEntryConfirmed && windowStable && structureTimeKeyReliable
+    && !cacheInternalGapUnresolved && !confirmedStructureStale && Number.isFinite(anchorRawIndex)
+    ? Number(closedRates[anchorRawIndex]?.time_utc_msc) : null
+  const bootstrapIdentity = latestCenterSummary?.core_stable_id && latestCenterSummary?.entry_segment_stable_id
+    ? JSON.stringify({
+      core_stable_id:latestCenterSummary.core_stable_id,
+      entry_segment_stable_id:latestCenterSummary.entry_segment_stable_id,
+    })
+    : null
 
-  if (DEBUG_CHAN) console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} confirmed=${confirmedBis.length} segs=${validSegs.length} centers=${centers.length} warnings=${warnings.join(',') || 'none'}`)
-  return {
+  if (DEBUG_CHAN) console.log(`[Chan] ${timeframe}: status=${status} reliability=${reliability} raw=${rates.length} processed=${bars.length} fractals=${fractals.length} bis=${allBis.length} active_bis=${activeConfirmedBis.length} runs=${biRuns.length} segs=${validSegs.length} centers=${centers.length} support=${segmentSupportCount}/${segmentValidatorCount} warnings=${warnings.join(',') || 'none'}`)
+  const result = {
+    algorithm_version: CHAN_ALGORITHM_VERSION,
+    rule_profile: CHAN_RULE_PROFILE,
+    center_level: 'segment',
     status, reliability,
     requested_history_count: requestedHistoryCount,
     received_history_count: rates.length,
@@ -1173,32 +1636,74 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     requested_closed_history_count: requestedClosedHistoryCount,
     closed_history_sufficient: closedHistorySufficient,
     clock_status: clockStatus,
+    clock_trust_level: clockTrustLevel,
     time_location_reliable: timeLocationReliable,
+    structure_time_key_reliable: structureTimeKeyReliable,
+    structure_time_key_basis: structureTimeKeyBasis,
+    structure_topology_reliable:Boolean(windowStable && structureTimeKeyReliable
+      && !cacheInternalGapUnresolved && !confirmedStructureStale
+      && validSegs.length >= 2 && centers.length > 0),
     cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
     cache_internal_gap_unresolved: cacheInternalGapUnresolved,
     window_resynced: windowResynced,
     window_stable: windowStable,
+    segment_support_count: segmentSupportCount,
+    segment_validator_count: segmentValidatorCount,
+    segment_support_ratio: round3(segmentSupportRatio),
+    segment_pair_support: segmentPairSupport,
     structure_anchor: {
       requested_time_utc_msc: Number.isFinite(requestedStructureAnchor) && requestedStructureAnchor > 0 ? requestedStructureAnchor : null,
       matched: structureAnchorMatched,
+      time_matched:structureAnchorTimeMatched,
+      identity_matched:structureAnchorIdentityMatched,
+      last_confirmed_segment_not_regressed:structureAnchorLastConfirmedNotRegressed,
+      requested_core_stable_id:requestedAnchorCoreStableId || null,
+      requested_entry_segment_stable_id:requestedAnchorEntryStableId || null,
+      requested_last_confirmed_segment_time_utc_msc:Number.isFinite(requestedAnchorLastConfirmedTime)
+        && requestedAnchorLastConfirmedTime > 0 ? requestedAnchorLastConfirmedTime : null,
       recommended_time_utc_msc: Number.isFinite(recommendedAnchorTime) && recommendedAnchorTime > 0 ? recommendedAnchorTime : null,
       last_confirmed_segment_time_utc_msc: Number.isFinite(lastConfirmedSegmentTime) && lastConfirmedSegmentTime > 0 ? lastConfirmedSegmentTime : null,
+      bootstrap_identity: bootstrapIdentity,
+      bootstrap_core_stable_id: latestCenterSummary?.core_stable_id || null,
+      bootstrap_entry_segment_stable_id: latestCenterSummary?.entry_segment_stable_id || null,
+      bootstrap_entry_start_time_utc_msc: Number(latestCenterSummary?.entry_segment_start_time_utc_msc) || null,
+      bootstrap_observation_time_utc_msc: Number(windowEndTimeUtcMs) || null,
+      full_window_authoritative: false,
+      temporal_identity_stable: false,
+      temporal_closed_bar_support: 0,
+      temporal_closed_bar_validator_count: 0,
+      bootstrap_state: bootstrapIdentity ? 'candidate' : 'unavailable',
+      current_result_usable:structureAnchorMatched,
     },
-    raw_bar_count: rates.length, closed_bar_count: closedRates.length, processed_bar_count: bars.length,
-    fractal_count: fractals.length, bi_count: allBis.length, segment_count: validSegs.length, center_count: centers.length,
+    window_start_time_utc_msc: windowStartTimeUtcMs,
+    window_end_time_utc_msc: windowEndTimeUtcMs,
+    raw_bar_count: rates.length,
+    latest_price: Number.isFinite(latest) ? round5(latest) : null,
+    closed_bar_count: closedRates.length, processed_bar_count: bars.length,
+    fractal_count: fractals.length,
+    bi_count: allBis.length,
+    active_bi_count: activeConfirmedBis.length,
+    bi_run_count: biRuns.length,
+    active_bi_run_id: activeRunId,
+    bi_discontinuity_count: invalidCount,
+    last_bi_discontinuity: lastDiscontinuity,
+    segment_count: validSegs.length,
+    center_count: centers.length,
+    bi_center_count: biCenters.length,
     confirmed_structure_age_bars: confirmedStructureAgeBars,
     confirmed_structure_max_age_bars: CHAN_STRUCTURE_MAX_AGE_BARS,
-    historical_segment_run_count: historicalSegmentRuns.length,
-    historical_segment_count: historicalSegmentRuns.reduce((sum, run) => sum + run.length, 0),
+    historical_segment_run_count: priorHistoricalSegmentRuns.length + historicalSegmentRuns.length,
+    historical_segment_count: [...priorHistoricalSegmentRuns, ...historicalSegmentRuns].reduce((sum, run) => sum + run.length, 0),
     current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
     developing_bi: developingBi,
-    recent_bis: allBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
-    current_segment: summarizeSegment(lastSeg, allBis, closedRates),
-    prev_segment: summarizeSegment(validSegs[validSegs.length - 2], allBis, closedRates),
+    recent_bis: activeConfirmedBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
+    current_segment: confirmedSegmentSummaries.at(-1) || null,
+    prev_segment: confirmedSegmentSummaries.at(-2) || null,
     candidate_segment: formingSegment ? { ...summarizeSegment(formingSegment, allBis, closedRates), confirmed: false } : candidate ? { dir: candidate.dir, bi_count: candidate.bi_ids.length, start_price: round5(candidate.start_price), end_price: round5(candidate.end_price), confirmed: false } : null,
-    current_center: summarizeCenter(latestCenter, timeframe, validSegs, allBis, closedRates),
-    active_center: summarizeCenter(activeCenter, timeframe, validSegs, allBis, closedRates),
-    latest_center: summarizeCenter(latestCenter, timeframe, validSegs, allBis, closedRates),
+    current_center:confirmedCenterSummaries.at(-1) || null,
+    active_center:activeCenter ? confirmedCenterSummaries.find(center => center.id === activeCenter.id) || null : null,
+    latest_center:confirmedCenterSummaries.at(-1) || null,
+    latest_bi_center: summarizeBiCenter(biCenters.at(-1), timeframe, activeConfirmedBis, closedRates),
     price_vs_center: priceVsCenter,
     divergence,
     forming_divergence: formingDivergence,
@@ -1207,15 +1712,647 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     entry_candidates: entryCandidates,
     warnings,
   }
+  Object.defineProperty(result, '_confirmed_segments', {
+    value:confirmedSegmentSummaries,
+    enumerable:false,
+  })
+  Object.defineProperty(result, '_confirmed_centers', {
+    value:confirmedCenterSummaries,
+    enumerable:false,
+  })
+  Object.defineProperty(result, '_closed_rate_times_utc_msc', {
+    value:utcTimes,
+    enumerable:false,
+  })
+  return result
 }
 
 function stableTerminalStructureKey(result) {
   const current = result?.current_segment?.stable_id
   const previous = result?.prev_segment?.stable_id
-  return result?.window_stable && result?.segment_count >= 2 && current && previous ? `${previous}|${current}` : null
+  const hasWithinWindowEvidence = result?.window_stable || Number(result?.segment_support_count) >= 1
+  return hasWithinWindowEvidence && result?.segment_count >= 2 && current && previous ? `${previous}|${current}` : null
 }
 
-function selectStableChanResult(candidates) {
+function windowCanObserve(candidate, evidenceStartUtcMs) {
+  const windowStart = Number(candidate?.window_start_time_utc_msc)
+  const evidenceStart = Number(evidenceStartUtcMs)
+  return !Number.isFinite(windowStart) || windowStart <= 0
+    || !Number.isFinite(evidenceStart) || evidenceStart <= 0
+    || windowStart <= evidenceStart
+}
+
+function windowHasEvidenceContext(candidate, evidenceStartUtcMs, minimumBars = 0) {
+  if (!windowCanObserve(candidate, evidenceStartUtcMs)) return false
+  if (!(Number(minimumBars) > 0)) return true
+  const times = Array.isArray(candidate?._closed_rate_times_utc_msc)
+    ? candidate._closed_rate_times_utc_msc : []
+  const evidenceStart = Number(evidenceStartUtcMs)
+  if (!times.length || !Number.isFinite(evidenceStart) || evidenceStart <= 0) return false
+  let low = 0
+  let high = times.length
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (Number(times[middle]) < evidenceStart) low = middle + 1
+    else high = middle
+  }
+  return low >= Number(minimumBars)
+}
+
+function terminalEvidenceStart(candidate) {
+  const utcMs = Number(candidate?.prev_segment?.start_time_utc_msc)
+  if (Number.isFinite(utcMs) && utcMs > 0) return utcMs
+  const fallback = Number(candidate?.prev_segment?.start_time)
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : null
+}
+
+function confirmedSegmentEvidence(candidate) {
+  if (Array.isArray(candidate?._confirmed_segments) && candidate._confirmed_segments.length > 0) {
+    return candidate._confirmed_segments
+  }
+  return [candidate?.prev_segment, candidate?.current_segment].filter(Boolean)
+}
+
+function buildCrossWindowConsensusSegments(winnerCandidates, allCandidates = winnerCandidates) {
+  const representative = [...winnerCandidates].sort((a, b) => (
+    confirmedSegmentEvidence(b).length - confirmedSegmentEvidence(a).length
+    || Number(b.raw_bar_count || 0) - Number(a.raw_bar_count || 0)
+  ))[0]
+  const segments = confirmedSegmentEvidence(representative)
+  if (segments.length < 2) return { segments:[], pairSupport:[] }
+  let confirmedChain = null
+  for (let start = 0; start <= segments.length - 2; start++) {
+    const chain = segments.slice(start)
+    const evidenceStart = Number(chain[0]?.start_time_utc_msc) || null
+    const eligible = allCandidates.filter(candidate => windowCanObserve(candidate, evidenceStart))
+    const support = eligible.filter(candidate => candidateEndsWithSegmentChain(candidate, chain)).length
+    const pairEvidence = chain.slice(0, -1).map((segment, index) => {
+      const next = chain[index + 1]
+      const pairStart = Number(segment?.start_time_utc_msc) || null
+      const pairEligible = allCandidates.filter(candidate => windowCanObserve(candidate, pairStart))
+      const pairSupport = pairEligible.filter(candidate => candidateEndsWithSegmentChain(
+        candidate, chain.slice(index))).length
+      return {
+        segment,
+        next,
+        support:pairSupport,
+        eligible:pairEligible.length,
+        confirmed:pairSupport >= 2 && pairSupport * 2 > pairEligible.length,
+      }
+    })
+    const wholeChainConfirmed = support >= 2 && support * 2 > eligible.length
+    if (wholeChainConfirmed && pairEvidence.every(item => item.confirmed)) {
+      confirmedChain = { segments:chain, support, eligible:eligible.length, pairEvidence }
+      break
+    }
+  }
+  if (!confirmedChain) return { segments:[], pairSupport:[] }
+  return {
+    segments:confirmedChain.segments,
+    supportCount:confirmedChain.support,
+    validatorCount:confirmedChain.eligible,
+    pairSupport:confirmedChain.pairEvidence.map(item => ({
+      previous_stable_id:item.segment.stable_id,
+      current_stable_id:item.next.stable_id,
+      support_count:item.support,
+      validator_count:item.eligible,
+    })),
+  }
+}
+
+function candidateEndsWithSegmentChain(candidate, chain) {
+  if (!chain.length) return true
+  const candidateIds = confirmedSegmentEvidence(candidate).map(segment => segment?.stable_id)
+  const chainIds = chain.map(segment => segment?.stable_id)
+  const start = candidateIds.length - chainIds.length
+  return start >= 0 && chainIds.every((id, index) => id && candidateIds[start + index] === id)
+}
+
+function summarizeConsensusCenter(center, segments, timeframe, supportCount, validatorCount) {
+  if (!center) return null
+  const byId = id => segments.find(segment => segment.id === id) || null
+  const entry = byId(center.entry_segment_id)
+  const start = byId(center.start_segment_id)
+  const end = byId(center.end_segment_id)
+  const departure = byId(center.departure_segment_id)
+  const core = (center.segment_ids || []).slice(0, 3).map(byId)
+  const coreStableIds = core.length === 3 && core.every(segment => segment?.stable_id)
+    ? core.map(segment => segment.stable_id)
+    : null
+  return {
+    id:center.id,
+    stable_id:`${start?.stable_id || 'unknown'}|${end?.stable_id || 'unknown'}`,
+    core_stable_id:coreStableIds ? coreStableIds.join('|') : null,
+    core_segment_stable_ids:coreStableIds,
+    zl:round5(center.zl), zh:round5(center.zh),
+    gg:round5(center.fluctuation_high), dd:round5(center.fluctuation_low),
+    status:center.status,
+    source_timeframe:timeframe || null,
+    structure_level:'segment', level:timeframe || null, component_level:'segment',
+    entry_segment_id:entry?.id ?? null,
+    entry_segment_stable_id:entry?.stable_id ?? null,
+    entry_segment_start_time_utc_msc:entry?.start_time_utc_msc ?? null,
+    entry_segment_end_time_utc_msc:entry?.end_time_utc_msc ?? null,
+    start_segment_id:start?.id ?? null,
+    start_segment_stable_id:start?.stable_id ?? null,
+    end_segment_id:end?.id ?? null,
+    end_segment_stable_id:end?.stable_id ?? null,
+    departure_segment_id:departure?.id ?? null,
+    departure_segment_stable_id:departure?.stable_id ?? null,
+    closed_by_segment_id:departure?.id ?? null,
+    start_index:start?.start_index ?? null,
+    end_index:end?.end_index ?? null,
+    start_time:start?.start_time ?? null,
+    end_time:end?.end_time ?? null,
+    start_broker_time:start?.start_broker_time ?? start?.start_time ?? null,
+    end_broker_time:end?.end_broker_time ?? end?.end_time ?? null,
+    start_time_utc_msc:start?.start_time_utc_msc ?? null,
+    end_time_utc_msc:end?.end_time_utc_msc ?? null,
+    consensus_mode:'independent_center_quorum',
+    cross_window_support_count:supportCount,
+    cross_window_validator_count:validatorCount,
+  }
+}
+
+function confirmedCenterEvidence(candidate) {
+  if (Object.prototype.hasOwnProperty.call(candidate || {}, '_confirmed_centers')) {
+    return Array.isArray(candidate?._confirmed_centers) ? candidate._confirmed_centers : []
+  }
+  return [candidate?.latest_center].filter(Boolean)
+}
+
+function centerCoreStableIds(center, candidate = null) {
+  const explicit = Array.isArray(center?.core_segment_stable_ids)
+    ? center.core_segment_stable_ids.filter(Boolean)
+    : []
+  if (explicit.length === 3) return explicit
+  if (typeof center?.core_stable_id === 'string') {
+    const values = center.core_stable_id.split('|').filter(Boolean)
+    if (values.length === 3) return values
+  }
+  const startStableId = center?.start_segment_stable_id || null
+  if (!startStableId || !candidate) return []
+  const segments = confirmedSegmentEvidence(candidate)
+  const startIndex = segments.findIndex(segment => segment?.stable_id === startStableId)
+  if (startIndex < 0 || startIndex + 2 >= segments.length) return []
+  const values = segments.slice(startIndex, startIndex + 3).map(segment => segment?.stable_id || null)
+  return values.every(Boolean) ? values : []
+}
+
+function stableCenterCoreKey(center, candidate = null) {
+  const coreStableIds = centerCoreStableIds(center, candidate)
+  return coreStableIds.length === 3 ? JSON.stringify(coreStableIds) : null
+}
+
+function rebuildConsensusCenterFromCore(coreStableIds, segments) {
+  if (!Array.isArray(coreStableIds) || coreStableIds.length !== 3) return null
+  const startIndex = segments.findIndex(segment => segment?.stable_id === coreStableIds[0])
+  if (startIndex < 0 || startIndex + 2 >= segments.length) return null
+  const initial = segments.slice(startIndex, startIndex + 3)
+  if (!initial.every((segment, index) => segment?.stable_id === coreStableIds[index])) return null
+  const range = segment => {
+    const low = Number.isFinite(Number(segment?.low))
+      ? Number(segment.low) : Math.min(Number(segment?.start_price), Number(segment?.end_price))
+    const high = Number.isFinite(Number(segment?.high))
+      ? Number(segment.high) : Math.max(Number(segment?.start_price), Number(segment?.end_price))
+    return Number.isFinite(low) && Number.isFinite(high) && low <= high ? [low, high] : null
+  }
+  const initialRanges = initial.map(range)
+  if (initialRanges.some(item => !item)) return null
+  const zl = Math.max(...initialRanges.map(item => item[0]))
+  const zh = Math.min(...initialRanges.map(item => item[1]))
+  if (!(zl < zh)) return null
+  let fluctuationLow = Math.min(...initialRanges.map(item => item[0]))
+  let fluctuationHigh = Math.max(...initialRanges.map(item => item[1]))
+  let endIndex = startIndex + 2
+  let departureIndex = null
+  for (let index = startIndex + 3; index < segments.length; index++) {
+    const currentRange = range(segments[index])
+    if (!currentRange) return null
+    if (Math.max(zl, currentRange[0]) >= Math.min(zh, currentRange[1])) {
+      departureIndex = index
+      break
+    }
+    fluctuationLow = Math.min(fluctuationLow, currentRange[0])
+    fluctuationHigh = Math.max(fluctuationHigh, currentRange[1])
+    endIndex = index
+  }
+  const entry = segments[startIndex - 1] || null
+  const departure = departureIndex == null ? null : segments[departureIndex]
+  const centerSegments = segments.slice(startIndex, endIndex + 1)
+  return {
+    center:{
+      id:null,
+      component_level:'segment',
+      component_ids:centerSegments.map(segment => segment.id),
+      segment_ids:centerSegments.map(segment => segment.id),
+      zl,
+      zh,
+      fluctuation_low:fluctuationLow,
+      fluctuation_high:fluctuationHigh,
+      start_segment_id:initial[0].id,
+      end_segment_id:segments[endIndex].id,
+      entry_segment_id:entry?.id ?? null,
+      departure_segment_id:departure?.id ?? null,
+      closed_by_segment_id:departure?.id ?? null,
+      status:departure ? 'closed' : endIndex > startIndex + 2 ? 'extended' : 'confirmed',
+    },
+    startIndex,
+    endIndex,
+    departureIndex,
+  }
+}
+
+function selectConsensusCenters(supportCandidates, allCandidates, segments, timeframe,
+  authoritativeCandidate = null, minimumContextBars = 0) {
+  const groups = new Map()
+  let hadEvidence = allCandidates.some(candidate => confirmedCenterEvidence(candidate).length > 0)
+  const authoritativeCenterKeys = new Set(confirmedCenterEvidence(authoritativeCandidate)
+    .map(center => stableCenterCoreKey(center, authoritativeCandidate)).filter(Boolean))
+  for (const candidate of supportCandidates) {
+    const seen = new Set()
+    for (const center of confirmedCenterEvidence(candidate)) {
+      const key = stableCenterCoreKey(center, candidate)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      const group = groups.get(key) || { coreStableIds:JSON.parse(key), entries:[] }
+      group.entries.push({ candidate, center })
+      groups.set(key, group)
+    }
+  }
+  const supported = []
+  for (const group of groups.values()) {
+    // Suffix windows may confirm a phase chosen by the complete history, but a
+    // truncated window is never allowed to create a different center phase.
+    if (!authoritativeCenterKeys.has(JSON.stringify(group.coreStableIds))
+      || !group.entries.some(entry => entry.candidate === authoritativeCandidate)) continue
+    const firstCoreStableId = group.coreStableIds[0]
+    const evidenceSegment = group.entries
+      .flatMap(entry => confirmedSegmentEvidence(entry.candidate))
+      .find(segment => segment?.stable_id === firstCoreStableId)
+    const evidenceStart = Number(evidenceSegment?.start_time_utc_msc) || null
+    const eligibleCandidates = allCandidates.filter(candidate => (
+      windowHasEvidenceContext(candidate, evidenceStart, minimumContextBars)))
+    const eligibleSet = new Set(eligibleCandidates)
+    const supportEntries = group.entries.filter(entry => eligibleSet.has(entry.candidate))
+    if (supportEntries.length < 2 || supportEntries.length * 2 <= eligibleCandidates.length) continue
+    const rebuilt = rebuildConsensusCenterFromCore(group.coreStableIds, segments)
+    if (!rebuilt) continue
+    supported.push({
+      ...rebuilt,
+      evidenceStart,
+      supportEntries,
+      supportCount:supportEntries.length,
+      validatorCount:eligibleCandidates.length,
+    })
+  }
+  supported.sort((a, b) => a.startIndex - b.startIndex || b.supportCount - a.supportCount)
+  let coherent = []
+  let jointSupportCandidates = new Set()
+  let sequenceEvidenceStart = null
+  for (const option of supported) {
+    const previous = coherent.at(-1)
+    if (previous) {
+      if (previous.departureIndex == null || option.startIndex < previous.departureIndex) {
+        coherent = [option]
+        jointSupportCandidates = new Set(option.supportEntries.map(entry => entry.candidate))
+        sequenceEvidenceStart = option.evidenceStart
+        continue
+      }
+      const optionSupportCandidates = new Set(option.supportEntries.map(entry => entry.candidate))
+      const intersection = new Set([...jointSupportCandidates].filter(candidate => optionSupportCandidates.has(candidate)))
+      const sequenceEligible = allCandidates.filter(candidate => windowCanObserve(candidate, sequenceEvidenceStart))
+      if (intersection.size < 2 || intersection.size * 2 <= sequenceEligible.length) {
+        coherent = [option]
+        jointSupportCandidates = optionSupportCandidates
+        sequenceEvidenceStart = option.evidenceStart
+        continue
+      }
+      jointSupportCandidates = intersection
+    } else {
+      jointSupportCandidates = new Set(option.supportEntries.map(entry => entry.candidate))
+      sequenceEvidenceStart = option.evidenceStart
+    }
+    coherent.push(option)
+  }
+  coherent.forEach((option, index) => { option.center.id = index + 1 })
+  const centers = coherent.map(option => summarizeConsensusCenter(
+    option.center, segments, timeframe, option.supportCount, option.validatorCount))
+  const latestOption = coherent.at(-1) || null
+  return {
+    centers,
+    hadEvidence,
+    latestSupportCount:latestOption?.supportCount || 0,
+    latestValidatorCount:latestOption?.validatorCount || 0,
+    latestCandidates:latestOption?.supportEntries.map(entry => entry.candidate) || [],
+  }
+}
+
+function centerBootstrapIdentity(candidate) {
+  const center = candidate?.latest_center || null
+  const coreStableId = center?.core_stable_id || null
+  const entryStableId = center?.entry_segment_stable_id || null
+  const entryStartUtcMs = Number(center?.entry_segment_start_time_utc_msc)
+  if (!coreStableId || !entryStableId || !Number.isFinite(entryStartUtcMs) || entryStartUtcMs <= 0) return null
+  return {
+    key:JSON.stringify({ core_stable_id:coreStableId, entry_segment_stable_id:entryStableId }),
+    coreStableId,
+    entryStableId,
+    entryStartUtcMs,
+  }
+}
+
+function summarizeTemporalBootstrapEvidence(snapshots = []) {
+  const validatorCount = snapshots.length
+  const valid = snapshots.map(candidate => {
+    const identity = centerBootstrapIdentity(candidate)
+    const observationUtcMs = Number(candidate?.structure_anchor?.bootstrap_observation_time_utc_msc
+      || candidate?.window_end_time_utc_msc)
+    const warnings = new Set(Array.isArray(candidate?.warnings) ? candidate.warnings : [])
+    const stableStructureTimeKey = candidate?.structure_time_key_reliable === true
+      || (candidate?.structure_time_key_reliable == null && candidate?.time_location_reliable === true)
+    const reliable = candidate?.window_stable === true
+      && stableStructureTimeKey
+      && candidate?.history_sufficient !== false
+      && candidate?.closed_history_sufficient !== false
+      && candidate?.cache_internal_gap_unresolved !== true
+      && candidate?.reliability !== 'low'
+      && !warnings.has('confirmed_structure_stale')
+      && Number.isFinite(observationUtcMs) && observationUtcMs > 0
+    return reliable && identity ? { candidate, identity, observationUtcMs } : null
+  }).filter(Boolean)
+  const groups = new Map()
+  for (const item of valid) {
+    const group = groups.get(item.identity.key) || []
+    group.push(item)
+    groups.set(item.identity.key, group)
+  }
+  const winner = [...groups.values()].sort((a, b) => b.length - a.length)[0] || []
+  const observations = new Set(winner.map(item => item.observationUtcMs))
+  const stable = validatorCount === 3 && winner.length === 3 && observations.size === 3
+  const identity = stable ? winner[0].identity : null
+  return {
+    full_window_authoritative:true,
+    temporal_identity_stable:stable,
+    temporal_closed_bar_support:winner.length,
+    temporal_closed_bar_validator_count:validatorCount,
+    temporal_core_stable_id:identity?.coreStableId || null,
+    temporal_entry_segment_stable_id:identity?.entryStableId || null,
+    temporal_entry_start_time_utc_msc:identity?.entryStartUtcMs || null,
+    temporal_observation_times_utc_msc:[...observations].sort((a, b) => a - b),
+  }
+}
+
+function buildFullWindowTemporalEvidence(rates, timeframe, options, primary) {
+  const lastBarClosed = options?.dataQuality?.last_bar_closed === true
+  const closedRates = Array.isArray(rates) ? (lastBarClosed ? rates.slice() : rates.slice(0, -1)) : []
+  if (closedRates.length < MIN_KLINES_FOR_CHAN + 2 || !centerBootstrapIdentity(primary)) {
+    return summarizeTemporalBootstrapEvidence([primary, null, null])
+  }
+  const snapshots = []
+  for (const trim of [2, 1]) {
+    const snapshotRates = closedRates.slice(0, -trim)
+    const snapshotMacd = calculateMacdSeries(snapshotRates.map(rate => Number(rate.close))).histSeries
+    snapshots.push(computeChanWindow(snapshotRates, timeframe, snapshotMacd, {
+      ...options,
+      trustedStructureAnchor:null,
+      trustedStructureAnchorUtcMs:null,
+      requestedHistoryCount:snapshotRates.length,
+      dataQuality:{ ...(options?.dataQuality || {}), last_bar_closed:true },
+    }))
+  }
+  snapshots.push(primary)
+  return summarizeTemporalBootstrapEvidence(snapshots)
+}
+
+function evaluateCrossWindowBootstrapEvidence(candidates, authoritativeCandidate, temporalEvidence, minimumContextBars = 0) {
+  const entryStartUtcMs = Number(temporalEvidence?.temporal_entry_start_time_utc_msc)
+  const coreStableId = temporalEvidence?.temporal_core_stable_id || null
+  const entryStableId = temporalEvidence?.temporal_entry_segment_stable_id || null
+  if (temporalEvidence?.temporal_identity_stable !== true || !coreStableId || !entryStableId
+    || !Number.isFinite(entryStartUtcMs) || entryStartUtcMs <= 0) {
+    return { stable:false, supportCount:0, validatorCount:0 }
+  }
+  const authoritativeIdentity = centerBootstrapIdentity(authoritativeCandidate)
+  if (authoritativeIdentity?.coreStableId !== coreStableId || authoritativeIdentity?.entryStableId !== entryStableId) {
+    return { stable:false, supportCount:0, validatorCount:0 }
+  }
+  const eligible = candidates.filter(candidate => (
+    windowHasEvidenceContext(candidate, entryStartUtcMs, minimumContextBars)))
+  const supporters = eligible.filter(candidate => confirmedCenterEvidence(candidate).some(center => (
+    (center?.core_stable_id || centerCoreStableIds(center, candidate).join('|')) === coreStableId
+      && center?.entry_segment_stable_id === entryStableId
+  )))
+  return {
+    stable:supporters.length >= 2 && supporters.length * 2 > eligible.length,
+    supportCount:supporters.length,
+    validatorCount:eligible.length,
+  }
+}
+
+const CONCLUSIVE_DIVERGENCE_NONE_REASONS = new Set([
+  'macd_no_divergence', 'no_price_extreme_break', 'not_after_center',
+])
+const CONCLUSIVE_FORMING_NONE_REASONS = new Set([
+  ...CONCLUSIVE_DIVERGENCE_NONE_REASONS, 'forming_departure_not_confirmed', 'no_forming_segment',
+])
+
+function stableDivergenceEvidenceKey(divergence, forming = false) {
+  const hasDirectionalEvidence = divergence?.type === 'top' || divergence?.type === 'bottom'
+  if (!hasDirectionalEvidence) {
+    const conclusiveReasons = forming ? CONCLUSIVE_FORMING_NONE_REASONS : CONCLUSIVE_DIVERGENCE_NONE_REASONS
+    return conclusiveReasons.has(String(divergence?.reason || '')) ? 'none' : null
+  }
+  if (!forming && divergence?.confirmed !== true) return null
+  if (forming && divergence?.confirmed === true) return null
+  const entry = divergence.entry_segment?.stable_id
+    || (divergence.entry_segment_id == null ? null : `unlocated:${divergence.entry_segment_id}`)
+  const departure = divergence.departure_segment?.stable_id
+    || (divergence.departure_segment_id == null ? null : `unlocated:${divergence.departure_segment_id}`)
+  if (!entry || !departure) return null
+  return JSON.stringify({
+    type:divergence.type,
+    entry,
+    departure,
+  })
+}
+
+function stableFormingCandidateEvidenceKey(candidate) {
+  const key = stableDivergenceEvidenceKey(candidate?.forming_divergence, true)
+  if (!key || key === 'none') return key
+  const center = centerStableIdentity(candidate?.latest_center)
+  return center ? `${key}|center:${center}` : null
+}
+
+function stableEntryEvidenceKey(item = {}) {
+  return JSON.stringify({
+    key:item.candidate_key || `${item.type || 'unknown'}:${item.segment?.stable_id || item.segment_id || 'unknown'}`,
+    type:item.type || null,
+    side:item.side || null,
+    source:item.source || null,
+    segment:item.segment?.stable_id || (item.segment_id == null ? null : `unlocated:${item.segment_id}`),
+    center:centerStableIdentity(item.center) || null,
+    reference:Number.isFinite(Number(item.reference_price)) ? round5(Number(item.reference_price)) : null,
+    invalidation:Number.isFinite(Number(item.invalidation_price)) ? round5(Number(item.invalidation_price)) : null,
+    usable:item.usable_for_entry === true,
+  })
+}
+
+function centerStableIdentity(center) {
+  if (center?.core_stable_id) return center.core_stable_id
+  if (Array.isArray(center?.core_segment_stable_ids) && center.core_segment_stable_ids.length === 3) {
+    return center.core_segment_stable_ids.join('|')
+  }
+  if (center?.stable_id) return center.stable_id
+  return center?.start_segment_stable_id && center?.end_segment_stable_id
+    ? `${center.start_segment_stable_id}|${center.end_segment_stable_id}`
+    : null
+}
+
+function remapDivergenceToConsensus(divergence, segments, centers, fallbackCenter = null) {
+  if (!divergence || (divergence.type !== 'top' && divergence.type !== 'bottom')) return divergence || null
+  const entryStableId = divergence.entry_segment?.stable_id || null
+  const departureStableId = divergence.departure_segment?.stable_id || null
+  if (!entryStableId || !departureStableId) return null
+  const entrySegment = segments.find(segment => segment.stable_id === entryStableId) || null
+  const departureSegment = segments.find(segment => segment.stable_id === departureStableId) || null
+  const centerMatches = center => center
+    && center.entry_segment_stable_id === entryStableId
+    && center.departure_segment_stable_id === departureStableId
+  const center = centers.find(centerMatches) || (centerMatches(fallbackCenter) ? fallbackCenter : null)
+  if (!entrySegment || !departureSegment || !center) return null
+  return {
+    ...divergence,
+    center_id:center.id,
+    entry_segment_id:entrySegment.id,
+    departure_segment_id:departureSegment.id,
+    entry_segment:entrySegment,
+    departure_segment:departureSegment,
+  }
+}
+
+function remapFormingDivergenceToConsensus(divergence, sourceCenter, sourceCandidate, segments, consensusCenter) {
+  if (!divergence || (divergence.type !== 'top' && divergence.type !== 'bottom')) return divergence || null
+  const sourceCenterIdentity = stableCenterCoreKey(sourceCenter, sourceCandidate)
+  if (!consensusCenter || !sourceCenterIdentity
+    || sourceCenterIdentity !== stableCenterCoreKey(consensusCenter)) return null
+  const entryStableId = divergence.entry_segment?.stable_id || null
+  const departureStableId = divergence.departure_segment?.stable_id || null
+  if (!entryStableId || !departureStableId) return null
+  if (!consensusCenter.entry_segment_stable_id
+    || consensusCenter.entry_segment_stable_id !== entryStableId) return null
+  const entrySegment = segments.find(segment => segment.stable_id === entryStableId) || null
+  if (!entrySegment) return null
+  return {
+    ...divergence,
+    confirmed:false,
+    state:'forming',
+    center_id:consensusCenter.id,
+    entry_segment_id:entrySegment.id,
+    departure_segment_id:null,
+    entry_segment:entrySegment,
+    departure_segment:{ ...divergence.departure_segment, id:null },
+    reference_scope:'forming_stable_refs',
+  }
+}
+
+function preserveHistoricalDivergenceReferences(divergence, segments, centers) {
+  if (!divergence || (divergence.type !== 'top' && divergence.type !== 'bottom')) return null
+  const entryStableId = divergence.entry_segment?.stable_id || null
+  const departureStableId = divergence.departure_segment?.stable_id || null
+  if (!entryStableId || !departureStableId) return null
+  const entrySegment = segments.find(segment => segment.stable_id === entryStableId) || null
+  const departureSegment = segments.find(segment => segment.stable_id === departureStableId) || null
+  const center = centers.find(candidate => (
+    candidate.entry_segment_stable_id === entryStableId
+    && candidate.departure_segment_stable_id === departureStableId
+  )) || null
+  return {
+    ...divergence,
+    center_id:center?.id ?? null,
+    entry_segment_id:entrySegment?.id ?? null,
+    departure_segment_id:departureSegment?.id ?? null,
+    entry_segment:entrySegment || { ...divergence.entry_segment, id:null },
+    departure_segment:departureSegment || { ...divergence.departure_segment, id:null },
+    reference_scope:entrySegment && departureSegment ? 'consensus_chain' : 'stable_history',
+  }
+}
+
+function remapEntryCandidateToConsensus(item, segments, centers) {
+  const segment = segments.find(candidate => candidate.stable_id === item?.segment?.stable_id) || null
+  if (!segment) return null
+  const centerIdentity = centerStableIdentity(item?.center)
+  const center = centerIdentity
+    ? centers.find(candidate => centerStableIdentity(candidate) === centerIdentity) || null
+    : null
+  if (item.center_id != null && !center) return null
+  return {
+    ...item,
+    segment_id:segment.id,
+    center_id:center?.id ?? null,
+    segment,
+    center,
+  }
+}
+
+function selectEvidenceConsensus(candidates, keySelector) {
+  const groups = new Map()
+  let eligibleCount = 0
+  for (const candidate of candidates) {
+    const key = keySelector(candidate)
+    if (!key) continue
+    eligibleCount++
+    const group = groups.get(key) || []
+    group.push(candidate)
+    groups.set(key, group)
+  }
+  const group = [...groups.values()]
+    .filter(item => item.length >= 2 && item.length * 2 > eligibleCount)
+    .sort((a, b) => b.length - a.length)[0] || null
+  return { group, eligibleCount }
+}
+
+function conservativeDivergence(items) {
+  const strengthRank = { none:0, weak:1, strong:2 }
+  return [...items].sort((a, b) => (
+    (strengthRank[a?.strength] ?? 0) - (strengthRank[b?.strength] ?? 0)
+    || (Number(b?.area_ratio) || 0) - (Number(a?.area_ratio) || 0)
+    || (Number(b?.peak_ratio) || 0) - (Number(a?.peak_ratio) || 0)
+  ))[0]
+}
+
+function majorityEvidenceItems(candidates, listSelector, keySelector, validatorCount,
+  selectItem = items => items[0], evidenceStartSelector = null) {
+  const evidence = new Map()
+  for (const candidate of candidates) {
+    const seen = new Set()
+    for (const item of listSelector(candidate)) {
+      const key = keySelector(item)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      const group = evidence.get(key) || { entries:[], items:[] }
+      group.entries.push({ candidate, item })
+      group.items.push(item)
+      evidence.set(key, group)
+    }
+  }
+  return [...evidence.values()].map(group => {
+    const evidenceStart = evidenceStartSelector ? Number(evidenceStartSelector(group.items[0])) : null
+    const eligible = evidenceStartSelector
+      ? candidates.filter(candidate => windowCanObserve(candidate, evidenceStart))
+      : candidates.slice(0, validatorCount)
+    const supportItems = group.entries
+      .filter(entry => !evidenceStartSelector || windowCanObserve(entry.candidate, evidenceStart))
+      .map(entry => entry.item)
+    return { eligibleCount:eligible.length, supportItems }
+  }).filter(group => (
+    group.supportItems.length >= 2 && group.supportItems.length * 2 > group.eligibleCount
+  )).map(group => selectItem(group.supportItems))
+}
+
+function selectStableChanResult(candidates, options = {}) {
+  const explicitAuthoritativeCandidate = options.authoritativeCandidate || null
+  const authoritativeCandidate = explicitAuthoritativeCandidate || candidates[0] || null
   const groups = new Map()
   for (const candidate of candidates) {
     const key = stableTerminalStructureKey(candidate)
@@ -1224,48 +2361,509 @@ function selectStableChanResult(candidates) {
     group.push(candidate)
     groups.set(key, group)
   }
-  const supported = [...groups.values()].filter(group => group.length >= 2)
+  const supported = [...groups.values()].map(group => {
+    const evidenceStart = terminalEvidenceStart(group[0])
+    const eligible = candidates.filter(candidate => windowCanObserve(candidate, evidenceStart))
+    return { group, evidenceStart, eligibleCount:eligible.length, ratio:eligible.length ? group.length / eligible.length : 0 }
+  }).filter(item => (!explicitAuthoritativeCandidate || item.group.includes(authoritativeCandidate))
+    && item.group.length >= 2 && item.group.length * 2 > item.eligibleCount)
   if (supported.length === 0) return null
-  supported.sort((a, b) => {
-    if (a.length !== b.length) return b.length - a.length
-    const bestA = Math.max(...a.map(item => item.center_count * 10000 + item.segment_count * 100 + item.raw_bar_count))
-    const bestB = Math.max(...b.map(item => item.center_count * 10000 + item.segment_count * 100 + item.raw_bar_count))
-    return bestB - bestA
+  supported.sort((a, b) => (
+    b.ratio - a.ratio
+    || b.group.length - a.group.length
+    || Math.max(...b.group.map(item => item.center_count * 10000 + item.segment_count * 100 + item.raw_bar_count))
+      - Math.max(...a.group.map(item => item.center_count * 10000 + item.segment_count * 100 + item.raw_bar_count))
+  ))
+  if (supported[1] && supported[0].ratio === supported[1].ratio && supported[0].group.length === supported[1].group.length) return null
+  const winnerEvidence = supported[0]
+  const winner = winnerEvidence.group
+  const validatorCount = winnerEvidence.eligibleCount
+  const confirmedSuffix = buildCrossWindowConsensusSegments(winner, candidates)
+  if (confirmedSuffix.segments.length < 2) return null
+  const derivedCandidates = winner.filter(candidate => candidateEndsWithSegmentChain(candidate, confirmedSuffix.segments))
+  if (derivedCandidates.length < 2) return null
+  const derivedValidatorCount = derivedCandidates.length
+  // The complete window owns the phase and the public structure chain.  A
+  // shorter suffix is only a validator; using it as the output base can make
+  // a confirmed full-window anchor disagree with the returned center.
+  if (explicitAuthoritativeCandidate && !derivedCandidates.includes(authoritativeCandidate)) return null
+  const selected = explicitAuthoritativeCandidate
+    ? authoritativeCandidate
+    : [...derivedCandidates].sort((a, b) => (
+      b.center_count - a.center_count || b.segment_count - a.segment_count || b.raw_bar_count - a.raw_bar_count
+    ))[0]
+  const consensus = explicitAuthoritativeCandidate
+    ? { ...confirmedSuffix, segments:confirmedSegmentEvidence(authoritativeCandidate) }
+    : confirmedSuffix
+  if (consensus.segments.length < 2) return null
+  const timeframe = selected?.latest_center?.source_timeframe || selected?.current_center?.source_timeframe || null
+  const centerConsensus = selectConsensusCenters(
+    derivedCandidates, candidates, consensus.segments, timeframe, authoritativeCandidate,
+    Number(options.minimumCenterContextBars) || 0)
+  const summarizedCenters = centerConsensus.centers
+  const latestConsensusCenter = summarizedCenters.at(-1) || null
+  const centerCandidates = latestConsensusCenter ? centerConsensus.latestCandidates : []
+  const consensusCenterEntryConfirmed = Boolean(latestConsensusCenter
+    && latestConsensusCenter.entry_segment_stable_id && latestConsensusCenter.entry_segment_id != null)
+  const divergenceCandidates = derivedCandidates.map(candidate => {
+    const divergence = candidate?.divergence
+    if (!latestConsensusCenter) return { ...candidate, divergence:emptyDivergence('no_cross_window_center') }
+    if (stableCenterCoreKey(candidate?.latest_center, candidate) !== stableCenterCoreKey(latestConsensusCenter)) {
+      return { ...candidate, divergence:emptyDivergence('center_reference_mismatch') }
+    }
+    const directional = divergence?.type === 'top' || divergence?.type === 'bottom'
+    if (!directional && CONCLUSIVE_DIVERGENCE_NONE_REASONS.has(String(divergence?.reason || ''))) {
+      const localCenter = candidate?.latest_center || null
+      const sameEntry = Boolean(latestConsensusCenter.entry_segment_stable_id
+        && localCenter?.entry_segment_stable_id === latestConsensusCenter.entry_segment_stable_id)
+      // An open centre legitimately has no departure segment yet.  Treat a
+      // shared null departure as the same structural reference, while still
+      // rejecting candidates that refer to a different departure.
+      const consensusDeparture = latestConsensusCenter.departure_segment_stable_id || null
+      const localDeparture = localCenter?.departure_segment_stable_id || null
+      const sameDeparture = localDeparture === consensusDeparture
+      return sameEntry && sameDeparture
+        ? candidate
+        : { ...candidate, divergence:emptyDivergence('center_reference_mismatch') }
+    }
+    if (!divergence?.confirmed) return candidate
+    const entry = divergence.entry_segment?.stable_id || null
+    const departure = divergence.departure_segment?.stable_id || null
+    const entryMatches = Boolean(entry && latestConsensusCenter.entry_segment_stable_id
+      && entry === latestConsensusCenter.entry_segment_stable_id)
+    const departureMatches = Boolean(departure && latestConsensusCenter.departure_segment_stable_id
+      && departure === latestConsensusCenter.departure_segment_stable_id)
+    return entryMatches && departureMatches
+      ? candidate
+      : { ...candidate, divergence:emptyDivergence('center_reference_mismatch') }
   })
-  return supported[0].sort((a, b) => (
-    b.center_count - a.center_count || b.segment_count - a.segment_count || b.raw_bar_count - a.raw_bar_count
-  ))[0]
+  const divergenceConsensus = selectEvidenceConsensus(divergenceCandidates,
+    candidate => stableDivergenceEvidenceKey(candidate?.divergence))
+  const divergenceWinner = divergenceConsensus.group
+  const formingCandidates = latestConsensusCenter
+    ? derivedCandidates.map(candidate => {
+      if (stableCenterCoreKey(candidate?.latest_center, candidate) !== stableCenterCoreKey(latestConsensusCenter)) {
+        return { ...candidate, forming_divergence:emptyDivergence('center_reference_mismatch') }
+      }
+      const forming = candidate?.forming_divergence
+      const directional = forming?.type === 'top' || forming?.type === 'bottom'
+      if (!directional && CONCLUSIVE_FORMING_NONE_REASONS.has(String(forming?.reason || ''))) {
+        const localCenter = candidate?.latest_center || null
+        const sameEntry = Boolean(latestConsensusCenter.entry_segment_stable_id
+          && localCenter?.entry_segment_stable_id === latestConsensusCenter.entry_segment_stable_id)
+        const consensusDeparture = latestConsensusCenter.departure_segment_stable_id || null
+        const localDeparture = localCenter?.departure_segment_stable_id || null
+        if (!sameEntry || localDeparture !== consensusDeparture) {
+          return { ...candidate, forming_divergence:emptyDivergence('center_reference_mismatch') }
+        }
+      }
+      return candidate
+    })
+    : derivedCandidates.map(candidate => ({ ...candidate, forming_divergence:emptyDivergence('no_cross_window_center') }))
+  const formingConsensus = selectEvidenceConsensus(formingCandidates, stableFormingCandidateEvidenceKey)
+  const formingWinner = formingConsensus.group
+  const votedDivergence = divergenceWinner
+    ? conservativeDivergence(divergenceWinner.map(candidate => candidate.divergence))
+    : null
+  const consensusDivergence = votedDivergence
+    ? remapDivergenceToConsensus(votedDivergence, consensus.segments, summarizedCenters, latestConsensusCenter)
+    : null
+  const votedFormingDivergence = formingWinner
+    ? conservativeDivergence(formingWinner.map(candidate => candidate.forming_divergence))
+    : null
+  const consensusFormingDivergence = votedFormingDivergence
+    ? remapFormingDivergenceToConsensus(votedFormingDivergence,
+      formingWinner?.[0]?.latest_center, formingWinner?.[0], consensus.segments, latestConsensusCenter)
+    : null
+  const recentDivergences = majorityEvidenceItems(derivedCandidates,
+    candidate => Array.isArray(candidate?.recent_divergences) ? candidate.recent_divergences : [],
+    stableDivergenceEvidenceKey, derivedValidatorCount, conservativeDivergence,
+    item => Number(item?.entry_segment?.start_time_utc_msc || item?.departure_segment?.start_time_utc_msc) || null)
+    .map(item => preserveHistoricalDivergenceReferences(item, consensus.segments, summarizedCenters))
+    .filter(Boolean)
+  const entryCandidates = latestConsensusCenter
+    ? majorityEvidenceItems(centerCandidates,
+      candidate => Array.isArray(candidate?.entry_candidates) ? candidate.entry_candidates : [],
+      stableEntryEvidenceKey, centerCandidates.length, items => items[0],
+      item => Number(item?.center?.start_time_utc_msc || item?.segment?.start_time_utc_msc) || null)
+      .map(item => remapEntryCandidateToConsensus(item, consensus.segments, summarizedCenters))
+      .filter(Boolean)
+    : []
+  const confirmedWarnings = (selected.warnings || []).filter(item => (
+    item !== 'segment_window_unstable'
+    && item !== 'center_entry_unconfirmed'
+    && item !== 'no_valid_center'
+  ))
+  if (latestConsensusCenter) {
+    // Center existence is independently confirmed below; local-window center warnings
+    // are not allowed to leak into the cross-window result.
+  } else if (centerConsensus.hadEvidence) confirmedWarnings.push('center_cross_window_unstable')
+  else confirmedWarnings.push('no_valid_center')
+  if (latestConsensusCenter && !consensusCenterEntryConfirmed) confirmedWarnings.push('center_entry_unconfirmed')
+  const divergenceFailureReason = !latestConsensusCenter
+    ? 'no_cross_window_center'
+    : divergenceConsensus.eligibleCount < 2
+      ? 'divergence_evidence_unavailable' : 'divergence_cross_window_unstable'
+  if (!consensusDivergence && latestConsensusCenter) confirmedWarnings.push(divergenceFailureReason)
+  const uniqueWarnings = [...new Set(confirmedWarnings)]
+  const confirmedStatus = consensus.segments.length > 0 && summarizedCenters.length === 0
+    ? 'partial'
+    : uniqueWarnings.length > 0 ? 'partial' : 'ok'
+  const confirmedReliability = selected.history_sufficient && selected.closed_history_sufficient
+    && selected.time_location_reliable && consensus.segments.length >= 2 && summarizedCenters.length > 0
+    && uniqueWarnings.length === 0
+    ? 'high'
+    : selected.history_sufficient && selected.closed_history_sufficient && consensus.segments.length > 0
+      ? 'medium'
+      : 'low'
+  const structureTopologyReliable = selected.history_sufficient && selected.closed_history_sufficient
+    && selected.structure_time_key_reliable === true
+    && selected.cache_internal_gap_unresolved !== true
+    && !new Set(selected.warnings || []).has('confirmed_structure_stale')
+    && consensus.segments.length >= 2 && summarizedCenters.length > 0
+  const latestPrice = Number(selected.latest_price)
+  const priceVsCenter = !latestConsensusCenter || !Number.isFinite(latestPrice)
+    ? 'none'
+    : latestPrice > Number(latestConsensusCenter.zh) ? 'above'
+      : latestPrice < Number(latestConsensusCenter.zl) ? 'below' : 'inside'
+  const trendState = classifyChanTrend(consensus.segments, summarizedCenters, latestPrice,
+    consensusDivergence || emptyDivergence(divergenceFailureReason), confirmedReliability)
+  const formingFailureReason = formingConsensus.eligibleCount < 2
+    ? 'forming_evidence_unavailable' : 'forming_cross_window_unstable'
+  return {
+    ...selected,
+    status: confirmedStatus,
+    reliability: confirmedReliability,
+    window_stable: true,
+    structure_topology_reliable:structureTopologyReliable,
+    segment_count:consensus.segments.length,
+    center_count:summarizedCenters.length,
+    current_segment:consensus.segments.at(-1) || null,
+    prev_segment:consensus.segments.at(-2) || null,
+    current_center:latestConsensusCenter,
+    active_center:latestConsensusCenter && latestConsensusCenter.status !== 'closed'
+      && priceVsCenter === 'inside' ? latestConsensusCenter : null,
+    latest_center:latestConsensusCenter,
+    price_vs_center:priceVsCenter,
+    structure_anchor:{
+      ...(selected.structure_anchor || {}),
+      recommended_time_utc_msc:null,
+      last_confirmed_segment_time_utc_msc:Number(consensus.segments.at(-1)?.end_time_utc_msc) || null,
+      full_window_authoritative:false,
+      temporal_identity_stable:false,
+      temporal_closed_bar_support:0,
+      temporal_closed_bar_validator_count:0,
+      bootstrap_state:'pending',
+    },
+    divergence:consensusDivergence || emptyDivergence(divergenceFailureReason),
+    forming_divergence:consensusFormingDivergence || emptyDivergence(formingFailureReason),
+    recent_divergences: recentDivergences,
+    trend_state:trendState,
+    entry_candidates: entryCandidates,
+    warnings: uniqueWarnings,
+    cross_window_support_count: winner.length,
+    cross_window_validator_count: validatorCount,
+    cross_window_total_count:candidates.length,
+    cross_window_support_ratio: validatorCount > 0 ? round3(winner.length / validatorCount) : 0,
+    cross_window_segment_pair_support:consensus.pairSupport,
+    cross_window_derived_support_count: derivedCandidates.length,
+    authoritative_terminal_chain_confirmed:derivedCandidates.includes(authoritativeCandidate),
+    cross_window_derived_support_ratio: consensus.validatorCount > 0
+      ? round3(consensus.supportCount / consensus.validatorCount) : 0,
+    cross_window_center_support_count: latestConsensusCenter ? centerConsensus.latestSupportCount : 0,
+    cross_window_center_validator_count:latestConsensusCenter ? centerConsensus.latestValidatorCount : 0,
+    cross_window_divergence_support_count: divergenceWinner?.length || 0,
+    cross_window_divergence_validator_count:divergenceConsensus.eligibleCount,
+    cross_window_forming_support_count:formingWinner?.length || 0,
+    cross_window_forming_validator_count:formingConsensus.eligibleCount,
+    cross_window_trend_support_count:derivedCandidates.length,
+  }
+}
+
+function suppressUnconfirmedWindowStructure(primary) {
+  const warnings = [...new Set([
+    ...(primary.warnings || []).filter(item => item !== 'segment_consensus_partial'
+      && item !== 'center_entry_unconfirmed'),
+    'segment_cross_window_unstable',
+    'segments_not_confirmed',
+    'no_valid_center',
+  ])]
+  return {
+    ...primary,
+    status: Number(primary.active_bi_count || primary.bi_count) >= 3 ? 'segment_history_unresolved' : primary.status,
+    reliability: 'low',
+    window_stable: false,
+    structure_topology_reliable:false,
+    cross_window_support_count: 0,
+    cross_window_validator_count: 0,
+    cross_window_support_ratio: 0,
+    segment_count: 0,
+    center_count: 0,
+    historical_segment_run_count: 0,
+    historical_segment_count: 0,
+    confirmed_structure_age_bars: null,
+    structure_anchor: {
+      ...(primary.structure_anchor || {}),
+      matched: false,
+      recommended_time_utc_msc: null,
+      last_confirmed_segment_time_utc_msc: null,
+      full_window_authoritative:false,
+      temporal_identity_stable:false,
+      temporal_closed_bar_support:0,
+      temporal_closed_bar_validator_count:0,
+      bootstrap_state:'unavailable',
+      bootstrap_identity:null,
+      bootstrap_core_stable_id:null,
+      bootstrap_entry_segment_stable_id:null,
+      bootstrap_entry_start_time_utc_msc:null,
+      current_result_usable:false,
+    },
+    current_segment: null,
+    prev_segment: null,
+    current_center: null,
+    active_center: null,
+    latest_center: null,
+    price_vs_center: 'none',
+    divergence: emptyDivergence('segment_cross_window_unstable'),
+    forming_divergence: emptyDivergence('segment_cross_window_unstable'),
+    recent_divergences: [],
+    trend_state: emptyTrendState('segment_cross_window_unstable'),
+    entry_candidates: [],
+    warnings,
+  }
+}
+
+function protectBootstrapDependentEvidence(selected, usable, reliability) {
+  if (usable) {
+    return {
+      divergence:selected.divergence,
+      forming_divergence:selected.forming_divergence,
+      recent_divergences:selected.recent_divergences,
+      trend_state:selected.trend_state,
+      entry_candidates:selected.entry_candidates,
+    }
+  }
+  const divergence = emptyDivergence('structure_anchor_bootstrap_pending')
+  return {
+    divergence,
+    forming_divergence:emptyDivergence('structure_anchor_bootstrap_pending'),
+    recent_divergences:[],
+    trend_state:classifyChanTrend(
+      [selected?.prev_segment, selected?.current_segment].filter(Boolean),
+      [selected?.latest_center].filter(Boolean),
+      Number(selected?.latest_price), divergence, reliability),
+    entry_candidates:[],
+  }
+}
+
+function protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationWindowCount) {
+  const reliability = primary.reliability === 'high' ? 'medium' : primary.reliability
+  const warnings = [...new Set([...(primary.warnings || []), 'structure_anchor_bootstrap_pending'])]
+  const hasEntryDependentStructure = Number(primary.segment_count) > 0
+    || Number(primary.center_count) > 0
+    || primary.divergence?.type === 'top' || primary.divergence?.type === 'bottom'
+    || primary.forming_divergence?.type === 'top' || primary.forming_divergence?.type === 'bottom'
+    || (Array.isArray(primary.recent_divergences) && primary.recent_divergences.length > 0)
+    || (Array.isArray(primary.entry_candidates) && primary.entry_candidates.length > 0)
+  const protectedEvidence = hasEntryDependentStructure
+    ? protectBootstrapDependentEvidence(primary, false, reliability)
+    : {
+      divergence:primary.divergence,
+      forming_divergence:primary.forming_divergence,
+      recent_divergences:primary.recent_divergences,
+      trend_state:primary.trend_state,
+      entry_candidates:primary.entry_candidates,
+    }
+  return {
+    ...primary,
+    status:primary.status === 'ok' ? 'partial' : primary.status,
+    reliability,
+    warnings,
+    temporal_identity_stable:false,
+    temporal_closed_bar_support:0,
+    temporal_closed_bar_validator_count:0,
+    cross_window_entry_support_count:0,
+    cross_window_entry_validator_count:0,
+    authoritative_terminal_chain_confirmed:false,
+    ...protectedEvidence,
+    structure_anchor:{
+      ...(primary.structure_anchor || {}),
+      matched:false,
+      recommended_time_utc_msc:null,
+      full_window_authoritative:true,
+      temporal_identity_stable:false,
+      temporal_closed_bar_support:0,
+      temporal_closed_bar_validator_count:0,
+      cross_window_entry_support_count:0,
+      cross_window_entry_validator_count:0,
+      bootstrap_identity:null,
+      bootstrap_core_stable_id:null,
+      bootstrap_entry_segment_stable_id:null,
+      bootstrap_entry_start_time_utc_msc:null,
+      bootstrap_state:'pending',
+      current_result_usable:false,
+    },
+    source_history_count:sourceHistoryCount,
+    calculation_window_count:calculationWindowCount,
+    window_selection:'full_window_bootstrap_pending',
+  }
 }
 
 function computeChan(rates, timeframe, macdHist, options = {}) {
-  const primary = computeChanWindow(rates, timeframe, macdHist, options)
-  const hasTrustedAnchor = Number(options.trustedStructureAnchorUtcMs) > 0
-  const trustedAnchorMatched = hasTrustedAnchor && primary.structure_anchor?.matched === true
-  if (trustedAnchorMatched || !Array.isArray(rates) || rates.length < 600 || (primary.window_stable && primary.segment_count >= 3 && primary.center_count > 0)) {
-    return { ...primary, source_history_count: rates?.length || 0, calculation_window_count: rates?.length || 0, window_selection: trustedAnchorMatched ? 'trusted_anchor' : 'full_window' }
+  const sourceHistoryCount = Array.isArray(rates) ? rates.length : 0
+  const calculationRates = sourceHistoryCount > CHAN_BOOTSTRAP_MAX_BARS
+    ? rates.slice(-CHAN_BOOTSTRAP_MAX_BARS) : rates
+  const calculationWindowCount = Array.isArray(calculationRates) ? calculationRates.length : 0
+  const calculationMacdHist = sourceHistoryCount > CHAN_BOOTSTRAP_MAX_BARS
+    ? calculateMacdSeries(calculationRates.map(rate => Number(rate.close))).histSeries
+    : macdHist
+  const requestedHistoryCount = Number(options.requestedHistoryCount)
+  const calculationOptions = {
+    ...options,
+    requestedHistoryCount:Number.isFinite(requestedHistoryCount) && requestedHistoryCount > 0
+      ? Math.min(requestedHistoryCount, CHAN_BOOTSTRAP_MAX_BARS)
+      : calculationWindowCount,
   }
+  const requestedTrustedAnchor = options.trustedStructureAnchor && typeof options.trustedStructureAnchor === 'object'
+    ? options.trustedStructureAnchor : {}
+  const requestedTrustedAnchorTime = Number(
+    requestedTrustedAnchor.anchor_time_utc_msc ?? options.trustedStructureAnchorUtcMs)
+  const hasTrustedAnchor = Number.isFinite(requestedTrustedAnchorTime) && requestedTrustedAnchorTime > 0
+  let effectiveCalculationOptions = calculationOptions
+  let primary = computeChanWindow(calculationRates, timeframe, calculationMacdHist, calculationOptions)
+  let trustedAnchorMatched = hasTrustedAnchor && primary.structure_anchor?.matched === true
+  if (hasTrustedAnchor && !trustedAnchorMatched) {
+    const failedAnchorDiagnostics = primary.structure_anchor || {}
+    const anchorWarnings = (primary.warnings || []).filter(item => item.startsWith('structure_anchor_'))
+    const unanchoredOptions = {
+      ...calculationOptions,
+      trustedStructureAnchor:null,
+      trustedStructureAnchorUtcMs:null,
+    }
+    effectiveCalculationOptions = unanchoredOptions
+    const unanchored = computeChanWindow(calculationRates, timeframe, calculationMacdHist, unanchoredOptions)
+    primary = {
+      ...unanchored,
+      status:'partial',
+      reliability:unanchored.reliability === 'high' ? 'medium' : unanchored.reliability,
+      warnings:[...new Set([...(unanchored.warnings || []), ...anchorWarnings])],
+      structure_anchor:{
+        ...(unanchored.structure_anchor || {}),
+        requested_time_utc_msc:requestedTrustedAnchorTime,
+        requested_core_stable_id:String(requestedTrustedAnchor.bootstrap_core_stable_id || '').trim() || null,
+        requested_entry_segment_stable_id:String(requestedTrustedAnchor.bootstrap_entry_segment_stable_id || '').trim() || null,
+        requested_last_confirmed_segment_time_utc_msc:
+          Number(requestedTrustedAnchor.last_confirmed_segment_time_utc_msc) || null,
+        matched:false,
+        time_matched:failedAnchorDiagnostics.time_matched === true,
+        identity_matched:failedAnchorDiagnostics.identity_matched === true,
+        last_confirmed_segment_not_regressed:
+          failedAnchorDiagnostics.last_confirmed_segment_not_regressed === true,
+      },
+    }
+    trustedAnchorMatched = false
+  }
+  if (trustedAnchorMatched || options.fractalsForTest || !Array.isArray(calculationRates)) {
+    return { ...primary, source_history_count:sourceHistoryCount, calculation_window_count:calculationWindowCount, window_selection:trustedAnchorMatched ? 'trusted_anchor' : 'full_window' }
+  }
+  if (calculationWindowCount < 300) {
+    return protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationWindowCount)
+  }
+  const maxWindow = calculationWindowCount
+  const shortWindowStep = maxWindow >= 600 ? 100 : Math.max(20, Math.floor((maxWindow / 5) / 10) * 10)
+  const minWindow = maxWindow >= 600 ? 300 : Math.max(120, Math.floor((maxWindow * 0.6) / 10) * 10)
   const sizes = []
-  for (let size = Math.floor(Math.min(rates.length, 1000) / 100) * 100; size >= 300; size -= 100) sizes.push(size)
-  const candidates = sizes.map(size => {
-    if (size === rates.length) return primary
-    const windowRates = rates.slice(-size)
-    const windowMacd = calculateMacdSeries(windowRates.map(rate => Number(rate.close))).histSeries
-    return computeChanWindow(windowRates, timeframe, windowMacd, { ...options, requestedHistoryCount: size })
-  })
-  const selected = selectStableChanResult(candidates)
-  if (!selected) {
-    return { ...primary, source_history_count: rates.length, calculation_window_count: rates.length, window_selection: 'full_window_unresolved' }
+  for (let size = maxWindow; size >= minWindow;) {
+    sizes.push(size)
+    size -= size > 1200 ? 200 : shortWindowStep
   }
+  const candidates = sizes.map(size => {
+    if (size === calculationWindowCount) return primary
+    const windowRates = calculationRates.slice(-size)
+    const windowMacd = calculateMacdSeries(windowRates.map(rate => Number(rate.close))).histSeries
+      return computeChanWindow(windowRates, timeframe, windowMacd, { ...effectiveCalculationOptions, requestedHistoryCount: size })
+  })
+  const selected = selectStableChanResult(candidates, {
+    authoritativeCandidate:primary,
+    minimumCenterContextBars:CHAN_CENTER_MIN_CONTEXT_BARS,
+  })
+  if (!selected) {
+    return {
+      ...suppressUnconfirmedWindowStructure(primary),
+      source_history_count:sourceHistoryCount,
+      calculation_window_count:calculationWindowCount,
+      window_selection: 'full_window_unresolved',
+    }
+  }
+  const temporalEvidence = buildFullWindowTemporalEvidence(calculationRates, timeframe, effectiveCalculationOptions, primary)
+  const crossWindowBootstrap = evaluateCrossWindowBootstrapEvidence(
+    candidates, primary, temporalEvidence, CHAN_CENTER_MIN_CONTEXT_BARS)
+  const primaryWarnings = new Set(primary.warnings || [])
+  const primaryStructureTimeKeyReliable = primary.structure_time_key_reliable === true
+    || (primary.structure_time_key_reliable == null && primary.time_location_reliable === true)
+  const promotionHistoryReady = calculationWindowCount >= CHAN_BOOTSTRAP_MAX_BARS
+    && primary.history_sufficient === true
+    && primary.closed_history_sufficient === true
+    && primaryStructureTimeKeyReliable
+    && primary.cache_internal_gap_unresolved !== true
+    && primary.reliability !== 'low'
+    && !primaryWarnings.has('confirmed_structure_stale')
+  const promotionReady = promotionHistoryReady
+    && selected.authoritative_terminal_chain_confirmed === true
+    && temporalEvidence.temporal_identity_stable === true
+    && crossWindowBootstrap.stable
+  // The unanchored calculation is phase one only: it may recommend and persist
+  // an independently confirmed boundary, but it never publishes entry-dependent
+  // evidence. A later calculation must reload and exactly match that boundary.
+  const bootstrapUsableNow = false
+  const recommendedAnchorTime = promotionReady
+    ? Number(temporalEvidence.temporal_entry_start_time_utc_msc) || null : null
+  const bootstrapWarning = bootstrapUsableNow ? [] : ['structure_anchor_bootstrap_pending']
+  const warnings = [...new Set([...(selected.warnings || []), ...bootstrapWarning])]
+  const reliability = !bootstrapUsableNow && selected.reliability === 'high' ? 'medium' : selected.reliability
+  const protectedEvidence = protectBootstrapDependentEvidence(selected, bootstrapUsableNow, reliability)
   return {
     ...selected,
-    source_history_count: rates.length,
+    status:warnings.length > 0 ? 'partial' : selected.status,
+    reliability,
+    warnings,
+    temporal_identity_stable:temporalEvidence.temporal_identity_stable,
+    temporal_closed_bar_support:temporalEvidence.temporal_closed_bar_support,
+    temporal_closed_bar_validator_count:temporalEvidence.temporal_closed_bar_validator_count,
+    cross_window_entry_support_count:crossWindowBootstrap.supportCount,
+    cross_window_entry_validator_count:crossWindowBootstrap.validatorCount,
+    ...protectedEvidence,
+    structure_anchor:{
+      ...(selected.structure_anchor || {}),
+      requested_time_utc_msc:primary.structure_anchor?.requested_time_utc_msc ?? null,
+      matched:false,
+      recommended_time_utc_msc:recommendedAnchorTime,
+      full_window_authoritative:true,
+      temporal_identity_stable:temporalEvidence.temporal_identity_stable,
+      temporal_closed_bar_support:temporalEvidence.temporal_closed_bar_support,
+      temporal_closed_bar_validator_count:temporalEvidence.temporal_closed_bar_validator_count,
+      cross_window_entry_support_count:crossWindowBootstrap.supportCount,
+      cross_window_entry_validator_count:crossWindowBootstrap.validatorCount,
+      bootstrap_identity:promotionReady ? JSON.stringify({
+        core_stable_id:temporalEvidence.temporal_core_stable_id,
+        entry_segment_stable_id:temporalEvidence.temporal_entry_segment_stable_id,
+      }) : null,
+      bootstrap_core_stable_id:promotionReady ? temporalEvidence.temporal_core_stable_id : null,
+      bootstrap_entry_segment_stable_id:promotionReady ? temporalEvidence.temporal_entry_segment_stable_id : null,
+      bootstrap_entry_start_time_utc_msc:promotionReady
+        ? temporalEvidence.temporal_entry_start_time_utc_msc : null,
+      bootstrap_observation_time_utc_msc:Number(primary.structure_anchor?.bootstrap_observation_time_utc_msc) || null,
+      bootstrap_state:promotionReady ? 'confirmed' : 'pending',
+      current_result_usable:bootstrapUsableNow,
+    },
+    source_history_count:sourceHistoryCount,
     calculation_window_count: selected.raw_bar_count,
-    window_selection: 'stable_suffix_consensus',
+    window_selection: 'full_window_cross_confirmed',
   }
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, computeChan, computeChanWindow, selectStableChanResult }
+export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, computeChan, computeChanWindow, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()
@@ -1422,7 +3020,12 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
     ? computeChan(chanRates, timeframe, chanMacdSeries.histSeries, {
       requestedHistoryCount: options.requestedChanHistoryCount,
       dataQuality: options.chanDataQuality,
-      trustedStructureAnchorUtcMs: options.chanDataQuality?.chan_structure_anchor_utc_msc,
+      trustedStructureAnchor: {
+        anchor_time_utc_msc:options.chanDataQuality?.chan_structure_anchor_utc_msc,
+        last_confirmed_segment_time_utc_msc:options.chanDataQuality?.chan_last_confirmed_segment_utc_msc,
+        bootstrap_core_stable_id:options.chanDataQuality?.chan_structure_anchor_core_stable_id,
+        bootstrap_entry_segment_stable_id:options.chanDataQuality?.chan_structure_anchor_entry_segment_stable_id,
+      },
     })
     : undefined
 

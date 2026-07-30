@@ -447,7 +447,7 @@ fn account_card(
         permission: terminal.map(permission_view),
         mt4_expert_update: terminal
             .filter(|value| value.platform == "mt4" && value.mt4_expert_restart_required)
-            .map(|_| "EA 已更新，重启 MT4 后生效".to_owned()),
+            .map(|_| "EA 版本已更新，请重启 MT4".to_owned()),
         primary_action,
         primary_action_text: primary_action.map(|action| {
             if busy {
@@ -847,6 +847,26 @@ mod tests {
         assert!(!view.show_settings);
         assert!(!view.show_pair);
         assert!(view.show_logout);
+    }
+
+    #[test]
+    fn mt4_adapter_upgrade_is_visible_on_the_matching_account_card() {
+        let mut state = base_state();
+        state.selected_platform = Some("mt4".to_owned());
+        state.selected_terminal_instance_id = Some("mt4-main".to_owned());
+        state.terminal_candidates[0].terminal_instance_id = "mt4-main".to_owned();
+        state.terminal_candidates[0].platform = "mt4".to_owned();
+        state.terminals[0].terminal_instance_id = "mt4-main".to_owned();
+        state.terminals[0].platform = "mt4".to_owned();
+        state.terminals[0].mt4_expert_restart_required = true;
+
+        let view = build_main_window_view(&state, &BTreeSet::new(), |_| "13:19:09".to_owned())
+            .expect("MT4 main window");
+
+        assert_eq!(
+            view.accounts[0].mt4_expert_update.as_deref(),
+            Some("EA 版本已更新，请重启 MT4")
+        );
     }
 
     #[test]

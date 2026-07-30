@@ -503,7 +503,7 @@ describe('bridge-reported market state', () => {
     expect(getPlatformMarketClockState(77)).toMatchObject({
       connected:true, timezone_offset_minutes:180,
       clock_status:'mt4_current_offset', clock_residual_ms:0,
-      broker_server:'Broker-Demo', account_login:'12345678',
+      broker_server:'Broker-Demo', account_login:'12345678', platform:'mt4',
     })
     expect(getLatestBridgeMt5Clock()).toMatchObject({
       time:'2026-07-27T06:12:34.000Z', user_id:77, platform:'mt4',

@@ -221,6 +221,8 @@ pub struct RuntimeTerminalStatus {
     pub collector_consecutive_failures: u32,
     pub last_success_at_utc_msc: Option<i64>,
     pub error_code: Option<String>,
+    #[serde(default)]
+    pub mt4_expert_restart_required: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -991,6 +993,7 @@ mod tests {
             read_runtime_status_snapshot(&output, DEFAULT_PROFILE_ID, now).expect("read status");
         assert_eq!(document.phase, "online");
         assert_eq!(document.terminals[0].collector_state, "retrying");
+        assert!(!document.terminals[0].mt4_expert_restart_required);
         assert!(!document.is_stale(now, 15_000));
         assert!(document.is_stale(now + 20_001, 15_000));
 

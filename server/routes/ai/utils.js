@@ -6,7 +6,8 @@ export const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return str
 
 export const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
 export const CHAN_HISTORY_COUNT = 300
-export const CHAN_MAX_HISTORY_COUNT = 1000
+export const CHAN_MAX_HISTORY_COUNT = 2000
+export const CHAN_ALGORITHM_VERSION = 'chan_structure_v4'
 
 const BROKER_SUFFIX_RE = /\.(a|s|c|pro|std|z|ecn|m|raw|mini)$/i
 export function stripBrokerSuffix(sym) {
@@ -71,11 +72,15 @@ export function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
 export function compactRates(rates) {
   return rates.map(r => ({
     time: r.time,
+    ...(Number.isFinite(Number(r.time_utc_msc)) ? { time_utc_msc:Number(r.time_utc_msc) } : {}),
+    ...(Number.isFinite(Number(r.time_server_msc)) ? { time_server_msc:Number(r.time_server_msc) } : {}),
+    ...(Number.isFinite(Number(r.captured_at_utc_msc)) ? { captured_at_utc_msc:Number(r.captured_at_utc_msc) } : {}),
     open: round5(parseFloat(r.open || 0)),
     high: round5(parseFloat(r.high || 0)),
     low: round5(parseFloat(r.low || 0)),
     close: round5(parseFloat(r.close || 0)),
     tick_volume: parseInt(r.tick_volume || 0),
+    spread: parseInt(r.spread || 0),
   }))
 }
 

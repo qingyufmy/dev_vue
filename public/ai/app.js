@@ -1022,13 +1022,16 @@ function userVisibleText(value, fallback = "暂无中文说明") {
   let text = String(value || "").trim();
   if (!text) return fallback;
   const cleanLocalizedText = input => String(input || "")
-    .replace(/相关条件尚未确认为相关条件尚未确认/g, "线段结构尚不可靠")
-    .replace(/系统提示的相关条件尚未确认显示/g, "系统提示的多周期状态显示");
+    .replace(/相关状态尚未确认(?:\s*(?:为|[:：=、，;；和及])\s*相关状态尚未确认)+/g, "相关状态尚未确认")
+    .replace(/系统提示的相关状态尚未确认显示/g, "系统提示状态尚未确认");
   const replacements = [
+    [/\bstructure_topology_reliable\s*=\s*true\b/gi, "线段与中枢结构拓扑已确认"],
+    [/\bstructure_topology_reliable\s*=\s*false\b/gi, "线段与中枢结构拓扑尚未确认"],
     [/\bwindow_stable\s*=\s*false\b/gi, "结构窗口不稳定"],
     [/\btime_location_reliable\s*=\s*false\b/gi, "结构时间定位不可靠"],
     [/\balignment_with_higher\s*=\s*conflict\b/gi, "与高周期方向冲突"],
     [/\bcontext_status\s*=\s*partial\b/gi, "多周期行情证据不完整"],
+    [/\bstatus\s*(?:=|为|:|：)\s*segment_history_unresolved\b/gi, "历史窗口尚未收敛，暂不确认线段"],
     [/\bstatus\s*(?:=|为|:|：)\s*unreliable_segments\b/gi, "线段结构尚不可靠"],
     [/\bagreement\s*(?:=|为|:|：)\s*aligned_up\b/gi, "多周期方向一致偏多"],
     [/\bagreement\s*(?:=|为|:|：)\s*aligned_down\b/gi, "多周期方向一致偏空"],
@@ -1041,6 +1044,17 @@ function userVisibleText(value, fallback = "暂无中文说明") {
     [/\breliability\s*(?:为|:|：)?\s*(?:中|一般)/gi, "结构可靠性一般"],
     [/\breliability\s*(?:为|:|：)?\s*高/gi, "结构可靠性较高"],
     [/\bunreliable_segments\b/gi, "线段结构尚不可靠"],
+    [/\bsegment_history_unresolved\b/gi, "历史窗口尚未收敛，暂不确认线段"],
+    [/\bsegment_cross_window_unstable\b/gi, "不同历史窗口的线段边界尚未收敛"],
+    [/\bcenter_cross_window_unstable\b/gi, "不同历史窗口对中枢形成核心尚未达成共识"],
+    [/\bcenter_entry_unconfirmed\b/gi, "中枢已确认，但进入段缺少跨窗口共识，仅背驰暂不可判"],
+    [/\bstructure_anchor_bootstrap_pending\b/gi, "结构锚点正在用连续三根已收盘K线确认，暂不使用依赖进入段的背驰与买卖点"],
+    [/\bmt4_historical_offset_unverified\b/gi, "MT4 历史K线的绝对UTC时间为近似定位，不影响同源结构顺序"],
+    [/\bdivergence_evidence_unavailable\b/gi, "背驰所需的有效力度证据不足"],
+    [/\bdivergence_cross_window_unstable\b/gi, "不同历史窗口的背驰证据尚未收敛"],
+    [/\bforming_evidence_unavailable\b/gi, "候选背驰所需的有效证据不足"],
+    [/\bforming_cross_window_unstable\b/gi, "不同历史窗口的候选背驰证据尚未收敛"],
+    [/\bno_cross_window_center\b/gi, "尚无跨窗口确认的中枢"],
     [/\binsufficient_confirmed_bis\b/gi, "已确认笔数量不足"],
     [/\binsufficient_bis\b/gi, "确认笔数量不足"],
     [/\binsufficient_klines\b/gi, "K线数据不足"],
@@ -1067,7 +1081,7 @@ function userVisibleText(value, fallback = "暂无中文说明") {
   if (localized !== text) return cleanLocalizedText(localized);
   const replaced = text.replace(/\b(?:R\d(?:\.[0-9A-Z]+)?_[A-Z0-9._-]+|PX\.[A-Z0-9._-]+|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/gi, token => {
     const translated = REASON_MAP[token] || RISK_DECISION_LABELS[token];
-    return translated || "相关条件尚未确认";
+    return translated || "相关状态尚未确认";
   });
   if (/[A-Za-z]/.test(replaced) && !/[\u4e00-\u9fff]/.test(replaced)) return fallback;
   return cleanLocalizedText(replaced);

@@ -25,7 +25,8 @@ const REQUIRED_MIGRATIONS = [
   '060_stateful_risk_governance', '061_inference_snapshots', '062_signal_outcomes',
   '063_trade_review_workflow', '064_personal_experience_memory', '065_ai_rollout_governance',
   '067_manual_inference_snapshots', '068_inference_preferences', '135_remove_paired_inference_experiment',
-  '126_position_management_foundation',
+  '126_position_management_foundation', '149_chan_structure_anchor_version',
+  '150_chan_structure_anchor_identity',
 ]
 
 const REQUIRED_TABLES = [
@@ -37,6 +38,7 @@ const REQUIRED_TABLES = [
   'ai_inference_preferences',
   'ai_trade_theses', 'ai_position_management_tasks', 'ai_position_management_commands',
   'ai_position_management_events', 'user_position_management_settings', 'global_position_management_control',
+  'chan_structure_anchors',
 ]
 
 const REQUIRED_COLUMNS = {
@@ -51,6 +53,11 @@ const REQUIRED_COLUMNS = {
   experience_memory_items: ['review_version_id','content_hash','status','token_count'],
   users: ['deletion_status','deleted_at'],
   ai_inference_preferences: ['user_id','session_id','system_prompt','max_position_size'],
+  chan_structure_anchors: [
+    'source_id','standard_symbol','timeframe','algorithm_version','anchor_time_utc_msc',
+    'last_confirmed_segment_time_utc_msc','bootstrap_core_stable_id',
+    'bootstrap_entry_segment_stable_id','bootstrap_observation_time_utc_msc',
+  ],
 }
 
 const REQUIRED_INDEXES = [

@@ -911,7 +911,7 @@ fn load_observer_terminal_statuses(
                 program_trading_allowed: permissions.program_trading_allowed,
                 account_trading_allowed: permissions.account_trading_allowed,
                 account_expert_trading_allowed: permissions.account_expert_trading_allowed,
-                mt4_expert_restart_required: false,
+                mt4_expert_restart_required: terminal.mt4_expert_restart_required,
             })
         })
         .collect()

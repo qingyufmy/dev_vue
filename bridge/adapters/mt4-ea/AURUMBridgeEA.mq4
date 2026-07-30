@@ -3,7 +3,7 @@
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.2.11"
+#define ADAPTER_VERSION "3.2.12"
 #define MAX_HISTORY_WINDOW_MSC 1576800000000
 
 input string InpPipeName = "AURUMBridgeV3";
@@ -54,6 +54,74 @@ string g_terminal_id = "";
 long   g_connection_epoch = 0;
 string g_pipe_name = "";
 int    g_route_failures = 0;
+int    g_server_offset_minutes = 0;
+bool   g_server_offset_valid = false;
+datetime g_offset_sample_utc = 0;
+datetime g_last_server_clock = 0;
+
+long StableServerIdentityHash(const string value)
+  {
+   long hash = 5381;
+   for(int index = 0; index < StringLen(value); index++)
+      hash = (hash * 33 + StringGetCharacter(value, index)) % 2147483629;
+   return(hash);
+  }
+
+string OffsetGlobalKey(const string suffix)
+  {
+   return("AURUMBridge.Offset." + IntegerToString(AccountNumber()) + "."
+      + IntegerToString((int)StableServerIdentityHash(AccountServer())) + "." + suffix);
+  }
+
+bool ValidServerOffsetMinutes(const int value)
+  {
+   return(value >= -14 * 60 && value <= 14 * 60 && value % 15 == 0);
+  }
+
+void LoadServerOffsetCache()
+  {
+   string minutes_key = OffsetGlobalKey("Minutes");
+   string sample_key = OffsetGlobalKey("SampleUtc");
+   if(!GlobalVariableCheck(minutes_key) || !GlobalVariableCheck(sample_key)) return;
+   int minutes = (int)MathRound(GlobalVariableGet(minutes_key));
+   datetime sample_utc = (datetime)MathRound(GlobalVariableGet(sample_key));
+   if(!ValidServerOffsetMinutes(minutes) || sample_utc <= 0) return;
+   g_server_offset_minutes = minutes;
+   g_offset_sample_utc = sample_utc;
+   g_server_offset_valid = true;
+  }
+
+void RefreshServerOffsetFromFreshTick()
+  {
+   datetime server_now = TimeCurrent();
+   datetime utc_now = TimeGMT();
+   if(server_now <= 0 || utc_now <= 0 || server_now <= g_last_server_clock) return;
+   g_last_server_clock = server_now;
+   double raw_minutes = ((double)((long)server_now - (long)utc_now)) / 60.0;
+   int minutes = (int)MathRound(raw_minutes);
+   long residual_seconds = (long)server_now - (long)utc_now - ((long)minutes * 60);
+   if(!ValidServerOffsetMinutes(minutes) || MathAbs((double)residual_seconds) > 120.0) return;
+   g_server_offset_minutes = minutes;
+   g_offset_sample_utc = utc_now;
+   g_server_offset_valid = true;
+   GlobalVariableSet(OffsetGlobalKey("Minutes"), (double)minutes);
+   GlobalVariableSet(OffsetGlobalKey("SampleUtc"), (double)utc_now);
+  }
+
+long ServerOffsetSampleAgeMsc()
+  {
+   if(!g_server_offset_valid || g_offset_sample_utc <= 0) return(-1);
+   long age_seconds = (long)TimeGMT() - (long)g_offset_sample_utc;
+   if(age_seconds < 0) age_seconds = 0;
+   return(age_seconds * 1000);
+  }
+
+string CurrentServerClockStatus()
+  {
+   if(!g_server_offset_valid) return("mt4_offset_unavailable");
+   return(ServerOffsetSampleAgeMsc() <= 300000
+      ? "mt4_current_offset" : "mt4_cached_offset");
+  }
 
 long CurrentServerOffsetMsc()
   {
@@ -62,8 +130,7 @@ long CurrentServerOffsetMsc()
 
 int CurrentServerOffsetMinutes()
   {
-   double raw_minutes = ((double)((long)TimeCurrent() - (long)TimeGMT())) / 60.0;
-   return((int)MathRound(raw_minutes));
+   return(g_server_offset_valid ? g_server_offset_minutes : 0);
   }
 
 long ServerTimeToUtcMsc(const datetime server_time, const long server_offset_msc)
@@ -130,9 +197,16 @@ bool SendTradePermissionFailure(const string command_id)
 int OnInit()
   {
    g_pipe_name = InpPipeName;
+   LoadServerOffsetCache();
+   g_last_server_clock = TimeCurrent();
    if(!EventSetMillisecondTimer(REQUEST_TIMER_MSC))
       return(INIT_FAILED);
    return(INIT_SUCCEEDED);
+  }
+
+void OnTick()
+  {
+   RefreshServerOffsetFromFreshTick();
   }
 
 void OnDeinit(const int reason)
@@ -143,6 +217,7 @@ void OnDeinit(const int reason)
 
 void OnTimer()
   {
+   RefreshServerOffsetFromFreshTick();
    if(g_pipe == INVALID_HANDLE)
      {
       ConnectPipe();
@@ -379,7 +454,7 @@ void SendQuoteResult(const string request_id, const string symbol, const int sta
    AppendUtf8(response, status == 1 ? DoubleToString(ask, digits) : "");
    AppendUtf8(response, error_code);
    AppendInt32(response, CurrentServerOffsetMinutes());
-   AppendUtf8(response, "broker_time_derived");
+   AppendUtf8(response, CurrentServerClockStatus());
    double point = MarketInfo(symbol, MODE_POINT);
    int trade_mode = MarketInfo(symbol, MODE_TRADEALLOWED) > 0 ? 4 : 0;
    AppendInt32(response, status == 1 ? digits : -2147483647 - 1);
@@ -456,6 +531,11 @@ void SendRates(uchar &request[], int &offset)
       oldest_shift = MathMin(oldest_shift, newest_shift + requested_count - 1);
      }
    int spread = (int)MarketInfo(symbol, MODE_SPREAD);
+   if(!g_server_offset_valid)
+     {
+      SendRatesResult(request_id, 2, "", "rates_clock_unavailable", 0);
+      return;
+     }
    string rates_json = "[";
    int actual_count = 0;
    for(int shift = oldest_shift; shift >= newest_shift; shift--)
@@ -481,7 +561,8 @@ void SendRates(uchar &request[], int &offset)
       + ",\"source\":\"mt4\""
       + ",\"timeframe\":\"" + timeframe_name + "\""
       + ",\"timezone_offset_minutes\":" + IntegerToString((int)(server_offset_msc / 60000))
-      + ",\"clock_status\":\"mt4_current_offset\""
+      + ",\"clock_status\":\"" + CurrentServerClockStatus() + "\""
+      + ",\"clock_sample_age_ms\":" + JsonLong(ServerOffsetSampleAgeMsc())
       + ",\"count\":" + IntegerToString(actual_count)
       + ",\"rates\":" + rates_json + "}";
    long source_time = ServerTimeToUtcMsc(
@@ -573,7 +654,8 @@ void SendSymbolSnapshot(uchar &request[], int &offset)
       + "\",\"source\":\"mt4\",\"account\":" + account_json
       + ",\"timezone_offset_minutes\":"
       + IntegerToString((int)(CurrentServerOffsetMsc() / 60000))
-      + ",\"clock_status\":\"mt4_current_offset\""
+      + ",\"clock_status\":\"" + CurrentServerClockStatus() + "\""
+      + ",\"clock_sample_age_ms\":" + JsonLong(ServerOffsetSampleAgeMsc())
       + ",\"instrument\":" + instrument_json + "}";
    long source_time = ServerTimeToUtcMsc(
       (datetime)MarketInfo(symbol, MODE_TIME), CurrentServerOffsetMsc());
@@ -678,7 +760,7 @@ void SendRiskSnapshot(uchar &request[], int &offset)
       return;
      }
    long captured_at = ((long)TimeGMT()) * 1000;
-   long server_offset_msc = ((long)TimeCurrent() - (long)TimeGMT()) * 1000;
+   long server_offset_msc = CurrentServerOffsetMsc();
    long raw_start = requested_cursor_time > 0 ? requested_cursor_time
       : (baseline_utc_msc > 0 ? baseline_utc_msc : captured_at);
    long cursor_time = requested_cursor_time > 0 ? requested_cursor_time : raw_start;
@@ -800,7 +882,8 @@ void SendRiskSnapshot(uchar &request[], int &offset)
       + ",\"time_msc\":" + JsonLong(observed_at)
       + ",\"time_utc_msc\":" + JsonLong(observed_at)
       + ",\"timezone_offset_minutes\":" + IntegerToString(offset_minutes)
-      + ",\"clock_status\":\"offset_calibrated\",\"clock_residual_ms\":0"
+      + ",\"clock_status\":\"" + CurrentServerClockStatus() + "\",\"clock_residual_ms\":0"
+      + ",\"clock_sample_age_ms\":" + JsonLong(ServerOffsetSampleAgeMsc())
       + ",\"captured_at_utc_msc\":" + JsonLong(captured_at)
       + ",\"account\":" + account + ",\"positions\":" + positions
       + ",\"pending\":" + pending + ",\"instruments\":{" + instruments + "}"
@@ -877,7 +960,7 @@ void SendPerformanceDaily(uchar &request[], int &offset)
      }
 
    int scanned_count = 0;
-   long server_offset_msc = ((long)TimeCurrent() - (long)TimeGMT()) * 1000;
+   long server_offset_msc = CurrentServerOffsetMsc();
    for(int history_index = OrdersHistoryTotal() - 1; history_index >= 0; history_index--)
      {
       if(!OrderSelect(history_index, SELECT_BY_POS, MODE_HISTORY)) continue;
@@ -962,7 +1045,8 @@ void SendPerformanceDaily(uchar &request[], int &offset)
    int offset_minutes = (int)(server_offset_msc / 60000);
    string payload = "{\"performance_version\":1,\"date_from\":\"" + date_from
       + "\",\"date_to\":\"" + date_to + "\",\"timezone_offset_minutes\":"
-      + IntegerToString(offset_minutes) + ",\"clock_status\":\"offset_calibrated\""
+      + IntegerToString(offset_minutes) + ",\"clock_status\":\"" + CurrentServerClockStatus() + "\""
+      + ",\"clock_sample_age_ms\":" + JsonLong(ServerOffsetSampleAgeMsc())
       + ",\"account\":{\"login\":" + IntegerToString(AccountNumber())
       + ",\"server\":\"" + JsonEscape(AccountServer()) + "\",\"currency\":\""
       + JsonEscape(AccountCurrency()) + "\"},\"daily\":" + rows
@@ -1039,7 +1123,7 @@ void SendDeals(uchar &request[], int &offset)
    long window_end = cursor_time + window_msc;
    if(window_end > captured_at) window_end = captured_at;
    if(window_end < cursor_time) window_end = cursor_time;
-   long server_offset_msc = ((long)TimeCurrent() - (long)TimeGMT()) * 1000;
+   long server_offset_msc = CurrentServerOffsetMsc();
    long event_times[];
    long event_tickets[];
    int total_candidates = 0;

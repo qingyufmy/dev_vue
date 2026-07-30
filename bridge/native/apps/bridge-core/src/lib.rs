@@ -1220,6 +1220,7 @@ pub struct NativeTerminalRuntimeStatus {
     pub collector_consecutive_failures: u32,
     pub last_success_at_utc_msc: Option<i64>,
     pub error_code: Option<String>,
+    pub mt4_expert_restart_required: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1511,7 +1512,7 @@ impl NativeRuntimeStatusHandle {
                     program_trading_allowed: permissions.program_trading_allowed,
                     account_trading_allowed: permissions.account_trading_allowed,
                     account_expert_trading_allowed: permissions.account_expert_trading_allowed,
-                    mt4_expert_restart_required: false,
+                    mt4_expert_restart_required: status.mt4_expert_restart_required,
                 }
             })
             .collect::<Vec<_>>();
@@ -1592,6 +1593,7 @@ impl NativeRuntimeStatusHandle {
                 error_code: status
                     .error_code
                     .map(|code| sanitized_status_code(&code, "terminal_runtime_failed")),
+                mt4_expert_restart_required: status.mt4_expert_restart_required,
             })
             .collect::<Vec<_>>();
         let all_ready = !terminals.is_empty() && terminals.iter().all(|status| status.data_ready);
@@ -2323,6 +2325,7 @@ mod tests {
             collector_consecutive_failures: 0,
             last_success_at_utc_msc,
             error_code: None,
+            mt4_expert_restart_required: false,
         }
     }
 

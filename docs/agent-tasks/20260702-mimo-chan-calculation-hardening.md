@@ -118,9 +118,9 @@ chan: {
 
 ### reliability 规则
 
-- `high`：有有效线段和有效中枢。
-- `medium`：有有效笔和至少一个有效线段，但中枢不足。
-- `low`：只有笔或候选线段。
+- `high`：历史与已收盘数据完整、时间定位可靠、线段与中枢均通过跨窗口独立多数确认，且没有 warning。
+- `medium`：有有效笔和至少一个跨窗口确认线段，但中枢、进入段或背驰证据仍待确认。
+- `low`：只有笔或候选线段，存在未补齐缺口、结构过旧，或历史窗口尚未收敛。
 
 `warnings` 中要写清楚原因，例如：
 
@@ -267,7 +267,7 @@ status: 'unreliable_segments'
 
 ### 中枢形成
 
-连续三笔或三段区间有重叠才形成中枢。
+当前安全执行层只计算线段级中枢：连续三条已确认线段的完整区间存在正宽度重叠才形成中枢；候选线段、单笔重叠和未确认结构不得当作中枢。
 
 区间计算：
 
@@ -281,14 +281,14 @@ if (zl < zh) center成立
 
 ### 中枢延伸
 
-延伸时仍取交集，不取并集：
+延伸时只判断后续确认线段是否仍与最初三段确定的核心区间存在正宽度重叠。核心 `ZL/ZH` 固定不收缩，另外更新完整波动区间 `GG/DD`：
 
 ```js
 const nextZl = Math.max(existing.zl, next.low)
 const nextZh = Math.min(existing.zh, next.high)
 if (nextZl < nextZh) {
-  existing.zl = nextZl
-  existing.zh = nextZh
+  existing.fluctuation_low = Math.min(existing.fluctuation_low, next.low)
+  existing.fluctuation_high = Math.max(existing.fluctuation_high, next.high)
   existing.status = 'extended'
 } else {
   existing.status = 'closed'
@@ -303,11 +303,15 @@ if (nextZl < nextZh) {
   id,
   zl,
   zh,
-  start_bi_id,
-  end_bi_id,
-  bi_ids,
+  entry_segment_id,
+  start_segment_id,
+  end_segment_id,
+  departure_segment_id,
+  segment_ids,
+  fluctuation_low,
+  fluctuation_high,
   level,
-  status: 'forming' | 'confirmed' | 'extended' | 'closed'
+  status: 'confirmed' | 'extended' | 'closed'
 }
 ```
 
@@ -509,6 +513,9 @@ Mimo 结果文件必须写清楚用户怎么手动测：
 - [ ] 有效线段至少 3 笔。
 - [ ] 1-2 笔结构只作为候选段，不进入 `segments`。
 - [ ] 中枢使用交集，不使用并集扩大。
+- [ ] 中枢形成核心独立取得所有可观察窗口的严格多数，且不允许短截断窗口覆盖最长完整窗口的中枢相位。
+- [ ] 无可信锚点时补取 2000 根，并以固定左边界连续三个收盘截面的 `core + entry` 一致性和跨窗口联合多数完成锚点冷启动。
+- [ ] 背驰将明确无背驰计为反对票，将暖机区和引用缺失计为弃权。
 - [ ] 背驰判断依赖有效线段/中枢，否则返回 none + reason。
 - [ ] 默认日志降噪。
 - [ ] `{{USE_CHAN}}` 逻辑保持兼容。

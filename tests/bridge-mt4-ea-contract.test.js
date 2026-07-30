@@ -15,7 +15,7 @@ describe('MT4 EA time contract', () => {
     expect(source).toContain('#property version   "3.00"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
     expect(block).toContain('AppendInt32(response, CurrentServerOffsetMinutes())')
-    expect(block).toContain('AppendUtf8(response, "broker_time_derived")')
+    expect(block).toContain('AppendUtf8(response, CurrentServerClockStatus())')
     expect(block).toContain('MarketInfo(symbol, MODE_DIGITS)')
     expect(block).toContain('MarketInfo(symbol, MODE_POINT)')
     expect(block).toContain('MarketInfo(symbol, MODE_TRADEALLOWED)')
@@ -29,13 +29,33 @@ describe('MT4 EA time contract', () => {
     expect(block).toContain('long bar_utc_msc = bar_server_msc - server_offset_msc')
     expect(block).toContain('time_server_msc')
     expect(block).toContain('clock_status')
-    expect(block).toContain('mt4_current_offset')
+    expect(block).toContain('CurrentServerClockStatus()')
+    expect(block).toContain('clock_sample_age_ms')
+    expect(block).toContain('rates_clock_unavailable')
   })
 
   it('normalizes symbol-snapshot observation time as well', () => {
     const block = functionBlock('void SendSymbolSnapshot', 'void SendSymbolSnapshotResult')
     expect(block).toContain('ServerTimeToUtcMsc(')
     expect(block).toContain('timezone_offset_minutes')
+    expect(block).toContain('CurrentServerClockStatus()')
+    expect(block).toContain('clock_sample_age_ms')
+  })
+
+  it('freezes the last valid broker offset while ticks are not advancing', () => {
+    const refresh = functionBlock('void RefreshServerOffsetFromFreshTick', 'long ServerOffsetSampleAgeMsc')
+    expect(refresh).toContain('server_now <= g_last_server_clock')
+    expect(refresh).toContain('GlobalVariableSet(OffsetGlobalKey("Minutes")')
+    expect(refresh).toContain('GlobalVariableSet(OffsetGlobalKey("SampleUtc")')
+    expect(source).toContain('mt4_cached_offset')
+    expect(source).not.toContain('((long)TimeCurrent() - (long)TimeGMT()) * 1000')
+  })
+
+  it('isolates the persisted offset by both account login and broker server', () => {
+    const key = functionBlock('string OffsetGlobalKey', 'bool ValidServerOffsetMinutes')
+    expect(source).toContain('long StableServerIdentityHash(const string value)')
+    expect(key).toContain('IntegerToString(AccountNumber())')
+    expect(key).toContain('StableServerIdentityHash(AccountServer())')
   })
 })
 
@@ -59,7 +79,7 @@ describe('MT4 EA reconnect contract', () => {
 describe('MT4 EA extended data contract', () => {
   it('advertises version 3.2 and handles every server data action', () => {
     expect(source).toContain('#define BRIDGE_PROTOCOL_VERSION 3')
-    expect(source).toContain('#define ADAPTER_VERSION "3.2.11"')
+    expect(source).toContain('#define ADAPTER_VERSION "3.2.12"')
     expect(source).toContain('AppendInt32(hello, BRIDGE_PROTOCOL_VERSION)')
     expect(source).toContain('AppendUtf8(hello, ADAPTER_VERSION)')
     const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')

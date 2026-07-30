@@ -150,7 +150,7 @@ vi.mock('../../server/routes/ai/period-market-evidence.js', () => ({
 vi.mock('../../server/routes/ai/utils.js', () => ({
   STRATEGY_TIMEFRAME_COUNTS: { M5: 100, M15: 100, M30: 100, H1: 80, H4: 50 },
   CHAN_HISTORY_COUNT: 300,
-  CHAN_MAX_HISTORY_COUNT: 1000,
+  CHAN_MAX_HISTORY_COUNT: 2000,
   attachSignalTiming: vi.fn(),
   parseTimeframeTags: vi.fn(() => [{ tf: 'M30', count: 100 }]),
   compactRates: vi.fn((rates) => rates),

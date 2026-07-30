@@ -22,7 +22,30 @@ function loadTerminalClockFormatter() {
   return new Function(`${source}\nreturn { formatTerminalQuoteTime };`)()
 }
 
+function loadUserVisibleText() {
+  const start = app.indexOf('function userVisibleText(value')
+  const end = app.indexOf('\nfunction setSignalFieldClass', start)
+  const source = app.slice(start, end)
+  return new Function('localizeReason', 'REASON_MAP', 'RISK_DECISION_LABELS', `${source}\nreturn userVisibleText;`)(
+    value => value,
+    {},
+    {},
+  )
+}
+
 describe('AI governance navigation and DOM contract', () => {
+  it('does not present unknown internal tokens as an unreliable Chan segment', () => {
+    const userVisibleText = loadUserVisibleText()
+
+    expect(userVisibleText('unknown_status为unknown_reason')).toBe('相关状态尚未确认')
+    expect(userVisibleText('系统提示的unknown_status显示')).toBe('系统提示状态尚未确认')
+    expect(userVisibleText('status=unreliable_segments')).toBe('线段结构尚不可靠')
+    expect(userVisibleText('status=segment_history_unresolved')).toBe('历史窗口尚未收敛，暂不确认线段')
+    expect(userVisibleText('center_entry_unconfirmed')).toBe('中枢已确认，但进入段缺少跨窗口共识，仅背驰暂不可判')
+    expect(userVisibleText('structure_anchor_bootstrap_pending')).toBe('结构锚点正在用连续三根已收盘K线确认，暂不使用依赖进入段的背驰与买卖点')
+    expect(userVisibleText('center_cross_window_unstable')).toBe('不同历史窗口对中枢形成核心尚未达成共识')
+  })
+
   it('renders the same broker time for heartbeat and quote clock payloads', () => {
     const { formatTerminalQuoteTime } = loadTerminalClockFormatter()
     const observedAtUtcMsc = Date.UTC(2026, 6, 27, 6, 12, 34)
@@ -62,7 +85,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('setText("quoteAsk", priceDisplay(q.ask))')
     expect(app).toContain('setText("quoteBid", priceDisplay(data.bid))')
     expect(app).toContain('setText("quoteAsk", priceDisplay(data.ask))')
-    expect(html).toContain('/ai/app.js?v=20260730bridge300')
+    expect(html).toContain('/ai/app.js?v=20260730chanv4')
     expect(app).toContain('wsApi("platform_quote", { symbol })')
     expect(app).toContain('state.platformMarketSourceActive = platformQuote.available === true')
     expect(app).toContain('state.lastObserverQuote = {')
@@ -734,7 +757,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('Math.ceil(ttl - age)')
     expect(app).toContain('reliability\\s*(?:=|为|:|：)\\s*low')
     expect(app).toContain('reliability\\s*(?:为|:|：)?\\s*低')
-    expect(app).toContain('相关条件尚未确认为相关条件尚未确认')
+    expect(app).not.toContain('相关条件尚未确认为相关条件尚未确认')
     expect(app).not.toContain('class="monitor-surface signal-monitor-execution')
     expect(css).toContain('grid-template-columns: minmax(0, 1.6fr) minmax(320px, .7fr)')
     expect(css).toContain('scrollbar-gutter: stable')

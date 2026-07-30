@@ -101,7 +101,7 @@ describe('inference snapshot evidence', () => {
     expect(result.evidenceStatus).toBe('complete')
   })
 
-  it('retains the largest balanced trailing K-line window that fits the snapshot budget', () => {
+  it('keeps the full balanced K-line window when its compressed storage fits the budget', () => {
     const bars = timeframe => Array.from({ length: 1000 }, (_, index) => ({
       time: `2026-07-${String(Math.floor(index / 100) + 1).padStart(2, '0')} ${String(index % 24).padStart(2, '0')}:00:00`,
       open: 3900 + index / 10, high: 3902 + index / 10, low: 3898 + index / 10,
@@ -113,11 +113,31 @@ describe('inference snapshot evidence', () => {
       marketSnapshot: { strategy_context: { visualization_klines: visualization, timeframes: {} } },
     }, 300 * 1024)
     const retained = Object.values(result.klines).map(rows => rows.length)
-    expect(retained.every(count => count > 50 && count < 1000)).toBe(true)
-    expect(Math.max(...retained) - Math.min(...retained)).toBeLessThanOrEqual(1)
-    expect(result.omittedFields).toContain('klines_before_retained_window')
+    expect(retained).toEqual([1000, 1000, 1000, 1000])
+    expect(result.omittedFields).not.toContain('klines_before_retained_window')
     expect(result.evidenceStatus).toBe('complete')
     expect(result.byteSize).toBeLessThanOrEqual(300 * 1024)
+  })
+
+  it('marks a snapshot incomplete when even compressed K-lines must lose their prefix', () => {
+    const bars = timeframe => Array.from({ length:1000 }, (_, index) => ({
+      time:`${timeframe}-${index}-${(index * 7919) % 104729}`,
+      time_utc_msc:1784185200000 + index * 300000,
+      open:3900 + index / 17,
+      high:3902 + index / 13,
+      low:3898 + index / 19,
+      close:3901 + index / 23,
+      tick_volume:(index * 3571) % 65521,
+    }))
+    const result = prepareInferenceSnapshot({
+      systemPrompt:'system', userPrompt:'payload',
+      klines:{ M5:bars('M5'), M15:bars('M15'), H1:bars('H1'), H4:bars('H4') },
+      marketSnapshot:{ strategy_context:{ timeframes:{} } },
+    }, 24 * 1024)
+    expect(Object.values(result.klines).every(rows => rows.length < 1000)).toBe(true)
+    expect(result.omittedFields).toContain('klines_before_retained_window')
+    expect(result.evidenceStatus).toBe('incomplete')
+    expect(result.byteSize).toBeLessThanOrEqual(24 * 1024)
   })
 
   it('persists metadata without any model secret column or value', async () => {

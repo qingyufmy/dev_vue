@@ -160,9 +160,16 @@ pub struct Mt4EaSnapshotSource {
     welcome: Welcome,
     registration_rx: Mutex<mpsc::Receiver<EaConnection>>,
     connection: Mutex<Option<EaConnection>>,
+    adapter_status: StdMutex<EaAdapterStatus>,
     accept_timeout: Duration,
     request_timeout: Duration,
     stop_tx: watch::Sender<bool>,
+}
+
+#[derive(Default)]
+struct EaAdapterStatus {
+    version: Option<String>,
+    restart_required: bool,
 }
 
 impl Mt4EaSnapshotSource {
@@ -184,6 +191,7 @@ impl Mt4EaSnapshotSource {
             welcome,
             registration_rx: Mutex::new(registration_rx),
             connection: Mutex::new(None),
+            adapter_status: StdMutex::new(EaAdapterStatus::default()),
             accept_timeout: spec.accept_timeout,
             request_timeout: spec.request_timeout,
             stop_tx,
@@ -196,6 +204,20 @@ impl Mt4EaSnapshotSource {
 
     pub fn request_stop(&self) {
         self.stop_tx.send_replace(true);
+    }
+
+    pub fn adapter_version(&self) -> Option<String> {
+        self.adapter_status
+            .lock()
+            .ok()
+            .and_then(|status| status.version.clone())
+    }
+
+    pub fn adapter_requires_restart(&self) -> bool {
+        self.adapter_status
+            .lock()
+            .map(|status| status.restart_required)
+            .unwrap_or(false)
     }
 
     pub async fn close(&self) {
@@ -480,6 +502,7 @@ impl Mt4EaSnapshotSource {
                 .accept(&self.identity, self.accept_timeout, self.request_timeout)
                 .await?;
             connection.send_welcome(&self.welcome).await?;
+            self.observe_adapter(&connection);
             return Ok(connection);
         }
         let connection = tokio::select! {
@@ -496,7 +519,15 @@ impl Mt4EaSnapshotSource {
         connection.verify_identity(&self.identity)?;
         let mut connection = connection;
         connection.send_welcome(&self.welcome).await?;
+        self.observe_adapter(&connection);
         Ok(connection)
+    }
+
+    fn observe_adapter(&self, connection: &EaConnection) {
+        if let Ok(mut status) = self.adapter_status.lock() {
+            status.version = Some(connection.hello().adapter_version.clone());
+            status.restart_required = connection.hello().adapter_requires_restart();
+        }
     }
 }
 
@@ -782,6 +813,8 @@ mod tests {
             .expect("first snapshot");
         assert_eq!(first.streams.account.expect("account")["balance"], 10_000);
         first_client.await.expect("first client");
+        assert_eq!(source.adapter_version().as_deref(), Some("3.2.5-test"));
+        assert!(source.adapter_requires_restart());
 
         assert!(
             source
@@ -795,9 +828,11 @@ mod tests {
         );
 
         let reconnect_name = reconnect_pipe_name(&terminal_id).expect("reconnect pipe");
+        let mut current_hello = hello(&data_path);
+        current_hello.adapter_version = "3.2.12".to_owned();
         let reconnect_client = tokio::spawn(serve_one_snapshot(
             format!(r"\\.\pipe\{reconnect_name}"),
-            hello(&data_path),
+            current_hello,
             terminal_id,
             snapshot(10_100),
         ));
@@ -807,6 +842,8 @@ mod tests {
             .expect("reconnected snapshot");
         assert_eq!(second.streams.account.expect("account")["balance"], 10_100);
         reconnect_client.await.expect("reconnect client");
+        assert_eq!(source.adapter_version().as_deref(), Some("3.2.12"));
+        assert!(!source.adapter_requires_restart());
 
         source.close().await;
         hub_handle.stop();

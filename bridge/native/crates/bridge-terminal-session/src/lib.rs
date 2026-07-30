@@ -123,6 +123,7 @@ pub struct TerminalSessionStatus {
     pub collector_consecutive_failures: u32,
     pub last_success_at_utc_msc: Option<i64>,
     pub error_code: Option<String>,
+    pub mt4_expert_restart_required: bool,
 }
 
 #[derive(Clone)]
@@ -174,6 +175,7 @@ impl Mt4SessionHandle {
             collector_consecutive_failures: collector.consecutive_failures,
             last_success_at_utc_msc: collector.last_success_at_utc_msc,
             error_code: collector.error_code,
+            mt4_expert_restart_required: self.source.adapter_requires_restart(),
         }
     }
 
@@ -310,6 +312,7 @@ impl TerminalSessionHandle {
             collector_consecutive_failures: collector.consecutive_failures,
             last_success_at_utc_msc: collector.last_success_at_utc_msc,
             error_code: collector.error_code.or(worker.error_code),
+            mt4_expert_restart_required: false,
         }
     }
 
@@ -1267,6 +1270,7 @@ mod tests {
         });
 
         wait_mt4_ready(&handle).await;
+        assert!(handle.status().mt4_expert_restart_required);
         let trade = handle
             .execute_command(CommandMessage {
                 v: 3,

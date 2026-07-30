@@ -3992,7 +3992,7 @@ mod tests {
                     color: Rgb(4, 120, 87),
                 }],
             }),
-            mt4_expert_update: expert_update.then(|| "EA 已更新，重启 MT4 后生效".to_owned()),
+            mt4_expert_update: expert_update.then(|| "EA 版本已更新，请重启 MT4".to_owned()),
             primary_action: observer_actions.then_some(ObserverAction::Pause),
             primary_action_text: observer_actions.then(|| "暂停".to_owned()),
             settings_visible: observer_actions,

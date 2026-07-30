@@ -148,11 +148,12 @@ describe('timeframeIntervalMs', () => {
 describe('compactRates', () => {
   it('压缩K线数据', () => {
     const rates = [
-      { time: '2026-01-01', open: '1.23456789', high: '1.24', low: '1.22', close: '1.23', tick_volume: '100' }
+      { time: '2026-01-01', time_utc_msc:1784185200000, open: '1.23456789', high: '1.24', low: '1.22', close: '1.23', tick_volume: '100', spread:'3' }
     ]
     const result = compactRates(rates)
     expect(result[0].open).toBe(1.23457)
     expect(result[0].tick_volume).toBe(100)
+    expect(result[0]).toMatchObject({ time_utc_msc:1784185200000, spread:3 })
   })
 })
 
