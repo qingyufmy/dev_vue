@@ -41,7 +41,9 @@ const ROUND_TRIP_CLOSE_COMMAND_ID: &str = "command_01JCONNECTED2";
 struct RoundTripCommand {
     symbol: String,
     side: String,
+    order_kind: String,
     volume: f64,
+    price: Option<f64>,
     magic: i64,
     comment: String,
 }
@@ -529,7 +531,9 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
     let mut server = LoopbackBridgeServer::start_with_round_trip(RoundTripCommand {
         symbol: "XAUUSD".to_owned(),
         side: "buy".to_owned(),
+        order_kind: "market".to_owned(),
         volume: 0.01,
+        price: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -818,7 +822,9 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
     let mut server = LoopbackBridgeServer::start_with_round_trip(RoundTripCommand {
         symbol: "XAUUSD".to_owned(),
         side: "buy".to_owned(),
+        order_kind: "market".to_owned(),
         volume: 0.01,
+        price: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -906,6 +912,123 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
     let after = mt5_active_trade_snapshot(&python_runtime, &terminal_path);
     assert_eq!(after, before, "MT5 round trip changed live terminal state");
     fs::remove_dir_all(root).expect("remove live MT5 round-trip fixture");
+}
+
+#[test]
+#[ignore = "requires an explicitly configured live MT5 demo terminal and sends one pending-order round trip"]
+fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
+    let terminal_path = std::env::var_os("AURUM_MT5_TEST_TERMINAL")
+        .map(PathBuf::from)
+        .expect("AURUM_MT5_TEST_TERMINAL");
+    let python_runtime = std::env::var_os("AURUM_MT5_TEST_PYTHON_RUNTIME")
+        .map(PathBuf::from)
+        .expect("AURUM_MT5_TEST_PYTHON_RUNTIME");
+    let broker_server = std::env::var("AURUM_MT5_TEST_SERVER").expect("AURUM_MT5_TEST_SERVER");
+    let login = std::env::var("AURUM_MT5_TEST_LOGIN").expect("AURUM_MT5_TEST_LOGIN");
+    assert!(terminal_path.is_absolute());
+    assert!(terminal_path.is_file());
+    assert!(python_runtime.join("python.exe").is_file());
+    assert!(broker_server.to_ascii_lowercase().contains("demo"));
+    assert!(!login.trim().is_empty());
+    let before = mt5_active_trade_snapshot(&python_runtime, &terminal_path);
+    let pending_price = mt5_buy_limit_price(&python_runtime, &terminal_path, "XAUUSD");
+
+    let marker = "AURUM:CORE-MT5-PENDING";
+    let magic = 923_415;
+    let root = unique_test_directory();
+    let profile_id = DEFAULT_PROFILE_ID.to_owned();
+    let mut server = LoopbackBridgeServer::start_with_round_trip(RoundTripCommand {
+        symbol: "XAUUSD".to_owned(),
+        side: "buy".to_owned(),
+        order_kind: "limit".to_owned(),
+        volume: 0.01,
+        price: Some(pending_price),
+        magic,
+        comment: marker.to_owned(),
+    });
+    let application = prepare_live_mt5_application(&root, &python_runtime);
+    let terminal_id = mt5_terminal_instance_id(&terminal_path);
+    let paths = prepare_mt5_discovery_profile(
+        &root,
+        &terminal_id,
+        &terminal_path,
+        &server.control_url,
+        &server.realtime_url,
+    );
+    let ready = root.join("mt5-pending-round-trip-ready.json");
+    let update_state_path = root.join("mt5-pending-round-trip-update-state.json");
+    let mut child = ChildGuard::spawn_for_discovery(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        &profile_id,
+        &ready,
+        &update_state_path,
+    );
+
+    wait_until(&mut child, Duration::from_secs(45), || {
+        ready.is_file()
+            && server.saw_command_result(CONNECTED_COMMAND_ID, "succeeded", "none")
+            && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
+            && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
+            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
+    });
+    thread::sleep(Duration::from_millis(500));
+    let store = OutboxStore::open_existing(&paths.database_path)
+        .expect("open MT5 pending round-trip store");
+    let placed = store
+        .execution_receipt(CONNECTED_COMMAND_ID)
+        .expect("MT5 pending place receipt")
+        .expect("MT5 pending place result");
+    let cancelled = store
+        .execution_receipt(ROUND_TRIP_CLOSE_COMMAND_ID)
+        .expect("MT5 pending cancel receipt")
+        .expect("MT5 pending cancel result");
+    assert_eq!(placed.status, "succeeded");
+    assert_eq!(cancelled.status, "succeeded");
+    assert_eq!(placed.evidence.broker_retcode, Some(10_009));
+    assert_eq!(cancelled.evidence.broker_retcode, Some(10_009));
+    assert!(!placed.evidence.order_tickets.is_empty());
+    for command_id in [CONNECTED_COMMAND_ID, ROUND_TRIP_CLOSE_COMMAND_ID] {
+        assert_eq!(
+            store
+                .command_ledger(command_id)
+                .expect("MT5 pending round-trip ledger")
+                .expect("MT5 pending round-trip command")
+                .status,
+            "acked"
+        );
+    }
+    let projection = store
+        .load_terminal_projection(
+            &terminal_id,
+            &AccountRef {
+                broker_server: broker_server.clone(),
+                login: login.clone(),
+            },
+            1,
+        )
+        .expect("MT5 pending round-trip projection");
+    let active_state =
+        serde_json::to_string(&(projection.positions.items, projection.orders.items))
+            .expect("MT5 pending round-trip active state json");
+    assert!(!active_state.contains(marker));
+    assert!(!active_state.contains(&magic.to_string()));
+    drop(store);
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id(&profile_id).expect("MT5 pending round-trip instance id"),
+    )
+    .expect("request MT5 pending round-trip core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    server.stop();
+    let after = mt5_active_trade_snapshot(&python_runtime, &terminal_path);
+    assert_eq!(
+        after, before,
+        "MT5 pending round trip changed live terminal state"
+    );
+    fs::remove_dir_all(root).expect("remove live MT5 pending round-trip fixture");
 }
 
 struct ChildGuard(Option<Child>);
@@ -1033,13 +1156,17 @@ impl LoopbackBridgeServer {
     }
 
     fn start_with_round_trip(command: RoundTripCommand) -> Self {
-        let params = serde_json::json!({
+        let mut params = serde_json::json!({
             "symbol": command.symbol,
             "side": command.side,
+            "order_kind": command.order_kind,
             "volume": command.volume,
             "magic": command.magic,
             "comment": command.comment,
         });
+        if let Some(price) = command.price {
+            params["price"] = serde_json::json!(price);
+        }
         Self::start_with_commands(false, Some(params), Some(command))
     }
 
@@ -1295,13 +1422,34 @@ struct RealtimeFixture {
     round_trip: Option<RoundTripCommand>,
 }
 
-async fn send_round_trip_close(
+async fn send_round_trip_completion(
     socket: &mut WebSocketStream<TcpStream>,
     terminal: &TerminalDescriptor,
     round_trip: &RoundTripCommand,
     expected_state: Value,
 ) {
     let now = now_utc_msc();
+    let (action, params) = if round_trip.order_kind == "market" {
+        (
+            "close_position",
+            serde_json::json!({
+                "ticket": expected_state["ticket"],
+                "symbol": expected_state["symbol"],
+                "side": expected_state["direction"],
+                "volume": expected_state["volume"],
+                "magic": round_trip.magic,
+                "expected_state": expected_state
+            }),
+        )
+    } else {
+        (
+            "cancel_order",
+            serde_json::json!({
+                "ticket": expected_state["ticket"],
+                "expected_state": expected_state
+            }),
+        )
+    };
     socket
         .send(Message::Text(
             serde_json::json!({
@@ -1315,15 +1463,8 @@ async fn send_round_trip_close(
                 "connection_epoch": terminal.connection_epoch,
                 "issued_at_utc_msc": now,
                 "deadline_utc_msc": now + 30_000,
-                "action": "close_position",
-                "params": {
-                    "ticket": expected_state["ticket"],
-                    "symbol": expected_state["symbol"],
-                    "side": expected_state["direction"],
-                    "volume": expected_state["volume"],
-                    "magic": round_trip.magic,
-                    "expected_state": expected_state
-                }
+                "action": action,
+                "params": params
             })
             .to_string()
             .into(),
@@ -1556,8 +1697,13 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                             if terminal.platform == "mt5"
                                 && round_trip_open_succeeded
                                 && !round_trip_close_sent
-                                && stream == "positions"
                                 && let Some(round_trip) = round_trip.as_ref()
+                                && stream
+                                    == if round_trip.order_kind == "market" {
+                                        "positions"
+                                    } else {
+                                        "orders"
+                                    }
                                 && let Some(position) =
                                     payload["upserts"].as_array().and_then(|positions| {
                                         positions.iter().find(|position| {
@@ -1570,17 +1716,22 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                     .map(|value| value.to_string())
                                     .or_else(|| position["ticket"].as_str().map(str::to_owned))
                                     .expect("MT5 round-trip position ticket");
-                                let direction = match position["type"].as_i64() {
-                                    Some(0) => "buy",
-                                    Some(1) => "sell",
-                                    _ => panic!("MT5 round-trip position direction"),
-                                };
+                                let direction =
+                                    match (position["type"].as_i64(), position["type"].as_str()) {
+                                        (Some(0 | 2 | 4 | 6), _) => "buy",
+                                        (Some(1 | 3 | 5 | 7), _) => "sell",
+                                        (_, Some(value)) if value.starts_with("buy") => "buy",
+                                        (_, Some(value)) if value.starts_with("sell") => "sell",
+                                        _ => panic!("MT5 round-trip target direction"),
+                                    };
                                 let symbol = position["symbol"]
                                     .as_str()
                                     .filter(|value| !value.is_empty())
                                     .expect("MT5 round-trip position symbol");
                                 let volume = position["volume"]
                                     .as_f64()
+                                    .or_else(|| position["volume_current"].as_f64())
+                                    .or_else(|| position["volume_initial"].as_f64())
                                     .filter(|value| value.is_finite() && *value > 0.0)
                                     .expect("MT5 round-trip position volume");
                                 let expected_state = serde_json::json!({
@@ -1594,7 +1745,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                     "stop_loss": position["sl"].as_f64().unwrap_or(0.0),
                                     "take_profit": position["tp"].as_f64().unwrap_or(0.0)
                                 });
-                                send_round_trip_close(
+                                send_round_trip_completion(
                                     &mut socket,
                                     &terminal,
                                     round_trip,
@@ -1793,7 +1944,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                 "broker_server_key": terminal.account_ref.broker_server,
                                 "login_account": terminal.account_ref.login
                             });
-                            send_round_trip_close(
+                            send_round_trip_completion(
                                 &mut socket,
                                 &terminal,
                                 round_trip,
@@ -2011,6 +2162,60 @@ finally:
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).expect("live MT5 state json")
+}
+
+fn mt5_buy_limit_price(python_runtime: &Path, terminal_path: &Path, requested_symbol: &str) -> f64 {
+    let script = r#"
+import sys
+import MetaTrader5 as mt5
+
+if not mt5.initialize(path=sys.argv[1], timeout=10000, portable=False):
+    raise SystemExit("mt5_initialize_failed")
+try:
+    requested = sys.argv[2].upper()
+    symbols = mt5.symbols_get(group=f"*{requested}*") or ()
+    names = [str(item.name) for item in symbols]
+    exact = next((name for name in names if name.upper() == requested), None)
+    symbol = exact or min(
+        (name for name in names if name.upper().startswith(requested)),
+        key=lambda name: (len(name), name),
+        default=None,
+    )
+    if symbol is None or not mt5.symbol_select(symbol, True):
+        raise SystemExit("mt5_symbol_unavailable")
+    info, tick = mt5.symbol_info(symbol), mt5.symbol_info_tick(symbol)
+    if info is None or tick is None:
+        raise SystemExit("mt5_quote_unavailable")
+    point = float(getattr(info, "point", 0) or 0)
+    tick_size = float(getattr(info, "trade_tick_size", 0) or point or 1e-8)
+    minimum_points = max(
+        int(getattr(info, "trade_stops_level", 0) or 0),
+        int(getattr(info, "trade_freeze_level", 0) or 0),
+        100,
+    )
+    distance = max(point * minimum_points, tick_size * 10)
+    digits = max(0, int(getattr(info, "digits", 0) or 0))
+    price = round(round((float(tick.bid) - distance * 2) / tick_size) * tick_size, digits)
+    print(price)
+finally:
+    mt5.shutdown()
+"#;
+    let output = Command::new(python_runtime.join("python.exe"))
+        .args(["-B", "-c", script])
+        .arg(terminal_path)
+        .arg(requested_symbol)
+        .output()
+        .expect("calculate live MT5 pending price");
+    assert!(
+        output.status.success(),
+        "live MT5 pending price failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("live MT5 pending price utf8")
+        .trim()
+        .parse::<f64>()
+        .expect("live MT5 pending price")
 }
 
 fn locate_python() -> PathBuf {
