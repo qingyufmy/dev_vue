@@ -53,6 +53,21 @@ struct RoundTripCommand {
     comment: String,
 }
 
+fn round_trip_params(command: &RoundTripCommand) -> Value {
+    let mut params = serde_json::json!({
+        "symbol": command.symbol,
+        "side": command.side,
+        "order_kind": command.order_kind,
+        "volume": command.volume,
+        "magic": command.magic,
+        "comment": command.comment,
+    });
+    if let Some(price) = command.price {
+        params["price"] = serde_json::json!(price);
+    }
+    params
+}
+
 #[test]
 fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     let root = unique_test_directory();
@@ -641,6 +656,120 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
 }
 
 #[test]
+#[ignore = "requires an explicitly configured live MT4 demo terminal and sends one pending-order round trip"]
+fn native_core_places_modifies_and_cancels_a_live_mt4_demo_order() {
+    let terminal_data_path = std::env::var_os("AURUM_MT4_TEST_DATA_PATH")
+        .map(PathBuf::from)
+        .expect("AURUM_MT4_TEST_DATA_PATH");
+    let broker_server = std::env::var("AURUM_MT4_TEST_SERVER").expect("AURUM_MT4_TEST_SERVER");
+    let login = std::env::var("AURUM_MT4_TEST_LOGIN").expect("AURUM_MT4_TEST_LOGIN");
+    assert!(terminal_data_path.is_absolute());
+    assert!(terminal_data_path.join("MQL4").is_dir());
+    assert!(broker_server.to_ascii_lowercase().contains("demo"));
+    assert!(!login.trim().is_empty());
+
+    let marker = "AURUM:CORE-MT4-PENDING";
+    let magic = 923_416;
+    let root = unique_test_directory();
+    let profile_id = DEFAULT_PROFILE_ID.to_owned();
+    let mut server = LoopbackBridgeServer::start_with_round_trip(RoundTripCommand {
+        symbol: "XAUUSD".to_owned(),
+        side: "buy".to_owned(),
+        order_kind: "limit".to_owned(),
+        volume: 0.01,
+        price: None,
+        modified_price: None,
+        stop_loss: None,
+        take_profit: None,
+        protection_distance: None,
+        magic,
+        comment: marker.to_owned(),
+    });
+    let application = prepare_application(&root);
+    let paths = prepare_mt4_discovery_profile(&root, &server.control_url, &server.realtime_url);
+    let ready = root.join("mt4-pending-round-trip-ready.json");
+    let update_state_path = root.join("mt4-pending-round-trip-update-state.json");
+    let mut child = ChildGuard::spawn_for_discovery(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        &profile_id,
+        &ready,
+        &update_state_path,
+    );
+
+    wait_until(&mut child, Duration::from_secs(30), || {
+        ready.is_file()
+            && server.saw_command_result(CONNECTED_COMMAND_ID, "succeeded", "none")
+            && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
+            && server.saw_command_result(ROUND_TRIP_CANCEL_COMMAND_ID, "succeeded", "none")
+            && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
+            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
+            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CANCEL_COMMAND_ID)
+    });
+    thread::sleep(Duration::from_millis(500));
+    let store = OutboxStore::open_existing(&paths.database_path)
+        .expect("open MT4 pending round-trip store");
+    let placed = store
+        .execution_receipt(CONNECTED_COMMAND_ID)
+        .expect("MT4 pending place receipt")
+        .expect("MT4 pending place result");
+    let modified = store
+        .execution_receipt(ROUND_TRIP_CLOSE_COMMAND_ID)
+        .expect("MT4 pending modify receipt")
+        .expect("MT4 pending modify result");
+    let cancelled = store
+        .execution_receipt(ROUND_TRIP_CANCEL_COMMAND_ID)
+        .expect("MT4 pending cancel receipt")
+        .expect("MT4 pending cancel result");
+    for receipt in [&placed, &modified, &cancelled] {
+        assert_eq!(receipt.status, "succeeded");
+        assert_eq!(receipt.evidence.broker_retcode, Some(0));
+    }
+    assert!(!placed.evidence.order_tickets.is_empty());
+    for command_id in [
+        CONNECTED_COMMAND_ID,
+        ROUND_TRIP_CLOSE_COMMAND_ID,
+        ROUND_TRIP_CANCEL_COMMAND_ID,
+    ] {
+        assert_eq!(
+            store
+                .command_ledger(command_id)
+                .expect("MT4 pending round-trip ledger")
+                .expect("MT4 pending round-trip command")
+                .status,
+            "acked"
+        );
+    }
+    let bindings = store.terminal_bindings().expect("MT4 pending bindings");
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].account_ref.broker_server, broker_server);
+    assert_eq!(bindings[0].account_ref.login, login);
+    let projection = store
+        .load_terminal_projection(
+            &bindings[0].terminal_instance_id,
+            &bindings[0].account_ref,
+            bindings[0].connection_epoch,
+        )
+        .expect("MT4 pending round-trip projection");
+    let active_state =
+        serde_json::to_string(&(projection.positions.items, projection.orders.items))
+            .expect("MT4 pending round-trip active state json");
+    assert!(!active_state.contains(marker));
+    assert!(!active_state.contains(&magic.to_string()));
+    drop(store);
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id(&profile_id).expect("MT4 pending round-trip instance id"),
+    )
+    .expect("request MT4 pending round-trip core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    server.stop();
+    fs::remove_dir_all(root).expect("remove live MT4 pending round-trip fixture");
+}
+
+#[test]
 #[ignore = "requires an explicitly configured live MT5 demo terminal and bundled Python runtime"]
 fn native_core_serves_live_mt5_history_from_sqlite_without_commands() {
     let terminal_path = std::env::var_os("AURUM_MT5_TEST_TERMINAL")
@@ -1212,17 +1341,7 @@ impl LoopbackBridgeServer {
     }
 
     fn start_with_round_trip(command: RoundTripCommand) -> Self {
-        let mut params = serde_json::json!({
-            "symbol": command.symbol,
-            "side": command.side,
-            "order_kind": command.order_kind,
-            "volume": command.volume,
-            "magic": command.magic,
-            "comment": command.comment,
-        });
-        if let Some(price) = command.price {
-            params["price"] = serde_json::json!(price);
-        }
+        let params = round_trip_params(&command);
         Self::start_with_commands(false, Some(params), Some(command))
     }
 
@@ -1478,6 +1597,35 @@ struct RealtimeFixture {
     round_trip: Option<RoundTripCommand>,
 }
 
+async fn send_place_order(
+    socket: &mut WebSocketStream<TcpStream>,
+    terminal: &TerminalDescriptor,
+    params: Value,
+) {
+    let now = now_utc_msc();
+    socket
+        .send(Message::Text(
+            serde_json::json!({
+                "v": 3,
+                "type": "command",
+                "message_id": "message_01JCONNECTED1",
+                "sent_at_utc_msc": now,
+                "command_id": CONNECTED_COMMAND_ID,
+                "terminal_instance_id": terminal.terminal_instance_id,
+                "account_ref": terminal.account_ref,
+                "connection_epoch": terminal.connection_epoch,
+                "issued_at_utc_msc": now,
+                "deadline_utc_msc": now + 30_000,
+                "action": "place_order",
+                "params": params
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("place order command send");
+}
+
 async fn send_round_trip_completion(
     socket: &mut WebSocketStream<TcpStream>,
     terminal: &TerminalDescriptor,
@@ -1618,6 +1766,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
         command_override,
         round_trip,
     } = fixture;
+    let mut round_trip = round_trip;
     while !stop.load(Ordering::SeqCst) {
         let accepted = tokio::select! {
             accepted = listener.accept() => Some(accepted.expect("realtime accept").0),
@@ -1744,6 +1893,43 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                     };
                     message_types.lock().expect("message types").push(summary);
                     if message_type == "data_response"
+                        && payload["action"] == "symbol_snapshot"
+                        && payload["status"] == "succeeded"
+                        && terminal.platform == "mt4"
+                        && let Some(command) = round_trip.as_mut()
+                        && command.order_kind != "market"
+                        && command.price.is_none()
+                        && !command_sent.swap(true, Ordering::SeqCst)
+                    {
+                        let instrument = &payload["payload"]["instrument"];
+                        let bid = instrument["margin_reference_price_sell"]
+                            .as_f64()
+                            .filter(|value| value.is_finite() && *value > 0.0)
+                            .expect("MT4 pending bid");
+                        let point = instrument["point"]
+                            .as_f64()
+                            .filter(|value| value.is_finite() && *value > 0.0)
+                            .expect("MT4 pending point");
+                        let tick_size = instrument["tick_size"]
+                            .as_f64()
+                            .filter(|value| value.is_finite() && *value > 0.0)
+                            .unwrap_or(point);
+                        let minimum_points = instrument["trade_stops_level"]
+                            .as_i64()
+                            .unwrap_or(0)
+                            .max(instrument["trade_freeze_level"].as_i64().unwrap_or(0))
+                            .max(100) as f64;
+                        let distance = (point * minimum_points).max(tick_size * 10.0);
+                        let digits = instrument["digits"].as_i64().unwrap_or(2).clamp(0, 8) as i32;
+                        let factor = 10_f64.powi(digits);
+                        let normalize = |value: f64| {
+                            (((value / tick_size).round() * tick_size) * factor).round() / factor
+                        };
+                        command.price = Some(normalize(bid - distance * 2.0));
+                        command.modified_price = Some(normalize(bid - distance * 3.0));
+                        send_place_order(&mut socket, &terminal, round_trip_params(command)).await;
+                    }
+                    if message_type == "data_response"
                         && payload["action"] == "history"
                         && payload["status"] == "succeeded"
                     {
@@ -1829,9 +2015,10 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                             .expect("data acknowledgement send");
                         if !full_snapshot {
                             if (terminal.platform == "mt5"
-                                || round_trip
-                                    .as_ref()
-                                    .is_some_and(|command| command.protection_distance.is_some()))
+                                || round_trip.as_ref().is_some_and(|command| {
+                                    command.protection_distance.is_some()
+                                        || command.order_kind != "market"
+                                }))
                                 && round_trip_open_succeeded
                                 && !round_trip_close_sent
                                 && let Some(round_trip) = round_trip.as_ref()
@@ -2055,9 +2242,13 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                         }
                         if initial_ready
                             && (send_commands || command_override.is_some())
+                            && !round_trip.as_ref().is_some_and(|command| {
+                                terminal.platform == "mt4"
+                                    && command.order_kind != "market"
+                                    && command.price.is_none()
+                            })
                             && !command_sent.swap(true, Ordering::SeqCst)
                         {
-                            let now = now_utc_msc();
                             let command_params = command_override.clone().unwrap_or_else(|| {
                                 serde_json::json!({
                                     "symbol": "XAUUSD",
@@ -2065,27 +2256,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                     "volume": 0.01
                                 })
                             });
-                            socket
-                                .send(Message::Text(
-                                    serde_json::json!({
-                                        "v": 3,
-                                        "type": "command",
-                                        "message_id": "message_01JCONNECTED1",
-                                        "sent_at_utc_msc": now,
-                                        "command_id": CONNECTED_COMMAND_ID,
-                                        "terminal_instance_id": terminal.terminal_instance_id,
-                                        "account_ref": terminal.account_ref,
-                                        "connection_epoch": terminal.connection_epoch,
-                                        "issued_at_utc_msc": now,
-                                        "deadline_utc_msc": now + 30_000,
-                                        "action": "place_order",
-                                        "params": command_params
-                                    })
-                                    .to_string()
-                                    .into(),
-                                ))
-                                .await
-                                .expect("command send");
+                            send_place_order(&mut socket, &terminal, command_params).await;
                         }
                     } else if message_type == "command_result" {
                         acknowledgement_sequence += 1;
@@ -2116,6 +2287,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                             if terminal.platform != "mt4"
                                 || round_trip_close_sent
                                 || round_trip.protection_distance.is_some()
+                                || round_trip.order_kind != "market"
                             {
                                 continue;
                             }
