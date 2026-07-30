@@ -75,11 +75,13 @@ if (-not $serverUri -or $serverUri.UserInfo -or $serverUri.Query -or
 }
 $serverUrlValue = $serverUri.GetLeftPart([UriPartial]::Authority)
 $rehearsalInstallRoot = $null
+$rehearsalResultPath = $null
 if ($TestRehearsalInstallRoot) {
   if ($TargetEnvironment -ne 'test') { throw 'full_installer_rehearsal_not_allowed' }
   $rehearsalInstallRoot = [IO.Path]::GetFullPath($TestRehearsalInstallRoot)
   $defaultInstallRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'AURUM\LiangjianBridge'))
   if ($rehearsalInstallRoot -eq $defaultInstallRoot) { throw 'full_installer_rehearsal_not_allowed' }
+  $rehearsalResultPath = [IO.Path]::GetFullPath("$rehearsalInstallRoot.install-result.json")
 }
 
 $manifest = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json
@@ -137,6 +139,7 @@ if ($DryRun) {
     package_size_bytes=($manifest.packages | Measure-Object size_bytes -Sum).Sum
     minimum_offline_validity_days=$MinimumOfflineValidityDays
     rehearsal_install_root=$rehearsalInstallRoot
+    rehearsal_result_path=$rehearsalResultPath
   } | ConvertTo-Json
   exit 0
 }
@@ -163,7 +166,7 @@ try {
   $installArgumentCode = if ($rehearsalInstallRoot) {
     "  Arguments := '--offline-bundle-root `"' + ExpandConstant('{tmp}') +`r`n" +
       "    '`" --rehearsal-install-root `"$(Escape-PascalString $rehearsalInstallRoot)`" --rehearsal-result `"' +`r`n" +
-      "    ExpandConstant('{tmp}\install-result.json') + '`"';"
+      "    '$(Escape-PascalString $rehearsalResultPath)' + '`"';"
   } else {
     "  Arguments := '--offline-bundle-root `"' + ExpandConstant('{tmp}') +`r`n" +
       "    '`" --install-result `"' + ExpandConstant('{tmp}\install-result.json') + '`"';"
@@ -296,6 +299,7 @@ end;
     unsigned_installer_authorized=[bool]($TargetEnvironment -eq 'production' -and -not $authenticodeSigned -and $AllowUnsignedInstaller)
     minimum_offline_validity_days=$MinimumOfflineValidityDays
     rehearsal_install_root=$rehearsalInstallRoot
+    rehearsal_result_path=$rehearsalResultPath
     generated_at_utc=(Get-Date).ToUniversalTime().ToString('o')
   }
   [IO.File]::WriteAllText(

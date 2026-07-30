@@ -149,11 +149,7 @@ try {
       throw 'release_native_artifact_missing'
     }
     $nativeProductVersion = (Get-Item -LiteralPath $nativeExecutable).VersionInfo.ProductVersion
-    $nativeVersion = $null
-    if (-not [Version]::TryParse(($nativeProductVersion -split '[+-]')[0], [ref]$nativeVersion) -or
-      $nativeVersion.Major -ne $parsedVersion.Major -or
-      $nativeVersion.Minor -ne $parsedVersion.Minor -or
-      $nativeVersion.Build -ne $parsedVersion.Build) {
+    if ($nativeProductVersion -ne $ReleaseVersion) {
       throw 'release_core_version_mismatch'
     }
   }
@@ -178,6 +174,10 @@ try {
   New-Item -ItemType Directory -Path (Join-Path $moduleRoot 'adapter.mt5.python') -Force | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $moduleRoot 'adapter.mt4') -Force | Out-Null
   $nativeMt5Worker = Join-Path $nativeRoot 'workers\mt5'
+  $workerSource = Get-Content -LiteralPath (Join-Path $nativeMt5Worker 'worker.py') -Raw
+  if ($workerSource -notmatch "(?m)^WORKER_VERSION = `"$([Regex]::Escape($ReleaseVersion))`"$") {
+    throw 'release_worker_version_mismatch'
+  }
   Copy-Item -LiteralPath (Join-Path $nativeMt5Worker 'worker.py') `
     -Destination (Join-Path $moduleRoot 'adapter.mt5.python\worker.py')
   Copy-Item -LiteralPath (Join-Path $nativeMt5Worker 'trade.py') `
@@ -217,12 +217,16 @@ try {
     -Mt5Directory (Join-Path $moduleRoot 'adapter.mt5.python') `
     -Mt4Directory $mt4Target `
     -LauncherPath $launcherArtifact
-  Add-Type -AssemblyName System.IO.Compression.FileSystem
   $sources = [ordered]@{ 'core'=$core; 'adapter.mt5.python'=(Join-Path $moduleRoot 'adapter.mt5.python'); 'adapter.mt4'=(Join-Path $moduleRoot 'adapter.mt4') }
   $packages = @()
   foreach ($entry in $sources.GetEnumerator()) {
     $zip = Join-Path $outputRoot "$($entry.Key).zip"
-    [IO.Compression.ZipFile]::CreateFromDirectory($entry.Value, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
+    $archiveResult = (& (Join-Path $PSScriptRoot 'new-portable-zip.ps1') `
+      -SourceDirectory $entry.Value `
+      -Destination $zip) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $archiveResult.ok -or $archiveResult.file_count -le 0) {
+      throw 'release_archive_build_failed'
+    }
     $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
     $size = (Get-Item -LiteralPath $zip).Length
     $key = "bridge/releases/$ReleaseVersion/$hash/$($entry.Key).zip"

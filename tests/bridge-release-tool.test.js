@@ -112,6 +112,7 @@ describe('bridge release tooling', () => {
     expect(releaseBuilder).not.toContain('dotnet publish')
     expect(releaseBuilder).not.toContain("bridge\\app\\AurumBridge\\AurumBridge.csproj")
     expect(releaseBuilder).toContain('release_core_version_mismatch')
+    expect(releaseBuilder).toContain('release_worker_version_mismatch')
     const nativeCoreResource = await readFile(
       new URL('../bridge/native/apps/bridge-core/build.rs', import.meta.url),
       'utf8',
@@ -161,6 +162,37 @@ describe('bridge release tooling', () => {
       ])).rejects.toMatchObject({
         stderr:expect.stringContaining('release_test_server_must_be_loopback'),
       })
+    } finally {
+      await rm(temporary, { recursive:true, force:true })
+    }
+  })
+
+  it('creates Windows release archives with portable forward-slash entry names', async () => {
+    if (process.platform !== 'win32') return
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'aurum-portable-zip-'))
+    const source = path.join(temporary, 'source')
+    const nested = path.join(source, 'nested')
+    const destination = path.join(temporary, 'package.zip')
+    await mkdir(nested, { recursive:true })
+    await writeFile(path.join(nested, 'worker.py'), 'print("ready")\n')
+    try {
+      const script = path.resolve('scripts/bridge-release/new-portable-zip.ps1')
+      const { stdout } = await execFileAsync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+        '-SourceDirectory', source, '-Destination', destination,
+      ])
+      expect(JSON.parse(stdout)).toMatchObject({ ok:true, file_count:1 })
+      const inspect = [
+        'Add-Type -AssemblyName System.IO.Compression.FileSystem',
+        `$zip=[System.IO.Compression.ZipFile]::OpenRead('${destination.replaceAll("'", "''")}')`,
+        'try { @($zip.Entries | ForEach-Object FullName) | ConvertTo-Json -Compress } finally { $zip.Dispose() }',
+      ].join('; ')
+      const result = await execFileAsync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-Command', inspect,
+      ])
+      const entries = JSON.parse(result.stdout)
+      expect(entries).toContain('nested/worker.py')
+      expect(entries.every(entry => !entry.includes('\\'))).toBe(true)
     } finally {
       await rm(temporary, { recursive:true, force:true })
     }
@@ -261,6 +293,8 @@ describe('bridge release tooling', () => {
     const nativeInstaller = await readFile(new URL('../bridge/native/apps/bridge-installer/src/lib.rs', import.meta.url), 'utf8')
     const nativeReleaseValidator = await readFile(new URL('../bridge/native/crates/bridge-update/src/coordinator.rs', import.meta.url), 'utf8')
     const nativeCompliance = await readFile(new URL('../scripts/bridge-release/generate-native-compliance.ps1', import.meta.url), 'utf8')
+    const nativeWorkspace = await readFile(new URL('../bridge/native/Cargo.toml', import.meta.url), 'utf8')
+    const mt5Worker = await readFile(new URL('../bridge/native/workers/mt5/worker.py', import.meta.url), 'utf8')
     expect(bootstrapBuilder).toContain('-p liangjian-bridge-bootstrapper')
     expect(bootstrapBuilder).toContain('AURUM_BOOTSTRAPPER_SERVER_URL')
     expect(bootstrapBuilder).toContain("implementation='rust-native'")
@@ -321,10 +355,15 @@ describe('bridge release tooling', () => {
     expect(nativeCompliance).toContain('PythonRuntimeDirectory')
     expect(nativeCompliance).toContain("name = 'CPython'")
     expect(nativeCompliance).toContain('pkg:pypi/')
+    expect(nativeWorkspace).toContain('version = "3.0.0"')
+    expect(nativeWorkspace).not.toContain('3.0.0-alpha')
+    expect(mt5Worker).toContain('WORKER_VERSION = "3.0.0"')
     expect(pythonRuntimeBuilder).toContain('pruned_build_artifact_count')
     expect(pythonRuntimeBuilder).toContain('optimize-python-runtime.ps1')
     expect(releaseBuilder).toContain('python_runtime_pruning')
     expect(releaseBuilder).toContain('release_python_runtime_optimization_failed')
+    expect(releaseBuilder).toContain('new-portable-zip.ps1')
+    expect(releaseBuilder).not.toContain('CreateFromDirectory')
     expect(releaseBuilder).toContain('$runtimeMetadata.openssl_runtime_included -ne $false')
     expect(pythonRuntimeOptimizer).toContain("'DLLs\\libssl-3-x64.dll'")
     expect(pythonRuntimeOptimizer).toContain("'DLLs\\libcrypto-3-x64.dll'")
@@ -335,6 +374,7 @@ describe('bridge release tooling', () => {
     expect(fullInstallerBuilder).toContain('--offline-bundle-root')
     expect(fullInstallerBuilder).toContain("$manifest.rollout_channel -ne 'stable'")
     expect(fullInstallerBuilder).toContain('$MinimumOfflineValidityDays')
+    expect(fullInstallerBuilder).toContain('rehearsal_result_path=$rehearsalResultPath')
     expect(fullInstallerBuilder).toContain('function ConvertFrom-CodePoints')
     expect(fullInstallerBuilder).toContain('0x91CF,0x89C1,0x667A,0x6865')
     expect([...fullInstallerBuilder].some(character => character.codePointAt(0) > 0x7f)).toBe(false)
