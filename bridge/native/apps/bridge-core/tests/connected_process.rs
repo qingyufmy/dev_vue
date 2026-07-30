@@ -420,6 +420,83 @@ fn native_core_serves_live_mt4_history_from_sqlite_without_commands() {
 }
 
 #[test]
+#[ignore = "requires an explicitly configured live MT4 demo terminal"]
+fn native_core_returns_and_acks_a_live_mt4_pretrade_rejection() {
+    let terminal_data_path = std::env::var_os("AURUM_MT4_TEST_DATA_PATH")
+        .map(PathBuf::from)
+        .expect("AURUM_MT4_TEST_DATA_PATH");
+    let broker_server = std::env::var("AURUM_MT4_TEST_SERVER").expect("AURUM_MT4_TEST_SERVER");
+    let login = std::env::var("AURUM_MT4_TEST_LOGIN").expect("AURUM_MT4_TEST_LOGIN");
+    assert!(terminal_data_path.is_absolute());
+    assert!(terminal_data_path.join("MQL4").is_dir());
+    assert!(broker_server.to_ascii_lowercase().contains("demo"));
+    assert!(!login.trim().is_empty());
+
+    let root = unique_test_directory();
+    let profile_id = DEFAULT_PROFILE_ID.to_owned();
+    let mut server = LoopbackBridgeServer::start_with_rejected_command(serde_json::json!({
+        "symbol": "XAUUSD",
+        "side": "buy",
+        "volume": 0.001,
+        "magic": 923412,
+        "comment": "AURUM:CORE-MT4-REJECT"
+    }));
+    let application = prepare_application(&root);
+    let paths = prepare_mt4_discovery_profile(&root, &server.control_url, &server.realtime_url);
+    let ready = root.join("mt4-rejection-ready.json");
+    let update_state_path = root.join("mt4-rejection-update-state.json");
+    let mut child = ChildGuard::spawn_for_discovery(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        &profile_id,
+        &ready,
+        &update_state_path,
+    );
+
+    wait_until(&mut child, Duration::from_secs(30), || {
+        ready.is_file()
+            && server.saw_command_result("command_01JCONNECTED1", "rejected", "mt4_error_131")
+            && command_is_acked(&paths.database_path)
+    });
+    assert!(server.saw_command_result("command_01JCONNECTED1", "rejected", "mt4_error_131",));
+    assert!(command_is_acked(&paths.database_path));
+    let store = OutboxStore::open_existing(&paths.database_path).expect("open MT4 rejection store");
+    let ledger = store
+        .command_ledger("command_01JCONNECTED1")
+        .expect("MT4 rejection ledger")
+        .expect("MT4 rejection command");
+    assert_eq!(ledger.status, "acked");
+    let bindings = store.terminal_bindings().expect("MT4 rejection bindings");
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].platform, "mt4");
+    assert_eq!(bindings[0].account_ref.broker_server, broker_server);
+    assert_eq!(bindings[0].account_ref.login, login);
+    let projection = store
+        .load_terminal_projection(
+            &bindings[0].terminal_instance_id,
+            &bindings[0].account_ref,
+            bindings[0].connection_epoch,
+        )
+        .expect("MT4 rejection projection");
+    let active_state =
+        serde_json::to_string(&(projection.positions.items, projection.orders.items))
+            .expect("MT4 active state json");
+    assert!(!active_state.contains("AURUM:CORE-MT4-REJECT"));
+    assert!(!active_state.contains("923412"));
+    drop(store);
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id(&profile_id).expect("MT4 rejection instance id"),
+    )
+    .expect("request MT4 rejection core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    server.stop();
+    fs::remove_dir_all(root).expect("remove live MT4 rejection fixture");
+}
+
+#[test]
 #[ignore = "requires an explicitly configured live MT5 demo terminal and bundled Python runtime"]
 fn native_core_serves_live_mt5_history_from_sqlite_without_commands() {
     let terminal_path = std::env::var_os("AURUM_MT5_TEST_TERMINAL")
