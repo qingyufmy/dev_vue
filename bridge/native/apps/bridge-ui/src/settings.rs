@@ -21,7 +21,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED, EM_SETLIMITTEXT};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTORADIOBUTTON, BS_OWNERDRAW,
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
@@ -29,8 +29,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowTextW, HICON, HMENU, IDC_ARROW, IsWindow, LoadCursorW, MINMAXINFO, MoveWindow,
     PostMessageW, RegisterClassExW, SW_SHOW, SW_SHOWNORMAL, SendMessageW, SetForegroundWindow,
     SetWindowLongPtrW, SetWindowTextW, ShowWindow, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
-    WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_NCCREATE, WM_NCDESTROY,
-    WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_LBUTTONDOWN, WM_NCCREATE,
+    WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
     WS_CLIPCHILDREN, WS_GROUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
@@ -344,6 +344,24 @@ unsafe extern "system" fn window_proc(
             state.background_brush as LRESULT
         }
         WM_DRAWITEM => unsafe { draw_settings_button(lparam) },
+        WM_LBUTTONDOWN => {
+            let x = (lparam & 0xffff) as i16 as i32;
+            let y = ((lparam >> 16) & 0xffff) as i16 as i32;
+            let mut client = RECT::default();
+            unsafe { GetClientRect(hwnd, &mut client) };
+            let bounds = server_url_frame_bounds(client.right - client.left, state.dpi);
+            if unsafe { IsWindowEnabled(state.server_url) } != 0
+                && x >= bounds.left
+                && x < bounds.right
+                && y >= bounds.top
+                && y < bounds.bottom
+            {
+                unsafe { SetFocus(state.server_url) };
+                0
+            } else {
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+        }
         WM_SETCURSOR if unsafe { apply_hand_cursor(wparam, lparam, is_settings_action_button) } => {
             1
         }
@@ -387,7 +405,7 @@ unsafe fn create_controls(hwnd: HWND, state: &mut SettingsState) {
         &edit_class,
         CONTROL_SERVER_URL,
         "",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL as u32,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL as u32,
     );
     state.test = create_owner_button(hwnd, instance, CONTROL_TEST, "测试连接");
     state.restore = create_owner_button(hwnd, instance, CONTROL_RESTORE, "恢复官方配置");
@@ -481,15 +499,20 @@ unsafe fn layout_controls(hwnd: HWND, state: &SettingsState) {
     let width = client.right - client.left;
     let height = client.bottom - client.top;
     let s = |value| scale(value, state.dpi);
+    let server_url_frame = server_url_frame_bounds(width, state.dpi);
+    let edit_horizontal_inset = s(4);
+    // Win32 ignores vertical formatting rectangles for single-line EDIT controls. Keep the
+    // full-height frame in the parent and center the borderless editor inside it instead.
+    let edit_vertical_inset = s(10);
     unsafe {
         MoveWindow(state.official, s(28), s(96), s(120), s(28), 1);
         MoveWindow(state.custom, s(150), s(96), s(190), s(28), 1);
         MoveWindow(
             state.server_url,
-            s(46),
-            s(180),
-            (width - s(92)).max(s(100)),
-            s(36),
+            server_url_frame.left + edit_horizontal_inset,
+            server_url_frame.top + edit_vertical_inset,
+            (server_url_frame.right - server_url_frame.left - edit_horizontal_inset * 2).max(s(92)),
+            (server_url_frame.bottom - server_url_frame.top - edit_vertical_inset * 2).max(s(16)),
             1,
         );
         MoveWindow(state.test, width - s(124), s(270), s(96), s(36), 1);
@@ -512,6 +535,15 @@ unsafe fn layout_controls(hwnd: HWND, state: &SettingsState) {
         );
     }
     unsafe { InvalidateRect(hwnd, null(), 1) };
+}
+
+fn server_url_frame_bounds(client_width: i32, dpi: u32) -> RECT {
+    rect(
+        scale(46, dpi),
+        scale(180, dpi),
+        (client_width - scale(46, dpi)).max(scale(146, dpi)),
+        scale(216, dpi),
+    )
 }
 
 unsafe fn handle_command(hwnd: HWND, state: &mut SettingsState, id: i32) {
@@ -763,6 +795,18 @@ unsafe fn paint_window(hwnd: HWND, state: &SettingsState) {
         Rgb(51, 65, 85),
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
     );
+    let server_url_frame = server_url_frame_bounds(width, state.dpi);
+    let server_url_enabled = unsafe { IsWindowEnabled(state.server_url) } != 0;
+    fill(
+        hdc,
+        server_url_frame,
+        if server_url_enabled {
+            Rgb(255, 255, 255)
+        } else {
+            Rgb(245, 247, 250)
+        },
+    );
+    draw_border(hdc, server_url_frame, Rgb(100, 116, 139));
     draw_text(
         hdc,
         "远程地址需使用 HTTPS；本机测试可使用 HTTP。实时通道会自动配置。",
@@ -949,6 +993,16 @@ mod tests {
         assert_eq!(scale(WINDOW_CLIENT_HEIGHT, 144), 735);
         assert_eq!(scale(WINDOW_MIN_WIDTH, 120), 725);
         assert_eq!(scale(WINDOW_MIN_HEIGHT, 144), 705);
+        let server_url_frame = server_url_frame_bounds(WINDOW_CLIENT_WIDTH, 96);
+        assert_eq!(
+            (
+                server_url_frame.left,
+                server_url_frame.top,
+                server_url_frame.right,
+                server_url_frame.bottom,
+            ),
+            (46, 180, 574, 216)
+        );
     }
 
     #[test]
