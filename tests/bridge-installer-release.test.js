@@ -7,7 +7,7 @@ describe('bridge installer release descriptor', () => {
     expect(resolveBridgeInstallerRelease({})).toMatchObject({
       version:'3.0.0',
       v3:true,
-      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'6f438a1c2d9f8050f7a1b1b6ce8d004cbe33a16ecfbee7f8b516ffa204361085'}/LiangjianBridgeSetup.exe`,
+      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'afbfc5cb8cb0a252834ee49d7f0c76a0640d4e2996cde7cda554c10ea43e3652'}/LiangjianBridgeSetup.exe`,
     })
   })
 

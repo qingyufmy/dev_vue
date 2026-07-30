@@ -441,6 +441,7 @@ describe('Python Bridge history contract', () => {
 
   it('keeps legacy auto-update disabled while exposing the configured signed installer release', () => {
     const source = readFileSync(new URL('../server/routes/ai/index.js', import.meta.url), 'utf8')
+    expect(readFileSync(new URL('../VERSION', import.meta.url), 'utf8').trim()).toBe('3.0.0')
     expect(source).toContain('auto_update_enabled: BRIDGE_RELEASE.v3')
     expect(source).toContain("updater_url: ''")
     expect(source).toContain("BRIDGE_RELEASE.v3 ? null : 'signed_update_manifest_required'")
