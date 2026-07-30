@@ -46,6 +46,8 @@ struct RoundTripCommand {
     volume: f64,
     price: Option<f64>,
     modified_price: Option<f64>,
+    stop_loss: Option<f64>,
+    take_profit: Option<f64>,
     magic: i64,
     comment: String,
 }
@@ -537,6 +539,8 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
         volume: 0.01,
         price: None,
         modified_price: None,
+        stop_loss: None,
+        take_profit: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -817,6 +821,8 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
     assert!(broker_server.to_ascii_lowercase().contains("demo"));
     assert!(!login.trim().is_empty());
     let before = mt5_active_trade_snapshot(&python_runtime, &terminal_path);
+    let (stop_loss, take_profit) =
+        mt5_buy_protection_prices(&python_runtime, &terminal_path, "XAUUSD");
 
     let marker = "AURUM:CORE-MT5-ROUNDTRIP";
     let magic = 923_414;
@@ -829,6 +835,8 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
         volume: 0.01,
         price: None,
         modified_price: None,
+        stop_loss: Some(stop_loss),
+        take_profit: Some(take_profit),
         magic,
         comment: marker.to_owned(),
     });
@@ -855,13 +863,19 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
         ready.is_file()
             && server.saw_command_result(CONNECTED_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
+            && server.saw_command_result(ROUND_TRIP_CANCEL_COMMAND_ID, "succeeded", "none")
             && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
             && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
+            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CANCEL_COMMAND_ID)
     });
     thread::sleep(Duration::from_millis(500));
     let store =
         OutboxStore::open_existing(&paths.database_path).expect("open MT5 round-trip store");
-    for command_id in [CONNECTED_COMMAND_ID, ROUND_TRIP_CLOSE_COMMAND_ID] {
+    for command_id in [
+        CONNECTED_COMMAND_ID,
+        ROUND_TRIP_CLOSE_COMMAND_ID,
+        ROUND_TRIP_CANCEL_COMMAND_ID,
+    ] {
         let ledger = store
             .command_ledger(command_id)
             .expect("MT5 round-trip ledger")
@@ -872,13 +886,19 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
         .execution_receipt(CONNECTED_COMMAND_ID)
         .expect("MT5 open receipt")
         .expect("MT5 open result");
-    let close_receipt = store
+    let modify_receipt = store
         .execution_receipt(ROUND_TRIP_CLOSE_COMMAND_ID)
+        .expect("MT5 modify position receipt")
+        .expect("MT5 modify position result");
+    let close_receipt = store
+        .execution_receipt(ROUND_TRIP_CANCEL_COMMAND_ID)
         .expect("MT5 close receipt")
         .expect("MT5 close result");
     assert_eq!(open_receipt.status, "succeeded");
+    assert_eq!(modify_receipt.status, "succeeded");
     assert_eq!(close_receipt.status, "succeeded");
     assert_eq!(open_receipt.evidence.broker_retcode, Some(10_009));
+    assert_eq!(modify_receipt.evidence.broker_retcode, Some(10_009));
     assert_eq!(close_receipt.evidence.broker_retcode, Some(10_009));
     assert!(!open_receipt.evidence.order_tickets.is_empty());
     assert!(
@@ -949,6 +969,8 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
         volume: 0.01,
         price: Some(pending_price),
         modified_price: Some(modified_price),
+        stop_loss: None,
+        take_profit: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -1526,6 +1548,45 @@ async fn send_pending_modify(
         .expect("round-trip modify command send");
 }
 
+async fn send_position_modify(
+    socket: &mut WebSocketStream<TcpStream>,
+    terminal: &TerminalDescriptor,
+    round_trip: &RoundTripCommand,
+    expected_state: &Value,
+) {
+    let now = now_utc_msc();
+    socket
+        .send(Message::Text(
+            serde_json::json!({
+                "v": 3,
+                "type": "command",
+                "message_id": "message_01JCONNECTED2",
+                "sent_at_utc_msc": now,
+                "command_id": ROUND_TRIP_CLOSE_COMMAND_ID,
+                "terminal_instance_id": terminal.terminal_instance_id,
+                "account_ref": terminal.account_ref,
+                "connection_epoch": terminal.connection_epoch,
+                "issued_at_utc_msc": now,
+                "deadline_utc_msc": now + 30_000,
+                "action": "modify_position",
+                "params": {
+                    "ticket": expected_state["ticket"],
+                    "symbol": expected_state["symbol"],
+                    "side": expected_state["direction"],
+                    "volume": expected_state["volume"],
+                    "magic": round_trip.magic,
+                    "stop_loss": round_trip.stop_loss.expect("position stop loss"),
+                    "take_profit": round_trip.take_profit.expect("position take profit"),
+                    "expected_state": expected_state
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("round-trip position modify command send");
+}
+
 #[allow(clippy::result_large_err)]
 async fn serve_realtime(fixture: RealtimeFixture) {
     let RealtimeFixture {
@@ -1609,8 +1670,8 @@ async fn serve_realtime(fixture: RealtimeFixture) {
         let mut history_retry_sequence = 0_u32;
         let mut round_trip_open_succeeded = false;
         let mut round_trip_close_sent = false;
-        let mut round_trip_cancel_sent = false;
-        let mut pending_expected_state = None;
+        let mut round_trip_final_sent = false;
+        let mut completion_expected_state = None;
 
         loop {
             if stop.load(Ordering::SeqCst)
@@ -1789,7 +1850,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                     .or_else(|| position["volume_initial"].as_f64())
                                     .filter(|value| value.is_finite() && *value > 0.0)
                                     .expect("MT5 round-trip position volume");
-                                let expected_state = serde_json::json!({
+                                let mut expected_state = serde_json::json!({
                                     "ticket": ticket,
                                     "symbol": symbol,
                                     "direction": direction,
@@ -1801,14 +1862,30 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                     "take_profit": position["tp"].as_f64().unwrap_or(0.0)
                                 });
                                 if round_trip.order_kind == "market" {
-                                    send_round_trip_completion(
-                                        &mut socket,
-                                        &terminal,
-                                        round_trip,
-                                        expected_state,
-                                        ROUND_TRIP_CLOSE_COMMAND_ID,
-                                    )
-                                    .await;
+                                    if let (Some(stop_loss), Some(take_profit)) =
+                                        (round_trip.stop_loss, round_trip.take_profit)
+                                    {
+                                        send_position_modify(
+                                            &mut socket,
+                                            &terminal,
+                                            round_trip,
+                                            &expected_state,
+                                        )
+                                        .await;
+                                        expected_state["stop_loss"] = serde_json::json!(stop_loss);
+                                        expected_state["take_profit"] =
+                                            serde_json::json!(take_profit);
+                                        completion_expected_state = Some(expected_state);
+                                    } else {
+                                        send_round_trip_completion(
+                                            &mut socket,
+                                            &terminal,
+                                            round_trip,
+                                            expected_state,
+                                            ROUND_TRIP_CLOSE_COMMAND_ID,
+                                        )
+                                        .await;
+                                    }
                                 } else {
                                     send_pending_modify(
                                         &mut socket,
@@ -1817,7 +1894,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                         &expected_state,
                                     )
                                     .await;
-                                    pending_expected_state = Some(expected_state);
+                                    completion_expected_state = Some(expected_state);
                                 }
                                 round_trip_close_sent = true;
                             }
@@ -2023,10 +2100,10 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                         }
                         if payload["command_id"] == ROUND_TRIP_CLOSE_COMMAND_ID
                             && payload["status"] == "succeeded"
-                            && !round_trip_cancel_sent
+                            && !round_trip_final_sent
                             && let Some(round_trip) = round_trip.as_ref()
-                            && round_trip.order_kind != "market"
-                            && let Some(expected_state) = pending_expected_state.take()
+                            && (round_trip.order_kind != "market" || round_trip.stop_loss.is_some())
+                            && let Some(expected_state) = completion_expected_state.take()
                         {
                             send_round_trip_completion(
                                 &mut socket,
@@ -2036,7 +2113,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                 ROUND_TRIP_CANCEL_COMMAND_ID,
                             )
                             .await;
-                            round_trip_cancel_sent = true;
+                            round_trip_final_sent = true;
                         }
                     }
                 }
@@ -2310,6 +2387,71 @@ finally:
     let modified = prices.next().expect("live MT5 modified price");
     assert!(prices.next().is_none(), "unexpected live MT5 price output");
     (pending, modified)
+}
+
+fn mt5_buy_protection_prices(
+    python_runtime: &Path,
+    terminal_path: &Path,
+    requested_symbol: &str,
+) -> (f64, f64) {
+    let script = r#"
+import sys
+import MetaTrader5 as mt5
+
+if not mt5.initialize(path=sys.argv[1], timeout=10000, portable=False):
+    raise SystemExit("mt5_initialize_failed")
+try:
+    requested = sys.argv[2].upper()
+    symbols = mt5.symbols_get(group=f"*{requested}*") or ()
+    names = [str(item.name) for item in symbols]
+    exact = next((name for name in names if name.upper() == requested), None)
+    symbol = exact or min(
+        (name for name in names if name.upper().startswith(requested)),
+        key=lambda name: (len(name), name),
+        default=None,
+    )
+    if symbol is None or not mt5.symbol_select(symbol, True):
+        raise SystemExit("mt5_symbol_unavailable")
+    info, tick = mt5.symbol_info(symbol), mt5.symbol_info_tick(symbol)
+    if info is None or tick is None:
+        raise SystemExit("mt5_quote_unavailable")
+    point = float(getattr(info, "point", 0) or 0)
+    tick_size = float(getattr(info, "trade_tick_size", 0) or point or 1e-8)
+    minimum_points = max(
+        int(getattr(info, "trade_stops_level", 0) or 0),
+        int(getattr(info, "trade_freeze_level", 0) or 0),
+        100,
+    )
+    distance = max(point * minimum_points, tick_size * 10) * 3
+    digits = max(0, int(getattr(info, "digits", 0) or 0))
+    stop_loss = round(round((float(tick.bid) - distance) / tick_size) * tick_size, digits)
+    take_profit = round(round((float(tick.ask) + distance) / tick_size) * tick_size, digits)
+    print(stop_loss)
+    print(take_profit)
+finally:
+    mt5.shutdown()
+"#;
+    let output = Command::new(python_runtime.join("python.exe"))
+        .args(["-B", "-c", script])
+        .arg(terminal_path)
+        .arg(requested_symbol)
+        .output()
+        .expect("calculate live MT5 protection prices");
+    assert!(
+        output.status.success(),
+        "live MT5 protection prices failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("live MT5 protection prices utf8");
+    let mut prices = stdout.lines().map(|value| {
+        value
+            .parse::<f64>()
+            .expect("live MT5 protection price value")
+    });
+    let stop_loss = prices.next().expect("live MT5 stop loss");
+    let take_profit = prices.next().expect("live MT5 take profit");
+    assert!(prices.next().is_none(), "unexpected live MT5 price output");
+    (stop_loss, take_profit)
 }
 
 fn locate_python() -> PathBuf {
