@@ -434,12 +434,13 @@ fn default_core_hosts_an_enabled_observer_profile_without_a_second_ui() {
 
     let ready = root.join("multi-profile-ready.json");
     let update_state_path = root.join("multi-profile-update-state.json");
-    let mut child = ChildGuard::spawn_for_discovery(
+    let mut child = ChildGuard::spawn_for_discovery_with_expected(
         application.join("liangjian-bridge-core.exe"),
         &root,
         DEFAULT_PROFILE_ID,
         &ready,
         &update_state_path,
+        &[primary_terminal_id, observer_terminal_id],
     );
 
     wait_until(&mut child, Duration::from_secs(30), || {
@@ -465,6 +466,19 @@ fn default_core_hosts_an_enabled_observer_profile_without_a_second_ui() {
     assert!(!observer_status.contains("Primary-Demo"));
     assert!(!observer_status.contains("100001"));
     assert_eq!(server.websocket_connections(), 2);
+    let ready_payload: Value =
+        serde_json::from_slice(&fs::read(&ready).expect("multi-profile ready payload"))
+            .expect("multi-profile ready json");
+    let ready_terminal_ids = ready_payload["running_terminal_instance_ids"]
+        .as_array()
+        .expect("ready terminal ids")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        ready_terminal_ids,
+        std::collections::BTreeSet::from([primary_terminal_id, observer_terminal_id])
+    );
 
     SingleInstanceGuard::request_shutdown(
         &profile_instance_id(DEFAULT_PROFILE_ID).expect("default instance id"),
@@ -487,6 +501,96 @@ fn default_core_hosts_an_enabled_observer_profile_without_a_second_ui() {
 
     server.stop();
     fs::remove_dir_all(root).expect("remove multi-profile fixture");
+}
+
+#[test]
+fn default_core_does_not_report_launcher_ready_when_an_expected_observer_is_offline() {
+    let root = unique_test_directory();
+    let primary_terminal_id = "mt5_333333333333333333333333";
+    let observer_terminal_id = "mt5_444444444444444444444444";
+    let observer_profile_id = "source-1";
+    let mut server = LoopbackBridgeServer::start_read_only_multi();
+    let application = prepare_application(&root);
+    let primary_paths = prepare_read_only_profile(
+        &root,
+        DEFAULT_PROFILE_ID,
+        primary_terminal_id,
+        "primary/terminal64.exe",
+        "Primary-Demo",
+        "300003",
+        &server.control_url,
+        &server.realtime_url,
+    );
+    let observer_paths = prepare_read_only_profile(
+        &root,
+        observer_profile_id,
+        observer_terminal_id,
+        "observer/terminal64.exe",
+        "Observer-Demo",
+        "400004",
+        &server.control_url,
+        &server.realtime_url,
+    );
+    BridgePreferencesStore::new(observer_paths.data_directory.join("preferences.json"))
+        .expect("observer preferences store")
+        .save_observer_profile(&ObserverProfilePreferences {
+            platform: "mt5".to_owned(),
+            terminal_instance_id: observer_terminal_id.to_owned(),
+            terminal_path: root
+                .join("observer/terminal64.exe")
+                .to_string_lossy()
+                .into_owned(),
+            bridge_user_id: 30,
+            observer_account_label: Some("离线观摩源".to_owned()),
+            trading_account_id: Some(82),
+            trading_account_label: Some("离线账户".to_owned()),
+        })
+        .expect("save observer profile");
+    BridgePreferencesStore::new(observer_paths.data_directory.join("preferences.json"))
+        .expect("observer preferences store")
+        .save_observer_enabled(true)
+        .expect("enable observer profile");
+    CredentialStore::new(&observer_paths.credential_path)
+        .expect("observer credential store")
+        .clear()
+        .expect("remove observer credential");
+
+    let ready = root.join("offline-observer-ready.json");
+    let update_state_path = root.join("offline-observer-update-state.json");
+    let mut child = ChildGuard::spawn_for_discovery_with_expected(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        DEFAULT_PROFILE_ID,
+        &ready,
+        &update_state_path,
+        &[primary_terminal_id, observer_terminal_id],
+    );
+    wait_until(&mut child, Duration::from_secs(30), || {
+        server.websocket_connections() == 1
+            && server.saw_routed_full_snapshot(primary_terminal_id)
+            && runtime_status_json(&primary_paths.runtime_status_path).is_some_and(|status| {
+                status["phase"] == "online"
+                    && status["terminals"][0]["terminal_instance_id"] == primary_terminal_id
+            })
+            && runtime_status_json(&observer_paths.runtime_status_path)
+                .is_some_and(|status| status["phase"] == "pairing_required")
+    });
+    thread::sleep(Duration::from_millis(500));
+    child.assert_running();
+    assert!(
+        !ready.exists(),
+        "Launcher ready must wait for every previously healthy observer"
+    );
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id(DEFAULT_PROFILE_ID).expect("default instance id"),
+    )
+    .expect("request default core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    server.stop();
+    fs::remove_dir_all(root).expect("remove offline observer fixture");
 }
 
 #[test]
@@ -1400,13 +1504,35 @@ impl ChildGuard {
         ready: &Path,
         update_state_path: &Path,
     ) -> Self {
-        let child = Command::new(executable)
-            .args([
-                "--profile",
-                profile_id,
-                "--ready-file",
-                ready.to_str().expect("ready path"),
-            ])
+        Self::spawn_for_discovery_with_expected(
+            executable,
+            root,
+            profile_id,
+            ready,
+            update_state_path,
+            &[],
+        )
+    }
+
+    fn spawn_for_discovery_with_expected(
+        executable: PathBuf,
+        root: &Path,
+        profile_id: &str,
+        ready: &Path,
+        update_state_path: &Path,
+        expected_terminal_ids: &[&str],
+    ) -> Self {
+        let mut command = Command::new(executable);
+        command.args([
+            "--profile",
+            profile_id,
+            "--ready-file",
+            ready.to_str().expect("ready path"),
+        ]);
+        for terminal_id in expected_terminal_ids {
+            command.args(["--expected-terminal", terminal_id]);
+        }
+        let child = command
             .env("AURUM_BRIDGE_DATA_DIR", root)
             .env("AURUM_BRIDGE_UPDATE_STATE_PATH", update_state_path)
             .env("LOCALAPPDATA", root.join("local"))

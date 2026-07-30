@@ -1440,6 +1440,7 @@ fn capture_update_runtime_scope(
         }
     }
     let mut observer_user_ids = std::collections::BTreeSet::new();
+    let ready_observer_terminal_ids = ready_observer_terminal_ids(root_data_directory, now)?;
     for profile_id in list_observer_profiles(root_data_directory).map_err(str::to_owned)? {
         let paths =
             resolve_profile_paths(root_data_directory, &profile_id).map_err(str::to_owned)?;
@@ -1447,40 +1448,119 @@ fn capture_update_runtime_scope(
             BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
                 .map_err(|error| error.code().to_owned())?
                 .load();
-        if !preferences.observer_enabled {
+        if !preferences.observer_enabled || !observer_preferences_configured(&preferences) {
             continue;
         }
         let Some(observer_user_id) = preferences.observer_bridge_user_id else {
             continue;
         };
-        let Ok(runtime) =
-            read_runtime_status_snapshot(&paths.runtime_status_path, &profile_id, now)
-        else {
+        let Some(terminal_id) = preferences.selected_terminal_instance_id() else {
             continue;
         };
-        if runtime.server_state != "connected" || runtime.is_stale(now, 5_000) {
+        if !ready_observer_terminal_ids.contains(terminal_id) {
             continue;
         }
-        let mut included = false;
-        for terminal in runtime
-            .terminals
-            .iter()
-            .filter(|terminal| terminal.state == "ready")
-        {
-            if !terminal_ids.insert(terminal.terminal_instance_id.clone()) {
-                return Err("bridge_update_terminal_scope_conflict".to_owned());
-            }
-            included = true;
+        if !terminal_ids.insert(terminal_id.to_owned()) {
+            return Err("bridge_update_terminal_scope_conflict".to_owned());
         }
-        if included {
-            observer_user_ids.insert(observer_user_id);
-        }
+        observer_user_ids.insert(observer_user_id);
     }
     Ok(UpdateRuntimeScope {
         terminal_instance_ids: terminal_ids.into_iter().collect(),
         observer_bridge_user_ids: observer_user_ids.into_iter().collect(),
         primary_ready: primary_ready && primary_terminal_count > 0,
     })
+}
+
+fn configured_startup_terminal_ids(
+    root_data_directory: &std::path::Path,
+    profile_id: &str,
+    bootstrap: &NativeProfileBootstrap,
+) -> Result<BTreeSet<String>, String> {
+    let mut terminal_ids = bootstrap
+        .mt5_sessions
+        .iter()
+        .map(|session| session.binding.terminal_instance_id.clone())
+        .chain(
+            bootstrap
+                .mt4_bindings
+                .iter()
+                .map(|binding| binding.terminal_instance_id.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    if profile_id != DEFAULT_PROFILE_ID {
+        return Ok(terminal_ids);
+    }
+    for observer_profile_id in list_observer_profiles(root_data_directory).map_err(str::to_owned)? {
+        let paths = resolve_profile_paths(root_data_directory, &observer_profile_id)
+            .map_err(str::to_owned)?;
+        let preferences =
+            BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+                .map_err(|error| error.code().to_owned())?
+                .load();
+        if preferences.observer_enabled
+            && observer_preferences_configured(&preferences)
+            && let Some(terminal_id) = preferences.selected_terminal_instance_id()
+        {
+            terminal_ids.insert(terminal_id.to_owned());
+        }
+    }
+    Ok(terminal_ids)
+}
+
+fn ready_observer_terminal_ids(
+    root_data_directory: &std::path::Path,
+    observed_at_utc_msc: i64,
+) -> Result<BTreeSet<String>, String> {
+    let mut terminal_ids = BTreeSet::new();
+    for profile_id in list_observer_profiles(root_data_directory).map_err(str::to_owned)? {
+        let paths =
+            resolve_profile_paths(root_data_directory, &profile_id).map_err(str::to_owned)?;
+        let preferences =
+            BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+                .map_err(|error| error.code().to_owned())?
+                .load();
+        if !preferences.observer_enabled || !observer_preferences_configured(&preferences) {
+            continue;
+        }
+        let Some(expected_terminal_id) = preferences.selected_terminal_instance_id() else {
+            continue;
+        };
+        let Ok(runtime) = read_runtime_status_snapshot(
+            &paths.runtime_status_path,
+            &profile_id,
+            observed_at_utc_msc,
+        ) else {
+            continue;
+        };
+        if runtime.phase != "online"
+            || runtime.server_state != "connected"
+            || runtime.is_stale(observed_at_utc_msc, 5_000)
+        {
+            continue;
+        }
+        let Some(terminal) = runtime.terminals.iter().find(|terminal| {
+            terminal.terminal_instance_id == expected_terminal_id
+                && terminal.state == "ready"
+                && terminal.data_ready
+        }) else {
+            continue;
+        };
+        let Ok(store) = OutboxStore::open_existing(&paths.database_path) else {
+            continue;
+        };
+        let Ok(bindings) = store.terminal_bindings() else {
+            continue;
+        };
+        if bindings.iter().any(|binding| {
+            binding.terminal_instance_id == terminal.terminal_instance_id
+                && binding.platform == terminal.platform
+                && binding.connection_epoch == terminal.connection_epoch
+        }) {
+            terminal_ids.insert(terminal.terminal_instance_id.clone());
+        }
+    }
+    Ok(terminal_ids)
 }
 
 async fn release_maintenance_lease_best_effort(
@@ -2784,20 +2864,12 @@ async fn run_profile_lifecycle(
         if bootstrap.mt5_sessions.is_empty() && bootstrap.mt4_bindings.is_empty() {
             return Err("bridge_terminals_invalid".into());
         }
-        let configured_terminal_ids = bootstrap
-            .mt5_sessions
-            .iter()
-            .map(|session| session.binding.terminal_instance_id.as_str())
-            .chain(
-                bootstrap
-                    .mt4_bindings
-                    .iter()
-                    .map(|binding| binding.terminal_instance_id.as_str()),
-            )
-            .collect::<std::collections::BTreeSet<_>>();
+        let configured_terminal_ids =
+            configured_startup_terminal_ids(root_data_directory, profile_id, &bootstrap)
+                .map_err(|code| -> Box<dyn Error> { code.into() })?;
         if expected_terminal_instance_ids
             .iter()
-            .any(|terminal_id| !configured_terminal_ids.contains(terminal_id.as_str()))
+            .any(|terminal_id| !configured_terminal_ids.contains(terminal_id))
         {
             return Err("bridge_expected_terminal_missing".into());
         }
@@ -3567,12 +3639,16 @@ async fn wait_and_write_ready(
             .current()
             .map_err(|error| error.to_string())?
             .is_some_and(|transition| transition.state == ConnectionState::Connected);
-        let running_terminal_ids = active_sessions
+        let mut running_terminal_ids = active_sessions
             .statuses()
             .into_iter()
             .filter(|status| status.state == TerminalSessionState::Ready && status.data_ready)
             .map(|status| status.route.terminal_instance_id)
             .collect::<std::collections::BTreeSet<_>>();
+        match ready_observer_terminal_ids(&root_data_directory, now_utc_msc()) {
+            Ok(observer_terminal_ids) => running_terminal_ids.extend(observer_terminal_ids),
+            Err(code) => logger.warning("startup_observer_ready_read_failed", Some(&code)),
+        }
         if connected
             && expected_terminal_instance_ids
                 .iter()
@@ -4153,6 +4229,19 @@ mod tests {
         let observer_paths = resolve_profile_paths(&root, "source-1").expect("observer paths");
         let terminal = root.join("terminal64.exe");
         std::fs::write(&terminal, b"terminal").expect("terminal executable");
+        OutboxStore::open_or_create(&observer_paths.database_path)
+            .expect("observer store")
+            .activate_terminal_binding(
+                "mt5_bbbbbbbbbbbbbbbbbbbbbbbb",
+                "mt5",
+                &terminal,
+                &bridge_contract::AccountRef {
+                    broker_server: "Observer-Demo".to_owned(),
+                    login: "200002".to_owned(),
+                },
+                now,
+            )
+            .expect("observer binding");
         BridgePreferencesStore::new(observer_paths.data_directory.join("preferences.json"))
             .expect("observer preferences")
             .save_observer_profile(&ObserverProfilePreferences {
