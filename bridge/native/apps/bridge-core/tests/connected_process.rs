@@ -36,6 +36,7 @@ use windows_sys::Win32::System::Threading::{
 const RECOVERED_COMMAND_ID: &str = "command_01JRECOVER01";
 const CONNECTED_COMMAND_ID: &str = "command_01JCONNECTED1";
 const ROUND_TRIP_CLOSE_COMMAND_ID: &str = "command_01JCONNECTED2";
+const ROUND_TRIP_CANCEL_COMMAND_ID: &str = "command_01JCONNECTED3";
 
 #[derive(Clone)]
 struct RoundTripCommand {
@@ -44,6 +45,7 @@ struct RoundTripCommand {
     order_kind: String,
     volume: f64,
     price: Option<f64>,
+    modified_price: Option<f64>,
     magic: i64,
     comment: String,
 }
@@ -534,6 +536,7 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
         order_kind: "market".to_owned(),
         volume: 0.01,
         price: None,
+        modified_price: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -825,6 +828,7 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
         order_kind: "market".to_owned(),
         volume: 0.01,
         price: None,
+        modified_price: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -931,7 +935,8 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
     assert!(broker_server.to_ascii_lowercase().contains("demo"));
     assert!(!login.trim().is_empty());
     let before = mt5_active_trade_snapshot(&python_runtime, &terminal_path);
-    let pending_price = mt5_buy_limit_price(&python_runtime, &terminal_path, "XAUUSD");
+    let (pending_price, modified_price) =
+        mt5_buy_limit_prices(&python_runtime, &terminal_path, "XAUUSD");
 
     let marker = "AURUM:CORE-MT5-PENDING";
     let magic = 923_415;
@@ -943,6 +948,7 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
         order_kind: "limit".to_owned(),
         volume: 0.01,
         price: Some(pending_price),
+        modified_price: Some(modified_price),
         magic,
         comment: marker.to_owned(),
     });
@@ -969,8 +975,10 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
         ready.is_file()
             && server.saw_command_result(CONNECTED_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
+            && server.saw_command_result(ROUND_TRIP_CANCEL_COMMAND_ID, "succeeded", "none")
             && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
             && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
+            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CANCEL_COMMAND_ID)
     });
     thread::sleep(Duration::from_millis(500));
     let store = OutboxStore::open_existing(&paths.database_path)
@@ -979,16 +987,26 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
         .execution_receipt(CONNECTED_COMMAND_ID)
         .expect("MT5 pending place receipt")
         .expect("MT5 pending place result");
-    let cancelled = store
+    let modified = store
         .execution_receipt(ROUND_TRIP_CLOSE_COMMAND_ID)
+        .expect("MT5 pending modify receipt")
+        .expect("MT5 pending modify result");
+    let cancelled = store
+        .execution_receipt(ROUND_TRIP_CANCEL_COMMAND_ID)
         .expect("MT5 pending cancel receipt")
         .expect("MT5 pending cancel result");
     assert_eq!(placed.status, "succeeded");
+    assert_eq!(modified.status, "succeeded");
     assert_eq!(cancelled.status, "succeeded");
     assert_eq!(placed.evidence.broker_retcode, Some(10_009));
+    assert_eq!(modified.evidence.broker_retcode, Some(10_009));
     assert_eq!(cancelled.evidence.broker_retcode, Some(10_009));
     assert!(!placed.evidence.order_tickets.is_empty());
-    for command_id in [CONNECTED_COMMAND_ID, ROUND_TRIP_CLOSE_COMMAND_ID] {
+    for command_id in [
+        CONNECTED_COMMAND_ID,
+        ROUND_TRIP_CLOSE_COMMAND_ID,
+        ROUND_TRIP_CANCEL_COMMAND_ID,
+    ] {
         assert_eq!(
             store
                 .command_ledger(command_id)
@@ -1427,6 +1445,7 @@ async fn send_round_trip_completion(
     terminal: &TerminalDescriptor,
     round_trip: &RoundTripCommand,
     expected_state: Value,
+    command_id: &str,
 ) {
     let now = now_utc_msc();
     let (action, params) = if round_trip.order_kind == "market" {
@@ -1455,9 +1474,9 @@ async fn send_round_trip_completion(
             serde_json::json!({
                 "v": 3,
                 "type": "command",
-                "message_id": "message_01JCONNECTED2",
+                "message_id": format!("message_{command_id}"),
                 "sent_at_utc_msc": now,
-                "command_id": ROUND_TRIP_CLOSE_COMMAND_ID,
+                "command_id": command_id,
                 "terminal_instance_id": terminal.terminal_instance_id,
                 "account_ref": terminal.account_ref,
                 "connection_epoch": terminal.connection_epoch,
@@ -1471,6 +1490,40 @@ async fn send_round_trip_completion(
         ))
         .await
         .expect("round-trip close command send");
+}
+
+async fn send_pending_modify(
+    socket: &mut WebSocketStream<TcpStream>,
+    terminal: &TerminalDescriptor,
+    round_trip: &RoundTripCommand,
+    expected_state: &Value,
+) {
+    let now = now_utc_msc();
+    socket
+        .send(Message::Text(
+            serde_json::json!({
+                "v": 3,
+                "type": "command",
+                "message_id": "message_01JCONNECTED2",
+                "sent_at_utc_msc": now,
+                "command_id": ROUND_TRIP_CLOSE_COMMAND_ID,
+                "terminal_instance_id": terminal.terminal_instance_id,
+                "account_ref": terminal.account_ref,
+                "connection_epoch": terminal.connection_epoch,
+                "issued_at_utc_msc": now,
+                "deadline_utc_msc": now + 30_000,
+                "action": "modify_order",
+                "params": {
+                    "ticket": expected_state["ticket"],
+                    "price": round_trip.modified_price.expect("pending modified price"),
+                    "expected_state": expected_state
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("round-trip modify command send");
 }
 
 #[allow(clippy::result_large_err)]
@@ -1556,6 +1609,8 @@ async fn serve_realtime(fixture: RealtimeFixture) {
         let mut history_retry_sequence = 0_u32;
         let mut round_trip_open_succeeded = false;
         let mut round_trip_close_sent = false;
+        let mut round_trip_cancel_sent = false;
+        let mut pending_expected_state = None;
 
         loop {
             if stop.load(Ordering::SeqCst)
@@ -1745,13 +1800,25 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                     "stop_loss": position["sl"].as_f64().unwrap_or(0.0),
                                     "take_profit": position["tp"].as_f64().unwrap_or(0.0)
                                 });
-                                send_round_trip_completion(
-                                    &mut socket,
-                                    &terminal,
-                                    round_trip,
-                                    expected_state,
-                                )
-                                .await;
+                                if round_trip.order_kind == "market" {
+                                    send_round_trip_completion(
+                                        &mut socket,
+                                        &terminal,
+                                        round_trip,
+                                        expected_state,
+                                        ROUND_TRIP_CLOSE_COMMAND_ID,
+                                    )
+                                    .await;
+                                } else {
+                                    send_pending_modify(
+                                        &mut socket,
+                                        &terminal,
+                                        round_trip,
+                                        &expected_state,
+                                    )
+                                    .await;
+                                    pending_expected_state = Some(expected_state);
+                                }
                                 round_trip_close_sent = true;
                             }
                             continue;
@@ -1949,9 +2016,27 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                 &terminal,
                                 round_trip,
                                 expected_state,
+                                ROUND_TRIP_CLOSE_COMMAND_ID,
                             )
                             .await;
                             round_trip_close_sent = true;
+                        }
+                        if payload["command_id"] == ROUND_TRIP_CLOSE_COMMAND_ID
+                            && payload["status"] == "succeeded"
+                            && !round_trip_cancel_sent
+                            && let Some(round_trip) = round_trip.as_ref()
+                            && round_trip.order_kind != "market"
+                            && let Some(expected_state) = pending_expected_state.take()
+                        {
+                            send_round_trip_completion(
+                                &mut socket,
+                                &terminal,
+                                round_trip,
+                                expected_state,
+                                ROUND_TRIP_CANCEL_COMMAND_ID,
+                            )
+                            .await;
+                            round_trip_cancel_sent = true;
                         }
                     }
                 }
@@ -2164,7 +2249,11 @@ finally:
     serde_json::from_slice(&output.stdout).expect("live MT5 state json")
 }
 
-fn mt5_buy_limit_price(python_runtime: &Path, terminal_path: &Path, requested_symbol: &str) -> f64 {
+fn mt5_buy_limit_prices(
+    python_runtime: &Path,
+    terminal_path: &Path,
+    requested_symbol: &str,
+) -> (f64, f64) {
     let script = r#"
 import sys
 import MetaTrader5 as mt5
@@ -2196,7 +2285,9 @@ try:
     distance = max(point * minimum_points, tick_size * 10)
     digits = max(0, int(getattr(info, "digits", 0) or 0))
     price = round(round((float(tick.bid) - distance * 2) / tick_size) * tick_size, digits)
+    changed = round(round((price - distance) / tick_size) * tick_size, digits)
     print(price)
+    print(changed)
 finally:
     mt5.shutdown()
 "#;
@@ -2211,11 +2302,14 @@ finally:
         "live MT5 pending price failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout)
-        .expect("live MT5 pending price utf8")
-        .trim()
-        .parse::<f64>()
-        .expect("live MT5 pending price")
+    let stdout = String::from_utf8(output.stdout).expect("live MT5 pending price utf8");
+    let mut prices = stdout
+        .lines()
+        .map(|value| value.parse::<f64>().expect("live MT5 pending price value"));
+    let pending = prices.next().expect("live MT5 pending price");
+    let modified = prices.next().expect("live MT5 modified price");
+    assert!(prices.next().is_none(), "unexpected live MT5 price output");
+    (pending, modified)
 }
 
 fn locate_python() -> PathBuf {
