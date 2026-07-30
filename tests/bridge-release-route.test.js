@@ -144,7 +144,7 @@ describe('bridge release manifest route', () => {
     expect(verifyBridgeReleaseSignatures({ ...value, priority:'urgent' }, publicKey)).toBe(false)
   })
 
-  it('serves the bundled signed 3.0.0 release when runtime pointers are absent', async () => {
+  it('serves the bundled signed update and keeps the 3.0.0 bootstrap baseline', async () => {
     const router = createBridgeReleaseRouter({ now:() => 1_785_402_928_956 })
     const headers = {
       'X-Aurum-Installation-Id':'install_0123456789abcdef0123456789abcdef',
@@ -157,11 +157,15 @@ describe('bridge release manifest route', () => {
     expect(current.status).toBe(200)
     expect(bootstrap.status).toBe(200)
     expect(JSON.parse(current.body)).toMatchObject({
+      release_id:'bridge-3.0.1-update-test-20260730.1',
+      release_version:'3.0.1',
+      rollout_percentage:100,
+    })
+    expect(JSON.parse(bootstrap.body)).toMatchObject({
       release_id:'bridge-3.0.0-production-20260730.3',
       release_version:'3.0.0',
       rollout_percentage:100,
     })
-    expect(JSON.parse(bootstrap.body)).toEqual(JSON.parse(current.body))
   })
 
   it('keeps the bundled fallback for equivalent relative runtime pointer paths', async () => {
@@ -176,7 +180,7 @@ describe('bridge release manifest route', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(JSON.parse(response.body).release_id).toBe('bridge-3.0.0-production-20260730.3')
+    expect(JSON.parse(response.body).release_id).toBe('bridge-3.0.1-update-test-20260730.1')
   })
 
   it('counts connected installations once and recommends stopping on rollback', () => {
