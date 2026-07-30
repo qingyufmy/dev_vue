@@ -67,6 +67,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const ADMINISTRATOR_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const OBSERVER_UI_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const OBSERVER_RUNTIME_STATUS_MAX_AGE_MSC: i64 = 15_000;
+const UPDATE_RUNTIME_STATUS_MAX_AGE_MSC: i64 = 15_000;
 const OBSERVER_CREDENTIAL_RECOVERY_SCAN_INTERVAL: Duration = Duration::from_secs(5);
 const OBSERVER_CREDENTIAL_RECOVERY_COOLDOWN: Duration = Duration::from_secs(30);
 const MT5_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -1847,7 +1848,7 @@ fn capture_update_runtime_scope(
     let mut primary_terminal_count = 0usize;
     let primary_ready = state.phase == "online"
         && state.server_connected
-        && now.saturating_sub(state.observed_at_utc_msc) <= 5_000;
+        && now.saturating_sub(state.observed_at_utc_msc) <= UPDATE_RUNTIME_STATUS_MAX_AGE_MSC;
     if primary_ready {
         for terminal in state.terminals.iter().filter(|terminal| {
             terminal.observer_profile_id.is_none() && terminal.runtime_state == "running"
@@ -1959,7 +1960,7 @@ fn ready_observer_terminal_ids(
         };
         if runtime.phase != "online"
             || runtime.server_state != "connected"
-            || runtime.is_stale(observed_at_utc_msc, 5_000)
+            || runtime.is_stale(observed_at_utc_msc, UPDATE_RUNTIME_STATUS_MAX_AGE_MSC)
         {
             continue;
         }
@@ -4969,10 +4970,11 @@ mod tests {
         let root = unique_test_directory("update-scope");
         std::fs::create_dir_all(&root).expect("root");
         let now = now_utc_msc();
+        let status_observed_at = now.saturating_sub(5_001);
         let mut state = NativeRuntimeStatusSnapshot::inactive(
             DEFAULT_PROFILE_ID,
             VERSION,
-            now,
+            status_observed_at,
             "starting",
             "connecting",
             None,
@@ -5033,7 +5035,7 @@ mod tests {
             "schema_version": 1,
             "bridge_version": VERSION,
             "profile_id": "source-1",
-            "observed_at_utc_msc": now,
+            "observed_at_utc_msc": status_observed_at,
             "phase": "online",
             "server_state": "connected",
             "server_error_code": null,
@@ -5047,7 +5049,7 @@ mod tests {
                 "data_ready": true,
                 "worker_consecutive_failures": 0,
                 "collector_consecutive_failures": 0,
-                "last_success_at_utc_msc": now,
+                "last_success_at_utc_msc": status_observed_at,
                 "error_code": null
             }],
             "reconciliation": {

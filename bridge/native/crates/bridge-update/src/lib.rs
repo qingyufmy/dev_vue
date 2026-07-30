@@ -290,6 +290,8 @@ impl BridgeUpdateStateStore {
             return Ok((state.state == STATE_WAITING_WINDOW).then_some(state));
         }
         state.manual_activation_requested = true;
+        state.next_retry_at_utc_msc = None;
+        state.last_error_code = None;
         self.save_unlocked(state).map(Some)
     }
 
@@ -438,7 +440,10 @@ mod tests {
         let path = root.join(UPDATE_STATE_FILE_NAME);
         let store =
             BridgeUpdateStateStore::with_clock(&path, || 1_800_000_000_123).expect("state store");
-        let saved = store.save(waiting_state()).expect("save waiting state");
+        let mut waiting = waiting_state();
+        waiting.next_retry_at_utc_msc = Some(1_800_000_900_000);
+        waiting.last_error_code = Some("bridge_maintenance_window_unconfigured".to_owned());
+        let saved = store.save(waiting).expect("save waiting state");
         assert_eq!(saved.updated_at_utc_msc, 1_800_000_000_123);
         let payload = fs::read_to_string(&path).expect("state payload");
         assert!(payload.contains("\"schema_version\":1"));
@@ -451,6 +456,8 @@ mod tests {
             .expect("request activation")
             .expect("waiting state");
         assert!(requested.manual_activation_requested);
+        assert!(requested.next_retry_at_utc_msc.is_none());
+        assert!(requested.last_error_code.is_none());
         assert_eq!(requested.notice().expect("notice").phase, "ready");
         assert_eq!(store.load(), Ok(Some(requested)));
         assert_eq!(fs::read_dir(&root).expect("state directory").count(), 1);
