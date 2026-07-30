@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory=$true)][string]$SourceDirectory,
-  [Parameter(Mandatory=$true)][string]$Destination
+  [Parameter(Mandatory=$true)][string]$Destination,
+  [ValidateSet('Optimal','NoCompression')][string]$CompressionLevel = 'Optimal'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -64,7 +65,7 @@ try {
       $archive,
       $item.FullName,
       $entryName,
-      [IO.Compression.CompressionLevel]::Optimal
+      [IO.Compression.CompressionLevel]::$CompressionLevel
     )
     $fileCount += 1
   }
@@ -87,5 +88,6 @@ try {
   destination=$destination
   entry_count=$identities.Count
   file_count=$fileCount
+  compression_level=$CompressionLevel
   size_bytes=(Get-Item -LiteralPath $destination).Length
 } | ConvertTo-Json

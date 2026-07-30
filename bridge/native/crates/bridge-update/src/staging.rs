@@ -315,8 +315,6 @@ pub fn verify_extracted_package(
     let plan = inspect_archive(&mut archive)?;
     let destination = destination_directory.as_ref();
     let mut verified_files = Vec::new();
-    let mut archive_buffer = [0_u8; 64 * 1024];
-    let mut staged_buffer = [0_u8; 64 * 1024];
     for planned in plan.iter().filter(|entry| !entry.directory) {
         let staged_path = destination.join(&planned.relative_path);
         let staged_metadata = fs::symlink_metadata(&staged_path)
@@ -332,25 +330,29 @@ pub fn verify_extracted_package(
             .map_err(|_| UpdateError::new("update_package_archive_invalid"))?;
         let mut staged =
             File::open(&staged_path).map_err(|_| UpdateError::new("update_package_io_failed"))?;
-        loop {
-            let archived_read = archived
-                .read(&mut archive_buffer)
-                .map_err(|_| UpdateError::new("update_package_archive_invalid"))?;
-            let staged_read = staged
-                .read(&mut staged_buffer)
-                .map_err(|_| UpdateError::new("update_package_io_failed"))?;
-            if archived_read != staged_read
-                || archive_buffer[..archived_read] != staged_buffer[..staged_read]
-            {
-                return Err(UpdateError::new("update_staged_release_integrity_failed"));
-            }
-            if archived_read == 0 {
-                break;
-            }
+        let archived_hash = hash_reader(&mut archived, "update_package_archive_invalid")?;
+        let staged_hash = hash_reader(&mut staged, "update_package_io_failed")?;
+        if archived_hash != staged_hash {
+            return Err(UpdateError::new("update_staged_release_integrity_failed"));
         }
         verified_files.push(planned.relative_path.clone());
     }
     Ok(verified_files)
+}
+
+fn hash_reader(reader: &mut impl Read, error_code: &'static str) -> Result<[u8; 32], UpdateError> {
+    let mut hash = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|_| UpdateError::new(error_code))?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+    }
+    Ok(hash.finalize().into())
 }
 
 #[derive(Debug)]
@@ -645,6 +647,26 @@ mod tests {
         assert_eq!(
             fs::read_to_string(destination.join("runtime/worker.py")).expect("worker"),
             "print('ready')"
+        );
+        fs::remove_dir_all(root).expect("remove package fixture");
+    }
+
+    #[test]
+    fn verifies_large_compressed_files_independent_of_reader_chunk_boundaries() {
+        let payload = vec![b'A'; 512 * 1024];
+        let archive = zip_payload(&[("runtime/large-worker.bin", payload.as_slice())]);
+        let root = unique_test_directory("verify-large-compressed-file");
+        fs::create_dir_all(&root).expect("fixture root");
+        let package_path = root.join("package.zip");
+        fs::write(&package_path, &archive).expect("package file");
+        let package = package_for(&archive, "http://127.0.0.1:3000/package.zip");
+        let destination = root.join("version");
+        extract_verified_package(&package, &package_path, &destination).expect("extract package");
+
+        assert_eq!(
+            verify_extracted_package(&package, &package_path, &destination)
+                .expect("verify extracted package"),
+            vec![PathBuf::from("runtime/large-worker.bin")]
         );
         fs::remove_dir_all(root).expect("remove package fixture");
     }

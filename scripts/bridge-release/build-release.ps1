@@ -15,6 +15,7 @@ param(
   [int]$ExpiresInDays = 30,
   [ValidateSet('test','production')][string]$TargetEnvironment = 'test',
   [string]$MetaEditorExe = $env:AURUM_METAEDITOR_EXE,
+  [switch]$LegacyVerifierCompatibility,
   [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
@@ -221,9 +222,11 @@ try {
   $packages = @()
   foreach ($entry in $sources.GetEnumerator()) {
     $zip = Join-Path $outputRoot "$($entry.Key).zip"
+    $compressionLevel = if ($LegacyVerifierCompatibility) { 'NoCompression' } else { 'Optimal' }
     $archiveResult = (& (Join-Path $PSScriptRoot 'new-portable-zip.ps1') `
       -SourceDirectory $entry.Value `
-      -Destination $zip) | ConvertFrom-Json
+      -Destination $zip `
+      -CompressionLevel $compressionLevel) | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or -not $archiveResult.ok -or $archiveResult.file_count -le 0) {
       throw 'release_archive_build_failed'
     }
@@ -247,6 +250,7 @@ try {
     ok=$true; operation='build'; implementation='rust-native'
     release_id=$ReleaseId; release_notes=$ReleaseNotes
     git_branch=$branch; git_commit=$commit; source_dirty=$dirty
+    legacy_verifier_compatibility=[bool]$LegacyVerifierCompatibility
     server_url=$serverUrlValue; output=$outputRoot; manifest=$manifestPath
     python_runtime_pruning=[ordered]@{
       removed_file_count=[int]$runtimeOptimization.removed_file_count

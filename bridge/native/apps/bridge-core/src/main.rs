@@ -1449,11 +1449,23 @@ async fn try_apply_staged_update(
     if state.state != STATE_WAITING_WINDOW {
         return Ok(false);
     }
-    let Some(staged) = coordinator
-        .restore_staged_release()
-        .map_err(|error| error.code().to_owned())?
-    else {
-        return Ok(false);
+    let staged = match coordinator.restore_staged_release() {
+        Ok(Some(staged)) => staged,
+        Ok(None) => return Ok(false),
+        Err(error) => {
+            let code = error.code().to_owned();
+            match coordinator.abandon_invalid_staged_release(&state, &code) {
+                Ok(true) => logger.warning("native_update_discarded_invalid_stage", Some(&code)),
+                Ok(false) => logger.warning(
+                    "native_update_invalid_stage_delegated_to_launcher",
+                    Some(&code),
+                ),
+                Err(cleanup_error) => {
+                    return Err(format!("{code};cleanup={}", cleanup_error.code()));
+                }
+            }
+            return Err(code);
+        }
     };
     let scope = match capture_update_runtime_scope(root_data_directory, ui_state) {
         Ok(scope) => scope,
