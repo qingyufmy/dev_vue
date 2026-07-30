@@ -21,6 +21,7 @@ struct Arguments {
     execute: bool,
     partial_close: bool,
     matrix: bool,
+    market_data_smoke: bool,
     observe_recovery_seconds: u64,
 }
 
@@ -175,6 +176,15 @@ async fn exercise(
             "mode": "recovery",
             "readiness": readiness,
             "recovery": recovery,
+            "passed": true,
+        }));
+    }
+    if arguments.market_data_smoke {
+        let market_data = run_market_data_smoke(&source, &resolved_symbol).await?;
+        return Ok(json!({
+            "mode": "market_data",
+            "readiness": readiness,
+            "market_data": market_data,
             "passed": true,
         }));
     }
@@ -416,6 +426,134 @@ async fn exercise(
         ));
     }
     Ok(report)
+}
+
+async fn run_market_data_smoke(
+    source: &Arc<Mt4EaSnapshotSource>,
+    symbol: &str,
+) -> Result<Value, String> {
+    let quote = source
+        .request_quote("demo_market_quote".to_owned(), symbol.to_owned())
+        .await
+        .map_err(protocol_error)?;
+    let bid = quote
+        .bid
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| "mt4_demo_quote_invalid".to_owned())?;
+    let ask = quote
+        .ask
+        .filter(|value| value.is_finite() && *value >= bid)
+        .ok_or_else(|| "mt4_demo_quote_invalid".to_owned())?;
+    let offset_minutes = quote
+        .timezone_offset_minutes
+        .filter(|value| (-14 * 60..=14 * 60).contains(value))
+        .ok_or_else(|| "mt4_demo_server_offset_invalid".to_owned())?;
+    let clock_status = quote
+        .clock_status
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "mt4_demo_clock_status_invalid".to_owned())?;
+    if quote.observed_at_utc_msc <= 0 || quote.symbol != symbol {
+        return Err("mt4_demo_quote_contract_invalid".to_owned());
+    }
+
+    let symbols = source
+        .request_data(
+            "demo_market_symbols".to_owned(),
+            "symbols".to_owned(),
+            json!({}),
+        )
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    let symbol_rows = symbols
+        .payload
+        .get("symbols")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "mt4_demo_symbols_invalid".to_owned())?;
+    let symbol_count = symbols
+        .payload
+        .get("count")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| "mt4_demo_symbols_invalid".to_owned())?;
+    if symbols.payload.get("source").and_then(Value::as_str) != Some("mt4")
+        || symbol_count != symbol_rows.len()
+        || !symbol_rows
+            .iter()
+            .any(|row| row.get("name").and_then(Value::as_str) == Some(symbol))
+    {
+        return Err("mt4_demo_symbols_contract_invalid".to_owned());
+    }
+
+    let rates = source
+        .request_data(
+            "demo_market_rates".to_owned(),
+            "rates".to_owned(),
+            json!({ "symbol": symbol, "timeframe": "M5", "count": 100 }),
+        )
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    let rows = rates
+        .payload
+        .get("rates")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "mt4_demo_rates_invalid".to_owned())?;
+    if rates.payload.get("source").and_then(Value::as_str) != Some("mt4")
+        || rates.payload.get("symbol").and_then(Value::as_str) != Some(symbol)
+        || rates.payload.get("timeframe").and_then(Value::as_str) != Some("M5")
+        || rates.payload.get("count").and_then(Value::as_u64) != Some(100)
+        || rows.len() != 100
+    {
+        return Err(format!("mt4_demo_rates_contract_invalid:{}", rates.payload));
+    }
+    let mut previous_time = 0_i64;
+    for row in rows {
+        let time = row
+            .get("time_utc_msc")
+            .and_then(Value::as_i64)
+            .filter(|value| *value > previous_time)
+            .ok_or_else(|| "mt4_demo_rates_time_invalid".to_owned())?;
+        let open = finite_price(row, "open")?;
+        let high = finite_price(row, "high")?;
+        let low = finite_price(row, "low")?;
+        let close = finite_price(row, "close")?;
+        if low > open || low > close || high < open || high < close || low > high {
+            return Err("mt4_demo_rates_ohlc_invalid".to_owned());
+        }
+        previous_time = time;
+    }
+    if rates.observed_at_utc_msc != previous_time {
+        return Err("mt4_demo_rates_observed_at_invalid".to_owned());
+    }
+
+    Ok(json!({
+        "symbol": symbol,
+        "quote": {
+            "bid": bid,
+            "ask": ask,
+            "observed_at_utc_msc": quote.observed_at_utc_msc,
+            "server_time_msc": quote.observed_at_utc_msc + i64::from(offset_minutes) * 60_000,
+            "timezone_offset_minutes": offset_minutes,
+            "clock_status": clock_status,
+            "digits": quote.digits,
+            "point": quote.point,
+            "trade_mode": quote.symbol_trade_mode,
+        },
+        "symbols": { "count": symbol_count, "contains_requested": true },
+        "rates": {
+            "timeframe": "M5",
+            "count": rows.len(),
+            "oldest_utc_msc": rows.first().and_then(|row| row.get("time_utc_msc")),
+            "newest_utc_msc": previous_time,
+        },
+    }))
+}
+
+fn finite_price(row: &Value, field: &str) -> Result<f64, String> {
+    row.get(field)
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| "mt4_demo_rates_ohlc_invalid".to_owned())
 }
 
 async fn observe_terminal_recovery(
@@ -1207,6 +1345,7 @@ fn parse_arguments() -> Result<Arguments, String> {
     let mut execute = false;
     let mut partial_close = false;
     let mut matrix = false;
+    let mut market_data_smoke = false;
     let mut observe_recovery_seconds = 0_u64;
     let values = env::args().skip(1).collect::<Vec<_>>();
     let mut index = 0;
@@ -1245,6 +1384,7 @@ fn parse_arguments() -> Result<Arguments, String> {
             "--execute" => execute = true,
             "--partial-close" => partial_close = true,
             "--matrix" => matrix = true,
+            "--market-data-smoke" => market_data_smoke = true,
             _ => return Err(format!("unknown_argument:{}", values[index])),
         }
         index += 1;
@@ -1259,6 +1399,7 @@ fn parse_arguments() -> Result<Arguments, String> {
         execute,
         partial_close,
         matrix,
+        market_data_smoke,
         observe_recovery_seconds,
     })
 }
@@ -1277,6 +1418,8 @@ fn validate_arguments(arguments: Arguments) -> Result<Arguments, String> {
         || (arguments.partial_close || arguments.matrix) && !arguments.execute
         || arguments.partial_close && arguments.matrix
         || arguments.observe_recovery_seconds > 0 && arguments.execute
+        || arguments.market_data_smoke && arguments.execute
+        || arguments.market_data_smoke && arguments.observe_recovery_seconds > 0
         || arguments.observe_recovery_seconds > 0
             && !(10..=180).contains(&arguments.observe_recovery_seconds)
     {

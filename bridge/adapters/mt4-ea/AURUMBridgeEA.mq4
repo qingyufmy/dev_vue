@@ -3,7 +3,7 @@
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.2.8"
+#define ADAPTER_VERSION "3.2.9"
 
 input string InpPipeName = "AURUMBridgeV3";
 
@@ -457,6 +457,7 @@ void SendRates(uchar &request[], int &offset)
      }
    rates_json += "]";
    string payload_json = "{\"symbol\":\"" + JsonEscape(symbol) + "\""
+      + ",\"source\":\"mt4\""
       + ",\"timeframe\":\"" + timeframe_name + "\""
       + ",\"timezone_offset_minutes\":" + IntegerToString((int)(server_offset_msc / 60000))
       + ",\"clock_status\":\"mt4_current_offset\""
