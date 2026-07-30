@@ -994,13 +994,13 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
         symbol: "XAUUSD".to_owned(),
         side: "buy".to_owned(),
         order_kind: "market".to_owned(),
-        volume: 0.01,
+        volume: 0.02,
         price: None,
         modified_price: None,
         stop_loss: Some(stop_loss),
         take_profit: Some(take_profit),
         protection_distance: None,
-        partial_close_volume: None,
+        partial_close_volume: Some(0.01),
         magic,
         comment: marker.to_owned(),
     });
@@ -1028,9 +1028,11 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
             && server.saw_command_result(CONNECTED_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CANCEL_COMMAND_ID, "succeeded", "none")
+            && server.saw_command_result(ROUND_TRIP_FINAL_COMMAND_ID, "succeeded", "none")
             && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
             && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
             && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CANCEL_COMMAND_ID)
+            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_FINAL_COMMAND_ID)
     });
     thread::sleep(Duration::from_millis(500));
     let store =
@@ -1039,6 +1041,7 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
         CONNECTED_COMMAND_ID,
         ROUND_TRIP_CLOSE_COMMAND_ID,
         ROUND_TRIP_CANCEL_COMMAND_ID,
+        ROUND_TRIP_FINAL_COMMAND_ID,
     ] {
         let ledger = store
             .command_ledger(command_id)
@@ -1054,17 +1057,30 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
         .execution_receipt(ROUND_TRIP_CLOSE_COMMAND_ID)
         .expect("MT5 modify position receipt")
         .expect("MT5 modify position result");
-    let close_receipt = store
+    let partial_close_receipt = store
         .execution_receipt(ROUND_TRIP_CANCEL_COMMAND_ID)
-        .expect("MT5 close receipt")
-        .expect("MT5 close result");
+        .expect("MT5 partial close receipt")
+        .expect("MT5 partial close result");
+    let close_receipt = store
+        .execution_receipt(ROUND_TRIP_FINAL_COMMAND_ID)
+        .expect("MT5 final close receipt")
+        .expect("MT5 final close result");
     assert_eq!(open_receipt.status, "succeeded");
     assert_eq!(modify_receipt.status, "succeeded");
+    assert_eq!(partial_close_receipt.status, "succeeded");
     assert_eq!(close_receipt.status, "succeeded");
     assert_eq!(open_receipt.evidence.broker_retcode, Some(10_009));
     assert_eq!(modify_receipt.evidence.broker_retcode, Some(10_009));
+    assert_eq!(partial_close_receipt.evidence.broker_retcode, Some(10_009));
     assert_eq!(close_receipt.evidence.broker_retcode, Some(10_009));
     assert!(!open_receipt.evidence.order_tickets.is_empty());
+    assert!(
+        partial_close_receipt
+            .raw_result
+            .as_ref()
+            .and_then(|result| result.get("position"))
+            .is_some_and(|ticket| ticket.as_u64().is_some_and(|ticket| ticket > 0))
+    );
     assert!(
         close_receipt
             .raw_result
@@ -2058,31 +2074,31 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                     .as_u64()
                                     .map(|value| value.to_string())
                                     .or_else(|| position["ticket"].as_str().map(str::to_owned))
-                                    .expect("MT4 remaining position ticket");
+                                    .expect("round-trip remaining position ticket");
                                 let direction =
                                     match (position["type"].as_i64(), position["type"].as_str()) {
                                         (Some(0 | 2 | 4 | 6), _) => "buy",
                                         (Some(1 | 3 | 5 | 7), _) => "sell",
                                         (_, Some(value)) if value.starts_with("buy") => "buy",
                                         (_, Some(value)) if value.starts_with("sell") => "sell",
-                                        _ => panic!("MT4 remaining position direction"),
+                                        _ => panic!("round-trip remaining position direction"),
                                     };
                                 let symbol = position["symbol"]
                                     .as_str()
                                     .filter(|value| !value.is_empty())
-                                    .expect("MT4 remaining position symbol");
+                                    .expect("round-trip remaining position symbol");
                                 let volume = position["volume"]
                                     .as_f64()
                                     .or_else(|| position["volume_current"].as_f64())
                                     .filter(|value| value.is_finite() && *value > 0.0)
-                                    .expect("MT4 remaining position volume");
+                                    .expect("round-trip remaining position volume");
                                 let expected_remaining_volume = round_trip.volume
                                     - round_trip
                                         .partial_close_volume
-                                        .expect("MT4 partial close volume");
+                                        .expect("round-trip partial close volume");
                                 assert!(
                                     (volume - expected_remaining_volume).abs() < 1e-9,
-                                    "MT4 remaining position volume"
+                                    "round-trip remaining position volume"
                                 );
                                 let expected_state = serde_json::json!({
                                     "ticket": ticket,
