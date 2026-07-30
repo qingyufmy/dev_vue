@@ -61,6 +61,25 @@ if ($resultDocument.operation -ne 'client-update-rehearsal' -or
   (($rehearsalExitCode -eq 0) -ne [bool]$resultDocument.ok)) {
   throw 'update_rehearsal_result_invalid'
 }
+if ($resultDocument.ok) {
+  $expectedPhases = @('waiting_window','acquiring_lease','draining','activating')
+  $observedPhases = @($resultDocument.interrupted_recovery.phases)
+  if ($resultDocument.interrupted_recovery.mode -ne 'real-child-process-termination' -or
+    $observedPhases.Count -ne $expectedPhases.Count) {
+    throw 'update_rehearsal_process_kill_evidence_missing'
+  }
+  for ($index = 0; $index -lt $expectedPhases.Count; $index++) {
+    $phase = $observedPhases[$index]
+    if ([string]$phase.phase -ne $expectedPhases[$index] -or
+      -not [bool]$phase.process_terminated -or
+      -not [bool]$phase.restart_recovered -or
+      -not [bool]$phase.stage_reverified -or
+      -not [bool]$phase.maintenance_lease_cleared -or
+      -not [bool]$phase.active_version_unchanged) {
+      throw 'update_rehearsal_process_kill_evidence_invalid'
+    }
+  }
+}
 if ($Result) {
   $resultPath = [IO.Path]::GetFullPath($Result)
   $resultDirectory = Split-Path $resultPath -Parent

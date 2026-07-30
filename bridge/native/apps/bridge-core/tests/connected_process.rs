@@ -43,6 +43,8 @@ const ROUND_TRIP_CLOSE_COMMAND_ID: &str = "command_01JCONNECTED2";
 const ROUND_TRIP_CANCEL_COMMAND_ID: &str = "command_01JCONNECTED3";
 const ROUND_TRIP_FINAL_COMMAND_ID: &str = "command_01JCONNECTED4";
 static LOCAL_CONTROL_REQUEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+static DEFAULT_PROFILE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone)]
 struct RoundTripCommand {
@@ -475,6 +477,9 @@ fn native_core_update_drain_times_out_on_an_active_command_and_recovers_admissio
 
 #[test]
 fn default_core_hosts_an_enabled_observer_profile_without_a_second_ui() {
+    let _default_profile_guard = DEFAULT_PROFILE_TEST_LOCK
+        .lock()
+        .expect("default profile test lock");
     let root = unique_test_directory();
     let primary_terminal_id = "mt5_111111111111111111111111";
     let observer_terminal_id = "mt5_222222222222222222222222";
@@ -610,6 +615,9 @@ fn default_core_hosts_an_enabled_observer_profile_without_a_second_ui() {
 
 #[test]
 fn default_core_does_not_report_launcher_ready_when_an_expected_observer_is_offline() {
+    let _default_profile_guard = DEFAULT_PROFILE_TEST_LOCK
+        .lock()
+        .expect("default profile test lock");
     let root = unique_test_directory();
     let primary_terminal_id = "mt5_333333333333333333333333";
     let observer_terminal_id = "mt5_444444444444444444444444";
@@ -3695,7 +3703,15 @@ fn now_utc_msc() -> i64 {
 }
 
 fn unique_profile_id() -> String {
-    format!("connected-{}-{}", std::process::id(), now_utc_msc())
+    format!(
+        "connected-{}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("profile clock")
+            .as_nanos(),
+        PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn unique_test_directory() -> PathBuf {

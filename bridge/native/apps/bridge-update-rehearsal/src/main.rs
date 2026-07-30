@@ -1,6 +1,7 @@
 use bridge_update::{
-    BridgeUpdateCoordinator, BridgeUpdateStateStore, ReleaseActivationStore, STATE_ACTIVATING,
-    STATE_HEALTHY, STATE_ROLLED_BACK, StagedRelease, UpdateError,
+    BridgeUpdateCoordinator, BridgeUpdateStateStore, ReleaseActivationStore, STATE_ACQUIRING_LEASE,
+    STATE_ACTIVATING, STATE_DRAINING, STATE_HEALTHY, STATE_ROLLED_BACK, STATE_WAITING_WINDOW,
+    StagedRelease, UpdateError,
 };
 use liangjian_bridge_launcher::{
     BridgeProcessRunner, LauncherEngine, LauncherError, NativeBridgeProcessRunner,
@@ -13,8 +14,9 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process::{Command, ExitCode, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use url::Url;
 
 const PUBLISH_PATH: &str = "/api/admin/bridge/v3/releases/publish";
@@ -127,6 +129,9 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<Value, RehearsalError> {
     let arguments = parse_arguments(std::env::args().skip(1))?;
+    if arguments.contains_key("fault-worker-mode") {
+        return run_fault_worker(&arguments);
+    }
     let server = validate_loopback_server(required(&arguments, "server")?)?;
     let expected_server = validate_loopback_server(required(&arguments, "expected-server-url")?)?;
     let public_key = existing_file(required(&arguments, "public-key")?)?;
@@ -185,6 +190,8 @@ async fn run() -> Result<Value, RehearsalError> {
         &first,
         "update_rehearsal_first_health_check_failed",
     )?;
+    let interrupted_recovery =
+        verify_process_kill_recovery(&initial_directory, &install_root, &initial_version, &first)?;
     prepare_activation(&first_coordinator, &first)?;
     let first_activated = LauncherEngine::new(
         &install_root,
@@ -259,6 +266,7 @@ async fn run() -> Result<Value, RehearsalError> {
             "health_check": "passed",
             "activation": "healthy"
         },
+        "interrupted_recovery": interrupted_recovery,
         "second": {
             "release_id": second.release_id,
             "version": second.version,
@@ -278,6 +286,188 @@ async fn run() -> Result<Value, RehearsalError> {
             "last_error_code": final_state.last_error_code,
             "maintenance_lease_cleared": final_state.maintenance_lease_id.is_none()
         }
+    }))
+}
+
+fn run_fault_worker(arguments: &BTreeMap<String, String>) -> Result<Value, RehearsalError> {
+    let mode = required(arguments, "fault-worker-mode")?;
+    let phase = required(arguments, "phase")?;
+    if !matches!(
+        phase,
+        STATE_WAITING_WINDOW | STATE_ACQUIRING_LEASE | STATE_DRAINING | STATE_ACTIVATING
+    ) {
+        return Err(RehearsalError::new("update_rehearsal_fault_phase_invalid"));
+    }
+    let install_root = existing_directory(required(arguments, "install-root")?)?;
+    let application_directory = existing_directory(required(arguments, "application-directory")?)?;
+    let coordinator = coordinator(&application_directory, &install_root)?;
+    let state = coordinator
+        .load_state()?
+        .ok_or_else(|| RehearsalError::new("update_rehearsal_fault_state_missing"))?;
+    let staged = coordinator
+        .restore_staged_release()?
+        .ok_or_else(|| RehearsalError::new("update_rehearsal_fault_stage_missing"))?;
+
+    match mode {
+        "interrupt" => {
+            let carries_lease = matches!(phase, STATE_DRAINING | STATE_ACTIVATING);
+            coordinator.save_activation_phase(
+                &staged,
+                phase,
+                true,
+                carries_lease.then(|| format!("lease_process_kill_{phase}")),
+                carries_lease.then_some(now_utc_msc().saturating_add(10 * 60 * 1_000)),
+                None,
+                None,
+            )?;
+            let ready_file = absolute_path(required(arguments, "ready-file")?)?;
+            fs::write(
+                ready_file,
+                serde_json::to_vec(&json!({ "ready": true, "phase": phase }))
+                    .map_err(|_| RehearsalError::new("update_rehearsal_fault_ready_failed"))?,
+            )
+            .map_err(|_| RehearsalError::new("update_rehearsal_fault_ready_failed"))?;
+            loop {
+                thread::park_timeout(Duration::from_secs(60));
+            }
+        }
+        "recover" => {
+            if state.state != phase {
+                return Err(RehearsalError::new("update_rehearsal_fault_state_mismatch"));
+            }
+            if phase != STATE_WAITING_WINDOW {
+                coordinator.save_activation_phase(
+                    &staged,
+                    STATE_WAITING_WINDOW,
+                    state.manual_activation_requested,
+                    None,
+                    None,
+                    Some(now_utc_msc().saturating_add(15_000)),
+                    Some("update_recovered_after_restart".to_owned()),
+                )?;
+            }
+            let recovered = coordinator
+                .load_state()?
+                .ok_or_else(|| RehearsalError::new("update_rehearsal_fault_state_missing"))?;
+            Ok(json!({
+                "ok": true,
+                "operation": "process-kill-recovery-worker",
+                "interrupted_phase": phase,
+                "recovered_state": recovered.state,
+                "target_version": recovered.target_version,
+                "maintenance_lease_cleared": recovered.maintenance_lease_id.is_none(),
+                "stage_reverified": true
+            }))
+        }
+        _ => Err(RehearsalError::new("update_rehearsal_fault_mode_invalid")),
+    }
+}
+
+fn verify_process_kill_recovery(
+    application_directory: &Path,
+    install_root: &Path,
+    initial_version: &str,
+    staged: &StagedRelease,
+) -> Result<Value, RehearsalError> {
+    let executable = std::env::current_exe()
+        .map_err(|_| RehearsalError::new("update_rehearsal_fault_process_failed"))?;
+    let pointer_store = ReleaseActivationStore::new(install_root.join(POINTER_FILE_NAME))?;
+    let state_store = BridgeUpdateStateStore::new(install_root.join(UPDATE_STATE_FILE_NAME))?;
+    let mut phases = Vec::new();
+    for phase in [
+        STATE_WAITING_WINDOW,
+        STATE_ACQUIRING_LEASE,
+        STATE_DRAINING,
+        STATE_ACTIVATING,
+    ] {
+        let ready_file = install_root.join(format!("fault-ready-{phase}.json"));
+        let mut interrupted = Command::new(&executable)
+            .arg("--fault-worker-mode")
+            .arg("interrupt")
+            .arg("--phase")
+            .arg(phase)
+            .arg("--install-root")
+            .arg(install_root)
+            .arg("--application-directory")
+            .arg(application_directory)
+            .arg("--ready-file")
+            .arg(&ready_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| RehearsalError::new("update_rehearsal_fault_process_failed"))?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready_file.is_file() {
+            if interrupted
+                .try_wait()
+                .map_err(|_| RehearsalError::new("update_rehearsal_fault_process_failed"))?
+                .is_some()
+                || Instant::now() >= deadline
+            {
+                let _ = interrupted.kill();
+                let _ = interrupted.wait();
+                return Err(RehearsalError::new(
+                    "update_rehearsal_fault_process_not_ready",
+                ));
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        interrupted
+            .kill()
+            .map_err(|_| RehearsalError::new("update_rehearsal_fault_process_kill_failed"))?;
+        interrupted
+            .wait()
+            .map_err(|_| RehearsalError::new("update_rehearsal_fault_process_kill_failed"))?;
+        fs::remove_file(&ready_file)
+            .map_err(|_| RehearsalError::new("update_rehearsal_fault_ready_failed"))?;
+
+        let output = Command::new(&executable)
+            .arg("--fault-worker-mode")
+            .arg("recover")
+            .arg("--phase")
+            .arg(phase)
+            .arg("--install-root")
+            .arg(install_root)
+            .arg("--application-directory")
+            .arg(application_directory)
+            .output()
+            .map_err(|_| RehearsalError::new("update_rehearsal_fault_process_failed"))?;
+        if !output.status.success() {
+            return Err(RehearsalError::new(
+                "update_rehearsal_fault_recovery_failed",
+            ));
+        }
+        let recovered = serde_json::from_slice::<Value>(&output.stdout)
+            .map_err(|_| RehearsalError::new("update_rehearsal_fault_recovery_failed"))?;
+        let state = state_store
+            .load()?
+            .ok_or_else(|| RehearsalError::new("update_rehearsal_fault_state_missing"))?;
+        let pointer = pointer_store.load()?;
+        if recovered.get("ok").and_then(Value::as_bool) != Some(true)
+            || state.state != STATE_WAITING_WINDOW
+            || state.target_version.as_deref() != Some(staged.version.as_str())
+            || state.maintenance_lease_id.is_some()
+            || pointer.active_version != initial_version
+            || pointer.last_known_good_version != initial_version
+            || pointer.status != "healthy"
+        {
+            return Err(RehearsalError::new(
+                "update_rehearsal_fault_recovery_failed",
+            ));
+        }
+        phases.push(json!({
+            "phase": phase,
+            "process_terminated": true,
+            "restart_recovered": true,
+            "stage_reverified": true,
+            "maintenance_lease_cleared": state.maintenance_lease_id.is_none(),
+            "active_version_unchanged": true
+        }));
+    }
+    Ok(json!({
+        "mode": "real-child-process-termination",
+        "phases": phases
     }))
 }
 
@@ -464,6 +654,19 @@ fn existing_file(value: &str) -> Result<PathBuf, RehearsalError> {
     } else {
         Err(RehearsalError::new("update_rehearsal_file_missing"))
     }
+}
+
+fn existing_directory(value: &str) -> Result<PathBuf, RehearsalError> {
+    let directory = absolute_path(value)?;
+    if directory.is_dir() {
+        Ok(directory)
+    } else {
+        Err(RehearsalError::new("update_rehearsal_directory_missing"))
+    }
+}
+
+fn absolute_path(value: &str) -> Result<PathBuf, RehearsalError> {
+    std::path::absolute(value).map_err(|_| RehearsalError::new("update_rehearsal_path_invalid"))
 }
 
 fn parse_arguments(
