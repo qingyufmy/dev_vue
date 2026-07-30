@@ -8,8 +8,8 @@ mod settings;
 mod terminal_directory;
 
 use bridge_foundation::{
-    CliMode, DEFAULT_PROFILE_ID, default_data_directory, parse_cli, profile_instance_id,
-    validate_profile_id,
+    CliMode, DEFAULT_PROFILE_ID, default_data_directory, default_root_data_directory, parse_cli,
+    profile_instance_id, validate_profile_id,
 };
 use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
@@ -18,6 +18,7 @@ use bridge_local_control::{
 use bridge_runtime_win::{
     InstanceAcquireResult, InstanceSignal, SingleInstanceGuard, default_lock_directory,
 };
+use bridge_transport::realtime_compatibility_enabled;
 use bridge_ui_model::{
     AccountCardView, MainWindowView, ObserverAction, PRODUCT_NAME, Rgb, SAFETY_COPY,
     build_main_window_view, resolve_account_column_count,
@@ -100,11 +101,13 @@ const MENU_EXIT: usize = 202;
 const MENU_AUTOSTART: usize = 203;
 const MENU_SETTINGS: usize = 204;
 const MENU_RECOVER_OFFICIAL: usize = 205;
+const MENU_REALTIME_COMPATIBILITY: usize = 206;
 const MENU_OPEN_COMMAND: i32 = MENU_OPEN as i32;
 const MENU_EXIT_COMMAND: i32 = MENU_EXIT as i32;
 const MENU_AUTOSTART_COMMAND: i32 = MENU_AUTOSTART as i32;
 const MENU_SETTINGS_COMMAND: i32 = MENU_SETTINGS as i32;
 const MENU_RECOVER_OFFICIAL_COMMAND: i32 = MENU_RECOVER_OFFICIAL as i32;
+const MENU_REALTIME_COMPATIBILITY_COMMAND: i32 = MENU_REALTIME_COMPATIBILITY as i32;
 const TIMER_POLL: usize = 1;
 const WM_STATE_READY: u32 = WM_APP + 1;
 const WM_ACTION_READY: u32 = WM_APP + 2;
@@ -253,6 +256,7 @@ impl DemoScenario {
 struct TrayMenuView {
     show_administration: bool,
     autostart_checked: bool,
+    realtime_compatibility_checked: bool,
     settings_text: &'static str,
     show_settings: bool,
     show_recovery: bool,
@@ -264,11 +268,13 @@ fn build_tray_menu_view(
     state: &UiStateSnapshot,
     show_settings: bool,
     action_running: bool,
+    realtime_compatibility_checked: bool,
 ) -> TrayMenuView {
     let show_administration = profile_id == DEFAULT_PROFILE_ID;
     TrayMenuView {
         show_administration,
         autostart_checked: state.autostart_enabled,
+        realtime_compatibility_checked,
         settings_text: if state.server_connected {
             "连接设置"
         } else {
@@ -2594,7 +2600,10 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
     if app.demo_mode
         && matches!(
             id,
-            CONTROL_SETTINGS | MENU_SETTINGS_COMMAND | MENU_RECOVER_OFFICIAL_COMMAND
+            CONTROL_SETTINGS
+                | MENU_SETTINGS_COMMAND
+                | MENU_RECOVER_OFFICIAL_COMMAND
+                | MENU_REALTIME_COMPATIBILITY_COMMAND
         )
     {
         return;
@@ -2693,6 +2702,18 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
                 },
             )
         },
+        MENU_REALTIME_COMPATIBILITY_COMMAND => {
+            let enabled = default_root_data_directory()
+                .map(|directory| !realtime_compatibility_enabled(directory))
+                .unwrap_or(true);
+            unsafe {
+                begin_action(
+                    hwnd,
+                    app,
+                    LocalControlAction::RealtimeCompatibilitySet { enabled },
+                )
+            }
+        }
         MENU_SETTINGS_COMMAND => match unsafe {
             settings::show_or_focus(app.settings_window, hwnd, &app.profile_id, app.brand_icon)
         } {
@@ -3126,9 +3147,13 @@ unsafe fn handle_tray(hwnd: HWND, app: &AppState, event: u32) {
         &app.state,
         app.view.show_settings,
         app.inbox.action_running.load(Ordering::Acquire),
+        default_root_data_directory()
+            .map(realtime_compatibility_enabled)
+            .unwrap_or(false),
     );
     let open = wide("打开量见智桥");
     let autostart = wide("开机自动启动（推荐）");
+    let realtime_compatibility = wide("旧系统兼容模式（WS）");
     let settings = wide(view.settings_text);
     let recover = wide("恢复官方连接");
     let exit = wide("退出桥接");
@@ -3153,6 +3178,18 @@ unsafe fn handle_tray(hwnd: HWND, app: &AppState, event: u32) {
                     },
                 MENU_AUTOSTART,
                 autostart.as_ptr(),
+            );
+            windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
+                menu,
+                MF_STRING
+                    | disabled
+                    | if view.realtime_compatibility_checked {
+                        MF_CHECKED
+                    } else {
+                        0
+                    },
+                MENU_REALTIME_COMPATIBILITY,
+                realtime_compatibility.as_ptr(),
             );
             if view.show_settings {
                 windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
@@ -3728,12 +3765,13 @@ mod tests {
     #[test]
     fn tray_menu_matches_dotnet_visibility_and_recovery_rules() {
         let mut state = demo_state(DEFAULT_PROFILE_ID, DemoScenario::AdminMultiAccount);
-        let connected = build_tray_menu_view(DEFAULT_PROFILE_ID, &state, true, false);
+        let connected = build_tray_menu_view(DEFAULT_PROFILE_ID, &state, true, false, false);
         assert_eq!(
             connected,
             TrayMenuView {
                 show_administration: true,
                 autostart_checked: true,
+                realtime_compatibility_checked: false,
                 settings_text: "连接设置",
                 show_settings: true,
                 show_recovery: false,
@@ -3742,11 +3780,12 @@ mod tests {
         );
         state.server_connected = false;
         state.custom_endpoint_active = true;
-        let recovering = build_tray_menu_view(DEFAULT_PROFILE_ID, &state, true, true);
+        let recovering = build_tray_menu_view(DEFAULT_PROFILE_ID, &state, true, true, true);
+        assert!(recovering.realtime_compatibility_checked);
         assert_eq!(recovering.settings_text, "切换服务器");
         assert!(recovering.show_recovery);
         assert!(!recovering.actions_enabled);
-        let observer = build_tray_menu_view("source-1", &state, true, false);
+        let observer = build_tray_menu_view("source-1", &state, true, false, false);
         assert!(!observer.show_administration);
         assert!(!observer.show_settings);
         assert!(!observer.show_recovery);

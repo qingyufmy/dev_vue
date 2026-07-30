@@ -49,6 +49,7 @@ pub use supervisor::{
 
 pub const ENDPOINT_SETTINGS_FILE_NAME: &str = "endpoint-settings.json";
 pub const PACKAGED_SERVER_ENDPOINTS_FILE_NAME: &str = "server-endpoints.json";
+pub const REALTIME_COMPATIBILITY_FILE_NAME: &str = "realtime-compatibility.json";
 pub const BRIDGE_WEBSOCKET_PATH: &str = "/aurum-api/bridge/v3/ws";
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
@@ -140,6 +141,13 @@ impl ServerEndpoints {
         &self.realtime_base
     }
 
+    fn with_plain_realtime(mut self) -> Result<Self, TransportError> {
+        self.realtime_base
+            .set_scheme("ws")
+            .map_err(|_| TransportError::new("bridge_realtime_url_invalid"))?;
+        Ok(self)
+    }
+
     pub fn api_url(&self, path: &str) -> Result<Url, TransportError> {
         if !path.starts_with('/') || path.starts_with("//") {
             return Err(TransportError::new("bridge_api_path_invalid"));
@@ -174,6 +182,69 @@ struct EndpointSettingsDocument {
 struct PackagedServerEndpointsDocument {
     schema_version: u8,
     server_url: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RealtimeCompatibilityDocument {
+    schema_version: u8,
+    force_ws: bool,
+}
+
+pub fn realtime_compatibility_enabled(root_data_directory: impl AsRef<Path>) -> bool {
+    let root_data_directory = root_data_directory.as_ref();
+    if !root_data_directory.is_absolute() {
+        return false;
+    }
+    let path = root_data_directory.join(REALTIME_COMPATIBILITY_FILE_NAME);
+    let Ok(bytes) = read_small_json(&path, "bridge_realtime_compatibility_invalid") else {
+        return false;
+    };
+    serde_json::from_slice::<RealtimeCompatibilityDocument>(strip_utf8_bom(&bytes))
+        .is_ok_and(|document| document.schema_version == 1 && document.force_ws)
+}
+
+pub fn save_realtime_compatibility(
+    root_data_directory: impl AsRef<Path>,
+    enabled: bool,
+) -> Result<(), TransportError> {
+    let root_data_directory = root_data_directory.as_ref();
+    if !root_data_directory.is_absolute() {
+        return Err(TransportError::new("bridge_endpoint_directory_invalid"));
+    }
+    fs::create_dir_all(root_data_directory)
+        .map_err(|_| TransportError::new("bridge_realtime_compatibility_write_failed"))?;
+    let path = root_data_directory.join(REALTIME_COMPATIBILITY_FILE_NAME);
+    if !enabled {
+        return match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(TransportError::new(
+                "bridge_realtime_compatibility_write_failed",
+            )),
+        };
+    }
+    let payload = serde_json::to_vec(&RealtimeCompatibilityDocument {
+        schema_version: 1,
+        force_ws: true,
+    })
+    .map_err(|_| TransportError::new("bridge_realtime_compatibility_write_failed"))?;
+    let temporary = endpoint_temporary_path(&path)?;
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|_| TransportError::new("bridge_realtime_compatibility_write_failed"))?;
+        file.write_all(&payload)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| TransportError::new("bridge_realtime_compatibility_write_failed"))?;
+        replace_endpoint_file(&temporary, &path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 pub fn load_endpoint_settings(path: impl AsRef<Path>) -> Result<ServerEndpoints, TransportError> {
@@ -290,8 +361,12 @@ pub fn load_packaged_server_endpoints(
     if document.schema_version != 1 {
         return Err(TransportError::new("bridge_server_endpoints_invalid"));
     }
-    ServerEndpoints::from_server_url(&document.server_url)
-        .map_err(|_| TransportError::new("bridge_server_endpoints_invalid"))
+    let endpoints = ServerEndpoints::from_server_url(&document.server_url)
+        .map_err(|_| TransportError::new("bridge_server_endpoints_invalid"))?;
+    if endpoints.control_base().scheme() != "https" && !is_loopback_host(endpoints.control_base()) {
+        return Err(TransportError::new("bridge_server_endpoints_invalid"));
+    }
+    Ok(endpoints)
 }
 
 pub fn resolve_server_endpoints(
@@ -307,16 +382,22 @@ pub fn resolve_server_endpoints(
         return Err(TransportError::new("bridge_endpoint_directory_invalid"));
     }
     let override_path = root_data_directory.join(ENDPOINT_SETTINGS_FILE_NAME);
-    if override_path.is_file()
+    let endpoints = if override_path.is_file()
         && let Ok(endpoints) = load_endpoint_settings(&override_path)
     {
-        return Ok(endpoints);
+        endpoints
+    } else {
+        let packaged_path = application_directory.join(PACKAGED_SERVER_ENDPOINTS_FILE_NAME);
+        if !packaged_path.is_file() {
+            return Err(TransportError::new("bridge_server_endpoints_missing"));
+        }
+        load_packaged_server_endpoints(packaged_path)?
+    };
+    if realtime_compatibility_enabled(root_data_directory) {
+        endpoints.with_plain_realtime()
+    } else {
+        Ok(endpoints)
     }
-    let packaged_path = application_directory.join(PACKAGED_SERVER_ENDPOINTS_FILE_NAME);
-    if !packaged_path.is_file() {
-        return Err(TransportError::new("bridge_server_endpoints_missing"));
-    }
-    load_packaged_server_endpoints(packaged_path)
 }
 
 fn read_small_json(path: &Path, code: &'static str) -> Result<Vec<u8>, TransportError> {
@@ -376,7 +457,7 @@ fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
 
 fn parse_control_url(value: &str) -> Result<Url, TransportError> {
     let url = parse_root_url(value, "bridge_server_url_invalid")?;
-    if url.scheme() == "https" || url.scheme() == "http" && is_loopback(&url) {
+    if matches!(url.scheme(), "http" | "https") {
         Ok(url)
     } else {
         Err(TransportError::new("bridge_server_url_invalid"))
@@ -408,7 +489,7 @@ fn parse_root_url(value: &str, code: &'static str) -> Result<Url, TransportError
     Ok(url)
 }
 
-fn is_loopback(url: &Url) -> bool {
+fn is_loopback_host(url: &Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
@@ -2145,8 +2226,12 @@ mod tests {
                 .as_str(),
             "wss://server.example/aurum-api/bridge/v3/ws?ticket=opaque+ticket"
         );
-        assert!(ServerEndpoints::from_server_url("http://example.com/").is_err());
+        assert!(ServerEndpoints::from_server_url("http://example.com/").is_ok());
         assert!(ServerEndpoints::from_server_url("http://127.0.0.1:3000/").is_ok());
+        assert!(ServerEndpoints::from_server_url("http://192.168.1.254/").is_ok());
+        assert!(ServerEndpoints::from_server_url("http://10.0.0.8:3000/").is_ok());
+        assert!(ServerEndpoints::from_server_url("http://172.16.0.8/").is_ok());
+        assert!(ServerEndpoints::from_server_url("http://192.0.2.8/").is_ok());
         assert!(
             ServerEndpoints::normalize("https://server.example/", "ws://server.example/").is_ok()
         );
@@ -2234,6 +2319,42 @@ mod tests {
         assert!(!root.join(ENDPOINT_SETTINGS_FILE_NAME).exists());
         clear_endpoint_settings(&root).expect("idempotent restore");
         fs::remove_dir_all(root).expect("remove endpoint settings fixture");
+    }
+
+    #[test]
+    fn realtime_compatibility_keeps_https_control_and_explicitly_switches_wss_to_ws() {
+        let root = unique_endpoint_directory();
+        let application = root.join("application");
+        let data = root.join("data");
+        fs::create_dir_all(&application).expect("application directory");
+        fs::create_dir_all(&data).expect("data directory");
+        fs::write(
+            application.join(PACKAGED_SERVER_ENDPOINTS_FILE_NAME),
+            br#"{"schema_version":1,"server_url":"https://www.cnfxtrade.com"}"#,
+        )
+        .expect("packaged endpoints");
+
+        let secure = resolve_server_endpoints(&application, &data).expect("secure endpoints");
+        assert_eq!(secure.control_base().scheme(), "https");
+        assert_eq!(secure.realtime_base().scheme(), "wss");
+
+        save_realtime_compatibility(&data, true).expect("enable compatibility");
+        assert!(realtime_compatibility_enabled(&data));
+        let compatible =
+            resolve_server_endpoints(&application, &data).expect("compatible endpoints");
+        assert_eq!(compatible.control_base().scheme(), "https");
+        assert_eq!(compatible.realtime_base().scheme(), "ws");
+
+        save_realtime_compatibility(&data, false).expect("disable compatibility");
+        assert!(!realtime_compatibility_enabled(&data));
+        assert_eq!(
+            resolve_server_endpoints(&application, &data)
+                .expect("restored endpoints")
+                .realtime_base()
+                .scheme(),
+            "wss"
+        );
+        fs::remove_dir_all(root).expect("remove compatibility fixture");
     }
 
     #[tokio::test]

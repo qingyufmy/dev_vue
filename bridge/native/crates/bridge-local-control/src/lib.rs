@@ -2,7 +2,7 @@ use bridge_foundation::{DEFAULT_PROFILE_ID, validate_profile_id};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
-use url::{Host, Url};
+use url::Url;
 
 #[cfg(windows)]
 mod windows_pipe;
@@ -80,6 +80,9 @@ pub enum LocalControlAction {
     },
     SettingsRestoreOfficial,
     AutostartSet {
+        enabled: bool,
+    },
+    RealtimeCompatibilitySet {
         enabled: bool,
     },
     UpdateActivate,
@@ -179,8 +182,7 @@ impl EndpointSettingsSelection {
         }
         let url =
             Url::parse(&self.server_url).map_err(|_| "bridge_local_control_request_invalid")?;
-        let local_http = url.scheme() == "http" && is_loopback(&url);
-        if (url.scheme() != "https" && !local_http)
+        if !matches!(url.scheme(), "http" | "https")
             || !url.username().is_empty()
             || url.password().is_some()
             || url.query().is_some()
@@ -580,8 +582,7 @@ pub fn decode_response(
 
 fn validate_pairing_url(value: &str) -> Result<(), &'static str> {
     let url = Url::parse(value).map_err(|_| "bridge_local_control_response_invalid")?;
-    let local_http = url.scheme() == "http" && is_loopback(&url);
-    if (url.scheme() == "https" || local_http)
+    if matches!(url.scheme(), "http" | "https")
         && url.username().is_empty()
         && url.password().is_none()
         && url.fragment().is_none()
@@ -594,15 +595,6 @@ fn validate_pairing_url(value: &str) -> Result<(), &'static str> {
 
 fn valid_platform(value: &str) -> bool {
     matches!(value, "mt4" | "mt5")
-}
-
-fn is_loopback(url: &Url) -> bool {
-    match url.host() {
-        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    }
 }
 
 fn valid_application_phase(value: &str) -> bool {
@@ -789,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_decoder_rejects_unknown_fields_and_public_http_settings() {
+    fn strict_decoder_rejects_unknown_fields_and_accepts_explicit_http_settings() {
         assert_eq!(
             decode_request(
                 br#"{"schema_version":1,"request_id":"request-1","profile_id":"default","action":{"name":"get_state"},"secret":"leak"}"#,
@@ -807,10 +799,7 @@ mod tests {
                 },
             },
         };
-        assert_eq!(
-            request.validate(),
-            Err("bridge_local_control_request_invalid")
-        );
+        assert_eq!(request.validate(), Ok(()));
     }
 
     #[test]
@@ -894,7 +883,7 @@ mod tests {
     }
 
     #[test]
-    fn pairing_url_allows_https_and_local_development_only() {
+    fn pairing_url_allows_http_and_https() {
         assert_eq!(
             validate_pairing_url("https://server.example/bridge/pair"),
             Ok(())
@@ -908,8 +897,12 @@ mod tests {
             Ok(())
         );
         assert_eq!(
+            validate_pairing_url("http://192.168.1.254/bridge/pair"),
+            Ok(())
+        );
+        assert_eq!(
             validate_pairing_url("http://example.com/bridge/pair"),
-            Err("bridge_local_control_response_invalid")
+            Ok(())
         );
     }
 

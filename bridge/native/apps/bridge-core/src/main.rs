@@ -32,7 +32,8 @@ use bridge_transport::{
     BridgeAuthClient, BridgePairing, BridgePairingStatus, ConnectionState, CredentialSource,
     ENDPOINT_SETTINGS_FILE_NAME, MaintenanceLeaseRequest, ManagedObserverSource, ServerEndpoints,
     SessionCancellation, clear_endpoint_settings, load_packaged_server_endpoints,
-    resolve_server_endpoints, save_endpoint_settings, test_server_endpoints,
+    resolve_server_endpoints, save_endpoint_settings, save_realtime_compatibility,
+    test_server_endpoints,
 };
 use bridge_update::{
     BridgeUpdateCoordinator, BridgeUpdateStateStore, STATE_ACQUIRING_LEASE, STATE_ACTIVATING,
@@ -2434,6 +2435,31 @@ async fn run_local_control_server(
                             }
                             Err(code) => LocalControlResult::Rejected {
                                 code: code.to_owned(),
+                            },
+                        }
+                    }
+                }
+                LocalControlAction::RealtimeCompatibilitySet { enabled } => {
+                    if server.endpoint().profile_id() != DEFAULT_PROFILE_ID {
+                        LocalControlResult::Rejected {
+                            code: "bridge_realtime_compatibility_forbidden".to_owned(),
+                        }
+                    } else {
+                        match save_realtime_compatibility(&root_data_directory, enabled) {
+                            Ok(()) => {
+                                signal_preference_change(&preference_change_sender);
+                                logger.info(
+                                    if enabled {
+                                        "realtime_compatibility_enabled_by_user"
+                                    } else {
+                                        "realtime_compatibility_disabled_by_user"
+                                    },
+                                    None,
+                                );
+                                LocalControlResult::Accepted
+                            }
+                            Err(error) => LocalControlResult::Rejected {
+                                code: error.code().to_owned(),
                             },
                         }
                     }

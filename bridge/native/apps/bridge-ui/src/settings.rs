@@ -732,7 +732,7 @@ fn show_invalid_address(hwnd: HWND, state: &mut SettingsState) {
     state.pending_save = false;
     state.last_successful_test = None;
     state.test_status =
-        "! 远程地址必须使用 HTTPS（本机测试可使用 HTTP），且不能包含路径或参数。".to_owned();
+        "! 请输入 HTTP 或 HTTPS 服务器根地址，且不能包含路径、参数或账号信息。".to_owned();
     state.test_status_color = Rgb(185, 28, 28);
     unsafe { InvalidateRect(hwnd, null(), 1) };
 }

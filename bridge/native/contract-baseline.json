@@ -317,7 +317,10 @@
     "invalid_override_falls_back_to_packaged_default": true,
     "packaged_default_required": true,
     "single_server_url_derives_realtime_url": true,
-    "remote_plaintext_control_rejected": true,
+    "packaged_remote_plaintext_control_rejected": true,
+    "administrator_explicit_http_override_allowed": true,
+    "ordinary_user_realtime_compatibility_toggle": true,
+    "realtime_compatibility_keeps_control_https": true,
     "json_maximum_bytes": 4096
   },
   "server_transport_contract": {
@@ -331,7 +334,7 @@
     "data_queue_capacity": 2048,
     "reconnect_delays_seconds": [1, 2, 4, 8, 10],
     "outbox_retry_delays_seconds": [2, 4, 8, 16, 30],
-    "control_transport": "https-except-loopback-http",
+    "control_transport": "packaged-https-admin-explicit-http-or-https",
     "realtime_transport": "configured-wss-or-ws-without-silent-downgrade",
     "tls_backend": "rustls",
     "native_tls_enabled": false,
