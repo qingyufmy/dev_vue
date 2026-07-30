@@ -516,6 +516,87 @@ fn native_core_serves_live_mt5_history_from_sqlite_without_commands() {
     fs::remove_dir_all(root).expect("remove live MT5 fixture");
 }
 
+#[test]
+#[ignore = "requires an explicitly configured live MT5 demo terminal and bundled Python runtime"]
+fn native_core_returns_and_acks_a_live_mt5_pretrade_rejection() {
+    let terminal_path = std::env::var_os("AURUM_MT5_TEST_TERMINAL")
+        .map(PathBuf::from)
+        .expect("AURUM_MT5_TEST_TERMINAL");
+    let python_runtime = std::env::var_os("AURUM_MT5_TEST_PYTHON_RUNTIME")
+        .map(PathBuf::from)
+        .expect("AURUM_MT5_TEST_PYTHON_RUNTIME");
+    let broker_server = std::env::var("AURUM_MT5_TEST_SERVER").expect("AURUM_MT5_TEST_SERVER");
+    let login = std::env::var("AURUM_MT5_TEST_LOGIN").expect("AURUM_MT5_TEST_LOGIN");
+    assert!(terminal_path.is_absolute());
+    assert!(terminal_path.is_file());
+    assert!(python_runtime.join("python.exe").is_file());
+    assert!(broker_server.to_ascii_lowercase().contains("demo"));
+    assert!(!login.trim().is_empty());
+    let before = mt5_active_trade_snapshot(&python_runtime, &terminal_path);
+
+    let root = unique_test_directory();
+    let profile_id = DEFAULT_PROFILE_ID.to_owned();
+    let mut server = LoopbackBridgeServer::start_with_rejected_command(serde_json::json!({
+        "symbol": "XAUUSD",
+        "side": "buy",
+        "volume": 0.001,
+        "magic": 923411,
+        "comment": "AURUM:CORE-REJECT"
+    }));
+    let application = prepare_live_mt5_application(&root, &python_runtime);
+    let terminal_id = mt5_terminal_instance_id(&terminal_path);
+    let paths = prepare_mt5_discovery_profile(
+        &root,
+        &terminal_id,
+        &terminal_path,
+        &server.control_url,
+        &server.realtime_url,
+    );
+    let ready = root.join("mt5-rejection-ready.json");
+    let update_state_path = root.join("mt5-rejection-update-state.json");
+    let mut child = ChildGuard::spawn_for_discovery(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        &profile_id,
+        &ready,
+        &update_state_path,
+    );
+
+    wait_until(&mut child, Duration::from_secs(30), || {
+        ready.is_file()
+            && server.saw_command_result(
+                "command_01JCONNECTED1",
+                "rejected",
+                "order_volume_below_minimum",
+            )
+            && command_is_acked(&paths.database_path)
+    });
+    assert!(server.saw_command_result(
+        "command_01JCONNECTED1",
+        "rejected",
+        "order_volume_below_minimum",
+    ));
+    assert!(command_is_acked(&paths.database_path));
+    let ledger = OutboxStore::open_existing(&paths.database_path)
+        .expect("open MT5 rejection store")
+        .command_ledger("command_01JCONNECTED1")
+        .expect("MT5 rejection ledger")
+        .expect("MT5 rejection command");
+    assert_eq!(ledger.status, "acked");
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id(&profile_id).expect("MT5 rejection instance id"),
+    )
+    .expect("request MT5 rejection core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    server.stop();
+    let after = mt5_active_trade_snapshot(&python_runtime, &terminal_path);
+    assert_eq!(after, before, "rejected command changed live MT5 state");
+    fs::remove_dir_all(root).expect("remove live MT5 rejection fixture");
+}
+
 struct ChildGuard(Option<Child>);
 
 impl ChildGuard {
@@ -629,14 +710,18 @@ struct LoopbackBridgeServer {
 
 impl LoopbackBridgeServer {
     fn start() -> Self {
-        Self::start_with_commands(true)
+        Self::start_with_commands(true, None)
     }
 
     fn start_read_only() -> Self {
-        Self::start_with_commands(false)
+        Self::start_with_commands(false, None)
     }
 
-    fn start_with_commands(send_commands: bool) -> Self {
+    fn start_with_rejected_command(params: Value) -> Self {
+        Self::start_with_commands(false, Some(params))
+    }
+
+    fn start_with_commands(send_commands: bool, command_override: Option<Value>) -> Self {
         let disconnect_first = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let websocket_connections = Arc::new(AtomicUsize::new(0));
@@ -671,15 +756,16 @@ impl LoopbackBridgeServer {
                         .expect("send addresses");
                     tokio::join!(
                         serve_control(control, Arc::clone(&stop), maintenance_released,),
-                        serve_realtime(
-                            realtime,
+                        serve_realtime(RealtimeFixture {
+                            listener: realtime,
                             disconnect_first,
-                            Arc::clone(&stop),
+                            stop: Arc::clone(&stop),
                             websocket_connections,
                             command_sent,
                             message_types,
                             send_commands,
-                        )
+                            command_override,
+                        })
                     );
                 });
             })
@@ -738,6 +824,16 @@ impl LoopbackBridgeServer {
             .expect("message types")
             .iter()
             .any(|value| value == &format!("command_result_id:{RECOVERED_COMMAND_ID}:succeeded"))
+    }
+
+    fn saw_command_result(&self, command_id: &str, status: &str, error_code: &str) -> bool {
+        self.message_types
+            .lock()
+            .expect("message types")
+            .iter()
+            .any(|value| {
+                value == &format!("command_result_error:{command_id}:{status}:{error_code}")
+            })
     }
 
     fn saw_history_response(&self) -> bool {
@@ -860,8 +956,7 @@ fn prepare_verifying_update_state(path: &Path) {
         .expect("save verifying update state");
 }
 
-#[allow(clippy::result_large_err)]
-async fn serve_realtime(
+struct RealtimeFixture {
     listener: TcpListener,
     disconnect_first: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
@@ -869,7 +964,21 @@ async fn serve_realtime(
     command_sent: Arc<AtomicBool>,
     message_types: Arc<Mutex<Vec<String>>>,
     send_commands: bool,
-) {
+    command_override: Option<Value>,
+}
+
+#[allow(clippy::result_large_err)]
+async fn serve_realtime(fixture: RealtimeFixture) {
+    let RealtimeFixture {
+        listener,
+        disconnect_first,
+        stop,
+        websocket_connections,
+        command_sent,
+        message_types,
+        send_commands,
+        command_override,
+    } = fixture;
     while !stop.load(Ordering::SeqCst) {
         let accepted = tokio::select! {
             accepted = listener.accept() => Some(accepted.expect("realtime accept").0),
@@ -1044,6 +1153,12 @@ async fn serve_realtime(
                             payload["command_id"].as_str().unwrap_or("missing"),
                             payload["status"].as_str().unwrap_or("missing")
                         ));
+                        message_types.lock().expect("message types").push(format!(
+                            "command_result_error:{}:{}:{}",
+                            payload["command_id"].as_str().unwrap_or("missing"),
+                            payload["status"].as_str().unwrap_or("missing"),
+                            payload["error_code"].as_str().unwrap_or("none")
+                        ));
                     }
 
                     if message_type == "data_delta"
@@ -1177,10 +1292,17 @@ async fn serve_realtime(
                             }
                         }
                         if initial_ready
-                            && send_commands
+                            && (send_commands || command_override.is_some())
                             && !command_sent.swap(true, Ordering::SeqCst)
                         {
                             let now = now_utc_msc();
+                            let command_params = command_override.clone().unwrap_or_else(|| {
+                                serde_json::json!({
+                                    "symbol": "XAUUSD",
+                                    "side": "buy",
+                                    "volume": 0.01
+                                })
+                            });
                             socket
                                 .send(Message::Text(
                                     serde_json::json!({
@@ -1195,11 +1317,7 @@ async fn serve_realtime(
                                         "issued_at_utc_msc": now,
                                         "deadline_utc_msc": now + 30_000,
                                         "action": "place_order",
-                                        "params": {
-                                            "symbol": "XAUUSD",
-                                            "side": "buy",
-                                            "volume": 0.01
-                                        }
+                                        "params": command_params
                                     })
                                     .to_string()
                                     .into(),
@@ -1401,6 +1519,42 @@ fn mt5_terminal_instance_id(terminal_path: &Path) -> String {
         .to_uppercase();
     let digest = Sha256::digest(normalized.as_bytes());
     format!("mt5_{:x}", digest)[..28].to_owned()
+}
+
+fn mt5_active_trade_snapshot(python_runtime: &Path, terminal_path: &Path) -> Value {
+    let script = r#"
+import json
+import sys
+import MetaTrader5 as mt5
+
+if not mt5.initialize(path=sys.argv[1], timeout=10000, portable=False):
+    raise SystemExit("mt5_initialize_failed")
+try:
+    account = mt5.account_info()
+    positions = mt5.positions_get()
+    orders = mt5.orders_get()
+    if account is None or positions is None or orders is None:
+        raise SystemExit("mt5_state_unavailable")
+    print(json.dumps({
+        "server": str(account.server),
+        "login": str(account.login),
+        "positions": sorted(str(item.ticket) for item in positions),
+        "orders": sorted(str(item.ticket) for item in orders),
+    }, separators=(",", ":")))
+finally:
+    mt5.shutdown()
+"#;
+    let output = Command::new(python_runtime.join("python.exe"))
+        .args(["-B", "-c", script])
+        .arg(terminal_path)
+        .output()
+        .expect("read live MT5 state");
+    assert!(
+        output.status.success(),
+        "live MT5 state failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("live MT5 state json")
 }
 
 fn locate_python() -> PathBuf {
