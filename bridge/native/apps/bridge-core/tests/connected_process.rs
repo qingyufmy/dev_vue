@@ -133,7 +133,7 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     let payload: Value =
         serde_json::from_slice(&fs::read(&ready).expect("ready payload")).expect("ready json");
     assert_eq!(payload["ready"], true);
-    assert_eq!(payload["version"], "3.0.3");
+    assert_eq!(payload["version"], "3.0.4");
     assert_eq!(payload["server_connected"], true);
     assert_eq!(payload["running_terminal_instance_ids"][0], terminal_id);
     assert!(
