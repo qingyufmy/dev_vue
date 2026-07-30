@@ -74,7 +74,11 @@ if ($TargetEnvironment -eq 'production') {
   $runtimeMetadataPath = Join-Path $pythonRoot 'runtime-metadata.json'
   if (-not (Test-Path -LiteralPath $runtimeMetadataPath -PathType Leaf)) { throw 'release_python_runtime_metadata_missing' }
   $runtimeMetadata = Get-Content -LiteralPath $runtimeMetadataPath -Raw | ConvertFrom-Json
-  if ($runtimeMetadata.schema_version -ne 1 -or $runtimeMetadata.architecture -ne 'win-x64' -or -not ([string]$runtimeMetadata.python_version).StartsWith('3.11.')) { throw 'release_python_runtime_metadata_invalid' }
+  if ($runtimeMetadata.schema_version -ne 1 -or $runtimeMetadata.architecture -ne 'win-x64' -or
+    -not ([string]$runtimeMetadata.python_version).StartsWith('3.11.') -or
+    $runtimeMetadata.openssl_runtime_included -ne $false) {
+    throw 'release_python_runtime_metadata_invalid'
+  }
 }
 if ($TargetEnvironment -eq 'production' -and (-not $MetaEditorExe -or -not (Test-Path -LiteralPath $MetaEditorExe -PathType Leaf))) { throw 'release_metaeditor_required' }
 $domain = $CdnDomain.TrimEnd('/')
@@ -164,14 +168,8 @@ try {
   $runtimeTarget = Join-Path $core 'runtime\python'
   New-Item -ItemType Directory -Path $runtimeTarget -Force | Out-Null
   Copy-Item -Path (Join-Path $pythonRoot '*') -Destination $runtimeTarget -Recurse -Force
-  $prunedRuntimeExtensions = @('.pdb','.d','.rlib','.lib','.exp','.obj','.ilk','.map')
-  $prunedRuntimeArtifacts = @(Get-ChildItem -LiteralPath $runtimeTarget -Recurse -File -Force | Where-Object {
-    $prunedRuntimeExtensions -contains $_.Extension.ToLowerInvariant()
-  })
-  $prunedRuntimeBytes = ($prunedRuntimeArtifacts | Measure-Object Length -Sum).Sum
-  foreach ($artifact in $prunedRuntimeArtifacts) {
-    Remove-Item -LiteralPath $artifact.FullName -Force
-  }
+  $runtimeOptimization = (& (Join-Path $PSScriptRoot 'optimize-python-runtime.ps1') -RuntimeDirectory $runtimeTarget) | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or -not $runtimeOptimization.ok) { throw 'release_python_runtime_optimization_failed' }
   Write-Utf8NoBom -Path (Join-Path $core 'server-endpoints.json') -Content (([ordered]@{
     schema_version=1
     server_url=$serverUrlValue
@@ -247,8 +245,9 @@ try {
     git_branch=$branch; git_commit=$commit; source_dirty=$dirty
     server_url=$serverUrlValue; output=$outputRoot; manifest=$manifestPath
     python_runtime_pruning=[ordered]@{
-      removed_file_count=$prunedRuntimeArtifacts.Count
-      removed_bytes=[long]$prunedRuntimeBytes
+      removed_file_count=[int]$runtimeOptimization.removed_file_count
+      removed_bytes=[long]$runtimeOptimization.removed_bytes
+      openssl_runtime_included=[bool]$runtimeOptimization.smoke.ssl_available
     }
     launcher=[ordered]@{
       package_module='core'

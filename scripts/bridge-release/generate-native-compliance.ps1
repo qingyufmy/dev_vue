@@ -151,13 +151,16 @@ foreach ($candidate in $NativeExecutable) {
   }
 }
 
-$forbiddenExtensions = @('.pdb','.d','.rlib','.lib','.exp','.obj','.ilk','.map')
+$forbiddenExtensions = @('.pdb','.d','.rlib','.lib','.exp','.obj','.ilk','.map','.pyc')
+$forbiddenRuntimeNames = @('libssl-3-x64.dll','libcrypto-3-x64.dll','_ssl.pyd','_hashlib.pyd')
 $stagedFiles = @()
 foreach ($candidate in $StagedDirectory) {
   $directory = (Resolve-Path -LiteralPath $candidate).Path
   $files = @(Get-ChildItem -LiteralPath $directory -Recurse -File -Force)
   $debugFiles = @($files | Where-Object { $forbiddenExtensions -contains $_.Extension.ToLowerInvariant() })
   if ($debugFiles.Count) { throw 'release_debug_artifact_present' }
+  $forbiddenRuntimeFiles = @($files | Where-Object { $forbiddenRuntimeNames -contains $_.Name.ToLowerInvariant() })
+  if ($forbiddenRuntimeFiles.Count) { throw 'release_forbidden_python_runtime_present' }
   $stagedFiles += $files
 }
 

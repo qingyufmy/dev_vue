@@ -494,7 +494,7 @@ Rust/C++ 原生程序相对 Python 源码和普通 .NET IL 更难直接还原，
 
 ### 阶段 8：包体和保护
 
-- [进行中] 最小 Python、重复文件清理、压缩参数和动态依赖审计：Python 运行时构建及 Release 临时目录都会裁剪 PDB / LIB / RLIB / OBJ 等开发文件，真实旧运行时共移除 21 个 NumPy 链接库、393,706 字节；PE 导入表审计证明 UI / Core / Launcher 只依赖 Windows 系统 DLL，并硬拒绝 OpenSSL/native-tls、Python 和 .NET 动态运行时。本地完整 `core.zip` 为 36,023,223 字节且不含受禁扩展；更深的标准库裁剪仍需逐模块冒烟后继续。
+- [进行中] 最小 Python、重复文件清理、压缩参数和动态依赖审计：独立优化器会在受控构建目录裁剪 PDB / LIB / RLIB / OBJ / PYC、字节码缓存、ensurepip/venv/Idle/Tk 及 Worker 不使用的 OpenSSL 动态库，再以隔离且禁写字节码的解释器验证 SHA-256、NumPy、MetaTrader5 和正式 Worker。旧运行时可移除 729 个文件、28,784,052 字节；从独立 CPython 按 requirements 哈希重新构建时移除 591 个文件、24,454,407 字节，Release 二次优化为零变更。新鲜运行时构建的完整 `core.zip` 为 23,950,134 字节且不含受禁文件；裁剪后的运行时已在账户 596520 / 860058 的两个真实 MT5 demo 终端通过历史、M5 行情、品种、UTC+3 时钟、风险/表现/挂单诊断只读冒烟，未发送交易。PE 导入表审计同时证明 UI / Core / Launcher 只依赖 Windows 系统 DLL，并硬拒绝 OpenSSL/native-tls、Python 和 .NET 动态运行时；更深的标准库裁剪仍需逐模块冒烟后继续。
 - [进行中] Release 已启用 LTO、`opt-level=s`、单 codegen unit、panic abort 和符号剥离，日志脱敏与命名管道 ACL 已有自动化证据；Defender 误报及干净 Windows 兼容验证留在最终安装验收。
 - [已完成] 发布构建会从锁定 Cargo 元数据与包内 Python 运行时生成 SPDX 2.3 SBOM、去重第三方许可证正文及 JSON 审计，覆盖 172 个 Rust 第三方包和 CPython / MetaTrader5 / NumPy 三个 Python 组件；三份合规文件同时留在发布目录并进入 `core.zip`，哈希写入 `build-result.json`。Cargo.lock 与 Python requirements 哈希共同作为可复现依赖证据，缺少许可证、非 registry Rust 依赖、受禁 TLS crate 或 Release 硬化配置时构建失败关闭。
 
