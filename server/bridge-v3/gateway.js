@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { WebSocketServer } from 'ws'
 
 import { queryOne } from '../db.js'
@@ -422,7 +423,7 @@ export function createBridgeV3Gateway({
       if (!pending) return
       if (pending.connection !== connection || !sameBridgeRoute(pending.request, message)
         || pending.request.action !== message.action
-        || JSON.stringify(pending.request.params) !== JSON.stringify(message.params)) {
+        || !isDeepStrictEqual(pending.request.params, message.params)) {
         throw gatewayError('bridge_data_response_mismatch')
       }
       clearTimeout(pending.timer)

@@ -422,6 +422,12 @@ pub struct OutboxStore {
     connection: Mutex<Connection>,
 }
 
+#[derive(Clone, Copy)]
+struct TerminalBindingActivation {
+    remove_other_accounts_for_path: bool,
+    connection_epoch_floor: Option<i64>,
+}
+
 impl OutboxStore {
     pub fn open_or_create(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = path.as_ref();
@@ -511,7 +517,10 @@ impl OutboxStore {
             terminal_path.as_ref(),
             account_ref,
             updated_at_utc_msc,
-            false,
+            TerminalBindingActivation {
+                remove_other_accounts_for_path: false,
+                connection_epoch_floor: None,
+            },
         )
     }
 
@@ -529,7 +538,28 @@ impl OutboxStore {
             terminal_path.as_ref(),
             account_ref,
             updated_at_utc_msc,
-            true,
+            TerminalBindingActivation {
+                remove_other_accounts_for_path: true,
+                connection_epoch_floor: None,
+            },
+        )
+    }
+
+    pub fn begin_terminal_session(
+        &self,
+        binding: &TerminalBinding,
+        updated_at_utc_msc: i64,
+    ) -> Result<TerminalBinding, StoreError> {
+        self.activate_terminal_binding_internal(
+            &binding.terminal_instance_id,
+            &binding.platform,
+            &binding.terminal_path,
+            &binding.account_ref,
+            updated_at_utc_msc,
+            TerminalBindingActivation {
+                remove_other_accounts_for_path: false,
+                connection_epoch_floor: Some(updated_at_utc_msc),
+            },
         )
     }
 
@@ -540,7 +570,7 @@ impl OutboxStore {
         terminal_path: &Path,
         account_ref: &AccountRef,
         updated_at_utc_msc: i64,
-        remove_other_accounts_for_path: bool,
+        activation: TerminalBindingActivation,
     ) -> Result<TerminalBinding, StoreError> {
         let mut binding = normalize_terminal_binding(
             terminal_instance_id,
@@ -568,7 +598,8 @@ impl OutboxStore {
             .unwrap_or(0);
         binding.connection_epoch = previous_epoch
             .checked_add(1)
-            .ok_or_else(|| StoreError::new("terminal_connection_epoch_exhausted"))?;
+            .ok_or_else(|| StoreError::new("terminal_connection_epoch_exhausted"))?
+            .max(activation.connection_epoch_floor.unwrap_or(1));
         let terminal_path = binding
             .terminal_path
             .to_str()
@@ -595,7 +626,7 @@ impl OutboxStore {
                 ],
             )
             .map_err(|_| StoreError::new("bridge_store_binding_write_failed"))?;
-        if remove_other_accounts_for_path {
+        if activation.remove_other_accounts_for_path {
             transaction
                 .execute(
                     "DELETE FROM terminal_bindings \
@@ -3344,6 +3375,36 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove binding fixture");
+    }
+
+    #[test]
+    fn terminal_session_epoch_uses_a_wall_clock_floor_after_runtime_migration() {
+        let root = unique_test_directory("terminal-session-epoch");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("binding store");
+        let binding = store
+            .activate_terminal_binding(
+                "mt4_terminal_epoch",
+                "mt4",
+                root.join("terminal-data"),
+                &AccountRef {
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "123456".to_owned(),
+                },
+                1_700_000_000_000,
+            )
+            .expect("initial binding");
+        assert_eq!(binding.connection_epoch, 1);
+        let started = store
+            .begin_terminal_session(&binding, 1_800_000_000_123)
+            .expect("begin terminal session");
+        assert_eq!(started.connection_epoch, 1_800_000_000_123);
+        let restarted = store
+            .begin_terminal_session(&started, 1_800_000_000_123)
+            .expect("restart terminal session");
+        assert_eq!(restarted.connection_epoch, 1_800_000_000_124);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove terminal session epoch fixture");
     }
 
     #[test]

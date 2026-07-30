@@ -4,6 +4,7 @@ use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
     LocalControlResult, UiStateSnapshot,
 };
+use bridge_mt4::reconnect_pipe_name;
 use bridge_preferences::{BridgePreferencesStore, ObserverProfilePreferences};
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
@@ -79,6 +80,27 @@ fn missing_authorization_waits_without_a_browser_and_honors_shutdown() {
     };
     assert_eq!(state.phase, "pairing_required");
     assert!(!state.server_connected);
+    let reconnect_pipe = reconnect_pipe_name(terminal_id).expect("MT4 reconnect pipe");
+    let reconnect_path = format!(r"\\.\pipe\{reconnect_pipe}");
+    let local_ea_connected_without_server_authorization = tokio::runtime::Runtime::new()
+        .expect("MT4 pipe runtime")
+        .block_on(async {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                match tokio::net::windows::named_pipe::ClientOptions::new().open(&reconnect_path) {
+                    Ok(stream) => break Some(stream),
+                    Err(_) if Instant::now() < deadline => {
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
+                    Err(_) => break None,
+                }
+            }
+        });
+    assert!(
+        local_ea_connected_without_server_authorization.is_some(),
+        "MT4 EA local pipe must be available before website authorization"
+    );
+    drop(local_ea_connected_without_server_authorization);
 
     SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
         .expect("request shutdown");

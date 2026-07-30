@@ -148,6 +148,30 @@ impl NativeProfileBootstrap {
             store,
         })
     }
+
+    pub fn begin_terminal_sessions(
+        &mut self,
+        observed_at_utc_msc: i64,
+    ) -> Result<(), CoreBootstrapError> {
+        if observed_at_utc_msc <= 0 {
+            return Err(CoreBootstrapError::new("bridge_clock_invalid"));
+        }
+        for prepared in &mut self.mt5_sessions {
+            let binding = self
+                .store
+                .begin_terminal_session(&prepared.binding, observed_at_utc_msc)
+                .map_err(store_error)?;
+            prepared.spec.route.connection_epoch = binding.connection_epoch;
+            prepared.binding = binding;
+        }
+        for binding in &mut self.mt4_bindings {
+            *binding = self
+                .store
+                .begin_terminal_session(binding, observed_at_utc_msc)
+                .map_err(store_error)?;
+        }
+        Ok(())
+    }
 }
 
 struct ActiveMt5Session {
@@ -204,7 +228,7 @@ impl RoutedCommandWorker {
 impl CommandWorker for RoutedCommandWorker {
     fn execute(
         &self,
-        command: bridge_contract::CommandMessage,
+        mut command: bridge_contract::CommandMessage,
     ) -> BoxFuture<'_, Result<CommandResultMessage, CommandWorkerError>> {
         Box::pin(async move {
             if let Some(session) = self
@@ -212,15 +236,44 @@ impl CommandWorker for RoutedCommandWorker {
                 .mt4_sessions
                 .get(&command.terminal_instance_id)
             {
+                rebind_reconciliation_query(&mut command, session.handle.route())?;
                 return session
                     .handle
                     .execute_command(command)
                     .await
                     .map_err(|error| CommandWorkerError::new(error.code()));
             }
+            if let Some(session) = self
+                .active_sessions
+                .sessions
+                .get(&command.terminal_instance_id)
+            {
+                rebind_reconciliation_query(&mut command, session.handle.route())?;
+            }
             self.mt5_worker.execute(command).await
         })
     }
+}
+
+fn rebind_reconciliation_query(
+    command: &mut bridge_contract::CommandMessage,
+    current_route: &WorkerRoute,
+) -> Result<(), CommandWorkerError> {
+    if command.action != "query_execution"
+        || command.connection_epoch == current_route.connection_epoch
+    {
+        return Ok(());
+    }
+    if command.account_ref.login != current_route.account_ref.login
+        || !command
+            .account_ref
+            .broker_server
+            .eq_ignore_ascii_case(&current_route.account_ref.broker_server)
+    {
+        return Err(CommandWorkerError::new("worker_registry_route_mismatch"));
+    }
+    command.connection_epoch = current_route.connection_epoch;
+    Ok(())
 }
 
 impl ActiveMt5Sessions {
@@ -1668,29 +1721,37 @@ pub struct NativeConnectedRuntime {
 
 impl NativeConnectedRuntime {
     pub async fn start(
-        bootstrap: NativeProfileBootstrap,
+        mut bootstrap: NativeProfileBootstrap,
         endpoints: ServerEndpoints,
         clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     ) -> Result<Self, CoreBootstrapError> {
-        let NativeProfileBootstrap {
-            credential_store,
-            mt5_sessions,
-            mt4_bindings,
-            store,
-            ..
-        } = bootstrap;
-        if mt5_sessions.is_empty() && mt4_bindings.is_empty() {
+        if bootstrap.mt5_sessions.is_empty() && bootstrap.mt4_bindings.is_empty() {
             return Err(CoreBootstrapError::new("bridge_terminals_invalid"));
         }
         let active_sessions = ActiveMt5Sessions::start_all(
-            mt5_sessions,
-            mt4_bindings,
+            std::mem::take(&mut bootstrap.mt5_sessions),
+            std::mem::take(&mut bootstrap.mt4_bindings),
             false,
-            Arc::clone(&store),
+            Arc::clone(&bootstrap.store),
             Arc::clone(&clock),
         )
         .await?;
-        match Self::build(active_sessions, credential_store, store, endpoints, clock) {
+        Self::connect(bootstrap, active_sessions, endpoints, clock).await
+    }
+
+    pub async fn connect(
+        bootstrap: NativeProfileBootstrap,
+        active_sessions: Arc<ActiveMt5Sessions>,
+        endpoints: ServerEndpoints,
+        clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    ) -> Result<Self, CoreBootstrapError> {
+        match Self::build(
+            active_sessions,
+            bootstrap.credential_store,
+            bootstrap.store,
+            endpoints,
+            clock,
+        ) {
             Ok(runtime) => Ok(runtime),
             Err((active_sessions, error)) => {
                 let _ = active_sessions.stop().await;

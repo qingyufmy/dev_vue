@@ -810,7 +810,9 @@ describe('Bridge v3 websocket gateway', () => {
     expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
       type:'data_request', request_id:'data_01JGATEWAY01', action:'rates',
     })
-    ws.emit('message', Buffer.from(JSON.stringify(dataResponse())))
+    ws.emit('message', Buffer.from(JSON.stringify(dataResponse({
+      params:{ count:100, timeframe:'M30', symbol:'XAUUSD' },
+    }))))
     await expect(pending).resolves.toMatchObject({ status:'succeeded', payload:{ rates:[] } })
     expect(gateway.pendingDataRequests.size).toBe(0)
     expect(dependencies.createLedgerEntry).not.toHaveBeenCalled()

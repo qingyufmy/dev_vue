@@ -201,6 +201,9 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         );
     }
     let cache_store = OutboxStore::open_existing(&paths.database_path).expect("open cache store");
+    let active_connection_epoch = runtime_status["terminals"][0]["connection_epoch"]
+        .as_i64()
+        .expect("active connection epoch");
     let cached_rates = cache_store
         .read_terminal_data_cache(
             &bridge_contract::TerminalDescriptor {
@@ -210,7 +213,7 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
                     broker_server: "Broker-Demo".to_owned(),
                     login: "123456".to_owned(),
                 },
-                connection_epoch: 1,
+                connection_epoch: active_connection_epoch,
                 worker_version: None,
             },
             "rates",
@@ -316,7 +319,8 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
             now_utc_msc(),
         )
         .expect("activate replacement binding");
-    assert_eq!(replacement.connection_epoch, 2);
+    let replacement_connection_epoch = active_connection_epoch + 1;
+    assert_eq!(replacement.connection_epoch, replacement_connection_epoch);
     drop(store);
     wait_for_process_exit(worker_before_binding_change, Duration::from_secs(10));
     wait_until(&mut child, Duration::from_secs(20), || {
@@ -332,13 +336,26 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         restarted_worker_pid = process_id;
         true
     });
-    wait_until(&mut child, Duration::from_secs(20), || {
-        server.saw_hello_route(terminal_id, 2, "Broker-Replacement", "654321")
-    });
+    let mut restarted_connection_epoch = replacement_connection_epoch;
     wait_until(&mut child, Duration::from_secs(20), || {
         runtime_status_json(&paths.runtime_status_path).is_some_and(|status| {
-            status["phase"] == "online" && status["terminals"][0]["connection_epoch"] == 2
+            let Some(connection_epoch) = status["terminals"][0]["connection_epoch"].as_i64() else {
+                return false;
+            };
+            if status["phase"] != "online" || connection_epoch <= replacement_connection_epoch {
+                return false;
+            }
+            restarted_connection_epoch = connection_epoch;
+            true
         })
+    });
+    wait_until(&mut child, Duration::from_secs(20), || {
+        server.saw_hello_route(
+            terminal_id,
+            restarted_connection_epoch,
+            "Broker-Replacement",
+            "654321",
+        )
     });
     assert_eq!(
         fs::read_to_string(&order_send_count_file)
@@ -1409,6 +1426,13 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
             .and_then(|result| result.get("position"))
             .is_some_and(|ticket| ticket.as_u64().is_some_and(|ticket| ticket > 0))
     );
+    let connection_epoch = store
+        .terminal_bindings()
+        .expect("MT5 round-trip bindings")
+        .into_iter()
+        .find(|binding| binding.terminal_instance_id == terminal_id)
+        .expect("MT5 round-trip binding")
+        .connection_epoch;
     let projection = store
         .load_terminal_projection(
             &terminal_id,
@@ -1416,7 +1440,7 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
                 broker_server: broker_server.clone(),
                 login: login.clone(),
             },
-            1,
+            connection_epoch,
         )
         .expect("MT5 round-trip projection");
     let active_state =
@@ -1541,6 +1565,13 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
             "acked"
         );
     }
+    let connection_epoch = store
+        .terminal_bindings()
+        .expect("MT5 pending round-trip bindings")
+        .into_iter()
+        .find(|binding| binding.terminal_instance_id == terminal_id)
+        .expect("MT5 pending round-trip binding")
+        .connection_epoch;
     let projection = store
         .load_terminal_projection(
             &terminal_id,
@@ -1548,7 +1579,7 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
                 broker_server: broker_server.clone(),
                 login: login.clone(),
             },
-            1,
+            connection_epoch,
         )
         .expect("MT5 pending round-trip projection");
     let active_state =

@@ -518,6 +518,39 @@ pub struct MaintenanceLeaseDecision {
     pub retry_after_seconds: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct BridgePairing {
+    device_code: String,
+    verification_url: Url,
+    expires_at_utc_msc: i64,
+    interval: Duration,
+}
+
+impl BridgePairing {
+    pub fn verification_url(&self) -> &Url {
+        &self.verification_url
+    }
+
+    pub fn expires_at_utc_msc(&self) -> i64 {
+        self.expires_at_utc_msc
+    }
+
+    pub fn interval(&self) -> Duration {
+        self.interval
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BridgePairingStatus {
+    Pending,
+    Expired,
+    Approved {
+        refresh_token: String,
+        refresh_expires_in_seconds: u64,
+    },
+}
+
+#[derive(Clone)]
 pub struct BridgeAuthClient {
     client: reqwest::Client,
     endpoints: ServerEndpoints,
@@ -539,6 +572,85 @@ impl BridgeAuthClient {
             .build()
             .map_err(|_| TransportError::new("bridge_http_client_failed"))?;
         Ok(Self { client, endpoints })
+    }
+
+    pub async fn start_pairing(&self, device_name: &str) -> Result<BridgePairing, TransportError> {
+        let device_name = device_name.trim();
+        if device_name.is_empty() || device_name.len() > 120 {
+            return Err(TransportError::new("bridge_pair_device_name_invalid"));
+        }
+        let response: PairingStartResponse = self
+            .post_json(
+                "/api/auth/bridge-pair/start",
+                &serde_json::json!({ "deviceName": device_name }),
+                None,
+            )
+            .await?;
+        if !(40..=128).contains(&response.device_code.len())
+            || !response
+                .device_code
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            || response.user_code.len() != 9
+            || response.user_code.as_bytes().get(4) != Some(&b'-')
+            || !response.user_code.bytes().enumerate().all(|(index, byte)| {
+                index == 4 && byte == b'-' || index != 4 && byte.is_ascii_alphanumeric()
+            })
+            || !matches!(
+                response.verification_path.as_str(),
+                "/bridge/pair" | "/ai/bridge/pair"
+            )
+            || !(30..=3_600).contains(&response.expires_in_seconds)
+            || !(1..=10).contains(&response.interval_seconds)
+        {
+            return Err(TransportError::new("bridge_pair_start_response_invalid"));
+        }
+        let mut verification_url = self.endpoints.api_url(&response.verification_path)?;
+        verification_url
+            .query_pairs_mut()
+            .append_pair("code", &response.user_code);
+        let expires_delta = i64::try_from(response.expires_in_seconds)
+            .ok()
+            .and_then(|seconds| seconds.checked_mul(1_000))
+            .ok_or_else(|| TransportError::new("bridge_pair_start_response_invalid"))?;
+        Ok(BridgePairing {
+            device_code: response.device_code,
+            verification_url,
+            expires_at_utc_msc: now_utc_msc().saturating_add(expires_delta),
+            interval: Duration::from_secs(response.interval_seconds),
+        })
+    }
+
+    pub async fn poll_pairing(
+        &self,
+        pairing: &BridgePairing,
+    ) -> Result<BridgePairingStatus, TransportError> {
+        let response: PairingTokenResponse = self
+            .post_json(
+                "/api/auth/bridge-pair/token",
+                &serde_json::json!({ "deviceCode": pairing.device_code }),
+                None,
+            )
+            .await?;
+        match response.status.as_str() {
+            "pending" if response.refresh_token.is_none() => Ok(BridgePairingStatus::Pending),
+            "expired" if response.refresh_token.is_none() => Ok(BridgePairingStatus::Expired),
+            "approved" => {
+                let refresh_token = response
+                    .refresh_token
+                    .filter(|token| (40..=16_384).contains(&token.len()))
+                    .ok_or_else(|| TransportError::new("bridge_pair_token_response_invalid"))?;
+                let refresh_expires_in_seconds = response
+                    .refresh_expires_in_seconds
+                    .filter(|seconds| *seconds > 0)
+                    .ok_or_else(|| TransportError::new("bridge_pair_token_response_invalid"))?;
+                Ok(BridgePairingStatus::Approved {
+                    refresh_token,
+                    refresh_expires_in_seconds,
+                })
+            }
+            _ => Err(TransportError::new("bridge_pair_token_response_invalid")),
+        }
     }
 
     pub async fn acquire(&self, refresh_token: &str) -> Result<SessionBootstrap, TransportError> {
@@ -907,6 +1019,29 @@ struct RefreshResponse {
 }
 
 #[derive(Deserialize)]
+struct PairingStartResponse {
+    #[serde(rename = "deviceCode")]
+    device_code: String,
+    #[serde(rename = "userCode")]
+    user_code: String,
+    #[serde(rename = "verificationPath")]
+    verification_path: String,
+    #[serde(rename = "expiresInSeconds")]
+    expires_in_seconds: u64,
+    #[serde(rename = "intervalSeconds")]
+    interval_seconds: u64,
+}
+
+#[derive(Deserialize)]
+struct PairingTokenResponse {
+    status: String,
+    #[serde(default, rename = "refreshToken")]
+    refresh_token: Option<String>,
+    #[serde(default, rename = "refreshExpiresInSeconds")]
+    refresh_expires_in_seconds: Option<u64>,
+}
+
+#[derive(Deserialize)]
 struct TicketResponse {
     ticket: String,
 }
@@ -1089,8 +1224,29 @@ impl BridgeWebSocketSession {
         let acknowledgement_json = timeout(HELLO_TIMEOUT, session.receive_text_unchecked())
             .await
             .map_err(|_| TransportError::new("bridge_hello_ack_timeout"))??;
-        let acknowledgement: HelloAcknowledgement = serde_json::from_str(&acknowledgement_json)
+        let acknowledgement_value: serde_json::Value = serde_json::from_str(&acknowledgement_json)
             .map_err(|_| TransportError::new("bridge_hello_ack_invalid"))?;
+        if acknowledgement_value
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            == Some("error")
+        {
+            let code = acknowledgement_value
+                .get("error_code")
+                .and_then(serde_json::Value::as_str)
+                .filter(|code| {
+                    !code.is_empty()
+                        && code.len() <= 128
+                        && code
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                })
+                .unwrap_or("bridge_hello_rejected");
+            return Err(TransportError::from_code(code.to_owned()));
+        }
+        let acknowledgement: HelloAcknowledgement =
+            serde_json::from_value(acknowledgement_value)
+                .map_err(|_| TransportError::new("bridge_hello_ack_invalid"))?;
         acknowledgement
             .validate_for(&session.hello)
             .map_err(TransportError::new)?;
@@ -2101,6 +2257,78 @@ mod tests {
             }
         );
         server.join().expect("probe server");
+    }
+
+    #[tokio::test]
+    async fn bridge_pairing_starts_on_server_and_polls_the_opaque_device_code() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("listener address");
+        let device_code = "device_0123456789abcdef0123456789abcdef0123456789";
+        let refresh_token = "refresh_0123456789abcdef0123456789abcdef0123456789";
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let server_requests = Arc::clone(&requests);
+        let server = tokio::spawn(async move {
+            let responses = [
+                serde_json::json!({
+                    "ok": true,
+                    "deviceCode": device_code,
+                    "userCode": "ABCD-2345",
+                    "verificationPath": "/ai/bridge/pair",
+                    "expiresInSeconds": 600,
+                    "intervalSeconds": 2
+                }),
+                serde_json::json!({
+                    "ok": true,
+                    "status": "approved",
+                    "refreshToken": refresh_token,
+                    "refreshExpiresInSeconds": 2_592_000
+                }),
+            ];
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let request = read_http_request(&mut stream).await;
+                server_requests.lock().expect("requests").push(request);
+                let body = response.to_string();
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .expect("response");
+            }
+        });
+
+        let endpoints =
+            ServerEndpoints::from_server_url(&format!("http://{address}")).expect("endpoints");
+        let client = BridgeAuthClient::new(endpoints, "LiangJianBridge/test").expect("client");
+        let pairing = client
+            .start_pairing("Test Workstation")
+            .await
+            .expect("start");
+        assert_eq!(
+            pairing.verification_url().as_str(),
+            format!("http://{address}/ai/bridge/pair?code=ABCD-2345")
+        );
+        assert_eq!(pairing.interval(), Duration::from_secs(2));
+        assert!(pairing.expires_at_utc_msc() > now_utc_msc());
+        assert_eq!(
+            client.poll_pairing(&pairing).await.expect("poll"),
+            BridgePairingStatus::Approved {
+                refresh_token: refresh_token.to_owned(),
+                refresh_expires_in_seconds: 2_592_000,
+            }
+        );
+        server.await.expect("server");
+
+        let requests = requests.lock().expect("requests");
+        assert!(requests[0].starts_with("POST /api/auth/bridge-pair/start HTTP/1.1"));
+        assert!(requests[0].contains(r#""deviceName":"Test Workstation""#));
+        assert!(requests[1].starts_with("POST /api/auth/bridge-pair/token HTTP/1.1"));
+        assert!(requests[1].contains(&format!(r#""deviceCode":"{device_code}""#)));
     }
 
     #[tokio::test]

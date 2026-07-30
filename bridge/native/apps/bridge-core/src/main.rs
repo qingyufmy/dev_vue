@@ -29,10 +29,10 @@ use bridge_security_win::{BridgeCredential, CredentialStore};
 use bridge_store::{OutboxStore, TerminalBinding};
 use bridge_terminal_session::TerminalSessionState;
 use bridge_transport::{
-    BridgeAuthClient, ConnectionState, CredentialSource, ENDPOINT_SETTINGS_FILE_NAME,
-    MaintenanceLeaseRequest, ManagedObserverSource, ServerEndpoints, SessionCancellation,
-    clear_endpoint_settings, load_packaged_server_endpoints, resolve_server_endpoints,
-    save_endpoint_settings, test_server_endpoints,
+    BridgeAuthClient, BridgePairing, BridgePairingStatus, ConnectionState, CredentialSource,
+    ENDPOINT_SETTINGS_FILE_NAME, MaintenanceLeaseRequest, ManagedObserverSource, ServerEndpoints,
+    SessionCancellation, clear_endpoint_settings, load_packaged_server_endpoints,
+    resolve_server_endpoints, save_endpoint_settings, test_server_endpoints,
 };
 use bridge_update::{
     BridgeUpdateCoordinator, BridgeUpdateStateStore, STATE_ACQUIRING_LEASE, STATE_ACTIVATING,
@@ -1872,6 +1872,8 @@ async fn run_local_control_server(
         Some(&format!("profile={}", server.endpoint().profile_id())),
     );
     let administrator_cache = Arc::new(AsyncMutex::new(AdministratorCache::default()));
+    let pairing_active = Arc::new(AtomicBool::new(false));
+    let pairing_generation = Arc::new(AtomicU64::new(0));
     let mut last_update_state_error = None;
     loop {
         let accepted = tokio::select! {
@@ -1976,19 +1978,56 @@ async fn run_local_control_server(
                     },
                 },
                 LocalControlAction::Pair => {
-                    match resolve_server_endpoints(&application_directory, &root_data_directory)
-                        .and_then(|endpoints| endpoints.api_url("/bridge/pair"))
-                    {
-                        Ok(url) => LocalControlResult::PairingUrl {
-                            url: url.to_string(),
-                        },
-                        Err(error) => LocalControlResult::Rejected {
-                            code: error.code().to_owned(),
-                        },
+                    if pairing_active.swap(true, Ordering::AcqRel) {
+                        LocalControlResult::Rejected {
+                            code: "bridge_pair_in_progress".to_owned(),
+                        }
+                    } else {
+                        let generation = pairing_generation.fetch_add(1, Ordering::AcqRel) + 1;
+                        let client =
+                            resolve_server_endpoints(&application_directory, &root_data_directory)
+                                .map_err(|error| error.code().to_owned())
+                                .and_then(|endpoints| {
+                                    BridgeAuthClient::new(
+                                        endpoints,
+                                        &format!("LiangJianBridge/{VERSION}"),
+                                    )
+                                    .map_err(|error| error.code().to_owned())
+                                });
+                        match client {
+                            Ok(client) => match client.start_pairing("量见智桥 Windows").await {
+                                Ok(pairing) => {
+                                    let url = pairing.verification_url().to_string();
+                                    tokio::spawn(poll_pairing_until_complete(
+                                        client,
+                                        pairing,
+                                        credential_store.clone(),
+                                        stop.clone(),
+                                        logger.clone(),
+                                        Arc::clone(&pairing_active),
+                                        Arc::clone(&pairing_generation),
+                                        generation,
+                                    ));
+                                    LocalControlResult::PairingUrl { url }
+                                }
+                                Err(error) => {
+                                    pairing_active.store(false, Ordering::Release);
+                                    LocalControlResult::Rejected {
+                                        code: error.code().to_owned(),
+                                    }
+                                }
+                            },
+                            Err(code) => {
+                                pairing_active.store(false, Ordering::Release);
+                                LocalControlResult::Rejected { code }
+                            }
+                        }
                     }
                 }
                 LocalControlAction::Logout => match credential_store.clear() {
                     Ok(()) => {
+                        pairing_generation.fetch_add(1, Ordering::AcqRel);
+                        pairing_active.store(false, Ordering::Release);
                         administrator_cache.lock().await.clear();
                         LocalControlResult::Accepted
                     }
@@ -2320,6 +2359,78 @@ async fn run_local_control_server(
             logger.warning("native_local_control_rotate_failed", Some(error.code()));
             return;
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn poll_pairing_until_complete(
+    client: BridgeAuthClient,
+    pairing: BridgePairing,
+    credential_store: CredentialStore,
+    stop: SessionCancellation,
+    logger: BridgeLogger,
+    pairing_active: Arc<AtomicBool>,
+    pairing_generation: Arc<AtomicU64>,
+    generation: u64,
+) {
+    let mut last_transient_error: Option<String> = None;
+    loop {
+        if pairing_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        if now_utc_msc() >= pairing.expires_at_utc_msc() {
+            logger.warning("native_pairing_expired", None);
+            break;
+        }
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = tokio::time::sleep(pairing.interval()) => {}
+        }
+        if pairing_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        match client.poll_pairing(&pairing).await {
+            Ok(BridgePairingStatus::Pending) => {
+                last_transient_error = None;
+            }
+            Ok(BridgePairingStatus::Expired) => {
+                logger.warning("native_pairing_expired", None);
+                break;
+            }
+            Ok(BridgePairingStatus::Approved {
+                refresh_token,
+                refresh_expires_in_seconds,
+            }) => {
+                let expires_delta = i64::try_from(refresh_expires_in_seconds)
+                    .ok()
+                    .and_then(|seconds| seconds.checked_mul(1_000));
+                let result = expires_delta
+                    .ok_or("bridge_pair_token_response_invalid")
+                    .and_then(|expires_delta| {
+                        credential_store
+                            .save(&BridgeCredential {
+                                refresh_token,
+                                expires_at_utc_msc: now_utc_msc().saturating_add(expires_delta),
+                            })
+                            .map_err(|error| error.code())
+                    });
+                match result {
+                    Ok(()) => logger.info("native_pairing_completed", None),
+                    Err(code) => logger.warning("native_pairing_save_failed", Some(code)),
+                }
+                break;
+            }
+            Err(error) => {
+                let code = error.code();
+                if last_transient_error.as_deref() != Some(code) {
+                    logger.warning("native_pairing_poll_retrying", Some(code));
+                    last_transient_error = Some(code.to_owned());
+                }
+            }
+        }
+    }
+    if pairing_generation.load(Ordering::Acquire) == generation {
+        pairing_active.store(false, Ordering::Release);
     }
 }
 
@@ -3058,6 +3169,29 @@ async fn run_profile_lifecycle(
                 }
             }
         }
+        if bootstrap.mt5_sessions.is_empty() && bootstrap.mt4_bindings.is_empty() {
+            return Err("bridge_terminals_invalid".into());
+        }
+        let configured_terminal_ids =
+            configured_startup_terminal_ids(root_data_directory, profile_id, &bootstrap)
+                .map_err(|code| -> Box<dyn Error> { code.into() })?;
+        if expected_terminal_instance_ids
+            .iter()
+            .any(|terminal_id| !configured_terminal_ids.contains(terminal_id))
+        {
+            return Err("bridge_expected_terminal_missing".into());
+        }
+        bootstrap.begin_terminal_sessions(now_utc_msc())?;
+        let endpoints = resolve_server_endpoints(application_directory, root_data_directory)?;
+        let clock: Arc<dyn Fn() -> i64 + Send + Sync> = Arc::new(now_utc_msc);
+        let local_sessions = ActiveMt5Sessions::start_all(
+            std::mem::take(&mut bootstrap.mt5_sessions),
+            std::mem::take(&mut bootstrap.mt4_bindings),
+            false,
+            Arc::clone(&bootstrap.store),
+            Arc::clone(&clock),
+        )
+        .await?;
         if bootstrap.credential_state == CredentialState::Missing {
             publish_inactive_status(
                 logger,
@@ -3073,14 +3207,13 @@ async fn run_profile_lifecycle(
                 },
             );
             logger.info("native_runtime_pairing_required", None);
-            let credentials = ProfileCredentialSource::new(bootstrap.credential_store)?;
-            loop {
+            let credentials = ProfileCredentialSource::new(bootstrap.credential_store.clone())?;
+            let credential_wait = loop {
                 tokio::select! {
                     changed = credentials.changed() => {
-                        changed?;
-                        break;
+                        break changed.map(|()| true);
                     }
-                    _ = stop.cancelled() => return Ok(()),
+                    _ = stop.cancelled() => break Ok(false),
                     _ = tokio::time::sleep(Duration::from_secs(5)) => {
                         publish_inactive_status(
                             logger,
@@ -3097,22 +3230,19 @@ async fn run_profile_lifecycle(
                         );
                     }
                 }
+            };
+            match credential_wait {
+                Ok(true) => {}
+                Ok(false) => {
+                    let _ = local_sessions.stop().await;
+                    return Ok(());
+                }
+                Err(error) => {
+                    let _ = local_sessions.stop().await;
+                    return Err(error.into());
+                }
             }
-            continue;
         }
-        if bootstrap.mt5_sessions.is_empty() && bootstrap.mt4_bindings.is_empty() {
-            return Err("bridge_terminals_invalid".into());
-        }
-        let configured_terminal_ids =
-            configured_startup_terminal_ids(root_data_directory, profile_id, &bootstrap)
-                .map_err(|code| -> Box<dyn Error> { code.into() })?;
-        if expected_terminal_instance_ids
-            .iter()
-            .any(|terminal_id| !configured_terminal_ids.contains(terminal_id))
-        {
-            return Err("bridge_expected_terminal_missing".into());
-        }
-        let endpoints = resolve_server_endpoints(application_directory, root_data_directory)?;
         let startup_credential_store = CredentialStore::new(&bootstrap.paths.credential_path)?;
         let binding_source = ProfileTerminalBindingSource::new(Arc::clone(&bootstrap.store))?;
         publish_inactive_status(
@@ -3128,9 +3258,13 @@ async fn run_profile_lifecycle(
                 preferences: Some(&preferences),
             },
         );
-        let clock: Arc<dyn Fn() -> i64 + Send + Sync> = Arc::new(now_utc_msc);
-        let connected =
-            NativeConnectedRuntime::start(bootstrap, endpoints, Arc::clone(&clock)).await?;
+        let connected = NativeConnectedRuntime::connect(
+            bootstrap,
+            local_sessions,
+            endpoints,
+            Arc::clone(&clock),
+        )
+        .await?;
         update_drain
             .install(connected.update_drain_handle())
             .map_err(|code| -> Box<dyn Error> { code.into() })?;

@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bridge_contract::AccountRef;
 use bridge_foundation::{DEFAULT_PROFILE_ID, list_observer_profiles, resolve_profile_paths};
@@ -20,6 +20,32 @@ use crate::mt4_terminal_discovery::{
 const REGISTRATION_ACCEPT_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const REGISTRATION_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REGISTRATION_RETRY_DELAY: Duration = Duration::from_secs(1);
+const REGISTRATION_REJECTION_LOG_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Default)]
+struct RegistrationRejectionReporter {
+    last_code: Option<&'static str>,
+    last_reported_at: Option<Instant>,
+}
+
+impl RegistrationRejectionReporter {
+    fn should_report(&mut self, code: &'static str, now: Instant) -> bool {
+        let should_report = self.last_code != Some(code)
+            || self.last_reported_at.is_none_or(|last_reported_at| {
+                now.duration_since(last_reported_at) >= REGISTRATION_REJECTION_LOG_INTERVAL
+            });
+        if should_report {
+            self.last_code = Some(code);
+            self.last_reported_at = Some(now);
+        }
+        should_report
+    }
+
+    fn reset(&mut self) {
+        self.last_code = None;
+        self.last_reported_at = None;
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Mt4RegistrationEvent {
@@ -51,6 +77,7 @@ async fn run_named(
     logger: BridgeLogger,
 ) {
     let mut bind_failure_reported = false;
+    let mut rejection_reporter = RegistrationRejectionReporter::default();
     loop {
         if stop.is_cancelled() {
             return;
@@ -86,7 +113,7 @@ async fn run_named(
             let next = EaPipeListener::bind_additional(pipe_name);
             match accepted {
                 Ok(connection) => {
-                    if let Err(code) = handle_registration(
+                    match handle_registration(
                         &root_data_directory,
                         connection,
                         &event_sender,
@@ -94,7 +121,11 @@ async fn run_named(
                     )
                     .await
                     {
-                        logger.warning("native_mt4_registration_rejected", Some(code));
+                        Ok(()) => rejection_reporter.reset(),
+                        Err(code) if rejection_reporter.should_report(code, Instant::now()) => {
+                            logger.warning("native_mt4_registration_rejected", Some(code));
+                        }
+                        Err(_) => {}
                     }
                 }
                 Err(error) if error.code() != "mt4_ea_accept_timeout" => {
@@ -193,12 +224,14 @@ async fn handle_registration(
         })
         .await
         .map_err(|error| error.code())?;
-    logger.info(
-        "native_mt4_registration_provisioned",
-        Some(&format!(
-            "profile={profile_id};terminal_id={terminal_instance_id}"
-        )),
-    );
+    if binding_changed {
+        logger.info(
+            "native_mt4_registration_provisioned",
+            Some(&format!(
+                "profile={profile_id};terminal_id={terminal_instance_id}"
+            )),
+        );
+    }
     Ok(())
 }
 
@@ -279,6 +312,27 @@ mod tests {
     };
     use bridge_preferences::ObserverProfilePreferences;
     use tokio::net::windows::named_pipe::ClientOptions;
+
+    #[test]
+    fn repeated_registration_rejections_are_bounded_without_hiding_new_errors() {
+        let start = Instant::now();
+        let mut reporter = RegistrationRejectionReporter::default();
+        assert!(reporter.should_report("mt4_registration_route_unavailable", start));
+        assert!(!reporter.should_report(
+            "mt4_registration_route_unavailable",
+            start + Duration::from_secs(1)
+        ));
+        assert!(reporter.should_report("mt4_registration_invalid", start + Duration::from_secs(2)));
+        assert!(reporter.should_report(
+            "mt4_registration_invalid",
+            start + Duration::from_secs(2) + REGISTRATION_REJECTION_LOG_INTERVAL
+        ));
+        reporter.reset();
+        assert!(reporter.should_report(
+            "mt4_registration_invalid",
+            start + Duration::from_secs(3) + REGISTRATION_REJECTION_LOG_INTERVAL
+        ));
+    }
 
     fn fixture_directory(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
