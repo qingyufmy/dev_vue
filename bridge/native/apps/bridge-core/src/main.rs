@@ -467,10 +467,12 @@ impl AdministratorCache {
                 self.last_error_code = None;
             }
             Err(code) => {
-                self.is_administrator = false;
-                self.observer_sources.clear();
-                self.observer_projection = ObserverUiProjection::default();
-                self.invalidate_observers();
+                if administrator_refresh_error_revokes_access(&code) {
+                    self.is_administrator = false;
+                    self.observer_sources.clear();
+                    self.observer_projection = ObserverUiProjection::default();
+                    self.invalidate_observers();
+                }
                 self.log_refresh_error(logger, &code);
             }
         }
@@ -585,6 +587,17 @@ impl AdministratorCache {
             self.last_error_code = Some(code.to_owned());
         }
     }
+}
+
+fn administrator_refresh_error_revokes_access(code: &str) -> bool {
+    matches!(
+        code,
+        "bridge_not_paired"
+            | "bridge_refresh_invalid"
+            | "bridge_refresh_revoked"
+            | "bridge_credential_payload_invalid"
+            | "bridge_credential_decryption_failed"
+    )
 }
 
 async fn refresh_administrator_access(
@@ -4254,6 +4267,80 @@ mod tests {
     use bridge_contract::{AccountRef, DataDeltaMessage};
     use bridge_security_win::BridgeCredential;
     use bridge_transport::load_endpoint_settings;
+
+    #[test]
+    fn administrator_cache_preserves_trusted_access_during_transient_refresh_failures() {
+        let root = unique_test_directory("administrator-refresh-cache");
+        let logger = BridgeLogger::new(
+            LoggerConfig::new(root.join("logs")).expect("administrator refresh logger config"),
+        );
+        let source = ManagedObserverSource {
+            bridge_user_id: 29,
+            email: "source@example.com".to_owned(),
+            nickname: None,
+            source_id: Some(1),
+            source_name: Some("一号观摩源".to_owned()),
+            source_status: Some("active".to_owned()),
+            trading_account_id: Some(2),
+            login_account: Some("596520".to_owned()),
+            broker_server: Some("DooTechnology-Demo".to_owned()),
+        };
+        let mut cache = AdministratorCache {
+            is_administrator: true,
+            observer_sources: vec![source.clone()],
+            refresh_in_progress: true,
+            ..AdministratorCache::default()
+        };
+
+        cache.complete_refresh(
+            cache.generation,
+            Err("bridge_server_unavailable".to_owned()),
+            &logger,
+        );
+        assert!(cache.is_administrator);
+        assert_eq!(cache.observer_sources, vec![source]);
+        assert_eq!(
+            cache.last_error_code.as_deref(),
+            Some("bridge_server_unavailable")
+        );
+        assert!(!cache.refresh_in_progress);
+
+        cache.complete_refresh(
+            cache.generation,
+            Err("bridge_refresh_revoked".to_owned()),
+            &logger,
+        );
+        assert!(!cache.is_administrator);
+        assert!(cache.observer_sources.is_empty());
+        assert_eq!(
+            cache.last_error_code.as_deref(),
+            Some("bridge_refresh_revoked")
+        );
+        drop(logger);
+        std::fs::remove_dir_all(root).expect("remove administrator refresh fixture");
+    }
+
+    #[test]
+    fn administrator_refresh_revocation_codes_are_explicit_and_fail_closed() {
+        for code in [
+            "bridge_not_paired",
+            "bridge_refresh_invalid",
+            "bridge_refresh_revoked",
+            "bridge_credential_payload_invalid",
+            "bridge_credential_decryption_failed",
+        ] {
+            assert!(administrator_refresh_error_revokes_access(code), "{code}");
+        }
+        for code in [
+            "bridge_server_unavailable",
+            "bridge_api_request_failed",
+            "bridge_http_response_invalid",
+            "bridge_credential_read_failed",
+            "bridge_credential_lock_failed",
+        ] {
+            assert!(!administrator_refresh_error_revokes_access(code), "{code}");
+        }
+    }
 
     #[test]
     fn endpoint_settings_permission_matches_the_dotnet_recovery_rule() {
