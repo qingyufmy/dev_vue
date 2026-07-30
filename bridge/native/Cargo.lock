@@ -127,6 +127,7 @@ version = "3.0.0"
 dependencies = [
  "bridge-contract",
  "bridge-runtime-win",
+ "bridge-store",
  "bridge-terminal-data",
  "bridge-worker-host",
  "serde_json",

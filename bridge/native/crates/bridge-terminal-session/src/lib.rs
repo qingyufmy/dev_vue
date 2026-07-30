@@ -868,7 +868,7 @@ fn start_mt4_history_sync(
                     cursor.time_msc,
                     cursor_ticket,
                     i32::from(HISTORY_BATCH_LIMIT),
-                    30 * 24 * 60 * 60 * 1_000,
+                    bridge_mt4::MAX_HISTORY_WINDOW_MSC,
                 )
                 .await;
             let Ok(batch) = batch else {

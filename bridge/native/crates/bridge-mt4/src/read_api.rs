@@ -440,7 +440,7 @@ pub fn encode_deals_request(request: &DealsRequest) -> Result<Vec<u8>, Mt4Protoc
         || request.cursor_time_msc <= 0
         || request.cursor_ticket < 0
         || !(1..=250).contains(&request.limit)
-        || !(86_400_000..=2_592_000_000).contains(&request.window_msc)
+        || !(86_400_000..=crate::MAX_HISTORY_WINDOW_MSC).contains(&request.window_msc)
     {
         return Err(Mt4ProtocolError::new("mt4_deals_request_invalid"));
     }
@@ -749,6 +749,27 @@ mod tests {
 
     #[test]
     fn deals_are_bounded_to_the_ea_cursor_page_contract() {
+        let maximum_window = DealsRequest {
+            terminal_instance_id: "mt4_0123456789abcdef01234567".to_owned(),
+            broker_server: "Broker-Demo".to_owned(),
+            login: "12345678".to_owned(),
+            connection_epoch: 7,
+            cursor_time_msc: 946_684_800_000,
+            cursor_ticket: 0,
+            limit: 250,
+            window_msc: crate::MAX_HISTORY_WINDOW_MSC,
+        };
+        encode_deals_request(&maximum_window).expect("full archive window");
+        assert_eq!(
+            encode_deals_request(&DealsRequest {
+                window_msc: crate::MAX_HISTORY_WINDOW_MSC + 1,
+                ..maximum_window
+            })
+            .expect_err("history window must remain bounded")
+            .code(),
+            "mt4_deals_request_invalid"
+        );
+
         let batch = DealsBatch {
             source_time_msc: 1_800_000_000_000,
             items: vec![serde_json::json!({ "ticket": "91", "time_msc": 1_700_000_000_000_i64 })],

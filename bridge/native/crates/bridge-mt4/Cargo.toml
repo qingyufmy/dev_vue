@@ -12,3 +12,6 @@ bridge-terminal-data = { path = "../bridge-terminal-data" }
 bridge-worker-host = { path = "../bridge-worker-host" }
 serde_json.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+bridge-store = { path = "../bridge-store" }

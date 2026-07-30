@@ -3,7 +3,8 @@
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.2.9"
+#define ADAPTER_VERSION "3.2.10"
+#define MAX_HISTORY_WINDOW_MSC 1576800000000
 
 input string InpPipeName = "AURUMBridgeV3";
 
@@ -1008,7 +1009,7 @@ void SendDeals(uchar &request[], int &offset)
       || login != IntegerToString(AccountNumber())
       || connection_epoch != g_connection_epoch
       || cursor_time <= 0 || cursor_ticket < 0 || limit < 1 || limit > 250
-      || window_msc < 86400000 || window_msc > 2592000000)
+      || window_msc < 86400000 || window_msc > MAX_HISTORY_WINDOW_MSC)
      {
       DisconnectPipe();
       return;

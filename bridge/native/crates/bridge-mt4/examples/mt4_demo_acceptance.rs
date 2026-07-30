@@ -2,10 +2,13 @@ use bridge_mt4::{
     EaIdentity, EaRegistrationHub, Mt4EaSnapshotSource, Mt4SnapshotSourceSpec, OrderKind,
     OrderSide, TradeAction, TradeCommand,
 };
+use bridge_store::{HistoryArchiveBatch, HistoryCursor, OutboxStore};
 use bridge_terminal_data::SnapshotSource;
 use bridge_worker_host::{SnapshotStream, WorkerRoute};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -22,6 +25,7 @@ struct Arguments {
     partial_close: bool,
     matrix: bool,
     market_data_smoke: bool,
+    history_smoke: bool,
     observe_recovery_seconds: u64,
 }
 
@@ -185,6 +189,15 @@ async fn exercise(
             "mode": "market_data",
             "readiness": readiness,
             "market_data": market_data,
+            "passed": true,
+        }));
+    }
+    if arguments.history_smoke {
+        let history = run_history_smoke(&source, &route).await?;
+        return Ok(json!({
+            "mode": "history",
+            "readiness": readiness,
+            "history": history,
             "passed": true,
         }));
     }
@@ -554,6 +567,241 @@ fn finite_price(row: &Value, field: &str) -> Result<f64, String> {
         .and_then(Value::as_f64)
         .filter(|value| value.is_finite() && *value > 0.0)
         .ok_or_else(|| "mt4_demo_rates_ohlc_invalid".to_owned())
+}
+
+async fn run_history_smoke(
+    source: &Arc<Mt4EaSnapshotSource>,
+    route: &WorkerRoute,
+) -> Result<Value, String> {
+    let database_path =
+        env::temp_dir().join(format!("liangjian-mt4-history-smoke-{}.db", now_msc()?));
+    let result = run_history_smoke_with_store(source, route, &database_path).await;
+    let cleanup = cleanup_history_smoke_files(&database_path);
+    match (result, cleanup) {
+        (Ok(report), Ok(())) => Ok(report),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    }
+}
+
+async fn run_history_smoke_with_store(
+    source: &Arc<Mt4EaSnapshotSource>,
+    route: &WorkerRoute,
+    database_path: &std::path::Path,
+) -> Result<Value, String> {
+    let terminal = bridge_contract::TerminalDescriptor {
+        terminal_instance_id: route.terminal_instance_id.clone(),
+        platform: route.platform.clone(),
+        account_ref: route.account_ref.clone(),
+        connection_epoch: route.connection_epoch,
+        worker_version: None,
+    };
+    let mut cursor_time_msc = 946_684_800_000_i64;
+    let mut cursor_ticket = 0_i64;
+    let mut batch_count = 0_usize;
+    let mut raw_item_count = 0_usize;
+    let mut expected_trade_ids = HashSet::new();
+    let store =
+        OutboxStore::open_or_create(database_path).map_err(|error| error.code().to_owned())?;
+    loop {
+        batch_count += 1;
+        if batch_count > 10_000 {
+            return Err("mt4_demo_history_batch_limit_exceeded".to_owned());
+        }
+        let batch = source
+            .collect_deals(
+                cursor_time_msc,
+                cursor_ticket,
+                250,
+                bridge_mt4::MAX_HISTORY_WINDOW_MSC,
+            )
+            .await
+            .map_err(protocol_error)?;
+        let next_cursor = (batch.next_time_msc, batch.next_ticket);
+        if next_cursor <= (cursor_time_msc, cursor_ticket)
+            || batch.items.len() > 250
+            || batch.source_time_msc <= 0
+        {
+            return Err("mt4_demo_history_cursor_invalid".to_owned());
+        }
+        raw_item_count += batch.items.len();
+        let trades = batch
+            .items
+            .iter()
+            .filter(|item| item.get("category").and_then(Value::as_str) == Some("trade"))
+            .map(build_history_trade)
+            .collect::<Result<Vec<_>, _>>()?;
+        for trade in &trades {
+            let identity = history_identity(trade)?;
+            expected_trade_ids.insert(identity);
+        }
+        let archive = HistoryArchiveBatch {
+            deals: batch.items.clone(),
+            history_orders: batch.items,
+            trades,
+            next_cursor: HistoryCursor {
+                time_msc: batch.next_time_msc,
+                ticket: batch.next_ticket.to_string(),
+            },
+            has_more: batch.has_more,
+            observed_at_utc_msc: batch.source_time_msc,
+        };
+        store
+            .persist_history_archive_batch(&terminal, &archive)
+            .map_err(|error| error.code().to_owned())?;
+        cursor_time_msc = batch.next_time_msc;
+        cursor_ticket = batch.next_ticket;
+        if !batch.has_more {
+            break;
+        }
+    }
+    let state = store
+        .history_archive_state(&terminal.terminal_instance_id, &terminal.account_ref)
+        .map_err(|error| error.code().to_owned())?;
+    if !state.is_complete
+        || state.cursor.time_msc != cursor_time_msc
+        || state.cursor.ticket != cursor_ticket.to_string()
+    {
+        return Err("mt4_demo_history_state_invalid".to_owned());
+    }
+    drop(store);
+
+    let reopened =
+        OutboxStore::open_existing(database_path).map_err(|error| error.code().to_owned())?;
+    let first_page = reopened
+        .read_history_archive_page(
+            &terminal,
+            &json!({ "page": 1, "page_size": 2, "include_deals": true }),
+        )
+        .map_err(|error| error.code().to_owned())?;
+    if first_page.get("source").and_then(Value::as_str) != Some("mt4_sqlite")
+        || first_page
+            .pointer("/history_sync/complete")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err("mt4_demo_history_page_contract_invalid".to_owned());
+    }
+    let total_count = first_page
+        .pointer("/pagination/total_count")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| "mt4_demo_history_page_contract_invalid".to_owned())?;
+    if total_count == 0 || total_count != expected_trade_ids.len() {
+        return Err("mt4_demo_history_total_mismatch".to_owned());
+    }
+    let total_pages = first_page
+        .pointer("/pagination/total_pages")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| "mt4_demo_history_page_contract_invalid".to_owned())?;
+    let mut paged_trade_ids = HashSet::new();
+    for page in 1..=total_pages {
+        let payload = reopened
+            .read_history_archive_page(
+                &terminal,
+                &json!({ "page": page, "page_size": 2, "include_deals": true }),
+            )
+            .map_err(|error| error.code().to_owned())?;
+        let rows = payload
+            .get("orders")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "mt4_demo_history_page_contract_invalid".to_owned())?;
+        if rows.len() > 2 {
+            return Err("mt4_demo_history_page_size_invalid".to_owned());
+        }
+        for row in rows {
+            if !paged_trade_ids.insert(history_identity(row)?) {
+                return Err("mt4_demo_history_page_duplicate".to_owned());
+            }
+        }
+    }
+    if paged_trade_ids != expected_trade_ids {
+        return Err("mt4_demo_history_page_coverage_invalid".to_owned());
+    }
+    drop(reopened);
+    Ok(json!({
+        "sqlite_reopen_verified": true,
+        "archive_complete": true,
+        "source_scope": "mt4_terminal_visible_history",
+        "broker_history_completeness": "requires_mt4_account_history_all_history",
+        "batch_count": batch_count,
+        "raw_item_count": raw_item_count,
+        "trade_count": total_count,
+        "page_size": 2,
+        "page_count": total_pages,
+        "cursor_time_msc": cursor_time_msc,
+        "cursor_ticket": cursor_ticket.to_string(),
+    }))
+}
+
+fn build_history_trade(item: &Value) -> Result<Value, String> {
+    let side = item
+        .get("side")
+        .and_then(Value::as_str)
+        .filter(|value| matches!(*value, "buy" | "sell"))
+        .ok_or_else(|| "mt4_demo_history_trade_invalid".to_owned())?;
+    let ticket = item
+        .get("ticket")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "mt4_demo_history_trade_invalid".to_owned())?;
+    let profit = history_number(item, "profit");
+    let commission = history_number(item, "commission");
+    let swap = history_number(item, "swap");
+    Ok(json!({
+        "ticket": ticket,
+        "deal_ticket": item.get("deal_ticket").and_then(Value::as_str).unwrap_or(ticket),
+        "order": item.get("order_ticket").and_then(Value::as_str).unwrap_or(ticket),
+        "position_id": item.get("position_id").and_then(Value::as_str).unwrap_or(ticket),
+        "symbol": item.get("symbol").and_then(Value::as_str).unwrap_or_default(),
+        "type": if side == "buy" { "BUY" } else { "SELL" },
+        "volume": history_number(item, "volume"),
+        "entry_price": history_number(item, "price_open"),
+        "exit_price": history_number(item, "price_close"),
+        "price": history_number(item, "price_close"),
+        "profit": profit,
+        "commission": commission,
+        "swap": swap,
+        "fee": 0.0,
+        "net_profit": profit + commission + swap,
+        "entry_time": item.get("entry_time").and_then(Value::as_str).unwrap_or_default(),
+        "close_time": item.get("close_time").and_then(Value::as_str).unwrap_or_default(),
+        "time": item.get("close_time").and_then(Value::as_str).unwrap_or_default(),
+        "time_msc": item.get("time_msc").and_then(Value::as_i64).unwrap_or_default(),
+        "comment": item.get("comment").and_then(Value::as_str).unwrap_or_default(),
+        "take_profit": history_number(item, "tp"),
+        "stop_loss": history_number(item, "sl"),
+    }))
+}
+
+fn history_number(item: &Value, name: &str) -> f64 {
+    item.get(name)
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+        .unwrap_or_default()
+}
+
+fn history_identity(item: &Value) -> Result<String, String> {
+    item.get("deal_ticket")
+        .or_else(|| item.get("ticket"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .map(str::to_owned)
+        .ok_or_else(|| "mt4_demo_history_identity_invalid".to_owned())
+}
+
+fn cleanup_history_smoke_files(database_path: &std::path::Path) -> Result<(), String> {
+    for path in [
+        database_path.to_path_buf(),
+        database_path.with_extension("db-wal"),
+        database_path.with_extension("db-shm"),
+    ] {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|_| "mt4_demo_history_cleanup_failed".to_owned())?;
+        }
+    }
+    Ok(())
 }
 
 async fn observe_terminal_recovery(
@@ -1346,6 +1594,7 @@ fn parse_arguments() -> Result<Arguments, String> {
     let mut partial_close = false;
     let mut matrix = false;
     let mut market_data_smoke = false;
+    let mut history_smoke = false;
     let mut observe_recovery_seconds = 0_u64;
     let values = env::args().skip(1).collect::<Vec<_>>();
     let mut index = 0;
@@ -1385,6 +1634,7 @@ fn parse_arguments() -> Result<Arguments, String> {
             "--partial-close" => partial_close = true,
             "--matrix" => matrix = true,
             "--market-data-smoke" => market_data_smoke = true,
+            "--history-smoke" => history_smoke = true,
             _ => return Err(format!("unknown_argument:{}", values[index])),
         }
         index += 1;
@@ -1400,6 +1650,7 @@ fn parse_arguments() -> Result<Arguments, String> {
         partial_close,
         matrix,
         market_data_smoke,
+        history_smoke,
         observe_recovery_seconds,
     })
 }
@@ -1420,6 +1671,9 @@ fn validate_arguments(arguments: Arguments) -> Result<Arguments, String> {
         || arguments.observe_recovery_seconds > 0 && arguments.execute
         || arguments.market_data_smoke && arguments.execute
         || arguments.market_data_smoke && arguments.observe_recovery_seconds > 0
+        || arguments.history_smoke && arguments.execute
+        || arguments.history_smoke && arguments.observe_recovery_seconds > 0
+        || arguments.history_smoke && arguments.market_data_smoke
         || arguments.observe_recovery_seconds > 0
             && !(10..=180).contains(&arguments.observe_recovery_seconds)
     {
