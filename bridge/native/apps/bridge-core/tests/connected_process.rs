@@ -48,6 +48,7 @@ struct RoundTripCommand {
     modified_price: Option<f64>,
     stop_loss: Option<f64>,
     take_profit: Option<f64>,
+    protection_distance: Option<f64>,
     magic: i64,
     comment: String,
 }
@@ -541,6 +542,7 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
         modified_price: None,
         stop_loss: None,
         take_profit: None,
+        protection_distance: Some(20.0),
         magic,
         comment: marker.to_owned(),
     });
@@ -560,13 +562,19 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
         ready.is_file()
             && server.saw_command_result(CONNECTED_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
+            && server.saw_command_result(ROUND_TRIP_CANCEL_COMMAND_ID, "succeeded", "none")
             && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
             && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
+            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CANCEL_COMMAND_ID)
     });
     thread::sleep(Duration::from_millis(500));
     let store =
         OutboxStore::open_existing(&paths.database_path).expect("open MT4 round-trip store");
-    for command_id in [CONNECTED_COMMAND_ID, ROUND_TRIP_CLOSE_COMMAND_ID] {
+    for command_id in [
+        CONNECTED_COMMAND_ID,
+        ROUND_TRIP_CLOSE_COMMAND_ID,
+        ROUND_TRIP_CANCEL_COMMAND_ID,
+    ] {
         let ledger = store
             .command_ledger(command_id)
             .expect("MT4 round-trip ledger")
@@ -577,13 +585,19 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
         .execution_receipt(CONNECTED_COMMAND_ID)
         .expect("MT4 open receipt")
         .expect("MT4 open result");
-    let close_receipt = store
+    let modify_receipt = store
         .execution_receipt(ROUND_TRIP_CLOSE_COMMAND_ID)
+        .expect("MT4 modify position receipt")
+        .expect("MT4 modify position result");
+    let close_receipt = store
+        .execution_receipt(ROUND_TRIP_CANCEL_COMMAND_ID)
         .expect("MT4 close receipt")
         .expect("MT4 close result");
     assert_eq!(open_receipt.status, "succeeded");
+    assert_eq!(modify_receipt.status, "succeeded");
     assert_eq!(close_receipt.status, "succeeded");
     assert_eq!(open_receipt.evidence.broker_retcode, Some(0));
+    assert_eq!(modify_receipt.evidence.broker_retcode, Some(0));
     assert_eq!(close_receipt.evidence.broker_retcode, Some(0));
     let open_ticket = open_receipt
         .evidence
@@ -837,6 +851,7 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
         modified_price: None,
         stop_loss: Some(stop_loss),
         take_profit: Some(take_profit),
+        protection_distance: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -971,6 +986,7 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
         modified_price: Some(modified_price),
         stop_loss: None,
         take_profit: None,
+        protection_distance: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -1553,6 +1569,8 @@ async fn send_position_modify(
     terminal: &TerminalDescriptor,
     round_trip: &RoundTripCommand,
     expected_state: &Value,
+    stop_loss: f64,
+    take_profit: f64,
 ) {
     let now = now_utc_msc();
     socket
@@ -1575,8 +1593,8 @@ async fn send_position_modify(
                     "side": expected_state["direction"],
                     "volume": expected_state["volume"],
                     "magic": round_trip.magic,
-                    "stop_loss": round_trip.stop_loss.expect("position stop loss"),
-                    "take_profit": round_trip.take_profit.expect("position take profit"),
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
                     "expected_state": expected_state
                 }
             })
@@ -1810,7 +1828,10 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                             .await
                             .expect("data acknowledgement send");
                         if !full_snapshot {
-                            if terminal.platform == "mt5"
+                            if (terminal.platform == "mt5"
+                                || round_trip
+                                    .as_ref()
+                                    .is_some_and(|command| command.protection_distance.is_some()))
                                 && round_trip_open_succeeded
                                 && !round_trip_close_sent
                                 && let Some(round_trip) = round_trip.as_ref()
@@ -1858,18 +1879,44 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                     "volume": volume,
                                     "broker_server_key": terminal.account_ref.broker_server,
                                     "login_account": terminal.account_ref.login,
-                                    "stop_loss": position["sl"].as_f64().unwrap_or(0.0),
-                                    "take_profit": position["tp"].as_f64().unwrap_or(0.0)
+                                    "stop_loss": position["sl"].as_f64()
+                                        .or_else(|| position["stop_loss"].as_f64()).unwrap_or(0.0),
+                                    "take_profit": position["tp"].as_f64()
+                                        .or_else(|| position["take_profit"].as_f64()).unwrap_or(0.0)
                                 });
                                 if round_trip.order_kind == "market" {
-                                    if let (Some(stop_loss), Some(take_profit)) =
-                                        (round_trip.stop_loss, round_trip.take_profit)
-                                    {
+                                    let protection = match (
+                                        round_trip.stop_loss,
+                                        round_trip.take_profit,
+                                        round_trip.protection_distance,
+                                    ) {
+                                        (Some(stop_loss), Some(take_profit), _) => {
+                                            Some((stop_loss, take_profit))
+                                        }
+                                        (_, _, Some(distance)) => {
+                                            let price = position["price_current"]
+                                                .as_f64()
+                                                .or_else(|| position["price_open"].as_f64())
+                                                .filter(|price| {
+                                                    price.is_finite() && *price > distance
+                                                })
+                                                .expect("MT4 round-trip position price");
+                                            Some(if direction == "buy" {
+                                                (price - distance, price + distance)
+                                            } else {
+                                                (price + distance, price - distance)
+                                            })
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some((stop_loss, take_profit)) = protection {
                                         send_position_modify(
                                             &mut socket,
                                             &terminal,
                                             round_trip,
                                             &expected_state,
+                                            stop_loss,
+                                            take_profit,
                                         )
                                         .await;
                                         expected_state["stop_loss"] = serde_json::json!(stop_loss);
@@ -2066,7 +2113,10 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                             && let Some(round_trip) = round_trip.as_ref()
                         {
                             round_trip_open_succeeded = true;
-                            if terminal.platform != "mt4" || round_trip_close_sent {
+                            if terminal.platform != "mt4"
+                                || round_trip_close_sent
+                                || round_trip.protection_distance.is_some()
+                            {
                                 continue;
                             }
                             let ticket = payload["evidence"]["order_tickets"]
@@ -2102,7 +2152,9 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                             && payload["status"] == "succeeded"
                             && !round_trip_final_sent
                             && let Some(round_trip) = round_trip.as_ref()
-                            && (round_trip.order_kind != "market" || round_trip.stop_loss.is_some())
+                            && (round_trip.order_kind != "market"
+                                || round_trip.stop_loss.is_some()
+                                || round_trip.protection_distance.is_some())
                             && let Some(expected_state) = completion_expected_state.take()
                         {
                             send_round_trip_completion(
