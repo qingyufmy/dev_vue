@@ -1,9 +1,9 @@
 #property strict
-#property version   "3.27"
+#property version   "3.28"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.2.7"
+#define ADAPTER_VERSION "3.2.8"
 
 input string InpPipeName = "AURUMBridgeV3";
 
@@ -250,6 +250,7 @@ void DisconnectPipe()
    if(g_pipe != INVALID_HANDLE)
       FileClose(g_pipe);
    g_pipe = INVALID_HANDLE;
+   g_pipe_name = InpPipeName;
    g_welcomed = false;
    g_terminal_id = "";
    g_connection_epoch = 0;

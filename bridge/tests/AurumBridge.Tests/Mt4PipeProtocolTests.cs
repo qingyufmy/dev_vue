@@ -46,8 +46,8 @@ public sealed class Mt4PipeProtocolTests
         Assert.IsTrue(Mt4PipeProtocol.RequiresAdapterRestart(decoded.AdapterVersion));
         Assert.IsTrue(Mt4PipeProtocol.IsCurrentAdapterVersion(
             $"{Mt4PipeProtocol.CurrentAdapterVersion}-test"));
-        Assert.IsTrue(Mt4PipeProtocol.RequiresAdapterRestart("3.2.6"));
-        Assert.IsFalse(Mt4PipeProtocol.RequiresAdapterRestart("3.2.7"));
+        Assert.IsTrue(Mt4PipeProtocol.RequiresAdapterRestart("3.2.7"));
+        Assert.IsFalse(Mt4PipeProtocol.RequiresAdapterRestart("3.2.8"));
     }
 
     [TestMethod]

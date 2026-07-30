@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SYSTEM_MAGIC: i32 = 234000;
 
@@ -21,6 +21,7 @@ struct Arguments {
     execute: bool,
     partial_close: bool,
     matrix: bool,
+    observe_recovery_seconds: u64,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -160,6 +161,23 @@ async fn exercise(
         "volume_step": volume_step,
         "diagnostics": diagnostics.payload,
     });
+    if arguments.observe_recovery_seconds > 0 {
+        println!(
+            "{}",
+            json!({ "mode": "recovery_ready", "readiness": readiness })
+        );
+        let recovery =
+            observe_terminal_recovery(&source, &route, arguments.observe_recovery_seconds).await;
+        if recovery["passed"] != Value::Bool(true) {
+            return Err(format!("mt4_demo_recovery_not_observed:{recovery}"));
+        }
+        return Ok(json!({
+            "mode": "recovery",
+            "readiness": readiness,
+            "recovery": recovery,
+            "passed": true,
+        }));
+    }
     if !arguments.execute {
         return Ok(json!({ "mode": "read_only", "passed": true, "readiness": readiness }));
     }
@@ -398,6 +416,79 @@ async fn exercise(
         ));
     }
     Ok(report)
+}
+
+async fn observe_terminal_recovery(
+    source: &Arc<Mt4EaSnapshotSource>,
+    route: &WorkerRoute,
+    duration_seconds: u64,
+) -> Value {
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(duration_seconds);
+    let mut transitions = Vec::new();
+    let mut last_state = None;
+    let mut observed_disconnect = false;
+    let mut recovered_samples = 0_u8;
+    let streams = vec![
+        SnapshotStream::Account,
+        SnapshotStream::Positions,
+        SnapshotStream::Orders,
+    ];
+
+    while Instant::now() < deadline {
+        let state = match tokio::time::timeout(
+            Duration::from_secs(2),
+            source.collect_snapshot(
+                route.clone(),
+                format!("snapshot_recovery_{}", transitions.len()),
+                streams.clone(),
+            ),
+        )
+        .await
+        {
+            Ok(Ok(_)) => "online".to_owned(),
+            Ok(Err(error)) => error.code().to_owned(),
+            Err(_) => "mt4_ea_reconnect_waiting".to_owned(),
+        };
+        if state != "online" {
+            observed_disconnect = true;
+            recovered_samples = 0;
+        } else if observed_disconnect {
+            recovered_samples = recovered_samples.saturating_add(1);
+        }
+        if last_state.as_deref() != Some(state.as_str()) {
+            let transition = json!({
+                "elapsed_ms": started.elapsed().as_millis(),
+                "state": state,
+            });
+            println!(
+                "{}",
+                json!({ "mode": "recovery_transition", "transition": transition })
+            );
+            transitions.push(transition);
+            last_state = Some(state);
+        }
+        if observed_disconnect && recovered_samples >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    let passed = transitions
+        .first()
+        .and_then(|value| value["state"].as_str())
+        == Some("online")
+        && transitions.last().and_then(|value| value["state"].as_str()) == Some("online")
+        && transitions
+            .iter()
+            .skip(1)
+            .take(transitions.len().saturating_sub(2))
+            .any(|value| value["state"].as_str() != Some("online"));
+    json!({
+        "transitions": transitions,
+        "elapsed_ms": started.elapsed().as_millis(),
+        "passed": passed,
+    })
 }
 
 async fn collect(
@@ -1116,11 +1207,17 @@ fn parse_arguments() -> Result<Arguments, String> {
     let mut execute = false;
     let mut partial_close = false;
     let mut matrix = false;
+    let mut observe_recovery_seconds = 0_u64;
     let values = env::args().skip(1).collect::<Vec<_>>();
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
-            "--terminal-data" | "--server" | "--login" | "--symbol" | "--volume" => {
+            "--terminal-data"
+            | "--server"
+            | "--login"
+            | "--symbol"
+            | "--volume"
+            | "--observe-recovery-seconds" => {
                 let name = values[index].clone();
                 index += 1;
                 let value = values
@@ -1136,6 +1233,11 @@ fn parse_arguments() -> Result<Arguments, String> {
                         volume = value
                             .parse()
                             .map_err(|_| "mt4_demo_volume_invalid".to_owned())?
+                    }
+                    "--observe-recovery-seconds" => {
+                        observe_recovery_seconds = value
+                            .parse()
+                            .map_err(|_| "mt4_demo_recovery_duration_invalid".to_owned())?
                     }
                     _ => unreachable!(),
                 }
@@ -1157,6 +1259,7 @@ fn parse_arguments() -> Result<Arguments, String> {
         execute,
         partial_close,
         matrix,
+        observe_recovery_seconds,
     })
 }
 
@@ -1173,6 +1276,9 @@ fn validate_arguments(arguments: Arguments) -> Result<Arguments, String> {
         || arguments.volume <= 0.0
         || (arguments.partial_close || arguments.matrix) && !arguments.execute
         || arguments.partial_close && arguments.matrix
+        || arguments.observe_recovery_seconds > 0 && arguments.execute
+        || arguments.observe_recovery_seconds > 0
+            && !(10..=180).contains(&arguments.observe_recovery_seconds)
     {
         return Err("mt4_demo_arguments_invalid".to_owned());
     }

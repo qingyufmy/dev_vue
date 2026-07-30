@@ -271,7 +271,7 @@ public sealed record Mt4TradeResult(
 public static class Mt4PipeProtocol
 {
     public const int CurrentProtocolVersion = 3;
-    public const string CurrentAdapterVersion = "3.2.7";
+    public const string CurrentAdapterVersion = "3.2.8";
     public const int MaxFrameBytes = 4 * 1024 * 1024;
     private const int MaxStringBytes = 2 * 1024 * 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
