@@ -560,7 +560,7 @@ update_failed
 | 10 | 主账户和观摩源统一排空、任一失败即恢复已暂停目标已有自动化覆盖 | 真实观摩源保留在途命令时拒绝切换 |
 | 11 | 中断临时文件清理、磁盘不足、同尺寸缓存损坏、模块损坏不改当前版本已有自动化覆盖 | 真实断网、进程强杀和磁盘耗尽组合 |
 | 12 | Manifest、包签名和包内容篡改均失败关闭已有自动化覆盖 | 对测试 CDN 对象和接口响应实施篡改演练 |
-| 13 | `waiting_window`、`acquiring_lease`、`draining`、`activating` 四阶段均能重新验签并恢复缓存 | 每个阶段真实强杀 Bridge/Launcher 或重启 Windows |
+| 13 | `waiting_window`、`acquiring_lease`、`draining`、`activating` 四阶段均重新验证 Manifest、缓存 ZIP 与逐文件解压内容；损坏且尚未 pending 的版本退出激活中并可重新下载，pending 版本保留给 Launcher 回滚 | 每个阶段真实强杀 Bridge/Launcher 或重启 Windows |
 | 14 | 新版本只读健康检查失败自动回滚已有 Launcher 自动化覆盖 | 真实坏核心包回滚并恢复服务连接 |
 | 15 | 新版本首次完整同步失败自动回滚已有 Launcher 自动化覆盖 | 真实 MT 主账户同步失败注入 |
 | 16 | ready 信号强制恢复更新前健康终端集合已有自动化覆盖 | 真实观摩源单点失败注入 |

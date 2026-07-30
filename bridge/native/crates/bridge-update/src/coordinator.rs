@@ -5,7 +5,7 @@ use crate::{
     ReleaseManifestVerifier, ReleasePackageStager, STATE_ACQUIRING_LEASE, STATE_ACTIVATING,
     STATE_CHECKING, STATE_DOWNLOADING, STATE_DRAINING, STATE_FAILED, STATE_ROLLED_BACK,
     STATE_WAITING_WINDOW, UpdateError, extract_verified_package, verified_expanded_size,
-    verify_package_file,
+    verify_extracted_package, verify_package_file,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -14,7 +14,7 @@ use std::ffi::c_void;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -274,7 +274,97 @@ impl BridgeUpdateCoordinator {
             return Err(UpdateError::new("update_staged_release_state_mismatch"));
         }
         validate_existing_release(&directory, &manifest)?;
+        self.verify_staged_release_contents(&directory, &manifest)?;
         Ok(Some(describe_staged_release(&manifest, directory)))
+    }
+
+    pub fn abandon_invalid_staged_release(
+        &self,
+        state: &BridgeUpdateState,
+        error_code: &str,
+    ) -> Result<bool, UpdateError> {
+        let target_version = state
+            .target_version
+            .as_deref()
+            .ok_or_else(|| UpdateError::new("update_staged_release_state_mismatch"))?;
+        let current = DotNetVersion::parse(&self.environment.current_version)
+            .ok_or_else(|| UpdateError::new("update_current_version_invalid"))?;
+        let target = DotNetVersion::parse(target_version)
+            .ok_or_else(|| UpdateError::new("update_release_version_invalid"))?;
+        if target <= current {
+            return Err(UpdateError::new("update_staged_release_invalid"));
+        }
+        let pointer = self.activation_store.load()?;
+        if pointer.status == "pending" && pointer.active_version == target_version {
+            return Ok(false);
+        }
+        let directory = self
+            .environment
+            .install_root
+            .join("versions")
+            .join(target_version);
+        if directory.exists() {
+            let metadata = fs::symlink_metadata(&directory)
+                .map_err(|_| UpdateError::new("update_staged_release_cleanup_failed"))?;
+            if !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || metadata.file_attributes() & 0x400 != 0
+            {
+                return Err(UpdateError::new("update_staged_release_cleanup_boundary"));
+            }
+            fs::remove_dir_all(&directory)
+                .map_err(|_| UpdateError::new("update_staged_release_cleanup_failed"))?;
+        }
+        self.state_store.save(BridgeUpdateState {
+            schema_version: 1,
+            state: STATE_FAILED.to_owned(),
+            target_version: None,
+            release_id: None,
+            priority: None,
+            manual_activation_requested: false,
+            staged_at_utc_msc: None,
+            activation_started_at_utc_msc: None,
+            minimum_idle_seconds: 120,
+            activation_deadline_utc_msc: None,
+            maintenance_lease_id: None,
+            maintenance_lease_expires_at_utc_msc: None,
+            next_retry_at_utc_msc: None,
+            last_error_code: Some(error_code.to_owned()),
+            updated_at_utc_msc: now_utc_msc(),
+        })?;
+        Ok(true)
+    }
+
+    fn verify_staged_release_contents(
+        &self,
+        directory: &Path,
+        manifest: &ReleaseManifest,
+    ) -> Result<(), UpdateError> {
+        let mut expected_files = HashSet::new();
+        for package in &manifest.packages {
+            let archive = self
+                .package_stager
+                .cache_directory()
+                .join(format!("{}.zip", package.sha256.to_ascii_lowercase()));
+            let relative_root = if package.module_id == "core" {
+                PathBuf::new()
+            } else {
+                PathBuf::from("modules").join(&package.module_id)
+            };
+            let destination = directory.join(&relative_root);
+            for relative_file in verify_extracted_package(package, archive, destination)? {
+                if !expected_files.insert(relative_root.join(relative_file)) {
+                    return Err(UpdateError::new("update_staged_release_integrity_failed"));
+                }
+            }
+        }
+        let mut actual_files = HashSet::new();
+        collect_staged_files(directory, directory, &mut actual_files)?;
+        actual_files.remove(Path::new(RELEASE_MARKER_FILE_NAME));
+        if actual_files != expected_files {
+            return Err(UpdateError::new("update_staged_release_integrity_failed"));
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -720,6 +810,39 @@ fn validate_existing_release(
     Ok(())
 }
 
+fn collect_staged_files(
+    root: &Path,
+    directory: &Path,
+    files: &mut HashSet<PathBuf>,
+) -> Result<(), UpdateError> {
+    for entry in fs::read_dir(directory)
+        .map_err(|_| UpdateError::new("update_staged_release_integrity_failed"))?
+    {
+        let entry =
+            entry.map_err(|_| UpdateError::new("update_staged_release_integrity_failed"))?;
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|_| UpdateError::new("update_staged_release_integrity_failed"))?;
+        if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x400 != 0 {
+            return Err(UpdateError::new("update_staged_release_integrity_failed"));
+        }
+        if metadata.is_dir() {
+            collect_staged_files(root, &entry.path(), files)?;
+        } else if metadata.is_file() {
+            let relative = entry
+                .path()
+                .strip_prefix(root)
+                .map_err(|_| UpdateError::new("update_staged_release_integrity_failed"))?
+                .to_path_buf();
+            if !files.insert(relative) {
+                return Err(UpdateError::new("update_staged_release_integrity_failed"));
+            }
+        } else {
+            return Err(UpdateError::new("update_staged_release_integrity_failed"));
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_native_release_layout(directory: &Path) -> Result<(), UpdateError> {
     if REQUIRED_CORE_FILES
         .iter()
@@ -1151,20 +1274,59 @@ mod tests {
                 .expect("restore staged release"),
             Some(staged.clone())
         );
-        coordinator
-            .save_activation_phase(&staged, STATE_ACQUIRING_LEASE, true, None, None, None, None)
-            .expect("acquiring state");
-        coordinator
-            .save_activation_phase(
-                &staged,
-                STATE_DRAINING,
-                true,
-                Some("lease_01JUPDATE".to_owned()),
-                Some(1_800_000_090_000),
-                None,
-                None,
-            )
-            .expect("draining state");
+        for phase in [
+            STATE_WAITING_WINDOW,
+            STATE_ACQUIRING_LEASE,
+            STATE_DRAINING,
+            STATE_ACTIVATING,
+        ] {
+            let requires_lease = matches!(phase, STATE_DRAINING | STATE_ACTIVATING);
+            coordinator
+                .save_activation_phase(
+                    &staged,
+                    phase,
+                    true,
+                    requires_lease.then(|| "lease_01JUPDATE".to_owned()),
+                    requires_lease.then_some(1_800_000_090_000),
+                    None,
+                    None,
+                )
+                .expect("interrupted activation state");
+            assert_eq!(
+                coordinator
+                    .restore_staged_release()
+                    .expect("restore interrupted staged release"),
+                Some(staged.clone()),
+                "phase {phase} must revalidate and restore the same release"
+            );
+        }
+        let staged_core = staged.version_directory.join("AURUMBridge.Core.exe");
+        let original_core = fs::read(&staged_core).expect("read staged core");
+        fs::write(&staged_core, b"tampered native core").expect("tamper staged core");
+        assert_eq!(
+            coordinator
+                .restore_staged_release()
+                .expect_err("tampered extracted core must not recover")
+                .code(),
+            "update_staged_release_integrity_failed"
+        );
+        fs::write(&staged_core, original_core).expect("restore staged core");
+        assert_eq!(
+            coordinator
+                .restore_staged_release()
+                .expect("restore repaired staged release"),
+            Some(staged.clone())
+        );
+        let unexpected = staged.version_directory.join("unexpected.dll");
+        fs::write(&unexpected, b"unexpected").expect("write unexpected staged file");
+        assert_eq!(
+            coordinator
+                .restore_staged_release()
+                .expect_err("unexpected staged file must not recover")
+                .code(),
+            "update_staged_release_integrity_failed"
+        );
+        fs::remove_file(unexpected).expect("remove unexpected staged file");
         coordinator
             .prepare_activation(
                 &staged,
@@ -1288,6 +1450,101 @@ mod tests {
         let coordinator = coordinator_for_state_test(root.clone(), state_store.clone());
         coordinator.try_record_failure("update_manifest_request_failed");
         assert_eq!(state_store.load(), Ok(Some(waiting)));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn invalid_interrupted_stage_is_discarded_unless_launcher_already_owns_pending_activation() {
+        let root = test_directory("interrupted-stage-cleanup");
+        let current_directory = root.join("versions/3.0.0");
+        let target_directory = root.join("versions/3.1.0");
+        fs::create_dir_all(&current_directory).expect("current directory");
+        fs::write(current_directory.join("AURUMBridge.exe"), b"current").expect("current UI");
+        fs::create_dir_all(&target_directory).expect("target directory");
+        fs::write(target_directory.join("AURUMBridge.exe"), b"candidate").expect("candidate UI");
+        let activation_store = ReleaseActivationStore::new(root.join(VERSION_POINTER_FILE_NAME))
+            .expect("activation store");
+        activation_store
+            .initialize_healthy("3.0.0", 1_800_000_000_000)
+            .expect("healthy pointer");
+        let state_store = BridgeUpdateStateStore::new(root.join(crate::UPDATE_STATE_FILE_NAME))
+            .expect("state store");
+        let interrupted = BridgeUpdateState {
+            schema_version: 1,
+            state: STATE_DRAINING.to_owned(),
+            target_version: Some("3.1.0".to_owned()),
+            release_id: Some("release-test-3.1.0".to_owned()),
+            priority: Some("normal".to_owned()),
+            manual_activation_requested: true,
+            staged_at_utc_msc: Some(1_800_000_000_000),
+            activation_started_at_utc_msc: Some(1_800_000_000_010),
+            minimum_idle_seconds: 120,
+            activation_deadline_utc_msc: None,
+            maintenance_lease_id: Some("lease_01JINTERRUPTED".to_owned()),
+            maintenance_lease_expires_at_utc_msc: Some(1_800_000_090_000),
+            next_retry_at_utc_msc: None,
+            last_error_code: None,
+            updated_at_utc_msc: 1_800_000_000_010,
+        };
+        state_store
+            .save(interrupted.clone())
+            .expect("interrupted state");
+        let coordinator = coordinator_for_state_test(root.clone(), state_store.clone());
+        assert!(
+            coordinator
+                .abandon_invalid_staged_release(
+                    &interrupted,
+                    "update_staged_release_integrity_failed"
+                )
+                .expect("discard invalid stage")
+        );
+        assert!(!target_directory.exists());
+        let failed = state_store.load().expect("failed state").expect("state");
+        assert_eq!(failed.state, STATE_FAILED);
+        assert!(failed.maintenance_lease_id.is_none());
+        assert_eq!(
+            failed.last_error_code.as_deref(),
+            Some("update_staged_release_integrity_failed")
+        );
+
+        fs::write(&target_directory, b"not a version directory")
+            .expect("write invalid target file");
+        assert_eq!(
+            coordinator
+                .abandon_invalid_staged_release(
+                    &interrupted,
+                    "update_staged_release_integrity_failed"
+                )
+                .expect_err("cleanup must reject a non-directory target")
+                .code(),
+            "update_staged_release_cleanup_boundary"
+        );
+        fs::remove_file(&target_directory).expect("remove invalid target file");
+        fs::create_dir_all(&target_directory).expect("recreate target directory");
+        fs::write(target_directory.join("AURUMBridge.exe"), b"candidate")
+            .expect("recreate candidate UI");
+        coordinator
+            .prepare_activation(
+                &StagedRelease {
+                    version: "3.1.0".to_owned(),
+                    version_directory: target_directory.clone(),
+                    release_id: Some("release-test-3.1.0".to_owned()),
+                    priority: "normal".to_owned(),
+                    minimum_idle_seconds: 120,
+                    activation_deadline_utc_msc: None,
+                },
+                &[],
+            )
+            .expect("prepare pending activation");
+        assert!(
+            !coordinator
+                .abandon_invalid_staged_release(
+                    &interrupted,
+                    "update_staged_release_integrity_failed"
+                )
+                .expect("delegate pending activation")
+        );
+        assert!(target_directory.exists());
         fs::remove_dir_all(root).expect("cleanup");
     }
 

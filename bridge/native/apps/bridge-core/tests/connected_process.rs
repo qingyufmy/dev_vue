@@ -226,7 +226,7 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
             .expect("order send count")
             .trim(),
         "1",
-        "startup reconciliation must query terminal facts without replaying the interrupted order"
+        "update/rollback startup reconciliation must query terminal facts without replaying the interrupted order"
     );
 
     let status_before_lock = runtime_status["observed_at_utc_msc"]

@@ -1222,7 +1222,22 @@ async fn recover_interrupted_update(
             }
         }
         Ok(None) => {}
-        Err(error) => logger.warning("native_update_recovery_failed", Some(error.code())),
+        Err(error) => {
+            let code = error.code().to_owned();
+            match coordinator.abandon_invalid_staged_release(&state, &code) {
+                Ok(true) => logger.warning(
+                    "native_update_recovery_discarded_invalid_stage",
+                    Some(&code),
+                ),
+                Ok(false) => {
+                    logger.warning("native_update_recovery_delegated_to_launcher", Some(&code))
+                }
+                Err(cleanup_error) => logger.warning(
+                    "native_update_recovery_failed",
+                    Some(&format!("{code};cleanup={}", cleanup_error.code())),
+                ),
+            }
+        }
     }
 }
 

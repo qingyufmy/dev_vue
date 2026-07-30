@@ -16,7 +16,8 @@ pub use manifest::{
     canonicalize_manifest, canonicalize_package,
 };
 pub use staging::{
-    ReleasePackageStager, extract_verified_package, verified_expanded_size, verify_package_file,
+    ReleasePackageStager, extract_verified_package, verified_expanded_size,
+    verify_extracted_package, verify_package_file,
 };
 
 use serde::{Deserialize, Serialize};

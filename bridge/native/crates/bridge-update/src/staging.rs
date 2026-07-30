@@ -277,6 +277,82 @@ pub fn extract_verified_package(
     Ok(destination)
 }
 
+pub fn verify_extracted_package(
+    package: &ReleasePackage,
+    package_path: impl AsRef<Path>,
+    destination_directory: impl AsRef<Path>,
+) -> Result<Vec<PathBuf>, UpdateError> {
+    if !validate_package(package) {
+        return Err(UpdateError::new("update_manifest_package_invalid"));
+    }
+    let mut source =
+        File::open(package_path).map_err(|_| UpdateError::new("update_package_cache_missing"))?;
+    let metadata = source
+        .metadata()
+        .map_err(|_| UpdateError::new("update_package_io_failed"))?;
+    if !metadata.is_file() || metadata.len() != package.size_bytes {
+        return Err(UpdateError::new("update_package_integrity_failed"));
+    }
+    let mut hash = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .map_err(|_| UpdateError::new("update_package_io_failed"))?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+    }
+    if hash.finalize().as_slice() != decode_sha256(&package.sha256)? {
+        return Err(UpdateError::new("update_package_integrity_failed"));
+    }
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| UpdateError::new("update_package_io_failed"))?;
+    let mut archive =
+        ZipArchive::new(source).map_err(|_| UpdateError::new("update_package_archive_invalid"))?;
+    let plan = inspect_archive(&mut archive)?;
+    let destination = destination_directory.as_ref();
+    let mut verified_files = Vec::new();
+    let mut archive_buffer = [0_u8; 64 * 1024];
+    let mut staged_buffer = [0_u8; 64 * 1024];
+    for planned in plan.iter().filter(|entry| !entry.directory) {
+        let staged_path = destination.join(&planned.relative_path);
+        let staged_metadata = fs::symlink_metadata(&staged_path)
+            .map_err(|_| UpdateError::new("update_staged_release_integrity_failed"))?;
+        if staged_metadata.file_type().is_symlink()
+            || !staged_metadata.is_file()
+            || staged_metadata.len() != planned.size
+        {
+            return Err(UpdateError::new("update_staged_release_integrity_failed"));
+        }
+        let mut archived = archive
+            .by_index(planned.index)
+            .map_err(|_| UpdateError::new("update_package_archive_invalid"))?;
+        let mut staged =
+            File::open(&staged_path).map_err(|_| UpdateError::new("update_package_io_failed"))?;
+        loop {
+            let archived_read = archived
+                .read(&mut archive_buffer)
+                .map_err(|_| UpdateError::new("update_package_archive_invalid"))?;
+            let staged_read = staged
+                .read(&mut staged_buffer)
+                .map_err(|_| UpdateError::new("update_package_io_failed"))?;
+            if archived_read != staged_read
+                || archive_buffer[..archived_read] != staged_buffer[..staged_read]
+            {
+                return Err(UpdateError::new("update_staged_release_integrity_failed"));
+            }
+            if archived_read == 0 {
+                break;
+            }
+        }
+        verified_files.push(planned.relative_path.clone());
+    }
+    Ok(verified_files)
+}
+
 #[derive(Debug)]
 struct ArchiveEntryPlan {
     index: usize,
