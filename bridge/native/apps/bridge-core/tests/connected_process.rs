@@ -2,6 +2,10 @@ use bridge_contract::{
     AccountRef, CommandMessage, HelloAcknowledgement, HelloMessage, TerminalDescriptor,
 };
 use bridge_foundation::{DEFAULT_PROFILE_ID, profile_instance_id, resolve_profile_paths};
+use bridge_local_control::{
+    LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
+    LocalControlResult,
+};
 use bridge_preferences::{BridgePreferencesStore, ObserverProfilePreferences};
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
@@ -38,6 +42,7 @@ const CONNECTED_COMMAND_ID: &str = "command_01JCONNECTED1";
 const ROUND_TRIP_CLOSE_COMMAND_ID: &str = "command_01JCONNECTED2";
 const ROUND_TRIP_CANCEL_COMMAND_ID: &str = "command_01JCONNECTED3";
 const ROUND_TRIP_FINAL_COMMAND_ID: &str = "command_01JCONNECTED4";
+static LOCAL_CONTROL_REQUEST_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
 struct RoundTripCommand {
@@ -386,6 +391,89 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
 }
 
 #[test]
+fn native_core_update_drain_times_out_on_an_active_command_and_recovers_admission() {
+    let root = unique_test_directory();
+    let profile_id = unique_profile_id();
+    let terminal_id = "mt5_dddddddddddddddddddddddd";
+    let mut server = LoopbackBridgeServer::start();
+    let application = prepare_application(&root);
+    let paths = prepare_profile(
+        &root,
+        &profile_id,
+        terminal_id,
+        &server.control_url,
+        &server.realtime_url,
+    );
+    let ready = root.join("drain-ready.json");
+    let update_state_path = root.join("drain-update-state.json");
+    let order_send_count_file = root.join("order-send-count.txt");
+    let mut child = ChildGuard::spawn_with_worker_delay(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        &profile_id,
+        &ready,
+        terminal_id,
+        &update_state_path,
+        750,
+    );
+
+    wait_until(&mut child, Duration::from_secs(20), || {
+        fs::read_to_string(&order_send_count_file).is_ok_and(|count| count.trim() == "1")
+    });
+    let rejected = match try_request_local_control(
+        &profile_id,
+        LocalControlAction::InternalUpdateDrain { timeout_msc: 50 },
+    ) {
+        Ok(result) => result,
+        Err(code) => {
+            SingleInstanceGuard::request_shutdown(
+                &profile_instance_id(&profile_id).expect("diagnostic instance id"),
+            )
+            .expect("request diagnostic shutdown");
+            let output = child.wait_with_output();
+            panic!(
+                "drain IPC failed: {code}; status={:?}; stderr={}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    };
+    assert_eq!(
+        rejected,
+        LocalControlResult::Rejected {
+            code: "bridge_command_drain_timeout".to_owned(),
+        },
+        "an active command must prevent update activation"
+    );
+
+    wait_until(&mut child, Duration::from_secs(10), || {
+        server.saw_succeeded_command_result() && command_is_acked(&paths.database_path)
+    });
+    assert_eq!(
+        request_local_control(
+            &profile_id,
+            LocalControlAction::InternalUpdateDrain { timeout_msc: 1_000 },
+        ),
+        LocalControlResult::Accepted,
+        "a timed-out drain must restore admission before the next attempt"
+    );
+    assert_eq!(
+        request_local_control(&profile_id, LocalControlAction::InternalUpdateResume),
+        LocalControlResult::Accepted
+    );
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id(&profile_id).expect("drain instance id"),
+    )
+    .expect("request drain core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    server.stop();
+    fs::remove_dir_all(root).expect("remove drain process fixture");
+}
+
+#[test]
 fn default_core_hosts_an_enabled_observer_profile_without_a_second_ui() {
     let root = unique_test_directory();
     let primary_terminal_id = "mt5_111111111111111111111111";
@@ -479,6 +567,23 @@ fn default_core_hosts_an_enabled_observer_profile_without_a_second_ui() {
         ready_terminal_ids,
         std::collections::BTreeSet::from([primary_terminal_id, observer_terminal_id])
     );
+    for profile_id in [DEFAULT_PROFILE_ID, observer_profile_id] {
+        assert_eq!(
+            request_local_control(
+                profile_id,
+                LocalControlAction::InternalUpdateDrain { timeout_msc: 1_000 },
+            ),
+            LocalControlResult::Accepted,
+            "every ready profile must expose the internal update drain endpoint"
+        );
+    }
+    for profile_id in [observer_profile_id, DEFAULT_PROFILE_ID] {
+        assert_eq!(
+            request_local_control(profile_id, LocalControlAction::InternalUpdateResume),
+            LocalControlResult::Accepted,
+            "paused profiles must resume in reverse order after an aborted activation"
+        );
+    }
 
     SingleInstanceGuard::request_shutdown(
         &profile_instance_id(DEFAULT_PROFILE_ID).expect("default instance id"),
@@ -1461,6 +1566,38 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
     fs::remove_dir_all(root).expect("remove live MT5 pending round-trip fixture");
 }
 
+fn request_local_control(profile_id: &str, action: LocalControlAction) -> LocalControlResult {
+    try_request_local_control(profile_id, action).expect("local control response")
+}
+
+fn try_request_local_control(
+    profile_id: &str,
+    action: LocalControlAction,
+) -> Result<LocalControlResult, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("local control runtime");
+    runtime.block_on(async {
+        let mut client = LocalControlPipeClient::connect(profile_id, Duration::from_secs(5))
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        client
+            .request(&LocalControlRequest {
+                schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                request_id: format!(
+                    "test_drain_{}",
+                    LOCAL_CONTROL_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+                ),
+                profile_id: profile_id.to_owned(),
+                action,
+            })
+            .await
+            .map(|response| response.result)
+            .map_err(|error| error.code().to_owned())
+    })
+}
+
 struct ChildGuard(Option<Child>);
 
 impl ChildGuard {
@@ -1472,7 +1609,49 @@ impl ChildGuard {
         terminal_id: &str,
         update_state_path: &Path,
     ) -> Self {
-        let child = Command::new(executable)
+        Self::spawn_with_optional_worker_delay(
+            executable,
+            root,
+            profile_id,
+            ready,
+            terminal_id,
+            update_state_path,
+            None,
+        )
+    }
+
+    fn spawn_with_worker_delay(
+        executable: PathBuf,
+        root: &Path,
+        profile_id: &str,
+        ready: &Path,
+        terminal_id: &str,
+        update_state_path: &Path,
+        worker_delay_msc: u64,
+    ) -> Self {
+        Self::spawn_with_optional_worker_delay(
+            executable,
+            root,
+            profile_id,
+            ready,
+            terminal_id,
+            update_state_path,
+            Some(worker_delay_msc),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_with_optional_worker_delay(
+        executable: PathBuf,
+        root: &Path,
+        profile_id: &str,
+        ready: &Path,
+        terminal_id: &str,
+        update_state_path: &Path,
+        worker_delay_msc: Option<u64>,
+    ) -> Self {
+        let mut command = Command::new(executable);
+        command
             .args([
                 "--profile",
                 profile_id,
@@ -1489,7 +1668,14 @@ impl ChildGuard {
             .env(
                 "AURUM_TEST_WORKER_ORDER_SEND_COUNT_FILE",
                 root.join("order-send-count.txt"),
-            )
+            );
+        if let Some(worker_delay_msc) = worker_delay_msc {
+            command.env(
+                "AURUM_TEST_WORKER_ORDER_SEND_DELAY_MSC",
+                worker_delay_msc.to_string(),
+            );
+        }
+        let child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

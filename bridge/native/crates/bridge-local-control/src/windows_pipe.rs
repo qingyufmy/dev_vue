@@ -93,24 +93,14 @@ pub struct LocalControlPipeServer {
 impl LocalControlPipeServer {
     pub fn bind(profile_id: &str) -> Result<Self, LocalControlError> {
         let endpoint = LocalControlEndpoint::for_profile(profile_id)?;
-        let security = CurrentUserPipeSecurity::new().map_err(|_| {
-            LocalControlError::new("bridge_local_control_security_descriptor_failed")
-        })?;
-        let mut options = ServerOptions::new();
-        options
-            .first_pipe_instance(true)
-            .reject_remote_clients(true)
-            .max_instances(1);
-        // SAFETY: the descriptor owner lives until CreateNamedPipeW returns. Tokio does not retain
-        // this SECURITY_ATTRIBUTES pointer after creating the pipe handle.
-        let server = unsafe {
-            options.create_with_security_attributes_raw(
-                endpoint.pipe_path(),
-                security.attributes_ptr(),
-            )
-        }
-        .map_err(|_| LocalControlError::new("bridge_local_control_bind_failed"))?;
+        let server = create_server_instance(&endpoint, true)?;
         Ok(Self { endpoint, server })
+    }
+
+    pub fn rotate(&mut self) -> Result<(), LocalControlError> {
+        let replacement = create_server_instance(&self.endpoint, false)?;
+        self.server = replacement;
+        Ok(())
     }
 
     pub fn endpoint(&self) -> &LocalControlEndpoint {
@@ -148,6 +138,25 @@ impl LocalControlPipeServer {
             .disconnect()
             .map_err(|_| LocalControlError::new("bridge_local_control_disconnect_failed"))
     }
+}
+
+fn create_server_instance(
+    endpoint: &LocalControlEndpoint,
+    first_pipe_instance: bool,
+) -> Result<NamedPipeServer, LocalControlError> {
+    let security = CurrentUserPipeSecurity::new()
+        .map_err(|_| LocalControlError::new("bridge_local_control_security_descriptor_failed"))?;
+    let mut options = ServerOptions::new();
+    options
+        .first_pipe_instance(first_pipe_instance)
+        .reject_remote_clients(true)
+        .max_instances(2);
+    // SAFETY: the descriptor owner lives until CreateNamedPipeW returns. Tokio does not retain
+    // this SECURITY_ATTRIBUTES pointer after creating the pipe handle.
+    unsafe {
+        options.create_with_security_attributes_raw(endpoint.pipe_path(), security.attributes_ptr())
+    }
+    .map_err(|_| LocalControlError::new("bridge_local_control_bind_failed"))
 }
 
 pub struct LocalControlPipeClient {
@@ -351,6 +360,46 @@ mod tests {
         assert_eq!(response.request_id, "request-1");
         assert!(matches!(response.result, LocalControlResult::State { .. }));
         server_task.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn rotating_server_accepts_an_immediate_followup_client_without_stale_pipe_races() {
+        let profile_id = "test-pipe-rotation";
+        let mut server = LocalControlPipeServer::bind(profile_id).expect("bind rotating server");
+        let server_task = tokio::spawn(async move {
+            for index in 0..2 {
+                server.accept().await.expect("accept rotating client");
+                let request = server.receive().await.expect("rotating request");
+                server
+                    .send(&LocalControlResponse {
+                        schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                        request_id: request.request_id,
+                        result: LocalControlResult::Accepted,
+                    })
+                    .await
+                    .expect("rotating response");
+                if index == 0 {
+                    server.rotate().expect("rotate pipe instance");
+                }
+            }
+        });
+
+        for index in 0..2 {
+            let mut client = LocalControlPipeClient::connect(profile_id, Duration::from_secs(2))
+                .await
+                .expect("connect rotating client");
+            let response = client
+                .request(&LocalControlRequest {
+                    schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                    request_id: format!("rotation-{index}"),
+                    profile_id: profile_id.to_owned(),
+                    action: LocalControlAction::InternalUpdateResume,
+                })
+                .await
+                .expect("rotating round trip");
+            assert_eq!(response.result, LocalControlResult::Accepted);
+        }
+        server_task.await.expect("rotating server task");
     }
 
     #[tokio::test]

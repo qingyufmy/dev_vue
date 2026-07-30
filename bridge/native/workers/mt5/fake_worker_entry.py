@@ -108,12 +108,16 @@ class FakeMt5:
 
     def order_send(self, request):
         import os
+        import time
         from pathlib import Path
         count_file = os.environ.get("AURUM_TEST_WORKER_ORDER_SEND_COUNT_FILE")
         if count_file:
             path = Path(count_file)
             count = int(path.read_text(encoding="ascii")) if path.exists() else 0
             path.write_text(str(count + 1), encoding="ascii")
+        delay_msc = int(os.environ.get("AURUM_TEST_WORKER_ORDER_SEND_DELAY_MSC", "0"))
+        if delay_msc > 0:
+            time.sleep(delay_msc / 1000)
         return SimpleNamespace(retcode=10009, order=1001, deal=2001, comment="done")
 
     def history_orders_get(self, *_args, **_kwargs):

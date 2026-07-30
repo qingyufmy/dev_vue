@@ -2301,8 +2301,9 @@ async fn run_local_control_server(
                 return;
             }
         }
-        if let Err(error) = server.disconnect() {
-            logger.warning("native_local_control_disconnect_failed", Some(error.code()));
+        if let Err(error) = server.rotate() {
+            logger.warning("native_local_control_rotate_failed", Some(error.code()));
+            return;
         }
     }
 }
