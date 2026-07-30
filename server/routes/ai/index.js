@@ -65,7 +65,7 @@ router.get('/bridge/version', (req, res) => {
   res.json({
     version: BRIDGE_RELEASE.version || BRIDGE_VERSION,
     build_date: BRIDGE_RELEASE.buildDate,
-    changelog: `${BRIDGE_VERSION}: 桥接服务器同时支持 HTTP/HTTPS 与 WS/WSS`,
+    changelog: `量见智桥 ${BRIDGE_RELEASE.version || BRIDGE_VERSION} 正式版`,
     bridge_ticket_required: process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN !== '1',
     legacy_bridge_query_token_enabled: process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN === '1',
     auto_update_enabled: BRIDGE_RELEASE.v3,

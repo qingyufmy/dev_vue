@@ -1,10 +1,10 @@
-const LEGACY_INSTALLER = Object.freeze({
+const VERIFIED_INSTALLER = Object.freeze({
   version:'3.0.0',
   buildDate:'2026-07-30',
   fullUrl:'https://qiniu.acadfx.com/bridge/bootstrapper/6f438a1c2d9f8050f7a1b1b6ce8d004cbe33a16ecfbee7f8b516ffa204361085/LiangjianBridgeSetup.exe',
   fileSize:26497378,
   sha256:'6F438A1C2D9F8050F7A1B1B6CE8D004CBE33A16ECFBEE7F8B516FFA204361085',
-  v3:false,
+  v3:true,
 })
 
 function validHttpsObjectUrl(value, sha256) {
@@ -24,7 +24,7 @@ export function resolveBridgeInstallerRelease(environment = process.env) {
   const buildDate = String(environment.BRIDGE_INSTALLER_BUILD_DATE || '').trim()
   const sha256 = String(environment.BRIDGE_INSTALLER_SHA256 || '').trim().toUpperCase()
   const sizeValue = String(environment.BRIDGE_INSTALLER_SIZE_BYTES || '').trim()
-  if (![url, version, buildDate, sizeValue, sha256].some(Boolean)) return LEGACY_INSTALLER
+  if (![url, version, buildDate, sizeValue, sha256].some(Boolean)) return VERIFIED_INSTALLER
   const fileSize = Number(sizeValue)
   if (!validHttpsObjectUrl(url, sha256)
     || !/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(version)

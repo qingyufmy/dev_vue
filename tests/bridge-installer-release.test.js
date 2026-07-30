@@ -6,7 +6,7 @@ describe('bridge installer release descriptor', () => {
   it('keeps the verified static 3.0.0 installer when no dynamic descriptor is configured', () => {
     expect(resolveBridgeInstallerRelease({})).toMatchObject({
       version:'3.0.0',
-      v3:false,
+      v3:true,
       fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'6f438a1c2d9f8050f7a1b1b6ce8d004cbe33a16ecfbee7f8b516ffa204361085'}/LiangjianBridgeSetup.exe`,
     })
   })

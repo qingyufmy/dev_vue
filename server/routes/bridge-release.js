@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { createHash, createPublicKey, timingSafeEqual, verify } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { queryAll } from '../db.js'
 import { notifyBridgeReleaseAvailable } from '../bridge-v3/release-events.js'
@@ -16,6 +17,14 @@ const ALLOWED_MODULES = new Set([
   'adapter.mt4',
   'data.symbol-map',
 ])
+const ROUTE_DIRECTORY = path.dirname(fileURLToPath(import.meta.url))
+const DEFAULT_RELEASE_DATA_DIRECTORY = path.resolve(ROUTE_DIRECTORY, '../data/bridge-release')
+const DEFAULT_RELEASE_SEED_DIRECTORY = path.resolve(ROUTE_DIRECTORY, '../release-bootstrap')
+const DEFAULT_MANIFEST_PATH = path.join(DEFAULT_RELEASE_DATA_DIRECTORY, 'current.json')
+const DEFAULT_BOOTSTRAP_MANIFEST_PATH = path.join(DEFAULT_RELEASE_DATA_DIRECTORY, 'bootstrap.json')
+const DEFAULT_SEED_MANIFEST_PATH = path.join(DEFAULT_RELEASE_SEED_DIRECTORY, 'current.json')
+const DEFAULT_SEED_BOOTSTRAP_MANIFEST_PATH = path.join(DEFAULT_RELEASE_SEED_DIRECTORY, 'bootstrap.json')
+const DEFAULT_PUBLIC_KEY_PATH = path.join(DEFAULT_RELEASE_SEED_DIRECTORY, 'release-public-key.pem')
 
 function validVersion(value) {
   return typeof value === 'string' && /^\d+\.\d+(?:\.\d+){0,2}$/.test(value)
@@ -212,13 +221,17 @@ export function validateBridgeReleaseManifest(manifest, nowUtcMsc = Date.now()) 
 }
 
 export function createBridgeReleaseRouter({
-  manifestPath = process.env.BRIDGE_RELEASE_MANIFEST_PATH,
-  bootstrapManifestPath = process.env.BRIDGE_BOOTSTRAP_MANIFEST_PATH,
+  manifestPath = process.env.BRIDGE_RELEASE_MANIFEST_PATH || DEFAULT_MANIFEST_PATH,
+  bootstrapManifestPath = process.env.BRIDGE_BOOTSTRAP_MANIFEST_PATH || DEFAULT_BOOTSTRAP_MANIFEST_PATH,
+  seedManifestPath = manifestPath === DEFAULT_MANIFEST_PATH ? DEFAULT_SEED_MANIFEST_PATH : '',
+  seedBootstrapManifestPath = bootstrapManifestPath === DEFAULT_BOOTSTRAP_MANIFEST_PATH
+    ? DEFAULT_SEED_BOOTSTRAP_MANIFEST_PATH : '',
   readManifest = readFile,
   authenticate = authMiddleware,
   requireAdmin = adminOnly,
   fileOps = { mkdir, readFile, rename, rm, writeFile },
-  publicKeyPath = process.env.BRIDGE_RELEASE_PUBLIC_KEY_PATH,
+  publicKeyPath = process.env.BRIDGE_RELEASE_PUBLIC_KEY_PATH
+    || (seedManifestPath || seedBootstrapManifestPath ? DEFAULT_PUBLIC_KEY_PATH : ''),
   releaseToken = process.env.AURUM_BRIDGE_RELEASE_API_TOKEN,
   verifySignatures = verifyBridgeReleaseSignatures,
   queryAllFn = queryAll,
@@ -273,10 +286,19 @@ export function createBridgeReleaseRouter({
     }
   }
 
-  async function optionalManifest(target) {
+  async function readWithFallback(target, fallbackTarget = '') {
+    try {
+      return await fileOps.readFile(target)
+    } catch (error) {
+      if (error?.code === 'ENOENT' && fallbackTarget) return fileOps.readFile(fallbackTarget)
+      throw error
+    }
+  }
+
+  async function optionalManifest(target, fallbackTarget = '') {
     if (!target) return null
     try {
-      const value = JSON.parse((await fileOps.readFile(target)).toString('utf8'))
+      const value = JSON.parse((await readWithFallback(target, fallbackTarget)).toString('utf8'))
       return validateBridgeReleaseManifest(value, now()) ? value : null
     } catch (error) {
       if (error?.code === 'ENOENT') return null
@@ -312,12 +334,19 @@ export function createBridgeReleaseRouter({
   async function servePublicManifest(req, res, target, {
     applyRollout = false,
     requireBootstrap = false,
+    fallbackTarget = '',
   } = {}) {
     res.set('Cache-Control', 'no-store')
     res.set('X-Content-Type-Options', 'nosniff')
     if (!target) return res.status(204).end()
     try {
-      const content = await readManifest(target)
+      let content
+      try {
+        content = await readManifest(target)
+      } catch (error) {
+        if (error?.code !== 'ENOENT' || !fallbackTarget) throw error
+        content = await readManifest(fallbackTarget)
+      }
       const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content)
       if (bytes.length === 0 || bytes.length > MAX_MANIFEST_BYTES) {
         throw new Error('bridge_release_manifest_size_invalid')
@@ -353,7 +382,10 @@ export function createBridgeReleaseRouter({
     res.set('X-Content-Type-Options', 'nosniff')
     try {
       if (await markerExists(disabledPath)) return res.status(204).end()
-      return servePublicManifest(req, res, manifestPath, { applyRollout:true })
+      return servePublicManifest(req, res, manifestPath, {
+        applyRollout:true,
+        fallbackTarget:seedManifestPath,
+      })
     } catch (error) {
       console.error('[BridgeRelease] rollout marker unavailable:', error?.message || 'unknown')
       return res.status(503).json({ ok:false, error:'bridge_release_unavailable' })
@@ -361,14 +393,17 @@ export function createBridgeReleaseRouter({
   })
 
   router.get('/bridge/v3/releases/bootstrap', async (req, res) =>
-    servePublicManifest(req, res, bootstrapManifestPath, { requireBootstrap:true }))
+    servePublicManifest(req, res, bootstrapManifestPath, {
+      requireBootstrap:true,
+      fallbackTarget:seedBootstrapManifestPath,
+    }))
 
   router.get('/admin/bridge/v3/releases/status', authorizeRelease, async (req, res) => {
     try {
       const [current, previous, bootstrap, bootstrapPrevious, disabled] = await Promise.all([
-        optionalManifest(manifestPath),
+        optionalManifest(manifestPath, seedManifestPath),
         optionalManifest(previousPath),
-        optionalManifest(bootstrapManifestPath),
+        optionalManifest(bootstrapManifestPath, seedBootstrapManifestPath),
         optionalManifest(bootstrapPreviousPath),
         markerExists(disabledPath),
       ])
@@ -392,7 +427,7 @@ export function createBridgeReleaseRouter({
     }
     try {
       const observedAtUtcMsc = now()
-      const current = await optionalManifest(manifestPath)
+      const current = await optionalManifest(manifestPath, seedManifestPath)
       const sessions = await queryAllFn(`SELECT terminal_instance_id, installation_id, bridge_version,
           last_seen_at_utc_msc
         FROM bridge_v3_terminal_sessions
@@ -442,7 +477,7 @@ export function createBridgeReleaseRouter({
         return res.status(400).json({ ok:false, error:'bridge_release_signature_invalid' })
       }
       await serialize(async () => {
-        const current = await optionalManifest(manifestPath)
+        const current = await optionalManifest(manifestPath, seedManifestPath)
         if (current) await atomicWrite(previousPath, JSON.stringify(current))
         await atomicWrite(manifestPath, JSON.stringify(req.body.manifest))
         await fileOps.rm(disabledPath, { force:true })
@@ -474,7 +509,7 @@ export function createBridgeReleaseRouter({
         return res.status(400).json({ ok:false, error:'bridge_release_signature_invalid' })
       }
       await serialize(async () => {
-        const current = await optionalManifest(bootstrapManifestPath)
+        const current = await optionalManifest(bootstrapManifestPath, seedBootstrapManifestPath)
         if (current) await atomicWrite(bootstrapPreviousPath, JSON.stringify(current))
         await atomicWrite(bootstrapManifestPath, JSON.stringify(manifest))
       })
@@ -496,7 +531,7 @@ export function createBridgeReleaseRouter({
         if (!publicKeyPath) throw new Error('bridge_release_signature_verifier_unavailable')
         const publicKey = await fileOps.readFile(publicKeyPath, 'utf8')
         if (!verifySignatures(value, publicKey)) throw new Error('bridge_release_signature_invalid')
-        const current = await optionalManifest(bootstrapManifestPath)
+        const current = await optionalManifest(bootstrapManifestPath, seedBootstrapManifestPath)
         await atomicWrite(bootstrapManifestPath, JSON.stringify(value))
         if (current) await atomicWrite(bootstrapPreviousPath, JSON.stringify(current))
         return value
@@ -515,7 +550,7 @@ export function createBridgeReleaseRouter({
   router.post('/admin/bridge/v3/releases/stop', authorizeRelease, async (req, res) => {
     try {
       const current = await serialize(async () => {
-        const value = await optionalManifest(manifestPath)
+        const value = await optionalManifest(manifestPath, seedManifestPath)
         if (value) await atomicWrite(disabledPath, JSON.stringify(value))
         return value
       })
@@ -536,7 +571,7 @@ export function createBridgeReleaseRouter({
           const publicKey = await fileOps.readFile(publicKeyPath, 'utf8')
           if (!verifySignatures(value, publicKey)) throw new Error('bridge_release_signature_invalid')
         }
-        const current = await optionalManifest(manifestPath)
+        const current = await optionalManifest(manifestPath, seedManifestPath)
         await atomicWrite(manifestPath, JSON.stringify(value))
         if (current) await atomicWrite(previousPath, JSON.stringify(current))
         await fileOps.rm(disabledPath, { force:true })
