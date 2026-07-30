@@ -210,6 +210,26 @@ pub fn describe_status(state: &UiStateSnapshot) -> StatusCopy {
         .as_deref()
         .map(platform_display_name)
         .unwrap_or("交易终端");
+    if matches!(
+        state.detail_code.as_deref(),
+        Some("membership_required" | "bridge_membership_required")
+    ) {
+        return status(
+            "会员已失效，桥接已暂停",
+            "续费或恢复有效会员后程序会自动重连，无需重新授权。",
+            Rgb(220, 38, 38),
+        );
+    }
+    if matches!(
+        state.detail_code.as_deref(),
+        Some("bridge_refresh_invalid" | "bridge_refresh_revoked" | "bridge_session_revoked")
+    ) {
+        return status(
+            "账号授权已失效",
+            "请手动点击“连接账号”重新完成一次浏览器授权。",
+            Rgb(220, 38, 38),
+        );
+    }
     match state.phase.as_str() {
         "starting" => status("正在启动", "正在准备安全连接。", Rgb(100, 116, 139)),
         "platform_selection_required" => status(
@@ -727,7 +747,9 @@ fn describe_code(code: Option<&str>, fallback: &str) -> String {
         Some("bridge_refresh_unavailable") => {
             "服务器暂时不可用，程序会保留账号授权并自动重试。"
         }
-        Some("bridge_refresh_revoked") => "当前设备授权已被撤销，需要重新连接量见账号。",
+        Some("bridge_refresh_invalid" | "bridge_refresh_revoked" | "bridge_session_revoked") => {
+            "当前设备授权已失效，需要重新连接量见账号。"
+        }
         _ => fallback,
     }
     .to_owned()
@@ -852,6 +874,22 @@ mod tests {
             view.empty_accounts_text.as_deref(),
             Some("尚未识别到交易账户")
         );
+    }
+
+    #[test]
+    fn membership_expiry_and_revoked_authorization_have_distinct_recovery_copy() {
+        let mut state = base_state();
+        state.phase = "degraded".to_owned();
+        state.detail_code = Some("bridge_membership_required".to_owned());
+        let membership = describe_status(&state);
+        assert_eq!(membership.title, "会员已失效，桥接已暂停");
+        assert!(membership.description.contains("自动重连"));
+
+        state.phase = "pairing_required".to_owned();
+        state.detail_code = Some("bridge_session_revoked".to_owned());
+        let revoked = describe_status(&state);
+        assert_eq!(revoked.title, "账号授权已失效");
+        assert!(revoked.description.contains("连接账号"));
     }
 
     #[test]

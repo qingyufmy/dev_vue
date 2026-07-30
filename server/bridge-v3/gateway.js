@@ -21,6 +21,7 @@ import {
 export const BRIDGE_V3_WS_PATH = '/aurum-api/bridge/v3/ws'
 export const BRIDGE_V3_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 export const BRIDGE_V3_CONNECTION_STALE_MS = 45_000
+export const BRIDGE_V3_ELIGIBILITY_RECHECK_MS = 30_000
 const AUTH_QUEUE_MAX_MESSAGES = 16
 const AUTH_QUEUE_MAX_BYTES = 1024 * 1024
 const MAX_PENDING_QUOTES_PER_CONNECTION = 64
@@ -118,6 +119,13 @@ export function createBridgeV3Gateway({
 
   function gatewayError(code) {
     return Object.assign(new Error(code), { code })
+  }
+
+  function sessionCloseCode(errorCode, ready) {
+    if (!ready) return 4002
+    return ['bridge_membership_required', 'bridge_session_revoked'].includes(errorCode)
+      ? 4004
+      : null
   }
 
   function activeCommandCount(terminalInstanceIds) {
@@ -228,6 +236,8 @@ export function createBridgeV3Gateway({
       throw Object.assign(new Error('bridge_membership_required'), { code:'bridge_membership_required' })
     }
     connection.userId = Number(user.id)
+    connection.tokenVersion = Number(credential.tokenVersion || 0)
+    connection.nextEligibilityCheckAt = now() + BRIDGE_V3_ELIGIBILITY_RECHECK_MS
     connection.tradeEnabled = String(user.role || '').toLowerCase() === 'admin'
       ? user.trade_send_enabled == null || Number(user.trade_send_enabled) === 1
       : Number(user.trade_send_enabled) === 1
@@ -236,6 +246,30 @@ export function createBridgeV3Gateway({
       ? { login:String(user.observer_login_account), broker_server:String(user.observer_broker_server) }
       : null
     connection.authenticated = true
+  }
+
+  async function revalidateConnectionEligibility(connection, checkedAt) {
+    if (checkedAt < Number(connection.nextEligibilityCheckAt || 0)) return
+    // Reserve the next slot before awaiting MySQL so concurrent heartbeats do
+    // not turn one connection into multiple entitlement queries.
+    connection.nextEligibilityCheckAt = checkedAt + BRIDGE_V3_ELIGIBILITY_RECHECK_MS
+    let user
+    try {
+      user = await queryOneFn(`SELECT id, role, token_version,
+        (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
+        FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [connection.userId])
+    } catch {
+      // A temporary database outage must not revoke a valid device session.
+      // The next heartbeat window will retry the authoritative check.
+      return
+    }
+    if (!user || Number(user.token_version || 0) !== Number(connection.tokenVersion || 0)) {
+      throw gatewayError('bridge_session_revoked')
+    }
+    if (Number(user.has_pro_access) !== 1) {
+      connection.tradeEnabled = false
+      throw gatewayError('bridge_membership_required')
+    }
   }
 
   async function acceptHello(connection, message) {
@@ -319,6 +353,7 @@ export function createBridgeV3Gateway({
         throw Object.assign(new Error('bridge_heartbeat_session_mismatch'), { code:'bridge_heartbeat_session_mismatch' })
       }
       const receivedAt = now()
+      await revalidateConnectionEligibility(connection, receivedAt)
       if (message.terminals !== undefined && !Array.isArray(message.terminals)) {
         throw gatewayError('bridge_heartbeat_terminals_invalid')
       }
@@ -446,6 +481,8 @@ export function createBridgeV3Gateway({
       closed:false,
       authQueue:[],
       authQueueBytes:0,
+      tokenVersion:null,
+      nextEligibilityCheckAt:0,
     }
     const url = new URL(req.url, 'http://localhost')
     const onMessage = raw => {
@@ -465,7 +502,7 @@ export function createBridgeV3Gateway({
         const validation = Array.isArray(error.details) ? ` details=${error.details.join('|')}` : ''
         console.warn(`[BridgeV3] message rejected user=${connection.userId ?? 'unknown'} code=${error.code || 'bridge_message_rejected'}${validation}`)
         protocolError(ws, error.code || 'bridge_message_rejected', error.message, {
-          closeCode:connection.ready ? null : 4002,
+          closeCode:sessionCloseCode(error.code, connection.ready),
         })
       })
     }
@@ -487,7 +524,7 @@ export function createBridgeV3Gateway({
           const validation = Array.isArray(error.details) ? ` details=${error.details.join('|')}` : ''
           console.warn(`[BridgeV3] queued message rejected user=${connection.userId ?? 'unknown'} code=${error.code || 'bridge_message_rejected'}${validation}`)
           protocolError(ws, error.code || 'bridge_message_rejected', error.message, {
-            closeCode:connection.ready ? null : 4002,
+            closeCode:sessionCloseCode(error.code, connection.ready),
           })
           break
         }

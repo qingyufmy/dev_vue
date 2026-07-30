@@ -1966,7 +1966,7 @@ impl SessionStateMachine {
     }
 
     pub fn failed(&mut self, error_code: &str) -> SessionTransition {
-        if error_code == "bridge_not_paired" {
+        if bridge_error_requires_pairing(error_code) {
             self.backoff.reset();
             self.state = ConnectionState::PairingRequired;
             return self.transition(None);
@@ -1993,6 +1993,16 @@ impl SessionStateMachine {
             retry_after,
         }
     }
+}
+
+fn bridge_error_requires_pairing(error_code: &str) -> bool {
+    matches!(
+        error_code,
+        "bridge_not_paired"
+            | "bridge_refresh_invalid"
+            | "bridge_refresh_revoked"
+            | "bridge_session_revoked"
+    )
 }
 
 fn outbox_retry_delay_msc(attempt_count: i64) -> i64 {
@@ -2560,6 +2570,22 @@ mod tests {
         assert_eq!(
             machine.failed("bridge_not_paired").state,
             ConnectionState::PairingRequired
+        );
+        for code in [
+            "bridge_refresh_invalid",
+            "bridge_refresh_revoked",
+            "bridge_session_revoked",
+        ] {
+            assert_eq!(
+                machine.failed(code).state,
+                ConnectionState::PairingRequired,
+                "{code}"
+            );
+            assert_eq!(machine.start(true).state, ConnectionState::Connecting);
+        }
+        assert_eq!(
+            machine.failed("bridge_membership_required").state,
+            ConnectionState::Reconnecting
         );
         assert_eq!(machine.stop().state, ConnectionState::Stopped);
     }

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   BRIDGE_V3_CONNECTION_STALE_MS,
+  BRIDGE_V3_ELIGIBILITY_RECHECK_MS,
   BRIDGE_V3_WS_PATH,
   createBridgeV3Gateway,
 } from '../server/bridge-v3/gateway.js'
@@ -140,6 +141,21 @@ function dataResponse(overrides = {}) {
     ...dataRequest(), type:'data_response', message_id:'msg_01JGATEWAY_DATA_RESULT',
     sent_at_utc_msc:NOW + 50, observed_at_utc_msc:NOW + 50,
     status:'succeeded', payload:{ symbol:'XAUUSD', rates:[] }, ...overrides,
+  }
+}
+
+function heartbeat(sentAt = NOW) {
+  return {
+    v:3,
+    type:'heartbeat',
+    message_id:`heartbeat_${sentAt}`,
+    sent_at_utc_msc:sentAt,
+    session_id:'session_01JGATEWAY01',
+    terminals:[{
+      terminal_instance_id:'terminal_01JGATEWAY1',
+      connection_epoch:7,
+      streams:{ account:sentAt, positions:sentAt, orders:sentAt, deals:sentAt },
+    }],
   }
 }
 
@@ -295,6 +311,53 @@ describe('Bridge v3 websocket gateway', () => {
     expect(gateway.listConnectedUsers()).toEqual([
       expect.objectContaining({ userId:42, connected:true, alive:true }),
     ])
+  })
+
+  it('disconnects an online ordinary user after membership expires', async () => {
+    let clock = NOW
+    const queryOneFn = vi.fn()
+      .mockResolvedValueOnce({
+        id:42, role:'user', token_version:3, has_pro_access:1, trade_send_enabled:1,
+      })
+      .mockResolvedValueOnce({ id:42, role:'user', token_version:3, has_pro_access:0 })
+    const { gateway } = setup({ queryOneFn, now:() => clock })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    clock += BRIDGE_V3_ELIGIBILITY_RECHECK_MS
+    ws.emit('message', Buffer.from(JSON.stringify(heartbeat(clock))))
+    await flush()
+
+    expect(queryOneFn).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'error', error_code:'bridge_membership_required',
+    })
+    expect(gateway.isTradeEnabled(42)).toBe(false)
+    expect(ws.close).toHaveBeenCalledWith(4004, 'bridge_membership_required')
+  })
+
+  it('keeps an authorized connection during a transient eligibility query failure', async () => {
+    let clock = NOW
+    const queryOneFn = vi.fn()
+      .mockResolvedValueOnce({
+        id:42, role:'user', token_version:3, has_pro_access:1, trade_send_enabled:1,
+      })
+      .mockRejectedValueOnce(new Error('temporary database outage'))
+    const { gateway } = setup({ queryOneFn, now:() => clock })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    const sendsBeforeHeartbeat = ws.send.mock.calls.length
+
+    clock += BRIDGE_V3_ELIGIBILITY_RECHECK_MS
+    ws.emit('message', Buffer.from(JSON.stringify(heartbeat(clock))))
+    await flush()
+
+    expect(queryOneFn).toHaveBeenCalledTimes(2)
+    expect(ws.send.mock.calls).toHaveLength(sendsBeforeHeartbeat)
+    expect(ws.close).not.toHaveBeenCalled()
+    expect(gateway.isTradeEnabled(42)).toBe(true)
   })
 
   it('rejects heartbeat freshness for an unknown terminal route', async () => {

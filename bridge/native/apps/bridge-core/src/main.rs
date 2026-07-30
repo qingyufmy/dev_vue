@@ -595,6 +595,7 @@ fn administrator_refresh_error_revokes_access(code: &str) -> bool {
         "bridge_not_paired"
             | "bridge_refresh_invalid"
             | "bridge_refresh_revoked"
+            | "bridge_session_revoked"
             | "bridge_credential_payload_invalid"
             | "bridge_credential_decryption_failed"
     )
@@ -4326,6 +4327,7 @@ mod tests {
             "bridge_not_paired",
             "bridge_refresh_invalid",
             "bridge_refresh_revoked",
+            "bridge_session_revoked",
             "bridge_credential_payload_invalid",
             "bridge_credential_decryption_failed",
         ] {
