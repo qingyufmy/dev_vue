@@ -406,8 +406,17 @@ function terminalQuoteTimezoneOffsetMinutes(quote) {
     ? offsetMinutes : null;
 }
 
-function formatTerminalQuoteTime(quote) {
+function terminalQuoteObservedAtUtcMsc(quote) {
   const observedAt = Number(quote?.observed_at_utc_msc);
+  if (Number.isFinite(observedAt) && observedAt > 0) return observedAt;
+  const time = String(quote?.time || '').trim();
+  if (!/(?:z|[+-]\d{2}:?\d{2})$/i.test(time)) return null;
+  const parsed = Date.parse(time);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function formatTerminalQuoteTime(quote) {
+  const observedAt = terminalQuoteObservedAtUtcMsc(quote);
   const offsetMinutes = terminalQuoteTimezoneOffsetMinutes(quote);
   if (Number.isFinite(observedAt) && observedAt > 0 && offsetMinutes !== null) {
     return fmtUtc(new Date(observedAt + offsetMinutes * 60_000));
@@ -2171,6 +2180,7 @@ function handleHeartbeat(msg) {
     if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
     const terminalTime = formatTerminalQuoteTime({
       time:msg.mt5_time,
+      observed_at_utc_msc:msg.observed_at_utc_msc,
       timezone_offset_minutes:msg.timezone_offset_minutes,
     });
     setText('quoteTime', terminalTime);
@@ -8987,4 +8997,3 @@ function initAnalysisHistoryScroll() {
     if (nearBottom) loadMore();
   }, { passive: true });
 }
-

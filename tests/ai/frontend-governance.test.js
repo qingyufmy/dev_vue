@@ -15,12 +15,42 @@ const adminApp = readFileSync(new URL('../../public/admin/app.js', import.meta.u
 const adminCss = readFileSync(new URL('../../public/admin/styles.css', import.meta.url), 'utf8')
 const adminRoutes = readFileSync(new URL('../../server/routes/admin-console.js', import.meta.url), 'utf8')
 
+function loadTerminalClockFormatter() {
+  const start = app.indexOf('function formatTime(value)')
+  const end = app.indexOf('const parseDate =', start)
+  const source = app.slice(start, end)
+  return new Function(`${source}\nreturn { formatTerminalQuoteTime };`)()
+}
+
 describe('AI governance navigation and DOM contract', () => {
+  it('renders the same broker time for heartbeat and quote clock payloads', () => {
+    const { formatTerminalQuoteTime } = loadTerminalClockFormatter()
+    const observedAtUtcMsc = Date.UTC(2026, 6, 27, 6, 12, 34)
+
+    expect(formatTerminalQuoteTime({
+      time:'2026-07-27T06:12:34.000Z', timezone_offset_minutes:180,
+    })).toBe('2026-07-27 09:12:34')
+    expect(formatTerminalQuoteTime({
+      observed_at_utc_msc:observedAtUtcMsc, timezone_offset_minutes:180,
+    })).toBe('2026-07-27 09:12:34')
+  })
+
+  it('does not double-apply the offset to legacy unzoned broker time strings', () => {
+    const { formatTerminalQuoteTime } = loadTerminalClockFormatter()
+    expect(formatTerminalQuoteTime({
+      time:'2026-07-27 09:12:34', timezone_offset_minutes:180,
+    })).toBe('2026-07-27 09:12:34')
+  })
+
   it('keeps quote metadata consistent across push and refresh paths', () => {
     expect(app).toContain("function renderQuoteStatusMeta(quote)")
     expect(app).toContain("fmt(quote.spread, 2)")
     expect(app).toContain("setText('mt5ServerTime'")
     expect(app).toContain('observedAt + offsetMinutes * 60_000')
+    expect(app).toContain('function terminalQuoteObservedAtUtcMsc(quote)')
+    expect(app).toContain('observed_at_utc_msc:msg.observed_at_utc_msc')
+    expect(bridgeWs).toContain('const heartbeatClock = buildBrowserHeartbeatClock(')
+    expect(bridgeWs).toContain('observed_at_utc_msc:Number.isFinite(observedAtValue)')
     expect(app).toContain("updateMarketStatusFromQuote(quote)")
     expect(app).toContain("loadStatus(), refreshQuote(), loadKlineData()")
     expect(app).toContain('const LIVE_QUOTE_REFRESH_INTERVAL_MS = 1000')
@@ -32,7 +62,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('setText("quoteAsk", priceDisplay(q.ask))')
     expect(app).toContain('setText("quoteBid", priceDisplay(data.bid))')
     expect(app).toContain('setText("quoteAsk", priceDisplay(data.ask))')
-    expect(html).toContain('/ai/app.js?v=20260728singlecancel1')
+    expect(html).toContain('/ai/app.js?v=20260730terminalclock1')
     expect(app).toContain('wsApi("platform_quote", { symbol })')
     expect(app).toContain('state.platformMarketSourceActive = platformQuote.available === true')
     expect(app).toContain('state.lastObserverQuote = {')

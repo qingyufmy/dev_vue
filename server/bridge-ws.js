@@ -561,6 +561,13 @@ function applyBridgeMarketState(bridge, payload, userId, receivedAt = Date.now()
     bridge.mt5TimeStr = String(terminalTime)
     bridge.lastTickMs = receivedAt
   }
+  const observedAtValue = payload?.quote?.observed_at_utc_msc ?? payload?.observed_at_utc_msc
+  const observedAtUtcMsc = Number(observedAtValue)
+  if (Number.isFinite(observedAtUtcMsc) && observedAtUtcMsc > 0) {
+    bridge.observedAtUtcMsc = observedAtUtcMsc
+  } else if (terminalTime) {
+    bridge.observedAtUtcMsc = null
+  }
   const normalized = normalizeBridgeMarketState(payload, receivedAt)
   if (!normalized) return null
   const previous = bridge.marketState?.state
@@ -579,6 +586,24 @@ function applyBridgeMarketState(bridge, payload, userId, receivedAt = Date.now()
     }, { scopes:['overview', 'ai-operations', 'risk-audit'] })
   }
   return normalized
+}
+
+export function buildBrowserHeartbeatClock(sharedQuote, clockBridge, marketState) {
+  const clockSource = sharedQuote?.time
+    ? { time:sharedQuote.time, observedAtUtcMsc:sharedQuote.observed_at_utc_msc }
+    : clockBridge?.mt5TimeStr
+      ? { time:clockBridge.mt5TimeStr, observedAtUtcMsc:clockBridge.observedAtUtcMsc }
+      : marketState?.mt5TimeStr
+        ? { time:marketState.mt5TimeStr, observedAtUtcMsc:marketState.observedAtUtcMsc }
+        : null
+  const observedAtValue = Number(clockSource?.observedAtUtcMsc)
+  return {
+    mt5_time:clockSource?.time || null,
+    observed_at_utc_msc:Number.isFinite(observedAtValue) && observedAtValue > 0
+      ? observedAtValue : null,
+    timezone_offset_minutes:sharedQuote?.timezone_offset_minutes
+      ?? clockBridge?.timezoneOffsetMinutes ?? marketState?.timezoneOffsetMinutes ?? null,
+  }
 }
 
 export function recordBridgeMarketState(userId, payload, receivedAt = Date.now()) {
@@ -961,14 +986,13 @@ async function handleBrowser(ws, url, req) {
       // A V3 terminal is tracked by bridgeV3Business rather than the legacy
       // bridges map. Keep the browser heartbeat compatible with both paths.
       const autoReasoningEnabled = alive ? !!bridge?.autoReasoningEnabled : undefined
+      const heartbeatClock = buildBrowserHeartbeatClock(sharedQuote, clockBridge, v3MarketState)
       ws.send(JSON.stringify({
         type: 'hb',
         seq: msg.seq,
         mt5_connected: connected,
         mt5_alive: alive,
-        mt5_time:sharedQuote?.time || clockBridge?.mt5TimeStr || v3MarketState?.mt5TimeStr || null,
-        timezone_offset_minutes:sharedQuote?.timezone_offset_minutes
-          ?? clockBridge?.timezoneOffsetMinutes ?? v3MarketState?.timezoneOffsetMinutes ?? null,
+        ...heartbeatClock,
         platform: dataRoute?.platform || bridgePlatform(
           dataUserId, observerContext?.channel?.trading_account_id),
         terminal_instance_id:dataRoute?.terminal_instance_id || null,
@@ -3325,6 +3349,7 @@ export function getLatestBridgeMt5Clock() {
         user_id:Number(userId),
         platform:bridge._clientHeartbeat?.platform || 'mt5',
         received_at:receivedAt || null,
+        observed_at_utc_msc:bridge.observedAtUtcMsc ?? null,
         timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? bridge._clientHeartbeat?.timezone_offset_minutes ?? null,
       }
     }
@@ -3340,6 +3365,7 @@ export function getLatestBridgeMt5Clock() {
       user_id:Number(userId),
       platform:route?.platform || 'mt5',
       received_at:receivedAt || null,
+      observed_at_utc_msc:marketState.observedAtUtcMsc ?? null,
       timezone_offset_minutes:marketState.timezoneOffsetMinutes ?? null,
     }
   }

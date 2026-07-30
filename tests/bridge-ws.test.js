@@ -86,6 +86,7 @@ import {
   buildSignalPendingActions,
   normalizeBridgeMarketState,
   recordBridgeMarketState,
+  buildBrowserHeartbeatClock,
   getPlatformMarketClockState,
   getLatestBridgeMt5Clock,
   sendToAdminBrowsers,
@@ -495,7 +496,8 @@ describe('bridge-reported market state', () => {
 
     recordBridgeMarketState(77, {
       timezone_offset_minutes:180, clock_status:'mt4_current_offset',
-      clock_residual_ms:0, time:'2026-07-27 09:12:34',
+      clock_residual_ms:0, time:'2026-07-27T06:12:34.000Z',
+      observed_at_utc_msc:Date.UTC(2026, 6, 27, 6, 12, 34),
     }, 1_800_000_000_000)
 
     expect(getPlatformMarketClockState(77)).toMatchObject({
@@ -504,8 +506,34 @@ describe('bridge-reported market state', () => {
       broker_server:'Broker-Demo', account_login:'12345678',
     })
     expect(getLatestBridgeMt5Clock()).toMatchObject({
-      time:'2026-07-27 09:12:34', user_id:77, platform:'mt4',
+      time:'2026-07-27T06:12:34.000Z', user_id:77, platform:'mt4',
       received_at:1_800_000_000_000, timezone_offset_minutes:180,
+      observed_at_utc_msc:Date.UTC(2026, 6, 27, 6, 12, 34),
+    })
+  })
+
+  it('builds one canonical browser heartbeat clock from the latest quote', () => {
+    expect(buildBrowserHeartbeatClock({
+      time:'2026-07-27T06:12:34.000Z',
+      observed_at_utc_msc:Date.UTC(2026, 6, 27, 6, 12, 34),
+      timezone_offset_minutes:180,
+    }, null, null)).toEqual({
+      mt5_time:'2026-07-27T06:12:34.000Z',
+      observed_at_utc_msc:Date.UTC(2026, 6, 27, 6, 12, 34),
+      timezone_offset_minutes:180,
+    })
+  })
+
+  it('does not combine a new quote time with an older bridge timestamp', () => {
+    expect(buildBrowserHeartbeatClock({
+      time:'2026-07-27T06:13:00.000Z', timezone_offset_minutes:180,
+    }, {
+      mt5TimeStr:'2026-07-27T06:12:34.000Z',
+      observedAtUtcMsc:Date.UTC(2026, 6, 27, 6, 12, 34),
+      timezoneOffsetMinutes:180,
+    }, null)).toMatchObject({
+      mt5_time:'2026-07-27T06:13:00.000Z', observed_at_utc_msc:null,
+      timezone_offset_minutes:180,
     })
   })
 })
