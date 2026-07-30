@@ -265,12 +265,18 @@ impl ObserverRuntimeManager {
         let Some(entry) = entry else {
             return Ok(());
         };
-        entry.stop.request_stop();
-        entry
+        entry.stop.request_graceful_stop();
+        let graceful_shutdown = stop_external_observer_runtime(profile_id).await;
+        if graceful_shutdown.is_err() {
+            entry.stop.request_stop();
+        }
+        let supervisor_result = entry
             .task
             .await
             .map_err(|_| "bridge_observer_runtime_join_failed".to_owned())?
-            .map_err(|error| error.code().to_owned())?;
+            .map_err(|error| error.code().to_owned());
+        graceful_shutdown?;
+        supervisor_result?;
         self.logger.info(
             "native_observer_runtime_stopped",
             Some(&format!("profile={profile_id}")),

@@ -2,7 +2,7 @@ use bridge_contract::{
     AccountRef, CommandMessage, HelloAcknowledgement, HelloMessage, TerminalDescriptor,
 };
 use bridge_foundation::{DEFAULT_PROFILE_ID, profile_instance_id, resolve_profile_paths};
-use bridge_preferences::BridgePreferencesStore;
+use bridge_preferences::{BridgePreferencesStore, ObserverProfilePreferences};
 use bridge_runtime_win::SingleInstanceGuard;
 use bridge_security_win::{BridgeCredential, CredentialStore};
 use bridge_store::OutboxStore;
@@ -383,6 +383,110 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
 
     server.stop();
     fs::remove_dir_all(root).expect("remove connected process fixture");
+}
+
+#[test]
+fn default_core_hosts_an_enabled_observer_profile_without_a_second_ui() {
+    let root = unique_test_directory();
+    let primary_terminal_id = "mt5_111111111111111111111111";
+    let observer_terminal_id = "mt5_222222222222222222222222";
+    let observer_profile_id = "source-1";
+    let mut server = LoopbackBridgeServer::start_read_only_multi();
+    let application = prepare_application(&root);
+    let primary_paths = prepare_read_only_profile(
+        &root,
+        DEFAULT_PROFILE_ID,
+        primary_terminal_id,
+        "primary/terminal64.exe",
+        "Primary-Demo",
+        "100001",
+        &server.control_url,
+        &server.realtime_url,
+    );
+    let observer_paths = prepare_read_only_profile(
+        &root,
+        observer_profile_id,
+        observer_terminal_id,
+        "observer/terminal64.exe",
+        "Observer-Demo",
+        "200002",
+        &server.control_url,
+        &server.realtime_url,
+    );
+    let observer_preferences =
+        BridgePreferencesStore::new(observer_paths.data_directory.join("preferences.json"))
+            .expect("observer preferences store");
+    let observer_terminal_path = root.join("observer/terminal64.exe");
+    observer_preferences
+        .save_observer_profile(&ObserverProfilePreferences {
+            platform: "mt5".to_owned(),
+            terminal_instance_id: observer_terminal_id.to_owned(),
+            terminal_path: observer_terminal_path.to_string_lossy().into_owned(),
+            bridge_user_id: 29,
+            observer_account_label: Some("一号观摩源".to_owned()),
+            trading_account_id: Some(81),
+            trading_account_label: Some("观摩账户".to_owned()),
+        })
+        .expect("save observer profile");
+    observer_preferences
+        .save_observer_enabled(true)
+        .expect("enable observer profile");
+
+    let ready = root.join("multi-profile-ready.json");
+    let update_state_path = root.join("multi-profile-update-state.json");
+    let mut child = ChildGuard::spawn_for_discovery(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        DEFAULT_PROFILE_ID,
+        &ready,
+        &update_state_path,
+    );
+
+    wait_until(&mut child, Duration::from_secs(30), || {
+        ready.is_file()
+            && server.websocket_connections() == 2
+            && server.saw_routed_full_snapshot(primary_terminal_id)
+            && server.saw_routed_full_snapshot(observer_terminal_id)
+            && runtime_status_json(&primary_paths.runtime_status_path).is_some_and(|status| {
+                status["phase"] == "online"
+                    && status["terminals"][0]["terminal_instance_id"] == primary_terminal_id
+            })
+            && runtime_status_json(&observer_paths.runtime_status_path).is_some_and(|status| {
+                status["phase"] == "online"
+                    && status["terminals"][0]["terminal_instance_id"] == observer_terminal_id
+            })
+    });
+    let primary_status =
+        fs::read_to_string(&primary_paths.runtime_status_path).expect("primary runtime status");
+    let observer_status =
+        fs::read_to_string(&observer_paths.runtime_status_path).expect("observer runtime status");
+    assert!(!primary_status.contains("Observer-Demo"));
+    assert!(!primary_status.contains("200002"));
+    assert!(!observer_status.contains("Primary-Demo"));
+    assert!(!observer_status.contains("100001"));
+    assert_eq!(server.websocket_connections(), 2);
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id(DEFAULT_PROFILE_ID).expect("default instance id"),
+    )
+    .expect("request default core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    assert!(
+        runtime_status_json(&observer_paths.runtime_status_path)
+            .is_some_and(|status| status["phase"] == "stopped"),
+        "default Core shutdown must stop its observer Core"
+    );
+    assert!(
+        !observer_paths
+            .data_directory
+            .join("native-bridge-core.active")
+            .exists()
+    );
+
+    server.stop();
+    fs::remove_dir_all(root).expect("remove multi-profile fixture");
 }
 
 #[test]
@@ -1306,6 +1410,11 @@ impl ChildGuard {
             .env("AURUM_BRIDGE_DATA_DIR", root)
             .env("AURUM_BRIDGE_UPDATE_STATE_PATH", update_state_path)
             .env("LOCALAPPDATA", root.join("local"))
+            .env("AURUM_TEST_WORKER_PID_FILE", root.join("worker.pid"))
+            .env(
+                "AURUM_TEST_WORKER_ORDER_SEND_COUNT_FILE",
+                root.join("order-send-count.txt"),
+            )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -1366,26 +1475,31 @@ struct LoopbackBridgeServer {
 
 impl LoopbackBridgeServer {
     fn start() -> Self {
-        Self::start_with_commands(true, None, None)
+        Self::start_with_commands(true, None, None, false)
     }
 
     fn start_read_only() -> Self {
-        Self::start_with_commands(false, None, None)
+        Self::start_with_commands(false, None, None, false)
+    }
+
+    fn start_read_only_multi() -> Self {
+        Self::start_with_commands(false, None, None, true)
     }
 
     fn start_with_rejected_command(params: Value) -> Self {
-        Self::start_with_commands(false, Some(params), None)
+        Self::start_with_commands(false, Some(params), None, false)
     }
 
     fn start_with_round_trip(command: RoundTripCommand) -> Self {
         let params = round_trip_params(&command);
-        Self::start_with_commands(false, Some(params), Some(command))
+        Self::start_with_commands(false, Some(params), Some(command), false)
     }
 
     fn start_with_commands(
         send_commands: bool,
         command_override: Option<Value>,
         round_trip: Option<RoundTripCommand>,
+        concurrent_read_only: bool,
     ) -> Self {
         let disconnect_first = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
@@ -1421,17 +1535,20 @@ impl LoopbackBridgeServer {
                         .expect("send addresses");
                     tokio::join!(
                         serve_control(control, Arc::clone(&stop), maintenance_released,),
-                        serve_realtime(RealtimeFixture {
-                            listener: realtime,
-                            disconnect_first,
-                            stop: Arc::clone(&stop),
-                            websocket_connections,
-                            command_sent,
-                            message_types,
-                            send_commands,
-                            command_override,
-                            round_trip,
-                        })
+                        serve_realtime_dispatch(
+                            RealtimeFixture {
+                                listener: realtime,
+                                disconnect_first,
+                                stop: Arc::clone(&stop),
+                                websocket_connections,
+                                command_sent,
+                                message_types,
+                                send_commands,
+                                command_override,
+                                round_trip,
+                            },
+                            concurrent_read_only
+                        )
                     );
                 });
             })
@@ -1793,6 +1910,161 @@ async fn send_position_modify(
         ))
         .await
         .expect("round-trip position modify command send");
+}
+
+async fn serve_realtime_dispatch(fixture: RealtimeFixture, concurrent_read_only: bool) {
+    if concurrent_read_only {
+        serve_realtime_read_only_multi(fixture).await;
+    } else {
+        serve_realtime(fixture).await;
+    }
+}
+
+async fn serve_realtime_read_only_multi(fixture: RealtimeFixture) {
+    let RealtimeFixture {
+        listener,
+        stop,
+        websocket_connections,
+        message_types,
+        ..
+    } = fixture;
+    let mut tasks = tokio::task::JoinSet::new();
+    while !stop.load(Ordering::SeqCst) {
+        let accepted = tokio::select! {
+            accepted = listener.accept() => Some(accepted.expect("multi realtime accept").0),
+            _ = sleep(Duration::from_millis(20)) => None,
+        };
+        let Some(stream) = accepted else {
+            continue;
+        };
+        let sequence = websocket_connections.fetch_add(1, Ordering::SeqCst) + 1;
+        tasks.spawn(serve_realtime_read_only_connection(
+            stream,
+            sequence,
+            Arc::clone(&stop),
+            Arc::clone(&message_types),
+        ));
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.expect("multi realtime connection task");
+    }
+}
+
+#[allow(clippy::result_large_err)]
+async fn serve_realtime_read_only_connection(
+    stream: TcpStream,
+    sequence: usize,
+    stop: Arc<AtomicBool>,
+    message_types: Arc<Mutex<Vec<String>>>,
+) {
+    let mut socket = accept_hdr_async(stream, |request: &Request, response: Response| {
+        assert_eq!(request.uri().path(), "/aurum-api/bridge/v3/ws");
+        Ok(response)
+    })
+    .await
+    .expect("multi websocket handshake");
+    let hello_json = socket
+        .next()
+        .await
+        .expect("multi hello message")
+        .expect("multi hello frame")
+        .into_text()
+        .expect("multi hello text");
+    let hello: HelloMessage = serde_json::from_str(&hello_json).expect("multi hello json");
+    hello.validate().expect("valid multi hello");
+    for terminal in &hello.terminals {
+        message_types.lock().expect("message types").push(format!(
+            "hello:{}:{}:{}:{}",
+            terminal.terminal_instance_id,
+            terminal.connection_epoch,
+            terminal.account_ref.broker_server,
+            terminal.account_ref.login
+        ));
+    }
+    let terminal_ids = hello
+        .terminals
+        .iter()
+        .map(|terminal| terminal.terminal_instance_id.clone())
+        .collect::<Vec<_>>();
+    socket
+        .send(Message::Text(
+            serde_json::to_string(&HelloAcknowledgement {
+                v: 3,
+                message_type: "hello_ack".to_owned(),
+                message_id: format!("hello_ack_multi_{sequence}"),
+                sent_at_utc_msc: now_utc_msc(),
+                acked_message_id: hello.message_id,
+                session_id: hello.session_id,
+                accepted_terminal_instance_ids: terminal_ids,
+            })
+            .expect("multi ack json")
+            .into(),
+        ))
+        .await
+        .expect("multi ack send");
+
+    let mut acknowledgement_sequence = 0_u64;
+    while !stop.load(Ordering::SeqCst) {
+        let received = timeout(Duration::from_millis(20), socket.next()).await;
+        if matches!(received, Ok(None)) {
+            return;
+        }
+        let Ok(Some(frame)) = received else {
+            continue;
+        };
+        let Ok(frame) = frame else {
+            return;
+        };
+        let Ok(text) = frame.into_text() else {
+            continue;
+        };
+        let Ok(payload) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let Some(message_type) = payload["type"].as_str() else {
+            continue;
+        };
+        if message_type == "data_delta" {
+            let stream = payload["stream"].as_str().expect("multi data stream");
+            message_types.lock().expect("message types").push(format!(
+                "data_delta:{}:{}",
+                payload["terminal_instance_id"]
+                    .as_str()
+                    .unwrap_or("missing"),
+                if payload["full_snapshot"].as_bool().unwrap_or(false) {
+                    "full"
+                } else {
+                    "delta"
+                }
+            ));
+            acknowledgement_sequence += 1;
+            socket
+                .send(Message::Text(
+                    serde_json::json!({
+                        "v": 3,
+                        "type": "data_ack",
+                        "message_id": format!("data_ack_multi_{sequence}_{acknowledgement_sequence}"),
+                        "sent_at_utc_msc": now_utc_msc(),
+                        "acked_message_id": payload["message_id"],
+                        "terminal_instance_id": payload["terminal_instance_id"],
+                        "connection_epoch": payload["connection_epoch"],
+                        "stream": stream,
+                        "revision": payload["revision"],
+                        "status": "applied"
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("multi data acknowledgement send");
+        } else {
+            message_types
+                .lock()
+                .expect("message types")
+                .push(message_type.to_owned());
+        }
+    }
+    let _ = socket.close(None).await;
 }
 
 #[allow(clippy::result_large_err)]
@@ -2886,6 +3158,64 @@ fn prepare_profile(
         .expect("endpoint json"),
     )
     .expect("endpoint settings");
+    paths
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_read_only_profile(
+    root: &Path,
+    profile_id: &str,
+    terminal_id: &str,
+    terminal_file_name: &str,
+    broker_server: &str,
+    login: &str,
+    control_url: &str,
+    realtime_url: &str,
+) -> bridge_foundation::BridgeProfilePaths {
+    let paths = resolve_profile_paths(root, profile_id).expect("read-only profile paths");
+    CredentialStore::new(&paths.credential_path)
+        .expect("read-only credential store")
+        .save(&BridgeCredential {
+            refresh_token: "r".repeat(48),
+            expires_at_utc_msc: 1_900_000_000_000,
+        })
+        .expect("read-only credential");
+    let terminal_path = root.join(terminal_file_name);
+    fs::create_dir_all(terminal_path.parent().expect("read-only terminal parent"))
+        .expect("read-only terminal directory");
+    fs::write(&terminal_path, b"terminal fixture").expect("read-only terminal fixture");
+    OutboxStore::open_or_create(&paths.database_path)
+        .expect("read-only store")
+        .activate_terminal_binding(
+            terminal_id,
+            "mt5",
+            &terminal_path,
+            &AccountRef {
+                broker_server: broker_server.to_owned(),
+                login: login.to_owned(),
+            },
+            now_utc_msc(),
+        )
+        .expect("read-only terminal binding");
+    let preferences = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("read-only preferences store");
+    preferences
+        .save_platform("mt5")
+        .expect("read-only platform");
+    preferences
+        .save_terminal("mt5", terminal_id)
+        .expect("read-only terminal");
+    fs::create_dir_all(&paths.root_data_directory).expect("read-only root data directory");
+    fs::write(
+        paths.root_data_directory.join("endpoint-settings.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "control_url": control_url,
+            "realtime_url": realtime_url,
+        }))
+        .expect("read-only endpoint json"),
+    )
+    .expect("read-only endpoint settings");
     paths
 }
 

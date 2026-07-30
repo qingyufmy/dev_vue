@@ -634,6 +634,7 @@ impl RestartPolicy {
 #[derive(Clone)]
 pub struct ProcessSupervisorHandle {
     stop: Arc<AtomicBool>,
+    graceful_stop: Arc<AtomicBool>,
 }
 
 impl ProcessSupervisorHandle {
@@ -644,12 +645,21 @@ impl ProcessSupervisorHandle {
     pub fn stop_requested(&self) -> bool {
         self.stop.load(Ordering::Acquire)
     }
+
+    pub fn request_graceful_stop(&self) {
+        self.graceful_stop.store(true, Ordering::Release);
+    }
+
+    pub fn graceful_stop_requested(&self) -> bool {
+        self.graceful_stop.load(Ordering::Acquire)
+    }
 }
 
 pub struct ProcessSupervisor {
     spec: ProcessSpec,
     policy: RestartPolicy,
     stop: Arc<AtomicBool>,
+    graceful_stop: Arc<AtomicBool>,
     started: AtomicBool,
 }
 
@@ -660,6 +670,7 @@ impl ProcessSupervisor {
             spec,
             policy,
             stop: Arc::new(AtomicBool::new(false)),
+            graceful_stop: Arc::new(AtomicBool::new(false)),
             started: AtomicBool::new(false),
         })
     }
@@ -667,6 +678,7 @@ impl ProcessSupervisor {
     pub fn handle(&self) -> ProcessSupervisorHandle {
         ProcessSupervisorHandle {
             stop: Arc::clone(&self.stop),
+            graceful_stop: Arc::clone(&self.graceful_stop),
         }
     }
 
@@ -677,7 +689,7 @@ impl ProcessSupervisor {
             ));
         }
         let mut failures = 0u32;
-        while !self.stop.load(Ordering::Acquire) {
+        while !self.stop.load(Ordering::Acquire) && !self.graceful_stop.load(Ordering::Acquire) {
             send_event(
                 events,
                 ProcessEvent {
@@ -730,6 +742,9 @@ impl ProcessSupervisor {
                 }
                 match managed.try_wait() {
                     Ok(Some(status)) => {
+                        if self.graceful_stop.load(Ordering::Acquire) {
+                            break None;
+                        }
                         if started_at.elapsed() >= self.policy.stable_run_threshold {
                             failures = 0;
                         }
@@ -788,7 +803,10 @@ impl ProcessSupervisor {
 
     fn wait_before_restart(&self, failures: u32) {
         let deadline = Instant::now() + self.policy.restart_delay(failures);
-        while !self.stop.load(Ordering::Acquire) && Instant::now() < deadline {
+        while !self.stop.load(Ordering::Acquire)
+            && !self.graceful_stop.load(Ordering::Acquire)
+            && Instant::now() < deadline
+        {
             thread::sleep(
                 self.policy
                     .poll_interval
@@ -1088,6 +1106,51 @@ mod tests {
         assert_eq!(restarted, 3);
         assert_eq!(stopped_failures, Some(3));
         assert!(handle.stop_requested());
+    }
+
+    #[test]
+    fn graceful_supervisor_stop_waits_for_the_child_and_suppresses_restart() {
+        let spec = ProcessSpec::new(command_interpreter(), std::env::temp_dir())
+            .expect("process spec")
+            .arg("/D")
+            .arg("/C")
+            .arg("ping -n 2 127.0.0.1 >NUL");
+        let policy = RestartPolicy {
+            stable_run_threshold: Duration::from_millis(50),
+            poll_interval: Duration::from_millis(5),
+            restart_delays: [Duration::from_millis(5); 5],
+            maximum_failure_counter: 3,
+        };
+        let supervisor = Arc::new(ProcessSupervisor::new(spec, policy).expect("supervisor"));
+        let handle = supervisor.handle();
+        let (sender, receiver) = mpsc::channel();
+        let running = Arc::clone(&supervisor);
+        let thread = thread::spawn(move || running.run(Some(&sender)));
+
+        let mut process_ids = Vec::new();
+        let mut restarting_events = 0;
+        while let Ok(event) = receiver.recv_timeout(Duration::from_secs(5)) {
+            match event.state {
+                ProcessState::Running => {
+                    let process_id = event.process_id.expect("running process id");
+                    if !process_ids.contains(&process_id) {
+                        process_ids.push(process_id);
+                    }
+                    handle.request_graceful_stop();
+                }
+                ProcessState::Restarting => restarting_events += 1,
+                ProcessState::Stopped => break,
+                ProcessState::Starting => {}
+            }
+        }
+        thread
+            .join()
+            .expect("supervisor thread")
+            .expect("supervisor run");
+        assert_eq!(process_ids.len(), 1);
+        assert_eq!(restarting_events, 0);
+        assert!(handle.graceful_stop_requested());
+        assert!(!handle.stop_requested());
     }
 
     #[test]
