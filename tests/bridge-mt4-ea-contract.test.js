@@ -12,7 +12,7 @@ function functionBlock(name, nextName) {
 describe('MT4 EA time contract', () => {
   it('normalizes broker quote time to UTC before publishing it', () => {
     const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
-    expect(source).toContain('#property version   "3.25"')
+    expect(source).toContain('#property version   "3.26"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
     expect(block).toContain('AppendInt32(response, CurrentServerOffsetMinutes())')
     expect(block).toContain('AppendUtf8(response, "broker_time_derived")')
@@ -42,7 +42,7 @@ describe('MT4 EA time contract', () => {
 describe('MT4 EA extended data contract', () => {
   it('advertises version 3.2 and handles every server data action', () => {
     expect(source).toContain('#define BRIDGE_PROTOCOL_VERSION 3')
-    expect(source).toContain('#define ADAPTER_VERSION "3.2.5"')
+    expect(source).toContain('#define ADAPTER_VERSION "3.2.6"')
     expect(source).toContain('AppendInt32(hello, BRIDGE_PROTOCOL_VERSION)')
     expect(source).toContain('AppendUtf8(hello, ADAPTER_VERSION)')
     const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')
@@ -155,5 +155,19 @@ describe('MT4 EA trade error contract', () => {
     expect(source).toContain('AccountInfoInteger(ACCOUNT_TRADE_EXPERT)')
     expect(block).toContain('"mt4_error_4112"')
     expect(block).toContain('"mt4_account_expert_trade_disabled"')
+  })
+})
+
+describe('MT4 EA partial-close contract', () => {
+  it('validates the current position volume separately from the requested close amount', () => {
+    const command = functionBlock('void ExecuteCommand', 'void ExecutePlace')
+    const close = functionBlock('void ExecuteClose', 'void ExecuteModifyPosition')
+
+    expect(command).toContain('offset < ArraySize(payload) ? ReadUtf8(payload, offset) : ""')
+    expect(close).toContain('double expected_volume = expected_volume_value == ""')
+    expect(close).toContain('MathAbs(OrderLots() - expected_volume)')
+    expect(close).toContain('double volume = (requested_volume <= 0) ? OrderLots() : requested_volume')
+    expect(close).toContain('OrderClose(ticket, volume, price, deviation, clrNONE)')
+    expect(close).not.toContain('MathAbs(OrderLots() - requested_volume)')
   })
 })

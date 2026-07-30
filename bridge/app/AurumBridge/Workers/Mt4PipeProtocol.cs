@@ -255,7 +255,8 @@ public sealed record Mt4TradeCommand(
     double? ExpectedTakeProfit,
     string Comment,
     string ExpectedKind,
-    string BridgeCommandRef);
+    string BridgeCommandRef,
+    double? ExpectedVolume);
 
 public sealed record Mt4TradeResult(
     string CommandId,
@@ -270,7 +271,7 @@ public sealed record Mt4TradeResult(
 public static class Mt4PipeProtocol
 {
     public const int CurrentProtocolVersion = 3;
-    public const string CurrentAdapterVersion = "3.2.5";
+    public const string CurrentAdapterVersion = "3.2.6";
     public const int MaxFrameBytes = 4 * 1024 * 1024;
     private const int MaxStringBytes = 2 * 1024 * 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -1034,8 +1035,23 @@ public static class Mt4PipeProtocol
             "query_execution" => Mt4TradeAction.QueryExecution,
             _ => throw new InvalidDataException("command_action_unsupported"),
         };
-        var symbol = ReadOptionalString(command.Params, "symbol") ?? string.Empty;
-        var side = (ReadOptionalString(command.Params, "side") ?? string.Empty).ToLowerInvariant() switch
+        var expected = command.Params.TryGetProperty("expected_state", out var expectedValue)
+            && expectedValue.ValueKind == JsonValueKind.Object
+                ? expectedValue
+                : default;
+        if (command.Params.TryGetProperty("expected_state", out expectedValue)
+            && expectedValue.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
+        {
+            throw new InvalidDataException("management_expected_state_invalid");
+        }
+        var symbol = ReadOptionalString(command.Params, "symbol")
+            ?? (expected.ValueKind == JsonValueKind.Object
+                ? ReadOptionalString(expected, "symbol") : null)
+            ?? string.Empty;
+        var side = (ReadOptionalString(command.Params, "side")
+            ?? (expected.ValueKind == JsonValueKind.Object
+                ? ReadOptionalString(expected, "direction") : null)
+            ?? string.Empty).ToLowerInvariant() switch
         {
             "" => Mt4OrderSide.None,
             "buy" => Mt4OrderSide.Buy,
@@ -1064,19 +1080,30 @@ public static class Mt4PipeProtocol
             ReadOptionalInt64(command.Params, "ticket")
                 ?? ReadOptionalInt64(command.Params, "pending_ticket")
                 ?? ReadOptionalInt64(command.Params, "trade_ticket")
+                ?? (expected.ValueKind == JsonValueKind.Object
+                    ? ReadOptionalInt64(expected, "ticket") : null)
                 ?? 0,
             ReadOptionalDouble(command.Params, "volume") ?? 0,
             ReadOptionalDouble(command.Params, "price"),
             ReadOptionalDouble(command.Params, "stop_loss"),
             ReadOptionalDouble(command.Params, "take_profit"),
             checked((int)(ReadOptionalInt64(command.Params, "deviation") ?? 20)),
-            checked((int)(ReadOptionalInt64(command.Params, "magic") ?? 234000)),
+            checked((int)(ReadOptionalInt64(command.Params, "magic")
+                ?? (expected.ValueKind == JsonValueKind.Object
+                    ? ReadOptionalInt64(expected, "magic") : null)
+                ?? 234000)),
             ReadOptionalInt64(command.Params, "expiration") ?? 0,
-            ReadOptionalDouble(command.Params, "expected_stop_loss"),
-            ReadOptionalDouble(command.Params, "expected_take_profit"),
+            ReadOptionalDouble(command.Params, "expected_stop_loss")
+                ?? (expected.ValueKind == JsonValueKind.Object
+                    ? ReadOptionalDouble(expected, "stop_loss") : null),
+            ReadOptionalDouble(command.Params, "expected_take_profit")
+                ?? (expected.ValueKind == JsonValueKind.Object
+                    ? ReadOptionalDouble(expected, "take_profit") : null),
             ReadOptionalString(command.Params, "comment") ?? string.Empty,
             (ReadOptionalString(command.Params, "expected_kind") ?? string.Empty).ToLowerInvariant(),
-            ReadOptionalString(command.Params, "bridge_command_ref") ?? string.Empty);
+            ReadOptionalString(command.Params, "bridge_command_ref") ?? string.Empty,
+            expected.ValueKind == JsonValueKind.Object
+                ? ReadOptionalDouble(expected, "volume") : null);
         ValidateTradeCommand(tradeCommand);
         return tradeCommand;
     }
@@ -1111,36 +1138,44 @@ public static class Mt4PipeProtocol
             WriteString(writer, command.Comment);
             WriteString(writer, command.ExpectedKind);
             WriteString(writer, command.BridgeCommandRef);
+            WriteNullableDouble(writer, command.ExpectedVolume);
         });
     }
 
     public static Mt4TradeCommand DecodeCommand(ReadOnlySpan<byte> payload)
     {
         using var reader = CreateReader(payload, Mt4MessageType.Command);
+        var commandId = ReadString(reader, 128);
+        var terminalInstanceId = ReadString(reader, 128);
+        var brokerServer = ReadString(reader, 128);
+        var login = ReadString(reader, 64);
+        var connectionEpoch = reader.ReadInt64();
+        var deadlineUtcMsc = reader.ReadInt64();
+        var action = (Mt4TradeAction)reader.ReadInt32();
+        var symbol = ReadString(reader, 64);
+        var side = (Mt4OrderSide)reader.ReadInt32();
+        var orderKind = (Mt4OrderKind)reader.ReadInt32();
+        var ticket = reader.ReadInt64();
+        var volume = ReadDoubleString(reader, required: true)!.Value;
+        var price = ReadDoubleString(reader, required: false);
+        var stopLoss = ReadDoubleString(reader, required: false);
+        var takeProfit = ReadDoubleString(reader, required: false);
+        var deviation = reader.ReadInt32();
+        var magic = reader.ReadInt32();
+        var expiration = reader.ReadInt64();
+        var expectedStopLoss = ReadDoubleString(reader, required: false);
+        var expectedTakeProfit = ReadDoubleString(reader, required: false);
+        var comment = ReadString(reader, 64);
+        var expectedKind = ReadString(reader, 16);
+        var bridgeCommandRef = ReadString(reader, 64);
+        var expectedVolume = reader.BaseStream.Position < reader.BaseStream.Length
+            ? ReadDoubleString(reader, required: false)
+            : null;
         var command = new Mt4TradeCommand(
-            ReadString(reader, 128),
-            ReadString(reader, 128),
-            ReadString(reader, 128),
-            ReadString(reader, 64),
-            reader.ReadInt64(),
-            reader.ReadInt64(),
-            (Mt4TradeAction)reader.ReadInt32(),
-            ReadString(reader, 64),
-            (Mt4OrderSide)reader.ReadInt32(),
-            (Mt4OrderKind)reader.ReadInt32(),
-            reader.ReadInt64(),
-            ReadDoubleString(reader, required: true)!.Value,
-            ReadDoubleString(reader, required: false),
-            ReadDoubleString(reader, required: false),
-            ReadDoubleString(reader, required: false),
-            reader.ReadInt32(),
-            reader.ReadInt32(),
-            reader.ReadInt64(),
-            ReadDoubleString(reader, required: false),
-            ReadDoubleString(reader, required: false),
-            ReadString(reader, 64),
-            ReadString(reader, 16),
-            ReadString(reader, 64));
+            commandId, terminalInstanceId, brokerServer, login, connectionEpoch,
+            deadlineUtcMsc, action, symbol, side, orderKind, ticket, volume, price,
+            stopLoss, takeProfit, deviation, magic, expiration, expectedStopLoss,
+            expectedTakeProfit, comment, expectedKind, bridgeCommandRef, expectedVolume);
         EnsureFullyRead(reader);
         ValidateTradeCommand(command);
         return command;
@@ -1392,6 +1427,17 @@ public static class Mt4PipeProtocol
             throw new InvalidDataException("mt4_command_query_params_invalid");
         }
         if (command.Action == Mt4TradeAction.ClosePosition && command.Volume < 0)
+        {
+            throw new InvalidDataException("close_volume_invalid");
+        }
+        if (command.ExpectedVolume is double guardedVolume
+            && (!double.IsFinite(guardedVolume) || guardedVolume <= 0))
+        {
+            throw new InvalidDataException("management_expected_state_invalid");
+        }
+        if (command.Action == Mt4TradeAction.ClosePosition
+            && command.ExpectedVolume is double expectedVolume
+            && command.Volume > expectedVolume + 0.00000001)
         {
             throw new InvalidDataException("close_volume_invalid");
         }

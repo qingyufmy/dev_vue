@@ -46,7 +46,8 @@ public sealed class Mt4PipeProtocolTests
         Assert.IsTrue(Mt4PipeProtocol.RequiresAdapterRestart(decoded.AdapterVersion));
         Assert.IsTrue(Mt4PipeProtocol.IsCurrentAdapterVersion(
             $"{Mt4PipeProtocol.CurrentAdapterVersion}-test"));
-        Assert.IsFalse(Mt4PipeProtocol.RequiresAdapterRestart("3.2.5"));
+        Assert.IsTrue(Mt4PipeProtocol.RequiresAdapterRestart("3.2.5"));
+        Assert.IsFalse(Mt4PipeProtocol.RequiresAdapterRestart("3.2.6"));
     }
 
     [TestMethod]
@@ -142,6 +143,65 @@ public sealed class Mt4PipeProtocolTests
         Assert.AreEqual(2295.0, decoded.StopLoss);
         Assert.AreEqual(2290.0, decoded.ExpectedStopLoss);
         Assert.AreEqual(2320.0, decoded.ExpectedTakeProfit);
+    }
+
+    [TestMethod]
+    public void PartialCloseKeepsRequestedVolumeSeparateFromExpectedPositionState()
+    {
+        var command = Command("close_position", new
+        {
+            volume = 0.01,
+            expected_state = new
+            {
+                ticket = "501", symbol = "XAUUSD", direction = "buy",
+                volume = 0.02, magic = 234000,
+            },
+        });
+
+        var decoded = Mt4PipeProtocol.DecodeCommand(Mt4PipeProtocol.EncodeCommand(
+            Mt4PipeProtocol.CreateTradeCommand(command)));
+
+        Assert.AreEqual(501L, decoded.Ticket);
+        Assert.AreEqual("XAUUSD", decoded.Symbol);
+        Assert.AreEqual(Mt4OrderSide.Buy, decoded.Side);
+        Assert.AreEqual(0.01, decoded.Volume);
+        Assert.AreEqual(0.02, decoded.ExpectedVolume);
+        Assert.AreEqual(234000, decoded.Magic);
+    }
+
+    [TestMethod]
+    public void DecoderAcceptsLegacyCommandWithoutExpectedVolumeField()
+    {
+        var local = Mt4PipeProtocol.CreateTradeCommand(Command("place_order", new
+        {
+            symbol = "XAUUSD", side = "buy", order_kind = "market", volume = 0.01,
+        }));
+        var current = Mt4PipeProtocol.EncodeCommand(local);
+        var legacy = current[..^sizeof(int)];
+
+        var decoded = Mt4PipeProtocol.DecodeCommand(legacy);
+
+        Assert.IsNull(decoded.ExpectedVolume);
+        Assert.AreEqual(local, decoded);
+    }
+
+    [TestMethod]
+    public void PartialCloseRejectsAmountLargerThanExpectedPosition()
+    {
+        var command = Command("close_position", new
+        {
+            ticket = "501", volume = 0.02,
+            expected_state = new
+            {
+                ticket = "501", symbol = "XAUUSD", direction = "buy",
+                volume = 0.01, magic = 234000,
+            },
+        });
+
+        var error = Assert.ThrowsExactly<InvalidDataException>(() =>
+            Mt4PipeProtocol.CreateTradeCommand(command));
+
+        Assert.AreEqual("close_volume_invalid", error.Message);
     }
 
     [TestMethod]

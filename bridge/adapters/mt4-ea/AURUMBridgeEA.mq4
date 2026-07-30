@@ -1,9 +1,9 @@
 #property strict
-#property version   "3.25"
+#property version   "3.26"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.2.5"
+#define ADAPTER_VERSION "3.2.6"
 
 input string InpPipeName = "AURUMBridgeV3";
 
@@ -1595,6 +1595,7 @@ void ExecuteCommand(uchar &payload[], int &offset)
    string order_comment = ReadUtf8(payload, offset);
    string expected_kind = ReadUtf8(payload, offset);
    string bridge_command_ref = ReadUtf8(payload, offset);
+   string expected_volume_value = offset < ArraySize(payload) ? ReadUtf8(payload, offset) : "";
    if(command_id == "" || terminal_id != g_terminal_id
       || StringCompare(broker_server, AccountServer(), false) != 0
       || login != IntegerToString(AccountNumber())
@@ -1620,7 +1621,8 @@ void ExecuteCommand(uchar &payload[], int &offset)
      }
    if(action == ACTION_CANCEL)
      {
-      ExecuteCancel(command_id, (int)ticket_value, symbol, side, volume, magic);
+      ExecuteCancel(command_id, (int)ticket_value, symbol, side, volume,
+         expected_volume_value, magic);
       return;
      }
    if(action == ACTION_MODIFY)
@@ -1631,12 +1633,14 @@ void ExecuteCommand(uchar &payload[], int &offset)
      }
    if(action == ACTION_CLOSE)
      {
-      ExecuteClose(command_id, (int)ticket_value, symbol, side, volume, deviation, magic);
+      ExecuteClose(command_id, (int)ticket_value, symbol, side, volume,
+         expected_volume_value, deviation, magic);
       return;
      }
    if(action == ACTION_MODIFY_POSITION)
      {
       ExecuteModifyPosition(command_id, (int)ticket_value, symbol, side, volume,
+         expected_volume_value,
          stop_loss_value, take_profit_value, expected_stop_loss_value,
          expected_take_profit_value, magic);
       return;
@@ -1688,8 +1692,11 @@ void ExecutePlace(const string command_id, const string symbol, const int side,
   }
 
 void ExecuteCancel(const string command_id, const int ticket, const string expected_symbol,
-   const int expected_side, const double expected_volume, const int expected_magic)
+   const int expected_side, const double legacy_expected_volume,
+   const string expected_volume_value, const int expected_magic)
   {
+   double expected_volume = expected_volume_value == ""
+      ? legacy_expected_volume : StrToDouble(expected_volume_value);
    bool guarded = expected_symbol != "" && expected_side != SIDE_NONE && expected_volume > 0;
    if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
      {
@@ -1767,9 +1774,12 @@ void ExecuteModify(const string command_id, const int ticket, const string price
   }
 
 void ExecuteClose(const string command_id, const int ticket, const string expected_symbol,
-   const int expected_side, const double requested_volume, const int deviation, const int expected_magic)
+   const int expected_side, const double requested_volume, const string expected_volume_value,
+   const int deviation, const int expected_magic)
   {
-   bool guarded = expected_symbol != "" && expected_side != SIDE_NONE && requested_volume > 0;
+   double expected_volume = expected_volume_value == ""
+      ? requested_volume : StrToDouble(expected_volume_value);
+   bool guarded = expected_symbol != "" && expected_side != SIDE_NONE && expected_volume > 0;
    if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES))
      {
       if(guarded)
@@ -1810,7 +1820,7 @@ void ExecuteClose(const string command_id, const int ticket, const string expect
       SendCommandResult(command_id, 2, "management_magic_mismatch", "", 0, ticket);
       return;
      }
-   if(guarded && MathAbs(OrderLots() - requested_volume) > 0.00000001)
+   if(guarded && MathAbs(OrderLots() - expected_volume) > 0.00000001)
      {
       SendCommandResult(command_id, 2, "management_volume_mismatch", "", 0, ticket);
       return;
@@ -1833,11 +1843,14 @@ void ExecuteClose(const string command_id, const int ticket, const string expect
   }
 
 void ExecuteModifyPosition(const string command_id, const int ticket,
-   const string expected_symbol, const int expected_side, const double expected_volume,
+   const string expected_symbol, const int expected_side, const double legacy_expected_volume,
+   const string expected_volume_value,
    const string stop_loss_value, const string take_profit_value,
    const string expected_stop_loss_value, const string expected_take_profit_value,
    const int expected_magic)
   {
+   double expected_volume = expected_volume_value == ""
+      ? legacy_expected_volume : StrToDouble(expected_volume_value);
    if(!OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES) || OrderCloseTime() > 0)
      {
       SendCommandResult(command_id, 2, "system_position_not_found", "", 0, ticket);

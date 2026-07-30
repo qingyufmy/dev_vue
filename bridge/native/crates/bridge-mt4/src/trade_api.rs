@@ -55,6 +55,7 @@ pub struct TradeCommand {
     pub comment: String,
     pub expected_kind: String,
     pub bridge_command_ref: String,
+    pub expected_volume: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +78,11 @@ pub fn command_from_bridge(command: &CommandMessage) -> Result<TradeCommand, Mt4
         .params
         .as_object()
         .ok_or_else(|| Mt4ProtocolError::new("mt4_command_params_invalid"))?;
+    let expected_state = match params.get("expected_state") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(value)) => Some(value),
+        Some(_) => return Err(Mt4ProtocolError::new("management_expected_state_invalid")),
+    };
     let action = match command.action.as_str() {
         "place_order" => TradeAction::PlaceOrder,
         "cancel_order" => TradeAction::CancelOrder,
@@ -87,6 +93,10 @@ pub fn command_from_bridge(command: &CommandMessage) -> Result<TradeCommand, Mt4
         _ => return Err(Mt4ProtocolError::new("command_action_unsupported")),
     };
     let side = match optional_string(params, "side")?
+        .or(expected_state
+            .map(|value| optional_string(value, "direction"))
+            .transpose()?
+            .flatten())
         .unwrap_or_default()
         .to_ascii_lowercase()
         .as_str()
@@ -115,27 +125,51 @@ pub fn command_from_bridge(command: &CommandMessage) -> Result<TradeCommand, Mt4
         connection_epoch: command.connection_epoch,
         deadline_utc_msc: command.deadline_utc_msc,
         action,
-        symbol: optional_string(params, "symbol")?.unwrap_or_default(),
+        symbol: optional_string(params, "symbol")?
+            .or(expected_state
+                .map(|value| optional_string(value, "symbol"))
+                .transpose()?
+                .flatten())
+            .unwrap_or_default(),
         side,
         order_kind,
         ticket: optional_i64(params, "ticket")?
             .or(optional_i64(params, "pending_ticket")?)
             .or(optional_i64(params, "trade_ticket")?)
+            .or(expected_state
+                .map(|value| optional_i64(value, "ticket"))
+                .transpose()?
+                .flatten())
             .unwrap_or(0),
         volume: optional_f64(params, "volume")?.unwrap_or(0.0),
         price: optional_f64(params, "price")?,
         stop_loss: optional_f64(params, "stop_loss")?,
         take_profit: optional_f64(params, "take_profit")?,
         deviation: optional_i32(params, "deviation")?.unwrap_or(20),
-        magic: optional_i32(params, "magic")?.unwrap_or(234000),
+        magic: optional_i32(params, "magic")?
+            .or(expected_state
+                .map(|value| optional_i32(value, "magic"))
+                .transpose()?
+                .flatten())
+            .unwrap_or(234000),
         expiration: optional_i64(params, "expiration")?.unwrap_or(0),
-        expected_stop_loss: optional_f64(params, "expected_stop_loss")?,
-        expected_take_profit: optional_f64(params, "expected_take_profit")?,
+        expected_stop_loss: optional_f64(params, "expected_stop_loss")?.or(expected_state
+            .map(|value| optional_f64(value, "stop_loss"))
+            .transpose()?
+            .flatten()),
+        expected_take_profit: optional_f64(params, "expected_take_profit")?.or(expected_state
+            .map(|value| optional_f64(value, "take_profit"))
+            .transpose()?
+            .flatten()),
         comment: optional_string(params, "comment")?.unwrap_or_default(),
         expected_kind: optional_string(params, "expected_kind")?
             .unwrap_or_default()
             .to_ascii_lowercase(),
         bridge_command_ref: optional_string(params, "bridge_command_ref")?.unwrap_or_default(),
+        expected_volume: expected_state
+            .map(|value| optional_f64(value, "volume"))
+            .transpose()?
+            .flatten(),
     };
     validate_command(&command)?;
     Ok(command)
@@ -479,36 +513,66 @@ pub fn encode_command(command: &TradeCommand) -> Result<Vec<u8>, Mt4ProtocolErro
     writer.string(&command.comment)?;
     writer.string(&command.expected_kind)?;
     writer.string(&command.bridge_command_ref)?;
+    write_number(&mut writer, command.expected_volume)?;
     writer.finish()
 }
 
 pub fn decode_command(payload: &[u8]) -> Result<TradeCommand, Mt4ProtocolError> {
     let mut reader = PayloadReader::new(payload, MessageType::Command)?;
+    let command_id = reader.string(128)?;
+    let terminal_instance_id = reader.string(128)?;
+    let broker_server = reader.string(128)?;
+    let login = reader.string(64)?;
+    let connection_epoch = reader.i64()?;
+    let deadline_utc_msc = reader.i64()?;
+    let action = decode_action(reader.i32()?)?;
+    let symbol = reader.string(64)?;
+    let side = decode_side(reader.i32()?)?;
+    let order_kind = decode_kind(reader.i32()?)?;
+    let ticket = reader.i64()?;
+    let volume = read_number(&mut reader, true)?
+        .ok_or_else(|| Mt4ProtocolError::new("mt4_pipe_number_invalid"))?;
+    let price = read_number(&mut reader, false)?;
+    let stop_loss = read_number(&mut reader, false)?;
+    let take_profit = read_number(&mut reader, false)?;
+    let deviation = reader.i32()?;
+    let magic = reader.i32()?;
+    let expiration = reader.i64()?;
+    let expected_stop_loss = read_number(&mut reader, false)?;
+    let expected_take_profit = read_number(&mut reader, false)?;
+    let comment = reader.string(64)?;
+    let expected_kind = reader.string(16)?;
+    let bridge_command_ref = reader.string(64)?;
+    let expected_volume = if reader.remaining() > 0 {
+        read_number(&mut reader, false)?
+    } else {
+        None
+    };
     let command = TradeCommand {
-        command_id: reader.string(128)?,
-        terminal_instance_id: reader.string(128)?,
-        broker_server: reader.string(128)?,
-        login: reader.string(64)?,
-        connection_epoch: reader.i64()?,
-        deadline_utc_msc: reader.i64()?,
-        action: decode_action(reader.i32()?)?,
-        symbol: reader.string(64)?,
-        side: decode_side(reader.i32()?)?,
-        order_kind: decode_kind(reader.i32()?)?,
-        ticket: reader.i64()?,
-        volume: read_number(&mut reader, true)?
-            .ok_or_else(|| Mt4ProtocolError::new("mt4_pipe_number_invalid"))?,
-        price: read_number(&mut reader, false)?,
-        stop_loss: read_number(&mut reader, false)?,
-        take_profit: read_number(&mut reader, false)?,
-        deviation: reader.i32()?,
-        magic: reader.i32()?,
-        expiration: reader.i64()?,
-        expected_stop_loss: read_number(&mut reader, false)?,
-        expected_take_profit: read_number(&mut reader, false)?,
-        comment: reader.string(64)?,
-        expected_kind: reader.string(16)?,
-        bridge_command_ref: reader.string(64)?,
+        command_id,
+        terminal_instance_id,
+        broker_server,
+        login,
+        connection_epoch,
+        deadline_utc_msc,
+        action,
+        symbol,
+        side,
+        order_kind,
+        ticket,
+        volume,
+        price,
+        stop_loss,
+        take_profit,
+        deviation,
+        magic,
+        expiration,
+        expected_stop_loss,
+        expected_take_profit,
+        comment,
+        expected_kind,
+        bridge_command_ref,
+        expected_volume,
     };
     reader.finish()?;
     validate_command(&command)?;
@@ -593,6 +657,7 @@ fn validate_command(command: &TradeCommand) -> Result<(), Mt4ProtocolError> {
         || !optional_finite(command.take_profit)
         || !optional_finite(command.expected_stop_loss)
         || !optional_finite(command.expected_take_profit)
+        || !optional_finite(command.expected_volume)
     {
         return Err(Mt4ProtocolError::new("mt4_command_route_invalid"));
     }
@@ -628,6 +693,16 @@ fn validate_command(command: &TradeCommand) -> Result<(), Mt4ProtocolError> {
         return Err(Mt4ProtocolError::new("mt4_command_query_params_invalid"));
     }
     if command.action == TradeAction::ClosePosition && command.volume < 0.0 {
+        return Err(Mt4ProtocolError::new("close_volume_invalid"));
+    }
+    if command.expected_volume.is_some_and(|value| value <= 0.0) {
+        return Err(Mt4ProtocolError::new("management_expected_state_invalid"));
+    }
+    if command.action == TradeAction::ClosePosition
+        && command
+            .expected_volume
+            .is_some_and(|expected| command.volume > expected + 1e-8)
+    {
         return Err(Mt4ProtocolError::new("close_volume_invalid"));
     }
     if command.action == TradeAction::ModifyPosition
@@ -835,15 +910,29 @@ mod tests {
             comment: "AI-MT4-01".to_owned(),
             expected_kind: String::new(),
             bridge_command_ref: String::new(),
+            expected_volume: None,
         }
     }
 
     #[test]
     fn command_round_trip_matches_the_existing_dotnet_and_ea_field_order() {
-        let expected = command();
+        let mut expected = command();
+        expected.expected_volume = Some(0.02);
         let encoded = encode_command(&expected).expect("encode command");
         assert_eq!(i32::from_le_bytes(encoded[..4].try_into().unwrap()), 20);
         assert_eq!(decode_command(&encoded).expect("decode command"), expected);
+    }
+
+    #[test]
+    fn decoder_accepts_the_legacy_command_without_expected_volume() {
+        let expected = command();
+        let mut encoded = encode_command(&expected).expect("encode command");
+        encoded.truncate(encoded.len() - 4);
+
+        assert_eq!(
+            decode_command(&encoded).expect("decode legacy command"),
+            expected
+        );
     }
 
     #[test]
@@ -931,6 +1020,92 @@ mod tests {
         .expect("bridge result");
         assert_eq!(result.evidence.position_tickets, ["2147483647"]);
         assert!(result.evidence.order_tickets.is_empty());
+    }
+
+    #[test]
+    fn partial_close_keeps_requested_volume_separate_from_expected_position_state() {
+        let bridge = CommandMessage {
+            v: 3,
+            message_type: "command".to_owned(),
+            message_id: "message_01JMT4PARTIAL01".to_owned(),
+            sent_at_utc_msc: 1_800_000_000_000,
+            command_id: "command_01JMT4PARTIAL01".to_owned(),
+            terminal_instance_id: "mt4_0123456789abcdef01234567".to_owned(),
+            account_ref: bridge_contract::AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "12345678".to_owned(),
+            },
+            connection_epoch: 7,
+            issued_at_utc_msc: 1_800_000_000_000,
+            deadline_utc_msc: 1_800_000_010_000,
+            action: "close_position".to_owned(),
+            params: serde_json::json!({
+                "volume": 0.01,
+                "expected_state": {
+                    "ticket": "501",
+                    "symbol": "XAUUSD.s",
+                    "direction": "buy",
+                    "volume": 0.02,
+                    "magic": 234000
+                }
+            }),
+        };
+
+        let local = command_from_bridge(&bridge).expect("partial close command");
+        assert_eq!(local.ticket, 501);
+        assert_eq!(local.symbol, "XAUUSD.s");
+        assert_eq!(local.side, OrderSide::Buy);
+        assert_eq!(local.volume, 0.01);
+        assert_eq!(local.expected_volume, Some(0.02));
+        assert_eq!(local.magic, 234000);
+    }
+
+    #[test]
+    fn partial_close_rejects_amount_larger_than_expected_position() {
+        let mut invalid = command();
+        invalid.action = TradeAction::ClosePosition;
+        invalid.ticket = 501;
+        invalid.volume = 0.02;
+        invalid.expected_volume = Some(0.01);
+
+        assert_eq!(
+            encode_command(&invalid)
+                .expect_err("close exceeds expected volume")
+                .code(),
+            "close_volume_invalid"
+        );
+    }
+
+    #[test]
+    fn bridge_command_rejects_non_object_expected_state() {
+        let bridge = CommandMessage {
+            v: 3,
+            message_type: "command".to_owned(),
+            message_id: "message_01JMT4EXPECTED01".to_owned(),
+            sent_at_utc_msc: 1_800_000_000_000,
+            command_id: "command_01JMT4EXPECTED01".to_owned(),
+            terminal_instance_id: "mt4_0123456789abcdef01234567".to_owned(),
+            account_ref: bridge_contract::AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "12345678".to_owned(),
+            },
+            connection_epoch: 7,
+            issued_at_utc_msc: 1_800_000_000_000,
+            deadline_utc_msc: 1_800_000_010_000,
+            action: "close_position".to_owned(),
+            params: serde_json::json!({
+                "ticket": "501",
+                "volume": 0.01,
+                "expected_state": "invalid"
+            }),
+        };
+
+        assert_eq!(
+            command_from_bridge(&bridge)
+                .expect_err("expected state type")
+                .code(),
+            "management_expected_state_invalid"
+        );
     }
 
     #[test]

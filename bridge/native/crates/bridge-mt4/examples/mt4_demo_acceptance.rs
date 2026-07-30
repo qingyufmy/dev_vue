@@ -19,6 +19,7 @@ struct Arguments {
     symbol: String,
     volume: f64,
     execute: bool,
+    partial_close: bool,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -113,8 +114,29 @@ async fn exercise(
         .pointer("/instrument/volume_min")
         .and_then(Value::as_f64)
         .ok_or_else(|| "mt4_demo_volume_contract_invalid".to_owned())?;
+    let volume_max = symbol_snapshot
+        .payload
+        .pointer("/instrument/volume_max")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| "mt4_demo_volume_contract_invalid".to_owned())?;
+    let volume_step = symbol_snapshot
+        .payload
+        .pointer("/instrument/volume_step")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| "mt4_demo_volume_contract_invalid".to_owned())?;
+    let open_volume = if arguments.partial_close {
+        arguments.volume * 2.0
+    } else {
+        arguments.volume
+    };
     if arguments.volume + 1e-8 < volume_min {
         return Err("mt4_demo_volume_below_minimum".to_owned());
+    }
+    if open_volume > volume_max + 1e-8
+        || !volume_aligned(arguments.volume, volume_step)
+        || !volume_aligned(open_volume, volume_step)
+    {
+        return Err("mt4_demo_volume_contract_invalid".to_owned());
     }
     if matching_position(&before, &resolved_symbol, None).is_some() {
         return Err("mt4_demo_symbol_must_have_no_existing_position".to_owned());
@@ -126,7 +148,11 @@ async fn exercise(
         "demo": true,
         "symbol": resolved_symbol,
         "volume": arguments.volume,
+        "open_volume": open_volume,
+        "partial_close": arguments.partial_close,
         "volume_min": volume_min,
+        "volume_max": volume_max,
+        "volume_step": volume_step,
         "diagnostics": diagnostics.payload,
     });
     if !arguments.execute {
@@ -142,7 +168,7 @@ async fn exercise(
             TradeAction::PlaceOrder,
             &resolved_symbol,
             0,
-            arguments.volume,
+            (open_volume, None),
             &comment,
         ))
         .await
@@ -161,7 +187,7 @@ async fn exercise(
                 &route,
                 &resolved_symbol,
                 open.ticket,
-                arguments.volume,
+                open_volume,
                 &comment,
                 suffix,
             )
@@ -178,14 +204,105 @@ async fn exercise(
         .and_then(Value::as_f64)
         .ok_or_else(|| "mt4_demo_open_position_invalid".to_owned())?;
 
+    let mut active_ticket = open.ticket;
+    let mut active_volume = position_volume;
+    let mut partial_result = None;
+    if arguments.partial_close {
+        let partial = match source
+            .execute_trade(trade_command(
+                &route,
+                format!("command_mt4_demo_partial_{suffix}"),
+                TradeAction::ClosePosition,
+                &resolved_symbol,
+                active_ticket,
+                (arguments.volume, Some(active_volume)),
+                &comment,
+            ))
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                let error = protocol_error(error);
+                let cleanup = cleanup_position(
+                    &source,
+                    &route,
+                    &resolved_symbol,
+                    active_ticket,
+                    active_volume,
+                    &comment,
+                    suffix,
+                )
+                .await;
+                return Err(format!(
+                    "mt4_demo_partial_close_failed:{error}:cleanup={cleanup}"
+                ));
+            }
+        };
+        if partial.status != "succeeded" {
+            let cleanup = cleanup_position(
+                &source,
+                &route,
+                &resolved_symbol,
+                active_ticket,
+                active_volume,
+                &comment,
+                suffix,
+            )
+            .await;
+            return Err(format!(
+                "mt4_demo_partial_close_rejected:{}:cleanup={cleanup}",
+                partial
+                    .error_code
+                    .as_deref()
+                    .unwrap_or(partial.status.as_str())
+            ));
+        }
+        let after_partial = match collect(&source, &route, "after_partial").await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                let cleanup =
+                    cleanup_symbol_position(&source, &route, &resolved_symbol, &comment, suffix)
+                        .await;
+                return Err(format!(
+                    "mt4_demo_partial_snapshot_failed:{error}:cleanup={cleanup}"
+                ));
+            }
+        };
+        let remaining = matching_position(&after_partial, &resolved_symbol, None)
+            .ok_or_else(|| "mt4_demo_partial_remaining_missing".to_owned())?;
+        active_ticket = position_ticket(remaining)
+            .ok_or_else(|| "mt4_demo_partial_remaining_invalid".to_owned())?;
+        active_volume = remaining
+            .get("volume")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| "mt4_demo_partial_remaining_invalid".to_owned())?;
+        let expected_remaining = position_volume - arguments.volume;
+        if (active_volume - expected_remaining).abs() > volume_step / 10.0 {
+            let cleanup = cleanup_position(
+                &source,
+                &route,
+                &resolved_symbol,
+                active_ticket,
+                active_volume,
+                &comment,
+                suffix,
+            )
+            .await;
+            return Err(format!(
+                "mt4_demo_partial_remaining_mismatch:{active_volume}:cleanup={cleanup}"
+            ));
+        }
+        partial_result = Some(partial);
+    }
+
     let close = match source
         .execute_trade(trade_command(
             &route,
             format!("command_mt4_demo_close_{suffix}"),
             TradeAction::ClosePosition,
             &resolved_symbol,
-            open.ticket,
-            position_volume,
+            active_ticket,
+            (active_volume, Some(active_volume)),
             &comment,
         ))
         .await
@@ -197,8 +314,8 @@ async fn exercise(
                 &source,
                 &route,
                 &resolved_symbol,
-                open.ticket,
-                position_volume,
+                active_ticket,
+                active_volume,
                 &comment,
                 suffix,
             )
@@ -213,8 +330,8 @@ async fn exercise(
                 &source,
                 &route,
                 &resolved_symbol,
-                open.ticket,
-                position_volume,
+                active_ticket,
+                active_volume,
                 &comment,
                 suffix,
             )
@@ -224,11 +341,12 @@ async fn exercise(
             ));
         }
     };
-    let cleaned = matching_position(&after_close, &resolved_symbol, Some(open.ticket)).is_none();
+    let cleaned = matching_position(&after_close, &resolved_symbol, None).is_none();
     let report = json!({
         "mode": "execute",
         "readiness": readiness,
         "open": safe_result(&open),
+        "partial_close": partial_result.as_ref().map(safe_result),
         "close": safe_result(&close),
         "position_ticket": open.ticket.to_string(),
         "cleaned": cleaned,
@@ -239,8 +357,8 @@ async fn exercise(
             &source,
             &route,
             &resolved_symbol,
-            open.ticket,
-            position_volume,
+            active_ticket,
+            active_volume,
             &comment,
             suffix,
         )
@@ -293,13 +411,24 @@ fn matching_position<'a>(
         })
 }
 
+fn position_ticket(position: &Value) -> Option<i64> {
+    position
+        .get("ticket")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<i64>().ok())
+}
+
+fn volume_aligned(volume: f64, step: f64) -> bool {
+    step > 0.0 && (volume / step - (volume / step).round()).abs() <= 1e-8
+}
+
 fn trade_command(
     route: &WorkerRoute,
     command_id: String,
     action: TradeAction,
     symbol: &str,
     ticket: i64,
-    volume: f64,
+    volumes: (f64, Option<f64>),
     comment: &str,
 ) -> TradeCommand {
     let now = now_msc().unwrap_or(1);
@@ -315,7 +444,7 @@ fn trade_command(
         side: OrderSide::Buy,
         order_kind: OrderKind::Market,
         ticket,
-        volume,
+        volume: volumes.0,
         price: None,
         stop_loss: None,
         take_profit: None,
@@ -327,6 +456,7 @@ fn trade_command(
         comment: comment.to_owned(),
         expected_kind: String::new(),
         bridge_command_ref: String::new(),
+        expected_volume: volumes.1,
     }
 }
 
@@ -346,7 +476,7 @@ async fn cleanup_position(
             TradeAction::ClosePosition,
             symbol,
             ticket,
-            volume,
+            (volume, Some(volume)),
             comment,
         ))
         .await;
@@ -358,6 +488,29 @@ async fn cleanup_position(
         Ok(result) => json!({ "result": safe_result(&result), "cleaned": cleaned }),
         Err(error) => json!({ "error": error.code(), "cleaned": cleaned }),
     }
+}
+
+async fn cleanup_symbol_position(
+    source: &Arc<Mt4EaSnapshotSource>,
+    route: &WorkerRoute,
+    symbol: &str,
+    comment: &str,
+    suffix: i64,
+) -> Value {
+    let snapshot = match collect(source, route, "cleanup_symbol_lookup").await {
+        Ok(snapshot) => snapshot,
+        Err(error) => return json!({ "error": error, "cleaned": false }),
+    };
+    let Some(position) = matching_position(&snapshot, symbol, None) else {
+        return json!({ "cleaned": true });
+    };
+    let Some(ticket) = position_ticket(position) else {
+        return json!({ "error": "mt4_demo_cleanup_ticket_invalid", "cleaned": false });
+    };
+    let Some(volume) = position.get("volume").and_then(Value::as_f64) else {
+        return json!({ "error": "mt4_demo_cleanup_volume_invalid", "cleaned": false });
+    };
+    cleanup_position(source, route, symbol, ticket, volume, comment, suffix).await
 }
 
 fn safe_result(result: &bridge_mt4::TradeResult) -> Value {
@@ -377,6 +530,7 @@ fn parse_arguments() -> Result<Arguments, String> {
     let mut symbol = None;
     let mut volume = 0.01_f64;
     let mut execute = false;
+    let mut partial_close = false;
     let values = env::args().skip(1).collect::<Vec<_>>();
     let mut index = 0;
     while index < values.len() {
@@ -402,6 +556,7 @@ fn parse_arguments() -> Result<Arguments, String> {
                 }
             }
             "--execute" => execute = true,
+            "--partial-close" => partial_close = true,
             _ => return Err(format!("unknown_argument:{}", values[index])),
         }
         index += 1;
@@ -414,6 +569,7 @@ fn parse_arguments() -> Result<Arguments, String> {
         symbol: symbol.ok_or_else(|| "symbol_required".to_owned())?,
         volume,
         execute,
+        partial_close,
     })
 }
 
@@ -428,6 +584,7 @@ fn validate_arguments(arguments: Arguments) -> Result<Arguments, String> {
         || arguments.symbol.trim().is_empty()
         || !arguments.volume.is_finite()
         || arguments.volume <= 0.0
+        || arguments.partial_close && !arguments.execute
     {
         return Err("mt4_demo_arguments_invalid".to_owned());
     }

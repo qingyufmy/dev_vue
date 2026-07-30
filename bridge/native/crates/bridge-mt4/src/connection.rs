@@ -533,6 +533,7 @@ mod tests {
                 comment: "AI-MT4-PIPE".to_owned(),
                 expected_kind: String::new(),
                 bridge_command_ref: String::new(),
+                expected_volume: None,
             })
             .await
             .expect("execute trade");
