@@ -64,10 +64,10 @@ $manifestFile = if ($ManifestPath) {
 }
 if (Test-Path -LiteralPath $output) { throw 'full_installer_output_exists' }
 $serverUri = $null
-$localTestServer = $TargetEnvironment -eq 'test' -and
-  [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$serverUri) -and
+$serverUrlParsed = [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$serverUri)
+$localTestServer = $serverUrlParsed -and $TargetEnvironment -eq 'test' -and
   $serverUri.Scheme -eq 'http' -and $serverUri.IsLoopback
-if (-not $serverUri -or $serverUri.UserInfo -or $serverUri.Query -or
+if (-not $serverUrlParsed -or $serverUri.UserInfo -or $serverUri.Query -or
   $serverUri.Fragment -or $serverUri.AbsolutePath -ne '/' -or
   ($TargetEnvironment -eq 'test' -and -not $localTestServer) -or
   ($TargetEnvironment -eq 'production' -and $serverUri.Scheme -ne 'https')) {

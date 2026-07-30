@@ -478,6 +478,21 @@ describe('bridge release tooling', () => {
         ok:true, operation:'build-full-installer', dry_run:true,
         release_id:manifest.release_id, release_version:'3.1.0',
       })
+      const production = await execFileAsync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+        '-OutputDirectory', path.join(temporary, 'production-output'),
+        '-ReleaseDirectory', temporary,
+        '-ManifestPath', manifestPath,
+        '-PublicKey', publicKey,
+        '-ServerUrl', 'https://www.cnfxtrade.com',
+        '-TargetEnvironment', 'production',
+        '-MinimumOfflineValidityDays', '90',
+        '-DryRun',
+      ])
+      expect(JSON.parse(production.stdout)).toMatchObject({
+        ok:true, operation:'build-full-installer', dry_run:true,
+        environment:'production', release_version:'3.1.0',
+      })
       const lifecycleScript = path.resolve('scripts/bridge-release/test-local-full-installer.ps1')
       const lifecycle = await execFileAsync('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', lifecycleScript,
