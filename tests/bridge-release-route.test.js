@@ -164,6 +164,21 @@ describe('bridge release manifest route', () => {
     expect(JSON.parse(bootstrap.body)).toEqual(JSON.parse(current.body))
   })
 
+  it('keeps the bundled fallback for equivalent relative runtime pointer paths', async () => {
+    const router = createBridgeReleaseRouter({
+      manifestPath:'server/data/bridge-release/current.json',
+      bootstrapManifestPath:'server/data/bridge-release/bootstrap.json',
+      now:() => 1_785_402_928_956,
+    })
+    const response = await request(router, {
+      'X-Aurum-Installation-Id':'install_0123456789abcdef0123456789abcdef',
+      'X-Aurum-Release-Channel':'stable',
+    })
+
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body).release_id).toBe('bridge-3.0.0-production-20260730.3')
+  })
+
   it('counts connected installations once and recommends stopping on rollback', () => {
     const value = summarizeBridgeReleaseHealth({
       manifest:manifestV2({ rollout_percentage:50 }),

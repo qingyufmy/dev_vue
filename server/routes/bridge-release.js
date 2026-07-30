@@ -223,8 +223,10 @@ export function validateBridgeReleaseManifest(manifest, nowUtcMsc = Date.now()) 
 export function createBridgeReleaseRouter({
   manifestPath = process.env.BRIDGE_RELEASE_MANIFEST_PATH || DEFAULT_MANIFEST_PATH,
   bootstrapManifestPath = process.env.BRIDGE_BOOTSTRAP_MANIFEST_PATH || DEFAULT_BOOTSTRAP_MANIFEST_PATH,
-  seedManifestPath = manifestPath === DEFAULT_MANIFEST_PATH ? DEFAULT_SEED_MANIFEST_PATH : '',
-  seedBootstrapManifestPath = bootstrapManifestPath === DEFAULT_BOOTSTRAP_MANIFEST_PATH
+  seedManifestPath = manifestPath && path.resolve(manifestPath) === DEFAULT_MANIFEST_PATH
+    ? DEFAULT_SEED_MANIFEST_PATH : '',
+  seedBootstrapManifestPath = bootstrapManifestPath
+    && path.resolve(bootstrapManifestPath) === DEFAULT_BOOTSTRAP_MANIFEST_PATH
     ? DEFAULT_SEED_BOOTSTRAP_MANIFEST_PATH : '',
   readManifest = readFile,
   authenticate = authMiddleware,
