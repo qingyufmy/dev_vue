@@ -157,8 +157,8 @@ describe('bridge release manifest route', () => {
     expect(current.status).toBe(200)
     expect(bootstrap.status).toBe(200)
     expect(JSON.parse(current.body)).toMatchObject({
-      release_id:'bridge-3.0.3-update-fix-20260730.1',
-      release_version:'3.0.3',
+      release_id:'bridge-3.0.4-update-acceptance-20260730.1',
+      release_version:'3.0.4',
       rollout_percentage:100,
     })
     expect(JSON.parse(bootstrap.body)).toMatchObject({
@@ -180,7 +180,7 @@ describe('bridge release manifest route', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(JSON.parse(response.body).release_id).toBe('bridge-3.0.3-update-fix-20260730.1')
+    expect(JSON.parse(response.body).release_id).toBe('bridge-3.0.4-update-acceptance-20260730.1')
   })
 
   it('counts connected installations once and recommends stopping on rollback', () => {
