@@ -1,5 +1,5 @@
 #property strict
-#property version   "3.01"
+#property version   "3.02"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3

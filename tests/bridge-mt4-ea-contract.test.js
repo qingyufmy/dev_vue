@@ -12,7 +12,7 @@ function functionBlock(name, nextName) {
 describe('MT4 EA time contract', () => {
   it('normalizes broker quote time to UTC before publishing it', () => {
     const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
-    expect(source).toContain('#property version   "3.01"')
+    expect(source).toContain('#property version   "3.02"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
     expect(block).toContain('AppendInt32(response, CurrentServerOffsetMinutes())')
     expect(block).toContain('AppendUtf8(response, "broker_time_derived")')

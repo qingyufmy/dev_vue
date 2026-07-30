@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-command"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-contract",
  "bridge-store",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-contract"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-foundation"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "rusqlite",
  "serde",
@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-local-control"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-foundation",
  "bridge-runtime-win",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-mt4"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-contract",
  "bridge-runtime-win",
@@ -136,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-observability"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-preferences"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -154,14 +154,14 @@ dependencies = [
 
 [[package]]
 name = "bridge-runtime-win"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "bridge-security-win"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-store"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-contract",
  "rusqlite",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-terminal-data"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-contract",
  "bridge-store",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-terminal-session"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-contract",
  "bridge-mt4",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-transport"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-command",
  "bridge-contract",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-ui-model"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-foundation",
  "bridge-local-control",
@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-update"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "base64",
  "p256",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-worker-host"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-command",
  "bridge-contract",
@@ -1021,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "liangjian-bridge-bootstrapper"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "liangjian-bridge-installer",
  "serde",
@@ -1032,7 +1032,7 @@ dependencies = [
 
 [[package]]
 name = "liangjian-bridge-compat-probe"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-foundation",
  "bridge-security-win",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "liangjian-bridge-core"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-command",
  "bridge-contract",
@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "liangjian-bridge-installer"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "base64",
  "bridge-update",
@@ -1089,7 +1089,7 @@ dependencies = [
 
 [[package]]
 name = "liangjian-bridge-launcher"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-update",
  "serde",
@@ -1099,7 +1099,7 @@ dependencies = [
 
 [[package]]
 name = "liangjian-bridge-ui"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-foundation",
  "bridge-local-control",
@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "liangjian-bridge-update-rehearsal"
-version = "3.0.1"
+version = "3.0.2"
 dependencies = [
  "bridge-update",
  "liangjian-bridge-launcher",
