@@ -7,6 +7,7 @@ use bridge_store::OutboxStore;
 use bridge_update::{BridgeUpdateState, BridgeUpdateStateStore, STATE_VERIFYING};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
 use std::fs::OpenOptions;
@@ -418,6 +419,103 @@ fn native_core_serves_live_mt4_history_from_sqlite_without_commands() {
     fs::remove_dir_all(root).expect("remove live MT4 fixture");
 }
 
+#[test]
+#[ignore = "requires an explicitly configured live MT5 demo terminal and bundled Python runtime"]
+fn native_core_serves_live_mt5_history_from_sqlite_without_commands() {
+    let terminal_path = std::env::var_os("AURUM_MT5_TEST_TERMINAL")
+        .map(PathBuf::from)
+        .expect("AURUM_MT5_TEST_TERMINAL");
+    let python_runtime = std::env::var_os("AURUM_MT5_TEST_PYTHON_RUNTIME")
+        .map(PathBuf::from)
+        .expect("AURUM_MT5_TEST_PYTHON_RUNTIME");
+    let broker_server = std::env::var("AURUM_MT5_TEST_SERVER").expect("AURUM_MT5_TEST_SERVER");
+    let login = std::env::var("AURUM_MT5_TEST_LOGIN").expect("AURUM_MT5_TEST_LOGIN");
+    assert!(terminal_path.is_absolute());
+    assert!(terminal_path.is_file());
+    assert!(python_runtime.join("python.exe").is_file());
+    assert!(broker_server.to_ascii_lowercase().contains("demo"));
+    assert!(!login.trim().is_empty());
+
+    let root = unique_test_directory();
+    let profile_id = DEFAULT_PROFILE_ID.to_owned();
+    let mut server = LoopbackBridgeServer::start_read_only();
+    let application = prepare_live_mt5_application(&root, &python_runtime);
+    let terminal_id = mt5_terminal_instance_id(&terminal_path);
+    let paths = prepare_mt5_discovery_profile(
+        &root,
+        &terminal_id,
+        &terminal_path,
+        &server.control_url,
+        &server.realtime_url,
+    );
+    let ready = root.join("mt5-ready.json");
+    let update_state_path = root.join("mt5-update-state.json");
+    let mut child = ChildGuard::spawn_for_discovery(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        &profile_id,
+        &ready,
+        &update_state_path,
+    );
+
+    let timeout_seconds = std::env::var("AURUM_MT5_TEST_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(120);
+    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+    loop {
+        child.assert_running();
+        if ready.is_file() && server.saw_complete_history_payload("mt5_sqlite") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "MT5 history condition timed out: {:?}",
+            server.message_summaries()
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    let ready_payload: Value =
+        serde_json::from_slice(&fs::read(&ready).expect("MT5 ready payload"))
+            .expect("MT5 ready json");
+    assert_eq!(ready_payload["ready"], true);
+    assert_eq!(ready_payload["server_connected"], true);
+    assert!(server.saw_data_response("history"));
+    assert!(server.saw_complete_history_payload("mt5_sqlite"));
+    assert!(
+        !server.saw_succeeded_command_result(),
+        "read-only acceptance must not receive a trade result"
+    );
+    let store = OutboxStore::open_existing(&paths.database_path).expect("open MT5 history store");
+    let bindings = store.terminal_bindings().expect("MT5 bindings");
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].terminal_instance_id, terminal_id);
+    assert_eq!(bindings[0].platform, "mt5");
+    assert_eq!(bindings[0].account_ref.broker_server, broker_server);
+    assert_eq!(bindings[0].account_ref.login, login);
+    let runtime_status: Value = serde_json::from_slice(
+        &fs::read(paths.data_directory.join("runtime-status.json"))
+            .expect("MT5 runtime status payload"),
+    )
+    .expect("MT5 runtime status json");
+    assert_eq!(
+        runtime_status["terminals"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(runtime_status["terminals"][0]["state"], "ready");
+    drop(store);
+
+    SingleInstanceGuard::request_shutdown(
+        &profile_instance_id(&profile_id).expect("MT5 instance id"),
+    )
+    .expect("request MT5 core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    server.stop();
+    fs::remove_dir_all(root).expect("remove live MT5 fixture");
+}
+
 struct ChildGuard(Option<Child>);
 
 impl ChildGuard {
@@ -663,6 +761,10 @@ impl LoopbackBridgeServer {
             })
     }
 
+    fn message_summaries(&self) -> Vec<String> {
+        self.message_types.lock().expect("message types").clone()
+    }
+
     fn saw_data_response(&self, action: &str) -> bool {
         self.message_types
             .lock()
@@ -905,19 +1007,22 @@ async fn serve_realtime(
                             history["pagination"]["page_size"].as_u64().unwrap_or(0),
                             history_complete
                         ));
-                        if !send_commands && !history_complete && history_retry_sequence < 100 {
+                        if !send_commands && !history_complete && history_retry_sequence < 400 {
                             history_retry_sequence += 1;
                             tokio::time::sleep(Duration::from_millis(250)).await;
-                            socket
+                            if socket
                                 .send(Message::Text(
                                     serde_json::json!({
+                                        "v": 3,
                                         "type": "data_request",
-                                        "message_id": format!("history-retry-{history_retry_sequence}"),
-                                        "server_request_id": format!("history-retry-{history_retry_sequence}"),
-                                        "terminal_instance_id": payload["terminal_instance_id"],
-                                        "connection_epoch": payload["connection_epoch"],
+                                        "message_id": format!("message_01JHISTRETRY{history_retry_sequence:04}"),
+                                        "sent_at_utc_msc": now_utc_msc(),
+                                        "request_id": format!("data_01JHISTRETRY{history_retry_sequence:04}"),
+                                        "terminal_instance_id": terminal.terminal_instance_id,
+                                        "account_ref": terminal.account_ref,
+                                        "connection_epoch": terminal.connection_epoch,
                                         "action": "history",
-                                        "parameters": {
+                                        "params": {
                                             "page": 1,
                                             "page_size": 20,
                                             "include_deals": true
@@ -927,7 +1032,10 @@ async fn serve_realtime(
                                     .into(),
                                 ))
                                 .await
-                                .expect("history retry send");
+                                .is_err()
+                            {
+                                break;
+                            }
                         }
                     }
                     if message_type == "command_result" {
@@ -1243,6 +1351,58 @@ fn prepare_application(root: &Path) -> PathBuf {
     application
 }
 
+fn prepare_live_mt5_application(root: &Path, python_runtime: &Path) -> PathBuf {
+    let application = root.join("application");
+    let python_directory = application.join("runtime/python");
+    let worker_directory = application.join("modules/adapter.mt5.python");
+    copy_directory(python_runtime, &python_directory);
+    fs::create_dir_all(&worker_directory).expect("live MT5 worker directory");
+    fs::copy(
+        env!("CARGO_BIN_EXE_liangjian-bridge-core"),
+        application.join("liangjian-bridge-core.exe"),
+    )
+    .expect("copy live MT5 core");
+    let native_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("native root");
+    let source_worker_directory = native_root.join("workers/mt5");
+    for file in ["worker.py", "trade.py"] {
+        fs::copy(
+            source_worker_directory.join(file),
+            worker_directory.join(file),
+        )
+        .expect("copy live MT5 worker module");
+    }
+    application
+}
+
+fn copy_directory(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination).expect("copy directory destination");
+    for entry in fs::read_dir(source).expect("copy directory source") {
+        let entry = entry.expect("copy directory entry");
+        let target = destination.join(entry.file_name());
+        if entry
+            .file_type()
+            .expect("copy directory file type")
+            .is_dir()
+        {
+            copy_directory(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).expect("copy directory file");
+        }
+    }
+}
+
+fn mt5_terminal_instance_id(terminal_path: &Path) -> String {
+    let normalized = std::path::absolute(terminal_path)
+        .expect("absolute MT5 terminal path")
+        .to_string_lossy()
+        .to_uppercase();
+    let digest = Sha256::digest(normalized.as_bytes());
+    format!("mt5_{:x}", digest)[..28].to_owned()
+}
+
 fn locate_python() -> PathBuf {
     let output = Command::new("where.exe")
         .arg("python.exe")
@@ -1361,6 +1521,42 @@ fn prepare_mt4_discovery_profile(
         .expect("MT4 endpoint json"),
     )
     .expect("MT4 endpoint settings");
+    paths
+}
+
+fn prepare_mt5_discovery_profile(
+    root: &Path,
+    terminal_id: &str,
+    terminal_path: &Path,
+    control_url: &str,
+    realtime_url: &str,
+) -> bridge_foundation::BridgeProfilePaths {
+    let paths = resolve_profile_paths(root, DEFAULT_PROFILE_ID).expect("MT5 profile paths");
+    CredentialStore::new(&paths.credential_path)
+        .expect("MT5 credential store")
+        .save(&BridgeCredential {
+            refresh_token: "r".repeat(48),
+            expires_at_utc_msc: 1_900_000_000_000,
+        })
+        .expect("MT5 credential");
+    OutboxStore::open_or_create(&paths.database_path).expect("MT5 store");
+    let preferences = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("MT5 preferences store");
+    preferences.save_platform("mt5").expect("MT5 platform");
+    preferences
+        .save_terminal_installation("mt5", terminal_id, terminal_path)
+        .expect("MT5 installation");
+    fs::create_dir_all(&paths.root_data_directory).expect("MT5 root data directory");
+    fs::write(
+        paths.root_data_directory.join("endpoint-settings.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "control_url": control_url,
+            "realtime_url": realtime_url,
+        }))
+        .expect("MT5 endpoint json"),
+    )
+    .expect("MT5 endpoint settings");
     paths
 }
 
