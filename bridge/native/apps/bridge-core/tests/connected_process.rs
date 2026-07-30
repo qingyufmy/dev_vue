@@ -37,6 +37,7 @@ const RECOVERED_COMMAND_ID: &str = "command_01JRECOVER01";
 const CONNECTED_COMMAND_ID: &str = "command_01JCONNECTED1";
 const ROUND_TRIP_CLOSE_COMMAND_ID: &str = "command_01JCONNECTED2";
 const ROUND_TRIP_CANCEL_COMMAND_ID: &str = "command_01JCONNECTED3";
+const ROUND_TRIP_FINAL_COMMAND_ID: &str = "command_01JCONNECTED4";
 
 #[derive(Clone)]
 struct RoundTripCommand {
@@ -49,6 +50,7 @@ struct RoundTripCommand {
     stop_loss: Option<f64>,
     take_profit: Option<f64>,
     protection_distance: Option<f64>,
+    partial_close_volume: Option<f64>,
     magic: i64,
     comment: String,
 }
@@ -552,12 +554,13 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
         symbol: "XAUUSD".to_owned(),
         side: "buy".to_owned(),
         order_kind: "market".to_owned(),
-        volume: 0.01,
+        volume: 0.02,
         price: None,
         modified_price: None,
         stop_loss: None,
         take_profit: None,
         protection_distance: Some(20.0),
+        partial_close_volume: Some(0.01),
         magic,
         comment: marker.to_owned(),
     });
@@ -578,9 +581,11 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
             && server.saw_command_result(CONNECTED_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CANCEL_COMMAND_ID, "succeeded", "none")
+            && server.saw_command_result(ROUND_TRIP_FINAL_COMMAND_ID, "succeeded", "none")
             && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
             && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
             && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CANCEL_COMMAND_ID)
+            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_FINAL_COMMAND_ID)
     });
     thread::sleep(Duration::from_millis(500));
     let store =
@@ -589,6 +594,7 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
         CONNECTED_COMMAND_ID,
         ROUND_TRIP_CLOSE_COMMAND_ID,
         ROUND_TRIP_CANCEL_COMMAND_ID,
+        ROUND_TRIP_FINAL_COMMAND_ID,
     ] {
         let ledger = store
             .command_ledger(command_id)
@@ -604,27 +610,39 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
         .execution_receipt(ROUND_TRIP_CLOSE_COMMAND_ID)
         .expect("MT4 modify position receipt")
         .expect("MT4 modify position result");
-    let close_receipt = store
+    let partial_close_receipt = store
         .execution_receipt(ROUND_TRIP_CANCEL_COMMAND_ID)
-        .expect("MT4 close receipt")
-        .expect("MT4 close result");
+        .expect("MT4 partial close receipt")
+        .expect("MT4 partial close result");
+    let close_receipt = store
+        .execution_receipt(ROUND_TRIP_FINAL_COMMAND_ID)
+        .expect("MT4 final close receipt")
+        .expect("MT4 final close result");
     assert_eq!(open_receipt.status, "succeeded");
     assert_eq!(modify_receipt.status, "succeeded");
+    assert_eq!(partial_close_receipt.status, "succeeded");
     assert_eq!(close_receipt.status, "succeeded");
     assert_eq!(open_receipt.evidence.broker_retcode, Some(0));
     assert_eq!(modify_receipt.evidence.broker_retcode, Some(0));
+    assert_eq!(partial_close_receipt.evidence.broker_retcode, Some(0));
     assert_eq!(close_receipt.evidence.broker_retcode, Some(0));
     let open_ticket = open_receipt
         .evidence
         .order_tickets
         .first()
         .expect("MT4 opened ticket");
-    let closed_ticket = close_receipt
+    let partial_ticket = partial_close_receipt
         .evidence
         .position_tickets
         .first()
-        .expect("MT4 closed ticket");
-    assert_eq!(closed_ticket, open_ticket);
+        .expect("MT4 partially closed ticket");
+    let final_ticket = close_receipt
+        .evidence
+        .position_tickets
+        .first()
+        .expect("MT4 final closed ticket");
+    assert_eq!(partial_ticket, open_ticket);
+    assert!(!final_ticket.is_empty());
     let bindings = store.terminal_bindings().expect("MT4 round-trip bindings");
     assert_eq!(bindings.len(), 1);
     assert_eq!(bindings[0].platform, "mt4");
@@ -682,6 +700,7 @@ fn native_core_places_modifies_and_cancels_a_live_mt4_demo_order() {
         stop_loss: None,
         take_profit: None,
         protection_distance: None,
+        partial_close_volume: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -981,6 +1000,7 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
         stop_loss: Some(stop_loss),
         take_profit: Some(take_profit),
         protection_distance: None,
+        partial_close_volume: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -1116,6 +1136,7 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
         stop_loss: None,
         take_profit: None,
         protection_distance: None,
+        partial_close_volume: None,
         magic,
         comment: marker.to_owned(),
     });
@@ -1632,6 +1653,7 @@ async fn send_round_trip_completion(
     round_trip: &RoundTripCommand,
     expected_state: Value,
     command_id: &str,
+    requested_volume: Option<f64>,
 ) {
     let now = now_utc_msc();
     let (action, params) = if round_trip.order_kind == "market" {
@@ -1641,7 +1663,11 @@ async fn send_round_trip_completion(
                 "ticket": expected_state["ticket"],
                 "symbol": expected_state["symbol"],
                 "side": expected_state["direction"],
-                "volume": expected_state["volume"],
+                "volume": requested_volume.unwrap_or_else(|| {
+                    expected_state["volume"]
+                        .as_f64()
+                        .expect("round-trip expected volume")
+                }),
                 "magic": round_trip.magic,
                 "expected_state": expected_state
             }),
@@ -1838,6 +1864,8 @@ async fn serve_realtime(fixture: RealtimeFixture) {
         let mut round_trip_open_succeeded = false;
         let mut round_trip_close_sent = false;
         let mut round_trip_final_sent = false;
+        let mut round_trip_partial_succeeded = false;
+        let mut round_trip_cleanup_sent = false;
         let mut completion_expected_state = None;
 
         loop {
@@ -2014,6 +2042,72 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                             .await
                             .expect("data acknowledgement send");
                         if !full_snapshot {
+                            if round_trip_partial_succeeded
+                                && !round_trip_cleanup_sent
+                                && stream == "positions"
+                                && let Some(round_trip) = round_trip.as_ref()
+                                && round_trip.partial_close_volume.is_some()
+                                && let Some(position) =
+                                    payload["upserts"].as_array().and_then(|positions| {
+                                        positions.iter().find(|position| {
+                                            position["magic"].as_i64() == Some(round_trip.magic)
+                                        })
+                                    })
+                            {
+                                let ticket = position["ticket"]
+                                    .as_u64()
+                                    .map(|value| value.to_string())
+                                    .or_else(|| position["ticket"].as_str().map(str::to_owned))
+                                    .expect("MT4 remaining position ticket");
+                                let direction =
+                                    match (position["type"].as_i64(), position["type"].as_str()) {
+                                        (Some(0 | 2 | 4 | 6), _) => "buy",
+                                        (Some(1 | 3 | 5 | 7), _) => "sell",
+                                        (_, Some(value)) if value.starts_with("buy") => "buy",
+                                        (_, Some(value)) if value.starts_with("sell") => "sell",
+                                        _ => panic!("MT4 remaining position direction"),
+                                    };
+                                let symbol = position["symbol"]
+                                    .as_str()
+                                    .filter(|value| !value.is_empty())
+                                    .expect("MT4 remaining position symbol");
+                                let volume = position["volume"]
+                                    .as_f64()
+                                    .or_else(|| position["volume_current"].as_f64())
+                                    .filter(|value| value.is_finite() && *value > 0.0)
+                                    .expect("MT4 remaining position volume");
+                                let expected_remaining_volume = round_trip.volume
+                                    - round_trip
+                                        .partial_close_volume
+                                        .expect("MT4 partial close volume");
+                                assert!(
+                                    (volume - expected_remaining_volume).abs() < 1e-9,
+                                    "MT4 remaining position volume"
+                                );
+                                let expected_state = serde_json::json!({
+                                    "ticket": ticket,
+                                    "symbol": symbol,
+                                    "direction": direction,
+                                    "magic": round_trip.magic,
+                                    "volume": volume,
+                                    "broker_server_key": terminal.account_ref.broker_server,
+                                    "login_account": terminal.account_ref.login,
+                                    "stop_loss": position["sl"].as_f64()
+                                        .or_else(|| position["stop_loss"].as_f64()).unwrap_or(0.0),
+                                    "take_profit": position["tp"].as_f64()
+                                        .or_else(|| position["take_profit"].as_f64()).unwrap_or(0.0)
+                                });
+                                send_round_trip_completion(
+                                    &mut socket,
+                                    &terminal,
+                                    round_trip,
+                                    expected_state,
+                                    ROUND_TRIP_FINAL_COMMAND_ID,
+                                    None,
+                                )
+                                .await;
+                                round_trip_cleanup_sent = true;
+                            }
                             if (terminal.platform == "mt5"
                                 || round_trip.as_ref().is_some_and(|command| {
                                     command.protection_distance.is_some()
@@ -2117,6 +2211,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                             round_trip,
                                             expected_state,
                                             ROUND_TRIP_CLOSE_COMMAND_ID,
+                                            None,
                                         )
                                         .await;
                                     }
@@ -2316,6 +2411,7 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                 round_trip,
                                 expected_state,
                                 ROUND_TRIP_CLOSE_COMMAND_ID,
+                                None,
                             )
                             .await;
                             round_trip_close_sent = true;
@@ -2335,9 +2431,18 @@ async fn serve_realtime(fixture: RealtimeFixture) {
                                 round_trip,
                                 expected_state,
                                 ROUND_TRIP_CANCEL_COMMAND_ID,
+                                round_trip.partial_close_volume,
                             )
                             .await;
                             round_trip_final_sent = true;
+                        }
+                        if payload["command_id"] == ROUND_TRIP_CANCEL_COMMAND_ID
+                            && payload["status"] == "succeeded"
+                            && round_trip
+                                .as_ref()
+                                .is_some_and(|command| command.partial_close_volume.is_some())
+                        {
+                            round_trip_partial_succeeded = true;
                         }
                     }
                 }
