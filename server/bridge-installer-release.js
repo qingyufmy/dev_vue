@@ -1,9 +1,9 @@
 const LEGACY_INSTALLER = Object.freeze({
-  version:'v2.4.9',
-  buildDate:'2026-07-25',
-  fullUrl:'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.9.exe',
-  fileSize:46700815,
-  sha256:'289FB6F52A77F2D2A31ACBE11EB9229364B67B5BE570D72439941A4EF3CF5580',
+  version:'3.0.0',
+  buildDate:'2026-07-30',
+  fullUrl:'https://qiniu.acadfx.com/bridge/bootstrapper/6f438a1c2d9f8050f7a1b1b6ce8d004cbe33a16ecfbee7f8b516ffa204361085/LiangjianBridgeSetup.exe',
+  fileSize:26497378,
+  sha256:'6F438A1C2D9F8050F7A1B1B6CE8D004CBE33A16ECFBEE7F8B516FFA204361085',
   v3:false,
 })
 

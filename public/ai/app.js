@@ -4323,8 +4323,8 @@ function initBridgeModal() {
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 
   $("downloadExe")?.addEventListener("click", async () => {
-    let url = "https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.9.exe";
-    let version = "v2.4.9";
+    let url = "https://qiniu.acadfx.com/bridge/bootstrapper/6f438a1c2d9f8050f7a1b1b6ce8d004cbe33a16ecfbee7f8b516ffa204361085/LiangjianBridgeSetup.exe";
+    let version = "3.0.0";
     try {
       const resp = await fetch("/api/bridge/version");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

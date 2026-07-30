@@ -3,11 +3,11 @@ import { readFile } from 'node:fs/promises'
 import { resolveBridgeInstallerRelease } from '../server/bridge-installer-release.js'
 
 describe('bridge installer release descriptor', () => {
-  it('keeps the legacy installer until the complete V3 descriptor is configured', () => {
+  it('keeps the verified static 3.0.0 installer when no dynamic descriptor is configured', () => {
     expect(resolveBridgeInstallerRelease({})).toMatchObject({
-      version:'v2.4.9',
+      version:'3.0.0',
       v3:false,
-      fullUrl:'https://qiniu.acadfx.com/AURUM_Bridge/AURUM_Bridge_Setup_v2.4.9.exe',
+      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'6f438a1c2d9f8050f7a1b1b6ce8d004cbe33a16ecfbee7f8b516ffa204361085'}/LiangjianBridgeSetup.exe`,
     })
   })
 
