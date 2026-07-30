@@ -65,6 +65,9 @@ use mt5_terminal_discovery::{
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const ADMINISTRATOR_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const OBSERVER_UI_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const OBSERVER_RUNTIME_STATUS_MAX_AGE_MSC: i64 = 15_000;
+const OBSERVER_CREDENTIAL_RECOVERY_SCAN_INTERVAL: Duration = Duration::from_secs(5);
+const OBSERVER_CREDENTIAL_RECOVERY_COOLDOWN: Duration = Duration::from_secs(30);
 const MT5_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const UPDATE_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 static UPDATE_DRAIN_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -247,6 +250,13 @@ struct ObserverRuntimeManager {
 struct ObserverUiProjection {
     profiles: Vec<UiObserverProfile>,
     terminals: Vec<UiTerminalStatus>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ObserverCredentialRecoveryCandidate {
+    profile_id: String,
+    bridge_user_id: i64,
+    terminal_instance_id: String,
 }
 
 impl ObserverRuntimeManager {
@@ -605,6 +615,156 @@ async fn refresh_administrator_access(
     Ok((is_administrator, observer_sources))
 }
 
+fn observer_credential_recovery_candidates(
+    root_data_directory: &std::path::Path,
+    observed_at_utc_msc: i64,
+) -> Vec<ObserverCredentialRecoveryCandidate> {
+    let Ok(profile_ids) = list_observer_profiles(root_data_directory) else {
+        return Vec::new();
+    };
+    profile_ids
+        .into_iter()
+        .filter_map(|profile_id| {
+            let paths = resolve_profile_paths(root_data_directory, &profile_id).ok()?;
+            let preferences =
+                BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+                    .ok()?
+                    .load();
+            if !preferences.observer_enabled || !observer_preferences_configured(&preferences) {
+                return None;
+            }
+            let runtime = read_runtime_status_snapshot(
+                &paths.runtime_status_path,
+                &profile_id,
+                observed_at_utc_msc,
+            )
+            .ok()?;
+            if !matches!(
+                runtime.server_error_code.as_deref(),
+                Some("bridge_refresh_revoked" | "bridge_refresh_invalid")
+            ) {
+                return None;
+            }
+            Some(ObserverCredentialRecoveryCandidate {
+                profile_id,
+                bridge_user_id: preferences.observer_bridge_user_id?,
+                terminal_instance_id: preferences.selected_terminal_instance_id()?.to_owned(),
+            })
+        })
+        .collect()
+}
+
+async fn recover_observer_credentials(
+    application_directory: &std::path::Path,
+    root_data_directory: &std::path::Path,
+    administrator_credential_store: &CredentialStore,
+    candidates: &[ObserverCredentialRecoveryCandidate],
+) -> Result<Vec<String>, String> {
+    let Some(administrator_credential) = administrator_credential_store
+        .load()
+        .map_err(|error| error.code().to_owned())?
+    else {
+        return Err("bridge_not_paired".to_owned());
+    };
+    let endpoints = resolve_server_endpoints(application_directory, root_data_directory)
+        .map_err(|error| error.code().to_owned())?;
+    let client = BridgeAuthClient::new(endpoints, &format!("LiangJianBridge/{VERSION}"))
+        .map_err(|error| error.code().to_owned())?;
+    let access = client
+        .managed_observer_access(&administrator_credential.refresh_token)
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if access.bridge_role != "admin" {
+        return Err("bridge_admin_required".to_owned());
+    }
+
+    let permitted_user_ids = access
+        .sources
+        .iter()
+        .map(|source| source.bridge_user_id)
+        .collect::<BTreeSet<_>>();
+    let mut recovered = Vec::new();
+    for candidate in candidates {
+        if !permitted_user_ids.contains(&candidate.bridge_user_id) {
+            continue;
+        }
+        let managed = client
+            .managed_observer_credential(
+                &administrator_credential.refresh_token,
+                candidate.bridge_user_id,
+                &candidate.terminal_instance_id,
+            )
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        let expires_delta = i64::try_from(managed.refresh_expires_in_seconds)
+            .ok()
+            .and_then(|seconds| seconds.checked_mul(1_000))
+            .ok_or_else(|| "bridge_observer_session_response_invalid".to_owned())?;
+        let paths = resolve_profile_paths(root_data_directory, &candidate.profile_id)
+            .map_err(str::to_owned)?;
+        CredentialStore::new(&paths.credential_path)
+            .map_err(|error| error.code().to_owned())?
+            .save(&BridgeCredential {
+                refresh_token: managed.refresh_token,
+                expires_at_utc_msc: now_utc_msc().saturating_add(expires_delta),
+            })
+            .map_err(|error| error.code().to_owned())?;
+        recovered.push(candidate.profile_id.clone());
+    }
+    Ok(recovered)
+}
+
+async fn run_observer_credential_recovery(
+    application_directory: PathBuf,
+    root_data_directory: PathBuf,
+    administrator_credential_store: CredentialStore,
+    stop: SessionCancellation,
+    logger: BridgeLogger,
+) {
+    let mut last_attempts = HashMap::<String, Instant>::new();
+    loop {
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = tokio::time::sleep(OBSERVER_CREDENTIAL_RECOVERY_SCAN_INTERVAL) => {}
+        }
+        let candidates =
+            observer_credential_recovery_candidates(&root_data_directory, now_utc_msc())
+                .into_iter()
+                .filter(|candidate| {
+                    last_attempts
+                        .get(&candidate.profile_id)
+                        .is_none_or(|attempt| {
+                            attempt.elapsed() >= OBSERVER_CREDENTIAL_RECOVERY_COOLDOWN
+                        })
+                })
+                .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            continue;
+        }
+        for candidate in &candidates {
+            last_attempts.insert(candidate.profile_id.clone(), Instant::now());
+        }
+        match recover_observer_credentials(
+            &application_directory,
+            &root_data_directory,
+            &administrator_credential_store,
+            &candidates,
+        )
+        .await
+        {
+            Ok(recovered) => {
+                for profile_id in recovered {
+                    logger.info(
+                        "native_observer_credential_recovered",
+                        Some(&format!("profile={profile_id}")),
+                    );
+                }
+            }
+            Err(code) => logger.warning("native_observer_credential_recovery_failed", Some(&code)),
+        }
+    }
+}
+
 fn load_observer_ui_projection(
     root_data_directory: &std::path::Path,
     observed_at_utc_msc: i64,
@@ -622,9 +782,9 @@ fn load_observer_ui_projection(
             &profile_id,
             observed_at_utc_msc,
         );
-        let runtime_is_fresh = runtime_result
-            .as_ref()
-            .is_ok_and(|runtime| !runtime.is_stale(observed_at_utc_msc, 5_000));
+        let runtime_is_fresh = runtime_result.as_ref().is_ok_and(|runtime| {
+            !runtime.is_stale(observed_at_utc_msc, OBSERVER_RUNTIME_STATUS_MAX_AGE_MSC)
+        });
         let (runtime_phase, runtime_detail_code) = match &runtime_result {
             Ok(runtime) if runtime_is_fresh => (
                 Some(runtime.phase.clone()),
@@ -934,6 +1094,15 @@ async fn run_connected_profile(
     let (update_wake_sender, update_wake_receiver) = watch::channel(0_u64);
     let update_drain = RuntimeUpdateDrainSlot::default();
     let lifecycle_update_state_store = update_state_store.clone();
+    let observer_credential_recovery_task = (profile_id == DEFAULT_PROFILE_ID).then(|| {
+        tokio::spawn(run_observer_credential_recovery(
+            application_directory.clone(),
+            root_data_directory.clone(),
+            credential_store.clone(),
+            stop.clone(),
+            logger.clone(),
+        ))
+    });
     let update_task = update_coordinator.map(|coordinator| {
         tokio::spawn(run_periodic_update_checks(
             coordinator,
@@ -953,7 +1122,7 @@ async fn run_connected_profile(
         local_control_server,
         LocalControlContext {
             ui_state: ui_state.clone(),
-            credential_store,
+            credential_store: credential_store.clone(),
             preferences_store: preferences_store.clone(),
             preference_change_sender,
             application_directory: application_directory.clone(),
@@ -1012,6 +1181,11 @@ async fn run_connected_profile(
     }
     if let Some(manager) = observer_runtimes {
         manager.stop_all().await;
+    }
+    if let Some(recovery_task) = observer_credential_recovery_task {
+        recovery_task
+            .await
+            .map_err(|_| "bridge_observer_credential_recovery_task_failed")?;
     }
     control_task
         .await
@@ -4404,6 +4578,91 @@ mod tests {
     }
 
     #[test]
+    fn observer_credential_recovery_targets_only_enabled_revoked_server_sessions() {
+        let root = unique_test_directory("observer-credential-recovery");
+        std::fs::create_dir_all(&root).expect("observer recovery root");
+        let now = now_utc_msc();
+        let paths = resolve_profile_paths(&root, "source-1").expect("observer paths");
+        let terminal = root.join("Broker MT5").join("terminal64.exe");
+        std::fs::create_dir_all(terminal.parent().expect("terminal parent"))
+            .expect("terminal directory");
+        std::fs::write(&terminal, b"terminal").expect("terminal fixture");
+        let terminal_instance_id = "mt5_dddddddddddddddddddddddd";
+        BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+            .expect("observer preferences")
+            .save_observer_profile(&ObserverProfilePreferences {
+                platform: "mt5".to_owned(),
+                terminal_instance_id: terminal_instance_id.to_owned(),
+                terminal_path: terminal.display().to_string(),
+                bridge_user_id: 29,
+                observer_account_label: Some("一号观摩源".to_owned()),
+                trading_account_id: Some(9),
+                trading_account_label: Some("596520 · Broker-Demo".to_owned()),
+            })
+            .expect("save observer profile");
+        let runtime = serde_json::json!({
+            "schema_version": 1,
+            "bridge_version": VERSION,
+            "profile_id": "source-1",
+            "observed_at_utc_msc": now,
+            "phase": "degraded",
+            "server_state": "reconnecting",
+            "server_error_code": "bridge_refresh_revoked",
+            "terminals": [],
+            "reconciliation": {
+                "last_run_at_utc_msc": null,
+                "inspected": 0,
+                "resolved": 0,
+                "pending": 0,
+                "error_codes": [],
+                "consecutive_failures": 0,
+                "fatal_error_code": null
+            }
+        });
+        write_runtime_status_snapshot(
+            &paths.runtime_status_path,
+            &serde_json::to_vec(&runtime).expect("runtime payload"),
+        )
+        .expect("observer runtime status");
+
+        assert_eq!(
+            observer_credential_recovery_candidates(&root, now),
+            vec![ObserverCredentialRecoveryCandidate {
+                profile_id: "source-1".to_owned(),
+                bridge_user_id: 29,
+                terminal_instance_id: terminal_instance_id.to_owned(),
+            }]
+        );
+
+        let healthy_runtime = serde_json::json!({
+            "schema_version": 1,
+            "bridge_version": VERSION,
+            "profile_id": "source-1",
+            "observed_at_utc_msc": now,
+            "phase": "online",
+            "server_state": "connected",
+            "server_error_code": null,
+            "terminals": [],
+            "reconciliation": {
+                "last_run_at_utc_msc": null,
+                "inspected": 0,
+                "resolved": 0,
+                "pending": 0,
+                "error_codes": [],
+                "consecutive_failures": 0,
+                "fatal_error_code": null
+            }
+        });
+        write_runtime_status_snapshot(
+            &paths.runtime_status_path,
+            &serde_json::to_vec(&healthy_runtime).expect("healthy runtime payload"),
+        )
+        .expect("healthy observer runtime status");
+        assert!(observer_credential_recovery_candidates(&root, now).is_empty());
+        std::fs::remove_dir_all(root).expect("remove observer recovery fixture");
+    }
+
+    #[test]
     fn observer_ui_projection_combines_preferences_runtime_route_and_permissions() {
         let root = unique_test_directory("observer-ui-projection");
         std::fs::create_dir_all(&root).expect("observer projection root");
@@ -4517,8 +4776,17 @@ mod tests {
             Some(false)
         );
 
+        let within_publish_jitter = load_observer_ui_projection(&root, now + 5_001)
+            .expect("observer projection within publish jitter");
+        assert_eq!(
+            within_publish_jitter.profiles[0].runtime_phase.as_deref(),
+            Some("online")
+        );
+        assert_eq!(within_publish_jitter.terminals.len(), 1);
+
         let stale =
-            load_observer_ui_projection(&root, now + 5_001).expect("stale observer projection");
+            load_observer_ui_projection(&root, now + OBSERVER_RUNTIME_STATUS_MAX_AGE_MSC + 1)
+                .expect("stale observer projection");
         assert_eq!(stale.profiles[0].runtime_phase.as_deref(), Some("degraded"));
         assert_eq!(
             stale.profiles[0].runtime_detail_code.as_deref(),

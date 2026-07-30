@@ -61,7 +61,9 @@ const RECONCILIATION_INTERVAL: Duration = Duration::from_secs(5);
 const RECONCILIATION_BATCH_LIMIT: usize = 100;
 const CREDENTIAL_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const TERMINAL_BINDING_POLL_INTERVAL: Duration = Duration::from_millis(500);
-const UI_TRADING_PERMISSION_MAX_AGE_MSC: i64 = 5_000;
+// Runtime status is persisted every five seconds. Keep enough scheduling margin so
+// the UI does not briefly downgrade healthy observer permissions between writes.
+const UI_TRADING_PERMISSION_MAX_AGE_MSC: i64 = 15_000;
 const MAX_CREDENTIAL_FILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
