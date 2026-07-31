@@ -44,6 +44,13 @@ const isLegacyPendingPositionAlias = outcome => Boolean(ref(outcome?.pending_tic
   && ref(outcome?.position_id) === ref(outcome?.pending_ticket)
   && !ref(outcome?.entry_deal_ticket)
 
+export function resolveLiveMarginMode(account = {}) {
+  if (typeof account.is_hedging === 'boolean') return account.is_hedging ? 'hedging' : 'netting'
+  const numeric = account.margin_mode == null || account.margin_mode === '' ? Number.NaN : Number(account.margin_mode)
+  if (Number.isInteger(numeric) && numeric >= 0) return numeric === 2 ? 'hedging' : 'netting'
+  return null
+}
+
 function effectiveMode(requested, maximum) {
   const requestedMode = String(requested || '').toLowerCase() === 'shadow'
     ? 'display' : String(requested || 'display').toLowerCase()
@@ -101,10 +108,8 @@ export function validateExitOnlyPreconditions({
   if (inventory?.status !== 'success' || !inventory.account) {
     return { ok:false, code:'bridge_inventory_unavailable', retryable:true }
   }
-  const inventoryMarginMode = inventory.account.is_hedging ? 'hedging' : 'netting'
-  if (String(outcome.margin_mode || '').toLowerCase() !== inventoryMarginMode) {
-    return { ok:false, code:'account_margin_mode_mismatch' }
-  }
+  const inventoryMarginMode = resolveLiveMarginMode(inventory.account)
+  if (!inventoryMarginMode) return { ok:false, code:'account_margin_mode_unavailable', retryable:true }
   if (upper(inventory.account.server) !== upper(task.broker_server_key)
     || ref(inventory.account.login) !== ref(task.login_account)) {
     return { ok:false, code:'bridge_account_identity_mismatch' }
@@ -128,7 +133,7 @@ export function validateExitOnlyPreconditions({
   if (canonicalSymbol(target.symbol) !== canonicalSymbol(task.original_symbol || task.standard_symbol)) {
     return { ok:false, code:'position_symbol_mismatch' }
   }
-  if (!inventory.account.is_hedging) {
+  if (inventoryMarginMode === 'netting') {
     const sameSymbolPositions = (inventory.positions || []).filter(position =>
       canonicalSymbol(position.symbol) === canonicalSymbol(target.symbol))
     if (sameSymbolPositions.length !== 1) return { ok:false, code:'netting_position_not_exclusive' }
@@ -201,10 +206,8 @@ export function validatePendingCancelPreconditions({
   if (inventory?.status !== 'success' || !inventory.account || !Array.isArray(inventory.pending_orders)) {
     return { ok:false, code:'bridge_inventory_unavailable', retryable:true }
   }
-  const inventoryMarginMode = inventory.account.is_hedging ? 'hedging' : 'netting'
-  if (String(outcome.margin_mode || '').toLowerCase() !== inventoryMarginMode) {
-    return { ok:false, code:'account_margin_mode_mismatch' }
-  }
+  const inventoryMarginMode = resolveLiveMarginMode(inventory.account)
+  if (!inventoryMarginMode) return { ok:false, code:'account_margin_mode_unavailable', retryable:true }
   if (upper(inventory.account.server) !== upper(task.broker_server_key)
     || ref(inventory.account.login) !== ref(task.login_account)) {
     return { ok:false, code:'bridge_account_identity_mismatch' }
@@ -235,6 +238,7 @@ export function validatePendingCancelPreconditions({
   const expectedState = {
     broker_server_key:upper(task.broker_server_key),
     login_account:ref(task.login_account),
+    margin_mode:inventoryMarginMode,
     ticket,
     symbol:ref(target.symbol),
     direction,

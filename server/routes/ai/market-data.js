@@ -1508,9 +1508,6 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   if (centerEntryUnconfirmed) warnings.push('center_entry_unconfirmed')
   const lastSeg = validSegs.length > 0 ? validSegs[validSegs.length - 1] : null
   const lastBi = activeConfirmedBis.at(-1) || null
-  const activeCenter = latestCenter && latestCenter.status !== 'closed' && latest >= latestCenter.zl && latest <= latestCenter.zh
-    ? latestCenter
-    : null
   const lastSegmentEndIndex = Number(lastSeg?.raw_end_idx)
   const confirmedStructureAgeBars = Number.isFinite(lastSegmentEndIndex)
     ? Math.max(0, closedRates.length - 1 - lastSegmentEndIndex)
@@ -1519,8 +1516,11 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   if (confirmedStructureStale) {
     warnings.push('confirmed_structure_stale')
   }
+  const currentStructureUsable = !confirmedStructureStale
+  const activeCenter = currentStructureUsable && latestCenter && latestCenter.status !== 'closed'
+    && latest >= latestCenter.zl && latest <= latestCenter.zh ? latestCenter : null
   let priceVsCenter = 'none'
-  if (latestCenter) {
+  if (currentStructureUsable && latestCenter) {
     if (latest > latestCenter.zh) priceVsCenter = 'above'
     else if (latest < latestCenter.zl) priceVsCenter = 'below'
     else priceVsCenter = 'inside'
@@ -1610,8 +1610,13 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   else if (validSegs.length > 0 && centers.length === 0) status = 'partial'
   else if (warnings.length > 0) status = 'partial'
 
-  const trendState = classifyChanTrend(validSegs, centers, latest, divergence, reliability)
-  const entryCandidates = detectChanEntryCandidates(validSegs, centers, divergence, currentRunRecentDivergences, allBis, closedRates, reliability, structureTimeKeyReliable, activeRunId)
+  const trendState = currentStructureUsable
+    ? classifyChanTrend(validSegs, centers, latest, divergence, reliability)
+    : emptyTrendState('confirmed_structure_stale')
+  const entryCandidates = currentStructureUsable
+    ? detectChanEntryCandidates(validSegs, centers, divergence, currentRunRecentDivergences,
+      allBis, closedRates, reliability, structureTimeKeyReliable, activeRunId)
+    : []
   const entrySegment = latestCenter ? validSegs.find(segment => segment.id === latestCenter.entry_segment_id) || null : null
   const anchorRawIndex = Number(entrySegment?.raw_start_idx)
   const recommendedAnchorTime = centerEntryConfirmed && windowStable && structureTimeKeyReliable
@@ -1700,7 +1705,7 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     current_segment: confirmedSegmentSummaries.at(-1) || null,
     prev_segment: confirmedSegmentSummaries.at(-2) || null,
     candidate_segment: formingSegment ? { ...summarizeSegment(formingSegment, allBis, closedRates), confirmed: false } : candidate ? { dir: candidate.dir, bi_count: candidate.bi_ids.length, start_price: round5(candidate.start_price), end_price: round5(candidate.end_price), confirmed: false } : null,
-    current_center:confirmedCenterSummaries.at(-1) || null,
+    current_center:currentStructureUsable ? confirmedCenterSummaries.at(-1) || null : null,
     active_center:activeCenter ? confirmedCenterSummaries.find(center => center.id === activeCenter.id) || null : null,
     latest_center:confirmedCenterSummaries.at(-1) || null,
     latest_bi_center: summarizeBiCenter(biCenters.at(-1), timeframe, activeConfirmedBis, closedRates),
@@ -2509,7 +2514,10 @@ function selectStableChanResult(candidates, options = {}) {
   const confirmedStatus = consensus.segments.length > 0 && summarizedCenters.length === 0
     ? 'partial'
     : uniqueWarnings.length > 0 ? 'partial' : 'ok'
-  const confirmedReliability = selected.history_sufficient && selected.closed_history_sufficient
+  const confirmedStructureStale = uniqueWarnings.includes('confirmed_structure_stale')
+  const confirmedReliability = confirmedStructureStale
+    ? 'low'
+    : selected.history_sufficient && selected.closed_history_sufficient
     && selected.time_location_reliable && consensus.segments.length >= 2 && summarizedCenters.length > 0
     && uniqueWarnings.length === 0
     ? 'high'
@@ -2519,15 +2527,18 @@ function selectStableChanResult(candidates, options = {}) {
   const structureTopologyReliable = selected.history_sufficient && selected.closed_history_sufficient
     && selected.structure_time_key_reliable === true
     && selected.cache_internal_gap_unresolved !== true
-    && !new Set(selected.warnings || []).has('confirmed_structure_stale')
+    && !confirmedStructureStale
     && consensus.segments.length >= 2 && summarizedCenters.length > 0
   const latestPrice = Number(selected.latest_price)
-  const priceVsCenter = !latestConsensusCenter || !Number.isFinite(latestPrice)
+  const currentStructureUsable = !confirmedStructureStale
+  const priceVsCenter = !currentStructureUsable || !latestConsensusCenter || !Number.isFinite(latestPrice)
     ? 'none'
     : latestPrice > Number(latestConsensusCenter.zh) ? 'above'
       : latestPrice < Number(latestConsensusCenter.zl) ? 'below' : 'inside'
-  const trendState = classifyChanTrend(consensus.segments, summarizedCenters, latestPrice,
-    consensusDivergence || emptyDivergence(divergenceFailureReason), confirmedReliability)
+  const trendState = currentStructureUsable
+    ? classifyChanTrend(consensus.segments, summarizedCenters, latestPrice,
+      consensusDivergence || emptyDivergence(divergenceFailureReason), confirmedReliability)
+    : emptyTrendState('confirmed_structure_stale')
   const formingFailureReason = formingConsensus.eligibleCount < 2
     ? 'forming_evidence_unavailable' : 'forming_cross_window_unstable'
   return {
@@ -2540,8 +2551,8 @@ function selectStableChanResult(candidates, options = {}) {
     center_count:summarizedCenters.length,
     current_segment:consensus.segments.at(-1) || null,
     prev_segment:consensus.segments.at(-2) || null,
-    current_center:latestConsensusCenter,
-    active_center:latestConsensusCenter && latestConsensusCenter.status !== 'closed'
+    current_center:currentStructureUsable ? latestConsensusCenter : null,
+    active_center:currentStructureUsable && latestConsensusCenter && latestConsensusCenter.status !== 'closed'
       && priceVsCenter === 'inside' ? latestConsensusCenter : null,
     latest_center:latestConsensusCenter,
     price_vs_center:priceVsCenter,
@@ -2559,7 +2570,7 @@ function selectStableChanResult(candidates, options = {}) {
     forming_divergence:consensusFormingDivergence || emptyDivergence(formingFailureReason),
     recent_divergences: recentDivergences,
     trend_state:trendState,
-    entry_candidates: entryCandidates,
+    entry_candidates: currentStructureUsable ? entryCandidates : [],
     warnings: uniqueWarnings,
     cross_window_support_count: winner.length,
     cross_window_validator_count: validatorCount,
@@ -2644,14 +2655,17 @@ function protectBootstrapDependentEvidence(selected, usable, reliability) {
     }
   }
   const divergence = emptyDivergence('structure_anchor_bootstrap_pending')
+  const confirmedStructureStale = new Set(selected?.warnings || []).has('confirmed_structure_stale')
   return {
     divergence,
     forming_divergence:emptyDivergence('structure_anchor_bootstrap_pending'),
     recent_divergences:[],
-    trend_state:classifyChanTrend(
-      [selected?.prev_segment, selected?.current_segment].filter(Boolean),
-      [selected?.latest_center].filter(Boolean),
-      Number(selected?.latest_price), divergence, reliability),
+    trend_state:confirmedStructureStale
+      ? emptyTrendState('confirmed_structure_stale')
+      : classifyChanTrend(
+        [selected?.prev_segment, selected?.current_segment].filter(Boolean),
+        [selected?.latest_center].filter(Boolean),
+        Number(selected?.latest_price), divergence, reliability),
     entry_candidates:[],
   }
 }

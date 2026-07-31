@@ -23,6 +23,7 @@ vi.mock('../../server/routes/ai/position-management.js', () => ({
 import {
   classifyCloseReconciliation,
   classifyPendingCancelReconciliation,
+  resolveLiveMarginMode,
   resolvePositionManagementRuntimeMode,
   validateExitOnlyPreconditions,
   validatePendingCancelPreconditions,
@@ -85,7 +86,6 @@ describe('position management exit-only worker', () => {
 
   it.each([
     ['bridge generation changes', value => { value.currentGeneration = 8 }, 'bridge_generation_mismatch'],
-    ['stored and live margin modes differ', value => { value.inventory.account.is_hedging = false }, 'account_margin_mode_mismatch'],
     ['attribution is ambiguous', value => { value.outcome.attribution_status = 'attribution_ambiguous' }, 'position_attribution_incomplete'],
     ['position volume was changed', value => { value.inventory.positions[0].volume = 0.1 }, 'position_volume_mismatch'],
     ['real stop loss is missing', value => { value.inventory.positions[0].sl = 0 }, 'position_missing_stop_loss'],
@@ -93,6 +93,28 @@ describe('position management exit-only worker', () => {
     const value = fixture()
     mutate(value)
     expect(validateExitOnlyPreconditions(value)).toMatchObject({ ok:false, code })
+  })
+
+  it('uses the live terminal margin mode instead of stale outcome metadata', () => {
+    const value = fixture()
+    value.outcome.margin_mode = 'netting'
+    expect(validateExitOnlyPreconditions(value)).toMatchObject({
+      ok:true,
+      expectedState:{ margin_mode:'hedging' },
+    })
+    delete value.inventory.account.is_hedging
+    delete value.inventory.account.margin_mode
+    expect(validateExitOnlyPreconditions(value)).toMatchObject({
+      ok:false, code:'account_margin_mode_unavailable', retryable:true,
+    })
+  })
+
+  it('normalizes explicit MT4 and MT5 live margin-mode fields', () => {
+    expect(resolveLiveMarginMode({ is_hedging:true, margin_mode:-1 })).toBe('hedging')
+    expect(resolveLiveMarginMode({ margin_mode:2 })).toBe('hedging')
+    expect(resolveLiveMarginMode({ margin_mode:0 })).toBe('netting')
+    expect(resolveLiveMarginMode({ margin_mode:null })).toBeNull()
+    expect(resolveLiveMarginMode({})).toBeNull()
   })
 
   it('allows an exact exclusive netting position but rejects competing strategy ownership', () => {
@@ -148,8 +170,10 @@ describe('position management exit-only worker', () => {
       type:'buy_limit', volume:0.2, magic:234000 }]
     expect(validatePendingCancelPreconditions(value)).toMatchObject({
       ok:true,
-      expectedState:{ ticket:'8101', symbol:'XAUUSD.s', direction:'buy', magic:234000, volume:0.2 },
+      expectedState:{ margin_mode:'netting', ticket:'8101', symbol:'XAUUSD.s', direction:'buy', magic:234000, volume:0.2 },
     })
+    value.outcome.margin_mode = 'hedging'
+    expect(validatePendingCancelPreconditions(value)).toMatchObject({ ok:true, expectedState:{ margin_mode:'netting' } })
     value.setting.execution_mode = 'display'
     value.control.maximum_mode = 'display'
     expect(validatePendingCancelPreconditions(value)).toMatchObject({ ok:true })

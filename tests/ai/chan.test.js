@@ -2053,6 +2053,39 @@ describe('persistent Chan structure anchor', () => {
     expect(selected.warnings).not.toContain('divergence_evidence_unavailable')
   })
 
+  it('keeps a stale center as historical evidence without calling it the current range', () => {
+    const chain = consensusSegmentChain()
+    const center = {
+      id:1, stable_id:'s1|c1', core_stable_id:'s1|p1|c1',
+      core_segment_stable_ids:['s1', 'p1', 'c1'], status:'open',
+      entry_segment_stable_id:'entry', start_segment_stable_id:'s1',
+      end_segment_stable_id:'c1', departure_segment_stable_id:null,
+      zl:100, zh:110,
+    }
+    const candidate = raw => ({
+      window_stable:true, segment_count:4, center_count:1, raw_bar_count:raw,
+      window_start_time_utc_msc:1, history_sufficient:true, closed_history_sufficient:true,
+      time_location_reliable:true, structure_time_key_reliable:true,
+      cache_internal_gap_unresolved:false, latest_price:105, reliability:'low',
+      warnings:['confirmed_structure_stale'], _confirmed_segments:chain,
+      prev_segment:chain.at(-2), current_segment:chain.at(-1), latest_center:center,
+      divergence:{ type:'none', confirmed:false, reason:'not_after_center' },
+      forming_divergence:{ type:'none', confirmed:false, reason:'no_forming_segment' },
+      recent_divergences:[], entry_candidates:[{ type:'third_buy', usable_for_entry:false }],
+    })
+    const selected = selectStableChanResult([
+      candidate(900), candidate(800), candidate(700), candidate(600), candidate(500),
+    ])
+
+    expect(selected.latest_center).toBeTruthy()
+    expect(selected.current_center).toBeNull()
+    expect(selected.active_center).toBeNull()
+    expect(selected.price_vs_center).toBe('none')
+    expect(selected.trend_state).toMatchObject({ state:'unavailable', reason:'confirmed_structure_stale' })
+    expect(selected.entry_candidates).toEqual([])
+    expect(selected.structure_topology_reliable).toBe(false)
+  })
+
   it('intersects historical divergences without discarding an agreed current center', () => {
     const result = (recentKey, raw) => ({
       window_stable:true, segment_count:4, center_count:1, raw_bar_count:raw,

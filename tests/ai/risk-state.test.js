@@ -290,6 +290,24 @@ describe('stateful gate', () => {
 describe('identity and platform permissions', () => {
   beforeEach(() => vi.clearAllMocks())
 
+  it('persists the Bridge-reported account margin mode instead of assuming netting', async () => {
+    const writes = []
+    db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {
+      if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[], []]
+      if (sql.startsWith('SELECT * FROM trading_accounts\n      WHERE UPPER')) return [[], []]
+      if (sql.includes('FROM mt5_account_bindings')) return [[], []]
+      writes.push({ sql, params })
+      if (sql.startsWith('INSERT INTO trading_accounts')) return [{ insertId:5 }, []]
+      return [{ affectedRows:1 }, []]
+    }))
+
+    await expect(syncTradingAccountIdentity(2, {
+      server:'Broker-Demo', login:123, trade_allowed:true, source:'mt4', margin_mode:-1,
+    })).resolves.toMatchObject({ accountId:5, verified:true })
+    const insert = writes.find(write => write.sql.startsWith('INSERT INTO trading_accounts'))
+    expect(insert.params[3]).toBe('hedging')
+  })
+
   it('auto-verifies a Bridge account and migrates existing subscriptions to the connected account', async () => {
     const writes = []
     db.withTransaction.mockImplementation(async fn => fn(async (sql, params = []) => {

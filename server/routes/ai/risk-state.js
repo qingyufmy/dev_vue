@@ -212,6 +212,16 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
   const server = String(snapshot?.server || '').trim(), login = String(snapshot?.login || '').trim()
   if (!server || !login) throw new Error('trading_account_identity_incomplete')
   const hasTradingAuthority = snapshot?.trade_allowed === true || Number(snapshot?.trade_allowed) === 1
+  const platform = String(snapshot?.source || snapshot?.platform || '').trim().toLowerCase()
+  const rawMarginMode = snapshot?.margin_mode
+  const numericMarginMode = rawMarginMode == null || rawMarginMode === '' ? Number.NaN : Number(rawMarginMode)
+  const snapshotMarginMode = typeof snapshot?.is_hedging === 'boolean'
+    ? (snapshot.is_hedging ? 'hedging' : 'netting')
+    : platform === 'mt4'
+      ? 'hedging'
+      : Number.isInteger(numericMarginMode) && numericMarginMode >= 0
+        ? (numericMarginMode === 2 ? 'hedging' : 'netting')
+        : null
   const result = await withTransaction(async run => {
     const now = beijingNow()
     const rows = (await run('SELECT * FROM trading_accounts WHERE user_id = ? FOR UPDATE', [userId]))[0]
@@ -231,21 +241,25 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
       const [insert] = await run(`INSERT INTO trading_accounts
         (user_id, broker_server, login_account, nickname, margin_mode, review_status, observe_status,
          observed_until, first_verified_at, identity_verified_at, anomaly_code, is_deleted, created_at, updated_at)
-        VALUES (?, ?, ?, '', 'netting', ?, ?, NULL, ?, ?, ?, 0, ?, ?)`,
-      [userId, server, login, reviewStatus, observeStatus, now, now, anomalyCode, now, now])
-      matched = { id: insert.insertId, user_id: userId, broker_server: server, login_account: login, review_status: reviewStatus, observe_status: observeStatus }
+        VALUES (?, ?, ?, '', ?, ?, ?, NULL, ?, ?, ?, 0, ?, ?)`,
+      [userId, server, login, snapshotMarginMode || 'netting', reviewStatus, observeStatus, now, now, anomalyCode, now, now])
+      matched = { id: insert.insertId, user_id: userId, broker_server: server, login_account: login,
+        margin_mode:snapshotMarginMode || 'netting', review_status:reviewStatus, observe_status:observeStatus }
     } else if (matched.is_deleted) {
       await run(`UPDATE trading_accounts SET is_deleted = 0, review_status = ?, observe_status = ?,
         observed_until = NULL, first_verified_at = COALESCE(first_verified_at, ?),
-        identity_verified_at = ?, anomaly_code = ?, updated_at = ? WHERE id = ?`,
-      [reviewStatus, observeStatus, now, now, anomalyCode, now, matched.id])
-      matched = { ...matched, is_deleted: 0, review_status: reviewStatus, observe_status: observeStatus }
+        identity_verified_at = ?, anomaly_code = ?, margin_mode = COALESCE(?, margin_mode), updated_at = ? WHERE id = ?`,
+      [reviewStatus, observeStatus, now, now, anomalyCode, snapshotMarginMode, now, matched.id])
+      matched = { ...matched, is_deleted:0, margin_mode:snapshotMarginMode || matched.margin_mode,
+        review_status:reviewStatus, observe_status:observeStatus }
     } else {
       await run(`UPDATE trading_accounts SET review_status = ?,
         observe_status = CASE WHEN ? = 'frozen' THEN 'frozen' WHEN ? = 'paused' THEN 'paused' ELSE 'active' END,
-        observed_until = NULL, first_verified_at = COALESCE(first_verified_at, ?), identity_verified_at = ?, anomaly_code = ?, updated_at = ? WHERE id = ?`,
-      [reviewStatus, observeStatus, observeStatus, now, now, anomalyCode, now, matched.id])
-      matched = { ...matched, review_status: reviewStatus, observe_status: observeStatus }
+        observed_until = NULL, first_verified_at = COALESCE(first_verified_at, ?), identity_verified_at = ?,
+        anomaly_code = ?, margin_mode = COALESCE(?, margin_mode), updated_at = ? WHERE id = ?`,
+      [reviewStatus, observeStatus, observeStatus, now, now, anomalyCode, snapshotMarginMode, now, matched.id])
+      matched = { ...matched, margin_mode:snapshotMarginMode || matched.margin_mode,
+        review_status:reviewStatus, observe_status:observeStatus }
     }
     if (!canClaimOwnership) {
       await run(`INSERT INTO risk_account_state (trading_account_id, user_id, halt_status, halt_reason, data_complete, created_at, updated_at)
