@@ -20,9 +20,20 @@ const DEBUG_LLM = process.env.DEBUG_LLM === '1' || DEBUG_LLM_PAYLOAD
 const TP_FROM_SL = { tp1: 1.5, tp2: 2.5, tp3: 4.0 }
 export const AUTO_INFERENCE_MAX_OUTPUT_TOKENS = 12_000
 export const AUTO_INFERENCE_MAX_PROMPT_CHARS = 120_000
-export const INFERENCE_KLINE_FIELDS = Object.freeze(['time', 'open', 'high', 'low', 'close', 'tick_volume'])
+export const INFERENCE_KLINE_FIELDS = Object.freeze([
+  'time',
+  'time_utc_msc',
+  'time_server_msc',
+  'captured_at_utc_msc',
+  'open',
+  'high',
+  'low',
+  'close',
+  'tick_volume',
+  'spread',
+])
 const COMPACT_MARKET_INPUT_RULE = `## 市场数据紧凑编码
-strategy_context.input_encoding 说明模型输入的无损编码。各周期 klines 中每个数组元素依次对应 kline_fields 的 time、open、high、low、close、tick_volume，数组元素数量就是 K 线根数。对象 {"$ref":"#/..."} 是 JSON Pointer，表示与所指对象完全相同；分析时必须按原对象展开理解，不得视为数据缺失。`
+strategy_context.input_encoding 说明模型输入的无损编码。各周期 klines 中每个数组元素严格依次对应 kline_fields；字段包括原始时间、UTC 毫秒时间、交易服务器毫秒时间、采集 UTC 毫秒时间、开高低收、Tick 成交量和点差，null 表示该原始字段未提供，数组元素数量就是 K 线根数。对象 {"$ref":"#/..."} 是 JSON Pointer，表示与所指对象完全相同；分析时必须按原对象展开理解，不得视为数据缺失。`
 
 export function automaticInferenceMaxTokens(config = {}) {
   const requested = Math.max(1_000, Number.parseInt(config.max_tokens || 2_000) || 2_000)

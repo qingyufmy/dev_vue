@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, automaticInferenceMaxTokens, AUTO_INFERENCE_MAX_OUTPUT_TOKENS, compactInferenceMarketPayload, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
+import { compactRates } from '../../server/routes/ai/utils.js'
 
 describe('automatic inference budgets', () => {
   it('caps automated output without changing manual model profiles', () => {
@@ -12,8 +13,8 @@ describe('automatic inference budgets', () => {
 describe('compact inference market payload', () => {
   it('keeps every K-line value and count while removing repeated field names', () => {
     const bars = [
-      { time:'2026-07-24 10:00:00', open:1, high:2, low:0.5, close:1.5, tick_volume:10 },
-      { time:'2026-07-24 11:00:00', open:1.5, high:2.5, low:1, close:2, tick_volume:12 },
+      { time:'2026-07-24 10:00:00', time_utc_msc:null, time_server_msc:null, captured_at_utc_msc:null, open:1, high:2, low:0.5, close:1.5, tick_volume:10, spread:null },
+      { time:'2026-07-24 11:00:00', time_utc_msc:null, time_server_msc:null, captured_at_utc_msc:null, open:1.5, high:2.5, low:1, close:2, tick_volume:12, spread:null },
     ]
     const original = { strategy_context:{ timeframes:{ H1:{ summary:{}, klines:bars } } } }
     const compacted = compactInferenceMarketPayload(original)
@@ -24,6 +25,24 @@ describe('compact inference market payload', () => {
       INFERENCE_KLINE_FIELDS.map((field, index) => [field, values[index]])))
     expect(expanded).toEqual(bars)
     expect(original.strategy_context.timeframes.H1.klines).toEqual(bars)
+  })
+
+  it('losslessly compacts the current compactRates output including clock and spread fields', () => {
+    const bars = compactRates([{
+      time:'2026-07-24 10:00:00',
+      time_utc_msc:1784868000000,
+      time_server_msc:1784878800000,
+      captured_at_utc_msc:1784868000500,
+      open:'1.234567', high:'1.240001', low:'1.220001', close:'1.230001', tick_volume:'100', spread:'3',
+    }])
+    const payload = { strategy_context:{ timeframes:{ M15:{ summary:{}, klines:bars } } } }
+    const compacted = compactInferenceMarketPayload(payload)
+    const frame = compacted.strategy_context.timeframes.M15
+    expect(frame.klines[0]).toHaveLength(INFERENCE_KLINE_FIELDS.length)
+    const expanded = frame.klines.map(values => Object.fromEntries(
+      INFERENCE_KLINE_FIELDS.map((field, index) => [field, values[index]])))
+    expect(expanded).toEqual(bars)
+    expect(compacted.strategy_context.input_encoding.kline_fields).toEqual(INFERENCE_KLINE_FIELDS)
   })
 
   it('replaces only exact repeated Chan objects with resolvable references', () => {
@@ -46,7 +65,7 @@ describe('compact inference market payload', () => {
   })
 
   it('does not compact custom K-line objects with unknown fields', () => {
-    const bar = { time:'t', open:1, high:2, low:0, close:1, tick_volume:2, spread:3 }
+    const bar = { time:'t', open:1, high:2, low:0, close:1, tick_volume:2, spread:3, broker_note:'custom' }
     const payload = { strategy_context:{ timeframes:{ M5:{ summary:{}, klines:[bar] } } } }
     expect(compactInferenceMarketPayload(payload).strategy_context.timeframes.M5.klines).toEqual([bar])
   })
