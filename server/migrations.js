@@ -4481,6 +4481,37 @@ const migrations = [
           AND outcomes.position_id IS NULL AND outcomes.pending_ticket IS NOT NULL
           AND COALESCE(deliveries.pending_state, signals.pending_state) = 'pending'`)
     }
+  },
+  {
+    id: '156_normalize_zero_deal_pending_identity',
+    async up() {
+      // MT4/MT5 report deal=0 while a pending order has not filled. Normalize
+      // that transport sentinel before repairing legacy order/position aliases.
+      await queryRun(`UPDATE signal_outcomes
+        SET entry_deal_ticket = NULL, updated_at = NOW()
+        WHERE TRIM(COALESCE(entry_deal_ticket, '')) IN ('', '0')
+          AND entry_deal_ticket IS NOT NULL`)
+      await queryRun(`UPDATE signal_outcomes outcomes
+        LEFT JOIN auto_signal_deliveries deliveries ON deliveries.id = outcomes.delivery_id
+        LEFT JOIN ai_signals signals ON signals.id = outcomes.signal_id
+        SET outcomes.position_id = NULL, outcomes.attribution_status = 'pending',
+          outcomes.status = 'open', outcomes.updated_at = NOW()
+        WHERE outcomes.pending_ticket IS NOT NULL
+          AND outcomes.position_id = outcomes.pending_ticket
+          AND outcomes.entry_deal_ticket IS NULL
+          AND outcomes.attribution_status = 'pending'
+          AND COALESCE(deliveries.pending_state, signals.pending_state) = 'pending'`)
+      await queryRun(`UPDATE ai_position_management_tasks tasks
+        JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
+        LEFT JOIN auto_signal_deliveries deliveries ON deliveries.id = outcomes.delivery_id
+        LEFT JOIN ai_signals signals ON signals.id = outcomes.signal_id
+        SET tasks.status = 'EXPIRED', tasks.confirmation_count = 0,
+          tasks.completed_at = COALESCE(tasks.completed_at, NOW()), tasks.updated_at = NOW()
+        WHERE tasks.task_type = 'position_exit'
+          AND tasks.status IN ('CANDIDATE','EVIDENCE_CONFIRMED')
+          AND outcomes.position_id IS NULL AND outcomes.pending_ticket IS NOT NULL
+          AND COALESCE(deliveries.pending_state, signals.pending_state) = 'pending'`)
+    }
   }
 ]
 

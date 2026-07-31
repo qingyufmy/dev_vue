@@ -54,9 +54,10 @@ describe('signal outcome attribution', () => {
     await createSignalOutcomeTx(run, {
       id:9, user_id:2, trading_account_id:3, source_type:'auto_delivery', action:'pending',
       source_id:'101', approved_order_json:JSON.stringify({ symbol:'XAUUSD.s', volume:0.1, order_type:'sell_limit' }),
-    }, { order:'7001', ticket:'7001', position_id:'7001' }, 'pending')
+    }, { order:'7001', ticket:'7001', position_id:'7001', deal:0 }, 'pending')
 
     const insert = calls.find(([sql]) => sql.includes('INSERT INTO signal_outcomes'))
+    expect(insert?.[1]?.[7]).toBeNull()
     expect(insert?.[1]?.[8]).toBe('7001')
     expect(insert?.[1]?.[9]).toBeNull()
   })
@@ -149,6 +150,7 @@ describe('position outcome monitor durability', () => {
       .mockResolvedValueOnce({ changes:97 })
     expect(await reconcileTerminalPendingOutcomes()).toBe(97)
     expect(db.queryRun.mock.calls[0][0]).toContain('outcomes.position_id = outcomes.pending_ticket')
+    expect(db.queryRun.mock.calls[0][0]).toContain("COALESCE(NULLIF(TRIM(outcomes.entry_deal_ticket), ''), '0') = '0'")
     expect(db.queryRun.mock.calls[1][0]).toContain("tasks.task_type = 'position_exit'")
     expect(db.queryRun.mock.calls[2][0]).toContain("IN ('cancelled','expired','superseded')")
     expect(db.queryRun.mock.calls[2][0]).toContain("attribution_status = 'not_filled'")
@@ -218,6 +220,7 @@ describe('position outcome monitor durability', () => {
     const monitor = readFileSync(new URL('../../server/routes/ai/signal-outcomes.js', import.meta.url), 'utf8')
     expect(source).toContain('UNIQUE KEY uk_signal_outcome_intent (order_intent_id)')
     expect(source).toContain('UNIQUE KEY uk_outcome_account_deal (trading_account_id, deal_ticket)')
+    expect(source).toContain("156_normalize_zero_deal_pending_identity")
     expect(monitor).toContain('INSERT IGNORE INTO signal_outcome_deals')
   })
 })

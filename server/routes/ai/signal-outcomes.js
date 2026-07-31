@@ -11,6 +11,12 @@ let monitorTimer = null
 
 const num = value => Number.isFinite(Number(value)) ? Number(value) : 0
 const ref = value => value == null || String(value).trim() === '' ? null : String(value)
+// MT4/MT5 use numeric zero when no deal exists yet. It is a sentinel, not a
+// durable deal ticket, and must never make a pending order look filled.
+const dealRef = value => {
+  const normalized = ref(value)
+  return normalized === '0' ? null : normalized
+}
 const parse = (value, fallback = {}) => { try { return value ? JSON.parse(value) : fallback } catch { return fallback } }
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const MYSQL_DATETIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/
@@ -33,7 +39,7 @@ export function dealTimeForDatabase(deal) {
   return Number.isFinite(parsed) ? utcMsToBeijingDatetime(parsed) : null
 }
 
-function dealTicket(deal) { return ref(deal?.deal_ticket ?? deal?.ticket) }
+function dealTicket(deal) { return dealRef(deal?.deal_ticket ?? deal?.ticket) }
 function dealNet(deal) { return num(deal?.profit) + num(deal?.commission) + num(deal?.swap) + num(deal?.fee) }
 function isEntry(deal) { return Number(deal?.entry) === 0 }
 function isExit(deal) { return [1, 3].includes(Number(deal?.entry)) }
@@ -122,7 +128,7 @@ export async function createSignalOutcomeTx(run, intent, bridgeResult, bridgeAct
   // is attached later by recordPendingOutcomeFill / terminal reconciliation.
   const positionId = isPendingOrder ? null : ref(bridgeResult?.position_id ?? bridgeResult?.position)
   const orderTicket = ref(bridgeResult?.order ?? bridgeResult?.ticket)
-  const deal = ref(bridgeResult?.deal ?? bridgeResult?.deal_ticket)
+  const deal = dealRef(bridgeResult?.deal ?? bridgeResult?.deal_ticket)
   const pending = isPendingOrder ? orderTicket : null
   const sourceSignalId = String(intent.source_id || '').split(':', 1)[0]
   const signalId = Number(sourceSignalId) > 0 ? Number(sourceSignalId) : null
@@ -178,7 +184,7 @@ export async function recordPendingOutcomeFill({ orderIntentId, deliveryId, posi
   await queryRun(`UPDATE signal_outcomes SET delivery_id = COALESCE(?, delivery_id),
     position_id = COALESCE(?, position_id), entry_order_ticket = COALESCE(?, entry_order_ticket),
     entry_deal_ticket = COALESCE(?, entry_deal_ticket), updated_at = ? WHERE order_intent_id = ?`,
-  [deliveryId || null, ref(positionId), ref(orderTicket), ref(dealTicket), beijingNow(), orderIntentId])
+  [deliveryId || null, ref(positionId), ref(orderTicket), dealRef(dealTicket), beijingNow(), orderIntentId])
 }
 
 export async function reconcileTerminalPendingOutcomes() {
@@ -190,11 +196,12 @@ export async function reconcileTerminalPendingOutcomes() {
   await queryRun(`UPDATE signal_outcomes outcomes
     LEFT JOIN auto_signal_deliveries deliveries ON deliveries.id = outcomes.delivery_id
     LEFT JOIN ai_signals signals ON signals.id = outcomes.signal_id
-    SET outcomes.position_id = NULL, outcomes.attribution_status = 'pending',
+    SET outcomes.position_id = NULL, outcomes.entry_deal_ticket = NULL,
+      outcomes.attribution_status = 'pending',
       outcomes.status = 'open', outcomes.updated_at = ?
     WHERE outcomes.pending_ticket IS NOT NULL
       AND outcomes.position_id = outcomes.pending_ticket
-      AND outcomes.entry_deal_ticket IS NULL
+      AND COALESCE(NULLIF(TRIM(outcomes.entry_deal_ticket), ''), '0') = '0'
       AND outcomes.attribution_status = 'pending'
       AND COALESCE(deliveries.pending_state, signals.pending_state) = 'pending'`, [now])
   await queryRun(`UPDATE ai_position_management_tasks tasks

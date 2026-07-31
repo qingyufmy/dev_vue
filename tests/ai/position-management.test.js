@@ -451,6 +451,7 @@ describe('durable state and protection boundaries', () => {
     expect(migrations).toContain("147_position_management_inference_confirmations")
     expect(migrations).toContain("148_single_inference_pending_cancel")
     expect(migrations).toContain("155_repair_pending_position_identity")
+    expect(migrations).toContain("156_normalize_zero_deal_pending_identity")
     expect(migrations).toContain('confirmation_count TINYINT NOT NULL DEFAULT 0')
     expect(migrations).toContain("inference_source VARCHAR(32) NOT NULL DEFAULT 'automatic_scheduler'")
     expect(positionManagement).toContain("inferenceSource = 'manual_analysis'")
