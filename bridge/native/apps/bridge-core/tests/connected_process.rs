@@ -2047,10 +2047,40 @@ async fn serve_control(
             continue;
         };
         let request = read_http_request(stream).await;
+        if request
+            .1
+            .starts_with("POST /api/auth/bridge-runtime-control/wait ")
+        {
+            let body = request
+                .1
+                .split_once("\r\n\r\n")
+                .and_then(|(_, body)| serde_json::from_str::<Value>(body).ok())
+                .expect("runtime control request body");
+            let after_revision = body
+                .get("afterRevision")
+                .and_then(Value::as_u64)
+                .expect("runtime control revision");
+            if after_revision > 0 {
+                let stop = Arc::clone(&stop);
+                let held_stream = request.0;
+                tokio::spawn(async move {
+                    while !stop.load(Ordering::SeqCst) {
+                        sleep(Duration::from_millis(20)).await;
+                    }
+                    drop(held_stream);
+                });
+                continue;
+            }
+        }
         let body = if request.1.starts_with("POST /api/auth/bridge-refresh ") {
             r#"{"ok":true,"token":"access_fixture","refreshExpiresInSeconds":3600,"bridgeRole":"admin"}"#
         } else if request.1.starts_with("POST /api/auth/bridge-ticket ") {
             r#"{"ok":true,"ticket":"ticket_fixture","expiresInSeconds":30}"#
+        } else if request
+            .1
+            .starts_with("POST /api/auth/bridge-runtime-control/wait ")
+        {
+            r#"{"ok":true,"enabled":true,"revision":1,"observedAtUtcMsc":1800000000000}"#
         } else if request
             .1
             .starts_with("POST /api/bridge/v3/maintenance-leases/lease_01JSTARTUP/release ")

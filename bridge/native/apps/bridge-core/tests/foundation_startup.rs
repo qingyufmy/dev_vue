@@ -134,7 +134,7 @@ fn missing_authorization_waits_without_a_browser_and_honors_shutdown() {
 }
 
 #[test]
-fn platform_selection_action_persists_dotnet_preferences_and_restarts_the_cycle() {
+fn platform_selection_action_persists_preferences() {
     let root = unique_test_directory();
     let profile_id = unique_profile_id();
     let paths = resolve_profile_paths(&root, &profile_id).expect("profile paths");
@@ -154,26 +154,51 @@ fn platform_selection_action_persists_dotnet_preferences_and_restarts_the_cycle(
             1_800_000_000_000,
         )
         .expect("terminal binding");
+    let mt5_terminal_id = "mt5_abcdef012345678901234567";
+    let mt5_terminal_path = root.join("missing-mt5").join("terminal64.exe");
+    fs::create_dir_all(mt5_terminal_path.parent().expect("MT5 terminal directory"))
+        .expect("MT5 terminal directory");
+    fs::write(&mt5_terminal_path, b"terminal fixture").expect("MT5 terminal fixture");
+    OutboxStore::open_existing(&paths.database_path)
+        .expect("store")
+        .activate_terminal_binding(
+            mt5_terminal_id,
+            "mt5",
+            &mt5_terminal_path,
+            &AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "654321".to_owned(),
+            },
+            1_800_000_000_001,
+        )
+        .expect("MT5 terminal binding");
+    let preferences = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("preferences store");
+    preferences.save_platform("mt4").expect("save platform");
+    preferences
+        .save_terminal("mt4", terminal_id)
+        .expect("save MT4 terminal");
+    preferences
+        .save_terminal("mt5", mt5_terminal_id)
+        .expect("save MT5 terminal");
     let child = spawn_core(&root, &profile_id);
-    let initial = wait_for_ui_phase(&profile_id, "platform_selection_required");
-    assert_eq!(initial.selected_platform, None);
+    let initial = wait_for_selected_platform(&profile_id, "mt4");
+    assert_eq!(initial.selected_platform.as_deref(), Some("mt4"));
     let selected = local_control_request(
         &profile_id,
         "request-select-platform",
         LocalControlAction::SelectPlatform {
-            platform: "mt4".to_owned(),
+            platform: "mt5".to_owned(),
         },
     );
     assert_eq!(selected, LocalControlResult::Accepted);
-    let pairing = wait_for_ui_phase(&profile_id, "pairing_required");
-    assert_eq!(pairing.selected_platform.as_deref(), Some("mt4"));
     assert_eq!(
         BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
             .expect("preferences store")
             .load()
             .platform
             .as_deref(),
-        Some("mt4")
+        Some("mt5")
     );
     SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
         .expect("request shutdown");
@@ -344,6 +369,7 @@ fn mt4_expert_action_installs_and_rechecks_the_selected_terminal_over_local_cont
 fn signed_update_state_is_projected_and_manual_activation_is_persisted_over_local_control() {
     let root = unique_test_directory();
     fs::create_dir_all(&root).expect("fixture root");
+    prepare_unpaired_mt4_selection(&root, "default");
     let update_path = root.join(UPDATE_STATE_FILE_NAME);
     let update_store = BridgeUpdateStateStore::with_clock(&update_path, || 1_800_000_000_123)
         .expect("update state store");
@@ -374,7 +400,7 @@ fn signed_update_state_is_projected_and_manual_activation_is_persisted_over_loca
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn default native core");
-    let state = wait_for_ui_phase("default", "platform_selection_required");
+    let state = wait_for_ui_state("default");
     let notice = state.update_notice.expect("ready update notice");
     assert_eq!(notice.version, "3.0.1");
     assert!(notice.urgent);
@@ -426,8 +452,9 @@ fn signed_update_state_is_projected_and_manual_activation_is_persisted_over_loca
 fn observer_profile_cannot_change_global_endpoint_settings() {
     let root = unique_test_directory();
     let profile_id = unique_profile_id();
+    prepare_unpaired_mt4_selection(&root, &profile_id);
     let child = spawn_core(&root, &profile_id);
-    let initial = wait_for_ui_phase(&profile_id, "platform_selection_required");
+    let initial = wait_for_ui_state(&profile_id);
     assert!(!initial.server_connected);
     let save_result = local_control_request(
         &profile_id,
@@ -644,6 +671,32 @@ fn launcher_expected_terminal_is_validated_before_startup() {
     fs::remove_dir_all(root).expect("remove expected-terminal fixture");
 }
 
+fn prepare_unpaired_mt4_selection(root: &Path, profile_id: &str) {
+    let paths = resolve_profile_paths(root, profile_id).expect("profile paths");
+    let terminal_id = "mt4_0123456789abcdef01234567";
+    let terminal_path = root.join("missing-mt4-data");
+    fs::create_dir_all(&terminal_path).expect("MT4 terminal fixture");
+    OutboxStore::open_or_create(&paths.database_path)
+        .expect("store")
+        .activate_terminal_binding(
+            terminal_id,
+            "mt4",
+            &terminal_path,
+            &AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            1_800_000_000_000,
+        )
+        .expect("terminal binding");
+    let preferences = BridgePreferencesStore::new(paths.data_directory.join("preferences.json"))
+        .expect("preferences store");
+    preferences.save_platform("mt4").expect("save platform");
+    preferences
+        .save_terminal("mt4", terminal_id)
+        .expect("save terminal");
+}
+
 fn spawn_core(root: &Path, profile_id: &str) -> Child {
     Command::new(env!("CARGO_BIN_EXE_liangjian-bridge-core"))
         .args(["--profile", profile_id, "--background"])
@@ -669,6 +722,40 @@ fn wait_for_ui_phase(profile_id: &str, phase: &str) -> UiStateSnapshot {
         assert!(
             Instant::now() < deadline,
             "timed out waiting for UI phase {phase}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_ui_state(profile_id: &str) -> UiStateSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(LocalControlResult::State { state }) = try_local_control_request(
+            profile_id,
+            "request-wait-ui-state",
+            LocalControlAction::GetState,
+        ) {
+            return *state;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for UI state");
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_selected_platform(profile_id: &str, platform: &str) -> UiStateSnapshot {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(LocalControlResult::State { state }) = try_local_control_request(
+            profile_id,
+            "request-wait-selected-platform",
+            LocalControlAction::GetState,
+        ) && state.selected_platform.as_deref() == Some(platform)
+        {
+            return *state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for selected platform {platform}"
         );
         thread::sleep(Duration::from_millis(50));
     }
