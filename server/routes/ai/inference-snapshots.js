@@ -101,6 +101,7 @@ function snapshotStorageByteLength(stored) {
     + Buffer.byteLength(String(stored?.user_prompt || ''), 'utf8')
     + Buffer.byteLength(JSON.stringify(stored?.market_snapshot || {}), 'utf8')
     + Buffer.byteLength(encodeSnapshotJson(stored?.klines || {}), 'utf8')
+    + Buffer.byteLength(JSON.stringify(stored?.strategy_runtime || {}), 'utf8')
 }
 
 export function encodeSnapshotJson(value, minimumBytes = SNAPSHOT_COMPRESSION_MIN_BYTES) {
@@ -156,9 +157,24 @@ function fitKlinesToSnapshotBudget(stored, maxBytes, minimumBars = 50) {
 }
 
 export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHOT_BYTES) {
+  const strategyRuntime = input.strategyRuntime ? {
+    ...input.strategyRuntime,
+    runtime_config_hash:sha256(JSON.stringify({
+      schema_version:input.strategyRuntime.schema_version || null,
+      mode:input.strategyRuntime.mode || null,
+      policy_hash:input.strategyRuntime.policy_hash || null,
+      compiled_policy:input.strategyRuntime.compiled_policy || null,
+    })),
+    rendered_prompt_hashes:{
+      system:sha256(input.systemPrompt || ''),
+      user:sha256(input.userPrompt || ''),
+      combined:sha256(`${input.systemPrompt || ''}\n${input.userPrompt || ''}`),
+    },
+  } : null
   const full = sanitizeInferenceEvidence({
     system_prompt: input.systemPrompt || '', user_prompt: input.userPrompt || '',
     market_snapshot: input.marketSnapshot || {}, klines: input.klines || extractKlines(input.marketSnapshot),
+    strategy_runtime:strategyRuntime,
   })
   const contentHash = sha256(JSON.stringify(full))
   // K-lines have their own column. Keeping the same arrays inside the market
@@ -192,6 +208,7 @@ export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHO
     userPrompt: stored.user_prompt,
     marketSnapshot: stored.market_snapshot,
     klines: stored.klines,
+    strategyRuntime:stored.strategy_runtime,
     promptHash: sha256(`${full.system_prompt}\n${full.user_prompt}`),
     contentHash,
     evidenceStatus: omitted.length ? 'incomplete' : 'complete',
@@ -206,13 +223,13 @@ export async function persistInferenceSnapshotTx(run, input) {
     (signal_id, strategy_id, strategy_version, strategy_scope, owner_user_id, standard_symbol, market_source,
      system_prompt, user_prompt, prompt_hash, model_profile_id, provider, model_name, credential_source,
      output_schema_version, klines_json, market_snapshot_json, memory_mode, evidence_status,
-     omitted_fields_json, content_hash, byte_size, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+     strategy_runtime_json, omitted_fields_json, content_hash, byte_size, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
     row.signalId || null, row.strategyId ?? null, row.strategyVersion || 1, row.strategyScope, row.ownerUserId || 0,
     row.standardSymbol, row.marketSource, row.systemPrompt, row.userPrompt, row.promptHash,
     row.modelProfileId || null, row.provider || null, row.modelName || null, row.credentialSource || 'none',
     row.outputSchemaVersion, encodeSnapshotJson(row.klines || {}), JSON.stringify(row.marketSnapshot || {}),
-    row.memoryMode || 'off', row.evidenceStatus, JSON.stringify(row.omittedFields), row.contentHash, row.byteSize,
+    row.memoryMode || 'off', row.evidenceStatus, JSON.stringify(row.strategyRuntime || null), JSON.stringify(row.omittedFields), row.contentHash, row.byteSize,
     row.createdAt || beijingNow(),
   ])
   return result.insertId
@@ -232,6 +249,8 @@ export function inferenceVisualizationSnapshot(row) {
     standard_symbol: row.standard_symbol || null,
     market_source: row.market_source || null,
     evidence_status: row.evidence_status || 'incomplete',
+    strategy_runtime:parseSnapshotJson(row.strategy_runtime_json, null),
+    strategy_runtime_mode:parseSnapshotJson(row.strategy_runtime_json, null)?.mode || 'legacy_implicit',
     omitted_fields: parseSnapshotJson(row.omitted_fields_json, []),
     klines,
     market_snapshot: marketSnapshot,
@@ -243,7 +262,7 @@ export async function getInferenceVisualizationSnapshot(signalId) {
   const id = Number(signalId)
   if (!id) return null
   const row = await queryOne(`SELECT id, strategy_id, standard_symbol, market_source, evidence_status,
-    omitted_fields_json, klines_json, market_snapshot_json, created_at
+    omitted_fields_json, klines_json, market_snapshot_json, strategy_runtime_json, created_at
     FROM inference_snapshots WHERE signal_id = ? ORDER BY id DESC LIMIT 1`, [id])
   return inferenceVisualizationSnapshot(row)
 }

@@ -20,6 +20,9 @@ import { getObserverSourceForStrategy } from './observer-channels.js'
 import { loadPlatformReferencePortfolio } from './reference-portfolio.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
+import { prepareStrategyPolicyRuntime } from './strategy-policy.js'
+import { validateWorkflowTrace, workflowGateEvaluation } from './strategy-workflow-engine.js'
+import { applyConstraintAction, evaluateStrategyConstraints } from './strategy-constraint-engine.js'
 import { registerAutoSchedulerState } from './runtime-state-registry.js'
 import {
   beginBridgeDeliveryExecution,
@@ -32,6 +35,43 @@ import {
 // Key: "promptTypeId:symbol"
 export const autoSchedulerState = {}
 registerAutoSchedulerState(autoSchedulerState)
+
+const MARKET_WAIT_REASONS = new Set([
+  'market_closed',
+  'market_restricted',
+  'market_stale_tick',
+  'market_unknown_no_tick',
+  'market_unknown',
+])
+
+function isMarketWaitReason(reason) {
+  return MARKET_WAIT_REASONS.has(String(reason || ''))
+}
+
+function summarizeRuntimeMarketStates(states = []) {
+  const normalized = states.filter(state => state && typeof state === 'object')
+  if (normalized.length === 0) {
+    return { alive:true, isOpen:false, tradeMode:-1, reason:'market_unknown', symbols:[] }
+  }
+
+  const openState = normalized.find(state => state.isOpen)
+  const priority = ['market_closed', 'market_restricted', 'market_stale_tick', 'market_unknown_no_tick', 'market_unknown']
+  const selected = openState || priority
+    .map(reason => normalized.find(state => state.reason === reason))
+    .find(Boolean) || normalized[0]
+
+  return {
+    ...selected,
+    isOpen:Boolean(openState),
+    reason:openState ? 'market_open' : (selected.reason || 'market_unknown'),
+    symbols:normalized.map(state => ({
+      symbol:state.symbol || '',
+      isOpen:Boolean(state.isOpen),
+      reason:state.reason || 'market_unknown',
+      tradeMode:Number.isFinite(Number(state.tradeMode)) ? Number(state.tradeMode) : -1,
+    })),
+  }
+}
 
 // === Permission gate: can user execute auto trades (cancel/submit) ===
 async function isUserEligibleForAutoExecution(userId) {
@@ -362,7 +402,12 @@ export async function getUserAutoRuntimeStatus(userId) {
   const marketBridgeUserId = marketBridge.userId
   const adminBridgeOnline = promptType?.scope === 'private' ? false : !!marketBridgeUserId && isBridgeAlive(marketBridgeUserId)
   const marketBridgeOnline = !!marketBridgeUserId && isBridgeAlive(marketBridgeUserId)
-  const marketState = marketBridgeOnline ? getOwnBridgeMarketState(marketBridgeUserId) : { alive: false, isOpen: false, tradeMode: -1, reason: 'bridge_offline', lastTickMs: null, tickAgeMs: null, mt5TimeStr: null }
+  const marketState = marketBridgeOnline
+    ? summarizeRuntimeMarketStates(selectedSymbols.map(symbol => ({
+      symbol,
+      ...getOwnBridgeMarketState(marketBridgeUserId, symbol),
+    })))
+    : { alive: false, isOpen: false, tradeMode: -1, reason: 'bridge_offline', lastTickMs: null, tickAgeMs: null, mt5TimeStr: null, symbols:[] }
 
   // Find user's active scheduler keys
   const activeKeys = []
@@ -370,6 +415,7 @@ export async function getUserAutoRuntimeStatus(userId) {
   let anyInFlight = false
   let overallLastError = ''
   let overallWaitReason = ''
+  let overallMarketWaitReason = ''
   let overallLastRunAt = ''
   let overallLastSignalId = null
   let totalSubscribers = 0
@@ -386,6 +432,7 @@ export async function getUserAutoRuntimeStatus(userId) {
     if (st.inFlight) anyInFlight = true
     if (st.lastError) overallLastError = st.lastError
     if (st.waitReason && !overallWaitReason) overallWaitReason = st.waitReason
+    if (isMarketWaitReason(st.waitReason) && !overallMarketWaitReason) overallMarketWaitReason = st.waitReason
     if (st.lastRunAt && (!overallLastRunAt || st.lastRunAt > overallLastRunAt)) overallLastRunAt = st.lastRunAt
     if (st.lastSignalId) overallLastSignalId = st.lastSignalId
     if (st.inFlight) {
@@ -423,15 +470,23 @@ export async function getUserAutoRuntimeStatus(userId) {
     if (activeSubscription && !isSubscriptionScheduleActive(activeSubscription)
       && activeSubscription.outside_window_behavior !== 'signals_only') pausedReason = 'outside_schedule'
   }
-  if (!pausedReason && activeKeys.length === 0) {
-    const userBridgeAlive = isBridgeAlive(userId)
-    if (!userBridgeAlive) pausedReason = 'user_bridge_offline'
-    else pausedReason = 'no_runtime_scheduler'
+  if (!pausedReason) {
+    if (activeKeys.length === 0) {
+      const userBridgeAlive = isBridgeAlive(userId)
+      pausedReason = userBridgeAlive ? 'no_runtime_scheduler' : 'user_bridge_offline'
+    } else if (!marketBridgeOnline) {
+      pausedReason = promptType?.scope === 'private' ? 'owner_bridge_offline' : 'admin_bridge_offline'
+    } else if (!marketState.isOpen && overallMarketWaitReason) {
+      // The scheduler probes the exact subscribed symbol before each cycle.
+      // Only its current per-symbol wait state may pause the status badge;
+      // a generic or stale bridge snapshot must not override a running market.
+      pausedReason = overallMarketWaitReason
+    } else if (!redisAvailable) {
+      pausedReason = 'redis_unavailable'
+    } else if (overallLastError && !anyInFlight) {
+      pausedReason = overallLastError
+    }
   }
-  else if (!marketBridgeOnline) pausedReason = promptType?.scope === 'private' ? 'owner_bridge_offline' : 'admin_bridge_offline'
-  else if (!marketState.isOpen) pausedReason = marketState.reason
-  else if (!redisAvailable) pausedReason = 'redis_unavailable'
-  else if (overallLastError && !anyInFlight) pausedReason = overallLastError
 
   const running = activeKeys.length > 0 && !pausedReason
   const nextRunSeconds = earliestNextRun === Infinity ? 0 : Math.max(0, earliestNextRun)
@@ -1346,7 +1401,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     await broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算指标与市场结构', progress_percent: 31 })
     const t2 = Date.now()
     let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
-    market.strategy_context = await buildStrategyContextFromTags(inferenceUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto', config._market_data_plan, useChanAnalysis, ratesResp.market_meta)
+    market.strategy_context = await buildStrategyContextFromTags(inferenceUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto', config._market_data_plan, useChanAnalysis, ratesResp.market_meta, config._strategy_policy?.compiledPolicy)
+    const strategyPolicyRuntime = prepareStrategyPolicyRuntime(config._strategy_policy, market.strategy_context, {
+      rawPolicy:config._strategy_policy?.strategyPolicy,
+    })
+    if (strategyPolicyRuntime) {
+      config._strategyPolicyRuntime = strategyPolicyRuntime
+      if (strategyPolicyRuntime.mode === 'enforce') config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
+    }
     if (useChanAnalysis) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
     market.primary_timeframe = primaryTf
     await attachAtrAnchor(inferenceUserId, symbol, market, primaryTf)
@@ -1449,6 +1511,27 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     market.inference_source = signal._inference_source || 'unknown'
     const aiSource = signal._inference_source
     delete signal._inference_source
+    if (strategyPolicyRuntime) {
+      const workflow = validateWorkflowTrace(config._strategy_policy.compiledPolicy, signal, {
+        indicators:strategyPolicyRuntime.indicators,
+        signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
+      })
+      strategyPolicyRuntime.workflow_state = workflow
+      const postInference = evaluateStrategyConstraints(config._strategy_policy.compiledPolicy, {
+        stages:workflow.stages,
+        decision:workflow.decision,
+        indicators:strategyPolicyRuntime.indicators,
+        signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
+        market,
+      }, 'post_inference')
+      strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
+      if (strategyPolicyRuntime.mode === 'enforce') {
+        signal.strategy_policy_decision = workflow.decision
+        signal = applyConstraintAction(signal, strategyPolicyRuntime.constraint_results.pre_inference).signal
+        signal = applyConstraintAction(signal, workflowGateEvaluation(workflow)).signal
+        signal = applyConstraintAction(signal, postInference).signal
+      }
+    }
     l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
     if (aiSource === 'ai_error_hold') {
       l(`BLOCKED: AI inference failed (${signal.reasoning || 'unknown error'})`)
@@ -1522,6 +1605,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         modelName: config.model_name,
         credentialSource: config._credential_source,
         memoryMode: isPrivate ? (memory.mode || 'off') : `platform_${memory.mode || 'off'}`,
+        strategyRuntime:strategyPolicyRuntime,
         createdAt,
       })
       await createTradeThesisTx(run, {
@@ -2478,4 +2562,6 @@ export const __schedulerTest = {
   nextCompletionIntervalDeadlineMs,
   completionIntervalCooldownSeconds,
   schedulerUpdateMaintenanceReason,
+  isMarketWaitReason,
+  summarizeRuntimeMarketStates,
 }

@@ -164,6 +164,29 @@ describe('unified authentication and account entry points', () => {
     expect(accountCss).toContain('body.account-embedded .account-sidebar { top:auto; height:auto; }')
   })
 
+  it('provides accessible email and phone binding controls in the account security center', () => {
+    expect(accountHtml).toContain('id="securityDialog"')
+    expect(accountHtml).toContain('id="securityCaptchaDialog"')
+    expect(accountApp).toContain('function maskEmail(value)')
+    expect(accountApp).toContain('function maskPhone(value)')
+    expect(accountApp).toContain('data-security-action="${type}"')
+    expect(accountApp).toContain("'/api/send-bind-code'")
+    expect(accountApp).toContain("api('/api/verify-code'")
+    expect(accountApp).toContain('`/api/change-${type}`')
+    expect(accountApp).toContain('aria-describedby="securityDestinationHelp securityDestinationError"')
+    expect(accountApp).toContain('role="alert"')
+    expect(accountCss).toContain('.security-contact-grid')
+    expect(accountCss).toContain('.form-field input[aria-invalid="true"]')
+    expect(accountCss).toContain('@media (max-width:480px)')
+  })
+
+  it('warns that password changes and global logout revoke bridge authorization', () => {
+    expect(accountApp).toContain('量见智桥的服务器授权都会失效')
+    expect(accountApp).toContain('量见智桥的服务器授权')
+    expect(accountApp).toContain("AuthSession.clear(); notifyParent('account-session-logout')")
+    expect(accountApp).toContain("api('/api/auth/logout-all'")
+  })
+
   it('synchronizes the main-site account modal with light and dark themes', () => {
     expect(accountApp).toContain("embedMode === 'main'")
     expect(accountApp).toContain("event.data?.type==='account-center-theme'")

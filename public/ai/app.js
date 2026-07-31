@@ -743,8 +743,15 @@ function autoReasonText(reason) {
   return AUTO_REASON_LABELS[reason] || '未知状态';
 }
 
-function isMarketClosedReason(reason) {
-  return ['market_closed', 'market_restricted', 'market_stale_tick', 'market_unknown_no_tick', 'market_unknown'].includes(reason);
+function marketPausePresentation(reason) {
+  const presentations = {
+    market_closed: { label:'自动分析 · 休市', type:'warning', status:'休市暂停' },
+    market_restricted: { label:'自动分析 · 交易受限', type:'warning', status:'交易权限受限' },
+    market_stale_tick: { label:'自动分析 · 行情停滞', type:'warning', status:'等待行情恢复' },
+    market_unknown_no_tick: { label:'自动分析 · 等待行情', type:'neutral', status:'等待行情数据' },
+    market_unknown: { label:'自动分析 · 检测中', type:'neutral', status:'正在检测市场状态' },
+  };
+  return presentations[reason] || null;
 }
 
 // Badge cache to avoid flickering on hover
@@ -948,11 +955,12 @@ function renderAutoAnalyzeBadge(s) {
       progress_seq: 0, started_at: s.cycle_started_at || '',
     }], ptName);
     return;
-  } else if (s.paused_reason && isMarketClosedReason(s.paused_reason)) {
-    label = '自动分析 · 休市';
-    type = 'warning';
+  } else if (s.paused_reason && marketPausePresentation(s.paused_reason)) {
+    const presentation = marketPausePresentation(s.paused_reason);
+    label = presentation.label;
+    type = presentation.type;
     const msState = s.market_state || {};
-    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：休市暂停`;
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：${presentation.status}`;
     title += `\n市场状态：${autoReasonText(msState.reason || s.paused_reason)}`;
     if (msState.tickAgeMs) title += `\n行情延迟：${msState.tickAgeMs}毫秒`;
     if (msState.mt5TimeStr) title += `\n桥接行情时间：${msState.mt5TimeStr}`;
@@ -2748,6 +2756,101 @@ function renderStrategyModelOptions(scope, selectedId = "") {
   if (help) help.textContent = platform ? "可绑定一个平台模型用于自动分析；留空时使用平台默认模型。" : "可绑定自己的模型；留空时按模型管理中的默认与共享规则自动选择。";
 }
 
+function strategyPolicyDraft(value) {
+  const parsed = parseJsonField(value, null);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+}
+
+function ema34Indicator(policy) {
+  return (Array.isArray(policy?.indicators) ? policy.indicators : []).find(item =>
+    item?.enabled !== false
+    && String(item?.kind || "").toLowerCase() === "ema"
+    && String(item?.source?.timeframe || "").toUpperCase() === "M5"
+    && String(item?.source?.field || "close").toLowerCase() === "close"
+    && String(item?.source?.bar_scope || "closed_only").toLowerCase() === "closed_only"
+    && Number(item?.params?.period) === 34);
+}
+
+function policyReferencesIndicator(value, indicatorId) {
+  if (Array.isArray(value)) return value.some(item => policyReferencesIndicator(item, indicatorId));
+  if (!value || typeof value !== "object") return false;
+  if (typeof value.ref === "string" && value.ref.startsWith(`indicators.${indicatorId}.`)) return true;
+  return Object.values(value).some(item => policyReferencesIndicator(item, indicatorId));
+}
+
+function strategyUsesEma34Filter(policy) {
+  return policy?.mode === "enforce" && Boolean(ema34Indicator(policy));
+}
+
+function strategyPolicyWithEma34(value, enabled) {
+  const source = strategyPolicyDraft(value);
+  const policy = source ? structuredClone(source) : {
+    schema_version:"strategy-policy-v1", mode:"enforce", features:[], indicators:[],
+    workflow:{ stages:[], selectors:[], default_decision:"allow" },
+    constraints:[], prompt_rules:[], ui:{ groups:[] },
+  };
+  policy.features = Array.isArray(policy.features) ? policy.features : [];
+  policy.indicators = Array.isArray(policy.indicators) ? policy.indicators : [];
+  policy.constraints = Array.isArray(policy.constraints) ? policy.constraints : [];
+  policy.prompt_rules = Array.isArray(policy.prompt_rules) ? policy.prompt_rules : [];
+  policy.workflow = policy.workflow && typeof policy.workflow === "object"
+    ? policy.workflow : { stages:[], selectors:[], default_decision:"allow" };
+  policy.ui = policy.ui && typeof policy.ui === "object" ? policy.ui : { groups:[] };
+  policy.ui.groups = Array.isArray(policy.ui.groups) ? policy.ui.groups : [];
+
+  const currentIndicator = ema34Indicator(policy);
+  const indicatorId = currentIndicator?.id || "entry_ema34";
+  const relatedIds = new Set(policy.indicators.filter(item =>
+    String(item?.kind || "").toLowerCase() === "ema"
+    && String(item?.source?.timeframe || "").toUpperCase() === "M5"
+    && Number(item?.params?.period) === 34).map(item => String(item.id || "")).filter(Boolean));
+  relatedIds.add(indicatorId);
+  policy.indicators = policy.indicators.filter(item => !relatedIds.has(String(item?.id || "")));
+  policy.constraints = policy.constraints.filter(item => ![...relatedIds].some(id => policyReferencesIndicator(item, id)));
+  policy.prompt_rules = policy.prompt_rules.filter(item => item?.id !== "entry_indicator_filter");
+  policy.ui.groups = policy.ui.groups.filter(item => item?.rule_ref !== indicatorId && item?.id !== "entry_indicator");
+
+  if (enabled) {
+    policy.mode = "enforce";
+    policy.indicators.push({
+      id:indicatorId, kind:"ema", enabled:true,
+      source:{ timeframe:"M5", field:"close", bar_scope:"closed_only" },
+      params:{ period:34, minimum_bars:34, warmup_target_bars:170, evidence_window:5 },
+    });
+    policy.constraints.push(
+      { id:"entry_indicator_ready", scope:"new_entry", phases:["post_inference","pre_submit"], require:{ left:{ ref:`indicators.${indicatorId}.ready` }, op:"eq", right:true }, on_fail:"hold_new_entry", counts_as_trigger:false },
+      { id:"buy_indicator_relation", scope:"new_entry", phases:["post_inference","pre_submit"], when:{ left:{ ref:"signal.side" }, op:"eq", right:"buy" }, require:{ left:{ ref:`indicators.${indicatorId}.bar.close` }, op:"gt", right:{ ref:`indicators.${indicatorId}.value` } }, on_fail:"hold_new_entry", counts_as_trigger:false },
+      { id:"sell_indicator_relation", scope:"new_entry", phases:["post_inference","pre_submit"], when:{ left:{ ref:"signal.side" }, op:"eq", right:"sell" }, require:{ left:{ ref:`indicators.${indicatorId}.bar.close` }, op:"lt", right:{ ref:`indicators.${indicatorId}.value` } }, on_fail:"hold_new_entry", counts_as_trigger:false },
+    );
+    policy.prompt_rules.push({ id:"entry_indicator_filter", text:"M5 已收盘 K 线 EMA34 是短线行情证据和新入场方向过滤器；可用于说明位置、斜率、距离、持续性与最近穿越，但不计作 M15 确认或 M5 触发，也不构成退出持仓或撤销挂单的理由。" });
+    policy.ui.groups.push({ id:"entry_indicator", label:"EMA34 入场过滤", control:"rule_switch", rule_ref:indicatorId });
+    return policy;
+  }
+
+  const hasRules = policy.features.length || policy.indicators.length
+    || policy.constraints.length || policy.prompt_rules.length
+    || (Array.isArray(policy.workflow?.stages) && policy.workflow.stages.length);
+  return hasRules ? policy : null;
+}
+
+function syncStrategyEma34Filter() {
+  const editor = $("strategyEditor"), toggle = $("strategyUseEma34Filter");
+  if (!editor || !toggle) return;
+  if (toggle.checked) {
+    const m5 = document.querySelector('[data-strategy-timeframe="M5"]');
+    const count = document.querySelector('[data-strategy-kline="M5"]');
+    const primary = document.querySelector('input[name="strategyPrimaryTimeframe"][value="M5"]');
+    if (m5 && !m5.checked) {
+      m5.checked = true;
+      if (count) count.disabled = false;
+      if (primary) primary.disabled = false;
+      toast("已自动启用 M5 行情，用于计算 EMA34", "info");
+    }
+  }
+  editor._strategyPolicyDraft = strategyPolicyWithEma34(editor._strategyPolicyDraft, toggle.checked);
+  editor.dataset.strategyPolicyDirty = "1";
+}
+
 function openStrategyEditor(strategy = null) {
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   const editor = $("strategyEditor"); editor.dataset.strategyId = strategy?.id || "";
@@ -2761,6 +2864,10 @@ function openStrategyEditor(strategy = null) {
   $("strategyTitle").value = strategy?.title || ""; $("strategySymbols").value = parseJsonField(strategy?.symbols_json, []).join(", ");
   $("strategyDescription").value = strategy?.description || "";
   $("strategyPrompt").value = strategy?.system_prompt || ""; $("strategyInterval").value = strategy?.interval_minutes || 5;
+  const strategyPolicy = strategyPolicyDraft(strategy?.strategy_policy_json);
+  editor._strategyPolicyDraft = strategyPolicy ? structuredClone(strategyPolicy) : null;
+  $("strategyUseEma34Filter").checked = strategyUsesEma34Filter(strategyPolicy);
+  editor.dataset.strategyPolicyDirty = "0";
   const plan = strategyMarketPlan(strategy);
   document.querySelectorAll("[data-strategy-timeframe]").forEach(input => { input.checked = plan.timeframes.some(item => item.timeframe === input.dataset.strategyTimeframe); });
   document.querySelectorAll("[data-strategy-kline]").forEach(input => { const item = plan.timeframes.find(row => row.timeframe === input.dataset.strategyKline); input.value = item?.kline_count || 100; input.disabled = !item; });
@@ -2799,6 +2906,9 @@ async function saveStrategyEditor() {
     model_profile_id:$("strategyModelProfile").value ? Number($("strategyModelProfile").value) : null,
     scope,
     visibility_status:visibilityStatus };
+  if ($("strategyEditor").dataset.strategyPolicyDirty === "1") {
+    body.strategy_policy = $("strategyEditor")._strategyPolicyDraft || null;
+  }
   await api(id ? `/api/ai/strategies/${id}` : "/api/ai/strategies", { method:id ? "PUT" : "POST", body });
   closeFormModal($("strategyEditor"), false); toast("策略已保存", "success"); await loadStrategyCatalog();
 }
@@ -5519,6 +5629,82 @@ function positionProtectionErrorLabel(code, fallback = "") {
   return labels[String(code || "")] || fallback || String(code || "执行失败");
 }
 
+function positionProtectionPriceLabel(value) {
+  return Number(value) > 0 ? fmt(Number(value), 6) : "未设置";
+}
+
+function setPositionProtectionFieldError(inputId, errorId, message = "") {
+  const input = $(inputId);
+  const error = $(errorId);
+  input?.setAttribute("aria-invalid", message ? "true" : "false");
+  if (!error) return;
+  error.textContent = message;
+  error.classList.toggle("hidden", !message);
+}
+
+function renderPositionProtectionChangeState({ showErrors = false } = {}) {
+  const preview = state.positionProtectionPreview;
+  const submit = $("positionProtectionSubmit");
+  const summary = $("positionProtectionChangeSummary");
+  const submitHint = $("positionProtectionSubmitHint");
+  const reason = $("positionProtectionReason")?.value.trim() || "";
+  if ($("positionProtectionReasonCount")) $("positionProtectionReasonCount").textContent = String(reason.length);
+  if (!preview) {
+    if (submit) submit.disabled = true;
+    return { valid:false };
+  }
+
+  const currentStopLoss = Number(preview.source?.current_stop_loss || 0);
+  const currentTakeProfit = Number(preview.source?.current_take_profit || 0);
+  const stopLossRaw = $("positionProtectionStopLoss")?.value.trim() || "";
+  const takeProfitRaw = $("positionProtectionTakeProfit")?.value.trim() || "";
+  const stopLossValue = stopLossRaw === "" ? currentStopLoss : Number(stopLossRaw);
+  const takeProfitValue = takeProfitRaw === "" ? currentTakeProfit : Number(takeProfitRaw);
+  const stopLossError = stopLossRaw !== "" && (!Number.isFinite(stopLossValue) || stopLossValue <= 0)
+    ? "请输入大于 0 的止损价格" : "";
+  const takeProfitError = takeProfitRaw !== "" && (!Number.isFinite(takeProfitValue) || takeProfitValue <= 0)
+    ? "请输入大于 0 的止盈价格" : "";
+  const reasonError = reason.length > 0 && reason.length < 2 ? "请至少填写 2 个字" : "";
+  if (showErrors || !stopLossError) setPositionProtectionFieldError("positionProtectionStopLoss", "positionProtectionStopLossError", showErrors ? stopLossError : "");
+  if (showErrors || !takeProfitError) setPositionProtectionFieldError("positionProtectionTakeProfit", "positionProtectionTakeProfitError", showErrors ? takeProfitError : "");
+  if (showErrors || !reasonError) setPositionProtectionFieldError("positionProtectionReason", "positionProtectionReasonError", showErrors ? (reason ? reasonError : "请填写本次变更原因") : "");
+
+  const stopLossChanged = !stopLossError && Math.abs(stopLossValue - currentStopLoss) > 1e-8;
+  const takeProfitChanged = !takeProfitError && Math.abs(takeProfitValue - currentTakeProfit) > 1e-8;
+  const changedCount = Number(stopLossChanged) + Number(takeProfitChanged);
+  const slState = $("positionProtectionStopLossState");
+  const tpState = $("positionProtectionTakeProfitState");
+  if (slState) {
+    slState.textContent = stopLossChanged ? "将更新" : "原值";
+    slState.classList.toggle("is-changed", stopLossChanged);
+  }
+  if (tpState) {
+    tpState.textContent = takeProfitChanged ? "将更新" : "原值";
+    tpState.classList.toggle("is-changed", takeProfitChanged);
+  }
+
+  const changes = [];
+  if (stopLossChanged) changes.push(`止损 ${positionProtectionPriceLabel(currentStopLoss)} → ${positionProtectionPriceLabel(stopLossValue)}`);
+  if (takeProfitChanged) changes.push(`止盈 ${positionProtectionPriceLabel(currentTakeProfit)} → ${positionProtectionPriceLabel(takeProfitValue)}`);
+  if (summary) {
+    summary.classList.toggle("has-changes", changedCount > 0);
+    summary.innerHTML = changedCount > 0
+      ? `<i data-lucide="shield-check" size="16"></i><span><strong>本次将修改 ${changedCount} 项：</strong>${escapeHtml(changes.join("；"))}</span>`
+      : '<i data-lucide="info" size="16"></i><span>修改任一价格后，这里会显示本次变更摘要。</span>';
+  }
+
+  const valid = !stopLossError && !takeProfitError && changedCount > 0 && reason.length >= 2;
+  if (submit) submit.disabled = !valid;
+  if (submitHint) {
+    if (stopLossError || takeProfitError) submitHint.textContent = "请先修正价格格式";
+    else if (!changedCount) submitHint.textContent = "请至少修改一个保护价";
+    else if (reason.length < 2) submitHint.textContent = "请填写至少 2 个字的变更原因";
+    else submitHint.textContent = $("positionProtectionSyncScope")?.checked ? "将按同一信号同步并逐笔校验" : "只修改当前这一笔持仓";
+  }
+  initIcons();
+  return { valid, stopLossError, takeProfitError, reasonError, changedCount };
+}
+
 function stopPositionProtectionPolling() {
   if (state.positionProtectionPollTimer) clearInterval(state.positionProtectionPollTimer);
   state.positionProtectionPollTimer = null;
@@ -5549,15 +5735,24 @@ function renderPositionProtectionPreview(preview, loading = false) {
   }
   if (!preview) return;
   const source = preview.source || {};
+  const direction = source.direction === "buy" ? "买入" : "卖出";
+  const online = Boolean(source.bridge_connected);
   if (summary) summary.innerHTML = `
-    <div><span>持仓</span><strong class="num">#${escapeHtml(source.ticket || "--")}</strong></div>
-    <div><span>品种 / 方向</span><strong>${escapeHtml(source.symbol || "--")} · ${source.direction === "buy" ? "买入" : "卖出"}</strong></div>
-    <div><span>当前 SL / TP</span><strong class="num">${Number(source.current_stop_loss) ? fmt(source.current_stop_loss, 6) : "未设置"} / ${Number(source.current_take_profit) ? fmt(source.current_take_profit, 6) : "未设置"}</strong></div>
-    <div><span>来源信号</span><strong>${source.signal_id ? `#${escapeHtml(source.signal_id)}` : "无法唯一归因"}</strong></div>`;
+    <div class="position-protection-identity">
+      <span class="position-protection-direction ${source.direction === "buy" ? "is-buy" : "is-sell"}"><i data-lucide="${source.direction === "buy" ? "trending-up" : "trending-down"}" size="18"></i>${direction}</span>
+      <div><strong>${escapeHtml(source.symbol || "--")}</strong><small class="num">持仓 #${escapeHtml(source.ticket || "--")} · 账户 ${escapeHtml(source.login_account || "--")}</small></div>
+      <span class="position-protection-connection ${online ? "is-online" : "is-offline"}"><i></i>${online ? "桥接在线" : "桥接离线"}</span>
+    </div>
+    <div class="position-protection-facts">
+      <div><span>持仓手数</span><strong class="num">${Number(source.volume || 0) || "--"}</strong></div>
+      <div><span>当前止损</span><strong class="num">${positionProtectionPriceLabel(source.current_stop_loss)}</strong></div>
+      <div><span>当前止盈</span><strong class="num">${positionProtectionPriceLabel(source.current_take_profit)}</strong></div>
+      <div><span>来源信号</span><strong>${source.signal_id ? `#${escapeHtml(source.signal_id)}` : "无法唯一归因"}</strong></div>
+    </div>`;
   if (impact) impact.innerHTML = `
-    <div><span>涉及用户</span><strong class="num">${Number(preview.affected_users || 0)}</strong></div>
-    <div><span>涉及持仓</span><strong class="num">${Number(preview.affected_positions || 0)}</strong></div>
-    <div><span>当前在线</span><strong class="num">${Number(preview.online_users || 0)}</strong></div>
+    <div><span>目标账户</span><strong class="num">${Number(preview.affected_users || 0)}</strong></div>
+    <div><span>目标持仓</span><strong class="num">${Number(preview.affected_positions || 0)}</strong></div>
+    <div><span>桥接在线</span><strong class="num">${Number(preview.online_users || 0)}</strong></div>
     <div><span>安全排除</span><strong class="num">${Number(preview.exclusions?.length || 0)}</strong></div>`;
   if (scope) {
     scope.disabled = !preview.sync_available;
@@ -5567,7 +5762,11 @@ function renderPositionProtectionPreview(preview, loading = false) {
   if (scopeHelp) scopeHelp.textContent = preview.sync_available
     ? "开启后，仅同步到由同一条信号产生、且当前仍能唯一归因的系统持仓。"
     : "该持仓缺少唯一信号来源，只能修改当前持仓。";
+  const scopeBadge = $("positionProtectionScopeBadge");
+  if (scopeBadge) scopeBadge.textContent = scope?.checked
+    ? `同步 ${Number(preview.affected_positions || 0)} 笔持仓` : "仅当前持仓";
   if (submit) submit.disabled = false;
+  renderPositionProtectionChangeState();
 }
 
 async function loadPositionProtectionPreview(ticket, syncScope = "source_only") {
@@ -5600,7 +5799,11 @@ async function openPositionProtectionModal(ticket) {
   $("positionProtectionError").classList.add("hidden");
   $("positionProtectionRetry").classList.add("hidden");
   $("positionProtectionSubmit").classList.remove("hidden");
+  $("positionProtectionCancel").textContent = "取消";
+  $("positionProtectionSubmitLabel").textContent = "保存修改";
+  $("positionProtectionSubmit").setAttribute("aria-busy", "false");
   openFormModal(modal);
+  renderPositionProtectionChangeState();
   try {
     await loadPositionProtectionPreview(ticket, "source_only");
   } catch (error) {
@@ -5644,6 +5847,7 @@ function renderPositionProtectionJob(job) {
       <td>${target.error_code ? escapeHtml(positionProtectionErrorLabel(target.error_code, target.error_message)) : "--"}</td>
     </tr>`).join("") || '<tr class="empty-row"><td colspan="4">正在准备执行目标…</td></tr>';
   $("positionProtectionSubmit")?.classList.add("hidden");
+  if ($("positionProtectionCancel")) $("positionProtectionCancel").textContent = "关闭";
   const retry = $("positionProtectionRetry");
   if (retry) retry.classList.toggle("hidden", !isTerminal || !(Number(job.failed_positions) || Number(job.skipped_positions)));
   if (isTerminal) {
@@ -5681,7 +5885,11 @@ async function submitPositionProtectionJob() {
   const submit = $("positionProtectionSubmit");
   const errorHost = $("positionProtectionError");
   errorHost.classList.add("hidden");
+  const formState = renderPositionProtectionChangeState({ showErrors:true });
+  if (!formState.valid) return;
   submit.disabled = true;
+  submit.setAttribute("aria-busy", "true");
+  $("positionProtectionSubmitLabel").textContent = "正在保存…";
   try {
     const currentStopLoss = Number(preview.source?.current_stop_loss || 0);
     const currentTakeProfit = Number(preview.source?.current_take_profit || 0);
@@ -5730,7 +5938,11 @@ async function submitPositionProtectionJob() {
       await loadPositionProtectionPreview($("positionProtectionTicket").value,
         $("positionProtectionSyncScope").checked ? "signal" : "source_only").catch(() => {});
     }
-  } finally { submit.disabled = false; }
+  } finally {
+    submit.setAttribute("aria-busy", "false");
+    $("positionProtectionSubmitLabel").textContent = "保存修改";
+    renderPositionProtectionChangeState();
+  }
 }
 
 async function retryPositionProtectionJob() {
@@ -8662,6 +8874,11 @@ function bindEvents() {
       const nextPrimary = next && document.querySelector(`input[name="strategyPrimaryTimeframe"][value="${next.dataset.strategyTimeframe}"]`);
       if (nextPrimary) nextPrimary.checked = true;
     }
+    if (tf === "M5" && !input.checked && $("strategyUseEma34Filter")?.checked) {
+      $("strategyUseEma34Filter").checked = false;
+      syncStrategyEma34Filter();
+      toast("已关闭 EMA34 入场过滤，因为 M5 行情已停用", "info");
+    }
   }));
   $("runAnalysisBtn").addEventListener("click", runAnalysis);
   $("executeSignalBtn").addEventListener("click", executeSignal);
@@ -8767,6 +8984,7 @@ function bindEvents() {
   $("addPrivateStrategyBtn")?.addEventListener("click", () => openStrategyEditor());
   $("cancelStrategyEditorBtn")?.addEventListener("click", () => closeFormModal($("strategyEditor")));
   $("saveStrategyBtn")?.addEventListener("click", () => saveStrategyEditor().catch(error => toast(error.message, "error")));
+  $("strategyUseEma34Filter")?.addEventListener("change", syncStrategyEma34Filter);
   $("cancelSubscriptionEditorBtn")?.addEventListener("click", () => closeFormModal($("subscriptionEditor")));
   $("saveSubscriptionBtn")?.addEventListener("click", () => saveSubscriptionEditor().catch(error => toast(error.message, "error")));
   $("subscriptionStrategy")?.addEventListener("change", handleSubscriptionStrategyChange);
@@ -8796,8 +9014,16 @@ function bindEvents() {
     stopPositionProtectionPolling();
     closeFormModal($("positionProtectionModal"));
   });
+  $("positionProtectionCancel")?.addEventListener("click", () => {
+    stopPositionProtectionPolling();
+    closeFormModal($("positionProtectionModal"));
+  });
   $("positionProtectionSubmit")?.addEventListener("click", submitPositionProtectionJob);
   $("positionProtectionRetry")?.addEventListener("click", retryPositionProtectionJob);
+  ["positionProtectionStopLoss", "positionProtectionTakeProfit", "positionProtectionReason"].forEach(id => {
+    $(id)?.addEventListener("input", () => renderPositionProtectionChangeState());
+    $(id)?.addEventListener("blur", () => renderPositionProtectionChangeState({ showErrors:true }));
+  });
   $("positionProtectionSyncScope")?.addEventListener("change", async event => {
     const ticket = $("positionProtectionTicket")?.value;
     if (!ticket) return;
@@ -8806,7 +9032,10 @@ function bindEvents() {
     catch (error) {
       event.target.checked = !event.target.checked;
       toast(error.message, "error");
-    } finally { event.target.disabled = !state.positionProtectionPreview?.sync_available; }
+    } finally {
+      event.target.disabled = !state.positionProtectionPreview?.sync_available;
+      renderPositionProtectionChangeState();
+    }
   });
   $("memoryEnabled")?.addEventListener("change", async event => {
     try { await api("/api/ai/memory/settings", { method:"PUT", body:{ enabled:event.target.checked, runtime_token_budget:800 } }); toast(event.target.checked ? "个人记忆已启用" : "个人记忆已关闭", "success"); }

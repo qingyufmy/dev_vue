@@ -14,6 +14,7 @@ import { evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state
 import { getRiskRuleRolloutModes } from './rollout-governance.js'
 import { getInferencePreference } from './inference-preferences.js'
 import { parseStrategyPolicy } from './strategy-policy.js'
+import { evaluateSignalStrategyPolicyBeforeSubmission } from './strategy-policy-execution.js'
 import { subscriptionAllowsExecution, subscriptionAllowsInference } from './subscription-schedule.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 
@@ -290,6 +291,7 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserI
     _market_data_plan: policy.marketDataPlan,
     _allowed_entry_methods: policy.entryMethods,
     _use_chan_analysis: policy.useChanAnalysis,
+    _strategy_policy:policy,
     _ai_volume_min: aiVolumeRange.min,
     _ai_volume_max: aiVolumeRange.max,
     _ai_volume_step: aiVolumeRange.step || DEFAULT_AI_VOLUME_STEP,
@@ -560,8 +562,18 @@ export async function executeOrderCore(userId, config, request, action, options 
       }
     },
     buildBridgeCall: buildBridgeOrderCall,
-    beforeBridgeSend: async ({ bridgeAction }) => {
+    beforeBridgeSend: async ({ bridgeAction, request:approved }) => {
       if (sourceType !== 'manual' && bridgeAction === 'pending') await assertAiPendingOrderEnabled()
+      const strategyGate = await evaluateSignalStrategyPolicyBeforeSubmission({
+        userId,
+        signalId,
+        request:approved,
+      })
+      if (!strategyGate.allowed) {
+        throw new RiskReject('strategy_policy_pre_submit_blocked', {
+          strategy_policy_gate:strategyGate,
+        })
+      }
     },
     afterRiskPrepared: options.afterRiskPrepared,
     resolveTradingAccount: ({ actorId, account, requestedAccountId }) => syncTradingAccountIdentity(actorId, account, requestedAccountId),

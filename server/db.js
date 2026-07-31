@@ -534,6 +534,7 @@ export async function initDB() {
       system_prompt MEDIUMTEXT NOT NULL,
       symbols_json TEXT NOT NULL,
       market_data_plan_json TEXT DEFAULT NULL,
+      strategy_policy_json LONGTEXT DEFAULT NULL,
       entry_methods_json VARCHAR(255) NOT NULL DEFAULT '["market","limit","stop","stop_limit"]',
       use_chan_analysis TINYINT NOT NULL DEFAULT 0,
       interval_minutes INT NOT NULL DEFAULT 5,

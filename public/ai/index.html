@@ -27,7 +27,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260731subscription2" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260731ema34evidence1" />
     <link rel="stylesheet" href="/ai/responsive.css?v=20260724position3" />
   </head>
   <body>
@@ -545,10 +545,16 @@
                     <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="H4" aria-label="启用 H4"><strong>H4</strong><input type="number" data-strategy-kline="H4" min="10" max="500" step="10" value="100" aria-label="H4 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="H4" aria-label="将 H4 设为主周期"></div>
                     <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="D1" aria-label="启用 D1"><strong>D1</strong><input type="number" data-strategy-kline="D1" min="10" max="500" step="10" value="100" aria-label="D1 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="D1" aria-label="将 D1 设为主周期"></div>
                   </div>
-                  <label class="strategy-capability-toggle" for="strategyUseChanAnalysis">
-                    <input id="strategyUseChanAnalysis" type="checkbox">
-                    <span><strong>启用缠论指标</strong><small>计算笔、线段、中枢、背驰、走势状态与买卖点候选，并检查多周期方向是否一致。结果仅作为行情证据，推理耗时可能增加。</small></span>
-                  </label>
+                  <div class="strategy-capability-grid">
+                    <label class="strategy-capability-toggle" for="strategyUseChanAnalysis">
+                      <input id="strategyUseChanAnalysis" type="checkbox">
+                      <span><strong>启用缠论指标</strong><small>计算笔、线段、中枢、背驰、走势状态与买卖点候选。推理耗时可能增加。</small></span>
+                    </label>
+                    <label class="strategy-capability-toggle" for="strategyUseEma34Filter">
+                      <input id="strategyUseEma34Filter" type="checkbox">
+                      <span><strong>启用 EMA34 入场过滤</strong><small>分析 M5 短线状态并过滤逆向新开仓；不会单独触发交易，也不影响已有持仓。</small></span>
+                    </label>
+                  </div>
                 </fieldset>
                 <fieldset class="strategy-form-section"><legend><span class="section-step">03</span>允许的入场方式</legend><p>未启用的方式会从模型输出格式中删除，后端也会拒绝模型越界输出。</p>
                   <div class="entry-method-grid">
@@ -615,40 +621,45 @@
               <footer class="form-actions form-modal-actions subscription-editor-actions"><span id="subscriptionSaveHint">保存后应用到当前交易账户</span><button id="saveSubscriptionBtn" class="btn btn-primary" type="button"><i data-lucide="check" size="16"></i><span>保存订阅</span></button></footer>
             </section>
             </div>
-            <div id="positionProtectionModal" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="positionProtectionTitle">
+            <div id="positionProtectionModal" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="positionProtectionTitle" aria-describedby="positionProtectionDescription">
               <section class="workspace-panel form-modal-dialog position-protection-dialog" tabindex="-1">
                 <header class="section-heading position-protection-heading">
                   <div>
-                    <span class="section-kicker">管理员专用 · 系统持仓</span>
-                    <h2 id="positionProtectionTitle">修改持仓止盈止损</h2>
-                    <p>先复核当前持仓与同步范围，再由服务端逐账户执行并实时回传结果。</p>
+                    <span class="section-kicker">系统持仓 · 管理员操作</span>
+                    <h2 id="positionProtectionTitle">编辑持仓保护价</h2>
+                    <p id="positionProtectionDescription">只修改止损或止盈，不会改变持仓方向、手数与开仓价格。</p>
                   </div>
-                  <button id="positionProtectionClose" class="icon-btn" type="button" aria-label="关闭修改持仓止盈止损弹窗"><i data-lucide="x" size="18"></i></button>
+                  <button id="positionProtectionClose" class="icon-btn" type="button" aria-label="关闭编辑持仓保护价弹窗"><i data-lucide="x" size="18"></i></button>
                 </header>
                 <input id="positionProtectionTicket" type="hidden">
                 <div id="positionProtectionError" class="position-protection-error hidden" role="alert"></div>
 
                 <div id="positionProtectionFormStage">
-                  <section class="position-protection-section" aria-labelledby="positionProtectionSourceTitle">
-                    <div class="position-protection-section-head"><h3 id="positionProtectionSourceTitle">持仓复核</h3><span data-bridge-platform-template="实时读取 {platform}">实时读取交易平台</span></div>
+                  <section class="position-protection-section position-protection-overview" aria-labelledby="positionProtectionSourceTitle">
+                    <div class="position-protection-section-head"><div><span class="position-protection-step">01</span><h3 id="positionProtectionSourceTitle">确认当前持仓</h3></div><span class="position-protection-live"><i data-lucide="radio" size="13"></i><span data-bridge-platform-template="{platform} 实时数据">交易平台实时数据</span></span></div>
                     <div id="positionProtectionSourceSummary" class="position-protection-summary"><div class="workspace-skeleton"></div></div>
                   </section>
                   <section class="position-protection-section" aria-labelledby="positionProtectionPriceTitle">
-                    <div class="position-protection-section-head"><h3 id="positionProtectionPriceTitle">新的保护价</h3><span>至少修改一项</span></div>
+                    <div class="position-protection-section-head"><div><span class="position-protection-step">02</span><h3 id="positionProtectionPriceTitle">设置新的保护价</h3></div><span>至少修改一项</span></div>
                     <div class="position-protection-price-grid">
-                      <label><span>止损价格（SL）</span><input id="positionProtectionStopLoss" class="num" type="number" min="0" step="any" inputmode="decimal" autocomplete="off"><small>保持原值时无需改动；系统会按券商最小跳动单位校准。</small></label>
-                      <label><span>止盈价格（TP）</span><input id="positionProtectionTakeProfit" class="num" type="number" min="0" step="any" inputmode="decimal" autocomplete="off"><small>执行前会校验方向、现价及最小止损距离。</small></label>
+                      <label class="position-protection-field" for="positionProtectionStopLoss"><span>止损价格 <b>SL</b></span><div class="position-protection-input"><i data-lucide="shield" size="17"></i><input id="positionProtectionStopLoss" class="num" type="number" min="0" step="any" inputmode="decimal" autocomplete="off" aria-describedby="positionProtectionStopLossHelp positionProtectionStopLossError"><em id="positionProtectionStopLossState">原值</em></div><small id="positionProtectionStopLossHelp">保持原值时无需改动；系统会按券商最小跳动单位校准。</small><small id="positionProtectionStopLossError" class="position-protection-field-error hidden" role="alert"></small></label>
+                      <label class="position-protection-field" for="positionProtectionTakeProfit"><span>止盈价格 <b>TP</b></span><div class="position-protection-input"><i data-lucide="target" size="17"></i><input id="positionProtectionTakeProfit" class="num" type="number" min="0" step="any" inputmode="decimal" autocomplete="off" aria-describedby="positionProtectionTakeProfitHelp positionProtectionTakeProfitError"><em id="positionProtectionTakeProfitState">原值</em></div><small id="positionProtectionTakeProfitHelp">执行前会校验方向、现价及券商要求的最小距离。</small><small id="positionProtectionTakeProfitError" class="position-protection-field-error hidden" role="alert"></small></label>
                     </div>
+                    <div id="positionProtectionChangeSummary" class="position-protection-change-summary" aria-live="polite"><i data-lucide="info" size="16"></i><span>修改任一价格后，这里会显示本次变更摘要。</span></div>
                   </section>
-                  <section class="position-protection-section" aria-labelledby="positionProtectionScopeTitle">
-                    <div class="position-protection-section-head"><h3 id="positionProtectionScopeTitle">同步范围</h3><span>仅同步唯一归因持仓</span></div>
+                  <section class="position-protection-section position-protection-scope-section" aria-labelledby="positionProtectionScopeTitle">
+                    <div class="position-protection-section-head"><div><span class="position-protection-step">03</span><h3 id="positionProtectionScopeTitle">选择应用范围</h3></div><span id="positionProtectionScopeBadge" class="position-protection-scope-badge">仅当前持仓</span></div>
                     <label class="position-protection-sync-option">
                       <input id="positionProtectionSyncScope" type="checkbox">
-                      <span><strong>同步到同一信号涉及的所有用户</strong><small id="positionProtectionScopeHelp">默认仅修改当前持仓；勾选后重新核对批量影响范围。</small></span>
+                      <span class="position-protection-switch" aria-hidden="true"><i></i></span>
+                      <span><strong>同步同一信号下的系统持仓</strong><small id="positionProtectionScopeHelp">默认只修改当前持仓；开启后会重新核对可安全同步的账户。</small></span>
                     </label>
                     <div id="positionProtectionImpact" class="position-protection-impact"><div class="workspace-skeleton"></div></div>
                   </section>
-                  <label class="position-protection-reason"><span>变更原因</span><textarea id="positionProtectionReason" maxlength="500" rows="3" placeholder="请说明本次调整依据，便于审计和后续复核"></textarea><small>必填，2–500 字；将记录到管理员审计日志。</small></label>
+                  <section class="position-protection-section" aria-labelledby="positionProtectionReasonTitle">
+                    <div class="position-protection-section-head"><div><span class="position-protection-step">04</span><h3 id="positionProtectionReasonTitle">记录变更原因</h3></div><span><b id="positionProtectionReasonCount" class="num">0</b> / 500</span></div>
+                    <label class="position-protection-reason" for="positionProtectionReason"><span class="sr-only">变更原因</span><textarea id="positionProtectionReason" maxlength="500" rows="3" placeholder="例如：价格结构失效，上移止损保护已有利润" aria-describedby="positionProtectionReasonHelp positionProtectionReasonError"></textarea><small id="positionProtectionReasonHelp">必填，至少 2 个字；保存后会写入管理员审计日志。</small><small id="positionProtectionReasonError" class="position-protection-field-error hidden" role="alert"></small></label>
+                  </section>
                 </div>
 
                 <div id="positionProtectionProgressStage" class="position-protection-progress-stage hidden" aria-live="polite">
@@ -666,7 +677,9 @@
 
                 <footer class="form-actions form-modal-actions position-protection-actions">
                   <button id="positionProtectionRetry" class="btn btn-secondary hidden" type="button"><i data-lucide="rotate-cw" size="15"></i>重新核对并重试</button>
-                  <button id="positionProtectionSubmit" class="btn btn-primary" type="button"><i data-lucide="shield-check" size="16"></i>确认并执行</button>
+                  <span id="positionProtectionSubmitHint">请先修改保护价并填写原因</span>
+                  <button id="positionProtectionCancel" class="btn btn-secondary" type="button">取消</button>
+                  <button id="positionProtectionSubmit" class="btn btn-primary" type="button"><i data-lucide="shield-check" size="16"></i><span id="positionProtectionSubmitLabel">保存修改</span></button>
                 </footer>
               </section>
             </div>
@@ -1268,7 +1281,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260731subscription2"></script>
+    <script src="/ai/app.js?v=20260731ema34evidence1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

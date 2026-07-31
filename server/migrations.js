@@ -4410,6 +4410,26 @@ const migrations = [
       }
       if (additions.length) await queryRun(`ALTER TABLE user_bridge_settings ${additions.join(', ')}`)
     }
+  },
+  {
+    id: '153_strategy_policy_runtime',
+    async up() {
+      const strategyColumns = new Set((await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_prompt_types'
+          AND COLUMN_NAME = 'strategy_policy_json'`)).map(row => String(row.COLUMN_NAME)))
+      if (!strategyColumns.has('strategy_policy_json')) {
+        await queryRun(`ALTER TABLE auto_prompt_types
+          ADD COLUMN strategy_policy_json LONGTEXT DEFAULT NULL AFTER market_data_plan_json`)
+      }
+
+      const snapshotColumns = new Set((await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'inference_snapshots'
+          AND COLUMN_NAME = 'strategy_runtime_json'`)).map(row => String(row.COLUMN_NAME)))
+      if (!snapshotColumns.has('strategy_runtime_json')) {
+        await queryRun(`ALTER TABLE inference_snapshots
+          ADD COLUMN strategy_runtime_json LONGTEXT DEFAULT NULL AFTER market_snapshot_json`)
+      }
+    }
   }
 ]
 

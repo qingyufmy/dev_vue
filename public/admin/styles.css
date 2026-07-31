@@ -296,6 +296,8 @@ h2 { margin:3px 0 0; font-size:22px; }
 .strategy-editor-block { display:grid; gap:12px; padding:14px; border:1px solid var(--border); border-radius:11px; background:var(--surface-2); }
 .strategy-editor-block > div:first-child strong,.strategy-editor-block > div:first-child small { display:block; }
 .strategy-editor-block > div:first-child small { margin-top:3px; color:var(--muted); }
+.strategy-capability-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+@media (max-width:760px) { .strategy-capability-grid { grid-template-columns:1fr; } }
 .strategy-timeframe-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
 .strategy-timeframe-grid > label { display:grid; grid-template-columns:22px 42px minmax(90px,1fr) 24px; align-items:center; gap:8px; min-height:48px; padding:7px 10px; border:1px solid var(--border); border-radius:9px; background:var(--surface); }
 .strategy-timeframe-grid .input { min-height:34px; padding:0 8px; }

@@ -142,6 +142,14 @@ router.get('/ai/observer-channels', async (req, res) => {
 })
 
 function reviewError(res, error) {
+  if (error?.name === 'StrategyPolicyValidationError') {
+    return res.status(400).json({
+      ok:false,
+      error:`策略政策配置无效：${error.code}（${error.path}）`,
+      code:error.code,
+      path:error.path,
+    })
+  }
   const raw = String(error?.message || '')
   const code = /^[a-z][a-z0-9_]*(?::[a-z0-9_.-]+)*$/.test(raw) ? raw : null
   if (!code) {

@@ -1,6 +1,11 @@
 import { hasLegacyUseChanTag, parseLegacyTimeframeTags } from './utils.js'
+import { compileStrategyPolicy, strategyPolicyMode, STRATEGY_POLICY_TIMEFRAMES } from './strategy-policy-compiler.js'
+import { calculatePolicyIndicators } from './indicator-registry.js'
+import { buildPreInferenceWorkflowState } from './strategy-workflow-engine.js'
+import { renderStrategyPolicyPrompt } from './strategy-prompt-renderer.js'
+import { evaluateStrategyConstraints } from './strategy-constraint-engine.js'
 
-export const VALID_TIMEFRAMES = Object.freeze(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
+export const VALID_TIMEFRAMES = STRATEGY_POLICY_TIMEFRAMES
 export const VALID_ENTRY_METHODS = Object.freeze(['market', 'limit', 'stop', 'stop_limit'])
 export const DEFAULT_ENTRY_METHODS = Object.freeze([...VALID_ENTRY_METHODS])
 
@@ -57,16 +62,60 @@ export function normalizeMarketDataPlan(value, { prompt = '', fallbackTimeframe 
 }
 
 export function parseStrategyPolicy(strategy = {}) {
+  const marketDataPlan = normalizeMarketDataPlan(strategy.market_data_plan_json || strategy.market_data_plan, {
+    prompt: strategy.system_prompt || '',
+  })
+  const rawPolicyValue = strategy.strategy_policy_json ?? strategy.strategy_policy
+  const declaredPolicyMode = rawPolicyValue == null || rawPolicyValue === '' ? 'off' : strategyPolicyMode(rawPolicyValue)
+  const rawPolicy = rawPolicyValue == null || rawPolicyValue === '' ? null
+    : (typeof rawPolicyValue === 'string' ? JSON.parse(rawPolicyValue) : structuredClone(rawPolicyValue))
+  // An explicitly disabled policy remains persisted and editable, but does not
+  // enter the runtime compiler or alter legacy context/prompt hashes.
+  const compiledPolicy = declaredPolicyMode === 'off'
+    ? null : compileStrategyPolicy(rawPolicyValue, { marketDataPlan })
   return {
     entryMethods: normalizeEntryMethods(strategy.entry_methods_json || strategy.entry_methods || DEFAULT_ENTRY_METHODS),
-    marketDataPlan: normalizeMarketDataPlan(strategy.market_data_plan_json || strategy.market_data_plan, {
-      prompt: strategy.system_prompt || '',
-    }),
+    marketDataPlan,
     useChanAnalysis: normalizeUseChanAnalysis(
       strategy.use_chan_analysis ?? strategy.market_data_plan?.use_chan_analysis,
       { prompt: strategy.system_prompt || '' },
     ),
+    strategyPolicy:rawPolicy,
+    compiledPolicy,
+    policyMode:declaredPolicyMode,
   }
+}
+
+export function prepareStrategyPolicyRuntime(policy, strategyContext, { rawPolicy = null } = {}) {
+  const compiledPolicy = policy?.compiledPolicy || policy
+  if (!compiledPolicy || compiledPolicy.mode === 'off') return null
+  const frameSources = strategyContext?.policyIndicatorSources || {}
+  const indicators = calculatePolicyIndicators(compiledPolicy, frameSources)
+  const workflowState = buildPreInferenceWorkflowState(compiledPolicy)
+  const preInference = evaluateStrategyConstraints(compiledPolicy, {
+    stages:{}, decision:{}, indicators, signal:{ side:'hold' }, evidence:{}, market:{},
+  }, 'pre_inference')
+  const prompt = renderStrategyPolicyPrompt(compiledPolicy, { indicators, workflow_state:workflowState })
+  const runtime = {
+    schema_version:compiledPolicy.schema_version,
+    mode:compiledPolicy.mode,
+    policy_hash:compiledPolicy.policy_hash,
+    raw_policy:rawPolicy || policy?.strategyPolicy || null,
+    compiled_policy:compiledPolicy,
+    workflow_state:workflowState,
+    indicators,
+    constraint_results:{ pre_inference:preInference },
+    prompt_renderer:prompt ? {
+      renderer_version:prompt.renderer_version,
+      rendered_hash:prompt.rendered_hash,
+    } : null,
+  }
+  if (compiledPolicy.mode === 'enforce' && strategyContext) {
+    strategyContext.compiled_policy = compiledPolicy
+    strategyContext.workflow_state = workflowState
+    strategyContext.indicators = indicators
+  }
+  return { ...runtime, rendered_prompt:prompt?.text || '' }
 }
 
 export function signalTypesForEntryMethods(methods) {

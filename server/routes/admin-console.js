@@ -111,6 +111,14 @@ const AI_OPERATION_ERRORS = {
 }
 
 function adminAiError(res, error) {
+  if (error?.name === 'StrategyPolicyValidationError') {
+    return res.status(400).json({
+      ok:false,
+      error:`策略政策配置无效：${error.code}（${error.path}）`,
+      code:error.code,
+      path:error.path,
+    })
+  }
   const code = String(error?.message || 'ai_operations_failed')
   const status = code.includes('not_found') ? 404 : 400
   res.status(status).json({ ok:false, error:AI_OPERATION_ERRORS[code] || 'AI 运营配置更新失败', code })

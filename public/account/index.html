@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>账户与订阅中心</title>
   <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/account/styles.css?v=20260723e">
+  <link rel="stylesheet" href="/account/styles.css?v=20260731security4">
 </head>
 <body>
   <div id="accountApp" class="account-app">
@@ -45,7 +45,26 @@
 
   <div id="toastHost" class="toast-host" aria-live="polite"></div>
   <dialog id="paymentDialog" class="payment-dialog"><div id="paymentDialogContent"></div></dialog>
+  <dialog id="securityDialog" class="security-dialog" aria-labelledby="securityDialogTitle"><div id="securityDialogContent"></div></dialog>
+  <dialog id="securityCaptchaDialog" class="captcha-dialog" aria-labelledby="securityCaptchaTitle">
+    <form id="securityCaptchaForm" class="captcha-sheet">
+      <header class="dialog-header">
+        <div><p class="dialog-eyebrow">安全验证</p><h2 id="securityCaptchaTitle">完成图形验证</h2><p>请输入图片中的字符后，我们再发送验证码。</p></div>
+        <button class="dialog-close" type="button" data-close-security-captcha aria-label="关闭图形验证">&times;</button>
+      </header>
+      <div id="securityCaptchaImage" class="captcha-image" aria-label="图形验证码"></div>
+      <label class="form-field full">
+        <span>图形验证码</span>
+        <input id="securityCaptchaAnswer" autocomplete="off" inputmode="text" maxlength="8" required aria-describedby="securityCaptchaError">
+        <small id="securityCaptchaError" class="field-error" role="alert"></small>
+      </label>
+      <div class="dialog-actions">
+        <button class="button quiet" type="button" data-close-security-captcha>取消</button>
+        <button id="securityCaptchaSubmit" class="button primary" type="submit">发送验证码</button>
+      </div>
+    </form>
+  </dialog>
   <script src="/shared/session.js?v=20260723a"></script>
-  <script src="/account/app.js?v=20260723c"></script>
+  <script src="/account/app.js?v=20260731security4"></script>
 </body>
 </html>

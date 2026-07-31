@@ -19,13 +19,31 @@ describe('admin position protection UI contract', () => {
       'positionProtectionModal', 'positionProtectionImpact', 'positionProtectionProgress',
       'positionProtectionResultBody', 'positionProtectionRetry',
     ]) expect(html).toContain(`id="${id}"`)
-    expect(html).toContain('同步到同一信号涉及的所有用户')
+    expect(html).toContain('同步同一信号下的系统持仓')
     expect(app).toContain("msg.type === 'position_protection_job_updated'")
     expect(app).toContain('/retry-failed')
     expect(css).toContain('.position-protection-target-status.failed')
     expect(app).not.toContain('if (sourcePreview.sync_available) await loadPositionProtectionPreview(ticket, "signal")')
     expect(app).toContain('Math.abs(stopLossValue - currentStopLoss) > 1e-8')
     expect(app).toContain('body:{ preview_hash:preview.preview_hash }')
+  })
+
+  it('presents a clear, accessible edit flow with inline change feedback', () => {
+    for (const id of [
+      'positionProtectionDescription', 'positionProtectionStopLossError',
+      'positionProtectionTakeProfitError', 'positionProtectionChangeSummary',
+      'positionProtectionScopeBadge', 'positionProtectionReasonCount',
+      'positionProtectionReasonError', 'positionProtectionCancel',
+      'positionProtectionSubmitHint', 'positionProtectionSubmitLabel',
+    ]) expect(html).toContain(`id="${id}"`)
+    expect(html).toContain('aria-describedby="positionProtectionStopLossHelp positionProtectionStopLossError"')
+    expect(html).toContain('aria-describedby="positionProtectionTakeProfitHelp positionProtectionTakeProfitError"')
+    expect(html).toContain('只修改止损或止盈，不会改变持仓方向、手数与开仓价格。')
+    expect(app).toContain('renderPositionProtectionChangeState({ showErrors:true })')
+    expect(app).toContain('positionProtectionPriceLabel(currentStopLoss)')
+    expect(app).toContain('positionProtectionSubmitLabel").textContent = "正在保存…"')
+    expect(css).toContain('.position-protection-field input[aria-invalid="true"]')
+    expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
   it('keeps batch execution on the server and verifies every MT5 write', () => {

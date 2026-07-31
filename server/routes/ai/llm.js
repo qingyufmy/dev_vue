@@ -269,6 +269,18 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   return { outputFormat: JSON.stringify(schema, null, 2), hasPending }
 }
 
+function attachStrategyPolicyOutputFormat(baseFormat, runtime) {
+  const hasWorkflowStages = Array.isArray(runtime?.compiled_policy?.workflow?.stages)
+    && runtime.compiled_policy.workflow.stages.length > 0
+  if (!runtime || runtime.mode !== 'enforce' || !hasWorkflowStages) return baseFormat
+  let schema
+  try { schema = JSON.parse(baseFormat) } catch { return baseFormat }
+  schema.strategy_policy_trace = {
+    stages:'必须按 compiled_policy.workflow.stages 的 id 返回对象。激活阶段返回 state 或 passed/evidence_count/evidence_refs；未激活阶段只能返回 skipped=true。',
+  }
+  return JSON.stringify(schema, null, 2)
+}
+
 function usesNativeJsonMode(provider, protocol) {
   return (provider === 'deepseek' && protocol !== 'responses')
     || (provider === 'volcengine_agent_plan' && protocol === 'responses')
@@ -652,6 +664,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
     const strategySchema = buildStrategyOutputFormat(outputFormat, config._allowed_entry_methods, config._experienceSelection)
     outputFormat = strategySchema.outputFormat
+    outputFormat = attachStrategyPolicyOutputFormat(outputFormat, config._strategyPolicyRuntime)
     const positionManagementContext = config._positionManagementContext
     const positionManagementEnabled = hasActivePositionManagementGroups(positionManagementContext)
     if (positionManagementEnabled) {
@@ -679,7 +692,9 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
 
 ## 持仓管理 v1.1 强制边界
 输入中的 position_management_context 由服务端生成。你必须完整返回其中每一个挂单管理组和持仓管理组，且只能原样引用给出的 management_group_id、thesis_id、condition_id 和 evidence_refs。挂单动作只允许 keep 或 cancel；持仓动作只允许 hold 或 exit。禁止输出 replace、reverse、ticket、手数或任何账户身份。不得修改冻结条件、失效价格、条件类型、周期和确认次数。reversal_candidate 只表示解释性判断，不是执行命令。新建仓、挂单评估、持仓评估彼此独立；新建仓字段无效时也必须继续完成其他评估。` : ''
-    const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + positionManagementRule + platformExperience + personalMemory + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + (positionManagementEnabled ? '' : pendingRule)
+    const strategyPolicyRule = typeof config._strategyPolicyPrompt === 'string' && config._strategyPolicyPrompt
+      ? `\n\n${config._strategyPolicyPrompt}` : ''
+    const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + positionManagementRule + platformExperience + personalMemory + strategyPolicyRule + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + (positionManagementEnabled ? '' : pendingRule)
 
     // Check if prompt wants Chan theory data
     const useChan = config._use_chan_analysis === undefined

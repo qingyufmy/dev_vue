@@ -146,6 +146,7 @@ export async function resolveModelSnapshotSelection(userId, snapshotIds, expecte
     content_hash:row.content_hash,
     market_snapshot:parseSnapshotJson(row.market_snapshot_json, {}),
     klines:parseSnapshotJson(row.klines_json, {}),
+    strategy_runtime:parseSnapshotJson(row.strategy_runtime_json, null),
     memory_mode:row.memory_mode || 'off',
   }))
   const fingerprint = crypto.createHash('sha256').update(JSON.stringify(samples.map(sample => ({

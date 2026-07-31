@@ -2,11 +2,11 @@ const $ = id => document.getElementById(id)
 const accountParams = new URLSearchParams(location.search)
 const embedMode = ['ai','main','admin'].includes(accountParams.get('embed')) ? accountParams.get('embed') : ''
 const embedded = Boolean(embedMode)
-const state = { user:null, plans:null, orders:null, referral:null, notifications:null, notificationUnread:0, period:'month', tab:'overview', paymentTimer:null }
+const state = { user:null, plans:null, orders:null, referral:null, notifications:null, notificationUnread:0, period:'month', tab:'overview', paymentTimer:null, securityCooldown:null, securityFlow:null, securityReturnFocus:null }
 const TAB_META = {
   overview:['账户概览','查看会员状态和常用账户信息。'],
   profile:['个人资料','管理头像、昵称和账户基础信息。'],
-  security:['账户安全','修改登录密码并检查绑定信息。'],
+  security:['账户安全','管理登录方式、找回方式和登录安全。'],
   notifications:['消息通知','查看账户、社区与系统通知。'],
   subscription:['订阅与续费','查看当前权益，续费或升级会员。'],
   orders:['支付订单','查看历史订单与支付状态。'],
@@ -25,6 +25,31 @@ function formatDate(value) { if (!value) return '长期有效'; const date = new
 function money(value) { return `$${Number(value || 0).toFixed(2)}` }
 function planLabel(value) { return ({ free:'体验版',plus:'Plus 专业版',pro:'Pro 交易版' })[value] || value || '体验版' }
 function effectivePlan() { return state.user?.effectivePlan || (state.user?.membershipExpired ? 'free' : state.user?.plan) || 'free' }
+function maskEmail(value) {
+  const [name,domain] = String(value || '').split('@')
+  if (!name || !domain) return value || '未绑定'
+  const visible = name.length > 2 ? name.slice(0,2) : name.slice(0,1)
+  return `${visible}***@${domain}`
+}
+function maskPhone(value) {
+  const phone = String(value || '')
+  if (!phone) return '未绑定'
+  if (phone.length <= 7) return `${phone.slice(0,2)}***${phone.slice(-2)}`
+  return `${phone.slice(0,3)}****${phone.slice(-4)}`
+}
+function securityIcon(name) {
+  const paths = {
+    shield:'<path d="M12 3 5 6v5c0 4.8 2.9 8 7 10 4.1-2 7-5.2 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-5"/>',
+    mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    phone:'<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+    key:'<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9m-4 4 3 3m-6 0 3 3"/>',
+    logout:'<path d="M10 17 15 12 10 7m5 5H3m12-9h5v18h-5"/>',
+    check:'<path d="m5 12 4 4L19 6"/>',
+    warning:'<path d="M12 4 3 20h18L12 4Z"/><path d="M12 9v4m0 3h.01"/>',
+    eye:'<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/>',
+  }
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.shield}</svg>`
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path,{ ...options, headers:AuthSession.headers({ 'Content-Type':'application/json', ...(options.headers || {}) }), body:options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body })
@@ -100,7 +125,294 @@ function profileTemplate() {
 
 function securityTemplate() {
   const user = state.user
-  return `<div class="section-stack"><article class="panel info-list"><div class="section-heading"><div><h2>登录方式</h2><p>敏感信息由服务器验证，前端不能直接修改。</p></div></div><div class="info-row"><span>邮箱</span><strong>${escapeHtml(user.email || '未绑定')}</strong></div><div class="info-row"><span>手机号</span><strong>${escapeHtml(user.phone || '未绑定')}</strong></div><div class="info-row"><span>主要登录方式</span><strong>${user.authMethod === 'phone' ? '手机号' : '邮箱'}</strong></div></article><article class="panel"><div class="section-heading"><div><h2>修改密码</h2><p>修改后主站和 AI 实验室都需要使用新密码。</p></div></div><form id="passwordForm"><div class="form-grid"><label class="form-field full"><span>当前密码</span><input id="oldPassword" type="password" autocomplete="current-password" required></label><label class="form-field"><span>新密码</span><input id="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="32" required><small class="field-help">8–32 位，包含字母和数字</small></label><label class="form-field"><span>确认新密码</span><input id="confirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="32" required></label></div><div class="form-actions"><button class="button primary" type="submit">更新密码</button></div></form></article><article class="panel panel-body"><button id="securityLogoutBtn" class="button danger" type="button">退出主站与 AI 实验室</button><p class="field-help">退出会清除当前浏览器中两个前端的登录状态。</p></article></div>`
+  const emailBound = Boolean(user.email)
+  const phoneBound = Boolean(user.phone)
+  const completed = 1 + Number(emailBound) + Number(phoneBound)
+  const recommended = !emailBound ? 'email' : !phoneBound ? 'phone' : ''
+  const summary = completed === 3 ? '账户保护完整' : `已完成 ${completed} 项保护`
+  const summaryText = completed === 3 ? '登录与找回方式均已配置，请继续妥善保管密码。' : `建议${!emailBound ? '绑定邮箱' : '绑定手机号'}，避免忘记密码后无法找回账户。`
+  const contactCard = (type,bound,value) => {
+    const isEmail = type === 'email'
+    const title = isEmail ? '邮箱' : '手机号'
+    const masked = isEmail ? maskEmail(value) : maskPhone(value)
+    const action = bound ? `更换${title}` : `绑定${title}`
+    const helper = isEmail ? '用于登录、找回密码和接收安全通知' : '用于登录、找回密码和身份验证'
+    const buttonClass = !bound && recommended === type ? 'primary' : 'secondary'
+    return `<article class="security-contact-card">
+      <div class="security-card-icon">${securityIcon(isEmail ? 'mail' : 'phone')}</div>
+      <div class="security-card-copy"><div class="security-card-title"><h3>${title}</h3><span class="security-state ${bound ? 'success' : 'warning'}">${securityIcon(bound ? 'check' : 'warning')} ${bound ? '已绑定' : '未绑定'}</span></div><strong>${escapeHtml(masked)}</strong><p>${helper}</p></div>
+      <button class="button ${buttonClass}" type="button" data-security-action="${type}">${action}</button>
+    </article>`
+  }
+  return `<div class="section-stack security-page">
+    <article class="panel security-overview">
+      <div class="security-overview-icon">${securityIcon('shield')}</div>
+      <div><span class="security-kicker">账户保护状态</span><h2>${summary}</h2><p>${summaryText}</p><div class="security-checks"><span class="${emailBound ? 'done' : ''}">${securityIcon(emailBound ? 'check' : 'warning')} 邮箱${emailBound ? '已绑定' : '未绑定'}</span><span class="${phoneBound ? 'done' : ''}">${securityIcon(phoneBound ? 'check' : 'warning')} 手机${phoneBound ? '已绑定' : '未绑定'}</span><span class="done">${securityIcon('check')} 密码已设置</span></div></div>
+      ${recommended ? `<button class="button primary security-overview-action" type="button" data-security-action="${recommended}">立即${recommended === 'email' ? '绑定邮箱' : '绑定手机'}</button>` : ''}
+    </article>
+    <section aria-labelledby="securityContactTitle"><div class="security-section-heading"><div><h2 id="securityContactTitle">登录与找回方式</h2><p>敏感信息已脱敏显示，修改前需要完成身份验证。</p></div><span class="security-primary-method">主要登录：${user.authMethod === 'phone' ? '手机号' : '邮箱'}</span></div><div class="security-contact-grid">${contactCard('email',emailBound,user.email)}${contactCard('phone',phoneBound,user.phone)}</div></section>
+    <section aria-labelledby="securityLoginTitle"><div class="security-section-heading"><div><h2 id="securityLoginTitle">登录安全</h2><p>密码修改和全端退出均会影响当前登录状态。</p></div></div><div class="security-action-list">
+      <article class="security-action-row"><div class="security-action-icon">${securityIcon('key')}</div><div><h3>登录密码</h3><p>建议使用与其他网站不同的密码，至少包含字母和数字。</p></div><span class="security-state success">${securityIcon('check')} 已设置</span><button class="button secondary" type="button" data-security-action="password">修改密码</button></article>
+      <article class="security-action-row danger-zone"><div class="security-action-icon danger">${securityIcon('logout')}</div><div><h3>退出所有登录</h3><p>退出主站、AI 实验室，并撤销量见智桥的服务器授权。</p></div><button class="button danger" type="button" data-security-action="logout">退出所有登录</button></article>
+    </div></section>
+  </div>`
+}
+
+function dialogHeader(title,description,icon='shield',eyebrow='账户安全') {
+  return `<header class="dialog-header"><div class="dialog-title-group"><span class="dialog-title-icon">${securityIcon(icon)}</span><div><p class="dialog-eyebrow">${eyebrow}</p><h2 id="securityDialogTitle">${title}</h2><p>${description}</p></div></div><button class="dialog-close" type="button" data-close-security aria-label="关闭${title}">&times;</button></header>`
+}
+
+function clearSecurityCooldown() {
+  clearInterval(state.securityCooldown)
+  state.securityCooldown = null
+}
+
+function closeSecurityDialog() {
+  clearSecurityCooldown()
+  if ($('securityCaptchaDialog').open) $('securityCaptchaDialog').close()
+  if ($('securityDialog').open) $('securityDialog').close()
+}
+
+function securityContactDialog(type) {
+  const isEmail = type === 'email'
+  const current = state.user?.[type] || ''
+  const changing = Boolean(current)
+  const label = isEmail ? '邮箱' : '手机号'
+  const action = changing ? '更换' : '绑定'
+  const masked = isEmail ? maskEmail(current) : maskPhone(current)
+  const inputType = isEmail ? 'email' : 'tel'
+  const autocomplete = isEmail ? 'email' : 'tel'
+  const placeholder = isEmail ? 'name@example.com' : '请输入常用手机号'
+  return `<form id="securityContactForm" class="security-sheet contact-sheet" novalidate>
+    ${dialogHeader(`${action}${label}`,changing ? `验证新${label}后，将替换当前登录与找回方式。` : `绑定后可使用${label}登录并找回密码。`,isEmail ? 'mail' : 'phone')}
+    <div class="dialog-step"><span>1</span><strong>填写并验证新${label}</strong><small>验证码 10 分钟内有效</small></div>
+    <div class="dialog-form">
+      ${changing ? `<div class="current-binding"><span>当前${label}</span><strong>${escapeHtml(masked)}</strong></div>` : ''}
+      <label class="form-field full"><span>新${label}</span><div class="verification-input"><input id="securityDestination" type="${inputType}" autocomplete="${autocomplete}" placeholder="${placeholder}" required aria-describedby="securityDestinationHelp securityDestinationError"><button id="securitySendCode" class="button secondary" type="button">发送验证码</button></div><small id="securityDestinationHelp" class="field-help">${isEmail ? '请填写可以正常接收邮件的地址' : '请填写可以正常接收短信的手机号'}</small><small id="securityDestinationError" class="field-error" role="alert"></small></label>
+      <label id="securityCodeField" class="form-field full" hidden><span>六位验证码</span><input id="securityCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="请输入收到的验证码" required aria-describedby="securityCodeError"><small id="securityCodeError" class="field-error" role="alert"></small></label>
+      ${changing ? `<label class="form-field full"><span>当前登录密码</span><div class="password-input"><input id="securityCurrentPassword" type="password" autocomplete="current-password" placeholder="用于确认是你本人操作" required aria-describedby="securityCurrentPasswordError"><button class="password-toggle" type="button" data-toggle-password="securityCurrentPassword" aria-label="显示当前登录密码">${securityIcon('eye')}</button></div><small id="securityCurrentPasswordError" class="field-error" role="alert"></small></label>` : ''}
+      <div id="securityDialogMessage" class="dialog-message" role="status" aria-live="polite"></div>
+    </div>
+    <div class="dialog-actions"><button class="button quiet" type="button" data-close-security>取消</button><button id="securityContactSubmit" class="button primary" type="submit" disabled>${action}${label}</button></div>
+  </form>`
+}
+
+function securityPasswordDialog() {
+  return `<form id="securityPasswordForm" class="security-sheet" novalidate>
+    ${dialogHeader('修改登录密码','修改成功后，所有已登录设备都需要重新登录。','key')}
+    <div class="dialog-form">
+      <label class="form-field full"><span>当前密码</span><div class="password-input"><input id="securityOldPassword" type="password" autocomplete="current-password" required aria-describedby="securityOldPasswordError"><button class="password-toggle" type="button" data-toggle-password="securityOldPassword" aria-label="显示当前密码">${securityIcon('eye')}</button></div><small id="securityOldPasswordError" class="field-error" role="alert"></small></label>
+      <label class="form-field full"><span>新密码</span><div class="password-input"><input id="securityNewPassword" type="password" autocomplete="new-password" minlength="8" maxlength="32" required aria-describedby="securityNewPasswordError securityPasswordRules"><button class="password-toggle" type="button" data-toggle-password="securityNewPassword" aria-label="显示新密码">${securityIcon('eye')}</button></div><small id="securityNewPasswordError" class="field-error" role="alert"></small></label>
+      <ul id="securityPasswordRules" class="password-rules" aria-live="polite"><li data-password-rule="length">8–32 位字符</li><li data-password-rule="letter">至少 1 个字母</li><li data-password-rule="number">至少 1 个数字</li></ul>
+      <label class="form-field full"><span>确认新密码</span><div class="password-input"><input id="securityConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="32" required aria-describedby="securityConfirmPasswordError"><button class="password-toggle" type="button" data-toggle-password="securityConfirmPassword" aria-label="显示确认密码">${securityIcon('eye')}</button></div><small id="securityConfirmPasswordError" class="field-error" role="alert"></small></label>
+      <div id="securityDialogMessage" class="dialog-message" role="status" aria-live="polite"></div>
+      <div class="security-impact-note">${securityIcon('warning')}<span>保存后主站、AI 实验室和量见智桥的服务器授权都会失效，需要重新登录或授权。</span></div>
+    </div>
+    <div class="dialog-actions"><button class="button quiet" type="button" data-close-security>取消</button><button class="button primary" type="submit">保存新密码</button></div>
+  </form>`
+}
+
+function securityLogoutDialog() {
+  return `<form id="securityLogoutForm" class="security-sheet" novalidate>
+    ${dialogHeader('退出所有登录','这是影响全部设备和桥接授权的安全操作。','logout','危险操作')}
+    <div class="logout-impact"><h3>确认退出以下连接？</h3><ul><li>${securityIcon('check')} 当前浏览器中的主站</li><li>${securityIcon('check')} AI 交易实验室</li><li>${securityIcon('check')} 其他已登录设备</li><li>${securityIcon('check')} 量见智桥的服务器授权</li></ul><p>本地 MT4/MT5 通信不受影响；再次使用服务器功能时，需要重新登录或授权。</p></div>
+    <div id="securityDialogMessage" class="dialog-message" role="status" aria-live="polite"></div>
+    <div class="dialog-actions"><button class="button secondary" type="button" data-close-security>保留登录</button><button class="button danger solid" type="submit">确认退出所有登录</button></div>
+  </form>`
+}
+
+function openSecurityDialog(action,trigger=document.activeElement) {
+  state.securityReturnFocus = trigger instanceof HTMLElement ? trigger : null
+  state.securityFlow = action === 'email' || action === 'phone' ? { type:action,changing:Boolean(state.user?.[action]),destination:'' } : { type:action }
+  const content = action === 'password' ? securityPasswordDialog() : action === 'logout' ? securityLogoutDialog() : securityContactDialog(action)
+  $('securityDialogContent').innerHTML = content
+  bindSecurityDialogActions()
+  $('securityDialog').showModal()
+  const focusTarget = action === 'logout' ? $('securityDialog').querySelector('button[data-close-security]') : $('securityDialog').querySelector('input:not([type="hidden"])')
+  focusTarget?.focus()
+}
+
+function setFieldError(id,message='') {
+  const input = $(id)
+  const error = $(`${id}Error`)
+  if (error) error.textContent = message
+  if (input) input.setAttribute('aria-invalid',message ? 'true' : 'false')
+}
+
+function setSecurityMessage(message='',type='') {
+  const node = $('securityDialogMessage')
+  if (!node) return
+  node.textContent = message
+  node.className = `dialog-message${type ? ` ${type}` : ''}`
+}
+
+function contactDestination() { return $('securityDestination')?.value.trim() || '' }
+function validateContactDestination(focus=true) {
+  const type = state.securityFlow?.type
+  const destination = contactDestination()
+  const valid = type === 'email' ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(destination) : /^[+\d][\d\s-]{5,19}$/.test(destination)
+  const same = String(state.user?.[type] || '').toLowerCase() === destination.toLowerCase()
+  const message = !valid ? `请输入有效的${type === 'email' ? '邮箱地址' : '手机号'}` : same ? `新${type === 'email' ? '邮箱' : '手机号'}不能与当前绑定信息相同` : ''
+  setFieldError('securityDestination',message)
+  if (message && focus) $('securityDestination')?.focus()
+  return message ? '' : destination
+}
+
+function startSecurityCooldown() {
+  clearSecurityCooldown()
+  const button = $('securitySendCode')
+  if (!button) return
+  let seconds = 60
+  button.disabled = true
+  button.textContent = `${seconds}s 后重发`
+  state.securityCooldown = setInterval(() => {
+    seconds -= 1
+    if (!button.isConnected || seconds <= 0) {
+      clearSecurityCooldown()
+      if (button.isConnected) { button.disabled = false; button.textContent = '重新发送' }
+      return
+    }
+    button.textContent = `${seconds}s 后重发`
+  },1000)
+}
+
+async function submitSecurityCaptcha(form) {
+  const answer = $('securityCaptchaAnswer').value.trim()
+  if (!answer) { $('securityCaptchaError').textContent = '请输入图形验证码'; $('securityCaptchaAnswer').focus(); return }
+  const button = $('securityCaptchaSubmit')
+  button.disabled = true
+  button.textContent = '正在发送…'
+  try {
+    const { type,changing,destination } = state.securityFlow
+    const body = { captchaId:state.securityFlow.captchaId, captchaAnswer:answer, [type]:destination }
+    const endpoint = changing ? '/api/send-code' : '/api/send-bind-code'
+    if (changing) body.purpose = type === 'email' ? 'change_email' : 'change_phone'
+    await api(endpoint,{ method:'POST',body })
+    $('securityCaptchaDialog').close()
+    $('securityDestination').readOnly = true
+    $('securityCodeField').hidden = false
+    $('securityContactSubmit').disabled = false
+    setSecurityMessage(`验证码已发送至${type === 'email' ? '新邮箱' : '新手机号'}。`,'success')
+    startSecurityCooldown()
+    $('securityCode').focus()
+  } catch(error) {
+    $('securityCaptchaError').textContent = error.message || '验证码发送失败，请重试'
+    $('securityCaptchaAnswer').focus()
+  } finally {
+    button.disabled = false
+    button.textContent = '发送验证码'
+  }
+}
+
+async function prepareSecurityCaptcha() {
+  const destination = validateContactDestination()
+  if (!destination) return
+  const button = $('securitySendCode')
+  button.disabled = true
+  button.textContent = '正在加载…'
+  try {
+    const result = await api('/api/captcha')
+    state.securityFlow.destination = destination
+    state.securityFlow.captchaId = result.id
+    $('securityCaptchaImage').innerHTML = result.svg || ''
+    $('securityCaptchaAnswer').value = ''
+    $('securityCaptchaError').textContent = ''
+    $('securityCaptchaDialog').showModal()
+    $('securityCaptchaAnswer').focus()
+  } catch(error) {
+    setSecurityMessage(error.message || '图形验证码加载失败，请重试','error')
+  } finally {
+    if (!state.securityCooldown) { button.disabled = false; button.textContent = '发送验证码' }
+  }
+}
+
+async function submitSecurityContact(form) {
+  const destination = validateContactDestination()
+  const code = $('securityCode')?.value.trim() || ''
+  const password = $('securityCurrentPassword')?.value || ''
+  setFieldError('securityCode',/^\d{6}$/.test(code) ? '' : '请输入六位数字验证码')
+  if (state.securityFlow.changing) setFieldError('securityCurrentPassword',password ? '' : '请输入当前登录密码')
+  if (!destination || !/^\d{6}$/.test(code) || state.securityFlow.changing && !password) {
+    form.querySelector('[aria-invalid="true"]')?.focus()
+    return
+  }
+  const button = $('securityContactSubmit')
+  button.disabled = true
+  button.textContent = state.securityFlow.changing ? '正在更换…' : '正在绑定…'
+  setSecurityMessage()
+  try {
+    const { type,changing } = state.securityFlow
+    const purpose = changing ? (type === 'email' ? 'change_email' : 'change_phone') : 'bind'
+    const verified = await api('/api/verify-code',{ method:'POST',body:{ [type]:destination,code,purpose } })
+    const endpoint = changing ? `/api/change-${type}` : `/api/bind-${type}`
+    const body = changing
+      ? { oldPassword:password,[type === 'email' ? 'newEmail' : 'newPhone']:destination,verifyToken:verified.token }
+      : { [type]:destination,verifyToken:verified.token }
+    await api(endpoint,{ method:'POST',body })
+    closeSecurityDialog()
+    await refreshProfile()
+    toast(`${type === 'email' ? '邮箱' : '手机号'}${changing ? '已更换' : '绑定成功'}`)
+  } catch(error) {
+    setSecurityMessage(error.message || '操作失败，请检查信息后重试','error')
+    button.disabled = false
+    button.textContent = state.securityFlow.changing ? `确认更换` : `确认绑定`
+  }
+}
+
+function updateSecurityPasswordRules() {
+  const password = $('securityNewPassword')?.value || ''
+  const rules = { length:password.length >= 8 && password.length <= 32,letter:/[A-Za-z]/.test(password),number:/\d/.test(password) }
+  Object.entries(rules).forEach(([rule,valid]) => $('securityPasswordRules')?.querySelector(`[data-password-rule="${rule}"]`)?.setAttribute('data-state',valid ? 'valid' : ''))
+  const confirm = $('securityConfirmPassword')?.value || ''
+  if (confirm) setFieldError('securityConfirmPassword',confirm === password ? '' : '两次输入的新密码不一致')
+}
+
+async function submitSecurityPassword(form) {
+  const oldPassword = $('securityOldPassword').value
+  const newPassword = $('securityNewPassword').value
+  const confirmPassword = $('securityConfirmPassword').value
+  setFieldError('securityOldPassword',oldPassword ? '' : '请输入当前密码')
+  setFieldError('securityNewPassword',newPassword.length >= 8 && newPassword.length <= 32 && /[A-Za-z]/.test(newPassword) && /\d/.test(newPassword) ? '' : '新密码需要 8–32 位，并包含字母和数字')
+  setFieldError('securityConfirmPassword',confirmPassword === newPassword ? '' : '两次输入的新密码不一致')
+  const invalid = form.querySelector('[aria-invalid="true"]')
+  if (invalid) { invalid.focus(); return }
+  const button = form.querySelector('[type="submit"]')
+  button.disabled = true
+  button.textContent = '正在保存…'
+  try {
+    const result = await api('/api/change-password',{ method:'POST',body:{ oldPassword,newPassword } })
+    if (result.relogin) {
+      toast('密码已更新，即将返回登录页')
+      setTimeout(() => { AuthSession.clear(); notifyParent('account-session-logout'); location.replace(embedMode === 'ai' ? '/ai/auth/?mode=login' : '/auth/login?mode=login') },700)
+      return
+    }
+    closeSecurityDialog()
+    toast('密码已更新')
+  } catch(error) {
+    setSecurityMessage(error.message || '密码修改失败，请重试','error')
+    button.disabled = false
+    button.textContent = '保存新密码'
+  }
+}
+
+function togglePasswordVisibility(button) {
+  const input = $(button.dataset.togglePassword)
+  if (!input) return
+  const visible = input.type === 'text'
+  input.type = visible ? 'password' : 'text'
+  button.setAttribute('aria-label',`${visible ? '显示' : '隐藏'}${input.id === 'securityOldPassword' ? '当前密码' : input.id === 'securityCurrentPassword' ? '当前登录密码' : '密码'}`)
+}
+
+function bindSecurityDialogActions() {
+  document.querySelectorAll('[data-close-security]').forEach(button => button.addEventListener('click',closeSecurityDialog))
+  document.querySelectorAll('[data-toggle-password]').forEach(button => button.addEventListener('click',() => togglePasswordVisibility(button)))
+  $('securitySendCode')?.addEventListener('click',prepareSecurityCaptcha)
+  $('securityDestination')?.addEventListener('blur',() => validateContactDestination(false))
+  $('securityContactForm')?.addEventListener('submit',event => { event.preventDefault(); void submitSecurityContact(event.currentTarget) })
+  $('securityPasswordForm')?.addEventListener('submit',event => { event.preventDefault(); void submitSecurityPassword(event.currentTarget) })
+  $('securityNewPassword')?.addEventListener('input',updateSecurityPasswordRules)
+  $('securityConfirmPassword')?.addEventListener('input',updateSecurityPasswordRules)
+  $('securityLogoutForm')?.addEventListener('submit',event => { event.preventDefault(); const button=event.currentTarget.querySelector('[type="submit"]'); button.disabled=true; button.textContent='正在退出…'; void logoutEverywhere() })
 }
 
 function planPrice(plan,period) { const row = state.plans?.[plan]?.[period]; return typeof row === 'object' ? Number(row.current || 0) : Number(row || 0) }
@@ -140,13 +452,12 @@ function renderTab() {
 
 function bindTabActions() {
   document.querySelectorAll('[data-open-tab]').forEach(button => button.addEventListener('click',() => switchTab(button.dataset.openTab)))
+  document.querySelectorAll('[data-security-action]').forEach(button => button.addEventListener('click',() => openSecurityDialog(button.dataset.securityAction,button)))
   document.querySelectorAll('[data-period]').forEach(button => button.addEventListener('click',() => { state.period = button.dataset.period; renderTab() }))
   document.querySelectorAll('[data-buy-plan]').forEach(button => button.addEventListener('click',() => void createPayment(button.dataset.buyPlan,button)))
   $('profileForm')?.addEventListener('submit',event => { event.preventDefault(); void saveProfile(event.currentTarget) })
   $('avatarInput')?.addEventListener('change',event => void saveAvatar(event.target.files?.[0]))
-  $('passwordForm')?.addEventListener('submit',event => { event.preventDefault(); void changePassword(event.currentTarget) })
   $('markNotificationsRead')?.addEventListener('click',() => void markNotificationsRead())
-  $('securityLogoutBtn')?.addEventListener('click',logoutEverywhere)
   $('copyReferralBtn')?.addEventListener('click',async () => { await navigator.clipboard.writeText($('referralLink').value); toast('邀请链接已复制') })
 }
 
@@ -180,15 +491,6 @@ async function saveAvatar(file) {
     state.user = { ...state.user,...result.user }; localStorage.setItem('ws_user',JSON.stringify(state.user))
     renderIdentity(); renderTab(); notifyParent('account-profile-updated',{ user:state.user }); toast('头像已更新')
   } catch (error) { toast(error.message || '头像更新失败','error') }
-}
-
-async function changePassword(form) {
-  const oldPassword=$('oldPassword').value,newPassword=$('newPassword').value,confirm=$('confirmPassword').value
-  if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) return toast('新密码需要至少 8 位，并包含字母和数字','error')
-  if (newPassword !== confirm) return toast('两次输入的新密码不一致','error')
-  const button=form.querySelector('[type="submit"]'); button.disabled=true
-  try { await api('/api/change-password',{ method:'POST',body:{ oldPassword,newPassword } }); form.reset(); toast('密码已更新') }
-  catch(error){ toast(error.message,'error') } finally { button.disabled=false }
 }
 
 async function loadOrders() {
@@ -259,10 +561,13 @@ async function bootstrap() {
 }
 
 $('accountNav').addEventListener('click',event=>{ const button=event.target.closest('[data-tab]'); if(button) switchTab(button.dataset.tab) })
-$('accountLogoutBtn').addEventListener('click',logoutEverywhere)
+$('accountLogoutBtn').addEventListener('click',event=>openSecurityDialog('logout',event.currentTarget))
 $('accountCloseBtn').addEventListener('click',()=>embedded ? notifyParent('account-center-close') : history.length > 1 ? history.back() : location.assign('/'))
 $('paymentDialog').addEventListener('close',()=>clearInterval(state.paymentTimer))
-window.addEventListener('keydown',event=>{ if(event.key==='Escape' && embedded){ event.preventDefault(); notifyParent('account-center-close') } })
+$('securityCaptchaForm').addEventListener('submit',event=>{ event.preventDefault(); void submitSecurityCaptcha(event.currentTarget) })
+document.querySelectorAll('[data-close-security-captcha]').forEach(button=>button.addEventListener('click',()=>$('securityCaptchaDialog').close()))
+$('securityDialog').addEventListener('close',()=>{ clearSecurityCooldown(); const focus=state.securityReturnFocus; state.securityFlow=null; state.securityReturnFocus=null; if(focus?.isConnected) focus.focus() })
+window.addEventListener('keydown',event=>{ if(event.key==='Escape' && embedded && !$('securityDialog').open && !$('securityCaptchaDialog').open && !$('paymentDialog').open){ event.preventDefault(); notifyParent('account-center-close') } })
 window.addEventListener('storage',event=>{ if(event.key===AuthSession.eventKey && !AuthSession.token()) location.replace(embedMode === 'ai' ? '/ai/auth/?mode=login' : embedded ? '/auth/login?mode=login' : '/') })
 window.addEventListener('message',event=>{
   if(event.origin!==location.origin || event.source!==window.parent) return

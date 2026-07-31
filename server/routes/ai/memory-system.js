@@ -145,6 +145,13 @@ function uniqueEvidenceValue(values, normalize = value => String(value || '').tr
   return normalized.length === 1 ? normalized[0] : null
 }
 
+function policyAwareSignalType(signal = {}) {
+  const direction = String(signal.strategy_policy_decision?.final_direction || '').toLowerCase()
+  if (direction === 'up') return 'buy'
+  if (direction === 'down') return 'sell'
+  return signal.signal_type || null
+}
+
 export function buildPeriodMemoryScope(reviewCase, evidence = {}) {
   const tradeEvidence = (Array.isArray(evidence.sources) ? evidence.sources : [])
     .map(source => source?.evidence).filter(Boolean)
@@ -159,7 +166,7 @@ export function buildPeriodMemoryScope(reviewCase, evidence = {}) {
     strategy_version:Number(reviewCase.strategy_version || 1),
     symbol:uniqueEvidenceValue(outcomes.map(item => item.symbol).concat(orders.map(item => item.symbol)), value => String(value || '').trim().toUpperCase()),
     timeframe:uniqueEvidenceValue(signals.map(item => item.timeframe), value => String(value || '').trim().toUpperCase()),
-    direction:uniqueEvidenceValue(signals.map(item => directionSide(item.signal_type)), value => String(value || '').trim().toLowerCase()),
+    direction:uniqueEvidenceValue(signals.map(item => directionSide(policyAwareSignalType(item))), value => String(value || '').trim().toLowerCase()),
     entry_method:uniqueEvidenceValue(orders.map(item => item.entry_method || item.action), value => String(value || '').trim().toLowerCase()),
     market_regime:uniqueEvidenceValue(retrievalContexts.map(item => item.marketRegime), value => String(value || '').trim().toLowerCase()),
     source_period:reviewCase.period_key,
@@ -203,7 +210,7 @@ function buildMemoryPayload(reviewCase, version) {
   const antiPattern = sanitizeMemoryText(issues.map(item => `${item.code}: ${item.description}`).join('；'), 4000)
   const conditions = {
     decision_quality: content.decision_quality || 'insufficient_evidence',
-    signal_type: signal.signal_type || null,
+    signal_type: policyAwareSignalType(signal),
     confidence: signal.confidence ?? null,
     external_intervention: Boolean(evidence?.post_trade?.outcome?.external_intervention),
   }
@@ -212,7 +219,7 @@ function buildMemoryPayload(reviewCase, version) {
     strategy_version: Number(snapshot.strategy_version || 1),
     symbol: evidence?.post_trade?.outcome?.symbol || approvedOrder.symbol || null,
     timeframe: signal.timeframe || snapshot.market_snapshot?.timeframe || null,
-    direction: signal.signal_type || null,
+    direction: policyAwareSignalType(signal),
     entry_method: approvedOrder.entry_method || approvedOrder.action || null,
     market_regime: retrievalContext.marketRegime || null,
   }

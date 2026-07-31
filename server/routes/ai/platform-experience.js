@@ -167,13 +167,15 @@ function buildCandidate(reviewCase, version) {
   const timeframe = sanitizeMemoryText(signal.timeframe || market.timeframe || market.strategy_context?.primary_timeframe || '', 16) || null
   const retrievalContext = buildPlatformExperienceRetrievalContext({ strategyVersion:Number(snapshot.strategy_version || 1), symbol:outcome.symbol || market.symbol, timeframe, market,
     allowedEntryMethods:signal.entry_method ? [signal.entry_method] : [] })
+  const workflowDirection = String(signal.strategy_policy_decision?.final_direction || '').toLowerCase()
+  const effectiveSignalType = workflowDirection === 'up' ? 'buy' : workflowDirection === 'down' ? 'sell' : signal.signal_type
   const context = {
     symbol: sanitizeMemoryText(outcome.symbol || market.symbol || '', 64) || null,
     timeframe,
-    signal_type: sanitizeMemoryText(signal.signal_type || '', 32) || null,
+    signal_type: sanitizeMemoryText(effectiveSignalType || '', 32) || null,
     entry_methods: signal.entry_method ? [sanitizeMemoryText(signal.entry_method, 24)] : [],
     market_regime: retrievalContext.market_regime || null,
-    trend_direction: retrievalContext.trend_direction || signalDirection(signal.signal_type),
+    trend_direction: retrievalContext.trend_direction || signalDirection(effectiveSignalType),
     volatility_bucket: retrievalContext.volatility_bucket,
     chan_trend_state: retrievalContext.chan_trend_state,
     chan_segment_direction: retrievalContext.chan_segment_direction,

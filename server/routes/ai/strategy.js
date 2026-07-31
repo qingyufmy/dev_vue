@@ -11,7 +11,9 @@ import { retrievePersonalMemory, attachMemoryInjectionSignal, buildPersonalMemor
 import { attachPlatformExperienceSignal, retrievePlatformExperience } from './platform-experience.js'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
-import { parseStrategyPolicy } from './strategy-policy.js'
+import { parseStrategyPolicy, prepareStrategyPolicyRuntime } from './strategy-policy.js'
+import { validateWorkflowTrace, workflowGateEvaluation } from './strategy-workflow-engine.js'
+import { applyConstraintAction, evaluateStrategyConstraints } from './strategy-constraint-engine.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 import { saveChanStructureAnchor } from './platform-market-data.js'
 import { loadPeriodMarketWindow } from './period-market-evidence.js'
@@ -20,6 +22,7 @@ import { resolveModelSnapshotSelection } from './model-snapshot-samples.js'
 import { resolvePlatformAiVolumeRange } from './risk-policy.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
+import { indicatorRequiredHistory } from './indicator-registry.js'
 import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
@@ -550,7 +553,7 @@ export async function buildStrategyContext(userId, symbol, account, positions, p
   }
 }
 
-export async function buildStrategyContextFromTags(userId, symbol, account, positions, prompt, fallbackTimeframe, fallbackRates, mode = 'manual', marketDataPlan = null, useChanAnalysis = null, fallbackMarketMeta = null) {
+export async function buildStrategyContextFromTags(userId, symbol, account, positions, prompt, fallbackTimeframe, fallbackRates, mode = 'manual', marketDataPlan = null, useChanAnalysis = null, fallbackMarketMeta = null, compiledPolicy = null) {
   let tags = Array.isArray(marketDataPlan?.timeframes)
     ? marketDataPlan.timeframes.map(item => ({ tf: String(item.timeframe || '').toUpperCase(), count: Number(item.kline_count) || 100 }))
     : parseTimeframeTags(prompt, mode)
@@ -562,10 +565,14 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   const useChan = useChanAnalysis == null ? /\{\{USE_CHAN\}\}/.test(prompt) : Boolean(useChanAnalysis)
   const timeframes = {}
   const visualizationKlines = {}
+  const policyIndicatorSources = {}
   const missingTimeframes = []
   for (const { tf, count } of tags) {
     const historyHintKey = chanHistoryHintKey(userId, symbol, tf)
-    const historyCount = resolveChanHistoryCount(userId, symbol, tf, count, useChan)
+    const indicatorHistoryCount = Math.max(0, ...(compiledPolicy?.indicators || [])
+      .filter(definition => definition.enabled && definition.source?.timeframe === tf)
+      .map(indicatorRequiredHistory))
+    const historyCount = Math.max(resolveChanHistoryCount(userId, symbol, tf, count, useChan), indicatorHistoryCount)
     let rates
     let chanDataQuality = null
     if (tf === (fallbackTimeframe || '').toUpperCase() && fallbackRates && fallbackRates.length >= historyCount) {
@@ -610,6 +617,12 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
     }
     const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
     timeframes[tf] = { summary: slimSummary, klines: compactRates(visibleRates) }
+    policyIndicatorSources[tf] = {
+      bars:compactRates(rates),
+      lastBarClosed:typeof chanDataQuality?.last_bar_closed === 'boolean' ? chanDataQuality.last_bar_closed : null,
+      internalGapUnresolved:chanDataQuality?.internal_gap_unresolved === true,
+      marketSource:chanDataQuality?.source || chanDataQuality?.source_type || null,
+    }
     if (useChan) visualizationKlines[tf] = compactRates(rates)
   }
   const context = {
@@ -624,6 +637,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   // Snapshot-only evidence: keep it out of model payloads, ai_signals JSON and
   // ordinary WebSocket responses. prepareInferenceSnapshot reads it directly.
   if (useChan) Object.defineProperty(context, 'visualization_klines', { value: visualizationKlines, enumerable: false })
+  Object.defineProperty(context, 'policyIndicatorSources', { value: policyIndicatorSources, enumerable: false })
   return context
 }
 
@@ -692,7 +706,12 @@ export async function handleAnalyze(userId, params) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
-  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta)
+  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta, policy.compiledPolicy)
+  const strategyPolicyRuntime = prepareStrategyPolicyRuntime(policy, market.strategy_context, { rawPolicy:policy.strategyPolicy })
+  if (strategyPolicyRuntime) {
+    config._strategyPolicyRuntime = strategyPolicyRuntime
+    if (policy.policyMode === 'enforce') config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
+  }
   market.requested_timeframes = market.strategy_context.required_timeframes
   market.used_timeframes = market.strategy_context.used_timeframes
   market.missing_timeframes = market.strategy_context.missing_timeframes
@@ -781,6 +800,29 @@ export async function handleAnalyze(userId, params) {
   }
   delete signal._inference_source
 
+  if (strategyPolicyRuntime) {
+    const workflow = validateWorkflowTrace(policy.compiledPolicy, signal, {
+      indicators:strategyPolicyRuntime.indicators,
+      signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
+    })
+    strategyPolicyRuntime.workflow_state = workflow
+    const constraintContext = {
+      stages:workflow.stages,
+      decision:workflow.decision,
+      indicators:strategyPolicyRuntime.indicators,
+      signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
+      market,
+    }
+    const postInference = evaluateStrategyConstraints(policy.compiledPolicy, constraintContext, 'post_inference')
+    strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
+    if (policy.policyMode === 'enforce') {
+      signal.strategy_policy_decision = workflow.decision
+      signal = applyConstraintAction(signal, strategyPolicyRuntime.constraint_results.pre_inference).signal
+      signal = applyConstraintAction(signal, workflowGateEvaluation(workflow)).signal
+      signal = applyConstraintAction(signal, postInference).signal
+    }
+  }
+
   const createdAt = beijingNow()
   const marketJson = JSON.stringify(market)
   const decision = normalizeDecisionFields(signal)
@@ -809,7 +851,8 @@ export async function handleAnalyze(userId, params) {
       outputSchemaVersion: renderedEvidence.outputSchemaVersion, marketSnapshot: market,
       modelProfileId: config?._model_profile_id, provider: config?.api_provider,
       modelName: config?.model_name, credentialSource: config?._credential_source,
-      memoryMode: strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off'), createdAt,
+      memoryMode: strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off'),
+      strategyRuntime:strategyPolicyRuntime, createdAt,
     })
     await createTradeThesisTx(run, {
       signalId:result.insertId,
@@ -974,7 +1017,8 @@ export async function handleAnalyzeCompare(userId, params) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), null, [], {})
-  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, null, [], prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta)
+  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, null, [], prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta, policy.compiledPolicy)
+  const baseStrategyPolicyRuntime = prepareStrategyPolicyRuntime(policy, market.strategy_context, { rawPolicy:policy.strategyPolicy })
   market.requested_timeframes = market.strategy_context.required_timeframes
   market.used_timeframes = market.strategy_context.used_timeframes
   market.missing_timeframes = market.strategy_context.missing_timeframes
@@ -1030,12 +1074,35 @@ export async function handleAnalyzeCompare(userId, params) {
       _ai_volume_step: aiVolumeRange.step,
       _comparison_mode:true,
     }
+    const strategyPolicyRuntime = baseStrategyPolicyRuntime ? structuredClone(baseStrategyPolicyRuntime) : null
+    if (strategyPolicyRuntime) {
+      config._strategyPolicyRuntime = strategyPolicyRuntime
+      if (strategyPolicyRuntime.mode === 'enforce') config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
+    }
     return maybeAiSignal(null, config, market, prompt).then(signal => {
       const inferenceSource = signal?._inference_source || 'unknown'
       if (inferenceSource !== 'ai') {
         return { model_id: modelId, status: 'error', error: signal?.reasoning || 'inference_failed' }
       }
       delete signal._inference_source
+      if (strategyPolicyRuntime) {
+        const workflow = validateWorkflowTrace(policy.compiledPolicy, signal, {
+          indicators:strategyPolicyRuntime.indicators,
+          signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
+        })
+        strategyPolicyRuntime.workflow_state = workflow
+        const postInference = evaluateStrategyConstraints(policy.compiledPolicy, {
+          stages:workflow.stages, decision:workflow.decision, indicators:strategyPolicyRuntime.indicators,
+          signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' }, market,
+        }, 'post_inference')
+        strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
+        if (strategyPolicyRuntime.mode === 'enforce') {
+          signal.strategy_policy_decision = workflow.decision
+          signal = applyConstraintAction(signal, strategyPolicyRuntime.constraint_results.pre_inference).signal
+          signal = applyConstraintAction(signal, workflowGateEvaluation(workflow)).signal
+          signal = applyConstraintAction(signal, postInference).signal
+        }
+      }
       const profile = resolved.model
       return {
         model_id: modelId,
@@ -1048,6 +1115,7 @@ export async function handleAnalyzeCompare(userId, params) {
         analysis: signal.analysis,
         reasoning: signal.reasoning,
         latest_price: market.latest_price,
+        strategy_policy_runtime:strategyPolicyRuntime,
       }
     }).catch(error => {
       return { model_id: modelId, status: 'error', error: error.message || 'inference_failed' }
@@ -1139,6 +1207,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     market_data_plan:policy.marketDataPlan,
     entry_methods:policy.entryMethods,
     use_chan_analysis:Boolean(policy.useChanAnalysis),
+    strategy_policy_mode:policy.policyMode,
+    strategy_policy_hash:policy.compiledPolicy?.policy_hash || null,
     interval_minutes:Number(strategy.interval_minutes || 0),
   }
   evaluatorStrategySnapshot.runtime_config_sha256 = comparisonFingerprint(evaluatorStrategySnapshot)
@@ -1161,6 +1231,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     use_chan_analysis:snapshotChanEnabled,
     interval_minutes:Number(TIMEFRAME_MINUTES[evaluationTimeframe] || 0),
     evidence_source:'inference_snapshot',
+    strategy_policy_mode:snapshotRun.samples[0]?.strategy_runtime?.mode || 'legacy_implicit',
+    strategy_policy_hash:snapshotRun.samples[0]?.strategy_runtime?.policy_hash || null,
   } : evaluatorStrategySnapshot
   strategyRuntimeSnapshot.runtime_config_sha256 = comparisonFingerprint(strategyRuntimeSnapshot)
   const runtimePolicy = snapshotRun ? {
@@ -1168,11 +1240,15 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     marketDataPlan:strategyRuntimeSnapshot.market_data_plan,
     useChanAnalysis:strategyRuntimeSnapshot.use_chan_analysis,
     marketOnly:strategyRuntimeSnapshot.scope === 'platform',
+    compiledPolicy:snapshotRun.samples[0]?.strategy_runtime?.compiled_policy || null,
+    policyMode:snapshotRun.samples[0]?.strategy_runtime?.mode || 'off',
   } : {
     entryMethods:policy.entryMethods,
     marketDataPlan:policy.marketDataPlan,
     useChanAnalysis:policy.useChanAnalysis,
     marketOnly:strategy.scope === 'platform',
+    compiledPolicy:policy.compiledPolicy,
+    policyMode:policy.policyMode,
   }
 
   const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params.timezone_offset_minutes)
@@ -1361,6 +1437,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       market = hydrateSnapshotMarket(decisionPoint.snapshotSample)
     } else {
     const strategyTimeframes = {}
+    const policyIndicatorSources = {}
     const missingTimeframes = []
     for (const item of historyWindows) {
       const sourceRates = Array.isArray(item.window?.periodRates) ? item.window.periodRates : []
@@ -1384,6 +1461,11 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       })
       const { account: _account, positions: _positions, symbol: _symbol, timeframe: _timeframe, timestamp: _timestamp, ...slimSummary } = summary
       strategyTimeframes[item.timeframe] = { summary: slimSummary, klines: compactRates(visibleContextRates) }
+      policyIndicatorSources[item.timeframe] = {
+        bars:compactRates(contextRates), lastBarClosed:true,
+        internalGapUnresolved:historicalDataQuality.internal_gap_unresolved === true,
+        marketSource:historicalDataQuality.source || 'historical_compare',
+      }
     }
     const primaryRates = compareVisibleRates(
       selectedWindow.window.periodRates, decisionUtcMs, requestedTimeframe,
@@ -1409,11 +1491,19 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       context_status: missingTimeframes.length ? 'partial' : 'complete',
       timeframes: strategyTimeframes,
     }
+    Object.defineProperty(market.strategy_context, 'policyIndicatorSources', { value:policyIndicatorSources, enumerable:false })
     market.requested_timeframes = market.strategy_context.required_timeframes
     market.used_timeframes = market.strategy_context.used_timeframes
     market.missing_timeframes = missingTimeframes
     if (policy.useChanAnalysis) market.chan = strategyTimeframes[requestedTimeframe]?.summary?.chan
     }
+
+    const baseStrategyPolicyRuntime = decisionPoint.snapshotSample
+      ? (decisionPoint.snapshotSample.strategy_runtime ? structuredClone(decisionPoint.snapshotSample.strategy_runtime) : null)
+      : prepareStrategyPolicyRuntime({
+        compiledPolicy:runtimePolicy.compiledPolicy,
+        strategyPolicy:policy.strategyPolicy,
+      }, market.strategy_context, { rawPolicy:policy.strategyPolicy })
 
     const inferenceTasks = validModels.map(async ({ modelId, resolved }) => {
       const snapshotVolumeRange = decisionPoint.snapshotSample?.market_snapshot?.ai_volume_range || currentAiVolumeRange
@@ -1461,13 +1551,41 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           })
         },
       }
+      const strategyPolicyRuntime = baseStrategyPolicyRuntime ? structuredClone(baseStrategyPolicyRuntime) : null
+      if (strategyPolicyRuntime) {
+        config._strategyPolicyRuntime = strategyPolicyRuntime
+        if (!decisionPoint.snapshotSample && strategyPolicyRuntime.mode === 'enforce') {
+          config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
+        }
+      }
       const startedAt = Date.now()
       try {
-        const signal = await maybeAiSignal(null, config, market, prompt)
+        let signal = await maybeAiSignal(null, config, market, prompt)
+        const rawSignalType = signal.signal_type
+        if (strategyPolicyRuntime && runtimePolicy.compiledPolicy) {
+          const workflow = validateWorkflowTrace(runtimePolicy.compiledPolicy, signal, {
+            indicators:strategyPolicyRuntime.indicators,
+            signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
+          })
+          strategyPolicyRuntime.workflow_state = workflow
+          const postInference = evaluateStrategyConstraints(runtimePolicy.compiledPolicy, {
+            stages:workflow.stages, decision:workflow.decision, indicators:strategyPolicyRuntime.indicators,
+            signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' }, market,
+          }, 'post_inference')
+          strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
+          if (runtimePolicy.policyMode === 'enforce') {
+            signal.strategy_policy_decision = workflow.decision
+            signal = applyConstraintAction(signal, strategyPolicyRuntime.constraint_results.pre_inference).signal
+            signal = applyConstraintAction(signal, workflowGateEvaluation(workflow)).signal
+            signal = applyConstraintAction(signal, postInference).signal
+          }
+        }
         return {
           modelId,
           latencyMs: Date.now() - startedAt,
           signal: { ...signal, _inference_source: signal._inference_source || 'unknown' },
+          rawSignalType,
+          strategyPolicyRuntime,
         }
       } catch (error) {
         if (abortSignal?.aborted) throw error
@@ -1539,6 +1657,12 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         normalization_info:signal.normalization_info || null,
         comparison_validation:comparisonValidation,
         execution_eligible:executionEligible,
+        raw_model_direction:comparisonDirection(result.rawSignalType),
+        policy_compliant_direction:direction,
+        workflow_compliant:result.strategyPolicyRuntime?.workflow_state?.compliant ?? null,
+        constraint_passed:result.strategyPolicyRuntime?.constraint_results?.post_inference?.passed ?? null,
+        strategy_policy_mode:result.strategyPolicyRuntime?.mode || 'legacy_implicit',
+        strategy_policy_hash:result.strategyPolicyRuntime?.policy_hash || null,
         decision_summary:boundedComparisonError(signal.decision_summary || signal.analysis || '', '', 600),
         reasoning:boundedComparisonError(signal.reasoning || '', '', 800),
         snapshot_sample:decisionPoint.snapshotSample ? {

@@ -271,6 +271,22 @@ describe('scheduler wait cadence', () => {
     expect(__schedulerTest.shouldLogSchedulerWait(state, 'market_stale_tick', 1000 + 30 * 60_000 + 1)).toBe(true)
     expect(__schedulerTest.schedulerWaitLabel('market_closed')).toBe('市场休市，等待开市')
   })
+
+  it('treats only explicit per-symbol market waits as market pauses', () => {
+    expect(__schedulerTest.isMarketWaitReason('market_closed')).toBe(true)
+    expect(__schedulerTest.isMarketWaitReason('market_stale_tick')).toBe(true)
+    expect(__schedulerTest.isMarketWaitReason('cooldown')).toBe(false)
+    expect(__schedulerTest.isMarketWaitReason('')).toBe(false)
+  })
+
+  it('keeps the aggregate market open when any subscribed symbol is trading', () => {
+    const summary = __schedulerTest.summarizeRuntimeMarketStates([
+      { symbol:'EURUSD', isOpen:false, reason:'market_closed', tradeMode:0 },
+      { symbol:'XAUUSD', isOpen:true, reason:'market_open', tradeMode:4 },
+    ])
+    expect(summary).toMatchObject({ isOpen:true, reason:'market_open', symbol:'XAUUSD', tradeMode:4 })
+    expect(summary.symbols).toHaveLength(2)
+  })
 })
 
 describe('post-completion scheduler cooldown', () => {
