@@ -4337,7 +4337,7 @@ function initBridgeModal() {
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 
   $("downloadExe")?.addEventListener("click", async () => {
-    let url = "https://qiniu.acadfx.com/bridge/bootstrapper/afbfc5cb8cb0a252834ee49d7f0c76a0640d4e2996cde7cda554c10ea43e3652/LiangjianBridgeSetup.exe";
+    let url = "https://qiniu.acadfx.com/bridge/bootstrapper/5b39aedcff48837d6f17b4b2fb0e8f5997ba495e3f24065118047c876741734e/LiangjianBridgeSetup.exe";
     let version = "3.0.0";
     try {
       const resp = await fetch("/api/bridge/version");
