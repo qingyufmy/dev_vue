@@ -489,7 +489,7 @@ export async function initDB() {
       take_profit_1_price DOUBLE,
       take_profit_2_price DOUBLE,
       take_profit_3_price DOUBLE,
-      market_data_json TEXT NOT NULL,
+      market_data_json LONGTEXT NOT NULL,
       token_count INT DEFAULT 0,
       ai_model VARCHAR(100) NOT NULL DEFAULT 'deepseek-chat',
       ttl_seconds INT,

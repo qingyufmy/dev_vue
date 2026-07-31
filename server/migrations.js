@@ -4378,6 +4378,18 @@ const migrations = [
       }
       if (additions.length) await queryRun(`ALTER TABLE chan_structure_anchors ${additions.join(', ')}`)
     }
+  },
+  {
+    id: '151_expand_ai_signal_market_data',
+    async up() {
+      const column = await queryOne(`SELECT DATA_TYPE FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals'
+          AND COLUMN_NAME = 'market_data_json'`)
+      if (!column) throw new Error('ai_signals.market_data_json_missing')
+      if (String(column.DATA_TYPE).toLowerCase() !== 'longtext') {
+        await queryRun('ALTER TABLE ai_signals MODIFY COLUMN market_data_json LONGTEXT NOT NULL')
+      }
+    }
   }
 ]
 
