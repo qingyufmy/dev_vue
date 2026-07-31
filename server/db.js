@@ -537,6 +537,7 @@ export async function initDB() {
       strategy_policy_json LONGTEXT DEFAULT NULL,
       entry_methods_json VARCHAR(255) NOT NULL DEFAULT '["market","limit","stop","stop_limit"]',
       use_chan_analysis TINYINT NOT NULL DEFAULT 0,
+      use_ema34_filter TINYINT NOT NULL DEFAULT 0,
       interval_minutes INT NOT NULL DEFAULT 5,
       is_active TINYINT NOT NULL DEFAULT 1,
       sort_order INT NOT NULL DEFAULT 0,

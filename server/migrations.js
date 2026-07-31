@@ -4430,6 +4430,32 @@ const migrations = [
           ADD COLUMN strategy_runtime_json LONGTEXT DEFAULT NULL AFTER market_snapshot_json`)
       }
     }
+  },
+  {
+    id: '154_hardcoded_ema34_filter',
+    async up() {
+      const columns = new Set((await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auto_prompt_types'
+          AND COLUMN_NAME = 'use_ema34_filter'`)).map(row => String(row.COLUMN_NAME)))
+      if (!columns.has('use_ema34_filter')) {
+        await queryRun(`ALTER TABLE auto_prompt_types
+          ADD COLUMN use_ema34_filter TINYINT NOT NULL DEFAULT 0 AFTER use_chan_analysis`)
+      }
+
+      const strategies = await queryAll(`SELECT id, strategy_policy_json
+        FROM auto_prompt_types
+        WHERE strategy_policy_json IS NOT NULL AND strategy_policy_json <> ''`)
+      for (const strategy of strategies) {
+        let policy
+        try { policy = JSON.parse(strategy.strategy_policy_json) } catch { continue }
+        const enabled = policy?.mode !== 'off' && Array.isArray(policy?.indicators) && policy.indicators.some(indicator =>
+          indicator?.enabled !== false
+          && String(indicator?.kind || '').toLowerCase() === 'ema'
+          && String(indicator?.source?.timeframe || '').toUpperCase() === 'M5'
+          && Number(indicator?.params?.period) === 34)
+        if (enabled) await queryRun('UPDATE auto_prompt_types SET use_ema34_filter = 1 WHERE id = ?', [strategy.id])
+      }
+    }
   }
 ]
 

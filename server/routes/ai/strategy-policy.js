@@ -1,5 +1,5 @@
 import { hasLegacyUseChanTag, parseLegacyTimeframeTags } from './utils.js'
-import { compileStrategyPolicy, strategyPolicyMode, STRATEGY_POLICY_TIMEFRAMES } from './strategy-policy-compiler.js'
+import { compileStrategyPolicy, STRATEGY_POLICY_TIMEFRAMES } from './strategy-policy-compiler.js'
 import { calculatePolicyIndicators } from './indicator-registry.js'
 import { buildPreInferenceWorkflowState } from './strategy-workflow-engine.js'
 import { renderStrategyPolicyPrompt } from './strategy-prompt-renderer.js'
@@ -11,6 +11,42 @@ export const DEFAULT_ENTRY_METHODS = Object.freeze([...VALID_ENTRY_METHODS])
 
 const timeframeSet = new Set(VALID_TIMEFRAMES)
 const entryMethodSet = new Set(VALID_ENTRY_METHODS)
+
+const HARDCODED_EMA34_POLICY = Object.freeze({
+  schema_version:'strategy-policy-v1',
+  mode:'enforce',
+  features:[],
+  indicators:[{
+    id:'entry_ema34', kind:'ema', enabled:true,
+    source:{ timeframe:'M5', field:'close', bar_scope:'closed_only' },
+    params:{ period:34, minimum_bars:34, warmup_target_bars:170, evidence_window:5 },
+  }],
+  workflow:{ stages:[], selectors:[], default_decision:'allow' },
+  constraints:[
+    {
+      id:'entry_indicator_ready', scope:'new_entry', phases:['post_inference', 'pre_submit'],
+      require:{ left:{ ref:'indicators.entry_ema34.ready' }, op:'eq', right:true },
+      on_fail:'hold_new_entry', counts_as_trigger:false,
+    },
+    {
+      id:'buy_indicator_relation', scope:'new_entry', phases:['post_inference', 'pre_submit'],
+      when:{ left:{ ref:'signal.side' }, op:'eq', right:'buy' },
+      require:{ left:{ ref:'indicators.entry_ema34.bar.close' }, op:'gt', right:{ ref:'indicators.entry_ema34.value' } },
+      on_fail:'hold_new_entry', counts_as_trigger:false,
+    },
+    {
+      id:'sell_indicator_relation', scope:'new_entry', phases:['post_inference', 'pre_submit'],
+      when:{ left:{ ref:'signal.side' }, op:'eq', right:'sell' },
+      require:{ left:{ ref:'indicators.entry_ema34.bar.close' }, op:'lt', right:{ ref:'indicators.entry_ema34.value' } },
+      on_fail:'hold_new_entry', counts_as_trigger:false,
+    },
+  ],
+  prompt_rules:[{
+    id:'entry_indicator_filter',
+    text:'M5 已收盘 K 线 EMA34 是短线行情证据和新入场方向过滤器；可用于说明位置、斜率、距离、持续性与最近穿越，但不计作 M15 确认或 M5 触发，也不构成退出持仓或撤销挂单的理由。',
+  }],
+  ui:{ groups:[] },
+})
 
 function parseJson(value, fallback) {
   if (value == null || value === '') return fallback
@@ -39,6 +75,18 @@ export function normalizeUseChanAnalysis(value, { prompt = '' } = {}) {
   return value === true || value === 1 || value === '1'
 }
 
+export function normalizeUseEma34Filter(value) {
+  return value === true || value === 1 || value === '1'
+}
+
+function ensureEma34MarketData(marketDataPlan) {
+  if (marketDataPlan.timeframes.some(item => item.timeframe === 'M5')) return marketDataPlan
+  return {
+    ...marketDataPlan,
+    timeframes:[...marketDataPlan.timeframes, { timeframe:'M5', kline_count:100 }],
+  }
+}
+
 export function normalizeMarketDataPlan(value, { prompt = '', fallbackTimeframe = 'M30', fallbackCount = 100 } = {}) {
   const fallback = promptPlan(prompt, fallbackTimeframe, fallbackCount)
   const parsed = parseJson(value, value)
@@ -62,17 +110,13 @@ export function normalizeMarketDataPlan(value, { prompt = '', fallbackTimeframe 
 }
 
 export function parseStrategyPolicy(strategy = {}) {
-  const marketDataPlan = normalizeMarketDataPlan(strategy.market_data_plan_json || strategy.market_data_plan, {
+  const useEma34Filter = normalizeUseEma34Filter(strategy.use_ema34_filter)
+  let marketDataPlan = normalizeMarketDataPlan(strategy.market_data_plan_json || strategy.market_data_plan, {
     prompt: strategy.system_prompt || '',
   })
-  const rawPolicyValue = strategy.strategy_policy_json ?? strategy.strategy_policy
-  const declaredPolicyMode = rawPolicyValue == null || rawPolicyValue === '' ? 'off' : strategyPolicyMode(rawPolicyValue)
-  const rawPolicy = rawPolicyValue == null || rawPolicyValue === '' ? null
-    : (typeof rawPolicyValue === 'string' ? JSON.parse(rawPolicyValue) : structuredClone(rawPolicyValue))
-  // An explicitly disabled policy remains persisted and editable, but does not
-  // enter the runtime compiler or alter legacy context/prompt hashes.
-  const compiledPolicy = declaredPolicyMode === 'off'
-    ? null : compileStrategyPolicy(rawPolicyValue, { marketDataPlan })
+  if (useEma34Filter) marketDataPlan = ensureEma34MarketData(marketDataPlan)
+  const compiledPolicy = useEma34Filter
+    ? compileStrategyPolicy(HARDCODED_EMA34_POLICY, { marketDataPlan }) : null
   return {
     entryMethods: normalizeEntryMethods(strategy.entry_methods_json || strategy.entry_methods || DEFAULT_ENTRY_METHODS),
     marketDataPlan,
@@ -80,9 +124,10 @@ export function parseStrategyPolicy(strategy = {}) {
       strategy.use_chan_analysis ?? strategy.market_data_plan?.use_chan_analysis,
       { prompt: strategy.system_prompt || '' },
     ),
-    strategyPolicy:rawPolicy,
+    useEma34Filter,
+    strategyPolicy:null,
     compiledPolicy,
-    policyMode:declaredPolicyMode,
+    policyMode:useEma34Filter ? 'enforce' : 'off',
   }
 }
 

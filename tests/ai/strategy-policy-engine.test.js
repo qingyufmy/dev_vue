@@ -69,15 +69,14 @@ describe('generic strategy policy compiler', () => {
       .toThrow(/policy_reference_field_forbidden/)
   })
 
-  it('keeps an explicitly disabled stored policy out of the runtime compiler', () => {
+  it('ignores legacy policy JSON when the dedicated EMA34 switch is disabled', () => {
     const disabled = policyFixture()
-    disabled.mode = 'off'
-    disabled.indicators[0].kind = 'retired-capability'
     const parsed = parseStrategyPolicy({
       market_data_plan_json:JSON.stringify(plan('M30', 'D1')),
       strategy_policy_json:JSON.stringify(disabled),
+      use_ema34_filter:0,
     })
-    expect(parsed).toMatchObject({ policyMode:'off', compiledPolicy:null })
+    expect(parsed).toMatchObject({ useEma34Filter:false, policyMode:'off', strategyPolicy:null, compiledPolicy:null })
   })
 
   it.each([
@@ -88,26 +87,46 @@ describe('generic strategy policy compiler', () => {
       .toMatchObject({ kind, params:{ period } })
   })
 
-  it('compiles the target configuration as data while generic modules stay target-free', () => {
-    const target = JSON.parse(readFileSync(new URL('../../docs/compose/strategy-policies/m15-h1-m5-ema34-v1.json', import.meta.url), 'utf8'))
-    expect(compileStrategyPolicy(target, { marketDataPlan:plan('M15', 'H1', 'M5') })).toMatchObject({ mode:'enforce' })
-    for (const file of [
-      'indicator-registry.js', 'strategy-workflow-engine.js', 'strategy-constraint-engine.js',
-      'strategy-prompt-renderer.js', 'strategy-policy-execution.js',
-    ]) {
-      const source = readFileSync(new URL(`../../server/routes/ai/${file}`, import.meta.url), 'utf8')
-      expect(source).not.toMatch(/\b(?:M15|H1|M5|34)\b|EMA34|use_m5_ema34/)
-    }
+  it('uses the fixed EMA34 rule without expanding the model-visible M5 window', () => {
+    const parsed = parseStrategyPolicy({
+      market_data_plan_json:JSON.stringify({ primary_timeframe:'M15', timeframes:[
+        { timeframe:'M15', kline_count:100 }, { timeframe:'M5', kline_count:50 },
+      ] }),
+      use_ema34_filter:1,
+    })
+    expect(parsed).toMatchObject({ useEma34Filter:true, policyMode:'enforce', strategyPolicy:null })
+    expect(parsed.marketDataPlan.timeframes.find(item => item.timeframe === 'M5')).toMatchObject({ kline_count:50 })
+    expect(parsed.compiledPolicy).toMatchObject({
+      mode:'enforce',
+      indicators:[{ id:'entry_ema34', kind:'ema', source:{ timeframe:'M5' }, params:{ period:34 } }],
+      workflow:{ stages:[], selectors:[], default_decision:'allow' },
+    })
   })
 
-  it('adds nullable policy/runtime columns without migration backfill', () => {
+  it('adds a normal M5 model window when EMA34 is enabled on a strategy without M5', () => {
+    const parsed = parseStrategyPolicy({
+      market_data_plan_json:JSON.stringify({ primary_timeframe:'M15', timeframes:[{ timeframe:'M15', kline_count:100 }] }),
+      use_ema34_filter:1,
+    })
+    expect(parsed.marketDataPlan.timeframes).toContainEqual({ timeframe:'M5', kline_count:100 })
+    expect(parsed.compiledPolicy.indicators[0].params.warmup_target_bars).toBe(170)
+  })
+
+  it('keeps legacy snapshots while migrating active strategies to the dedicated EMA34 switch', () => {
     const db = readFileSync(new URL('../../server/db.js', import.meta.url), 'utf8')
     const migrations = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
-    const block = migrations.slice(migrations.indexOf("id: '153_strategy_policy_runtime'"))
+    const block153 = migrations.slice(
+      migrations.indexOf("id: '153_strategy_policy_runtime'"),
+      migrations.indexOf("id: '154_hardcoded_ema34_filter'"),
+    )
+    const block154 = migrations.slice(migrations.indexOf("id: '154_hardcoded_ema34_filter'"))
     expect(db).toContain('strategy_policy_json LONGTEXT DEFAULT NULL')
-    expect(block).toContain('ADD COLUMN strategy_policy_json LONGTEXT DEFAULT NULL')
-    expect(block).toContain('ADD COLUMN strategy_runtime_json LONGTEXT DEFAULT NULL')
-    expect(block).not.toContain('UPDATE auto_prompt_types')
+    expect(db).toContain('use_ema34_filter TINYINT NOT NULL DEFAULT 0')
+    expect(block153).toContain('ADD COLUMN strategy_policy_json LONGTEXT DEFAULT NULL')
+    expect(block153).toContain('ADD COLUMN strategy_runtime_json LONGTEXT DEFAULT NULL')
+    expect(block153).not.toContain('UPDATE auto_prompt_types')
+    expect(block154).toContain('ADD COLUMN use_ema34_filter TINYINT NOT NULL DEFAULT 0')
+    expect(block154).toContain('UPDATE auto_prompt_types SET use_ema34_filter = 1')
   })
 
   it('rejects workflow cycles', () => {
@@ -232,7 +251,8 @@ describe('workflow and constraint execution', () => {
     configured.workflow = { stages:[], selectors:[], default_decision:'allow' }
     const policy = compileStrategyPolicy(configured, { marketDataPlan:plan('M30', 'D1') })
     const prompt = renderStrategyPolicyPrompt(policy, { indicators:{} })
-    expect(prompt.text).toContain('当前政策只包含指标与约束')
+    expect(prompt.text).toContain('EMA34 短线证据与新开仓过滤')
+    expect(prompt.text).not.toContain('运行政策')
     expect(prompt.text).not.toContain('你必须在输出中提供 strategy_policy_trace.stages')
   })
 

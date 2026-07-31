@@ -2756,99 +2756,20 @@ function renderStrategyModelOptions(scope, selectedId = "") {
   if (help) help.textContent = platform ? "可绑定一个平台模型用于自动分析；留空时使用平台默认模型。" : "可绑定自己的模型；留空时按模型管理中的默认与共享规则自动选择。";
 }
 
-function strategyPolicyDraft(value) {
-  const parsed = parseJsonField(value, null);
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-}
-
-function ema34Indicator(policy) {
-  return (Array.isArray(policy?.indicators) ? policy.indicators : []).find(item =>
-    item?.enabled !== false
-    && String(item?.kind || "").toLowerCase() === "ema"
-    && String(item?.source?.timeframe || "").toUpperCase() === "M5"
-    && String(item?.source?.field || "close").toLowerCase() === "close"
-    && String(item?.source?.bar_scope || "closed_only").toLowerCase() === "closed_only"
-    && Number(item?.params?.period) === 34);
-}
-
-function policyReferencesIndicator(value, indicatorId) {
-  if (Array.isArray(value)) return value.some(item => policyReferencesIndicator(item, indicatorId));
-  if (!value || typeof value !== "object") return false;
-  if (typeof value.ref === "string" && value.ref.startsWith(`indicators.${indicatorId}.`)) return true;
-  return Object.values(value).some(item => policyReferencesIndicator(item, indicatorId));
-}
-
-function strategyUsesEma34Filter(policy) {
-  return policy?.mode === "enforce" && Boolean(ema34Indicator(policy));
-}
-
-function strategyPolicyWithEma34(value, enabled) {
-  const source = strategyPolicyDraft(value);
-  const policy = source ? structuredClone(source) : {
-    schema_version:"strategy-policy-v1", mode:"enforce", features:[], indicators:[],
-    workflow:{ stages:[], selectors:[], default_decision:"allow" },
-    constraints:[], prompt_rules:[], ui:{ groups:[] },
-  };
-  policy.features = Array.isArray(policy.features) ? policy.features : [];
-  policy.indicators = Array.isArray(policy.indicators) ? policy.indicators : [];
-  policy.constraints = Array.isArray(policy.constraints) ? policy.constraints : [];
-  policy.prompt_rules = Array.isArray(policy.prompt_rules) ? policy.prompt_rules : [];
-  policy.workflow = policy.workflow && typeof policy.workflow === "object"
-    ? policy.workflow : { stages:[], selectors:[], default_decision:"allow" };
-  policy.ui = policy.ui && typeof policy.ui === "object" ? policy.ui : { groups:[] };
-  policy.ui.groups = Array.isArray(policy.ui.groups) ? policy.ui.groups : [];
-
-  const currentIndicator = ema34Indicator(policy);
-  const indicatorId = currentIndicator?.id || "entry_ema34";
-  const relatedIds = new Set(policy.indicators.filter(item =>
-    String(item?.kind || "").toLowerCase() === "ema"
-    && String(item?.source?.timeframe || "").toUpperCase() === "M5"
-    && Number(item?.params?.period) === 34).map(item => String(item.id || "")).filter(Boolean));
-  relatedIds.add(indicatorId);
-  policy.indicators = policy.indicators.filter(item => !relatedIds.has(String(item?.id || "")));
-  policy.constraints = policy.constraints.filter(item => ![...relatedIds].some(id => policyReferencesIndicator(item, id)));
-  policy.prompt_rules = policy.prompt_rules.filter(item => item?.id !== "entry_indicator_filter");
-  policy.ui.groups = policy.ui.groups.filter(item => item?.rule_ref !== indicatorId && item?.id !== "entry_indicator");
-
-  if (enabled) {
-    policy.mode = "enforce";
-    policy.indicators.push({
-      id:indicatorId, kind:"ema", enabled:true,
-      source:{ timeframe:"M5", field:"close", bar_scope:"closed_only" },
-      params:{ period:34, minimum_bars:34, warmup_target_bars:170, evidence_window:5 },
-    });
-    policy.constraints.push(
-      { id:"entry_indicator_ready", scope:"new_entry", phases:["post_inference","pre_submit"], require:{ left:{ ref:`indicators.${indicatorId}.ready` }, op:"eq", right:true }, on_fail:"hold_new_entry", counts_as_trigger:false },
-      { id:"buy_indicator_relation", scope:"new_entry", phases:["post_inference","pre_submit"], when:{ left:{ ref:"signal.side" }, op:"eq", right:"buy" }, require:{ left:{ ref:`indicators.${indicatorId}.bar.close` }, op:"gt", right:{ ref:`indicators.${indicatorId}.value` } }, on_fail:"hold_new_entry", counts_as_trigger:false },
-      { id:"sell_indicator_relation", scope:"new_entry", phases:["post_inference","pre_submit"], when:{ left:{ ref:"signal.side" }, op:"eq", right:"sell" }, require:{ left:{ ref:`indicators.${indicatorId}.bar.close` }, op:"lt", right:{ ref:`indicators.${indicatorId}.value` } }, on_fail:"hold_new_entry", counts_as_trigger:false },
-    );
-    policy.prompt_rules.push({ id:"entry_indicator_filter", text:"M5 已收盘 K 线 EMA34 是短线行情证据和新入场方向过滤器；可用于说明位置、斜率、距离、持续性与最近穿越，但不计作 M15 确认或 M5 触发，也不构成退出持仓或撤销挂单的理由。" });
-    policy.ui.groups.push({ id:"entry_indicator", label:"EMA34 入场过滤", control:"rule_switch", rule_ref:indicatorId });
-    return policy;
-  }
-
-  const hasRules = policy.features.length || policy.indicators.length
-    || policy.constraints.length || policy.prompt_rules.length
-    || (Array.isArray(policy.workflow?.stages) && policy.workflow.stages.length);
-  return hasRules ? policy : null;
-}
-
 function syncStrategyEma34Filter() {
-  const editor = $("strategyEditor"), toggle = $("strategyUseEma34Filter");
-  if (!editor || !toggle) return;
+  const toggle = $("strategyUseEma34Filter");
+  if (!toggle) return;
   if (toggle.checked) {
     const m5 = document.querySelector('[data-strategy-timeframe="M5"]');
-    const count = document.querySelector('[data-strategy-kline="M5"]');
     const primary = document.querySelector('input[name="strategyPrimaryTimeframe"][value="M5"]');
     if (m5 && !m5.checked) {
       m5.checked = true;
+      const count = document.querySelector('[data-strategy-kline="M5"]');
       if (count) count.disabled = false;
       if (primary) primary.disabled = false;
       toast("已自动启用 M5 行情，用于计算 EMA34", "info");
     }
   }
-  editor._strategyPolicyDraft = strategyPolicyWithEma34(editor._strategyPolicyDraft, toggle.checked);
-  editor.dataset.strategyPolicyDirty = "1";
 }
 
 function openStrategyEditor(strategy = null) {
@@ -2864,10 +2785,7 @@ function openStrategyEditor(strategy = null) {
   $("strategyTitle").value = strategy?.title || ""; $("strategySymbols").value = parseJsonField(strategy?.symbols_json, []).join(", ");
   $("strategyDescription").value = strategy?.description || "";
   $("strategyPrompt").value = strategy?.system_prompt || ""; $("strategyInterval").value = strategy?.interval_minutes || 5;
-  const strategyPolicy = strategyPolicyDraft(strategy?.strategy_policy_json);
-  editor._strategyPolicyDraft = strategyPolicy ? structuredClone(strategyPolicy) : null;
-  $("strategyUseEma34Filter").checked = strategyUsesEma34Filter(strategyPolicy);
-  editor.dataset.strategyPolicyDirty = "0";
+  $("strategyUseEma34Filter").checked = Boolean(Number(strategy?.use_ema34_filter || 0));
   const plan = strategyMarketPlan(strategy);
   document.querySelectorAll("[data-strategy-timeframe]").forEach(input => { input.checked = plan.timeframes.some(item => item.timeframe === input.dataset.strategyTimeframe); });
   document.querySelectorAll("[data-strategy-kline]").forEach(input => { const item = plan.timeframes.find(row => row.timeframe === input.dataset.strategyKline); input.value = item?.kline_count || 100; input.disabled = !item; });
@@ -2901,14 +2819,12 @@ async function saveStrategyEditor() {
     description:$("strategyDescription").value.trim(), system_prompt:$("strategyPrompt").value.trim(), interval_minutes:Number($("strategyInterval").value) || 5,
     market_data_plan:{ primary_timeframe:primaryTimeframe, timeframes }, entry_methods:entryMethods,
     use_chan_analysis:$("strategyUseChanAnalysis").checked,
+    use_ema34_filter:$("strategyUseEma34Filter").checked,
     include_portfolio_context:scope === "private" && $("strategyIncludePortfolioContext").checked,
     is_active:visibilityStatus === "active",
     model_profile_id:$("strategyModelProfile").value ? Number($("strategyModelProfile").value) : null,
     scope,
     visibility_status:visibilityStatus };
-  if ($("strategyEditor").dataset.strategyPolicyDirty === "1") {
-    body.strategy_policy = $("strategyEditor")._strategyPolicyDraft || null;
-  }
   await api(id ? `/api/ai/strategies/${id}` : "/api/ai/strategies", { method:id ? "PUT" : "POST", body });
   closeFormModal($("strategyEditor"), false); toast("策略已保存", "success"); await loadStrategyCatalog();
 }

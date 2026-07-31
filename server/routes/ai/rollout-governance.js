@@ -26,7 +26,7 @@ const REQUIRED_MIGRATIONS = [
   '063_trade_review_workflow', '064_personal_experience_memory', '065_ai_rollout_governance',
   '067_manual_inference_snapshots', '068_inference_preferences', '135_remove_paired_inference_experiment',
   '126_position_management_foundation', '149_chan_structure_anchor_version',
-  '150_chan_structure_anchor_identity', '153_strategy_policy_runtime',
+  '150_chan_structure_anchor_identity', '153_strategy_policy_runtime', '154_hardcoded_ema34_filter',
 ]
 
 const REQUIRED_TABLES = [
@@ -43,7 +43,7 @@ const REQUIRED_TABLES = [
 
 const REQUIRED_COLUMNS = {
   ai_model_profiles: ['owner_user_id','scope','api_key_encrypted','key_version','deleted_at'],
-  auto_prompt_types: ['scope','owner_user_id','model_profile_id','visibility_status','version','strategy_policy_json'],
+  auto_prompt_types: ['scope','owner_user_id','model_profile_id','visibility_status','version','strategy_policy_json','use_ema34_filter'],
   order_intents: ['idempotency_key','status','lease_token','bridge_command_ref'],
   risk_decisions: ['order_intent_id','decision_status','reject_code','rule_results_json'],
   inference_snapshots: ['strategy_id','system_prompt','user_prompt','content_hash','evidence_status','strategy_runtime_json'],

@@ -4,8 +4,7 @@ import { queryOne, queryAll, queryRun, withTransaction, beijingNow, logAudit } f
 import { parsePromptSymbols } from './config.js'
 import { getModelProfileById } from './model-profiles.js'
 import { stripBrokerSuffix, stripStrategyControlTags } from './utils.js'
-import { normalizeEntryMethods, normalizeMarketDataPlan, normalizeUseChanAnalysis } from './strategy-policy.js'
-import { canonicalPolicyJson, compileStrategyPolicy, StrategyPolicyValidationError } from './strategy-policy-compiler.js'
+import { normalizeEntryMethods, normalizeMarketDataPlan, normalizeUseChanAnalysis, normalizeUseEma34Filter } from './strategy-policy.js'
 import { normalizeSubscriptionSchedule } from './subscription-schedule.js'
 
 const VALID_SCOPES = new Set(['platform', 'private'])
@@ -14,18 +13,6 @@ const PRIVATE_MEMORY_MODES = new Set(['personal', 'off', 'shadow'])
 const VALID_MARGIN_MODES = new Set(['unknown', 'netting', 'hedging'])
 const VALID_TAKE_PROFIT_MODES = new Set(['ai_recommended', 'conservative', 'standard', 'trend'])
 const DEFAULT_PRO_PRIVATE_STRATEGY_LIMIT = 1
-
-function normalizeStrategyPolicyForStorage(value, marketDataPlan) {
-  if (value == null || value === '') return null
-  let raw = value
-  if (typeof value === 'string') {
-    try { raw = JSON.parse(value) } catch (error) {
-      throw new StrategyPolicyValidationError('policy_json_invalid', '$', error.message)
-    }
-  }
-  compileStrategyPolicy(raw, { marketDataPlan })
-  return canonicalPolicyJson(raw)
-}
 
 function toId(value, field = 'id') {
   const id = Number(value)
@@ -218,9 +205,9 @@ export async function createStrategy(userId, userRole, payload = {}) {
   if (!symbols.length) throw new Error('symbols_required')
   const rawPrompt = payload.system_prompt || ''
   const marketDataPlan = normalizeMarketDataPlan(payload.market_data_plan, { prompt: rawPrompt })
-  const strategyPolicyJson = normalizeStrategyPolicyForStorage(payload.strategy_policy, marketDataPlan)
   const entryMethods = normalizeEntryMethods(payload.entry_methods)
   const useChanAnalysis = normalizeUseChanAnalysis(payload.use_chan_analysis, { prompt: rawPrompt })
+  const useEma34Filter = normalizeUseEma34Filter(payload.use_ema34_filter)
   const includePortfolioContext = normalizePortfolioContext(scope, payload.include_portfolio_context)
   const systemPrompt = stripStrategyControlTags(rawPrompt)
   const ownerUserId = scope === 'platform' ? 0 : actorId
@@ -241,17 +228,18 @@ export async function createStrategy(userId, userRole, payload = {}) {
     }
     const [result] = await run(
       `INSERT INTO auto_prompt_types
-      (title, description, system_prompt, symbols_json, market_data_plan_json, entry_methods_json, use_chan_analysis, include_portfolio_context, interval_minutes, is_active, sort_order,
+      (title, description, system_prompt, symbols_json, market_data_plan_json, entry_methods_json, use_chan_analysis, use_ema34_filter, include_portfolio_context, interval_minutes, is_active, sort_order,
        created_by, scope, owner_user_id, model_profile_id, inference_mode, visibility_status,
-       strategy_policy_json, version, version_label, created_at, updated_at)
+       version, version_label, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
     [
       payload.title || '未命名策略', payload.description || '', systemPrompt,
       JSON.stringify(symbols), JSON.stringify(marketDataPlan), JSON.stringify(entryMethods), useChanAnalysis ? 1 : 0,
+      useEma34Filter ? 1 : 0,
       includePortfolioContext ? 1 : 0,
       Math.max(1, Number(payload.interval_minutes) || 5),
       visibility === 'active' ? 1 : 0, Number(payload.sort_order) || 0, actorId,
-      scope, ownerUserId, binding.modelProfileId, binding.inferenceMode, visibility, strategyPolicyJson,
+      scope, ownerUserId, binding.modelProfileId, binding.inferenceMode, visibility,
       payload.version_label || '', now, now,
       ]
     )
@@ -286,9 +274,6 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
   const marketDataPlan = payload.market_data_plan !== undefined
     ? normalizeMarketDataPlan(payload.market_data_plan, { prompt: payload.system_prompt ?? existing.system_prompt })
     : normalizeMarketDataPlan(existing.market_data_plan_json, { prompt: existing.system_prompt })
-  const strategyPolicyJson = Object.hasOwn(payload, 'strategy_policy')
-    ? normalizeStrategyPolicyForStorage(payload.strategy_policy, marketDataPlan)
-    : existing.strategy_policy_json
   const entryMethods = payload.entry_methods !== undefined
     ? normalizeEntryMethods(payload.entry_methods)
     : normalizeEntryMethods(existing.entry_methods_json)
@@ -297,6 +282,9 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
   const useChanAnalysis = payload.use_chan_analysis !== undefined
     ? normalizeUseChanAnalysis(payload.use_chan_analysis, { prompt: rawPrompt })
     : normalizeUseChanAnalysis(existing.use_chan_analysis, { prompt: existing.system_prompt })
+  const useEma34Filter = payload.use_ema34_filter !== undefined
+    ? normalizeUseEma34Filter(payload.use_ema34_filter)
+    : normalizeUseEma34Filter(existing.use_ema34_filter)
   const includePortfolioContext = payload.include_portfolio_context !== undefined
     ? normalizePortfolioContext(existing.scope, payload.include_portfolio_context)
     : normalizePortfolioContext(existing.scope, existing.include_portfolio_context)
@@ -304,25 +292,26 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
   const binding = await validateModelBinding(existing.scope, Number(existing.owner_user_id), requestedModelId)
   const contentChanged = payload.title !== undefined || payload.system_prompt !== undefined || payload.symbols !== undefined
     || payload.market_data_plan !== undefined || payload.entry_methods !== undefined || payload.use_chan_analysis !== undefined
-    || payload.include_portfolio_context !== undefined || Object.hasOwn(payload, 'strategy_policy')
+    || payload.use_ema34_filter !== undefined || payload.include_portfolio_context !== undefined
   const version = contentChanged ? Number(existing.version || 1) + 1 : Number(existing.version || 1)
   const now = beijingNow()
   await queryRun(
     `UPDATE auto_prompt_types SET title = ?, description = ?, system_prompt = ?, symbols_json = ?,
-       market_data_plan_json = ?, entry_methods_json = ?, use_chan_analysis = ?, include_portfolio_context = ?,
+       market_data_plan_json = ?, entry_methods_json = ?, use_chan_analysis = ?, use_ema34_filter = ?, include_portfolio_context = ?,
        interval_minutes = ?, is_active = ?, sort_order = ?, model_profile_id = ?, inference_mode = ?,
-       visibility_status = ?, version = ?, version_label = ?, strategy_policy_json = ?, updated_at = ?
+       visibility_status = ?, version = ?, version_label = ?, updated_at = ?
      WHERE id = ? AND deleted_at IS NULL`,
     [
       payload.title ?? existing.title, payload.description ?? existing.description,
       systemPrompt, symbolsJson,
       JSON.stringify(marketDataPlan), JSON.stringify(entryMethods), useChanAnalysis ? 1 : 0,
+      useEma34Filter ? 1 : 0,
       includePortfolioContext ? 1 : 0,
       payload.interval_minutes != null ? Math.max(1, Number(payload.interval_minutes) || 1) : existing.interval_minutes,
       visibility === 'active' ? 1 : 0,
       payload.sort_order != null ? Number(payload.sort_order) || 0 : existing.sort_order,
       binding.modelProfileId, binding.inferenceMode, visibility, version,
-      payload.version_label ?? existing.version_label, strategyPolicyJson, now, id,
+      payload.version_label ?? existing.version_label, now, id,
     ]
   )
   return getStrategyById(id, actorId, userRole)

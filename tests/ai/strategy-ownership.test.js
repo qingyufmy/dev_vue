@@ -141,12 +141,13 @@ describe('strategy visibility and mutation permissions', () => {
     expect(params).toContain(2)
     expect(params).toContain('user_default')
     expect(params).not.toContain(99)
-    expect(params[7]).toBe(1)
+    expect(params[7]).toBe(0)
+    expect(params[8]).toBe(1)
   })
 
   it('forces platform strategies to exclude portfolio context', async () => {
     await createStrategy(1, 'admin', { scope: 'platform', symbols: ['XAUUSD'], include_portfolio_context: true })
-    expect(latestStrategyInsert()[1][7]).toBe(0)
+    expect(latestStrategyInsert()[1][8]).toBe(0)
   })
 
   it('does not create administrator private strategies', async () => {
@@ -167,12 +168,12 @@ describe('strategy visibility and mutation permissions', () => {
 
   it('derives the executable flag from the strategy visibility state', async () => {
     await createStrategy(1, 'admin', { scope: 'platform', visibility_status: 'draft', is_active: true, symbols: ['XAUUSD'] })
-    expect(latestStrategyInsert()[1][9]).toBe(0)
+    expect(latestStrategyInsert()[1][10]).toBe(0)
 
     db.queryRun.mockClear()
     db.queryOne.mockImplementation(sql => sql.includes('FROM users') ? PRO : { ...PLATFORM, is_active: 0, visibility_status: 'draft' })
     await updateStrategy(1, 1, 'admin', { visibility_status: 'active', is_active: false })
-    expect(db.queryRun.mock.calls[0][1][9]).toBe(1)
+    expect(db.queryRun.mock.calls[0][1][10]).toBe(1)
   })
 
   it('imports legacy prompt controls into structured fields and stores a clean prompt', async () => {
@@ -187,6 +188,25 @@ describe('strategy visibility and mutation permissions', () => {
       timeframes: [{ timeframe: 'H1', kline_count: 80 }, { timeframe: 'H4', kline_count: 50 }],
     })
     expect(params[6]).toBe(1)
+  })
+
+  it('stores EMA34 as a dedicated boolean instead of editable policy JSON', async () => {
+    await createStrategy(2, 'user', {
+      scope:'private', title:'EMA34', symbols:['XAUUSD'], use_ema34_filter:true,
+      strategy_policy:{ mode:'off', indicators:[] },
+    })
+    const [sql, params] = latestStrategyInsert()
+    expect(sql).toContain('use_ema34_filter')
+    expect(sql).not.toContain('strategy_policy_json')
+    expect(params[7]).toBe(1)
+
+    db.queryOne.mockImplementation(statement => statement.includes('FROM users')
+      ? PRO : { ...PRIVATE, use_ema34_filter:0 })
+    await updateStrategy(2, 2, 'user', { use_ema34_filter:true, strategy_policy:{ mode:'off' } })
+    const [updateSql, updateParams] = db.queryRun.mock.calls[0]
+    expect(updateSql).toContain('use_ema34_filter = ?')
+    expect(updateSql).not.toContain('strategy_policy_json = ?')
+    expect(updateParams[7]).toBe(1)
   })
 
   it('allows only an active model owned by the private strategy creator', async () => {
