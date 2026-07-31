@@ -52,8 +52,12 @@ function effectiveMode(requested, maximum) {
     : [...MODE_RANK.entries()].find(([, rank]) => rank === maximumRank)?.[0] || 'display'
 }
 
-function effectiveRuntimeMode(setting, control) {
-  return effectiveMode(setting?.execution_mode || 'display', control?.maximum_mode || 'display')
+function effectiveRuntimeMode(setting, control, fallbackMode = 'display') {
+  return effectiveMode(setting?.execution_mode || fallbackMode, control?.maximum_mode || 'display')
+}
+
+export function resolvePositionManagementRuntimeMode(task, setting, control) {
+  return effectiveRuntimeMode(setting, control, task?.execution_mode || 'display')
 }
 
 function targetProtectionStatus(target) {
@@ -73,7 +77,7 @@ export function validateExitOnlyPreconditions({
   competingOutcomes = [],
 } = {}) {
   if (!task || !outcome) return { ok:false, code:'management_context_incomplete' }
-  const mode = effectiveRuntimeMode(setting || { execution_mode:task.execution_mode }, control)
+  const mode = resolvePositionManagementRuntimeMode(task, setting, control)
   if (!['auto_exit', 'auto_reverse'].includes(mode)) return { ok:false, code:'formal_exit_not_enabled' }
   if (task.task_type !== 'position_exit' || task.candidate_action !== 'exit') {
     return { ok:false, code:'exit_only_worker_scope_mismatch' }
@@ -836,7 +840,7 @@ async function prepareExitTask(context, lease, bridge = mt5Bridge) {
     return transition(task, lease, 'REJECTED', 'duplicate_active_task',
       '同一持仓已有进行中的自动平仓任务，本候选已拒绝', context.activeTask)
   }
-  const mode = effectiveRuntimeMode(context.setting || { execution_mode:task.execution_mode }, context.control)
+  const mode = resolvePositionManagementRuntimeMode(task, context.setting, context.control)
   if (!['auto_exit', 'auto_reverse'].includes(mode)) {
     return transition(task, lease, 'HELD', 'formal_execution_disabled',
       '平台总闸或用户设置未允许正式自动平仓，本候选保持不执行')
@@ -914,7 +918,9 @@ export async function runPositionManagementWorkerOnce({ bridge = mt5Bridge, limi
         if (await processTask(Number(row.id), bridge)) processed += 1
       } catch (error) {
         runtimeStatus.last_error = error.message
-        console.error(`[PositionManagementWorker] task=${row.id}:`, error.message)
+        const transition = error?.fromStatus && error?.toStatus
+          ? ` from=${error.fromStatus} to=${error.toStatus}` : ''
+        console.error(`[PositionManagementWorker] task=${row.id}:`, `${error.message}${transition}`)
       }
     }
     runtimeStatus.processed += processed

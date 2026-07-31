@@ -14,7 +14,7 @@ const MODE_RANK = new Map(POSITION_MANAGEMENT_MODES.map((mode, index) => [mode, 
 const TERMINAL_STATES = new Set(['HELD', 'EXPIRED', 'REJECTED', 'FAILED', 'COMPLETED', 'EXIT_ONLY_COMPLETED'])
 const TRANSITIONS = new Map(Object.entries({
   CANDIDATE:['EVIDENCE_CONFIRMED', 'HELD', 'EXPIRED', 'REJECTED'],
-  EVIDENCE_CONFIRMED:['PRECONDITIONS_LOCKED', 'EXPIRED', 'REJECTED'],
+  EVIDENCE_CONFIRMED:['PRECONDITIONS_LOCKED', 'HELD', 'EXPIRED', 'REJECTED'],
   PRECONDITIONS_LOCKED:['PENDING_CANCEL_INTENT', 'CLOSE_INTENT_CREATED', 'COMPLETED', 'REJECTED'],
   PENDING_CANCEL_INTENT:['PENDING_CANCEL_SENT', 'FAILED'],
   PENDING_CANCEL_SENT:['PENDING_RECONCILING', 'PENDING_UNCERTAIN'],
@@ -767,7 +767,12 @@ export async function transitionPositionManagementTask({
     if (!task) throw new Error('position_management_task_not_found')
     if (Number(task.state_version) !== Number(expectedStateVersion)) throw new Error('position_management_state_version_conflict')
     if (Number(task.fencing_token) !== Number(expectedFencingToken)) throw new Error('position_management_fencing_conflict')
-    if (!canTransitionPositionManagement(task.status, toStatus)) throw new Error('position_management_transition_invalid')
+    if (!canTransitionPositionManagement(task.status, toStatus)) {
+      const error = new Error('position_management_transition_invalid')
+      error.fromStatus = String(task.status || '')
+      error.toStatus = String(toStatus || '')
+      throw error
+    }
     const now = beijingNow()
     const terminal = TERMINAL_STATES.has(toStatus)
     const [updated] = await run(`UPDATE ai_position_management_tasks SET status = ?, state_version = state_version + 1,

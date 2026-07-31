@@ -367,8 +367,10 @@ describe('durable state and protection boundaries', () => {
   })
 
   it('allows recovery transitions but never leaves a terminal state', () => {
+    expect(canTransitionPositionManagement('EVIDENCE_CONFIRMED', 'HELD')).toBe(true)
     expect(canTransitionPositionManagement('CLOSE_UNCERTAIN', 'CLOSE_RECONCILING')).toBe(true)
     expect(canTransitionPositionManagement('PENDING_FILLED_DURING_CANCEL', 'MANUAL_REVIEW')).toBe(true)
+    expect(canTransitionPositionManagement('HELD', 'PRECONDITIONS_LOCKED')).toBe(false)
     expect(canTransitionPositionManagement('COMPLETED', 'REENTRY_SENT')).toBe(false)
   })
 

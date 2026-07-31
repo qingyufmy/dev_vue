@@ -23,6 +23,7 @@ vi.mock('../../server/routes/ai/position-management.js', () => ({
 import {
   classifyCloseReconciliation,
   classifyPendingCancelReconciliation,
+  resolvePositionManagementRuntimeMode,
   validateExitOnlyPreconditions,
   validatePendingCancelPreconditions,
 } from '../../server/routes/ai/position-management-worker.js'
@@ -59,6 +60,13 @@ function fixture(overrides = {}) {
 }
 
 describe('position management exit-only worker', () => {
+  it('uses the task execution mode when the user has no persisted setting', () => {
+    const value = fixture()
+    expect(resolvePositionManagementRuntimeMode(value.task, null, value.control)).toBe('auto_exit')
+    expect(resolvePositionManagementRuntimeMode(value.task, {}, value.control)).toBe('auto_exit')
+    expect(resolvePositionManagementRuntimeMode(value.task, { execution_mode:'display' }, value.control)).toBe('display')
+  })
+
   it('does not block risk-reducing operations with daily quotas or account-wide cooldowns', () => {
     expect(workerSource).not.toContain('user_daily_count')
     expect(workerSource).not.toContain('account_daily_count')
