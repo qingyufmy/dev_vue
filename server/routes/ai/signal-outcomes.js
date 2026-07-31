@@ -13,6 +13,25 @@ const num = value => Number.isFinite(Number(value)) ? Number(value) : 0
 const ref = value => value == null || String(value).trim() === '' ? null : String(value)
 const parse = (value, fallback = {}) => { try { return value ? JSON.parse(value) : fallback } catch { return fallback } }
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')
+const MYSQL_DATETIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/
+
+function utcMsToBeijingDatetime(utcMs) {
+  const value = Number(utcMs)
+  if (!Number.isFinite(value) || value <= 0) return null
+  const shifted = new Date(value + 8 * 3600_000)
+  if (!Number.isFinite(shifted.getTime())) return null
+  return shifted.toISOString().replace('T', ' ').slice(0, 19)
+}
+
+export function dealTimeForDatabase(deal) {
+  const trustedUtcMs = Number(deal?.time_utc_msc)
+  if (Number.isFinite(trustedUtcMs) && trustedUtcMs > 0) return utcMsToBeijingDatetime(trustedUtcMs)
+  const raw = String(deal?.time ?? '').trim()
+  if (!raw) return null
+  if (MYSQL_DATETIME_RE.test(raw)) return raw
+  const parsed = Date.parse(raw)
+  return Number.isFinite(parsed) ? utcMsToBeijingDatetime(parsed) : null
+}
 
 function dealTicket(deal) { return ref(deal?.deal_ticket ?? deal?.ticket) }
 function dealNet(deal) { return num(deal?.profit) + num(deal?.commission) + num(deal?.swap) + num(deal?.fee) }
@@ -66,7 +85,7 @@ export function analyzeOutcomeAttribution(outcome, allDeals = [], activePosition
   const commission = deals.reduce((sum, deal) => sum + num(deal.commission), 0)
   const swap = deals.reduce((sum, deal) => sum + num(deal.swap), 0)
   const fee = deals.reduce((sum, deal) => sum + num(deal.fee), 0)
-  const latestExit = exits.map(deal => deal.time).filter(Boolean).sort().at(-1) || null
+  const latestExit = exits.map(dealTimeForDatabase).filter(Boolean).sort().at(-1) || null
   const feeHash = hash(deals.map(deal => [dealTicket(deal), num(deal.profit), num(deal.commission), num(deal.swap), num(deal.fee)]).sort())
   return {
     attributionStatus: 'attributed', positionId: resolvedPositionId, matchedDeals: deals, complete,
@@ -184,7 +203,7 @@ async function saveMatchedDeals(run, outcome, deals) {
       outcome.id, outcome.user_id, outcome.trading_account_id, dealTicket(deal), ref(deal.position_id), ref(deal.order),
       deal.entry ?? null, deal.magic ?? null, deal.reason ?? null, String(deal.comment || '').slice(0, 255),
       num(deal.volume), deal.price ?? null, num(deal.profit), num(deal.commission), num(deal.swap), num(deal.fee),
-      deal.time || null, JSON.stringify(deal), beijingNow(),
+      dealTimeForDatabase(deal), JSON.stringify(deal), beijingNow(),
     ])
   }
 }

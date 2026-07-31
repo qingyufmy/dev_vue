@@ -10,6 +10,7 @@ vi.mock('../../server/db.js', () => db)
 import {
   analyzeOutcomeAttribution,
   createSignalOutcomeTx,
+  dealTimeForDatabase,
   isSystemManagedOutcomeSource,
   reconcileTerminalPendingOutcomes,
   reconcileSignalOutcomes,
@@ -45,6 +46,15 @@ describe('signal outcome attribution', () => {
     ])
     expect(result).toMatchObject({ attributionStatus: 'attributed', complete: true, entryVolume: 1, closedVolume: 1, netProfit: 15.5 })
     expect(result.matchedDeals).toHaveLength(2)
+  })
+
+  it('normalizes Bridge UTC ISO timestamps for MySQL DATETIME columns', () => {
+    expect(dealTimeForDatabase({ time:'2026-07-31T09:07:49Z' })).toBe('2026-07-31 17:07:49')
+    expect(dealTimeForDatabase({ time:'2026-07-31 12:07:49' })).toBe('2026-07-31 12:07:49')
+    expect(dealTimeForDatabase({ time:'invalid' })).toBeNull()
+    expect(dealTimeForDatabase({
+      time:'2020-01-01T00:00:00Z', time_utc_msc:Date.parse('2026-07-31T09:07:49Z'),
+    })).toBe('2026-07-31 17:07:49')
   })
 
   it('keeps a partially closed hedging position open', () => {
@@ -147,6 +157,32 @@ describe('position outcome monitor durability', () => {
     await reconcileSignalOutcomes({ bridge })
 
     expect(writes.some(sql => sql.includes("SET halt_status = 'active', halt_reason = NULL"))).toBe(true)
+  })
+
+  it('writes normalized close timestamps to both deal and outcome DATETIME columns', async () => {
+    db.queryAll.mockResolvedValue([outcome({ status:'open', order_intent_id:8, entry_direction:'buy' })])
+    const calls = []
+    const locked = outcome({ status:'open', order_intent_id:8, entry_direction:'buy' })
+    const run = vi.fn(async (sql, params = []) => {
+      calls.push([sql, params])
+      if (sql.includes('SELECT * FROM signal_outcomes')) return [[locked], []]
+      if (sql.includes('COUNT(*) AS unresolved_count')) return [[{ unresolved_count:1 }], []]
+      return [{ affectedRows:1 }, []]
+    })
+    db.withTransaction.mockImplementation(callback => callback(run))
+    const bridge = vi.fn(async (_userId, action) => action === 'history'
+      ? { status:'success', deals:[
+          deal({ time:'2026-07-31T08:00:00Z' }),
+          deal({ deal_ticket:'D2', entry:1, profit:2, time:'2026-07-31T09:07:49Z' }),
+        ], history_orders:[] }
+      : { status:'success', positions:[] })
+
+    await reconcileSignalOutcomes({ bridge })
+
+    const exitInsert = calls.find(([sql, params]) => sql.includes('INSERT IGNORE INTO signal_outcome_deals') && params[3] === 'D2')
+    const outcomeUpdate = calls.find(([sql]) => sql.includes('fully_closed_at = ?'))
+    expect(exitInsert?.[1]?.[16]).toBe('2026-07-31 17:07:49')
+    expect(outcomeUpdate?.[1]?.[13]).toBe('2026-07-31 17:07:49')
   })
 
   it('enforces idempotency for both outcomes and MT5 deals in the schema', () => {
