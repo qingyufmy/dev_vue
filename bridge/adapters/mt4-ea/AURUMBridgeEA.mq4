@@ -3,7 +3,7 @@
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.2.12"
+#define ADAPTER_VERSION "3.0.0"
 #define MAX_HISTORY_WINDOW_MSC 1576800000000
 
 input string InpPipeName = "AURUMBridgeV3";
