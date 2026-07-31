@@ -118,7 +118,7 @@ impl ReleaseManifestClient {
         client: Client,
         endpoint_path: &str,
     ) -> Result<Self, UpdateError> {
-        if !valid_transport_url(&server_base) {
+        if !valid_manifest_server_url(&server_base) {
             return Err(UpdateError::new("update_server_uri_invalid"));
         }
         if endpoint_path != CURRENT_MANIFEST_PATH && endpoint_path != BOOTSTRAP_MANIFEST_PATH {
@@ -164,7 +164,7 @@ impl ReleaseManifestClient {
             .send()
             .await
             .map_err(|_| UpdateError::new("update_manifest_request_failed"))?;
-        if !valid_transport_url(response.url()) {
+        if !valid_manifest_server_url(response.url()) {
             return Err(UpdateError::new("update_manifest_redirect_invalid"));
         }
         match response.status() {
@@ -373,6 +373,13 @@ pub(crate) fn valid_transport_url(url: &Url) -> bool {
         && url.password().is_none()
 }
 
+fn valid_manifest_server_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
 fn valid_installation_id(value: &str) -> bool {
     value.len() == 40
         && value.starts_with("install_")
@@ -493,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_keys_versions_packages_and_remote_plaintext() {
+    fn rejects_unsupported_keys_versions_packages_and_invalid_server_urls() {
         assert_eq!(
             ReleaseManifestVerifier::new("not a public key")
                 .err()
@@ -521,20 +528,37 @@ mod tests {
             "update_manifest_package_invalid"
         );
         let client = reqwest::Client::new();
+        assert!(
+            ReleaseManifestClient::new(
+                Url::parse("http://192.168.1.254").expect("administrator HTTP URL"),
+                client.clone(),
+            )
+            .is_ok()
+        );
         assert_eq!(
             ReleaseManifestClient::new(
-                Url::parse("http://updates.example.test").expect("remote URL"),
+                Url::parse("ftp://updates.example.test").expect("unsupported URL"),
+                client.clone(),
+            )
+            .err()
+            .expect("unsupported scheme")
+            .code(),
+            "update_server_uri_invalid"
+        );
+        assert_eq!(
+            ReleaseManifestClient::new(
+                Url::parse("https://user:pass@updates.example.test").expect("credential URL"),
                 client,
             )
             .err()
-            .expect("remote plaintext")
+            .expect("embedded credentials")
             .code(),
             "update_server_uri_invalid"
         );
     }
 
     #[tokio::test]
-    async fn fetches_only_from_loopback_and_revalidates_the_etag_cache() {
+    async fn fetches_from_configured_server_and_revalidates_the_etag_cache() {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
         let address = listener.local_addr().expect("server address");
