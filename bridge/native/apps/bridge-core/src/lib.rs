@@ -28,7 +28,8 @@ use bridge_transport::{
     InboundQuoteResult, NativeCommandAdmission, NativeInboundRouter, OutboxPump,
     PriorityMessageQueue, ReleaseAvailableNotification, ServerEndpoints, SessionCancellation,
     SessionConnector, SessionIntervals, SessionRuntime, SessionSupervisor, SessionTransition,
-    SupervisorStateSink, TerminalFreshnessProvider, TransportError, V3SessionConnector,
+    SupervisorStateSink, TerminalFreshnessProvider, TransportError, V3RuntimeControlSource,
+    V3SessionConnector,
 };
 use bridge_worker_host::{
     CommandReconciliationWorker, RegistryCommandWorker, WorkerProgram, WorkerRegistry, WorkerRoute,
@@ -1602,6 +1603,8 @@ impl NativeRuntimeStatusHandle {
             .any(|status| matches!(status.state.as_str(), "degraded" | "superseded" | "stopped"));
         let phase = if server_state == "connected" && all_ready {
             "online"
+        } else if server_state == "paused" {
+            "paused"
         } else if server_state == "reconnecting" || any_degraded {
             "degraded"
         } else if server_state == "pairing_required" {
@@ -1640,6 +1643,7 @@ fn connection_state_name(state: bridge_transport::ConnectionState) -> &'static s
     match state {
         bridge_transport::ConnectionState::Stopped => "stopped",
         bridge_transport::ConnectionState::PairingRequired => "pairing_required",
+        bridge_transport::ConnectionState::Paused => "paused",
         bridge_transport::ConnectionState::Connecting => "connecting",
         bridge_transport::ConnectionState::Connected => "connected",
         bridge_transport::ConnectionState::Reconnecting => "reconnecting",
@@ -1839,6 +1843,13 @@ impl NativeConnectedRuntime {
                 terminals: active_sessions.terminal_descriptors(),
                 clock: Arc::clone(&clock),
             });
+            let runtime_control = Arc::new(
+                V3RuntimeControlSource::new(
+                    endpoints.clone(),
+                    concat!("LiangJianBridge/", env!("CARGO_PKG_VERSION")),
+                )
+                .map_err(transport_error)?,
+            );
             let connector: Arc<dyn SessionConnector> = Arc::new(
                 V3SessionConnector::new(
                     endpoints,
@@ -1852,7 +1863,8 @@ impl NativeConnectedRuntime {
             let connection_state = Arc::new(CoreConnectionState::default());
             let states: Arc<dyn SupervisorStateSink> = connection_state.clone();
             let supervisor =
-                SessionSupervisor::new(credentials, connector, session_runtime, states);
+                SessionSupervisor::new(credentials, connector, session_runtime, states)
+                    .with_runtime_control(runtime_control);
             Ok(Self {
                 active_sessions: active_sessions.clone(),
                 supervisor,

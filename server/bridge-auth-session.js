@@ -48,7 +48,7 @@ export async function createBridgeRefreshSession(user, { userAgent = '', ip = ''
   return { refreshToken, expiresInSeconds: BRIDGE_REFRESH_TTL_DAYS * 86400 }
 }
 
-export async function useBridgeRefreshSession(refreshToken, { userAgent = '', ip = '' } = {}) {
+export async function useBridgeRefreshSession(refreshToken, { userAgent = '', ip = '', touch = true } = {}) {
   if (!refreshToken || String(refreshToken).length < 40) {
     const error = new Error('bridge_refresh_invalid')
     error.code = 'bridge_refresh_invalid'
@@ -67,12 +67,14 @@ export async function useBridgeRefreshSession(refreshToken, { userAgent = '', ip
     throw error
   }
   assertBridgeEligible(session)
-  await queryRun(`UPDATE bridge_refresh_sessions
-    SET last_used_at = NOW(), user_agent = ?, last_ip = ?, updated_at = NOW()
-    WHERE id = ?`, [
-    String(userAgent || '').slice(0, 255), String(ip || '').slice(0, 64),
-    session.session_id,
-  ])
+  if (touch) {
+    await queryRun(`UPDATE bridge_refresh_sessions
+      SET last_used_at = NOW(), user_agent = ?, last_ip = ?, updated_at = NOW()
+      WHERE id = ?`, [
+      String(userAgent || '').slice(0, 255), String(ip || '').slice(0, 64),
+      session.session_id,
+    ])
+  }
   return { user: session, expiresInSeconds: BRIDGE_REFRESH_TTL_DAYS * 86400 }
 }
 

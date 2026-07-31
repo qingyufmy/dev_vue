@@ -521,6 +521,9 @@ export async function initDB() {
       user_id INT PRIMARY KEY,
       trade_send_enabled TINYINT NOT NULL DEFAULT 1,
       auto_reasoning_enabled TINYINT NOT NULL DEFAULT 1,
+      connection_enabled TINYINT NOT NULL DEFAULT 1,
+      connection_control_revision BIGINT UNSIGNED NOT NULL DEFAULT 1,
+      connection_control_changed_at DATETIME(3) DEFAULT NULL,
       updated_at DATETIME NOT NULL DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 

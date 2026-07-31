@@ -267,6 +267,11 @@ pub fn describe_status(state: &UiStateSnapshot) -> StatusCopy {
             "请手动点击“连接账号”；浏览器授权成功后会长期保持登录。",
             Rgb(124, 58, 237),
         ),
+        "paused" => status(
+            "服务器连接已暂停",
+            "已按网页端设置暂停数据与交易指令通道；MT 和已有订单不受影响。",
+            Rgb(100, 116, 139),
+        ),
         "connecting" => status(
             "正在连接服务器",
             &describe_code(

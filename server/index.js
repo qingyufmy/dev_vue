@@ -33,6 +33,7 @@ import membershipNotificationRoutes from './routes/membership-notifications.js'
 import sentimentRoutes from './routes/sentiment.js'
 import bridgeReleaseRoutes from './routes/bridge-release.js'
 import bridgeMaintenanceRoutes from './routes/bridge-maintenance.js'
+import bridgeRuntimeControlRoutes from './routes/bridge-runtime-control.js'
 import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON } from './redis.js'
 import { initAutoSchedulers, startPeriodReviewWorker } from './routes/ai/index.js'
@@ -231,6 +232,7 @@ app.use('/api', membershipNotificationRoutes)
 app.use('/api', sentimentRoutes)
 app.use('/api', bridgeReleaseRoutes)
 app.use('/api', bridgeMaintenanceRoutes)
+app.use('/api', bridgeRuntimeControlRoutes)
 app.use('/aurum-api', noCache, aiRoutes)
 
 

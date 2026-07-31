@@ -21,11 +21,12 @@ class FakeWebSocketServer extends EventEmitter {
   }
 }
 
-function fakeWs() {
+function fakeWs({ withPing = false } = {}) {
   const ws = new EventEmitter()
   ws.readyState = 1
   ws.send = vi.fn()
   ws.close = vi.fn()
+  if (withPing) ws.ping = vi.fn()
   return ws
 }
 
@@ -184,8 +185,8 @@ function setup(overrides = {}) {
   return { gateway:createBridgeV3Gateway(dependencies), dependencies }
 }
 
-async function connect(gateway, { ticket = 'ticket-value' } = {}) {
-  const ws = fakeWs()
+async function connect(gateway, { ticket = 'ticket-value', withPing = false } = {}) {
+  const ws = fakeWs({ withPing })
   const req = { url:`${BRIDGE_V3_WS_PATH}?ticket=${ticket}` }
   gateway.handleUpgrade(req, { ws }, Buffer.alloc(0))
   await flush()
@@ -271,6 +272,39 @@ describe('Bridge v3 websocket gateway', () => {
     expect(gateway.isTradeEnabled(42)).toBe(true)
     expect(gateway.setTradeEnabled(42, false)).toBe(true)
     expect(gateway.isTradeEnabled(42)).toBe(false)
+  })
+
+  it('rejects a new server session while the user has explicitly paused Bridge', async () => {
+    const { gateway } = setup({
+      queryOneFn:vi.fn().mockResolvedValue({
+        id:42, role:'user', token_version:3, has_pro_access:1,
+        trade_send_enabled:1, connection_enabled:0,
+      }),
+    })
+    const ws = await connect(gateway)
+    expect(ws.close).toHaveBeenCalledWith(4002, 'bridge_runtime_paused')
+    expect(gateway.connectionsByTerminal.size).toBe(0)
+  })
+
+  it('measures transport latency from native websocket ping and pong frames', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    try {
+      const { gateway } = setup({ now:() => Date.now() })
+      const ws = await connect(gateway, { withPing:true })
+      ws.emit('message', Buffer.from(JSON.stringify(hello())))
+      await flush()
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(ws.ping).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(23)
+      ws.emit('pong')
+
+      expect(gateway.listConnectedTerminals(42)[0].transport_rtt_msc).toBe(23)
+      ws.emit('close')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('removes stale sessions from routing until a valid heartbeat arrives', async () => {

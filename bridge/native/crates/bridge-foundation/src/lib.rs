@@ -267,13 +267,20 @@ impl RuntimeStatusDocument {
             || self.observed_at_utc_msc > now_utc_msc.saturating_add(60_000)
             || !matches!(
                 self.phase.as_str(),
-                "starting" | "pairing_required" | "connecting" | "online" | "degraded" | "stopped"
+                "starting"
+                    | "pairing_required"
+                    | "paused"
+                    | "connecting"
+                    | "online"
+                    | "degraded"
+                    | "stopped"
             )
             || !matches!(
                 self.server_state.as_str(),
                 "starting"
                     | "stopped"
                     | "pairing_required"
+                    | "paused"
                     | "connecting"
                     | "connected"
                     | "reconnecting"

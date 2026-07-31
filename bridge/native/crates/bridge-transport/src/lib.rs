@@ -43,8 +43,9 @@ pub use runtime::{
     TerminalFreshnessProvider,
 };
 pub use supervisor::{
-    CredentialSource, HelloProvider, NoopSupervisorStateSink, SessionConnector, SessionSupervisor,
-    SupervisorStateSink, V3SessionConnector,
+    CredentialSource, HelloProvider, NoopRuntimeControlSource, NoopSupervisorStateSink,
+    RuntimeControlSource, RuntimeControlState, SessionConnector, SessionSupervisor,
+    SupervisorStateSink, V3RuntimeControlSource, V3SessionConnector,
 };
 
 pub const ENDPOINT_SETTINGS_FILE_NAME: &str = "endpoint-settings.json";
@@ -768,6 +769,35 @@ impl BridgeAuthClient {
         })
     }
 
+    pub async fn wait_runtime_control(
+        &self,
+        refresh_token: &str,
+        after_revision: u64,
+    ) -> Result<RuntimeControlState, TransportError> {
+        if refresh_token.trim().is_empty() || refresh_token.len() > 16_384 {
+            return Err(TransportError::new("bridge_not_paired"));
+        }
+        let response: RuntimeControlResponse = self
+            .post_json(
+                "/api/auth/bridge-runtime-control/wait",
+                &serde_json::json!({
+                    "refreshToken": refresh_token,
+                    "afterRevision": after_revision,
+                }),
+                None,
+            )
+            .await?;
+        if response.revision == 0 || response.observed_at_utc_msc <= 0 {
+            return Err(TransportError::new(
+                "bridge_runtime_control_response_invalid",
+            ));
+        }
+        Ok(RuntimeControlState {
+            enabled: response.enabled,
+            revision: response.revision,
+        })
+    }
+
     pub async fn managed_observer_access(
         &self,
         refresh_token: &str,
@@ -1125,6 +1155,14 @@ struct PairingTokenResponse {
 #[derive(Deserialize)]
 struct TicketResponse {
     ticket: String,
+}
+
+#[derive(Deserialize)]
+struct RuntimeControlResponse {
+    enabled: bool,
+    revision: u64,
+    #[serde(rename = "observedAtUtcMsc")]
+    observed_at_utc_msc: i64,
 }
 
 #[derive(Deserialize)]
@@ -1994,6 +2032,7 @@ struct DataDeltaRoute {
 pub enum ConnectionState {
     Stopped,
     PairingRequired,
+    Paused,
     Connecting,
     Connected,
     Reconnecting,
@@ -2037,6 +2076,12 @@ impl SessionStateMachine {
 
     pub fn connected(&mut self) -> SessionTransition {
         self.state = ConnectionState::Connected;
+        self.transition(None)
+    }
+
+    pub fn paused(&mut self) -> SessionTransition {
+        self.backoff.reset();
+        self.state = ConnectionState::Paused;
         self.transition(None)
     }
 

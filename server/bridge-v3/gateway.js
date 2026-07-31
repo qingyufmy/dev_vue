@@ -26,6 +26,7 @@ const AUTH_QUEUE_MAX_MESSAGES = 16
 const AUTH_QUEUE_MAX_BYTES = 1024 * 1024
 const MAX_PENDING_QUOTES_PER_CONNECTION = 64
 const MAX_PENDING_DATA_REQUESTS_PER_CONNECTION = 32
+const TRANSPORT_PING_INTERVAL_MS = 10_000
 const REQUIRED_INITIAL_STREAMS = Object.freeze(['account', 'positions', 'orders'])
 const RELEASE_NOTICE_MINIMUM_BRIDGE_VERSION = Object.freeze([3, 1, 2])
 const BROKER_SYMBOL_SUFFIX_RE = /\.(a|s|c|pro|std|z|ecn|m|raw|mini)$/i
@@ -177,6 +178,7 @@ export function createBridgeV3Gateway({
   }
 
   function unregisterConnection(connection) {
+    if (connection.pingInterval) clearInterval(connection.pingInterval)
     for (const terminal of connection.terminals.values()) {
       const current = connectionsByTerminal.get(terminal.terminal_instance_id)
       if (current?.connection === connection) {
@@ -219,6 +221,7 @@ export function createBridgeV3Gateway({
     const credential = await consumeTicket(ticket)
     const user = await queryOneFn(`SELECT id, role, plan, plan_source, plan_expires_at, token_version,
       (SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = users.id LIMIT 1) AS trade_send_enabled,
+      (SELECT connection_enabled FROM user_bridge_settings WHERE user_id = users.id LIMIT 1) AS connection_enabled,
       (SELECT accounts.login_account FROM ai_observer_sources sources
         JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
           AND accounts.user_id = users.id AND accounts.is_deleted = 0
@@ -234,6 +237,9 @@ export function createBridgeV3Gateway({
     }
     if (Number(user.has_pro_access) !== 1) {
       throw Object.assign(new Error('bridge_membership_required'), { code:'bridge_membership_required' })
+    }
+    if (user.connection_enabled != null && Number(user.connection_enabled) !== 1) {
+      throw Object.assign(new Error('bridge_runtime_paused'), { code:'bridge_runtime_paused' })
     }
     connection.userId = Number(user.id)
     connection.tokenVersion = Number(credential.tokenVersion || 0)
@@ -256,6 +262,7 @@ export function createBridgeV3Gateway({
     let user
     try {
       user = await queryOneFn(`SELECT id, role, token_version,
+        (SELECT connection_enabled FROM user_bridge_settings WHERE user_id = users.id LIMIT 1) AS connection_enabled,
         (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
         FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [connection.userId])
     } catch {
@@ -269,6 +276,10 @@ export function createBridgeV3Gateway({
     if (Number(user.has_pro_access) !== 1) {
       connection.tradeEnabled = false
       throw gatewayError('bridge_membership_required')
+    }
+    if (user.connection_enabled != null && Number(user.connection_enabled) !== 1) {
+      connection.tradeEnabled = false
+      throw gatewayError('bridge_runtime_paused')
     }
   }
 
@@ -483,6 +494,9 @@ export function createBridgeV3Gateway({
       authQueueBytes:0,
       tokenVersion:null,
       nextEligibilityCheckAt:0,
+      pingInterval:null,
+      pingOutstandingAt:0,
+      transportRttMs:null,
     }
     const url = new URL(req.url, 'http://localhost')
     const onMessage = raw => {
@@ -512,7 +526,21 @@ export function createBridgeV3Gateway({
       connection.closed = true
       unregisterConnection(connection)
     })
+    ws.on('pong', () => {
+      if (!connection.pingOutstandingAt) return
+      connection.transportRttMs = Math.max(0, now() - connection.pingOutstandingAt)
+      connection.pingOutstandingAt = 0
+    })
     ws.on('error', () => {})
+
+    if (typeof ws.ping === 'function') {
+      connection.pingInterval = setInterval(() => {
+        if (connection.closed || ws.readyState !== 1 || connection.pingOutstandingAt) return
+        connection.pingOutstandingAt = now()
+        try { ws.ping() } catch { connection.pingOutstandingAt = 0 }
+      }, TRANSPORT_PING_INTERVAL_MS)
+      connection.pingInterval.unref?.()
+    }
 
     authenticate(connection, url).then(async () => {
       const queued = connection.authQueue
@@ -787,6 +815,9 @@ export function createBridgeV3Gateway({
         initial_sync_ready:terminalInitialSyncReady(connection, terminal.terminal_instance_id),
         connection_generation:connection.generation,
         last_seen_at_utc_msc:connection.lastSeen,
+        bridge_version:connection.bridgeVersion || null,
+        transport_rtt_msc:Number.isFinite(connection.transportRttMs)
+          ? Math.round(connection.transportRttMs) : null,
         stream_observed_at_utc_msc:{ ...(terminal.stream_observed_at_utc_msc || {}) },
       })
     }

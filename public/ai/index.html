@@ -1048,29 +1048,92 @@
 
 
 
-    <div id="mt5BridgeModal" class="bridge-overlay hidden" role="dialog" aria-modal="true">
+    <div id="mt5BridgeModal" class="bridge-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="bridgeControlDialogTitle">
       <div class="bridge-dialog">
         <div class="bridge-head">
-          <strong>连接交易终端</strong>
-          <button id="mt5BridgeClose" class="icon-btn" title="关闭"><i data-lucide="x" size="16"></i></button>
+          <div>
+            <strong id="bridgeControlDialogTitle">桥接控制中心</strong>
+            <span>连接状态、终端数据与软件管理</span>
+          </div>
+          <button id="mt5BridgeClose" class="icon-btn" title="关闭" aria-label="关闭桥接控制中心"><i data-lucide="x" size="16"></i></button>
         </div>
         <div class="bridge-body">
-          <div class="bridge-intro">
-            <p>下载桥接客户端，双击运行后选择 MT4 或 MT5。</p>
-            <p class="bridge-note">内置登录界面，输入账号密码即可使用。</p>
-          </div>
-          <div class="bridge-options">
-            <button id="downloadExe" class="bridge-option-card bridge-option-recommended">
-              <div class="bridge-option-icon"><i data-lucide="monitor" size="32"></i></div>
-              <div class="bridge-option-info">
-                <strong>Windows (.exe)</strong>
-                <span>无需 Python · 原生 Windows 客户端 · 双击运行</span>
-                <small>支持 MT4 / MT5 · 首次浏览器授权 · 自动重连</small>
+          <section class="bridge-status-summary" aria-live="polite">
+            <div id="bridgeControlStatusIcon" class="bridge-status-icon is-loading"><i data-lucide="loader-circle" size="22"></i></div>
+            <div class="bridge-status-copy">
+              <div class="bridge-status-title-row">
+                <strong id="bridgeControlStateTitle">正在读取桥接状态</strong>
+                <span id="bridgeControlDesiredBadge" class="bridge-state-chip">读取中</span>
               </div>
-              <i data-lucide="download" size="18"></i>
+              <p id="bridgeControlStateDescription">正在确认客户端、交易终端和服务器通道。</p>
+            </div>
+          </section>
+
+          <div class="bridge-metrics" aria-label="桥接运行指标">
+            <div class="bridge-metric">
+              <span>通信延迟</span>
+              <strong id="bridgeControlLatency">--</strong>
+              <small>服务器与桥接软件</small>
+            </div>
+            <div class="bridge-metric">
+              <span>数据同步</span>
+              <strong id="bridgeControlFreshness">--</strong>
+              <small>最近终端数据</small>
+            </div>
+            <div class="bridge-metric">
+              <span>最近心跳</span>
+              <strong id="bridgeControlLastSeen">--</strong>
+              <small>连接活跃时间</small>
+            </div>
+            <div class="bridge-metric">
+              <span>客户端版本</span>
+              <strong id="bridgeControlVersion">--</strong>
+              <small>量见智桥</small>
+            </div>
+          </div>
+
+          <section class="bridge-terminal-section">
+            <div class="bridge-section-heading">
+              <strong>当前交易终端</strong>
+              <span id="bridgeControlTerminalCount">尚未检测</span>
+            </div>
+            <div id="bridgeControlTerminals" class="bridge-terminal-list">
+              <div class="bridge-terminal-empty">正在读取账户与交易服务器信息…</div>
+            </div>
+          </section>
+
+          <div id="bridgePauseConfirmation" class="bridge-pause-confirmation hidden" role="alert">
+            <div>
+              <strong>确认暂停桥接？</strong>
+              <span>只暂停服务器数据和新交易指令，不会关闭 MT4/MT5，也不会撤单或平仓。</span>
+            </div>
+            <div class="bridge-confirm-actions">
+              <button id="bridgePauseCancel" type="button" class="btn btn-ghost">取消</button>
+              <button id="bridgePauseConfirm" type="button" class="btn btn-danger-soft">确认暂停</button>
+            </div>
+          </div>
+
+          <div class="bridge-control-actions">
+            <div class="bridge-control-secondary">
+              <button id="downloadExe" type="button" class="btn btn-secondary"><i data-lucide="download" size="15"></i>下载软件</button>
+              <button id="bridgeControlRefresh" type="button" class="btn btn-ghost"><i data-lucide="refresh-cw" size="15"></i>刷新状态</button>
+            </div>
+            <button id="bridgeRuntimeToggle" type="button" class="btn btn-primary" disabled>
+              <i data-lucide="power" size="16"></i><span>读取中</span>
             </button>
           </div>
 
+          <details class="bridge-control-details">
+            <summary>连接说明</summary>
+            <div>
+              <p>暂停后，桥接软件会保留本地运行与交易终端连接，但停止连接业务服务器。</p>
+              <p>再次启动时，独立控制通道会立即唤醒桥接，无需重新登录或重启软件。</p>
+              <div class="bridge-download-hint">
+                <i data-lucide="monitor" size="16"></i>
+                <span>下载桥接客户端，双击运行后选择 MT4 或 MT5。</span>
+              </div>
+            </div>
+          </details>
         </div>
       </div>
     </div>

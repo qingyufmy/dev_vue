@@ -6270,6 +6270,153 @@ body.form-modal-open .content-card { animation:none !important; transform:none !
   flex-shrink: 0;
 }
 
+/* Professional bridge status and runtime controls. */
+.bridge-dialog {
+  width: 720px;
+  max-height: min(780px, 92vh);
+  overflow: auto;
+  box-shadow: var(--shadow-modal, 0 25px 60px rgba(0, 0, 0, 0.7));
+  animation: slideUp 0.22s cubic-bezier(.22, 1, .36, 1);
+}
+.bridge-head { padding: 18px 22px; font-size: 17px; }
+.bridge-head > div { display: flex; flex-direction: column; gap: 2px; }
+.bridge-head > div > span { color: var(--text-muted); font-size: 12px; font-weight: 500; }
+.bridge-body { padding: 22px; gap: 20px; }
+.bridge-status-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+}
+.bridge-status-icon {
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 42px;
+  border-radius: 50%;
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
+.bridge-status-icon.is-connected { color: var(--status-connected); background: var(--status-connected-bg); }
+.bridge-status-icon.is-paused { color: var(--text-secondary); background: var(--bg-input); }
+.bridge-status-icon.is-offline { color: var(--status-danger); background: var(--status-danger-bg); }
+.bridge-status-icon.is-reconnecting { color: var(--color-warning); background: var(--color-warning-bg); }
+.bridge-status-icon.is-loading svg { animation: bridgeSpin 0.9s linear infinite; }
+.bridge-status-copy { min-width: 0; flex: 1; }
+.bridge-status-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.bridge-status-title-row strong { color: var(--text-primary); font-size: 15px; }
+.bridge-status-copy p { margin: 5px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
+.bridge-state-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  font-size: 11px;
+  font-weight: 700;
+}
+.bridge-state-chip.is-enabled { color: var(--status-connected); border-color: var(--status-connected-border); background: var(--status-connected-bg); }
+.bridge-state-chip.is-paused { color: var(--color-warning); border-color: var(--color-warning-border); background: var(--color-warning-bg); }
+.bridge-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-block: 1px solid var(--border-default);
+}
+.bridge-metric { min-width: 0; padding: 14px 16px; }
+.bridge-metric + .bridge-metric { border-left: 1px solid var(--border-default); }
+.bridge-metric span, .bridge-metric small { display: block; color: var(--text-muted); font-size: 11px; }
+.bridge-metric strong {
+  display: block;
+  margin: 5px 0 3px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bridge-terminal-section { display: flex; flex-direction: column; gap: 10px; }
+.bridge-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.bridge-section-heading strong { color: var(--text-primary); font-size: 13px; }
+.bridge-section-heading span { color: var(--text-muted); font-size: 12px; }
+.bridge-terminal-list { border-block: 1px solid var(--border-default); }
+.bridge-terminal-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 2px;
+}
+.bridge-terminal-row + .bridge-terminal-row { border-top: 1px solid var(--border-subtle); }
+.bridge-terminal-main { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.bridge-terminal-marker { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--status-connected); }
+.bridge-terminal-copy { min-width: 0; }
+.bridge-terminal-copy strong, .bridge-terminal-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bridge-terminal-copy strong { color: var(--text-primary); font-size: 13px; }
+.bridge-terminal-copy span { margin-top: 3px; color: var(--text-secondary); font-size: 12px; }
+.bridge-terminal-sync { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.bridge-terminal-empty { padding: 14px 2px; color: var(--text-muted); font-size: 12px; }
+.bridge-pause-confirmation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-bg);
+}
+.bridge-pause-confirmation.hidden { display: none; }
+.bridge-pause-confirmation > div:first-child { min-width: 0; }
+.bridge-pause-confirmation strong, .bridge-pause-confirmation span { display: block; }
+.bridge-pause-confirmation strong { color: var(--color-warning); font-size: 13px; }
+.bridge-pause-confirmation span { margin-top: 3px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.bridge-confirm-actions, .bridge-control-actions, .bridge-control-secondary { display: flex; align-items: center; gap: 8px; }
+.bridge-control-actions { justify-content: space-between; }
+.bridge-control-actions .btn { min-height: 38px; }
+.bridge-control-actions #bridgeRuntimeToggle { min-width: 132px; }
+.bridge-control-actions #bridgeRuntimeToggle.is-pause {
+  color: var(--color-warning);
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-bg);
+}
+.bridge-control-actions #bridgeRuntimeToggle.is-pause:hover { border-color: var(--color-warning); }
+.btn-danger-soft { color: var(--status-danger); border-color: var(--status-danger-border); background: var(--status-danger-bg); }
+.btn-danger-soft:hover { color: #fecaca; border-color: var(--status-danger); background: var(--status-danger-bg); }
+.bridge-control-details { border-top: 1px solid var(--border-default); padding-top: 12px; }
+.bridge-control-details summary { color: var(--text-secondary); font-size: 12px; font-weight: 700; cursor: pointer; }
+.bridge-control-details > div { padding-top: 10px; }
+.bridge-control-details p { margin: 0 0 5px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+.bridge-download-hint { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
+.bridge-download-hint i { color: var(--gold-primary); }
+
+@keyframes bridgeSpin { to { transform: rotate(360deg); } }
+
+@media (max-width: 680px) {
+  .bridge-dialog { width: min(94vw, 520px); }
+  .bridge-body { padding: 18px; }
+  .bridge-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bridge-metric:nth-child(3) { border-left: 0; border-top: 1px solid var(--border-default); }
+  .bridge-metric:nth-child(4) { border-top: 1px solid var(--border-default); }
+  .bridge-control-actions, .bridge-pause-confirmation { align-items: stretch; flex-direction: column; }
+  .bridge-control-secondary { display: grid; grid-template-columns: 1fr 1fr; }
+  .bridge-control-actions #bridgeRuntimeToggle { width: 100%; }
+  .bridge-confirm-actions { justify-content: flex-end; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bridge-overlay, .bridge-dialog { animation: none; }
+  .bridge-status-icon.is-loading svg { animation-duration: 1.8s; }
+}
+
 /* ===== Membership access lobby ===== */
 .pro-overlay {
   position:fixed;

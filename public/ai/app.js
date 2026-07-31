@@ -27,6 +27,7 @@ const state = {
   accountBalance: 0,
   bridgeAccountIdentity: null,
   bridgePlatform: "mt5",
+  bridgeRuntimeControl: null,
   historyNetResult: 0,
 
   signalTableData: [],
@@ -92,6 +93,19 @@ function bridgePlatformLabel(value = state.bridgePlatform) {
 
 function bridgeAccountConnectPrompt(value = state.bridgePlatform) {
   return `请先连接您的 ${bridgePlatformLabel(value)} 账户`;
+}
+
+function renderGatewayConnectionBadge(isLive, usingFallback) {
+  const platform = bridgePlatformLabel();
+  if (state.bridgeRuntimeControl?.desired_state === "paused") {
+    setBadge("gatewayMode", `${platform} 已暂停`, "warning");
+    return;
+  }
+  if (usingFallback) {
+    setBadge("gatewayMode", state.isPlusReadOnly ? "观摩模式" : `观摩模式 · 请连接 ${platform}`, "warning");
+    return;
+  }
+  setBadge("gatewayMode", isLive ? `${platform} 已连接` : `${platform} 未连接`, isLive ? "connected" : "neutral");
 }
 
 function syncManualOrderPlatformCapabilities() {
@@ -2243,16 +2257,7 @@ function handleHeartbeat(msg) {
   const wasFallback = state._lastUsingFallback;
   state._usingFallback = usingFallback;
 
-  if (usingFallback) {
-    if (state.isPlusReadOnly) {
-      setBadge("gatewayMode", "观摩模式", "warning");
-    } else {
-      setBadge("gatewayMode", `观摩模式 · 请连接 ${bridgePlatformLabel()}`, "warning");
-    }
-  } else {
-    const platform = bridgePlatformLabel();
-    setBadge("gatewayMode", isLive ? `${platform} 已连接` : `${platform} 未连接`, isLive ? "connected" : "neutral");
-  }
+  renderGatewayConnectionBadge(isLive, usingFallback);
 
   // Update market status from heartbeat
   if (typeof msg.trade_mode === 'number') updateMarketStatus(msg.trade_mode);
@@ -2306,7 +2311,7 @@ function handleHeartbeat(msg) {
 
 // Handle bridge disconnect notification
 function handleDisconnect(msg) {
-  setBadge("gatewayMode", `${bridgePlatformLabel()} 未连接`, "neutral");
+  renderGatewayConnectionBadge(false, false);
   setBadge("tradeMode", "请先启动桥接", "neutral");
   // Bridge connectivity pauses the runtime subscription but does not change
   // the persisted automatic-inference switch.
@@ -4265,22 +4270,19 @@ async function loadStatus() {
   const gateway = health.gateway || {};
   if (gateway.platform) updateBridgePlatformUI(gateway.platform);
   state.gatewayStatus = gateway;
+  if (gateway.connection_desired_state) {
+    state.bridgeRuntimeControl = {
+      ...(state.bridgeRuntimeControl || {}),
+      desired_state: gateway.connection_desired_state,
+    };
+  }
   syncAiAccess(gateway.access);
   const isLive = gateway.mode === "live";
   const usingFallback = gateway.using_fallback;
   state._usingFallback = usingFallback;
 
   // Gateway badge — bridge connection status
-  if (usingFallback) {
-    if (state.isPlusReadOnly) {
-      setBadge("gatewayMode", "观摩模式", "warning");
-    } else {
-      setBadge("gatewayMode", `观摩模式 · 请连接 ${bridgePlatformLabel()}`, "warning");
-    }
-  } else {
-    const platform = bridgePlatformLabel();
-    setBadge("gatewayMode", isLive ? `${platform} 已连接` : `${platform} 未连接`, isLive ? "connected" : "neutral");
-  }
+  renderGatewayConnectionBadge(isLive, usingFallback);
 
   // Sync role-based UI (observation hint, button states, etc.)
   applyRoleUI();
@@ -4349,8 +4351,134 @@ async function loadStatus() {
 
 }
 
-// ============ Gateway Badge Click ============
-// ============ Gateway Badge Click — MT5 connect/disconnect ============
+// ============ Bridge control center ============
+let _bridgeControlRefreshTimer = null;
+let _bridgeControlLoading = false;
+
+function formatBridgeAge(timestamp) {
+  const value = Number(timestamp || 0);
+  if (!value) return "--";
+  const seconds = Math.max(0, Math.round((Date.now() - value) / 1000));
+  if (seconds < 2) return "刚刚";
+  if (seconds < 60) return `${seconds} 秒前`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  return `${Math.floor(minutes / 60)} 小时前`;
+}
+
+function bridgeControlPresentation(data) {
+  const platform = normalizeBridgePlatform(data?.platform || state.bridgePlatform).toUpperCase();
+  switch (data?.actual_state) {
+    case "connected": return {
+      icon:"link", iconClass:"is-connected", title:`${platform} 桥接已连接`,
+      description:"账户数据、行情同步和服务器交易指令通道运行正常。",
+    };
+    case "paused": return {
+      icon:"pause", iconClass:"is-paused", title:`${platform} 桥接已暂停`,
+      description:"桥接软件保持本地运行，但不会连接业务服务器；MT 与已有订单不受影响。",
+    };
+    case "reconnecting": return {
+      icon:"refresh-cw", iconClass:"is-reconnecting", title:`${platform} 正在恢复连接`,
+      description:"启动指令已发送，桥接软件正在重新建立数据与交易指令通道。",
+    };
+    default: return {
+      icon:"unplug", iconClass:"is-offline", title:"桥接客户端未连接",
+      description:"请确认量见智桥正在运行并已完成账号授权；尚未安装时可在下方下载。",
+    };
+  }
+}
+
+function renderBridgeControlStatus(data) {
+  state.bridgeRuntimeControl = data;
+  if (data?.platform) updateBridgePlatformUI(data.platform);
+  const presentation = bridgeControlPresentation(data);
+  const icon = $("bridgeControlStatusIcon");
+  if (icon) {
+    icon.className = `bridge-status-icon ${presentation.iconClass}`;
+    icon.innerHTML = `<i data-lucide="${presentation.icon}" size="22"></i>`;
+  }
+  setText("bridgeControlStateTitle", presentation.title);
+  setText("bridgeControlStateDescription", presentation.description);
+  const desired = $("bridgeControlDesiredBadge");
+  if (desired) {
+    const paused = data?.desired_state === "paused";
+    desired.textContent = paused ? "用户已暂停" : "允许连接";
+    desired.className = `bridge-state-chip ${paused ? "is-paused" : "is-enabled"}`;
+  }
+  setText("bridgeControlLatency", Number.isFinite(Number(data?.transport_latency_msc))
+    ? `${Math.round(Number(data.transport_latency_msc))} ms` : "--");
+  setText("bridgeControlFreshness", formatBridgeAge(data?.last_data_at_utc_msc));
+  setText("bridgeControlLastSeen", formatBridgeAge(data?.last_seen_at_utc_msc));
+  setText("bridgeControlVersion", data?.bridge_version || "--");
+
+  const terminals = Array.isArray(data?.terminals) ? data.terminals : [];
+  setText("bridgeControlTerminalCount", terminals.length ? `${terminals.length} 个终端` : "未检测到终端");
+  const terminalList = $("bridgeControlTerminals");
+  if (terminalList) {
+    terminalList.innerHTML = terminals.length ? terminals.map(terminal => `
+      <div class="bridge-terminal-row">
+        <div class="bridge-terminal-main">
+          <span class="bridge-terminal-marker" aria-hidden="true"></span>
+          <div class="bridge-terminal-copy">
+            <strong>${escapeHtml(String(terminal.platform || "").toUpperCase())} · ${escapeHtml(terminal.login || "账户识别中")}</strong>
+            <span>${escapeHtml(terminal.broker_server || "交易服务器识别中")}</span>
+          </div>
+        </div>
+        <span class="bridge-terminal-sync">${terminal.initial_sync_ready ? "数据已同步" : "正在同步"}</span>
+      </div>`).join("") : `<div class="bridge-terminal-empty">${data?.desired_state === "paused"
+        ? "桥接已由你暂停，启动后会自动恢复当前终端。"
+        : "未发现在线终端。请启动量见智桥，或下载安装最新版。"}</div>`;
+  }
+
+  const toggle = $("bridgeRuntimeToggle");
+  if (toggle) {
+    const paused = data?.desired_state === "paused";
+    toggle.disabled = _bridgeControlLoading;
+    toggle.className = `btn ${paused ? "btn-primary" : "is-pause"}`;
+    toggle.innerHTML = `<i data-lucide="${paused ? "play" : "pause"}" size="16"></i><span>${paused ? "启动桥接" : "暂停桥接"}</span>`;
+  }
+  renderGatewayConnectionBadge(data?.actual_state === "connected", state._usingFallback);
+  if (typeof lucide !== "undefined") lucide.createIcons();
+}
+
+function renderBridgeControlError(message) {
+  const icon = $("bridgeControlStatusIcon");
+  if (icon) {
+    icon.className = "bridge-status-icon is-offline";
+    icon.innerHTML = '<i data-lucide="circle-alert" size="22"></i>';
+  }
+  setText("bridgeControlStateTitle", "桥接状态读取失败");
+  setText("bridgeControlStateDescription", message || "请检查网络连接后重新刷新。已有桥接运行不受影响。");
+  const toggle = $("bridgeRuntimeToggle");
+  if (toggle) { toggle.disabled = true; toggle.querySelector("span").textContent = "暂不可用"; }
+  if (typeof lucide !== "undefined") lucide.createIcons();
+}
+
+async function loadBridgeControlStatus({ quiet = false } = {}) {
+  if (_bridgeControlLoading) return state.bridgeRuntimeControl;
+  _bridgeControlLoading = true;
+  $("bridgeControlRefresh")?.setAttribute("aria-busy", "true");
+  try {
+    const data = await api("/api/bridge/runtime-control", { timeout:8000 });
+    renderBridgeControlStatus(data);
+    return data;
+  } catch (error) {
+    if (!quiet) renderBridgeControlError(error.message);
+    return null;
+  } finally {
+    _bridgeControlLoading = false;
+    $("bridgeControlRefresh")?.removeAttribute("aria-busy");
+    if (state.bridgeRuntimeControl) renderBridgeControlStatus(state.bridgeRuntimeControl);
+  }
+}
+
+function closeBridgeControlModal() {
+  $("mt5BridgeModal")?.classList.add("hidden");
+  $("bridgePauseConfirmation")?.classList.add("hidden");
+  clearInterval(_bridgeControlRefreshTimer);
+  _bridgeControlRefreshTimer = null;
+}
+
 async function handleGatewayModeClick() {
   if (isObserverMode() && state.aiAccess?.can_download_bridge !== true) {
     toast("Plus 会员仅支持观摩，不能下载或连接桥接软件", "warning");
@@ -4360,18 +4488,31 @@ async function handleGatewayModeClick() {
   const modal = $("mt5BridgeModal");
   if (!modal) return;
   if (!modal.classList.contains("hidden")) {
-    modal.classList.add("hidden");
+    closeBridgeControlModal();
     return;
   }
   modal.classList.remove("hidden");
+  await loadBridgeControlStatus();
+  clearInterval(_bridgeControlRefreshTimer);
+  _bridgeControlRefreshTimer = setInterval(() => loadBridgeControlStatus({ quiet:true }), 3000);
 }
 
 function initBridgeModal() {
   const modal = $("mt5BridgeModal");
   if (!modal) return;
 
-  $("mt5BridgeClose")?.addEventListener("click", () => modal.classList.add("hidden"));
-  modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
+  $("mt5BridgeClose")?.addEventListener("click", closeBridgeControlModal);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeBridgeControlModal(); });
+  $("bridgeControlRefresh")?.addEventListener("click", () => loadBridgeControlStatus());
+  $("bridgeRuntimeToggle")?.addEventListener("click", () => {
+    if (state.bridgeRuntimeControl?.desired_state === "paused") {
+      updateBridgeRuntimeControl(true);
+    } else {
+      $("bridgePauseConfirmation")?.classList.remove("hidden");
+    }
+  });
+  $("bridgePauseCancel")?.addEventListener("click", () => $("bridgePauseConfirmation")?.classList.add("hidden"));
+  $("bridgePauseConfirm")?.addEventListener("click", () => updateBridgeRuntimeControl(false));
 
   $("downloadExe")?.addEventListener("click", async () => {
     let url = "https://qiniu.acadfx.com/bridge/bootstrapper/38ce5a8bf81750faafbe44be956ceed14aed8fccc4f8bf5012d18f2387e5e22f/LiangjianBridgeSetup.exe";
@@ -4389,9 +4530,42 @@ function initBridgeModal() {
     const a = document.createElement("a");
     a.href = url; a.download = url.split("/").pop(); a.click();
     toast(`正在下载量见智桥 ${version}`, "success");
-    modal.classList.add("hidden");
   });
 
+}
+
+async function updateBridgeRuntimeControl(enabled) {
+  if (_bridgeControlLoading) return;
+  const previous = state.bridgeRuntimeControl;
+  _bridgeControlLoading = true;
+  $("bridgePauseConfirmation")?.classList.add("hidden");
+  if (!enabled && previous) {
+    renderBridgeControlStatus({ ...previous, desired_state:"paused", actual_state:"paused" });
+  }
+  const toggle = $("bridgeRuntimeToggle");
+  if (toggle) {
+    toggle.disabled = true;
+    const label = toggle.querySelector("span");
+    if (label) label.textContent = enabled ? "正在启动…" : "正在暂停…";
+  }
+  try {
+    const data = await api("/api/bridge/runtime-control", {
+      method:"POST",
+      body:{ enabled },
+      timeout:10000,
+    });
+    const next = enabled && data.actual_state !== "connected"
+      ? { ...data, actual_state:"reconnecting" } : data;
+    renderBridgeControlStatus(next);
+    toast(enabled ? "已启动桥接，正在恢复服务器连接" : "桥接已暂停，MT 与已有订单不受影响", "success");
+    setTimeout(() => loadBridgeControlStatus({ quiet:true }), 700);
+  } catch (error) {
+    if (previous) renderBridgeControlStatus(previous);
+    toast(error.message || "桥接控制操作失败，请重试", "error");
+  } finally {
+    _bridgeControlLoading = false;
+    if (state.bridgeRuntimeControl) renderBridgeControlStatus(state.bridgeRuntimeControl);
+  }
 }
 
 // ============ Trade Mode Badge Click — toggle trade sending ============
@@ -8210,6 +8384,7 @@ function bindEvents() {
   });
   window.addEventListener("keydown", event => {
     if (event.key === "Escape" && !$("accountCenterModal")?.classList.contains("hidden")) closeAccountCenter();
+    if (event.key === "Escape" && !$("mt5BridgeModal")?.classList.contains("hidden")) closeBridgeControlModal();
   });
   $("refreshAllBtn").addEventListener("click", () => { _historyCache = null; _historyChartCache = null; refreshAll(); });
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);

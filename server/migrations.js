@@ -4390,6 +4390,26 @@ const migrations = [
         await queryRun('ALTER TABLE ai_signals MODIFY COLUMN market_data_json LONGTEXT NOT NULL')
       }
     }
+  },
+  {
+    id: '152_bridge_runtime_control',
+    async up() {
+      const columns = new Set((await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_bridge_settings'
+          AND COLUMN_NAME IN ('connection_enabled', 'connection_control_revision',
+            'connection_control_changed_at')`)).map(row => String(row.COLUMN_NAME)))
+      const additions = []
+      if (!columns.has('connection_enabled')) {
+        additions.push('ADD COLUMN connection_enabled TINYINT NOT NULL DEFAULT 1 AFTER auto_reasoning_enabled')
+      }
+      if (!columns.has('connection_control_revision')) {
+        additions.push('ADD COLUMN connection_control_revision BIGINT UNSIGNED NOT NULL DEFAULT 1 AFTER connection_enabled')
+      }
+      if (!columns.has('connection_control_changed_at')) {
+        additions.push('ADD COLUMN connection_control_changed_at DATETIME(3) DEFAULT NULL AFTER connection_control_revision')
+      }
+      if (additions.length) await queryRun(`ALTER TABLE user_bridge_settings ${additions.join(', ')}`)
+    }
   }
 ]
 

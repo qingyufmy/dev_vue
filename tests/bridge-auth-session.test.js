@@ -52,6 +52,17 @@ describe('bridge refresh sessions', () => {
     expect(queryRun.mock.calls[0][0]).toContain('last_used_at = NOW()')
   })
 
+  it('can validate the low-volume runtime control channel without rewriting session activity', async () => {
+    queryOne.mockResolvedValue({
+      session_id: 12, id: 4, role: 'user', plan: 'pro', plan_expires_at: null,
+    })
+    const result = await useBridgeRefreshSession('x'.repeat(64), {
+      userAgent:'bridge-control', ip:'1.2.3.4', touch:false,
+    })
+    expect(result.user.id).toBe(4)
+    expect(queryRun).not.toHaveBeenCalled()
+  })
+
   it('rejects missing and explicitly invalidated refresh credentials', async () => {
     await expect(useBridgeRefreshSession('short')).rejects.toMatchObject({ code: 'bridge_refresh_invalid' })
     queryOne.mockResolvedValue(null)

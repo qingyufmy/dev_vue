@@ -607,6 +607,7 @@ fn valid_application_phase(value: &str) -> bool {
             | "detecting_terminal"
             | "terminal_not_found"
             | "pairing_required"
+            | "paused"
             | "connecting"
             | "online"
             | "degraded"

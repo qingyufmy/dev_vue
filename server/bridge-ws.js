@@ -1710,7 +1710,9 @@ async function handleBrowserCommand(ws, userId, msg) {
 
   try {
     const ai = await import('./routes/ai/index.js')
-    const user = await queryOne('SELECT plan, role, plan_expires_at, plan_source FROM users WHERE id = ?', [userId])
+    const user = await queryOne(`SELECT plan, role, plan_expires_at, plan_source,
+      (SELECT connection_enabled FROM user_bridge_settings WHERE user_id = users.id LIMIT 1) AS connection_enabled
+      FROM users WHERE id = ?`, [userId])
     const access = buildAiAccessContext(user, { ownBridgeConnected:isBridgeAlive(userId) })
     if (!observerWsActionAllowed(access, action)) {
       const code = access.mode === 'blocked' ? access.reason : 'observer_read_only'
@@ -1767,6 +1769,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             terminal_instance_id:dataRoute?.terminal_instance_id || null,
             using_fallback: usingFallback,
             trade_mode: dataUserId ? await getBridgeTradeMode(dataUserId) : -1,
+            connection_desired_state:user.connection_enabled == null || Number(user.connection_enabled) === 1
+              ? 'enabled' : 'paused',
             access:{ ...access, observer_source_available:Boolean(dataUserId),
               observer_channel:observerContext?.channel || null },
           },
@@ -3348,6 +3352,46 @@ export function getBridgeDiagnostics() {
       lastQuoteTime: hb.last_quote_time || null,
     }
   })
+}
+
+export function getBridgeRuntimeDiagnostics(userId) {
+  const id = Number(userId)
+  const routes = bridgeV3Business?.connectedTerminals(id) || []
+  if (routes.length) {
+    const streamTimes = routes.flatMap(route => Object.values(route.stream_observed_at_utc_msc || {}))
+      .map(Number).filter(value => Number.isFinite(value) && value > 0)
+    const lastSeen = Math.max(...routes.map(route => Number(route.last_seen_at_utc_msc || 0)))
+    const rtts = routes.map(route => Number(route.transport_rtt_msc))
+      .filter(value => Number.isFinite(value) && value >= 0)
+    return {
+      connected:true,
+      terminal_count:routes.length,
+      platform:routes[0]?.platform || null,
+      bridge_version:routes.find(route => route.bridge_version)?.bridge_version || null,
+      transport_latency_msc:rtts.length ? Math.round(Math.min(...rtts)) : null,
+      last_seen_at_utc_msc:lastSeen || null,
+      last_data_at_utc_msc:streamTimes.length ? Math.max(...streamTimes) : null,
+      terminals:routes.map(route => ({
+        terminal_instance_id:route.terminal_instance_id,
+        platform:route.platform,
+        login:route.account_ref?.login || null,
+        broker_server:route.account_ref?.broker_server || null,
+        initial_sync_ready:route.initial_sync_ready === true,
+      })),
+    }
+  }
+  const bridge = bridges.get(id)
+  const connected = Boolean(bridge?.ws?.readyState === 1 && Date.now() - Number(bridge.lastSeen || 0) < 20_000)
+  return {
+    connected,
+    terminal_count:connected ? 1 : 0,
+    platform:connected ? bridge?._clientHeartbeat?.platform || 'mt5' : null,
+    bridge_version:bridge?._clientHeartbeat?.client_version || null,
+    transport_latency_msc:null,
+    last_seen_at_utc_msc:Number(bridge?.lastSeen || 0) || null,
+    last_data_at_utc_msc:Number(bridge?.lastTickMs || 0) || null,
+    terminals:[],
+  }
 }
 
 export function getBridgeGeneration(userId) {
