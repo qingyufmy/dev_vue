@@ -693,6 +693,20 @@ async function resolveObserverBridgeContext(userId, user, requestedChannelId = n
   return { bridgeUserId:null, channel:null }
 }
 
+async function readAutomaticAnalysisEnabled(userId) {
+  const numericUserId = Number(userId)
+  if (!Number.isInteger(numericUserId) || numericUserId <= 0) return undefined
+  try {
+    const subscription = await queryOne(`SELECT id FROM strategy_subscriptions
+      WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1
+      ORDER BY updated_at DESC, id DESC LIMIT 1`, [numericUserId])
+    return Boolean(subscription)
+  } catch (error) {
+    console.warn(`[BridgeWS] Failed to read automatic-analysis state user=${numericUserId}:`, error.message)
+    return undefined
+  }
+}
+
 function canUseDefaultPlatformMarketSource(user) {
   return String(user?.role || '').toLowerCase() === 'user'
     && String(user?.plan_source || '').toLowerCase() !== 'observer_source'
@@ -953,7 +967,6 @@ async function handleBrowser(ws, url, req) {
       ws._observerBridgeUserId = access.mode === 'observer' ? Number(dataUserId) || null : null
       ws._observerStrategyId = access.mode === 'observer'
         ? Number(observerContext?.channel?.strategy_id || 0) || null : null
-      const bridge = dataUserId ? bridges.get(dataUserId) : null
       const dataRoute = dataUserId ? bridgeV3RouteForContext(
         dataUserId, observerContext?.channel?.trading_account_id) : null
       let quoteClockUserId = dataUserId
@@ -987,7 +1000,13 @@ async function handleBrowser(ws, url, req) {
       const tradeEnabled = alive ? isTradeEnabled(dataUserId) : undefined
       // A V3 terminal is tracked by bridgeV3Business rather than the legacy
       // bridges map. Keep the browser heartbeat compatible with both paths.
-      const autoReasoningEnabled = alive ? !!bridge?.autoReasoningEnabled : undefined
+      // The automatic-analysis switch belongs to the user's strategy
+      // subscription. V3 terminals are not stored in the legacy `bridges`
+      // map, so reading bridge.autoReasoningEnabled would incorrectly emit
+      // false every heartbeat for otherwise healthy MT4/MT5 V3 sessions.
+      const autoReasoningEnabled = access.mode === 'full'
+        ? await readAutomaticAnalysisEnabled(userId)
+        : alive ? await readAutomaticAnalysisEnabled(dataUserId) : undefined
       const heartbeatClock = buildBrowserHeartbeatClock(sharedQuote, clockBridge, v3MarketState)
       ws.send(JSON.stringify({
         type: 'hb',
@@ -1727,7 +1746,6 @@ async function handleBrowserCommand(ws, userId, msg) {
     let result
     switch (action) {
       case 'health': {
-        const bridge = dataUserId ? bridges.get(dataUserId) : null
         const usingFallback = access.read_only
         const connected = Boolean(dataUserId && isBridgeAlive(dataUserId))
         const alive = connected
@@ -1735,8 +1753,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           ? (alive ? isTradeEnabled(dataUserId) : null)
           : alive && isTradeEnabled(dataUserId)
         const autoReasoningEnabled = usingFallback
-          ? (alive ? !!bridge?.autoReasoningEnabled : null)
-          : (alive ? !!bridge?.autoReasoningEnabled : false)
+          ? (alive ? await readAutomaticAnalysisEnabled(dataUserId) : null)
+          : await readAutomaticAnalysisEnabled(userId)
         result = {
           status: 'success',
           gateway: {

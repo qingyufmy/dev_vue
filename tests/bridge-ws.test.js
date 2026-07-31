@@ -391,6 +391,7 @@ describe('initBridgeWS', () => {
       if (sql.includes('SELECT role, plan, plan_expires_at, plan_source FROM users')) {
         return { role:'admin', plan:'pro', plan_expires_at:null, plan_source:null }
       }
+      if (sql.includes('FROM strategy_subscriptions')) return { id:88 }
       return null
     })
 
@@ -417,7 +418,7 @@ describe('initBridgeWS', () => {
       mt5_connected:true,
       mt5_alive:true,
       trade_enabled:true,
-      auto_reasoning_enabled:false,
+      auto_reasoning_enabled:true,
       platform:'mt4',
       terminal_instance_id:'mt4_terminal_heartbeat_01',
     })

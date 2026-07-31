@@ -2273,18 +2273,12 @@ function handleHeartbeat(msg) {
     setBadge("tradeMode", "请先启动桥接", "neutral");
   }
 
-  // Update auto badge from heartbeat data
+  // Heartbeats describe bridge connectivity. For full-access users the
+  // automatic-analysis switch is owned by strategy subscriptions and is
+  // updated only by auto_status / auto_state; otherwise a stale or V3 bridge
+  // heartbeat can overwrite an enabled subscription with false.
   if (isObserverMode() && typeof msg.auto_reasoning_enabled === 'boolean') {
     renderObserverSwitchStates({ tradeEnabled: msg.trade_enabled, autoEnabled: msg.auto_reasoning_enabled });
-  } else if (!isObserverMode() && typeof msg.auto_reasoning_enabled === 'boolean') {
-    state.autoEnabled = msg.auto_reasoning_enabled;
-    // Use renderAutoAnalyzeBadge for consistent display
-    if (state.autoRuntime) {
-      state.autoRuntime.enabled = msg.auto_reasoning_enabled;
-      renderAutoAnalyzeBadge(state.autoRuntime);
-    } else if (!msg.auto_reasoning_enabled) {
-      setBadge("autoAnalyzeMode", "自动分析关闭", "neutral");
-    }
   }
 
   state._lastGatewayLive = isLive;
@@ -4263,7 +4257,10 @@ async function refreshAll() {
   }
 }
 
+let _loadStatusGeneration = 0;
+
 async function loadStatus() {
+  const requestGeneration = ++_loadStatusGeneration;
   const health = await wsApi("health");
   const gateway = health.gateway || {};
   if (gateway.platform) updateBridgePlatformUI(gateway.platform);
@@ -4316,6 +4313,7 @@ async function loadStatus() {
 
   try {
     const auto = await wsApi('auto_status');
+    if (requestGeneration !== _loadStatusGeneration) return;
     const scheduler = auto.scheduler || {};
     if (Array.isArray(scheduler.active_cycles)) {
       state.autoProgressCycles = Object.fromEntries(scheduler.active_cycles
@@ -4344,7 +4342,9 @@ async function loadStatus() {
     };
     state.autoEnabled = scheduler.enabled;
   } catch {
-    setBadge("autoAnalyzeMode", "自动分析状态未知", "warning");
+    if (requestGeneration === _loadStatusGeneration) {
+      setBadge("autoAnalyzeMode", "自动分析状态未知", "warning");
+    }
   }
 
 }
