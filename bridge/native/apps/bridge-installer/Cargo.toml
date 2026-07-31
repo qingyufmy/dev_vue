@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+bridge-runtime-win = { path = "../../crates/bridge-runtime-win" }
 bridge-update = { path = "../../crates/bridge-update" }
 reqwest.workspace = true
 serde.workspace = true

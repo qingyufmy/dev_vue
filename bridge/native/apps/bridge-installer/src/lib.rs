@@ -1,3 +1,4 @@
+use bridge_runtime_win::{SingleInstanceGuard, default_lock_directory};
 use bridge_update::{
     InstallationIdentityStore, ReleaseActivationStore, ReleaseManifest, ReleaseManifestClient,
     ReleaseManifestVerifier, ReleasePackage, ReleasePackageStager, extract_verified_package,
@@ -13,8 +14,8 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use url::{Host, Url};
 use windows_registry::CURRENT_USER;
 use windows_sys::Win32::Foundation::{
@@ -41,6 +42,9 @@ const MAXIMUM_TOTAL_EXPANDED_BYTES: u64 = 1024 * 1024 * 1024;
 const REQUIRED_MODULES: [&str; 3] = ["core", "adapter.mt5.python", "adapter.mt4"];
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const BOOTSTRAP_MANIFEST_PATH: &str = "/api/bridge/v3/releases/bootstrap";
+const BRIDGE_RUNTIME_INSTANCE_PREFIX: &str = "AURUMBridge.v3";
+const BRIDGE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
+const BRIDGE_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InstallerError {
@@ -130,10 +134,6 @@ impl OfflineInstaller {
         bundle_root: &Path,
         install_root: &Path,
     ) -> Result<InstallOutcome, InstallerError> {
-        if !self.configuration.rehearsal && bridge_processes_running()? {
-            return Err(InstallerError::new("bootstrap_running_process_detected"));
-        }
-
         let operation_root = install_root.join(format!(
             ".bootstrap-{}-{}-{}",
             process::id(),
@@ -161,6 +161,8 @@ impl OfflineInstaller {
             &serde_json::to_vec(&manifest)
                 .map_err(|_| InstallerError::new("bootstrap_json_invalid"))?,
         )?;
+
+        prepare_running_bridge_for_install(self.configuration.rehearsal)?;
 
         let installed_version =
             install_version(install_root, &version_directory, &manifest.release_version)?;
@@ -230,9 +232,6 @@ impl OnlineInstaller {
             .map_err(|_| InstallerError::new("bootstrap_io_failed"))?;
         let _installation_lock =
             InstallationLock::acquire(&install_root, self.configuration.rehearsal)?;
-        if !self.configuration.rehearsal && bridge_processes_running()? {
-            return Err(InstallerError::new("bootstrap_running_process_detected"));
-        }
         let bundle_root = install_root.join(format!(
             ".bootstrap-online-{}-{}-{}",
             process::id(),
@@ -357,6 +356,12 @@ pub fn write_failure_log(error: InstallerError) {
 pub fn describe_installer_error(error: InstallerError) -> &'static str {
     match error.code() {
         "bootstrap_running_process_detected" => "请先退出正在运行的量见智桥，再重新安装。",
+        "bootstrap_running_process_stop_timeout" => {
+            "量见智桥未能自动退出。请从托盘退出后重新安装。"
+        }
+        "bootstrap_shutdown_signal_failed" => {
+            "无法通知正在运行的量见智桥退出。请从托盘退出后重新安装。"
+        }
         "bootstrap_installation_in_progress" => "另一个安装程序正在运行，请稍后重试。",
         "bootstrap_release_unavailable" => "当前没有可用于首次安装的稳定版本，请稍后重试。",
         "update_manifest_signature_invalid" | "update_package_signature_invalid" => {
@@ -741,6 +746,123 @@ fn directory_size(root: &Path) -> Result<u64, InstallerError> {
     Ok(total)
 }
 
+fn prepare_running_bridge_for_install(rehearsal: bool) -> Result<(), InstallerError> {
+    if rehearsal {
+        return Ok(());
+    }
+    stop_running_bridge_with(
+        bridge_processes_running,
+        request_bridge_shutdown,
+        wait_for_bridge_processes_to_exit,
+        BRIDGE_SHUTDOWN_TIMEOUT,
+    )
+}
+
+fn stop_running_bridge_with<Probe, Signal, Wait>(
+    mut process_probe: Probe,
+    shutdown_signal: Signal,
+    wait_for_exit: Wait,
+    timeout: Duration,
+) -> Result<(), InstallerError>
+where
+    Probe: FnMut() -> Result<bool, InstallerError>,
+    Signal: FnOnce() -> Result<(), InstallerError>,
+    Wait: FnOnce(Duration) -> Result<bool, InstallerError>,
+{
+    if !process_probe()? {
+        return Ok(());
+    }
+    shutdown_signal()?;
+    if !wait_for_exit(timeout)? || process_probe()? {
+        return Err(InstallerError::new(
+            "bootstrap_running_process_stop_timeout",
+        ));
+    }
+    Ok(())
+}
+
+fn request_bridge_shutdown() -> Result<(), InstallerError> {
+    let lock_directory = default_lock_directory()
+        .map_err(|_| InstallerError::new("bootstrap_shutdown_signal_failed"))?;
+    request_bridge_shutdown_in(&lock_directory)
+}
+
+fn request_bridge_shutdown_in(lock_directory: &Path) -> Result<(), InstallerError> {
+    let mut instance_ids = vec![
+        BRIDGE_RUNTIME_INSTANCE_PREFIX.to_owned(),
+        format!("{BRIDGE_RUNTIME_INSTANCE_PREFIX}.ui"),
+    ];
+    match fs::read_dir(lock_directory) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry =
+                    entry.map_err(|_| InstallerError::new("bootstrap_shutdown_signal_failed"))?;
+                if !entry
+                    .file_type()
+                    .map_err(|_| InstallerError::new("bootstrap_shutdown_signal_failed"))?
+                    .is_file()
+                {
+                    continue;
+                }
+                let name = entry.file_name();
+                let Some(instance_id) = name.to_str().and_then(|value| value.strip_suffix(".lock"))
+                else {
+                    continue;
+                };
+                if is_bridge_runtime_instance_id(instance_id) {
+                    instance_ids.push(instance_id.to_owned());
+                }
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => return Err(InstallerError::new("bootstrap_shutdown_signal_failed")),
+    }
+    instance_ids.sort_by(|left, right| {
+        right
+            .ends_with(".ui")
+            .cmp(&left.ends_with(".ui"))
+            .then_with(|| left.cmp(right))
+    });
+    instance_ids.dedup();
+    for instance_id in instance_ids {
+        SingleInstanceGuard::request_shutdown(&instance_id)
+            .map_err(|_| InstallerError::new("bootstrap_shutdown_signal_failed"))?;
+    }
+    Ok(())
+}
+
+fn is_bridge_runtime_instance_id(instance_id: &str) -> bool {
+    if matches!(instance_id, "AURUMBridge.v3" | "AURUMBridge.v3.ui") {
+        return true;
+    }
+    let Some(profile) = instance_id
+        .strip_prefix("AURUMBridge.v3.profile.")
+        .map(|value| value.strip_suffix(".ui").unwrap_or(value))
+    else {
+        return false;
+    };
+    !profile.is_empty()
+        && profile.len() <= 40
+        && profile
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn wait_for_bridge_processes_to_exit(timeout: Duration) -> Result<bool, InstallerError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !bridge_processes_running()? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(
+            BRIDGE_PROCESS_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+}
+
 fn bridge_processes_running() -> Result<bool, InstallerError> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
@@ -863,4 +985,114 @@ fn timestamp_nanos() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bridge_runtime_win::{InstanceAcquireResult, InstanceSignal};
+    use std::cell::Cell;
+
+    #[test]
+    fn running_bridge_is_signalled_and_waited_before_installation_continues() {
+        let probe_count = Cell::new(0_u32);
+        let signalled = Cell::new(false);
+        let waited = Cell::new(false);
+
+        stop_running_bridge_with(
+            || {
+                let count = probe_count.get();
+                probe_count.set(count + 1);
+                Ok(count == 0)
+            },
+            || {
+                signalled.set(true);
+                Ok(())
+            },
+            |timeout| {
+                waited.set(true);
+                assert_eq!(timeout, BRIDGE_SHUTDOWN_TIMEOUT);
+                Ok(true)
+            },
+            BRIDGE_SHUTDOWN_TIMEOUT,
+        )
+        .expect("running Bridge should stop cooperatively");
+
+        assert!(signalled.get());
+        assert!(waited.get());
+        assert_eq!(probe_count.get(), 2);
+    }
+
+    #[test]
+    fn stopped_bridge_does_not_receive_a_shutdown_signal() {
+        stop_running_bridge_with(
+            || Ok(false),
+            || panic!("stopped Bridge must not be signalled"),
+            |_| panic!("stopped Bridge must not be awaited"),
+            BRIDGE_SHUTDOWN_TIMEOUT,
+        )
+        .expect("stopped Bridge should not block installation");
+    }
+
+    #[test]
+    fn installer_fails_closed_when_bridge_does_not_exit() {
+        let error = stop_running_bridge_with(
+            || Ok(true),
+            || Ok(()),
+            |_| Ok(false),
+            BRIDGE_SHUTDOWN_TIMEOUT,
+        )
+        .expect_err("an unresponsive Bridge must block file replacement");
+
+        assert_eq!(error.code(), "bootstrap_running_process_stop_timeout");
+    }
+
+    #[test]
+    fn only_current_bridge_runtime_lock_names_are_signalled() {
+        for instance_id in [
+            "AURUMBridge.v3",
+            "AURUMBridge.v3.ui",
+            "AURUMBridge.v3.profile.source-1",
+            "AURUMBridge.v3.profile.source-1.ui",
+        ] {
+            assert!(is_bridge_runtime_instance_id(instance_id), "{instance_id}");
+        }
+        for instance_id in [
+            "AURUMBridge.v2",
+            "AURUMBridge.v3.profile.",
+            "AURUMBridge.v3.profile.source.1",
+            "unrelated",
+        ] {
+            assert!(!is_bridge_runtime_instance_id(instance_id), "{instance_id}");
+        }
+    }
+
+    #[test]
+    fn discovered_profile_lock_receives_the_real_shutdown_event() {
+        let root = std::env::temp_dir().join(format!(
+            "liangjian-installer-shutdown-{}-{}",
+            process::id(),
+            timestamp_nanos()
+        ));
+        fs::create_dir_all(&root).expect("lock directory");
+        let profile = format!("test{}{}", process::id(), timestamp_nanos() % 1_000_000);
+        let instance_id = format!("AURUMBridge.v3.profile.{profile}");
+        let instance = match SingleInstanceGuard::try_acquire(&instance_id, &root, false)
+            .expect("instance guard")
+        {
+            InstanceAcquireResult::Acquired(instance) => instance,
+            InstanceAcquireResult::Duplicate => panic!("unique test instance must be acquired"),
+        };
+
+        request_bridge_shutdown_in(&root).expect("installer shutdown request");
+        assert_eq!(
+            instance
+                .wait_for_signal(Duration::from_secs(1))
+                .expect("shutdown event"),
+            InstanceSignal::Shutdown
+        );
+
+        drop(instance);
+        fs::remove_dir_all(root).expect("lock cleanup");
+    }
 }

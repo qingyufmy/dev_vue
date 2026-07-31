@@ -1074,6 +1074,7 @@ name = "liangjian-bridge-installer"
 version = "3.0.0"
 dependencies = [
  "base64",
+ "bridge-runtime-win",
  "bridge-update",
  "p256",
  "reqwest",
