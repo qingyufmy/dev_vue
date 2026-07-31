@@ -22,4 +22,19 @@ describe('bridge control center frontend contract', () => {
     expect(js).toContain('setInterval(() => loadBridgeControlStatus({ quiet:true }), 3000)')
     expect(js).toContain('data?.desired_state === "paused"')
   })
+
+  it('switches an ordinary paused bridge to observer data without waiting for disconnect timeout', () => {
+    expect(js).toContain('async function enterBridgeObserverMode')
+    expect(js).toContain('if (!enabled) {\n      await enterBridgeObserverMode({ paused:true });')
+    expect(js).toContain('const accessRes = await api("/api/ai/access-context")')
+    expect(js).toContain('await loadObserverChannels()')
+    expect(js).toContain('notifyObserverChannelSelection()')
+    expect(js).toContain('"观摩模式 · 桥接已暂停"')
+  })
+
+  it('keeps observer data visible while a resumed bridge is reconnecting', () => {
+    expect(js).toContain('"观摩模式 · 桥接恢复中"')
+    expect(js).toContain('renderGatewayConnectionBadge(false, state._usingFallback === true)')
+    expect(js).toContain('void enterBridgeObserverMode({')
+  })
 })

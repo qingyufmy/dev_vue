@@ -98,11 +98,16 @@ function bridgeAccountConnectPrompt(value = state.bridgePlatform) {
 function renderGatewayConnectionBadge(isLive, usingFallback) {
   const platform = bridgePlatformLabel();
   if (state.bridgeRuntimeControl?.desired_state === "paused") {
-    setBadge("gatewayMode", `${platform} 已暂停`, "warning");
+    setBadge("gatewayMode", usingFallback || isObserverMode()
+      ? "观摩模式 · 桥接已暂停"
+      : `${platform} 已暂停`, "warning");
     return;
   }
   if (usingFallback) {
-    setBadge("gatewayMode", state.isPlusReadOnly ? "观摩模式" : `观摩模式 · 请连接 ${platform}`, "warning");
+    const reconnecting = state.bridgeRuntimeControl?.actual_state === "reconnecting";
+    setBadge("gatewayMode", state.isPlusReadOnly
+      ? "观摩模式"
+      : reconnecting ? "观摩模式 · 桥接恢复中" : `观摩模式 · 请连接 ${platform}`, "warning");
     return;
   }
   setBadge("gatewayMode", isLive ? `${platform} 已连接` : `${platform} 未连接`, isLive ? "connected" : "neutral");
@@ -1399,6 +1404,18 @@ const OBSERVER_WS_READ_ACTIONS = new Set([
 
 function isObserverMode() { return state.aiAccess?.read_only === true; }
 
+function canUseBridgeObserverFallback() {
+  return state.user?.role !== "admin" && state.user?.plan === "pro";
+}
+
+function bridgeOfflineObserverAccess() {
+  return {
+    mode:"observer", reason:"bridge_offline", read_only:true, can_download_bridge:true,
+    allowed_tabs:["dashboard","model-strategy","ai-analyze","trading","history","feedback"],
+    data_source:"platform_admin_account",
+  };
+}
+
 function observerMessage() {
   if (state.aiAccess?.reason === "membership_expired") return "会员已过期，请续费后继续使用 AI 交易实验室";
   if (state.aiAccess?.reason === "membership_required") return "当前为免费账户，请升级会员后使用 AI 交易实验室";
@@ -1466,6 +1483,71 @@ function schedulePersonalBridgeRefresh() {
       console.warn('[BridgeAccess] 个人桥接数据自动刷新失败:', error?.message || error);
     });
   }, 0);
+}
+
+function notifyObserverChannelSelection() {
+  if (!state.selectedObserverChannelId || state.bridgeWs?.readyState !== WebSocket.OPEN) return;
+  try {
+    state.bridgeWs.send(JSON.stringify({
+      type:"hb",
+      seq:++state._hbSeq,
+      observer_channel_id:state.selectedObserverChannelId,
+    }));
+  } catch {}
+}
+
+async function enterBridgeObserverMode({ paused = false, refresh = true } = {}) {
+  // Keep admins in their full management context. Ordinary Pro users switch
+  // immediately so a deliberate pause never leaves the page waiting for a
+  // WebSocket timeout before the default observer source becomes available.
+  if (paused) {
+    state.bridgeRuntimeControl = {
+      ...(state.bridgeRuntimeControl || {}),
+      desired_state:"paused",
+      actual_state:"paused",
+    };
+  }
+  if (canUseBridgeObserverFallback()) syncAiAccess(bridgeOfflineObserverAccess());
+  if (!isObserverMode()) {
+    renderGatewayConnectionBadge(false, false);
+    return false;
+  }
+
+  state._usingFallback = true;
+  state._lastUsingFallback = true;
+  state._lastGatewayLive = false;
+  state.platformMarketSourceActive = false;
+  state.lastObserverQuote = null;
+  state.signals = [];
+  state.positions = [];
+  _historyCache = null;
+  _historyChartCache = null;
+  setText("quoteTime", "--");
+  setText("mt5ServerTime", "--");
+  renderPositionRows();
+  stopLiveQuoteRefreshTimer();
+
+  // Refresh the server-authoritative access context after the bridge route has
+  // been removed. The local transition above remains a safe fallback if this
+  // small request happens to fail during a network interruption.
+  try {
+    const accessRes = await api("/api/ai/access-context");
+    syncAiAccess(accessRes.access);
+  } catch (error) {
+    console.warn("[BridgeAccess] 观摩模式状态同步失败:", error?.message || error);
+  }
+
+  if (!isObserverMode()) {
+    renderGatewayConnectionBadge(false, false);
+    return false;
+  }
+  await loadObserverChannels().catch(error => {
+    console.warn("[BridgeAccess] 观摩源列表加载失败:", error?.message || error);
+  });
+  notifyObserverChannelSelection();
+  renderGatewayConnectionBadge(false, true);
+  if (refresh) await refreshAll();
+  return true;
 }
 
 function apiErrorMessage(code) {
@@ -2325,18 +2407,9 @@ function handleDisconnect(msg) {
   }
   state._lastGatewayLive = false;
   stopLiveQuoteRefreshTimer();
-  if (state.user?.role !== "admin" && state.user?.plan === "pro") {
-    state._usingFallback = true;
-    setBadge("gatewayMode", `观摩模式 · 请连接 ${bridgePlatformLabel()}`, "warning");
-    syncAiAccess({
-      mode:"observer", reason:"bridge_offline", read_only:true, can_download_bridge:true,
-      allowed_tabs:["dashboard","model-strategy","ai-analyze","trading","history"],
-      data_source:"platform_admin_account",
-    });
-    _historyCache = null;
-    _historyChartCache = null;
-    refreshAll().catch(() => {});
-  }
+  void enterBridgeObserverMode({
+    paused:state.bridgeRuntimeControl?.desired_state === "paused",
+  }).catch(error => console.warn("[BridgeAccess] 断线后切换观摩模式失败:", error?.message || error));
   updateMarketStatus(-1);
 }
 
@@ -4557,6 +4630,13 @@ async function updateBridgeRuntimeControl(enabled) {
     const next = enabled && data.actual_state !== "connected"
       ? { ...data, actual_state:"reconnecting" } : data;
     renderBridgeControlStatus(next);
+    if (!enabled) {
+      await enterBridgeObserverMode({ paused:true });
+    } else {
+      // Stay on observer data until a heartbeat confirms that the personal
+      // bridge is genuinely online; do not create a blank reconnect window.
+      renderGatewayConnectionBadge(false, state._usingFallback === true);
+    }
     toast(enabled ? "已启动桥接，正在恢复服务器连接" : "桥接已暂停，MT 与已有订单不受影响", "success");
     setTimeout(() => loadBridgeControlStatus({ quiet:true }), 700);
   } catch (error) {
@@ -5546,11 +5626,7 @@ async function changeObserverChannel(channelId) {
   state.positions = [];
   const accessRes = await api(`/api/ai/access-context?channel_id=${encodeURIComponent(nextId)}`);
   syncAiAccess(accessRes.access);
-  if (state.bridgeWs?.readyState === WebSocket.OPEN) {
-    try {
-      state.bridgeWs.send(JSON.stringify({ type:'hb', seq:++state._hbSeq, observer_channel_id:nextId }));
-    } catch {}
-  }
+  notifyObserverChannelSelection();
   await refreshAll();
   const channelName = state.observerChannels.find(channel => Number(channel.id) === nextId)?.name || '观摩频道';
   toast(`已切换至${channelName}`, 'success');
