@@ -27,7 +27,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260731bridgeaccess1" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260731bridgecontrol1" />
     <link rel="stylesheet" href="/ai/responsive.css?v=20260724position3" />
   </head>
   <body>
@@ -1048,64 +1048,77 @@
 
 
 
-    <div id="mt5BridgeModal" class="bridge-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="bridgeControlDialogTitle">
-      <div class="bridge-dialog">
+    <div id="mt5BridgeModal" class="bridge-overlay hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="bridgeControlDialogTitle" aria-describedby="bridgeControlDialogDescription">
+      <div class="bridge-dialog bridge-control-dialog">
         <div class="bridge-head">
-          <div>
-            <strong id="bridgeControlDialogTitle">桥接控制中心</strong>
-            <span>连接状态、终端数据与软件管理</span>
+          <div class="bridge-head-identity">
+            <span class="bridge-head-mark" aria-hidden="true"><i data-lucide="network" size="20"></i></span>
+            <div class="bridge-head-copy">
+              <span>量见智桥</span>
+              <strong id="bridgeControlDialogTitle">桥接控制中心</strong>
+              <p id="bridgeControlDialogDescription">监控交易终端与业务服务器之间的数据和指令通道</p>
+            </div>
           </div>
-          <button id="mt5BridgeClose" class="icon-btn" title="关闭" aria-label="关闭桥接控制中心"><i data-lucide="x" size="16"></i></button>
+          <button id="mt5BridgeClose" class="icon-btn bridge-close-button" type="button" title="关闭" aria-label="关闭桥接控制中心"><i data-lucide="x" size="18"></i></button>
         </div>
         <div class="bridge-body">
-          <section class="bridge-status-summary" aria-live="polite">
+          <section id="bridgeControlStatusSummary" class="bridge-status-summary" aria-live="polite">
             <div id="bridgeControlStatusIcon" class="bridge-status-icon is-loading"><i data-lucide="loader-circle" size="22"></i></div>
             <div class="bridge-status-copy">
+              <span class="bridge-status-label">当前连接状态</span>
               <div class="bridge-status-title-row">
                 <strong id="bridgeControlStateTitle">正在读取桥接状态</strong>
                 <span id="bridgeControlDesiredBadge" class="bridge-state-chip">读取中</span>
               </div>
               <p id="bridgeControlStateDescription">正在确认客户端、交易终端和服务器通道。</p>
             </div>
+            <div class="bridge-live-indicator" title="状态每 3 秒自动更新">
+              <span aria-hidden="true"></span>
+              <small id="bridgeControlMonitorLabel">实时监控</small>
+            </div>
           </section>
 
-          <div class="bridge-metrics" aria-label="桥接运行指标">
+          <dl class="bridge-metrics" aria-label="桥接运行指标">
             <div class="bridge-metric">
-              <span>通信延迟</span>
-              <strong id="bridgeControlLatency">--</strong>
+              <dt><i data-lucide="activity" size="15"></i>通信延迟</dt>
+              <dd id="bridgeControlLatency">--</dd>
               <small>服务器与桥接软件</small>
             </div>
             <div class="bridge-metric">
-              <span>数据同步</span>
-              <strong id="bridgeControlFreshness">--</strong>
+              <dt><i data-lucide="database" size="15"></i>数据同步</dt>
+              <dd id="bridgeControlFreshness">--</dd>
               <small>最近终端数据</small>
             </div>
             <div class="bridge-metric">
-              <span>最近心跳</span>
-              <strong id="bridgeControlLastSeen">--</strong>
+              <dt><i data-lucide="radio" size="15"></i>最近心跳</dt>
+              <dd id="bridgeControlLastSeen">--</dd>
               <small>连接活跃时间</small>
             </div>
             <div class="bridge-metric">
-              <span>客户端版本</span>
-              <strong id="bridgeControlVersion">--</strong>
+              <dt><i data-lucide="package-check" size="15"></i>客户端版本</dt>
+              <dd id="bridgeControlVersion">--</dd>
               <small>量见智桥</small>
             </div>
-          </div>
+          </dl>
 
           <section class="bridge-terminal-section">
             <div class="bridge-section-heading">
-              <strong>当前交易终端</strong>
-              <span id="bridgeControlTerminalCount">尚未检测</span>
+              <div>
+                <strong>当前交易终端</strong>
+                <span>已识别并接入桥接通道的账户</span>
+              </div>
+              <span id="bridgeControlTerminalCount" class="bridge-terminal-count">尚未检测</span>
             </div>
             <div id="bridgeControlTerminals" class="bridge-terminal-list">
-              <div class="bridge-terminal-empty">正在读取账户与交易服务器信息…</div>
+              <div class="bridge-terminal-empty"><i data-lucide="loader-circle" size="17"></i><span>正在读取账户与交易服务器信息…</span></div>
             </div>
           </section>
 
           <div id="bridgePauseConfirmation" class="bridge-pause-confirmation hidden" role="alert">
-            <div>
+            <span class="bridge-pause-icon" aria-hidden="true"><i data-lucide="circle-alert" size="18"></i></span>
+            <div class="bridge-pause-copy">
               <strong>确认暂停桥接？</strong>
-              <span>只暂停服务器数据和新交易指令，不会关闭 MT4/MT5，也不会撤单或平仓。</span>
+              <span>暂停后自动切换为观摩模式。MT4/MT5 和已有订单不受影响，也不会自动撤单或平仓。</span>
             </div>
             <div class="bridge-confirm-actions">
               <button id="bridgePauseCancel" type="button" class="btn btn-ghost">取消</button>
@@ -1113,28 +1126,27 @@
             </div>
           </div>
 
-          <div class="bridge-control-actions">
-            <div class="bridge-control-secondary">
-              <button id="downloadExe" type="button" class="btn btn-secondary"><i data-lucide="download" size="15"></i>下载软件</button>
-              <button id="bridgeControlRefresh" type="button" class="btn btn-ghost"><i data-lucide="refresh-cw" size="15"></i>刷新状态</button>
-            </div>
-            <button id="bridgeRuntimeToggle" type="button" class="btn btn-primary" disabled>
-              <i data-lucide="power" size="16"></i><span>读取中</span>
-            </button>
-          </div>
-
           <details class="bridge-control-details">
-            <summary>连接说明</summary>
-            <div>
-              <p>暂停后，桥接软件会保留本地运行与交易终端连接，但停止连接业务服务器。</p>
-              <p>再次启动时，独立控制通道会立即唤醒桥接，无需重新登录或重启软件。</p>
-              <div class="bridge-download-hint">
-                <i data-lucide="monitor" size="16"></i>
-                <span>下载桥接客户端，双击运行后选择 MT4 或 MT5。</span>
-              </div>
+            <summary><i data-lucide="circle-help" size="15"></i><span>桥接如何工作</span><i data-lucide="chevron-down" size="15" class="bridge-details-chevron"></i></summary>
+            <div class="bridge-control-help-grid">
+              <p><i data-lucide="pause" size="15"></i><span><strong>暂停连接</strong>桥接软件会保留本地运行与交易终端连接，但停止连接业务服务器。</span></p>
+              <p><i data-lucide="play" size="15"></i><span><strong>恢复连接</strong>控制通道会立即唤醒桥接，无需重新登录，也无需重启软件或 MT。</span></p>
             </div>
+            <p class="bridge-install-hint"><i data-lucide="download" size="15"></i><span>下载桥接客户端，双击运行后选择 MT4 或 MT5。</span></p>
           </details>
         </div>
+        <footer class="bridge-control-footer">
+          <p><i data-lucide="shield-check" size="15"></i><span>暂停操作不会修改、撤销或平掉交易终端中的已有订单。</span></p>
+          <div class="bridge-control-actions">
+            <div class="bridge-control-secondary">
+              <button id="downloadExe" type="button" class="btn btn-secondary"><i data-lucide="download" size="16"></i>下载软件</button>
+              <button id="bridgeControlRefresh" type="button" class="btn btn-ghost"><i data-lucide="refresh-cw" size="16"></i><span>刷新状态</span></button>
+            </div>
+            <button id="bridgeRuntimeToggle" type="button" class="btn btn-primary" disabled>
+              <i data-lucide="power" size="17"></i><span>读取中</span>
+            </button>
+          </div>
+        </footer>
       </div>
     </div>
 
@@ -1230,7 +1242,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260731bridgeaccess1"></script>
+    <script src="/ai/app.js?v=20260731bridgecontrol1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

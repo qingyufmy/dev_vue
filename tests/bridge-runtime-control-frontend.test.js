@@ -15,6 +15,19 @@ describe('bridge control center frontend contract', () => {
     expect(css).toContain('@media (max-width: 680px)')
   })
 
+  it('uses a professional responsive control hierarchy with accessible modal behavior', () => {
+    expect(html).toContain('class="bridge-dialog bridge-control-dialog"')
+    expect(html).toContain('id="bridgeControlStatusSummary"')
+    expect(html).toContain('class="bridge-live-indicator"')
+    expect(html).toContain('class="bridge-control-footer"')
+    expect(html).toContain('aria-describedby="bridgeControlDialogDescription"')
+    expect(css).toContain('grid-template-rows: auto minmax(0, 1fr) auto')
+    expect(css).toContain('min-height: 44px')
+    expect(css).toContain('@media (prefers-reduced-motion: reduce)')
+    expect(js).toContain('_bridgeModalPreviousFocus = document.activeElement')
+    expect(js).toContain('if (event.key !== "Tab") return')
+  })
+
   it('polls the persisted runtime state and sends start or pause intent to the server', () => {
     expect(js).toContain('api("/api/bridge/runtime-control"')
     expect(js).toContain('api("/api/bridge/runtime-control", {')

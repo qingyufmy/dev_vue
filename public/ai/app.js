@@ -4427,6 +4427,7 @@ async function loadStatus() {
 // ============ Bridge control center ============
 let _bridgeControlRefreshTimer = null;
 let _bridgeControlLoading = false;
+let _bridgeModalPreviousFocus = null;
 
 function formatBridgeAge(timestamp) {
   const value = Number(timestamp || 0);
@@ -4465,6 +4466,9 @@ function renderBridgeControlStatus(data) {
   state.bridgeRuntimeControl = data;
   if (data?.platform) updateBridgePlatformUI(data.platform);
   const presentation = bridgeControlPresentation(data);
+  const summary = $("bridgeControlStatusSummary");
+  if (summary) summary.dataset.state = String(data?.actual_state || "offline");
+  setText("bridgeControlMonitorLabel", "实时监控");
   const icon = $("bridgeControlStatusIcon");
   if (icon) {
     icon.className = `bridge-status-icon ${presentation.iconClass}`;
@@ -4491,16 +4495,16 @@ function renderBridgeControlStatus(data) {
     terminalList.innerHTML = terminals.length ? terminals.map(terminal => `
       <div class="bridge-terminal-row">
         <div class="bridge-terminal-main">
-          <span class="bridge-terminal-marker" aria-hidden="true"></span>
+          <span class="bridge-terminal-marker" aria-hidden="true"><i data-lucide="monitor" size="17"></i></span>
           <div class="bridge-terminal-copy">
             <strong>${escapeHtml(String(terminal.platform || "").toUpperCase())} · ${escapeHtml(terminal.login || "账户识别中")}</strong>
             <span>${escapeHtml(terminal.broker_server || "交易服务器识别中")}</span>
           </div>
         </div>
-        <span class="bridge-terminal-sync">${terminal.initial_sync_ready ? "数据已同步" : "正在同步"}</span>
-      </div>`).join("") : `<div class="bridge-terminal-empty">${data?.desired_state === "paused"
+        <span class="bridge-terminal-sync ${terminal.initial_sync_ready ? "" : "is-syncing"}">${terminal.initial_sync_ready ? "数据已同步" : "正在同步"}</span>
+      </div>`).join("") : `<div class="bridge-terminal-empty"><i data-lucide="${data?.desired_state === "paused" ? "pause-circle" : "monitor-off"}" size="17"></i><span>${data?.desired_state === "paused"
         ? "桥接已由你暂停，启动后会自动恢复当前终端。"
-        : "未发现在线终端。请启动量见智桥，或下载安装最新版。"}</div>`;
+        : "未发现在线终端。请启动量见智桥，或下载安装最新版。"}</span></div>`;
   }
 
   const toggle = $("bridgeRuntimeToggle");
@@ -4515,6 +4519,9 @@ function renderBridgeControlStatus(data) {
 }
 
 function renderBridgeControlError(message) {
+  const summary = $("bridgeControlStatusSummary");
+  if (summary) summary.dataset.state = "error";
+  setText("bridgeControlMonitorLabel", "读取失败");
   const icon = $("bridgeControlStatusIcon");
   if (icon) {
     icon.className = "bridge-status-icon is-offline";
@@ -4546,10 +4553,15 @@ async function loadBridgeControlStatus({ quiet = false } = {}) {
 }
 
 function closeBridgeControlModal() {
-  $("mt5BridgeModal")?.classList.add("hidden");
+  const modal = $("mt5BridgeModal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
   $("bridgePauseConfirmation")?.classList.add("hidden");
   clearInterval(_bridgeControlRefreshTimer);
   _bridgeControlRefreshTimer = null;
+  if (_bridgeModalPreviousFocus instanceof HTMLElement) _bridgeModalPreviousFocus.focus();
+  _bridgeModalPreviousFocus = null;
 }
 
 async function handleGatewayModeClick() {
@@ -4564,7 +4576,10 @@ async function handleGatewayModeClick() {
     closeBridgeControlModal();
     return;
   }
+  _bridgeModalPreviousFocus = document.activeElement;
   modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+  requestAnimationFrame(() => $("mt5BridgeClose")?.focus());
   await loadBridgeControlStatus();
   clearInterval(_bridgeControlRefreshTimer);
   _bridgeControlRefreshTimer = setInterval(() => loadBridgeControlStatus({ quiet:true }), 3000);
@@ -4576,15 +4591,34 @@ function initBridgeModal() {
 
   $("mt5BridgeClose")?.addEventListener("click", closeBridgeControlModal);
   modal.addEventListener("click", (e) => { if (e.target === modal) closeBridgeControlModal(); });
+  modal.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const focusable = [...modal.querySelectorAll('button:not([disabled]), summary, [href], [tabindex]:not([tabindex="-1"])')]
+      .filter(element => !element.closest(".hidden"));
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
   $("bridgeControlRefresh")?.addEventListener("click", () => loadBridgeControlStatus());
   $("bridgeRuntimeToggle")?.addEventListener("click", () => {
     if (state.bridgeRuntimeControl?.desired_state === "paused") {
       updateBridgeRuntimeControl(true);
     } else {
       $("bridgePauseConfirmation")?.classList.remove("hidden");
+      requestAnimationFrame(() => $("bridgePauseCancel")?.focus());
     }
   });
-  $("bridgePauseCancel")?.addEventListener("click", () => $("bridgePauseConfirmation")?.classList.add("hidden"));
+  $("bridgePauseCancel")?.addEventListener("click", () => {
+    $("bridgePauseConfirmation")?.classList.add("hidden");
+    $("bridgeRuntimeToggle")?.focus();
+  });
   $("bridgePauseConfirm")?.addEventListener("click", () => updateBridgeRuntimeControl(false));
 
   $("downloadExe")?.addEventListener("click", async () => {
