@@ -319,6 +319,22 @@ fn confirm_user_exit(hwnd: HWND) -> bool {
     show_confirmation(hwnd, &user_exit_confirmation_message(), "退出桥接")
 }
 
+unsafe fn complete_bridge_exit(hwnd: HWND, app: &mut AppState) {
+    if let Some(core_host) = app.core_host.as_mut() {
+        core_host.disable_restart();
+    }
+    if !app.demo_mode
+        && let Ok(instance_id) = profile_instance_id(&app.profile_id)
+    {
+        // BridgeExit remains in the local-control contract for backward compatibility, but
+        // process shutdown itself is intentionally idempotent. The Core can close its pipe
+        // immediately after accepting an exit request, so the UI must not depend on receiving
+        // that final pipe frame before honoring the user's explicit exit intent.
+        let _ = SingleInstanceGuard::request_shutdown(&instance_id);
+    }
+    unsafe { DestroyWindow(hwnd) };
+}
+
 fn dialog_message_root(main_window: HWND, message_window: HWND) -> HWND {
     if message_window.is_null() {
         return main_window;
@@ -984,7 +1000,7 @@ unsafe extern "system" fn window_proc(
                             windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
                         },
                         Ok(InstanceSignal::Shutdown) => unsafe {
-                            begin_action(hwnd, state, LocalControlAction::BridgeExit);
+                            complete_bridge_exit(hwnd, state);
                         },
                         Ok(InstanceSignal::Timeout) | Err(_) => {}
                     }
@@ -2761,7 +2777,7 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
         CONTROL_PAIR => unsafe { begin_action(hwnd, app, LocalControlAction::Pair) },
         CONTROL_LOGOUT => unsafe { begin_action(hwnd, app, LocalControlAction::Logout) },
         id if is_user_exit_command(id) && confirm_user_exit(hwnd) => unsafe {
-            begin_action(hwnd, app, LocalControlAction::BridgeExit)
+            complete_bridge_exit(hwnd, app)
         },
         MENU_OPEN_COMMAND => unsafe {
             ShowWindow(hwnd, SW_SHOWNORMAL);
@@ -3020,17 +3036,16 @@ unsafe fn receive_background_message(hwnd: HWND, app: &mut AppState) {
             unsafe { begin_state_poll(hwnd, app) };
         }
         Some(UiMessage::Action {
-            action,
+            action: LocalControlAction::BridgeExit,
+            ..
+        }) => unsafe {
+            complete_bridge_exit(hwnd, app);
+        },
+        Some(UiMessage::Action {
             result: Ok(LocalControlResult::Accepted),
+            ..
         }) => {
-            if action == LocalControlAction::BridgeExit {
-                if let Some(core_host) = app.core_host.as_mut() {
-                    core_host.disable_restart();
-                }
-                unsafe { DestroyWindow(hwnd) };
-            } else {
-                unsafe { begin_state_poll(hwnd, app) };
-            }
+            unsafe { begin_state_poll(hwnd, app) };
         }
         Some(UiMessage::Action {
             result: Ok(LocalControlResult::Rejected { code }),

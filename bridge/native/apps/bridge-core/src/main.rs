@@ -2586,6 +2586,10 @@ async fn run_local_control_server(
                 break;
             }
             if exit_requested {
+                // The UI closes this one-request pipe only after reading the response. Waiting
+                // briefly for that close prevents DisconnectNamedPipe from discarding the final
+                // Accepted frame and turning a successful exit into a false UI error.
+                let _ = tokio::time::timeout(Duration::from_millis(500), server.receive()).await;
                 stop.cancel();
                 let _ = server.disconnect();
                 return;

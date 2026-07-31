@@ -406,6 +406,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exit_response_is_observed_before_the_server_disconnects() {
+        let profile_id = "test-exit-response-delivery";
+        let mut server = LocalControlPipeServer::bind(profile_id).expect("bind exit server");
+        let server_task = tokio::spawn(async move {
+            server.accept().await.expect("accept exit client");
+            let request = server.receive().await.expect("exit request");
+            assert_eq!(request.action, LocalControlAction::BridgeExit);
+            server
+                .send(&LocalControlResponse {
+                    schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                    request_id: request.request_id,
+                    result: LocalControlResult::Accepted,
+                })
+                .await
+                .expect("exit response");
+            let closed = tokio::time::timeout(Duration::from_secs(1), server.receive())
+                .await
+                .expect("client close timeout")
+                .expect_err("one-request client must close after response");
+            assert_eq!(closed.code(), "bridge_local_control_pipe_closed");
+        });
+
+        let mut client = LocalControlPipeClient::connect(profile_id, Duration::from_secs(2))
+            .await
+            .expect("connect exit client");
+        let response = client
+            .request(&LocalControlRequest {
+                schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                request_id: "exit-request-1".to_owned(),
+                profile_id: profile_id.to_owned(),
+                action: LocalControlAction::BridgeExit,
+            })
+            .await
+            .expect("receive accepted exit response");
+        assert_eq!(response.result, LocalControlResult::Accepted);
+        drop(client);
+        server_task.await.expect("exit server task");
+    }
+
+    #[tokio::test]
     async fn oversized_length_is_rejected_before_payload_allocation() {
         let (mut writer, mut reader) = duplex(8);
         writer
