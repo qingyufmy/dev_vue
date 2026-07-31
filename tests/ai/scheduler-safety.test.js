@@ -154,6 +154,22 @@ describe('Lock Guard (Fix 1+2)', () => {
     expect(await guard.assertOwned('test')).toBe(false)
     expect(guard.lost).toBe(true)
   })
+
+  it('serializes delivery inventory across strategies by account and canonical symbol', async () => {
+    const set = vi.fn().mockResolvedValue('OK')
+    redisModule.getRedis.mockReturnValue({ set })
+
+    expect(__schedulerTest.deliveryInventoryLockKey(7, 'XAUUSD.s'))
+      .toBe('delivery_inventory:7:XAUUSD')
+    const lock = await __schedulerTest.acquireDeliveryInventoryLock(7, 'XAUUSD.c')
+
+    expect(lock.key).toBe('delivery_inventory:7:XAUUSD')
+    expect(lock.token).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(set).toHaveBeenCalledWith(
+      'auto:scheduler:lock:delivery_inventory:7:XAUUSD',
+      lock.token, 'NX', 'PX', 120000,
+    )
+  })
 })
 
 describe('weekly flatten inference boundary', () => {

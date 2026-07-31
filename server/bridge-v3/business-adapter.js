@@ -225,7 +225,14 @@ function legacyTradeResult(action, result, params = {}) {
   const evidence = result?.evidence || {}
   const raw = result?.raw_result || {}
   const orderTicket = evidence.order_tickets?.[0] ?? raw.order ?? null
-  const positionTicket = evidence.position_tickets?.[0] ?? raw.position ?? orderTicket
+  const explicitPositionTicket = evidence.position_tickets?.[0] ?? raw.position ?? null
+  // A successfully accepted pending order is still an order, not a position.
+  // Falling back to the order ticket here poisoned signal_outcomes.position_id
+  // and made pending orders enter the position-exit management path. Every
+  // non-pending legacy action retains its existing order-ticket fallback.
+  const positionTicket = action === 'pending'
+    ? null
+    : explicitPositionTicket ?? orderTicket
   const dealTicket = evidence.deal_tickets?.[0] ?? raw.deal ?? null
   const ticket = action === 'open' ? positionTicket : orderTicket ?? positionTicket
   const retcode = evidence.broker_retcode ?? raw.broker_retcode ?? raw.retcode ?? null
@@ -233,7 +240,7 @@ function legacyTradeResult(action, result, params = {}) {
     const expected = params.expected_state || {}
     return cleanObject({
       status:'success', command_id:result.command_id, ticket,
-      order:orderTicket, position_id:positionTicket, deal:dealTicket,
+      order:orderTicket, position_id:positionTicket ?? undefined, deal:dealTicket,
       price:raw.price, retcode,
       already_absent:raw.already_absent === true || result?.error_message === 'already_absent'
         ? true : undefined,

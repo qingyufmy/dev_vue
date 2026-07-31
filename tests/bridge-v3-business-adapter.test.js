@@ -453,6 +453,21 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('never aliases a pending order ticket as a position id', async () => {
+    const { adapter } = setup({ commandResult:{
+      status:'succeeded', command_id:'command_pending_01',
+      raw_result:{ order:3001, retcode:10008 },
+      evidence:{ observed_at_utc_msc:NOW, order_tickets:['3001'], broker_retcode:10008 },
+    } })
+
+    const result = await adapter.execute(42, 'pending', {
+      symbol:'XAUUSD', order_type:'sell_limit', volume:0.1, price:2310,
+    })
+
+    expect(result).toMatchObject({ status:'success', ticket:'3001', order:'3001', retcode:10008 })
+    expect(result).not.toHaveProperty('position_id')
+  })
+
   it('maps manual close and pending cancellation to their exact durable actions', async () => {
     const { adapter, gateway } = setup()
 

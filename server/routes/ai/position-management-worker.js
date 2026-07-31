@@ -40,6 +40,9 @@ const json = (value, fallback = {}) => { try { return value ? JSON.parse(value) 
 const canonicalSymbol = value => stripBrokerSuffix(String(value || '')).toUpperCase()
 const sameVolume = (left, right) => Math.abs(Number(left || 0) - Number(right || 0)) <= 1e-8
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')
+const isLegacyPendingPositionAlias = outcome => Boolean(ref(outcome?.pending_ticket))
+  && ref(outcome?.position_id) === ref(outcome?.pending_ticket)
+  && !ref(outcome?.entry_deal_ticket)
 
 function effectiveMode(requested, maximum) {
   const requestedMode = String(requested || '').toLowerCase() === 'shadow'
@@ -209,7 +212,7 @@ export function validatePendingCancelPreconditions({
   if (String(outcome.status || '').toLowerCase() !== 'open'
     || !['pending', 'attributed'].includes(String(outcome.attribution_status || '').toLowerCase())
     || Number(outcome.external_intervention || 0) !== 0
-    || ref(outcome.position_id)) {
+    || (ref(outcome.position_id) && !isLegacyPendingPositionAlias(outcome))) {
     return { ok:false, code:'pending_attribution_incomplete' }
   }
   const ticket = ref(outcome.pending_ticket)
@@ -464,9 +467,11 @@ async function lockPendingPreconditions(task, lease, preflight) {
     [current.ownership_history_id, current.user_id, current.trading_account_id])
     if (!ownershipRows?.[0]) throw new Error('position_management_ownership_changed')
     const [outcomeRows] = await run(`SELECT id, status, attribution_status, external_intervention,
-        pending_ticket, position_id FROM signal_outcomes WHERE id = ? FOR UPDATE`, [current.outcome_id])
+        pending_ticket, position_id, entry_deal_ticket
+      FROM signal_outcomes WHERE id = ? FOR UPDATE`, [current.outcome_id])
     const outcome = outcomeRows?.[0]
-    if (!outcome || outcome.status !== 'open' || ref(outcome.position_id)
+    if (!outcome || outcome.status !== 'open'
+      || (ref(outcome.position_id) && !isLegacyPendingPositionAlias(outcome))
       || ref(outcome.pending_ticket) !== ref(preflight.expectedState.ticket)
       || Number(outcome.external_intervention || 0) !== 0) {
       throw new Error('position_management_pending_outcome_changed')

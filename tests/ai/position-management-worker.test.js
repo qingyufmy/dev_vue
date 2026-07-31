@@ -157,6 +157,22 @@ describe('position management exit-only worker', () => {
     expect(validatePendingCancelPreconditions(value)).toMatchObject({ ok:false, code:'ai_pending_cancel_disabled' })
   })
 
+  it('accepts a legacy pending ticket alias only when no entry deal exists', () => {
+    const value = fixture()
+    value.task = { ...value.task, task_type:'pending_cancel', candidate_action:'cancel' }
+    value.outcome = { ...value.outcome, attribution_status:'pending', position_id:'8101',
+      pending_ticket:'8101', entry_deal_ticket:null, expected_volume:0.2, entry_volume:0,
+      closed_volume:0, margin_mode:'netting' }
+    value.inventory.account.is_hedging = false
+    value.inventory.positions = []
+    value.inventory.pending_orders = [{ ticket:8101, symbol:'XAUUSD.s', side:'buy',
+      type:'buy_limit', volume:0.2, magic:234000 }]
+
+    expect(validatePendingCancelPreconditions(value)).toMatchObject({ ok:true })
+    value.outcome.entry_deal_ticket = '9101'
+    expect(validatePendingCancelPreconditions(value)).toMatchObject({ ok:false, code:'pending_attribution_incomplete' })
+  })
+
   it('distinguishes cancelled, filled-during-cancel and still-active pending states', () => {
     const expected = JSON.stringify({ ticket:'8101', symbol:'XAUUSD.s', direction:'buy', magic:234000, volume:0.2 })
     const task = { broker_server_key:'BROKER-DEMO', login_account:'7788', expected_state_json:expected }

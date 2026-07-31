@@ -73,8 +73,10 @@ export function resolvePositionManagementTaskMode(taskType, userMode, control = 
 export function targetMatchesPositionManagementTask(target, taskType) {
   const hasPosition = String(target?.position_id ?? '').trim().length > 0
   const hasPending = String(target?.pending_ticket ?? '').trim().length > 0
-  if (taskType === 'pending_cancel') return hasPending && !hasPosition
-  if (taskType === 'position_exit') return hasPosition
+  const isActivePending = hasPending
+    && String(target?.effective_pending_state || '').toLowerCase() === 'pending'
+  if (taskType === 'pending_cancel') return hasPending && (!hasPosition || isActivePending)
+  if (taskType === 'position_exit') return hasPosition && !isActivePending
   return false
 }
 
@@ -187,9 +189,16 @@ function publicGroup(row) {
 }
 
 export function isActivePositionManagementOutcome(row) {
+  if (row?.pending_ticket
+    && String(row?.effective_pending_state || '').toLowerCase() === 'pending') return true
   if (row?.position_id) return true
-  return Boolean(row?.pending_ticket)
+  return false
+}
+
+function normalizePositionManagementOutcome(row) {
+  const activePending = Boolean(row?.pending_ticket)
     && String(row?.effective_pending_state || '').toLowerCase() === 'pending'
+  return activePending && row?.position_id ? { ...row, position_id:null } : row
 }
 
 export async function loadActivePositionManagementContext({
@@ -214,13 +223,27 @@ export async function loadActivePositionManagementContext({
     WHERE outcomes.status IN ('open','closing') AND outcomes.attribution_status <> 'attribution_ambiguous'
       AND theses.status IN ('proposed','active') AND theses.strategy_id = ?
       AND theses.standard_symbol = ?${privateWhere}
-      AND (outcomes.position_id IS NOT NULL OR (
-        outcomes.pending_ticket IS NOT NULL AND outcomes.position_id IS NULL
-        AND COALESCE(deliveries.pending_state, origin_signals.pending_state) = 'pending'
-      ))
+      AND ((outcomes.pending_ticket IS NOT NULL
+          AND COALESCE(deliveries.pending_state, origin_signals.pending_state) = 'pending')
+        OR (outcomes.position_id IS NOT NULL
+          AND COALESCE(deliveries.pending_state, origin_signals.pending_state, '') <> 'pending'))
     ORDER BY theses.created_at DESC, outcomes.id DESC`, params)
+  const referencePortfolio = market?.strategy_reference_portfolio
+  const referenceOutcomeIds = referencePortfolio?.role === 'platform_strategy_reference_portfolio'
+    && referencePortfolio?.status !== 'unavailable'
+    && Array.isArray(referencePortfolio?.positions)
+    && Array.isArray(referencePortfolio?.pending_orders)
+    ? new Set([...referencePortfolio.positions, ...referencePortfolio.pending_orders]
+      .map(item => /^outcome:(\d+)$/.exec(String(item?.reference_id || ''))?.[1])
+      .filter(Boolean).map(Number))
+    : null
   const groups = new Map()
-  for (const row of rows) {
+  for (const rawRow of rows) {
+    // The reference portfolio is sourced from the terminal's current
+    // positions and pending orders. When it is available, stale database
+    // outcomes must not be fed back into a new management inference.
+    if (referenceOutcomeIds && !referenceOutcomeIds.has(Number(rawRow.outcome_id))) continue
+    const row = normalizePositionManagementOutcome(rawRow)
     if (!isActivePositionManagementOutcome(row)) continue
     if (strategyVersion && Number(row.strategy_version) !== Number(strategyVersion)) continue
     if (!groups.has(row.management_group_id)) groups.set(row.management_group_id, { ...publicGroup(row), targets:[] })

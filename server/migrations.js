@@ -4456,6 +4456,31 @@ const migrations = [
         if (enabled) await queryRun('UPDATE auto_prompt_types SET use_ema34_filter = 1 WHERE id = ?', [strategy.id])
       }
     }
+  },
+  {
+    id: '155_repair_pending_position_identity',
+    async up() {
+      await queryRun(`UPDATE signal_outcomes outcomes
+        LEFT JOIN auto_signal_deliveries deliveries ON deliveries.id = outcomes.delivery_id
+        LEFT JOIN ai_signals signals ON signals.id = outcomes.signal_id
+        SET outcomes.position_id = NULL, outcomes.attribution_status = 'pending',
+          outcomes.status = 'open', outcomes.updated_at = NOW()
+        WHERE outcomes.pending_ticket IS NOT NULL
+          AND outcomes.position_id = outcomes.pending_ticket
+          AND outcomes.entry_deal_ticket IS NULL
+          AND outcomes.attribution_status = 'pending'
+          AND COALESCE(deliveries.pending_state, signals.pending_state) = 'pending'`)
+      await queryRun(`UPDATE ai_position_management_tasks tasks
+        JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
+        LEFT JOIN auto_signal_deliveries deliveries ON deliveries.id = outcomes.delivery_id
+        LEFT JOIN ai_signals signals ON signals.id = outcomes.signal_id
+        SET tasks.status = 'EXPIRED', tasks.confirmation_count = 0,
+          tasks.completed_at = COALESCE(tasks.completed_at, NOW()), tasks.updated_at = NOW()
+        WHERE tasks.task_type = 'position_exit'
+          AND tasks.status IN ('CANDIDATE','EVIDENCE_CONFIRMED')
+          AND outcomes.position_id IS NULL AND outcomes.pending_ticket IS NOT NULL
+          AND COALESCE(deliveries.pending_state, signals.pending_state) = 'pending'`)
+    }
   }
 ]
 

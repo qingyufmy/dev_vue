@@ -116,10 +116,14 @@ export async function createSignalOutcomeTx(run, intent, bridgeResult, bridgeAct
   const account = Array.isArray(accounts) ? accounts[0] : null
   const marginMode = account?.margin_mode || 'netting'
   const now = beijingNow()
-  const positionId = ref(bridgeResult?.position_id ?? bridgeResult?.position)
+  const outcomeAction = String(bridgeAction || intent.action || '').toLowerCase()
+  const isPendingOrder = outcomeAction === 'pending'
+  // Pending acceptance never proves that a position exists. The position id
+  // is attached later by recordPendingOutcomeFill / terminal reconciliation.
+  const positionId = isPendingOrder ? null : ref(bridgeResult?.position_id ?? bridgeResult?.position)
   const orderTicket = ref(bridgeResult?.order ?? bridgeResult?.ticket)
   const deal = ref(bridgeResult?.deal ?? bridgeResult?.deal_ticket)
-  const pending = (bridgeAction || intent.action) === 'pending' ? orderTicket : null
+  const pending = isPendingOrder ? orderTicket : null
   const sourceSignalId = String(intent.source_id || '').split(':', 1)[0]
   const signalId = Number(sourceSignalId) > 0 ? Number(sourceSignalId) : null
   const [signals] = signalId ? await run(`SELECT prompt_type_id, signal_type, thesis_id, management_group_id,
@@ -179,6 +183,30 @@ export async function recordPendingOutcomeFill({ orderIntentId, deliveryId, posi
 
 export async function reconcileTerminalPendingOutcomes() {
   const now = beijingNow()
+  // Repair outcomes created by the legacy Bridge v3 adapter, which used the
+  // pending order ticket as a fallback position id. Restrict the repair to an
+  // explicitly active pending state with no entry deal, so a genuinely filled
+  // order is never downgraded to pending by this compatibility cleanup.
+  await queryRun(`UPDATE signal_outcomes outcomes
+    LEFT JOIN auto_signal_deliveries deliveries ON deliveries.id = outcomes.delivery_id
+    LEFT JOIN ai_signals signals ON signals.id = outcomes.signal_id
+    SET outcomes.position_id = NULL, outcomes.attribution_status = 'pending',
+      outcomes.status = 'open', outcomes.updated_at = ?
+    WHERE outcomes.pending_ticket IS NOT NULL
+      AND outcomes.position_id = outcomes.pending_ticket
+      AND outcomes.entry_deal_ticket IS NULL
+      AND outcomes.attribution_status = 'pending'
+      AND COALESCE(deliveries.pending_state, signals.pending_state) = 'pending'`, [now])
+  await queryRun(`UPDATE ai_position_management_tasks tasks
+    JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
+    LEFT JOIN auto_signal_deliveries deliveries ON deliveries.id = outcomes.delivery_id
+    LEFT JOIN ai_signals signals ON signals.id = outcomes.signal_id
+    SET tasks.status = 'EXPIRED', tasks.confirmation_count = 0,
+      tasks.completed_at = COALESCE(tasks.completed_at, ?), tasks.updated_at = ?
+    WHERE tasks.task_type = 'position_exit'
+      AND tasks.status IN ('CANDIDATE','EVIDENCE_CONFIRMED')
+      AND outcomes.position_id IS NULL AND outcomes.pending_ticket IS NOT NULL
+      AND COALESCE(deliveries.pending_state, signals.pending_state) = 'pending'`, [now, now])
   const result = await queryRun(`UPDATE signal_outcomes outcomes
     LEFT JOIN auto_signal_deliveries deliveries ON deliveries.id = outcomes.delivery_id
     LEFT JOIN ai_signals signals ON signals.id = outcomes.signal_id

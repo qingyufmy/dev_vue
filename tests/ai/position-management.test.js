@@ -21,6 +21,7 @@ import {
   createTradeThesisTx,
   getPositionManagementSettings,
   isActivePositionManagementOutcome,
+  loadActivePositionManagementContext,
   positionProtectionStatus,
   persistPositionManagementEvaluations,
   resolveAutomaticExitConfirmation,
@@ -111,6 +112,7 @@ describe('position management v1.1 contract', () => {
   it('includes only real positions and explicitly active pending orders', () => {
     expect(isActivePositionManagementOutcome({ position_id:'P1', pending_ticket:'O1', effective_pending_state:'filled' })).toBe(true)
     expect(isActivePositionManagementOutcome({ position_id:null, pending_ticket:'O2', effective_pending_state:'pending' })).toBe(true)
+    expect(isActivePositionManagementOutcome({ position_id:'O4', pending_ticket:'O4', effective_pending_state:'pending' })).toBe(true)
     for (const state of ['cancelled', 'expired', 'superseded', 'filled', null]) {
       expect(isActivePositionManagementOutcome({ position_id:null, pending_ticket:'O3', effective_pending_state:state })).toBe(false)
     }
@@ -347,12 +349,46 @@ describe('durable state and protection boundaries', () => {
     const pending = { position_id:null, pending_ticket:'O-1' }
     const position = { position_id:'P-1', pending_ticket:null }
     const filledPending = { position_id:'P-2', pending_ticket:'O-2' }
+    const legacyPendingAlias = { position_id:'O-3', pending_ticket:'O-3', effective_pending_state:'pending' }
     expect(targetMatchesPositionManagementTask(pending, 'pending_cancel')).toBe(true)
     expect(targetMatchesPositionManagementTask(position, 'pending_cancel')).toBe(false)
     expect(targetMatchesPositionManagementTask(filledPending, 'pending_cancel')).toBe(false)
     expect(targetMatchesPositionManagementTask(position, 'position_exit')).toBe(true)
     expect(targetMatchesPositionManagementTask(filledPending, 'position_exit')).toBe(true)
     expect(targetMatchesPositionManagementTask(pending, 'position_exit')).toBe(false)
+    expect(targetMatchesPositionManagementTask(legacyPendingAlias, 'pending_cancel')).toBe(true)
+    expect(targetMatchesPositionManagementTask(legacyPendingAlias, 'position_exit')).toBe(false)
+  })
+
+  it('uses the terminal reference portfolio to remove stale positions and recover legacy pending aliases', async () => {
+    queryAll.mockResolvedValueOnce([
+      {
+        outcome_id:11, pending_ticket:'O-11', position_id:'O-11', effective_pending_state:'pending',
+        management_group_id:'group_pending', thesis_id:'thesis_pending', strategy_id:3, strategy_version:1,
+        standard_symbol:'XAUUSD', direction:'sell', origin_signal_id:101, decision_timeframe:'M15',
+        invalidation_conditions_json:'[]', evidence_refs_json:'[]',
+      },
+      {
+        outcome_id:12, pending_ticket:null, position_id:'P-12', effective_pending_state:null,
+        management_group_id:'group_stale', thesis_id:'thesis_stale', strategy_id:3, strategy_version:1,
+        standard_symbol:'XAUUSD', direction:'buy', origin_signal_id:102, decision_timeframe:'M15',
+        invalidation_conditions_json:'[]', evidence_refs_json:'[]',
+      },
+    ])
+    const value = await loadActivePositionManagementContext({
+      strategyId:3, strategyVersion:1, symbol:'XAUUSD', decisionTimeframe:'M15',
+      market:{
+        strategy_reference_portfolio:{
+          role:'platform_strategy_reference_portfolio', positions:[],
+          pending_orders:[{ reference_id:'outcome:11' }],
+        },
+        strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1784877300000 } } } } },
+      },
+    })
+
+    expect(value.pending_groups).toEqual([expect.objectContaining({ management_group_id:'group_pending' })])
+    expect(value.position_groups).toEqual([])
+    expect(value._targets.get('group_pending')[0].position_id).toBeNull()
   })
 
   it('does not accept the retired auto-reverse mode through the settings API', async () => {
@@ -414,6 +450,7 @@ describe('durable state and protection boundaries', () => {
     expect(migrations).toContain("131_independent_ai_pending_order_controls")
     expect(migrations).toContain("147_position_management_inference_confirmations")
     expect(migrations).toContain("148_single_inference_pending_cancel")
+    expect(migrations).toContain("155_repair_pending_position_identity")
     expect(migrations).toContain('confirmation_count TINYINT NOT NULL DEFAULT 0')
     expect(migrations).toContain("inference_source VARCHAR(32) NOT NULL DEFAULT 'automatic_scheduler'")
     expect(positionManagement).toContain("inferenceSource = 'manual_analysis'")

@@ -548,6 +548,15 @@ async function acquireLock(key) {
   } catch (e) { console.error('[acquireLock]', key, e.message); return null }
 }
 
+function deliveryInventoryLockKey(userId, symbol) {
+  return `delivery_inventory:${Number(userId)}:${stripBrokerSuffix(String(symbol || '')).toUpperCase()}`
+}
+
+async function acquireDeliveryInventoryLock(userId, symbol) {
+  const key = deliveryInventoryLockKey(userId, symbol)
+  return { key, token:await acquireLock(key) }
+}
+
 async function schedulerLockWaitSeconds(key) {
   const redis = getRedis()
   if (!redis) return 5
@@ -1786,6 +1795,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
 async function executeDelivery(userId, signalId, signal, unifiedConfig, market, promptTypeId, symbol, createdAt, lockGuard) {
   const endDeliveryExecution = beginBridgeDeliveryExecution(userId)
   const l = (msg) => console.log(`[Delivery U${userId}] signal=${signalId} ${symbol}: ${msg}`)
+  let inventoryLock = null
   const setTerminalStatus = (status, reason, details = {}) => queryRun(
     'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
     [status, JSON.stringify({ status, reason, details }), signalId, userId])
@@ -1866,6 +1876,18 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'trade_send_disabled' },
         { status: 'skipped' }, 'info')
       return
+    }
+
+    // Strategy inference locks are independent, but all strategies for this
+    // user share one terminal inventory. Serialize the final snapshot, limit
+    // check and send per account+symbol to prevent concurrent strategies from
+    // consuming the same pending-order slot.
+    if (/^(buy|sell)/.test(String(signal.signal_type || '').toLowerCase())) {
+      inventoryLock = await acquireDeliveryInventoryLock(userId, symbol)
+      if (!inventoryLock.token) {
+        await finishBeforeRisk('skipped', 'execution_inventory_lock_busy')
+        return
+      }
     }
 
     const [positionsResponse, pendingResponse, strategyDeliveries] = await Promise.all([
@@ -2280,6 +2302,9 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       user_id:Number(userId), signal_id:Number(signalId), status:'failed',
     }, { scopes:['ai-operations', 'risk-audit'], refresh:true })
   } finally {
+    if (inventoryLock?.token) {
+      await finalizeLock(inventoryLock.key, inventoryLock.token, 0).catch(() => {})
+    }
     endDeliveryExecution()
   }
 }
@@ -2559,6 +2584,8 @@ export const __schedulerTest = {
   shouldLogSchedulerWait,
   schedulerWaitLabel,
   schedulerLockWaitSeconds,
+  deliveryInventoryLockKey,
+  acquireDeliveryInventoryLock,
   nextCompletionIntervalDeadlineMs,
   completionIntervalCooldownSeconds,
   schedulerUpdateMaintenanceReason,
