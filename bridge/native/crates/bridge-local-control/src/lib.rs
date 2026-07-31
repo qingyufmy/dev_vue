@@ -44,6 +44,7 @@ impl LocalControlRequest {
 pub enum LocalControlAction {
     GetState,
     Pair,
+    PairRestart,
     Logout,
     SelectPlatform {
         platform: String,
@@ -702,6 +703,28 @@ mod tests {
         };
         let payload = serde_json::to_vec(&request).expect("serialize request");
         assert_eq!(decode_request(&payload), Ok(request));
+    }
+
+    #[test]
+    fn explicit_pairing_restart_round_trips_without_changing_normal_pairing() {
+        for (request_id, action, expected_name) in [
+            ("pair-normal", LocalControlAction::Pair, "pair"),
+            (
+                "pair-restart",
+                LocalControlAction::PairRestart,
+                "pair_restart",
+            ),
+        ] {
+            let request = LocalControlRequest {
+                schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+                request_id: request_id.to_owned(),
+                profile_id: DEFAULT_PROFILE_ID.to_owned(),
+                action,
+            };
+            let payload = serde_json::to_vec(&request).expect("serialize pairing request");
+            assert!(String::from_utf8_lossy(&payload).contains(expected_name));
+            assert_eq!(decode_request(&payload), Ok(request));
+        }
     }
 
     #[test]

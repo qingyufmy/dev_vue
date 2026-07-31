@@ -3035,6 +3035,19 @@ unsafe fn receive_background_message(hwnd: HWND, app: &mut AppState) {
         Some(UiMessage::Action {
             result: Ok(LocalControlResult::Rejected { code }),
             ..
+        }) if code == "bridge_pair_in_progress" => {
+            let restart = show_confirmation(
+                hwnd,
+                "授权页面可能仍在打开。\n\n如果页面还在，请继续完成授权，不会再打开新页面。\n\n如果页面已经关闭，点击“是”作废旧授权码并重新打开；点击“否”保留当前授权。",
+                "重新打开授权页面？",
+            );
+            if restart {
+                unsafe { begin_action(hwnd, app, LocalControlAction::PairRestart) };
+            }
+        }
+        Some(UiMessage::Action {
+            result: Ok(LocalControlResult::Rejected { code }),
+            ..
         })
         | Some(UiMessage::Action {
             result: Err(code), ..
@@ -3081,8 +3094,25 @@ fn open_browser(url: &str) {
 }
 
 fn show_error(hwnd: HWND, code: &str) {
-    let message = match code {
+    let text = wide(error_message(code));
+    let title = wide(PRODUCT_NAME);
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+            hwnd,
+            text.as_ptr(),
+            title.as_ptr(),
+            windows_sys::Win32::UI::WindowsAndMessaging::MB_OK
+                | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONWARNING,
+        );
+    }
+}
+
+fn error_message(code: &str) -> &'static str {
+    match code {
         "bridge_local_control_action_unavailable" => "该功能正在迁移到新版核心，当前尚不可用。",
+        "bridge_pair_in_progress" => {
+            "正在准备新的授权页面，请稍候；如果浏览器没有打开，请再次点击“连接账号”。"
+        }
         "mt4_platform_not_selected" => "请先将交易平台切换为 MT4。",
         "mt4_terminal_not_found" => "未发现 MT4，请先打开一次 MT4，然后点击“重新检测”。",
         "mt4_terminal_selection_required" => "检测到多个 MT4，请先选择需要安装 EA 的终端。",
@@ -3122,17 +3152,6 @@ fn show_error(hwnd: HWND, code: &str) {
             "更新状态暂时不可用，当前桥接和交易不受影响。"
         }
         _ => "量见智桥暂时无法完成操作，请稍后重试。",
-    };
-    let text = wide(message);
-    let title = wide(PRODUCT_NAME);
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
-            hwnd,
-            text.as_ptr(),
-            title.as_ptr(),
-            windows_sys::Win32::UI::WindowsAndMessaging::MB_OK
-                | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONWARNING,
-        );
     }
 }
 
@@ -3549,6 +3568,14 @@ mod tests {
     use super::*;
     use bridge_local_control::{EndpointSettingsSelection, ObserverProfileMutation};
     use bridge_ui_model::{PermissionDetailView, PermissionView};
+
+    #[test]
+    fn pairing_in_progress_has_an_actionable_chinese_message() {
+        let message = error_message("bridge_pair_in_progress");
+        assert!(message.contains("授权页面"));
+        assert!(message.contains("连接账号"));
+        assert_ne!(message, error_message("unknown_error"));
+    }
 
     #[test]
     fn formats_current_timestamp_in_local_time() {

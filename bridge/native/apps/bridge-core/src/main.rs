@@ -74,6 +74,50 @@ const MT5_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const UPDATE_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 static UPDATE_DRAIN_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Default)]
+struct PairingAttemptState {
+    active: AtomicBool,
+    generation: AtomicU64,
+    commit_gate: AsyncMutex<()>,
+}
+
+impl PairingAttemptState {
+    async fn begin(&self, restart: bool) -> Option<u64> {
+        let _guard = self.commit_gate.lock().await;
+        if self.active.load(Ordering::Acquire) && !restart {
+            return None;
+        }
+        self.active.store(true, Ordering::Release);
+        Some(self.generation.fetch_add(1, Ordering::AcqRel) + 1)
+    }
+
+    async fn invalidate(&self) {
+        let _guard = self.commit_gate.lock().await;
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.active.store(false, Ordering::Release);
+    }
+
+    fn is_current(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::Acquire) == generation
+    }
+
+    async fn complete_current<T>(
+        &self,
+        generation: u64,
+        complete: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let _guard = self.commit_gate.lock().await;
+        self.is_current(generation).then(complete)
+    }
+
+    async fn finish(&self, generation: u64) {
+        let _guard = self.commit_gate.lock().await;
+        if self.is_current(generation) {
+            self.active.store(false, Ordering::Release);
+        }
+    }
+}
+
 enum ProfileRuntimeTrigger {
     Completed(Result<(), liangjian_bridge_core::CoreBootstrapError>),
     BindingChanged,
@@ -2074,8 +2118,7 @@ async fn run_local_control_server(
         Some(&format!("profile={}", server.endpoint().profile_id())),
     );
     let administrator_cache = Arc::new(AsyncMutex::new(AdministratorCache::default()));
-    let pairing_active = Arc::new(AtomicBool::new(false));
-    let pairing_generation = Arc::new(AtomicU64::new(0));
+    let pairing_attempts = Arc::new(PairingAttemptState::default());
     let mut last_update_state_error = None;
     loop {
         let accepted = tokio::select! {
@@ -2179,64 +2222,30 @@ async fn run_local_control_server(
                         code: code.to_owned(),
                     },
                 },
-                LocalControlAction::Pair => {
-                    if pairing_active.swap(true, Ordering::AcqRel) {
-                        LocalControlResult::Rejected {
-                            code: "bridge_pair_in_progress".to_owned(),
+                action @ (LocalControlAction::Pair | LocalControlAction::PairRestart) => {
+                    start_pairing_request(
+                        &application_directory,
+                        &root_data_directory,
+                        &credential_store,
+                        &stop,
+                        &logger,
+                        &pairing_attempts,
+                        action == LocalControlAction::PairRestart,
+                    )
+                    .await
+                }
+                LocalControlAction::Logout => {
+                    pairing_attempts.invalidate().await;
+                    match credential_store.clear() {
+                        Ok(()) => {
+                            administrator_cache.lock().await.clear();
+                            LocalControlResult::Accepted
                         }
-                    } else {
-                        let generation = pairing_generation.fetch_add(1, Ordering::AcqRel) + 1;
-                        let client =
-                            resolve_server_endpoints(&application_directory, &root_data_directory)
-                                .map_err(|error| error.code().to_owned())
-                                .and_then(|endpoints| {
-                                    BridgeAuthClient::new(
-                                        endpoints,
-                                        &format!("LiangJianBridge/{VERSION}"),
-                                    )
-                                    .map_err(|error| error.code().to_owned())
-                                });
-                        match client {
-                            Ok(client) => match client.start_pairing("量见智桥 Windows").await {
-                                Ok(pairing) => {
-                                    let url = pairing.verification_url().to_string();
-                                    tokio::spawn(poll_pairing_until_complete(
-                                        client,
-                                        pairing,
-                                        credential_store.clone(),
-                                        stop.clone(),
-                                        logger.clone(),
-                                        Arc::clone(&pairing_active),
-                                        Arc::clone(&pairing_generation),
-                                        generation,
-                                    ));
-                                    LocalControlResult::PairingUrl { url }
-                                }
-                                Err(error) => {
-                                    pairing_active.store(false, Ordering::Release);
-                                    LocalControlResult::Rejected {
-                                        code: error.code().to_owned(),
-                                    }
-                                }
-                            },
-                            Err(code) => {
-                                pairing_active.store(false, Ordering::Release);
-                                LocalControlResult::Rejected { code }
-                            }
-                        }
+                        Err(error) => LocalControlResult::Rejected {
+                            code: error.code().to_owned(),
+                        },
                     }
                 }
-                LocalControlAction::Logout => match credential_store.clear() {
-                    Ok(()) => {
-                        pairing_generation.fetch_add(1, Ordering::AcqRel);
-                        pairing_active.store(false, Ordering::Release);
-                        administrator_cache.lock().await.clear();
-                        LocalControlResult::Accepted
-                    }
-                    Err(error) => LocalControlResult::Rejected {
-                        code: error.code().to_owned(),
-                    },
-                },
                 LocalControlAction::SelectPlatform { platform } => {
                     match preferences_store.save_platform(&platform) {
                         Ok(()) => {
@@ -2589,20 +2598,67 @@ async fn run_local_control_server(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+async fn start_pairing_request(
+    application_directory: &std::path::Path,
+    root_data_directory: &std::path::Path,
+    credential_store: &CredentialStore,
+    stop: &SessionCancellation,
+    logger: &BridgeLogger,
+    pairing_attempts: &Arc<PairingAttemptState>,
+    restart: bool,
+) -> LocalControlResult {
+    let Some(generation) = pairing_attempts.begin(restart).await else {
+        return LocalControlResult::Rejected {
+            code: "bridge_pair_in_progress".to_owned(),
+        };
+    };
+    let client = resolve_server_endpoints(application_directory, root_data_directory)
+        .map_err(|error| error.code().to_owned())
+        .and_then(|endpoints| {
+            BridgeAuthClient::new(endpoints, &format!("LiangJianBridge/{VERSION}"))
+                .map_err(|error| error.code().to_owned())
+        });
+    match client {
+        Ok(client) => match client.start_pairing("量见智桥 Windows").await {
+            Ok(pairing) => {
+                let url = pairing.verification_url().to_string();
+                tokio::spawn(poll_pairing_until_complete(
+                    client,
+                    pairing,
+                    credential_store.clone(),
+                    stop.clone(),
+                    logger.clone(),
+                    Arc::clone(pairing_attempts),
+                    generation,
+                ));
+                LocalControlResult::PairingUrl { url }
+            }
+            Err(error) => {
+                pairing_attempts.finish(generation).await;
+                LocalControlResult::Rejected {
+                    code: error.code().to_owned(),
+                }
+            }
+        },
+        Err(code) => {
+            pairing_attempts.finish(generation).await;
+            LocalControlResult::Rejected { code }
+        }
+    }
+}
+
 async fn poll_pairing_until_complete(
     client: BridgeAuthClient,
     pairing: BridgePairing,
     credential_store: CredentialStore,
     stop: SessionCancellation,
     logger: BridgeLogger,
-    pairing_active: Arc<AtomicBool>,
-    pairing_generation: Arc<AtomicU64>,
+    pairing_attempts: Arc<PairingAttemptState>,
     generation: u64,
 ) {
     let mut last_transient_error: Option<String> = None;
     loop {
-        if pairing_generation.load(Ordering::Acquire) != generation {
+        if !pairing_attempts.is_current(generation) {
             return;
         }
         if now_utc_msc() >= pairing.expires_at_utc_msc() {
@@ -2613,10 +2669,14 @@ async fn poll_pairing_until_complete(
             _ = stop.cancelled() => return,
             _ = tokio::time::sleep(pairing.interval()) => {}
         }
-        if pairing_generation.load(Ordering::Acquire) != generation {
+        if !pairing_attempts.is_current(generation) {
             return;
         }
-        match client.poll_pairing(&pairing).await {
+        let poll_result = client.poll_pairing(&pairing).await;
+        if !pairing_attempts.is_current(generation) {
+            return;
+        }
+        match poll_result {
             Ok(BridgePairingStatus::Pending) => {
                 last_transient_error = None;
             }
@@ -2631,16 +2691,24 @@ async fn poll_pairing_until_complete(
                 let expires_delta = i64::try_from(refresh_expires_in_seconds)
                     .ok()
                     .and_then(|seconds| seconds.checked_mul(1_000));
-                let result = expires_delta
-                    .ok_or("bridge_pair_token_response_invalid")
-                    .and_then(|expires_delta| {
-                        credential_store
-                            .save(&BridgeCredential {
-                                refresh_token,
-                                expires_at_utc_msc: now_utc_msc().saturating_add(expires_delta),
+                let result = pairing_attempts
+                    .complete_current(generation, || {
+                        expires_delta
+                            .ok_or("bridge_pair_token_response_invalid")
+                            .and_then(|expires_delta| {
+                                credential_store
+                                    .save(&BridgeCredential {
+                                        refresh_token,
+                                        expires_at_utc_msc: now_utc_msc()
+                                            .saturating_add(expires_delta),
+                                    })
+                                    .map_err(|error| error.code())
                             })
-                            .map_err(|error| error.code())
-                    });
+                    })
+                    .await;
+                let Some(result) = result else {
+                    return;
+                };
                 match result {
                     Ok(()) => logger.info("native_pairing_completed", None),
                     Err(code) => logger.warning("native_pairing_save_failed", Some(code)),
@@ -2656,9 +2724,7 @@ async fn poll_pairing_until_complete(
             }
         }
     }
-    if pairing_generation.load(Ordering::Acquire) == generation {
-        pairing_active.store(false, Ordering::Release);
-    }
+    pairing_attempts.finish(generation).await;
 }
 
 fn resolve_update_state_store(
@@ -4307,6 +4373,31 @@ mod tests {
     use bridge_contract::{AccountRef, DataDeltaMessage};
     use bridge_security_win::BridgeCredential;
     use bridge_transport::load_endpoint_settings;
+
+    #[tokio::test]
+    async fn pairing_retry_allows_only_the_latest_attempt_to_commit() {
+        let attempts = PairingAttemptState::default();
+        let first = attempts.begin(false).await.expect("first attempt");
+        assert_eq!(attempts.begin(false).await, None);
+        let second = attempts.begin(true).await.expect("explicit retry");
+        let third = attempts.begin(true).await.expect("latest explicit retry");
+
+        assert!(!attempts.is_current(first));
+        assert!(!attempts.is_current(second));
+        assert!(attempts.is_current(third));
+        assert_eq!(attempts.complete_current(first, || "stale").await, None);
+        assert_eq!(attempts.complete_current(second, || "stale").await, None);
+        assert_eq!(
+            attempts.complete_current(third, || "latest").await,
+            Some("latest")
+        );
+        attempts.finish(third).await;
+        assert!(attempts.begin(false).await.is_some());
+
+        attempts.invalidate().await;
+        assert!(!attempts.is_current(third));
+        assert_eq!(attempts.complete_current(third, || "stale").await, None);
+    }
 
     #[test]
     fn administrator_cache_preserves_trusted_access_during_transient_refresh_failures() {
