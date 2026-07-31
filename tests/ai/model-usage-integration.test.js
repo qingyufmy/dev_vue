@@ -68,6 +68,36 @@ describe('provider-call usage integration', () => {
     }
   })
 
+  it('counts Responses API input items instead of reporting messages=0', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ output_text: '{"ok":true}', usage: { total_tokens: 18 } }),
+    })
+
+    try {
+      await requestJsonObject({
+        url: 'https://api.test/v3/responses', apiKey: 'secret-test-key',
+        provider: 'volcengine_agent_plan', protocol: 'responses', model: 'test-model',
+        temperature: 0.3, maxTokens: 500,
+        messages: [
+          { role: 'system', content: '只返回 JSON' },
+          { role: 'user', content: '市场数据' },
+        ],
+        usageContext: { ...usageContext, usage: 'auto_platform', strategyId: 19 },
+      })
+
+      const logLine = logSpy.mock.calls
+        .map(call => String(call[0]))
+        .find(line => line.startsWith('[AI Auto] Model request '))
+      expect(logLine).toContain('messages=1')
+      expect(logLine).not.toContain('messages=0')
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
   it('records actual provider token usage after a successful call', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

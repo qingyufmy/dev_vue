@@ -531,28 +531,6 @@ export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) 
   return market
 }
 
-export async function buildStrategyContext(userId, symbol, account, positions, primaryTimeframe, primaryRates) {
-  const timeframes = {}
-  for (const [tf, count] of Object.entries(STRATEGY_TIMEFRAME_COUNTS)) {
-    let rates
-    if (tf === primaryTimeframe.toUpperCase() && primaryRates.length >= count) {
-      rates = primaryRates
-    } else {
-      const resp = await platformRates(userId, { symbol, timeframe: tf, count })
-      rates = (resp && resp.rates) ? resp.rates : []
-    }
-    const summary = calculateMarketData(symbol, tf, rates, account, positions, { computeChan: false })
-    if (summary.error) continue
-    const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
-    timeframes[tf] = { summary: slimSummary, klines: compactRates(rates) }
-  }
-  return {
-    strategy_sequence: '1H trend primary, 4H fallback only if 1H unclear, M15 signal confirmation, M5 precise entry trigger',
-    required_timeframes: Object.keys(STRATEGY_TIMEFRAME_COUNTS),
-    timeframes,
-  }
-}
-
 export async function buildStrategyContextFromTags(userId, symbol, account, positions, prompt, fallbackTimeframe, fallbackRates, mode = 'manual', marketDataPlan = null, useChanAnalysis = null, fallbackMarketMeta = null, compiledPolicy = null) {
   let tags = Array.isArray(marketDataPlan?.timeframes)
     ? marketDataPlan.timeframes.map(item => ({ tf: String(item.timeframe || '').toUpperCase(), count: Number(item.kline_count) || 100 }))

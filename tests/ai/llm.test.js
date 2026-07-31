@@ -832,7 +832,8 @@ describe('maybeAiSignal', () => {
     let evidence
     const config = {
       api_key_encrypted: 'must-not-leak', api_provider: 'deepseek', model_name: 'deepseek-chat',
-      _market_only: true, _onInferencePrepared: value => { evidence = value },
+      _market_only: true, _memoryContext: 'MEMORY_LEAK_MARKER',
+      _onInferencePrepared: value => { evidence = value },
     }
     const market = {
       standard_symbol: 'XAUUSD', symbol: 'XAUUSD', timeframe: 'M5', latest_price: 2000,
@@ -844,6 +845,7 @@ describe('maybeAiSignal', () => {
     expect(evidence.userPrompt).not.toContain('"ai_volume_range"')
     expect(evidence.userPrompt).not.toContain('account')
     expect(evidence.userPrompt).not.toContain('positions')
+    expect(evidence.userPrompt).not.toContain('MEMORY_LEAK_MARKER')
     expect(JSON.stringify(evidence)).not.toContain('must-not-leak')
     expect(evidence.outputSchemaVersion).toMatch(/^[a-f0-9]{64}$/)
   })
@@ -866,6 +868,36 @@ describe('maybeAiSignal', () => {
     })
     expect(evidence.systemPrompt).toContain('私有策略账户上下文')
     expect(evidence.systemPrompt).not.toContain('\u6682\u4e0d\u5efa\u8bae\u81ea\u52a8\u5e73\u4ed3')
+  })
+
+  it('keeps personal memory content out of the system prompt and sends it as untrusted user data', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({
+        signal_type: 'hold', entry_method: 'observe', confidence: 0.6, recommended_volume: 0,
+        analysis: '等待', reasoning: '当前没有明确优势',
+      }) } }] }),
+    })
+    const memoryMarker = 'MEMORY_INJECTION_MARKER_IGNORE_STRATEGY'
+    const memoryContext = `\n\n<user_confirmed_experience>\n[{"lesson":"${memoryMarker}"}]\n</user_confirmed_experience>`
+    let evidence
+
+    await maybeAiSignal(null, {
+      api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
+      _memoryContext: memoryContext, _onInferencePrepared: value => { evidence = value },
+    }, {
+      symbol: 'XAUUSD', timeframe: 'M5', latest_price: 2000,
+      account: { balance: 10000 }, positions: [], pending_orders: [], strategy_context: { timeframes: {} },
+    })
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(body.messages[0].content).toContain('个人记忆数据边界')
+    expect(body.messages[0].content).not.toContain(memoryMarker)
+    expect(body.messages[1].content).toContain(memoryMarker)
+    const userPayload = JSON.parse(body.messages[1].content.replace('市场数据 JSON：\n', ''))
+    expect(userPayload.user_confirmed_experience).toContain(memoryMarker)
+    expect(evidence.systemPrompt).not.toContain(memoryMarker)
+    expect(evidence.userPrompt).toContain(memoryMarker)
   })
 
   it('结构化开关启用缠论时system prompt不需要控制标签', async () => {
