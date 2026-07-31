@@ -720,7 +720,7 @@ fn initial_state(profile_id: &str) -> UiStateSnapshot {
         observed_at_utc_msc: now_utc_msc(),
         phase: "starting".to_owned(),
         detail_code: None,
-        selected_platform: None,
+        selected_platform: Some("mt5".to_owned()),
         selected_terminal_instance_id: None,
         terminal_candidates: Vec::new(),
         terminals: Vec::new(),
@@ -3938,6 +3938,12 @@ mod tests {
                 scenario.slug()
             );
         }
+    }
+
+    #[test]
+    fn startup_state_selects_mt5_before_the_core_snapshot_arrives() {
+        let state = initial_state(DEFAULT_PROFILE_ID);
+        assert_eq!(state.selected_platform.as_deref(), Some("mt5"));
     }
 
     #[test]

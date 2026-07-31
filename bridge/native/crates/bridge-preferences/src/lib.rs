@@ -13,7 +13,7 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct BridgeUserPreferences {
-    #[serde(default)]
+    #[serde(default = "default_platform")]
     pub platform: Option<String>,
     #[serde(default)]
     pub mt5_terminal_instance_id: Option<String>,
@@ -42,7 +42,7 @@ pub struct BridgeUserPreferences {
 impl Default for BridgeUserPreferences {
     fn default() -> Self {
         Self {
-            platform: None,
+            platform: default_platform(),
             mt5_terminal_instance_id: None,
             mt5_terminal_path: None,
             mt4_terminal_instance_id: None,
@@ -68,7 +68,7 @@ impl BridgeUserPreferences {
     }
 
     fn normalize(mut self) -> Self {
-        self.platform = normalize_platform(self.platform.as_deref());
+        self.platform = normalize_platform(self.platform.as_deref()).or_else(default_platform);
         self.mt5_terminal_instance_id =
             normalize_terminal_id(self.mt5_terminal_instance_id.as_deref(), "mt5_");
         self.mt4_terminal_instance_id =
@@ -85,6 +85,10 @@ impl BridgeUserPreferences {
             normalize_label(self.observer_trading_account_label.as_deref());
         self
     }
+}
+
+fn default_platform() -> Option<String> {
+    Some("mt5".to_owned())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -443,6 +447,22 @@ mod tests {
                 .expect("decode saved preferences");
         assert_eq!(encoded["Platform"], "mt4");
         assert!(encoded.get("Mt5TerminalInstanceId").is_some());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn new_missing_and_unselected_preferences_default_to_mt5() {
+        let path = test_path("default-platform");
+        let store = BridgePreferencesStore::new(&path).expect("store");
+        assert_eq!(store.load().platform.as_deref(), Some("mt5"));
+
+        fs::write(&path, br#"{"Platform":null,"ObserverEnabled":true}"#)
+            .expect("write unselected preferences");
+        assert_eq!(store.load().platform.as_deref(), Some("mt5"));
+
+        fs::write(&path, br#"{"Platform":"unknown","ObserverEnabled":true}"#)
+            .expect("write invalid preferences");
+        assert_eq!(store.load().platform.as_deref(), Some("mt5"));
         let _ = fs::remove_file(path);
     }
 
