@@ -310,6 +310,7 @@ describe('requestJsonObject', () => {
   })
 
   it('JSON 结构校验失败时要求模型修复并再次校验', async () => {
+    const largeMarketPayload = `大量 K 线与账户行情，不应进入精简修复请求：${'K'.repeat(100_000)}`
     mockFetch
       .mockResolvedValueOnce({
         ok: true,
@@ -320,20 +321,38 @@ describe('requestJsonObject', () => {
         json: () => Promise.resolve({ choices: [{ message: { content: '{"period_summary":"字段已补齐"}' } }] })
       })
 
-    const validateObject = vi.fn(value => {
+    const validateObject = vi.fn((value, validation) => {
       if (!value.period_summary) throw new Error('daily_review_summary_missing')
-      return value
+      return { ...value, validation_phase:validation.phase }
     })
     const result = await requestJsonObject({
       url: 'https://api.example.test', apiKey: 'test-key', model: 'test-model', temperature: 0.2,
-      maxTokens: 2000, messages: [{ role: 'user', content: 'test' }], validateObject,
+      maxTokens: 2000,
+      messages:[
+        { role:'system', content:'完整策略和输出要求，不应进入精简修复请求' },
+        { role:'user', content:largeMarketPayload },
+      ],
+      validateObject,
+      repairContext:{
+        outputFormat:'{"period_summary":"必填字符串"}',
+        requiredCoverage:{ position_management_group_ids:['position_group_01'] },
+      },
     })
 
-    expect(result).toEqual({ period_summary: '字段已补齐' })
+    expect(result).toEqual({ period_summary:'字段已补齐', validation_phase:'repair' })
     expect(validateObject).toHaveBeenCalledTimes(2)
+    expect(validateObject.mock.calls.map(([, validation]) => validation.phase)).toEqual(['initial', 'repair'])
     expect(mockFetch).toHaveBeenCalledTimes(2)
     const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
-    expect(repairBody.messages.at(-1).content).toContain('daily_review_summary_missing')
+    expect(repairBody.messages).toHaveLength(2)
+    expect(JSON.stringify(repairBody.messages)).not.toContain('大量 K 线')
+    expect(JSON.stringify(repairBody.messages)).not.toContain('完整策略')
+    expect(mockFetch.mock.calls[1][1].body.length).toBeLessThan(mockFetch.mock.calls[0][1].body.length / 10)
+    const repairPayload = JSON.parse(repairBody.messages[1].content)
+    expect(repairPayload.validation_error).toBe('daily_review_summary_missing')
+    expect(repairPayload.output_contract).toContain('period_summary')
+    expect(repairPayload.required_coverage.position_management_group_ids).toEqual(['position_group_01'])
+    expect(repairPayload.original_output).toBe('{"summary":"缺少必填字段"}')
   })
 
   it('HTTP 错误抛出异常', async () => {

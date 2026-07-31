@@ -356,7 +356,7 @@ function validateEvidenceRefs(refs, allowed) {
   return normalized
 }
 
-export function validatePositionManagementResponse(value, context, validateMarketPlan) {
+export function validatePositionManagementResponse(value, context, validateMarketPlan, { allowFailClosed = true } = {}) {
   if (!object(value)) throw new Error('position_management_response_not_object')
   validateAsOf(value, context)
   const analysis = text(value.analysis, 4000)
@@ -440,6 +440,14 @@ export function validatePositionManagementResponse(value, context, validateMarke
       reason:'该管理组未通过模型输出校验，服务端按安全默认继续持有',
       evidence_refs:[], validation_source:'server_fail_closed',
     })
+  }
+
+  if (!allowFailClosed && (marketError || errors.length)) {
+    const details = [
+      ...(marketError ? [`market:${marketError}`] : []),
+      ...errors.map(error => `${error.section}:${error.group_id || 'unknown'}:${error.code}`),
+    ]
+    throw new Error(`position_management_output_invalid:${details.join('|')}`)
   }
 
   return {

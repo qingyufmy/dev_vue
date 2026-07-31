@@ -147,6 +147,27 @@ describe('position management v1.1 contract', () => {
     )
   })
 
+  it('throws on the initial invalid management output so the common repair pass can run', () => {
+    const value = response({ position_evaluations:[] })
+    expect(() => validatePositionManagementResponse(
+      value,
+      context,
+      plan => ({ ...plan, confidence:0.8 }),
+      { allowFailClosed:false },
+    )).toThrow('position_management_output_invalid:position:position_group_01:evaluation_missing')
+  })
+
+  it('accepts a complete management output during strict initial validation', () => {
+    const result = validatePositionManagementResponse(
+      response(),
+      context,
+      plan => ({ ...plan, confidence:0.8 }),
+      { allowFailClosed:false },
+    )
+    expect(result._position_management.validation.errors).toEqual([])
+    expect(result._position_management.position_evaluations[0].action).toBe('exit')
+  })
+
   it('expires the whole response when snapshot identity changes', () => {
     expect(() => validatePositionManagementResponse(response({
       as_of:{ ...asOf, market_snapshot_hash:'sha256:other' },

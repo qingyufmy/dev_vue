@@ -506,7 +506,7 @@ export async function requestJsonObject({
   url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled,
   reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null,
   onProgress = null, validateObject = null, signal = null,
-  onProviderRequest = null, onProviderUsage = null,
+  onProviderRequest = null, onProviderUsage = null, repairContext = null,
 }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
@@ -543,14 +543,22 @@ export async function requestJsonObject({
   await emitModelProgress(onProgress, 'validating')
   try {
     const parsed = parseJsonObject(content)
-    return typeof validateObject === 'function' ? validateObject(parsed) : parsed
+    return typeof validateObject === 'function' ? validateObject(parsed, { phase:'initial' }) : parsed
   } catch (exc) {
     signal?.throwIfAborted()
     await emitModelProgress(onProgress, 'repairing')
-    const repairMessages = [
+    const repairMessages = repairContext ? [
+      { role:'system', content:'你是 JSON 输出格式修复器。只能修复字段名、数据类型、枚举值和缺失的必填项，不得重新分析行情，不得改变原输出中已经合法的交易方向、价格、止损止盈、挂单或持仓管理意图。必须严格遵守 output_contract 和 required_coverage，只返回一个完整、合法的 JSON 对象，不要 Markdown、解释或外层包装字段。' },
+      { role:'user', content:JSON.stringify({
+        validation_error:String(exc.message || 'output_validation_failed'),
+        output_contract:repairContext.outputFormat || '{}',
+        required_coverage:repairContext.requiredCoverage || null,
+        original_output:content,
+      }) },
+    ] : [
       ...messages,
-      { role: 'assistant', content: content.substring(0, 6000) },
-      { role: 'user', content: `上一次输出未通过系统校验，错误代码为：${exc.message}。请严格按照最初要求的字段名、数据类型、枚举值和完整覆盖范围修正。必须补齐所有必填字段，只返回修正后的一个 JSON 对象，不要 Markdown，不要解释，不要增加外层包装字段。` },
+      { role:'assistant', content:content.substring(0, 6000) },
+      { role:'user', content:`上一次输出未通过系统校验，错误代码为：${exc.message}。请严格按照最初要求的字段名、数据类型、枚举值和完整覆盖范围修正。必须补齐所有必填字段，只返回修正后的一个 JSON 对象，不要 Markdown，不要解释，不要增加外层包装字段。` },
     ]
     const repairBody = buildLlmRequestBody({
       protocol, provider, model, temperature: 0, maxTokens, messages: repairMessages,
@@ -565,7 +573,7 @@ export async function requestJsonObject({
     if (!repaired) throw new Error('LLM repair response content is empty')
     await emitModelProgress(onProgress, 'validating')
     const repairedObject = parseJsonObject(repaired)
-    return typeof validateObject === 'function' ? validateObject(repairedObject) : repairedObject
+    return typeof validateObject === 'function' ? validateObject(repairedObject, { phase:'repair' }) : repairedObject
   }
 }
 
@@ -805,9 +813,23 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       signal: config._abortSignal || null,
       onProviderRequest:config._onProviderRequest || null,
       onProviderUsage:config._onProviderUsage || null,
-      validateObject: value => positionManagementEnabled
+      repairContext:{
+        outputFormat,
+        requiredCoverage:positionManagementEnabled ? {
+          contract_version:positionManagementContext.contract_version,
+          as_of:positionManagementContext.as_of,
+          pending_management_group_ids:(positionManagementContext.pending_groups || []).map(group => group.management_group_id),
+          position_management_groups:(positionManagementContext.position_groups || []).map(group => ({
+            management_group_id:group.management_group_id,
+            thesis_id:group.thesis_id,
+            allowed_condition_ids:(group.frozen_conditions || []).map(condition => condition.condition_id),
+          })),
+        } : null,
+      },
+      validateObject: (value, validation = {}) => positionManagementEnabled
         ? validatePositionManagementResponse(value, positionManagementContext,
-          marketPlan => validateAiSignalResponse(marketPlan, config._allowed_entry_methods))
+          marketPlan => validateAiSignalResponse(marketPlan, config._allowed_entry_methods),
+          { allowFailClosed:validation.phase === 'repair' })
         : validateAiSignalResponse(value, config._allowed_entry_methods),
     })
     parsed._inference_source = 'ai'
