@@ -2861,13 +2861,34 @@ function renderSubscriptionStrategySummary(strategy, subscription = null) {
   const description = String(strategy.description || (strategy.scope === "private" ? "我的自定义分析策略" : "平台提供的分析策略"))
     .replace(/^\s*>\s?/gm, "").trim();
   host.innerHTML = `<div><span class="status-chip ${strategy.scope === "private" ? "info" : ""}">${strategy.scope === "private" ? "我的策略" : "平台策略"}</span><strong>${escapeHtml(strategy.title)}</strong><p>${escapeHtml(description)}</p></div><dl><div><dt>主要周期</dt><dd>${escapeHtml(primary)}</dd></div><div><dt>支持品种</dt><dd>${symbols.length ? `${symbols.length} 个` : "未设置"}</dd></div></dl>`;
+}
+
+function syncSubscriptionEditorActionState() {
+  const editor = $("subscriptionEditor");
+  const enabled = Boolean($("subscriptionExecutionEnabled")?.checked);
+  const hasSubscription = editor?.dataset.hasSubscription === "1";
+  const initiallyEnabled = editor?.dataset.initialExecutionEnabled === "1";
+  const changed = hasSubscription && enabled !== initiallyEnabled;
   const badge = $("subscriptionStateBadge");
   if (badge) {
-    const running = Number(subscription?.execution_enabled) === 1;
-    badge.className = `status-chip ${running ? "success" : subscription ? "info" : ""}`;
-    badge.textContent = running ? "正在自动分析" : subscription ? "已订阅" : "尚未订阅";
+    badge.className = `status-chip ${changed ? "warning" : enabled ? "success" : hasSubscription ? "info" : ""}`;
+    badge.textContent = changed
+      ? enabled ? "待保存 · 将开启" : "待保存 · 将关闭"
+      : hasSubscription ? enabled ? "已订阅 · 自动分析开启" : "已订阅 · 自动分析关闭"
+      : enabled ? "新订阅 · 保存后开启" : "尚未订阅";
   }
-  setText("subscriptionSaveHint", subscription ? "保存后更新当前订阅配置" : "保存后为当前策略创建订阅");
+  setText("subscriptionExecutionHelp", enabled
+    ? "开启后生成交易建议，并在通过风控后自动执行；同一时间只运行一个策略。"
+    : "关闭时只保存订阅，不会自动生成或执行建议。");
+  setText("subscriptionSaveHint", enabled
+    ? "保存后为当前交易账户开启自动分析"
+    : hasSubscription ? "保存后保留订阅，但不自动运行" : "保存后创建订阅，暂不自动运行");
+  const saveButton = $("saveSubscriptionBtn");
+  if (saveButton && saveButton.getAttribute("aria-busy") !== "true") {
+    const label = enabled && (!hasSubscription || !initiallyEnabled) ? "保存并开启自动分析" : hasSubscription ? "保存设置" : "保存订阅";
+    saveButton.innerHTML = `<i data-lucide="${enabled ? "play" : "check"}" size="16"></i><span>${label}</span>`;
+    initIcons();
+  }
 }
 
 function hydrateSubscriptionEditor(strategy, subscription = null) {
@@ -2878,9 +2899,11 @@ function hydrateSubscriptionEditor(strategy, subscription = null) {
     && Number(subscription.strategy_id) === Number(strategy.id) ? subscription : null;
   editor.dataset.strategyId = String(strategy.id);
   editor.dataset.subscriptionId = accountSubscription?.id || "";
+  editor.dataset.hasSubscription = accountSubscription ? "1" : "0";
+  editor.dataset.initialExecutionEnabled = Number(accountSubscription?.execution_enabled) === 1 ? "1" : "0";
   renderSubscriptionStrategySelector(strategy.id, currentAccount.id);
-  $("subscriptionAccount").innerHTML = `<option value="${Number(currentAccount.id)}">${escapeHtml(currentAccount.nickname || currentAccount.login_account)} · ${escapeHtml(currentAccount.broker_server)}</option>`;
   $("subscriptionAccount").value = String(currentAccount.id);
+  setText("subscriptionAccountName", `${currentAccount.login_account || currentAccount.nickname || "未识别账户"} · ${currentAccount.broker_server || "未知服务器"}`);
   populateSubscriptionSymbolOptions(strategy, accountSubscription);
   $("subscriptionSymbolsDropdown").open = false;
   const isPrivate = strategy.scope === "private";
@@ -2897,7 +2920,12 @@ function hydrateSubscriptionEditor(strategy, subscription = null) {
   document.querySelectorAll("[data-schedule-weekday]").forEach(input => { input.checked = weekdays.has(Number(input.dataset.scheduleWeekday)); });
   renderSubscriptionScheduleWindows(parseJsonField(accountSubscription?.schedule_windows_json, [{ start:"00:00", end:"23:59" }]));
   renderSubscriptionStrategySummary(strategy, accountSubscription);
+  const advanced = $("subscriptionAdvancedSettings");
+  if (advanced) advanced.open = Boolean(Number(accountSubscription?.schedule_enabled)
+    || (accountSubscription?.take_profit_mode && accountSubscription.take_profit_mode !== "ai_recommended")
+    || (isPrivate && accountSubscription?.memory_mode && accountSubscription.memory_mode !== "personal"));
   syncSubscriptionScheduleVisibility();
+  syncSubscriptionEditorActionState();
   initIcons();
   return true;
 }
@@ -8742,6 +8770,7 @@ function bindEvents() {
   $("cancelSubscriptionEditorBtn")?.addEventListener("click", () => closeFormModal($("subscriptionEditor")));
   $("saveSubscriptionBtn")?.addEventListener("click", () => saveSubscriptionEditor().catch(error => toast(error.message, "error")));
   $("subscriptionStrategy")?.addEventListener("change", handleSubscriptionStrategyChange);
+  $("subscriptionExecutionEnabled")?.addEventListener("change", syncSubscriptionEditorActionState);
   $("subscriptionScheduleEnabled")?.addEventListener("change", syncSubscriptionScheduleVisibility);
   $("addSubscriptionScheduleWindow")?.addEventListener("click", () => {
     const windows = selectedSubscriptionScheduleWindows();

@@ -85,7 +85,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('setText("quoteAsk", priceDisplay(q.ask))')
     expect(app).toContain('setText("quoteBid", priceDisplay(data.bid))')
     expect(app).toContain('setText("quoteAsk", priceDisplay(data.ask))')
-    expect(html).toContain('/ai/app.js?v=20260731subscription1')
+    expect(html).toContain('/ai/app.js?v=20260731subscription2')
     expect(app).toContain('wsApi("platform_quote", { symbol })')
     expect(app).toContain('state.platformMarketSourceActive = platformQuote.available === true')
     expect(app).toContain('state.lastObserverQuote = {')
@@ -630,6 +630,21 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('strategy_id:strategyId')
   })
 
+  it('keeps beginner subscription choices visible and progressively discloses advanced settings', () => {
+    expect(html).toContain('id="subscriptionAdvancedSettings"')
+    expect(html).toContain('<strong>高级设置</strong>')
+    expect(html).toContain('分析经验、止盈方式和运行时间')
+    expect(html).toContain('id="subscriptionAccountDisplay"')
+    expect(html).toContain('id="subscriptionExecutionHelp"')
+    expect(css).toContain('.subscription-primary-toggle')
+    expect(css).toContain('.subscription-advanced-settings > summary')
+    expect(app).toContain('function syncSubscriptionEditorActionState()')
+    expect(app).toContain('"已订阅 · 自动分析开启"')
+    expect(app).toContain('"已订阅 · 自动分析关闭"')
+    expect(app).toContain('"保存并开启自动分析"')
+    expect(app).toContain('accountSubscription.take_profit_mode !== "ai_recommended"')
+  })
+
   it('refreshes personal data and removes the observer selector when a user bridge reconnects', () => {
     const start = app.indexOf('function syncAiAccess(access)')
     const end = app.indexOf('function apiErrorMessage', start)
@@ -648,9 +663,10 @@ describe('AI governance navigation and DOM contract', () => {
   })
 
   it('binds subscriptions to the current bridge account instead of a historical account choice', () => {
-    expect(html).toContain('<span>当前桥接账户</span>')
-    expect(html).toContain('id="subscriptionAccount" disabled')
-    expect(html).toContain('账户切换由桥接软件同步，无需在这里重复选择。')
+    expect(html).toContain('<span>当前交易账户</span>')
+    expect(html).toContain('id="subscriptionAccount" type="hidden"')
+    expect(html).toContain('id="subscriptionAccountDisplay" class="subscription-account-display" role="status" aria-live="polite"')
+    expect(html).toContain('跟随桥接软件自动切换，无需在这里选择。')
     const accountResolver = app.slice(app.indexOf('function currentSubscriptionAccount'), app.indexOf('function selectableSubscriptionStrategies'))
     expect(accountResolver).toContain('Number(account.is_active) === 1')
     const editor = app.slice(app.indexOf('function hydrateSubscriptionEditor'), app.indexOf('function openSubscriptionEditor'))
@@ -1142,7 +1158,7 @@ describe('route permissions and credential redaction', () => {
     const heartbeatHandler = app.slice(app.indexOf('function handleHeartbeat(msg)'), app.indexOf('function handleDisconnect(msg)'))
     expect(heartbeatHandler).not.toContain('state.autoEnabled = msg.auto_reasoning_enabled')
     expect(app).toContain('if (requestGeneration !== _loadStatusGeneration) return;')
-    expect(app).toContain('Number(subscription?.execution_enabled) === 1')
+    expect(app).toContain('editor.dataset.initialExecutionEnabled = Number(accountSubscription?.execution_enabled) === 1')
     expect(app).not.toContain('volume > 0.05')
     expect(app).not.toContain('submit.disabled = Number(meta.marginShortfall)')
     expect(html).not.toContain('id="tradeVolume" class="num" type="number" value="0.01" min="0.01" max="0.05"')
