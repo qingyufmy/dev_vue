@@ -34,8 +34,41 @@ describe('platform reference portfolio', () => {
       actual_stop_loss:2030, original_stop_loss:2030, thesis_id:'thesis-12' })
     expect(String(mocks.queryAll.mock.calls[0][0])).toContain("outcomes.status IN ('open','closing')")
     expect(String(mocks.queryAll.mock.calls[0][0])).not.toContain('LIMIT 200')
+    expect(mocks.mt5Bridge).toHaveBeenNthCalledWith(1, 7, 'positions', {}, { timeoutMs:5000, noFallback:true })
+    expect(mocks.mt5Bridge).toHaveBeenNthCalledWith(2, 7, 'pending_list', {}, { timeoutMs:5000, noFallback:true })
     const keys = JSON.stringify(result).match(/"([^"]+)":/g)?.map(key => key.slice(1, -2)) || []
     expect(keys).not.toEqual(expect.arrayContaining(['volume', 'profit', 'ticket', 'account', 'balance', 'equity']))
+  })
+
+  it.each([
+    ['XAUUSD', 'XAUUSD.s'],
+    ['XAUUSD.s', 'XAUUSD.c'],
+    ['XAUUSD.c', 'XAUUSD.pro'],
+    ['XAUUSD.pro', 'XAUUSD.std'],
+    ['XAUUSD.std', 'XAUUSD.z'],
+    ['XAUUSD.z', 'XAUUSD.ecn'],
+    ['XAUUSD.ecn', 'XAUUSD.m'],
+    ['XAUUSD.m', 'XAUUSD.raw'],
+    ['XAUUSD.raw', 'XAUUSD.mini'],
+    ['XAUUSD.mini', 'XAUUSD.a'],
+  ])('matches strategy symbol %s to terminal broker symbol %s', async (strategySymbol, terminalSymbol) => {
+    mocks.queryAll.mockResolvedValue([
+      { outcome_id:31, signal_id:21, position_id:'701', pending_ticket:'801', signal_type:'sell_limit',
+        original_stop_loss:2050, original_take_profits_json:'[1980]', thesis_id:'thesis-21',
+        management_group_id:'group-21', created_at:'2026-07-22 10:00:00' },
+    ])
+    mocks.mt5Bridge.mockImplementation(async (_userId, action) => action === 'positions'
+      ? { status:'success', positions:[
+          { ticket:701, symbol:terminalSymbol, type:'sell', magic:234000,
+            open_price:2020, price_current:2010, sl:2050, tp:1980 },
+        ] }
+      : { status:'success', orders:[
+          { ticket:801, symbol:terminalSymbol, pending_type:'sell_limit', magic:234000,
+            price:2020, sl:2050, tp:1980 },
+        ] })
+
+    const result = await loadPlatformReferencePortfolio({ strategyId:3, sourceUserId:7, symbol:strategySymbol })
+    expect(result).toMatchObject({ symbol:'XAUUSD', position_count:1, pending_count:1 })
   })
 
   it('fails closed when either live source snapshot is unavailable', async () => {

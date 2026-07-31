@@ -14,8 +14,12 @@ function ticketKey(value) {
 
 export async function loadPlatformReferencePortfolio({ strategyId, sourceUserId, symbol } = {}) {
   const [positionsResponse, pendingResponse, ownershipRows] = await Promise.all([
-    mt5Bridge(sourceUserId, 'positions', { symbol }, { timeoutMs:5000, noFallback:true }),
-    mt5Bridge(sourceUserId, 'pending_list', { symbol }, { timeoutMs:5000, noFallback:true }),
+    // The strategy symbol is canonical (for example XAUUSD) while the terminal
+    // may expose any supported broker suffix (XAUUSD.s, XAUUSD.c, ...). Do not
+    // let the Bridge exact-symbol prefilter discard those rows before the
+    // suffix-aware sameSymbol() ownership filter below can inspect them.
+    mt5Bridge(sourceUserId, 'positions', {}, { timeoutMs:5000, noFallback:true }),
+    mt5Bridge(sourceUserId, 'pending_list', {}, { timeoutMs:5000, noFallback:true }),
     queryAll(`SELECT outcomes.id AS outcome_id, outcomes.signal_id, outcomes.pending_ticket,
         outcomes.entry_order_ticket, outcomes.position_id, outcomes.original_symbol,
         outcomes.actual_stop_loss, outcomes.actual_take_profit, outcomes.original_stop_loss,
