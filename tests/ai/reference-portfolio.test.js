@@ -51,6 +51,8 @@ describe('platform reference portfolio', () => {
     ['XAUUSD.m', 'XAUUSD.raw'],
     ['XAUUSD.raw', 'XAUUSD.mini'],
     ['XAUUSD.mini', 'XAUUSD.a'],
+    ['XAUUSD.micro', 'XAUUSD.cash'],
+    ['XAUUSD.custom42', 'XAUUSD.s'],
   ])('matches strategy symbol %s to terminal broker symbol %s', async (strategySymbol, terminalSymbol) => {
     mocks.queryAll.mockResolvedValue([
       { outcome_id:31, signal_id:21, position_id:'701', pending_ticket:'801', signal_type:'sell_limit',

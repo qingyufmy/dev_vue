@@ -9,9 +9,16 @@ export const CHAN_HISTORY_COUNT = 300
 export const CHAN_MAX_HISTORY_COUNT = 2000
 export const CHAN_ALGORITHM_VERSION = 'chan_structure_v4'
 
-const BROKER_SUFFIX_RE = /\.(a|s|c|pro|std|z|ecn|m|raw|mini)$/i
+const BROKER_SUFFIX_RE = /^([A-Z0-9]{4,12})\.(?:a|s|c|pro|std|z|ecn|m|raw|mini)$/i
+const GENERIC_MARKET_SUFFIX_RE = /^([A-Z0-9]{6,12})\.[A-Z0-9_-]{1,16}$/i
 export function stripBrokerSuffix(sym) {
-  return String(sym || '').replace(BROKER_SUFFIX_RE, '').toUpperCase()
+  const normalized = String(sym || '').trim().toUpperCase()
+  const knownSuffix = BROKER_SUFFIX_RE.exec(normalized)?.[1]
+  if (knownSuffix) return knownSuffix
+  // Brokers frequently add proprietary suffixes to six-character FX, metal
+  // and crypto symbols. Accept those without collapsing short equity symbols
+  // such as BRK.B into the same instrument.
+  return GENERIC_MARKET_SUFFIX_RE.exec(normalized)?.[1] || normalized
 }
 
 const MTF_TAG_RE = /\{\{MTF:([A-Z]\d+):(\d+)\}\}/g
