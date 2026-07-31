@@ -1680,7 +1680,9 @@ async function handleAccountSwitched(msg = {}) {
   if (generation !== state._accountContextGeneration) return;
   const currentAccount = state.tradingAccounts?.find(account => Number(account.is_active) === 1);
   if (currentAccount && !$('subscriptionEditor')?.classList.contains('hidden')) {
-    $('subscriptionAccount').value = String(currentAccount.id);
+    const strategyId = Number($('subscriptionStrategy')?.value || $('subscriptionEditor')?.dataset.strategyId || 0);
+    const strategy = selectableSubscriptionStrategies().find(item => Number(item.id) === strategyId);
+    if (strategy) hydrateSubscriptionEditor(strategy, subscriptionForStrategyAccount(strategy.id, currentAccount.id));
   }
   // Heavy account data (history, chart, pending orders and risk details) stays
   // demand-driven: refresh only the page the user is currently viewing.
@@ -2821,32 +2823,102 @@ function syncMt5ScheduleTimezoneOption() {
   return timezone;
 }
 
-function openSubscriptionEditor(strategy, subscription = null) {
-  if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
-  if (!state.tradingAccounts?.length) { toast(`请先连接 ${bridgePlatformLabel()} 桥接并完成账户登记`, "warning"); return; }
-  const editor = $("subscriptionEditor"); editor.dataset.strategyId = strategy.id; editor.dataset.subscriptionId = subscription?.id || "";
-  const currentAccount = state.tradingAccounts.find(account => Number(account.is_active) === 1)
-    || state.tradingAccounts.find(account => account.observe_status === "active")
-    || state.tradingAccounts[0];
+function currentSubscriptionAccount() {
+  return state.tradingAccounts?.find(account => Number(account.is_active) === 1)
+    || state.tradingAccounts?.find(account => account.observe_status === "active")
+    || state.tradingAccounts?.[0]
+    || null;
+}
+
+function selectableSubscriptionStrategies() {
+  return (state.strategies || []).filter(item => item.visibility_status === "active" && Number(item.is_active)
+    && (item.scope !== "private" || Number(item.owner_user_id) === Number(state.user?.id)));
+}
+
+function subscriptionForStrategyAccount(strategyId, accountId) {
+  return (state.strategySubscriptions || []).find(item => Number(item.strategy_id) === Number(strategyId)
+    && Number(item.trading_account_id) === Number(accountId)) || null;
+}
+
+function renderSubscriptionStrategySelector(selectedStrategyId, accountId) {
+  const select = $("subscriptionStrategy");
+  if (!select) return;
+  const strategies = selectableSubscriptionStrategies();
+  select.innerHTML = strategies.map(item => {
+    const linked = subscriptionForStrategyAccount(item.id, accountId);
+    const suffix = Number(linked?.execution_enabled) ? " · 正在运行" : linked ? " · 已订阅" : "";
+    return `<option value="${Number(item.id)}">${escapeHtml(item.title)}${suffix}</option>`;
+  }).join("");
+  select.value = String(selectedStrategyId);
+}
+
+function renderSubscriptionStrategySummary(strategy, subscription = null) {
+  const host = $("subscriptionStrategySummary");
+  if (!host || !strategy) return;
+  const plan = strategyMarketPlan(strategy);
+  const primary = plan.primary_timeframe || plan.timeframes?.[0]?.timeframe || "M30";
+  const symbols = parseJsonField(strategy.symbols_json, []);
+  const description = String(strategy.description || (strategy.scope === "private" ? "我的自定义分析策略" : "平台提供的分析策略"))
+    .replace(/^\s*>\s?/gm, "").trim();
+  host.innerHTML = `<div><span class="status-chip ${strategy.scope === "private" ? "info" : ""}">${strategy.scope === "private" ? "我的策略" : "平台策略"}</span><strong>${escapeHtml(strategy.title)}</strong><p>${escapeHtml(description)}</p></div><dl><div><dt>主要周期</dt><dd>${escapeHtml(primary)}</dd></div><div><dt>支持品种</dt><dd>${symbols.length ? `${symbols.length} 个` : "未设置"}</dd></div></dl>`;
+  const badge = $("subscriptionStateBadge");
+  if (badge) {
+    const running = Number(subscription?.execution_enabled) === 1;
+    badge.className = `status-chip ${running ? "success" : subscription ? "info" : ""}`;
+    badge.textContent = running ? "正在自动分析" : subscription ? "已订阅" : "尚未订阅";
+  }
+  setText("subscriptionSaveHint", subscription ? "保存后更新当前订阅配置" : "保存后为当前策略创建订阅");
+}
+
+function hydrateSubscriptionEditor(strategy, subscription = null) {
+  const editor = $("subscriptionEditor");
+  const currentAccount = currentSubscriptionAccount();
+  if (!editor || !currentAccount || !strategy) return false;
+  const accountSubscription = subscription && Number(subscription.trading_account_id) === Number(currentAccount.id)
+    && Number(subscription.strategy_id) === Number(strategy.id) ? subscription : null;
+  editor.dataset.strategyId = String(strategy.id);
+  editor.dataset.subscriptionId = accountSubscription?.id || "";
+  renderSubscriptionStrategySelector(strategy.id, currentAccount.id);
   $("subscriptionAccount").innerHTML = `<option value="${Number(currentAccount.id)}">${escapeHtml(currentAccount.nickname || currentAccount.login_account)} · ${escapeHtml(currentAccount.broker_server)}</option>`;
   $("subscriptionAccount").value = String(currentAccount.id);
-  populateSubscriptionSymbolOptions(strategy, subscription);
+  populateSubscriptionSymbolOptions(strategy, accountSubscription);
   $("subscriptionSymbolsDropdown").open = false;
   const isPrivate = strategy.scope === "private";
   $("subscriptionMemoryModeField")?.classList.toggle("hidden", !isPrivate);
   $("platformMemoryNotice")?.classList.toggle("hidden", isPrivate);
-  $("subscriptionMemoryMode").value = isPrivate ? (subscription?.memory_mode || "personal") : "personal";
-  $("subscriptionExecutionEnabled").checked = Number(subscription?.execution_enabled) === 1;
-  $("subscriptionTakeProfitMode").value = subscription?.take_profit_mode || "ai_recommended";
-  $("subscriptionScheduleEnabled").checked = Boolean(Number(subscription?.schedule_enabled || 0));
+  $("subscriptionMemoryMode").value = isPrivate ? (accountSubscription?.memory_mode || "personal") : "personal";
+  $("subscriptionExecutionEnabled").checked = Number(accountSubscription?.execution_enabled) === 1;
+  $("subscriptionTakeProfitMode").value = accountSubscription?.take_profit_mode || "ai_recommended";
+  $("subscriptionScheduleEnabled").checked = Boolean(Number(accountSubscription?.schedule_enabled || 0));
   const defaultScheduleTimezone = syncMt5ScheduleTimezoneOption();
-  $("subscriptionScheduleTimezone").value = subscription?.schedule_timezone || defaultScheduleTimezone;
-  $("subscriptionOutsideWindowBehavior").value = subscription?.outside_window_behavior || "pause_all";
-  const weekdays = new Set(parseJsonField(subscription?.schedule_weekdays_json, [1,2,3,4,5]).map(Number));
+  $("subscriptionScheduleTimezone").value = accountSubscription?.schedule_timezone || defaultScheduleTimezone;
+  $("subscriptionOutsideWindowBehavior").value = accountSubscription?.outside_window_behavior || "pause_all";
+  const weekdays = new Set(parseJsonField(accountSubscription?.schedule_weekdays_json, [1,2,3,4,5]).map(Number));
   document.querySelectorAll("[data-schedule-weekday]").forEach(input => { input.checked = weekdays.has(Number(input.dataset.scheduleWeekday)); });
-  renderSubscriptionScheduleWindows(parseJsonField(subscription?.schedule_windows_json, [{ start:"00:00", end:"23:59" }]));
+  renderSubscriptionScheduleWindows(parseJsonField(accountSubscription?.schedule_windows_json, [{ start:"00:00", end:"23:59" }]));
+  renderSubscriptionStrategySummary(strategy, accountSubscription);
   syncSubscriptionScheduleVisibility();
-  openFormModal(editor);
+  initIcons();
+  return true;
+}
+
+function openSubscriptionEditor(strategy, subscription = null) {
+  if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
+  if (!state.tradingAccounts?.length) { toast(`请先连接 ${bridgePlatformLabel()} 桥接并完成账户登记`, "warning"); return; }
+  const selected = selectableSubscriptionStrategies().find(item => Number(item.id) === Number(strategy?.id));
+  if (!selected) { toast("当前策略不可订阅，请选择已上线的可用策略", "warning"); return; }
+  const account = currentSubscriptionAccount();
+  const exactSubscription = subscriptionForStrategyAccount(selected.id, account?.id) || subscription;
+  if (!hydrateSubscriptionEditor(selected, exactSubscription)) return;
+  openFormModal($("subscriptionEditor"));
+}
+
+function handleSubscriptionStrategyChange() {
+  const strategyId = Number($("subscriptionStrategy")?.value || 0);
+  const strategy = selectableSubscriptionStrategies().find(item => Number(item.id) === strategyId);
+  const account = currentSubscriptionAccount();
+  if (!strategy || !account) return;
+  hydrateSubscriptionEditor(strategy, subscriptionForStrategyAccount(strategy.id, account.id));
 }
 
 function subscriptionScheduleSummary(subscription) {
@@ -2926,6 +2998,11 @@ function updateSubscriptionSymbolSummary() {
 
 async function saveSubscriptionEditor() {
   const editor = $("subscriptionEditor"), id = Number(editor.dataset.subscriptionId || 0);
+  const saveButton = $("saveSubscriptionBtn");
+  if (saveButton?.disabled) return;
+  const strategyId = Number($("subscriptionStrategy")?.value || editor.dataset.strategyId || 0);
+  const strategy = selectableSubscriptionStrategies().find(item => Number(item.id) === strategyId);
+  if (!strategy) throw new Error("请选择可用的交易策略");
   const executionEnabled = $("subscriptionExecutionEnabled").checked;
   const otherActive = (state.strategySubscriptions || []).find(item => Number(item.execution_enabled) && Number(item.id) !== id);
   let replaceActive = false;
@@ -2933,8 +3010,7 @@ async function saveSubscriptionEditor() {
     replaceActive = confirm(`当前已有“${otherActive.strategy_title || `订阅 #${otherActive.id}`}”在自动分析。是否关闭原订阅并切换到当前策略？`);
     if (!replaceActive) return;
   }
-  const strategy = (state.strategies || []).find(item => Number(item.id) === Number(editor.dataset.strategyId));
-  const body = { trading_account_id:Number($("subscriptionAccount").value), strategy_id:Number(editor.dataset.strategyId),
+  const body = { trading_account_id:Number($("subscriptionAccount").value), strategy_id:strategyId,
     symbols:selectedSubscriptionSymbols(), memory_mode:strategy?.scope === "platform" ? "platform_only" : $("subscriptionMemoryMode").value,
     execution_enabled:executionEnabled, replace_active:replaceActive,
     take_profit_mode:$("subscriptionTakeProfitMode").value,
@@ -2943,8 +3019,29 @@ async function saveSubscriptionEditor() {
     schedule_weekdays:[...document.querySelectorAll("[data-schedule-weekday]:checked")].map(input => Number(input.dataset.scheduleWeekday)),
     schedule_windows:selectedSubscriptionScheduleWindows(),
     outside_window_behavior:$("subscriptionOutsideWindowBehavior").value };
-  await api(id ? `/api/ai/subscriptions/${id}` : "/api/ai/subscriptions", { method:id ? "PUT" : "POST", body });
-  closeFormModal(editor, false); toast("订阅已保存", "success"); await loadStrategyCatalog(); await loadStatus();
+  const originalButtonHtml = saveButton?.innerHTML || "";
+  if (saveButton) {
+    saveButton.disabled = true;
+    saveButton.setAttribute("aria-busy", "true");
+    saveButton.innerHTML = '<i data-lucide="loader-circle" size="16"></i>正在保存';
+    saveButton.classList.add("spinning");
+    initIcons();
+  }
+  try {
+    await api(id ? `/api/ai/subscriptions/${id}` : "/api/ai/subscriptions", { method:id ? "PUT" : "POST", body });
+    closeFormModal(editor, false);
+    toast("订阅已保存", "success");
+    await loadStrategyCatalog();
+    await loadStatus();
+  } finally {
+    if (saveButton) {
+      saveButton.disabled = false;
+      saveButton.removeAttribute("aria-busy");
+      saveButton.classList.remove("spinning");
+      saveButton.innerHTML = originalButtonHtml;
+      initIcons();
+    }
+  }
 }
 
 const RISK_LABELS = {
@@ -4744,26 +4841,25 @@ async function handleAutoSubscriptionClick() {
     const activeAccount = state.tradingAccounts?.find(account => Number(account.is_active) === 1)
       || state.tradingAccounts?.find(account => account.observe_status === "active")
       || state.tradingAccounts?.[0];
-    const subscriptions = state.strategySubscriptions || [];
-    const subscription = subscriptions.find(item => Number(item.execution_enabled) === 1)
-      || subscriptions.find(item => Number(item.trading_account_id) === Number(activeAccount?.id))
+    const subscriptions = (state.strategySubscriptions || []).filter(item => Number(item.trading_account_id) === Number(activeAccount?.id));
+    const runtimeStrategyId = Number(state.autoRuntime?.prompt_type_id || state.autoConfig?.prompt_type_id || 0);
+    const subscription = subscriptions.find(item => Number(item.execution_enabled) === 1 && Number(item.strategy_id) === runtimeStrategyId)
+      || subscriptions.find(item => Number(item.execution_enabled) === 1)
+      || subscriptions.find(item => Number(item.strategy_id) === runtimeStrategyId)
       || subscriptions[0]
       || null;
-    const strategy = (state.strategies || []).find(item => Number(item.id) === Number(subscription?.strategy_id))
-      || (state.strategies || []).find(item => item.visibility_status === "active" && Number(item.is_active) === 1)
-      || (state.strategies || [])[0];
+    const strategyId = Number(subscription?.strategy_id || runtimeStrategyId || 0);
+    const strategy = selectableSubscriptionStrategies().find(item => Number(item.id) === strategyId)
+      || selectableSubscriptionStrategies()[0];
     if (!strategy) {
       setTab("model-strategy");
       setModelStrategySubtab("strategies");
       toast("还没有可用策略，请先创建或选择策略", "warning");
       return;
     }
-    const editableSubscription = subscription && Number(subscription.strategy_id) === Number(strategy.id)
-      ? subscription
-      : null;
     setTab("model-strategy", { skipRefresh:true });
     setModelStrategySubtab("strategies");
-    openSubscriptionEditor(strategy, editableSubscription);
+    openSubscriptionEditor(strategy, subscriptionForStrategyAccount(strategy.id, activeAccount?.id));
   } catch (error) {
     toast(`订阅设置加载失败：${userVisibleText(apiErrorMessage(error.message), "请稍后重试")}`, "error");
   } finally {
@@ -8645,6 +8741,7 @@ function bindEvents() {
   $("saveStrategyBtn")?.addEventListener("click", () => saveStrategyEditor().catch(error => toast(error.message, "error")));
   $("cancelSubscriptionEditorBtn")?.addEventListener("click", () => closeFormModal($("subscriptionEditor")));
   $("saveSubscriptionBtn")?.addEventListener("click", () => saveSubscriptionEditor().catch(error => toast(error.message, "error")));
+  $("subscriptionStrategy")?.addEventListener("change", handleSubscriptionStrategyChange);
   $("subscriptionScheduleEnabled")?.addEventListener("change", syncSubscriptionScheduleVisibility);
   $("addSubscriptionScheduleWindow")?.addEventListener("click", () => {
     const windows = selectedSubscriptionScheduleWindows();
