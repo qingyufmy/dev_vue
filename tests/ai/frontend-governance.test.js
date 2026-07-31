@@ -85,7 +85,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('setText("quoteAsk", priceDisplay(q.ask))')
     expect(app).toContain('setText("quoteBid", priceDisplay(data.bid))')
     expect(app).toContain('setText("quoteAsk", priceDisplay(data.ask))')
-    expect(html).toContain('/ai/app.js?v=20260731bridge300')
+    expect(html).toContain('/ai/app.js?v=20260731platformcopy3')
     expect(app).toContain('wsApi("platform_quote", { symbol })')
     expect(app).toContain('state.platformMarketSourceActive = platformQuote.available === true')
     expect(app).toContain('state.lastObserverQuote = {')
@@ -147,7 +147,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('function managementExpectedState(item, ticket, kind)')
     expect(app).toContain('broker_server_key: identity.brokerServerKey')
     expect(app).toContain('login_account: identity.loginAccount')
-    expect(app).toContain('MT5 账户身份尚未加载，请刷新账户状态后重试')
+    expect(app).toContain('账户身份尚未加载，请刷新账户状态后重试')
     expect(app).toContain('expected_state: managementExpectedState(order, ticket, "pending")')
     expect(app).toContain('confirm: true')
     expect(app).toContain('expected_state: managementExpectedState(position, ticket, "position")')
@@ -223,7 +223,7 @@ describe('AI governance navigation and DOM contract', () => {
   it('restores the dedicated user-scoped system audit workspace', () => {
     expect(html.match(/data-tab="audit"/g)).toHaveLength(2)
     expect(html).toContain('<section id="audit" class="tab-panel">')
-    expect(html).toContain('时间（MT5）')
+    expect(html).toContain('data-bridge-platform-template="时间（{platform}）"')
     expect(html).toContain('风控与执行记录')
     expect(app).toContain('wsApi("audit_logs")')
     expect(app).toContain('row?.created_at_mt5 || row?.created_at')
@@ -470,7 +470,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.inline-check-card,.inline-check { display:flex; flex-direction:row')
     expect(app).toContain('replace_active:replaceActive')
     expect(app).toContain('selectedSubscriptionScheduleWindows()')
-    expect(html).toContain('<option value="Etc/GMT-3">MT5 服务器时间（UTC+3）</option>')
+    expect(html).toContain('<option value="Etc/GMT-3">交易平台服务器时间（UTC+3）</option>')
     expect(html).toContain('北京时间（UTC+8）')
     expect(html).toContain('伦敦时间（UTC+0，夏令时 UTC+1）')
     expect(html).toContain('纽约时间（UTC-5，夏令时 UTC-4）')
@@ -606,6 +606,17 @@ describe('AI governance navigation and DOM contract', () => {
     expect(handler).toContain('clearAccountContextCaches()')
     expect(handler).toContain('refreshTabData(activeTabId())')
     expect(handler).not.toContain('loadHistory(), loadHistoryChart()')
+  })
+
+  it('opens subscription settings from the automatic-analysis status instead of toggling it directly', () => {
+    expect(app).toContain('async function handleAutoSubscriptionClick()')
+    expect(app).toContain('addEventListener("click", handleAutoSubscriptionClick)')
+    expect(app).toContain('openSubscriptionEditor(strategy, editableSubscription)')
+    expect(app).toContain('Number(subscription.strategy_id) === Number(strategy.id)')
+    expect(app).toContain('setTab("model-strategy", { skipRefresh:true })')
+    const handler = app.slice(app.indexOf('async function handleAutoSubscriptionClick()'), app.indexOf('async function loadSymbols()'))
+    expect(handler).not.toContain("wsApi('toggle_auto')")
+    expect(handler).not.toContain('请先连接您的 MT5 账户')
   })
 
   it('formats numeric MT terminal timestamps instead of exposing raw epoch values', () => {

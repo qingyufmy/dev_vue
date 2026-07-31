@@ -105,7 +105,7 @@ describe('unified authentication and account entry points', () => {
     expect(aiHtml).toContain('membershipGateTitle')
     expect(aiHtml).toContain('membershipGateAccess')
     expect(aiHtml).toContain('只观摩，不连接个人账户')
-    expect(aiHtml).toContain('连接自己的 MT5 账户')
+    expect(aiHtml).toContain('连接自己的 MT4/MT5 账户')
     expect(aiApp).toContain("accessRes.access?.mode === 'blocked'")
     expect(aiApp).toContain('renderMembershipAccessState')
     expect(aiApp).toContain('工作区资料仍然保留')

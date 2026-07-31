@@ -90,6 +90,10 @@ function bridgePlatformLabel(value = state.bridgePlatform) {
   return normalizeBridgePlatform(value).toUpperCase();
 }
 
+function bridgeAccountConnectPrompt(value = state.bridgePlatform) {
+  return `请先连接您的 ${bridgePlatformLabel(value)} 账户`;
+}
+
 function syncManualOrderPlatformCapabilities() {
   const stopLimitButton = document.querySelector('.order-type-btn[data-type="stop_limit"]');
   if (!stopLimitButton) return;
@@ -165,7 +169,7 @@ function createSymbolSelector(inputId, options, opts = {}) {
   // Disable in observe mode
   if (isObserveMode) {
     input.disabled = true;
-    input.title = isPlusReadOnly ? 'Plus 会员仅可查看' : '请先连接您的 MT5 账户';
+    input.title = isPlusReadOnly ? 'Plus 会员仅可查看' : bridgeAccountConnectPrompt();
   }
 
   const dropdown = document.createElement("div");
@@ -324,12 +328,12 @@ const REASON_MAP = {
   signal_price_slippage_exceeded: "信号参考价与当前报价偏离过大，已拒绝",
   auto_trade_disabled: "当前订阅没有开启自动执行",
   bridge_offline: "用户的交易终端桥接当前未连接",
-  user_quote_unavailable: "无法获取用户 MT5 的有效报价",
+  user_quote_unavailable: "无法获取用户交易平台的有效报价",
   stop_loss_missing: "AI 信号缺少有效止损价格",
   invalid_stop_loss_direction: "止损价格方向与订单方向不一致",
   take_profit_target_missing: "所选止盈档位没有有效目标价格",
   invalid_take_profit_direction: "止盈价格方向与订单方向不一致",
-  pending_list_unavailable: "无法读取当前 MT5 挂单列表",
+  pending_list_unavailable: "无法读取当前交易平台挂单列表",
   pending_list_confirm_unavailable: "替换旧挂单后无法复核最新挂单列表",
   pending_list_confirm_failed: "替换旧挂单后的挂单复核失败",
   pending_supersede_incomplete: "同方向旧挂单尚未完全替换",
@@ -343,9 +347,9 @@ const REASON_MAP = {
   system_execution_exception: "系统执行异常，详细信息已记录",
   lock_lost_before_supersede_cancel: "任务执行权已失效，未继续替换旧挂单",
   lock_lost_before_pending_confirm: "任务执行权已失效，未继续复核挂单",
-  lock_lost_before_send: "任务执行权已失效，订单未发送到 MT5",
+  lock_lost_before_send: "任务执行权已失效，订单未发送到交易平台",
   bridge_upgrade_required_for_incremental_risk: "桥接软件版本过旧，请从源码重启或升级到最新版后重试",
-  risk_snapshot_failed: "无法获取完整的 MT5 风险快照，已为安全起见阻止交易",
+  risk_snapshot_failed: "无法获取完整的交易平台风险快照，已为安全起见阻止交易",
   confirmation_required: "需要人工确认",
   rejected: "风控拒绝",
   success: "成功",
@@ -784,7 +788,9 @@ function applyAutoBadge(label, type, title, visual = {}) {
     track.setAttribute('aria-valuetext', visual.stage ? `${visual.stage}，${progress}%` : `${progress}%`);
   }
   el.style.setProperty('--auto-progress-scale', String(progress / 100));
-  el.setAttribute('aria-label', visual.mode ? `${label}，${visual.stage || ''}，${progress}%` : label);
+  const actionHint = isObserverMode() ? observerMessage() : '点击编辑订阅与自动分析设置';
+  el.setAttribute('aria-label', `${visual.mode ? `${label}，${visual.stage || ''}，${progress}%` : label}。${actionHint}`);
+  title = `${title || label}\n${actionHint}`;
 
   if (!_autoBadgeHovering) {
     if (el.title !== title) el.title = title;
@@ -867,7 +873,7 @@ function renderAutoProgress(cycles, ptName) {
     ? `${symbols.slice(0, 3).join(' · ')}${symbols.length > 3 ? ` 等 ${symbols.length} 项` : ''}${elapsed ? ` · ${elapsed}` : ''}`
     : `已用时 ${elapsed || '00:00'}`;
   const details = cycles.map(cycle => `${cycle.symbol || '未知品种'}：${cycle.stage_label || '正在处理'} ${Math.round(Number(cycle.progress_percent || 0))}%`).join('\n');
-  const title = `策略：${ptName || '未选择'}\n状态：正在分析\n${details}\n点击可停止后续自动分析`;
+  const title = `策略：${ptName || '未选择'}\n状态：正在分析\n${details}`;
   applyAutoBadge(label, 'running', title, { mode: primary?.stage === 'complete' ? 'complete' : 'running', stage, progress });
 }
 
@@ -1296,7 +1302,7 @@ const API_ERROR_MESSAGES = {
   "model_ids must be an array of 2-5 model profile IDs": "请选择 2 至 5 个模型",
   "model_ids must contain 2-5 unique IDs": "请选择 2 至 5 个不同模型",
   invalid_history_time_range: "历史评估时间范围无效",
-  history_compare_end_time_in_future: "结束时间晚于当前 MT5 时间，请刷新时间范围后重试",
+  history_compare_end_time_in_future: "结束时间晚于当前交易平台时间，请刷新时间范围后重试",
   history_market_data_unavailable: "历史行情暂不可用，请确认桥接和行情缓存状态",
   period_market_candles_unavailable: "所选区间内没有可用的完整历史 K 线，请调整时间范围后重试",
   period_market_source_unavailable: "历史行情源暂不可用，请检查管理员桥接和行情缓存",
@@ -1325,7 +1331,7 @@ const API_ERROR_MESSAGES = {
   snapshot_compare_schema_mismatch: "所选快照的输出格式版本不同，请分开评估",
   snapshot_compare_decision_time_missing: "快照缺少可靠的历史决策时间",
   snapshot_compare_outcome_candles_incomplete: "部分快照缺少信号产生后的行情，暂时无法评分",
-  broker_contract_constraint: "订单不符合 MT5 合约约束",
+  broker_contract_constraint: "订单不符合交易平台合约约束",
   pending_price_too_close: "挂单价格距离当时报价过近",
   market_order_not_allowed: "该合约不允许市价单",
   limit_order_not_allowed: "该合约不允许限价单",
@@ -1358,7 +1364,7 @@ const API_ERROR_MESSAGES = {
   invalid_stop_loss_direction: "止损价格与交易方向不符",
   invalid_take_profit_direction: "止盈价格与交易方向不符",
   invalid_recommended_take_profit_tier: "AI 推荐的止盈档位无效",
-  ai_volume_out_of_platform_range: "订单执行上限不符合 MT5 手数规则",
+  ai_volume_out_of_platform_range: "订单执行上限不符合交易平台手数规则",
   confidence_below_risk_threshold: "置信度低于策略风险阈值",
   atr_anchor_unavailable_hold: "缺少可靠 ATR 锚点",
   sl_widen_min_lot_hold: "扩大止损后所需手数低于最小值",
@@ -1531,16 +1537,18 @@ function clearAccountContextCaches() {
 }
 
 async function handleAccountSwitched(msg = {}) {
+  if (msg.platform) updateBridgePlatformUI(msg.platform);
+  const platform = bridgePlatformLabel(msg.platform || state.bridgePlatform);
   const generation = Number(state._accountContextGeneration || 0) + 1;
   state._accountContextGeneration = generation;
   clearAccountContextCaches();
   const login = msg.account?.login == null ? "" : String(msg.account.login);
   if (!msg.verified) {
-    toast("当前 MT5 登录没有交易权限，账户数据可查看，但系统不会接管或执行交易", "warning");
+    toast(`当前 ${platform} 登录没有交易权限，账户数据可查看，但系统不会接管或执行交易`, "warning");
   } else if (msg.ownership_transferred) {
-    toast(`MT5 账户${login ? ` ${login}` : ""}已切换到当前平台账号`, "success");
+    toast(`${platform} 账户${login ? ` ${login}` : ""}已切换到当前平台账号`, "success");
   } else if (msg.switched) {
-    toast(`已切换到 MT5 账户${login ? ` ${login}` : ""}，正在刷新账户数据`, "success");
+    toast(`已切换到 ${platform} 账户${login ? ` ${login}` : ""}，正在刷新账户数据`, "success");
   }
   const results = await Promise.allSettled([
     loadStatus(), loadSymbols(), loadAccount(), loadPositions(), loadStrategyCatalog(),
@@ -1558,10 +1566,11 @@ async function handleAccountSwitched(msg = {}) {
 }
 
 async function handleAccountTransferred(msg = {}) {
+  if (msg.platform) updateBridgePlatformUI(msg.platform);
   state._accountContextGeneration = Number(state._accountContextGeneration || 0) + 1;
   clearAccountContextCaches();
   state.autoEnabled = false;
-  toast("此 MT5 账户已由另一个平台账号重新连接，当前账号的自动分析和交易发送已关闭", "warning");
+  toast(`此 ${bridgePlatformLabel(msg.platform || state.bridgePlatform)} 账户已由另一个平台账号重新连接，当前账号的自动分析和交易发送已关闭`, "warning");
   await Promise.allSettled([loadStatus(), loadStrategyCatalog(), refreshTabData(activeTabId())]);
 }
 
@@ -1659,9 +1668,9 @@ function connectBridgeStatusWs(onReady) {
         }
         if (msg.reason === 'user_bridge_offline') {
           if (msg.enabled) {
-            toast('MT5桥接断开，等待连接后自动恢复订阅', 'warning');
+            toast(`${bridgePlatformLabel()} 桥接断开，等待连接后自动恢复订阅`, 'warning');
           } else {
-            toast('MT5桥接断开', 'warning');
+            toast(`${bridgePlatformLabel()} 桥接断开`, 'warning');
           }
         }
         // Update runtime state with enabled info
@@ -1820,7 +1829,7 @@ function updateMarketStatus(tradeMode) {
     text.textContent = '行情停滞';
     setBadge('marketStatus', '行情停滞', 'warning');
     const b = document.getElementById('marketStatus');
-    if (b) b.title = '市场状态：MT5 报价暂未更新，系统不会按开市处理';
+    if (b) b.title = `市场状态：${bridgePlatformLabel()} 报价暂未更新，系统不会按开市处理`;
     return;
   }
   if (tradeMode < 0) {
@@ -2210,7 +2219,7 @@ function handleHeartbeat(msg) {
     if (state.isPlusReadOnly) {
       setBadge("gatewayMode", "观摩模式", "warning");
     } else {
-      setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
+      setBadge("gatewayMode", `观摩模式 · 请连接 ${bridgePlatformLabel()}`, "warning");
     }
   } else {
     const platform = bridgePlatformLabel();
@@ -2291,7 +2300,7 @@ function handleDisconnect(msg) {
   stopLiveQuoteRefreshTimer();
   if (state.user?.role !== "admin" && state.user?.plan === "pro") {
     state._usingFallback = true;
-    setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
+    setBadge("gatewayMode", `观摩模式 · 请连接 ${bridgePlatformLabel()}`, "warning");
     syncAiAccess({
       mode:"observer", reason:"bridge_offline", read_only:true, can_download_bridge:true,
       allowed_tabs:["dashboard","model-strategy","ai-analyze","trading","history"],
@@ -2708,13 +2717,13 @@ function syncMt5ScheduleTimezoneOption() {
   const option = [...select.options].find(item => item.dataset.mt5Dynamic === "1") || select.options[0];
   option.dataset.mt5Dynamic = "1";
   option.value = timezone;
-  option.textContent = `MT5 服务器时间（${offsetLabel}）`;
+  option.textContent = `${bridgePlatformLabel()} 服务器时间（${offsetLabel}）`;
   return timezone;
 }
 
 function openSubscriptionEditor(strategy, subscription = null) {
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
-  if (!state.tradingAccounts?.length) { toast("请先连接交易桥并完成账户登记", "warning"); return; }
+  if (!state.tradingAccounts?.length) { toast(`请先连接 ${bridgePlatformLabel()} 桥接并完成账户登记`, "warning"); return; }
   const editor = $("subscriptionEditor"); editor.dataset.strategyId = strategy.id; editor.dataset.subscriptionId = subscription?.id || "";
   const currentAccount = state.tradingAccounts.find(account => Number(account.is_active) === 1)
     || state.tradingAccounts.find(account => account.observe_status === "active")
@@ -2842,7 +2851,7 @@ const RISK_LABELS = {
   allowed_symbols:"允许交易品种", require_stop_loss:"强制止损",
   pending_valid_minutes:"挂单有效期",
   max_position_size:"账户单笔最大手数", max_risk_per_trade_pct:"单笔最大风险",
-  signal_ttl_seconds:"信号有效期", max_quote_age_seconds:"报价最大年龄", max_spread_points:"最大点差", max_execution_price_deviation_pct:"最大执行价格偏差", weekend_close_minutes:"MT5周末收盘提前量",
+  signal_ttl_seconds:"信号有效期", max_quote_age_seconds:"报价最大年龄", max_spread_points:"最大点差", max_execution_price_deviation_pct:"最大执行价格偏差", weekend_close_minutes:"交易平台周末收盘提前量",
   min_open_interval_seconds:"最小开仓间隔", max_daily_open_count:"每日开仓次数", dedup_window_seconds:"重复订单时间窗", dedup_price_atr:"重复订单价格距离",
   daily_loss_limit_pct:"每日最大亏损", consecutive_loss_limit:"连续亏损次数", loss_cooldown_minutes:"连续亏损冷却", max_drawdown_pct:"最大回撤",
 };
@@ -2882,23 +2891,23 @@ const RISK_DECISION_LABELS = {
   "R1.7_PENDING_DEVIATION":"挂单价格偏离当前报价过大", "R1.7_PENDING_DIRECTION":"挂单触发价方向与当前价格关系错误",
   "R1.7_PENDING_PRICE_ABNORMAL":"挂单触发价明显异常",
   "R1.7_STOP_LIMIT_RELATION":"Stop Limit 触发价与触发后限价关系错误",
-  "R1.8_PENDING_TTL_DEFAULT":"使用默认挂单有效期", "R1.9_AI_VOLUME_OUT_OF_RANGE":"订单执行上限不符合 MT5 手数规则",
+  "R1.8_PENDING_TTL_DEFAULT":"使用默认挂单有效期", "R1.9_AI_VOLUME_OUT_OF_RANGE":"订单执行上限不符合交易平台手数规则",
   "R1.9_BELOW_MINIMUM_AFTER_RISK":"风险调整后手数低于最小可交易手数", "R1.9_VOLUME_INCREASE_FORBIDDEN":"风控禁止超过账户单笔手数上限",
   "R1.9_VOLUME_INVALID":"订单手数无效", "R1.10_RISK_DATA_INVALID":"账户或品种风险数据无效",
   "R1.10_REAL_RISK":"单笔实际风险校验通过", "R4_QUOTE_INVALID":"当前报价无效",
   "R4.2_WEEKEND_PROTECTION":"周末保护时段禁止开仓", "R4.3_SIGNAL_EXPIRED":"推理信号已过期",
-  "R4.4_QUOTE_STALE":"MT5 报价已过期或时间异常", "R4.5_SPREAD_TOO_WIDE":"当前点差超过上限",
+  "R4.4_QUOTE_STALE":"交易平台报价已过期或时间异常", "R4.5_SPREAD_TOO_WIDE":"当前点差超过上限",
   "R4.6_MARKET_SIGNAL_DRIFT":"市价偏离推理参考价过大", "R4.6_EXECUTION_PRICE_DEVIATION":"当前价格超出允许执行区间", "R2.1_DIRECTIONAL_EXPOSURE":"同方向持仓敞口超过上限",
   "R2.2_MIN_OPEN_INTERVAL":"距离上次开仓时间过短", "R2.3_DAILY_OPEN_COUNT":"当日开仓次数达到上限",
   "R2.4_PRICE_TIME_DUPLICATE":"检测到重复价格和时间窗口订单", "R3.1_DAILY_LOSS_LIMIT":"达到每日亏损上限",
   "R3.2_CONSECUTIVE_LOSS_COOLDOWN":"连续亏损触发冷却", "R3.2_LOSS_COOLDOWN":"账户仍处于亏损冷却期",
   "R3.3_MAX_DRAWDOWN":"达到最大回撤上限", "R3.4_MARGIN_LEVEL":"保证金水平低于要求",
-  "R3.4_MARGIN_DATA_INCOMPLETE":"MT5 无法计算预计保证金", "R3.4_PROJECTED_MARGIN_LEVEL":"下单后的预计保证金水平低于要求",
+  "R3.4_MARGIN_DATA_INCOMPLETE":"交易平台无法计算预计保证金", "R3.4_PROJECTED_MARGIN_LEVEL":"下单后的预计保证金水平低于要求",
   "R3.4_NOTIONAL_DATA_INCOMPLETE":"名义敞口数据不完整", "R3.4_NOTIONAL_EXPOSURE":"名义敞口超过上限",
   "R3_ACCOUNT_HALTED":"账户风控已暂停", "R3_RISK_DATA_INCOMPLETE":"账户风险数据不完整",
   "R6_ACCOUNT_NOT_FOUND":"未找到交易账户",
-  "R6_ACCOUNT_PAUSED":"交易账户已暂停", "R6_ACCOUNT_TRANSFERRED":"MT5账户已切换到其他平台账号",
-  "R6_ACCOUNT_TRADE_PERMISSION_REQUIRED":"MT5账户没有完整交易权限", "R6_GLOBAL_KILL_SWITCH":"全局紧急停止已开启",
+  "R6_ACCOUNT_PAUSED":"交易账户已暂停", "R6_ACCOUNT_TRANSFERRED":"交易账户已切换到其他平台账号",
+  "R6_ACCOUNT_TRADE_PERMISSION_REQUIRED":"交易账户没有完整交易权限", "R6_GLOBAL_KILL_SWITCH":"全局紧急停止已开启",
   "R6_USER_KILL_SWITCH":"账户紧急停止已开启", "R6.4_OBSERVATION_BELOW_MINIMUM":"观察期手数低于最小可交易手数",
   portfolio_state_unavailable:"无法读取当前账户的持仓与挂单，本次未执行",
   opposite_position_exists:"当前账户已有反向持仓，本次不新增仓位",
@@ -2910,7 +2919,7 @@ const RISK_DECISION_LABELS = {
   pending_cancel_failed:"取消当前策略挂单失败，本次未继续执行",
   pending_cancelled:"旧挂单已取消",
   "PX.3_BROKER_SLIPPAGE":"已应用旧版下单价格偏差",
-  "PX.3_EXECUTION_PRICE_TOLERANCE":"已按百分比换算 MT5 下单偏差",
+  "PX.3_EXECUTION_PRICE_TOLERANCE":"已按百分比换算交易平台下单偏差",
 };
 
 function riskDecisionLabel(code) { return RISK_DECISION_LABELS[code] || localizeReason(code) || "未说明原因"; }
@@ -2924,7 +2933,7 @@ function riskDataIncompleteText(value) {
   const reasons = String(value || "").split(",").map(item => item.trim()).filter(Boolean);
   if (!reasons.length) return "账户或行情数据尚未完整";
   return reasons.map(reason => {
-    if (reason.startsWith("unknown_deal_type:")) return `发现尚未识别的 MT5 资金类型（${reason.split(":")[1]}）`;
+    if (reason.startsWith("unknown_deal_type:")) return `发现尚未识别的交易平台资金类型（${reason.split(":")[1]}）`;
     if (reason.startsWith("symbol_info_unavailable:")) return `无法读取品种 ${reason.split(":").slice(1).join(":")} 的合约参数`;
     return RISK_DATA_REASON_LABELS[reason] || reason;
   }).join("；");
@@ -2946,7 +2955,7 @@ function riskRuleDescription(code, details = {}) {
   if (code === "R4.4_QUOTE_STALE") return `${label}：报价年龄 ${displayRiskNumber(details.quote_age_seconds, 3)} 秒，允许上限 ${displayRiskNumber(details.maximum_seconds)} 秒`;
   if (code === "R1.7_PENDING_DEVIATION") return `${label}：偏离 ${displayRiskNumber(details.deviation)}，允许上限 ${displayRiskNumber(details.maximum)}`;
   if (code === "R4.6_EXECUTION_PRICE_DEVIATION") return `${label}：当前 ${displayRiskNumber(details.current_price)}，允许 ${displayRiskNumber(details.allowed_min)} ～ ${displayRiskNumber(details.allowed_max)}（±${displayRiskNumber(details.maximum_pct, 3)}%）`;
-  if (code === "PX.3_EXECUTION_PRICE_TOLERANCE") return `${label}：剩余 ${displayRiskNumber(details.remaining_price, 3)}，发送 ${displayRiskNumber(details.mt5_points, 0)} MT5 点`;
+  if (code === "PX.3_EXECUTION_PRICE_TOLERANCE") return `${label}：剩余 ${displayRiskNumber(details.remaining_price, 3)}，发送 ${displayRiskNumber(details.mt5_points, 0)} ${bridgePlatformLabel()} 点`;
   if (code === "R1.3_SL_WIDEN_VOLUME_DOWN") return `${label}：止损 ${displayRiskNumber(details.from_sl)} → ${displayRiskNumber(details.to_sl)}，手数 ${displayRiskNumber(details.from_volume)} → ${displayRiskNumber(details.to_volume)}`;
   if (code === "R1.9_AI_VOLUME_OUT_OF_RANGE") return `${label}：执行上限 ${displayRiskNumber(details.volume)} 手，允许 ${displayRiskNumber(details.minimum)} ～ ${displayRiskNumber(details.maximum)} 手，步进 ${displayRiskNumber(details.step)} 手`;
   if (code === "R1.7_PENDING_DIRECTION") return `${label}：触发价 ${displayRiskNumber(details.trigger_price)}，当前价 ${displayRiskNumber(details.current_price)}`;
@@ -3448,7 +3457,7 @@ function periodReviewProgressHtml(review) {
     <div class="period-review-stage-track" role="progressbar" aria-label="复盘生成阶段" aria-valuemin="1" aria-valuemax="4" aria-valuenow="${Math.min(4, stageIndex + 1)}">
       ${["准备证据", "AI 分析", "校验结果", "等待确认"].map((label,index) => `<div class="${index < stageIndex || (terminal && stage !== 'failed') ? 'done' : index === stageIndex && !terminal ? 'active' : ''}"><span>${index < stageIndex || (terminal && stage !== 'failed') ? '<i data-lucide="check" size="12"></i>' : index + 1}</span><small>${label}</small></div>`).join("")}
     </div>
-    <div class="period-review-live-line ${stage === 'failed' ? 'danger' : ''}"><span class="period-review-live-dot"></span><strong>${escapeHtml(detail)}</strong>${review.stage_updated_at ? `<small>更新于 ${escapeHtml(formatReviewEventTime(review.stage_updated_at, review.timezone_offset_minutes))} MT5</small>` : ''}</div>
+    <div class="period-review-live-line ${stage === 'failed' ? 'danger' : ''}"><span class="period-review-live-dot"></span><strong>${escapeHtml(detail)}</strong>${review.stage_updated_at ? `<small>更新于 ${escapeHtml(formatReviewEventTime(review.stage_updated_at, review.timezone_offset_minutes))} ${bridgePlatformLabel()}</small>` : ''}</div>
     ${review.last_error_code && ["retry_wait", "failed"].includes(stage) ? `<div class="period-review-inline-error"><i data-lucide="circle-alert" size="15"></i><span>${escapeHtml(periodReviewFailureText(review.last_error_code))}</span></div>` : ""}
     ${events.length ? `<details class="period-review-log"><summary>生成记录 <span>${events.length}</span></summary><ol>${events.map(event => `<li class="${escapeHtml(event.event_status || 'info')}"><time>${escapeHtml(formatReviewEventTime(event.created_at, review.timezone_offset_minutes))}</time><span>${escapeHtml(periodReviewEventLabel(event))}${event.message_code ? `<small>${escapeHtml(periodReviewFailureText(event.message_code))}</small>` : ''}</span></li>`).join("")}</ol></details>` : ""}
   </section>`;
@@ -3540,8 +3549,8 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
   const sourceLabel = review.evidence_status === "complete" ? "证据完整" : "证据待补全";
   const sourceDetail = quality.complete === false ? "部分行情或结构证据不可用" : `已汇总 ${Number(review.source_count || 0)} 个来源`;
   const periodScope = isMonthly
-    ? `MT5 时间 ${review.period_key || '--'} 全月 · 月末结算后生成`
-    : `MT5 时间 ${review.period_key || '--'} 00:00–24:00 · 已结束周期`;
+    ? `${bridgePlatformLabel()} 时间 ${review.period_key || '--'} 全月 · 月末结算后生成`
+    : `${bridgePlatformLabel()} 时间 ${review.period_key || '--'} 00:00–24:00 · 已结束周期`;
   const nextPeriodHint = isMonthly ? "本月结束后的交易将进入下月复盘" : "本周期结束后的平仓将进入下一份日复盘";
   const strategyProvenance = reviewStrategyProvenance(review);
   const derivationLabels = { queued:"经验等待处理", leased:"正在沉淀经验", paused:"经验处理已暂停", failed:"经验处理失败", succeeded:"经验已沉淀" };
@@ -4084,7 +4093,7 @@ function renderMembershipAccessState(user, access) {
   $('membershipGateTitle').textContent = expired ? '续费后恢复 AI 交易实验室' : '开通会员后进入 AI 交易实验室';
   $('membershipGateDescription').textContent = expired
     ? `你的 ${purchasedPlan}${expiresAt ? ` 已于 ${expiresAt} 到期` : ' 已到期'}。账户资料仍然保留，续费成功后会自动恢复对应权限。`
-    : '当前账户已成功登录，但免费版不包含实验室权限。选择 Plus 进行观摩，或选择 Pro 连接自己的 MT5。';
+    : '当前账户已成功登录，但免费版不包含实验室权限。选择 Plus 进行观摩，或选择 Pro 连接自己的 MT4/MT5。';
   $('membershipGateAccount').textContent = account;
   $('membershipGateAvatar').textContent = avatar;
   $('membershipGatePlan').textContent = expired ? `${purchasedPlan} · 已过期` : '免费版';
@@ -4241,7 +4250,7 @@ async function loadStatus() {
     if (state.isPlusReadOnly) {
       setBadge("gatewayMode", "观摩模式", "warning");
     } else {
-      setBadge("gatewayMode", "观摩模式-请连接您的MT5", "warning");
+      setBadge("gatewayMode", `观摩模式 · 请连接 ${bridgePlatformLabel()}`, "warning");
     }
   } else {
     const platform = bridgePlatformLabel();
@@ -4361,7 +4370,7 @@ function initBridgeModal() {
 async function handleTradeModeClick() {
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
-  if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
+  if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast(bridgeAccountConnectPrompt(), "warning"); return; }
   const health = await wsApi("health").catch(() => null);
   if (!health?.gateway) {
     toast(`暂时无法核验 ${bridgePlatformLabel()} 与交易权限，请稍后重试`, "error");
@@ -4407,28 +4416,42 @@ async function handleTradeModeClick() {
   }
 }
 
-// ============ Auto Toggle (Simple) ============
-let _autoToggleLock = false;
-async function handleAutoToggle() {
-  if (_autoToggleLock) return;
+// ============ Automatic-analysis subscription settings entry ============
+let _autoSubscriptionEntryLock = false;
+async function handleAutoSubscriptionClick() {
+  if (_autoSubscriptionEntryLock) return;
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   if (state.isPlusReadOnly) { toast("Plus 会员仅可查看", "warning"); return; }
-  if (state.user?.role !== 'admin' && state.user?.plan === 'pro' && state._usingFallback) { toast("请先连接您的 MT5 账户", "warning"); return; }
-  const activeCycles = activeAutoProgressCycles(state.autoRuntime);
-  const closeTitle = activeCycles.length ? "停止后续自动分析" : "关闭自动分析";
-  const closeMessage = activeCycles.length
-    ? `当前有 ${activeCycles.length} 个品种正在分析。关闭后不会再开始新任务，已经提交给模型的任务仍会安全完成。`
-    : "确认关闭自动分析？关闭后将停止 AI 行情分析和交易建议推送。";
-  if (state.autoEnabled && !await showConfirm(closeTitle, closeMessage, { confirmText: activeCycles.length ? "停止后续任务" : "关闭", danger: true })) return;
-  _autoToggleLock = true;
+  _autoSubscriptionEntryLock = true;
   try {
-    const result = await wsApi('toggle_auto');
-    await loadStatus();
-    toast(result.message || (result.enabled ? '自动分析已开启' : '自动分析已关闭'), 'success');
-  } catch (e) {
-    toast('切换失败: ' + e.message, 'error');
+    await loadStrategyCatalog();
+    const activeAccount = state.tradingAccounts?.find(account => Number(account.is_active) === 1)
+      || state.tradingAccounts?.find(account => account.observe_status === "active")
+      || state.tradingAccounts?.[0];
+    const subscriptions = state.strategySubscriptions || [];
+    const subscription = subscriptions.find(item => Number(item.execution_enabled) === 1)
+      || subscriptions.find(item => Number(item.trading_account_id) === Number(activeAccount?.id))
+      || subscriptions[0]
+      || null;
+    const strategy = (state.strategies || []).find(item => Number(item.id) === Number(subscription?.strategy_id))
+      || (state.strategies || []).find(item => item.visibility_status === "active" && Number(item.is_active) === 1)
+      || (state.strategies || [])[0];
+    if (!strategy) {
+      setTab("model-strategy");
+      setModelStrategySubtab("strategies");
+      toast("还没有可用策略，请先创建或选择策略", "warning");
+      return;
+    }
+    const editableSubscription = subscription && Number(subscription.strategy_id) === Number(strategy.id)
+      ? subscription
+      : null;
+    setTab("model-strategy", { skipRefresh:true });
+    setModelStrategySubtab("strategies");
+    openSubscriptionEditor(strategy, editableSubscription);
+  } catch (error) {
+    toast(`订阅设置加载失败：${userVisibleText(apiErrorMessage(error.message), "请稍后重试")}`, "error");
   } finally {
-    _autoToggleLock = false;
+    _autoSubscriptionEntryLock = false;
   }
 }
 
@@ -5035,13 +5058,13 @@ const POSITION_PROTECTION_TERMINAL_STATES = new Set(["completed", "partial_faile
 
 function positionProtectionErrorLabel(code, fallback = "") {
   const labels = {
-    bridge_offline: "用户桥接离线，请连接 MT5 后重试",
+    bridge_offline: "用户桥接离线，请连接交易平台后重试",
     system_position_not_found: "持仓已不存在或已经平仓",
     position_not_system_owned: "该持仓不是系统下单",
     position_magic_mismatch: "持仓归属校验失败",
     management_account_identity_mismatch: "当前桥接账户与目标账户不一致",
-    management_account_server_mismatch: "MT5 服务器已变化",
-    management_account_login_mismatch: "MT5 登录账号已变化",
+    management_account_server_mismatch: "交易平台服务器已变化",
+    management_account_login_mismatch: "交易平台登录账号已变化",
     management_symbol_mismatch: "持仓品种已变化",
     management_direction_mismatch: "持仓方向已变化",
     management_volume_mismatch: "持仓手数已变化",
@@ -5051,7 +5074,7 @@ function positionProtectionErrorLabel(code, fallback = "") {
     take_profit_direction_or_distance_invalid: "止盈方向错误或距离现价过近",
     source_position_update_failed: "发起持仓修改失败，未继续同步",
     multiple_position_sources: "净持仓包含多个来源，已安全跳过",
-    position_protection_command_failed: "MT5 未确认修改结果",
+    position_protection_command_failed: "交易平台未确认修改结果",
   };
   return labels[String(code || "")] || fallback || String(code || "执行失败");
 }
@@ -5401,7 +5424,7 @@ function applyRoleUI() {
     gatewayBadge.classList.toggle("clickable-badge", canOpenDownload);
     gatewayBadge.classList.toggle("is-readonly", !canOpenDownload);
     gatewayBadge.setAttribute("aria-disabled", String(!canOpenDownload));
-    gatewayBadge.title = observer && !canOpenDownload ? "Plus 会员仅可观摩" : "";
+    gatewayBadge.title = observer && !canOpenDownload ? "Plus 会员仅可观摩" : `打开 ${bridgePlatformLabel()} 连接设置`;
   }
 
   document.querySelectorAll('.sym-input').forEach(el => {
@@ -5416,7 +5439,11 @@ function applyRoleUI() {
     badge.classList.toggle("is-readonly", observer);
     badge.setAttribute('aria-disabled', String(observer));
     if ('disabled' in badge) badge.disabled = false;
-    badge.title = observer ? observerMessage() : "";
+    badge.title = observer
+      ? observerMessage()
+      : id === "autoAnalyzeMode"
+        ? (badge.title || "点击编辑订阅与自动分析设置")
+        : (badge.title || "查看或切换交易发送权限");
   }
 
   document.querySelectorAll('.observer-action-panel').forEach(panel => setObserverPanelLock(panel, observer));
@@ -5816,10 +5843,10 @@ function signalExecutionAdvice(signal) {
   if (pending) return {
     state:"pending",
     title:"挂单已提交",
-    description:signal?.pending_ticket ? `MT5 挂单 #${signal.pending_ticket} 正在等待触发。` : "挂单已经发送到 MT5，正在等待触发。",
+    description:signal?.pending_ticket ? `${bridgePlatformLabel()} 挂单 #${signal.pending_ticket} 正在等待触发。` : `挂单已经发送到 ${bridgePlatformLabel()}，正在等待触发。`,
     executable:false,
   };
-  if (signal?.is_executed) return { state:"executed", title:"订单已执行", description:"MT5 已确认订单执行结果。", executable:false };
+  if (signal?.is_executed) return { state:"executed", title:"订单已执行", description:`${bridgePlatformLabel()} 已确认订单执行结果。`, executable:false };
   const terminalStatus = ["rejected", "failed", "skipped", "uncertain"].includes(persistedStatus) ? persistedStatus : "";
   const executionStatus = execution?.status || terminalStatus;
   if (executionStatus && executionStatus !== "success") {
@@ -5995,7 +6022,7 @@ function inferenceChartShell(signal) {
   }
   const snapshotStatus = context.snapshot?.evidence_status;
   const sourceLabel = ["platform_market_bridge", "platform_admin_bridge"].includes(context.snapshot?.market_source)
-    ? "平台 MT5 行情"
+    ? "平台默认观摩源行情"
     : "推理时行情";
   const visibleCount = Array.isArray(context.klines[state.inferenceChartTimeframe])
     ? context.klines[state.inferenceChartTimeframe].length
@@ -6819,7 +6846,7 @@ function queueTradeStateRefresh(options) {
 function managementExpectedState(item, ticket, kind) {
   const identity = state.bridgeAccountIdentity;
   if (!identity?.brokerServerKey || !identity?.loginAccount) {
-    throw new Error("MT5 账户身份尚未加载，请刷新账户状态后重试");
+    throw new Error(`${bridgePlatformLabel()} 账户身份尚未加载，请刷新账户状态后重试`);
   }
   const directionValue = String(kind === "position"
     ? (item.type || item.side || "")
@@ -7755,7 +7782,7 @@ function renderPositionManagementSettings(settings = {}) {
     event.preventDefault();
     const button = event.submitter;
     const executionMode = $("positionManagementModeInput").value;
-    if (executionMode === "auto_exit" && !await showConfirm("开启自动平仓？", "开启后，同一持仓连续两轮有效自动推理都建议平仓时，系统会核对具体 MT5 票号并执行。任意一轮继续持有或输出无效都会清零；净持仓账户仍须通过同品种独占仓位与唯一归属校验。AI 挂单和 AI 取消挂单使用独立的平台开关。", { confirmText:"确认开启", danger:true })) return;
+    if (executionMode === "auto_exit" && !await showConfirm("开启自动平仓？", `开启后，同一持仓连续两轮有效自动推理都建议平仓时，系统会核对具体 ${bridgePlatformLabel()} 票号并执行。任意一轮继续持有或输出无效都会清零；净持仓账户仍须通过同品种独占仓位与唯一归属校验。AI 挂单和 AI 取消挂单使用独立的平台开关。`, { confirmText:"确认开启", danger:true })) return;
     button.disabled = true;
     try {
       await api("/api/ai/position-management/settings", { method:"PUT", body:JSON.stringify({
@@ -8283,8 +8310,8 @@ function bindEvents() {
     if (!event.target.closest("#observerChannelControl")) setObserverChannelMenuOpen(false);
   });
 
-  // Auto analyze badge — simple toggle on/off
-  $("autoAnalyzeMode")?.addEventListener("click", handleAutoToggle);
+  // Auto analyze badge — open the current subscription settings.
+  $("autoAnalyzeMode")?.addEventListener("click", handleAutoSubscriptionClick);
 
   // Auto badge hover — prevent title flicker during countdown
   const autoMode = $('autoAnalyzeMode');
