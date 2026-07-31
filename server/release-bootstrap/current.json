@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "release_id": "bridge-3.0.0-production-20260730.4",
+  "release_id": "bridge-3.0.0-production-20260731.2",
   "release_version": "3.0.0",
-  "generated_at_utc_msc": 1785411369664,
-  "published_at_utc_msc": 1785411369664,
-  "expires_at_utc_msc": 1816947369664,
+  "generated_at_utc_msc": 1785465227975,
+  "published_at_utc_msc": 1785465227975,
+  "expires_at_utc_msc": 1817001227975,
   "priority": "normal",
   "minimum_launcher_version": "1.0.0",
   "minimum_idle_seconds": 120,
@@ -15,10 +15,10 @@
     {
       "module_id": "core",
       "version": "3.0.0",
-      "url": "https://qiniu.acadfx.com/bridge/releases/3.0.0/65a3e0e1e9854c5ef9513568ed0a7ec1ef06bd360c0da88b71b59019d28fe38f/core.zip",
-      "size_bytes": 24055235,
-      "sha256": "65a3e0e1e9854c5ef9513568ed0a7ec1ef06bd360c0da88b71b59019d28fe38f",
-      "signature": "pBcTvEir0hdZ2aaejMe2kTN13B0fq6eMreVyWd9yYAc3TtX592seRPophszKirbltTkXYjSWZo593MAcDKjJDw=="
+      "url": "https://qiniu.acadfx.com/bridge/releases/3.0.0/a4f2034cc0c3df4dca5a26a9c9189de03d9a8db5980b114c0cbf7ee0f2605f44/core.zip",
+      "size_bytes": 24057544,
+      "sha256": "a4f2034cc0c3df4dca5a26a9c9189de03d9a8db5980b114c0cbf7ee0f2605f44",
+      "signature": "9J1AJGk1fOqF0lBGq6rDDbpmj7iswQ4o0VLlkhnSWFd699hJlHBTWLRb3q5txcFTIRQRz/rQXz9l2vK0q4kZCg=="
     },
     {
       "module_id": "adapter.mt5.python",
@@ -26,16 +26,16 @@
       "url": "https://qiniu.acadfx.com/bridge/releases/3.0.0/9029c3b11fb6b85ab72f175aeaed1ef27e7098d2adc56003dcbb2eaa11f40990/adapter.mt5.python.zip",
       "size_bytes": 21217,
       "sha256": "9029c3b11fb6b85ab72f175aeaed1ef27e7098d2adc56003dcbb2eaa11f40990",
-      "signature": "gUXFPlTRyjLg+TgzWOv7NXUWMzCeusdUsZ7hpW/503v5lOSMLAlr3wjjcPtl2G+TSXzF8WtTaKFwpwEeUopq1w=="
+      "signature": "gC+3W1tXn119Cf01wwIWT28FAgAZujBTHp/S1fdBAHICmle9TxbJy5Mj3gfv/UyudfaQ1FtzUVtQhBfgY7c+dw=="
     },
     {
       "module_id": "adapter.mt4",
       "version": "3.0.0",
-      "url": "https://qiniu.acadfx.com/bridge/releases/3.0.0/2dcd486086eb8be815e73e21aee032b787bb7e88ee4d4c4531fb1f6c60df771c/adapter.mt4.zip",
-      "size_bytes": 315325,
-      "sha256": "2dcd486086eb8be815e73e21aee032b787bb7e88ee4d4c4531fb1f6c60df771c",
-      "signature": "HXKFTms6wG/3D8kgAKbUbOaZP/BtHP56wIOClA1SBQEMneUC7I7iNRdScH+HZTp3rWsiLkocvDHOeH+NWWjoHQ=="
+      "url": "https://qiniu.acadfx.com/bridge/releases/3.0.0/96998dfb71aa9bf410d02784041e63599c6bf874348f6cfbd63d77dc480ee80d/adapter.mt4.zip",
+      "size_bytes": 322163,
+      "sha256": "96998dfb71aa9bf410d02784041e63599c6bf874348f6cfbd63d77dc480ee80d",
+      "signature": "of7ifY8BzruZDY/SVryxqbQD7jQjIVHHULo8vggTxbhaYXUxwRDyBQ60G0fWXi1C1icHe7UwU5qGBZ1IxZU+jw=="
     }
   ],
-  "signature": "z+x3c+iGWwoW6++BPZc2r4wdKOTezt41YGeYa/tJEJAMXcVIvYAled9yP4aRGHNh5/AQx4i8mpvl/jfhSt74cQ=="
+  "signature": "1sUBHnPlX2emIY9bKhZvgMfj0sshPsw9jZx6kgNHZah9lWqVL7JEm6b1FgChsKv1LKoaK5iUuqcn0LbnKIB8lA=="
 }
