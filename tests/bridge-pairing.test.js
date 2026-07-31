@@ -195,14 +195,16 @@ describe('bridge device pairing', () => {
     expect(createBridgeRefreshSession).not.toHaveBeenCalled()
   })
 
-  it('rate-limits start and approval without exhausting the polling window', () => {
+  it('rate-limits pairing starts independently without exhausting approval or polling quotas', () => {
     const server = readFileSync(new URL('../server/index.js', import.meta.url), 'utf8')
     const config = readFileSync(new URL('../server/config.js', import.meta.url), 'utf8')
-    expect(server).toContain("app.use('/api/auth/bridge-pair/start', authLimiter)")
+    expect(server).toContain("app.use('/api/auth/bridge-pair/start', bridgePairStartLimiter)")
     expect(server).toContain("app.use('/api/auth/bridge-pair/approve', authLimiter)")
     expect(server).toContain("app.use('/api/auth/bridge-pair/token', bridgeAuthLimiter)")
     expect(server).toContain("app.use('/api/auth/bridge-refresh', bridgeAuthLimiter)")
     expect(server).toContain("app.use('/api/auth/bridge-observer-session', bridgeAuthLimiter)")
     expect(config).toContain("BRIDGE_AUTH_RATE_LIMIT_MAX = parseInt(process.env.BRIDGE_AUTH_RATE_LIMIT_MAX || '240')")
+    expect(config).toContain("BRIDGE_PAIR_START_RATE_LIMIT_WINDOW_MS = parseInt(process.env.BRIDGE_PAIR_START_RATE_LIMIT_WINDOW_MS || '600000')")
+    expect(config).toContain("BRIDGE_PAIR_START_RATE_LIMIT_MAX = parseInt(process.env.BRIDGE_PAIR_START_RATE_LIMIT_MAX || '6')")
   })
 })

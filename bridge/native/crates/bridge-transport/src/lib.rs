@@ -2463,6 +2463,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bridge_pairing_preserves_the_server_rate_limit_code() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let _request = read_http_request(&mut stream).await;
+            let body = serde_json::json!({
+                "ok": false,
+                "code": "bridge_pair_start_rate_limited",
+                "error": "authorization rate limited"
+            })
+            .to_string();
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 60\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("response");
+        });
+
+        let endpoints =
+            ServerEndpoints::from_server_url(&format!("http://{address}")).expect("endpoints");
+        let client = BridgeAuthClient::new(endpoints, "LiangJianBridge/test").expect("client");
+        let error = client
+            .start_pairing("Test Workstation")
+            .await
+            .expect_err("rate limited");
+        assert_eq!(error.code(), "bridge_pair_start_rate_limited");
+        server.await.expect("server");
+    }
+
+    #[tokio::test]
     async fn maintenance_lease_uses_fresh_bearer_tokens_and_exact_server_routes() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let address = listener.local_addr().expect("listener address");

@@ -4,7 +4,7 @@ import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
 import http from 'http'
-import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, AUTH_RATE_LIMIT_MAX, BRIDGE_AUTH_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, CORS_ORIGINS, isCorsOriginAllowed } from './config.js'
+import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, AUTH_RATE_LIMIT_MAX, BRIDGE_AUTH_RATE_LIMIT_MAX, BRIDGE_PAIR_START_RATE_LIMIT_WINDOW_MS, BRIDGE_PAIR_START_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, CORS_ORIGINS, isCorsOriginAllowed } from './config.js'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
@@ -52,6 +52,7 @@ import { securityHeaders } from './security-headers.js'
 import { blockPrivateVideoStatic } from './video-access.js'
 import { installFatalProcessHandlers, listenHttpServer } from './runtime-lifecycle.js'
 import { resolveBridgeInstallerRelease } from './bridge-installer-release.js'
+import { createBridgePairStartLimiter } from './bridge-pair-rate-limit.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const bridgeInstallerRelease = resolveBridgeInstallerRelease()
@@ -103,6 +104,10 @@ const bridgeAuthLimiter = rateLimit({
   legacyHeaders: false,
   message: { ok: false, code:'bridge_api_rate_limited', error: '操作过于频繁，请稍后再试' }
 })
+const bridgePairStartLimiter = createBridgePairStartLimiter({
+  windowMs: BRIDGE_PAIR_START_RATE_LIMIT_WINDOW_MS,
+  max: BRIDGE_PAIR_START_RATE_LIMIT_MAX,
+})
 const writeLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: WRITE_RATE_LIMIT_MAX,
@@ -114,7 +119,7 @@ app.use('/api/login', authLimiter)
 app.use('/api/auth/bridge-refresh', bridgeAuthLimiter)
 app.use('/api/auth/bridge-session', bridgeAuthLimiter)
 app.use('/api/auth/bridge-revoke', authLimiter)
-app.use('/api/auth/bridge-pair/start', authLimiter)
+app.use('/api/auth/bridge-pair/start', bridgePairStartLimiter)
 app.use('/api/auth/bridge-pair/token', bridgeAuthLimiter)
 app.use('/api/auth/bridge-pair/approve', authLimiter)
 app.use('/api/auth/bridge-observer-session', bridgeAuthLimiter)

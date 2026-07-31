@@ -46,6 +46,8 @@ export const CORS_ORIGINS = Object.freeze(parseCorsOrigins())
 // at the deployment edge so dashboard polling is not double-limited per IP.
 export const AUTH_RATE_LIMIT_MAX = parseInt(process.env.AUTH_RATE_LIMIT_MAX || '20')
 export const BRIDGE_AUTH_RATE_LIMIT_MAX = parseInt(process.env.BRIDGE_AUTH_RATE_LIMIT_MAX || '240')
+export const BRIDGE_PAIR_START_RATE_LIMIT_WINDOW_MS = parseInt(process.env.BRIDGE_PAIR_START_RATE_LIMIT_WINDOW_MS || '600000')
+export const BRIDGE_PAIR_START_RATE_LIMIT_MAX = parseInt(process.env.BRIDGE_PAIR_START_RATE_LIMIT_MAX || '6')
 export const WRITE_RATE_LIMIT_MAX = parseInt(process.env.WRITE_RATE_LIMIT_MAX || '10')
 export const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000') // 15min
 

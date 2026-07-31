@@ -15,10 +15,13 @@ describe('application rate-limit boundaries', () => {
   it('retains dedicated limits for authentication, Bridge credentials, and content writes', () => {
     expect(serverSource).toContain('const authLimiter = rateLimit({')
     expect(serverSource).toContain('const bridgeAuthLimiter = rateLimit({')
+    expect(serverSource).toContain('const bridgePairStartLimiter = createBridgePairStartLimiter({')
     expect(serverSource).toContain("app.use('/api/login', authLimiter)")
     expect(serverSource).toContain("app.use('/api/send-code', authLimiter)")
     expect(serverSource).toContain("app.use('/api/auth/bridge-refresh', bridgeAuthLimiter)")
     expect(serverSource).toContain("app.use('/api/auth/bridge-pair/token', bridgeAuthLimiter)")
+    expect(serverSource).toContain("app.use('/api/auth/bridge-pair/start', bridgePairStartLimiter)")
+    expect(serverSource).not.toContain("app.use('/api/auth/bridge-pair/start', authLimiter)")
     expect(serverSource).toContain('const writeLimiter = rateLimit({')
     expect(serverSource).toContain("app.use('/api/feedback', writeLimiter)")
     expect(serverSource).toContain("app.use('/api/posts', writeLimiter)")

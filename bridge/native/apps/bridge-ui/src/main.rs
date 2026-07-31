@@ -3113,6 +3113,9 @@ fn error_message(code: &str) -> &'static str {
         "bridge_pair_in_progress" => {
             "正在准备新的授权页面，请稍候；如果浏览器没有打开，请再次点击“连接账号”。"
         }
+        "bridge_pair_start_rate_limited" => {
+            "授权请求过于频繁，请稍等几分钟后再试，请勿反复点击“连接账号”。"
+        }
         "mt4_platform_not_selected" => "请先将交易平台切换为 MT4。",
         "mt4_terminal_not_found" => "未发现 MT4，请先打开一次 MT4，然后点击“重新检测”。",
         "mt4_terminal_selection_required" => "检测到多个 MT4，请先选择需要安装 EA 的终端。",
@@ -3574,6 +3577,14 @@ mod tests {
         let message = error_message("bridge_pair_in_progress");
         assert!(message.contains("授权页面"));
         assert!(message.contains("连接账号"));
+        assert_ne!(message, error_message("unknown_error"));
+    }
+
+    #[test]
+    fn pairing_rate_limit_has_an_actionable_chinese_message() {
+        let message = error_message("bridge_pair_start_rate_limited");
+        assert!(message.contains("过于频繁"));
+        assert!(message.contains("请勿反复点击"));
         assert_ne!(message, error_message("unknown_error"));
     }
 
