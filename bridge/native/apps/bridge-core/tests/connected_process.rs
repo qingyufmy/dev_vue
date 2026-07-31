@@ -2074,6 +2074,11 @@ async fn serve_control(
         }
         let body = if request.1.starts_with("POST /api/auth/bridge-refresh ") {
             r#"{"ok":true,"token":"access_fixture","refreshExpiresInSeconds":3600,"bridgeRole":"admin"}"#
+        } else if request
+            .1
+            .starts_with("POST /api/auth/bridge-observer-sources ")
+        {
+            r#"{"ok":true,"sources":[]}"#
         } else if request.1.starts_with("POST /api/auth/bridge-ticket ") {
             r#"{"ok":true,"ticket":"ticket_fixture","expiresInSeconds":30}"#
         } else if request
