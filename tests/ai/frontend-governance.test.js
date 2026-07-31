@@ -85,7 +85,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('setText("quoteAsk", priceDisplay(q.ask))')
     expect(app).toContain('setText("quoteBid", priceDisplay(data.bid))')
     expect(app).toContain('setText("quoteAsk", priceDisplay(data.ask))')
-    expect(html).toContain('/ai/app.js?v=20260731platformcopy3')
+    expect(html).toContain('/ai/app.js?v=20260731bridgeaccess1')
     expect(app).toContain('wsApi("platform_quote", { symbol })')
     expect(app).toContain('state.platformMarketSourceActive = platformQuote.available === true')
     expect(app).toContain('state.lastObserverQuote = {')
@@ -617,6 +617,18 @@ describe('AI governance navigation and DOM contract', () => {
     const handler = app.slice(app.indexOf('async function handleAutoSubscriptionClick()'), app.indexOf('async function loadSymbols()'))
     expect(handler).not.toContain("wsApi('toggle_auto')")
     expect(handler).not.toContain('请先连接您的 MT5 账户')
+  })
+
+  it('refreshes personal data and removes the observer selector when a user bridge reconnects', () => {
+    const start = app.indexOf('function syncAiAccess(access)')
+    const end = app.indexOf('function apiErrorMessage', start)
+    const accessSync = app.slice(start, end)
+    expect(accessSync).toContain('previousMode === "observer" && access.mode !== "observer"')
+    expect(accessSync).toContain('state.observerChannels = []')
+    expect(accessSync).toContain('state.selectedObserverChannelId = null')
+    expect(accessSync).toContain('renderObserverChannelControl()')
+    expect(accessSync).toContain('schedulePersonalBridgeRefresh()')
+    expect(accessSync).toContain('refreshAll().then(() => refreshTabData(activeTabId()))')
   })
 
   it('formats numeric MT terminal timestamps instead of exposing raw epoch values', () => {

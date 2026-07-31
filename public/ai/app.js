@@ -1411,19 +1411,47 @@ function canAccessTab(tabId) {
 }
 
 function syncAiAccess(access) {
-  if (!access) return;
+  if (!access) return { changed:false, personalBridgeRestored:false };
   const previousMode = state.aiAccess?.mode;
   const previousReason = state.aiAccess?.reason;
   state.aiAccess = access;
   state.isPlusReadOnly = access.reason === "plus_plan";
   document.body.classList.toggle("ai-observer-mode", access.read_only === true);
   document.body.dataset.aiAccessReason = access.reason || "full";
+  const changed = Boolean(previousMode) && (previousMode !== access.mode || previousReason !== access.reason);
+  const personalBridgeRestored = previousMode === "observer" && access.mode !== "observer";
+  if (!isObserverMode()) {
+    state.observerChannels = [];
+    state.selectedObserverChannelId = null;
+  }
+  // Access can change from the 15-second status refresh without reloading the
+  // page. Re-render this control immediately so an old observer selector can
+  // never remain visible after the user's own bridge becomes active.
+  renderObserverChannelControl();
   applyRoleUI();
   if (!canAccessTab(activeTabId())) setTab("dashboard", { skipRefresh:true });
-  if (previousMode && (previousMode !== access.mode || previousReason !== access.reason)) {
+  if (changed) {
     _historyCache = null;
     _historyChartCache = null;
   }
+  if (personalBridgeRestored) schedulePersonalBridgeRefresh();
+  return { changed, personalBridgeRestored };
+}
+
+let _personalBridgeRefreshTimer = null;
+
+function schedulePersonalBridgeRefresh() {
+  if (_personalBridgeRefreshTimer) return;
+  _personalBridgeRefreshTimer = setTimeout(() => {
+    _personalBridgeRefreshTimer = null;
+    state.platformMarketSourceActive = false;
+    state.lastObserverQuote = null;
+    _historyCache = null;
+    _historyChartCache = null;
+    refreshAll().then(() => refreshTabData(activeTabId())).catch(error => {
+      console.warn('[BridgeAccess] 个人桥接数据自动刷新失败:', error?.message || error);
+    });
+  }, 0);
 }
 
 function apiErrorMessage(code) {
@@ -2195,7 +2223,7 @@ function flashSignalMonitorUpdate() {
 
 // Handle heartbeat reply — MT5 connection status
 function handleHeartbeat(msg) {
-  syncAiAccess(msg.access);
+  const accessTransition = syncAiAccess(msg.access);
   if (msg.platform) updateBridgePlatformUI(msg.platform);
   if (msg.observer_channel?.id) syncSelectedObserverChannel(msg.observer_channel.id);
   if (msg.mt5_time) {
@@ -2267,7 +2295,7 @@ function handleHeartbeat(msg) {
   // Bridge state changed → update role-based UI
   if (isLive !== wasLive || usingFallback !== wasFallback) {
     applyRoleUI();
-    if (isLive) {
+    if (isLive && !accessTransition.personalBridgeRestored) {
       // Clear caches so bridge-dependent data refreshes
       _historyCache = null;
       _historyChartCache = null;
