@@ -61,6 +61,7 @@ use mt4_registration_coordinator::Mt4RegistrationEvent;
 use mt4_terminal_discovery::Mt4Installation;
 use mt5_terminal_discovery::{
     Mt5Installation, Mt5ProbeResult, probe_terminal, selected_or_discovered,
+    start_terminal_if_stopped as start_mt5_terminal_if_stopped,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -3478,6 +3479,7 @@ async fn run_profile_lifecycle(
         {
             return Err("bridge_expected_terminal_missing".into());
         }
+        start_bound_terminals(&bootstrap, logger).await?;
         bootstrap.begin_terminal_sessions(now_utc_msc())?;
         let endpoints = resolve_server_endpoints(application_directory, root_data_directory)?;
         let clock: Arc<dyn Fn() -> i64 + Send + Sync> = Arc::new(now_utc_msc);
@@ -3665,6 +3667,76 @@ async fn run_profile_lifecycle(
     }
 }
 
+async fn start_bound_terminals(
+    bootstrap: &NativeProfileBootstrap,
+    logger: &BridgeLogger,
+) -> Result<(), &'static str> {
+    let mut started = false;
+    for prepared in &bootstrap.mt5_sessions {
+        match start_mt5_terminal_if_stopped(&prepared.binding.terminal_path) {
+            Ok(true) => {
+                started = true;
+                logger.info(
+                    "native_mt5_terminal_started",
+                    Some(&format!(
+                        "profile={};terminal_id={}",
+                        bootstrap.profile_id, prepared.binding.terminal_instance_id
+                    )),
+                );
+            }
+            Ok(false) => {}
+            Err(code) => logger.warning(
+                "native_mt5_terminal_start_failed",
+                Some(&format!(
+                    "profile={};terminal_id={};code={code}",
+                    bootstrap.profile_id, prepared.binding.terminal_instance_id
+                )),
+            ),
+        }
+    }
+    for binding in &bootstrap.mt4_bindings {
+        let selected = mt4_terminal_discovery::selected_or_discovered(Some(
+            binding.terminal_path.to_string_lossy().as_ref(),
+        ));
+        let Some(installation) = selected.into_iter().find(|installation| {
+            mt4_terminal_discovery::paths_equal(&installation.data_path, &binding.terminal_path)
+        }) else {
+            logger.warning(
+                "native_mt4_terminal_start_failed",
+                Some(&format!(
+                    "profile={};terminal_id={};code=mt4_terminal_not_found",
+                    bootstrap.profile_id, binding.terminal_instance_id
+                )),
+            );
+            continue;
+        };
+        match mt4_terminal_discovery::start_terminal_if_stopped(&installation) {
+            Ok(true) => {
+                started = true;
+                logger.info(
+                    "native_mt4_terminal_started",
+                    Some(&format!(
+                        "profile={};terminal_id={}",
+                        bootstrap.profile_id, binding.terminal_instance_id
+                    )),
+                );
+            }
+            Ok(false) => {}
+            Err(code) => logger.warning(
+                "native_mt4_terminal_start_failed",
+                Some(&format!(
+                    "profile={};terminal_id={};code={code}",
+                    bootstrap.profile_id, binding.terminal_instance_id
+                )),
+            ),
+        }
+    }
+    if started {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    Ok(())
+}
+
 async fn provision_mt5_bindings_if_missing(
     application_directory: &std::path::Path,
     root_data_directory: &std::path::Path,
@@ -3705,6 +3777,26 @@ async fn provision_mt5_bindings_if_missing(
         let python = python.clone();
         let worker = worker.clone();
         let terminal = installation.executable_path.clone();
+        match start_mt5_terminal_if_stopped(&terminal) {
+            Ok(true) => {
+                logger.info(
+                    "native_mt5_terminal_started",
+                    Some(&format!(
+                        "profile={profile_id};terminal_id={}",
+                        installation.terminal_instance_id
+                    )),
+                );
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Ok(false) => {}
+            Err(code) => logger.warning(
+                "native_mt5_terminal_start_failed",
+                Some(&format!(
+                    "profile={profile_id};terminal_id={};code={code}",
+                    installation.terminal_instance_id
+                )),
+            ),
+        }
         let result = tokio::task::spawn_blocking(move || {
             probe_terminal(&python, &worker, &terminal, MT5_PROBE_TIMEOUT)
         })

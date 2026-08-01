@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::os::windows::ffi::OsStringExt;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use bridge_runtime_win::machine_guid;
 use sha2::{Digest, Sha256};
@@ -15,6 +17,8 @@ use windows_sys::Win32::System::Threading::{
 };
 
 const MAX_PROCESS_PATH_CHARS: usize = 32_768;
+const DETACHED_PROCESS: u32 = 0x0000_0008;
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Mt4Installation {
@@ -66,6 +70,34 @@ pub(crate) fn selected_or_discovered(selected_path: Option<&str>) -> Vec<Mt4Inst
         installation_path: selected.to_path_buf(),
         is_running: false,
     }])
+}
+
+pub(crate) fn start_terminal_if_stopped(
+    installation: &Mt4Installation,
+) -> Result<bool, &'static str> {
+    if installation.is_running
+        || running_terminal_paths().iter().any(|executable| {
+            executable
+                .parent()
+                .is_some_and(|directory| paths_equal(directory, &installation.installation_path))
+        })
+    {
+        return Ok(false);
+    }
+    let executable = ["terminal.exe", "terminal64.exe"]
+        .into_iter()
+        .map(|name| installation.installation_path.join(name))
+        .find(|candidate| candidate.is_file())
+        .ok_or("mt4_terminal_not_found")?;
+    Command::new(&executable)
+        .current_dir(&installation.installation_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .spawn()
+        .map(|_| true)
+        .map_err(|_| "mt4_terminal_start_failed")
 }
 
 pub(crate) fn installation_terminal_instance_id(

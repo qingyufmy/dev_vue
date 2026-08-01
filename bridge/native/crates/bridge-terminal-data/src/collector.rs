@@ -315,7 +315,9 @@ where
 
     fn publish_failure(&mut self, error_code: &str) {
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
-        let last_success_at_utc_msc = self.status_tx.borrow().last_success_at_utc_msc;
+        let previous = self.status_tx.borrow().clone();
+        let last_success_at_utc_msc = previous.last_success_at_utc_msc;
+        let error_code = preserve_terminal_error(previous.error_code.as_deref(), error_code);
         self.status_tx.send_replace(CollectorStatus {
             route: self.route.clone(),
             state: CollectorLifecycleState::Retrying,
@@ -324,6 +326,22 @@ where
             last_success_at_utc_msc,
             error_code: Some(error_code.to_owned()),
         });
+    }
+}
+
+fn preserve_terminal_error<'a>(previous: Option<&'a str>, current: &'a str) -> &'a str {
+    if matches!(
+        current,
+        "worker_registry_not_ready" | "worker_registry_client_unhealthy"
+    ) && previous.is_some_and(|code| {
+        !matches!(
+            code,
+            "worker_registry_not_ready" | "worker_registry_client_unhealthy"
+        )
+    }) {
+        previous.unwrap_or(current)
+    } else {
+        current
     }
 }
 
@@ -503,6 +521,21 @@ mod tests {
 
     fn projector(store: Arc<MemoryStore>) -> SnapshotProjector<MemoryStore> {
         SnapshotProjector::restore(store, route()).expect("projector")
+    }
+
+    #[test]
+    fn registry_transition_does_not_hide_the_terminal_failure_that_triggered_restart() {
+        assert_eq!(
+            preserve_terminal_error(
+                Some("mt5_terminal_disconnected"),
+                "worker_registry_not_ready"
+            ),
+            "mt5_terminal_disconnected"
+        );
+        assert_eq!(
+            preserve_terminal_error(Some("worker_registry_not_ready"), "mt5_account_unavailable"),
+            "mt5_account_unavailable"
+        );
     }
 
     async fn wait_for_calls(source: &FakeSource, expected: usize) {

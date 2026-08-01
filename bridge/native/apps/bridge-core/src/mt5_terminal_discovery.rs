@@ -28,6 +28,8 @@ use windows_sys::Win32::System::Threading::{
 use crate::observer_terminal::mt5_terminal_instance_id;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const DETACHED_PROCESS: u32 = 0x0000_0008;
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 const MAX_PROBE_OUTPUT_BYTES: u64 = 16 * 1024;
 const MAX_PROCESS_PATH_CHARS: usize = 32_768;
 const MAX_REGISTRY_PATH_BYTES: u32 = 64 * 1024;
@@ -90,6 +92,27 @@ pub(crate) fn selected_or_discovered(selected_terminal_path: Option<&str>) -> Ve
         }]);
     }
     discover_windows()
+}
+
+pub(crate) fn start_terminal_if_stopped(terminal_executable: &Path) -> Result<bool, &'static str> {
+    let executable =
+        find_terminal_executable(terminal_executable).ok_or("mt5_terminal_not_found")?;
+    if running_terminal_paths()
+        .iter()
+        .any(|running| paths_equal(running, &executable))
+    {
+        return Ok(false);
+    }
+    let working_directory = executable.parent().ok_or("mt5_terminal_not_found")?;
+    Command::new(&executable)
+        .current_dir(working_directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .spawn()
+        .map(|_| true)
+        .map_err(|_| "mt5_terminal_start_failed")
 }
 
 pub(crate) fn probe_terminal(

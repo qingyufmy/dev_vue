@@ -28,6 +28,8 @@ TERMINAL_SESSION_FATAL_ERRORS = frozenset({
     "mt5_account_unavailable",
     "mt5_terminal_disconnected",
 })
+TERMINAL_LOGIN_WAIT_SECONDS = 30.0
+TERMINAL_LOGIN_POLL_SECONDS = 0.5
 RATE_TIMEFRAMES = frozenset({
     "M1", "M2", "M3", "M4", "M5", "M6", "M10", "M12", "M15", "M20", "M30",
     "H1", "H2", "H3", "H4", "H6", "H8", "H12", "D1", "W1", "MN1",
@@ -221,19 +223,34 @@ class BrokerClock:
 
 class ReadOnlyMt5Adapter:
     def __init__(self, mt5: Any, terminal_path: str, route: WorkerRoute,
-                 clock_msc: Any | None = None, clock_state_path: Path | None = None):
+                 clock_msc: Any | None = None, clock_state_path: Path | None = None,
+                 login_wait_seconds: float = TERMINAL_LOGIN_WAIT_SECONDS,
+                 login_poll_seconds: float = TERMINAL_LOGIN_POLL_SECONDS):
         self.mt5 = mt5
         self.terminal_path = str(Path(terminal_path).resolve())
         self.route = route
         self.clock = BrokerClock(clock_state_path, clock_msc)
         self._resolved_symbols: dict[str, str] = {}
+        self.login_wait_seconds = max(0.0, float(login_wait_seconds))
+        self.login_poll_seconds = max(0.01, float(login_poll_seconds))
 
     def connect(self) -> None:
         if not Path(self.terminal_path).is_file():
             raise WorkerError("mt5_terminal_not_found")
         if not self.mt5.initialize(path=self.terminal_path, timeout=10_000, portable=False):
             raise WorkerError("mt5_initialize_failed")
-        self._ensure_identity()
+        self._wait_for_identity()
+
+    def _wait_for_identity(self) -> tuple[Any, Any]:
+        deadline = time.monotonic() + self.login_wait_seconds
+        while True:
+            try:
+                return self._ensure_identity()
+            except WorkerError as error:
+                if (error.code not in TERMINAL_SESSION_FATAL_ERRORS
+                        or time.monotonic() >= deadline):
+                    raise
+                time.sleep(self.login_poll_seconds)
 
     def shutdown(self) -> None:
         self.mt5.shutdown()

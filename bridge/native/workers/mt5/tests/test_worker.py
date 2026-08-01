@@ -226,6 +226,35 @@ class WorkerTests(unittest.TestCase):
         )
         self.assertFalse(self.mt5.initialized)
 
+    def test_connect_waits_for_saved_account_session_to_be_restored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Path(directory) / "terminal64.exe"
+            terminal.write_bytes(b"terminal")
+            mt5 = FakeMt5(self.now)
+            account_info = mt5.account_info
+            calls = 0
+
+            def delayed_account_info():
+                nonlocal calls
+                calls += 1
+                return None if calls < 3 else account_info()
+
+            mt5.account_info = delayed_account_info
+            adapter = ReadOnlyMt5Adapter(
+                mt5,
+                str(terminal),
+                self.route,
+                clock_msc=lambda: self.now,
+                login_wait_seconds=0.2,
+                login_poll_seconds=0.01,
+            )
+
+            adapter.connect()
+
+            self.assertGreaterEqual(calls, 3)
+            self.assertTrue(mt5.initialized)
+            adapter.shutdown()
+
     def tearDown(self):
         self.temporary.cleanup()
 
