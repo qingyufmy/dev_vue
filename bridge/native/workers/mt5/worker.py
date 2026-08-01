@@ -43,7 +43,13 @@ class WorkerError(RuntimeError):
 
 
 def _normalized_terminal_path(value: str | Path) -> str:
-    return os.path.normcase(os.path.abspath(os.fspath(value))).casefold()
+    normalized = os.path.normcase(os.path.abspath(os.fspath(value)))
+    folded = normalized.casefold()
+    if folded.startswith("\\\\?\\unc\\"):
+        normalized = "\\\\" + normalized[8:]
+    elif folded.startswith("\\\\?\\"):
+        normalized = normalized[4:]
+    return normalized.casefold()
 
 
 def _running_windows_process_paths() -> tuple[str, ...]:

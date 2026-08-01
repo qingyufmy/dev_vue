@@ -20,6 +20,8 @@ from worker import (  # noqa: E402
     Mt5Worker,
     WorkerError,
     WorkerRoute,
+    _normalized_terminal_path,
+    _terminal_process_running,
     probe_terminal,
     read_frame,
     write_frame,
@@ -279,6 +281,22 @@ class WorkerTests(unittest.TestCase):
                 adapter.connect()
 
             self.assertFalse(mt5.initialized)
+
+    def test_terminal_process_detection_matches_windows_verbatim_drive_path(self):
+        ordinary = r"D:\Program Files\MetaTrader 5\terminal64.exe"
+        verbatim = r"\\?\D:\Program Files\MetaTrader 5\terminal64.exe"
+
+        with patch("worker._running_windows_process_paths", return_value=(ordinary,)):
+            self.assertTrue(_terminal_process_running(verbatim))
+
+    def test_terminal_path_normalization_matches_windows_verbatim_unc_path(self):
+        ordinary = r"\\server\share\MetaTrader 5\terminal64.exe"
+        verbatim = r"\\?\UNC\server\share\MetaTrader 5\terminal64.exe"
+
+        self.assertEqual(
+            _normalized_terminal_path(ordinary),
+            _normalized_terminal_path(verbatim),
+        )
 
     def test_probe_rejects_closed_terminal_without_starting_it(self):
         with tempfile.TemporaryDirectory() as directory:
