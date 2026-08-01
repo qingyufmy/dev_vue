@@ -17,12 +17,14 @@ class Mt5TradeExecutor:
     """Strict MT5 mutation/query adapter for the native Worker IPC."""
 
     def __init__(self, mt5: Any, route: Any, ensure_identity: Callable[[], tuple[Any, Any]],
-                 resolve_symbol: Callable[[str], str], clock_msc: Callable[[], int] | None = None):
+                 resolve_symbol: Callable[[str], str], clock_msc: Callable[[], int] | None = None,
+                 report_exception: Callable[[str, BaseException], None] | None = None):
         self.mt5 = mt5
         self.route = route
         self._ensure_identity = ensure_identity
         self._resolve_symbol = resolve_symbol
         self._clock_msc = clock_msc or (lambda: int(time.time() * 1000))
+        self._report_exception = report_exception or (lambda _stage, _error: None)
         self._receipts: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
     def execute(self, command: dict[str, Any], read_only: bool = False) -> dict[str, Any]:
@@ -60,7 +62,11 @@ class Mt5TradeExecutor:
                     result = handler(command, params)
         except TradeError as error:
             result = self._result(command, "rejected", error.code)
-        except Exception:
+        except Exception as error:
+            try:
+                self._report_exception("trade_execute", error)
+            except Exception:
+                pass
             result = self._result(command, "uncertain", "mt5_execution_exception")
         self._remember(command_id, result)
         return result
@@ -336,7 +342,11 @@ class Mt5TradeExecutor:
         self._ensure_trade_allowed()
         try:
             result = self.mt5.order_send(request)
-        except Exception:
+        except Exception as error:
+            try:
+                self._report_exception("order_send", error)
+            except Exception:
+                pass
             return self._result(command, "uncertain", "mt5_order_send_exception")
         if result is None:
             return self._result(command, "uncertain", "mt5_order_result_missing")

@@ -58,6 +58,12 @@ int    g_server_offset_minutes = 0;
 bool   g_server_offset_valid = false;
 datetime g_offset_sample_utc = 0;
 datetime g_last_server_clock = 0;
+long   g_history_event_times[];
+long   g_history_event_tickets[];
+int    g_history_index_total = -1;
+int    g_history_index_login = 0;
+string g_history_index_server = "";
+long   g_history_index_offset_msc = 0;
 
 long StableServerIdentityHash(const string value)
   {
@@ -1097,6 +1103,45 @@ string BuildSelectedHistoryDealJson(const long event_utc_msc, const long server_
       + "\"source\":\"mt4_history_order\"}");
   }
 
+bool EnsureHistoryCursorIndex(const long server_offset_msc)
+  {
+   int history_total = OrdersHistoryTotal();
+   if(g_history_index_total == history_total
+      && g_history_index_login == AccountNumber()
+      && g_history_index_server == AccountServer()
+      && g_history_index_offset_msc == server_offset_msc)
+      return(true);
+
+   ArrayResize(g_history_event_times, 0);
+   ArrayResize(g_history_event_tickets, 0);
+   for(int history_index = 0; history_index < history_total; history_index++)
+     {
+      if(!OrderSelect(history_index, SELECT_BY_POS, MODE_HISTORY))
+        {
+         g_history_index_total = -1;
+         return(false);
+        }
+      int order_type = OrderType();
+      if(order_type == OP_BUYLIMIT || order_type == OP_SELLLIMIT
+         || order_type == OP_BUYSTOP || order_type == OP_SELLSTOP) continue;
+      datetime event_time = OrderCloseTime() > 0 ? OrderCloseTime() : OrderOpenTime();
+      int slot = ArraySize(g_history_event_times);
+      if(ArrayResize(g_history_event_times, slot + 1) != slot + 1
+         || ArrayResize(g_history_event_tickets, slot + 1) != slot + 1)
+        {
+         g_history_index_total = -1;
+         return(false);
+        }
+      g_history_event_times[slot] = ((long)event_time) * 1000 - server_offset_msc;
+      g_history_event_tickets[slot] = (long)OrderTicket();
+     }
+   g_history_index_total = history_total;
+   g_history_index_login = AccountNumber();
+   g_history_index_server = AccountServer();
+   g_history_index_offset_msc = server_offset_msc;
+   return(true);
+  }
+
 void SendDeals(uchar &request[], int &offset)
   {
    string terminal_id = ReadUtf8(request, offset);
@@ -1127,16 +1172,16 @@ void SendDeals(uchar &request[], int &offset)
    long event_times[];
    long event_tickets[];
    int total_candidates = 0;
-   int history_total = OrdersHistoryTotal();
+   if(!EnsureHistoryCursorIndex(server_offset_msc))
+     {
+      DisconnectPipe();
+      return;
+     }
+   int history_total = ArraySize(g_history_event_times);
    for(int history_index = 0; history_index < history_total; history_index++)
      {
-      if(!OrderSelect(history_index, SELECT_BY_POS, MODE_HISTORY)) continue;
-      int order_type = OrderType();
-      if(order_type == OP_BUYLIMIT || order_type == OP_SELLLIMIT
-         || order_type == OP_BUYSTOP || order_type == OP_SELLSTOP) continue;
-      datetime event_time = OrderCloseTime() > 0 ? OrderCloseTime() : OrderOpenTime();
-      long event_utc_msc = ((long)event_time) * 1000 - server_offset_msc;
-      int event_ticket = OrderTicket();
+      long event_utc_msc = g_history_event_times[history_index];
+      int event_ticket = (int)g_history_event_tickets[history_index];
       if(!CursorAfter(event_utc_msc, event_ticket, cursor_time, cursor_ticket)
          || event_utc_msc > window_end) continue;
       total_candidates++;

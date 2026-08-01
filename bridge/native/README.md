@@ -2,6 +2,12 @@
 
 本目录承载量见智桥 3.0.0 的 Rust 原生实现。现有 .NET Bridge 只作为功能与协议对照，不作为正式双栈、迁移接管或回退目标；服务器 V3 JSON 协议继续作为对外通信合同。
 
+## 正式支持的 Windows 范围
+
+- 当前正式包仅支持 **Windows 10 22H2 / Windows 11 x64**；Windows Server 对应基线为 Server 2016 及以上 x64。
+- Windows 7、Windows 8/8.1、32 位 Windows 和 ARM Windows 不属于 3.0.0 支持范围。当前 Rust MSVC 目标与随包 CPython/MetaTrader5 运行时均不能在这些系统上形成同等可验证的安全、更新和终端通信合同，因此安装验收不得把“偶尔能启动”标记为兼容通过。
+- MT4/MT5 终端必须由用户自行安装、启动并登录；量见智桥不会代替终端保存登录资料，也不会自动启动或关闭 MT 软件。
+
 ## 当前阶段
 
 - 已建立独立 Rust workspace，不覆盖现有 V3 构建入口。

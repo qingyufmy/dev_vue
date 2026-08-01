@@ -614,7 +614,7 @@ fn damaged_packaged_endpoint_fails_before_any_worker_is_started() {
             .join("native-bridge-core.active")
             .exists()
     );
-    fs::remove_dir_all(root).expect("remove endpoint fixture");
+    remove_dir_all_with_retry(&root, "remove endpoint fixture");
 }
 
 #[test]
@@ -915,4 +915,19 @@ fn unique_test_directory() -> PathBuf {
         "liangjian-bridge-core-foundation-{}-{stamp}",
         std::process::id()
     ))
+}
+
+fn remove_dir_all_with_retry(path: &Path, context: &str) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match fs::remove_dir_all(path) {
+            Ok(()) => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if Instant::now() < deadline => {
+                let _ = error;
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => panic!("{context}: {error}"),
+        }
+    }
 }

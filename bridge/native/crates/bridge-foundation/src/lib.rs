@@ -222,6 +222,14 @@ pub struct RuntimeTerminalStatus {
     pub last_success_at_utc_msc: Option<i64>,
     pub error_code: Option<String>,
     #[serde(default)]
+    pub history_state: String,
+    #[serde(default)]
+    pub history_consecutive_failures: u32,
+    #[serde(default)]
+    pub history_last_success_at_utc_msc: Option<i64>,
+    #[serde(default)]
+    pub history_error_code: Option<String>,
+    #[serde(default)]
     pub mt4_expert_restart_required: bool,
 }
 
@@ -327,11 +335,23 @@ impl RuntimeStatusDocument {
                     terminal.collector_state.as_str(),
                     "starting" | "ready" | "retrying" | "stopped"
                 )
+                || (!terminal.history_state.is_empty()
+                    && !matches!(
+                        terminal.history_state.as_str(),
+                        "starting" | "ready" | "retrying" | "stopped"
+                    ))
                 || terminal
                     .last_success_at_utc_msc
                     .is_some_and(|value| value <= 0 || value > now_utc_msc.saturating_add(60_000))
                 || terminal
+                    .history_last_success_at_utc_msc
+                    .is_some_and(|value| value <= 0 || value > now_utc_msc.saturating_add(60_000))
+                || terminal
                     .error_code
+                    .as_deref()
+                    .is_some_and(|code| !valid_runtime_status_code(code))
+                || terminal
+                    .history_error_code
                     .as_deref()
                     .is_some_and(|code| !valid_runtime_status_code(code))
             {
@@ -1000,6 +1020,12 @@ mod tests {
             read_runtime_status_snapshot(&output, DEFAULT_PROFILE_ID, now).expect("read status");
         assert_eq!(document.phase, "online");
         assert_eq!(document.terminals[0].collector_state, "retrying");
+        assert_eq!(document.terminals[0].history_state, "retrying");
+        assert_eq!(document.terminals[0].history_consecutive_failures, 2);
+        assert_eq!(
+            document.terminals[0].history_error_code.as_deref(),
+            Some("terminal_history_store_worker_failed")
+        );
         assert!(!document.terminals[0].mt4_expert_restart_required);
         assert!(!document.is_stale(now, 15_000));
         assert!(document.is_stale(now + 20_001, 15_000));
@@ -1077,7 +1103,11 @@ mod tests {
                 "worker_consecutive_failures": 0,
                 "collector_consecutive_failures": 1,
                 "last_success_at_utc_msc": observed_at_utc_msc,
-                "error_code": null
+                "error_code": null,
+                "history_state": "retrying",
+                "history_consecutive_failures": 2,
+                "history_last_success_at_utc_msc": observed_at_utc_msc,
+                "history_error_code": "terminal_history_store_worker_failed"
             }],
             "reconciliation": {
                 "last_run_at_utc_msc": observed_at_utc_msc,

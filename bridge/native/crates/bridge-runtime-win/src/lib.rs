@@ -1074,7 +1074,9 @@ mod tests {
             .arg("/C")
             .arg("exit /B 7");
         let policy = RestartPolicy {
-            stable_run_threshold: Duration::from_millis(50),
+            // A process that exits immediately must never be reclassified as stable merely
+            // because a loaded CI host took longer than a few milliseconds to observe it.
+            stable_run_threshold: Duration::from_secs(5),
             poll_interval: Duration::from_millis(1),
             restart_delays: [Duration::from_millis(1); 5],
             maximum_failure_counter: 3,

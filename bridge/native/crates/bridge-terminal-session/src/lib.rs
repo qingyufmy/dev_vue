@@ -112,6 +112,33 @@ pub enum TerminalSessionState {
     Stopped,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistorySyncState {
+    Starting,
+    Ready,
+    Retrying,
+    Stopped,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistorySyncStatus {
+    pub state: HistorySyncState,
+    pub consecutive_failures: u32,
+    pub last_success_at_utc_msc: Option<i64>,
+    pub error_code: Option<String>,
+}
+
+impl Default for HistorySyncStatus {
+    fn default() -> Self {
+        Self {
+            state: HistorySyncState::Starting,
+            consecutive_failures: 0,
+            last_success_at_utc_msc: None,
+            error_code: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TerminalSessionStatus {
     pub route: WorkerRoute,
@@ -123,6 +150,7 @@ pub struct TerminalSessionStatus {
     pub collector_consecutive_failures: u32,
     pub last_success_at_utc_msc: Option<i64>,
     pub error_code: Option<String>,
+    pub history: HistorySyncStatus,
     pub mt4_expert_restart_required: bool,
 }
 
@@ -175,6 +203,7 @@ impl Mt4SessionHandle {
             collector_consecutive_failures: collector.consecutive_failures,
             last_success_at_utc_msc: collector.last_success_at_utc_msc,
             error_code: collector.error_code,
+            history: self.history.status(),
             mt4_expert_restart_required: self.source.adapter_requires_restart(),
         }
     }
@@ -312,6 +341,7 @@ impl TerminalSessionHandle {
             collector_consecutive_failures: collector.consecutive_failures,
             last_success_at_utc_msc: collector.last_success_at_utc_msc,
             error_code: collector.error_code.or(worker.error_code),
+            history: self.history.status(),
             mt4_expert_restart_required: false,
         }
     }
@@ -703,6 +733,7 @@ impl RunningMt4Session {
 struct HistorySyncHandle {
     stop_tx: watch::Sender<bool>,
     wake: Arc<Notify>,
+    status_rx: watch::Receiver<HistorySyncStatus>,
 }
 
 impl HistorySyncHandle {
@@ -713,6 +744,10 @@ impl HistorySyncHandle {
 
     fn wake(&self) {
         self.wake.notify_one();
+    }
+
+    fn status(&self) -> HistorySyncStatus {
+        self.status_rx.borrow().clone()
     }
 }
 
@@ -728,10 +763,12 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let (stop_tx, mut stop_rx) = watch::channel(false);
+    let (status_tx, status_rx) = watch::channel(HistorySyncStatus::default());
     let wake = Arc::new(Notify::new());
     let handle = HistorySyncHandle {
         stop_tx,
         wake: Arc::clone(&wake),
+        status_rx,
     };
     let task = tokio::spawn(async move {
         let mut cursor = initial_cursor;
@@ -740,6 +777,7 @@ where
         let mut sequence = 0_u64;
         loop {
             if *stop_rx.borrow() {
+                publish_history_stopped(&status_tx);
                 return;
             }
             let delay = if failures > 0 {
@@ -754,7 +792,10 @@ where
             tokio::select! {
                 biased;
                 changed = stop_rx.changed() => {
-                    if changed.is_err() || *stop_rx.borrow() { return; }
+                    if changed.is_err() || *stop_rx.borrow() {
+                        publish_history_stopped(&status_tx);
+                        return;
+                    }
                     continue;
                 }
                 _ = wake.notified() => {}
@@ -767,6 +808,7 @@ where
             let now = clock();
             if now <= 0 {
                 failures = failures.saturating_add(1);
+                publish_history_failure(&status_tx, failures, "terminal_session_clock_invalid");
                 continue;
             }
             let request_cursor = WorkerHistoryCursor {
@@ -781,9 +823,13 @@ where
                     HISTORY_BATCH_LIMIT,
                 )
                 .await;
-            let Ok(batch) = result else {
-                failures = failures.saturating_add(1);
-                continue;
+            let batch = match result {
+                Ok(batch) => batch,
+                Err(error) => {
+                    failures = failures.saturating_add(1);
+                    publish_history_failure(&status_tx, failures, error.code());
+                    continue;
+                }
             };
             let stored = HistoryArchiveBatch {
                 deals: batch.deals,
@@ -809,8 +855,25 @@ where
                     cursor = next_cursor;
                     complete = !has_more;
                     failures = 0;
+                    status_tx.send_replace(HistorySyncStatus {
+                        state: HistorySyncState::Ready,
+                        consecutive_failures: 0,
+                        last_success_at_utc_msc: Some(now),
+                        error_code: None,
+                    });
                 }
-                _ => failures = failures.saturating_add(1),
+                Ok(Err(error)) => {
+                    failures = failures.saturating_add(1);
+                    publish_history_failure(&status_tx, failures, error.code());
+                }
+                Err(_) => {
+                    failures = failures.saturating_add(1);
+                    publish_history_failure(
+                        &status_tx,
+                        failures,
+                        "terminal_history_store_worker_failed",
+                    );
+                }
             }
         }
     });
@@ -825,10 +888,12 @@ fn start_mt4_history_sync(
     initially_complete: bool,
 ) -> (HistorySyncHandle, JoinHandle<()>) {
     let (stop_tx, mut stop_rx) = watch::channel(false);
+    let (status_tx, status_rx) = watch::channel(HistorySyncStatus::default());
     let wake = Arc::new(Notify::new());
     let handle = HistorySyncHandle {
         stop_tx,
         wake: Arc::clone(&wake),
+        status_rx,
     };
     let task = tokio::spawn(async move {
         let mut cursor = initial_cursor;
@@ -836,6 +901,7 @@ fn start_mt4_history_sync(
         let mut failures = 0_u32;
         loop {
             if *stop_rx.borrow() {
+                publish_history_stopped(&status_tx);
                 return;
             }
             let delay = if failures > 0 {
@@ -850,7 +916,10 @@ fn start_mt4_history_sync(
             tokio::select! {
                 biased;
                 changed = stop_rx.changed() => {
-                    if changed.is_err() || *stop_rx.borrow() { return; }
+                    if changed.is_err() || *stop_rx.borrow() {
+                        publish_history_stopped(&status_tx);
+                        return;
+                    }
                     continue;
                 }
                 _ = wake.notified() => {}
@@ -863,6 +932,11 @@ fn start_mt4_history_sync(
                 Ok(ticket) if ticket >= 0 => ticket,
                 _ => {
                     failures = failures.saturating_add(1);
+                    publish_history_failure(
+                        &status_tx,
+                        failures,
+                        "terminal_history_cursor_invalid",
+                    );
                     continue;
                 }
             };
@@ -874,9 +948,13 @@ fn start_mt4_history_sync(
                     bridge_mt4::MAX_HISTORY_WINDOW_MSC,
                 )
                 .await;
-            let Ok(batch) = batch else {
-                failures = failures.saturating_add(1);
-                continue;
+            let batch = match batch {
+                Ok(batch) => batch,
+                Err(error) => {
+                    failures = failures.saturating_add(1);
+                    publish_history_failure(&status_tx, failures, error.code());
+                    continue;
+                }
             };
             let trades = batch
                 .items
@@ -889,8 +967,8 @@ fn start_mt4_history_sync(
                 .map(build_mt4_history_trade)
                 .collect::<Vec<_>>();
             let stored = HistoryArchiveBatch {
-                deals: batch.items.clone(),
-                history_orders: batch.items,
+                deals: batch.items,
+                history_orders: Vec::new(),
                 trades,
                 next_cursor: HistoryCursor {
                     time_msc: batch.next_time_msc,
@@ -912,12 +990,51 @@ fn start_mt4_history_sync(
                     cursor = next_cursor;
                     complete = !has_more;
                     failures = 0;
+                    status_tx.send_replace(HistorySyncStatus {
+                        state: HistorySyncState::Ready,
+                        consecutive_failures: 0,
+                        last_success_at_utc_msc: Some(batch.source_time_msc),
+                        error_code: None,
+                    });
                 }
-                _ => failures = failures.saturating_add(1),
+                Ok(Err(error)) => {
+                    failures = failures.saturating_add(1);
+                    publish_history_failure(&status_tx, failures, error.code());
+                }
+                Err(_) => {
+                    failures = failures.saturating_add(1);
+                    publish_history_failure(
+                        &status_tx,
+                        failures,
+                        "terminal_history_store_worker_failed",
+                    );
+                }
             }
         }
     });
     (handle, task)
+}
+
+fn publish_history_failure(
+    status_tx: &watch::Sender<HistorySyncStatus>,
+    consecutive_failures: u32,
+    error_code: &str,
+) {
+    let last_success_at_utc_msc = status_tx.borrow().last_success_at_utc_msc;
+    status_tx.send_replace(HistorySyncStatus {
+        state: HistorySyncState::Retrying,
+        consecutive_failures,
+        last_success_at_utc_msc,
+        error_code: Some(error_code.to_owned()),
+    });
+}
+
+fn publish_history_stopped(status_tx: &watch::Sender<HistorySyncStatus>) {
+    let previous = status_tx.borrow().clone();
+    status_tx.send_replace(HistorySyncStatus {
+        state: HistorySyncState::Stopped,
+        ..previous
+    });
 }
 
 fn build_mt4_history_trade(item: &serde_json::Value) -> serde_json::Value {
@@ -1326,6 +1443,9 @@ mod tests {
         })
         .await
         .expect("MT4 history archived");
+        assert_eq!(handle.status().history.state, HistorySyncState::Ready);
+        assert_eq!(handle.status().history.consecutive_failures, 0);
+        assert!(handle.status().history.last_success_at_utc_msc.is_some());
         let history = store
             .read_history_archive_page(
                 &bridge_contract::TerminalDescriptor {

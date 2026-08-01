@@ -457,6 +457,34 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("error", invalid["outcome"])
         self.assertEqual("worker_rates_params_invalid", invalid["payload"]["error_code"])
 
+    def test_symbol_resolution_rejects_ambiguous_broker_suffixes(self):
+        self.mt5.symbols_get = lambda: (
+            self.mt5.symbol_info("XAUUSD.s")._replace(name="XAUUSD.s"),
+            self.mt5.symbol_info("XAUUSD.c")._replace(name="XAUUSD.c"),
+        )
+
+        response = self.worker.handle(self.request("quote", {"symbol": "XAUUSD"}))
+
+        self.assertEqual("error", response["outcome"])
+        self.assertEqual("symbol_ambiguous", response["payload"]["error_code"])
+
+    def test_unexpected_worker_exception_writes_only_redacted_diagnostic(self):
+        with tempfile.TemporaryDirectory() as root:
+            diagnostic = Path(root) / "worker.jsonl"
+            self.adapter.quote = lambda _symbol: (_ for _ in ()).throw(
+                RuntimeError("account=123456 secret-token")
+            )
+            with patch.dict("os.environ", {
+                "AURUM_BRIDGE_DIAGNOSTIC_PATH": str(diagnostic),
+            }):
+                response = self.worker.handle(self.request("quote", {"symbol": "XAUUSD"}))
+
+            self.assertEqual("mt5_worker_internal_error", response["payload"]["error_code"])
+            payload = diagnostic.read_text(encoding="utf-8")
+            self.assertIn('"exception_type":"RuntimeError"', payload)
+            self.assertNotIn("123456", payload)
+            self.assertNotIn("secret-token", payload)
+
     def test_extended_read_only_data_contracts_preserve_identity_and_clock(self):
         symbol = self.worker.handle(self.request("data", {
             "action": "symbol_snapshot", "params": {"symbol": "XAUUSD"},

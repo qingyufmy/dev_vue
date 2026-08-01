@@ -53,6 +53,8 @@ pub const PACKAGED_SERVER_ENDPOINTS_FILE_NAME: &str = "server-endpoints.json";
 pub const REALTIME_COMPATIBILITY_FILE_NAME: &str = "realtime-compatibility.json";
 pub const BRIDGE_WEBSOCKET_PATH: &str = "/aurum-api/bridge/v3/ws";
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+pub const WEBSOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+pub const QUEUE_ENQUEUE_TIMEOUT: Duration = Duration::from_secs(5);
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 pub const OUTBOX_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const MAXIMUM_API_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -1399,28 +1401,33 @@ impl BridgeWebSocketSession {
     }
 
     pub async fn close(&mut self) -> Result<(), TransportError> {
-        self.socket
-            .close(None)
+        timeout(WEBSOCKET_WRITE_TIMEOUT, self.socket.close(None))
             .await
+            .map_err(|_| TransportError::new("bridge_websocket_close_timeout"))?
             .map_err(|_| TransportError::new("bridge_websocket_close_failed"))
     }
 
     async fn send_text_unchecked(&mut self, payload: String) -> Result<(), TransportError> {
-        self.socket
-            .send(Message::Text(payload.into()))
-            .await
-            .map_err(|_| TransportError::new("bridge_websocket_send_failed"))
+        timeout(
+            WEBSOCKET_WRITE_TIMEOUT,
+            self.socket.send(Message::Text(payload.into())),
+        )
+        .await
+        .map_err(|_| TransportError::new("bridge_websocket_send_timeout"))?
+        .map_err(|_| TransportError::new("bridge_websocket_send_failed"))
     }
 
     async fn receive_text_unchecked(&mut self) -> Result<String, TransportError> {
         loop {
             match self.socket.next().await {
                 Some(Ok(Message::Text(payload))) => return Ok(payload.to_string()),
-                Some(Ok(Message::Ping(payload))) => self
-                    .socket
-                    .send(Message::Pong(payload))
-                    .await
-                    .map_err(|_| TransportError::new("bridge_websocket_send_failed"))?,
+                Some(Ok(Message::Ping(payload))) => timeout(
+                    WEBSOCKET_WRITE_TIMEOUT,
+                    self.socket.send(Message::Pong(payload)),
+                )
+                .await
+                .map_err(|_| TransportError::new("bridge_websocket_send_timeout"))?
+                .map_err(|_| TransportError::new("bridge_websocket_send_failed"))?,
                 Some(Ok(Message::Pong(_))) => {}
                 Some(Ok(Message::Close(_))) | None => {
                     return Err(TransportError::new("bridge_websocket_disconnected"));
@@ -1495,6 +1502,15 @@ impl PriorityMessageQueue {
     }
 
     pub async fn enqueue(&self, message: OutboundMessage) -> Result<(), TransportError> {
+        self.enqueue_with_timeout(message, QUEUE_ENQUEUE_TIMEOUT)
+            .await
+    }
+
+    async fn enqueue_with_timeout(
+        &self,
+        message: OutboundMessage,
+        wait: Duration,
+    ) -> Result<(), TransportError> {
         if message.message_id.trim().is_empty()
             || message.payload_json.is_empty()
             || message.payload_json.len() > SERVER_MAX_MESSAGE_BYTES
@@ -1505,9 +1521,9 @@ impl PriorityMessageQueue {
             MessagePriority::Trade => &self.inner.trade_slots,
             MessagePriority::Data => &self.inner.data_slots,
         };
-        let permit = slots
-            .acquire()
+        let permit = timeout(wait, slots.acquire())
             .await
+            .map_err(|_| TransportError::new("bridge_queue_backpressure_timeout"))?
             .map_err(|_| TransportError::new("bridge_queue_closed"))?;
         let mut state = self.inner.state.lock().await;
         match message.priority {
@@ -2732,6 +2748,33 @@ mod tests {
             .expect("trade");
         assert_eq!(queue.dequeue().await.message_id, "trade_01JQUEUE01");
         assert_eq!(queue.dequeue().await.message_id, "data_01JQUEUE0001");
+    }
+
+    #[tokio::test]
+    async fn full_queue_fails_with_bounded_backpressure_instead_of_waiting_forever() {
+        let queue = PriorityMessageQueue::new(1, 1).expect("queue");
+        queue
+            .enqueue(OutboundMessage {
+                message_id: "data_01JBACKPRESS1".to_owned(),
+                payload_json: "{}".to_owned(),
+                priority: MessagePriority::Data,
+            })
+            .await
+            .expect("first data");
+
+        let error = queue
+            .enqueue_with_timeout(
+                OutboundMessage {
+                    message_id: "data_01JBACKPRESS2".to_owned(),
+                    payload_json: "{}".to_owned(),
+                    priority: MessagePriority::Data,
+                },
+                Duration::from_millis(10),
+            )
+            .await
+            .expect_err("full queue must time out");
+
+        assert_eq!(error.code(), "bridge_queue_backpressure_timeout");
     }
 
     #[test]

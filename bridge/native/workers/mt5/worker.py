@@ -34,12 +34,35 @@ RATE_TIMEFRAMES = frozenset({
     "M1", "M2", "M3", "M4", "M5", "M6", "M10", "M12", "M15", "M20", "M30",
     "H1", "H2", "H3", "H4", "H6", "H8", "H12", "D1", "W1", "MN1",
 })
+DIAGNOSTIC_PATH_ENV = "AURUM_BRIDGE_DIAGNOSTIC_PATH"
+MAX_DIAGNOSTIC_BYTES = 1024 * 1024
 
 
 class WorkerError(RuntimeError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+def _report_unexpected_exception(stage: str, error: BaseException) -> None:
+    """Persist only a redacted exception type; never serialize broker/user data or messages."""
+    path = os.environ.get(DIAGNOSTIC_PATH_ENV, "").strip()
+    if not path:
+        return
+    try:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "observed_at_utc_msc": int(time.time() * 1000),
+            "event": "mt5_worker_unexpected_exception",
+            "stage": stage,
+            "exception_type": type(error).__name__,
+        }
+        mode = "w" if target.is_file() and target.stat().st_size >= MAX_DIAGNOSTIC_BYTES else "a"
+        with target.open(mode, encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(record, ensure_ascii=True, separators=(",", ":")) + "\n")
+    except (OSError, TypeError, ValueError):
+        return
 
 
 def _normalized_terminal_path(value: str | Path) -> str:
@@ -1222,16 +1245,26 @@ class ReadOnlyMt5Adapter:
         symbols = self.mt5.symbols_get()
         if symbols is None:
             raise WorkerError("mt5_symbols_unavailable")
-        names = [str(getattr(item, "name", "") or "") for item in symbols]
+        named = [(str(getattr(item, "name", "") or ""), item) for item in symbols]
+        names = [name for name, _ in named if name]
         folded = requested.upper()
         resolved = next((name for name in names if name == requested), None)
         resolved = resolved or next((name for name in names if name.upper() == folded), None)
-        suffixes = (".s", "m", ".c", "_", ".micro")
-        resolved = resolved or next((
-            name for suffix in suffixes for name in names
-            if name.upper() == f"{folded}{suffix}".upper()
-        ), None)
-        resolved = resolved or next((name for name in names if name.upper().startswith(folded)), None)
+        if resolved is None:
+            candidates = [
+                (name, item) for name, item in named
+                if name.upper().startswith(folded)
+                and self._valid_broker_symbol_suffix(name[len(requested):])
+            ]
+            visible = [
+                (name, item) for name, item in candidates
+                if bool(getattr(item, "visible", False))
+            ]
+            viable = visible if visible else candidates
+            if len(viable) == 1:
+                resolved = viable[0][0]
+            elif len(viable) > 1:
+                raise WorkerError("symbol_ambiguous")
         if not resolved:
             raise WorkerError("symbol_not_found")
         select = getattr(self.mt5, "symbol_select", None)
@@ -1239,6 +1272,12 @@ class ReadOnlyMt5Adapter:
             raise WorkerError("symbol_select_failed")
         self._resolved_symbols[key] = resolved
         return resolved
+
+    @staticmethod
+    def _valid_broker_symbol_suffix(suffix: str) -> bool:
+        if not suffix or len(suffix) > 16:
+            return False
+        return all(character.isalnum() or character in "._-" for character in suffix)
 
 
 class Mt5Worker:
@@ -1251,6 +1290,7 @@ class Mt5Worker:
             route,
             self._ensure_trade_identity,
             adapter._resolve_symbol,
+            report_exception=_report_unexpected_exception,
         )
 
     def _ensure_trade_identity(self) -> tuple[Any, Any]:
@@ -1327,7 +1367,8 @@ class Mt5Worker:
         except WorkerError as error:
             self._record_restart_error(error.code)
             return self._response(request_id, "error", {"error_code": error.code})
-        except Exception:
+        except Exception as error:
+            _report_unexpected_exception("worker_handle", error)
             return self._response(request_id, "error", {"error_code": "mt5_worker_internal_error"})
 
     def _validate_request(self, request: dict[str, Any]) -> None:

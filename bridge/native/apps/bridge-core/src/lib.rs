@@ -140,7 +140,8 @@ impl NativeProfileBootstrap {
                 _ => return Err(CoreBootstrapError::new("bridge_store_binding_invalid")),
             }
         }
-        let mt5_sessions = prepare_mt5_sessions(&application_directory, mt5_bindings)?;
+        let mt5_sessions =
+            prepare_mt5_sessions(&application_directory, &paths.data_directory, mt5_bindings)?;
         Ok(Self {
             profile_id,
             paths,
@@ -1221,6 +1222,10 @@ pub struct NativeTerminalRuntimeStatus {
     pub collector_consecutive_failures: u32,
     pub last_success_at_utc_msc: Option<i64>,
     pub error_code: Option<String>,
+    pub history_state: String,
+    pub history_consecutive_failures: u32,
+    pub history_last_success_at_utc_msc: Option<i64>,
+    pub history_error_code: Option<String>,
     pub mt4_expert_restart_required: bool,
 }
 
@@ -1594,6 +1599,13 @@ impl NativeRuntimeStatusHandle {
                 error_code: status
                     .error_code
                     .map(|code| sanitized_status_code(&code, "terminal_runtime_failed")),
+                history_state: history_state_name(status.history.state).to_owned(),
+                history_consecutive_failures: status.history.consecutive_failures,
+                history_last_success_at_utc_msc: status.history.last_success_at_utc_msc,
+                history_error_code: status
+                    .history
+                    .error_code
+                    .map(|code| sanitized_status_code(&code, "terminal_history_sync_failed")),
                 mt4_expert_restart_required: status.mt4_expert_restart_required,
             })
             .collect::<Vec<_>>();
@@ -1686,6 +1698,15 @@ fn collector_state_name(state: bridge_terminal_data::CollectorLifecycleState) ->
         bridge_terminal_data::CollectorLifecycleState::Ready => "ready",
         bridge_terminal_data::CollectorLifecycleState::Retrying => "retrying",
         bridge_terminal_data::CollectorLifecycleState::Stopped => "stopped",
+    }
+}
+
+fn history_state_name(state: bridge_terminal_session::HistorySyncState) -> &'static str {
+    match state {
+        bridge_terminal_session::HistorySyncState::Starting => "starting",
+        bridge_terminal_session::HistorySyncState::Ready => "ready",
+        bridge_terminal_session::HistorySyncState::Retrying => "retrying",
+        bridge_terminal_session::HistorySyncState::Stopped => "stopped",
     }
 }
 
@@ -1977,6 +1998,7 @@ async fn run_command_reconciliation(
 
 fn prepare_mt5_sessions(
     application_directory: &Path,
+    data_directory: &Path,
     bindings: Vec<TerminalBinding>,
 ) -> Result<Vec<PreparedMt5Session>, CoreBootstrapError> {
     if bindings.is_empty() {
@@ -2006,6 +2028,13 @@ fn prepare_mt5_sessions(
             let program = WorkerProgram::new(&python, worker_directory)
                 .map_err(worker_error)?
                 .arg(worker.as_os_str())
+                .env(
+                    "AURUM_BRIDGE_DIAGNOSTIC_PATH",
+                    data_directory
+                        .join("logs")
+                        .join("mt5-worker-diagnostics.jsonl"),
+                )
+                .map_err(worker_error)?
                 .show_window(false)
                 .terminal_path(&binding.terminal_path)
                 .map_err(worker_error)?;
@@ -2337,6 +2366,7 @@ mod tests {
             collector_consecutive_failures: 0,
             last_success_at_utc_msc,
             error_code: None,
+            history: bridge_terminal_session::HistorySyncStatus::default(),
             mt4_expert_restart_required: false,
         }
     }

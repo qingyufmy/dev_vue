@@ -11,6 +11,9 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, interval, timeout};
 
+const SESSION_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const SESSION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub trait SessionChannel: Send + 'static {
     fn session_id(&self) -> &str;
     fn terminals(&self) -> Vec<TerminalDescriptor>;
@@ -224,7 +227,14 @@ impl SessionRuntime {
             result = tasks.join_next() => (result, false),
             _ = stop.cancelled() => {
                 cancellation.cancel();
-                (tasks.join_next().await, true)
+                match timeout(SESSION_SHUTDOWN_TIMEOUT, tasks.join_next()).await {
+                    Ok(result) => (result, true),
+                    Err(_) => {
+                        tasks.abort_all();
+                        while tasks.join_next().await.is_some() {}
+                        return Ok(());
+                    }
+                }
             }
         };
         let first = match first {
@@ -237,9 +247,19 @@ impl SessionRuntime {
             None => return Err(TransportError::new("bridge_session_loop_stopped")),
         };
         cancellation.cancel();
-        while let Some(result) = tasks.join_next().await {
-            if result.is_err() && first.is_ok() && !externally_cancelled {
-                return Err(TransportError::new("bridge_session_worker_failed"));
+        let drain = async {
+            while let Some(result) = tasks.join_next().await {
+                if result.is_err() && first.is_ok() && !externally_cancelled {
+                    return Err(TransportError::new("bridge_session_worker_failed"));
+                }
+            }
+            Ok(())
+        };
+        if timeout(SESSION_SHUTDOWN_TIMEOUT, drain).await.is_err() {
+            tasks.abort_all();
+            while tasks.join_next().await.is_some() {}
+            if !externally_cancelled {
+                return Err(TransportError::new("bridge_session_shutdown_timeout"));
             }
         }
         match first {
@@ -263,8 +283,24 @@ async fn io_loop<C: SessionChannel>(
             biased;
             _ = cancellation.cancelled() => break Ok(()),
             message = queue.dequeue() => {
-                if let Err(error) = channel.send_json(message.payload_json).await {
-                    let _ = outbox.release_claim(&message.message_id);
+                let message_id = message.message_id.clone();
+                let sent = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => {
+                        let _ = outbox.release_claim(&message_id);
+                        break Ok(());
+                    },
+                    sent = timeout(SESSION_WRITE_TIMEOUT, channel.send_json(message.payload_json)) => sent,
+                };
+                let sent = match sent {
+                    Ok(sent) => sent,
+                    Err(_) => {
+                        let _ = outbox.release_claim(&message_id);
+                        break Err(TransportError::new("bridge_websocket_send_timeout"));
+                    }
+                };
+                if let Err(error) = sent {
+                    let _ = outbox.release_claim(&message_id);
                     break Err(error);
                 }
                 if let Err(error) = outbox.record_successful_send(&message.message_id, clock()).await {
@@ -279,7 +315,18 @@ async fn io_loop<C: SessionChannel>(
                 };
                 match inbound.route(&payload).await {
                     Ok(Some(response)) => {
-                        if let Err(error) = channel.send_json(response.payload_json).await {
+                        let sent = tokio::select! {
+                            biased;
+                            _ = cancellation.cancelled() => break Ok(()),
+                            sent = timeout(SESSION_WRITE_TIMEOUT, channel.send_json(response.payload_json)) => sent,
+                        };
+                        let sent = match sent {
+                            Ok(sent) => sent,
+                            Err(_) => {
+                                break Err(TransportError::new("bridge_websocket_send_timeout"));
+                            }
+                        };
+                        if let Err(error) = sent {
                             break Err(error);
                         }
                     }
@@ -435,6 +482,57 @@ mod tests {
         send_error: Option<&'static str>,
     }
 
+    struct HangingSendChannel {
+        session_id: String,
+        inbound: mpsc::Receiver<Result<String, TransportError>>,
+        send_started: Arc<std::sync::atomic::AtomicBool>,
+        closed: Arc<Mutex<bool>>,
+    }
+
+    impl SessionChannel for HangingSendChannel {
+        fn session_id(&self) -> &str {
+            &self.session_id
+        }
+
+        fn terminals(&self) -> Vec<TerminalDescriptor> {
+            vec![TerminalDescriptor {
+                terminal_instance_id: "mt5_terminal_01".to_owned(),
+                platform: "mt5".to_owned(),
+                account_ref: bridge_contract::AccountRef {
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "123456".to_owned(),
+                },
+                connection_epoch: 1,
+                worker_version: Some("3.0.0".to_owned()),
+            }]
+        }
+
+        fn send_json(&mut self, _: String) -> BoxFuture<'_, Result<(), TransportError>> {
+            let started = Arc::clone(&self.send_started);
+            Box::pin(async move {
+                started.store(true, std::sync::atomic::Ordering::Release);
+                std::future::pending().await
+            })
+        }
+
+        fn receive_json(&mut self) -> BoxFuture<'_, Result<String, TransportError>> {
+            Box::pin(async move {
+                self.inbound
+                    .recv()
+                    .await
+                    .unwrap_or_else(|| Err(TransportError::new("bridge_websocket_disconnected")))
+            })
+        }
+
+        fn close(&mut self) -> BoxFuture<'_, Result<(), TransportError>> {
+            let closed = Arc::clone(&self.closed);
+            Box::pin(async move {
+                *closed.lock().expect("closed") = true;
+                Ok(())
+            })
+        }
+    }
+
     impl SessionChannel for FakeChannel {
         fn session_id(&self) -> &str {
             &self.session_id
@@ -538,6 +636,37 @@ mod tests {
             serde_json::from_str(sent.lock().expect("sent").first().expect("sent heartbeat"))
                 .expect("heartbeat json");
         heartbeat.validate().expect("heartbeat contract");
+        assert!(*closed.lock().expect("closed"));
+    }
+
+    #[tokio::test]
+    async fn external_cancellation_interrupts_a_stalled_send_and_closes_the_session() {
+        let (_sender, receiver) = mpsc::channel(1);
+        let send_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let closed = Arc::new(Mutex::new(false));
+        let channel = HangingSendChannel {
+            session_id: "session_01JSTALLSEND".to_owned(),
+            inbound: receiver,
+            send_started: Arc::clone(&send_started),
+            closed: Arc::clone(&closed),
+        };
+        let cancellation = SessionCancellation::default();
+        let run_cancellation = cancellation.clone();
+        let run = tokio::spawn(async move { runtime().run(channel, run_cancellation).await });
+        timeout(Duration::from_secs(1), async {
+            while !send_started.load(std::sync::atomic::Ordering::Acquire) {
+                sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("stalled send started");
+
+        cancellation.cancel();
+        timeout(Duration::from_secs(1), run)
+            .await
+            .expect("prompt cancellation")
+            .expect("join")
+            .expect("clean cancellation");
         assert!(*closed.lock().expect("closed"));
     }
 

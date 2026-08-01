@@ -149,6 +149,22 @@ describe('MT4 EA snapshot performance contract', () => {
   })
 })
 
+describe('MT4 EA history paging performance contract', () => {
+  it('builds the terminal history index once and reuses it across cursor pages', () => {
+    const index = functionBlock('bool EnsureHistoryCursorIndex', 'void SendDeals')
+    const send = functionBlock('void SendDeals', 'string UtcDateTimeText')
+
+    expect(index.match(/OrdersHistoryTotal\(\)/g)).toHaveLength(1)
+    expect(index).toContain('g_history_index_total == history_total')
+    expect(index).toContain('g_history_index_login == AccountNumber()')
+    expect(index).toContain('g_history_index_server == AccountServer()')
+    expect(send).toContain('EnsureHistoryCursorIndex(server_offset_msc)')
+    expect(send).toContain('ArraySize(g_history_event_times)')
+    expect(send).not.toContain('OrdersHistoryTotal()')
+    expect(send).not.toContain('OrderSelect(history_index, SELECT_BY_POS, MODE_HISTORY)')
+  })
+})
+
 describe('MT4 EA uncertain execution contract', () => {
   it('does not claim an absent order when the MT4 history range cannot be proven complete', () => {
     const block = functionBlock('void ExecuteQuery', 'void SendTradeFailure')
