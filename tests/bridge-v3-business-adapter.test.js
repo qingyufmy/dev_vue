@@ -427,12 +427,13 @@ describe('Bridge v3 business compatibility adapter', () => {
     const { adapter } = setup({ nowValue:sunday, quote:{
       status:'succeeded', symbol:'XAUUSD', bid:4053.38, ask:4053.56,
       observed_at_utc_msc:Date.UTC(2026, 6, 24, 23, 54, 59),
-      symbol_trade_mode:4, terminal_connected:true,
+      symbol_trade_mode:4, terminal_connected:true, timezone_offset_minutes:180,
+      clock_status:'provisional_stale',
     } })
 
     await expect(adapter.execute(42, 'market_state', { symbol:'XAUUSD' })).resolves.toMatchObject({
       status:'success', market_state:'closed', market_reason:'weekend_tick_stale',
-      symbol_trade_mode:4, tick_progressing:false,
+      symbol_trade_mode:4, tick_progressing:false, clock_status:'provisional_stale',
     })
   })
 

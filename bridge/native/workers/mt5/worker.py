@@ -304,7 +304,19 @@ class BrokerClock:
             self.status = "calibrating"
         self._last_raw_msc = raw_msc
         self._last_host_msc = host_msc
-        if not self._trusted:
+        if self._trusted:
+            if self.status != "verified":
+                self.status = "persisted_stale"
+        elif residual < -CLOCK_FRESHNESS_TOLERANCE_MS:
+            # A fresh install can start while the market is closed. MT5 then
+            # returns the final quote from the previous session, so there is no
+            # advancing sample from which to calibrate a broker offset. Keep
+            # the default offset provisional and expose the stale read model;
+            # never persist it as a trusted calibration. The server classifies
+            # the old observed timestamp as a closed/stale market and therefore
+            # keeps automated execution disabled.
+            self.status = "provisional_stale"
+        else:
             raise WorkerError("mt5_clock_unverified")
         self._save()
         return self.normalize(raw_msc)

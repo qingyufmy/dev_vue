@@ -691,7 +691,10 @@ impl TerminalQuote {
             || !(0..=4).contains(&self.symbol_trade_mode)
             || !self.terminal_connected
             || !(-720..=840).contains(&self.timezone_offset_minutes)
-            || self.clock_status != "verified"
+            || !matches!(
+                self.clock_status.as_str(),
+                "verified" | "persisted_stale" | "provisional_stale"
+            )
         {
             return Err(WorkerHostError::new("worker_quote_invalid"));
         }
@@ -1654,7 +1657,7 @@ mod tests {
     }
 
     #[test]
-    fn quote_contract_rejects_an_unverified_clock() {
+    fn quote_contract_rejects_calibrating_clock_and_allows_closed_market_read_statuses() {
         let request = WorkerRequest::quote(
             route(),
             "request_01JQUOTE001".to_owned(),
@@ -1691,6 +1694,17 @@ mod tests {
                 .code(),
             "worker_quote_invalid"
         );
+
+        let mut closed_market_response = response;
+        for status in ["persisted_stale", "provisional_stale"] {
+            let WorkerResponseBody::Quote { quote } = &mut closed_market_response.body else {
+                unreachable!();
+            };
+            quote.clock_status = status.to_owned();
+            closed_market_response
+                .validate_for(&request)
+                .expect("stale read-only clock status");
+        }
     }
 
     #[test]

@@ -16,6 +16,7 @@ WORKER_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKER_DIR))
 
 from worker import (  # noqa: E402
+    BrokerClock,
     ReadOnlyMt5Adapter,
     Mt5Worker,
     WorkerError,
@@ -310,6 +311,43 @@ class WorkerTests(unittest.TestCase):
                 probe_terminal(mt5, str(terminal))
 
             self.assertFalse(mt5.initialized)
+
+    def test_fresh_install_exposes_closed_market_read_data_with_provisional_clock(self):
+        self.mt5.now = self.now - 18 * 60 * 60_000
+
+        quote_response = self.worker.handle(self.request("quote", {"symbol": "XAUUSD"}))
+        self.assertEqual("quote", quote_response["outcome"])
+        quote = quote_response["payload"]["quote"]
+        self.assertEqual("provisional_stale", quote["clock_status"])
+        self.assertEqual(self.mt5.now, quote["observed_at_utc_msc"])
+
+        rates_response = self.worker.handle(self.request("data", {
+            "action": "rates",
+            "params": {"symbol": "XAUUSD", "timeframe": "M5", "count": 4},
+        }, "request_01JSTALECLOCK"))
+        self.assertEqual("data", rates_response["outcome"])
+        rates = rates_response["payload"]["data"]["payload"]
+        self.assertEqual("provisional_stale", rates["clock_status"])
+        self.assertEqual(4, rates["count"])
+
+    def test_provisional_closed_market_clock_is_not_persisted_as_trusted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "clock.json"
+            clock = BrokerClock(state_path, lambda: self.now)
+
+            observed = clock.calibrate(self.now + 180 * 60_000 - 18 * 60 * 60_000)
+
+            self.assertEqual(self.now - 18 * 60 * 60_000, observed)
+            self.assertEqual("provisional_stale", clock.status)
+            self.assertFalse(state_path.exists())
+
+    def test_future_clock_sample_still_fails_closed(self):
+        self.mt5.now = self.now + 60 * 60_000
+
+        response = self.worker.handle(self.request("quote", {"symbol": "XAUUSD"}))
+
+        self.assertEqual("error", response["outcome"])
+        self.assertEqual("mt5_clock_unverified", response["payload"]["error_code"])
 
     def tearDown(self):
         self.temporary.cleanup()
