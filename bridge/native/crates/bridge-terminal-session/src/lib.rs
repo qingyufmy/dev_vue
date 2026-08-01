@@ -825,6 +825,14 @@ where
                 .await;
             let batch = match result {
                 Ok(batch) => batch,
+                Err(error) if error.code() == "mt5_history_evidence_pending" => {
+                    // The MT5 worker deliberately limits cross-window evidence lookups so a
+                    // large history import cannot monopolize the same serialized channel used
+                    // by quotes, candles and commands. Cached evidence is retained by the
+                    // worker; retry promptly without marking the terminal or history unhealthy.
+                    tokio::task::yield_now().await;
+                    continue;
+                }
                 Err(error) => {
                     failures = failures.saturating_add(1);
                     publish_history_failure(&status_tx, failures, error.code());

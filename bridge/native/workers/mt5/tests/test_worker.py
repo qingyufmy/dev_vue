@@ -84,6 +84,8 @@ class FakeMt5:
         self.initialized = False
         self.sent = []
         self.checks = []
+        self.history_order_queries = []
+        self.history_deal_queries = []
         self.positions = [Position(101, "XAUUSD.s", 0.01, 0, 234000, 2290.0, 2320.0)]
         self.orders = [Order(202, "XAUUSD.s", 0.02, 0.02, 2, 234000, "AI-PENDING",
                              2280.0, 2270.0, 2310.0, 0.0, 0)]
@@ -184,11 +186,19 @@ class FakeMt5:
             ]
         return SimpleNamespace(retcode=10009, order=1001, deal=2001, comment="done")
 
-    def history_orders_get(self, *_args, **kwargs):
+    def history_orders_get(self, *args, **kwargs):
+        self.history_order_queries.append((args, dict(kwargs)))
         ticket = kwargs.get("ticket")
-        return (self.history_orders[ticket],) if ticket in self.history_orders else ()
+        if ticket is not None:
+            return (self.history_orders[ticket],) if ticket in self.history_orders else ()
+        if len(args) == 2:
+            start, end = args
+            return tuple(item for item in self.history_orders.values()
+                         if start.timestamp() <= item.time_done <= end.timestamp())
+        return ()
 
     def history_deals_get(self, *args, **kwargs):
+        self.history_deal_queries.append((args, dict(kwargs)))
         position = kwargs.get("position")
         if position is not None:
             return tuple(item for item in self.history_deals if item.position_id == position)
@@ -561,6 +571,113 @@ class WorkerTests(unittest.TestCase):
             [3002, 3001],
             [item["ticket"] for item in second_batch["history_orders"]],
         )
+        self.assertEqual(1, len(self.mt5.history_deal_queries))
+        self.assertEqual(2, len(self.mt5.history_order_queries))
+        self.assertTrue(all(not kwargs for _, kwargs in self.mt5.history_deal_queries))
+        self.assertTrue(all(not kwargs for _, kwargs in self.mt5.history_order_queries))
+
+    def test_dense_history_uses_two_bulk_queries_without_per_item_mt5_calls(self):
+        start_seconds = int(time.time()) - 10_000
+        deals = []
+        orders = {}
+        for index in range(100):
+            position_id = 20_000 + index
+            open_order = 30_000 + index * 2
+            close_order = open_order + 1
+            open_deal = 40_000 + index * 2
+            close_deal = open_deal + 1
+            opened = start_seconds + index * 2
+            closed = opened + 1
+            deals.extend([
+                Deal(open_deal, open_order, position_id, "XAUUSD.s", 0, 0,
+                     234000, 0, "open", 0.01, 2295.0, 0.0, 0.0, 0.0,
+                     0.0, 2285.0, 2315.0, opened, opened * 1000),
+                Deal(close_deal, close_order, position_id, "XAUUSD.s", 1, 1,
+                     234000, 0, "close", 0.01, 2305.0, 10.0, -0.2, -0.1,
+                     0.0, 0.0, 0.0, closed, closed * 1000),
+            ])
+            orders[open_order] = HistoryOrder(
+                open_order, position_id, "XAUUSD.s", 0, 4, 234000, 0, "open",
+                0.01, 0.0, 2295.0, 2285.0, 2315.0, opened, opened,
+                opened * 1000, opened * 1000)
+            orders[close_order] = HistoryOrder(
+                close_order, position_id, "XAUUSD.s", 1, 4, 234000, 0, "close",
+                0.01, 0.0, 2305.0, 0.0, 0.0, closed, closed,
+                closed * 1000, closed * 1000)
+        self.mt5.history_deals = deals
+        self.mt5.history_orders = orders
+        self.mt5.history_deal_queries.clear()
+        self.mt5.history_order_queries.clear()
+
+        response = self.worker.handle(self.request("history_sync", {
+            "cursor": {"time_msc": start_seconds * 1000 - 1, "ticket": "0"},
+            "limit": 250,
+        }, "request_01JDENSEHISTORY"))
+
+        self.assertEqual("history_batch", response["outcome"])
+        batch = response["payload"]["batch"]
+        self.assertEqual(200, len(batch["deals"]))
+        self.assertEqual(100, len(batch["trades"]))
+        self.assertEqual(200, len(batch["history_orders"]))
+        self.assertEqual(1, len(self.mt5.history_deal_queries))
+        self.assertEqual(1, len(self.mt5.history_order_queries))
+        self.assertFalse(self.mt5.history_deal_queries[0][1])
+        self.assertFalse(self.mt5.history_order_queries[0][1])
+
+    def test_cross_window_evidence_is_resolved_in_bounded_retry_batches(self):
+        close_start = int(time.time()) - 1_000
+        deals = []
+        orders = {}
+        for index in range(6):
+            position_id = 50_000 + index
+            open_order = 60_000 + index * 2
+            close_order = open_order + 1
+            open_deal = 70_000 + index * 2
+            close_deal = open_deal + 1
+            opened = close_start - 40 * 24 * 60 * 60 - index
+            closed = close_start + index
+            deals.extend([
+                Deal(open_deal, open_order, position_id, "XAUUSD.s", 0, 0,
+                     234000, 0, "open", 0.01, 2295.0, 0.0, 0.0, 0.0,
+                     0.0, 2285.0, 2315.0, opened, opened * 1000),
+                Deal(close_deal, close_order, position_id, "XAUUSD.s", 1, 1,
+                     234000, 0, "close", 0.01, 2305.0, 10.0, -0.2, -0.1,
+                     0.0, 0.0, 0.0, closed, closed * 1000),
+            ])
+            orders[open_order] = HistoryOrder(
+                open_order, position_id, "XAUUSD.s", 0, 4, 234000, 0, "open",
+                0.01, 0.0, 2295.0, 2285.0, 2315.0, opened, opened,
+                opened * 1000, opened * 1000)
+            orders[close_order] = HistoryOrder(
+                close_order, position_id, "XAUUSD.s", 1, 4, 234000, 0, "close",
+                0.01, 0.0, 2305.0, 0.0, 0.0, closed, closed,
+                closed * 1000, closed * 1000)
+        self.mt5.history_deals = deals
+        self.mt5.history_orders = orders
+        self.mt5.history_deal_queries.clear()
+        self.mt5.history_order_queries.clear()
+        payload = {
+            "cursor": {"time_msc": close_start * 1000 - 1, "ticket": "0"},
+            "limit": 250,
+        }
+
+        attempts = []
+        for index in range(4):
+            before = len(self.mt5.history_deal_queries) + len(self.mt5.history_order_queries)
+            response = self.worker.handle(self.request(
+                "history_sync", payload, f"request_01JBOUNDED{index}"))
+            after = len(self.mt5.history_deal_queries) + len(self.mt5.history_order_queries)
+            attempts.append(after - before)
+            if response["outcome"] == "history_batch":
+                break
+            self.assertEqual("mt5_history_evidence_pending",
+                             response["payload"]["error_code"])
+
+        self.assertEqual("history_batch", response["outcome"])
+        self.assertEqual(6, len(response["payload"]["batch"]["trades"]))
+        # Each attempt has two bulk calls and no more than four targeted fallbacks.
+        self.assertTrue(all(count <= 6 for count in attempts), attempts)
+        self.assertGreater(len(attempts), 1)
 
     def test_history_sync_rejects_zero_cursor_and_oversized_limit_before_mt5_query(self):
         for payload in (
