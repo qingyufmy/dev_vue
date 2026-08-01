@@ -3236,7 +3236,10 @@ fn prepare_application(root: &Path) -> PathBuf {
             "from __future__ import annotations",
             "from __future__ import annotations\n\nimport os\nfrom pathlib import Path\nPath(os.environ['AURUM_TEST_WORKER_PID_FILE']).write_text(str(os.getpid()), encoding='ascii')",
         )
-        .replace("from worker import run", "from runtime_worker import run");
+        .replace(
+            "from worker import run",
+            "import runtime_worker\nruntime_worker._terminal_process_running = lambda _path: True\nfrom runtime_worker import run",
+        );
     fs::write(worker_directory.join("worker.py"), fake_entry).expect("write fake entry");
     application
 }

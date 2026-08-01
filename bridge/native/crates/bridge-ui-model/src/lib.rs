@@ -297,7 +297,7 @@ pub fn describe_status(state: &UiStateSnapshot) -> StatusCopy {
             "部分连接异常",
             &describe_code(
                 state.detail_code.as_deref(),
-                "程序正在自动恢复，不影响 MT 中已有订单。",
+                "请确认 MT 已手动启动并登录；量见智桥不会自动启动或关闭 MT。",
             ),
             Rgb(220, 38, 38),
         ),
@@ -665,7 +665,7 @@ fn permission_color(value: Option<bool>) -> Rgb {
 fn terminal_state_text(terminal: &UiTerminalStatus) -> &'static str {
     match terminal.runtime_state.as_str() {
         "running" => "运行中",
-        "restarting" => "自动恢复中",
+        "restarting" => "等待终端",
         "stopped" if terminal.error_code.as_deref() == Some("terminal_worker_failure_limit") => {
             "已暂停，请重新检测"
         }
@@ -677,6 +677,7 @@ fn terminal_state_text(terminal: &UiTerminalStatus) -> &'static str {
 fn describe_code(code: Option<&str>, fallback: &str) -> String {
     match code {
         Some("mt5_terminal_not_found") => "未发现 MT5，请先打开并登录 MT5。",
+        Some("mt5_terminal_not_running") => "MT5 未运行，请手动打开并登录 MT5。",
         Some("mt5_account_unavailable") => "已发现 MT5，但尚未登录交易账户。",
         Some("mt5_terminal_disconnected") => "MT5 当前未连接交易服务器。",
         Some("trading_terminal_not_found") => {

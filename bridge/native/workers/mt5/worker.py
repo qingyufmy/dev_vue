@@ -4,7 +4,6 @@ import hashlib
 import json
 import math
 import os
-import subprocess
 import struct
 import sys
 import time
@@ -31,9 +30,6 @@ TERMINAL_SESSION_FATAL_ERRORS = frozenset({
 })
 TERMINAL_LOGIN_WAIT_SECONDS = 30.0
 TERMINAL_LOGIN_POLL_SECONDS = 0.5
-TERMINAL_PROCESS_START_WAIT_SECONDS = 15.0
-TERMINAL_PROCESS_POLL_SECONDS = 0.1
-TERMINAL_PROCESS_SETTLE_SECONDS = 2.0
 RATE_TIMEFRAMES = frozenset({
     "M1", "M2", "M3", "M4", "M5", "M6", "M10", "M12", "M15", "M20", "M30",
     "H1", "H2", "H3", "H4", "H6", "H8", "H12", "D1", "W1", "MN1",
@@ -124,40 +120,9 @@ def _terminal_process_running(terminal_path: str | Path) -> bool:
     )
 
 
-def _start_terminal_without_arguments(terminal_path: str | Path) -> subprocess.Popen[bytes]:
-    executable = Path(terminal_path).resolve()
-    creation_flags = (
-        getattr(subprocess, "DETACHED_PROCESS", 0)
-        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
-    )
-    return subprocess.Popen(
-        [str(executable)],
-        cwd=str(executable.parent),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-        creationflags=creation_flags,
-    )
-
-
-def _ensure_terminal_started(terminal_path: str | Path) -> bool:
-    if os.name != "nt" or _terminal_process_running(terminal_path):
-        return False
-    try:
-        process = _start_terminal_without_arguments(terminal_path)
-    except OSError as error:
-        raise WorkerError("mt5_terminal_start_failed") from error
-    deadline = time.monotonic() + TERMINAL_PROCESS_START_WAIT_SECONDS
-    while time.monotonic() < deadline:
-        if _terminal_process_running(terminal_path):
-            time.sleep(TERMINAL_PROCESS_SETTLE_SECONDS)
-            return True
-        if process.poll() is not None:
-            break
-        time.sleep(TERMINAL_PROCESS_POLL_SECONDS)
-    raise WorkerError("mt5_terminal_start_failed")
+def _require_terminal_running(terminal_path: str | Path) -> None:
+    if not _terminal_process_running(terminal_path):
+        raise WorkerError("mt5_terminal_not_running")
 
 
 @dataclass(frozen=True)
@@ -355,7 +320,7 @@ class ReadOnlyMt5Adapter:
     def connect(self) -> None:
         if not Path(self.terminal_path).is_file():
             raise WorkerError("mt5_terminal_not_found")
-        _ensure_terminal_started(self.terminal_path)
+        _require_terminal_running(self.terminal_path)
         if not self.mt5.initialize(path=self.terminal_path, timeout=10_000, portable=False):
             raise WorkerError("mt5_initialize_failed")
         self._wait_for_identity()
@@ -1426,6 +1391,7 @@ def probe_terminal(mt5: Any, terminal_path: str) -> dict[str, Any]:
     resolved_path = str(Path(terminal_path).resolve())
     if not Path(resolved_path).is_file():
         raise WorkerError("mt5_terminal_not_found")
+    _require_terminal_running(resolved_path)
     if not mt5.initialize(path=resolved_path, timeout=10_000, portable=False):
         raise WorkerError("mt5_initialize_failed")
     try:

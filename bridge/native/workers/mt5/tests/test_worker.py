@@ -261,20 +261,11 @@ class WorkerTests(unittest.TestCase):
             self.assertTrue(mt5.initialized)
             adapter.shutdown()
 
-    def test_connect_restarts_closed_terminal_without_command_line_arguments(self):
+    def test_connect_rejects_closed_terminal_without_starting_it(self):
         with tempfile.TemporaryDirectory() as directory:
             terminal = Path(directory) / "terminal64.exe"
             terminal.write_bytes(b"terminal")
             mt5 = FakeMt5(self.now)
-            initialize_calls = []
-
-            def initialize(**kwargs):
-                initialize_calls.append(kwargs)
-                mt5.initialized = True
-                return True
-
-            mt5.initialize = initialize
-            process = SimpleNamespace(poll=lambda: None)
             adapter = ReadOnlyMt5Adapter(
                 mt5,
                 str(terminal),
@@ -282,35 +273,25 @@ class WorkerTests(unittest.TestCase):
                 clock_msc=lambda: self.now,
             )
             with (
-                patch("worker.os.name", "nt"),
-                patch("worker._terminal_process_running", side_effect=[False, True]),
-                patch("worker._start_terminal_without_arguments", return_value=process) as start,
-                patch("worker.time.sleep") as sleep,
+                patch("worker._terminal_process_running", return_value=False),
+                self.assertRaisesRegex(WorkerError, "mt5_terminal_not_running"),
             ):
                 adapter.connect()
 
-            start.assert_called_once_with(str(terminal.resolve()))
-            sleep.assert_called_once_with(2.0)
-            self.assertEqual(
-                [{"path": str(terminal.resolve()), "timeout": 10_000, "portable": False}],
-                initialize_calls,
-            )
-            adapter.shutdown()
+            self.assertFalse(mt5.initialized)
 
-    def test_terminal_restart_is_detached_from_bridge_job(self):
+    def test_probe_rejects_closed_terminal_without_starting_it(self):
         with tempfile.TemporaryDirectory() as directory:
             terminal = Path(directory) / "terminal64.exe"
             terminal.write_bytes(b"terminal")
-            process = SimpleNamespace(poll=lambda: None)
-            with patch("worker.subprocess.Popen", return_value=process) as popen:
-                from worker import _start_terminal_without_arguments
+            mt5 = FakeMt5(self.now)
+            with (
+                patch("worker._terminal_process_running", return_value=False),
+                self.assertRaisesRegex(WorkerError, "mt5_terminal_not_running"),
+            ):
+                probe_terminal(mt5, str(terminal))
 
-                self.assertIs(process, _start_terminal_without_arguments(terminal))
-
-            args, kwargs = popen.call_args
-            self.assertEqual([str(terminal.resolve())], args[0])
-            self.assertEqual(str(terminal.resolve().parent), kwargs["cwd"])
-            self.assertNotEqual(0, kwargs["creationflags"] & 0x01000000)
+            self.assertFalse(mt5.initialized)
 
     def tearDown(self):
         self.temporary.cleanup()
