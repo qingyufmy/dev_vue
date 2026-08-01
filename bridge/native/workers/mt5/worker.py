@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import subprocess
 import struct
 import sys
 import time
@@ -30,6 +31,9 @@ TERMINAL_SESSION_FATAL_ERRORS = frozenset({
 })
 TERMINAL_LOGIN_WAIT_SECONDS = 30.0
 TERMINAL_LOGIN_POLL_SECONDS = 0.5
+TERMINAL_PROCESS_START_WAIT_SECONDS = 15.0
+TERMINAL_PROCESS_POLL_SECONDS = 0.1
+TERMINAL_PROCESS_SETTLE_SECONDS = 2.0
 RATE_TIMEFRAMES = frozenset({
     "M1", "M2", "M3", "M4", "M5", "M6", "M10", "M12", "M15", "M20", "M30",
     "H1", "H2", "H3", "H4", "H6", "H8", "H12", "D1", "W1", "MN1",
@@ -40,6 +44,120 @@ class WorkerError(RuntimeError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+def _normalized_terminal_path(value: str | Path) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(value))).casefold()
+
+
+def _running_windows_process_paths() -> tuple[str, ...]:
+    if os.name != "nt":
+        return ()
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)]
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)]
+    kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    if snapshot in (None, wintypes.HANDLE(-1).value):
+        return ()
+    paths: list[str] = []
+    try:
+        entry = ProcessEntry32W()
+        entry.dwSize = ctypes.sizeof(ProcessEntry32W)
+        available = bool(kernel32.Process32FirstW(snapshot, ctypes.byref(entry)))
+        while available:
+            if str(entry.szExeFile).lower() in {"terminal64.exe", "terminal.exe"}:
+                process = kernel32.OpenProcess(0x1000, False, entry.th32ProcessID)
+                if process:
+                    try:
+                        buffer = ctypes.create_unicode_buffer(32_768)
+                        length = wintypes.DWORD(len(buffer))
+                        if kernel32.QueryFullProcessImageNameW(
+                            process, 0, buffer, ctypes.byref(length)
+                        ):
+                            paths.append(buffer.value)
+                    finally:
+                        kernel32.CloseHandle(process)
+            available = bool(kernel32.Process32NextW(snapshot, ctypes.byref(entry)))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return tuple(paths)
+
+
+def _terminal_process_running(terminal_path: str | Path) -> bool:
+    expected = _normalized_terminal_path(terminal_path)
+    return any(
+        _normalized_terminal_path(path) == expected
+        for path in _running_windows_process_paths()
+    )
+
+
+def _start_terminal_without_arguments(terminal_path: str | Path) -> subprocess.Popen[bytes]:
+    executable = Path(terminal_path).resolve()
+    creation_flags = (
+        getattr(subprocess, "DETACHED_PROCESS", 0)
+        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+    )
+    return subprocess.Popen(
+        [str(executable)],
+        cwd=str(executable.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        creationflags=creation_flags,
+    )
+
+
+def _ensure_terminal_started(terminal_path: str | Path) -> bool:
+    if os.name != "nt" or _terminal_process_running(terminal_path):
+        return False
+    try:
+        process = _start_terminal_without_arguments(terminal_path)
+    except OSError as error:
+        raise WorkerError("mt5_terminal_start_failed") from error
+    deadline = time.monotonic() + TERMINAL_PROCESS_START_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if _terminal_process_running(terminal_path):
+            time.sleep(TERMINAL_PROCESS_SETTLE_SECONDS)
+            return True
+        if process.poll() is not None:
+            break
+        time.sleep(TERMINAL_PROCESS_POLL_SECONDS)
+    raise WorkerError("mt5_terminal_start_failed")
 
 
 @dataclass(frozen=True)
@@ -237,6 +355,7 @@ class ReadOnlyMt5Adapter:
     def connect(self) -> None:
         if not Path(self.terminal_path).is_file():
             raise WorkerError("mt5_terminal_not_found")
+        _ensure_terminal_started(self.terminal_path)
         if not self.mt5.initialize(path=self.terminal_path, timeout=10_000, portable=False):
             raise WorkerError("mt5_initialize_failed")
         self._wait_for_identity()

@@ -22,7 +22,8 @@ use windows_sys::Win32::System::Registry::{
     REG_SZ, RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    CREATE_BREAKAWAY_FROM_JOB, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW,
 };
 
 use crate::observer_terminal::mt5_terminal_instance_id;
@@ -109,7 +110,7 @@ pub(crate) fn start_terminal_if_stopped(terminal_executable: &Path) -> Result<bo
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB)
         .spawn()
         .map(|_| true)
         .map_err(|_| "mt5_terminal_start_failed")

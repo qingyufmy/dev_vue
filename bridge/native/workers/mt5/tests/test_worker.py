@@ -10,6 +10,7 @@ from collections import namedtuple
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 WORKER_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKER_DIR))
@@ -197,6 +198,11 @@ class FakeMt5:
 
 class WorkerTests(unittest.TestCase):
     def setUp(self):
+        self.terminal_running = patch(
+            "worker._terminal_process_running", return_value=True
+        )
+        self.terminal_running.start()
+        self.addCleanup(self.terminal_running.stop)
         self.now = 1_800_000_000_000
         self.route = WorkerRoute("terminal_01", "mt5", "Broker-Demo", "123456", 7)
         self.temporary = tempfile.TemporaryDirectory()
@@ -254,6 +260,57 @@ class WorkerTests(unittest.TestCase):
             self.assertGreaterEqual(calls, 3)
             self.assertTrue(mt5.initialized)
             adapter.shutdown()
+
+    def test_connect_restarts_closed_terminal_without_command_line_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Path(directory) / "terminal64.exe"
+            terminal.write_bytes(b"terminal")
+            mt5 = FakeMt5(self.now)
+            initialize_calls = []
+
+            def initialize(**kwargs):
+                initialize_calls.append(kwargs)
+                mt5.initialized = True
+                return True
+
+            mt5.initialize = initialize
+            process = SimpleNamespace(poll=lambda: None)
+            adapter = ReadOnlyMt5Adapter(
+                mt5,
+                str(terminal),
+                self.route,
+                clock_msc=lambda: self.now,
+            )
+            with (
+                patch("worker.os.name", "nt"),
+                patch("worker._terminal_process_running", side_effect=[False, True]),
+                patch("worker._start_terminal_without_arguments", return_value=process) as start,
+                patch("worker.time.sleep") as sleep,
+            ):
+                adapter.connect()
+
+            start.assert_called_once_with(str(terminal.resolve()))
+            sleep.assert_called_once_with(2.0)
+            self.assertEqual(
+                [{"path": str(terminal.resolve()), "timeout": 10_000, "portable": False}],
+                initialize_calls,
+            )
+            adapter.shutdown()
+
+    def test_terminal_restart_is_detached_from_bridge_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Path(directory) / "terminal64.exe"
+            terminal.write_bytes(b"terminal")
+            process = SimpleNamespace(poll=lambda: None)
+            with patch("worker.subprocess.Popen", return_value=process) as popen:
+                from worker import _start_terminal_without_arguments
+
+                self.assertIs(process, _start_terminal_without_arguments(terminal))
+
+            args, kwargs = popen.call_args
+            self.assertEqual([str(terminal.resolve())], args[0])
+            self.assertEqual(str(terminal.resolve().parent), kwargs["cwd"])
+            self.assertNotEqual(0, kwargs["creationflags"] & 0x01000000)
 
     def tearDown(self):
         self.temporary.cleanup()
