@@ -17,7 +17,7 @@ if ((Test-Path -LiteralPath (Join-Path $source 'pyvenv.cfg')) -or
   (Test-Path -LiteralPath (Join-Path (Split-Path $source -Parent) 'pyvenv.cfg'))) { throw 'release_python_source_is_venv' }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $output) { throw 'release_python_output_exists' }
-$lock = if ($RequirementsLock) { (Resolve-Path -LiteralPath $RequirementsLock).Path } else { Join-Path $repo 'bridge\adapters\mt5-python\requirements.lock.txt' }
+$lock = if ($RequirementsLock) { (Resolve-Path -LiteralPath $RequirementsLock).Path } else { Join-Path $repo 'bridge\native\workers\mt5\requirements.lock.txt' }
 if (-not (Test-Path -LiteralPath $lock -PathType Leaf)) { throw 'release_python_requirements_lock_missing' }
 $wheelhouse = if ($WheelhouseDirectory) { (Resolve-Path -LiteralPath $WheelhouseDirectory).Path } else { $null }
 $runtimeInfo = (& $sourcePython -c "import json,platform,sys; print(json.dumps({'version':platform.python_version(),'architecture':platform.architecture()[0],'implementation':platform.python_implementation(),'major':sys.version_info.major,'minor':sys.version_info.minor}))") | ConvertFrom-Json

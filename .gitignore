@@ -28,8 +28,6 @@ test_stderr.txt
 _build/
 build/
 dist/
-dist_inno/
-dist_nuitka/
 bridge/release-artifacts/
 bridge/.test-artifacts/
 
@@ -37,13 +35,7 @@ __pycache__/
 .venv-bridge/
 .codebuddy/
 .workbuddy/
-public/ai/build/
-public/ai/dist/
 *.spec
-public/ai/AURUM_EA_Bridge/
-public/ai/AURUM_Bridge.exe
-public/ai/AURUM_Bridge
-public/ai/aurum_updater.exe
 .mimocode/
 .codebase-memory/
 .mcp.json

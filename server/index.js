@@ -7,7 +7,7 @@ import http from 'http'
 import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, AUTH_RATE_LIMIT_MAX, BRIDGE_AUTH_RATE_LIMIT_MAX, BRIDGE_PAIR_START_RATE_LIMIT_WINDOW_MS, BRIDGE_PAIR_START_RATE_LIMIT_MAX, WRITE_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, CORS_ORIGINS, isCorsOriginAllowed } from './config.js'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { existsSync, mkdirSync, readFileSync } from 'fs'
+import { existsSync, mkdirSync } from 'fs'
 import { initDB, queryOne, queryRun } from './db.js'
 import { runMigrations } from './migrations.js'
 import { isEncryptionAvailable } from './ai-credential.js'
@@ -250,112 +250,18 @@ app.use('/ai', express.static(join(__dirname, '..', 'public', 'ai'), {
   }
 }))
 
-// Bridge config download (for EXE update-token feature)
-app.get('/ai/bridge/config', (req, res) => {
-  const _proto = req.get('x-forwarded-proto') || req.protocol
-  const _port = req.get('host')?.split(':')?.[1] || ''
-  const _needsPort = _port && !['80', '443'].includes(_port)
-  const serverUrl = _needsPort ? `${_proto}://${req.hostname}:${_port}` : `${_proto}://${req.hostname}`
-  res.json({ server_url: serverUrl, token: '' })
-})
-
-// Bridge script download with embedded auth token
-app.get('/ai/bridge/:platform', authMiddleware, async (req, res) => {
+// Bridge 3.0 installer download compatibility entry.
+app.get('/ai/bridge/:platform', authMiddleware, (req, res) => {
   // Only Pro and admin users can download bridge software
   if (!hasActiveMembership(req.user, 'pro')) {
     return res.status(403).json({ ok: false, error: '仅 Pro 会员可下载桥接软件' })
   }
   const platform = req.params.platform
-  const token = req.query.token || ''
-  const _proto = req.get('x-forwarded-proto') || req.protocol
-  const _port = req.get('host')?.split(':')?.[1] || ''
-  const _needsPort = _port && !['80', '443'].includes(_port)
-  const serverUrl = _needsPort ? `${_proto}://${req.hostname}:${_port}` : `${_proto}://${req.hostname}`
-
-  if (bridgeInstallerRelease.v3
-    && ['setup', 'exe', 'exe-file'].includes(platform)) {
+  if (['setup', 'exe', 'exe-file'].includes(platform)) {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
     return res.redirect(302, bridgeInstallerRelease.fullUrl)
   }
-
-  if (platform === 'setup') {
-    // One-click setup: downloads exe + writes config + launches
-    const configData = JSON.stringify({ server_url: serverUrl, token })
-    const lines = [
-      '@echo off',
-      'chcp 65001 >nul 2>&1',
-      'echo ================================',
-      'echo   AURUM MT5 Bridge Setup',
-      'echo ================================',
-      'echo.',
-      '',
-      'REM --- Find Python ---',
-      'set PYTHON=',
-      'where python >nul 2>&1 && set PYTHON=python',
-      'if "%PYTHON%"=="" (',
-      '  where python3 >nul 2>&1 && set PYTHON=python3',
-      ')',
-      'if "%PYTHON%"=="" (',
-      '  for %%P in (3.13 3.12 3.11 3.10) do (',
-      '    if exist "C:\\Python%%P\\python.exe" set PYTHON=C:\\Python%%P\\python.exe',
-      '    if exist "%LOCALAPPDATA%\\Programs\\Python\\Python%%P\\python.exe" set PYTHON=%LOCALAPPDATA%\\Programs\\Python\\Python%%P\\python.exe',
-      '  )',
-      ')',
-      'if "%PYTHON%"=="" (',
-      '  echo ERROR: Python not found! Install Python 3.10+ first.',
-      '  pause',
-      '  exit /b 1',
-      ')',
-      'echo Using Python: %PYTHON%',
-      'echo.',
-      '',
-      'REM --- Install dependencies ---',
-      'echo Installing dependencies...',
-      '%PYTHON% -m pip install MetaTrader5 requests websocket-client -q',
-      'echo.',
-      '',
-      'REM --- Download EXE ---',
-      'echo Downloading AURUM_Bridge.exe...',
-      'curl -sL -o "%~dp0AURUM_Bridge.exe" "' + serverUrl + '/ai/bridge/exe-file?token=' + encodeURIComponent(token) + '"',
-      'if not exist "%~dp0AURUM_Bridge.exe" (',
-      '  echo Download failed! Check network.',
-      '  pause',
-      '  exit /b 1',
-      ')',
-      'echo.',
-      '',
-      'REM --- Write config ---',
-      'echo Writing config...',
-      'echo ' + Buffer.from(configData).toString('base64') + ' > "%~dp0config.json.b64"',
-      'certutil -decode "%~dp0config.json.b64" "%~dp0config.json" >nul',
-      'del "%~dp0config.json.b64"',
-      '',
-      'REM --- Launch ---',
-      'echo Starting AURUM Bridge...',
-      'start "" "%~dp0AURUM_Bridge.exe"',
-    ]
-    res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge_Setup.bat"')
-    res.setHeader('Content-Type', 'application/octet-stream')
-    res.send(lines.join('\r\n'))
-  } else if (platform === 'exe' || platform === 'exe-file') {
-    // Serve the EXE directly
-    const exePath = join(__dirname, '..', 'public', 'ai', 'AURUM_Bridge.exe')
-    if (!existsSync(exePath)) {
-      return res.status(404).json({ status: 'error', message: 'EXE not found' })
-    }
-    res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge.exe"')
-    res.setHeader('Content-Type', 'application/octet-stream')
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
-    res.sendFile(exePath)
-  } else if (platform === 'mac') {
-    let script = readFileSync(join(__dirname, '..', 'public', 'ai', 'AURUM_Bridge_Mac.command'), 'utf-8')
-    script = script.replaceAll('{{TOKEN}}', token).replaceAll('{{SERVER_URL}}', serverUrl)
-    res.setHeader('Content-Disposition', 'attachment; filename="AURUM_Bridge_Mac.command"')
-    res.setHeader('Content-Type', 'application/octet-stream')
-    res.send(script)
-  } else {
-    res.status(400).json({ status: 'error', message: '平台不支持，请使用 win 或 mac' })
-  }
+  res.status(400).json({ status: 'error', message: '仅支持 Windows 版量见智桥' })
 })
 
 app.get('/ai', noCache, (req, res) => {

@@ -1,12 +1,12 @@
 # 量见智桥 3.0.0 Rust Native 详细重构方案
 
-> 文档状态：实施基线 1.0
+> 文档状态：3.0 重构历史基线；旧 Python GUI 与 .NET 客户端源码已在 Native 正式化后移除
 >
 > 基线分支：`refactor/aurum-bridge-v3`
 >
 > 产品版本：Rust Native 直接作为正式 3.0.0；现有 .NET Bridge 仅作功能与协议对照
 >
-> 当前进度：阶段 0 / 1 / 2 已完成；阶段 3 已完成 MT5 Python Worker、增量投影、Profile 准备、本地终端域与服务器会话域的独立生命周期、端点权威源与 Core 正式入口；阶段 4 已接通正式 MT5 Dispatcher、主动执行核对、真实 MT5 管理/拒绝/终端恢复矩阵及脱敏运行状态投影，休市等不可主动制造的外部故障验收仍待实施
+> 当前实现：`bridge/native/` 是唯一正式客户端；MT5 Worker 位于 `bridge/native/workers/mt5/`，MT4 EA 位于 `bridge/adapters/mt4-ea/`
 
 ## 1. 结论
 

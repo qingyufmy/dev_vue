@@ -71,7 +71,7 @@ if ($QiniuConfigSource -eq 'database') {
   }
 }
 $checks = [ordered]@{
-  dotnet = [bool]($env:AURUM_DOTNET_EXE -or (Get-Command dotnet -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $env:USERPROFILE '.cache\aurum-dotnet\dotnet.exe')))
+  cargo = [bool]((Get-Command cargo -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe')))
   node = [bool](Get-Command node -ErrorAction SilentlyContinue)
   signer = $signerPathValid
   signing_certificate = $signerSelfTestValid
@@ -102,7 +102,7 @@ if (-not $Server) { $missingRequirements += 'RELEASE_SERVER_HTTPS_URL' }
 elseif (-not $Server.StartsWith('https://')) { $missingRequirements += 'RELEASE_SERVER_HTTPS_REQUIRED' }
 if (-not $checks.python_runtime) { $missingRequirements += 'PYTHON_RUNTIME_DIRECTORY' }
 if (-not $checks.metaeditor) { $missingRequirements += 'AURUM_METAEDITOR_EXE' }
-if (-not $checks.dotnet -or -not $checks.node) { throw 'release_build_runtime_missing' }
+if (-not $checks.cargo -or -not $checks.node) { throw 'release_build_runtime_missing' }
 if ($Environment -eq 'production' -and (-not $checks.signer -or -not $checks.signing_certificate -or (-not $checks.authenticode_certificate -and -not $checks.unsigned_installer_authorized) -or -not $checks.public_key -or -not $checks.qiniu -or -not $checks.endpoint -or -not $checks.python_runtime -or -not $checks.metaeditor)) {
   throw 'release_production_prerequisite_missing'
 }

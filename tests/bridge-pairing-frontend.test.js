@@ -6,8 +6,8 @@ const html = readFileSync(new URL('../public/ai/bridge-pair.html', import.meta.u
 const script = readFileSync(new URL('../public/ai/bridge-pair.js', import.meta.url), 'utf8')
 const styles = readFileSync(new URL('../public/ai/bridge-pair.css', import.meta.url), 'utf8')
 const server = readFileSync(new URL('../server/index.js', import.meta.url), 'utf8')
-const bridgeContext = readFileSync(new URL(
-  '../bridge/app/AurumBridge/UI/BridgeApplicationContext.cs', import.meta.url), 'utf8')
+const bridgeUi = readFileSync(new URL(
+  '../bridge/native/apps/bridge-ui/src/main.rs', import.meta.url), 'utf8')
 
 describe('Bridge authorization in the AI trading lab', () => {
   it('serves the authorization page in the AI lab and redirects the old URL', () => {
@@ -35,10 +35,10 @@ describe('Bridge authorization in the AI trading lab', () => {
   })
 
   it('opens a browser only from the explicit connect-account action', () => {
-    expect(bridgeContext).toContain('_form.PairRequested += HandlePairRequested')
-    expect(bridgeContext).toContain('Process.Start(new ProcessStartInfo(prompt.VerificationUri.AbsoluteUri)')
-    expect(bridgeContext).not.toContain('automatic_pairing_started')
-    expect(bridgeContext).not.toContain('BridgeFirstAuthorizationGate')
+    expect(bridgeUi).toContain('CONTROL_PAIR => unsafe { begin_action(hwnd, app, LocalControlAction::Pair) }')
+    expect(bridgeUi).toContain('LocalControlResult::PairingUrl { url }')
+    expect(bridgeUi).toContain('open_browser(&url)')
+    expect(bridgeUi).not.toContain('automatic_pairing_started')
   })
 
   it('provides accessible status and responsive controls', () => {

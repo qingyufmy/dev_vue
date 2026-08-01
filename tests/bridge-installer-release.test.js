@@ -49,10 +49,12 @@ describe('bridge installer release descriptor', () => {
     })).toThrow('bridge_installer_release_configuration_invalid')
   })
 
-  it('redirects authenticated legacy Windows download routes only after V3 activation', async () => {
+  it('redirects authenticated compatibility routes directly to the verified 3.0 installer', async () => {
     const source = await readFile(new URL('../server/index.js', import.meta.url), 'utf8')
-    expect(source).toContain("bridgeInstallerRelease.v3")
     expect(source).toContain("['setup', 'exe', 'exe-file'].includes(platform)")
     expect(source).toContain('res.redirect(302, bridgeInstallerRelease.fullUrl)')
+    expect(source).not.toContain("app.get('/ai/bridge/config'")
+    expect(source).not.toContain('AURUM_Bridge.exe')
+    expect(source).not.toContain("platform === 'mac'")
   })
 })

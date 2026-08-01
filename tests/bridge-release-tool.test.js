@@ -90,7 +90,7 @@ describe('bridge release tooling', () => {
   })
 
   it('pins the portable MT5 Python runtime and enforces build provenance', async () => {
-    const lock = await readFile(new URL('../bridge/adapters/mt5-python/requirements.lock.txt', import.meta.url), 'utf8')
+    const lock = await readFile(new URL('../bridge/native/workers/mt5/requirements.lock.txt', import.meta.url), 'utf8')
     const runtimeBuilder = await readFile(new URL('../scripts/bridge-release/build-python-runtime.ps1', import.meta.url), 'utf8')
     const releaseBuilder = await readFile(new URL('../scripts/bridge-release/build-release.ps1', import.meta.url), 'utf8')
     expect(lock).toContain('MetaTrader5==5.0.5735')
@@ -285,7 +285,8 @@ describe('bridge release tooling', () => {
     expect(fixtureBuilder).toContain("$serverUri.Host -ne '127.0.0.1'")
     expect(fixtureBuilder).toContain("'sign-release.ps1'")
     expect(fixtureBuilder).toContain("'verify-signatures.ps1'")
-    expect(releaseTests).toContain('& $dotnet build $solution')
+    expect(releaseTests).toContain("scripts\\bridge-native\\test-native.ps1")
+    expect(releaseTests).not.toContain('$dotnet')
     expect(workspace).toContain('"apps/bridge-update-rehearsal"')
   })
 
@@ -393,17 +394,13 @@ describe('bridge release tooling', () => {
     expect(fullInstallerBuilder).toContain('function ConvertFrom-CodePoints')
     expect(fullInstallerBuilder).toContain('0x91CF,0x89C1,0x667A,0x6865')
     expect([...fullInstallerBuilder].some(character => character.codePointAt(0) > 0x7f)).toBe(false)
-    const launcherProgram = await readFile(
-      new URL('../bridge/launcher/AurumBridge.Launcher/Program.cs', import.meta.url),
-      'utf8',
-    )
     const launcherUninstaller = await readFile(
-      new URL('../bridge/launcher/AurumBridge.Launcher/LauncherUninstaller.cs', import.meta.url),
+      new URL('../bridge/native/apps/bridge-launcher/src/uninstall.rs', import.meta.url),
       'utf8',
     )
-    expect(launcherProgram).toContain('["--uninstall"]')
-    expect(launcherUninstaller).toContain('BridgeInstallationRegistration.IsDefaultInstallRoot')
-    expect(launcherUninstaller).toContain('RemoveRegistrationAndShortcuts')
+    expect(launcherUninstaller).toContain('argument == "--uninstall"')
+    expect(launcherUninstaller).toContain('layout.is_default_install_root')
+    expect(launcherUninstaller).toContain('remove_registration_and_shortcuts(layout)')
   })
 
   it('generates a locked Native SPDX inventory and deduplicated third-party license bundle', async () => {

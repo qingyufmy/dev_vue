@@ -4,7 +4,8 @@
 
 - `server/` 是 Node.js ESM 后端；HTTP 路由位于 `server/routes/`，AI 推理、策略、风控、复盘、记忆和模型对比集中在 `server/routes/ai/`。
 - `public/` 存放静态前端资源。AI 交易实验室主要由 `public/ai/index.html`、`app.js` 和 `styles.css` 构成，无单独前端构建步骤。
-- `public/ai/aurum_bridge_gui.py` 是服务器与 MT5 之间的 Python 桥接程序。
+- `bridge/native/apps/bridge-ui/` 是量见智桥 Windows 界面与托盘程序；`bridge/native/` 包含 Rust 3.0 核心、启动器、安装器、MT4 通信、SQLite、传输和更新运行时；MT5 官方 Python 库只封装在 `bridge/native/workers/mt5/` Worker 中。
+- `scripts/bridge-native/` 用于本地原生链路验证，`scripts/bridge-release/` 用于构建安装器、生成更新包、签名、上传和发布。`public/ai/` 不再存放可执行桥接客户端源码或安装包。
 - `tests/` 按后端模块组织；AI、路由和加密货币相关测试分别位于 `tests/ai/`、`tests/routes/` 和 `tests/crypto/`。
 - 数据库变更统一写入 `server/migrations.js`；方案、实现记录和运维文档放在 `docs/`。
 
@@ -18,7 +19,7 @@ npm test             # 运行全部 Vitest 测试
 npm run test:watch   # 持续运行受影响的测试
 ```
 
-定向测试示例：`npx vitest run tests/ai/strategy.test.js`。构建 Windows 桥接软件使用 `python public/ai/build_nuitka.py`。启动或重启项目、桥接软件时必须使用可见的 PowerShell 控制台，便于观察运行日志和异常。重启前不仅要停止对应服务或 Python 进程，还必须关闭承载它的旧显式 PowerShell 控制台，禁止遗留空控制台窗口。项目重启前必须先检查 3000 端口；若仍有监听进程，先停止并再次确认端口已无监听，再启动新服务。启动后必须检查 `/health`，不得在旧服务尚未退出时直接重复启动。
+定向测试示例：`npx vitest run tests/ai/strategy.test.js`。验证量见智桥 3.0 使用 `powershell -File scripts/bridge-native/test-native.ps1 -SkipRelease`；完整安装器必须通过 `scripts/bridge-release/build-full-installer.ps1` 及发布脚本构建，禁止恢复旧 Python GUI、Nuitka 打包或把 EXE 放回 `public/ai/`。启动或重启项目、桥接软件时必须使用可见的 PowerShell 控制台，便于观察运行日志和异常。重启前不仅要停止对应服务或桥接进程，还必须关闭承载它的旧显式 PowerShell 控制台，禁止遗留空控制台窗口。项目重启前必须先检查 3000 端口；若仍有监听进程，先停止并再次确认端口已无监听，再启动新服务。启动后必须检查 `/health`，不得在旧服务尚未退出时直接重复启动。
 
 ## 编码与命名规范
 
@@ -26,7 +27,7 @@ JavaScript 使用两空格缩进、无分号风格和 ESM `import`/`export`。�
 
 ## 测试要求
 
-测试框架为 Vitest，JavaScript 测试命名为 `*.test.js`，Python 探针可使用 `test_*.py`。修复问题时必须增加回归测试，重点覆盖权限、迁移、调度状态、MT5 时间、订单执行和缓存边界。先运行定向测试，再运行 `npm test`；涉及运行链路时还需启动项目并检查 `/health`。
+测试框架为 Vitest，JavaScript 测试命名为 `*.test.js`；MT5 Worker 使用 `bridge/native/workers/mt5/tests/test_*.py`，Rust 使用 Cargo 工作区测试。修复问题时必须增加回归测试，重点覆盖权限、迁移、调度状态、MT4/MT5 时间、订单执行、SQLite 与缓存边界。先运行定向测试，再按影响范围运行 `npm test` 与 `scripts/bridge-native/test-native.ps1 -SkipRelease`；涉及服务运行链路时还需启动项目并检查 `/health`。
 
 ## 提交与合并要求
 
@@ -47,9 +48,9 @@ MT5 累计收益、入出金和平仓统计必须按 `mt5_account_ownership_hist
 
 观摩源账户在保持 `role=user` 的前提下拥有独立的平台 AI 内容能力：只能新建和维护平台策略，复盘结论只能沉淀为平台记忆；不得因此获得用户管理、全局风控、平台模型或其他管理员权限。普通 Pro 用户仍使用私有策略与个人记忆。
 
-同一台 Windows 主机运行多个观摩源桥接时，每个进程必须使用独立配置档案启动，例如 `python public/ai/aurum_bridge_gui.py --profile source-a`；默认档案继续兼容 `%APPDATA%\\AURUM_Bridge`，命名档案存放在其 `profiles/<name>` 子目录。每个档案使用独立 Pro 源账号、MT5 路径、令牌和日志，禁止多个来源共用默认档案。
+同一台 Windows 主机运行多个观摩源时，由量见智桥 3.0 总控在同一界面管理隔离运行时；默认档案位于 `%APPDATA%\\AURUM\\BridgeV3`，命名观摩档案位于其 `profiles/<name>` 子目录。每个档案使用独立观摩源账号、终端绑定、凭据、SQLite 和日志，禁止多个来源共用默认档案或终端身份。
 
-管理员默认 Bridge 登录后提供“新增观摩源”入口；新来源必须先验证 `plan_source=observer_source` 的专用账户，并绑定未被其他档案使用的独立 MT5 安装目录。子 Bridge 自动登录、自动启动并将明确的 `terminal64.exe` 路径传给 Python MT5 初始化；同一档案仅允许一个进程，不同档案可以并行。普通 Pro Bridge 不显示新增入口。
+管理员登录量见智桥后提供“新增观摩源”入口；新来源必须先验证 `plan_source=observer_source` 的专用账户，并绑定未被其他档案使用的独立终端目录和交易账户。观摩源由 3.0 核心以隔离档案运行，不再启动旧版子 Bridge 界面。普通用户不显示观摩源和管理员连接设置入口，且一个客户端只连接一个本人交易账户。
 
 自动推理成功后必须对齐下一个固定时间槽，不得按“模型完成时间 + 周期”累计漂移。`inference_snapshots.klines_json` 兼容普通 JSON 与 `gzip-base64:` 压缩格式，读取必须统一使用 `parseSnapshotJson()`，不得直接 `JSON.parse()`。模型调用流量以 `ai_model_usage_logs` 中的请求字节、响应字节和耗时字段为准。
 模型结构化输出参数必须按供应商与协议白名单启用，不得向所有 OpenAI 兼容端点统一写死。DeepSeek Chat API 使用 `response_format: { type: 'json_object' }`；火山 Agent Plan Responses API 使用 `text.format: { type: 'json_object' }`。现有动态输出模板与后端字段校验仍是交易合同，JSON Mode 只负责保证 JSON 语法，不得替代业务校验。

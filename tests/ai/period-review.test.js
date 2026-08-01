@@ -297,7 +297,7 @@ describe('period market evidence', () => {
     expect(isReviewGridAligned(start + 4 * 3600000, start, 'H4')).toBe(true)
     expect(isReviewGridAligned(start + 3 * 3600000, start, 'H4')).toBe(false)
     const evidenceSource = readFileSync(new URL('../../server/routes/ai/period-market-evidence.js', import.meta.url), 'utf8')
-    const bridgeSource = readFileSync(new URL('../../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const bridgeSource = readFileSync(new URL('../../bridge/native/workers/mt5/worker.py', import.meta.url), 'utf8')
     expect(evidenceSource).toContain('start_utc_msc:startUtcMs - CHAN_LOOKBACK_BARS * interval')
     expect(bridgeSource).toContain('copy_rates_range')
   })

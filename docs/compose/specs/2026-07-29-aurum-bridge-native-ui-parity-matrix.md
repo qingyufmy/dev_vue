@@ -2,19 +2,18 @@
 
 ## 1. 目标和禁止项
 
-Native 3.0.0 是现有 .NET 量见智桥的 Rust 语言与进程架构重构。用户看到的窗口尺寸、控件层级、字体、颜色、间距、按钮顺序、中文文案、显隐条件、产品能力、任务流和权限边界保持不变；不是重新设计界面。
+Native 3.0.0 是旧 .NET 量见智桥的 Rust 语言与进程架构重构。用户看到的窗口尺寸、控件层级、字体、颜色、间距、按钮顺序、中文文案、显隐条件、产品能力、任务流和权限边界保持不变；不是重新设计界面。迁移完成后旧 .NET 源码已从仓库删除，本文件保留为验收历史，当前 Rust 实现与 `bridge/native/contract-baseline.json` 才是维护基线。
 
 禁止以“首版”“状态壳”“轻量化”为理由省略现有入口；禁止用近似布局、自定义信息架构或新增控件替代 .NET 界面；禁止让 UI 直接读写 Bridge SQLite、控制 Worker 或向服务器发送交易请求；禁止把脱敏 `runtime-status.json` 扩展成包含账户、Broker、管理员权限或授权信息的旁路接口。
 
-权威实现：
+当前权威实现：
 
-- 主界面：`bridge/app/AurumBridge/UI/BridgeMainForm.cs`
-- 状态文案：`bridge/app/AurumBridge/UI/BridgeUiText.cs`
-- 托盘与事件编排：`bridge/app/AurumBridge/UI/BridgeApplicationContext.cs`
-- 连接设置：`bridge/app/AurumBridge/UI/BridgeSettingsForm.cs`
-- 观摩源：`bridge/app/AurumBridge/UI/BridgeObserverProfileDialog.cs`
-- 终端目录：`bridge/app/AurumBridge/UI/BridgeTerminalDirectoryDialog.cs`
-- 内置日志：`bridge/app/AurumBridge/UI/BridgeLogViewerForm.cs`
+- 主界面、状态文案、托盘与事件编排：`bridge/native/apps/bridge-ui/src/main.rs`
+- 连接设置：`bridge/native/apps/bridge-ui/src/settings.rs`
+- 观摩源：`bridge/native/apps/bridge-ui/src/observer_profile_dialog.rs`
+- 终端目录：`bridge/native/apps/bridge-ui/src/terminal_directory.rs`
+- 内置日志：`bridge/native/apps/bridge-ui/src/log_viewer.rs`
+- UI 状态模型：`bridge/native/crates/bridge-ui-model/src/lib.rs`
 
 ## 2. 主界面等价项
 

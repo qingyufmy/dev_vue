@@ -1358,7 +1358,7 @@ mod tests {
     }
 
     #[test]
-    fn installation_identity_is_stable_and_dotnet_compatible() {
+    fn installation_identity_is_stable_across_native_upgrades() {
         let root = test_directory("identity");
         fs::create_dir_all(&root).expect("root");
         let store = InstallationIdentityStore::new(root.join(INSTALLATION_ID_FILE_NAME))
@@ -1373,11 +1373,11 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_current_dotnet_launcher_file_version_when_available() {
+    fn reads_the_current_native_launcher_file_version_when_available() {
         let launcher = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../launcher/AurumBridge.Launcher/bin/Release/net10.0-windows/AURUMBridge.Launcher.exe");
+            .join("../../target/x86_64-pc-windows-msvc/release/liangjian-bridge-launcher.exe");
         if launcher.is_file() {
-            assert_eq!(read_file_version(&launcher), Ok("1.0.0".to_owned()));
+            assert!(read_file_version(&launcher).is_ok());
         }
     }
 

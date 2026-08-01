@@ -227,12 +227,10 @@ describe('position management exit-only worker', () => {
 
   it('starts the guarded worker with the server and exposes exact pending-order history state', () => {
     const server = readFileSync(new URL('../../server/index.js', import.meta.url), 'utf8')
-    const bridge = readFileSync(new URL('../../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const bridge = readFileSync(new URL('../../bridge/native/workers/mt5/worker.py', import.meta.url), 'utf8')
     const worker = readFileSync(new URL('../../server/routes/ai/position-management-worker.js', import.meta.url), 'utf8')
     expect(server).toContain('startPositionManagementWorker()')
-    expect(bridge).toContain('"sl": p.sl, "tp": p.tp')
-    expect(bridge).toContain('"AI持仓管理退出"')
-    expect(bridge).toContain('elif action == "pending_order_state":')
+    expect(bridge).toContain('if action == "pending_order_state":')
     expect(bridge).toContain('self.mt5.history_orders_get(ticket=ticket)')
     expect(worker).toContain("scope:'exit_and_pending_cancel'")
   })

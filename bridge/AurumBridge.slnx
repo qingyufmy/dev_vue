@@ -1,7 +1,0 @@
-<Solution>
-  <Project Path="app/AurumBridge/AurumBridge.csproj" />
-  <Project Path="launcher/AurumBridge.Launcher/AurumBridge.Launcher.csproj" />
-  <Project Path="tools/AurumBridge.ReleaseSigner/AurumBridge.ReleaseSigner.csproj" />
-  <Project Path="tools/AurumBridge.UpdateRehearsal/AurumBridge.UpdateRehearsal.csproj" />
-  <Project Path="tests/AurumBridge.Tests/AurumBridge.Tests.csproj" />
-</Solution>

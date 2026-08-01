@@ -5,7 +5,8 @@ const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'ut
 const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
 const server = readFileSync(new URL('../../server/routes/admin-position-protection.js', import.meta.url), 'utf8')
-const bridge = readFileSync(new URL('../../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+const bridgeAdapter = readFileSync(new URL('../../server/bridge-v3/business-adapter.js', import.meta.url), 'utf8')
+const mt5Trade = readFileSync(new URL('../../bridge/native/workers/mt5/trade.py', import.meta.url), 'utf8')
 
 describe('admin position protection UI contract', () => {
   it('shows the edit action only to administrators for system-owned positions', () => {
@@ -50,11 +51,10 @@ describe('admin position protection UI contract', () => {
     expect(server).toContain("sendBridgeCommand(target.user_id, 'modify_system_position_protection'")
     expect(server).toContain("if (Number(target.is_source))")
     expect(server).toContain("'source_position_update_failed'")
-    expect(bridge).toContain('elif action == "modify_system_position_protection":')
-    expect(bridge).toContain('verified = self.mt5.positions_get(ticket=pos.ticket)')
-    expect(bridge).toContain('position_stop_loss_changed')
-    expect(bridge).toContain('position_take_profit_changed')
-    expect(bridge).toContain('"ticket": str(p.ticket)')
+    expect(bridgeAdapter).toContain("modify_system_position_protection:'modify_position'")
+    expect(mt5Trade).toContain('current = self.mt5.positions_get(ticket=ticket)')
+    expect(mt5Trade).toContain('position_protection_not_applied')
+    expect(mt5Trade).toContain('"position": ticket, "stop_loss": next_sl, "take_profit": next_tp')
     expect(server).toContain('stop_loss:expectedStopLoss')
     expect(server).toContain('(position_id = ? OR entry_order_ticket = ?)')
   })

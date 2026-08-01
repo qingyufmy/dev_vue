@@ -460,7 +460,8 @@ describe('durable state and protection boundaries', () => {
   it('declares the required durable tables and Bridge-side operation safeguards', () => {
     const migrations = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
     const positionManagement = readFileSync(new URL('../../server/routes/ai/position-management.js', import.meta.url), 'utf8')
-    const bridge = readFileSync(new URL('../../public/ai/aurum_bridge_gui.py', import.meta.url), 'utf8')
+    const bridgeAdapter = readFileSync(new URL('../../server/bridge-v3/business-adapter.js', import.meta.url), 'utf8')
+    const bridgeLedger = readFileSync(new URL('../../bridge/native/crates/bridge-store/src/lib.rs', import.meta.url), 'utf8')
     for (const table of ['ai_trade_theses', 'ai_position_management_tasks', 'ai_position_management_evaluations',
       'ai_position_management_commands', 'ai_position_management_events']) {
       expect(migrations).toContain(`CREATE TABLE IF NOT EXISTS ${table}`)
@@ -482,8 +483,8 @@ describe('durable state and protection boundaries', () => {
     expect(migrations).toContain("MODIFY execution_mode VARCHAR(20) NOT NULL DEFAULT 'auto_exit'")
     expect(positionManagement).toContain("if (mode === 'display') continue")
     expect(positionManagement).not.toContain('server_hard_condition')
-    expect(bridge).toContain('operation_id')
-    expect(bridge).toContain('_management_precondition_error')
-    expect(bridge).toContain('idempotent_replay')
+    expect(bridgeAdapter).toContain('params.operation_id')
+    expect(bridgeAdapter).toContain('managementPreconditionError')
+    expect(bridgeLedger).toContain('ON CONFLICT(command_id) DO NOTHING')
   })
 })

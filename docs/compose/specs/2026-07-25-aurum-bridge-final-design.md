@@ -346,7 +346,7 @@ Python 仅存在于 MT5 Worker，不再承载 GUI、更新、服务器业务或�
 
 ### 9.3 当前优化重点
 
-当前实现中，交易命令和数据采集共享 MT5 锁，且数据循环持续读取全账户持仓与 M1 数据。见 [aurum_bridge_gui.py](../../../public/ai/aurum_bridge_gui.py#L702)、[aurum_bridge_gui.py](../../../public/ai/aurum_bridge_gui.py#L3170) 和 [aurum_bridge_gui.py](../../../public/ai/aurum_bridge_gui.py#L3263)。
+当时的旧版 Python GUI 将交易命令和数据采集放在同一 MT5 锁与串行循环中。该实现已在 3.0 原生重构完成后删除；本段仅保留为重构背景，不再对应当前可执行源码。
 
 重构首先解决：
 

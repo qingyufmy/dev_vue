@@ -3965,22 +3965,6 @@ mod tests {
     }
 
     #[test]
-    fn required_schema_matches_the_current_csharp_v3_authority() {
-        let csharp_sources = format!(
-            "{}\n{}",
-            include_str!("../../../../app/AurumBridge/Storage/BridgeStore.cs"),
-            include_str!("../../../../app/AurumBridge/Storage/BridgeStore.History.cs")
-        );
-        for (table, expected_columns) in REQUIRED_SCHEMA {
-            let actual_columns = extract_csharp_create_table_columns(&csharp_sources, table);
-            assert_eq!(
-                actual_columns, *expected_columns,
-                "Rust compatibility contract drifted from C# table {table}"
-            );
-        }
-    }
-
-    #[test]
     fn missing_v3_column_fails_closed() {
         let root = unique_test_directory("incompatible");
         fs::create_dir_all(&root).expect("fixture directory");
@@ -4786,33 +4770,6 @@ mod tests {
 
         drop(store);
         fs::remove_dir_all(root).expect("remove receipt conflict fixture");
-    }
-
-    fn extract_csharp_create_table_columns<'a>(source: &'a str, table: &str) -> Vec<&'a str> {
-        let marker = format!("CREATE TABLE IF NOT EXISTS {table} (");
-        let body = source
-            .split_once(&marker)
-            .unwrap_or_else(|| panic!("C# schema table missing: {table}"))
-            .1
-            .split_once("\n        );")
-            .or_else(|| {
-                source
-                    .split_once(&marker)
-                    .and_then(|(_, remainder)| remainder.split_once("\n            );"))
-            })
-            .unwrap_or_else(|| panic!("C# schema table terminator missing: {table}"))
-            .0;
-        body.lines()
-            .map(str::trim)
-            .take_while(|line| !line.starts_with("PRIMARY KEY"))
-            .filter(|line| !line.is_empty())
-            .map(|line| {
-                line.split_ascii_whitespace()
-                    .next()
-                    .expect("C# schema column")
-                    .trim_end_matches(',')
-            })
-            .collect()
     }
 
     fn unique_test_directory(suffix: &str) -> PathBuf {
