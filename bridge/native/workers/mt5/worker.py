@@ -1097,6 +1097,20 @@ class ReadOnlyMt5Adapter:
             int(getattr(self.mt5, "DEAL_ENTRY_OUT_BY", 3)),
         }
         buy_type = int(getattr(self.mt5, "DEAL_TYPE_BUY", 0))
+
+        def history_order(order_ticket: int) -> dict[str, Any]:
+            if order_ticket <= 0:
+                return {}
+            if order_ticket not in orders_by_ticket:
+                values = self.mt5.history_orders_get(ticket=order_ticket)
+                if values is None:
+                    raise WorkerError("mt5_history_orders_unavailable")
+                if values:
+                    order = self._history_order_row(_plain(values[-1]))
+                    orders_by_ticket[order_ticket] = order
+                    history_orders.append(order)
+            return orders_by_ticket.get(order_ticket, {})
+
         for raw in raw_deals:
             deals.append(self._history_deal_row(raw))
             try:
@@ -1105,14 +1119,7 @@ class ReadOnlyMt5Adapter:
                 order_ticket = int(raw.get("order") or 0)
             except (TypeError, ValueError) as error:
                 raise WorkerError("mt5_history_item_invalid") from error
-            if order_ticket > 0 and order_ticket not in orders_by_ticket:
-                values = self.mt5.history_orders_get(ticket=order_ticket)
-                if values is None:
-                    raise WorkerError("mt5_history_orders_unavailable")
-                if values:
-                    order = self._history_order_row(_plain(values[-1]))
-                    orders_by_ticket[order_ticket] = order
-                    history_orders.append(order)
+            history_order(order_ticket)
             if entry not in exit_entries:
                 continue
             if position_id > 0 and position_id not in position_deals:
@@ -1125,6 +1132,11 @@ class ReadOnlyMt5Adapter:
                            if isinstance(value, dict)
                            and int(value.get("entry") if value.get("entry") is not None else -1)
                            == entry_in), raw)
+            try:
+                origin_order_ticket = int(origin.get("order") or 0)
+            except (TypeError, ValueError) as error:
+                raise WorkerError("mt5_history_item_invalid") from error
+            protection_order = history_order(origin_order_ticket)
             trades.append({
                 "ticket": origin.get("order") or position_id or raw.get("ticket"),
                 "deal_ticket": raw.get("ticket"),
@@ -1149,8 +1161,8 @@ class ReadOnlyMt5Adapter:
                 "time": self._history_time(raw.get("time")),
                 "time_msc": int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000),
                 "comment": str(raw.get("comment") or ""),
-                "take_profit": float(orders_by_ticket.get(order_ticket, {}).get("tp") or 0.0),
-                "stop_loss": float(orders_by_ticket.get(order_ticket, {}).get("sl") or 0.0),
+                "take_profit": float(protection_order.get("tp") or 0.0),
+                "stop_loss": float(protection_order.get("sl") or 0.0),
             })
         return {
             "deals": deals,

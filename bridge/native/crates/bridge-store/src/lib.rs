@@ -1016,7 +1016,8 @@ impl OutboxStore {
         page_values.push(SqlValue::Integer(
             (request.page - 1).saturating_mul(request.page_size),
         ));
-        let rows = read_json_rows(&mut statement, params_from_iter(page_values))?;
+        let mut rows = read_json_rows(&mut statement, params_from_iter(page_values))?;
+        hydrate_history_trade_protection(&connection, terminal, &mut rows)?;
         let (deals, history_orders, evidence_truncated) = if request.include_deals {
             read_history_evidence(&connection, terminal, &rows)?
         } else {
@@ -3050,6 +3051,73 @@ fn read_history_evidence(
     ))
 }
 
+fn hydrate_history_trade_protection(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    trades: &mut [serde_json::Value],
+) -> Result<(), StoreError> {
+    let mut opening_orders = trades
+        .iter()
+        .filter_map(serde_json::Value::as_object)
+        .filter_map(|trade| history_scalar(trade, &["ticket", "order"]))
+        .collect::<Vec<_>>();
+    opening_orders.sort();
+    opening_orders.dedup();
+    if opening_orders.is_empty() {
+        return Ok(());
+    }
+
+    let placeholders = std::iter::repeat_n("?", opening_orders.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!(
+        "SELECT payload_json FROM history_archive_items \
+         WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
+           AND login_account = ? AND item_kind = 'history_order' \
+           AND (item_id IN ({placeholders}) OR order_ticket IN ({placeholders}));"
+    );
+    let mut values = history_scope_values(terminal);
+    values.extend(opening_orders.iter().cloned().map(SqlValue::Text));
+    values.extend(opening_orders.iter().cloned().map(SqlValue::Text));
+    let mut statement = connection
+        .prepare(&query)
+        .map_err(|_| StoreError::new("bridge_store_history_page_query_failed"))?;
+    let history_orders = read_json_rows(&mut statement, params_from_iter(values))?;
+
+    for trade in trades {
+        let Some(trade_object) = trade.as_object_mut() else {
+            continue;
+        };
+        let Some(opening_order) = history_scalar(trade_object, &["ticket", "order"]) else {
+            continue;
+        };
+        let Some(protection) = history_orders.iter().find_map(|order| {
+            let object = order.as_object()?;
+            (history_scalar(object, &["ticket", "order", "order_ticket"]).as_deref()
+                == Some(opening_order.as_str()))
+            .then_some(object)
+        }) else {
+            continue;
+        };
+        for (target, source) in [("stop_loss", "sl"), ("take_profit", "tp")] {
+            let current = trade_object
+                .get(target)
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or_default();
+            let replacement = protection
+                .get(source)
+                .and_then(serde_json::Value::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0);
+            if current <= 0.0
+                && let Some(number) = replacement.and_then(serde_json::Number::from_f64)
+            {
+                trade_object.insert(target.to_owned(), serde_json::Value::Number(number));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn query_history_evidence(
     connection: &Connection,
     terminal: &TerminalDescriptor,
@@ -3566,15 +3634,21 @@ mod tests {
                 "ticket": 1001,
                 "position_id": 42,
                 "time_msc": 1_700_000_000_050_i64,
-                "symbol": "XAUUSD"
+                "symbol": "XAUUSD",
+                "sl": 2290.0,
+                "tp": 2320.0
             })],
             trades: vec![serde_json::json!({
                 "deal_ticket": 5001,
-                "order_ticket": 1001,
+                "ticket": 1001,
+                "order": 1001,
+                "order_ticket": 1002,
                 "position_id": 42,
                 "close_time_msc": 1_700_000_000_100_i64,
                 "symbol": "XAUUSD",
-                "profit": 12.5
+                "profit": 12.5,
+                "stop_loss": 0.0,
+                "take_profit": 0.0
             })],
             next_cursor: HistoryCursor {
                 time_msc: 1_700_000_000_100,
@@ -3607,6 +3681,8 @@ mod tests {
             )
             .expect("history page");
         assert_eq!(page["orders"].as_array().expect("trades").len(), 1);
+        assert_eq!(page["orders"][0]["stop_loss"], 2290.0);
+        assert_eq!(page["orders"][0]["take_profit"], 2320.0);
         assert_eq!(page["deals"].as_array().expect("deals").len(), 1);
         assert_eq!(
             page["history_orders"]

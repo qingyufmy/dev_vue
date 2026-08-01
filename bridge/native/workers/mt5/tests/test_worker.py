@@ -527,7 +527,12 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(1, len(second_batch["trades"]))
         self.assertAlmostEqual(9.7, second_batch["trades"][0]["net_profit"])
         self.assertEqual(3002, second_batch["trades"][0]["order_ticket"])
-        self.assertEqual([3002], [item["ticket"] for item in second_batch["history_orders"]])
+        self.assertEqual(2285.0, second_batch["trades"][0]["stop_loss"])
+        self.assertEqual(2315.0, second_batch["trades"][0]["take_profit"])
+        self.assertEqual(
+            [3002, 3001],
+            [item["ticket"] for item in second_batch["history_orders"]],
+        )
 
     def test_history_sync_rejects_zero_cursor_and_oversized_limit_before_mt5_query(self):
         for payload in (
