@@ -1,9 +1,9 @@
 const VERIFIED_INSTALLER = Object.freeze({
   version:'3.0.0',
   buildDate:'2026-08-01',
-  fullUrl:'https://qiniu.acadfx.com/bridge/bootstrapper/b88a346c0e25d9fc8a90e8076c2162dbd3f0a2e411533e0c8599408b8fce94ee/LiangjianBridgeSetup.exe',
-  fileSize:26513204,
-  sha256:'B88A346C0E25D9FC8A90E8076C2162DBD3F0A2E411533E0C8599408B8FCE94EE',
+  fullUrl:'https://qiniu.acadfx.com/bridge/bootstrapper/3f7e3567e3879ef641f48e5f51eb76347e493d2bcdb6fff4fe88bede903200b3/LiangjianBridgeSetup.exe',
+  fileSize:26509691,
+  sha256:'3F7E3567E3879EF641F48E5F51EB76347E493D2BCDB6FFF4FE88BEDE903200B3',
   v3:true,
 })
 
