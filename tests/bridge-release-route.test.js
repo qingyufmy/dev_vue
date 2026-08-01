@@ -157,12 +157,12 @@ describe('bridge release manifest route', () => {
     expect(current.status).toBe(200)
     expect(bootstrap.status).toBe(200)
     expect(JSON.parse(current.body)).toMatchObject({
-      release_id:'bridge-3.0.0-production-20260801.1',
+      release_id:'bridge-3.0.0-production-20260801.3',
       release_version:'3.0.0',
       rollout_percentage:100,
     })
     expect(JSON.parse(bootstrap.body)).toMatchObject({
-      release_id:'bridge-3.0.0-production-20260801.1',
+      release_id:'bridge-3.0.0-production-20260801.3',
       release_version:'3.0.0',
       rollout_percentage:100,
     })
@@ -180,7 +180,7 @@ describe('bridge release manifest route', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(JSON.parse(response.body).release_id).toBe('bridge-3.0.0-production-20260801.1')
+    expect(JSON.parse(response.body).release_id).toBe('bridge-3.0.0-production-20260801.3')
   })
 
   it('counts connected installations once and recommends stopping on rollback', () => {
