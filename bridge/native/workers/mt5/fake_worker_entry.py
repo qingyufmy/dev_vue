@@ -6,6 +6,9 @@ from types import SimpleNamespace
 
 from worker import run
 
+# Test workers model an already-running terminal without launching a real MT5 process.
+run.__globals__["_terminal_process_running"] = lambda _path: True
+
 Account = namedtuple("Account", "login server balance equity margin_free trade_allowed trade_expert")
 Terminal = namedtuple("Terminal", "connected trade_allowed tradeapi_disabled")
 Position = namedtuple("Position", "ticket symbol type volume price_open sl tp magic comment")
