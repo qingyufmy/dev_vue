@@ -179,6 +179,7 @@ function setup(overrides = {}) {
     markUncertain:vi.fn().mockResolvedValue({ command:{ status:'uncertain' } }),
     recordResult:vi.fn().mockImplementation(message => Promise.resolve({ command:{ result:message } })),
     countOutstanding:vi.fn().mockResolvedValue(0),
+    onDataDelta:vi.fn().mockResolvedValue(undefined),
     now:() => NOW,
     ...overrides,
   }
@@ -536,8 +537,45 @@ describe('Bridge v3 websocket gateway', () => {
     })))
     await flush()
     expect(dependencies.applyDelta).toHaveBeenCalledOnce()
+    expect(dependencies.onDataDelta).toHaveBeenCalledWith({
+      userId:42,
+      terminal:expect.objectContaining({ terminal_instance_id:'terminal_01JGATEWAY1' }),
+      stream:'positions',
+      revision:1,
+      observedAtUtcMsc:NOW,
+      fullSnapshot:false,
+    })
     expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
       type:'data_ack', status:'applied', acked_message_id:'msg_01JGATEWAY_DELTA', expected_revision:2,
+    })
+  })
+
+  it('does not notify browsers again for a duplicate delta', async () => {
+    const { gateway, dependencies } = setup({
+      applyDelta:vi.fn().mockResolvedValue({ status:'duplicate', expected_revision:2 }),
+    })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    ws.emit('message', Buffer.from(JSON.stringify({
+      ...hello().terminals[0],
+      v:3,
+      type:'data_delta',
+      message_id:'msg_01JGATEWAY_DUPLICATE_DELTA',
+      sent_at_utc_msc:NOW,
+      stream:'account',
+      revision:1,
+      base_revision:0,
+      observed_at_utc_msc:NOW,
+      source_time_msc:NOW,
+      full_snapshot:false,
+      upserts:[{ login:'1001' }],
+      deletes:[],
+    })))
+    await flush()
+    expect(dependencies.onDataDelta).not.toHaveBeenCalled()
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'data_ack', status:'duplicate', expected_revision:2,
     })
   })
 

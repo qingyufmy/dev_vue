@@ -99,6 +99,8 @@ import {
   normalizeBridgePageSize,
   wsMessageByteLength,
   buildBrowserCommandResult,
+  buildBridgeDataChangedEvent,
+  buildObserverBrowserPayload,
 } from '../server/bridge-ws.js'
 import { queryOne } from '../server/db.js'
 
@@ -604,5 +606,30 @@ describe('sendToBrowsers', () => {
 
   it('does not throw for heartbeat message with no browsers', () => {
     expect(() => sendToBrowsers(1, { type: 'hb', mt5_connected: false })).not.toThrow()
+  })
+
+  it('builds account and position refresh notifications only for live read-model streams', () => {
+    expect(buildBridgeDataChangedEvent({
+      stream:'positions', revision:12,
+      terminal:{ terminal_instance_id:'terminal-1' },
+    })).toEqual({
+      type:'bridge_data_changed', streams:['positions'],
+      terminal_instance_id:'terminal-1', revision:12,
+    })
+    expect(buildBridgeDataChangedEvent({ stream:'orders', revision:13 })).toBeNull()
+  })
+
+  it('forwards only a value-free refresh hint to observer browsers', () => {
+    const payload = buildObserverBrowserPayload({
+      type:'bridge_data_changed', streams:['account', 'positions', 'orders'],
+      terminal_instance_id:'terminal-private', revision:19,
+      account:{ balance:12345 }, positions:[{ ticket:'secret' }],
+    })
+    expect(payload).toEqual({
+      type:'bridge_data_changed', streams:['account', 'positions'], _source:'observer_channel',
+    })
+    expect(JSON.stringify(payload)).not.toContain('terminal-private')
+    expect(JSON.stringify(payload)).not.toContain('12345')
+    expect(buildObserverBrowserPayload({ type:'bridge_data_changed', streams:['orders'] })).toBeNull()
   })
 })

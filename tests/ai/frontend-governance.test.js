@@ -178,6 +178,19 @@ describe('AI governance navigation and DOM contract', () => {
     expect(platformTickBranch).not.toContain('state.lastQuote =')
   })
 
+  it('coalesces V3 account and position change notices into live read-model refreshes', () => {
+    expect(app).toContain("msg.type === 'bridge_data_changed'")
+    expect(app).toContain('scheduleBridgeDataRefresh(msg)')
+    const refreshStart = app.indexOf('function scheduleBridgeDataRefresh')
+    const refreshEnd = app.indexOf('let _lastSignalRefreshTs', refreshStart)
+    const refreshBlock = app.slice(refreshStart, refreshEnd)
+    expect(refreshBlock).toContain("stream === 'account' || stream === 'positions'")
+    expect(refreshBlock).toContain("refreshes.push(loadAccount())")
+    expect(refreshBlock).toContain("refreshes.push(loadPositions({ refreshSignalTickets:false }))")
+    expect(refreshBlock).toContain('await Promise.allSettled(refreshes)')
+    expect(app).toContain('if (refreshSignalTickets) requests.push(loadSignalTickets())')
+  })
+
   it('updates the active bridge entry before synchronizing account identity', () => {
     expect(bridgeWs).toContain('const currentBridge = bridges.get(userId)')
     expect(bridgeWs).toContain('currentBridge.brokerServer = account.server')

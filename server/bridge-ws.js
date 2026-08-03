@@ -84,7 +84,7 @@ const observerQuoteFeeds = createObserverQuoteFeedManager({
   publish:(ws, quote) => {
     if (ws?.readyState !== 1) return false
     ws.send(JSON.stringify({
-      type:'platform_market_tick',
+      type: 'platform_market_tick',
       quote,
       trade_mode:observerQuoteTradeMode(quote),
       _source:'observer_quote_feed',
@@ -784,6 +784,7 @@ export function initBridgeWS(server) {
   const v3Gateway = createBridgeV3Gateway({
     onTerminalReady:synchronizeBridgeV3TerminalIdentity,
     onTerminalDisconnected:forgetBridgeV3TerminalIdentity,
+    onDataDelta:notifyBridgeV3DataChanged,
   })
   setBridgeReleaseNotifier(release => v3Gateway.broadcastReleaseAvailable(release))
   bridgeV3Business = createBridgeV3BusinessAdapter({ gateway:v3Gateway })
@@ -1653,6 +1654,41 @@ export function broadcastAdminEvent(scope, reason, data = {}, options = {}) {
   })
 }
 
+export function buildBridgeDataChangedEvent(update = {}) {
+  const stream = String(update.stream || '')
+  if (!['account', 'positions'].includes(stream)) return null
+  const revision = Number(update.revision)
+  return {
+    type:'bridge_data_changed',
+    streams:[stream],
+    terminal_instance_id:String(update.terminal?.terminal_instance_id || ''),
+    revision:Number.isSafeInteger(revision) && revision > 0 ? revision : null,
+  }
+}
+
+export function buildObserverBrowserPayload(data = {}) {
+  if (data.type === 'data') {
+    return {
+      type: 'platform_market_tick',
+      quote:data.quote || null,
+      trade_mode:typeof data.trade_mode === 'number' ? data.trade_mode : -1,
+      _source: 'observer_channel',
+    }
+  }
+  if (data.type === 'bridge_data_changed') {
+    const streams = [...new Set((Array.isArray(data.streams) ? data.streams : [])
+      .map(value => String(value || '')).filter(value => ['account', 'positions'].includes(value)))]
+    if (!streams.length) return null
+    return { type:'bridge_data_changed', streams, _source: 'observer_channel' }
+  }
+  return null
+}
+
+function notifyBridgeV3DataChanged(update = {}) {
+  const event = buildBridgeDataChangedEvent(update)
+  if (event) sendToBrowsers(Number(update.userId), event)
+}
+
 function sendToBrowsers(userId, data) {
   const set = browsers.get(userId)
   if (set) {
@@ -1665,15 +1701,12 @@ function sendToBrowsers(userId, data) {
       }
     }
   }
-  // Forward sanitized market-only data exclusively to browsers whose resolved
-  // observer channel points at this exact source. Never use a global admin fallback.
-  if (data.type === 'data' && browsers.size > 0) {
-    const observerJson = JSON.stringify({
-      type: 'platform_market_tick',
-      quote: data.quote || null,
-      trade_mode: typeof data.trade_mode === 'number' ? data.trade_mode : -1,
-      _source: 'observer_channel',
-    })
+  // Forward only sanitized notifications to browsers whose resolved observer
+  // channel points at this exact source. Account and position values are read
+  // through the observer-authorized command route instead of being broadcast.
+  const observerPayload = buildObserverBrowserPayload(data)
+  if (observerPayload && browsers.size > 0) {
+    const observerJson = JSON.stringify(observerPayload)
     const now = Date.now()
     for (const [uid, browserSet] of browsers) {
       const last = _broadcastThrottle.get(uid) || 0

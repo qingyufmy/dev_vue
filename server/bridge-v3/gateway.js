@@ -105,6 +105,7 @@ export function createBridgeV3Gateway({
   countOutstanding = countOutstandingCommands,
   onTerminalReady = async () => {},
   onTerminalDisconnected = async () => {},
+  onDataDelta = async () => {},
   now = () => Date.now(),
 } = {}) {
   const wss = new WebSocketServerImpl({ noServer:true, maxPayload:BRIDGE_V3_MAX_PAYLOAD_BYTES })
@@ -419,6 +420,18 @@ export function createBridgeV3Gateway({
         status:result.status,
         expected_revision:result.expected_revision,
       })
+      if (result.status === 'applied') {
+        Promise.resolve(onDataDelta({
+          userId:connection.userId,
+          terminal:{ ...terminal },
+          stream:message.stream,
+          revision:message.revision,
+          observedAtUtcMsc:message.observed_at_utc_msc,
+          fullSnapshot:message.full_snapshot === true,
+        })).catch(error => {
+          console.warn(`[BridgeV3] data delta callback failed user=${connection.userId} stream=${message.stream} error=${error.message}`)
+        })
+      }
       if (!wasInitialSyncReady && terminalInitialSyncReady(connection, message.terminal_instance_id)) {
         Promise.resolve(onTerminalReady({
           userId:connection.userId,

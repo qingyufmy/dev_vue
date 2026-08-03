@@ -1788,6 +1788,8 @@ function connectBridgeStatusWs(onReady) {
         if (isObserverMode()) _maybeRefreshSignal();
       } else if (msg.type === 'data') {
         handleBridgeData(msg);
+      } else if (msg.type === 'bridge_data_changed') {
+        scheduleBridgeDataRefresh(msg);
       } else if (msg.type === 'hb') {
         handleHeartbeat(msg);
       } else if (msg.type === 'disconnect') {
@@ -2155,6 +2157,39 @@ function handleBridgeData(msg) {
   _maybeRefreshSignal();
 }
 
+const BRIDGE_DATA_REFRESH_DELAY_MS = 250;
+let _bridgeDataRefreshTimer = null;
+let _bridgeDataRefreshInFlight = false;
+const _bridgeDataRefreshStreams = new Set();
+
+function scheduleBridgeDataRefresh(msg = {}) {
+  for (const stream of Array.isArray(msg.streams) ? msg.streams : []) {
+    if (stream === 'account' || stream === 'positions') _bridgeDataRefreshStreams.add(stream);
+  }
+  if (!_bridgeDataRefreshStreams.size || document.hidden
+      || _bridgeDataRefreshTimer || _bridgeDataRefreshInFlight) return;
+  _bridgeDataRefreshTimer = setTimeout(() => {
+    _bridgeDataRefreshTimer = null;
+    void flushBridgeDataRefresh();
+  }, BRIDGE_DATA_REFRESH_DELAY_MS);
+}
+
+async function flushBridgeDataRefresh() {
+  if (_bridgeDataRefreshInFlight || document.hidden || !_bridgeDataRefreshStreams.size) return;
+  _bridgeDataRefreshInFlight = true;
+  const streams = new Set(_bridgeDataRefreshStreams);
+  _bridgeDataRefreshStreams.clear();
+  try {
+    const refreshes = [];
+    if (streams.has('account')) refreshes.push(loadAccount());
+    if (streams.has('positions')) refreshes.push(loadPositions({ refreshSignalTickets:false }));
+    await Promise.allSettled(refreshes);
+  } finally {
+    _bridgeDataRefreshInFlight = false;
+    if (_bridgeDataRefreshStreams.size) scheduleBridgeDataRefresh();
+  }
+}
+
 let _lastSignalRefreshTs = 0;
 let _lastSignalId = null;
 
@@ -2249,6 +2284,7 @@ document.addEventListener("visibilitychange", () => {
   } else {
     startUiTimer();
     startLiveQuoteRefreshTimer();
+    scheduleBridgeDataRefresh();
     if (activeTabId() === "dashboard") {
       loadKlineData().catch(() => {});
       startKlineRefreshTimer();
@@ -5522,11 +5558,10 @@ function ticketCell(ticket, signalTickets) {
   return `<td data-label="票号" class="num">${escapeHtml(ticket)}</td>`;
 }
 
-async function loadPositions() {
-  const [data] = await Promise.all([
-    wsApi("positions", {}),
-    loadSignalTickets(),
-  ]);
+async function loadPositions({ refreshSignalTickets = true } = {}) {
+  const requests = [wsApi("positions", {})];
+  if (refreshSignalTickets) requests.push(loadSignalTickets());
+  const [data] = await Promise.all(requests);
   const positions = data.positions || [];
   state.positions = positions;
   $("positionsBody").innerHTML = renderPositionRows(positions, true);
