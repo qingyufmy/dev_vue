@@ -1724,6 +1724,7 @@ textarea:focus {
   color: var(--text-secondary, #e2e8f0);
 }
 .kline-chart-container {
+  position: relative;
   flex: 1 1 320px;
   width: 100%;
   height: clamp(280px, 34vh, 380px);
@@ -1732,6 +1733,26 @@ textarea:focus {
   overflow: hidden;
   background: rgba(0, 0, 0, 0.15);
 }
+.kline-position-tooltip {
+  position: absolute;
+  z-index: 3;
+  min-width: 172px;
+  max-width: min(260px, calc(100% - 16px));
+  padding: 7px 9px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-card) 96%, black);
+  color: var(--text-primary);
+  pointer-events: none;
+}
+.kline-position-tooltip[hidden] { display: none; }
+.kline-position-tooltip-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; }
+.kline-position-tooltip-row + .kline-position-tooltip-row { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle); }
+.kline-position-tooltip-row strong,
+.kline-position-tooltip-row span { font-size: 12px; line-height: 1.4; }
+.kline-position-tooltip-row small { grid-column: 1 / -1; color: var(--text-secondary); font-size: 10px; line-height: 1.45; }
+.kline-position-tooltip-row.is-buy strong { color: #ff7b84; }
+.kline-position-tooltip-row.is-sell strong { color: #43cfa3; }
 .kline-chart-container a[href*="tradingview"],
 .kline-chart-container #tv-attr-logo {
   display: none !important;

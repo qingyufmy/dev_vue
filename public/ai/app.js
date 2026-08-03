@@ -5235,6 +5235,9 @@ let _klineSeries = null;
 let _klineVolumeSeries = null;
 let _klineTimeframe = 'M5';
 let _klineLastBar = null;
+let _klineCandles = [];
+let _klinePositionSeries = [];
+let _klinePositionTooltip = null;
 let _klineVolRefreshTimer = null;
 let _klineMutationObserver = null;
 let _klineResizeObserver = null;
@@ -5246,6 +5249,163 @@ function mt5BrokerTimeSeconds(value) {
   if (parts.length < 3 || parts.slice(0, 3).some(item => !Number.isFinite(item))) return null;
   const seconds = Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2], parts[3] || 0, parts[4] || 0, parts[5] || 0) / 1000);
   return Number.isFinite(seconds) ? seconds : null;
+}
+
+function klinePositionTimeSeconds(position = {}) {
+  const millisecondFields = [
+    position.open_time_server_msc, position.entry_time_server_msc,
+    position.time_server_msc, position.open_time_utc_msc,
+    position.entry_time_utc_msc, position.time_utc_msc, position.time_msc,
+  ];
+  for (const value of millisecondFields) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return Math.floor(number / 1000);
+  }
+  for (const value of [position.time, position.open_time, position.entry_time]) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) {
+      return Math.floor(number > 1e12 ? number / 1000 : number);
+    }
+    const parsed = mt5BrokerTimeSeconds(value);
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
+function klineSymbolKey(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function klineSymbolStem(value) {
+  return klineSymbolKey(value).split(/[._-]/, 1)[0];
+}
+
+function klinePositionMatchesSymbol(position, symbol) {
+  const positionSymbol = klineSymbolKey(position?.symbol);
+  const chartSymbol = klineSymbolKey(symbol);
+  if (!positionSymbol || !chartSymbol) return false;
+  return positionSymbol === chartSymbol || klineSymbolStem(positionSymbol) === klineSymbolStem(chartSymbol);
+}
+
+function klinePositionPriceDigits(position = {}) {
+  const digits = Number(position.digits);
+  return Number.isFinite(digits) ? Math.min(Math.max(digits, 0), 6) : 2;
+}
+
+function clearKlinePositionEntries() {
+  if (_klineChart) {
+    for (const item of _klinePositionSeries) {
+      try { _klineChart.removeSeries(item.series); } catch { /* chart already reset */ }
+    }
+  }
+  _klinePositionSeries = [];
+  if (_klinePositionTooltip) {
+    _klinePositionTooltip.hidden = true;
+    _klinePositionTooltip.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function klinePositionStartIndex(candles, entryTime) {
+  if (!candles.length || !Number.isFinite(entryTime)) return { index:0, visible:false };
+  if (entryTime < candles[0].time) return { index:0, visible:false };
+  let low = 0, high = candles.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (candles[middle].time <= entryTime) low = middle;
+    else high = middle - 1;
+  }
+  const interval = { M1:60, M5:300, M15:900, M30:1800, H1:3600, H4:14400, D1:86400 }[_klineTimeframe] || 300;
+  if (entryTime > candles.at(-1).time + interval) return { index:candles.length - 1, visible:false };
+  return { index:low, visible:true };
+}
+
+function ensureKlinePositionTooltip() {
+  const container = document.getElementById('klineChart');
+  if (!container) return null;
+  if (_klinePositionTooltip?.isConnected) return _klinePositionTooltip;
+  _klinePositionTooltip = document.createElement('div');
+  _klinePositionTooltip.className = 'kline-position-tooltip';
+  _klinePositionTooltip.hidden = true;
+  _klinePositionTooltip.setAttribute('aria-hidden', 'true');
+  container.appendChild(_klinePositionTooltip);
+  return _klinePositionTooltip;
+}
+
+function syncKlinePositionEntries() {
+  clearKlinePositionEntries();
+  if (!_klineChart || !_klineSeries || !_klineCandles.length) return;
+  const symbol = $('quoteSymbolSelect')?.value || $('tradeSymbolSelect')?.value || 'XAUUSD';
+  const positions = (state.positions || []).filter(position =>
+    klinePositionMatchesSymbol(position, symbol)
+      && Number.isFinite(Number(position.price_open))
+      && Number(position.price_open) > 0
+  );
+  const markerSummary = [];
+  for (const position of positions) {
+    const buy = String(position.type || '').toLowerCase() === 'buy';
+    const color = buy ? '#ef5b66' : '#20b486';
+    const direction = buy ? '多仓' : '空仓';
+    const price = Number(position.price_open);
+    const entryTime = klinePositionTimeSeconds(position);
+    const start = klinePositionStartIndex(_klineCandles, entryTime);
+    const series = _klineChart.addLineSeries({
+      title:`${direction}入场`, color, lineWidth:1,
+      lineStyle:LightweightCharts.LineStyle.Dashed,
+      pointMarkersVisible:false, crosshairMarkerVisible:true,
+      crosshairMarkerRadius:4, lastValueVisible:true, priceLineVisible:false,
+      priceFormat:{ type:'price', precision:klinePositionPriceDigits(position), minMove:10 ** -klinePositionPriceDigits(position) },
+    });
+    series.setData(_klineCandles.slice(start.index).map(candle => ({ time:candle.time, value:price })));
+    if (start.visible) {
+      series.setMarkers([{
+        time:_klineCandles[start.index].time,
+        position:'inBar', color,
+        shape:buy ? 'arrowUp' : 'arrowDown',
+        text:`${direction}入场`,
+      }]);
+    }
+    _klinePositionSeries.push({ series, position, direction, color, entryVisible:start.visible });
+    markerSummary.push(`${direction} ${volumeText(position.volume)}，入场价 ${fmt(price, klinePositionPriceDigits(position))}${start.visible ? '' : '，入场时间在当前图表范围外'}`);
+  }
+  const container = document.getElementById('klineChart');
+  if (container) {
+    container.setAttribute('role', 'img');
+    container.setAttribute('aria-label', markerSummary.length
+      ? `K 线图；当前品种持仓：${markerSummary.join('；')}`
+      : 'K 线图；当前品种没有持仓入场标记');
+  }
+  ensureKlinePositionTooltip();
+}
+
+function handleKlinePositionCrosshair(param) {
+  const tooltip = ensureKlinePositionTooltip();
+  const container = document.getElementById('klineChart');
+  if (!tooltip || !container || !param?.point || !param.seriesData) return hideKlinePositionTooltip();
+  const matches = _klinePositionSeries.filter(item => param.seriesData.has(item.series));
+  if (!matches.length || param.point.x < 0 || param.point.y < 0
+    || param.point.x > container.clientWidth || param.point.y > container.clientHeight) {
+    return hideKlinePositionTooltip();
+  }
+  tooltip.innerHTML = matches.map(({ position, direction, entryVisible }) => {
+    const buy = direction === '多仓';
+    const digits = klinePositionPriceDigits(position);
+    return `<div class="kline-position-tooltip-row ${buy ? 'is-buy' : 'is-sell'}">
+      <strong>${direction}</strong><span class="num">${escapeHtml(volumeText(position.volume))}</span>
+      <small>入场 ${fmt(position.price_open, digits)} · #${escapeHtml(position.ticket || '--')}${entryVisible ? '' : ' · 早于图表范围'}</small>
+    </div>`;
+  }).join('');
+  tooltip.hidden = false;
+  tooltip.setAttribute('aria-hidden', 'false');
+  const preferLeft = param.point.x > container.clientWidth - 220;
+  tooltip.style.left = `${Math.max(8, param.point.x + (preferLeft ? -8 : 12))}px`;
+  tooltip.style.top = `${Math.max(8, Math.min(container.clientHeight - tooltip.offsetHeight - 8, param.point.y + 12))}px`;
+  tooltip.style.transform = preferLeft ? 'translateX(-100%)' : 'none';
+}
+
+function hideKlinePositionTooltip() {
+  if (!_klinePositionTooltip) return;
+  _klinePositionTooltip.hidden = true;
+  _klinePositionTooltip.setAttribute('aria-hidden', 'true');
 }
 
 function disconnectKlineObservers() {
@@ -5324,6 +5484,7 @@ function _createKlineChart(container) {
   _klineChart.priceScale('volume').applyOptions({
     scaleMargins: { top: 0.8, bottom: 0 },
   });
+  _klineChart.subscribeCrosshairMove(handleKlinePositionCrosshair);
 
   // Remove TradingView attribution logo
   const tvLogo = container.querySelector('#tv-attr-logo') || container.querySelector('a[href*="tradingview"]');
@@ -5405,7 +5566,9 @@ async function loadKlineData() {
 
     _klineSeries.setData(candles);
     _klineVolumeSeries.setData(volumes);
+    _klineCandles = candles;
     _klineLastBar = candles[candles.length - 1];
+    syncKlinePositionEntries();
 
     // Update last price display
     setText('klineLastPrice', candles.at(-1).close.toFixed(2));
@@ -5589,6 +5752,7 @@ async function loadPositions({ refreshSignalTickets = true } = {}) {
   const [data] = await Promise.all(requests);
   const positions = data.positions || [];
   state.positions = positions;
+  syncKlinePositionEntries();
   $("positionsBody").innerHTML = renderPositionRows(positions, true);
   $("dashboardPositionsBody").innerHTML = renderPositionRows(positions, false);
   $("positionsEmpty").classList.toggle("hidden", positions.length > 0);
