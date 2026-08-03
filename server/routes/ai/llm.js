@@ -415,9 +415,12 @@ function providerHttpError(url, provider, status) {
 
 async function emitProviderTelemetry(callback, payload) {
   if (typeof callback !== 'function') return
-  try { await callback(payload) } catch (error) {
-    console.error('[LLM] Provider telemetry callback failed:', error.message)
-  }
+  // These callbacks are part of the durable task contract, not optional log
+  // decoration. In particular, the pre-request callback records the submitted
+  // state and fencing generation before fetch(). If that write fails, sending
+  // the provider request would create an untracked, potentially duplicated
+  // charge, so the failure must abort the request.
+  await callback(payload)
 }
 
 function formatByteSize(bytes) {
@@ -514,11 +517,11 @@ async function trackedModelRequest({
       }
       usageLogId = null
     }
+    providerUsageEmitted = true
     await emitProviderTelemetry(onProviderUsage, { phase, status:completion.truncated ? 'error' : 'success', tokenCount,
       ...usage, providerRequestId, finishReason:completion.finishReason, incompleteDetails:completion.incompleteDetails,
       errorCode:completion.truncated ? 'output_truncated' : null,
       requestBytes, responseBytes, durationMs: Date.now() - startedAt })
-    providerUsageEmitted = true
     assertModelResponseComplete(data, protocol)
     if (quotaCircuitState.probe) await recordModelQuotaRecovered(quotaCircuitContext)
     return { response, data }

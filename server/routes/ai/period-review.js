@@ -12,7 +12,7 @@ import { createPlatformExperienceCandidateFromApprovedPeriodReview } from './pla
 import { canManagePlatformAiContent, platformAiContentManagerSql } from './platform-content-access.js'
 import { applyDefaultObserverClockBootstrap } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
-import { createShadowModelTaskTracker } from './model-task-tracker.js'
+import { createModelTaskTracker } from './model-task-tracker.js'
 
 const DAY_MS = 86400000
 const DAILY_GRACE_MINUTES = 30
@@ -796,7 +796,7 @@ function modelEndpoint(model) {
 }
 
 async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, taskKind) {
-  const tracker = await createShadowModelTaskTracker({
+  const tracker = await createModelTaskTracker({
     taskKind,
     queueClass:'background',
     ownerUserId:job.user_id,
@@ -816,8 +816,16 @@ async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, tas
     taskDeadlineAtUtcMs:job._deadlineAtMs,
   }, {
     workerId:`period-review:${process.pid}`,
-    linkTask:taskId => queryRun(`UPDATE period_review_jobs SET model_task_id = COALESCE(model_task_id, ?)
-      WHERE id = ?`, [taskId, job.id]),
+    linkTask:async taskId => {
+      const result = await queryRun(`UPDATE period_review_jobs SET model_task_id = COALESCE(model_task_id, ?)
+        WHERE id = ?`, [taskId, job.id])
+      const affected = Number(result?.affectedRows ?? result?.changes)
+      if (Number.isFinite(affected) && affected < 1) {
+        const linked = await queryOne('SELECT model_task_id FROM period_review_jobs WHERE id = ? LIMIT 1', [job.id])
+        if (String(linked?.model_task_id || '') !== String(taskId)) throw new Error('model_task_link_failed')
+      }
+      return true
+    },
   })
   job._modelTracker = tracker
   return tracker
@@ -851,6 +859,9 @@ async function generateDailyReview(job, requestModel) {
   if (!resolved.model) throw new Error(resolved.error || 'daily_review_model_unavailable')
   const endpoint = modelEndpoint(resolved.model)
   const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'daily_review')
+  const requestSignal = job._abortSignal && tracker.signal
+    ? AbortSignal.any([job._abortSignal, tracker.signal])
+    : tracker.signal || job._abortSignal || null
   const outcomeIds = evidence.sources.map(item => Number(item.outcome_id))
   const shape = { period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
     trade_assessments: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence', summary: 'string', issue_codes: ['string'] })),
@@ -872,7 +883,7 @@ async function generateDailyReview(job, requestModel) {
     maxTokens: Number(resolved.model.max_tokens || 3000), thinkingEnabled: resolved.model.thinking_enabled,
     reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
     timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs,
-    signal:job._abortSignal || null,
+    signal:requestSignal,
     messages: [
       { role: 'system', content: `你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。period_market 是按策略周期提取的完整交易日行情，缠论结构已基于完整窗口计算；必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` },
       { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
@@ -892,6 +903,7 @@ async function finishDailyReviewSuccess(job, generated) {
   await withTransaction(async run => {
     const [jobs] = await run('SELECT * FROM period_review_jobs WHERE id = ? FOR UPDATE', [job.id])
     if (!jobs[0] || jobs[0].status !== 'leased' || jobs[0].lease_token !== job.lease_token) throw new Error('daily_review_job_lease_lost')
+    await job._modelTracker?.assertOwnedTx(run)
     const [cases] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [job.period_case_id])
     if (!cases[0]) throw new Error('daily_review_case_missing')
     const now = beijingNow()
@@ -944,19 +956,30 @@ export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObjec
     if (!await isAiFeatureEnabled('review_generation_enabled', job.user_id)) return skipDisabledPeriodReviewJob(job)
     const generated = await generateDailyReview(job, requestModel)
     lease.assertOwned()
+    job._modelTracker?.assertOwned()
     await job._modelTracker?.applying()
+    lease.assertOwned()
+    job._modelTracker?.assertOwned()
     await finishDailyReviewSuccess(job, generated)
     await job._modelTracker?.succeeded({ resultRef:`period_review_case:${job.period_case_id}` })
     await setPeriodReviewJobStage(job, 'succeeded', 'success')
     return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
   } catch (error) {
-    await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
-    await finishDailyReviewFailure(job, error)
+    let failure = error
+    try {
+      await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
+    } catch (trackerError) {
+      failure = trackerError
+      console.error(`[PeriodReview case=${job.period_case_id}] model task failure:`, safeError(trackerError))
+    }
+    await finishDailyReviewFailure(job, failure)
     await setPeriodReviewJobStage(job, job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
       job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
-    return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
+    return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(failure) }
   } finally {
-    await job._modelTracker?.stop()
+    try { await job._modelTracker?.stop() } catch (trackerError) {
+      console.error(`[PeriodReview case=${job.period_case_id}] model task stop:`, safeError(trackerError))
+    }
     await lease.stop()
   }
 }
@@ -989,6 +1012,9 @@ async function generateMonthlyReview(job, requestModel) {
   if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
   const endpoint = modelEndpoint(resolved.model)
   const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'monthly_review_merge')
+  const requestSignal = job._abortSignal && tracker.signal
+    ? AbortSignal.any([job._abortSignal, tracker.signal])
+    : tracker.signal || job._abortSignal || null
   const dailyCaseIds = evidence.sources.map(item => Number(item.period_case_id))
   const approvedDailyCaseIds = evidence.sources.filter(item => item.review_status === 'approved').map(item => Number(item.period_case_id))
   const shape = { period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
@@ -1016,7 +1042,7 @@ async function generateMonthlyReview(job, requestModel) {
     maxTokens: Number(resolved.model.max_tokens || 4000), thinkingEnabled: resolved.model.thinking_enabled,
     reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
     timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs,
-    signal:job._abortSignal || null,
+    signal:requestSignal,
     messages: [
       { role: 'system', content: `你是严格的交易月度复盘分析器。基础统计以系统数据为准，不得自行重算。period_market_digest 是各个交易日使用完整日内 K 线计算后的行情与缠论结构摘要，只能从日复盘和这些摘要中识别跨日重复模式；未确认的日复盘只能作为待核实证据。必须区分缠论数据、结构计算、确认延迟、AI解读和策略规则问题。记忆候选必须至少由两个不同交易日支持，不得创造新规则或提高风险。\n\n以下输出契约不可违反：\n${contract}` },
       { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
@@ -1036,6 +1062,7 @@ async function finishMonthlyReviewSuccess(job, generated) {
   await withTransaction(async run => {
     const [jobs] = await run('SELECT * FROM period_review_jobs WHERE id = ? FOR UPDATE', [job.id])
     if (!jobs[0] || jobs[0].status !== 'leased' || jobs[0].lease_token !== job.lease_token) throw new Error('monthly_review_job_lease_lost')
+    await job._modelTracker?.assertOwnedTx(run)
     const [cases] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [job.period_case_id])
     if (!cases[0]) throw new Error('monthly_review_case_missing')
     const now = beijingNow()
@@ -1077,19 +1104,30 @@ export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObj
     if (!await isAiFeatureEnabled('review_generation_enabled', job.user_id)) return skipDisabledPeriodReviewJob(job)
     const generated = await generateMonthlyReview(job, requestModel)
     lease.assertOwned()
+    job._modelTracker?.assertOwned()
     await job._modelTracker?.applying()
+    lease.assertOwned()
+    job._modelTracker?.assertOwned()
     await finishMonthlyReviewSuccess(job, generated)
     await job._modelTracker?.succeeded({ resultRef:`period_review_case:${job.period_case_id}` })
     await setPeriodReviewJobStage(job, 'succeeded', 'success')
     return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
   } catch (error) {
-    await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
-    await finishMonthlyReviewFailure(job, error)
+    let failure = error
+    try {
+      await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
+    } catch (trackerError) {
+      failure = trackerError
+      console.error(`[PeriodReview case=${job.period_case_id}] model task failure:`, safeError(trackerError))
+    }
+    await finishMonthlyReviewFailure(job, failure)
     await setPeriodReviewJobStage(job, job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
       job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
-    return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
+    return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(failure) }
   } finally {
-    await job._modelTracker?.stop()
+    try { await job._modelTracker?.stop() } catch (trackerError) {
+      console.error(`[PeriodReview case=${job.period_case_id}] model task stop:`, safeError(trackerError))
+    }
     await lease.stop()
   }
 }

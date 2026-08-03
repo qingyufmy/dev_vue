@@ -271,11 +271,11 @@ describe('period review runtime integration', () => {
     expect(() => periodReviewAccessScope({ role:'admin' })).toThrow('invalid_user')
   })
 
-  it('starts only the period worker and preserves separate platform experience lineage', () => {
+  it('starts period and memory workers while preserving separate platform experience lineage', () => {
     const periodReview = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
     expect(server).toContain('startPeriodReviewWorker()')
     expect(server).not.toContain('startReviewWorker()')
-    expect(server).not.toContain('startMemoryCompressionWorker()')
+    expect(server).toContain('startMemoryCompressionWorker()')
     expect(platform).toContain('createPlatformExperienceCandidateFromApprovedPeriodReview')
     expect(migration).toContain('092_platform_period_experience_lineage')
     expect(migration).toContain('uk_platform_experience_period_version')

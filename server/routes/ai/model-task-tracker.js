@@ -1,93 +1,259 @@
 import { beginModelTaskAttempt, claimModelTaskById, createModelTask, finishModelTaskAttempt,
   renewModelTaskLease, transitionModelTask } from './model-task-runtime.js'
 
-function noopTracker() {
-  const noop = async () => {}
-  return { active:false, taskId:null, onProviderRequest:noop, onProviderUsage:noop,
-    resultReady:noop, applying:noop, succeeded:noop, failed:noop, stop:noop }
+const CLAIMABLE_STATUSES = new Set(['queued', 'retry_wait'])
+const TERMINAL_STATUSES = new Set(['cancelled', 'failed_terminal', 'succeeded', 'completed_stale', 'completed_rejected'])
+const ACTIVE_STATUSES = new Set([
+  'leased', 'preparing', 'submitted', 'provider_running', 'provider_quiet', 'status_unknown',
+  'reconciling', 'response_received', 'validating', 'repairing', 'result_ready', 'applying',
+])
+
+function trackerError(code, detail = '') {
+  const error = new Error(detail ? `${code}:${detail}` : code)
+  error.code = code
+  return error
 }
 
-export async function createShadowModelTaskTracker(input, { linkTask = null, workerId = null } = {}) {
-  try {
-    const { task:createdTask } = await createModelTask(input)
-    if (!createdTask) return noopTracker()
-    if (typeof linkTask === 'function') await linkTask(createdTask.task_id)
-    let task = await claimModelTaskById(createdTask.task_id, { workerId:workerId || `shadow:${process.pid}` })
-    if (!task) return noopTracker()
-    task = await transitionModelTask(task, 'preparing')
-    let attempt = null
-    let providerAttemptSequence = 0
-    let stopped = false
-    let pending = Promise.resolve()
-    const enqueue = operation => {
-      pending = pending.then(operation).catch(error => {
-        console.error(`[ModelTaskShadow] task=${task?.task_id || createdTask.task_id}:`, error.message)
-      })
-      return pending
-    }
-    const renewTimer = setInterval(() => enqueue(async () => {
-      if (!stopped && !await renewModelTaskLease(task)) throw new Error('model_task_shadow_lease_lost')
-    }), 30_000)
-    renewTimer.unref?.()
+function affectedRows(value) {
+  if (typeof value === 'number') return value
+  if (!value || typeof value !== 'object') return null
+  const candidate = value.affectedRows ?? value.changes
+  return candidate == null ? null : Number(candidate)
+}
 
-    return {
-      active:true,
-      taskId:createdTask.task_id,
-      onProviderRequest:event => enqueue(async () => {
-        if (task.status === 'response_received') task = await transitionModelTask(task, 'validating')
-        if (task.status === 'validating') task = await transitionModelTask(task, 'repairing')
-        if (task.status === 'repairing') task = await transitionModelTask(task, 'submitted')
-        if (task.status === 'preparing') task = await transitionModelTask(task, 'submitted')
-        if (!attempt) attempt = await beginModelTaskAttempt(task, {
+function assertLinkResult(value) {
+  // Link callbacks may return a boolean acknowledgement, a database result,
+  // or nothing. A rejected callback always propagates; explicit false/zero
+  // results are treated as a failed durable association.
+  if (value === false) throw trackerError('model_task_link_failed')
+  const rows = affectedRows(value)
+  if (rows != null && rows < 1) throw trackerError('model_task_link_failed')
+}
+
+function classifyExistingTask(task) {
+  const status = String(task?.status || '')
+  if (CLAIMABLE_STATUSES.has(status)) return
+  if (ACTIVE_STATUSES.has(status)) throw trackerError('model_task_duplicate_active', status)
+  if (TERMINAL_STATUSES.has(status)) throw trackerError('model_task_duplicate_terminal', status)
+  throw trackerError('model_task_not_claimable', status || 'missing_status')
+}
+
+function taskError(error, fallback = 'model_task_tracker_failed') {
+  if (error instanceof Error) return error
+  return trackerError(fallback, String(error || fallback))
+}
+
+/**
+ * Create the authoritative runtime envelope around one provider invocation.
+ *
+ * Initialization is intentionally strict. An existing idempotent task may be
+ * claimed only while it is still queued/retry_wait; an active or terminal task
+ * is never treated as a new provider attempt.
+ */
+export async function createModelTaskTracker(input, {
+  linkTask = null,
+  workerId = null,
+  leaseMs = 120_000,
+  renewIntervalMs = 30_000,
+} = {}) {
+  const createdResult = await createModelTask(input)
+  const taskFromCreate = createdResult?.task
+  if (!taskFromCreate) throw trackerError('model_task_create_failed')
+  if (!createdResult.created) classifyExistingTask(taskFromCreate)
+
+  if (typeof linkTask === 'function') {
+    const linked = await linkTask(taskFromCreate.task_id)
+    assertLinkResult(linked)
+  }
+
+  let task = await claimModelTaskById(taskFromCreate.task_id, {
+    leaseMs,
+    workerId:workerId || `model-task:${process.pid}`,
+  })
+  if (!task) throw trackerError('model_task_not_claimable', String(taskFromCreate.status || 'unknown'))
+
+  task = await transitionModelTask(task, 'preparing')
+  let attempt = null
+  let providerAttemptSequence = 0
+  let stopped = false
+  let fatalError = null
+  let tail = Promise.resolve()
+  let renewTimer = null
+  const controller = new AbortController()
+
+  const rememberFailure = error => {
+    const normalized = taskError(error)
+    if (!fatalError) fatalError = normalized
+    if (!controller.signal.aborted) controller.abort(fatalError)
+    if (renewTimer) clearInterval(renewTimer)
+    return fatalError
+  }
+
+  const assertOwned = () => {
+    if (fatalError) throw fatalError
+    if (stopped) throw trackerError('model_task_tracker_stopped')
+    controller.signal.throwIfAborted()
+  }
+
+  const assertOwnedTx = async run => {
+    assertOwned()
+    if (typeof run !== 'function') throw trackerError('model_task_transaction_runner_missing')
+    try {
+      const result = await run(`SELECT task_id, status, lease_token, fencing_token, lease_expires_at_utc_msc
+        FROM ai_model_tasks WHERE task_id = ? FOR UPDATE`, [task.task_id])
+      const rows = Array.isArray(result?.[0]) ? result[0] : (Array.isArray(result) ? result : [])
+      const current = rows[0]
+      const hasLeaseExpiry = current && Object.prototype.hasOwnProperty.call(current, 'lease_expires_at_utc_msc')
+      const leaseExpired = hasLeaseExpiry
+        && (!Number.isFinite(Number(current.lease_expires_at_utc_msc)) || Number(current.lease_expires_at_utc_msc) <= Date.now())
+      if (!current || TERMINAL_STATUSES.has(String(current.status || ''))
+        || String(current.lease_token || '') !== String(task.lease_token || '')
+        || Number(current.fencing_token) !== Number(task.fencing_token)
+        || leaseExpired
+        || !ACTIVE_STATUSES.has(String(current.status || ''))) {
+        throw trackerError('model_task_fence_lost')
+      }
+      return current
+    } catch (error) {
+      throw rememberFailure(error)
+    }
+  }
+
+  const enqueue = operation => {
+    const current = tail.then(async () => {
+      assertOwned()
+      try {
+        const result = await operation()
+        // stop() intentionally waits for the already queued operation. Do not
+        // turn a successful in-flight operation into a synthetic failure just
+        // because stopping began while it was completing.
+        if (fatalError) throw fatalError
+        return result
+      } catch (error) {
+        throw rememberFailure(error)
+      }
+    })
+    // Keep the queue usable for stop/assertOwned while preserving the error
+    // for the caller that owns this operation.
+    tail = current.catch(error => {
+      rememberFailure(error)
+    })
+    return current
+  }
+
+  const renewOnce = () => enqueue(async () => {
+    const renewed = await renewModelTaskLease(task, leaseMs)
+    if (!renewed) throw trackerError('model_task_lease_lost')
+    return true
+  })
+
+  const statusTransition = (toStatus, patch = {}) => enqueue(async () => {
+    task = await transitionModelTask(task, toStatus, patch)
+    return task
+  })
+
+  renewTimer = setInterval(() => {
+    void renewOnce().catch(error => {
+      console.error(`[ModelTask] lease renewal failed for ${task.task_id}:`, error.message)
+    })
+  }, Math.max(1, Number(renewIntervalMs) || 30_000))
+  renewTimer.unref?.()
+
+  const transitionToResultReady = patch => enqueue(async () => {
+    if (task.status === 'submitted') task = await transitionModelTask(task, 'response_received')
+    if (task.status === 'response_received') task = await transitionModelTask(task, 'validating')
+    if (task.status === 'validating') task = await transitionModelTask(task, 'result_ready', patch)
+    if (task.status !== 'result_ready') throw trackerError('model_task_result_not_ready', task.status)
+    return task
+  })
+
+  const transitionToTerminal = (toStatus, reason = null) => enqueue(async () => {
+    if (!['completed_stale', 'completed_rejected'].includes(toStatus)) {
+      throw trackerError('model_task_terminal_status_invalid', toStatus)
+    }
+    const patch = reason == null ? {} : {
+      errorCode:String(reason?.code || reason || toStatus).slice(0, 128),
+      errorMessage:String(reason?.message || reason || toStatus).slice(0, 512),
+    }
+    const allowed = toStatus === 'completed_stale'
+      ? ['status_unknown', 'result_ready', 'applying']
+      : ['validating', 'result_ready', 'applying']
+    if (allowed.includes(task.status)) {
+      task = await transitionModelTask(task, toStatus, patch)
+      return task
+    }
+    throw trackerError('model_task_terminal_transition_invalid', `${task.status}:${toStatus}`)
+  })
+
+  return {
+    get active() { return !stopped && !fatalError },
+    taskId:task.task_id,
+    signal:controller.signal,
+    assertOwned,
+    assertOwnedTx,
+    renewNow:renewOnce,
+    onProviderRequest:event => enqueue(async () => {
+      if (task.status === 'response_received') task = await transitionModelTask(task, 'validating')
+      if (task.status === 'validating') task = await transitionModelTask(task, 'repairing')
+      if (task.status === 'repairing') task = await transitionModelTask(task, 'submitted')
+      if (task.status === 'preparing') task = await transitionModelTask(task, 'submitted')
+      if (task.status !== 'submitted') throw trackerError('model_task_provider_request_invalid', task.status)
+      if (!attempt) {
+        attempt = await beginModelTaskAttempt(task, {
           attemptNo:(Math.max(1, Number(task.attempt_count)) - 1) * 10 + (++providerAttemptSequence),
           providerRequestId:event?.providerRequestId || null,
         })
-      }),
-      onProviderUsage:event => enqueue(async () => {
-        if (!attempt) return
-        await finishModelTaskAttempt(task, attempt, {
-          status:event?.status === 'success' ? 'succeeded' : 'failed',
-          providerRequestId:event?.providerRequestId, inputTokens:event?.inputTokens,
-          outputTokens:event?.outputTokens, reasoningTokens:event?.reasoningTokens,
-          cachedTokens:event?.cachedTokens, totalTokens:event?.totalTokens || event?.tokenCount,
+      }
+      return attempt
+    }),
+    onProviderUsage:event => enqueue(async () => {
+      if (!attempt) throw trackerError('model_task_attempt_missing')
+      await finishModelTaskAttempt(task, attempt, {
+        status:event?.status === 'success' ? 'succeeded' : 'failed',
+        providerRequestId:event?.providerRequestId,
+        inputTokens:event?.inputTokens, outputTokens:event?.outputTokens,
+        reasoningTokens:event?.reasoningTokens, cachedTokens:event?.cachedTokens,
+        totalTokens:event?.totalTokens || event?.tokenCount,
+        finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails,
+        errorCode:event?.errorCode,
+      })
+      attempt = null
+      if (event?.status === 'success' && task.status === 'submitted') {
+        task = await transitionModelTask(task, 'response_received', {
           finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails,
-          errorCode:event?.errorCode,
         })
-        attempt = null
-        if (event?.status === 'success' && task.status === 'submitted') {
-          task = await transitionModelTask(task, 'response_received', {
-            finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails,
-          })
-        }
-      }),
-      resultReady:patch => enqueue(async () => {
-        if (task.status === 'submitted') task = await transitionModelTask(task, 'response_received')
-        if (task.status === 'response_received') task = await transitionModelTask(task, 'validating')
-        if (task.status === 'validating') task = await transitionModelTask(task, 'result_ready', patch)
-      }),
-      applying:() => enqueue(async () => {
-        if (task.status === 'result_ready') task = await transitionModelTask(task, 'applying')
-      }),
-      succeeded:patch => enqueue(async () => {
-        if (task.status === 'applying') task = await transitionModelTask(task, 'succeeded', patch)
-      }),
-      failed:(error, exhausted = false) => enqueue(async () => {
-        const target = exhausted ? 'failed_terminal' : 'retry_wait'
-        if (['leased','preparing','submitted','provider_running','provider_quiet','response_received','validating','repairing'].includes(task.status)) {
-          task = await transitionModelTask(task, target, {
-            errorCode:String(error?.code || error?.message || 'model_task_failed').slice(0, 128),
-            errorMessage:String(error?.message || error || 'model_task_failed').slice(0, 512),
-          })
-        }
-      }),
-      async stop() {
-        stopped = true
-        clearInterval(renewTimer)
-        await pending
-      },
-    }
-  } catch (error) {
-    console.error('[ModelTaskShadow] unable to start tracker:', error.message)
-    return noopTracker()
+      }
+      return true
+    }),
+    resultReady:transitionToResultReady,
+    applying:() => statusTransition('applying'),
+    succeeded:patch => statusTransition('succeeded', patch),
+    completedStale:reason => transitionToTerminal('completed_stale', reason),
+    completedRejected:reason => transitionToTerminal('completed_rejected', reason),
+    failed:(error, exhausted = false) => enqueue(async () => {
+      // Once a validated result reached result_ready/applying, retry_wait would
+      // require replaying an output that is no longer durably stored in the
+      // generic envelope. Fail that attempt terminally instead of performing
+      // an invalid transition or silently issuing a second provider request.
+      const target = exhausted || ['result_ready', 'applying'].includes(task.status)
+        ? 'failed_terminal' : 'retry_wait'
+      if (['leased', 'preparing', 'submitted', 'provider_running', 'provider_quiet', 'response_received',
+        'validating', 'repairing', 'result_ready', 'applying'].includes(task.status)) {
+        task = await transitionModelTask(task, target, {
+          errorCode:String(error?.code || error?.message || 'model_task_failed').slice(0, 128),
+          errorMessage:String(error?.message || error || 'model_task_failed').slice(0, 512),
+        })
+        return task
+      }
+      throw trackerError('model_task_failure_transition_invalid', task.status)
+    }),
+    async stop() {
+      stopped = true
+      if (renewTimer) clearInterval(renewTimer)
+      await tail.catch(error => {
+        if (!fatalError) rememberFailure(error)
+      })
+      if (fatalError) throw fatalError
+    },
   }
 }

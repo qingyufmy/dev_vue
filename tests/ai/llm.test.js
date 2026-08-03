@@ -342,6 +342,29 @@ describe('requestJsonObject', () => {
       event.requestBytes > 0 && event.responseBytes > 0 && event.durationMs >= 0)).toBe(true)
   })
 
+  it('does not send an untracked provider request when the durable submitted callback fails', async () => {
+    const onProviderRequest = vi.fn().mockRejectedValue(new Error('model_task_fence_lost'))
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }], onProviderRequest,
+    })).rejects.toThrow('model_task_fence_lost')
+    expect(onProviderRequest).toHaveBeenCalledTimes(1)
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a durable completion callback failure without emitting it twice', async () => {
+    mockFetch.mockResolvedValue({ ok:true, status:200,
+      json:() => Promise.resolve({ choices:[{ message:{ content:'{"ok":true}' } }] }),
+    })
+    const onProviderUsage = vi.fn().mockRejectedValue(new Error('model_task_attempt_fence_lost'))
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }], onProviderUsage,
+    })).rejects.toThrow('model_task_attempt_fence_lost')
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(onProviderUsage).toHaveBeenCalledTimes(1)
+  })
+
   it('JSON 结构校验失败时要求模型修复并再次校验', async () => {
     const largeMarketPayload = `大量 K 线与账户行情，不应进入精简修复请求：${'K'.repeat(100_000)}`
     mockFetch

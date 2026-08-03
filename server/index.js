@@ -36,8 +36,9 @@ import bridgeMaintenanceRoutes from './routes/bridge-maintenance.js'
 import bridgeRuntimeControlRoutes from './routes/bridge-runtime-control.js'
 import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON } from './redis.js'
-import { initAutoSchedulers, startPeriodReviewWorker, startManualAnalysisJobs,
+import { initAutoSchedulers, startPeriodReviewWorker, startMemoryCompressionWorker, startManualAnalysisJobs,
   startHistoryCompareRecoveryWorker } from './routes/ai/index.js'
+import { recoverAbandonedAutoInferenceTasks } from './routes/ai/model-task-runtime.js'
 import { startOrderIntentReconciler } from './routes/ai/order-intents.js'
 import { startPositionManagementWorker } from './routes/ai/position-management-worker.js'
 import { authMiddleware, tokenVersionMatches } from './middleware/auth.js'
@@ -353,11 +354,25 @@ installFatalProcessHandlers()
   await startHistoryCompareRecoveryWorker()
   const modelUsageRecoveryTimer = setInterval(recoverModelUsageReservations, 5 * 60 * 1000)
   modelUsageRecoveryTimer.unref?.()
+  const recoverAutoInferenceTasks = async () => {
+    try {
+      const recovered = await recoverAbandonedAutoInferenceTasks()
+      if (recovered.succeeded || recovered.statusUnknown || recovered.stale) {
+        console.warn('[AI] Reconciled abandoned auto inference tasks:', recovered)
+      }
+    } catch (error) {
+      console.error('[AI] Auto inference task recovery failed:', error.message)
+    }
+  }
+  await recoverAutoInferenceTasks()
+  const autoInferenceRecoveryTimer = setInterval(recoverAutoInferenceTasks, 30_000)
+  autoInferenceRecoveryTimer.unref?.()
   await initAutoSchedulers()
   startOrderIntentReconciler()
   startPositionManagementWorker()
   startAdminPositionProtectionWorker()
   startPeriodReviewWorker()
+  startMemoryCompressionWorker()
   startManualAnalysisJobs()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   startWeeklySystemFlatten()

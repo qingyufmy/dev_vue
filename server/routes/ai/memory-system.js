@@ -6,7 +6,7 @@ import { sha256 } from './inference-snapshots.js'
 import { canManagePlatformAiContent } from './platform-content-access.js'
 import { getEffectiveFeatureFlags, isAiFeatureEnabled } from './rollout-governance.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
-import { createShadowModelTaskTracker } from './model-task-tracker.js'
+import { createModelTaskTracker } from './model-task-tracker.js'
 
 const DEFAULT_BUDGET = 800
 const MAX_BUDGET = 1600
@@ -818,7 +818,7 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
     const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: null, usage: 'memory_compression' })
     if (!resolved.model) throw new Error(resolved.error || 'compression_model_unavailable')
     const endpoint = modelEndpoint(resolved.model)
-    const tracker = await createShadowModelTaskTracker({
+    const tracker = await createModelTaskTracker({
       taskKind:'memory_compression', queueClass:'background', ownerUserId:job.user_id,
       domainType:'memory_compression_job', domainId:job.id,
       idempotencyKey:`memory_compression:${job.id}:${job.source_set_hash}`,
@@ -827,8 +827,16 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
       modelProfileId:resolved.model_profile_id, protocol:endpoint.protocol,
       credentialSource:resolved.credential_source, frozenContext:{ scope_key:job.scope_key, source_set_hash:job.source_set_hash },
       maxAttempts:Number(job.max_attempts) || 3, taskDeadlineAtUtcMs:job._deadlineAtMs,
-    }, { workerId:`memory-compression:${process.pid}`, linkTask:taskId => queryRun(`UPDATE memory_compression_jobs
-      SET model_task_id = COALESCE(model_task_id, ?) WHERE id = ?`, [taskId, job.id]) })
+    }, { workerId:`memory-compression:${process.pid}`, linkTask:async taskId => {
+      const result = await queryRun(`UPDATE memory_compression_jobs
+        SET model_task_id = COALESCE(model_task_id, ?) WHERE id = ?`, [taskId, job.id])
+      const affected = Number(result?.affectedRows ?? result?.changes)
+      if (Number.isFinite(affected) && affected < 1) {
+        const linked = await queryOne('SELECT model_task_id FROM memory_compression_jobs WHERE id = ? LIMIT 1', [job.id])
+        if (String(linked?.model_task_id || '') !== String(taskId)) throw new Error('model_task_link_failed')
+      }
+      return true
+    } })
     job._modelTracker = tracker
     const input = current.map(item => ({ id: Number(item.id), scope: parse(item.scope_json, {}), conditions: parse(item.conditions_json, {}), lesson: item.lesson_text, anti_pattern: item.anti_pattern_text }))
     const category = current[0] ? memoryCategory(current[0]) : 'general'
@@ -837,7 +845,8 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
       temperature: 0.1, maxTokens: Math.min(resolved.model.max_tokens || 1600, 1800), thinkingEnabled: resolved.model.thinking_enabled,
       reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
       timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs,
-      signal:lease.signal, onProviderRequest:event => tracker.onProviderRequest(event),
+      signal:AbortSignal.any([lease.signal, tracker.signal]),
+      onProviderRequest:event => tracker.onProviderRequest(event),
       onProviderUsage:event => tracker.onProviderUsage(event),
       messages: [{ role: 'system', content: '把用户确认的交易经验压缩成保留适用条件和冲突边界的摘要。不得创造新规则，不得提高仓位或风险。只返回 JSON。' },
         { role: 'user', content: JSON.stringify({ output: { summary: 'string <= 1200 tokens', source_memory_ids: ids }, memories: input }) }],
@@ -848,10 +857,14 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
     if (!summaryText || tokenCount(summaryText) > SUMMARY_MAX_TOKENS || JSON.stringify(outputIds) !== JSON.stringify(ids)) throw new Error('invalid_compression_output')
     await tracker.resultReady({ resultHash:sha256(JSON.stringify(output)) })
     lease.assertOwned()
+    tracker.assertOwned()
     await tracker.applying()
+    lease.assertOwned()
+    tracker.assertOwned()
     await withTransaction(async run => {
       const [locked] = await run('SELECT * FROM memory_compression_jobs WHERE id = ? FOR UPDATE', [job.id])
       if (!locked[0] || locked[0].lease_token !== job.lease_token || locked[0].status !== 'leased') throw new Error('compression_lease_lost')
+      await tracker.assertOwnedTx(run)
       const [activeRows] = await run(`SELECT id FROM experience_memory_items WHERE user_id = ? AND status = 'active'
         AND id IN (${ids.map(() => '?').join(',')}) ORDER BY id`, [job.user_id, ...ids])
       if (sha256(JSON.stringify(activeRows.map(row => Number(row.id)))) !== job.source_set_hash) throw new Error('compression_source_set_stale')
@@ -871,13 +884,21 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
     await tracker.succeeded({ resultRef:`memory_scope:${job.scope_key}` })
     return { claimed: true, status: 'succeeded', scopeKey: job.scope_key }
   } catch (error) {
-    await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
+    let failure = error
+    try {
+      await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
+    } catch (trackerError) {
+      failure = trackerError
+      console.error(`[MemoryCompression scope=${job.scope_key}] model task failure:`, safeError(trackerError))
+    }
     const exhausted = job.attempt_count >= Number(job.max_attempts)
     await queryRun(`UPDATE memory_compression_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
-      lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`, [exhausted ? 'failed' : 'queued', safeError(error), beijingNow(), job.id, job.lease_token])
-    return { claimed: true, status: 'failed', error: safeError(error) }
+      lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`, [exhausted ? 'failed' : 'queued', safeError(failure), beijingNow(), job.id, job.lease_token])
+    return { claimed: true, status: 'failed', error: safeError(failure) }
   } finally {
-    await job._modelTracker?.stop()
+    try { await job._modelTracker?.stop() } catch (trackerError) {
+      console.error(`[MemoryCompression scope=${job.scope_key}] model task stop:`, safeError(trackerError))
+    }
     await lease.stop()
   }
 }

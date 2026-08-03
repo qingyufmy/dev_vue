@@ -336,6 +336,53 @@ describe('post-completion scheduler cooldown', () => {
   })
 })
 
+describe('durable automatic model-task gate', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('blocks an existing active or status-unknown task before provider work', async () => {
+    db.queryOne.mockResolvedValue({ task_id:'task-1', status:'status_unknown' })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5))
+      .resolves.toMatchObject({ allowed:false, reason:'model_task_status_unknown' })
+    expect(db.queryOne.mock.calls[0][0]).toContain("task_kind = 'auto_inference'")
+    expect(db.queryOne.mock.calls[0][0]).toContain('ai_model_task_attempts')
+  })
+
+  it('keeps a full configured cooldown after a provider attempt across Redis loss', async () => {
+    const completedAt = 1_000_000
+    db.queryOne.mockResolvedValue({
+      task_id:'task-2', status:'succeeded', completed_at_utc_msc:completedAt,
+      provider_request_started:1, frozen_context_json:JSON.stringify({ interval_minutes:5 }),
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, completedAt + 1))
+      .resolves.toMatchObject({ allowed:false, reason:'model_task_cooldown', nextRunInSeconds:300 })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, completedAt + 300_001))
+      .resolves.toMatchObject({ allowed:true })
+  })
+
+  it('freezes execution-critical task identity and all source hashes', () => {
+    const input = __schedulerTest.buildAutoModelTaskInput({
+      promptTypeId:7, symbol:'XAUUSD.s', cycleId:'7:XAUUSD:1', cycleStartedAtMs:1_000,
+      intervalMinutes:5,
+      strategy:{ id:7, version:3, scope:'platform' },
+      config:{ api_provider:'deepseek', model_name:'deepseek-chat', protocol:'chat_completions',
+        _model_profile_id:11, _credential_source:'platform_shared', system_prompt:'system',
+        _allowed_entry_methods:['market'] },
+      market:{ symbol:'XAUUSD', latest_price:2000 },
+      marketMeta:{ timezone_offset_minutes:180, clock_status:'progressing_tick', source:'bridge' },
+      primaryTimeframe:'M5', resultValidUntilUtcMsc:120_000,
+    })
+    expect(input).toMatchObject({
+      taskKind:'auto_inference', queueClass:'execution_critical', domainType:'strategy_symbol',
+      domainId:'7:XAUUSD', idempotencyKey:'7:XAUUSD:1', strategyId:7,
+    })
+    expect(input.snapshotHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(input.inputHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(input.promptHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(input.outputContractHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(input.frozenContext).toMatchObject({ strategy_version:3, provider:'deepseek', model:'deepseek-chat', interval_minutes:5 })
+  })
+})
+
 describe('resolveEffectiveSymbols (Fix 3)', () => {
   it('NULL returns strategy all symbols', async () => {
     const { resolveEffectiveSymbols } = await import('../../server/routes/ai/config.js')

@@ -254,3 +254,45 @@ export async function markModelTaskCompletedStaleById(taskId, reason = 'model_ta
   }
   return false
 }
+
+// Auto inference cannot be replayed after a process restart because its frozen
+// market/account snapshot may already be stale and most synchronous providers
+// cannot prove whether an interrupted request was accepted. Reconcile the
+// durable envelope before schedulers start so a Redis lease loss never turns
+// into a blind duplicate model request.
+export async function recoverAbandonedAutoInferenceTasks({ nowUtcMs = Date.now(), limit = 500 } = {}) {
+  const now = Number(nowUtcMs) || Date.now()
+  const tasks = await queryAll(`SELECT * FROM ai_model_tasks
+    WHERE task_kind = 'auto_inference'
+      AND status NOT IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')
+    ORDER BY updated_at_utc_msc LIMIT ?`, [Math.max(1, Math.min(1000, Number(limit) || 500))])
+  const result = { scanned:tasks.length, succeeded:0, statusUnknown:0, stale:0, active:0 }
+  for (const task of tasks) {
+    const applied = await queryOne('SELECT id FROM ai_signals WHERE inference_task_id = ? LIMIT 1', [task.task_id])
+    if (applied?.id) {
+      if (await markModelTaskSucceededFromResult(task.task_id, { resultRef:`ai_signals:${applied.id}` })) result.succeeded += 1
+      continue
+    }
+    const leaseExpired = !Number(task.lease_expires_at_utc_msc) || Number(task.lease_expires_at_utc_msc) <= now
+    const deadlineExpired = Number(task.task_deadline_at_utc_msc) > 0 && Number(task.task_deadline_at_utc_msc) <= now
+    if (!leaseExpired && !deadlineExpired) {
+      result.active += 1
+      continue
+    }
+    if (['submitted','provider_running','provider_quiet'].includes(task.status) && !deadlineExpired) {
+      if (await markModelTaskStatusUnknownById(task.task_id, 'auto_inference_provider_status_unknown_after_restart')) {
+        result.statusUnknown += 1
+      }
+      continue
+    }
+    if (task.status === 'status_unknown' && !deadlineExpired) {
+      result.statusUnknown += 1
+      continue
+    }
+    if (await markModelTaskCompletedStaleById(task.task_id,
+      deadlineExpired ? 'auto_inference_task_deadline_expired' : 'auto_inference_worker_abandoned')) {
+      result.stale += 1
+    }
+  }
+  return result
+}
