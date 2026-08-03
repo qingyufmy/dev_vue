@@ -6,7 +6,7 @@ import { getArticleContentValidationError, getCourseMediaValidationError } from 
 import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js?v=20260714f'
 import { getCourseProgramByView } from './data/course-programs.js?v=20260714h'
 import { renderCourseOverviewPage, renderCourseProgramPage } from './lib/course-pages.js?v=20260714h'
-import { getCoursesForCategory } from './lib/course-catalog.js?v=20260714i'
+import { getCoursePage } from './lib/course-catalog.js?v=20260803stream1'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
@@ -1776,6 +1776,7 @@ function renderView() {
     bridgePair: '连接量见智桥 | 量见',
   }
   document.title = pageTitles[state.currentView] || '量见'
+  if (state.currentView !== 'home') courseStream.disconnect()
   switch (state.currentView) {
     case 'home': renderHome(); break
     case 'courses': mainContent.innerHTML = renderCourseOverviewPage(); break
@@ -2048,7 +2049,8 @@ window.addEventListener('popstate', (e) => {
 
 // ===== Home View =====
 function renderHome() {
-  const filtered = getFilteredEpisodes()
+  courseStream.prepare(state.currentCategory)
+  const page = getCoursePage(episodes, state.currentCategory, 0, courseStream.visibleCount)
   const statsHtml = renderSidebarStats()
   const quotesHtml = renderSidebarQuotes()
   const updatesHtml = renderSidebarUpdates()
@@ -2102,11 +2104,13 @@ function renderHome() {
           `).join('')}
         </div>
 
-        <div class="episode-grid">
-          ${filtered.map(ep => renderEpisodeCard(ep)).join('')}
+        <div class="episode-grid" id="courseStreamGrid">
+          ${page.items.map(ep => renderEpisodeCard(ep)).join('')}
         </div>
 
-        ${filtered.length === 0 ? '<p style="text-align:center; color:var(--text-3); padding:48px 0;">未找到匹配的课程</p>' : ''}
+        ${page.total === 0
+          ? '<p style="text-align:center; color:var(--text-3); padding:48px 0;">未找到匹配的课程</p>'
+          : renderCourseStreamFooter(page)}
 
         <div class="home-mobile-below-courses">
           ${mobileBelowCoursesHtml}
@@ -2121,7 +2125,73 @@ function renderHome() {
 
   // 异步从 API 加载最新更新（用真实数据替换静态后备）
   refreshSidebarUpdates()
+  setupCourseStreamObserver()
 
+}
+
+function renderCourseStreamFooter(page) {
+  if (!page.hasMore) {
+    return `<div class="course-stream-footer is-complete" id="courseStreamFooter" aria-live="polite">
+      已显示全部 ${page.total} 节课程
+    </div>`
+  }
+
+  return `<div class="course-stream-footer" id="courseStreamFooter" aria-live="polite">
+    <span class="course-stream-sentinel" id="courseStreamSentinel" aria-hidden="true"></span>
+    <button class="course-stream-more" id="courseStreamMore" type="button">
+      继续加载 <span>${Math.min(COURSE_STREAM_PAGE_SIZE, page.total - page.nextOffset)} 节</span>
+    </button>
+    <small>已显示 ${page.nextOffset} / ${page.total}</small>
+  </div>`
+}
+
+function setupCourseStreamObserver() {
+  courseStream.disconnect()
+  const sentinel = document.getElementById('courseStreamSentinel')
+  if (!sentinel || typeof IntersectionObserver !== 'function') return
+
+  courseStream.observer = new IntersectionObserver(entries => {
+    if (entries.some(entry => entry.isIntersecting)) loadMoreCourseStream()
+  }, { rootMargin: '280px 0px' })
+  courseStream.observer.observe(sentinel)
+}
+
+async function loadMoreCourseStream() {
+  if (courseStream.loading || state.currentView !== 'home') return
+  const category = state.currentCategory
+  const page = getCoursePage(episodes, category, courseStream.visibleCount, COURSE_STREAM_PAGE_SIZE)
+  if (!page.items.length) {
+    courseStream.disconnect()
+    return
+  }
+
+  courseStream.loading = true
+  const button = document.getElementById('courseStreamMore')
+  if (button) {
+    button.disabled = true
+    button.innerHTML = '<span class="course-stream-spinner" aria-hidden="true"></span> 正在加载…'
+  }
+
+  await new Promise(resolve => requestAnimationFrame(resolve))
+  if (state.currentView !== 'home' || state.currentCategory !== category) {
+    courseStream.loading = false
+    return
+  }
+
+  const grid = document.getElementById('courseStreamGrid')
+  const footer = document.getElementById('courseStreamFooter')
+  if (!grid || !footer) {
+    courseStream.loading = false
+    return
+  }
+
+  grid.insertAdjacentHTML('beforeend', page.items.map(ep => renderEpisodeCard(ep)).join(''))
+  courseStream.visibleCount = page.nextOffset
+  courseStream.loading = false
+
+  const current = getCoursePage(episodes, category, 0, courseStream.visibleCount)
+  footer.outerHTML = renderCourseStreamFooter(current)
+  setupCourseStreamObserver()
 }
 
 function getCardBackground(ep) {
@@ -2363,6 +2433,27 @@ function formatTimeAgo(timestamp) {
 const COURSE_CATEGORY_IDS = ['morning', 'indicator', 'pattern', 'strategy', 'advanced']
 const CATEGORY_LABELS = { morning: '早盘解读', strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '经济指标' }
 function getCategoryLabel(cat) { return CATEGORY_LABELS[cat] || cat || '' }
+
+const COURSE_STREAM_PAGE_SIZE = 9
+const courseStream = {
+  category: null,
+  visibleCount: COURSE_STREAM_PAGE_SIZE,
+  loading: false,
+  observer: null,
+
+  prepare(category) {
+    if (this.category === category) return
+    this.category = category
+    this.visibleCount = COURSE_STREAM_PAGE_SIZE
+    this.loading = false
+    this.disconnect()
+  },
+
+  disconnect() {
+    this.observer?.disconnect()
+    this.observer = null
+  },
+}
 
 function syncVideoAccessState(items = []) {
   state.paidVideoEpisodes = getVideoEpisodeIds(items)
@@ -2632,10 +2723,6 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress, info
     </div>
   `
   hydrateCourseAttachments(ep).catch(error => console.error('Course attachments render error:', error))
-}
-
-function getFilteredEpisodes() {
-  return getCoursesForCategory(episodes, state.currentCategory)
 }
 
 function renderArticle() {
@@ -7752,6 +7839,11 @@ function setupGlobalEvents() {
     if (tab) {
       state.currentCategory = tab.dataset.category
       renderHome()
+      return
+    }
+
+    if (target.closest('#courseStreamMore')) {
+      await loadMoreCourseStream()
       return
     }
 
