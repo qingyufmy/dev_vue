@@ -20,7 +20,7 @@ export function estimateModelInputTokens(messages, calibratedCharsPerToken = 3.2
 
 export function selectModelTaskBudget({ taskKind, profileHardCap, providerOutputCap = null,
   contextWindowTokens = null, estimatedInputTokens = 0, schemaNeedTokens = 0,
-  historicalOutputP95 = 0, safetyReserveRatio = 0.15 } = {}) {
+  historicalOutputP95 = 0, truncatedOutputHighWatermark = 0, safetyReserveRatio = 0.15 } = {}) {
   const policy = modelTaskPolicy(taskKind)
   const profileCap = Math.max(1, Math.trunc(Number(profileHardCap) || policy.cap))
   const providerCap = Number(providerOutputCap) > 0 ? Math.trunc(Number(providerOutputCap)) : Number.POSITIVE_INFINITY
@@ -31,7 +31,8 @@ export function selectModelTaskBudget({ taskKind, profileHardCap, providerOutput
     : Number.POSITIVE_INFINITY
   const schemaNeed = Math.max(0, Math.ceil(Number(schemaNeedTokens) || 0))
   const historyNeed = Math.max(0, Math.ceil((Number(historicalOutputP95) || 0) * 1.35))
-  const taskNeed = Math.max(policy.floor, schemaNeed, historyNeed)
+  const truncationNeed = Math.max(0, Math.ceil((Number(truncatedOutputHighWatermark) || 0) * 2))
+  const taskNeed = Math.max(policy.floor, schemaNeed, historyNeed, truncationNeed)
   const hardLimit = Math.min(profileCap, providerCap, policy.cap, contextRoom)
   const selected = Math.max(0, Math.min(hardLimit, taskNeed))
   return {
@@ -44,8 +45,31 @@ export function selectModelTaskBudget({ taskKind, profileHardCap, providerOutput
     taskCap:policy.cap,
     sufficient:selected >= schemaNeed,
     reason:selected < schemaNeed ? 'output_budget_insufficient'
+      : truncationNeed >= Math.max(policy.floor, schemaNeed, historyNeed) ? 'output_truncation_growth'
       : historyNeed >= Math.max(policy.floor, schemaNeed) ? 'historical_p95'
         : schemaNeed >= policy.floor ? 'output_contract' : 'task_floor',
+  }
+}
+
+export function summarizeModelOutputHistory(rows = []) {
+  const completed = rows
+    .filter(row => Number(row?.output_tokens) > 0
+      && row?.request_status === 'success'
+      && row?.accounting_status === 'settled'
+      && !['length', 'incomplete'].includes(String(row?.finish_reason || '').toLowerCase()))
+    .map(row => Number(row.output_tokens))
+    .sort((a, b) => a - b)
+  const truncated = rows
+    .filter(row => Number(row?.output_tokens) > 0
+      && (row?.error_code === 'output_truncated'
+        || ['length', 'incomplete'].includes(String(row?.finish_reason || '').toLowerCase())))
+    .map(row => Number(row.output_tokens))
+  const p95Index = completed.length ? Math.max(0, Math.ceil(completed.length * 0.95) - 1) : -1
+  return {
+    historicalOutputP95:p95Index >= 0 ? completed[p95Index] : 0,
+    truncatedOutputHighWatermark:truncated.length ? Math.max(...truncated) : 0,
+    completedSamples:completed.length,
+    truncatedSamples:truncated.length,
   }
 }
 

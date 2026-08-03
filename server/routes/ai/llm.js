@@ -1,6 +1,6 @@
 // ai/llm.js — AI 推理 + 信号标准化
 
-import { queryOne } from '../../db.js'
+import { queryAll, queryOne } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
@@ -15,7 +15,7 @@ import { buildPositionManagementOutputFormat, hasActivePositionManagementGroups,
 import { assertModelQuotaAvailable, buildModelQuotaCircuitContext, deferModelQuotaProbe,
   recordModelQuotaExhausted, recordModelQuotaRecovered } from './model-quota-circuit.js'
 import { getModelProviderCapabilities } from './model-provider-capabilities.js'
-import { estimateModelInputTokens, selectModelTaskBudget } from './model-task-budget.js'
+import { estimateModelInputTokens, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
 const DEBUG_LLM = process.env.DEBUG_LLM === '1' || DEBUG_LLM_PAYLOAD
@@ -856,15 +856,36 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     } catch (error) {
       console.warn('[LLM] Model capability lookup unavailable, using profile hard cap only:', error.message)
     }
+    const estimatedInputTokens = estimateModelInputTokens([
+      { role:'system', content:cleanPrompt }, { role:'user', content:renderedUserPrompt },
+    ])
+    let outputHistory = summarizeModelOutputHistory([])
+    if (config._model_profile_id) {
+      try {
+        const lowerInputBound = Math.max(1, Math.floor(estimatedInputTokens * 0.5))
+        const upperInputBound = Math.max(lowerInputBound, Math.ceil(estimatedInputTokens * 2))
+        const historyRows = await queryAll(`SELECT output_tokens, request_status, error_code,
+          finish_reason, accounting_status
+          FROM ai_model_usage_logs
+          WHERE model_profile_id = ? AND \`usage\` = ? AND input_tokens BETWEEN ? AND ?
+            AND output_tokens > 0
+          ORDER BY id DESC LIMIT 100`, [
+          config._model_profile_id, usageKind, lowerInputBound, upperInputBound,
+        ])
+        outputHistory = summarizeModelOutputHistory(historyRows)
+      } catch (error) {
+        console.warn('[LLM] Model output history unavailable, using task floor:', error.message)
+      }
+    }
     const budget = selectModelTaskBudget({
       taskKind,
       profileHardCap:configuredModelMaxTokens(config),
       providerOutputCap:capabilities.max_output_tokens,
       contextWindowTokens:capabilities.context_window_tokens,
-      estimatedInputTokens:estimateModelInputTokens([
-        { role:'system', content:cleanPrompt }, { role:'user', content:renderedUserPrompt },
-      ]),
+      estimatedInputTokens,
       schemaNeedTokens:Math.max(1200, Math.ceil(outputFormat.length / 2.5)),
+      historicalOutputP95:outputHistory.historicalOutputP95,
+      truncatedOutputHighWatermark:outputHistory.truncatedOutputHighWatermark,
     })
     if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
     config._selectedOutputBudget = budget

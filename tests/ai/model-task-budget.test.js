@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget } from '../../server/routes/ai/model-task-budget.js'
+import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget,
+  summarizeModelOutputHistory } from '../../server/routes/ai/model-task-budget.js'
 
 describe('model task adaptive budget', () => {
   it('treats the configured 30000 as a hard cap instead of a fixed request size', () => {
@@ -22,6 +23,23 @@ describe('model task adaptive budget', () => {
       contextWindowTokens:32000, estimatedInputTokens:27000, schemaNeedTokens:8000 })
     expect(result.sufficient).toBe(false)
     expect(result.reason).toBe('output_budget_insufficient')
+  })
+
+  it('doubles the observed high-water mark after a trustworthy truncation', () => {
+    const result = selectModelTaskBudget({ taskKind:'auto_inference', profileHardCap:30000,
+      estimatedInputTokens:20000, schemaNeedTokens:1200, truncatedOutputHighWatermark:2000 })
+    expect(result.selectedMaxOutputTokens).toBe(4000)
+    expect(result.reason).toBe('output_truncation_growth')
+  })
+
+  it('learns p95 only from settled complete output while retaining truncation evidence', () => {
+    expect(summarizeModelOutputHistory([
+      { output_tokens:1200, request_status:'success', accounting_status:'settled', finish_reason:'completed' },
+      { output_tokens:1600, request_status:'success', accounting_status:'settled', finish_reason:'stop' },
+      { output_tokens:2000, request_status:'error', accounting_status:'settled', error_code:'output_truncated', finish_reason:'incomplete' },
+      { output_tokens:9000, request_status:'success', accounting_status:'estimated', finish_reason:null },
+    ])).toEqual({ historicalOutputP95:1600, truncatedOutputHighWatermark:2000,
+      completedSamples:2, truncatedSamples:1 })
   })
 
   it('uses the smaller business deadline and keeps manual timeout as a tightening cap', () => {
