@@ -382,34 +382,57 @@ async function loadProfile() {
 function metric(label, value, note, primary = false) {
   return `<article class="metric-card ${primary ? 'is-primary' : ''}"><span class="metric-label">${label}</span><div class="metric-value">${Number(value || 0).toLocaleString('zh-CN')}</div><span class="metric-note">${note}</span></article>`
 }
+function overviewRatio(value, total) {
+  const safeTotal = Math.max(0, Number(total) || 0)
+  if (!safeTotal) return 0
+  return Math.min(100, Math.max(0, Math.round((Number(value || 0) / safeTotal) * 100)))
+}
+function overviewMetric({ label, value, note, icon, ratio = null, tone = '' }) {
+  const progress = ratio === null ? '' : `<div class="overview-metric-progress" aria-label="${escapeHtml(label)}占比 ${ratio}%"><span style="--overview-progress:${ratio}%"></span></div>`
+  return `<article class="overview-metric ${tone ? `is-${tone}` : ''}"><header><span class="overview-metric-icon" aria-hidden="true">${icon}</span><span>${escapeHtml(label)}</span></header><strong>${Number(value || 0).toLocaleString('zh-CN')}</strong><footer><small>${escapeHtml(note)}</small>${ratio === null ? '' : `<b>${ratio}%</b>`}</footer>${progress}</article>`
+}
 async function renderOverview() {
   const main = document.querySelector('#adminMain')
-  main.innerHTML = `<header class="page-head"><div><span class="eyebrow">统一运营视图</span><h1>运营总览</h1><p>先看需要处理的事项，再进入对应业务模块。</p></div><button class="primary-button" data-go-users type="button">查看用户目录</button></header>${skeleton()}`
+  main.innerHTML = `<header class="page-head overview-page-head"><div><span class="eyebrow">统一运营视图</span><h1>运营总览</h1><p>汇总用户、会员、交易接入和 AI 运营状态。</p></div></header>${skeleton()}`
   const data = await api('/api/admin/overview')
   state.overview = data.overview
   const o = data.overview
+  const activeMembers = Number(o.plus_active || 0) + Number(o.pro_active || 0)
+  const attentionTotal = Number(o.expired_memberships || 0) + Number(o.pending_reviews || 0)
+  const hasAttention = attentionTotal > 0
+  const memberRatio = overviewRatio(activeMembers, o.total_users)
+  const activityRatio = overviewRatio(o.active_today, o.total_users)
+  const connectionRatio = overviewRatio(o.connected_users, o.total_users)
+  const reportDate = new Intl.DateTimeFormat('zh-CN', { month:'long', day:'numeric', weekday:'short' }).format(new Date())
   main.innerHTML = `
-    <header class="page-head"><div><span class="eyebrow">统一运营视图</span><h1>运营总览</h1><p>先看需要处理的事项，再进入对应业务模块。</p></div><button class="primary-button" data-go-users type="button">查看用户目录</button></header>
-    <section class="metric-grid" aria-label="核心运营指标">
-      ${metric('用户总数',o.total_users,`今日新增 ${o.today_new_users} 人`,true)}
-      ${metric('有效会员',o.plus_active + o.pro_active,`Plus ${o.plus_active} · Pro ${o.pro_active}`)}
-      ${metric('当前在线',o.online_now,`今日活跃 ${o.active_today} 人`)}
-      ${metric('已接入 MT5',o.connected_users,`${o.trading_accounts} 个交易账户`)}
+    <header class="page-head overview-page-head"><div class="overview-title-lockup"><span class="overview-title-icon" aria-hidden="true">${icons.overview}</span><div><span class="eyebrow">统一运营视图</span><h1>运营总览</h1><p>先确认今日态势，再处理异常和进入业务工作区。</p></div></div><div class="overview-head-actions"><div class="overview-report-date"><span>数据日期</span><strong>${reportDate}</strong></div><button class="primary-button" data-go-users type="button">查看用户目录</button></div></header>
+    <section class="overview-status-band ${hasAttention ? 'needs-attention' : 'is-clear'}" aria-label="今日运营状态">
+      <span class="overview-status-mark" aria-hidden="true">${hasAttention ? icons.alert : icons.check}</span>
+      <div class="overview-status-copy"><span>今日运营状态</span><h2>${hasAttention ? `有 ${attentionTotal} 项需要跟进` : '关键运营状态正常'}</h2><p>${hasAttention ? `其中会员到期 ${Number(o.expired_memberships || 0)} 人、周期复盘待处理 ${Number(o.pending_reviews || 0)} 条。` : '会员服务与 AI 复盘队列目前没有待处理事项。'}</p></div>
+      <dl class="overview-status-facts"><div><dt>今日新增</dt><dd>+${Number(o.today_new_users || 0).toLocaleString('zh-CN')}</dd></div><div><dt>今日活跃</dt><dd>${Number(o.active_today || 0).toLocaleString('zh-CN')}</dd></div></dl>
     </section>
-    <section class="dashboard-grid">
-      <article class="panel dashboard-attention"><header class="section-head"><div><h2>需要关注</h2><p>优先处理会影响用户服务或自动交易的事项。</p></div><span class="badge">${Number(o.expired_memberships || 0) + Number(o.pending_reviews || 0)} 项</span></header><div class="panel-body module-list">
-        <div class="module-row"><span class="module-icon">${icons.users}</span><div><strong>已过期会员</strong><small>权限已按免费用户处理，档案仍保留原会员等级。</small></div><span class="state">${o.expired_memberships} 人</span></div>
-        <div class="module-row"><span class="module-icon">${icons.activity}</span><div><strong>待处理复盘</strong><small>包含待生成、待确认及失败的周期复盘。</small></div><span class="state">${o.pending_reviews} 条</span></div>
-      </div></article>
-      <aside class="panel dashboard-shortcuts"><header class="section-head"><div><h2>快速进入</h2><p>进入最常用的运营工作区。</p></div></header><div class="shortcut-grid">
-        <button type="button" data-overview-go="users"><span>${icons.users}</span><div><strong>用户档案</strong><small>会员、账户与策略</small></div></button>
-        <button type="button" data-overview-go="ai-operations"><span>${icons.activity}</span><div><strong>AI 运行</strong><small>调度、模型与频道</small></div></button>
-        <button type="button" data-overview-go="risk-audit"><span>${icons.shield}</span><div><strong>风控管理</strong><small>账户状态与平台规则</small></div></button>
-        <button type="button" data-overview-go="commercial"><span>${icons.commercial}</span><div><strong>商业运营</strong><small>订单、通知与返佣</small></div></button>
+    <section class="overview-metric-grid" aria-label="核心运营指标">
+      ${overviewMetric({ label:'用户总数', value:o.total_users, note:`今日新增 ${o.today_new_users} 人`, icon:icons.users, tone:'primary' })}
+      ${overviewMetric({ label:'有效会员', value:activeMembers, note:`Plus ${o.plus_active} · Pro ${o.pro_active}`, icon:icons.commercial, ratio:memberRatio })}
+      ${overviewMetric({ label:'今日活跃', value:o.active_today, note:`当前在线 ${o.online_now} 人`, icon:icons.activity, ratio:activityRatio })}
+      ${overviewMetric({ label:'MT5 接入用户', value:o.connected_users, note:`共 ${o.trading_accounts} 个交易账户`, icon:icons.chart, ratio:connectionRatio })}
+    </section>
+    <section class="overview-workspace-grid">
+      <article class="panel overview-attention-panel"><header class="section-head"><div><h2>待办与异常</h2><p>按对用户服务和 AI 运行的影响排序。</p></div><span class="overview-count ${hasAttention ? 'has-items' : ''}">${attentionTotal} 项</span></header><div class="overview-task-list">
+        <button class="overview-task-row ${Number(o.expired_memberships || 0) ? 'needs-action' : 'is-clear'}" type="button" data-overview-action="expired"><span class="overview-task-icon" aria-hidden="true">${icons.users}</span><div><strong>已过期会员</strong><small>${Number(o.expired_memberships || 0) ? '核对续费与会员服务状态，进入后已自动筛选。' : '当前没有需要跟进的到期会员。'}</small></div><span class="overview-task-value">${Number(o.expired_memberships || 0)}<small>人</small></span><span class="overview-task-arrow" aria-hidden="true">${icons.chevron}</span></button>
+        <button class="overview-task-row ${Number(o.pending_reviews || 0) ? 'needs-action' : 'is-clear'}" type="button" data-overview-action="reviews"><span class="overview-task-icon" aria-hidden="true">${icons.activity}</span><div><strong>周期复盘队列</strong><small>${Number(o.pending_reviews || 0) ? '包含待生成、待确认及失败记录，进入 AI 运营处理。' : '周期复盘队列当前没有积压。'}</small></div><span class="overview-task-value">${Number(o.pending_reviews || 0)}<small>条</small></span><span class="overview-task-arrow" aria-hidden="true">${icons.chevron}</span></button>
+      </div><footer class="overview-attention-footer"><span>${hasAttention ? '建议先完成以上事项，再检查其他工作区。' : '当前没有集中待办，可继续进行日常运营检查。'}</span><button class="text-button" type="button" data-overview-go="management-audit">查看管理记录</button></footer></article>
+      <aside class="panel overview-shortcuts-panel"><header class="section-head"><div><h2>运营工作区</h2><p>常用管理入口集中在这里。</p></div></header><div class="overview-shortcut-list">
+        <button type="button" data-overview-go="users"><span>${icons.users}</span><div><strong>用户与会员</strong><small>${Number(o.total_users || 0)} 位用户 · ${activeMembers} 位有效会员</small></div><b aria-hidden="true">${icons.chevron}</b></button>
+        <button type="button" data-overview-go="ai-operations"><span>${icons.activity}</span><div><strong>AI 运营</strong><small>${Number(o.pending_reviews || 0)} 条复盘待处理</small></div><b aria-hidden="true">${icons.chevron}</b></button>
+        <button type="button" data-overview-go="risk-audit"><span>${icons.shield}</span><div><strong>风控管理</strong><small>账户风险与平台规则</small></div><b aria-hidden="true">${icons.chevron}</b></button>
+        <button type="button" data-overview-go="commercial"><span>${icons.commercial}</span><div><strong>商业运营</strong><small>订单、通知与返佣</small></div><b aria-hidden="true">${icons.chevron}</b></button>
       </div></aside>
     </section>`
   main.querySelector('[data-go-users]').addEventListener('click', () => setView('users'))
   main.querySelectorAll('[data-overview-go]').forEach(button => button.addEventListener('click', () => setView(button.dataset.overviewGo)))
+  main.querySelector('[data-overview-action="expired"]').addEventListener('click', () => { state.membership = 'expired'; state.page = 1; setView('users') })
+  main.querySelector('[data-overview-action="reviews"]').addEventListener('click', () => { state.aiTab = 'memory'; setView('ai-operations') })
 }
 
 function commercialTabs() {
@@ -1454,12 +1477,12 @@ function riskAccountPagination(pagination = {}) {
   const totalPages = Math.max(1, Number(pagination.total_pages) || 1)
   const start = total ? (page - 1) * pageSize + 1 : 0
   const end = total ? Math.min(total, page * pageSize) : 0
-  return `<footer class="pagination risk-account-pagination"><div class="risk-page-summary"><strong>${start}–${end}</strong><span>/ ${total} 个账户</span><small>每页 ${pageSize} 个，风险账户优先</small></div><div class="risk-page-controls"><button class="secondary-button" id="accountRiskPrev" type="button" aria-label="查看上一页账户">上一页</button><span class="risk-page-number" aria-live="polite">第 <strong>${page}</strong> / ${totalPages} 页</span><button class="secondary-button" id="accountRiskNext" type="button" aria-label="查看下一页账户">下一页</button></div></footer>`
+  return `<footer class="pagination risk-account-pagination"><div class="risk-page-summary"><strong>${start}–${end}</strong><span>/ ${total} 个账户</span><small>每页 ${pageSize} 个，已切换账户最后</small></div><div class="risk-page-controls"><button class="secondary-button" id="accountRiskPrev" type="button" aria-label="查看上一页账户">上一页</button><span class="risk-page-number" aria-live="polite">第 <strong>${page}</strong> / ${totalPages} 页</span><button class="secondary-button" id="accountRiskNext" type="button" aria-label="查看下一页账户">下一页</button></div></footer>`
 }
 function riskStatusContent(data) {
   const s = data.summary, global = data.global_control
   const accountPagination = data.account_pagination || { page:1, page_size:state.riskAccountPageSize, total:data.accounts.length, total_pages:1 }
-  return `<div class="risk-status-workspace"><section class="health-banner risk-global-banner ${global.global_kill_switch ? 'needs-attention' : 'is-healthy'}"><span class="health-mark ${global.global_kill_switch ? 'risk-stop' : ''}">${global.global_kill_switch ? '!' : '✓'}</span><div class="risk-global-copy"><span class="eyebrow">平台交易总闸门</span><h2>${global.global_kill_switch ? '平台已暂停所有新开仓' : '平台交易总闸门正常'}</h2><p>${global.global_kill_switch ? escapeHtml(global.reason || '管理员已开启紧急停止') : '平台闸门放行后，每个账户仍会继续接受独立风控检查。'}</p><small class="risk-global-updated">最后变更：${global.updated_at ? escapeHtml(formatDate(global.updated_at, true)) : '尚无变更记录'}</small></div><div class="stop-action risk-stop-action">${global.global_kill_switch ? '' : '<input class="input" id="globalStopReason" maxlength="120" aria-label="平台紧急停止原因" placeholder="填写停止原因（至少 4 个字）">'}<button class="${global.global_kill_switch ? 'secondary-button' : 'danger-button primary-button'}" data-global-stop type="button">${global.global_kill_switch ? '解除紧急停止' : '紧急停止新开仓'}</button></div></section><section class="metric-grid risk-metric-grid">${metric('今日风控检查',s.decisions_today,'全部交易请求',true)}${metric('调整后放行',s.adjusted_today,'已自动收紧参数')}${metric('今日拒绝',s.rejected_today,'正常规则命中')}${metric('暂停账户',s.paused_accounts,`共 ${s.trading_accounts} 个账户`)}</section><section class="panel risk-account-panel"><header class="section-head"><div><span class="eyebrow">账户级保护</span><h2>账户风险状态</h2><p>暂停、数据不完整和紧急停止账户优先排列。</p></div><div class="risk-account-panel-meta"><span>风险账户优先</span><strong>${Number(accountPagination.total || 0)}<small> 个账户</small></strong></div></header><div class="risk-account-table" role="table" aria-label="账户风险状态"><div class="risk-account-grid-head" role="row"><span role="columnheader">账户与归属</span><span role="columnheader">交易状态</span><span role="columnheader">当前回撤</span><span role="columnheader">连续亏损</span><span role="columnheader">风控快照</span></div><div class="risk-account-list" role="rowgroup">${data.accounts.map(accountRiskStatus).join('') || '<div class="empty-state">暂无交易账户</div>'}</div></div>${riskAccountPagination(accountPagination)}</section></div>`
+  return `<div class="risk-status-workspace"><section class="health-banner risk-global-banner ${global.global_kill_switch ? 'needs-attention' : 'is-healthy'}"><span class="health-mark ${global.global_kill_switch ? 'risk-stop' : ''}">${global.global_kill_switch ? '!' : '✓'}</span><div class="risk-global-copy"><span class="eyebrow">平台交易总闸门</span><h2>${global.global_kill_switch ? '平台已暂停所有新开仓' : '平台交易总闸门正常'}</h2><p>${global.global_kill_switch ? escapeHtml(global.reason || '管理员已开启紧急停止') : '平台闸门放行后，每个账户仍会继续接受独立风控检查。'}</p><small class="risk-global-updated">最后变更：${global.updated_at ? escapeHtml(formatDate(global.updated_at, true)) : '尚无变更记录'}</small></div><div class="stop-action risk-stop-action">${global.global_kill_switch ? '' : '<input class="input" id="globalStopReason" maxlength="120" aria-label="平台紧急停止原因" placeholder="填写停止原因（至少 4 个字）">'}<button class="${global.global_kill_switch ? 'secondary-button' : 'danger-button primary-button'}" data-global-stop type="button">${global.global_kill_switch ? '解除紧急停止' : '紧急停止新开仓'}</button></div></section><section class="metric-grid risk-metric-grid">${metric('今日风控检查',s.decisions_today,'全部交易请求',true)}${metric('调整后放行',s.adjusted_today,'已自动收紧参数')}${metric('今日拒绝',s.rejected_today,'正常规则命中')}${metric('暂停账户',s.paused_accounts,`共 ${s.trading_accounts} 个账户`)}</section><section class="panel risk-account-panel"><header class="section-head"><div><span class="eyebrow">账户级保护</span><h2>账户风险状态</h2><p>需处理账户优先排列，已切换账户统一排在最后。</p></div><div class="risk-account-panel-meta"><span>风险账户优先</span><strong>${Number(accountPagination.total || 0)}<small> 个账户</small></strong></div></header><div class="risk-account-table" role="table" aria-label="账户风险状态"><div class="risk-account-grid-head" role="row"><span role="columnheader">账户与归属</span><span role="columnheader">交易状态</span><span role="columnheader">当前回撤</span><span role="columnheader">连续亏损</span><span role="columnheader">风控快照</span></div><div class="risk-account-list" role="rowgroup">${data.accounts.map(accountRiskStatus).join('') || '<div class="empty-state">暂无交易账户</div>'}</div></div>${riskAccountPagination(accountPagination)}</section></div>`
 }
 function riskDecisionsContent(data) {
   return `<section class="panel"><form class="filter-bar compact-filter" id="riskDecisionFilter"><div class="field"><label for="riskDecision">决策结果</label><select class="select" id="riskDecision"><option value="all">全部结果</option><option value="pass">通过</option><option value="adjust">调整后通过</option><option value="reject">拒绝</option></select></div><button class="secondary-button" type="submit">筛选</button></form><div class="decision-list">${data.decisions.map(item => `<article class="decision-row"><div><strong>#${item.id} · ${escapeHtml(item.symbol || '--')}</strong><small>${escapeHtml(item.user_nickname || item.user_email || `用户 #${item.user_id}`)} · ${formatDate(item.created_at,true)}</small></div><div class="decision-reason"><span class="badge ${item.decision_status === 'reject' ? 'expired' : 'active'}">${item.decision_status === 'reject' ? '拒绝' : item.decision_status === 'adjust' ? '调整后通过' : '通过'}</span><p>${escapeHtml(item.reason || '风控检查已完成')}</p></div></article>`).join('') || '<div class="empty-state">没有符合条件的风控决策</div>'}</div><div class="pagination"><button class="secondary-button" id="riskPrev" type="button">上一页</button><span>第 ${data.pagination.page} / ${data.pagination.total_pages} 页 · 共 ${data.pagination.total} 条</span><button class="secondary-button" id="riskNext" type="button">下一页</button></div></section>`
@@ -1828,13 +1851,15 @@ const systemConfigKeyLabels={
   access_key:'存储访问密钥',secret_key:'存储私密密钥',bucket:'存储桶名称',domain:'访问域名',region:'存储区域',
   access_key_id:'短信访问密钥 ID',access_key_secret:'短信访问密钥',sign_name:'短信签名',template_code:'通用验证码模板',test_phone:'默认测试手机号',template_code_login:'登录验证码模板',template_code_register:'注册验证码模板',template_code_reset:'重置密码模板',template_code_bind:'绑定验证码模板',template_code_membership_expiry:'会员到期模板',template_code_membership_expired:'会员过期模板',
   payment_mode:'支付模式',hd_mnemonic:'地址派生助记词',trongrid_api_key:'TRON 网络接口密钥',etherscan_api_key:'以太坊网络接口密钥',bscscan_api_key:'BSC 网络接口密钥',solana_rpc_url:'Solana 网络接口地址',rate_source:'汇率来源',fixed_tron_address:'固定 TRON 收款地址',fixed_erc20_address:'固定 ERC-20 收款地址',fixed_bep20_address:'固定 BEP-20 收款地址',fixed_sol_address:'固定 Solana 收款地址',items:'配置项目',
+  plus_month:'Plus 月付价',plus_month_original:'Plus 月付原价',plus_year:'Plus 年付价',plus_year_original:'Plus 年付原价',
+  pro_month:'Pro 月付价',pro_month_original:'Pro 月付原价',pro_year:'Pro 年付价',pro_year_original:'Pro 年付原价',
 }
 const systemConfigKeyHelp={
   enable_email_register:'关闭后将隐藏邮箱注册入口。',enable_email_login:'关闭后已有用户也不能使用邮箱登录。',enable_phone_register:'关闭后将隐藏手机号注册入口。',enable_phone_login:'关闭后已有用户也不能使用手机号登录。',
   email_enabled:'同时控制邮箱注册与登录入口。',phone_enabled:'同时控制手机号注册与登录入口。',gift_enabled:'开启后，新注册用户会按下方规则获得会员。',gift_plan:'选择注册赠送的会员等级。',gift_duration:'填写赠送权益的有效时长。',gift_duration_unit:'设置赠送时长使用的计算单位。',
   payment_mode:'生产支付链路固定为 TRC-20 共享地址，不支持在管理台切换。',fixed_tron_address:'订单通过固定地址和金额尾差进行匹配，请使用有效 TRON 地址。',hd_mnemonic:'用于派生动态收款地址，留空会保留现有助记词。',rate_source:'用于订单金额换算的汇率数据来源。',
   region:'请选择对象存储空间所在区域。',domain:'填写可公开访问的文件域名。',secure:'465 端口通常开启，587 端口通常关闭。',
-  template_code:'未指定场景模板时使用的兼容模板。',test_phone:'仅用于后台测试，不会展示给用户。',items:'使用 JSON 维护菜单、链接和排序。',
+  template_code:'未指定场景模板时使用的兼容模板。',test_phone:'仅用于后台测试，不会展示给用户。',items:'使用结构化表单维护内容；页面从上到下的顺序会同步到主站。',
 }
 const systemConfigSelectOptions={
   gift_plan:[['free','免费用户'],['plus','Plus 进阶版'],['pro','Pro 专业版']],
@@ -1853,7 +1878,33 @@ function configItemLabel(item){
 }
 function isSensitiveConfigKey(key){return sensitiveConfigKeyRe.test(String(key||''))}
 function systemConfigControlId(item,index){return `systemConfig_${String(item.key||index).replace(/[^a-zA-Z0-9_-]/g,'_')}_${index}`}
-function systemConfigInput(item,index) {
+function structuredConfigExtra(value,knownKeys){return Object.fromEntries(Object.entries(value||{}).filter(([key])=>!knownKeys.includes(key)))}
+function structuredConfigExtraAttribute(value,knownKeys){return escapeHtml(JSON.stringify(structuredConfigExtra(value,knownKeys)))}
+function structuredConfigField(label,key,value='',options={}){
+  const multiline=Boolean(options.multiline),required=Boolean(options.required),type=options.type||'text',placeholder=options.placeholder||''
+  return `<label class="structured-config-field ${multiline?'is-wide':''}"><span>${escapeHtml(label)}${required?'<b>必填</b>':''}</span>${multiline?`<textarea class="input" data-structured-field="${escapeHtml(key)}" rows="2" placeholder="${escapeHtml(placeholder)}" ${required?'required':''}>${escapeHtml(value)}</textarea>`:`<input class="input" data-structured-field="${escapeHtml(key)}" type="${escapeHtml(type)}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" ${required?'required':''}>`}</label>`
+}
+function marketMenuItemHtml(item={},index=0){
+  const known=['name','icon','url']
+  return `<article class="structured-config-item" data-structured-item data-extra="${structuredConfigExtraAttribute(item,known)}"><header><span class="structured-config-index">${index+1}</span><div><strong>${escapeHtml(item.name||'新菜单项')}</strong><small>股票研究入口</small></div><div class="structured-config-row-actions"><button type="button" data-structured-move="up" aria-label="上移菜单项">↑</button><button type="button" data-structured-move="down" aria-label="下移菜单项">↓</button><button class="is-danger" type="button" data-structured-remove aria-label="删除菜单项"><span data-icon="trash"></span></button></div></header><div class="structured-config-grid">${structuredConfigField('名称','name',item.name,{required:true,placeholder:'例如：全球市场股票深度研究'})}${structuredConfigField('图标','icon',item.icon,{placeholder:'例如：📈'})}${structuredConfigField('访问地址','url',item.url,{required:true,placeholder:'/research/ 或 https://…'})}</div></article>`
+}
+function toolboxItemHtml(item={},index=0){
+  const known=['name','desc','icon','url','tag','tagColor','code','rebate','note']
+  return `<article class="structured-config-item toolbox-config-item" data-structured-item data-extra="${structuredConfigExtraAttribute(item,known)}"><header><span class="structured-config-index">${index+1}</span><div><strong>${escapeHtml(item.name||'新工具')}</strong><small>${escapeHtml(item.url||'尚未填写链接')}</small></div><div class="structured-config-row-actions"><button type="button" data-structured-move="up" aria-label="上移工具">↑</button><button type="button" data-structured-move="down" aria-label="下移工具">↓</button><button class="is-danger" type="button" data-structured-remove aria-label="删除工具"><span data-icon="trash"></span></button></div></header><div class="structured-config-grid">${structuredConfigField('工具名称','name',item.name,{required:true,placeholder:'例如：TradingView'})}${structuredConfigField('图标','icon',item.icon,{placeholder:'例如：📊'})}${structuredConfigField('访问地址','url',item.url,{required:true,placeholder:'https://…'})}${structuredConfigField('简要说明','desc',item.desc,{multiline:true,placeholder:'向用户说明工具用途'})}</div><details class="structured-config-details"><summary>推广与补充信息</summary><div class="structured-config-grid">${structuredConfigField('角标文字','tag',item.tag,{placeholder:'例如：首选'})}${structuredConfigField('角标颜色','tagColor',item.tagColor,{placeholder:'#f0b90b'})}${structuredConfigField('邀请码','code',item.code,{placeholder:'选填'})}${structuredConfigField('返佣说明','rebate',item.rebate,{placeholder:'例如：返佣 20%'})}${structuredConfigField('补充提示','note',item.note,{multiline:true,placeholder:'选填，将展示给用户'})}</div></details></article>`
+}
+function toolboxGroupHtml(group={},index=0){
+  const items=Array.isArray(group.items)?group.items:[],known=['category','items']
+  return `<section class="structured-config-group" data-structured-group data-extra="${structuredConfigExtraAttribute(group,known)}"><header class="structured-config-group-head"><span class="structured-config-index">${index+1}</span><label><span>分类名称 <b>必填</b></span><input class="input" data-structured-category required value="${escapeHtml(group.category||'')}" placeholder="例如：数据工具"></label><div class="structured-config-row-actions"><button type="button" data-structured-group-move="up" aria-label="上移分类">↑</button><button type="button" data-structured-group-move="down" aria-label="下移分类">↓</button><button class="is-danger" type="button" data-structured-group-remove aria-label="删除分类"><span data-icon="trash"></span></button></div></header><div class="structured-config-items">${items.map(toolboxItemHtml).join('')}</div><button class="structured-config-add" type="button" data-structured-add-item><span data-icon="plus"></span>添加工具</button></section>`
+}
+function structuredConfigInput(category,item,index){
+  const id=systemConfigControlId(item,index),value=String(item.value??'')
+  let parsed
+  try{parsed=JSON.parse(value||'[]')}catch{return `<div class="structured-config-invalid"><strong>现有内容无法转换为表单</strong><small>请先修正下面的 JSON，保存后即可使用可视化编辑器。</small><textarea class="input config-json-input" id="${id}" data-config-key="${escapeHtml(item.key)}" spellcheck="false" aria-describedby="${id}_error">${escapeHtml(value)}</textarea></div>`}
+  if(!Array.isArray(parsed))return `<textarea class="input config-json-input" id="${id}" data-config-key="${escapeHtml(item.key)}" spellcheck="false" aria-describedby="${id}_error">${escapeHtml(value)}</textarea>`
+  const content=category==='market_menu'?`<div class="structured-config-items">${parsed.map(marketMenuItemHtml).join('')}</div><button class="structured-config-add" type="button" data-structured-add-item><span data-icon="plus"></span>添加菜单项</button>`:`<div class="structured-config-groups">${parsed.map(toolboxGroupHtml).join('')}</div><button class="structured-config-add is-group" type="button" data-structured-add-group><span data-icon="plus"></span>添加工具分类</button>`
+  return `<div class="structured-config-editor" data-structured-config="${escapeHtml(category)}"><textarea class="structured-config-value" id="${id}" data-config-key="${escapeHtml(item.key)}" aria-describedby="${id}_error">${escapeHtml(value)}</textarea><div class="structured-config-toolbar"><div><strong>${category==='market_menu'?'菜单条目':'工具分类与条目'}</strong><small>使用上移、下移调整主站展示顺序</small></div><span data-structured-count></span></div>${content}</div>`
+}
+function systemConfigInput(item,index,category='') {
   const value=String(item.value??''),key=String(item.key||''),id=systemConfigControlId(item,index)
   const meta=item.config_meta||{},sensitive=Boolean(meta.sensitive)||isSensitiveConfigKey(key),stored=value==='***REDACTED***'
   if(meta.editable===false)return `<div class="config-readonly-value"><strong>${escapeHtml(systemConfigSelectOptions[key]?.find(option=>option[0]===value)?.[1]||value||'系统固定')}</strong><small>由服务端执行合约锁定</small></div>`
@@ -1863,11 +1914,92 @@ function systemConfigInput(item,index) {
   if(sensitive){const encryptionReady=state.systemConfigSecurity?.credential_encryption_available!==false;return `<div class="config-secret-control"><div class="config-secret-state ${stored?'is-set':'is-empty'}"><span data-icon="${stored?'check':'key'}" aria-hidden="true"></span><strong>${stored?'已加密保存':'尚未配置'}</strong><small>${encryptionReady?(stored?'留空不会覆盖现有内容':'保存时使用 AES-256-GCM 加密'):'凭证加密服务未就绪'}</small></div><input class="input" id="${id}" type="password" autocomplete="new-password" data-config-key="${escapeHtml(key)}" data-redacted="true" value="" placeholder="${stored?'输入新内容可替换':'请输入配置内容'}" ${encryptionReady?'':'disabled'}></div>`}
   if(isBoolean)return `<label class="config-toggle-control" for="${id}"><input id="${id}" type="checkbox" data-config-key="${escapeHtml(key)}" data-config-boolean="true" ${value==='true'?'checked':''}><span class="config-toggle-track" aria-hidden="true"><span></span></span><strong data-config-toggle-label>${value==='true'?'已开启':'已关闭'}</strong></label>`
   if(selectOptions)return `<select class="select" id="${id}" data-config-key="${escapeHtml(key)}">${selectOptions.map(([optionValue,optionLabel])=>`<option value="${optionValue}" ${value===optionValue?'selected':''}>${optionLabel}</option>`).join('')}</select>`
+  if(isJson&&key==='items'&&['market_menu','toolbox'].includes(category))return structuredConfigInput(category,item,index)
   if(isJson)return `<textarea class="input config-json-input" id="${id}" data-config-key="${escapeHtml(key)}" spellcheck="false" aria-describedby="${id}_error">${escapeHtml(value)}</textarea>`
   const numeric=meta.type==='integer'||/(_month|_year|_original|duration$|^port$)/.test(key)
   const inputType=key==='from'?'email':key==='test_phone'?'tel':numeric?'number':'text'
   const numericAttrs=numeric?` min="${Number.isFinite(Number(meta.min))?Number(meta.min):0}"${Number.isFinite(Number(meta.max))?` max="${Number(meta.max)}"`:''} step="1" inputmode="decimal"`:''
-  return `<input class="input" id="${id}" type="${inputType}" data-config-key="${escapeHtml(key)}" value="${escapeHtml(value)}"${numericAttrs}>`
+  return `<input class="input" id="${id}" type="${inputType}" data-config-key="${escapeHtml(key)}" value="${escapeHtml(value)}"${numericAttrs}${category==='plan_prices'?` required aria-describedby="${id}_error"`:''}>`
+}
+function structuredConfigNodeValue(node){
+  let value={}
+  try{value=JSON.parse(node.dataset.extra||'{}')}catch{}
+  node.querySelectorAll(':scope [data-structured-field]').forEach(field=>{if(field.closest('[data-structured-item]')===node){const fieldValue=field.value.trim();if(fieldValue)value[field.dataset.structuredField]=fieldValue}})
+  return value
+}
+function syncStructuredConfig(editor){
+  const category=editor.dataset.structuredConfig,control=editor.querySelector('.structured-config-value');let value=[]
+  if(category==='market_menu'){
+    value=[...editor.querySelectorAll(':scope > .structured-config-items > [data-structured-item]')].map(structuredConfigNodeValue)
+  }else{
+    value=[...editor.querySelectorAll(':scope > .structured-config-groups > [data-structured-group]')].map(group=>{
+      let result={};try{result=JSON.parse(group.dataset.extra||'{}')}catch{}
+      result.category=group.querySelector(':scope > .structured-config-group-head [data-structured-category]')?.value.trim()||''
+      result.items=[...group.querySelectorAll(':scope > .structured-config-items > [data-structured-item]')].map(structuredConfigNodeValue)
+      return result
+    })
+  }
+  control.value=JSON.stringify(value)
+}
+function refreshStructuredConfigEditor(editor){
+  const category=editor.dataset.structuredConfig,groups=[...editor.querySelectorAll(':scope > .structured-config-groups > [data-structured-group]')]
+  const refreshItems=container=>{const items=[...container.querySelectorAll(':scope > [data-structured-item]')];items.forEach((item,index)=>{item.querySelector(':scope > header .structured-config-index').textContent=String(index+1);const up=item.querySelector('[data-structured-move="up"]'),down=item.querySelector('[data-structured-move="down"]');if(up)up.disabled=index===0;if(down)down.disabled=index===items.length-1});return items.length}
+  let itemCount=0
+  if(category==='market_menu')itemCount=refreshItems(editor.querySelector(':scope > .structured-config-items'))
+  else groups.forEach((group,index)=>{group.querySelector(':scope > .structured-config-group-head .structured-config-index').textContent=String(index+1);const up=group.querySelector('[data-structured-group-move="up"]'),down=group.querySelector('[data-structured-group-move="down"]');if(up)up.disabled=index===0;if(down)down.disabled=index===groups.length-1;itemCount+=refreshItems(group.querySelector(':scope > .structured-config-items'))})
+  const count=editor.querySelector('[data-structured-count]');if(count)count.textContent=category==='market_menu'?`${itemCount} 个菜单项`:`${groups.length} 个分类 · ${itemCount} 个工具`
+  syncStructuredConfig(editor)
+}
+function validateStructuredConfigEditor(editor){
+  let firstInvalid=null
+  editor.querySelectorAll('[required]').forEach(field=>{const invalid=!field.value.trim();field.setAttribute('aria-invalid',String(invalid));if(invalid&&!firstInvalid)firstInvalid=field})
+  editor.dataset.structuredInvalid=String(Boolean(firstInvalid))
+  return firstInvalid
+}
+function bindStructuredConfigEditor(editor){
+  const changed=()=>{refreshStructuredConfigEditor(editor);validateStructuredConfigEditor(editor);setSystemConfigDirty(true)}
+  editor.addEventListener('input',event=>{
+    if(event.target.matches('[data-structured-field="name"]'))event.target.closest('[data-structured-item]')?.querySelector(':scope > header strong')?.replaceChildren(event.target.value.trim()||'新条目')
+    if(event.target.matches('[data-structured-field="url"]'))event.target.closest('[data-structured-item]')?.querySelector(':scope > header small')?.replaceChildren(event.target.value.trim()||'尚未填写链接')
+    changed()
+  })
+  editor.addEventListener('click',event=>{
+    const button=event.target.closest('button');if(!button)return
+    const item=button.closest('[data-structured-item]'),group=button.closest('[data-structured-group]')
+    if(button.matches('[data-structured-add-group]'))editor.querySelector(':scope > .structured-config-groups').insertAdjacentHTML('beforeend',toolboxGroupHtml({},editor.querySelectorAll(':scope > .structured-config-groups > [data-structured-group]').length))
+    else if(button.matches('[data-structured-add-item]')){const container=group?.querySelector(':scope > .structured-config-items')||editor.querySelector(':scope > .structured-config-items'),html=editor.dataset.structuredConfig==='market_menu'?marketMenuItemHtml({},container.children.length):toolboxItemHtml({},container.children.length);container.insertAdjacentHTML('beforeend',html)}
+    else if(button.matches('[data-structured-remove]'))item?.remove()
+    else if(button.matches('[data-structured-group-remove]'))group?.remove()
+    else if(button.matches('[data-structured-move]')&&item){const direction=button.dataset.structuredMove,sibling=direction==='up'?item.previousElementSibling:item.nextElementSibling;if(sibling)item.parentElement.insertBefore(direction==='up'?item:sibling,direction==='up'?sibling:item)}
+    else if(button.matches('[data-structured-group-move]')&&group){const direction=button.dataset.structuredGroupMove,sibling=direction==='up'?group.previousElementSibling:group.nextElementSibling;if(sibling)group.parentElement.insertBefore(direction==='up'?group:sibling,direction==='up'?sibling:group)}
+    else return
+    renderIcons(editor);changed()
+  })
+  refreshStructuredConfigEditor(editor)
+}
+function planPriceCycleHtml(plan,period,items){
+  const currentKey=`${plan}_${period}`,originalKey=`${currentKey}_original`,current=items.find(item=>item.key===currentKey),original=items.find(item=>item.key===originalKey)
+  if(!current&&!original)return ''
+  const currentIndex=Math.max(0,items.indexOf(current)),originalIndex=Math.max(0,items.indexOf(original)),periodLabel=period==='month'?'月付':'年付'
+  const field=(item,index,label,kind)=>item?`<label class="plan-price-field" for="${systemConfigControlId(item,index)}"><span>${label}</span><div class="plan-price-input"><b aria-hidden="true">$</b>${systemConfigInput(item,index,'plan_prices')}<small>USD</small></div><span class="config-field-error" id="${systemConfigControlId(item,index)}_error" role="alert" hidden></span><input type="hidden" data-config-label="${escapeHtml(item.key)}" value="${escapeHtml(configItemLabel(item))}"><input type="hidden" data-config-order="${escapeHtml(item.key)}" value="${Number(item.sort_order??index)}"><i>${kind==='current'?'用户实际支付金额':'仅用于主站划线价展示'}</i></label>`:''
+  return `<section class="plan-price-cycle" data-plan-price-cycle="${currentKey}"><header><strong>${periodLabel}</strong><small>${period==='month'?'按月购买':'一次购买 12 个月'}</small></header>${field(current,currentIndex,'当前售价','current')}${field(original,originalIndex,'展示原价','original')}<div class="plan-price-calculation" data-plan-price-summary="${currentKey}" aria-live="polite"></div></section>`
+}
+function planPricesEditorHtml(items){
+  const plan=(key,name,description)=>`<article class="plan-price-plan" data-plan-price="${key}"><header><span>${key==='plus'?'P+':'PRO'}</span><div><h3>${name}</h3><p>${description}</p></div><small data-plan-price-overview="${key}">读取价格…</small></header><div class="plan-price-cycles">${planPriceCycleHtml(key,'month',items)}${planPriceCycleHtml(key,'year',items)}</div></article>`
+  return `<section class="plan-price-editor"><div class="plan-price-guidance"><span data-icon="info" aria-hidden="true"></span><div><strong>所有金额均为美元</strong><p>“当前售价”用于创建真实订单；“展示原价”只在主站显示划线价格，不参与扣款。</p></div></div><div class="plan-price-plans">${plan('plus','Plus 进阶版','适合需要持续分析与进阶功能的用户')}${plan('pro','Pro 专业版','适合需要完整专业能力与更高权限的用户')}</div></section>`
+}
+function refreshPlanPriceSummaries(root){
+  root.querySelectorAll('[data-plan-price-cycle]').forEach(cycle=>{
+    const key=cycle.dataset.planPriceCycle,current=Number(cycle.querySelector(`[data-config-key="${key}"]`)?.value||0),original=Number(cycle.querySelector(`[data-config-key="${key}_original"]`)?.value||0),period=key.endsWith('_year')?'year':'month',parts=[]
+    if(current>0&&period==='year')parts.push(`折合 $${(current/12).toFixed(2)} / 月`)
+    if(current>0&&original>current)parts.push(`比展示原价省 $${original-current}（${Math.round((1-current/original)*100)}%）`)
+    else parts.push(original>0&&current>=original?'当前售价未低于展示原价':'未设置优惠对比')
+    const summary=cycle.querySelector('[data-plan-price-summary]');if(summary)summary.innerHTML=`<strong>${escapeHtml(parts[0])}</strong>${parts[1]?`<small>${escapeHtml(parts[1])}</small>`:''}`
+  })
+  root.querySelectorAll('[data-plan-price]').forEach(plan=>{const key=plan.dataset.planPrice,month=Number(plan.querySelector(`[data-config-key="${key}_month"]`)?.value||0),year=Number(plan.querySelector(`[data-config-key="${key}_year"]`)?.value||0),overview=plan.querySelector('[data-plan-price-overview]');if(overview)overview.textContent=`月付 $${month||'--'} · 年付 $${year||'--'}`})
+}
+function defaultSystemConfigRowsHtml(category,items){
+  return items.map((item,index)=>{const id=systemConfigControlId(item,index),label=configItemLabel(item),helper=systemConfigKeyHelp[item.key]||'保存后将应用到相关平台服务。',sensitive=item.config_meta?.sensitive||isSensitiveConfigKey(item.key),readonly=item.config_meta?.editable===false;return `<div class="config-editor-row ${readonly?'is-readonly':''} ${['market_menu','toolbox'].includes(category)&&item.key==='items'?'is-structured':''}"><div class="config-field-copy"><div><label ${readonly?'':`for="${id}"`}>${escapeHtml(label)}</label>${sensitive?'<span>敏感</span>':readonly?'<span>只读</span>':''}</div><p>${escapeHtml(helper)}</p></div><div class="config-field-control">${systemConfigInput(item,index,category)}<small class="config-field-error" id="${id}_error" role="alert" hidden></small></div><input type="hidden" data-config-label="${escapeHtml(item.key)}" value="${escapeHtml(label)}"><input type="hidden" data-config-order="${escapeHtml(item.key)}" value="${Number(item.sort_order??index)}"></div>`}).join('')||'<div class="empty-state">该分类暂无配置项</div>'
 }
 function systemCategoryTools(category) {
   if(category==='smtp')return `<section class="config-action-panel"><div class="config-tool-heading"><span class="config-tool-icon" data-icon="mail" aria-hidden="true"></span><div><span class="eyebrow">连接验证</span><strong>发送测试邮件</strong><small>请先保存配置，再向指定邮箱发送测试邮件。</small></div></div><div class="config-action-form"><label class="field" for="smtpTestTarget"><span>收件邮箱</span><input class="input" id="smtpTestTarget" type="email" placeholder="name@example.com"></label><button class="secondary-button" id="smtpTestSend" type="button">发送测试</button></div></section>`
@@ -1932,26 +2064,33 @@ function setSystemConfigDirty(dirty){
   if(discard)discard.disabled=!state.systemConfigDirty
 }
 function validateSystemConfigControl(control){
-  const row=control.closest('.config-editor-row'),error=row?.querySelector('.config-field-error');let message=''
+  const row=control.closest('.plan-price-field')||control.closest('[data-plan-price-cycle]')||control.closest('.config-editor-row'),error=row?.querySelector('.config-field-error');let message=''
   const value=control.dataset.configBoolean==='true'?String(control.checked):String(control.value||'').trim()
+  const structuredEditor=control.closest('[data-structured-config]'),structuredInvalid=structuredEditor?validateStructuredConfigEditor(structuredEditor):null
+  if(structuredInvalid)message='请填写所有标记为必填的名称和访问地址。'
+  if(!message&&control.required&&!value)message='该价格不能为空。'
   if(value&&(['items'].includes(control.dataset.configKey)||value.startsWith('[')||value.startsWith('{'))){try{JSON.parse(value)}catch{message='JSON 格式不正确，请检查括号、引号和逗号。'}}
-  if(!message&&control.type==='number'&&value&&Number(value)<0)message='数值不能小于 0。'
+  if(!message&&control.type==='number'&&value&&!/^-?\d+$/.test(value))message='请输入整数。'
+  if(!message&&control.type==='number'&&value&&control.hasAttribute('min')&&Number(value)<Number(control.min))message=`数值不能小于 ${control.min}。`
+  if(!message&&control.type==='number'&&value&&control.hasAttribute('max')&&Number(value)>Number(control.max))message=`数值不能大于 ${control.max}。`
   if(!message&&value&&['email','url'].includes(control.type)&&!control.checkValidity())message=control.type==='email'?'请输入有效的邮箱地址。':'请输入完整有效的地址。'
-  control.setAttribute('aria-invalid',String(Boolean(message)));row?.classList.toggle('has-error',Boolean(message));if(error){error.hidden=!message;error.textContent=message}
+  control.setAttribute('aria-invalid',String(Boolean(message)&&!structuredEditor));row?.classList.toggle('has-error',Boolean(message));if(error){error.hidden=!message;error.textContent=message}
   return !message
 }
 function renderSystemConfigCategory(){
   const root=document.querySelector('#systemConfigEditor');if(!root||!state.systemConfig)return
   const category=state.systemConfigCategory,items=state.systemConfig[category]||[],meta=systemCategoryMeta[category]||{label:category,description:'平台配置',icon:'settings',tone:'standard',toneLabel:'配置'}
   const sensitiveCount=items.filter(item=>item.config_meta?.sensitive||isSensitiveConfigKey(item.key)).length,encryptionReady=state.systemConfigSecurity?.credential_encryption_available!==false
-  root.innerHTML=`<header class="system-config-head"><div class="system-config-heading"><span class="system-config-mark tone-${meta.tone}" data-icon="${meta.icon}" aria-hidden="true"></span><div><span class="eyebrow">平台配置</span><h2>${escapeHtml(meta.label)}</h2><p>${escapeHtml(meta.description)}</p></div></div><div class="system-config-badges"><span>${items.length} 项配置</span><span class="tone-${meta.tone}">${escapeHtml(meta.toneLabel)}</span>${sensitiveCount?`<span>${sensitiveCount} 项敏感</span>`:''}</div></header>${sensitiveCount?`<div class="system-secret-notice ${encryptionReady?'':'is-warning'}"><span data-icon="shield" aria-hidden="true"></span><p><strong>${encryptionReady?'敏感内容已加密保护':'凭证加密服务未就绪'}</strong><small>${encryptionReady?'密钥和密码使用 AES-256-GCM 保存且不会回显；留空即可保持原值。':'为避免明文落库，敏感字段暂时禁止修改。'}</small></p></div>`:''}<form class="config-editor-form" id="systemConfigForm">${items.map((item,index)=>{const id=systemConfigControlId(item,index),label=configItemLabel(item),helper=systemConfigKeyHelp[item.key]||'保存后将应用到相关平台服务。',sensitive=item.config_meta?.sensitive||isSensitiveConfigKey(item.key),readonly=item.config_meta?.editable===false;return `<div class="config-editor-row ${readonly?'is-readonly':''}"><div class="config-field-copy"><div><label ${readonly?'':`for="${id}"`}>${escapeHtml(label)}</label>${sensitive?'<span>敏感</span>':readonly?'<span>只读</span>':''}</div><p>${escapeHtml(helper)}</p></div><div class="config-field-control">${systemConfigInput(item,index)}<small class="config-field-error" id="${id}_error" role="alert" hidden></small></div><input type="hidden" data-config-label="${escapeHtml(item.key)}" value="${escapeHtml(label)}"><input type="hidden" data-config-order="${escapeHtml(item.key)}" value="${Number(item.sort_order??index)}"></div>`}).join('')||'<div class="empty-state">该分类暂无配置项</div>'}<footer class="system-config-savebar"><div class="system-config-save-state" id="systemConfigSaveState" aria-live="polite"></div><div><button class="secondary-button" id="discardSystemConfig" type="button" disabled><span data-icon="rotate"></span>放弃修改</button><button class="primary-button" id="saveSystemConfig" type="submit" disabled><span data-icon="save"></span>保存当前分类</button></div></footer></form>${systemCategoryTools(category)}`
+  root.innerHTML=`<header class="system-config-head"><div class="system-config-heading"><span class="system-config-mark tone-${meta.tone}" data-icon="${meta.icon}" aria-hidden="true"></span><div><span class="eyebrow">平台配置</span><h2>${escapeHtml(meta.label)}</h2><p>${escapeHtml(meta.description)}</p></div></div><div class="system-config-badges"><span>${items.length} 项配置</span><span class="tone-${meta.tone}">${escapeHtml(meta.toneLabel)}</span>${sensitiveCount?`<span>${sensitiveCount} 项敏感</span>`:''}</div></header>${sensitiveCount?`<div class="system-secret-notice ${encryptionReady?'':'is-warning'}"><span data-icon="shield" aria-hidden="true"></span><p><strong>${encryptionReady?'敏感内容已加密保护':'凭证加密服务未就绪'}</strong><small>${encryptionReady?'密钥和密码使用 AES-256-GCM 保存且不会回显；留空即可保持原值。':'为避免明文落库，敏感字段暂时禁止修改。'}</small></p></div>`:''}<form class="config-editor-form" id="systemConfigForm">${category==='plan_prices'?planPricesEditorHtml(items):defaultSystemConfigRowsHtml(category,items)}<footer class="system-config-savebar"><div class="system-config-save-state" id="systemConfigSaveState" aria-live="polite"></div><div><button class="secondary-button" id="discardSystemConfig" type="button" disabled><span data-icon="rotate"></span>放弃修改</button><button class="primary-button" id="saveSystemConfig" type="submit" disabled><span data-icon="save"></span>保存当前分类</button></div></footer></form>${systemCategoryTools(category)}`
   renderIcons(root);setSystemConfigDirty(false)
   const controls=[...root.querySelectorAll('[data-config-key]')]
-  controls.forEach(control=>{const markDirty=()=>{if(control.dataset.configBoolean==='true'){const label=root.querySelector(`label[for="${CSS.escape(control.id)}"] [data-config-toggle-label]`);if(label)label.textContent=control.checked?'已开启':'已关闭'}validateSystemConfigControl(control);setSystemConfigDirty(true)};control.addEventListener('input',markDirty);control.addEventListener('change',markDirty);control.addEventListener('blur',()=>validateSystemConfigControl(control))})
+  controls.forEach(control=>{const markDirty=()=>{if(control.dataset.configBoolean==='true'){const label=root.querySelector(`label[for="${CSS.escape(control.id)}"] [data-config-toggle-label]`);if(label)label.textContent=control.checked?'已开启':'已关闭'}validateSystemConfigControl(control);if(category==='plan_prices')refreshPlanPriceSummaries(root);setSystemConfigDirty(true)};control.addEventListener('input',markDirty);control.addEventListener('change',markDirty);control.addEventListener('blur',()=>validateSystemConfigControl(control))})
+  root.querySelectorAll('[data-structured-config]').forEach(bindStructuredConfigEditor)
+  if(category==='plan_prices')refreshPlanPriceSummaries(root)
   root.querySelector('#discardSystemConfig').onclick=async()=>{if(!state.systemConfigDirty)return;if(!await confirmAction('放弃当前修改？','当前分类中尚未保存的内容将恢复为服务器最新值。','放弃修改',true))return;renderSystemConfigCategory()}
   root.querySelector('#systemConfigForm').onsubmit=async event=>{
     event.preventDefault();const button=event.submitter;if(!state.systemConfigDirty)return
-    const valid=controls.map(validateSystemConfigControl).every(Boolean);if(!valid){root.querySelector('[aria-invalid="true"]')?.focus();return handleError(new Error('请先修正标记出的配置内容'))}
+    const valid=controls.map(validateSystemConfigControl).every(Boolean);if(!valid){root.querySelector('[aria-invalid="true"]:not(.structured-config-value)')?.focus();return handleError(new Error('请先修正标记出的配置内容'))}
     if(meta.tone==='critical'&&!await confirmAction('确认保存高风险配置？','收款钱包配置会影响订单收款和链上资金处理，请确认地址、网络与密钥均正确。','确认保存',true))return
     button.disabled=true
     try{
@@ -2066,6 +2205,7 @@ async function setView(view) {
   state.view = view
   window.scrollTo(0,0)
   document.querySelector('#adminMain').classList.toggle('ai-operations-page', view === 'ai-operations')
+  document.querySelector('#adminMain').classList.toggle('overview-page', view === 'overview')
   document.querySelector('#adminMain').classList.toggle('content-operations-page', view === 'content-operations')
   document.querySelector('#adminMain').classList.toggle('system-settings-page', view === 'system-settings')
   document.querySelectorAll('.nav-item[data-view]').forEach(item => {

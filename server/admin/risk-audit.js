@@ -36,7 +36,8 @@ export async function getAdminRiskAuditOverview({ accountPage = 1, accountPageSi
       FROM trading_accounts accounts JOIN users ON users.id = accounts.user_id
       LEFT JOIN risk_account_state states ON states.trading_account_id = accounts.id
       WHERE accounts.is_deleted = 0
-      ORDER BY (accounts.observe_status IN ('paused','switched','frozen','transferred')
+      ORDER BY (accounts.observe_status = 'switched') ASC,
+        (accounts.observe_status IN ('paused','frozen','transferred')
         OR COALESCE(states.halt_status, 'active') <> 'active'
         OR COALESCE(states.user_kill_switch, 0) = 1 OR COALESCE(states.data_complete, 0) = 0) DESC,
         accounts.updated_at DESC LIMIT ? OFFSET ?`, [safeAccountPageSize, (safeAccountPage - 1) * safeAccountPageSize]),
