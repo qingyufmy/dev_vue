@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, automaticInferenceMaxTokens, AUTO_INFERENCE_MAX_OUTPUT_TOKENS, compactInferenceMarketPayload, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, configuredModelMaxTokens, compactInferenceMarketPayload, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
 import { compactRates } from '../../server/routes/ai/utils.js'
 
-describe('automatic inference budgets', () => {
-  it('caps automated output without changing manual model profiles', () => {
-    expect(automaticInferenceMaxTokens({ _usage:'auto_platform', max_tokens:150000 }))
-      .toBe(AUTO_INFERENCE_MAX_OUTPUT_TOKENS)
-    expect(automaticInferenceMaxTokens({ _usage:'manual', max_tokens:150000 })).toBe(150000)
+describe('model output budgets', () => {
+  it('uses the configured model profile value for automated and manual inference', () => {
+    expect(configuredModelMaxTokens({ _usage:'auto_platform', max_tokens:30000 })).toBe(30000)
+    expect(configuredModelMaxTokens({ _usage:'auto_private', max_tokens:150000 })).toBe(150000)
+    expect(configuredModelMaxTokens({ _usage:'manual', max_tokens:30000 })).toBe(30000)
+    expect(configuredModelMaxTokens({ _usage:'auto_platform' })).toBe(2000)
   })
 })
 
@@ -498,12 +499,12 @@ describe('requestJsonObject', () => {
     await requestJsonObject({
       url: 'https://api.kimi.com/coding/v1/chat/completions',
       apiKey: 'kimi-key', provider: 'kimi_code', model: 'k3', temperature: 0.3,
-      maxTokens: 2000, thinkingEnabled: false, reasoningEffort: 'max',
+      maxTokens: 30000, thinkingEnabled: false, reasoningEffort: 'max',
       messages: [{ role: 'user', content: 'test' }],
     })
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(body.thinking).toEqual({ type: 'disabled' })
-    expect(body.max_tokens).toBe(2000)
+    expect(body.max_tokens).toBe(30000)
     expect(body).not.toHaveProperty('temperature')
   })
 
@@ -640,7 +641,7 @@ describe('OpenAI-compatible provider URL', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions')
   })
 
-  it('routes Kimi Code through its subscription endpoint with Thinking disabled when configured', async () => {
+  it('routes Kimi Code through its subscription endpoint with the configured automatic output limit', async () => {
     vi.clearAllMocks()
     mockFetch.mockResolvedValue({
       ok: true,
@@ -650,11 +651,13 @@ describe('OpenAI-compatible provider URL', () => {
       }) } }] }),
     })
     await maybeAiSignal(null, {
-      api_key_encrypted: 'key', api_provider: 'kimi_code', model_name: 'kimi-for-coding',
-      thinking_enabled: false,
+      api_key_encrypted: 'key', api_provider: 'kimi_code', model_name: 'k3',
+      thinking_enabled: false, max_tokens: 30000, _usage: 'auto_platform',
     }, { symbol: 'XAUUSD', timeframe: 'M5', strategy_score: {} })
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.kimi.com/coding/v1/chat/completions')
-    expect(JSON.parse(mockFetch.mock.calls[0][1].body).thinking.type).toBe('disabled')
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(body.thinking.type).toBe('disabled')
+    expect(body.max_tokens).toBe(30000)
   })
 
   it('does not turn an externally cancelled inference into a HOLD signal', async () => {
