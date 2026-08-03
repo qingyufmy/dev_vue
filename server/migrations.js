@@ -4717,6 +4717,130 @@ const migrations = [
         await queryRun('CREATE INDEX idx_usage_provider_request ON ai_model_usage_logs (provider_request_id)')
       }
     }
+  },
+  {
+    id: '162_model_task_runtime_envelope',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_tasks (
+        task_id CHAR(36) PRIMARY KEY,
+        task_kind VARCHAR(48) NOT NULL,
+        queue_class VARCHAR(24) NOT NULL DEFAULT 'background',
+        owner_user_id INT NOT NULL DEFAULT 0,
+        strategy_id INT DEFAULT NULL,
+        domain_type VARCHAR(48) DEFAULT NULL,
+        domain_id VARCHAR(191) DEFAULT NULL,
+        idempotency_key VARCHAR(191) DEFAULT NULL,
+        snapshot_hash CHAR(64) DEFAULT NULL,
+        input_hash CHAR(64) DEFAULT NULL,
+        prompt_hash CHAR(64) DEFAULT NULL,
+        output_contract_hash CHAR(64) DEFAULT NULL,
+        frozen_provider VARCHAR(64) DEFAULT NULL,
+        frozen_model VARCHAR(191) DEFAULT NULL,
+        frozen_model_profile_id INT DEFAULT NULL,
+        frozen_protocol VARCHAR(32) DEFAULT NULL,
+        frozen_credential_source VARCHAR(32) DEFAULT NULL,
+        frozen_context_json LONGTEXT DEFAULT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'queued',
+        priority INT NOT NULL DEFAULT 0,
+        attempt_count INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 1,
+        scheduled_at_utc_msc BIGINT NOT NULL,
+        task_deadline_at_utc_msc BIGINT DEFAULT NULL,
+        result_valid_until_utc_msc BIGINT DEFAULT NULL,
+        lease_token CHAR(36) DEFAULT NULL,
+        fencing_token BIGINT NOT NULL DEFAULT 0,
+        lease_owner VARCHAR(191) DEFAULT NULL,
+        lease_expires_at_utc_msc BIGINT DEFAULT NULL,
+        last_activity_at_utc_msc BIGINT DEFAULT NULL,
+        estimated_input_tokens INT NOT NULL DEFAULT 0,
+        selected_output_budget INT NOT NULL DEFAULT 0,
+        schema_need_tokens INT NOT NULL DEFAULT 0,
+        context_window_tokens INT DEFAULT NULL,
+        provider_output_cap INT DEFAULT NULL,
+        result_ref VARCHAR(255) DEFAULT NULL,
+        result_hash CHAR(64) DEFAULT NULL,
+        finish_reason VARCHAR(64) DEFAULT NULL,
+        incomplete_details_json TEXT DEFAULT NULL,
+        error_code VARCHAR(128) DEFAULT NULL,
+        error_message VARCHAR(512) DEFAULT NULL,
+        completed_at_utc_msc BIGINT DEFAULT NULL,
+        created_at_utc_msc BIGINT NOT NULL,
+        updated_at_utc_msc BIGINT NOT NULL,
+        UNIQUE KEY uk_model_task_idempotency (task_kind, idempotency_key),
+        KEY idx_model_task_claim (queue_class, status, priority, scheduled_at_utc_msc),
+        KEY idx_model_task_lease (status, lease_expires_at_utc_msc),
+        KEY idx_model_task_owner (owner_user_id, created_at_utc_msc)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_task_attempts (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        task_id CHAR(36) NOT NULL,
+        attempt_no INT NOT NULL,
+        fencing_token BIGINT NOT NULL,
+        provider_request_id VARCHAR(191) DEFAULT NULL,
+        provider_idempotency_key VARCHAR(191) DEFAULT NULL,
+        status VARCHAR(32) NOT NULL,
+        request_started_at_utc_msc BIGINT DEFAULT NULL,
+        first_byte_at_utc_msc BIGINT DEFAULT NULL,
+        response_received_at_utc_msc BIGINT DEFAULT NULL,
+        last_activity_at_utc_msc BIGINT DEFAULT NULL,
+        request_bytes BIGINT NOT NULL DEFAULT 0,
+        response_bytes BIGINT NOT NULL DEFAULT 0,
+        input_tokens INT NOT NULL DEFAULT 0,
+        output_tokens INT NOT NULL DEFAULT 0,
+        reasoning_tokens INT NOT NULL DEFAULT 0,
+        cached_tokens INT NOT NULL DEFAULT 0,
+        total_tokens INT NOT NULL DEFAULT 0,
+        finish_reason VARCHAR(64) DEFAULT NULL,
+        incomplete_details_json TEXT DEFAULT NULL,
+        http_status INT DEFAULT NULL,
+        error_code VARCHAR(128) DEFAULT NULL,
+        error_message VARCHAR(512) DEFAULT NULL,
+        created_at_utc_msc BIGINT NOT NULL,
+        updated_at_utc_msc BIGINT NOT NULL,
+        UNIQUE KEY uk_model_task_attempt (task_id, attempt_no),
+        KEY idx_model_attempt_request (provider_request_id),
+        CONSTRAINT fk_model_attempt_task FOREIGN KEY (task_id) REFERENCES ai_model_tasks(task_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_task_events (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        task_id CHAR(36) NOT NULL,
+        attempt_id BIGINT DEFAULT NULL,
+        event_type VARCHAR(64) NOT NULL,
+        payload_json TEXT DEFAULT NULL,
+        created_at_utc_msc BIGINT NOT NULL,
+        KEY idx_model_event_task (task_id, id),
+        CONSTRAINT fk_model_event_task FOREIGN KEY (task_id) REFERENCES ai_model_tasks(task_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_provider_capabilities (
+        model_profile_id INT PRIMARY KEY,
+        supports_stream TINYINT NOT NULL DEFAULT 0,
+        supports_request_id TINYINT NOT NULL DEFAULT 0,
+        supports_poll TINYINT NOT NULL DEFAULT 0,
+        supports_cancel TINYINT NOT NULL DEFAULT 0,
+        supports_idempotency TINYINT NOT NULL DEFAULT 0,
+        supports_structured_output TINYINT NOT NULL DEFAULT 0,
+        supports_usage_split TINYINT NOT NULL DEFAULT 0,
+        context_window_tokens INT DEFAULT NULL,
+        max_output_tokens INT DEFAULT NULL,
+        verification_status VARCHAR(24) NOT NULL DEFAULT 'unverified',
+        verified_by_user_id INT DEFAULT NULL,
+        verified_at_utc_msc BIGINT DEFAULT NULL,
+        updated_at_utc_msc BIGINT NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      const linkedTables = ['period_review_jobs', 'trade_review_jobs', 'memory_compression_jobs', 'ai_model_compare_jobs']
+      for (const table of linkedTables) {
+        const columns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'model_task_id'`, [table])
+        if (!columns.length) await queryRun(`ALTER TABLE ${table} ADD COLUMN model_task_id CHAR(36) DEFAULT NULL`)
+      }
+      const signalColumns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND COLUMN_NAME = 'inference_task_id'`)
+      if (!signalColumns.length) await queryRun('ALTER TABLE ai_signals ADD COLUMN inference_task_id CHAR(36) DEFAULT NULL')
+      const signalIndexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND INDEX_NAME = 'uk_ai_signal_inference_task'`)
+      if (!signalIndexes.length) await queryRun('CREATE UNIQUE INDEX uk_ai_signal_inference_task ON ai_signals (inference_task_id)')
+    }
   }
 ]
 
