@@ -280,6 +280,16 @@ describe('period review runtime integration', () => {
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
   })
 
+  it('supersedes legacy cross-account monthly reviews and hides them from active workflows', () => {
+    expect(migration).toContain("id: '158_supersede_legacy_cross_account_monthly_reviews'")
+    expect(migration).toContain("period_type = 'monthly' AND trading_account_id = 0 AND status <> 'superseded'")
+    expect(migration).toContain("superseded_reason = 'legacy_cross_account_monthly'")
+    expect(migration).toContain("last_error_code = 'superseded_by_account_scoped_review'")
+    expect(periodReview).toContain("WHERE ${access.sql} AND cases.status <> 'superseded'")
+    expect(periodReview).toContain("AND status <> 'superseded'\n    ORDER BY CASE WHEN status = 'approved'")
+    expect(periodReview.match(/cases\.status <> 'superseded'/g)?.length).toBeGreaterThanOrEqual(4)
+  })
+
   it('never revokes an approved memory merely because review evidence is rebuilt', () => {
     const source = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
     expect(source).not.toContain("UPDATE platform_strategy_experience_items SET status = 'revoked'")

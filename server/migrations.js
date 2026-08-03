@@ -4522,6 +4522,92 @@ const migrations = [
         SET schedule_timezone = 'terminal_server'
         WHERE schedule_timezone <> 'terminal_server'`)
     }
+  },
+  {
+    id: '158_supersede_legacy_cross_account_monthly_reviews',
+    async up() {
+      const columns = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'period_review_cases'
+          AND COLUMN_NAME IN ('superseded_by_case_id', 'superseded_reason')`)
+      const existingColumns = new Set(columns.map(row => row.COLUMN_NAME))
+      if (!existingColumns.has('superseded_by_case_id')) {
+        await queryRun(`ALTER TABLE period_review_cases
+          ADD COLUMN superseded_by_case_id BIGINT DEFAULT NULL AFTER approved_version_id`)
+      }
+      if (!existingColumns.has('superseded_reason')) {
+        await queryRun(`ALTER TABLE period_review_cases
+          ADD COLUMN superseded_reason VARCHAR(64) DEFAULT NULL AFTER superseded_by_case_id`)
+      }
+      const indexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'period_review_cases'
+          AND INDEX_NAME = 'idx_period_review_superseded'`)
+      if (!indexes.length) {
+        await queryRun(`CREATE INDEX idx_period_review_superseded
+          ON period_review_cases (superseded_by_case_id, status)`)
+      }
+
+      const legacyCases = await queryAll(`SELECT id FROM period_review_cases
+        WHERE period_type = 'monthly' AND trading_account_id = 0 AND status <> 'superseded'
+        ORDER BY id`)
+      for (const row of legacyCases) {
+        await withTransaction(async run => {
+          const [lockedRows] = await run(`SELECT * FROM period_review_cases
+            WHERE id = ? AND period_type = 'monthly' AND trading_account_id = 0
+              AND status <> 'superseded' FOR UPDATE`, [row.id])
+          const legacyCase = lockedRows[0]
+          if (!legacyCase) return
+          const [sourceAccounts] = await run(`SELECT DISTINCT daily.trading_account_id
+            FROM period_review_sources sources
+            JOIN period_review_cases daily ON daily.id = sources.source_period_case_id
+            WHERE sources.period_case_id = ? AND daily.period_type = 'daily'
+              AND daily.trading_account_id > 0
+            ORDER BY daily.trading_account_id`, [legacyCase.id])
+          const accountIds = sourceAccounts.map(item => Number(item.trading_account_id)).filter(id => id > 0)
+          if (!accountIds.length) return
+
+          let replacementCaseId = null
+          if (accountIds.length === 1) {
+            const targetAccountId = accountIds[0]
+            const [targets] = await run(`SELECT id FROM period_review_cases
+              WHERE period_type = 'monthly' AND period_key = ? AND user_id = ?
+                AND trading_account_id = ? AND strategy_id = ? AND status <> 'superseded'
+              ORDER BY CASE WHEN status = 'approved' THEN 0 WHEN current_version_id IS NOT NULL THEN 1 ELSE 2 END,
+                updated_at DESC, id DESC LIMIT 1 FOR UPDATE`, [legacyCase.period_key, legacyCase.user_id,
+              targetAccountId, legacyCase.strategy_id])
+            replacementCaseId = Number(targets[0]?.id || 0) || null
+            if (!replacementCaseId) {
+              const scope = ['monthly', legacyCase.period_key, legacyCase.user_id, targetAccountId, legacyCase.strategy_id].join(':')
+              await run(`UPDATE period_review_cases SET trading_account_id = ?, strategy_compatibility_hash = ?,
+                superseded_by_case_id = NULL, superseded_reason = NULL, updated_at = NOW() WHERE id = ?`,
+              [targetAccountId, crypto.createHash('sha256').update(scope).digest('hex'), legacyCase.id])
+              return
+            }
+          } else {
+            const placeholders = accountIds.map(() => '?').join(',')
+            const [targets] = await run(`SELECT id FROM period_review_cases
+              WHERE period_type = 'monthly' AND period_key = ? AND user_id = ?
+                AND trading_account_id IN (${placeholders}) AND strategy_id = ? AND status <> 'superseded'
+              ORDER BY CASE WHEN status = 'approved' THEN 0 WHEN current_version_id IS NOT NULL THEN 1 ELSE 2 END,
+                updated_at DESC, id DESC LIMIT 1 FOR UPDATE`, [legacyCase.period_key, legacyCase.user_id,
+              ...accountIds, legacyCase.strategy_id])
+            replacementCaseId = Number(targets[0]?.id || 0) || null
+          }
+
+          const now = beijingNow()
+          await run(`UPDATE period_review_cases SET status = 'superseded', strategy_compatibility_hash = NULL,
+            superseded_by_case_id = ?, superseded_reason = 'legacy_cross_account_monthly', updated_at = ?
+            WHERE id = ?`, [replacementCaseId, now, legacyCase.id])
+          await run(`UPDATE period_review_jobs SET status = 'skipped', progress_stage = 'skipped', stage_updated_at = ?,
+            last_error_code = 'superseded_by_account_scoped_review', lease_token = NULL, lease_expires_at = NULL,
+            next_attempt_at = NULL, completed_at = COALESCE(completed_at, ?), updated_at = ?
+            WHERE period_case_id = ? AND status IN ('queued', 'leased')`, [now, now, now, legacyCase.id])
+          await run(`UPDATE period_review_derivation_jobs SET status = 'superseded',
+            last_error_code = 'superseded_by_account_scoped_review', lease_token = NULL, lease_expires_at = NULL,
+            next_attempt_at = NULL, updated_at = ?
+            WHERE period_case_id = ? AND status IN ('queued', 'leased', 'paused')`, [now, legacyCase.id])
+        })
+      }
+    }
   }
 ]
 

@@ -638,7 +638,7 @@ async function eligibleDailyReviewRows(limit) {
 
 async function upsertMonthlyGroup(group, clock) {
   const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'monthly' AND period_key = ?
-    AND user_id = ? AND trading_account_id = ? AND strategy_id = ?
+    AND user_id = ? AND trading_account_id = ? AND strategy_id = ? AND status <> 'superseded'
     ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
   [group.periodKey, group.userId, group.tradingAccountId, group.strategyId])
   if (existingCase) {
@@ -1006,7 +1006,7 @@ function periodReviewContentForCase(reviewCase, content) {
 export async function listPeriodReviewCases(actor, { periodType = null, status = null, limit = 50, offset = 0, includePageInfo = false } = {}) {
   const access = periodReviewAccessScope(actor)
   const params = [access.userId, ...access.params]
-  let where = `WHERE ${access.sql}`
+  let where = `WHERE ${access.sql} AND cases.status <> 'superseded'`
   if (periodType) {
     if (!['daily', 'monthly'].includes(periodType)) throw new Error('invalid_review_period_type')
     where += ' AND cases.period_type = ?'; params.push(periodType)
@@ -1106,7 +1106,7 @@ export async function getPeriodReviewSummary(actor) {
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
     LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
       AND derivation.period_version_id = cases.approved_version_id
-    WHERE ${access.sql}`, [access.userId, ...access.params])
+    WHERE ${access.sql} AND cases.status <> 'superseded'`, [access.userId, ...access.params])
   const summary = { attention:0, unread:0, pending_confirmation:0, generating:0, failed:0,
     total:0, daily_total:0, monthly_total:0,
     daily_attention:0, monthly_attention:0, daily_pending:0, monthly_pending:0,
@@ -1180,7 +1180,7 @@ export async function editPeriodReviewCase({ periodCaseId, actor, content, expec
   const access = periodReviewAccessScope(actor)
   return withTransaction(async run => {
     const [rows] = await run(`SELECT cases.* FROM period_review_cases cases
-      WHERE cases.id = ? AND ${access.sql} FOR UPDATE`, [periodCaseId, ...access.params])
+      WHERE cases.id = ? AND ${access.sql} AND cases.status <> 'superseded' FOR UPDATE`, [periodCaseId, ...access.params])
     const reviewCase = rows[0]
     if (!reviewCase) throw new Error('period_review_not_found')
     if (!reviewCase.current_version_id || Number(reviewCase.current_version_id) !== Number(expectedVersionId)) throw new Error('period_review_version_conflict')
@@ -1203,7 +1203,7 @@ export async function confirmPeriodReviewCase({ periodCaseId, actor, versionId, 
   const access = periodReviewAccessScope(actor)
   return withTransaction(async run => {
     const [rows] = await run(`SELECT cases.* FROM period_review_cases cases
-      WHERE cases.id = ? AND ${access.sql} FOR UPDATE`, [periodCaseId, ...access.params])
+      WHERE cases.id = ? AND ${access.sql} AND cases.status <> 'superseded' FOR UPDATE`, [periodCaseId, ...access.params])
     const reviewCase = rows[0]
     if (!reviewCase) throw new Error('period_review_not_found')
     if (!reviewCase.current_version_id || Number(reviewCase.current_version_id) !== Number(versionId)) throw new Error('period_review_version_conflict')
@@ -1328,7 +1328,7 @@ export async function retryPeriodReviewCase(periodCaseId, actor) {
   const access = periodReviewAccessScope(actor)
   const result = await withTransaction(async run => {
     const [rows] = await run(`SELECT cases.* FROM period_review_cases cases
-      WHERE cases.id = ? AND ${access.sql} FOR UPDATE`, [periodCaseId, ...access.params])
+      WHERE cases.id = ? AND ${access.sql} AND cases.status <> 'superseded' FOR UPDATE`, [periodCaseId, ...access.params])
     const reviewCase = rows[0]
     if (!reviewCase) throw new Error('period_review_not_found')
     if (reviewCase.evidence_status !== 'complete') throw new Error('period_review_evidence_incomplete')
