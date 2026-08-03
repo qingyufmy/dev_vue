@@ -5,6 +5,7 @@
  */
 import { queryOne, queryAll, queryRun, withConnection, withTransaction, beijingNow } from './db.js'
 import crypto from 'node:crypto'
+import { terminalOffsetFromClockPairs } from './routes/ai/utils.js'
 
 export function applyPendingLifecycleSchema(schema) {
   return {
@@ -4606,6 +4607,88 @@ const migrations = [
             next_attempt_at = NULL, updated_at = ?
             WHERE period_case_id = ? AND status IN ('queued', 'leased', 'paused')`, [now, legacyCase.id])
         })
+      }
+    }
+  },
+  {
+    id: '159_terminal_event_clock_evidence',
+    async up() {
+      const additions = {
+        ai_signals:[
+          ['created_at_utc_msc', 'BIGINT DEFAULT NULL AFTER pending_ticket'],
+          ['terminal_timezone_offset_minutes', 'SMALLINT DEFAULT NULL AFTER created_at_utc_msc'],
+          ['terminal_clock_status', 'VARCHAR(32) DEFAULT NULL AFTER terminal_timezone_offset_minutes'],
+          ['terminal_clock_source', 'VARCHAR(64) DEFAULT NULL AFTER terminal_clock_status'],
+        ],
+        trade_audit_logs:[
+          ['trading_account_id', 'INT DEFAULT NULL AFTER status'],
+          ['created_at_utc_msc', 'BIGINT DEFAULT NULL AFTER trading_account_id'],
+          ['terminal_timezone_offset_minutes', 'SMALLINT DEFAULT NULL AFTER created_at_utc_msc'],
+          ['terminal_clock_status', 'VARCHAR(32) DEFAULT NULL AFTER terminal_timezone_offset_minutes'],
+          ['terminal_clock_source', 'VARCHAR(64) DEFAULT NULL AFTER terminal_clock_status'],
+        ],
+      }
+      for (const [table, columns] of Object.entries(additions)) {
+        const existing = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`, [table])
+        const names = new Set(existing.map(row => row.COLUMN_NAME))
+        for (const [name, definition] of columns) {
+          if (!names.has(name)) await queryRun(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`)
+        }
+        await queryRun(`UPDATE ${table}
+          SET created_at_utc_msc = TIMESTAMPDIFF(MICROSECOND, '1970-01-01 08:00:00', created_at) DIV 1000
+          WHERE created_at_utc_msc IS NULL AND created_at IS NOT NULL`)
+      }
+      const indexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'trade_audit_logs'
+          AND INDEX_NAME = 'idx_trade_audit_account_time'`)
+      if (!indexes.length) {
+        await queryRun(`CREATE INDEX idx_trade_audit_account_time
+          ON trade_audit_logs (user_id, trading_account_id, created_at_utc_msc)`)
+      }
+    }
+  },
+  {
+    id: '160_backfill_recent_signal_terminal_clock',
+    async up() {
+      const recent = await queryAll(`SELECT id,
+          COALESCE(
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.M5.klines[0].time_server_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.M15.klines[0].time_server_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.H1.klines[0].time_server_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.H4.klines[0].time_server_msc'))
+          ) AS server_0,
+          COALESCE(
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.M5.klines[0].time_utc_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.M15.klines[0].time_utc_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.H1.klines[0].time_utc_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.H4.klines[0].time_utc_msc'))
+          ) AS utc_0,
+          COALESCE(
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.M5.klines[1].time_server_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.M15.klines[1].time_server_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.H1.klines[1].time_server_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.H4.klines[1].time_server_msc'))
+          ) AS server_1,
+          COALESCE(
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.M5.klines[1].time_utc_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.M15.klines[1].time_utc_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.H1.klines[1].time_utc_msc')),
+            JSON_UNQUOTE(JSON_EXTRACT(market_data_json, '$.strategy_context.timeframes.H4.klines[1].time_utc_msc'))
+          ) AS utc_1
+        FROM (SELECT id, market_data_json FROM ai_signals
+          WHERE terminal_timezone_offset_minutes IS NULL AND JSON_VALID(market_data_json)
+          ORDER BY id DESC LIMIT 500) recent`)
+      for (const row of recent) {
+        const offset = terminalOffsetFromClockPairs([
+          { time_server_msc:row.server_0, time_utc_msc:row.utc_0 },
+          { time_server_msc:row.server_1, time_utc_msc:row.utc_1 },
+        ])
+        if (offset == null) continue
+        await queryRun(`UPDATE ai_signals SET terminal_timezone_offset_minutes = ?,
+          terminal_clock_status = 'snapshot_pair_verified',
+          terminal_clock_source = 'legacy_signal_market_snapshot'
+          WHERE id = ? AND terminal_timezone_offset_minutes IS NULL`, [offset, row.id])
       }
     }
   }

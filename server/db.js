@@ -503,6 +503,10 @@ export async function initDB() {
       pending_valid_until DATETIME DEFAULT NULL,
       order_state VARCHAR(12) DEFAULT NULL,
       pending_ticket VARCHAR(32) DEFAULT NULL,
+      created_at_utc_msc BIGINT DEFAULT NULL,
+      terminal_timezone_offset_minutes SMALLINT DEFAULT NULL,
+      terminal_clock_status VARCHAR(32) DEFAULT NULL,
+      terminal_clock_source VARCHAR(64) DEFAULT NULL,
       created_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -514,6 +518,11 @@ export async function initDB() {
       request_json TEXT NOT NULL,
       result_json TEXT NOT NULL,
       status VARCHAR(20) NOT NULL,
+      trading_account_id INT DEFAULT NULL,
+      created_at_utc_msc BIGINT DEFAULT NULL,
+      terminal_timezone_offset_minutes SMALLINT DEFAULT NULL,
+      terminal_clock_status VARCHAR(32) DEFAULT NULL,
+      terminal_clock_source VARCHAR(64) DEFAULT NULL,
       created_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 

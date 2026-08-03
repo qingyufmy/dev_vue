@@ -5,7 +5,7 @@ const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'ut
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
 
 describe('dashboard current-position entry markers', () => {
-  it('draws current-symbol entries as gold points without persistent price lines or labels', () => {
+  it('draws current-symbol entries as explicit gold arrows without persistent price lines or labels', () => {
     const syncStart = app.indexOf('function syncKlinePositionEntries()')
     const syncEnd = app.indexOf('function handleKlinePositionCrosshair', syncStart)
     const syncBlock = app.slice(syncStart, syncEnd)
@@ -14,11 +14,16 @@ describe('dashboard current-position entry markers', () => {
     expect(app).toContain('klinePositionMatchesSymbol(position, symbol)')
     expect(app).toContain("const KLINE_POSITION_ENTRY_COLOR = '#d4af37'")
     expect(syncBlock).toContain('lineVisible:false')
-    expect(syncBlock).toContain('pointMarkersVisible:true')
+    expect(syncBlock).toContain('pointMarkersVisible:false')
     expect(syncBlock).toContain('lastValueVisible:false')
     expect(syncBlock).toContain('if (!start.visible) continue;')
-    expect(syncBlock).toContain('series.setData([{ time:_klineCandles[start.index].time, value:price }])')
-    expect(syncBlock).not.toContain('setMarkers(')
+    expect(syncBlock).toContain('series.setData([{ time:markerTime, value:price }])')
+    expect(syncBlock).toContain('series.setMarkers([{')
+    expect(syncBlock).toContain("position:'inBar'")
+    expect(syncBlock).toContain('color:KLINE_POSITION_ENTRY_COLOR')
+    expect(syncBlock).toContain("shape:buy ? 'arrowUp' : 'arrowDown'")
+    expect(syncBlock).toContain('size:1.5')
+    expect(syncBlock).not.toContain('pointMarkersRadius')
     expect(syncBlock).not.toContain('LineStyle.Dashed')
     expect(syncBlock).not.toContain('title:`${direction}入场`')
     expect(app).toContain('syncKlinePositionEntries();')

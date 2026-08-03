@@ -106,6 +106,33 @@ export function utcToMt5Time(str, timezoneOffsetMinutes = null) {
   } catch { return str }
 }
 
+export function utcMscToTerminalTime(utcMsc, timezoneOffsetMinutes = null) {
+  const timestamp = Number(utcMsc)
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return null
+  if (timezoneOffsetMinutes === null || timezoneOffsetMinutes === undefined || timezoneOffsetMinutes === '') return null
+  const offset = Number(timezoneOffsetMinutes)
+  if (!Number.isInteger(offset) || offset < -720 || offset > 840) return null
+  const shifted = new Date(timestamp + offset * 60_000)
+  if (!Number.isFinite(shifted.getTime())) return null
+  return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth()+1)}-${pad(shifted.getUTCDate())} ${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:${pad(shifted.getUTCSeconds())}`
+}
+
+export function terminalOffsetFromClockPairs(pairs = []) {
+  const offsets = []
+  for (const pair of Array.isArray(pairs) ? pairs : []) {
+    const serverMsc = Number(pair?.time_server_msc)
+    const utcMsc = Number(pair?.time_utc_msc)
+    if (!Number.isFinite(serverMsc) || !Number.isFinite(utcMsc) || serverMsc <= 0 || utcMsc <= 0) continue
+    const rawMinutes = (serverMsc - utcMsc) / 60_000
+    const offset = Math.round(rawMinutes)
+    if (!Number.isInteger(offset) || offset < -720 || offset > 840
+      || Math.abs(rawMinutes - offset) > (1000 / 60_000)) continue
+    offsets.push(offset)
+  }
+  if (offsets.length < 2 || offsets.some(value => value !== offsets[0])) return null
+  return offsets[0]
+}
+
 export function signalTtlSeconds(timeframe) {
   const map = { M1: 20, M5: 45, M15: 90, M30: 180, H1: 300, H4: 900, D1: 1800 }
   return map[String(timeframe).toUpperCase()] || 120
@@ -128,11 +155,23 @@ export function attachSignalTiming(signal, timezoneOffsetMinutes = null) {
     ? (() => { const d = parseBeijing(signal.created_at); if (!d) return null; d.setSeconds(d.getSeconds() + ttl); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` })()
     : null
   signal.is_stale = age > ttl
-  const offset = timezoneOffsetMinutes === null || timezoneOffsetMinutes === undefined || timezoneOffsetMinutes === ''
+  const storedClock = {
+    timezone_offset_minutes:signal.terminal_timezone_offset_minutes,
+    clock_status:signal.terminal_clock_status,
+  }
+  const storedOffset = storedClock.timezone_offset_minutes === null
+    || storedClock.timezone_offset_minutes === undefined || storedClock.timezone_offset_minutes === ''
+    ? Number.NaN : Number(storedClock.timezone_offset_minutes)
+  const storedStatus = String(storedClock.clock_status || '').trim().toLowerCase()
+  const storedTrusted = Number.isInteger(storedOffset) && storedOffset >= -720 && storedOffset <= 840
+    && Boolean(storedStatus) && !['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(storedStatus)
+  const fallbackOffset = timezoneOffsetMinutes === null || timezoneOffsetMinutes === undefined || timezoneOffsetMinutes === ''
     ? Number.NaN : Number(timezoneOffsetMinutes)
+  const offset = storedTrusted ? storedOffset : fallbackOffset
   signal.mt5_timezone_offset_minutes = Number.isInteger(offset) && offset >= -720 && offset <= 840
     ? offset : null
-  signal.created_at_mt5 = utcToMt5Time(signal.created_at, signal.mt5_timezone_offset_minutes)
+  signal.created_at_mt5 = utcMscToTerminalTime(signal.created_at_utc_msc, signal.mt5_timezone_offset_minutes)
+    || utcToMt5Time(signal.created_at, signal.mt5_timezone_offset_minutes)
   signal.expires_at_mt5 = utcToMt5Time(signal.expires_at, signal.mt5_timezone_offset_minutes)
   return signal
 }

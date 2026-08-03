@@ -4,7 +4,7 @@ import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing
 import { ADMIN_CACHE_TTL_MS, CORS_ORIGINS } from './config.js'
 import { isCorsOriginAllowed } from './cors-origin.js'
 import { getRedis, isRedisAvailable } from './redis.js'
-import { stripBrokerSuffix, utcToMt5Time } from './routes/ai/utils.js'
+import { stripBrokerSuffix, utcMscToTerminalTime } from './routes/ai/utils.js'
 import { getRegisteredAutoSchedulerState } from './routes/ai/runtime-state-registry.js'
 import { weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
@@ -858,17 +858,6 @@ export async function getEffectivePlatformMarketClockState(userId, tradingAccoun
     || Date.now() - defaultObserverClockLastRefresh > 60_000) await refreshDefaultObserverClock()
   return getPlatformMarketClockState(userId, tradingAccountId, terminalInstanceId)
 }
-
-async function getLabTimezoneOffsetMinutes(userId, tradingAccountId = null) {
-  const clock = await getEffectivePlatformMarketClockState(userId, tradingAccountId)
-  if (clock.timezone_offset_minutes == null || clock.timezone_offset_minutes === '') return null
-  const offset = Number(clock.timezone_offset_minutes)
-  const status = String(clock.clock_status || '').trim().toLowerCase()
-  if (!Number.isInteger(offset) || offset < -720 || offset > 840 || !status
-    || ['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(status)) return null
-  return offset
-}
-
 
 export function initBridgeWS(server) {
   // Cache admin userId at startup
@@ -2188,8 +2177,7 @@ async function handleBrowserCommand(ws, userId, msg) {
             item.pending_actions = await loadSignalPendingActions(detailUserId, signalId, delivery.execution_result)
             item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
             if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
-            ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes(
-              detailUserId, delivery.trading_account_id))
+            ai.attachSignalTiming(item)
             Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
               requesterUserId: userId, requesterRole: user?.role || 'user',
             })))
@@ -2212,7 +2200,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           item.pending_actions = await loadSignalPendingActions(detailUserId, signalId, item.execution_result)
           item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
           if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
-          ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes(detailUserId))
+          ai.attachSignalTiming(item)
           Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
             requesterUserId: userId, requesterRole: user?.role || 'user',
           })))
@@ -2260,12 +2248,12 @@ async function handleBrowserCommand(ws, userId, msg) {
         const countOldSub = `(SELECT ${countColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${observerOldFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
         const countDelivSub = `(SELECT ${countColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${observerDeliveryFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         // Full subquery for data (exclude market_data_json TEXT for performance)
-        const selectCols = 'id, user_id, trading_account_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, approved_order_json, created_at, delivery_id, execution_status, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, pending_state, order_state, schema_version, decision_json'
-        const selectColsOld = 's.id, s.user_id, NULL AS trading_account_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, NULL as approved_order_json, s.created_at, NULL as delivery_id, NULL as execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.pending_state, s.order_state, s.schema_version, s.decision_json'
+        const selectCols = 'id, user_id, trading_account_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, approved_order_json, created_at, created_at_utc_msc, terminal_timezone_offset_minutes, terminal_clock_status, terminal_clock_source, delivery_id, execution_status, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, pending_state, order_state, schema_version, decision_json'
+        const selectColsOld = 's.id, s.user_id, NULL AS trading_account_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, NULL as approved_order_json, s.created_at, s.created_at_utc_msc, s.terminal_timezone_offset_minutes, s.terminal_clock_status, s.terminal_clock_source, NULL as delivery_id, NULL as execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.pending_state, s.order_state, s.schema_version, s.decision_json'
         const activeTradingAccountId = Number(observerContext?.channel?.trading_account_id)
         const activeTradingAccountSql = Number.isInteger(activeTradingAccountId) && activeTradingAccountId > 0
           ? String(activeTradingAccountId) : 'NULL'
-        const selectColsDeliv = `s.id, d.user_id, COALESCE(oi.trading_account_id, ${activeTradingAccountSql}) AS trading_account_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, d.approved_order_json, s.created_at, d.id as delivery_id, d.execution_status, s.entry_method, s.limit_price, s.stop_limit_price, COALESCE(d.pending_valid_until, s.pending_valid_until) AS pending_valid_until, d.pending_ticket, d.pending_state, s.order_state, s.schema_version, s.decision_json`
+        const selectColsDeliv = `s.id, d.user_id, COALESCE(oi.trading_account_id, ${activeTradingAccountSql}) AS trading_account_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, d.approved_order_json, s.created_at, s.created_at_utc_msc, s.terminal_timezone_offset_minutes, s.terminal_clock_status, s.terminal_clock_source, d.id as delivery_id, d.execution_status, s.entry_method, s.limit_price, s.stop_limit_price, COALESCE(d.pending_valid_until, s.pending_valid_until) AS pending_valid_until, d.pending_ticket, d.pending_state, s.order_state, s.schema_version, s.decision_json`
         const dataOldSub = `(SELECT ${selectColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${observerOldFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
         const dataDelivSub = `(SELECT ${selectColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id LEFT JOIN order_intents oi ON oi.id = d.order_intent_id WHERE d.user_id = ?${observerDeliveryFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         const oldParams = [queryUserId, ...oldSessionParam, ...observerStrategyParam, ...sharedParams]
@@ -2288,9 +2276,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         const hasMore = allRows.length > limit
         const sliced = allRows.slice(0, limit)
 
-        const accountOffsets = new Map(await Promise.all([...new Set(sliced
-          .map(row => Number(row.trading_account_id)).filter(id => id > 0))]
-          .map(async accountId => [accountId, await getLabTimezoneOffsetMinutes(queryUserId, accountId)])))
         const signals = sliced.map(row => {
           const item = { ...row }
           // Both subqueries already output unified columns: delivery_* fields are named as their final names.
@@ -2301,7 +2286,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           try { item.market_data = JSON.parse(item.market_data_json || '{}') } catch { item.market_data = {} }
           delete item.delivery_id
           item.is_executed = !!item.is_executed
-          ai.attachSignalTiming(item, accountOffsets.get(Number(item.trading_account_id)) ?? null)
+          ai.attachSignalTiming(item)
           return ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
             requesterUserId: userId, requesterRole: user?.role || 'user',
           }))
@@ -2462,10 +2447,14 @@ async function handleBrowserCommand(ws, userId, msg) {
           const item = { ...row }
           try { item.request = JSON.parse(item.request_json) } catch { item.request = {} }
           try { item.result = JSON.parse(item.result_json) } catch { item.result = {} }
-          const accountId = Number(item.request?.trading_account_id
-            ?? item.result?.trading_account_id ?? item.result?.account_id)
-          item.created_at_mt5 = utcToMt5Time(item.created_at,
-            accountId > 0 ? await getLabTimezoneOffsetMinutes(userId, accountId) : null)
+          const snapshotClock = {
+            timezone_offset_minutes:item.terminal_timezone_offset_minutes,
+            clock_status:item.terminal_clock_status,
+          }
+          if (trustedTerminalClock(snapshotClock)) {
+            item.created_at_mt5 = utcMscToTerminalTime(item.created_at_utc_msc,
+              snapshotClock.timezone_offset_minutes)
+          } else item.created_at_mt5 = null
           delete item.request_json
           delete item.result_json
           return localizeAuditRow(item)

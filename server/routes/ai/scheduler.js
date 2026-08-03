@@ -30,6 +30,7 @@ import {
   isPlatformMarketMaintenancePaused,
   isPrivateInferenceMaintenancePaused,
 } from '../../bridge-v3/update-maintenance-registry.js'
+import { trustedTerminalClock } from './terminal-clock.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -1592,6 +1593,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       return { status: 'error', reason: 'lock_lost' }
     }
     const createdAt = beijingNow()
+    const createdAtUtcMsc = Date.now()
+    const marketClock = trustedTerminalClock(ratesResp.market_meta || {}) ? ratesResp.market_meta : null
+    const terminalOffsetMinutes = marketClock ? Math.trunc(Number(marketClock.timezone_offset_minutes)) : null
+    const terminalClockStatus = marketClock ? String(marketClock.clock_status || '').trim().toLowerCase() : null
+    const terminalClockSource = marketClock ? String(marketClock.clock_source || marketClock.source || 'market_snapshot') : null
     const marketJson = JSON.stringify(market)
     const decision = normalizeDecisionFields(signal)
     const decisionJson = JSON.stringify(decision)
@@ -1603,8 +1609,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
           recommended_volume, position_size_tier, position_size_factor, position_size_reason,
           analysis, reasoning, stop_loss_price, take_profit_1_price,
           take_profit_2_price, take_profit_3_price, recommended_take_profit_tier, market_data_json, token_count, ai_model, ttl_seconds, is_executed, created_at,
+          created_at_utc_msc, terminal_timezone_offset_minutes, terminal_clock_status, terminal_clock_source,
           entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         isPrivate ? inferenceUserId : 0, 0, promptTypeId, signalSource, signalSource, symbol, primaryTf,
         signal.signal_type, signal.confidence, signal.recommended_volume,
@@ -1612,6 +1619,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         signal.analysis, signal.reasoning, signal.stop_loss_price,
         signal.take_profit_1_price, signal.take_profit_2_price, signal.take_profit_3_price, signal.recommended_take_profit_tier || null,
         marketJson, tokenCount, config.model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
+        createdAtUtcMsc, terminalOffsetMinutes, terminalClockStatus, terminalClockSource,
         signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null,
         SIGNAL_SCHEMA_VERSION, decisionJson
       ])
@@ -1698,6 +1706,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     signal.symbol = symbol
     signal.timeframe = primaryTf
     signal.created_at = createdAt
+    signal.created_at_utc_msc = createdAtUtcMsc
+    signal.terminal_timezone_offset_minutes = terminalOffsetMinutes
+    signal.terminal_clock_status = terminalClockStatus
+    signal.terminal_clock_source = terminalClockSource
     signal.market_data = market
     signal.is_executed = false
     signal.config_id = 0
@@ -1706,7 +1718,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     signal = attachSignalPresentation({ ...signal, ...decision, decision_json: decisionJson })
     signal.prompt_type_id = promptTypeId
     signal.ai_model = config.model_name || 'deepseek-chat'
-    attachSignalTiming(signal, ratesResp.market_meta?.timezone_offset_minutes)
+    attachSignalTiming(signal)
     l(`shared signal #${signalId} saved`)
 
     if (inferenceWeeklyWindow()) {

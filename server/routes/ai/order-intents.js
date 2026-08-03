@@ -536,13 +536,17 @@ export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit
             ? 'order_intent_reconciled_broker_reject'
             : 'order_intent_reconciled_not_found'
           await run(`INSERT INTO trade_audit_logs
-            (user_id, action, symbol, request_json, result_json, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+            (user_id, action, symbol, request_json, result_json, status,
+              trading_account_id, created_at_utc_msc, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
             current.user_id, auditAction, current.symbol || null,
-            JSON.stringify({ order_intent_id:current.id, bridge_command_ref:current.bridge_command_ref }),
+            JSON.stringify({ order_intent_id:current.id, bridge_command_ref:current.bridge_command_ref,
+              trading_account_id:current.trading_account_id || null }),
             JSON.stringify({ complete:true, lookback_seconds:reconciledResult.lookback_seconds,
               delivery_ids:absentDeliveries.map(item => item.id) }),
             terminalStatus,
+            current.trading_account_id || null,
+            Date.now(),
             beijingNow(),
           ])
           resolved += 1
@@ -629,11 +633,15 @@ export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit
         [pendingState, beijingNow(), beijingNow(), intent.id])
       }
       await run(`INSERT INTO trade_audit_logs
-        (user_id, action, symbol, request_json, result_json, status, created_at)
-        VALUES (?, 'order_intent_reconciled', ?, ?, ?, 'success', ?)`, [
+        (user_id, action, symbol, request_json, result_json, status,
+          trading_account_id, created_at_utc_msc, created_at)
+        VALUES (?, 'order_intent_reconciled', ?, ?, ?, 'success', ?, ?, ?)`, [
         current.user_id, current.symbol || null,
-        JSON.stringify({ order_intent_id:current.id, bridge_command_ref:current.bridge_command_ref }),
+        JSON.stringify({ order_intent_id:current.id, bridge_command_ref:current.bridge_command_ref,
+          trading_account_id:current.trading_account_id || null }),
         JSON.stringify({ ticket:String(ticket), kind:foundKind, delivery_ids:recoveredDeliveries.map(item => item.id) }),
+        current.trading_account_id || null,
+        Date.now(),
         beijingNow(),
       ])
       resolved += 1

@@ -19,6 +19,7 @@ import { subscriptionAllowsExecution, subscriptionAllowsInference } from './subs
 import { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
+import { auditTradingAccountId, buildAuditClockSnapshot } from './audit-clock.js'
 
 export { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
@@ -117,13 +118,58 @@ export function buildBridgeOrderCall(request) {
   }
 }
 
+async function resolveAuditAccountClock(userId, requestedAccountId = null) {
+  const numericUserId = Number(userId)
+  if (!Number.isInteger(numericUserId) || numericUserId <= 0) return { tradingAccountId:null, clock:null }
+  let tradingAccountId = Number(requestedAccountId)
+  if (!Number.isInteger(tradingAccountId) || tradingAccountId <= 0) {
+    const accounts = (await queryAll(`SELECT id FROM trading_accounts
+      WHERE user_id = ? AND is_deleted = 0 ORDER BY updated_at DESC, id DESC LIMIT 2`, [numericUserId])) || []
+    if (accounts.length !== 1) return { tradingAccountId:null, clock:null }
+    tradingAccountId = Number(accounts[0].id)
+  }
+  const accountClock = await queryOne(`SELECT accounts.id AS trading_account_id,
+      accounts.broker_server, accounts.login_account,
+      sources.timezone_offset_minutes, sources.clock_status,
+      UNIX_TIMESTAMP(sources.last_calibrated_at) * 1000 AS last_calibrated_at_utc_msc
+    FROM trading_accounts accounts
+    LEFT JOIN market_data_sources sources ON sources.bridge_user_id = accounts.user_id
+      AND UPPER(COALESCE(sources.broker_server, '')) = UPPER(accounts.broker_server)
+      AND CAST(COALESCE(sources.account_login, 0) AS CHAR) = CAST(accounts.login_account AS CHAR)
+    WHERE accounts.id = ? AND accounts.user_id = ? AND accounts.is_deleted = 0
+    ORDER BY sources.last_calibrated_at DESC, sources.id DESC LIMIT 1`, [tradingAccountId, numericUserId])
+  if (!accountClock) return { tradingAccountId:null, clock:null }
+  let clock = accountClock
+  if (!trustedTerminalClock(clock)) {
+    const observerClock = await getDefaultObserverSourceClock().catch(() => null)
+    clock = applyDefaultObserverClockBootstrap(accountClock, observerClock)
+  }
+  return { tradingAccountId, clock:trustedTerminalClock(clock) ? clock : null }
+}
+
+export async function resolveAuditClockSnapshot(userId, request = {}, result = {}, createdAtUtcMsc = Date.now()) {
+  const payloadAccountId = auditTradingAccountId(request, result)
+  const account = await resolveAuditAccountClock(userId, payloadAccountId)
+  return buildAuditClockSnapshot({
+    request, result, accountClock:account.clock,
+    tradingAccountId:payloadAccountId || account.tradingAccountId,
+    createdAtUtcMsc,
+  })
+}
+
 export async function insertAudit(db, userId, action, symbol, request, result, status) {
   if (shouldSkipHoldAudit(request, result, status)) return false
   const record = prepareAuditRecord(action, request, result, status)
+  const createdAtUtcMsc = Date.now()
+  const clock = await resolveAuditClockSnapshot(userId, request, result, createdAtUtcMsc)
   await queryRun(`
-    INSERT INTO trade_audit_logs(user_id, action, symbol, request_json, result_json, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `, [userId, record.action, symbol || null, JSON.stringify(record.request), JSON.stringify(record.result), record.status, beijingNow()])
+    INSERT INTO trade_audit_logs(user_id, action, symbol, request_json, result_json, status,
+      trading_account_id, created_at_utc_msc, terminal_timezone_offset_minutes,
+      terminal_clock_status, terminal_clock_source, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [userId, record.action, symbol || null, JSON.stringify(record.request), JSON.stringify(record.result), record.status,
+    clock.trading_account_id, clock.created_at_utc_msc, clock.terminal_timezone_offset_minutes,
+    clock.terminal_clock_status, clock.terminal_clock_source, beijingNow()])
   return true
 }
 

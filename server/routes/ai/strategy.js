@@ -829,6 +829,11 @@ export async function handleAnalyze(userId, params) {
   }
 
   const createdAt = beijingNow()
+  const createdAtUtcMsc = Date.now()
+  const marketClock = trustedTerminalClock(ratesResp.market_meta || {}) ? ratesResp.market_meta : null
+  const terminalOffsetMinutes = marketClock ? Math.trunc(Number(marketClock.timezone_offset_minutes)) : null
+  const terminalClockStatus = marketClock ? String(marketClock.clock_status || '').trim().toLowerCase() : null
+  const terminalClockSource = marketClock ? String(marketClock.clock_source || marketClock.source || 'market_snapshot') : null
   const marketJson = JSON.stringify(market)
   const decision = normalizeDecisionFields(signal)
   const decisionJson = JSON.stringify(decision)
@@ -839,14 +844,16 @@ export async function handleAnalyze(userId, params) {
       position_size_tier, position_size_factor, position_size_reason,
       analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier,
       market_data_json, token_count, ai_model, ttl_seconds, created_at,
+      created_at_utc_msc, terminal_timezone_offset_minutes, terminal_clock_status, terminal_clock_source,
       entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json)
-      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [userId, Number(strategy.id), session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.position_size_tier || null, signal.position_size_factor ?? null, signal.position_size_reason || null,
         signal.analysis, signal.reasoning, signal.stop_loss_price || null,
         signal.take_profit_1_price || null, signal.take_profit_2_price || null, signal.take_profit_3_price || null,
         signal.recommended_take_profit_tier || null,
         marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
+        createdAtUtcMsc, terminalOffsetMinutes, terminalClockStatus, terminalClockSource,
         signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null,
         SIGNAL_SCHEMA_VERSION, decisionJson])
     const snapshotId = await persistInferenceSnapshotTx(run, {
@@ -901,9 +908,13 @@ export async function handleAnalyze(userId, params) {
   signal.user_id = userId
   signal.timeframe = primaryTf
   signal.created_at = createdAt
+  signal.created_at_utc_msc = createdAtUtcMsc
+  signal.terminal_timezone_offset_minutes = terminalOffsetMinutes
+  signal.terminal_clock_status = terminalClockStatus
+  signal.terminal_clock_source = terminalClockSource
   signal.market_data = market
   signal.is_executed = false
-  attachSignalTiming(signal, ratesResp.market_meta?.timezone_offset_minutes)
+  attachSignalTiming(signal)
   signal = attachSignalPresentation({ ...signal, ...decision, decision_json: decisionJson })
 
   // Push new signal notification to browser

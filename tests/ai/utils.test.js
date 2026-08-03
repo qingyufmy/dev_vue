@@ -4,7 +4,7 @@ import {
   parseTimeframeTags, parseLegacyTimeframeTags, stripTimeframeTags, stripStrategyControlTags,
   signalTtlSeconds, signalAgeSeconds, attachSignalTiming,
   timeframeIntervalMs,
-  compactRates, utcToMt5Time,
+  compactRates, terminalOffsetFromClockPairs, utcMscToTerminalTime, utcToMt5Time,
   aiFailureHold, parseJsonObject,
   DEFAULT_PROMPT, STRATEGY_TIMEFRAME_COUNTS
 } from '../../server/routes/ai/utils.js'
@@ -170,6 +170,36 @@ describe('utcToMt5Time', () => {
 
   it('null 返回 null', () => {
     expect(utcToMt5Time(null)).toBe(null)
+  })
+})
+
+describe('utcMscToTerminalTime', () => {
+  it('derives event terminal time from canonical UTC and the frozen event offset', () => {
+    expect(utcMscToTerminalTime(Date.UTC(2026, 7, 3, 8, 11, 49), 180))
+      .toBe('2026-08-03 11:11:49')
+  })
+
+  it('fails closed when terminal clock evidence is missing', () => {
+    expect(utcMscToTerminalTime(Date.UTC(2026, 7, 3, 8, 11, 49))).toBeNull()
+  })
+})
+
+describe('terminalOffsetFromClockPairs', () => {
+  it('recovers a frozen terminal offset only from two consistent UTC/server pairs', () => {
+    expect(terminalOffsetFromClockPairs([
+      { time_utc_msc:1_000_000, time_server_msc:11_800_000 },
+      { time_utc_msc:2_000_000, time_server_msc:12_800_000 },
+    ])).toBe(180)
+  })
+
+  it('rejects conflicting or incomplete clock evidence', () => {
+    expect(terminalOffsetFromClockPairs([
+      { time_utc_msc:1_000_000, time_server_msc:11_800_000 },
+      { time_utc_msc:2_000_000, time_server_msc:9_200_000 },
+    ])).toBeNull()
+    expect(terminalOffsetFromClockPairs([
+      { time_utc_msc:1_000_000, time_server_msc:11_800_000 },
+    ])).toBeNull()
   })
 })
 

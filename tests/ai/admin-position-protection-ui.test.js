@@ -44,6 +44,10 @@ describe('admin position protection UI contract', () => {
     expect(app).toContain('positionProtectionPriceLabel(currentStopLoss)')
     expect(app).toContain('positionProtectionSubmitLabel").textContent = "正在保存…"')
     expect(css).toContain('.position-protection-field input[aria-invalid="true"]')
+    expect(css).toContain('.position-protection-sync-option { position:relative; display:flex;')
+    expect(css).toContain('.position-protection-switch { position:relative; flex:0 0 42px;')
+    expect(css).toContain('.position-protection-sync-option:has(input:checked)')
+    expect(css).not.toContain('grid-template-columns:1px 42px minmax(0,1fr)')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
 

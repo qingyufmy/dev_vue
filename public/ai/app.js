@@ -522,8 +522,16 @@ function compactTimeHtml(value) {
   return `<span class="time-cell"><span class="num">${escapeHtml(parts.time)}</span>${parts.badge ? `<span class="date-badge">${escapeHtml(parts.badge)}</span>` : ""}</span>`;
 }
 
+function compactTerminalTimeText(value) {
+  return value ? compactTimeText(value) : "时间待终端校准";
+}
+
+function compactTerminalTimeHtml(value) {
+  return value ? compactTimeHtml(value) : '<span class="terminal-time-pending">时间待终端校准</span>';
+}
+
 function signalDisplayTime(signal) {
-  return formatTime(signal?.created_at_mt5 || signal?.created_at);
+  return signal?.created_at_mt5 ? formatTime(signal.created_at_mt5) : "时间待终端校准";
 }
 
 function profitClass(value) {
@@ -2136,34 +2144,7 @@ function handleBridgeData(msg) {
         }, 500);
       }
     }
-    // Update existing rows
-    for (const pos of msg.positions) {
-      const closeBtn = document.querySelector(`[data-close-ticket="${pos.ticket}"]`);
-      if (closeBtn) {
-        const row = closeBtn.closest('tr');
-        if (row) {
-          row.setAttribute('data-ticket', pos.ticket);
-          const cells = row.querySelectorAll('td');
-          if (cells[5]) cells[5].textContent = fmt(pos.price_current);
-          if (cells[9]) {
-            cells[9].textContent = fmt(pos.profit);
-            cells[9].className = `num ${profitClass(pos.profit)}`;
-          }
-        }
-      }
-      const dashRows = document.querySelectorAll('#dashboardPositionsBody tr');
-      for (const row of dashRows) {
-        const ticketCell = row.querySelector('td:first-child');
-        if (ticketCell && ticketCell.textContent.trim() === String(pos.ticket)) {
-          const cells = row.querySelectorAll('td');
-          if (cells[5]) cells[5].textContent = fmt(pos.price_current);
-          if (cells[7]) {
-            cells[7].textContent = fmt(pos.profit);
-            cells[7].className = `num ${profitClass(pos.profit)}`;
-          }
-        }
-      }
-    }
+    patchPositionLiveCells(msg.positions);
   }
   _maybeRefreshSignal();
 }
@@ -2193,7 +2174,7 @@ async function flushBridgeDataRefresh() {
   try {
     const refreshes = [];
     if (streams.has('account')) refreshes.push(loadAccount());
-    if (streams.has('positions')) refreshes.push(loadPositions({ refreshSignalTickets:false }));
+    if (streams.has('positions')) refreshes.push(loadPositions({ refreshSignalTickets:false, liveOnly:true }));
     await Promise.allSettled(refreshes);
   } finally {
     _bridgeDataRefreshInFlight = false;
@@ -3816,7 +3797,7 @@ function formatReviewEventTime(value, offsetMinutes = null) {
   const offset = Number(offsetMinutes);
   if (!Number.isInteger(offset) || offset < -720 || offset > 840) return "时间待终端校准";
   const utcMs = Date.parse(`${String(value).replace(" ", "T")}+08:00`);
-  if (!Number.isFinite(utcMs)) return formatTime(value);
+  if (!Number.isFinite(utcMs)) return "时间待终端校准";
   return new Date(utcMs + offset * 60000).toISOString().slice(5, 19).replace("T", " ");
 }
 
@@ -3989,7 +3970,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
       ${periodReviewListBlock(isMonthly ? '跨日模式' : '逐笔判断', assessments.map(item => `${isMonthly ? item.period_case_id : item.outcome_id} · ${periodDecisionLabels[item.decision_quality] || item.decision_quality}：${item.summary || ''}`), isMonthly ? 'calendar-range' : 'receipt-text')}
       ${isMonthly ? periodReviewListBlock('长期记忆候选', (content.memory_candidates || []).map(item => item.lesson), 'brain-circuit') : periodReviewListBlock('缠论结构诊断', diagnostics.map(item => `${chanIssueLabels[item.issue_source] || item.issue_source}：${item.explanation || '无补充说明'}`), 'git-branch')}
     </section>
-    <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="database" size="15"></i><strong>证据来源与系统字段</strong><small>基础统计只读，避免修改后与真实成交数据不一致</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>账户 / 策略</span><strong>#${Number(review.trading_account_id || 0)} / #${Number(review.strategy_id || 0)}</strong></div><div><span>统计时区</span><strong>${escapeHtml(terminalTimezoneLabel(review.timezone_offset_minutes))}</strong></div><div><span>来源策略配置</span><strong>${escapeHtml(reviewStrategyVersions(review).length ? reviewStrategyVersions(review).map(value => `v${value}`).join('、') : '已记录')}</strong></div><div><span>来源数量</span><strong>${Number(review.source_count || 0)}</strong></div><div><span>生成时间</span><strong>${escapeHtml(current.created_at || '--')}</strong></div></div></div></details>
+    <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="database" size="15"></i><strong>证据来源与系统字段</strong><small>基础统计只读，避免修改后与真实成交数据不一致</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>账户 / 策略</span><strong>#${Number(review.trading_account_id || 0)} / #${Number(review.strategy_id || 0)}</strong></div><div><span>统计时区</span><strong>${escapeHtml(terminalTimezoneLabel(review.timezone_offset_minutes))}</strong></div><div><span>来源策略配置</span><strong>${escapeHtml(reviewStrategyVersions(review).length ? reviewStrategyVersions(review).map(value => `v${value}`).join('、') : '已记录')}</strong></div><div><span>来源数量</span><strong>${Number(review.source_count || 0)}</strong></div><div><span>生成时间</span><strong>${escapeHtml(formatReviewEventTime(current.created_at, review.timezone_offset_minutes))}</strong></div></div></div></details>
     <footer class="review-actions"><div class="review-action-context"><i data-lucide="shield-check" size="17"></i><span><strong>确认后才会进入记忆体系</strong><small>${isMonthly ? '月复盘负责压缩跨日模式并产生长期记忆候选' : '日复盘先形成短期策略记忆，月底再统一压缩'}</small></span></div>${editable ? `<div class="review-action-buttons"><button class="text-action" data-review-action="defer" data-version-id="${current.id}">稍后处理</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">标记有问题</button><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}"><i data-lucide="check" size="15"></i>确认并沉淀经验</button></div>` : '<span class="status-chip success">内容已锁定</span>'}</footer>` : ''}`;
   initIcons();
   if (current && Number(review.is_unread)) {
@@ -5353,21 +5334,28 @@ function syncKlinePositionEntries() {
     const series = _klineChart.addLineSeries({
       color:KLINE_POSITION_ENTRY_COLOR,
       lineVisible:false,
-      pointMarkersVisible:true,
-      pointMarkersRadius:4,
+      pointMarkersVisible:false,
       crosshairMarkerVisible:false,
       lastValueVisible:false,
       priceLineVisible:false,
       priceFormat:{ type:'price', precision:klinePositionPriceDigits(position), minMove:10 ** -klinePositionPriceDigits(position) },
     });
-    series.setData([{ time:_klineCandles[start.index].time, value:price }]);
+    const markerTime = _klineCandles[start.index].time;
+    series.setData([{ time:markerTime, value:price }]);
+    series.setMarkers([{
+      time:markerTime,
+      position:'inBar',
+      color:KLINE_POSITION_ENTRY_COLOR,
+      shape:buy ? 'arrowUp' : 'arrowDown',
+      size:1.5,
+    }]);
     _klinePositionSeries.push({ series, position, direction });
   }
   const container = document.getElementById('klineChart');
   if (container) {
     container.setAttribute('role', 'img');
     container.setAttribute('aria-label', markerSummary.length
-      ? `K 线图；当前品种持仓入场点使用金色标记：${markerSummary.join('；')}`
+      ? `K 线图；当前品种持仓入场点使用金色箭头标记：${markerSummary.join('；')}`
       : 'K 线图；当前品种没有持仓入场标记');
   }
   ensureKlinePositionTooltip();
@@ -5702,8 +5690,7 @@ function renderPositionRows(positions = [], withAction) {
     const type = String(position.type || "").toLowerCase();
     const directionLabel = type === "buy" ? "买入 多" : "卖出 空";
     const directionClass = type === "buy" ? "dir-buy" : type === "close" ? "dir-close" : "dir-sell";
-    const digits = Number(position.digits);
-    const priceDigits = Number.isFinite(digits) ? Math.min(Math.max(digits, 0), 6) : 2;
+    const priceDigits = positionPriceDigits(position);
     return `
       <tr data-ticket="${escapeHtml(position.ticket)}">
         ${ticketCell(position.ticket, tickets)}
@@ -5711,10 +5698,10 @@ function renderPositionRows(positions = [], withAction) {
         <td data-label="方向"><span class="${directionClass}">${directionLabel}</span></td>
         <td data-label="手数" class="num">${escapeHtml(volumeText(position.volume))}</td>
         <td data-label="开仓价" class="num">${fmt(position.price_open, priceDigits)}</td>
-        <td data-label="现价" class="num">${fmt(position.price_current, priceDigits)}</td>
+        <td data-label="现价" data-position-live="price" class="num">${fmt(position.price_current, priceDigits)}</td>
         <td data-label="开仓时间" class="num">${escapeHtml(formatTime(position.time))}</td>
         ${withAction ? `<td data-label="止损" class="num">${Number(position.sl) ? fmt(position.sl, priceDigits) : "--"}</td><td data-label="止盈" class="num">${Number(position.tp) ? fmt(position.tp, priceDigits) : "--"}</td>` : ""}
-        <td data-label="浮动盈亏" class="${profitClass(position.profit)}">${fmt(position.profit)}</td>
+        <td data-label="浮动盈亏" data-position-live="profit" class="num ${profitClass(position.profit)}">${fmt(position.profit)}</td>
         ${withAction ? `<td data-label="操作" class="position-row-actions-cell">
           ${state.user?.role === "admin" && Number(position.magic) === 234000 ? `<button class="btn small position-protection-edit" type="button" data-edit-protection-ticket="${escapeHtml(position.ticket)}"><i data-lucide="pencil" size="13"></i>编辑保护</button>` : ""}
           <button class="btn small" type="button" data-close-ticket="${escapeHtml(position.ticket)}"><i data-lucide="x" size="12"></i>平仓</button>
@@ -5722,6 +5709,63 @@ function renderPositionRows(positions = [], withAction) {
       </tr>
     `;
   }).join("");
+}
+
+function positionPriceDigits(position = {}) {
+  const digits = Number(position.digits);
+  return Number.isFinite(digits) ? Math.min(Math.max(digits, 0), 6) : 2;
+}
+
+function positionStructureSignature(position = {}) {
+  return JSON.stringify([
+    String(position.ticket ?? ""), String(position.symbol ?? ""), String(position.type ?? "").toLowerCase(),
+    Number(position.volume), Number(position.price_open), String(position.time ?? ""),
+    Number(position.sl), Number(position.tp), Number(position.magic), positionPriceDigits(position),
+  ]);
+}
+
+function positionStructureMatches(current = [], next = []) {
+  return current.length === next.length
+    && current.every((position, index) => positionStructureSignature(position) === positionStructureSignature(next[index]));
+}
+
+function patchPositionLiveCells(positions = []) {
+  const bodies = [$('positionsBody'), $('dashboardPositionsBody')].filter(Boolean);
+  if (!bodies.length) return false;
+  const rowMaps = bodies.map(body => new Map(
+    [...body.querySelectorAll('tr[data-ticket]')].map(row => [String(row.dataset.ticket), row])
+  ));
+  if (rowMaps.some(rows => rows.size !== positions.length)) return false;
+  for (const position of positions) {
+    const ticket = String(position.ticket);
+    const price = fmt(position.price_current, positionPriceDigits(position));
+    const profit = fmt(position.profit);
+    const profitClassName = `num ${profitClass(position.profit)}`;
+    for (const rows of rowMaps) {
+      const row = rows.get(ticket);
+      const priceCell = row?.querySelector('[data-position-live="price"]');
+      const profitCell = row?.querySelector('[data-position-live="profit"]');
+      if (!priceCell || !profitCell) return false;
+      if (priceCell.textContent !== price) priceCell.textContent = price;
+      if (profitCell.textContent !== profit) profitCell.textContent = profit;
+      if (profitCell.className !== profitClassName) profitCell.className = profitClassName;
+    }
+  }
+  return true;
+}
+
+function renderPositionTables(positions = [], { liveOnly = false } = {}) {
+  const patched = liveOnly && positionStructureMatches(state.positions || [], positions)
+    && patchPositionLiveCells(positions);
+  state.positions = positions;
+  syncKlinePositionEntries();
+  $('positionsEmpty').classList.toggle('hidden', positions.length > 0);
+  $('dashboardPositionsTable').classList.toggle('hidden', positions.length === 0);
+  if (patched) return 'live';
+  $('positionsBody').innerHTML = renderPositionRows(positions, true);
+  $('dashboardPositionsBody').innerHTML = renderPositionRows(positions, false);
+  initIcons();
+  return 'full';
 }
 
 async function loadSignalTickets() {
@@ -5746,18 +5790,12 @@ function ticketCell(ticket, signalTickets) {
   return `<td data-label="票号" class="num">${escapeHtml(ticket)}</td>`;
 }
 
-async function loadPositions({ refreshSignalTickets = true } = {}) {
+async function loadPositions({ refreshSignalTickets = true, liveOnly = false } = {}) {
   const requests = [wsApi("positions", {})];
   if (refreshSignalTickets) requests.push(loadSignalTickets());
   const [data] = await Promise.all(requests);
   const positions = data.positions || [];
-  state.positions = positions;
-  syncKlinePositionEntries();
-  $("positionsBody").innerHTML = renderPositionRows(positions, true);
-  $("dashboardPositionsBody").innerHTML = renderPositionRows(positions, false);
-  $("positionsEmpty").classList.toggle("hidden", positions.length > 0);
-  $("dashboardPositionsTable").classList.toggle("hidden", positions.length === 0);
-  initIcons();
+  renderPositionTables(positions, { liveOnly });
 }
 
 /* ---- Sidebar 观摩提示 ---- */
@@ -7972,7 +8010,7 @@ function buildHistoryItemHTML(signal) {
         </span>
         <span class="history-item-meta">
           <span>#${escapeHtml(signal.id)}</span>
-          <span>${escapeHtml(compactTimeText(signal?.created_at_mt5 || signal?.created_at))}</span>
+          <span>${escapeHtml(compactTerminalTimeText(signal?.created_at_mt5))}</span>
           <span>${confidence}</span>
           <span>${escapeHtml(status)}</span>
         </span>
@@ -8074,7 +8112,7 @@ function renderSignalRows() {
     return `
       <tr data-analysis-id="${escapeHtml(signal.id)}">
         <td class="num">${escapeHtml(signal.id)}</td>
-        <td>${compactTimeHtml(signal?.created_at_mt5 || signal?.created_at)}</td>
+        <td>${compactTerminalTimeHtml(signal?.created_at_mt5)}</td>
         <td>${escapeHtml(signal.symbol)}</td>
         <td><span class="signal-tf-badge ${dir === 'close' ? 'close-badge' : ''}">${dir === 'close' ? '持仓分析' : escapeHtml(signal.timeframe)}</span></td>
         <td><span class="tag ${dir}">${directionText(signal.signal_type)}</span></td>
@@ -9051,7 +9089,7 @@ function renderAuditRows() {
     const resultText = auditResultText(row);
     const reasonText = auditReasonText(row);
     return `<tr class="audit-row row-${statusTone}">
-      <td data-label="时间（${bridgePlatformLabel()}）">${compactTimeHtml(row?.created_at_mt5 || row?.created_at)}</td>
+      <td data-label="时间（${bridgePlatformLabel()}）">${compactTerminalTimeHtml(row?.created_at_mt5)}</td>
       <td data-label="动作"><span class="action-badge ${actionType}">${escapeHtml(auditActionText(row))}</span></td>
       <td data-label="品种"><strong class="num">${escapeHtml(row?.symbol || "--")}</strong></td>
       <td data-label="状态"><span class="audit-status ${statusTone}">${escapeHtml(auditStatusText(row))}</span></td>

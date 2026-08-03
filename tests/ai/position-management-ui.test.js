@@ -8,8 +8,8 @@ const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.me
 
 describe('AI position management workspace', () => {
   it('publishes the automatic-exit UI with a fresh asset cache key', () => {
-    expect(html).toContain('/ai/styles.css?v=20260803bridge300r3')
-    expect(html).toContain('/ai/app.js?v=20260803bridge300r3')
+    expect(html).toContain('/ai/styles.css?v=20260803terminaltime1')
+    expect(html).toContain('/ai/app.js?v=20260803terminaltime1')
   })
 
   it('keeps position management inside AI trader instead of adding another top-level module', () => {
@@ -81,6 +81,16 @@ describe('AI position management workspace', () => {
     expect(css).toContain('.management-confirmation-row')
     expect(css).toContain('@media (max-width: 760px)')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
+  })
+
+  it('patches only live price and profit cells while the position structure is stable', () => {
+    expect(app).toContain('data-position-live="price"')
+    expect(app).toContain('data-position-live="profit"')
+    expect(app).toContain('function positionStructureMatches')
+    expect(app).toContain('function patchPositionLiveCells')
+    expect(app).toContain("renderPositionTables(positions, { liveOnly })")
+    expect(app).toContain("loadPositions({ refreshSignalTickets:false, liveOnly:true })")
+    expect(app).toContain("if (patched) return 'live'")
   })
 
   it('shows timeline timestamps in MT5 time and explains rejected preconditions', () => {
