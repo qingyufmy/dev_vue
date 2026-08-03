@@ -138,8 +138,12 @@ export function signalTtlSeconds(timeframe) {
   return map[String(timeframe).toUpperCase()] || 120
 }
 
-export function signalAgeSeconds(createdAt) {
+export function signalAgeSeconds(createdAt, createdAtUtcMsc = null) {
   try {
+    const utcMsc = Number(createdAtUtcMsc)
+    if (Number.isFinite(utcMsc) && utcMsc > 0) {
+      return Math.max((Date.now() - utcMsc) / 1000, 0)
+    }
     const created = parseBeijing(createdAt)
     if (!created) return 999999
     return Math.max((Date.now() - created.getTime()) / 1000, 0)
@@ -148,7 +152,7 @@ export function signalAgeSeconds(createdAt) {
 
 export function attachSignalTiming(signal, timezoneOffsetMinutes = null) {
   const ttl = signalTtlSeconds(signal.timeframe || '')
-  const age = signalAgeSeconds(signal.created_at)
+  const age = signalAgeSeconds(signal.created_at, signal.created_at_utc_msc)
   signal.ttl_seconds = ttl
   signal.age_seconds = Math.round(age * 10) / 10
   signal.expires_at = signal.created_at

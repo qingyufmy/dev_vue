@@ -2264,7 +2264,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         // COUNT uses lightweight subquery (no TEXT); data uses full subquery (no market_data_json)
         const countSql = `SELECT COUNT(*) as total FROM (${countOldSub} UNION ALL ${countDelivSub}) t`
         const cursorWhere = Number.isInteger(beforeId) && beforeId > 0 ? ' WHERE t.id < ?' : ''
-        const dataSql = `SELECT ${selectCols} FROM (${dataOldSub} UNION ALL ${dataDelivSub}) t${cursorWhere} ORDER BY t.id DESC, t.created_at DESC LIMIT ? OFFSET ?`
+        const dataSql = `SELECT ${selectCols} FROM (${dataOldSub} UNION ALL ${dataDelivSub}) t${cursorWhere} ORDER BY t.created_at_utc_msc DESC, t.id DESC LIMIT ? OFFSET ?`
         const dataParams = [...oldParams, ...delivParams]
         if (cursorWhere) dataParams.push(beforeId)
         dataParams.push(limit + 1, cursorWhere ? 0 : offset)
@@ -2442,7 +2442,7 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'audit_logs': {
         // 审计日志只显示自己的数据
-        let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [userId])
+        let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY created_at_utc_msc DESC, id DESC LIMIT 100', [userId])
         const logs = await Promise.all(ownRows.map(async row => {
           const item = { ...row }
           try { item.request = JSON.parse(item.request_json) } catch { item.request = {} }

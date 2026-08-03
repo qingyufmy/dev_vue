@@ -121,6 +121,13 @@ describe('signalAgeSeconds', () => {
   it('无效日期返回大值', () => {
     expect(signalAgeSeconds('invalid')).toBe(999999)
   })
+
+  it('优先使用数据库中的 UTC 毫秒计算信号年龄', () => {
+    const createdAtUtcMsc = Date.now() - 10_000
+    const age = signalAgeSeconds('invalid', createdAtUtcMsc)
+    expect(age).toBeGreaterThanOrEqual(9)
+    expect(age).toBeLessThanOrEqual(11)
+  })
 })
 
 describe('attachSignalTiming', () => {
@@ -134,6 +141,11 @@ describe('attachSignalTiming', () => {
     expect(result.is_stale).toBe(false)
     expect(result.created_at_mt5).toBeNull()
     expect(attachSignalTiming({ timeframe:'M5', created_at:createdAt }, 180).created_at_mt5).toBeTruthy()
+  })
+
+  it('使用 UTC 毫秒判定新鲜度，不依赖旧北京时间字符串', () => {
+    const result = attachSignalTiming({ timeframe:'M5', created_at:'invalid', created_at_utc_msc:Date.now() - 5_000 })
+    expect(result.is_stale).toBe(false)
   })
 })
 

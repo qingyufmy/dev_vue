@@ -444,7 +444,9 @@ function syncTerminalTimezoneOffset(payload) {
   const hasClockEvidence = Object.prototype.hasOwnProperty.call(payload, "timezone_offset_minutes")
     || Object.prototype.hasOwnProperty.call(payload, "clock_status");
   const offset = terminalQuoteTimezoneOffsetMinutes(payload);
-  if (hasClockEvidence) state.mt5TimezoneOffsetMinutes = offset;
+  const previousOffset = state.mt5TimezoneOffsetMinutes;
+  if (hasClockEvidence && offset !== null) state.mt5TimezoneOffsetMinutes = offset;
+  if (previousOffset !== state.mt5TimezoneOffsetMinutes) scheduleTerminalTimeRefresh();
   return offset;
 }
 
@@ -471,6 +473,59 @@ const fmtUtc = (d) => {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
 };
+
+function validTerminalTimezoneOffsetMinutes(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const offset = Number(value);
+  return Number.isInteger(offset) && offset >= -840 && offset <= 840 ? offset : null;
+}
+
+function terminalEventTimezoneOffsetMinutes(record = {}, explicitOffset = null) {
+  const candidates = [
+    record?.terminal_timezone_offset_minutes,
+    record?.mt5_timezone_offset_minutes,
+    record?.timezone_offset_minutes,
+    explicitOffset,
+    state.mt5TimezoneOffsetMinutes,
+  ];
+  for (const candidate of candidates) {
+    const offset = validTerminalTimezoneOffsetMinutes(candidate);
+    if (offset !== null) return offset;
+  }
+  return null;
+}
+
+function terminalTimeFromUtcMsc(utcMsc, preferredOffset = null) {
+  const timestamp = Number(utcMsc);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+  const offset = validTerminalTimezoneOffsetMinutes(preferredOffset)
+    ?? validTerminalTimezoneOffsetMinutes(state.mt5TimezoneOffsetMinutes);
+  if (offset === null) return null;
+  return fmtUtc(new Date(timestamp + offset * 60_000));
+}
+
+function terminalEventTime(record = {}, utcField = "created_at_utc_msc", explicitOffset = null) {
+  const offset = terminalEventTimezoneOffsetMinutes(record, explicitOffset);
+  return terminalTimeFromUtcMsc(record?.[utcField], offset);
+}
+
+let _terminalTimeRefreshQueued = false;
+function scheduleTerminalTimeRefresh() {
+  if (_terminalTimeRefreshQueued) return;
+  _terminalTimeRefreshQueued = true;
+  queueMicrotask(() => {
+    _terminalTimeRefreshQueued = false;
+    if (state.dashboardSignal) updateSignalDisplay(state.dashboardSignal);
+    if (state.signals.length) {
+      renderAnalysisHistory(state.signals);
+      renderSignalRows();
+    }
+    if (state.auditRows.length) renderAuditRows();
+    if (state.positionManagementTasks.length) {
+      renderPositionManagementTasks(state.positionManagementTasks, state.positionManagementFilters);
+    }
+  });
+}
 
 const parseDate = (v) => {
   if (!v || v === "None" || v === "0" || v === "0.0") return null;
@@ -522,16 +577,18 @@ function compactTimeHtml(value) {
   return `<span class="time-cell"><span class="num">${escapeHtml(parts.time)}</span>${parts.badge ? `<span class="date-badge">${escapeHtml(parts.badge)}</span>` : ""}</span>`;
 }
 
-function compactTerminalTimeText(value) {
+function compactTerminalTimeText(record) {
+  const value = terminalEventTime(record);
   return value ? compactTimeText(value) : "时间待终端校准";
 }
 
-function compactTerminalTimeHtml(value) {
+function compactTerminalTimeHtml(record) {
+  const value = terminalEventTime(record);
   return value ? compactTimeHtml(value) : '<span class="terminal-time-pending">时间待终端校准</span>';
 }
 
 function signalDisplayTime(signal) {
-  return signal?.created_at_mt5 ? formatTime(signal.created_at_mt5) : "时间待终端校准";
+  return terminalEventTime(signal) || "时间待终端校准";
 }
 
 function profitClass(value) {
@@ -2418,7 +2475,6 @@ function handleHeartbeat(msg) {
   if (isLive) startLiveQuoteRefreshTimer();
   else {
     stopLiveQuoteRefreshTimer();
-    if (!usingFallback) state.mt5TimezoneOffsetMinutes = null;
   }
 
   // Bridge state changed → update role-based UI
@@ -2454,7 +2510,6 @@ function handleDisconnect(msg) {
     renderAutoAnalyzeBadge({ enabled: !!state.autoEnabled, paused_reason: state.autoEnabled ? 'user_bridge_offline' : 'disabled' });
   }
   state._lastGatewayLive = false;
-  state.mt5TimezoneOffsetMinutes = null;
   stopLiveQuoteRefreshTimer();
   void enterBridgeObserverMode({
     paused:state.bridgeRuntimeControl?.desired_state === "paused",
@@ -3793,12 +3848,10 @@ function periodReviewFailureText(value) {
 
 function formatReviewEventTime(value, offsetMinutes = null) {
   if (!value) return "--";
-  if (offsetMinutes === null || offsetMinutes === undefined || offsetMinutes === "") return "时间待终端校准";
-  const offset = Number(offsetMinutes);
-  if (!Number.isInteger(offset) || offset < -720 || offset > 840) return "时间待终端校准";
   const utcMs = Date.parse(`${String(value).replace(" ", "T")}+08:00`);
   if (!Number.isFinite(utcMs)) return "时间待终端校准";
-  return new Date(utcMs + offset * 60000).toISOString().slice(5, 19).replace("T", " ");
+  const terminalTime = terminalTimeFromUtcMsc(utcMs, offsetMinutes);
+  return terminalTime ? terminalTime.slice(5) : "时间待终端校准";
 }
 
 function terminalTimezoneLabel(offsetMinutes) {
@@ -6621,7 +6674,9 @@ function signalFreshness(signal) {
   // Compute age in real-time from created_at, not from stale snapshot
   const ttl = Number(signal.ttl_seconds);
   if (!Number.isFinite(ttl)) return signal.ttl_seconds ? `TTL ${signal.ttl_seconds}s` : "--";
-  const createdAt = parseBeijingServerTime(signal.created_at);
+  const canonicalUtcMsc = Number(signal.created_at_utc_msc);
+  const createdAt = Number.isFinite(canonicalUtcMsc) && canonicalUtcMsc > 0
+    ? canonicalUtcMsc : parseBeijingServerTime(signal.created_at);
   if (!createdAt || isNaN(createdAt)) return "--";
   const age = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
   const remaining = Math.max(0, Math.ceil(ttl - age));
@@ -6656,7 +6711,7 @@ function renderPendingSignalInfo(signal, market) {
   if (em === 'stop_limit' && signal.stop_limit_price) rows += `<div><span>限价</span><strong>${escapeHtml(priceDisplay(signal.stop_limit_price))}</strong></div>`
   if (em === 'stop_limit' && Number.isFinite(Number(market.latest_price))) rows += `<div><span>当前市价</span><strong>${escapeHtml(priceDisplay(market.latest_price))}</strong></div>`
   if (signal.pending_valid_until) {
-    const validDate = utcToMt5(signal.pending_valid_until, signal.mt5_timezone_offset_minutes)
+    const validDate = utcToMt5(signal.pending_valid_until, terminalEventTimezoneOffsetMinutes(signal))
     if (validDate) rows += `<div><span>有效期至</span><strong>${escapeHtml(validDate)}</strong></div>`
   }
   return `<div class="signal-pending-info">${rows}</div>`
@@ -8010,7 +8065,7 @@ function buildHistoryItemHTML(signal) {
         </span>
         <span class="history-item-meta">
           <span>#${escapeHtml(signal.id)}</span>
-          <span>${escapeHtml(compactTerminalTimeText(signal?.created_at_mt5))}</span>
+          <span>${escapeHtml(compactTerminalTimeText(signal))}</span>
           <span>${confidence}</span>
           <span>${escapeHtml(status)}</span>
         </span>
@@ -8112,7 +8167,7 @@ function renderSignalRows() {
     return `
       <tr data-analysis-id="${escapeHtml(signal.id)}">
         <td class="num">${escapeHtml(signal.id)}</td>
-        <td>${compactTerminalTimeHtml(signal?.created_at_mt5)}</td>
+        <td>${compactTerminalTimeHtml(signal)}</td>
         <td>${escapeHtml(signal.symbol)}</td>
         <td><span class="signal-tf-badge ${dir === 'close' ? 'close-badge' : ''}">${dir === 'close' ? '持仓分析' : escapeHtml(signal.timeframe)}</span></td>
         <td><span class="tag ${dir}">${directionText(signal.signal_type)}</span></td>
@@ -9089,7 +9144,7 @@ function renderAuditRows() {
     const resultText = auditResultText(row);
     const reasonText = auditReasonText(row);
     return `<tr class="audit-row row-${statusTone}">
-      <td data-label="时间（${bridgePlatformLabel()}）">${compactTerminalTimeHtml(row?.created_at_mt5)}</td>
+      <td data-label="时间（${bridgePlatformLabel()}）">${compactTerminalTimeHtml(row)}</td>
       <td data-label="动作"><span class="action-badge ${actionType}">${escapeHtml(auditActionText(row))}</span></td>
       <td data-label="品种"><strong class="num">${escapeHtml(row?.symbol || "--")}</strong></td>
       <td data-label="状态"><span class="audit-status ${statusTone}">${escapeHtml(auditStatusText(row))}</span></td>
