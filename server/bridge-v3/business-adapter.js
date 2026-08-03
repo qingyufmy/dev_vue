@@ -17,6 +17,7 @@ const SUPPORTED_ACTIONS = new Set([
 ])
 const RATE_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
 const DEFAULT_FRESHNESS_MS = 30_000
+const MAX_HISTORY_EVIDENCE_REFS = 100
 
 function adapterError(code) {
   return Object.assign(new Error(code), { code })
@@ -34,6 +35,18 @@ function parsePayload(value) {
 
 function cleanObject(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined))
+}
+
+function normalizeHistoryEvidenceRefs(value) {
+  if (value == null) return undefined
+  if (!Array.isArray(value) || value.length > MAX_HISTORY_EVIDENCE_REFS) {
+    throw adapterError('history_params_invalid')
+  }
+  const references = [...new Set(value.map(item => String(item).trim()))]
+  if (references.some(reference => !/^(?!0+$)\d{1,32}$/.test(reference))) {
+    throw adapterError('history_params_invalid')
+  }
+  return references.length ? references : undefined
 }
 
 function durableOrderComment(value) {
@@ -568,10 +581,19 @@ export function createBridgeV3BusinessAdapter({
           force_refresh:params.force_refresh === true || undefined,
           include_deals:action === 'history' && params.include_deals === true || undefined,
           compact:action === 'history' && params.compact === true || undefined,
+          evidence_position_ids:action === 'history'
+            ? normalizeHistoryEvidenceRefs(params.evidence_position_ids) : undefined,
+          evidence_order_tickets:action === 'history'
+            ? normalizeHistoryEvidenceRefs(params.evidence_order_tickets) : undefined,
         })
     if (action === 'history' && (!Number.isSafeInteger(allowed.page) || allowed.page < 1
       || !Number.isSafeInteger(allowed.page_size) || allowed.page_size < 1 || allowed.page_size > 200)) {
       throw adapterError('history_pagination_invalid')
+    }
+    if (action === 'history'
+      && (allowed.evidence_position_ids?.length || 0) + (allowed.evidence_order_tickets?.length || 0)
+        > MAX_HISTORY_EVIDENCE_REFS) {
+      throw adapterError('history_params_invalid')
     }
     if (action === 'pending_order_state' && !/^\d{1,32}$/.test(allowed.ticket || '')) {
       throw adapterError('ticket_required')

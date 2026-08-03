@@ -212,6 +212,28 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('forwards bounded position and order references for open-position history evidence', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ orders:[], deals:[], history_orders:[], source:'mt5' },
+    } })
+
+    await expect(adapter.execute(42, 'history', {
+      page:1, page_size:20, include_deals:true,
+      evidence_position_ids:['694675577'], evidence_order_tickets:['694675577'],
+    }, { timeoutMs:30_000 })).resolves.toMatchObject({ status:'success', deals:[] })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      type:'data_request', action:'history', params:expect.objectContaining({
+        include_deals:true,
+        evidence_position_ids:['694675577'],
+        evidence_order_tickets:['694675577'],
+      }),
+    }), { timeoutMs:30_000 })
+
+    await expect(adapter.execute(42, 'history', {
+      page:1, page_size:20, include_deals:true, evidence_position_ids:['invalid'],
+    })).resolves.toMatchObject({ status:'error', error:'history_params_invalid' })
+  })
+
   it('rejects oversized history pages so evidence stays within the bridge frame budget', async () => {
     const { adapter, gateway } = setup({ dataResponse:{
       status:'succeeded', payload:{ orders:[], deals:[], history_orders:[], source:'mt5' },

@@ -7,6 +7,7 @@ import { positionProtectionStatus } from './position-management.js'
 const SYSTEM_MAGIC = 234000
 const OPEN_STATUSES = ['open', 'closing']
 const PROTECTION_INCIDENTS = ['missing_stop_loss', 'invalid_stop_loss_direction']
+const HISTORY_EVIDENCE_REF_LIMIT = 100
 let monitorTimer = null
 
 const num = value => Number.isFinite(Number(value)) ? Number(value) : 0
@@ -264,18 +265,43 @@ async function clearRecoveredProtectionIncidentTx(run, outcome) {
   return true
 }
 
-async function loadOutcomeHistory(bridge, userId, dateFrom) {
+function outcomeHistoryEvidenceBatches(outcomes = []) {
+  const references = []
+  const seen = new Set()
+  const append = (kind, value) => {
+    const normalized = String(value ?? '').trim()
+    if (!/^(?!0+$)\d{1,32}$/.test(normalized)) return
+    const key = `${kind}:${normalized}`
+    if (seen.has(key)) return
+    seen.add(key)
+    references.push({ kind, value:normalized })
+  }
+  for (const outcome of outcomes) {
+    append('position', outcome.position_id)
+    append('order', outcome.entry_order_ticket)
+    append('order', outcome.pending_ticket)
+  }
+  const batches = []
+  for (let offset = 0; offset < references.length; offset += HISTORY_EVIDENCE_REF_LIMIT) {
+    const batch = references.slice(offset, offset + HISTORY_EVIDENCE_REF_LIMIT)
+    batches.push({
+      evidence_position_ids:batch.filter(item => item.kind === 'position').map(item => item.value),
+      evidence_order_tickets:batch.filter(item => item.kind === 'order').map(item => item.value),
+    })
+  }
+  return batches
+}
+
+async function loadOutcomeHistory(bridge, userId, dateFrom, evidenceBatches = []) {
   const deals = []
   const historyOrders = []
   const seenDeals = new Set()
   const seenOrders = new Set()
-  for (let page = 1; page <= 25; page += 1) {
-    const history = await bridge(userId, 'history', {
-      page, page_size:200, include_deals:true, ...(dateFrom ? { date_from:dateFrom } : {}),
-    }, { noFallback:true })
-    if (history?.status !== 'success' || !Array.isArray(history.deals)) return null
-    if (history.history_sync?.complete === false) return null
-    if (history.history_sync?.evidence_truncated === true) return null
+  let evidenceBatchIndex = 0
+  const mergeHistory = history => {
+    if (history?.status !== 'success' || !Array.isArray(history.deals)) return false
+    if (history.history_sync?.complete === false) return false
+    if (history.history_sync?.evidence_truncated === true) return false
     for (const deal of history.deals) {
       const key = String(deal?.deal_ticket || deal?.ticket || '')
       if (key && !seenDeals.has(key)) {
@@ -290,8 +316,32 @@ async function loadOutcomeHistory(bridge, userId, dateFrom) {
         historyOrders.push(order)
       }
     }
+    return true
+  }
+  const requestHistoryPage = async (page, pageSize, evidenceScope = {}) => {
+    const baseParams = {
+      page, page_size:pageSize, include_deals:true,
+      ...(dateFrom ? { date_from:dateFrom } : {}),
+    }
+    let history = await bridge(userId, 'history', { ...baseParams, ...evidenceScope }, { noFallback:true })
+    const scoped = (evidenceScope.evidence_position_ids?.length || 0)
+      + (evidenceScope.evidence_order_tickets?.length || 0) > 0
+    if (scoped && history?.status !== 'success'
+      && String(history?.error || history?.message || '') === 'history_params_invalid') {
+      history = await bridge(userId, 'history', baseParams, { noFallback:true })
+    }
+    return history
+  }
+  for (let page = 1; page <= 25; page += 1) {
+    const evidenceScope = evidenceBatches[evidenceBatchIndex++] || {}
+    const history = await requestHistoryPage(page, 200, evidenceScope)
+    if (!mergeHistory(history)) return null
     const totalPages = Math.max(1, Math.min(25, Number(history.pagination?.total_pages || 1)))
     if (page >= totalPages) break
+  }
+  while (evidenceBatchIndex < evidenceBatches.length) {
+    const history = await requestHistoryPage(1, 1, evidenceBatches[evidenceBatchIndex++])
+    if (!mergeHistory(history)) return null
   }
   return { status:'success', deals, history_orders:historyOrders }
 }
@@ -312,7 +362,7 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
     const earliestCreated = userOutcomes.map(item => String(item.created_at || '').slice(0, 10)).filter(Boolean).sort()[0]
     try {
       ;[history, positions] = await Promise.all([
-        loadOutcomeHistory(bridge, userId, earliestCreated),
+        loadOutcomeHistory(bridge, userId, earliestCreated, outcomeHistoryEvidenceBatches(userOutcomes)),
         bridge(userId, 'positions', {}, { noFallback: true }),
       ])
     } catch { continue }

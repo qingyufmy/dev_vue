@@ -18,6 +18,7 @@ pub const BRIDGE_DATABASE_FILE_NAME: &str = "bridge.db";
 const DEFAULT_DATA_OUTBOX_LIMIT_PER_STREAM: i64 = 256;
 const MAX_HISTORY_BATCH_ITEMS: usize = 250;
 const MAX_HISTORY_EVIDENCE_ITEMS: usize = 500;
+const MAX_HISTORY_EVIDENCE_REFS: usize = 100;
 const MAX_HISTORY_ITEM_BYTES: usize = 16 * 1024;
 const MAX_HISTORY_PAGE_PAYLOAD_BYTES: usize = SERVER_MAX_MESSAGE_BYTES - 64 * 1024;
 
@@ -1019,7 +1020,13 @@ impl OutboxStore {
         let mut rows = read_json_rows(&mut statement, params_from_iter(page_values))?;
         hydrate_history_trade_protection(&connection, terminal, &mut rows)?;
         let (deals, history_orders, evidence_truncated) = if request.include_deals {
-            read_history_evidence(&connection, terminal, &rows)?
+            read_history_evidence(
+                &connection,
+                terminal,
+                &rows,
+                &request.evidence_position_ids,
+                &request.evidence_order_tickets,
+            )?
         } else {
             (Vec::new(), Vec::new(), false)
         };
@@ -2535,6 +2542,8 @@ struct HistoryPageRequest {
     page: i64,
     page_size: i64,
     include_deals: bool,
+    evidence_position_ids: Vec<String>,
+    evidence_order_tickets: Vec<String>,
     filter_sql: String,
     filter_values: Vec<SqlValue>,
     capital_filter_sql: String,
@@ -2578,6 +2587,8 @@ fn parse_history_page_request(
         "force_refresh",
         "include_deals",
         "compact",
+        "evidence_position_ids",
+        "evidence_order_tickets",
     ];
     if object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
         || ["force_refresh", "include_deals", "compact"]
@@ -2641,6 +2652,11 @@ fn parse_history_page_request(
             _ => return Err(StoreError::new("history_profit_filter_invalid")),
         }
     }
+    let evidence_position_ids = history_reference_list(object.get("evidence_position_ids"))?;
+    let evidence_order_tickets = history_reference_list(object.get("evidence_order_tickets"))?;
+    if evidence_position_ids.len() + evidence_order_tickets.len() > MAX_HISTORY_EVIDENCE_REFS {
+        return Err(StoreError::new("history_params_invalid"));
+    }
     Ok(HistoryPageRequest {
         page,
         page_size,
@@ -2648,11 +2664,42 @@ fn parse_history_page_request(
             .get("include_deals")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
+        evidence_position_ids,
+        evidence_order_tickets,
         filter_sql: clauses.concat(),
         filter_values: values,
         capital_filter_sql: capital_clauses.concat(),
         capital_filter_values: capital_values,
     })
+}
+
+fn history_reference_list(value: Option<&serde_json::Value>) -> Result<Vec<String>, StoreError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .filter(|values| values.len() <= MAX_HISTORY_EVIDENCE_REFS)
+        .ok_or_else(|| StoreError::new("history_params_invalid"))?;
+    let mut references = values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| value.as_u64().map(|number| number.to_string()))
+                .filter(|reference| {
+                    !reference.is_empty()
+                        && reference.len() <= 32
+                        && reference.bytes().all(|byte| byte.is_ascii_digit())
+                        && reference.bytes().any(|byte| byte != b'0')
+                })
+                .ok_or_else(|| StoreError::new("history_params_invalid"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    references.sort();
+    references.dedup();
+    Ok(references)
 }
 
 fn history_integer(
@@ -3015,9 +3062,11 @@ fn read_history_evidence(
     connection: &Connection,
     terminal: &TerminalDescriptor,
     trades: &[serde_json::Value],
+    requested_positions: &[String],
+    requested_orders: &[String],
 ) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, bool), StoreError> {
-    let mut positions = Vec::new();
-    let mut orders = Vec::new();
+    let mut positions = requested_positions.to_vec();
+    let mut orders = requested_orders.to_vec();
     for trade in trades {
         let Some(object) = trade.as_object() else {
             continue;
@@ -3623,21 +3672,38 @@ mod tests {
         let store = OutboxStore::open_or_create(&path).expect("history store");
         let terminal = history_terminal("123456");
         let batch = HistoryArchiveBatch {
-            deals: vec![serde_json::json!({
-                "deal_ticket": 5001,
-                "order": 1001,
-                "position_id": 42,
-                "time_msc": 1_700_000_000_100_i64,
-                "symbol": "XAUUSD"
-            })],
-            history_orders: vec![serde_json::json!({
-                "ticket": 1001,
-                "position_id": 42,
-                "time_msc": 1_700_000_000_050_i64,
-                "symbol": "XAUUSD",
-                "sl": 2290.0,
-                "tp": 2320.0
-            })],
+            deals: vec![
+                serde_json::json!({
+                    "deal_ticket": 5001,
+                    "order": 1001,
+                    "position_id": 42,
+                    "time_msc": 1_700_000_000_100_i64,
+                    "symbol": "XAUUSD"
+                }),
+                serde_json::json!({
+                    "deal_ticket": 6001,
+                    "order": 2001,
+                    "position_id": 77,
+                    "time_msc": 1_700_000_000_150_i64,
+                    "symbol": "EURUSD"
+                }),
+            ],
+            history_orders: vec![
+                serde_json::json!({
+                    "ticket": 1001,
+                    "position_id": 42,
+                    "time_msc": 1_700_000_000_050_i64,
+                    "symbol": "XAUUSD",
+                    "sl": 2290.0,
+                    "tp": 2320.0
+                }),
+                serde_json::json!({
+                    "ticket": 2001,
+                    "position_id": 77,
+                    "time_msc": 1_700_000_000_125_i64,
+                    "symbol": "EURUSD"
+                }),
+            ],
             trades: vec![serde_json::json!({
                 "deal_ticket": 5001,
                 "ticket": 1001,
@@ -3694,6 +3760,46 @@ mod tests {
         assert_eq!(page["pagination"]["total_count"], 1);
         assert_eq!(page["source"], "mt5_sqlite");
         assert_eq!(page["statistics"]["total_profit"], 12.5);
+        let scoped_open_position = store
+            .read_history_archive_page(
+                &terminal,
+                &serde_json::json!({
+                    "page": 1,
+                    "page_size": 20,
+                    "include_deals": true,
+                    "evidence_position_ids": ["77"]
+                }),
+            )
+            .expect("open-position evidence page");
+        assert!(
+            scoped_open_position["deals"]
+                .as_array()
+                .expect("scoped deals")
+                .iter()
+                .any(|deal| deal["deal_ticket"] == 6001)
+        );
+        assert!(
+            scoped_open_position["history_orders"]
+                .as_array()
+                .expect("scoped history orders")
+                .iter()
+                .any(|order| order["ticket"] == 2001)
+        );
+        assert_eq!(
+            store
+                .read_history_archive_page(
+                    &terminal,
+                    &serde_json::json!({
+                        "page": 1,
+                        "page_size": 20,
+                        "include_deals": true,
+                        "evidence_position_ids": ["not-a-ticket"]
+                    }),
+                )
+                .expect_err("invalid evidence reference")
+                .code(),
+            "history_params_invalid"
+        );
         let filtered = store
             .read_history_archive_page(
                 &terminal,
@@ -3722,11 +3828,17 @@ mod tests {
         let other_page = store
             .read_history_archive_page(
                 &other_account,
-                &serde_json::json!({ "page": 1, "page_size": 20, "include_deals": true }),
+                &serde_json::json!({
+                    "page": 1,
+                    "page_size": 20,
+                    "include_deals": true,
+                    "evidence_position_ids": ["77"]
+                }),
             )
             .expect("isolated empty page");
         assert_eq!(other_page["pagination"]["total_count"], 0);
         assert!(other_page["orders"].as_array().expect("orders").is_empty());
+        assert!(other_page["deals"].as_array().expect("deals").is_empty());
 
         let mut regressed = batch.clone();
         regressed.trades = vec![serde_json::json!({

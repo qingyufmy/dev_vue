@@ -142,6 +142,32 @@ describe('position outcome monitor durability', () => {
     expect(db.queryRun).toHaveBeenCalledTimes(4)
   })
 
+  it('keeps legacy Bridge history reconciliation working until scoped evidence is installed', async () => {
+    const legacyOutcome = outcome({
+      status:'open', order_intent_id:8, entry_direction:'buy',
+      position_id:'694675577', entry_order_ticket:'694675500',
+    })
+    db.queryAll.mockResolvedValue([legacyOutcome])
+    const run = vi.fn(async sql => sql.includes('SELECT * FROM signal_outcomes')
+      ? [[legacyOutcome], []] : [{ affectedRows:1 }, []])
+    db.withTransaction.mockImplementation(callback => callback(run))
+    const bridge = vi.fn(async (_userId, action, params) => {
+      if (action === 'positions') return { status:'success', positions:[] }
+      if (params.evidence_position_ids) return { status:'error', error:'history_params_invalid' }
+      return {
+        status:'success', deals:[], history_orders:[],
+        pagination:{ total_pages:1 }, history_sync:{ complete:true, evidence_truncated:false },
+      }
+    })
+
+    await reconcileSignalOutcomes({ bridge })
+
+    const historyCalls = bridge.mock.calls.filter(([, action]) => action === 'history')
+    expect(historyCalls).toHaveLength(2)
+    expect(historyCalls[0][2]).toMatchObject({ evidence_position_ids:['694675577'] })
+    expect(historyCalls[1][2]).not.toHaveProperty('evidence_position_ids')
+  })
+
   it('retires terminal pending outcomes before they reach inference context', async () => {
     db.queryRun
       .mockResolvedValueOnce({ changes:3 })
@@ -157,18 +183,17 @@ describe('position outcome monitor durability', () => {
   })
 
   it('automatically clears a protection pause after the system position is protected again', async () => {
-    db.queryAll.mockResolvedValue([outcome({
+    const managedOutcome = outcome({
       status:'open', order_intent_id:8, entry_direction:'buy',
       protection_status:'missing_stop_loss', original_stop_loss:90,
-    })])
+      position_id:'694675577', entry_order_ticket:'694675500',
+    })
+    db.queryAll.mockResolvedValue([managedOutcome])
     const writes = []
     const run = vi.fn(async (sql) => {
       writes.push(sql)
       if (sql.includes('SELECT * FROM signal_outcomes')) {
-        return [[outcome({
-          status:'open', order_intent_id:8, entry_direction:'buy',
-          protection_status:'missing_stop_loss', original_stop_loss:90,
-        })], []]
+        return [[managedOutcome], []]
       }
       if (sql.includes('COUNT(*) AS unresolved_count')) return [[{ unresolved_count:0 }], []]
       if (sql.includes('FROM risk_account_state') && sql.includes('FOR UPDATE')) {
@@ -178,14 +203,18 @@ describe('position outcome monitor durability', () => {
     })
     db.withTransaction.mockImplementation(callback => callback(run))
     const bridge = vi.fn(async (_userId, action) => action === 'history'
-      ? { status:'success', deals:[deal()], history_orders:[] }
+      ? { status:'success', deals:[deal({ position_id:'694675577', order:'694675500' })], history_orders:[] }
       : { status:'success', positions:[{
-        ticket:'P1', position_id:'P1', type:'buy', price_current:100,
+        ticket:'694675577', position_id:'694675577', type:'buy', price_current:100,
         sl:90, tp:120, magic:234000, volume:1,
       }] })
 
     await reconcileSignalOutcomes({ bridge })
 
+    expect(bridge).toHaveBeenCalledWith(2, 'history', expect.objectContaining({
+      evidence_position_ids:['694675577'],
+      evidence_order_tickets:['694675500'],
+    }), { noFallback:true })
     expect(writes.some(sql => sql.includes("SET halt_status = 'active', halt_reason = NULL"))).toBe(true)
   })
 
