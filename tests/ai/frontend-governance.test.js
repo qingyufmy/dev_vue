@@ -1218,6 +1218,12 @@ describe('route permissions and credential redaction', () => {
     expect(adminApp).toContain("String(account.observe_status || '').toLowerCase()")
   })
 
+  it('resolves shared signal account time without reading a nonexistent delivery column', () => {
+    expect(bridgeWs).not.toContain('d.trading_account_id')
+    expect(bridgeWs).toContain('COALESCE(oi.trading_account_id, ${activeTradingAccountSql}) AS trading_account_id')
+    expect(bridgeWs).toContain('LEFT JOIN order_intents oi ON oi.id = d.order_intent_id')
+  })
+
   it('fails closed when no observer channel is authorized and scopes signals to the bound strategy', () => {
     expect(bridgeWs).toContain('return { bridgeUserId:null, channel:null }')
     expect(bridgeWs).not.toContain('return { bridgeUserId:await getActivePlatformBridgeUserId(), channel:null }')
