@@ -8,8 +8,8 @@ const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.me
 
 describe('AI position management workspace', () => {
   it('publishes the automatic-exit UI with a fresh asset cache key', () => {
-    expect(html).toContain('/ai/styles.css?v=20260803reviewstream1')
-    expect(html).toContain('/ai/app.js?v=20260803reviewstream1')
+    expect(html).toContain('/ai/styles.css?v=20260803positiontime1')
+    expect(html).toContain('/ai/app.js?v=20260803positiontime1')
   })
 
   it('keeps position management inside AI trader instead of adding another top-level module', () => {
@@ -81,5 +81,14 @@ describe('AI position management workspace', () => {
     expect(css).toContain('.management-confirmation-row')
     expect(css).toContain('@media (max-width: 760px)')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
+  })
+
+  it('shows timeline timestamps in MT5 time and explains rejected preconditions', () => {
+    expect(app).toContain('function positionManagementEventTime(event)')
+    expect(app).toContain('positionManagementEventTime(event)')
+    expect(app).toContain('`${bridgePlatformLabel()} 服务器时间`')
+    expect(app).toContain('position_attribution_incomplete:"成交归属尚未完成，系统无法确认完整开仓手数"')
+    expect(app).toContain('positionManagementEventSummary(event)')
+    expect(css).toContain('.management-timeline time > span')
   })
 })

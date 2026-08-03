@@ -8353,6 +8353,37 @@ function positionManagementDecisionTime(task) {
   return fmtUtc(new Date(timestamp + offset * 60_000));
 }
 
+function positionManagementEventTime(event) {
+  const timestamp = parseBeijingServerTime(event?.created_at);
+  if (!Number.isFinite(timestamp)) return "--";
+  const offset = Number.isFinite(Number(state.mt5TimezoneOffsetMinutes)) ? Number(state.mt5TimezoneOffsetMinutes) : 180;
+  return fmtUtc(new Date(timestamp + offset * 60_000));
+}
+
+const POSITION_MANAGEMENT_EVENT_REASONS = Object.freeze({
+  position_attribution_incomplete:"成交归属尚未完成，系统无法确认完整开仓手数",
+  bridge_generation_mismatch:"Bridge 已重新连接，任务创建时的连接已失效",
+  account_ownership_generation_mismatch:"账户归属已变化，系统已停止执行",
+  position_already_absent:"目标持仓已不在 MT5 当前持仓中",
+  full_position_volume_required:"系统无法确认当前持仓仍是完整开仓手数",
+  position_ticket_missing:"缺少可核对的 MT5 持仓票号",
+  position_symbol_mismatch:"MT5 当前持仓品种与任务不一致",
+  position_direction_mismatch:"MT5 当前持仓方向与任务不一致",
+  position_magic_mismatch:"持仓不再满足系统订单标识",
+  position_volume_mismatch:"MT5 当前手数与系统记录不一致",
+  position_missing_stop_loss:"目标持仓缺少有效止损",
+  position_invalid_stop_loss_direction:"目标持仓止损方向异常",
+  pending_order_absent:"目标挂单已不在 MT5 当前挂单中",
+});
+
+function positionManagementEventSummary(event = {}) {
+  const summary = event.summary || event.event_type || "状态已更新";
+  const details = parseJsonField(event.details_json, {});
+  const reasonCode = String(details.code || details.reason_code || "");
+  const reason = POSITION_MANAGEMENT_EVENT_REASONS[reasonCode];
+  return reason && !String(summary).includes(reason) ? `${summary}；${reason}` : summary;
+}
+
 function positionManagementDirection(direction) {
   const value = String(direction || "").toLowerCase();
   return value === "buy" ? "买入" : value === "sell" ? "卖出" : "--";
@@ -8584,7 +8615,7 @@ async function loadPositionManagementDetail(taskId, options = {}) {
       <section class="management-detail-section"><header><div><h4>${confirmationTitle}</h4><p>${confirmationDescription}</p></div><span class="management-state ${escapeHtml(confirmation.tone)}">${escapeHtml(confirmation.label)}</span></header><div class="management-confirmation-meter" role="progressbar" aria-valuemin="0" aria-valuemax="${confirmation.required}" aria-valuenow="${confirmation.count}"><i style="--confirmation-progress:${(confirmation.count / confirmation.required) * 100}%"></i></div><ol class="management-confirmation-list">${evaluationRows}</ol></section>
       <section class="management-detail-section"><header><h4>当前结论</h4><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></header><p>${escapeHtml(evaluation.reason || "暂无模型说明。")}</p><small>${escapeHtml(positionManagementEvidenceSource(evidence.source))}</small></section>
       <section class="management-detail-section"><header><h4>执行状态</h4><span>${commands.length} 条 ${bridgePlatformLabel()} 命令</span></header><p>${executionDescription}</p></section>
-      <section class="management-detail-section"><header><h4>状态时间线</h4><span>${events.length} 条</span></header>${events.length ? `<ol class="management-timeline">${events.map(event => `<li><time>${escapeHtml(compactTimeText(event.created_at))}</time><span><strong>${escapeHtml(positionManagementStatus(event.to_status).label)}</strong><br>${escapeHtml(event.summary || event.event_type || "状态已更新")}</span></li>`).join("")}</ol>` : `<p>暂无状态记录。</p>`}</section>`;
+      <section class="management-detail-section"><header><h4>状态时间线</h4><span>${events.length} 条 · ${escapeHtml(bridgePlatformLabel())} 时间</span></header>${events.length ? `<ol class="management-timeline">${events.map(event => `<li><time title="${escapeHtml(`${bridgePlatformLabel()} 服务器时间`)}"><span>${escapeHtml(bridgePlatformLabel())}</span>${escapeHtml(compactTimeText(positionManagementEventTime(event)))}</time><span><strong>${escapeHtml(positionManagementStatus(event.to_status).label)}</strong><br>${escapeHtml(positionManagementEventSummary(event))}</span></li>`).join("")}</ol>` : `<p>暂无状态记录。</p>`}</section>`;
     initIcons();
   } catch (error) {
     if (state.selectedPositionManagementId === id) host.innerHTML = `<div class="position-management-empty"><i data-lucide="triangle-alert" size="22"></i><strong>详情读取失败</strong><span>${escapeHtml(error.message)}</span></div>`;

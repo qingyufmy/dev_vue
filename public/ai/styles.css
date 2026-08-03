@@ -3459,10 +3459,24 @@ textarea:focus {
 }
 
 .management-timeline time {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
+  gap: 5px;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 10px;
+}
+
+.management-timeline time > span {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--gold-wash);
+  color: var(--gold-primary);
+  font-family: var(--font-sans);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .02em;
 }
 
 @media (max-width: 1180px) {
