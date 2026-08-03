@@ -386,7 +386,7 @@ describe('unified admin console contract', () => {
     expect(css).toContain('--scrollbar-track: #f2efe8')
     expect(css).toContain('--scrollbar-thumb: #334155')
     expect(css).toContain('Course editor modal / focused publishing workspace')
-    expect(html).toContain('20260802overview1')
+    expect(html).toContain('20260803modelruntime1')
     expect(app).toContain('function filterSubmitButton')
     expect(app.match(/filterSubmitButton\(\)/g)).toHaveLength(4)
     expect(css).toContain('.filter-bar { align-items:end; gap:8px; padding:12px 16px;')
