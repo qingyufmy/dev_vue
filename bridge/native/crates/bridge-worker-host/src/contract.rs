@@ -539,12 +539,19 @@ pub struct WorkerHistoryBatch {
     pub next_cursor: WorkerHistoryCursor,
     pub has_more: bool,
     pub observed_at_utc_msc: i64,
+    pub timezone_offset_minutes: i16,
+    pub clock_status: String,
 }
 
 impl WorkerHistoryBatch {
     fn validate_for(&self, request: &HistorySyncRequest) -> Result<(), WorkerHostError> {
         self.next_cursor.validate()?;
         if self.observed_at_utc_msc <= 0
+            || !(-720..=840).contains(&self.timezone_offset_minutes)
+            || !matches!(
+                self.clock_status.as_str(),
+                "verified" | "persisted_stale" | "provisional_stale"
+            )
             || self.deals.len() > usize::from(request.limit)
             || self.history_orders.len() > usize::from(request.limit)
             || self.trades.len() > usize::from(request.limit)
@@ -1705,6 +1712,55 @@ mod tests {
                 .validate_for(&request)
                 .expect("stale read-only clock status");
         }
+    }
+
+    #[test]
+    fn history_contract_accepts_verified_clock_metadata_and_rejects_untrusted_status() {
+        let request = WorkerRequest::history_sync(
+            route(),
+            "history_sync_01JCLOCK01".to_owned(),
+            WorkerHistoryCursor {
+                time_msc: 946_684_800_000,
+                ticket: "0".to_owned(),
+            },
+            250,
+        );
+        request.validate(1_700_000_000_001).expect("valid request");
+        let mut response: WorkerResponse = serde_json::from_value(serde_json::json!({
+            "ipc_v": WORKER_IPC_VERSION,
+            "type": "worker_response",
+            "request_id": request.request_id,
+            "route": request.route,
+            "outcome": "history_batch",
+            "payload": {
+                "batch": {
+                    "deals": [],
+                    "history_orders": [],
+                    "trades": [],
+                    "next_cursor": { "time_msc": 949_276_800_000_i64, "ticket": "0" },
+                    "has_more": true,
+                    "observed_at_utc_msc": 1_700_000_000_001_i64,
+                    "timezone_offset_minutes": 180,
+                    "clock_status": "verified"
+                }
+            }
+        }))
+        .expect("history response with clock metadata");
+        response
+            .validate_for(&request)
+            .expect("valid history batch");
+
+        let WorkerResponseBody::HistoryBatch { batch } = &mut response.body else {
+            unreachable!();
+        };
+        batch.clock_status = "calibrating".to_owned();
+        assert_eq!(
+            response
+                .validate_for(&request)
+                .expect_err("untrusted history clock")
+                .code(),
+            "worker_history_batch_invalid"
+        );
     }
 
     #[test]
