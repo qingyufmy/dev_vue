@@ -1,6 +1,5 @@
-// The terminal UI and market countdown use the broker's MT5 server clock
-// (UTC+3). Etc/GMT signs are intentionally reversed by the IANA convention.
-const DEFAULT_TIMEZONE = 'Etc/GMT-3'
+export const TERMINAL_SERVER_TIMEZONE = 'terminal_server'
+const DEFAULT_TIMEZONE = TERMINAL_SERVER_TIMEZONE
 const DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5]
 const DEFAULT_WINDOWS = [{ start: '00:00', end: '23:59' }]
 const VALID_OUTSIDE_BEHAVIORS = new Set(['pause_all', 'signals_only'])
@@ -25,8 +24,12 @@ export function normalizeSubscriptionSchedule(payload = {}, existing = {}) {
   const enabled = payload.schedule_enabled === undefined
     ? Boolean(Number(existing.schedule_enabled || 0))
     : Boolean(payload.schedule_enabled)
-  const timezone = String(payload.schedule_timezone ?? existing.schedule_timezone ?? DEFAULT_TIMEZONE).trim()
-  try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date()) } catch { throw new Error('invalid_schedule_timezone') }
+  const requestedTimezone = String(
+    payload.schedule_timezone ?? existing.schedule_timezone ?? DEFAULT_TIMEZONE).trim()
+  // All AI trading schedules follow the bound MT4/MT5 terminal. Legacy IANA
+  // values remain readable during migration but are normalized on the next save.
+  const timezone = requestedTimezone === TERMINAL_SERVER_TIMEZONE
+    ? TERMINAL_SERVER_TIMEZONE : TERMINAL_SERVER_TIMEZONE
 
   const rawWeekdays = payload.schedule_weekdays ?? parseJson(existing.schedule_weekdays_json, DEFAULT_WEEKDAYS)
   const weekdays = [...new Set((Array.isArray(rawWeekdays) ? rawWeekdays : []).map(Number))]
@@ -47,16 +50,35 @@ export function normalizeSubscriptionSchedule(payload = {}, existing = {}) {
   return { enabled, timezone, weekdays, windows, outsideBehavior }
 }
 
-export function isSubscriptionScheduleActive(subscription = {}, now = new Date()) {
+function terminalScheduleParts(now, subscription, options = {}) {
+  const rawOffset = options.timezoneOffsetMinutes
+    ?? subscription.runtime_timezone_offset_minutes
+    ?? subscription.timezone_offset_minutes
+  if (rawOffset === null || rawOffset === undefined || rawOffset === '') return null
+  const offset = Number(rawOffset)
+  const status = String(options.clockStatus
+    ?? subscription.runtime_clock_status
+    ?? subscription.clock_status
+    ?? '').trim().toLowerCase()
+  if (!Number.isInteger(offset) || offset < -720 || offset > 840 || !status
+    || ['unavailable', 'unverified', 'unknown', 'calibrating', 'fallback'].includes(status)) {
+    return null
+  }
+  const shifted = new Date(now.getTime() + offset * 60_000)
+  return {
+    weekday:shifted.getUTCDay(),
+    hour:shifted.getUTCHours(),
+    minute:shifted.getUTCMinutes(),
+  }
+}
+
+export function isSubscriptionScheduleActive(subscription = {}, now = new Date(), options = {}) {
   if (!Number(subscription.schedule_enabled)) return true
   const schedule = normalizeSubscriptionSchedule({}, subscription)
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: schedule.timezone,
-    weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).formatToParts(now)
-  const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
-  const weekday = ({ Sun:0, Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6 })[values.weekday]
-  const minute = Number(values.hour) * 60 + Number(values.minute)
+  const terminalParts = terminalScheduleParts(now, subscription, options)
+  if (!terminalParts) return false
+  const weekday = terminalParts.weekday
+  const minute = terminalParts.hour * 60 + terminalParts.minute
   const selected = new Set(schedule.weekdays)
   const previousWeekday = (weekday + 6) % 7
 
@@ -69,13 +91,13 @@ export function isSubscriptionScheduleActive(subscription = {}, now = new Date()
   })
 }
 
-export function subscriptionAllowsInference(subscription = {}, now = new Date()) {
-  const inWindow = isSubscriptionScheduleActive(subscription, now)
+export function subscriptionAllowsInference(subscription = {}, now = new Date(), options = {}) {
+  const inWindow = isSubscriptionScheduleActive(subscription, now, options)
   return inWindow || subscription.outside_window_behavior === 'signals_only'
 }
 
-export function subscriptionAllowsExecution(subscription = {}, now = new Date()) {
-  return isSubscriptionScheduleActive(subscription, now)
+export function subscriptionAllowsExecution(subscription = {}, now = new Date(), options = {}) {
+  return isSubscriptionScheduleActive(subscription, now, options)
 }
 
 export const SUBSCRIPTION_SCHEDULE_DEFAULTS = {

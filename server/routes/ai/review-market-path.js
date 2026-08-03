@@ -18,6 +18,13 @@ function dealUtcMs(deal, offsetMinutes = 0) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function dealsHaveCanonicalUtc(deals = []) {
+  return deals.filter(deal => [0, 1, 2, 3].includes(Number(deal?.entry_type))).every(deal => {
+    const direct = Number(parse(deal?.raw_json, {})?.time_utc_msc)
+    return Number.isFinite(direct) && direct > 0
+  })
+}
+
 function weightedPrice(deals) {
   const volume = deals.reduce((sum, deal) => sum + Number(deal.volume || 0), 0)
   return volume > 0 ? deals.reduce((sum, deal) => sum + Number(deal.price || 0) * Number(deal.volume || 0), 0) / volume : null
@@ -57,14 +64,19 @@ export function calculateHoldingPathMetrics({ rates = [], deals = [], direction 
   }
 }
 
-async function reviewMarketOffset(symbol) {
-  const row = await queryOne(`SELECT mds.timezone_offset_minutes
-    FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
-    WHERE u.role = 'admin' AND mds.timezone_offset_minutes IS NOT NULL
-      AND EXISTS (SELECT 1 FROM market_candles candles WHERE candles.source_id = mds.id
-        AND candles.standard_symbol = ? LIMIT 1)
-    ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`, [stripBrokerSuffix(symbol)])
-  return Number.isFinite(Number(row?.timezone_offset_minutes)) ? Number(row.timezone_offset_minutes) : 180
+async function reviewMarketOffset(userId, tradingAccountId) {
+  const row = await queryOne(`SELECT mds.timezone_offset_minutes, mds.clock_status
+    FROM trading_accounts accounts
+    JOIN market_data_sources mds ON mds.bridge_user_id = accounts.user_id
+      AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(accounts.broker_server)
+      AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(accounts.login_account AS CHAR)
+    WHERE accounts.user_id = ? AND accounts.id = ? AND mds.timezone_offset_minutes IS NOT NULL
+    ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`, [Number(userId), Number(tradingAccountId)])
+  const status = String(row?.clock_status || '').trim().toLowerCase()
+  const offset = Number(row?.timezone_offset_minutes)
+  return Number.isInteger(offset) && offset >= -720 && offset <= 840
+    && status && !['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(status)
+    ? offset : null
 }
 
 function slimChan(chan) {
@@ -83,7 +95,7 @@ function compactRate(rate) {
   return { time_utc_msc: Number(rate.time_utc_msc), open: Number(rate.open), high: Number(rate.high), low: Number(rate.low), close: Number(rate.close), tick_volume: Number(rate.tick_volume || 0) }
 }
 
-export async function buildReviewMarketPath({ userId, symbol, signal = {}, snapshot = {}, deals = [], fetchRates = null,
+export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, signal = {}, snapshot = {}, deals = [], fetchRates = null,
   loadWindow = loadPeriodMarketWindow, timezoneOffsetMinutes = null } = {}) {
   const snapshotKlines = snapshot?.klines && typeof snapshot.klines === 'object' ? snapshot.klines : {}
   const timeframes = [...new Set([signal.timeframe, ...Object.keys(snapshotKlines)]
@@ -95,9 +107,14 @@ export async function buildReviewMarketPath({ userId, symbol, signal = {}, snaps
   let primaryOffset = 0
   let primaryTruncated = false
   const errors = []
-  const defaultOffset = Number.isFinite(Number(timezoneOffsetMinutes))
+  const hasRequestedOffset = timezoneOffsetMinutes !== null && timezoneOffsetMinutes !== undefined
+    && timezoneOffsetMinutes !== '' && Number.isInteger(Number(timezoneOffsetMinutes))
+  const defaultOffset = hasRequestedOffset
     ? Number(timezoneOffsetMinutes)
-    : fetchRates ? 180 : await reviewMarketOffset(symbol).catch(() => 180)
+    : dealsHaveCanonicalUtc(deals) ? 0 : await reviewMarketOffset(userId, tradingAccountId).catch(() => null)
+  if (!Number.isInteger(defaultOffset)) {
+    return { status:'partial', reason:'terminal_clock_unverified', timeframes:{}, metrics:null }
+  }
   for (const timeframe of timeframes) {
     try {
       const initialEntryTimes = deals.filter(deal => [0, 2].includes(Number(deal.entry_type)))
@@ -120,7 +137,9 @@ export async function buildReviewMarketPath({ userId, symbol, signal = {}, snaps
         allRatesClosed = true
       }
       if (response?.status === 'error' || !Array.isArray(response?.rates) || response.rates.length < 2) throw new Error(response?.error || 'rates_unavailable')
-      const offset = Number(response.market_meta?.timezone_offset_minutes || 0)
+      const responseOffset = response.market_meta?.timezone_offset_minutes
+      const offset = responseOffset == null || responseOffset === ''
+        ? defaultOffset : Number(responseOffset)
       let allClosed = (allRatesClosed ? response.rates : response.rates.slice(0, -1))
         .filter(rate => Number.isFinite(Number(rate.time_utc_msc))).map(compactRate)
       const entryTimes = deals.filter(deal => [0, 2].includes(Number(deal.entry_type))).map(deal => dealUtcMs(deal, offset)).filter(Number.isFinite)

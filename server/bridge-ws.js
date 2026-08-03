@@ -6,7 +6,7 @@ import { isCorsOriginAllowed } from './cors-origin.js'
 import { getRedis, isRedisAvailable } from './redis.js'
 import { stripBrokerSuffix, utcToMt5Time } from './routes/ai/utils.js'
 import { getRegisteredAutoSchedulerState } from './routes/ai/runtime-state-registry.js'
-import { setWeeklyMarketTimezoneOffset, weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
+import { weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
 import { buildAiAccessContext, observerAccessError, observerWsActionAllowed } from './routes/ai/observer-access.js'
 import { getDefaultObserverSource, observerSourceSupportsSymbol, resolveObserverSourceForUser } from './routes/ai/observer-channels.js'
@@ -78,7 +78,10 @@ const observerQuoteFeeds = createObserverQuoteFeedManager({
       } : {}),
     }
     const quote = await ai.mt5Bridge(descriptor.sourceUserId, 'quote', params, { noFallback:true })
-    if (quote?.status === 'success') recordBridgeMarketState(descriptor.sourceUserId, quote)
+    if (quote?.status === 'success') recordBridgeMarketState(descriptor.sourceUserId, quote, Date.now(), {
+      terminalInstanceId:descriptor.terminalInstanceId,
+      tradingAccountId:descriptor.tradingAccountId,
+    })
     return quote
   },
   publish:(ws, quote) => {
@@ -368,6 +371,9 @@ function forgetBridgeV3TerminalIdentity({ userId, terminal }) {
   const bindings = bridgeV3TradingAccounts.get(Number(userId))
   bindings?.delete(terminal.terminal_instance_id)
   if (bindings?.size === 0) bridgeV3TradingAccounts.delete(Number(userId))
+  const marketStates = bridgeV3UserMarketStates(Number(userId))
+  marketStates?.delete(terminal.terminal_instance_id)
+  if (marketStates?.size === 0) bridgeV3MarketStates.delete(Number(userId))
   if (bridgeV3PreferredTerminals.get(Number(userId)) === terminal.terminal_instance_id) {
     const replacement = (bridgeV3Business?.connectedTerminals(Number(userId)) || [])
       .find(route => route.terminal_instance_id !== terminal.terminal_instance_id)
@@ -603,18 +609,47 @@ export function buildBrowserHeartbeatClock(sharedQuote, clockBridge, marketState
       ? observedAtValue : null,
     timezone_offset_minutes:sharedQuote?.timezone_offset_minutes
       ?? clockBridge?.timezoneOffsetMinutes ?? marketState?.timezoneOffsetMinutes ?? null,
+    clock_status:sharedQuote?.clock_status
+      || clockBridge?.clockStatus || marketState?.clockStatus || 'unknown',
   }
 }
 
-export function recordBridgeMarketState(userId, payload, receivedAt = Date.now()) {
+function bridgeV3UserMarketStates(userId, create = false) {
+  const numericUserId = Number(userId)
+  let states = bridgeV3MarketStates.get(numericUserId)
+  if (!states && create) {
+    states = new Map()
+    bridgeV3MarketStates.set(numericUserId, states)
+  }
+  return states || null
+}
+
+function bridgeV3MarketStateForContext(userId, tradingAccountId = null, terminalInstanceId = null) {
+  const states = bridgeV3UserMarketStates(userId)
+  if (!states) return null
+  const route = terminalInstanceId
+    ? { terminal_instance_id:String(terminalInstanceId) }
+    : bridgeV3RouteForContext(userId, tradingAccountId)
+  if (route?.terminal_instance_id && states.has(route.terminal_instance_id)) {
+    return states.get(route.terminal_instance_id)
+  }
+  return states.size === 1 ? states.values().next().value : null
+}
+
+export function recordBridgeMarketState(userId, payload, receivedAt = Date.now(), context = {}) {
   const numericUserId = Number(userId)
   const bridge = bridges.get(numericUserId)
   if (bridge?.ws?.readyState === 1) {
     return applyBridgeMarketState(bridge, payload, numericUserId, receivedAt)
   }
   if (!bridgeV3Business?.hasConnectedTerminal(numericUserId)) return null
-  const state = bridgeV3MarketStates.get(numericUserId) || { marketStates:new Map() }
-  bridgeV3MarketStates.set(numericUserId, state)
+  const route = context.terminalInstanceId
+    ? { terminal_instance_id:String(context.terminalInstanceId) }
+    : bridgeV3RouteForContext(numericUserId, context.tradingAccountId)
+  if (!route?.terminal_instance_id) return null
+  const states = bridgeV3UserMarketStates(numericUserId, true)
+  const state = states.get(route.terminal_instance_id) || { marketStates:new Map() }
+  states.set(route.terminal_instance_id, state)
   return applyBridgeMarketState(state, payload, numericUserId, receivedAt)
 }
 
@@ -734,11 +769,14 @@ async function resolveDefaultPlatformMarketContext(user, symbol) {
   }
 }
 
-export function getPlatformMarketClockState(userId, tradingAccountId = null) {
+export function getPlatformMarketClockState(userId, tradingAccountId = null, terminalInstanceId = null) {
   const numericUserId = Number(userId)
   const bridge = bridges.get(numericUserId)
   const hb = bridge?._clientHeartbeat || {}
-  if (bridge?.ws?.readyState === 1) {
+  const requestedAccountId = Number(tradingAccountId)
+  const legacyAccountMatches = !(requestedAccountId > 0)
+    || Number(bridge?.tradingAccountId || 0) === requestedAccountId
+  if (!terminalInstanceId && legacyAccountMatches && bridge?.ws?.readyState === 1) {
     return {
       bridge_user_id:numericUserId || null,
       connected:true,
@@ -751,12 +789,16 @@ export function getPlatformMarketClockState(userId, tradingAccountId = null) {
       platform:String(hb.platform || bridge.platform || bridgePlatform(numericUserId, tradingAccountId) || '').trim().toLowerCase() || null,
     }
   }
-  const route = getBridgeDataRoute(numericUserId, tradingAccountId, {
-    strictAccount:Number(tradingAccountId) > 0,
-  })
+  const route = terminalInstanceId
+    ? (bridgeV3Business?.connectedTerminals(numericUserId) || [])
+      .find(item => item.terminal_instance_id === String(terminalInstanceId))
+    : getBridgeDataRoute(numericUserId, tradingAccountId, {
+      strictAccount:Number(tradingAccountId) > 0,
+    })
   const userConnection = bridgeV3Business?.connectedUsers?.()
     .find(item => Number(item.userId) === numericUserId)
-  const marketState = bridgeV3MarketStates.get(numericUserId) || {}
+  const marketState = bridgeV3MarketStateForContext(
+    numericUserId, tradingAccountId, route?.terminal_instance_id) || {}
   return {
     bridge_user_id:numericUserId || null,
     connected:Boolean(route),
@@ -770,10 +812,14 @@ export function getPlatformMarketClockState(userId, tradingAccountId = null) {
   }
 }
 
-async function getLabTimezoneOffsetMinutes() {
-  const platformUserId = await getActivePlatformBridgeUserId()
-  const offset = platformUserId ? Number(getPlatformMarketClockState(platformUserId).timezone_offset_minutes) : NaN
-  return Number.isFinite(offset) && offset >= -720 && offset <= 840 ? Math.trunc(offset) : 180
+async function getLabTimezoneOffsetMinutes(userId, tradingAccountId = null) {
+  const clock = getPlatformMarketClockState(userId, tradingAccountId)
+  if (clock.timezone_offset_minutes == null || clock.timezone_offset_minutes === '') return null
+  const offset = Number(clock.timezone_offset_minutes)
+  const status = String(clock.clock_status || '').trim().toLowerCase()
+  if (!Number.isInteger(offset) || offset < -720 || offset > 840 || !status
+    || ['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(status)) return null
+  return offset
 }
 
 
@@ -991,7 +1037,9 @@ async function handleBrowser(ws, url, req) {
         observerQuoteFeeds.unsubscribe(ws)
       }
       const sharedQuote = observerQuoteFeeds.latestFor(ws)
-      const v3MarketState = quoteClockUserId ? bridgeV3MarketStates.get(Number(quoteClockUserId)) : null
+      const v3MarketState = quoteClockUserId ? bridgeV3MarketStateForContext(
+        Number(quoteClockUserId), observerContext?.channel?.trading_account_id,
+        dataRoute?.terminal_instance_id) : null
       const clockBridge = quoteClockUserId ? bridges.get(Number(quoteClockUserId)) : null
       const usingFallback = access.mode === 'observer'
       const connected = Boolean(dataUserId && isBridgeAlive(dataUserId))
@@ -1410,7 +1458,6 @@ async function _initBridge(ws, userId, user, initQueue = null) {
         throttleKey:`admin-bridge-heartbeat:${userId}`,
         minIntervalMs:5000,
       })
-      if (userId === adminUserId && Number.isFinite(Number(msg.timezone_offset_minutes))) setWeeklyMarketTimezoneOffset(msg.timezone_offset_minutes)
     }
 
     if (msg.type === 'data') {
@@ -1420,7 +1467,6 @@ async function _initBridge(ws, userId, user, initQueue = null) {
         bridge.clockResidualMs = msg.quote.clock_residual_ms ?? bridge.clockResidualMs ?? null
         bridge.brokerServer = msg.account?.server || bridge.brokerServer || null
         bridge.accountLogin = msg.account?.login || bridge.accountLogin || null
-        if (userId === adminUserId && Number.isFinite(Number(msg.quote.timezone_offset_minutes))) setWeeklyMarketTimezoneOffset(msg.quote.timezone_offset_minutes)
       }
       const explicitMarketState = bridge && msg.quote ? applyBridgeMarketState(bridge, { symbol: msg.quote.symbol, ...msg.quote }, userId) : null
       if (bridge && msg.quote && typeof msg.quote.time === 'string') {
@@ -1857,7 +1903,10 @@ async function handleBrowserCommand(ws, userId, msg) {
             observerQuoteDescriptor(dataUserId, observerContext, dataRoute, ws._observerQuoteSymbol))
         } else if (dataUserId && isBridgeAlive(dataUserId)) {
           result = await ai.mt5Bridge(dataUserId, 'quote', routedParams({ symbol: params.symbol }), { noFallback:true })
-          if (result?.status === 'success') recordBridgeMarketState(dataUserId, result)
+          if (result?.status === 'success') recordBridgeMarketState(dataUserId, result, Date.now(), {
+            terminalInstanceId:dataRoute?.terminal_instance_id,
+            tradingAccountId:observerContext?.channel?.trading_account_id,
+          })
         } else {
           if (access.mode === 'observer') observerQuoteFeeds.unsubscribe(ws)
           result = { status: 'error', message: 'MT5桥接未连接' }
@@ -2085,7 +2134,8 @@ async function handleBrowserCommand(ws, userId, msg) {
             item.pending_actions = await loadSignalPendingActions(detailUserId, signalId, delivery.execution_result)
             item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
             if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
-            ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes())
+            ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes(
+              detailUserId, delivery.trading_account_id))
             Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
               requesterUserId: userId, requesterRole: user?.role || 'user',
             })))
@@ -2108,7 +2158,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           item.pending_actions = await loadSignalPendingActions(detailUserId, signalId, item.execution_result)
           item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
           if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
-          ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes())
+          ai.attachSignalTiming(item, await getLabTimezoneOffsetMinutes(detailUserId))
           Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
             requesterUserId: userId, requesterRole: user?.role || 'user',
           })))
@@ -2156,9 +2206,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         const countOldSub = `(SELECT ${countColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${observerOldFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
         const countDelivSub = `(SELECT ${countColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${observerDeliveryFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         // Full subquery for data (exclude market_data_json TEXT for performance)
-        const selectCols = 'id, user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, approved_order_json, created_at, delivery_id, execution_status, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, pending_state, order_state, schema_version, decision_json'
-        const selectColsOld = 's.id, s.user_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, NULL as approved_order_json, s.created_at, NULL as delivery_id, NULL as execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.pending_state, s.order_state, s.schema_version, s.decision_json'
-        const selectColsDeliv = 's.id, d.user_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, d.approved_order_json, s.created_at, d.id as delivery_id, d.execution_status, s.entry_method, s.limit_price, s.stop_limit_price, COALESCE(d.pending_valid_until, s.pending_valid_until) AS pending_valid_until, d.pending_ticket, d.pending_state, s.order_state, s.schema_version, s.decision_json'
+        const selectCols = 'id, user_id, trading_account_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, approved_order_json, created_at, delivery_id, execution_status, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, pending_state, order_state, schema_version, decision_json'
+        const selectColsOld = 's.id, s.user_id, NULL AS trading_account_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, NULL as approved_order_json, s.created_at, NULL as delivery_id, NULL as execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.pending_state, s.order_state, s.schema_version, s.decision_json'
+        const selectColsDeliv = 's.id, d.user_id, d.trading_account_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, d.approved_order_json, s.created_at, d.id as delivery_id, d.execution_status, s.entry_method, s.limit_price, s.stop_limit_price, COALESCE(d.pending_valid_until, s.pending_valid_until) AS pending_valid_until, d.pending_ticket, d.pending_state, s.order_state, s.schema_version, s.decision_json'
         const dataOldSub = `(SELECT ${selectColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${observerOldFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
         const dataDelivSub = `(SELECT ${selectColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${observerDeliveryFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         const oldParams = [queryUserId, ...oldSessionParam, ...observerStrategyParam, ...sharedParams]
@@ -2181,7 +2231,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         const hasMore = allRows.length > limit
         const sliced = allRows.slice(0, limit)
 
-        const signalTimezoneOffset = await getLabTimezoneOffsetMinutes()
+        const accountOffsets = new Map(await Promise.all([...new Set(sliced
+          .map(row => Number(row.trading_account_id)).filter(id => id > 0))]
+          .map(async accountId => [accountId, await getLabTimezoneOffsetMinutes(queryUserId, accountId)])))
         const signals = sliced.map(row => {
           const item = { ...row }
           // Both subqueries already output unified columns: delivery_* fields are named as their final names.
@@ -2192,7 +2244,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           try { item.market_data = JSON.parse(item.market_data_json || '{}') } catch { item.market_data = {} }
           delete item.delivery_id
           item.is_executed = !!item.is_executed
-          ai.attachSignalTiming(item, signalTimezoneOffset)
+          ai.attachSignalTiming(item, accountOffsets.get(Number(item.trading_account_id)) ?? null)
           return ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
             requesterUserId: userId, requesterRole: user?.role || 'user',
           }))
@@ -2349,16 +2401,18 @@ async function handleBrowserCommand(ws, userId, msg) {
       case 'audit_logs': {
         // 审计日志只显示自己的数据
         let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [userId])
-        const auditTimezoneOffset = await getLabTimezoneOffsetMinutes()
-        const logs = ownRows.map(row => {
+        const logs = await Promise.all(ownRows.map(async row => {
           const item = { ...row }
-          item.created_at_mt5 = utcToMt5Time(item.created_at, auditTimezoneOffset)
           try { item.request = JSON.parse(item.request_json) } catch { item.request = {} }
           try { item.result = JSON.parse(item.result_json) } catch { item.result = {} }
+          const accountId = Number(item.request?.trading_account_id
+            ?? item.result?.trading_account_id ?? item.result?.account_id)
+          item.created_at_mt5 = utcToMt5Time(item.created_at,
+            accountId > 0 ? await getLabTimezoneOffsetMinutes(userId, accountId) : null)
           delete item.request_json
           delete item.result_json
           return localizeAuditRow(item)
-        })
+        }))
         result = { status: 'success', logs }
         break
       }
@@ -3053,12 +3107,17 @@ async function handleBrowserCommand(ws, userId, msg) {
 
 // Send command to bridge and wait for result
 export async function sendBridgeCommand(userId, action, params, timeoutMs = 5000, options = {}) {
+  const numericUserId = Number(userId)
   if (action === 'open' || action === 'pending') {
-    const riskLock = weeklyRiskLockResult()
+    const clock = getPlatformMarketClockState(
+      numericUserId,
+      options.tradingAccountId ?? params?.trading_account_id ?? null,
+      params?.terminal_instance_id ?? null)
+    const riskLock = weeklyRiskLockResult(
+      new Date(), clock.timezone_offset_minutes, clock.clock_status)
     if (riskLock) return riskLock
   }
 
-  const numericUserId = Number(userId)
   if (bridgeV3Business?.supports(action) && bridgeV3Business.hasConnectedTerminal(numericUserId)) {
     return bridgeV3Business.execute(numericUserId, action, params, { ...options, timeoutMs })
   }
@@ -3247,7 +3306,7 @@ export function getOwnBridgeMarketState(userId, symbol = null) {
   const bridge = legacy?.ws?.readyState === 1
     ? legacy
     : bridgeV3Business?.hasConnectedTerminal(numericUserId)
-      ? bridgeV3MarketStates.get(numericUserId) || {}
+      ? bridgeV3MarketStateForContext(numericUserId) || {}
       : null
   if (!bridge) {
     return {
@@ -3303,7 +3362,7 @@ export async function getBridgeTradeMode(userId) {
   const bridge = legacy?.ws?.readyState === 1
     ? legacy
     : bridgeV3Business?.hasConnectedTerminal(numericUserId)
-      ? bridgeV3MarketStates.get(numericUserId)
+      ? bridgeV3MarketStateForContext(numericUserId)
       : null
   if (!bridge) return -1
   // Use real-time trade mode detected from MT5 tick_time advancement
@@ -3448,22 +3507,28 @@ export function getLatestBridgeMt5Clock() {
         received_at:receivedAt || null,
         observed_at_utc_msc:bridge.observedAtUtcMsc ?? null,
         timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? bridge._clientHeartbeat?.timezone_offset_minutes ?? null,
+        clock_status:bridge.clockStatus || bridge._clientHeartbeat?.clock_status || 'unknown',
       }
     }
   }
-  for (const [userId, marketState] of bridgeV3MarketStates.entries()) {
+  for (const [userId, states] of bridgeV3MarketStates.entries()) {
     if (!bridgeV3Business?.hasConnectedTerminal(Number(userId))) continue
-    const time = marketState?.mt5TimeStr || null
-    const receivedAt = Number(marketState?.lastTickMs || marketState?.marketState?.receivedAt || 0)
-    if (!time || (latest && receivedAt <= Number(latest.received_at || 0))) continue
-    const route = bridgeV3RouteForContext(Number(userId))
-    latest = {
-      time:String(time),
-      user_id:Number(userId),
-      platform:route?.platform || 'mt5',
-      received_at:receivedAt || null,
-      observed_at_utc_msc:marketState.observedAtUtcMsc ?? null,
-      timezone_offset_minutes:marketState.timezoneOffsetMinutes ?? null,
+    for (const [terminalInstanceId, marketState] of states.entries()) {
+      const time = marketState?.mt5TimeStr || null
+      const receivedAt = Number(marketState?.lastTickMs || marketState?.marketState?.receivedAt || 0)
+      if (!time || (latest && receivedAt <= Number(latest.received_at || 0))) continue
+      const route = (bridgeV3Business?.connectedTerminals(Number(userId)) || [])
+        .find(item => item.terminal_instance_id === terminalInstanceId)
+      latest = {
+        time:String(time),
+        user_id:Number(userId),
+        terminal_instance_id:terminalInstanceId,
+        platform:route?.platform || 'mt5',
+        received_at:receivedAt || null,
+        observed_at_utc_msc:marketState.observedAtUtcMsc ?? null,
+        timezone_offset_minutes:marketState.timezoneOffsetMinutes ?? null,
+        clock_status:marketState.clockStatus || 'unknown',
+      }
     }
   }
   return latest

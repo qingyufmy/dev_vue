@@ -126,7 +126,7 @@ async function applyCollection(run, message) {
 }
 
 function dealTimeMsc(item) {
-  const milliseconds = Number(item?.time_msc || 0)
+  const milliseconds = Number(item?.time_utc_msc ?? item?.time_msc ?? 0)
   if (Number.isSafeInteger(milliseconds) && milliseconds > 0) return milliseconds
   const seconds = Number(item?.time || 0)
   if (Number.isSafeInteger(seconds) && seconds > 0

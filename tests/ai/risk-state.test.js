@@ -59,6 +59,7 @@ describe('account metrics', () => {
     const result = await refreshRiskAccountState(2, 4, {
       account: { equity: 10000, currency: 'USD' }, positions: [], pending: [], instruments: {}, fxRates: {},
       snapshot_complete: true, risk_snapshot_version: 1, businessDate: '2026-07-15',
+      timezone_offset_minutes:180, clock_status:'verified',
       increment: { requested_cursor: {}, through_cursor: {}, closed_positions: [], account_events: [] },
     }, DEFAULT_RISK_POLICY)
     expect(result).toMatchObject({ halt_status: 'active', halt_reason: null, data_complete: true })
@@ -114,7 +115,7 @@ describe('account metrics', () => {
       account: { equity: 9920, currency: 'USD' },
       positions: [{ symbol: 'XAUUSD', volume: 0.01, price_current: 2000, profit: -20 }],
       pending: [], instruments: { XAUUSD: instrument }, fxRates: {}, snapshot_complete: true,
-      businessDate: '2026-07-15', previousState: {
+      businessDate: '2026-07-15', timezone_offset_minutes:180, clock_status:'verified', previousState: {
         ...stateRow, day_realized_net: -10, consecutive_losses: 1,
         cumulative_cash_flow: 1000, last_deal_time_msc: 1000, last_deal_ticket: 10,
       },
@@ -152,7 +153,7 @@ describe('account metrics', () => {
     const result = calculateAccountRiskMetrics({
       risk_snapshot_version: 1, account: { equity: 10000, currency: 'USD' },
       positions: [], pending: [], instruments: { XAUUSD: instrument }, fxRates: {},
-      snapshot_complete: true, businessDate: '2026-07-15',
+      snapshot_complete: true, businessDate: '2026-07-15', timezone_offset_minutes:180, clock_status:'verified',
       previousState: { ...stateRow, last_deal_time_msc: 1000, last_deal_ticket: 10 },
       increment: {
         requested_cursor: { time_msc: 2000, ticket: 20 },
@@ -161,6 +162,16 @@ describe('account metrics', () => {
     })
     expect(result.data_complete).toBe(false)
     expect(result.data_incomplete_reasons).toContain('deal_cursor_gap')
+  })
+
+  it('fails closed when an incremental snapshot has no verified terminal clock', () => {
+    const result = calculateAccountRiskMetrics({
+      risk_snapshot_version:1, account:{ equity:10000, currency:'USD' }, positions:[], pending:[],
+      instruments:{}, fxRates:{}, snapshot_complete:true, businessDate:'2026-07-15',
+      increment:{ requested_cursor:{}, through_cursor:{}, closed_positions:[], account_events:[] },
+    })
+    expect(result.data_complete).toBe(false)
+    expect(result.data_incomplete_reasons).toContain('terminal_clock_unverified')
   })
 })
 

@@ -93,12 +93,14 @@ export function compactRates(rates) {
 
 const pad = n => String(n).padStart(2, '0')
 
-export function utcToMt5Time(str, timezoneOffsetMinutes = 180) {
+export function utcToMt5Time(str, timezoneOffsetMinutes = null) {
   if (!str) return null
   try {
     const d = parseBeijing(str)
     if (!d) return str
-    const offset = Number.isFinite(Number(timezoneOffsetMinutes)) ? Math.trunc(Number(timezoneOffsetMinutes)) : 180
+    if (timezoneOffsetMinutes === null || timezoneOffsetMinutes === undefined || timezoneOffsetMinutes === '') return null
+    const offset = Number(timezoneOffsetMinutes)
+    if (!Number.isInteger(offset) || offset < -720 || offset > 840) return null
     const shifted = new Date(d.getTime() + offset * 60_000)
     return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth()+1)}-${pad(shifted.getUTCDate())} ${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:${pad(shifted.getUTCSeconds())}`
   } catch { return str }
@@ -117,7 +119,7 @@ export function signalAgeSeconds(createdAt) {
   } catch { return 999999 }
 }
 
-export function attachSignalTiming(signal, timezoneOffsetMinutes = 180) {
+export function attachSignalTiming(signal, timezoneOffsetMinutes = null) {
   const ttl = signalTtlSeconds(signal.timeframe || '')
   const age = signalAgeSeconds(signal.created_at)
   signal.ttl_seconds = ttl
@@ -126,7 +128,10 @@ export function attachSignalTiming(signal, timezoneOffsetMinutes = 180) {
     ? (() => { const d = parseBeijing(signal.created_at); if (!d) return null; d.setSeconds(d.getSeconds() + ttl); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` })()
     : null
   signal.is_stale = age > ttl
-  signal.mt5_timezone_offset_minutes = Number.isFinite(Number(timezoneOffsetMinutes)) ? Math.trunc(Number(timezoneOffsetMinutes)) : 180
+  const offset = timezoneOffsetMinutes === null || timezoneOffsetMinutes === undefined || timezoneOffsetMinutes === ''
+    ? Number.NaN : Number(timezoneOffsetMinutes)
+  signal.mt5_timezone_offset_minutes = Number.isInteger(offset) && offset >= -720 && offset <= 840
+    ? offset : null
   signal.created_at_mt5 = utcToMt5Time(signal.created_at, signal.mt5_timezone_offset_minutes)
   signal.expires_at_mt5 = utcToMt5Time(signal.expires_at, signal.mt5_timezone_offset_minutes)
   return signal

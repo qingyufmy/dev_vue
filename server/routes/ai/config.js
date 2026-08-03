@@ -69,6 +69,7 @@ export function buildBridgeOrderCall(request) {
       take_profit_candidates: _takeProfitCandidates,
       normalization_info: _normalizationInfo,
       mt5_timezone_offset_minutes: _mt5TimezoneOffsetMinutes,
+      mt5_clock_status: _mt5ClockStatus,
       ...bridgeParams
     } = request
     return { bridgeAction: 'open', bridgeParams }
@@ -81,9 +82,13 @@ export function buildBridgeOrderCall(request) {
   }
   const pendingType = pendingTypeMap[entryMethod] || entryMethod
   const rawOffsetMinutes = Number(request.mt5_timezone_offset_minutes)
-  const timezoneOffsetMinutes = Number.isFinite(rawOffsetMinutes) && rawOffsetMinutes >= -720 && rawOffsetMinutes <= 840
-    ? Math.trunc(rawOffsetMinutes)
-    : 180
+  const clockStatus = String(request.mt5_clock_status || '').trim().toLowerCase()
+  if (!Number.isInteger(rawOffsetMinutes) || rawOffsetMinutes < -720 || rawOffsetMinutes > 840
+    || !clockStatus
+    || ['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(clockStatus)) {
+    throw new Error('mt5_clock_unverified')
+  }
+  const timezoneOffsetMinutes = rawOffsetMinutes
   let expiration = 0
   if (request.pending_valid_until) {
     const expDate = new Date(request.pending_valid_until.replace(' ', 'T') + 'Z')
@@ -150,9 +155,14 @@ export async function getAnalyzeApiKey(userId, sessionId, strategyId = null) {
 
 export function enrichOrderRequest({ request:prepared, quote } = {}) {
   if (!prepared || !quote) return
+  const hasOffset = quote.timezone_offset_minutes !== null
+    && quote.timezone_offset_minutes !== undefined && quote.timezone_offset_minutes !== ''
   const offset = Number(quote.timezone_offset_minutes)
-  if (Number.isFinite(offset) && offset >= -720 && offset <= 840) {
+  const clockStatus = String(quote.clock_status || '').trim().toLowerCase()
+  if (hasOffset && Number.isInteger(offset) && offset >= -720 && offset <= 840 && clockStatus
+    && !['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(clockStatus)) {
     prepared.mt5_timezone_offset_minutes = Math.trunc(offset)
+    prepared.mt5_clock_status = clockStatus
   }
   if (!prepared.symbol) return
   prepared.quote_price = parseFloat(prepared.order_type === 'buy' ? quote.ask : quote.bid)
@@ -309,13 +319,20 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
     `SELECT s.user_id, s.selected_symbols_json, apt.symbols_json as strategy_symbols_json,
             apt.scope AS strategy_scope, apt.owner_user_id AS strategy_owner_user_id,
             s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
-            ss.id AS subscription_id, ss.schedule_enabled, ss.schedule_timezone,
+            ss.id AS subscription_id, ss.trading_account_id, ss.schedule_enabled, ss.schedule_timezone,
             ss.schedule_weekdays_json, ss.schedule_windows_json, ss.outside_window_behavior,
+            mds.timezone_offset_minutes AS runtime_timezone_offset_minutes,
+            mds.clock_status AS runtime_clock_status,
             u.plan, u.role
      FROM auto_scheduler s
      JOIN auto_prompt_types apt ON apt.id = s.prompt_type_id
      JOIN strategy_subscriptions ss ON ss.user_id = s.user_id AND ss.strategy_id = s.prompt_type_id
        AND ss.execution_enabled = 1 AND ss.is_deleted = 0
+     JOIN trading_accounts ta ON ta.id = ss.trading_account_id AND ta.user_id = ss.user_id
+       AND ta.is_deleted = 0
+     LEFT JOIN market_data_sources mds ON mds.bridge_user_id = ss.user_id
+       AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(ta.broker_server)
+       AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
      JOIN users u ON u.id = s.user_id
      WHERE s.prompt_type_id = ? AND s.enabled = 1
        AND (apt.scope = 'platform' OR (apt.scope = 'private' AND apt.owner_user_id = s.user_id))
@@ -350,9 +367,16 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
 
 export async function getDeliverySubscriptionRuntime(userId, promptTypeId, symbol) {
   const rows = await queryAll(
-    `SELECT ss.*, apt.symbols_json AS strategy_symbols_json
+    `SELECT ss.*, apt.symbols_json AS strategy_symbols_json,
+       mds.timezone_offset_minutes AS runtime_timezone_offset_minutes,
+       mds.clock_status AS runtime_clock_status
      FROM strategy_subscriptions ss
      JOIN auto_prompt_types apt ON apt.id = ss.strategy_id AND apt.deleted_at IS NULL
+     JOIN trading_accounts ta ON ta.id = ss.trading_account_id AND ta.user_id = ss.user_id
+       AND ta.is_deleted = 0
+     LEFT JOIN market_data_sources mds ON mds.bridge_user_id = ss.user_id
+       AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(ta.broker_server)
+       AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
      WHERE ss.user_id = ? AND ss.strategy_id = ?
        AND ss.execution_enabled = 1 AND ss.is_deleted = 0
      ORDER BY ss.updated_at DESC, ss.id DESC`,
@@ -650,7 +674,9 @@ export async function executeOrderCore(userId, config, request, action, options 
         snapshot_complete: riskSnapshot.complete === true,
         data_incomplete_reasons: riskSnapshot.incomplete_reasons || [],
         risk_snapshot_version: Number(riskSnapshot.snapshot_version || 0),
-        timezone_offset_minutes:Number(riskSnapshot.timezone_offset_minutes || 0),
+        timezone_offset_minutes:riskSnapshot.timezone_offset_minutes == null
+          || riskSnapshot.timezone_offset_minutes === '' ? null : Number(riskSnapshot.timezone_offset_minutes),
+        clock_status:riskSnapshot.clock_status || '',
         businessDate: riskSnapshot.business_date,
         increment: riskSnapshot.increment || {},
         broker_calculation: riskSnapshot.broker_calculation || null,

@@ -379,7 +379,7 @@ describe('subscription transaction and V1 execution constraint', () => {
       schedule_windows:[{ start:'09:00', end:'12:00' }], outside_window_behavior:'signals_only',
     })
     const insert = txRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))
-    expect(insert[1]).toContain('UTC')
+    expect(insert[1]).toContain('terminal_server')
     expect(insert[1]).toContain('[1,3,5]')
     expect(insert[1]).toContain('[{"start":"09:00","end":"12:00"}]')
     expect(insert[1]).toContain('signals_only')

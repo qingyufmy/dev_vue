@@ -310,20 +310,27 @@ const rejection = (rules, code, details = {}) => ({ decision_status: 'reject', r
 const quoteEpoch = value => {
   if (typeof value === 'number') return value > 1e12 ? value : value * 1000
   const text = String(value || '')
-  const parsed = Date.parse(text.replace(' ', 'T') + (/[zZ]|[+-]\d\d:\d\d$/.test(text) ? '' : '+08:00'))
+  if (!/[zZ]|[+-]\d\d:?\d\d$/.test(text)) return null
+  const parsed = Date.parse(text.replace(' ', 'T'))
   return Number.isFinite(parsed) ? parsed : null
 }
-const DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES = 180
-
 function mt5TimezoneOffsetMinutes(value) {
-  if (value === null || value === undefined || value === '') return DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+  if (value === null || value === undefined || value === '') return null
   const offset = Number(value)
-  return Number.isFinite(offset) && offset >= -720 && offset <= 840
-    ? Math.trunc(offset) : DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+  return Number.isInteger(offset) && offset >= -720 && offset <= 840
+    ? offset : null
 }
 
-export function weekendProtectionState(nowMs, minutes, timezoneOffsetMinutes = DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES) {
+export function weekendProtectionState(nowMs, minutes, timezoneOffsetMinutes = null, clockStatus = '') {
   const offsetMinutes = mt5TimezoneOffsetMinutes(timezoneOffsetMinutes)
+  const normalizedStatus = String(clockStatus || '').trim().toLowerCase()
+  if (offsetMinutes == null || !normalizedStatus
+    || ['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(normalizedStatus)) {
+    return {
+      protected:true, clock_unverified:true, timezone_offset_minutes:null,
+      mt5_weekday:null, mt5_time:null, close_advance_minutes:Number(minutes),
+    }
+  }
   const date = new Date(nowMs + offsetMinutes * 60_000)
   const day = date.getUTCDay()
   const minute = day * 1440 + date.getUTCHours() * 60 + date.getUTCMinutes()
@@ -486,7 +493,9 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
       const rejected = rolloutReject('R4.3_SIGNAL_EXPIRED'); if (rejected) return rejected
     }
   }
-  const weekendProtection = weekendProtectionState(nowMs, policy.weekend_close_minutes, quote?.timezone_offset_minutes)
+  const weekendProtection = weekendProtectionState(
+    nowMs, policy.weekend_close_minutes,
+    quote?.timezone_offset_minutes, quote?.clock_status)
   if (weekendProtection.protected) {
     const rejected = rolloutReject('R4.2_WEEKEND_PROTECTION', weekendProtection); if (rejected) return rejected
   }

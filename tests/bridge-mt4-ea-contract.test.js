@@ -152,7 +152,7 @@ describe('MT4 EA snapshot performance contract', () => {
 describe('MT4 EA history paging performance contract', () => {
   it('builds the terminal history index once and reuses it across cursor pages', () => {
     const index = functionBlock('bool EnsureHistoryCursorIndex', 'void SendDeals')
-    const send = functionBlock('void SendDeals', 'string UtcDateTimeText')
+    const send = functionBlock('void SendDeals', 'string ServerDateTimeText')
 
     expect(index.match(/OrdersHistoryTotal\(\)/g)).toHaveLength(1)
     expect(index).toContain('g_history_index_total == history_total')

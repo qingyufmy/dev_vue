@@ -13,6 +13,8 @@ const parseJson = (value, fallback = {}) => {
 const txOne = async (run, sql, params = []) => ((await run(sql, params))[0] || [])[0] || null
 const txAll = async (run, sql, params = []) => (await run(sql, params))[0] || []
 const nowDate = () => beijingNow().slice(0, 10)
+const validTimezoneOffset = value => value !== null && value !== undefined && value !== ''
+  && Number.isInteger(Number(value)) && Number(value) >= -720 && Number(value) <= 840
 
 export class StatefulRiskReject extends Error {
   constructor(reason, details = {}) {
@@ -51,11 +53,17 @@ function compareCursor(left, right) {
   return left[0] === right[0] ? left[1] - right[1] : left[0] - right[0]
 }
 
-function calculateIncrementalMetrics({ account, positions = [], pending = [], instruments = {}, fxRates = {}, previousState = {}, businessDate = nowDate(), snapshot_complete = true, data_incomplete_reasons = [], increment = {}, timezone_offset_minutes = 0 }) {
+function calculateIncrementalMetrics({ account, positions = [], pending = [], instruments = {}, fxRates = {}, previousState = {}, businessDate = null, snapshot_complete = true, data_incomplete_reasons = [], increment = {}, timezone_offset_minutes = null, clock_status = '' }) {
   const stateCursor = [Math.max(0, Number(previousState.last_deal_time_msc) || 0), Math.max(0, Number(previousState.last_deal_ticket) || 0)]
   const requestedCursor = cursorOf(increment.requested_cursor)
   const throughCursor = cursorOf(increment.through_cursor)
   const reasons = [...new Set((data_incomplete_reasons || []).map(String).filter(Boolean))]
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(businessDate || ''))) reasons.push('terminal_business_date_missing')
+  const clockStatus = String(clock_status || '').trim().toLowerCase()
+  if (!validTimezoneOffset(timezone_offset_minutes) || !clockStatus
+    || ['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(clockStatus)) {
+    reasons.push('terminal_clock_unverified')
+  }
   if (!snapshot_complete && reasons.length === 0) reasons.push('risk_snapshot_incomplete')
   if (stateCursor[0] > 0 && compareCursor(requestedCursor, stateCursor) > 0) reasons.push('deal_cursor_gap')
   const afterState = item => compareCursor(cursorOf(item, item.close_time_msc != null ? 'close_time_msc' : 'time_msc', item.close_deal_ticket != null ? 'close_deal_ticket' : 'ticket'), stateCursor) > 0
@@ -95,7 +103,9 @@ function calculateIncrementalMetrics({ account, positions = [], pending = [], in
     daily_loss_pct: dailyLossPct, cumulative_cash_flow: cumulativeCashFlow, equity_high_water: highWater,
     drawdown_pct: drawdownPct, consecutive_losses: consecutiveLosses, notional, data_complete: dataComplete,
     data_incomplete_reasons: reasons, last_deal_time_msc: nextCursor[0], last_deal_ticket: nextCursor[1],
-    loss_streak_events:lossStreakEvents, timezone_offset_minutes:Number(timezone_offset_minutes || 0),
+    loss_streak_events:lossStreakEvents,
+    timezone_offset_minutes:validTimezoneOffset(timezone_offset_minutes) ? Number(timezone_offset_minutes) : null,
+    clock_status:clockStatus || 'unknown',
   }
 }
 
@@ -111,7 +121,9 @@ export function consecutiveLossCooldownUntil(metrics, previousLosses, policy, no
   let closeUtcMs = Number(crossing.close_time_utc_msc || 0)
   if (!(closeUtcMs > 0)) {
     const rawCloseMs = Number(crossing.close_time_msc || 0)
-    if (rawCloseMs > 0) closeUtcMs = rawCloseMs - Number(metrics.timezone_offset_minutes || 0) * 60000
+    if (rawCloseMs > 0 && validTimezoneOffset(metrics.timezone_offset_minutes)) {
+      closeUtcMs = rawCloseMs - Number(metrics.timezone_offset_minutes) * 60000
+    }
   }
   if (!(closeUtcMs > 0)) return null
   const deadlineUtcMs = closeUtcMs + Math.max(1, Number(policy?.loss_cooldown_minutes || 0)) * 60000

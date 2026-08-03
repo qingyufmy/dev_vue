@@ -52,10 +52,15 @@ describe('AI governance navigation and DOM contract', () => {
 
     expect(formatTerminalQuoteTime({
       time:'2026-07-27T06:12:34.000Z', timezone_offset_minutes:180,
+      clock_status:'progressing_tick',
     })).toBe('2026-07-27 09:12:34')
     expect(formatTerminalQuoteTime({
       observed_at_utc_msc:observedAtUtcMsc, timezone_offset_minutes:180,
+      clock_status:'persisted_stale',
     })).toBe('2026-07-27 09:12:34')
+    expect(formatTerminalQuoteTime({
+      time:'2026-07-27T06:12:34.000Z', timezone_offset_minutes:180,
+    })).toBe('2026-07-27 06:12:34')
   })
 
   it('does not double-apply the offset to legacy unzoned broker time strings', () => {
@@ -490,13 +495,14 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.inline-check-card,.inline-check { display:flex; flex-direction:row')
     expect(app).toContain('replace_active:replaceActive')
     expect(app).toContain('selectedSubscriptionScheduleWindows()')
-    expect(html).toContain('<option value="Etc/GMT-3">交易平台服务器时间（UTC+3）</option>')
-    expect(html).toContain('北京时间（UTC+8）')
-    expect(html).toContain('伦敦时间（UTC+0，夏令时 UTC+1）')
-    expect(html).toContain('纽约时间（UTC-5，夏令时 UTC-4）')
+    expect(html).toContain('<option value="terminal_server">交易平台服务器时间（等待终端校准）</option>')
+    expect(html).toContain('休市时沿用最后一次已验证时区，未校准前暂停定时任务')
+    expect(html).not.toContain('北京时间（UTC+8）')
+    expect(html).not.toContain('伦敦时间（UTC+0，夏令时 UTC+1）')
+    expect(html).not.toContain('纽约时间（UTC-5，夏令时 UTC-4）')
     expect(app).toContain('const defaultScheduleTimezone = syncMt5ScheduleTimezoneOption();')
-    expect(app).toContain('accountSubscription?.schedule_timezone || defaultScheduleTimezone')
-    expect(app).toContain('return "Etc/GMT-3"')
+    expect(app).toContain('$("subscriptionScheduleTimezone").value = defaultScheduleTimezone')
+    expect(app).toContain('return "terminal_server"')
   })
 
   it('uses platform-neutral account errors for MT4 and MT5 subscriptions', () => {
@@ -596,7 +602,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(adminApp).toContain('data-ai-tab="model-compare"')
     expect(adminApp).toContain("data_source:'snapshots'")
     expect(adminApp).toContain('snapshot_ids:[...compare.selected.keys()]')
-    expect(adminApp).toContain('timezone_offset_minutes:180')
+    expect(adminApp).not.toContain('timezone_offset_minutes:180')
     expect(adminApp).toContain("api('/api/admin/ai/model-compare/jobs'")
     expect(html).not.toContain('id="modelCompareWorkspace"')
   })

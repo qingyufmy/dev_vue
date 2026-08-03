@@ -41,9 +41,11 @@ describe('order request enrichment', () => {
     const request = {
       symbol:'XAUUSD', order_type:'buy', stop_loss_points:100, take_profit_points:200,
     }
-    enrichOrderRequest({ request, quote:{ ask:4000, bid:3999.8, point:0.01, timezone_offset_minutes:120 } })
+    enrichOrderRequest({ request, quote:{ ask:4000, bid:3999.8, point:0.01,
+      timezone_offset_minutes:120, clock_status:'verified' } })
     expect(request).toMatchObject({
       mt5_timezone_offset_minutes:120,
+      mt5_clock_status:'verified',
       quote_price:4000,
       sl:3999,
       tp:4002,
@@ -167,10 +169,17 @@ describe('signalOrderPayload', () => {
 })
 
 describe('buildBridgeOrderCall', () => {
+  it('fails closed for pending expiration when terminal time is unverified', () => {
+    expect(() => buildBridgeOrderCall({
+      symbol:'XAUUSD', entry_method:'limit', order_type:'buy', limit_price:3980, volume:0.01,
+    })).toThrow('mt5_clock_unverified')
+  })
+
   it('preserves a manual magic number for pending orders', () => {
     const result = buildBridgeOrderCall({
       symbol:'XAUUSD', entry_method:'limit', order_type:'buy',
       limit_price:3980, volume:0.01, magic:0,
+      mt5_timezone_offset_minutes:180, mt5_clock_status:'verified',
     })
     expect(result.bridgeParams.magic).toBe(0)
   })
@@ -196,6 +205,7 @@ describe('buildBridgeOrderCall', () => {
       symbol: 'XAUUSD', entry_method: 'limit', order_type: 'buy',
       limit_price: 3980, volume: 0.01, sl: 3970, tp: 4000,
       pending_valid_until: '2026-07-04 12:00:00',
+      mt5_timezone_offset_minutes:180, mt5_clock_status:'verified',
     })
     expect(result.bridgeAction).toBe('pending')
     expect(result.bridgeParams.order_type).toBe('buy_limit')
@@ -209,7 +219,7 @@ describe('buildBridgeOrderCall', () => {
       symbol: 'XAUUSD', entry_method: 'limit', order_type: 'buy',
       limit_price: 3980, volume: 0.01,
       pending_valid_until: '2026-07-04 12:00:00',
-      mt5_timezone_offset_minutes: 120,
+      mt5_timezone_offset_minutes: 120, mt5_clock_status:'verified',
     })
     const expectedExpiration = Math.floor(new Date('2026-07-04T12:00:00Z').getTime() / 1000) + 7200
     expect(result.bridgeParams.expiration).toBe(expectedExpiration)
@@ -227,6 +237,7 @@ describe('buildBridgeOrderCall', () => {
     const result = buildBridgeOrderCall({
       symbol: 'XAUUSD', entry_method: 'stop', order_type: 'sell',
       limit_price: 4050, volume: 0.01,
+      mt5_timezone_offset_minutes:180, mt5_clock_status:'verified',
     })
     expect(result.bridgeAction).toBe('pending')
     expect(result.bridgeParams.order_type).toBe('sell_stop')
@@ -237,6 +248,7 @@ describe('buildBridgeOrderCall', () => {
     const result = buildBridgeOrderCall({
       symbol: 'XAUUSD', entry_method: 'stop_limit', order_type: 'sell',
       limit_price: 3990, stop_limit_price: 3995, volume: 0.01,
+      mt5_timezone_offset_minutes:180, mt5_clock_status:'verified',
     })
     expect(result.bridgeParams).toMatchObject({ order_type: 'sell_stop_limit', price: 3990, stoplimit_price: 3995 })
   })
@@ -246,6 +258,7 @@ describe('buildBridgeOrderCall', () => {
     const result = buildBridgeOrderCall({
       symbol: 'XAUUSD', entry_method: 'limit', order_type: 'buy',
       limit_price: 3980, volume: 0.01,
+      mt5_timezone_offset_minutes:180, mt5_clock_status:'verified',
     })
     const after = before + 5
     expect(result.bridgeParams.expiration).toBeGreaterThanOrEqual(before)

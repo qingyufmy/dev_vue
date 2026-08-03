@@ -19,6 +19,7 @@ const closedCacheWrites = new Map()
 let lastCleanupAt = 0
 
 function validTimezoneOffsetMinutes(value) {
+  if (value === null || value === undefined || value === '') return null
   const offset = Number(value)
   return Number.isInteger(offset) && offset >= -14 * 60 && offset <= 14 * 60 && offset % 15 === 0
     ? offset : null
@@ -43,19 +44,20 @@ function normalizedUtcMs(rate, offsetMinutes) {
   const direct = Number(rate?.time_utc_msc)
   if (Number.isFinite(direct) && direct > 0) return direct
   const raw = Number(rate?.time_msc)
-  if (Number.isFinite(raw) && raw > 0 && Number.isFinite(Number(offsetMinutes))) return raw - Number(offsetMinutes) * 60000
+  const offset = validTimezoneOffsetMinutes(offsetMinutes)
+  if (Number.isFinite(raw) && raw > 0 && offset != null) return raw - offset * 60000
   const parsed = Date.parse(String(rate?.time || '').replace(' ', 'T') + 'Z')
-  return Number.isFinite(parsed) && Number.isFinite(Number(offsetMinutes)) ? parsed - Number(offsetMinutes) * 60000 : null
+  return Number.isFinite(parsed) && offset != null ? parsed - offset * 60000 : null
 }
 
 function normalizedBrokerTime(rate, offsetMinutes, utcMs) {
   const direct = String(rate?.time || '').trim()
   if (direct) return direct.slice(0, 32)
   const serverMs = Number(rate?.time_server_msc)
-  const offset = Number(offsetMinutes)
+  const offset = validTimezoneOffsetMinutes(offsetMinutes)
   const derivedMs = Number.isFinite(serverMs) && serverMs > 0
     ? serverMs
-    : Number.isFinite(offset)
+    : offset != null
       ? utcMs + offset * 60000
       : utcMs
   if (!Number.isFinite(derivedMs) || derivedMs <= 0) return null

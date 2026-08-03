@@ -687,13 +687,6 @@ bool CursorAfter(const long event_time, const int event_ticket,
    return(event_time > cursor_time || (event_time == cursor_time && event_ticket > cursor_ticket));
   }
 
-string UtcBusinessDate(const long utc_msc)
-  {
-   string value = TimeToString((datetime)(utc_msc / 1000), TIME_DATE);
-   StringReplace(value, ".", "-");
-   return(value);
-  }
-
 string JsonLong(const long value)
   {
    return(StringFormat("%I64d", value));
@@ -763,6 +756,12 @@ void SendRiskSnapshot(uchar &request[], int &offset)
       || baseline_utc_msc < 0)
      {
       SendRiskSnapshotResult(request_id, 2, "", "risk_snapshot_params_invalid", 0);
+      return;
+     }
+   RefreshServerOffsetFromFreshTick();
+   if(!g_server_offset_valid)
+     {
+      SendRiskSnapshotResult(request_id, 2, "", "mt4_clock_unverified", 0);
       return;
      }
    long captured_at = ((long)TimeGMT()) * 1000;
@@ -841,8 +840,9 @@ void SendRiskSnapshot(uchar &request[], int &offset)
          closed += "{\"position_id\":" + IntegerToString(history_ticket)
             + ",\"close_time_msc\":" + JsonLong(close_utc_msc)
             + ",\"close_time_utc_msc\":" + JsonLong(close_utc_msc)
+            + ",\"close_time_server_msc\":" + JsonLong(((long)event_time) * 1000)
             + ",\"close_deal_ticket\":" + IntegerToString(history_ticket)
-            + ",\"business_date\":\"" + UtcBusinessDate(close_utc_msc) + "\""
+            + ",\"business_date\":\"" + ServerDateText(event_time) + "\""
             + ",\"net\":" + JsonNumber(net) + "}";
          first_closed = false;
         }
@@ -851,7 +851,9 @@ void SendRiskSnapshot(uchar &request[], int &offset)
          if(!first_event) events += ",";
          events += "{\"ticket\":" + IntegerToString(history_ticket)
             + ",\"time_msc\":" + JsonLong(close_utc_msc)
-            + ",\"business_date\":\"" + UtcBusinessDate(close_utc_msc) + "\""
+            + ",\"time_utc_msc\":" + JsonLong(close_utc_msc)
+            + ",\"time_server_msc\":" + JsonLong(((long)event_time) * 1000)
+            + ",\"business_date\":\"" + ServerDateText(event_time) + "\""
             + ",\"deal_type\":" + IntegerToString(history_type)
             + ",\"category\":\"capital\",\"amount\":" + JsonNumber(net) + "}";
          first_event = false;
@@ -864,8 +866,10 @@ void SendRiskSnapshot(uchar &request[], int &offset)
       && proposed_entry_value != "" && proposed_sl_value != "")
       warnings = "[\"mt4_broker_calculation_unavailable\"]";
 
-   long observed_at = ((long)MarketInfo(broker_symbol, MODE_TIME)) * 1000 - server_offset_msc;
+   long observed_server = ((long)MarketInfo(broker_symbol, MODE_TIME)) * 1000;
+   long observed_at = observed_server - server_offset_msc;
    if(observed_at <= 0) observed_at = captured_at;
+   if(observed_server <= 0) observed_server = observed_at + server_offset_msc;
    int offset_minutes = (int)(server_offset_msc / 60000);
    string account = "{\"login\":" + IntegerToString(AccountNumber())
       + ",\"server\":\"" + JsonEscape(AccountServer()) + "\""
@@ -883,8 +887,9 @@ void SendRiskSnapshot(uchar &request[], int &offset)
       + ",\"margin_so_so\":" + JsonNumber(AccountStopoutLevel()) + "}";
    string payload = "{\"snapshot_version\":1,\"source\":\"mt4\",\"complete\":true"
       + ",\"incomplete_reasons\":" + incomplete_reasons + ",\"warnings\":" + warnings
-      + ",\"business_date\":\"" + UtcBusinessDate(observed_at) + "\""
-      + ",\"mt4_time_msc\":" + JsonLong(observed_at)
+      + ",\"business_date\":\"" + ServerDateText((datetime)(observed_server / 1000)) + "\""
+      + ",\"mt4_time_msc\":" + JsonLong(observed_server)
+      + ",\"time_server_msc\":" + JsonLong(observed_server)
       + ",\"time_msc\":" + JsonLong(observed_at)
       + ",\"time_utc_msc\":" + JsonLong(observed_at)
       + ",\"timezone_offset_minutes\":" + IntegerToString(offset_minutes)
@@ -928,6 +933,12 @@ void SendPerformanceDaily(uchar &request[], int &offset)
       || login != IntegerToString(AccountNumber()) || connection_epoch != g_connection_epoch)
      {
       SendPerformanceDailyResult(request_id, 2, "", "performance_route_mismatch", observed_at);
+      return;
+     }
+   RefreshServerOffsetFromFreshTick();
+   if(!g_server_offset_valid)
+     {
+      SendPerformanceDailyResult(request_id, 2, "", "mt4_clock_unverified", observed_at);
       return;
      }
    string parse_from = date_from;
@@ -1083,6 +1094,8 @@ string BuildSelectedHistoryDealJson(const long event_utc_msc, const long server_
       + "\"position_id\":\"" + IntegerToString(OrderTicket()) + "\","
       + "\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\","
       + "\"time_msc\":" + JsonLong(event_utc_msc) + ","
+      + "\"time_utc_msc\":" + JsonLong(event_utc_msc) + ","
+      + "\"time_server_msc\":" + JsonLong(event_utc_msc + server_offset_msc) + ","
       + "\"type\":" + IntegerToString(order_type) + ","
       + "\"category\":\"" + category + "\","
       + "\"side\":\"" + side + "\","
@@ -1092,9 +1105,9 @@ string BuildSelectedHistoryDealJson(const long event_utc_msc, const long server_
       + "\"price_close\":" + JsonNumber(OrderClosePrice()) + ","
       + "\"sl\":" + JsonNumber(OrderStopLoss()) + ","
       + "\"tp\":" + JsonNumber(OrderTakeProfit()) + ","
-      + "\"entry_time\":\"" + JsonEscape(UtcDateTimeText(OrderOpenTime(), server_offset_msc)) + "\","
-      + "\"close_time\":\"" + JsonEscape(UtcDateTimeText(
-         OrderCloseTime() > 0 ? OrderCloseTime() : OrderOpenTime(), server_offset_msc)) + "\","
+      + "\"entry_time\":\"" + JsonEscape(ServerDateTimeText(OrderOpenTime())) + "\","
+      + "\"close_time\":\"" + JsonEscape(ServerDateTimeText(
+         OrderCloseTime() > 0 ? OrderCloseTime() : OrderOpenTime())) + "\","
       + "\"profit\":" + JsonNumber(OrderProfit()) + ","
       + "\"commission\":" + JsonNumber(OrderCommission()) + ","
       + "\"swap\":" + JsonNumber(OrderSwap()) + ","
@@ -1168,6 +1181,12 @@ void SendDeals(uchar &request[], int &offset)
    long window_end = cursor_time + window_msc;
    if(window_end > captured_at) window_end = captured_at;
    if(window_end < cursor_time) window_end = cursor_time;
+   RefreshServerOffsetFromFreshTick();
+   if(!g_server_offset_valid)
+     {
+      DisconnectPipe();
+      return;
+     }
    long server_offset_msc = CurrentServerOffsetMsc();
    long event_times[];
    long event_tickets[];
@@ -1252,18 +1271,17 @@ void SendDeals(uchar &request[], int &offset)
    if(!WriteFrame(response)) DisconnectPipe();
   }
 
-string UtcDateTimeText(const datetime server_time, const long server_offset_msc)
+string ServerDateTimeText(const datetime server_time)
   {
    if(server_time <= 0) return("");
-   string value = TimeToString((datetime)(ServerTimeToUtcMsc(server_time, server_offset_msc) / 1000),
-      TIME_DATE|TIME_SECONDS);
+   string value = TimeToString(server_time, TIME_DATE|TIME_SECONDS);
    StringReplace(value, ".", "-");
    return(value);
   }
 
-string UtcDateText(const datetime server_time, const long server_offset_msc)
+string ServerDateText(const datetime server_time)
   {
-   string value = UtcDateTimeText(server_time, server_offset_msc);
+   string value = ServerDateTimeText(server_time);
    return(StringLen(value) >= 10 ? StringSubstr(value, 0, 10) : "");
   }
 
@@ -1286,8 +1304,8 @@ bool HistoryOrderMatches(const string date_from, const string date_to,
   {
    int order_type = OrderType();
    if(!IsMarketHistoryOrder(order_type) || OrderCloseTime() <= 0) return(false);
-   string close_date = UtcDateText(OrderCloseTime(), server_offset_msc);
-   string entry_date = UtcDateText(OrderOpenTime(), server_offset_msc);
+   string close_date = ServerDateText(OrderCloseTime());
+   string entry_date = ServerDateText(OrderOpenTime());
    if(!DateInRange(close_date, date_from, date_to)) return(false);
    if(entry_from != "" && StringCompare(entry_date, entry_from) < 0) return(false);
    if(entry_to != "" && StringCompare(entry_date, entry_to) > 0) return(false);
@@ -1302,6 +1320,10 @@ string BuildSelectedClosedOrderJson(const long server_offset_msc)
   {
    string type = OrderType() == OP_BUY ? "BUY" : "SELL";
    double net_profit = OrderProfit() + OrderSwap() + OrderCommission();
+   long entry_server_msc = ((long)OrderOpenTime()) * 1000;
+   long close_server_msc = ((long)OrderCloseTime()) * 1000;
+   long entry_utc_msc = entry_server_msc - server_offset_msc;
+   long close_utc_msc = close_server_msc - server_offset_msc;
    return("{"
       + "\"ticket\":\"" + IntegerToString(OrderTicket()) + "\","
       + "\"deal_ticket\":\"" + IntegerToString(OrderTicket()) + "\","
@@ -1318,9 +1340,17 @@ string BuildSelectedClosedOrderJson(const long server_offset_msc)
       + "\"commission\":" + JsonNumber(OrderCommission()) + ","
       + "\"fee\":0,"
       + "\"net_profit\":" + JsonNumber(net_profit) + ","
-      + "\"entry_time\":\"" + UtcDateTimeText(OrderOpenTime(), server_offset_msc) + "\","
-      + "\"close_time\":\"" + UtcDateTimeText(OrderCloseTime(), server_offset_msc) + "\","
-      + "\"time\":\"" + UtcDateTimeText(OrderCloseTime(), server_offset_msc) + "\","
+      + "\"entry_time\":\"" + ServerDateTimeText(OrderOpenTime()) + "\","
+      + "\"entry_time_server_msc\":" + JsonLong(entry_server_msc) + ","
+      + "\"entry_time_utc_msc\":" + JsonLong(entry_utc_msc) + ","
+      + "\"close_time\":\"" + ServerDateTimeText(OrderCloseTime()) + "\","
+      + "\"close_time_server_msc\":" + JsonLong(close_server_msc) + ","
+      + "\"close_time_utc_msc\":" + JsonLong(close_utc_msc) + ","
+      + "\"close_time_msc\":" + JsonLong(close_utc_msc) + ","
+      + "\"time\":\"" + ServerDateTimeText(OrderCloseTime()) + "\","
+      + "\"time_server_msc\":" + JsonLong(close_server_msc) + ","
+      + "\"time_utc_msc\":" + JsonLong(close_utc_msc) + ","
+      + "\"time_msc\":" + JsonLong(close_utc_msc) + ","
       + "\"comment\":\"" + JsonEscape(OrderComment()) + "\","
       + "\"take_profit\":" + JsonNumber(OrderTakeProfit()) + ","
       + "\"stop_loss\":" + JsonNumber(OrderStopLoss()) + "}");
@@ -1389,7 +1419,7 @@ string BuildHistoryPayload(const string date_from, const string date_to,
       if(!OrderSelect(index, SELECT_BY_POS, MODE_HISTORY)) continue;
       int order_type = OrderType();
       datetime event_time = OrderCloseTime() > 0 ? OrderCloseTime() : OrderOpenTime();
-      string event_date = UtcDateText(event_time, server_offset_msc);
+      string event_date = ServerDateText(event_time);
       if((order_type == 6 || order_type == 7) && DateInRange(event_date, date_from, date_to))
         {
          double amount = OrderProfit();
@@ -1423,7 +1453,7 @@ string BuildHistoryPayload(const string date_from, const string date_to,
         {
          if(!OrderSelect(tickets[compact_index], SELECT_BY_TICKET, MODE_HISTORY)) continue;
          if(compact_index > 0) compact_rows += ",";
-         compact_rows += "{\"t\":\"" + UtcDateTimeText(OrderCloseTime(), server_offset_msc)
+         compact_rows += "{\"t\":\"" + ServerDateTimeText(OrderCloseTime())
             + "\",\"p\":" + JsonNumber(OrderProfit())
             + ",\"y\":\"" + (OrderType() == OP_BUY ? "BUY" : "SELL") + "\"}";
         }
@@ -1501,7 +1531,7 @@ string BuildChartPayload(const string date_from, const string date_to,
       if(!OrderSelect(index, SELECT_BY_POS, MODE_HISTORY)
          || !HistoryOrderMatches(date_from, date_to, "", "", direction,
             profit_filter, server_offset_msc)) continue;
-      string day = UtcDateText(OrderCloseTime(), server_offset_msc);
+      string day = ServerDateText(OrderCloseTime());
       double net = OrderProfit() + OrderSwap() + OrderCommission();
       int day_index = FindDayIndex(days, day);
       if(day_index < 0)

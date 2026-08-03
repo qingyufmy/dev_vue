@@ -24,9 +24,10 @@ MAX_HISTORY_FALLBACK_QUERIES = 4
 MAX_HISTORY_WINDOW_CACHE_ITEMS = 10_000
 MAX_SYMBOL_ITEMS = 10_000
 HISTORY_WINDOW_MSC = 30 * 24 * 60 * 60 * 1000
-DEFAULT_TIMEZONE_OFFSET_MINUTES = 180
 CLOCK_FRESHNESS_TOLERANCE_MS = 30_000
 CLOCK_STALE_AFTER_MS = 120_000
+CLOCK_INITIAL_PROBE_SECONDS = 2.0
+CLOCK_INITIAL_POLL_SECONDS = 0.1
 TERMINAL_SESSION_FATAL_ERRORS = frozenset({
     "mt5_account_unavailable",
     "mt5_terminal_disconnected",
@@ -256,8 +257,8 @@ class BrokerClock:
     def __init__(self, state_path: Path | None, clock_msc: Any | None = None):
         self._state_path = state_path
         self._clock_msc = clock_msc or (lambda: int(time.time() * 1000))
-        self.offset_minutes = DEFAULT_TIMEZONE_OFFSET_MINUTES
-        self.status = "fallback"
+        self.offset_minutes: int | None = None
+        self.status = "unavailable"
         self.residual_ms: int | None = None
         self._trusted = False
         self._last_raw_msc = 0
@@ -291,11 +292,16 @@ class BrokerClock:
         except OSError:
             pass
 
+    def require_offset_minutes(self) -> int:
+        if self.offset_minutes is None:
+            raise WorkerError("mt5_clock_unverified")
+        return self.offset_minutes
+
     def normalize(self, raw_msc: int) -> int:
-        return raw_msc - self.offset_minutes * 60_000
+        return raw_msc - self.require_offset_minutes() * 60_000
 
     def server_from_utc(self, utc_msc: int) -> int:
-        return utc_msc + self.offset_minutes * 60_000
+        return utc_msc + self.require_offset_minutes() * 60_000
 
     def now_utc_msc(self) -> int:
         return int(self._clock_msc())
@@ -304,9 +310,11 @@ class BrokerClock:
         host_msc = int(self._clock_msc())
         if raw_msc <= 0:
             raise WorkerError("mt5_clock_unverified")
-        residual = self.normalize(raw_msc) - host_msc
+        residual = (self.normalize(raw_msc) - host_msc
+                    if self.offset_minutes is not None else raw_msc - host_msc)
         self.residual_ms = residual
-        if abs(residual) <= CLOCK_FRESHNESS_TOLERANCE_MS:
+        if (self.offset_minutes is not None
+                and abs(residual) <= CLOCK_FRESHNESS_TOLERANCE_MS):
             self.status = "verified"
             self._trusted = True
         elif (raw_msc == self._last_raw_msc and self._last_host_msc
@@ -330,18 +338,12 @@ class BrokerClock:
             self.status = "calibrating"
         self._last_raw_msc = raw_msc
         self._last_host_msc = host_msc
+        if (self._trusted and self.status != "verified"
+                and residual > CLOCK_FRESHNESS_TOLERANCE_MS):
+            raise WorkerError("mt5_clock_unverified")
         if self._trusted:
             if self.status != "verified":
                 self.status = "persisted_stale"
-        elif residual < -CLOCK_FRESHNESS_TOLERANCE_MS:
-            # A fresh install can start while the market is closed. MT5 then
-            # returns the final quote from the previous session, so there is no
-            # advancing sample from which to calibrate a broker offset. Keep
-            # the default offset provisional and expose the stale read model;
-            # never persist it as a trusted calibration. The server classifies
-            # the old observed timestamp as a closed/stale market and therefore
-            # keeps automated execution disabled.
-            self.status = "provisional_stale"
         else:
             raise WorkerError("mt5_clock_unverified")
         self._save()
@@ -352,7 +354,9 @@ class ReadOnlyMt5Adapter:
     def __init__(self, mt5: Any, terminal_path: str, route: WorkerRoute,
                  clock_msc: Any | None = None, clock_state_path: Path | None = None,
                  login_wait_seconds: float = TERMINAL_LOGIN_WAIT_SECONDS,
-                 login_poll_seconds: float = TERMINAL_LOGIN_POLL_SECONDS):
+                 login_poll_seconds: float = TERMINAL_LOGIN_POLL_SECONDS,
+                 clock_probe_seconds: float = CLOCK_INITIAL_PROBE_SECONDS,
+                 clock_poll_seconds: float = CLOCK_INITIAL_POLL_SECONDS):
         self.mt5 = mt5
         self.terminal_path = str(Path(terminal_path).resolve())
         self.route = route
@@ -366,6 +370,8 @@ class ReadOnlyMt5Adapter:
         self._history_window_rows: list[tuple[int, int, dict[str, Any]]] = []
         self.login_wait_seconds = max(0.0, float(login_wait_seconds))
         self.login_poll_seconds = max(0.01, float(login_poll_seconds))
+        self.clock_probe_seconds = max(0.0, float(clock_probe_seconds))
+        self.clock_poll_seconds = max(0.01, float(clock_poll_seconds))
 
     def connect(self) -> None:
         if not Path(self.terminal_path).is_file():
@@ -430,9 +436,62 @@ class ReadOnlyMt5Adapter:
             raise WorkerError("mt5_snapshot_items_invalid")
         return items
 
+    def _calibrate_terminal_clock(self, preferred_symbol: str | None = None) -> int:
+        symbol_names: list[str] = []
+        if preferred_symbol:
+            symbol_names.append(preferred_symbol)
+        symbols = self.mt5.symbols_get()
+        if symbols is None and not symbol_names:
+            raise WorkerError("mt5_symbols_unavailable")
+        if symbols is not None:
+            for item in symbols[:MAX_SYMBOL_ITEMS]:
+                name = str(getattr(item, "name", "") or "").strip()
+                if name and name not in symbol_names:
+                    symbol_names.append(name)
+        deadline = time.monotonic() + self.clock_probe_seconds
+        last_error: WorkerError | None = None
+        while True:
+            candidates: list[int] = []
+            for name in symbol_names:
+                tick = self.mt5.symbol_info_tick(name)
+                raw_msc = int(getattr(tick, "time_msc", 0) or 0) if tick else 0
+                if raw_msc > 0:
+                    candidates.append(raw_msc)
+            if candidates:
+                host_msc = self.clock.now_utc_msc()
+                persisted_offset = self.clock.offset_minutes
+
+                def sample_score(raw_msc: int) -> int:
+                    if persisted_offset is not None:
+                        return abs(raw_msc - persisted_offset * 60_000 - host_msc)
+                    candidate = round((raw_msc - host_msc) / 900_000) * 15
+                    if not -720 <= candidate <= 840:
+                        return 2**63 - 1
+                    return abs(raw_msc - candidate * 60_000 - host_msc)
+
+                try:
+                    observed = self.clock.calibrate(min(candidates, key=sample_score))
+                    if self.clock.status == "verified" or time.monotonic() >= deadline:
+                        return observed
+                except WorkerError as error:
+                    last_error = error
+            if time.monotonic() >= deadline:
+                if self.clock.offset_minutes is not None:
+                    # A closed market cannot provide a progressing tick. Keep
+                    # the last verified terminal offset, but never derive a new
+                    # offset from the age of the stale quote.
+                    observed = self.clock.normalize(max(candidates))
+                    if observed > self.clock.now_utc_msc() + CLOCK_FRESHNESS_TOLERANCE_MS:
+                        raise last_error or WorkerError("mt5_clock_unverified")
+                    self.clock.status = "persisted_stale"
+                    return observed
+                raise last_error or WorkerError("mt5_clock_unverified")
+            time.sleep(self.clock_poll_seconds)
+
     def quote(self, requested_symbol: str) -> dict[str, Any]:
         self._ensure_identity()
         symbol = self._resolve_symbol(requested_symbol)
+        self._calibrate_terminal_clock(symbol)
         tick = self.mt5.symbol_info_tick(symbol)
         if tick is None:
             raise WorkerError("symbol_tick_unavailable")
@@ -448,7 +507,7 @@ class ReadOnlyMt5Adapter:
                 or bid <= 0 or ask < bid or last < 0 or point <= 0):
             raise WorkerError("symbol_tick_invalid")
         raw_msc = int(getattr(tick, "time_msc", 0) or 0)
-        observed_at = self.clock.calibrate(raw_msc)
+        observed_at = self.clock.normalize(raw_msc)
         return {
             "requested_symbol": requested_symbol,
             "symbol": symbol,
@@ -473,19 +532,22 @@ class ReadOnlyMt5Adapter:
             limit = int(limit)
         except (TypeError, ValueError) as error:
             raise WorkerError("worker_history_cursor_invalid") from error
-        now_msc = int(time.time() * 1000)
+        now_msc = self.clock.now_utc_msc()
         if (cursor_time <= 0 or cursor_time > now_msc or cursor_ticket < 0
                 or limit < 1 or limit > MAX_HISTORY_BATCH_ITEMS):
             raise WorkerError("worker_history_cursor_invalid")
+        self._calibrate_terminal_clock()
         request_cursor = (cursor_time, cursor_ticket)
         if self._history_window_cursor != request_cursor:
             window_end = min(cursor_time + HISTORY_WINDOW_MSC, now_msc)
             if window_end <= cursor_time:
                 return self._history_batch(
                     [], [], cursor_time, cursor_ticket, False, now_msc)
-            date_from = datetime.fromtimestamp(max(0, cursor_time - 1_000) / 1000,
+            server_from = self.clock.server_from_utc(max(0, cursor_time - 1_000))
+            server_to = self.clock.server_from_utc(window_end + 999)
+            date_from = datetime.fromtimestamp(server_from / 1000,
                                                tz=timezone.utc)
-            date_to = datetime.fromtimestamp((window_end + 999) / 1000, tz=timezone.utc)
+            date_to = datetime.fromtimestamp(server_to / 1000, tz=timezone.utc)
             raw_deals = self.mt5.history_deals_get(date_from, date_to)
             if raw_deals is None:
                 raise WorkerError("mt5_history_deals_unavailable")
@@ -496,15 +558,16 @@ class ReadOnlyMt5Adapter:
                     raise WorkerError("mt5_history_deal_invalid")
                 try:
                     ticket = int(raw.get("ticket") or 0)
-                    event_msc = int(raw.get("time_msc")
-                                    or int(raw.get("time") or 0) * 1000)
+                    event_server_msc = int(raw.get("time_msc")
+                                           or int(raw.get("time") or 0) * 1000)
                 except (TypeError, ValueError) as error:
                     raise WorkerError("mt5_history_deal_invalid") from error
-                if ticket <= 0 or event_msc <= 0:
+                if ticket <= 0 or event_server_msc <= 0:
                     raise WorkerError("mt5_history_deal_invalid")
-                if ((event_msc, ticket) > request_cursor
-                        and event_msc <= window_end):
-                    rows.append((event_msc, ticket, raw))
+                event_utc_msc = self.clock.normalize(event_server_msc)
+                if ((event_utc_msc, ticket) > request_cursor
+                        and event_utc_msc <= window_end):
+                    rows.append((event_utc_msc, ticket, raw))
             rows.sort(key=lambda item: (item[0], item[1]))
             self._history_window_cursor = request_cursor
             self._history_window_end = window_end
@@ -523,9 +586,11 @@ class ReadOnlyMt5Adapter:
             has_more = window_end < now_msc
         raw_orders: list[Any] = []
         if selected:
-            order_from = datetime.fromtimestamp(max(0, cursor_time - 1_000) / 1000,
+            order_from = datetime.fromtimestamp(
+                self.clock.server_from_utc(max(0, cursor_time - 1_000)) / 1000,
                                                 tz=timezone.utc)
-            order_to = datetime.fromtimestamp((selected[-1][0] + 999) / 1000,
+            order_to = datetime.fromtimestamp(
+                self.clock.server_from_utc(selected[-1][0] + 999) / 1000,
                                               tz=timezone.utc)
             values = self.mt5.history_orders_get(order_from, order_to)
             if values is None:
@@ -583,10 +648,7 @@ class ReadOnlyMt5Adapter:
                 or ((start_utc_msc or end_utc_msc)
                     and not (start_utc_msc > 0 and end_utc_msc > start_utc_msc))):
             raise WorkerError("worker_rates_params_invalid")
-        tick = self.mt5.symbol_info_tick(symbol)
-        if tick is None:
-            raise WorkerError("symbol_tick_unavailable")
-        self.clock.calibrate(int(getattr(tick, "time_msc", 0) or 0))
+        self._calibrate_terminal_clock(symbol)
         timeframe_value = getattr(self.mt5, f"TIMEFRAME_{timeframe}", None)
         if timeframe_value is None:
             raise WorkerError("rates_timeframe_unavailable")
@@ -846,6 +908,7 @@ class ReadOnlyMt5Adapter:
             raise WorkerError("performance_date_range_invalid")
         if (end_date - start_date).days > 30:
             raise WorkerError("performance_date_range_too_large")
+        self._calibrate_terminal_clock()
         account = self.mt5.account_info()
         if account is None:
             raise WorkerError("performance_account_unavailable")
@@ -888,16 +951,17 @@ class ReadOnlyMt5Adapter:
             raw = _plain(item)
             if not isinstance(raw, dict):
                 raise WorkerError("performance_history_invalid")
-            event_ms = int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000)
-            day = datetime.fromtimestamp(event_ms / 1000.0, timezone.utc).strftime("%Y-%m-%d")
+            event_server_msc = int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000)
+            event_utc_msc = self.clock.normalize(event_server_msc)
+            day = datetime.fromtimestamp(event_server_msc / 1000.0, timezone.utc).strftime("%Y-%m-%d")
             if not start_text <= day <= end_text:
                 continue
             row = daily.setdefault(day, empty_day(day))
             ticket = int(raw.get("ticket") or 0)
-            if not row["first_deal_time_msc"] or event_ms < row["first_deal_time_msc"]:
-                row["first_deal_time_msc"] = event_ms
-            if (event_ms, ticket) > (row["last_deal_time_msc"], row["last_deal_ticket"]):
-                row["last_deal_time_msc"], row["last_deal_ticket"] = event_ms, ticket
+            if not row["first_deal_time_msc"] or event_utc_msc < row["first_deal_time_msc"]:
+                row["first_deal_time_msc"] = event_utc_msc
+            if (event_utc_msc, ticket) > (row["last_deal_time_msc"], row["last_deal_ticket"]):
+                row["last_deal_time_msc"], row["last_deal_ticket"] = event_utc_msc, ticket
             deal_type = int(raw.get("type") if raw.get("type") is not None else -1)
             values = {key: float(raw.get(key) or 0.0) for key in ("profit", "commission", "swap", "fee")}
             net = sum(values.values())
@@ -937,7 +1001,8 @@ class ReadOnlyMt5Adapter:
             row["source_hash"] = hashlib.sha256(digest.encode("utf-8")).hexdigest()
             rows.append(row)
         return {"performance_version": 1, "date_from": start_text, "date_to": end_text,
-                "timezone_offset_minutes": 0, "clock_status": "utc_direct",
+                "timezone_offset_minutes": self.clock.offset_minutes,
+                "clock_status": self.clock.status,
                 "account": {"login": int(account.login), "server": str(account.server),
                             "currency": str(getattr(account, "currency", "") or "")},
                 "daily": rows, "scanned_deal_count": len(deals), "source": "mt5"}
@@ -956,6 +1021,7 @@ class ReadOnlyMt5Adapter:
             raise WorkerError("risk_snapshot_cursor_invalid") from error
         if min(requested_ms, requested_ticket, baseline_ms) < 0:
             raise WorkerError("risk_snapshot_cursor_invalid")
+        observed = self._calibrate_terminal_clock(symbol)
         account = self.mt5.account_info()
         positions, pending = self.mt5.positions_get(), self.mt5.orders_get()
         if account is None:
@@ -985,20 +1051,26 @@ class ReadOnlyMt5Adapter:
                          "volume_current": float(getattr(item, "volume_current", 0.0) or 0.0),
                          "volume_initial": float(getattr(item, "volume_initial", 0.0) or 0.0),
                          "price": float(getattr(item, "price_open", 0.0) or 0.0)} for item in pending]
-        raw_start = requested_ms or baseline_ms or self.clock.now_utc_msc()
+        utc_start = requested_ms or baseline_ms or self.clock.now_utc_msc()
         deals = self.mt5.history_deals_get(
-            datetime.fromtimestamp(max(0, raw_start - 300_000) / 1000.0, timezone.utc),
-            datetime.now(timezone.utc) + timedelta(days=1))
+            datetime.fromtimestamp(
+                self.clock.server_from_utc(max(0, utc_start - 300_000)) / 1000.0,
+                timezone.utc),
+            datetime.fromtimestamp(
+                self.clock.server_from_utc(self.clock.now_utc_msc() + 86_400_000) / 1000.0,
+                timezone.utc))
         if deals is None:
             raise WorkerError("risk_snapshot_deals_unavailable")
         deal_rows = [_plain(item) for item in deals]
         if not all(isinstance(item, dict) for item in deal_rows):
             raise WorkerError("risk_snapshot_deals_invalid")
-        deal_rows.sort(key=lambda item: (int(item.get("time_msc") or int(item.get("time") or 0) * 1000),
+        deal_rows.sort(key=lambda item: (self.clock.normalize(
+                                             int(item.get("time_msc") or int(item.get("time") or 0) * 1000)),
                                          int(item.get("ticket") or 0)))
-        cursor = (requested_ms or raw_start, requested_ticket)
+        cursor = (requested_ms or utc_start, requested_ticket)
         new_deals = [item for item in deal_rows if
-                     (int(item.get("time_msc") or int(item.get("time") or 0) * 1000),
+                     (self.clock.normalize(int(item.get("time_msc")
+                                               or int(item.get("time") or 0) * 1000)),
                       int(item.get("ticket") or 0)) > cursor]
         trade_types = {int(getattr(self.mt5, "DEAL_TYPE_BUY", 0)), int(getattr(self.mt5, "DEAL_TYPE_SELL", 1))}
         exits = {int(getattr(self.mt5, name, value)) for name, value in
@@ -1018,10 +1090,14 @@ class ReadOnlyMt5Adapter:
                 continue
             net = sum(sum(float(getattr(item, key, 0.0) or 0.0)
                           for key in ("profit", "commission", "swap", "fee")) for item in group)
-            close_ms = int(deal.get("time_msc") or int(deal.get("time") or 0) * 1000)
-            closed.append({"position_id": position_id, "close_time_msc": close_ms,
-                           "close_time_utc_msc": close_ms, "close_deal_ticket": int(deal.get("ticket") or 0),
-                           "business_date": datetime.fromtimestamp(close_ms / 1000.0, timezone.utc).strftime("%Y-%m-%d"),
+            close_server_msc = int(deal.get("time_msc") or int(deal.get("time") or 0) * 1000)
+            close_utc_msc = self.clock.normalize(close_server_msc)
+            closed.append({"position_id": position_id, "close_time_msc": close_utc_msc,
+                           "close_time_utc_msc": close_utc_msc,
+                           "close_time_server_msc": close_server_msc,
+                           "close_deal_ticket": int(deal.get("ticket") or 0),
+                           "business_date": datetime.fromtimestamp(
+                               close_server_msc / 1000.0, timezone.utc).strftime("%Y-%m-%d"),
                            "net": round(net, 8)})
         capital_types = {int(getattr(self.mt5, name, value)) for name, value in (
             ("DEAL_TYPE_BALANCE", 2), ("DEAL_TYPE_CREDIT", 3),
@@ -1040,7 +1116,8 @@ class ReadOnlyMt5Adapter:
                 continue
             amount = sum(float(deal.get(key) or 0.0)
                          for key in ("profit", "commission", "swap", "fee"))
-            event_ms = int(deal.get("time_msc") or int(deal.get("time") or 0) * 1000)
+            event_server_msc = int(deal.get("time_msc") or int(deal.get("time") or 0) * 1000)
+            event_utc_msc = self.clock.normalize(event_server_msc)
             if deal_type in capital_types:
                 category = "capital"
             elif deal_type in adjustment_types:
@@ -1049,9 +1126,11 @@ class ReadOnlyMt5Adapter:
                 category = "unknown"
                 issues.append(f"unknown_deal_type:{deal_type}")
             account_events.append({"ticket": int(deal.get("ticket") or 0),
-                                   "time_msc": event_ms,
+                                   "time_msc": event_utc_msc,
+                                   "time_utc_msc": event_utc_msc,
+                                   "time_server_msc": event_server_msc,
                                    "business_date": datetime.fromtimestamp(
-                                       event_ms / 1000.0, timezone.utc).strftime("%Y-%m-%d"),
+                                       event_server_msc / 1000.0, timezone.utc).strftime("%Y-%m-%d"),
                                    "deal_type": deal_type, "category": category,
                                    "amount": round(amount, 8)})
         relevant = {row["symbol"] for row in position_rows + pending_rows if row.get("symbol")} | {symbol}
@@ -1091,16 +1170,18 @@ class ReadOnlyMt5Adapter:
             except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as error:
                 warnings.append(f"broker_calculation_unavailable:{type(error).__name__}")
         through = cursor if not new_deals else (
-            int(new_deals[-1].get("time_msc") or int(new_deals[-1].get("time") or 0) * 1000),
+            self.clock.normalize(int(new_deals[-1].get("time_msc")
+                                     or int(new_deals[-1].get("time") or 0) * 1000)),
             int(new_deals[-1].get("ticket") or 0))
         tick = self.mt5.symbol_info_tick(symbol)
         if tick is None:
             raise WorkerError("symbol_tick_unavailable")
         raw_observed = int(getattr(tick, "time_msc", 0) or 0)
-        observed = self.clock.calibrate(raw_observed)
+        observed = self.clock.normalize(raw_observed)
         return {"snapshot_version": 1, "source": "mt5", "complete": not issues,
                 "incomplete_reasons": sorted(set(issues)), "warnings": sorted(set(warnings)),
-                "business_date": datetime.fromtimestamp(observed / 1000.0, timezone.utc).strftime("%Y-%m-%d"),
+                "business_date": datetime.fromtimestamp(
+                    raw_observed / 1000.0, timezone.utc).strftime("%Y-%m-%d"),
                 "mt5_time_msc": raw_observed, "time_msc": raw_observed, "time_utc_msc": observed,
                 "timezone_offset_minutes": self.clock.offset_minutes, "clock_status": self.clock.status,
                 "clock_residual_ms": self.clock.residual_ms, "captured_at_utc_msc": self.clock.now_utc_msc(),
@@ -1265,10 +1346,24 @@ class ReadOnlyMt5Adapter:
                 "net_profit": sum(float(raw.get(key) or 0.0)
                                   for key in ("profit", "swap", "commission", "fee")),
                 "entry_time": self._history_time(origin.get("time")),
+                "entry_time_server_msc": int(origin.get("time_msc")
+                                             or int(origin.get("time") or 0) * 1000),
+                "entry_time_utc_msc": self.clock.normalize(int(
+                    origin.get("time_msc") or int(origin.get("time") or 0) * 1000)),
                 "close_time": self._history_time(raw.get("time")),
-                "close_time_msc": int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000),
+                "close_time_server_msc": int(raw.get("time_msc")
+                                             or int(raw.get("time") or 0) * 1000),
+                "close_time_utc_msc": self.clock.normalize(int(
+                    raw.get("time_msc") or int(raw.get("time") or 0) * 1000)),
+                "close_time_msc": self.clock.normalize(int(
+                    raw.get("time_msc") or int(raw.get("time") or 0) * 1000)),
                 "time": self._history_time(raw.get("time")),
-                "time_msc": int(raw.get("time_msc") or int(raw.get("time") or 0) * 1000),
+                "time_server_msc": int(raw.get("time_msc")
+                                       or int(raw.get("time") or 0) * 1000),
+                "time_utc_msc": self.clock.normalize(int(
+                    raw.get("time_msc") or int(raw.get("time") or 0) * 1000)),
+                "time_msc": self.clock.normalize(int(
+                    raw.get("time_msc") or int(raw.get("time") or 0) * 1000)),
                 "comment": str(raw.get("comment") or ""),
                 "take_profit": float(protection_order.get("tp") or 0.0),
                 "stop_loss": float(protection_order.get("sl") or 0.0),
@@ -1280,6 +1375,8 @@ class ReadOnlyMt5Adapter:
             "next_cursor": {"time_msc": next_time, "ticket": str(next_ticket)},
             "has_more": has_more,
             "observed_at_utc_msc": observed_at,
+            "timezone_offset_minutes": self.clock.offset_minutes,
+            "clock_status": self.clock.status,
         }
 
     @staticmethod
@@ -1292,12 +1389,14 @@ class ReadOnlyMt5Adapter:
     @staticmethod
     def _history_time(value: Any) -> str:
         try:
-            return datetime.fromtimestamp(int(value or 0), tz=timezone.utc).isoformat().replace(
-                "+00:00", "Z")
+            return datetime.fromtimestamp(int(value or 0), tz=timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S")
         except (OSError, OverflowError, TypeError, ValueError) as error:
             raise WorkerError("mt5_history_time_invalid") from error
 
     def _history_deal_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        server_msc = int(row.get("time_msc") or int(row.get("time") or 0) * 1000)
+        utc_msc = self.clock.normalize(server_msc)
         return {
             "deal_ticket": row.get("ticket"), "ticket": row.get("ticket"),
             "order": row.get("order"), "order_ticket": row.get("order"),
@@ -1308,12 +1407,17 @@ class ReadOnlyMt5Adapter:
             "profit": row.get("profit"), "commission": row.get("commission"),
             "swap": row.get("swap"), "fee": row.get("fee"), "sl": row.get("sl"),
             "tp": row.get("tp"), "time": self._history_time(row.get("time")),
-            "time_msc": int(row.get("time_msc") or int(row.get("time") or 0) * 1000),
+            "time_msc": utc_msc, "time_utc_msc": utc_msc,
+            "time_server_msc": server_msc,
+            "timezone_offset_minutes": self.clock.offset_minutes,
         }
 
     def _history_order_row(self, row: Any) -> dict[str, Any]:
         if not isinstance(row, dict):
             raise WorkerError("mt5_history_order_invalid")
+        server_msc = int(row.get("time_done_msc") or row.get("time_setup_msc")
+                         or int(row.get("time_done") or row.get("time_setup") or 0) * 1000)
+        utc_msc = self.clock.normalize(server_msc)
         return {
             "ticket": row.get("ticket"), "order": row.get("ticket"),
             "order_ticket": row.get("ticket"), "position_id": row.get("position_id"),
@@ -1324,8 +1428,9 @@ class ReadOnlyMt5Adapter:
             "sl": row.get("sl"), "tp": row.get("tp"),
             "time_setup": self._history_time(row.get("time_setup")),
             "time_done": self._history_time(row.get("time_done") or row.get("time_setup")),
-            "time_msc": int(row.get("time_done_msc") or row.get("time_setup_msc")
-                            or int(row.get("time_done") or row.get("time_setup") or 0) * 1000),
+            "time_msc": utc_msc, "time_utc_msc": utc_msc,
+            "time_server_msc": server_msc,
+            "timezone_offset_minutes": self.clock.offset_minutes,
         }
 
     def _resolve_symbol(self, requested: str) -> str:

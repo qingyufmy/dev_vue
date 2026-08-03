@@ -1,7 +1,7 @@
 // ai/scheduler.js — 统一自动推理调度与交付
 
 import { queryOne, queryAll, queryRun, beijingNow, withTransaction } from '../../db.js'
-import { getOwnBridgeMarketState, recordBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges, broadcastAdminEvent } from '../../bridge-ws.js'
+import { getOwnBridgeMarketState, getPlatformMarketClockState, recordBridgeMarketState, isBridgeAlive, isTradeEnabled, sendToBrowsers, getAllBridges, broadcastAdminEvent } from '../../bridge-ws.js'
 import { mt5Bridge, platformRates, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, getDeliverySubscriptionRuntime, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, isAiPendingOrderRequest, assertAiPendingOrderEnabled, assertAiPendingCancelEnabled } from './config.js'
@@ -43,6 +43,11 @@ const MARKET_WAIT_REASONS = new Set([
   'market_unknown_no_tick',
   'market_unknown',
 ])
+
+function bridgeWeeklyWindow(userId, tradingAccountId = null, now = new Date()) {
+  const clock = getPlatformMarketClockState(userId, tradingAccountId)
+  return isWeeklyFlattenWindow(now, clock.timezone_offset_minutes)
+}
 
 function isMarketWaitReason(reason) {
   return MARKET_WAIT_REASONS.has(String(reason || ''))
@@ -460,13 +465,22 @@ export async function getUserAutoRuntimeStatus(userId) {
 
   // Determine paused reason — only real errors/blockers, not normal cooldown
   let pausedReason = ''
-  if (isWeeklyFlattenWindow()) pausedReason = 'weekly_flatten_window'
+  if (bridgeWeeklyWindow(userId)) pausedReason = 'weekly_flatten_window'
   else if (!scheduler.prompt_type_id) pausedReason = 'no_strategy'
   else if (selectedSymbols.length === 0) pausedReason = 'no_symbols'
   else {
-    const activeSubscription = await queryOne(`SELECT * FROM strategy_subscriptions
-      WHERE user_id = ? AND strategy_id = ? AND execution_enabled = 1 AND is_deleted = 0
-      ORDER BY updated_at DESC, id DESC LIMIT 1`, [userId, scheduler.prompt_type_id])
+    const activeSubscription = await queryOne(`SELECT subscriptions.*,
+        sources.timezone_offset_minutes AS runtime_timezone_offset_minutes,
+        sources.clock_status AS runtime_clock_status
+      FROM strategy_subscriptions subscriptions
+      JOIN trading_accounts accounts ON accounts.id = subscriptions.trading_account_id
+        AND accounts.user_id = subscriptions.user_id AND accounts.is_deleted = 0
+      LEFT JOIN market_data_sources sources ON sources.bridge_user_id = subscriptions.user_id
+        AND UPPER(COALESCE(sources.broker_server, '')) = UPPER(accounts.broker_server)
+        AND CAST(COALESCE(sources.account_login, 0) AS CHAR) = CAST(accounts.login_account AS CHAR)
+      WHERE subscriptions.user_id = ? AND subscriptions.strategy_id = ?
+        AND subscriptions.execution_enabled = 1 AND subscriptions.is_deleted = 0
+      ORDER BY subscriptions.updated_at DESC, subscriptions.id DESC LIMIT 1`, [userId, scheduler.prompt_type_id])
     if (activeSubscription && !isSubscriptionScheduleActive(activeSubscription)
       && activeSubscription.outside_window_behavior !== 'signals_only') pausedReason = 'outside_schedule'
   }
@@ -962,16 +976,6 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     const st = autoSchedulerState[key]
     if (!st?.running) return
 
-    if (isWeeklyFlattenWindow()) {
-      const delay = Math.max(1000, currentWeeklyFlattenEnd().getTime() - Date.now())
-      st.lastError = null
-      st.waitReason = 'weekly_flatten_window'
-      st.nextRunInSeconds = Math.round(delay / 1000)
-      await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
-      return
-    }
-
     const redis = getRedis()
     if (!redis || !isRedisAvailable()) {
       st._waitCount = (st._waitCount || 0) + 1
@@ -1029,6 +1033,18 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     }
     const marketBridge = await resolveStrategyMarketBridge(ptRow)
     const marketUserId = marketBridge.userId
+    const marketClock = getPlatformMarketClockState(
+      marketUserId, marketBridge.source?.trading_account_id)
+    if (isWeeklyFlattenWindow(new Date(), marketClock.timezone_offset_minutes)) {
+      const end = currentWeeklyFlattenEnd(new Date(), marketClock.timezone_offset_minutes)
+      const delay = Math.max(1000, Number(end?.getTime() || Date.now() + 60_000) - Date.now())
+      st.lastError = null
+      st.waitReason = 'weekly_flatten_window'
+      st.nextRunInSeconds = Math.round(delay / 1000)
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      return
+    }
     const updateMaintenanceReason = schedulerUpdateMaintenanceReason(ptRow, marketUserId)
     if (updateMaintenanceReason) {
       st.lastError = null
@@ -1052,7 +1068,9 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     }
 
     const marketProbe = await mt5Bridge(marketUserId, 'market_state', { symbol }, { timeoutMs: 5000, noFallback: true })
-    if (marketProbe?.status === 'success') recordBridgeMarketState(marketUserId, marketProbe)
+    if (marketProbe?.status === 'success') recordBridgeMarketState(marketUserId, marketProbe, Date.now(), {
+      tradingAccountId:marketBridge.source?.trading_account_id,
+    })
     const marketState = getOwnBridgeMarketState(marketUserId, symbol)
     st.marketState = marketState
     if (!marketState.isOpen) {
@@ -1324,8 +1342,6 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
   const ts = () => new Date().toISOString()
   const l = (msg) => console.log(`[UnifiedCycle ${key}] ${ts()} ${symbol}: ${msg}`)
 
-  if (isWeeklyFlattenWindow()) return { status: 'blocked', reason: 'weekly_flatten_window' }
-
   l('>>> cycle start')
   await broadcastAutoProgress(promptTypeId, symbol, { stage: 'config', label: '检查策略与模型', progress_percent: 6 })
 
@@ -1347,6 +1363,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
   if (!inferenceUserId || !isBridgeAlive(inferenceUserId)) {
     return { status: 'blocked', reason: isPrivate ? 'owner_bridge_offline' : 'admin_bridge_offline' }
   }
+  const inferenceWeeklyWindow = () => bridgeWeeklyWindow(
+    inferenceUserId, fallbackBridge?.source?.trading_account_id)
+  if (inferenceWeeklyWindow()) return { status:'blocked', reason:'weekly_flatten_window' }
   const configuredMemoryMode = isPrivate
     ? (await queryOne(`SELECT memory_mode FROM strategy_subscriptions
         WHERE user_id = ? AND strategy_id = ? AND is_deleted = 0 ORDER BY updated_at DESC LIMIT 1`,
@@ -1550,9 +1569,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       return { status: 'blocked', reason: 'ai_failed' }
     }
 
-    // An inference started before 04:00 must not persist, broadcast or execute
+    // An inference started before the terminal risk window must not persist,
+    // broadcast or execute after that terminal window begins.
     // after the weekly flatten window begins.
-    if (isWeeklyFlattenWindow()) {
+    if (inferenceWeeklyWindow()) {
       l('BLOCKED: weekly flatten window began during inference')
       return { status: 'blocked', reason: 'weekly_flatten_window' }
     }
@@ -1689,7 +1709,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     attachSignalTiming(signal, ratesResp.market_meta?.timezone_offset_minutes)
     l(`shared signal #${signalId} saved`)
 
-    if (isWeeklyFlattenWindow()) {
+    if (inferenceWeeklyWindow()) {
       l('BLOCKED: weekly flatten window began before signal delivery')
       await discardSharedSignalForWeeklyWindow(signalId)
       return { status: 'blocked', reason: 'weekly_flatten_window' }
@@ -1698,7 +1718,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     await broadcastAutoProgress(promptTypeId, symbol, { stage: 'publish', label: '发布信号与执行建议', progress_percent: 94 })
     // 7. Notify online subscribers
     for (const uid of onlineSubscribers) {
-      if (isWeeklyFlattenWindow()) {
+      if (inferenceWeeklyWindow()) {
         l('BLOCKED: weekly flatten window began during signal delivery')
         return { status: 'blocked', reason: 'weekly_flatten_window' }
       }
@@ -1726,7 +1746,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     await broadcastAutoProgress(promptTypeId, symbol, { stage: 'delivery', label: '同步信号与执行状态', progress_percent: 96 })
 
     // 7.5 Re-check global safety boundaries before per-user delivery.
-    if (isWeeklyFlattenWindow()) {
+    if (inferenceWeeklyWindow()) {
       l('BLOCKED: weekly flatten window began before delivery')
       return { status: 'blocked', reason: 'weekly_flatten_window' }
     }
@@ -1814,10 +1834,6 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     sendToBrowsers(userId, { type:'signal_execution_updated', signal_id:signalId, status, reason, details })
   }
   try {
-    if (isWeeklyFlattenWindow()) {
-      await setTerminalStatus('skipped', 'weekly_flatten_window')
-      return
-    }
     if (isBridgeDeliveryMaintenancePaused(userId)) {
       await setTerminalStatus('skipped', 'bridge_update_maintenance')
       return
@@ -1875,6 +1891,12 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'trade_send_disabled' },
         { status: 'skipped' }, 'info')
+      return
+    }
+    const subscriberWeeklyWindow = () => bridgeWeeklyWindow(
+      userId, subscriptionRuntime.trading_account_id)
+    if (subscriberWeeklyWindow()) {
+      await setTerminalStatus('skipped', 'weekly_flatten_window')
       return
     }
 
@@ -2095,7 +2117,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     }
 
     // Final lock check before sending MT5 order (Fix 2)
-    if (isWeeklyFlattenWindow()) {
+    if (subscriberWeeklyWindow()) {
       l('skipped: weekly flatten window began before order send')
       await setTerminalStatus('skipped', 'weekly_flatten_window').catch(() => {})
       return
@@ -2115,7 +2137,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         error.details = details
         return error
       }
-      if (isWeeklyFlattenWindow()) throw reject('weekly_flatten_window')
+      if (subscriberWeeklyWindow()) throw reject('weekly_flatten_window')
       if (lockGuard && !(await lockGuard.assertOwned('replacement_cancel'))) {
         throw reject('lock_lost_before_supersede_cancel')
       }

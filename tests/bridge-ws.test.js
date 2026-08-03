@@ -520,10 +520,12 @@ describe('bridge-reported market state', () => {
       time:'2026-07-27T06:12:34.000Z',
       observed_at_utc_msc:Date.UTC(2026, 6, 27, 6, 12, 34),
       timezone_offset_minutes:180,
+      clock_status:'progressing_tick',
     }, null, null)).toEqual({
       mt5_time:'2026-07-27T06:12:34.000Z',
       observed_at_utc_msc:Date.UTC(2026, 6, 27, 6, 12, 34),
       timezone_offset_minutes:180,
+      clock_status:'progressing_tick',
     })
   })
 
@@ -570,15 +572,15 @@ describe('getBridgeTradeMode', () => {
 describe('sendBridgeCommand', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('rejects new orders during the Beijing weekend risk window before bridge lookup', async () => {
+  it('fails closed when a new order has no account-specific terminal clock', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-17T20:00:00.000Z'))
 
     const result = await sendBridgeCommand(999, 'open', { symbol: 'XAUUSD' })
 
     expect(result.status).toBe('rejected')
-    expect(result.code).toBe('weekly_market_close_risk_lock')
-    expect(result.message).toBe('周末风险控制期间禁止新增交易')
+    expect(result.code).toBe('terminal_clock_unverified')
+    expect(result.message).toBe('交易平台时间尚未校准')
     vi.useRealTimers()
   })
 

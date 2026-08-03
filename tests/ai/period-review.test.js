@@ -40,6 +40,10 @@ describe('daily review grouping', () => {
     expect(ready[0]).toMatchObject({ periodKey: '2026-07-17', strategyVersion: 2, offsetMinutes: 180 })
   })
 
+  it('does not guess the close instant from a Beijing database timestamp', () => {
+    expect(outcomeCloseUtcMs({ fully_closed_at:'2026-07-17 10:00:00' }, 180)).toBeNull()
+  })
+
   it('assigns daily reviews by full-close time rather than open time', () => {
     const rows = [{ ...base, id:1, opened_at:'2026-07-16 10:00:00',
       last_deal_raw_json:JSON.stringify({ time_utc_msc:Date.parse('2026-07-17T20:30:00Z') }) }]
@@ -168,13 +172,13 @@ describe('monthly review aggregation', () => {
       losses: netProfit < 0 ? 2 : 0, breakeven: 0, net_profit: netProfit, gross_profit: Math.max(0, netProfit),
       gross_loss: Math.abs(Math.min(0, netProfit)), external_intervention_count: id === 2 ? 1 : 0 } }) })
 
-  it('waits for the MT5 monthly grace period and combines accounts without losing daily sources', () => {
+  it('waits for the terminal monthly grace period and keeps accounts isolated', () => {
     const rows = [daily(1, '2026-02-03', 20), daily(2, '2026-02-12', -10, 'draft')]
     expect(groupMonthlyReviewCases(rows, { offsetMinutes: 180, asOfUtcMs: Date.parse('2026-02-28T22:59:59Z') })).toHaveLength(0)
     const groups = groupMonthlyReviewCases(rows, { offsetMinutes: 180, asOfUtcMs: Date.parse('2026-02-28T23:00:00Z') })
-    expect(groups).toHaveLength(1)
-    expect(groups[0]).toMatchObject({ periodKey: '2026-02', tradingAccountId: 0, strategyVersion: 2 })
-    expect(groups[0].dailyCases.map(item => item.id)).toEqual([1, 2])
+    expect(groups).toHaveLength(2)
+    expect(groups.map(group => group.tradingAccountId)).toEqual([1, 2])
+    expect(groups.flatMap(group => group.dailyCases.map(item => item.id))).toEqual([1, 2])
   })
 
   it('computes monthly metrics from deterministic daily statistics', () => {

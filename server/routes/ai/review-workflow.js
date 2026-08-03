@@ -129,7 +129,9 @@ async function loadEvidence(outcomeId) {
     stop_loss_price: row.stop_loss_price, take_profit_1_price: row.take_profit_1_price,
     take_profit_2_price: row.take_profit_2_price, take_profit_3_price: row.take_profit_3_price, created_at: row.signal_created_at } : null
   let marketPath = { status: 'partial', reason: 'market_path_unavailable', timeframes: {}, metrics: null, hash: null }
-  try { marketPath = await buildReviewMarketPath({ userId: row.user_id, symbol: row.symbol, signal: signal || {}, snapshot: snapshot || {}, deals }) }
+  try { marketPath = await buildReviewMarketPath({ userId: row.user_id,
+    tradingAccountId:row.trading_account_id, symbol: row.symbol,
+    signal: signal || {}, snapshot: snapshot || {}, deals }) }
   catch (error) { marketPath.reason = safeError(error) }
   const assessment = {
     complete:coreAssessment.complete && marketPath.status === 'complete',

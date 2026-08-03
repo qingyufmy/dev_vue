@@ -4512,6 +4512,16 @@ const migrations = [
           AND outcomes.position_id IS NULL AND outcomes.pending_ticket IS NOT NULL
           AND COALESCE(deliveries.pending_state, signals.pending_state) = 'pending'`)
     }
+  },
+  {
+    id: '157_terminal_server_schedule_timezone',
+    async up() {
+      await queryRun(`ALTER TABLE strategy_subscriptions
+        MODIFY COLUMN schedule_timezone VARCHAR(64) NOT NULL DEFAULT 'terminal_server'`)
+      await queryRun(`UPDATE strategy_subscriptions
+        SET schedule_timezone = 'terminal_server'
+        WHERE schedule_timezone <> 'terminal_server'`)
+    }
   }
 ]
 

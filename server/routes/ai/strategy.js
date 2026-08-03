@@ -34,10 +34,10 @@ const HISTORY_COMPARE_MAX_STEPS = 30
 const HISTORY_COMPARE_MIN_STEPS = 4
 const HISTORY_COMPARE_MAX_KLINES = 5000
 const HISTORY_COMPARE_MAX_CONTINUOUS_STEPS = 120
-const DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES = 180
 const HISTORY_COMPARE_FUTURE_TOLERANCE_MS = 5 * 60_000
 
 function normalizeCompareTimezoneOffset(value) {
+  if (value === null || value === undefined || value === '') return null
   const numeric = Number(value)
   return Number.isFinite(numeric) && numeric >= -14 * 60 && numeric <= 14 * 60
     ? Math.trunc(numeric)
@@ -45,13 +45,14 @@ function normalizeCompareTimezoneOffset(value) {
 }
 
 function timezoneOffsetSuffix(offsetMinutes) {
-  const normalized = normalizeCompareTimezoneOffset(offsetMinutes) ?? DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+  const normalized = normalizeCompareTimezoneOffset(offsetMinutes)
+  if (normalized == null) throw new Error('terminal_clock_unverified')
   const sign = normalized >= 0 ? '+' : '-'
   const absolute = Math.abs(normalized)
   return `${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`
 }
 
-function parseCompareTimeUtcMs(value, timezoneOffsetMinutes = DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES) {
+function parseCompareTimeUtcMs(value, timezoneOffsetMinutes) {
   const raw = String(value || '').trim()
   if (!raw) return null
   const hasTimezone = /T.*(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
@@ -79,14 +80,38 @@ function normalizeHistoryCompareTimeRange(startTime, endTime, timezoneOffsetMinu
   }
 }
 
-async function resolveCompareTimezoneOffset(value) {
-  const requested = normalizeCompareTimezoneOffset(value)
-  if (requested != null) return requested
-  const row = await queryOne(`SELECT mds.timezone_offset_minutes
-    FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
-    WHERE u.role = 'admin' AND mds.timezone_offset_minutes IS NOT NULL
-    ORDER BY (mds.clock_status = 'calibrated') DESC, mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`)
-  return normalizeCompareTimezoneOffset(row?.timezone_offset_minutes) ?? DEFAULT_MT5_TIMEZONE_OFFSET_MINUTES
+async function resolveCompareTimezoneOffset(params = {}) {
+  const strategyId = Number(params.strategy_id)
+  const tradingAccountId = Number(params.trading_account_id)
+  const userId = Number(params.user_id)
+  let row = null
+  if (strategyId > 0) {
+    row = await queryOne(`SELECT mds.timezone_offset_minutes, mds.clock_status
+      FROM ai_observer_sources sources
+      JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
+      JOIN market_data_sources mds ON mds.bridge_user_id = sources.bridge_user_id
+        AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(accounts.broker_server)
+        AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(accounts.login_account AS CHAR)
+      WHERE sources.strategy_id = ? AND sources.status = 'active'
+      ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`, [strategyId])
+  }
+  if (!row && tradingAccountId > 0) {
+    row = await queryOne(`SELECT mds.timezone_offset_minutes, mds.clock_status
+      FROM trading_accounts accounts
+      JOIN market_data_sources mds ON mds.bridge_user_id = accounts.user_id
+        AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(accounts.broker_server)
+        AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(accounts.login_account AS CHAR)
+      WHERE accounts.id = ? ${userId > 0 ? 'AND accounts.user_id = ?' : ''}
+      ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`,
+    [tradingAccountId, ...(userId > 0 ? [userId] : [])])
+  }
+  const status = String(row?.clock_status || '').trim().toLowerCase()
+  const offset = normalizeCompareTimezoneOffset(row?.timezone_offset_minutes)
+  if (offset == null || !status
+    || ['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(status)) {
+    throw new Error('terminal_clock_unverified')
+  }
+  return offset
 }
 
 function comparisonDirection(signalType) {
@@ -1229,7 +1254,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     policyMode:policy.policyMode,
   }
 
-  const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params.timezone_offset_minutes)
+  const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params)
   let normalizedTimeRange
   try {
     if (dataSource === 'snapshots') {
@@ -2087,7 +2112,7 @@ export async function startHistoryCompareJob(userId, params) {
   const snapshotEvaluationTimeframe = snapshotRun
     ? resolveLockedSnapshotEvaluationTimeframe(snapshotRun)
     : null
-  const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params?.timezone_offset_minutes)
+  const selectionTimezoneOffsetMinutes = await resolveCompareTimezoneOffset(params || {})
   const snapshotDecisions = snapshotRun?.samples.map(sample => snapshotDecisionPoint(
     sample, snapshotEvaluationTimeframe, selectionTimezoneOffsetMinutes,
   ).decisionUtcMs) || []

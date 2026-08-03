@@ -4,6 +4,7 @@ const db = vi.hoisted(() => ({
   queryOne: vi.fn(),
   withTransaction: vi.fn(),
   beijingNow: vi.fn(() => '2026-07-22 10:00:00'),
+  parseBeijing: vi.fn(value => value ? new Date(String(value).replace(' ', 'T') + '+08:00') : null),
 }))
 vi.mock('../../server/db.js', () => db)
 
@@ -13,6 +14,7 @@ import {
   recentPerformanceWindow,
   saveAccountPerformanceChunk,
   getAccountPerformanceSummary,
+  getAccountPerformanceSyncWindow,
 } from '../../server/routes/ai/account-performance.js'
 
 const context = {
@@ -53,6 +55,31 @@ describe('MT5 account performance windows', () => {
   it('rejects an inconsistent realized-net total', () => {
     expect(() => normalizePerformanceDay({ business_date:'2026-07-22', trade_profit:1, realized_net:2 }))
       .toThrow('performance_realized_net_mismatch')
+  })
+
+  it('uses the account terminal date and accepts a persisted offset while the market is closed', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-22T23:30:00Z'))
+    const run = vi.fn(async sql => sql.includes('FROM trading_accounts ta')
+      ? [[{ ...context, timezone_offset_minutes:-120, clock_status:'persisted_stale' }], []]
+      : [{ affectedRows:1 }, []])
+    db.withTransaction.mockImplementation(fn => fn(run))
+
+    const window = await getAccountPerformanceSyncWindow(7, 11)
+
+    expect(window).toMatchObject({ date_from:'2026-07-21', date_to:'2026-07-22',
+      timezone_offset_minutes:-120, clock_status:'persisted_stale' })
+    vi.useRealTimers()
+  })
+
+  it('does not create a performance window before the account terminal clock is verified', async () => {
+    const run = vi.fn(async sql => sql.includes('FROM trading_accounts ta')
+      ? [[{ ...context, timezone_offset_minutes:null, clock_status:'unknown' }], []]
+      : [{ affectedRows:1 }, []])
+    db.withTransaction.mockImplementation(fn => fn(run))
+
+    await expect(getAccountPerformanceSyncWindow(7, 11)).rejects.toThrow('terminal_clock_unverified')
+    expect(run.mock.calls.some(([sql]) => sql.includes('INSERT INTO mt5_account_performance_sync_state'))).toBe(false)
   })
 })
 

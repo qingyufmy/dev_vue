@@ -387,6 +387,12 @@ describe('POST /ai/analyze-compare route', () => {
 })
 
 describe('handleHistoryCompare', () => {
+  const mockAdminWithTerminalClock = () => {
+    mockQueryOne.mockImplementation(async sql => String(sql).includes('timezone_offset_minutes')
+      ? { timezone_offset_minutes:180, clock_status:'progressing_tick' }
+      : { role:'admin' })
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     maybeAiSignal.mockImplementation(defaultMaybeAiSignalImplementation)
@@ -411,7 +417,7 @@ describe('handleHistoryCompare', () => {
 
   describe('input validation', () => {
     beforeEach(() => {
-      mockQueryOne.mockResolvedValue({ role: 'admin' })
+      mockAdminWithTerminalClock()
     })
 
     it('returns error when symbol is missing', async () => {
@@ -460,7 +466,7 @@ describe('handleHistoryCompare', () => {
 
   describe('kline data', () => {
     beforeEach(() => {
-      mockQueryOne.mockResolvedValue({ role: 'admin' })
+      mockAdminWithTerminalClock()
     })
 
     it('returns error when no kline data for range', async () => {
@@ -479,7 +485,7 @@ describe('handleHistoryCompare', () => {
       }))
     })
 
-    it('interprets legacy unqualified ranges with the supplied MT5 timezone', async () => {
+    it('uses the verified terminal clock instead of a client-supplied timezone', async () => {
       mockMt5Bridge.mockResolvedValue({ status:'success', rates:[], market_meta:{ source:'mysql' } })
       await handleHistoryCompare(1, {
         symbol:'XAUUSD', model_ids:[1, 2], strategy_id:1,
@@ -495,13 +501,13 @@ describe('handleHistoryCompare', () => {
         timezone_offset_minutes:480,
       })
       const utc8Start = mockMt5Bridge.mock.calls.find(call => call[1] === 'rates')[2].start_utc_msc
-      expect(utc3Start - utc8Start).toBe(5 * 60 * 60 * 1000)
+      expect(utc3Start).toBe(utc8Start)
     })
   })
 
   describe('historical inference', () => {
     beforeEach(() => {
-      mockQueryOne.mockResolvedValue({ role: 'admin' })
+      mockAdminWithTerminalClock()
       mockMt5Bridge.mockImplementation(async (_userId, action) => {
         if (action === 'symbol_snapshot') {
           return {

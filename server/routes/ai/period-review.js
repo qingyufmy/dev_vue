@@ -12,7 +12,6 @@ import { createPlatformExperienceCandidateFromApprovedPeriodReview } from './pla
 import { canManagePlatformAiContent, platformAiContentManagerSql } from './platform-content-access.js'
 
 const DAY_MS = 86400000
-const DEFAULT_MT5_OFFSET_MINUTES = 180
 const DAILY_GRACE_MINUTES = 30
 const MONTHLY_GRACE_MINUTES = 120
 const DAILY_COMPLETE_RECHECK_MS = 15 * 60 * 1000
@@ -152,7 +151,15 @@ export function requestPeriodReviewCycle() {
   queueMicrotask(() => void runRequestedPeriodReviewCycle())
 }
 
-export function reviewPeriodBounds(periodType, periodKey, offsetMinutes = DEFAULT_MT5_OFFSET_MINUTES) {
+function validTerminalOffset(value) {
+  if (value === null || value === undefined || value === '') throw new Error('terminal_clock_unverified')
+  const offset = Number(value)
+  if (!Number.isInteger(offset) || offset < -720 || offset > 840) throw new Error('terminal_clock_unverified')
+  return offset
+}
+
+export function reviewPeriodBounds(periodType, periodKey, offsetMinutes) {
+  offsetMinutes = validTerminalOffset(offsetMinutes)
   const offsetMs = Number(offsetMinutes) * 60000
   if (periodType === 'daily') {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(periodKey))) throw new Error('invalid_daily_period_key')
@@ -170,7 +177,8 @@ export function reviewPeriodBounds(periodType, periodKey, offsetMinutes = DEFAUL
   throw new Error('invalid_review_period_type')
 }
 
-export function reviewPeriodKey(utcMs, periodType, offsetMinutes = DEFAULT_MT5_OFFSET_MINUTES) {
+export function reviewPeriodKey(utcMs, periodType, offsetMinutes) {
+  offsetMinutes = validTerminalOffset(offsetMinutes)
   const shifted = new Date(Number(utcMs) + Number(offsetMinutes) * 60000)
   if (!Number.isFinite(shifted.getTime())) throw new Error('invalid_review_period_time')
   const day = shifted.toISOString().slice(0, 10)
@@ -179,18 +187,13 @@ export function reviewPeriodKey(utcMs, periodType, offsetMinutes = DEFAULT_MT5_O
   throw new Error('invalid_review_period_type')
 }
 
-function fallbackBeijingUtcMs(value) {
-  const parsed = Date.parse(String(value || '').replace(' ', 'T') + '+08:00')
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-export function outcomeCloseUtcMs(row, offsetMinutes = DEFAULT_MT5_OFFSET_MINUTES) {
+export function outcomeCloseUtcMs(row, offsetMinutes) {
   const raw = parse(row?.last_deal_raw_json, {})
   const direct = Number(raw?.time_utc_msc)
   if (Number.isFinite(direct) && direct > 0) return direct
   const broker = Number(raw?.time_msc)
   if (Number.isFinite(broker) && broker > 0) return broker - Number(offsetMinutes) * 60000
-  return fallbackBeijingUtcMs(row?.fully_closed_at || row?.review_eligible_at)
+  return null
 }
 
 export function periodReviewEligibility(row) {
@@ -201,14 +204,16 @@ export function periodReviewEligibility(row) {
   return { eligible: false, reason: scope === 'platform' ? 'platform_strategy_user_review_disabled' : platformManager ? 'platform_manager_private_strategy_review_disabled' : 'review_strategy_scope_missing' }
 }
 
-export function groupDailyReviewOutcomes(rows, { offsetMinutes = DEFAULT_MT5_OFFSET_MINUTES, asOfUtcMs = Date.now() } = {}) {
+export function groupDailyReviewOutcomes(rows, { offsetMinutes = null, asOfUtcMs = Date.now() } = {}) {
   const groups = new Map()
   for (const row of rows || []) {
     if (!periodReviewEligibility(row).eligible) continue
-    const closeUtcMs = outcomeCloseUtcMs(row, offsetMinutes)
+    let rowOffset
+    try { rowOffset = validTerminalOffset(row.timezone_offset_minutes ?? offsetMinutes) } catch { continue }
+    const closeUtcMs = outcomeCloseUtcMs(row, rowOffset)
     if (!Number.isFinite(closeUtcMs)) continue
-    const periodKey = reviewPeriodKey(closeUtcMs, 'daily', offsetMinutes)
-    const bounds = reviewPeriodBounds('daily', periodKey, offsetMinutes)
+    const periodKey = reviewPeriodKey(closeUtcMs, 'daily', rowOffset)
+    const bounds = reviewPeriodBounds('daily', periodKey, rowOffset)
     if (Number(asOfUtcMs) < bounds.endUtcMs + DAILY_GRACE_MINUTES * 60000) continue
     const key = [row.user_id, row.trading_account_id, row.strategy_id, periodKey].join(':')
     if (!groups.has(key)) groups.set(key, { periodType: 'daily', periodKey, ...bounds, userId: Number(row.user_id), tradingAccountId: Number(row.trading_account_id), strategyId: Number(row.strategy_id), strategyVersion: Number(row.strategy_version || 1), strategyVersions:[], strategyScope: row.strategy_scope, outcomes: [] })
@@ -242,17 +247,19 @@ export function dailyReviewStatistics(outcomes) {
   }
 }
 
-export function groupMonthlyReviewCases(rows, { offsetMinutes = DEFAULT_MT5_OFFSET_MINUTES, asOfUtcMs = Date.now() } = {}) {
+export function groupMonthlyReviewCases(rows, { offsetMinutes = null, asOfUtcMs = Date.now() } = {}) {
   const groups = new Map()
   for (const row of rows || []) {
     if (String(row?.period_type) !== 'daily' || !row?.current_version_id) continue
     const periodKey = String(row.period_key || '').slice(0, 7)
     if (!/^\d{4}-\d{2}$/.test(periodKey)) continue
-    const bounds = reviewPeriodBounds('monthly', periodKey, offsetMinutes)
+    let rowOffset
+    try { rowOffset = validTerminalOffset(row.timezone_offset_minutes ?? offsetMinutes) } catch { continue }
+    const bounds = reviewPeriodBounds('monthly', periodKey, rowOffset)
     if (Number(asOfUtcMs) < bounds.endUtcMs + MONTHLY_GRACE_MINUTES * 60000) continue
-    const key = [row.user_id, row.strategy_id, periodKey].join(':')
+    const key = [row.user_id, row.trading_account_id, row.strategy_id, periodKey].join(':')
     if (!groups.has(key)) groups.set(key, { periodType: 'monthly', periodKey, ...bounds,
-      userId: Number(row.user_id), tradingAccountId: 0, strategyId: Number(row.strategy_id),
+      userId: Number(row.user_id), tradingAccountId: Number(row.trading_account_id), strategyId: Number(row.strategy_id),
       strategyVersion: Number(row.strategy_version || 1), strategyVersions:[], strategyScope: row.strategy_scope, dailyCases: [] })
     const group = groups.get(key)
     const versions = parse(row.strategy_versions_json, [Number(row.strategy_version || 1)]) || []
@@ -404,23 +411,20 @@ export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedD
   }
 }
 
-async function latestMt5Clock() {
-  const row = await queryOne(`SELECT mds.timezone_offset_minutes, mds.clock_status, mds.last_calibrated_at
-    FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
-    WHERE u.role = 'admin' AND mds.timezone_offset_minutes IS NOT NULL
-    ORDER BY (mds.clock_status = 'calibrated') DESC, mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`)
-  return row ? { offsetMinutes: Number(row.timezone_offset_minutes), status: row.clock_status, calibratedAt: row.last_calibrated_at } : { offsetMinutes: DEFAULT_MT5_OFFSET_MINUTES, status: 'fallback', calibratedAt: null }
-}
-
 async function eligibleOutcomeRows(limit) {
   const batchLimit = Math.min(2000, Math.max(2, Number(limit || 500)))
   const backlogLimit = Math.max(1, Math.ceil(batchLimit * 0.7))
   const recentLimit = Math.max(1, batchLimit - backlogLimit)
   const select = `SELECT so.*, snap.strategy_id, snap.strategy_version, snap.strategy_scope,
       u.role AS user_role, u.plan_source AS user_plan_source,
+      mds.timezone_offset_minutes, mds.clock_status,
       (SELECT sod.raw_json FROM signal_outcome_deals sod WHERE sod.outcome_id = so.id ORDER BY sod.deal_time DESC, sod.id DESC LIMIT 1) AS last_deal_raw_json
     FROM signal_outcomes so
     JOIN users u ON u.id = so.user_id
+    JOIN trading_accounts ta ON ta.id = so.trading_account_id AND ta.user_id = so.user_id
+    LEFT JOIN market_data_sources mds ON mds.bridge_user_id = so.user_id
+      AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(ta.broker_server)
+      AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
     JOIN inference_snapshots snap ON snap.id = (SELECT MAX(s2.id) FROM inference_snapshots s2 WHERE s2.signal_id = so.signal_id)`
   const platformManagerSql = platformAiContentManagerSql('u')
   const eligible = `so.status = 'closed' AND so.review_eligible_at IS NOT NULL
@@ -593,15 +597,18 @@ async function upsertDailyGroup(group, clock) {
 }
 
 export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Date.now() } = {}) {
-  const [clock, rows] = await Promise.all([latestMt5Clock(), eligibleOutcomeRows(limit)])
+  const rows = await eligibleOutcomeRows(limit)
   const userIds = [...new Set(rows.map(row => Number(row.user_id)).filter(id => id > 0))]
   const enabledEntries = await Promise.all(userIds.map(async userId => [userId, await isAiFeatureEnabled('review_generation_enabled', userId)]))
   const enabledUsers = new Set(enabledEntries.filter(([, enabled]) => enabled).map(([userId]) => userId))
   const enabledRows = rows.filter(row => enabledUsers.has(Number(row.user_id)))
-  const groups = groupDailyReviewOutcomes(enabledRows, { offsetMinutes: clock.offsetMinutes, asOfUtcMs })
-  const result = { scanned: rows.length, skippedDisabled:rows.length - enabledRows.length, groups: groups.length, ready: 0, incomplete: 0, clock }
+  const groups = groupDailyReviewOutcomes(enabledRows, { asOfUtcMs })
+  const result = { scanned: rows.length, skippedDisabled:rows.length - enabledRows.length,
+    skippedClock:enabledRows.filter(row => row.timezone_offset_minutes == null
+      || row.timezone_offset_minutes === '' || !Number.isInteger(Number(row.timezone_offset_minutes))).length,
+    groups: groups.length, ready: 0, incomplete: 0, clock:{ status:'per_account' } }
   for (const group of groups) {
-    const prepared = await upsertDailyGroup(group, clock)
+    const prepared = await upsertDailyGroup(group, { status:'account_terminal' })
     result[prepared.complete ? 'ready' : 'incomplete'] += 1
   }
   return result
@@ -620,9 +627,9 @@ async function eligibleDailyReviewRows(limit) {
 
 async function upsertMonthlyGroup(group, clock) {
   const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'monthly' AND period_key = ?
-    AND user_id = ? AND trading_account_id = 0 AND strategy_id = ?
+    AND user_id = ? AND trading_account_id = ? AND strategy_id = ?
     ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
-  [group.periodKey, group.userId, group.strategyId])
+  [group.periodKey, group.userId, group.tradingAccountId, group.strategyId])
   if (existingCase) {
     group.strategyVersion = Number(existingCase.strategy_version || group.strategyVersion || 1)
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
@@ -685,16 +692,16 @@ async function upsertMonthlyGroup(group, clock) {
     (period_type, period_key, user_id, trading_account_id, strategy_id, strategy_version, strategy_versions_json, strategy_compatibility_hash, strategy_scope,
      timezone_offset_minutes, period_start_utc_msc, period_end_utc_msc, status, evidence_status,
      evidence_reason, evidence_json, evidence_hash, source_count, created_at, updated_at)
-    VALUES ('monthly', ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 'complete', NULL, ?, ?, ?, ?, ?)
+    VALUES ('monthly', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 'complete', NULL, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE evidence_status = VALUES(evidence_status), evidence_reason = VALUES(evidence_reason),
       strategy_versions_json = VALUES(strategy_versions_json), evidence_json = VALUES(evidence_json), evidence_hash = VALUES(evidence_hash), source_count = VALUES(source_count),
       status = IF(status IN ('approved','edited','needs_revision','deferred'), status, VALUES(status)), updated_at = VALUES(updated_at)`, [
-    group.periodKey, group.userId, group.strategyId, group.strategyVersion, JSON.stringify(group.strategyVersions), periodCompatibilityHash(group), group.strategyScope,
+    group.periodKey, group.userId, group.tradingAccountId, group.strategyId, group.strategyVersion, JSON.stringify(group.strategyVersions), periodCompatibilityHash(group), group.strategyScope,
     group.offsetMinutes, group.startUtcMs, group.endUtcMs, JSON.stringify(evidence), evidenceHash, sources.length, now, now,
   ])
   const periodCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'monthly' AND period_key = ?
-    AND user_id = ? AND trading_account_id = 0 AND strategy_id = ? ORDER BY id DESC LIMIT 1`,
-  [group.periodKey, group.userId, group.strategyId])
+    AND user_id = ? AND trading_account_id = ? AND strategy_id = ? ORDER BY id DESC LIMIT 1`,
+  [group.periodKey, group.userId, group.tradingAccountId, group.strategyId])
   if (!periodCase.current_version_id) {
     const sourcePeriodIds = sources.map(source => Number(source.period_case_id))
     if (sourcePeriodIds.length) await queryRun(`DELETE FROM period_review_sources WHERE period_case_id = ? AND source_period_case_id IS NOT NULL
@@ -711,15 +718,16 @@ async function upsertMonthlyGroup(group, clock) {
 }
 
 export async function prepareEligibleMonthlyReviews({ limit = 1000, asOfUtcMs = Date.now() } = {}) {
-  const [clock, rows] = await Promise.all([latestMt5Clock(), eligibleDailyReviewRows(limit)])
+  const rows = await eligibleDailyReviewRows(limit)
   const userIds = [...new Set(rows.map(row => Number(row.user_id)).filter(id => id > 0))]
   const enabledEntries = await Promise.all(userIds.map(async userId => [userId, await isAiFeatureEnabled('review_generation_enabled', userId)]))
   const enabledUsers = new Set(enabledEntries.filter(([, enabled]) => enabled).map(([userId]) => userId))
   const enabledRows = rows.filter(row => enabledUsers.has(Number(row.user_id)))
-  const groups = groupMonthlyReviewCases(enabledRows, { offsetMinutes: clock.offsetMinutes, asOfUtcMs })
-  const result = { scanned: rows.length, skippedDisabled:rows.length - enabledRows.length, groups: groups.length, ready: 0, clock }
+  const groups = groupMonthlyReviewCases(enabledRows, { asOfUtcMs })
+  const result = { scanned: rows.length, skippedDisabled:rows.length - enabledRows.length,
+    groups: groups.length, ready: 0, clock:{ status:'per_account' } }
   for (const group of groups) {
-    await upsertMonthlyGroup(group, clock)
+    await upsertMonthlyGroup(group, { status:'account_terminal' })
     result.ready += 1
   }
   return result

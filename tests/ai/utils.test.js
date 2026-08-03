@@ -132,7 +132,8 @@ describe('attachSignalTiming', () => {
     const result = attachSignalTiming(signal)
     expect(result.ttl_seconds).toBe(45)
     expect(result.is_stale).toBe(false)
-    expect(result.created_at_mt5).toBeTruthy()
+    expect(result.created_at_mt5).toBeNull()
+    expect(attachSignalTiming({ timeframe:'M5', created_at:createdAt }, 180).created_at_mt5).toBeTruthy()
   })
 })
 
@@ -158,9 +159,9 @@ describe('compactRates', () => {
 })
 
 describe('utcToMt5Time', () => {
-  it('北京时间转MT5时间（减5小时）', () => {
+  it('does not assume a terminal offset when none was verified', () => {
     const result = utcToMt5Time('2026-06-26 15:30:00')
-    expect(result).toBe('2026-06-26 10:30:00')
+    expect(result).toBeNull()
   })
 
   it('uses the calibrated MT5 offset and rolls the date forward', () => {

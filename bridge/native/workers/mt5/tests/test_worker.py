@@ -89,7 +89,8 @@ class FakeMt5:
         self.positions = [Position(101, "XAUUSD.s", 0.01, 0, 234000, 2290.0, 2320.0)]
         self.orders = [Order(202, "XAUUSD.s", 0.02, 0.02, 2, 234000, "AI-PENDING",
                              2280.0, 2270.0, 2310.0, 0.0, 0)]
-        event_seconds = int(time.time()) - 60
+        event_utc_seconds = now // 1000 - 60
+        event_seconds = event_utc_seconds + 180 * 60
         self.history_deals = [
             Deal(4001, 3001, 2001, "XAUUSD.s", 0, 0, 234000, 0, "open",
                  0.01, 2295.0, 0.0, 0.0, 0.0, 0.0, 2285.0, 2315.0,
@@ -222,11 +223,17 @@ class WorkerTests(unittest.TestCase):
         self.terminal_path = Path(self.temporary.name) / "terminal64.exe"
         self.terminal_path.touch()
         self.mt5 = FakeMt5(self.now)
+        self.clock_state_path = Path(self.temporary.name) / "clock.json"
+        self.clock_state_path.write_text(
+            '{"version":1,"timezone_offset_minutes":180}', encoding="utf-8")
         self.adapter = ReadOnlyMt5Adapter(
             self.mt5,
             str(self.terminal_path),
             self.route,
             clock_msc=lambda: self.now,
+            clock_state_path=self.clock_state_path,
+            clock_probe_seconds=0.01,
+            clock_poll_seconds=0.01,
         )
         self.adapter.connect()
         self.worker = Mt5Worker(self.adapter, self.route)
@@ -322,34 +329,74 @@ class WorkerTests(unittest.TestCase):
 
             self.assertFalse(mt5.initialized)
 
-    def test_fresh_install_exposes_closed_market_read_data_with_provisional_clock(self):
+    def test_fresh_install_closed_market_fails_until_a_progressing_tick_calibrates_clock(self):
+        adapter = ReadOnlyMt5Adapter(
+            self.mt5, str(self.terminal_path), self.route,
+            clock_msc=lambda: self.now, clock_probe_seconds=0,
+        )
+        adapter.connect()
+        worker = Mt5Worker(adapter, self.route)
         self.mt5.now = self.now - 18 * 60 * 60_000
 
-        quote_response = self.worker.handle(self.request("quote", {"symbol": "XAUUSD"}))
-        self.assertEqual("quote", quote_response["outcome"])
-        quote = quote_response["payload"]["quote"]
-        self.assertEqual("provisional_stale", quote["clock_status"])
-        self.assertEqual(self.mt5.now, quote["observed_at_utc_msc"])
+        quote_response = worker.handle(self.request("quote", {"symbol": "XAUUSD"}))
 
-        rates_response = self.worker.handle(self.request("data", {
-            "action": "rates",
-            "params": {"symbol": "XAUUSD", "timeframe": "M5", "count": 4},
-        }, "request_01JSTALECLOCK"))
-        self.assertEqual("data", rates_response["outcome"])
-        rates = rates_response["payload"]["data"]["payload"]
-        self.assertEqual("provisional_stale", rates["clock_status"])
-        self.assertEqual(4, rates["count"])
+        self.assertEqual("error", quote_response["outcome"])
+        self.assertEqual("mt5_clock_unverified", quote_response["payload"]["error_code"])
 
-    def test_provisional_closed_market_clock_is_not_persisted_as_trusted(self):
+    def test_closed_market_sample_is_not_persisted_as_trusted(self):
         with tempfile.TemporaryDirectory() as directory:
             state_path = Path(directory) / "clock.json"
             clock = BrokerClock(state_path, lambda: self.now)
 
-            observed = clock.calibrate(self.now + 180 * 60_000 - 18 * 60 * 60_000)
+            with self.assertRaisesRegex(WorkerError, "mt5_clock_unverified"):
+                clock.calibrate(self.now + 180 * 60_000 - 18 * 60 * 60_000)
 
-            self.assertEqual(self.now - 18 * 60 * 60_000, observed)
-            self.assertEqual("provisional_stale", clock.status)
+            self.assertEqual("calibrating", clock.status)
             self.assertFalse(state_path.exists())
+
+    def test_fresh_install_uses_progressing_tick_to_calibrate_against_utc(self):
+        host_samples = iter((self.now, self.now + 1_000))
+        clock = BrokerClock(None, lambda: next(host_samples))
+
+        with self.assertRaisesRegex(WorkerError, "mt5_clock_unverified"):
+            clock.calibrate(self.now + 180 * 60_000)
+        observed = clock.calibrate(self.now + 1_000 + 180 * 60_000)
+
+        self.assertEqual(self.now + 1_000, observed)
+        self.assertEqual(180, clock.offset_minutes)
+        self.assertEqual("verified", clock.status)
+
+    def test_closed_preferred_symbol_uses_another_progressing_symbol_for_initial_calibration(self):
+        adapter = ReadOnlyMt5Adapter(
+            self.mt5, str(self.terminal_path), self.route,
+            clock_msc=lambda: self.now, clock_probe_seconds=0.02,
+            clock_poll_seconds=0.001,
+        )
+        adapter.connect()
+        secondary_samples = iter((self.now + 180 * 60_000,
+                                  self.now + 180 * 60_000 + 1_000))
+        last_secondary = self.now + 180 * 60_000 + 1_000
+        self.mt5.symbols_get = lambda: (
+            self.mt5.symbol_info("XAUUSD.s")._replace(name="XAUUSD.s"),
+            self.mt5.symbol_info("EURUSD.s")._replace(name="EURUSD.s"),
+        )
+
+        def symbol_tick(symbol):
+            if symbol == "XAUUSD.s":
+                return Tick(2300.0, 2300.2, 2300.1,
+                            self.now + 180 * 60_000 - 18 * 60 * 60_000)
+            try:
+                raw = next(secondary_samples)
+            except StopIteration:
+                raw = last_secondary
+            return Tick(1.1, 1.1002, 1.1001, raw)
+
+        self.mt5.symbol_info_tick = symbol_tick
+
+        adapter._calibrate_terminal_clock("XAUUSD.s")
+
+        self.assertEqual(180, adapter.clock.offset_minutes)
+        self.assertEqual("verified", adapter.clock.status)
 
     def test_future_clock_sample_still_fails_closed(self):
         self.mt5.now = self.now + 60 * 60_000
@@ -529,7 +576,7 @@ class WorkerTests(unittest.TestCase):
             "action": "risk_snapshot",
             "params": {"symbol": "XAUUSD", "last_deal_time_msc": 0,
                        "last_deal_ticket": 0,
-                       "baseline_from_utc_msc": self.mt5.history_deals[0].time_msc - 1},
+                       "baseline_from_utc_msc": self.mt5.history_deals[0].time_msc - 180 * 60_000 - 1},
         }, "request_01JRISKDATA"))["payload"]["data"]["payload"]
         self.assertEqual(1, risk["snapshot_version"])
         self.assertEqual(self.now, risk["time_utc_msc"])
@@ -546,13 +593,16 @@ class WorkerTests(unittest.TestCase):
                          response["payload"]["error_code"])
 
     def test_history_sync_is_bounded_cursor_ordered_and_builds_related_evidence(self):
-        cursor_time = self.mt5.history_deals[0].time_msc - 1
+        cursor_time = self.mt5.history_deals[0].time_msc - 180 * 60_000 - 1
         first = self.worker.handle(self.request("history_sync", {
             "cursor": {"time_msc": cursor_time, "ticket": "0"}, "limit": 1
         }))
         self.assertEqual("history_batch", first["outcome"])
         first_batch = first["payload"]["batch"]
         self.assertEqual([4001], [item["deal_ticket"] for item in first_batch["deals"]])
+        self.assertEqual(cursor_time + 1, first_batch["deals"][0]["time_utc_msc"])
+        self.assertEqual(self.mt5.history_deals[0].time_msc,
+                         first_batch["deals"][0]["time_server_msc"])
         self.assertEqual("4001", first_batch["next_cursor"]["ticket"])
         self.assertTrue(first_batch["has_more"])
         self.assertEqual([], first_batch["trades"])
@@ -586,8 +636,10 @@ class WorkerTests(unittest.TestCase):
             close_order = open_order + 1
             open_deal = 40_000 + index * 2
             close_deal = open_deal + 1
-            opened = start_seconds + index * 2
-            closed = opened + 1
+            opened_utc = start_seconds + index * 2
+            closed_utc = opened_utc + 1
+            opened = opened_utc + 180 * 60
+            closed = closed_utc + 180 * 60
             deals.extend([
                 Deal(open_deal, open_order, position_id, "XAUUSD.s", 0, 0,
                      234000, 0, "open", 0.01, 2295.0, 0.0, 0.0, 0.0,
@@ -634,8 +686,10 @@ class WorkerTests(unittest.TestCase):
             close_order = open_order + 1
             open_deal = 70_000 + index * 2
             close_deal = open_deal + 1
-            opened = close_start - 40 * 24 * 60 * 60 - index
-            closed = close_start + index
+            opened_utc = close_start - 40 * 24 * 60 * 60 - index
+            closed_utc = close_start + index
+            opened = opened_utc + 180 * 60
+            closed = closed_utc + 180 * 60
             deals.extend([
                 Deal(open_deal, open_order, position_id, "XAUUSD.s", 0, 0,
                      234000, 0, "open", 0.01, 2295.0, 0.0, 0.0, 0.0,

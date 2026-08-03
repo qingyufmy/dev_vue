@@ -153,16 +153,18 @@ describe('bridge release manifest route', () => {
 
     const current = await request(router, headers)
     const bootstrap = await getRoute(router, '/bridge/v3/releases/bootstrap')
+    const expectedCurrent = JSON.parse(await readFile(path.resolve('server/release-bootstrap/current.json'), 'utf8'))
+    const expectedBootstrap = JSON.parse(await readFile(path.resolve('server/release-bootstrap/bootstrap.json'), 'utf8'))
 
     expect(current.status).toBe(200)
     expect(bootstrap.status).toBe(200)
     expect(JSON.parse(current.body)).toMatchObject({
-      release_id:'bridge-3.0.0-production-20260802.2',
+      release_id:expectedCurrent.release_id,
       release_version:'3.0.0',
       rollout_percentage:100,
     })
     expect(JSON.parse(bootstrap.body)).toMatchObject({
-      release_id:'bridge-3.0.0-production-20260802.2',
+      release_id:expectedBootstrap.release_id,
       release_version:'3.0.0',
       rollout_percentage:100,
     })
@@ -178,9 +180,10 @@ describe('bridge release manifest route', () => {
       'X-Aurum-Installation-Id':'install_0123456789abcdef0123456789abcdef',
       'X-Aurum-Release-Channel':'stable',
     })
+    const expectedCurrent = JSON.parse(await readFile(path.resolve('server/release-bootstrap/current.json'), 'utf8'))
 
     expect(response.status).toBe(200)
-    expect(JSON.parse(response.body).release_id).toBe('bridge-3.0.0-production-20260802.2')
+    expect(JSON.parse(response.body).release_id).toBe(expectedCurrent.release_id)
   })
 
   it('counts connected installations once and recommends stopping on rollback', () => {

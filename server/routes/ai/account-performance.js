@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { beijingNow, queryOne, withTransaction } from '../../db.js'
+import { beijingNow, parseBeijing, queryOne, withTransaction } from '../../db.js'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const DAY_MS = 86_400_000
@@ -9,6 +9,22 @@ const isoDate = value => new Date(value).toISOString().slice(0, 10)
 const addDays = (value, days) => isoDate(Date.parse(`${value}T00:00:00Z`) + days * DAY_MS)
 const minDate = (left, right) => left <= right ? left : right
 const todayDate = () => new Date().toISOString().slice(0, 10)
+const UNTRUSTED_CLOCK_STATUSES = new Set(['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'])
+
+function terminalClock(account) {
+  if (account?.timezone_offset_minutes == null || account.timezone_offset_minutes === '') {
+    throw new Error('terminal_clock_unverified')
+  }
+  const offsetMinutes = Number(account?.timezone_offset_minutes)
+  const status = String(account?.clock_status || '').trim().toLowerCase()
+  if (!Number.isInteger(offsetMinutes) || offsetMinutes < -720 || offsetMinutes > 840
+    || !status || UNTRUSTED_CLOCK_STATUSES.has(status)) throw new Error('terminal_clock_unverified')
+  return { offsetMinutes, status }
+}
+
+function terminalDate(utcMs, offsetMinutes) {
+  return new Date(Number(utcMs) + Number(offsetMinutes) * 60000).toISOString().slice(0, 10)
+}
 
 export function normalizePerformanceDay(input = {}) {
   const businessDate = String(input.business_date || '')
@@ -60,7 +76,17 @@ async function accountSyncContext(run, userId, accountId, lock = false) {
   const account = await txOne(run, `SELECT ta.id, ta.user_id, ta.broker_server, ta.login_account,
       ta.first_verified_at, bindings.first_connected_at, bindings.last_connected_at, bindings.account_currency,
       ownership.id AS ownership_history_id, ownership.started_at AS ownership_started_at,
-      state.synced_through_date, state.sync_status
+      state.synced_through_date, state.sync_status,
+      (SELECT mds.timezone_offset_minutes FROM market_data_sources mds
+        WHERE mds.bridge_user_id = ta.user_id
+          AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(ta.broker_server)
+          AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
+        ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1) AS timezone_offset_minutes,
+      (SELECT mds.clock_status FROM market_data_sources mds
+        WHERE mds.bridge_user_id = ta.user_id
+          AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(ta.broker_server)
+          AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
+        ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1) AS clock_status
     FROM trading_accounts ta
     JOIN mt5_account_bindings bindings ON bindings.current_trading_account_id = ta.id
       AND bindings.current_user_id = ta.user_id
@@ -75,10 +101,17 @@ async function accountSyncContext(run, userId, accountId, lock = false) {
 export async function getAccountPerformanceSyncWindow(userId, accountId, { recent = false } = {}) {
   return withTransaction(async run => {
     const account = await accountSyncContext(run, userId, accountId, true)
+    const clock = terminalClock(account)
     const firstConnectedAt = account.ownership_started_at || account.first_verified_at
+    const firstConnectedUtcMs = firstConnectedAt instanceof Date
+      ? firstConnectedAt.getTime() : parseBeijing(firstConnectedAt)?.getTime()
+    const firstConnectedDate = Number.isFinite(firstConnectedUtcMs)
+      ? terminalDate(firstConnectedUtcMs, clock.offsetMinutes) : String(firstConnectedAt || '').slice(0, 10)
+    const today = terminalDate(Date.now(), clock.offsetMinutes)
     const window = recent
-      ? recentPerformanceWindow({ firstConnectedAt })
-      : nextPerformanceWindow({ firstConnectedAt, syncedThroughDate:account.synced_through_date })
+      ? recentPerformanceWindow({ firstConnectedAt:firstConnectedDate, today })
+      : nextPerformanceWindow({ firstConnectedAt:firstConnectedDate,
+        syncedThroughDate:account.synced_through_date, today })
     if (!window) return null
     const now = beijingNow()
     await run(`INSERT INTO mt5_account_performance_sync_state
@@ -89,7 +122,8 @@ export async function getAccountPerformanceSyncWindow(userId, accountId, { recen
     [account.ownership_history_id, accountId, String(firstConnectedAt).slice(0, 10), account.synced_through_date || null, now, now, now])
     return { ...window, account:{ id:Number(account.id), server:account.broker_server,
       login:String(account.login_account), currency:account.account_currency || null },
-      first_connected_at:firstConnectedAt }
+      first_connected_at:firstConnectedAt, timezone_offset_minutes:clock.offsetMinutes,
+      clock_status:clock.status }
   })
 }
 
@@ -181,7 +215,9 @@ export async function saveAccountPerformanceChunk(userId, accountId, payload = {
         last_error = VALUES(last_error), last_attempt_at = VALUES(last_attempt_at),
         last_success_at = VALUES(last_success_at), updated_at = VALUES(updated_at)`,
     [context.ownership_history_id, accountId, String(context.ownership_started_at || context.first_verified_at).slice(0, 10), syncedThroughDate,
-      Number.isFinite(Number(payload.timezone_offset_minutes)) ? Math.trunc(Number(payload.timezone_offset_minutes)) : null,
+      payload.timezone_offset_minutes != null && payload.timezone_offset_minutes !== ''
+        && Number.isFinite(Number(payload.timezone_offset_minutes))
+        ? Math.trunc(Number(payload.timezone_offset_minutes)) : null,
       complete ? 'current' : 'incomplete', complete ? null : rows.map(row => row.data_issue).filter(Boolean).join(',').slice(0, 255),
       now, now, now, now])
     await run(`UPDATE mt5_account_bindings SET account_currency = COALESCE(?, account_currency),

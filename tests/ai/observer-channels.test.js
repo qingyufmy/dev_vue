@@ -104,7 +104,7 @@ describe('observer sources and channels', () => {
     expect(subscriptionCall[0]).toContain('schedule_windows_json')
     expect(subscriptionCall[1]).toEqual([
       7, 12, 3, '["XAUUSD"]', 0,
-      'Etc/GMT-3', '[1,2,3,4,5]', '[{"start":"00:00","end":"23:59"}]', 'pause_all',
+      'terminal_server', '[1,2,3,4,5]', '[{"start":"00:00","end":"23:59"}]', 'pause_all',
     ])
     expect(schedulerCall[1]).toEqual([7, 0, 3, 0, '["XAUUSD"]'])
     expect(bridgeSettingsCall[1]).toEqual([7, 0, 0])

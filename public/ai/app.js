@@ -26,6 +26,7 @@ const state = {
   pendingManualOrder: null,
   accountBalance: 0,
   bridgeAccountIdentity: null,
+  mt5TimezoneOffsetMinutes: null,
   bridgePlatform: "mt5",
   bridgeRuntimeControl: null,
   historyNetResult: 0,
@@ -429,11 +430,22 @@ function formatTime(value) {
 }
 
 function terminalQuoteTimezoneOffsetMinutes(quote) {
+  const status = String(quote?.clock_status || '').trim().toLowerCase();
+  if (!status || ["unknown", "unavailable", "unverified", "calibrating", "fallback"].includes(status)) return null;
   const rawOffset = quote?.timezone_offset_minutes;
   if (rawOffset === null || rawOffset === undefined || rawOffset === '') return null;
   const offsetMinutes = Number(rawOffset);
-  return Number.isFinite(offsetMinutes) && offsetMinutes >= -840 && offsetMinutes <= 840
+  return Number.isInteger(offsetMinutes) && offsetMinutes >= -840 && offsetMinutes <= 840
     ? offsetMinutes : null;
+}
+
+function syncTerminalTimezoneOffset(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const hasClockEvidence = Object.prototype.hasOwnProperty.call(payload, "timezone_offset_minutes")
+    || Object.prototype.hasOwnProperty.call(payload, "clock_status");
+  const offset = terminalQuoteTimezoneOffsetMinutes(payload);
+  if (hasClockEvidence) state.mt5TimezoneOffsetMinutes = offset;
+  return offset;
 }
 
 function terminalQuoteObservedAtUtcMsc(quote) {
@@ -469,11 +481,14 @@ const parseDate = (v) => {
   try { return fmtUtc(new Date(v.replace(" ", "T"))); } catch { return null; }
 };
 
-function utcToMt5(utcStr, timezoneOffsetMinutes = 180) {
+function utcToMt5(utcStr, timezoneOffsetMinutes = null) {
   if (!utcStr) return null;
+  if (timezoneOffsetMinutes === null || timezoneOffsetMinutes === undefined || timezoneOffsetMinutes === "") return null;
+  const offset = Number(timezoneOffsetMinutes);
+  if (!Number.isInteger(offset) || offset < -720 || offset > 840) return null;
   const d = new Date(utcStr.replace(" ", "T") + "Z");
   if (isNaN(d.getTime())) return utcStr;
-  const shifted = new Date(d.getTime() + Number(timezoneOffsetMinutes || 0) * 60_000);
+  const shifted = new Date(d.getTime() + offset * 60_000);
   const p = (x) => String(x).padStart(2, "0");
   return `${shifted.getUTCFullYear()}-${p(shifted.getUTCMonth() + 1)}-${p(shifted.getUTCDate())} ${p(shifted.getUTCHours())}:${p(shifted.getUTCMinutes())}:${p(shifted.getUTCSeconds())}`;
 }
@@ -1666,6 +1681,7 @@ function clearAccountContextCaches() {
   _historyChartCache = null;
   state.lastQuote = null;
   state.bridgeAccountIdentity = null;
+  state.mt5TimezoneOffsetMinutes = null;
   state.positions = [];
   state.pendingOrders = [];
   state.tradingAccounts = [];
@@ -1750,8 +1766,7 @@ function connectBridgeStatusWs(onReady) {
       const msg = JSON.parse(e.data);
       if (msg.type === 'platform_market_tick') {
         const quote = msg.quote || {};
-        const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(quote);
-        if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
+        if (isObserverMode()) syncTerminalTimezoneOffset(quote);
         const selected = String($("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || getGlobalSymbol()).toUpperCase();
         const brokerSymbol = String(quote.symbol || '').toUpperCase();
         if (brokerSymbol && standardMarketSymbol(brokerSymbol) === standardMarketSymbol(selected) &&
@@ -2019,8 +2034,7 @@ function updateMarketStatusFromQuote(quote) {
 
 function renderQuoteStatusMeta(quote) {
   setText('quoteSpread', Number.isFinite(Number(quote?.spread)) ? fmt(quote.spread, 2) : '--');
-  const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(quote);
-  if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
+  syncTerminalTimezoneOffset(quote);
   const quoteTime = formatTerminalQuoteTime(quote);
   setText('quoteTime', quoteTime);
   setText('mt5ServerTime', quoteTime === '--' ? '--' : quoteTime.split(' ').pop() || '--');
@@ -2032,8 +2046,6 @@ function renderPlatformMarketMeta(quote) {
     renderQuoteStatusMeta(quote);
     return;
   }
-  const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(quote);
-  if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
   const quoteTime = formatTerminalQuoteTime(quote);
   setText('quoteTime', quoteTime);
   setText('mt5ServerTime', quoteTime === '--' ? '--' : quoteTime.split(' ').pop() || '--');
@@ -2060,8 +2072,7 @@ function handleBridgeData(msg) {
 
   if (msg.quote) {
     const q = msg.quote;
-    const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(q);
-    if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
+    syncTerminalTimezoneOffset(q);
     // Only update quote display if the pushed symbol matches the selected symbol
     if (q.symbol && q.symbol === selectedSymbol) {
       const prev = state.lastQuote && state.lastQuote.symbol === q.symbol ? state.lastQuote : null;
@@ -2376,12 +2387,12 @@ function handleHeartbeat(msg) {
   if (msg.platform) updateBridgePlatformUI(msg.platform);
   if (msg.observer_channel?.id) syncSelectedObserverChannel(msg.observer_channel.id);
   if (msg.mt5_time) {
-    const timezoneOffsetMinutes = terminalQuoteTimezoneOffsetMinutes(msg);
-    if (timezoneOffsetMinutes !== null) state.mt5TimezoneOffsetMinutes = timezoneOffsetMinutes;
+    syncTerminalTimezoneOffset(msg);
     const terminalTime = formatTerminalQuoteTime({
       time:msg.mt5_time,
       observed_at_utc_msc:msg.observed_at_utc_msc,
       timezone_offset_minutes:msg.timezone_offset_minutes,
+      clock_status:msg.clock_status,
     });
     setText('quoteTime', terminalTime);
     setText('mt5ServerTime', terminalTime === '--' ? '--' : terminalTime.split(' ').pop() || '--');
@@ -2424,7 +2435,10 @@ function handleHeartbeat(msg) {
   state._lastGatewayLive = isLive;
   state._lastUsingFallback = usingFallback;
   if (isLive) startLiveQuoteRefreshTimer();
-  else stopLiveQuoteRefreshTimer();
+  else {
+    stopLiveQuoteRefreshTimer();
+    if (!usingFallback) state.mt5TimezoneOffsetMinutes = null;
+  }
 
   // Bridge state changed → update role-based UI
   if (isLive !== wasLive || usingFallback !== wasFallback) {
@@ -2459,6 +2473,7 @@ function handleDisconnect(msg) {
     renderAutoAnalyzeBadge({ enabled: !!state.autoEnabled, paused_reason: state.autoEnabled ? 'user_bridge_offline' : 'disabled' });
   }
   state._lastGatewayLive = false;
+  state.mt5TimezoneOffsetMinutes = null;
   stopLiveQuoteRefreshTimer();
   void enterBridgeObserverMode({
     paused:state.bridgeRuntimeControl?.desired_state === "paused",
@@ -2873,21 +2888,19 @@ async function saveStrategyEditor() {
 }
 
 function mt5ScheduleTimezone(offsetMinutes = state.mt5TimezoneOffsetMinutes) {
-  const offsetHours = Number(offsetMinutes) / 60;
-  if (!Number.isInteger(offsetHours) || offsetHours < -14 || offsetHours > 12) return "Etc/GMT-3";
-  if (offsetHours === 0) return "UTC";
-  return `Etc/GMT${offsetHours > 0 ? "-" : "+"}${Math.abs(offsetHours)}`;
+  return "terminal_server";
 }
 
 function syncMt5ScheduleTimezoneOption() {
   const select = $("subscriptionScheduleTimezone");
-  if (!select) return "Etc/GMT-3";
+  if (!select) return "terminal_server";
   const timezone = mt5ScheduleTimezone();
-  const offset = Number.isFinite(Number(state.mt5TimezoneOffsetMinutes)) ? Number(state.mt5TimezoneOffsetMinutes) : 180;
-  const offsetLabel = `UTC${offset >= 0 ? "+" : ""}${offset / 60}`;
+  const offset = Number(state.mt5TimezoneOffsetMinutes);
+  const offsetLabel = Number.isInteger(offset)
+    ? `UTC${offset >= 0 ? "+" : ""}${offset / 60}` : "等待终端校准";
   const option = [...select.options].find(item => item.dataset.mt5Dynamic === "1") || select.options[0];
   option.dataset.mt5Dynamic = "1";
-  option.value = timezone;
+  option.value = "terminal_server";
   option.textContent = `${bridgePlatformLabel()} 服务器时间（${offsetLabel}）`;
   return timezone;
 }
@@ -2983,7 +2996,7 @@ function hydrateSubscriptionEditor(strategy, subscription = null) {
   $("subscriptionTakeProfitMode").value = accountSubscription?.take_profit_mode || "ai_recommended";
   $("subscriptionScheduleEnabled").checked = Boolean(Number(accountSubscription?.schedule_enabled || 0));
   const defaultScheduleTimezone = syncMt5ScheduleTimezoneOption();
-  $("subscriptionScheduleTimezone").value = accountSubscription?.schedule_timezone || defaultScheduleTimezone;
+  $("subscriptionScheduleTimezone").value = defaultScheduleTimezone;
   $("subscriptionOutsideWindowBehavior").value = accountSubscription?.outside_window_behavior || "pause_all";
   const weekdays = new Set(parseJsonField(accountSubscription?.schedule_weekdays_json, [1,2,3,4,5]).map(Number));
   document.querySelectorAll("[data-schedule-weekday]").forEach(input => { input.checked = weekdays.has(Number(input.dataset.scheduleWeekday)); });
@@ -3797,11 +3810,21 @@ function periodReviewFailureText(value) {
   return localized && localized !== text ? localized : "复盘生成未完成，请重新生成；详细错误已记录在服务器日志中";
 }
 
-function formatReviewEventTime(value, offsetMinutes = 180) {
+function formatReviewEventTime(value, offsetMinutes = null) {
   if (!value) return "--";
+  if (offsetMinutes === null || offsetMinutes === undefined || offsetMinutes === "") return "时间待终端校准";
+  const offset = Number(offsetMinutes);
+  if (!Number.isInteger(offset) || offset < -720 || offset > 840) return "时间待终端校准";
   const utcMs = Date.parse(`${String(value).replace(" ", "T")}+08:00`);
   if (!Number.isFinite(utcMs)) return formatTime(value);
-  return new Date(utcMs + Number(offsetMinutes || 0) * 60000).toISOString().slice(5, 19).replace("T", " ");
+  return new Date(utcMs + offset * 60000).toISOString().slice(5, 19).replace("T", " ");
+}
+
+function terminalTimezoneLabel(offsetMinutes) {
+  if (offsetMinutes === null || offsetMinutes === undefined || offsetMinutes === "") return "等待终端校准";
+  const offset = Number(offsetMinutes);
+  if (!Number.isInteger(offset) || offset < -720 || offset > 840) return "等待终端校准";
+  return `UTC${offset >= 0 ? "+" : ""}${fmt(offset / 60, 1)}`;
 }
 
 function periodReviewEventLabel(event) {
@@ -3837,7 +3860,9 @@ function schedulePeriodReviewDetailPoll(review) {
   const generatingReview = review && ["queued", "leased"].includes(review.job_status) && !Number(review.current_version_id || 0);
   const derivingMemory = review && ["queued", "leased"].includes(review.derivation_status);
   if (!generatingReview && !derivingMemory) return;
-  const caseId = Number(review.id), timezoneOffset = Number(review.timezone_offset_minutes || 180);
+  const caseId = Number(review.id), timezoneOffset = review.timezone_offset_minutes != null
+    && review.timezone_offset_minutes !== "" && Number.isInteger(Number(review.timezone_offset_minutes))
+    ? Number(review.timezone_offset_minutes) : null;
   state.reviewDetailJobKey = `${review.job_status}:${review.progress_stage}:${review.attempt_count}:${review.next_attempt_at || ''}`;
   state.reviewDetailPollTimer = setTimeout(async () => {
     if (Number(state.selectedReviewId) !== caseId || activeTabId() !== "review-memory") return;
@@ -3964,7 +3989,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
       ${periodReviewListBlock(isMonthly ? '跨日模式' : '逐笔判断', assessments.map(item => `${isMonthly ? item.period_case_id : item.outcome_id} · ${periodDecisionLabels[item.decision_quality] || item.decision_quality}：${item.summary || ''}`), isMonthly ? 'calendar-range' : 'receipt-text')}
       ${isMonthly ? periodReviewListBlock('长期记忆候选', (content.memory_candidates || []).map(item => item.lesson), 'brain-circuit') : periodReviewListBlock('缠论结构诊断', diagnostics.map(item => `${chanIssueLabels[item.issue_source] || item.issue_source}：${item.explanation || '无补充说明'}`), 'git-branch')}
     </section>
-    <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="database" size="15"></i><strong>证据来源与系统字段</strong><small>基础统计只读，避免修改后与真实成交数据不一致</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>账户 / 策略</span><strong>#${Number(review.trading_account_id || 0)} / #${Number(review.strategy_id || 0)}</strong></div><div><span>统计时区</span><strong>UTC${Number(review.timezone_offset_minutes || 0) >= 0 ? '+' : ''}${fmt(Number(review.timezone_offset_minutes || 0) / 60, 1)}</strong></div><div><span>来源策略配置</span><strong>${escapeHtml(reviewStrategyVersions(review).length ? reviewStrategyVersions(review).map(value => `v${value}`).join('、') : '已记录')}</strong></div><div><span>来源数量</span><strong>${Number(review.source_count || 0)}</strong></div><div><span>生成时间</span><strong>${escapeHtml(current.created_at || '--')}</strong></div></div></div></details>
+    <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="database" size="15"></i><strong>证据来源与系统字段</strong><small>基础统计只读，避免修改后与真实成交数据不一致</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>账户 / 策略</span><strong>#${Number(review.trading_account_id || 0)} / #${Number(review.strategy_id || 0)}</strong></div><div><span>统计时区</span><strong>${escapeHtml(terminalTimezoneLabel(review.timezone_offset_minutes))}</strong></div><div><span>来源策略配置</span><strong>${escapeHtml(reviewStrategyVersions(review).length ? reviewStrategyVersions(review).map(value => `v${value}`).join('、') : '已记录')}</strong></div><div><span>来源数量</span><strong>${Number(review.source_count || 0)}</strong></div><div><span>生成时间</span><strong>${escapeHtml(current.created_at || '--')}</strong></div></div></div></details>
     <footer class="review-actions"><div class="review-action-context"><i data-lucide="shield-check" size="17"></i><span><strong>确认后才会进入记忆体系</strong><small>${isMonthly ? '月复盘负责压缩跨日模式并产生长期记忆候选' : '日复盘先形成短期策略记忆，月底再统一压缩'}</small></span></div>${editable ? `<div class="review-action-buttons"><button class="text-action" data-review-action="defer" data-version-id="${current.id}">稍后处理</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">标记有问题</button><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}"><i data-lucide="check" size="15"></i>确认并沉淀经验</button></div>` : '<span class="status-chip success">内容已锁定</span>'}</footer>` : ''}`;
   initIcons();
   if (current && Number(review.is_unread)) {
@@ -8377,21 +8402,24 @@ function positionManagementActionLabel(action) {
 function positionManagementBarTime(task) {
   const timestamp = Number(task?.closed_bar_time_utc_ms);
   if (!Number.isFinite(timestamp) || timestamp <= 0) return "--";
-  const offset = Number.isFinite(Number(state.mt5TimezoneOffsetMinutes)) ? Number(state.mt5TimezoneOffsetMinutes) : 180;
+  const offset = state.mt5TimezoneOffsetMinutes == null ? Number.NaN : Number(state.mt5TimezoneOffsetMinutes);
+  if (!Number.isInteger(offset)) return "时间待终端校准";
   return fmtUtc(new Date(timestamp + offset * 60_000));
 }
 
 function positionManagementDecisionTime(task) {
   const timestamp = parseBeijingServerTime(task?.updated_at || task?.created_at);
   if (!Number.isFinite(timestamp)) return positionManagementBarTime(task);
-  const offset = Number.isFinite(Number(state.mt5TimezoneOffsetMinutes)) ? Number(state.mt5TimezoneOffsetMinutes) : 180;
+  const offset = state.mt5TimezoneOffsetMinutes == null ? Number.NaN : Number(state.mt5TimezoneOffsetMinutes);
+  if (!Number.isInteger(offset)) return "时间待终端校准";
   return fmtUtc(new Date(timestamp + offset * 60_000));
 }
 
 function positionManagementEventTime(event) {
   const timestamp = parseBeijingServerTime(event?.created_at);
   if (!Number.isFinite(timestamp)) return "--";
-  const offset = Number.isFinite(Number(state.mt5TimezoneOffsetMinutes)) ? Number(state.mt5TimezoneOffsetMinutes) : 180;
+  const offset = state.mt5TimezoneOffsetMinutes == null ? Number.NaN : Number(state.mt5TimezoneOffsetMinutes);
+  if (!Number.isInteger(offset)) return "时间待终端校准";
   return fmtUtc(new Date(timestamp + offset * 60_000));
 }
 

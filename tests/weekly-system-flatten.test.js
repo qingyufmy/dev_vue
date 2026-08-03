@@ -4,6 +4,7 @@ const mockQueryRun = vi.fn()
 const mockSendBridgeCommand = vi.fn()
 const mockSendToBrowsers = vi.fn()
 const mockGetAllBridges = vi.fn()
+const mockGetPlatformMarketClockState = vi.fn()
 const mockRedis = {
   get: vi.fn(),
   set: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock('../server/db.js', () => ({ queryRun: mockQueryRun }))
 vi.mock('../server/redis.js', () => ({ getRedis: () => mockRedis, isRedisAvailable: () => true }))
 vi.mock('../server/bridge-ws.js', () => ({
   getAllBridges: mockGetAllBridges,
+  getPlatformMarketClockState: mockGetPlatformMarketClockState,
   sendBridgeCommand: mockSendBridgeCommand,
   sendToBrowsers: mockSendToBrowsers,
 }))
@@ -32,49 +34,50 @@ beforeEach(() => {
   mockRedis.expire.mockResolvedValue(1)
   mockRedis.smembers.mockResolvedValue([])
   mockQueryRun.mockResolvedValue({ affectedRows: 1 })
+  mockGetPlatformMarketClockState.mockReturnValue({
+    connected:true, timezone_offset_minutes:180, clock_status:'verified',
+  })
 })
 
 describe('weekly MT5 risk window', () => {
   it('only locks from Friday 23:00 through 23:59 MT5 time', async () => {
     const { isWeeklyFlattenWindow, isWeeklyFlattenPrimaryWindow } = await import('../server/jobs/weekly-risk-window.js')
 
-    expect(isWeeklyFlattenWindow(new Date('2026-07-17T19:59:00.000Z'))).toBe(false)
-    expect(isWeeklyFlattenWindow(new Date('2026-07-17T20:00:00.000Z'))).toBe(true)
-    expect(isWeeklyFlattenPrimaryWindow(new Date('2026-07-17T20:30:00.000Z'))).toBe(true)
-    expect(isWeeklyFlattenPrimaryWindow(new Date('2026-07-17T21:00:00.000Z'))).toBe(false)
-    expect(isWeeklyFlattenWindow(new Date('2026-07-18T20:00:00.000Z'))).toBe(false)
-    expect(isWeeklyFlattenWindow(new Date('2026-07-19T23:59:00.000Z'))).toBe(false)
-    expect(isWeeklyFlattenWindow(new Date('2026-07-20T00:00:00.000Z'))).toBe(false)
+    expect(isWeeklyFlattenWindow(new Date('2026-07-17T19:59:00.000Z'), 180)).toBe(false)
+    expect(isWeeklyFlattenWindow(new Date('2026-07-17T20:00:00.000Z'), 180)).toBe(true)
+    expect(isWeeklyFlattenPrimaryWindow(new Date('2026-07-17T20:30:00.000Z'), 180)).toBe(true)
+    expect(isWeeklyFlattenPrimaryWindow(new Date('2026-07-17T21:00:00.000Z'), 180)).toBe(false)
+    expect(isWeeklyFlattenWindow(new Date('2026-07-18T20:00:00.000Z'), 180)).toBe(false)
+    expect(isWeeklyFlattenWindow(new Date('2026-07-19T23:59:00.000Z'), 180)).toBe(false)
+    expect(isWeeklyFlattenWindow(new Date('2026-07-20T00:00:00.000Z'), 180)).toBe(false)
   })
 
   it('calculates the next Friday 23:00 MT5 start', async () => {
     const { currentWeeklyFlattenEnd, nextWeeklyFlattenStart } = await import('../server/jobs/weekly-risk-window.js')
 
-    expect(nextWeeklyFlattenStart(new Date('2026-07-17T19:00:00.000Z')).toISOString()).toBe('2026-07-17T20:00:00.000Z')
-    expect(nextWeeklyFlattenStart(new Date('2026-07-17T21:00:00.000Z')).toISOString()).toBe('2026-07-24T20:00:00.000Z')
-    expect(currentWeeklyFlattenEnd(new Date('2026-07-17T20:30:00.000Z')).toISOString()).toBe('2026-07-17T21:00:00.000Z')
+    expect(nextWeeklyFlattenStart(new Date('2026-07-17T19:00:00.000Z'), 180).toISOString()).toBe('2026-07-17T20:00:00.000Z')
+    expect(nextWeeklyFlattenStart(new Date('2026-07-17T21:00:00.000Z'), 180).toISOString()).toBe('2026-07-24T20:00:00.000Z')
+    expect(currentWeeklyFlattenEnd(new Date('2026-07-17T20:30:00.000Z'), 180).toISOString()).toBe('2026-07-17T21:00:00.000Z')
   })
 
   it('uses the MT5 Saturday date as the cycle id', async () => {
     const { weeklyFlattenCycleId } = await import('../server/jobs/weekly-risk-window.js')
 
-    expect(weeklyFlattenCycleId(new Date('2026-07-17T20:00:00.000Z'))).toBe('2026-07-18')
-    expect(weeklyFlattenCycleId(new Date('2026-07-18T20:00:00.000Z'))).toBe('2026-07-18')
-    expect(weeklyFlattenCycleId(new Date('2026-07-19T23:00:00.000Z'))).toBe('2026-07-18')
-    expect(weeklyFlattenCycleId(new Date('2026-07-21T03:00:00.000Z'))).toBe('2026-07-18')
+    expect(weeklyFlattenCycleId(new Date('2026-07-17T20:00:00.000Z'), 180)).toBe('2026-07-18')
+    expect(weeklyFlattenCycleId(new Date('2026-07-18T20:00:00.000Z'), 180)).toBe('2026-07-18')
+    expect(weeklyFlattenCycleId(new Date('2026-07-19T23:00:00.000Z'), 180)).toBe('2026-07-18')
+    expect(weeklyFlattenCycleId(new Date('2026-07-21T03:00:00.000Z'), 180)).toBe('2026-07-18')
   })
 
   it('moves the same MT5 window when the broker offset changes', async () => {
-    const { isWeeklyFlattenWindow, setWeeklyMarketTimezoneOffset } = await import('../server/jobs/weekly-risk-window.js')
-    setWeeklyMarketTimezoneOffset(120)
-    expect(isWeeklyFlattenWindow(new Date('2026-07-17T20:30:00.000Z'))).toBe(false)
-    expect(isWeeklyFlattenWindow(new Date('2026-07-17T21:30:00.000Z'))).toBe(true)
-    setWeeklyMarketTimezoneOffset(180)
+    const { isWeeklyFlattenWindow } = await import('../server/jobs/weekly-risk-window.js')
+    expect(isWeeklyFlattenWindow(new Date('2026-07-17T20:30:00.000Z'), 120)).toBe(false)
+    expect(isWeeklyFlattenWindow(new Date('2026-07-17T21:30:00.000Z'), 120)).toBe(true)
   })
 
   it('returns a deterministic rejection during the risk window', async () => {
     const { weeklyRiskLockResult } = await import('../server/jobs/weekly-risk-window.js')
-    const result = weeklyRiskLockResult(new Date('2026-07-17T20:00:00.000Z'))
+    const result = weeklyRiskLockResult(new Date('2026-07-17T20:00:00.000Z'), 180, 'verified')
 
     expect(result.status).toBe('rejected')
     expect(result.code).toBe('weekly_market_close_risk_lock')
@@ -110,7 +113,7 @@ describe('weekly system flatten execution', () => {
       })
     const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
 
-    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt)
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt, 180)
 
     expect(result.status).toBe('completed')
     expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toEqual([
@@ -129,7 +132,7 @@ describe('weekly system flatten execution', () => {
     })
     const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
 
-    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt)
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt, 180)
 
     expect(result.status).toBe('unsupported_netting')
     expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toEqual(['system_trade_inventory'])
@@ -140,7 +143,7 @@ describe('weekly system flatten execution', () => {
     mockRedis.get.mockResolvedValue('done')
     const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
 
-    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt)
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt, 180)
 
     expect(result.status).toBe('already_completed')
     expect(mockSendBridgeCommand).not.toHaveBeenCalled()
@@ -160,7 +163,7 @@ describe('weekly system flatten execution', () => {
       .mockResolvedValueOnce({ status: 'success', ticket: 11 })
     const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
 
-    const result = await runWeeklySystemFlattenForUser(7, runAt, clock)
+    const result = await runWeeklySystemFlattenForUser(7, runAt, clock, 180)
 
     expect(result.status).toBe('window_ended')
     expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toEqual([
@@ -172,7 +175,7 @@ describe('weekly system flatten execution', () => {
     mockRedis.get.mockRejectedValueOnce(new Error('redis down'))
     const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
 
-    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt)
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt, 180)
 
     expect(result.status).toBe('redis_unavailable')
     expect(result.error).toBe('redis down')
@@ -300,7 +303,7 @@ describe('weekly flatten deadline finalization', () => {
     mockSendBridgeCommand.mockReturnValueOnce(new Promise(resolve => { releaseInventory = resolve }))
 
     const endedAt = new Date('2026-07-17T21:00:00.000Z')
-    const trackedRun = __weeklyFlattenTest.runTrackedUserFlatten(10, runAt, () => endedAt)
+    const trackedRun = __weeklyFlattenTest.runTrackedUserFlatten(10, runAt, () => endedAt, 180)
     let finalized = false
     const finalizing = finalizeWeeklyFlattenCycle('2026-07-18').then(result => {
       finalized = true
