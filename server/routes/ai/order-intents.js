@@ -237,11 +237,15 @@ async function reserveRisk(intentId, leaseToken, userId, tradingAccountId, reque
   }
 }
 
-async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId, bridgeAction, bridgeParams) {
+async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId, bridgeAction, bridgeParams,
+  beforeBridgeSendTx = null) {
   return withTransaction(async run => {
     await lockAccountScope(run, userId, tradingAccountId)
     const intent = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
     if (!intent || intent.status !== 'prepared' || intent.lease_token !== leaseToken) throw new Error('order_intent_lease_lost')
+    if (typeof beforeBridgeSendTx === 'function') {
+      await beforeBridgeSendTx({ run, intent, intentId, userId, tradingAccountId, bridgeAction })
+    }
     const bridgeRef = `AI-${Number(intentId).toString(36).toUpperCase()}`.slice(0, 24)
     // The MT5 comment is the durable execution identity. Never allow a caller
     // supplied comment to replace it; the original request remains in request_json.
@@ -326,6 +330,7 @@ export async function prepareAndExecuteOrderIntent({
   validateRequest,
   buildBridgeCall,
   beforeBridgeSend,
+  beforeBridgeSendTx,
   afterRiskPrepared,
   enrichRequest,
   loadRiskContext,
@@ -401,7 +406,8 @@ export async function prepareAndExecuteOrderIntent({
         risk,
       })
     }
-    const sending = await markBridgeSending(intentId, leaseToken, actorId, accountId, bridgeAction, bridgeParams)
+    const sending = await markBridgeSending(intentId, leaseToken, actorId, accountId, bridgeAction, bridgeParams,
+      beforeBridgeSendTx)
     bridgeStarted = true
     let bridgeResult
     try {

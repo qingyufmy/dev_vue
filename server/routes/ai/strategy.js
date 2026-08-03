@@ -685,6 +685,7 @@ export async function handleAnalyze(userId, params, options = {}) {
   config._market_only = strategy.scope === 'platform'
   config._include_portfolio_context = strategy.scope === 'private' && Boolean(Number(strategy.include_portfolio_context))
   if (options.abortSignal) config._abortSignal = options.abortSignal
+  if (options.taskId) config._modelTaskId = String(options.taskId)
   if (typeof options.onProviderRequest === 'function') config._onProviderRequest = options.onProviderRequest
   if (typeof options.onProviderUsage === 'function') config._onProviderUsage = options.onProviderUsage
   const prompt = strategy.system_prompt || ''

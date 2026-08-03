@@ -13,6 +13,19 @@ import { canManagePlatformAiContent, platformAiContentManagerSql } from './platf
 import { applyDefaultObserverClockBootstrap } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
 import { createModelTaskTracker } from './model-task-tracker.js'
+import { MODEL_TASK_TERMINAL_STATES, recoverAbandonedBusinessModelTasks } from './model-task-runtime.js'
+import {
+  MONTHLY_REVIEW_CHECKPOINT_STATUSES,
+  assertMonthlyReviewCheckpointCoverage,
+  buildMonthlyReviewChunks,
+  claimMonthlyReviewCheckpoint,
+  ensureMonthlyReviewCheckpoints,
+  linkMonthlyReviewCheckpointModelTask,
+  loadSucceededMonthlyReviewCheckpoints,
+  releaseMonthlyReviewCheckpoint,
+  renewMonthlyReviewCheckpointLease,
+  validateMonthlyReviewCheckpointContent,
+} from './period-review-monthly-checkpoints.js'
 
 const DAY_MS = 86400000
 const DAILY_GRACE_MINUTES = 30
@@ -352,6 +365,32 @@ const DAILY_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidence
 const CHAN_SOURCES = new Set(['data', 'calculation', 'confirmation_lag', 'ai_interpretation', 'strategy_rule', 'none', 'unknown'])
 const MEMORY_CATEGORIES = new Set(['general', 'market_regime', 'entry_setup', 'chan_structure', 'risk_execution'])
 
+function normalizeMonthlyConflictGroups(input, known) {
+  if (input == null) return []
+  if (!Array.isArray(input)) throw new Error('invalid_monthly_review_conflict_groups')
+  return input.map(group => {
+    if (!group || typeof group !== 'object' || Array.isArray(group)) throw new Error('invalid_monthly_review_conflict_group')
+    const supporting = [...new Set((Array.isArray(group.supporting_period_case_ids)
+      ? group.supporting_period_case_ids : []).map(Number))]
+    if (!supporting.length || supporting.some(id => !known.has(id))) throw new Error('invalid_monthly_review_conflict_group')
+    const candidates = Array.isArray(group.candidates) ? group.candidates.map(candidate => {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new Error('invalid_monthly_review_conflict_candidate')
+      const text = firstReviewText(candidate, ['text', 'candidate', 'lesson', 'summary'])
+      const marketRegime = String(candidate.market_regime || '').trim()
+      const candidateSupporting = [...new Set((Array.isArray(candidate.supporting_period_case_ids)
+        ? candidate.supporting_period_case_ids : supporting).map(Number))]
+      if (!text || !marketRegime || !candidateSupporting.length || candidateSupporting.some(id => !known.has(id))) {
+        throw new Error('invalid_monthly_review_conflict_candidate')
+      }
+      return { text, market_regime:marketRegime, applicability:candidate.applicability && typeof candidate.applicability === 'object'
+        ? candidate.applicability : {}, supporting_period_case_ids:candidateSupporting.sort((left, right) => left - right) }
+    }) : []
+    if (candidates.length < 2) throw new Error('invalid_monthly_review_conflict_group')
+    return { conflict_key:String(group.conflict_key || group.group_id || group.id || '').trim() || `monthly-conflict-${supporting.join('-')}`,
+      supporting_period_case_ids:supporting.sort((left, right) => left - right), candidates }
+  })
+}
+
 function periodCompatibilityHash(group) {
   return sha256([group.periodType, group.periodKey, group.userId, Number(group.tradingAccountId || 0), group.strategyId].join(':'))
 }
@@ -388,14 +427,18 @@ export function validateDailyReviewContent(input, outcomeIds = []) {
     if (!known.has(outcomeId) || !DAILY_DECISIONS.has(item?.decision_quality) || !String(item?.summary || '').trim()) throw new Error('invalid_daily_trade_assessment')
     return { outcome_id: outcomeId, decision_quality: item.decision_quality, summary: String(item.summary).trim(), issue_codes: Array.isArray(item.issue_codes) ? item.issue_codes.map(String) : [] }
   })
-  if (new Set(assessments.map(item => item.outcome_id)).size !== known.size) throw new Error('daily_review_trade_coverage_incomplete')
+  if (assessments.length !== known.size || new Set(assessments.map(item => item.outcome_id)).size !== known.size) {
+    throw new Error('daily_review_trade_coverage_incomplete')
+  }
   const chanDiagnoses = input.chan_diagnoses.map(item => {
     const outcomeId = Number(item?.outcome_id)
     if (!known.has(outcomeId) || !CHAN_SOURCES.has(item?.issue_source)) throw new Error('invalid_daily_chan_diagnosis')
     return { outcome_id: outcomeId, status: String(item.status || 'insufficient_evidence'), issue_source: item.issue_source,
       impact_on_decision: String(item.impact_on_decision || 'unknown'), explanation: String(item.explanation || '').trim(), confidence: Math.min(1, Math.max(0, Number(item.confidence || 0))) }
   })
-  if (new Set(chanDiagnoses.map(item => item.outcome_id)).size !== known.size) throw new Error('daily_review_chan_coverage_incomplete')
+  if (chanDiagnoses.length !== known.size || new Set(chanDiagnoses.map(item => item.outcome_id)).size !== known.size) {
+    throw new Error('daily_review_chan_coverage_incomplete')
+  }
   const periodChan = input.period_chan_assessment && typeof input.period_chan_assessment === 'object'
     ? input.period_chan_assessment : { status:'insufficient_evidence', issue_source:'unknown', explanation:'', affected_outcome_ids:[], confidence:0 }
   const affectedOutcomeIds = [...new Set((Array.isArray(periodChan.affected_outcome_ids) ? periodChan.affected_outcome_ids : []).map(Number))]
@@ -427,7 +470,9 @@ export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedD
     if (!known.has(periodCaseId) || !DAILY_DECISIONS.has(item?.decision_quality) || !String(item?.summary || '').trim()) throw new Error('invalid_monthly_daily_assessment')
     return { period_case_id: periodCaseId, decision_quality: item.decision_quality, summary: String(item.summary).trim(), issue_codes: Array.isArray(item.issue_codes) ? item.issue_codes.map(String) : [] }
   })
-  if (new Set(assessments.map(item => item.period_case_id)).size !== known.size) throw new Error('monthly_review_daily_coverage_incomplete')
+  if (assessments.length !== known.size || new Set(assessments.map(item => item.period_case_id)).size !== known.size) {
+    throw new Error('monthly_review_daily_coverage_incomplete')
+  }
   const memoryCandidates = input.memory_candidates.map(item => {
     const support = Array.isArray(item?.supporting_period_case_ids) ? [...new Set(item.supporting_period_case_ids.map(Number))] : []
     if (!String(item?.lesson || '').trim() || support.length < 2 || support.some(id => !known.has(id) || !approved.has(id))) throw new Error('invalid_monthly_memory_candidate')
@@ -448,12 +493,23 @@ export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedD
       avoid_when:applicability.avoid_when && typeof applicability.avoid_when === 'object' ? applicability.avoid_when : {} },
       supporting_period_case_ids: support, confidence: Math.min(1, Math.max(0, Number(item.confidence || 0))) }
   })
+  const conflictGroups = normalizeMonthlyConflictGroups(input.conflict_groups, known)
   return {
     period_summary: periodSummary, decision_quality: input.decision_quality, daily_assessments: assessments,
     recurring_patterns: input.recurring_patterns.map(String), strengths: input.strengths.map(String),
     risk_observations: input.risk_observations.map(String), chan_issue_summary: input.chan_issue_summary.map(String),
-    next_month_actions: input.next_month_actions.map(String), memory_candidates: memoryCandidates, confidence: Number(input.confidence),
+    next_month_actions: input.next_month_actions.map(String), memory_candidates: memoryCandidates,
+    conflict_groups: conflictGroups, confidence: Number(input.confidence),
   }
+}
+
+export function validateMonthlyReviewMergeContent(input, dailyCaseIds = [], approvedDailyCaseIds = dailyCaseIds,
+  verifiedConflictGroups = []) {
+  // Chunk conclusions are already source- and applicability-validated. Keep
+  // those conflicts server-owned so the merge model cannot silently omit or
+  // collapse contradictory market-regime evidence.
+  return validateMonthlyReviewContent({ ...(input || {}), conflict_groups:verifiedConflictGroups },
+    dailyCaseIds, approvedDailyCaseIds)
 }
 
 async function eligibleOutcomeRows(limit) {
@@ -684,12 +740,14 @@ async function upsertMonthlyGroup(group, clock) {
     AND user_id = ? AND trading_account_id = ? AND strategy_id = ? AND status <> 'superseded'
     ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
   [group.periodKey, group.userId, group.tradingAccountId, group.strategyId])
+  let sourceChangedForExisting = false
   if (existingCase) {
     group.strategyVersion = Number(existingCase.strategy_version || group.strategyVersion || 1)
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
     const sourceChanged = monthlyReviewSourceHash(group.dailyCases) !== monthlyReviewSourceHash(existingEvidence.sources || [])
+    sourceChangedForExisting = sourceChanged
     if (existingCase.current_version_id && !sourceChanged) return { id: Number(existingCase.id), periodKey: group.periodKey,
       sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, reused:true }
     if (existingCase.current_version_id && sourceChanged) {
@@ -767,6 +825,13 @@ async function upsertMonthlyGroup(group, clock) {
     await queryRun(`INSERT IGNORE INTO period_review_jobs
       (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
       VALUES (?, 'monthly_review', ?, 'queued', 0, 3, ?, ?)`, [periodCase.id, `monthly:${periodCase.id}:${evidenceHash}`, now, now])
+    if (sourceChangedForExisting || !existingCase) {
+      await queryRun(`UPDATE period_review_jobs SET idempotency_key = ?, model_task_id = NULL, status = 'queued',
+        progress_stage = 'queued', attempt_count = 0, last_error_code = NULL, lease_token = NULL,
+        lease_expires_at = NULL, next_attempt_at = NULL, completed_at = NULL, updated_at = ?
+        WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0`,
+      [`monthly:${periodCase.id}:${evidenceHash}`, now, periodCase.id])
+    }
   }
   return { id: Number(periodCase.id), periodKey: group.periodKey, sourceCount: sources.length, evidenceHash }
 }
@@ -793,6 +858,271 @@ function modelEndpoint(model) {
   const base = String(model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
   if (!base) throw new Error('unsupported_daily_review_model_provider')
   return { protocol, url: `${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}` }
+}
+
+function startMonthlyReviewCheckpointLeaseHeartbeat(checkpoint, {
+  intervalMs = 30_000,
+  leaseMs = 120_000,
+} = {}) {
+  const controller = new AbortController()
+  let stopped = false
+  let lost = false
+  let pending = null
+  const markLost = error => {
+    if (lost || stopped) return
+    lost = true
+    const reason = error instanceof Error ? error : new Error('monthly_review_checkpoint_lease_lost')
+    if (!controller.signal.aborted) controller.abort(reason)
+  }
+  const renewOnce = async () => {
+    if (stopped || lost || pending) return
+    pending = Promise.resolve(renewMonthlyReviewCheckpointLease({
+      checkpointId:checkpoint.id, leaseToken:checkpoint.lease_token,
+      fencingToken:checkpoint.fencing_token, leaseMs,
+    })).then(renewed => {
+      if (!renewed) markLost(new Error('monthly_review_checkpoint_lease_lost'))
+    }).catch(error => markLost(error)).finally(() => { pending = null })
+    await pending
+  }
+  const timer = setInterval(renewOnce, Math.max(1, Number(intervalMs) || 30_000))
+  timer.unref?.()
+  return {
+    signal:controller.signal,
+    get lost() { return lost },
+    assertOwned() {
+      if (lost) throw controller.signal.reason || new Error('monthly_review_checkpoint_lease_lost')
+    },
+    renewNow:renewOnce,
+    async stop() {
+      stopped = true
+      clearInterval(timer)
+      if (pending) await pending
+    },
+  }
+}
+
+function chunkContentText(item, keys = []) {
+  for (const key of keys) {
+    const text = String(item?.[key] || '').trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function normalizeChunkSupportIds(item, expectedSet) {
+  const support = Array.isArray(item?.supporting_period_case_ids)
+    ? [...new Set(item.supporting_period_case_ids.map(Number))]
+    : []
+  if (!support.length || support.some(id => !Number.isSafeInteger(id) || !expectedSet.has(id))) {
+    throw new Error('monthly_review_chunk_support_invalid')
+  }
+  return support.sort((left, right) => left - right)
+}
+
+function normalizeChunkApplicability(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('monthly_review_chunk_applicability_invalid')
+  const normalizeStrings = candidate => [...new Set((Array.isArray(candidate) ? candidate : [])
+    .map(entry => String(entry || '').trim()).filter(Boolean))].slice(0, 20)
+  const applicableWhen = value.applicable_when && typeof value.applicable_when === 'object'
+    ? value.applicable_when : value
+  return {
+    applicable_when: {
+      universal:Boolean(applicableWhen.universal),
+      symbols:normalizeStrings(applicableWhen.symbols),
+      timeframes:normalizeStrings(applicableWhen.timeframes),
+      directions:normalizeStrings(applicableWhen.directions),
+      entry_methods:normalizeStrings(applicableWhen.entry_methods),
+      market_regimes:normalizeStrings(applicableWhen.market_regimes || applicableWhen.market_regime),
+      volatility_buckets:normalizeStrings(applicableWhen.volatility_buckets),
+      chan_reliabilities:normalizeStrings(applicableWhen.chan_reliabilities),
+      chan_trend_states:normalizeStrings(applicableWhen.chan_trend_states),
+      chan_segment_directions:normalizeStrings(applicableWhen.chan_segment_directions),
+      chan_divergences:normalizeStrings(applicableWhen.chan_divergences),
+      chan_center_states:normalizeStrings(applicableWhen.chan_center_states),
+    },
+    avoid_when:value.avoid_when && typeof value.avoid_when === 'object' ? value.avoid_when : {},
+  }
+}
+
+function normalizeChunkContext(item, expectedSet, textKeys) {
+  const text = chunkContentText(item, textKeys)
+  if (!text) throw new Error('monthly_review_chunk_item_text_missing')
+  const support = normalizeChunkSupportIds(item, expectedSet)
+  const applicability = normalizeChunkApplicability(item.applicability)
+  const marketRegime = String(item.market_regime || item.market_regimes
+    || applicability.applicable_when.market_regimes[0] || '').trim()
+  if (!marketRegime) throw new Error('monthly_review_chunk_market_regime_missing')
+  return { text, supporting_period_case_ids:support, applicability, market_regime:marketRegime,
+    confidence:Math.min(1, Math.max(0, Number(item.confidence ?? 0))) }
+}
+
+function normalizeChunkContextArray(input, key, expectedSet, textKeys) {
+  if (!Array.isArray(input?.[key])) throw new Error(`invalid_monthly_review_chunk_${key}`)
+  return input[key].map(item => normalizeChunkContext(item, expectedSet, textKeys))
+}
+
+function normalizeChunkConflictGroups(input, expectedSet) {
+  if (!Array.isArray(input?.conflict_groups)) throw new Error('invalid_monthly_review_chunk_conflict_groups')
+  return input.conflict_groups.map(group => {
+    if (!group || typeof group !== 'object' || Array.isArray(group)) throw new Error('invalid_monthly_review_chunk_conflict_group')
+    const support = normalizeChunkSupportIds({ supporting_period_case_ids:group.supporting_period_case_ids }, expectedSet)
+    const candidates = Array.isArray(group.candidates) ? group.candidates.map(candidate => {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new Error('invalid_monthly_review_chunk_conflict_candidate')
+      const text = chunkContentText(candidate, ['text', 'candidate', 'lesson', 'summary'])
+      if (!text) throw new Error('monthly_review_chunk_conflict_candidate_text_missing')
+      const marketRegime = String(candidate.market_regime || '').trim()
+      if (!marketRegime) throw new Error('monthly_review_chunk_market_regime_missing')
+      return { text, market_regime:marketRegime,
+        applicability:normalizeChunkApplicability(candidate.applicability),
+        supporting_period_case_ids:normalizeChunkSupportIds(candidate, expectedSet) }
+    }) : []
+    if (candidates.length < 2) throw new Error('monthly_review_chunk_conflict_candidates_incomplete')
+    return { conflict_key:String(group.conflict_key || group.group_id || group.id || '').trim() || `chunk-conflict-${support.join('-')}`,
+      supporting_period_case_ids:support, candidates }
+  })
+}
+
+/**
+ * Chunk output is intentionally stricter than the final monthly contract.
+ * Every local conclusion carries the exact source IDs and applicability
+ * context that the merge model must preserve rather than silently combine.
+ */
+export function validateMonthlyReviewChunkContent(input, expectedPeriodCaseIds = []) {
+  const expected = [...new Set(expectedPeriodCaseIds.map(Number))].sort((left, right) => left - right)
+  const coverage = validateMonthlyReviewCheckpointContent(input, expected)
+  const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {}
+  const expectedSet = new Set(expected)
+  const assessments = coverage.items.map(item => {
+    const periodCaseId = Number(item.period_case_id)
+    if (!DAILY_DECISIONS.has(item.decision_quality) || !String(item.summary || '').trim()) throw new Error('invalid_monthly_review_chunk_daily_assessment')
+    return { period_case_id:periodCaseId, decision_quality:item.decision_quality,
+      summary:String(item.summary).trim(), issue_codes:Array.isArray(item.issue_codes) ? item.issue_codes.map(String) : [] }
+  }).sort((left, right) => left.period_case_id - right.period_case_id)
+  const periodSummary = firstReviewText(value, ['period_summary', 'summary'])
+  if (!periodSummary) throw new Error('monthly_review_chunk_summary_missing')
+  if (!DAILY_DECISIONS.has(value.decision_quality)) throw new Error('invalid_monthly_review_chunk_decision')
+  const result = {
+    period_summary:periodSummary,
+    decision_quality:value.decision_quality,
+    daily_assessments:assessments,
+    local_patterns:normalizeChunkContextArray(value, 'local_patterns', expectedSet, ['pattern', 'text', 'summary']),
+    strengths:normalizeChunkContextArray(value, 'strengths', expectedSet, ['strength', 'text', 'summary']),
+    risks:normalizeChunkContextArray(value, 'risks', expectedSet, ['risk', 'text', 'summary']),
+    chan_observations:normalizeChunkContextArray(value, 'chan_observations', expectedSet, ['observation', 'text', 'summary']),
+    action_candidates:normalizeChunkContextArray(value, 'action_candidates', expectedSet, ['action', 'text', 'summary']),
+    conflict_groups:normalizeChunkConflictGroups(value, expectedSet),
+    confidence:Math.min(1, Math.max(0, Number(value.confidence ?? 0))),
+  }
+  if (!Number.isFinite(Number(value.confidence)) || Number(value.confidence) < 0 || Number(value.confidence) > 1) throw new Error('invalid_monthly_review_chunk_confidence')
+  return result
+}
+
+function parseCheckpointContent(row) {
+  if (row?.content_json && typeof row.content_json === 'string') return parse(row.content_json, null)
+  return row?.content_json || row?.content || null
+}
+
+async function inspectPeriodReviewModelTask(task) {
+  const job = await queryOne(`SELECT jobs.id, jobs.status, jobs.period_case_id,
+      cases.current_version_id, versions.content_hash AS result_hash
+    FROM period_review_jobs jobs
+    LEFT JOIN period_review_cases cases ON cases.id = jobs.period_case_id
+    LEFT JOIN period_review_versions versions ON versions.id = cases.current_version_id
+    WHERE jobs.model_task_id = ? LIMIT 1`, [task.task_id])
+  if (job) {
+    const succeeded = job.status === 'succeeded' && Number(job.current_version_id) > 0 && Boolean(job.result_hash)
+    return { kind:'period_review', job, succeeded, resultRef:succeeded ? `period_review_case:${job.period_case_id}` : null,
+      resultHash:succeeded ? job.result_hash : null }
+  }
+  const checkpoint = await queryOne(`SELECT checkpoints.*, jobs.status AS parent_status, jobs.period_case_id,
+      jobs.id AS period_review_job_id
+    FROM period_review_monthly_checkpoints checkpoints
+    JOIN period_review_jobs jobs ON jobs.id = checkpoints.period_review_job_id
+    WHERE checkpoints.model_task_id = ? LIMIT 1`, [task.task_id])
+  if (!checkpoint) return null
+  const content = parseCheckpointContent(checkpoint)
+  const succeeded = checkpoint.status === MONTHLY_REVIEW_CHECKPOINT_STATUSES.SUCCEEDED
+    && Boolean(content) && Boolean(checkpoint.content_hash)
+  return { kind:'monthly_review_chunk', checkpoint,
+    job:{ id:Number(checkpoint.period_review_job_id), status:checkpoint.parent_status,
+      period_case_id:Number(checkpoint.period_case_id) }, succeeded,
+    resultRef:succeeded ? `period_review_monthly_checkpoint:${checkpoint.id}` : null,
+    resultHash:succeeded ? checkpoint.content_hash : null }
+}
+
+async function transitionPeriodReviewModelBusiness({ action, task, business, reason }) {
+  const jobId = Number(business?.job?.id || 0)
+  if (!jobId) return
+  const now = beijingNow()
+  if (business.kind === 'monthly_review_chunk') {
+    const checkpointId = Number(business.checkpoint?.id || 0)
+    if (!checkpointId) return
+    if (action === 'requeued') {
+      await queryRun(`UPDATE period_review_monthly_checkpoints SET status = 'queued',
+        lease_token = NULL, lease_owner = NULL, lease_expires_at_utc_msc = NULL,
+        fencing_token = fencing_token + 1, next_attempt_at_utc_msc = NULL,
+        error_code = NULL, error_message = NULL, updated_at_utc_msc = ?
+        WHERE id = ? AND model_task_id = ? AND status IN ('leased','failed')`, [Date.now(), checkpointId, task.task_id])
+      await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
+        last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
+        WHERE id = ? AND status NOT IN ('succeeded','failed','skipped','status_unknown')`, [now, now, jobId])
+      return
+    }
+    if (action === 'status_unknown') {
+      await queryRun(`UPDATE period_review_monthly_checkpoints SET status = 'status_unknown',
+        error_code = 'provider_status_unknown', error_message = ?, lease_token = NULL, lease_owner = NULL,
+        lease_expires_at_utc_msc = NULL, fencing_token = fencing_token + 1,
+        next_attempt_at_utc_msc = NULL, updated_at_utc_msc = ?
+        WHERE id = ? AND model_task_id = ? AND status IN ('leased','failed')`,
+      [String(reason || 'provider_status_unknown').slice(0, 512), Date.now(), checkpointId, task.task_id])
+      await queryRun(`UPDATE period_review_jobs SET status = 'status_unknown', progress_stage = 'status_unknown', stage_updated_at = ?,
+        last_error_code = 'provider_status_unknown', lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
+        WHERE id = ? AND status NOT IN ('succeeded','failed','skipped')`, [now, now, jobId])
+      return
+    }
+    if (action === 'stale') {
+      await queryRun(`UPDATE period_review_monthly_checkpoints SET status = 'failed',
+        error_code = ?, error_message = ?, lease_token = NULL, lease_owner = NULL,
+        lease_expires_at_utc_msc = NULL, fencing_token = fencing_token + 1,
+        next_attempt_at_utc_msc = NULL, updated_at_utc_msc = ?
+        WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','superseded')`,
+      [String(reason || 'model_task_recovery_stale').slice(0, 128), String(reason || 'model_task_recovery_stale').slice(0, 512), Date.now(), checkpointId, task.task_id])
+      await queryRun(`UPDATE period_review_jobs SET status = 'failed', progress_stage = 'failed', stage_updated_at = ?,
+        last_error_code = ?, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
+        completed_at = ?, updated_at = ? WHERE id = ? AND status NOT IN ('succeeded','failed','skipped')`,
+      [now, String(reason || 'model_task_recovery_stale').slice(0, 128), now, now, jobId])
+    }
+    return
+  }
+  if (action === 'requeued') {
+    await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
+      last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
+      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed','skipped')`,
+    [now, now, jobId, task.task_id])
+    return
+  }
+  if (action === 'status_unknown') {
+    await queryRun(`UPDATE period_review_jobs SET status = 'status_unknown', progress_stage = 'status_unknown', stage_updated_at = ?,
+      last_error_code = 'provider_status_unknown', lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
+      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed','skipped')`,
+    [now, now, jobId, task.task_id])
+    return
+  }
+  if (action === 'stale') {
+    await queryRun(`UPDATE period_review_jobs SET status = 'failed', progress_stage = 'failed', stage_updated_at = ?,
+      last_error_code = ?, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
+      completed_at = ?, updated_at = ? WHERE id = ? AND model_task_id = ?
+      AND status NOT IN ('succeeded','failed','skipped')`,
+    [now, String(reason || 'model_task_recovery_stale').slice(0, 128), now, now, jobId, task.task_id])
+  }
+}
+
+export async function recoverAbandonedPeriodReviewModelTasks({ nowUtcMs = Date.now(), limit = 100 } = {}) {
+  return recoverAbandonedBusinessModelTasks({
+    taskKinds:['daily_review', 'monthly_review_chunk', 'monthly_review_merge'], nowUtcMs, limit,
+    inspectBusiness:inspectPeriodReviewModelTask,
+    onBusinessTransition:transitionPeriodReviewModelBusiness,
+  })
 }
 
 async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, taskKind) {
@@ -828,6 +1158,144 @@ async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, tas
     },
   })
   job._modelTracker = tracker
+  return tracker
+}
+
+function checkpointChunkFromRow(row, plan) {
+  const chunk = plan.chunks.find(item => Number(item.chunk_index) === Number(row?.chunk_index))
+  if (!chunk || String(chunk.source_hash) !== String(row?.source_hash)
+    || String(chunk.expected_ids_hash) !== String(row?.expected_ids_hash || row?.expected_id_set_hash)) {
+    throw new Error('monthly_review_checkpoint_identity_conflict')
+  }
+  return chunk
+}
+
+function beijingAtUtcMs(utcMs) {
+  const date = new Date(Number(utcMs) + 8 * 3600000)
+  return date.toISOString().replace('T', ' ').slice(0, 19)
+}
+
+async function persistMonthlyReviewChunkSuccess(job, checkpoint, tracker, content) {
+  const expectedIds = parse(checkpoint.expected_period_case_ids_json, []).map(Number)
+  const validated = validateMonthlyReviewChunkContent(content, expectedIds)
+  const body = JSON.stringify(validated)
+  const contentHash = sha256(body)
+  const nowUtcMs = Date.now()
+  await withTransaction(async run => {
+    const [jobs] = await run('SELECT status, lease_token FROM period_review_jobs WHERE id = ? FOR UPDATE', [job.id])
+    if (!jobs[0] || jobs[0].status !== 'leased' || String(jobs[0].lease_token || '') !== String(job.lease_token || '')) {
+      throw new Error('monthly_review_job_lease_lost')
+    }
+    await tracker.assertOwnedTx(run)
+    const [rows] = await run(`SELECT status, lease_token, fencing_token FROM period_review_monthly_checkpoints
+      WHERE id = ? FOR UPDATE`, [checkpoint.id])
+    const current = rows?.[0]
+    if (!current || current.status !== 'leased' || String(current.lease_token || '') !== String(checkpoint.lease_token || '')
+      || Number(current.fencing_token) !== Number(checkpoint.fencing_token)) throw new Error('monthly_review_checkpoint_fence_lost')
+    const result = await run(`UPDATE period_review_monthly_checkpoints
+      SET status = 'succeeded', content_json = ?, content_hash = ?, completed_at_utc_msc = ?,
+        lease_token = NULL, lease_owner = NULL, lease_expires_at_utc_msc = NULL,
+        updated_at_utc_msc = ?, error_code = NULL, error_message = NULL
+      WHERE id = ? AND status = 'leased' AND lease_token = ? AND fencing_token = ?`,
+    [body, contentHash, nowUtcMs, nowUtcMs, checkpoint.id, checkpoint.lease_token, checkpoint.fencing_token])
+    const affected = Number(result?.affectedRows ?? result?.changes ?? 0)
+    if (affected !== 1) throw new Error('monthly_review_checkpoint_fence_lost')
+  })
+  return { content:validated, contentHash }
+}
+
+async function releaseMonthlyReviewParentAfterChunk(job, checkpoint, {
+  status = 'queued', nextAttemptAtUtcMs = null, errorCode = null,
+} = {}) {
+  const now = beijingNow()
+  const nextAttemptAt = nextAttemptAtUtcMs == null ? null : beijingAtUtcMs(nextAttemptAtUtcMs)
+  const result = await queryRun(`UPDATE period_review_jobs SET status = ?, progress_stage = ?, stage_updated_at = ?,
+    last_error_code = ?, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = ?, updated_at = ?
+    WHERE id = ? AND lease_token = ? AND status NOT IN ('succeeded','failed','skipped')`,
+  [status, status === 'queued' ? 'queued' : status, now, errorCode, nextAttemptAt, now, job.id, job.lease_token])
+  const affected = Number(result?.affectedRows ?? result?.changes ?? 0)
+  if (affected !== 1) throw new Error('monthly_review_job_lease_lost')
+  return { status, nextAttemptAtUtcMs:nextAttemptAtUtcMs == null ? null : Number(nextAttemptAtUtcMs), checkpointId:Number(checkpoint?.id || 0) }
+}
+
+async function failMonthlyReviewChunk(job, checkpoint, tracker, error) {
+  let modelTask = null
+  let failure = error
+  const exhausted = Number(checkpoint.attempt_count || 0) >= Number(checkpoint.max_attempts || 3)
+  try {
+    modelTask = await tracker?.failed(error, exhausted)
+  } catch (trackerError) {
+    failure = trackerError
+    console.error(`[PeriodReview case=${job.period_case_id}] monthly chunk model task failure:`, safeError(trackerError))
+  }
+  const unknown = providerResultUnknown(tracker, modelTask)
+  if (unknown) {
+  await releaseMonthlyReviewCheckpoint({ checkpointId:checkpoint.id, leaseToken:checkpoint.lease_token,
+      fencingToken:checkpoint.fencing_token, status:MONTHLY_REVIEW_CHECKPOINT_STATUSES.STATUS_UNKNOWN,
+      errorCode:'provider_status_unknown', errorMessage:safeError(failure) })
+    await releaseMonthlyReviewParentAfterChunk(job, checkpoint, { status:'status_unknown', errorCode:'provider_status_unknown' })
+    return { status:'status_unknown', error:safeError(failure), modelTask }
+  }
+  const released = await releaseMonthlyReviewCheckpoint({ checkpointId:checkpoint.id, leaseToken:checkpoint.lease_token,
+    fencingToken:checkpoint.fencing_token, status:MONTHLY_REVIEW_CHECKPOINT_STATUSES.FAILED,
+    errorCode:safeError(failure), errorMessage:safeError(failure) })
+  const parentStatus = released.retryable ? 'queued' : 'failed'
+  await releaseMonthlyReviewParentAfterChunk(job, checkpoint, {
+    status:parentStatus, nextAttemptAtUtcMs:released.nextAttemptAtUtcMs, errorCode:safeError(failure),
+  })
+  return { status:released.retryable ? 'retry_wait' : 'failed', error:safeError(failure), modelTask, retryable:released.retryable }
+}
+
+async function startMonthlyReviewChunkModelTask(job, resolved, endpoint, checkpoint, chunk) {
+  const chunkEvidence = {
+    evidence_hash:chunk.evidence_hash || chunk.evidenceHash,
+    source_hash:chunk.source_hash || chunk.sourceHash,
+    chunk_index:Number(chunk.chunk_index ?? chunk.chunkIndex),
+    expected_period_case_ids:chunk.expected_period_case_ids || chunk.expectedPeriodCaseIds,
+    sources:chunk.sources || [],
+  }
+  const attemptNo = Math.max(1, Number(checkpoint.attempt_count || 1))
+  const retryIdempotencyKey = [
+    'monthly_review_chunk', Number(job.id), String(chunkEvidence.evidence_hash || job.evidence_hash || ''),
+    Number(chunkEvidence.chunk_index), String(chunkEvidence.source_hash || ''),
+    String(chunk.expected_ids_hash || chunk.expectedIdHash || ''), attemptNo,
+  ].join(':')
+  // A worker can die after creating the authoritative task but before the
+  // provider request starts. Reuse that queued task by its durable key; only
+  // an explicit retry/failed checkpoint gets a fresh attempt key.
+  const existingTask = checkpoint.model_task_id
+    ? await queryOne('SELECT task_id, status, idempotency_key FROM ai_model_tasks WHERE task_id = ? LIMIT 1', [checkpoint.model_task_id])
+    : null
+  const idempotencyKey = existingTask && ['queued', 'retry_wait'].includes(String(existingTask.status || ''))
+    && existingTask.idempotency_key ? existingTask.idempotency_key : retryIdempotencyKey
+  const tracker = await createModelTaskTracker({
+    taskKind:'monthly_review_chunk',
+    queueClass:'background',
+    ownerUserId:job.user_id,
+    strategyId:job.strategy_id,
+    domainType:'period_review_monthly_checkpoint',
+    domainId:checkpoint.id,
+    idempotencyKey,
+    snapshotHash:String(chunkEvidence.evidence_hash || job.evidence_hash || ''),
+    inputHash:sha256(JSON.stringify(chunkEvidence)),
+    provider:resolved.model.provider,
+    model:resolved.model.model_name,
+    modelProfileId:resolved.model_profile_id,
+    protocol:endpoint.protocol,
+    credentialSource:resolved.credential_source,
+    frozenContext:{ period_review_job_id:Number(job.id), period_case_id:Number(job.period_case_id),
+      checkpoint_id:Number(checkpoint.id), evidence_hash:chunkEvidence.evidence_hash,
+      source_hash:chunkEvidence.source_hash, chunk_index:chunkEvidence.chunk_index,
+      expected_period_case_ids:chunkEvidence.expected_period_case_ids },
+    maxAttempts:Number(checkpoint.max_attempts || 3),
+    taskDeadlineAtUtcMs:job._deadlineAtMs,
+  }, {
+    workerId:`period-review-monthly-chunk:${process.pid}`,
+    linkTask:taskId => linkMonthlyReviewCheckpointModelTask({
+      checkpointId:checkpoint.id, leaseToken:checkpoint.lease_token,
+      fencingToken:checkpoint.fencing_token, modelTaskId:taskId,
+    }),
+  })
   return tracker
 }
 
@@ -922,13 +1390,26 @@ async function finishDailyReviewSuccess(job, generated) {
   })
 }
 
-async function finishDailyReviewFailure(job, error) {
+function providerResultUnknown(tracker, task = null) {
+  const status = String(task?.status || tracker?.status || '')
+  if (status === 'status_unknown' || status === 'provider_quiet') return true
+  const providerState = tracker?.providerRequestState
+  return providerState?.submitted === true && providerState?.responseReceived !== true
+}
+
+async function finishDailyReviewFailure(job, error, modelTask = null) {
+  const unknown = providerResultUnknown(job._modelTracker, modelTask)
   const exhausted = job.attempt_count >= Number(job.max_attempts)
-  const retryAt = exhausted ? null : afterSeconds(Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))))
+  const retryAt = unknown || exhausted ? null : afterSeconds(Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))))
+  const jobStatus = unknown ? 'status_unknown' : exhausted ? 'failed' : 'queued'
+  const errorCode = unknown ? 'provider_status_unknown' : safeError(error)
   await queryRun(`UPDATE period_review_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
     lease_expires_at = NULL, next_attempt_at = ?, updated_at = ? WHERE id = ? AND lease_token = ?`,
-  [exhausted ? 'failed' : 'queued', safeError(error), retryAt, beijingNow(), job.id, job.lease_token])
-  await queryRun(`UPDATE period_review_cases SET status = ?, updated_at = ? WHERE id = ? AND current_version_id IS NULL`, [exhausted ? 'failed' : 'ready', beijingNow(), job.period_case_id])
+  [jobStatus, errorCode, retryAt, beijingNow(), job.id, job.lease_token])
+  // The review case remains generating while the provider outcome is
+  // unresolved.  Only the job/status stage is marked unknown; showing a
+  // failed case would incorrectly imply that no provider request was made.
+  await queryRun(`UPDATE period_review_cases SET status = ?, updated_at = ? WHERE id = ? AND current_version_id IS NULL`, [unknown ? 'generating' : exhausted ? 'failed' : 'ready', beijingNow(), job.period_case_id])
 }
 
 async function skipDisabledPeriodReviewJob(job) {
@@ -966,16 +1447,18 @@ export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObjec
     return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
   } catch (error) {
     let failure = error
+    let modelTask = null
     try {
-      await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
+      modelTask = await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
     } catch (trackerError) {
       failure = trackerError
       console.error(`[PeriodReview case=${job.period_case_id}] model task failure:`, safeError(trackerError))
     }
-    await finishDailyReviewFailure(job, failure)
-    await setPeriodReviewJobStage(job, job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
-      job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
-    return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(failure) }
+    await finishDailyReviewFailure(job, failure, modelTask)
+    const unknown = providerResultUnknown(job._modelTracker, modelTask)
+    await setPeriodReviewJobStage(job, unknown ? 'status_unknown' : job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
+      unknown || job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
+    return { claimed: true, status: unknown ? 'status_unknown' : 'failed', periodCaseId: Number(job.period_case_id), error: safeError(failure) }
   } finally {
     try { await job._modelTracker?.stop() } catch (trackerError) {
       console.error(`[PeriodReview case=${job.period_case_id}] model task stop:`, safeError(trackerError))
@@ -998,64 +1481,146 @@ async function claimMonthlyReviewJob() {
     if (!rows[0]) return null
     const token = crypto.randomUUID()
     await run(`UPDATE period_review_jobs SET status = 'leased', progress_stage = 'preparing', stage_updated_at = ?, lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
-      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [beijingNow(), token, afterSeconds(120), beijingNow(), rows[0].id])
+      updated_at = ? WHERE id = ?`, [beijingNow(), token, afterSeconds(120), beijingNow(), rows[0].id])
     await run(`UPDATE period_review_cases SET status = 'generating', updated_at = ?
       WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), rows[0].period_case_id])
-    return { ...rows[0], lease_token: token, attempt_count: Number(rows[0].attempt_count) + 1 }
+    return { ...rows[0], lease_token: token, attempt_count: Number(rows[0].attempt_count || 0) }
   })
 }
 
-async function generateMonthlyReview(job, requestModel) {
-  const evidence = parse(job.evidence_json, null)
-  if (!evidence || !Array.isArray(evidence.sources) || !evidence.sources.length) throw new Error('monthly_review_evidence_invalid')
-  const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: job.strategy_id, usage: 'review' })
+async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) {
+  const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review' })
   if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
   const endpoint = modelEndpoint(resolved.model)
-  const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'monthly_review_merge')
-  const requestSignal = job._abortSignal && tracker.signal
-    ? AbortSignal.any([job._abortSignal, tracker.signal])
-    : tracker.signal || job._abortSignal || null
-  const dailyCaseIds = evidence.sources.map(item => Number(item.period_case_id))
-  const approvedDailyCaseIds = evidence.sources.filter(item => item.review_status === 'approved').map(item => Number(item.period_case_id))
-  const shape = { period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
-    daily_assessments: dailyCaseIds.map(id => ({ period_case_id: id, decision_quality: 'good|mixed|poor|insufficient_evidence', summary: 'string', issue_codes: ['string'] })),
-    recurring_patterns: ['string'], strengths: ['string'], risk_observations: ['string'], chan_issue_summary: ['string'],
-    next_month_actions: ['string'], memory_candidates: approvedDailyCaseIds.length >= 2
-      ? [{ lesson: 'string', anti_pattern: 'string', memory_category:'general|market_regime|entry_setup|chan_structure|risk_execution',
-          applicability:{ applicable_when:{ universal:false, symbols:['XAUUSD'], timeframes:['H1'], directions:['buy|sell|hold'],
-            entry_methods:['market|limit|stop|stop_limit'], market_regimes:['trend|range|breakout|pullback|reversal'],
-            volatility_buckets:['low|normal|high'], chan_reliabilities:['low|medium|high'], chan_trend_states:['string'],
-            chan_segment_directions:['buy|sell'], chan_divergences:['string'], chan_center_states:['string'] }, avoid_when:{} },
-          supporting_period_case_ids: approvedDailyCaseIds.slice(0, 2), confidence: 0.5 }] : [], confidence: 0.5 }
+  const checkpointLease = startMonthlyReviewCheckpointLeaseHeartbeat(checkpoint)
+  job._checkpointLease = checkpointLease
+  const tracker = await startMonthlyReviewChunkModelTask(job, resolved, endpoint, checkpoint, chunk)
+  job._modelTracker = tracker
+  const requestSignal = [job._abortSignal, checkpointLease.signal, tracker.signal].filter(Boolean).length > 1
+    ? AbortSignal.any([job._abortSignal, checkpointLease.signal, tracker.signal].filter(Boolean))
+    : tracker.signal || checkpointLease.signal || job._abortSignal || null
+  const expectedIds = chunk.expected_period_case_ids || chunk.expectedPeriodCaseIds
+  const shape = {
+    period_summary:'string', decision_quality:'good|mixed|poor|insufficient_evidence',
+    daily_assessments:expectedIds.map(id => ({ period_case_id:id, decision_quality:'good|mixed|poor|insufficient_evidence', summary:'string', issue_codes:['string'] })),
+    local_patterns:[{ text:'string', supporting_period_case_ids:expectedIds.slice(0, 1), applicability:{ applicable_when:{ universal:false, market_regimes:['trend|range|breakout|pullback|reversal'] }, avoid_when:{} }, market_regime:'trend|range|breakout|pullback|reversal', confidence:0.5 }],
+    strengths:[{ text:'string', supporting_period_case_ids:expectedIds.slice(0, 1), applicability:{ applicable_when:{ universal:false, market_regimes:['trend'] }, avoid_when:{} }, market_regime:'trend', confidence:0.5 }],
+    risks:[{ text:'string', supporting_period_case_ids:expectedIds.slice(0, 1), applicability:{ applicable_when:{ universal:false, market_regimes:['range'] }, avoid_when:{} }, market_regime:'range', confidence:0.5 }],
+    chan_observations:[{ text:'string', supporting_period_case_ids:expectedIds.slice(0, 1), applicability:{ applicable_when:{ universal:false, market_regimes:['trend'] }, avoid_when:{} }, market_regime:'trend', confidence:0.5 }],
+    action_candidates:[{ text:'string', supporting_period_case_ids:expectedIds.slice(0, 1), applicability:{ applicable_when:{ universal:false, market_regimes:['trend'] }, avoid_when:{} }, market_regime:'trend', confidence:0.5 }],
+    conflict_groups:[{ conflict_key:'string', supporting_period_case_ids:expectedIds.slice(0, 2), candidates:[
+      { text:'string', market_regime:'trend', applicability:{ applicable_when:{ universal:false }, avoid_when:{} }, supporting_period_case_ids:expectedIds.slice(0, 1) },
+      { text:'string', market_regime:'range', applicability:{ applicable_when:{ universal:false }, avoid_when:{} }, supporting_period_case_ids:expectedIds.slice(0, 1) },
+    ] }],
+    confidence:0.5,
+  }
   const contract = [
     '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
-    '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。',
-    'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
-    '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
-    `daily_assessments 必须包含 ${dailyCaseIds.length} 项，并且 period_case_id 只能且必须完整覆盖：${dailyCaseIds.join(', ')}。`,
-    'memory_candidates 的每项必须至少由两个已确认日复盘支持；不符合条件时必须返回空数组。',
-    '每条记忆候选必须选择 memory_category，并依据证据填写 applicability。除非它确实是同一策略在任何行情下都成立的原则，否则 universal 必须为 false。互相矛盾的行情经验必须拆分。',
-    '不得遗漏、合并或虚构日复盘，不得修改系统提供的基础统计。',
+    '必须原样使用 required_output 中的全部字段名；所有字段必填，没有结论时也必须返回空数组。',
+    '除 JSON 字段名和规定枚举值外，分块内的用户可见字符串与数组内容使用简体中文；不得输出内部错误码、英文状态或整句英文。',
+    `daily_assessments 必须恰好包含 ${expectedIds.length} 项，并完整覆盖且仅覆盖：${expectedIds.join(', ')}。`,
+    'local_patterns、strengths、risks、chan_observations、action_candidates 的每项必须是结构化对象，带 supporting_period_case_ids、applicability 和 market_regime；支持 ID 只能来自本分块。',
+    '互相矛盾的行情经验必须分别放在 conflict_groups.candidates 中，不能合并成一条；每个候选仍需保留自己的行情状态、适用条件和支持 ID。',
   ].join('\n')
-  const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider,
-    model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
-    maxTokens: Number(resolved.model.max_tokens || 4000), thinkingEnabled: resolved.model.thinking_enabled,
-    reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
-    timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs,
-    signal:requestSignal,
-    messages: [
-      { role: 'system', content: `你是严格的交易月度复盘分析器。基础统计以系统数据为准，不得自行重算。period_market_digest 是各个交易日使用完整日内 K 线计算后的行情与缠论结构摘要，只能从日复盘和这些摘要中识别跨日重复模式；未确认的日复盘只能作为待核实证据。必须区分缠论数据、结构计算、确认延迟、AI解读和策略规则问题。记忆候选必须至少由两个不同交易日支持，不得创造新规则或提高风险。\n\n以下输出契约不可违反：\n${contract}` },
-      { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
+  const output = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted, provider:resolved.model.provider,
+    model:resolved.model.model_name, temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
+    maxTokens:Number(resolved.model.max_tokens || 3500), thinkingEnabled:resolved.model.thinking_enabled,
+    reasoningEffort:resolved.model.reasoning_effort, protocol:endpoint.protocol,
+    timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs, signal:requestSignal,
+    messages:[
+      { role:'system', content:`你是严格的交易月度复盘分块分析器。只能分析本分块已冻结的日复盘和行情摘要，不得自行补造统计。\n\n${contract}` },
+      { role:'user', content:JSON.stringify({ required_output:shape, chunk }) },
     ],
-    usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
+    usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
     onProviderRequest:event => tracker.onProviderRequest(event),
     onProviderUsage:event => tracker.onProviderUsage(event),
-    onProgress: stage => setPeriodReviewJobStage(job, stage),
-    validateObject: value => validateMonthlyReviewContent(value, dailyCaseIds, approvedDailyCaseIds),
+    onProgress:stage => setPeriodReviewJobStage(job, `monthly_chunk_${Number(chunk.chunk_index)}`,
+      'info', stage),
+    validateObject:value => validateMonthlyReviewChunkContent(value, expectedIds),
   })
-  const content = validateMonthlyReviewContent(output, dailyCaseIds, approvedDailyCaseIds)
+  const content = validateMonthlyReviewChunkContent(output, expectedIds)
   await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
-  return { content, resolved }
+  return { content, resolved, tracker, checkpointLease }
+}
+
+async function beginMonthlyReviewMergeAttempt(job) {
+  const result = await queryRun(`UPDATE period_review_jobs SET attempt_count = attempt_count + 1, updated_at = ?
+    WHERE id = ? AND status = 'leased' AND lease_token = ? AND attempt_count < max_attempts`,
+  [beijingNow(), job.id, job.lease_token])
+  const affected = Number(result?.affectedRows ?? result?.changes ?? 0)
+  if (affected !== 1) throw new Error('monthly_review_job_attempt_exhausted')
+  job.attempt_count = Number(job.attempt_count || 0) + 1
+}
+
+function verifiedMonthlyMergeEvidence(evidence, checkpointResult) {
+  const chunks = checkpointResult.checkpoints.map(row => ({
+    checkpoint_id:Number(row.id), chunk_index:Number(row.chunk_index), source_hash:row.source_hash,
+    expected_period_case_ids:parse(row.expected_period_case_ids_json, []).map(Number),
+    content:parseCheckpointContent(row),
+  }))
+  const conflictGroups = chunks.flatMap(chunk => Array.isArray(chunk.content?.conflict_groups)
+    ? chunk.content.conflict_groups.map(group => ({ ...group, chunk_index:chunk.chunk_index, checkpoint_id:chunk.checkpoint_id })) : [])
+  return {
+    evidence_hash:evidence.evidence_hash,
+    period:evidence.period,
+    strategy:evidence.strategy,
+    statistics:evidence.statistics,
+    source_quality:evidence.source_quality,
+    period_market_digest:evidence.period_market_digest,
+    expected_period_case_ids:checkpointResult.expectedPeriodCaseIds,
+    verified_daily_assessments:checkpointResult.assessments,
+    verified_chunks:chunks,
+    conflict_groups:conflictGroups,
+  }
+}
+
+async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpointResult) {
+  await beginMonthlyReviewMergeAttempt(job)
+  const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review' })
+  if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
+  const endpoint = modelEndpoint(resolved.model)
+  const tracker = await startPeriodReviewModelTask(job, resolved, endpoint,
+    verifiedMonthlyMergeEvidence(evidence, checkpointResult), 'monthly_review_merge')
+  const requestSignal = job._abortSignal && tracker.signal
+    ? AbortSignal.any([job._abortSignal, tracker.signal]) : tracker.signal || job._abortSignal || null
+  const dailyCaseIds = checkpointResult.expectedPeriodCaseIds
+  const approvedDailyCaseIds = evidence.sources.filter(item => item.review_status === 'approved')
+    .map(item => Number(item.period_case_id)).filter(id => dailyCaseIds.includes(id))
+  const mergeEvidence = verifiedMonthlyMergeEvidence(evidence, checkpointResult)
+  const shape = { period_summary:'string', decision_quality:'good|mixed|poor|insufficient_evidence',
+    daily_assessments:dailyCaseIds.map(id => ({ period_case_id:id, decision_quality:'good|mixed|poor|insufficient_evidence', summary:'string', issue_codes:['string'] })),
+    recurring_patterns:['string'], strengths:['string'], risk_observations:['string'], chan_issue_summary:['string'],
+    next_month_actions:['string'], memory_candidates:approvedDailyCaseIds.length >= 2 ? [{ lesson:'string', anti_pattern:'string',
+      memory_category:'general|market_regime|entry_setup|chan_structure|risk_execution', applicability:{ applicable_when:{ universal:false, market_regimes:['trend|range|breakout|pullback|reversal'] }, avoid_when:{} },
+      supporting_period_case_ids:approvedDailyCaseIds.slice(0, 2), confidence:0.5 }] : [],
+    conflict_groups:mergeEvidence.conflict_groups, confidence:0.5 }
+  const contract = [
+    '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
+    '必须原样使用 required_output 的字段名；基础统计、已验证日复盘和 conflict_groups 只可作为输入依据。',
+    '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。',
+    'daily_assessments 必须恰好覆盖全部且仅覆盖 expected_period_case_ids；不得遗漏、重复、合并或虚构日复盘。',
+    'memory_candidates 必须仅引用已确认日复盘且每项至少两个不同日复盘支持；不满足时返回空数组。',
+    '冲突行情经验必须保留为独立 conflict_groups.candidates，分别写明 market_regime、applicability 与 supporting_period_case_ids，不得静默合并。',
+  ].join('\n')
+  const output = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted, provider:resolved.model.provider,
+    model:resolved.model.model_name, temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
+    maxTokens:Number(resolved.model.max_tokens || 4000), thinkingEnabled:resolved.model.thinking_enabled,
+    reasoningEffort:resolved.model.reasoning_effort, protocol:endpoint.protocol,
+    timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs, signal:requestSignal,
+    messages:[
+      { role:'system', content:`你是严格的交易月度复盘汇总分析器。只能使用 verified_chunks、verified_daily_assessments 和确定性统计/元数据；不得读取或重建未验证来源。\n\n${contract}` },
+      { role:'user', content:JSON.stringify({ required_output:shape, evidence:mergeEvidence }) },
+    ],
+    usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
+    onProviderRequest:event => tracker.onProviderRequest(event), onProviderUsage:event => tracker.onProviderUsage(event),
+    onProgress:stage => setPeriodReviewJobStage(job, stage),
+    validateObject:value => validateMonthlyReviewMergeContent(value, dailyCaseIds, approvedDailyCaseIds,
+      mergeEvidence.conflict_groups),
+  })
+  const content = validateMonthlyReviewMergeContent(output, dailyCaseIds, approvedDailyCaseIds,
+    mergeEvidence.conflict_groups)
+  await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
+  return { content, resolved, tracker }
 }
 
 async function finishMonthlyReviewSuccess(job, generated) {
@@ -1083,14 +1648,17 @@ async function finishMonthlyReviewSuccess(job, generated) {
   })
 }
 
-async function finishMonthlyReviewFailure(job, error) {
+async function finishMonthlyReviewFailure(job, error, modelTask = null) {
+  const unknown = providerResultUnknown(job._modelTracker, modelTask)
   const exhausted = job.attempt_count >= Number(job.max_attempts)
-  const retryAt = exhausted ? null : afterSeconds(Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))))
+  const retryAt = unknown || exhausted ? null : afterSeconds(Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))))
+  const jobStatus = unknown ? 'status_unknown' : exhausted ? 'failed' : 'queued'
+  const errorCode = unknown ? 'provider_status_unknown' : safeError(error)
   await queryRun(`UPDATE period_review_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
     lease_expires_at = NULL, next_attempt_at = ?, updated_at = ? WHERE id = ? AND lease_token = ?`,
-  [exhausted ? 'failed' : 'queued', safeError(error), retryAt, beijingNow(), job.id, job.lease_token])
+  [jobStatus, errorCode, retryAt, beijingNow(), job.id, job.lease_token])
   await queryRun(`UPDATE period_review_cases SET status = ?, updated_at = ? WHERE id = ? AND current_version_id IS NULL`,
-  [exhausted ? 'failed' : 'ready', beijingNow(), job.period_case_id])
+  [unknown ? 'generating' : exhausted ? 'failed' : 'ready', beijingNow(), job.period_case_id])
 }
 
 export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
@@ -1102,7 +1670,62 @@ export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObj
   await setPeriodReviewJobStage(job, 'preparing')
   try {
     if (!await isAiFeatureEnabled('review_generation_enabled', job.user_id)) return skipDisabledPeriodReviewJob(job)
-    const generated = await generateMonthlyReview(job, requestModel)
+    const evidence = parse(job.evidence_json, null)
+    if (!evidence || !Array.isArray(evidence.sources) || !evidence.sources.length) throw new Error('monthly_review_evidence_invalid')
+    const plan = buildMonthlyReviewChunks(evidence, { maxDays:8, evidenceHash:job.evidence_hash })
+    const materialized = await ensureMonthlyReviewCheckpoints({ periodReviewJobId:Number(job.id), evidence,
+      evidenceHash:plan.evidenceHash, maxDays:8 })
+    const checkpoint = await claimMonthlyReviewCheckpoint({ periodReviewJobId:Number(job.id), evidenceHash:plan.evidenceHash,
+      workerId:`period-review-monthly:${process.pid}` })
+    if (checkpoint) {
+      job._checkpoint = checkpoint
+      const chunk = checkpointChunkFromRow(checkpoint, plan)
+      const generated = await generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk)
+      lease.assertOwned()
+      job._checkpointLease?.assertOwned()
+      job._modelTracker?.assertOwned()
+      await job._modelTracker.applying()
+      lease.assertOwned()
+      job._checkpointLease?.assertOwned()
+      const persisted = await persistMonthlyReviewChunkSuccess(job, checkpoint, job._modelTracker, generated.content)
+      job._chunkPersisted = true
+      await releaseMonthlyReviewParentAfterChunk(job, checkpoint)
+      await job._modelTracker.succeeded({ resultRef:`period_review_monthly_checkpoint:${checkpoint.id}`, resultHash:persisted.contentHash })
+      await setPeriodReviewJobStage(job, 'monthly_chunk_succeeded', 'success', null,
+        { checkpoint_id:Number(checkpoint.id), chunk_index:Number(chunk.chunk_index) })
+      return { claimed:true, status:'chunk_succeeded', periodCaseId:Number(job.period_case_id),
+        checkpointId:Number(checkpoint.id), chunkIndex:Number(chunk.chunk_index) }
+    }
+
+    const currentRows = Array.isArray(materialized.checkpoints) ? materialized.checkpoints : []
+    const unknownCheckpoint = currentRows.find(row => String(row.status) === MONTHLY_REVIEW_CHECKPOINT_STATUSES.STATUS_UNKNOWN)
+    if (unknownCheckpoint) {
+      await releaseMonthlyReviewParentAfterChunk(job, unknownCheckpoint, { status:'status_unknown', errorCode:'provider_status_unknown' })
+      await setPeriodReviewJobStage(job, 'status_unknown', 'error', 'provider_status_unknown')
+      return { claimed:true, status:'status_unknown', periodCaseId:Number(job.period_case_id), checkpointId:Number(unknownCheckpoint.id) }
+    }
+    const allSucceeded = currentRows.length === plan.chunks.length
+      && currentRows.every(row => String(row.status) === MONTHLY_REVIEW_CHECKPOINT_STATUSES.SUCCEEDED)
+    if (!allSucceeded) {
+      const nextCheckpoint = currentRows.filter(row => ['failed', 'leased'].includes(String(row.status)))
+        .sort((left, right) => Number(left.next_attempt_at_utc_msc || left.lease_expires_at_utc_msc || 0)
+          - Number(right.next_attempt_at_utc_msc || right.lease_expires_at_utc_msc || 0))[0]
+      const nextAt = Number(nextCheckpoint?.next_attempt_at_utc_msc || nextCheckpoint?.lease_expires_at_utc_msc || 0)
+      const terminalFailure = nextCheckpoint && String(nextCheckpoint.status) === 'failed'
+        && Number(nextCheckpoint.attempt_count || 0) >= Number(nextCheckpoint.max_attempts || 3)
+      await releaseMonthlyReviewParentAfterChunk(job, nextCheckpoint, {
+        status:terminalFailure ? 'failed' : 'queued', nextAttemptAtUtcMs:terminalFailure ? null : nextAt > 0 ? nextAt : null,
+        errorCode:nextCheckpoint?.error_code || null,
+      })
+      await setPeriodReviewJobStage(job, terminalFailure ? 'failed' : 'retry_wait', 'info', nextCheckpoint?.error_code || null)
+      return { claimed:true, status:terminalFailure ? 'failed' : 'retry_wait', periodCaseId:Number(job.period_case_id),
+        checkpointId:Number(nextCheckpoint?.id || 0) }
+    }
+
+    const verified = await loadSucceededMonthlyReviewCheckpoints({ periodReviewJobId:Number(job.id),
+      evidenceHash:plan.evidenceHash, expectedPeriodCaseIds:plan.expectedPeriodCaseIds })
+    assertMonthlyReviewCheckpointCoverage(verified.checkpoints, plan.expectedPeriodCaseIds)
+    const generated = await generateMonthlyReviewMerge(job, requestModel, evidence, verified)
     lease.assertOwned()
     job._modelTracker?.assertOwned()
     await job._modelTracker?.applying()
@@ -1111,22 +1734,44 @@ export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObj
     await finishMonthlyReviewSuccess(job, generated)
     await job._modelTracker?.succeeded({ resultRef:`period_review_case:${job.period_case_id}` })
     await setPeriodReviewJobStage(job, 'succeeded', 'success')
-    return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
+    return { claimed:true, status:'succeeded', periodCaseId:Number(job.period_case_id) }
   } catch (error) {
+    if (job._checkpoint && job._chunkPersisted) {
+      // The checkpoint content is already fenced and durable. A transient
+      // failure while releasing the parent or finalizing the generic task
+      // must not turn that completed chunk into a fresh provider request.
+      try { await releaseMonthlyReviewParentAfterChunk(job, job._checkpoint) } catch (releaseError) {
+        console.error(`[PeriodReview case=${job.period_case_id}] monthly chunk parent release:`, safeError(releaseError))
+      }
+      return { claimed:true, status:'chunk_succeeded', periodCaseId:Number(job.period_case_id),
+        checkpointId:Number(job._checkpoint.id) }
+    }
+    if (job._checkpoint && !job._chunkPersisted) {
+      const chunkFailure = await failMonthlyReviewChunk(job, job._checkpoint, job._modelTracker, error)
+      await setPeriodReviewJobStage(job, chunkFailure.status === 'status_unknown' ? 'status_unknown'
+        : chunkFailure.status === 'failed' ? 'failed' : 'retry_wait', 'error', chunkFailure.error)
+      return { claimed:true, status:chunkFailure.status, periodCaseId:Number(job.period_case_id),
+        checkpointId:Number(job._checkpoint.id), error:chunkFailure.error }
+    }
     let failure = error
+    let modelTask = null
     try {
-      await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
+      modelTask = await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
     } catch (trackerError) {
       failure = trackerError
       console.error(`[PeriodReview case=${job.period_case_id}] model task failure:`, safeError(trackerError))
     }
-    await finishMonthlyReviewFailure(job, failure)
-    await setPeriodReviewJobStage(job, job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
-      job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
-    return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(failure) }
+    await finishMonthlyReviewFailure(job, failure, modelTask)
+    const unknown = providerResultUnknown(job._modelTracker, modelTask)
+    await setPeriodReviewJobStage(job, unknown ? 'status_unknown' : job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
+      unknown || job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
+    return { claimed: true, status: unknown ? 'status_unknown' : 'failed', periodCaseId: Number(job.period_case_id), error: safeError(failure) }
   } finally {
     try { await job._modelTracker?.stop() } catch (trackerError) {
       console.error(`[PeriodReview case=${job.period_case_id}] model task stop:`, safeError(trackerError))
+    }
+    try { await job._checkpointLease?.stop() } catch (checkpointError) {
+      console.error(`[PeriodReview case=${job.period_case_id}] monthly checkpoint lease stop:`, safeError(checkpointError))
     }
     await lease.stop()
   }
@@ -1481,8 +2126,50 @@ export async function retryPeriodReviewCase(periodCaseId, actor) {
     const [jobs] = await run('SELECT * FROM period_review_jobs WHERE period_case_id = ? AND job_type = ? AND job_slot = 0 LIMIT 1 FOR UPDATE', [periodCaseId, jobType])
     const now = beijingNow()
     let jobId = Number(jobs[0]?.id || 0)
-    if (jobs[0]) await run(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?, attempt_count = 0, last_error_code = NULL,
-      lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`, [now, now, jobs[0].id])
+    if (jobs[0]) {
+      if (jobType === 'monthly_review') {
+        const [checkpoints] = await run(`SELECT * FROM period_review_monthly_checkpoints
+          WHERE period_review_job_id = ? ORDER BY evidence_hash, chunk_index FOR UPDATE`, [jobs[0].id])
+        for (const checkpoint of checkpoints || []) {
+          const checkpointStatus = String(checkpoint.status || '')
+          if (checkpointStatus === MONTHLY_REVIEW_CHECKPOINT_STATUSES.STATUS_UNKNOWN
+            || checkpointStatus === MONTHLY_REVIEW_CHECKPOINT_STATUSES.LEASED) {
+            throw new Error('period_review_chunk_checkpoint_unresolved')
+          }
+          if (checkpoint.model_task_id) {
+            const [tasks] = await run('SELECT task_id, status FROM ai_model_tasks WHERE task_id = ? LIMIT 1 FOR UPDATE', [checkpoint.model_task_id])
+            const task = tasks?.[0]
+            if (!task) throw new Error('period_review_chunk_model_task_missing')
+            if (!MODEL_TASK_TERMINAL_STATES.has(String(task.status || ''))) {
+              throw new Error('period_review_chunk_model_task_unresolved')
+            }
+          }
+          if (checkpointStatus === MONTHLY_REVIEW_CHECKPOINT_STATUSES.FAILED) {
+            await run(`UPDATE period_review_monthly_checkpoints SET status = 'queued', attempt_count = 0,
+              next_attempt_at_utc_msc = NULL, model_task_id = NULL, lease_token = NULL, lease_owner = NULL,
+              lease_expires_at_utc_msc = NULL, fencing_token = fencing_token + 1,
+              error_code = NULL, error_message = NULL, updated_at_utc_msc = ?
+              WHERE id = ? AND status = 'failed'`, [Date.now(), checkpoint.id])
+          }
+        }
+      }
+      let nextIdempotencyKey = jobs[0].idempotency_key
+      let clearModelTask = false
+      if (jobs[0].model_task_id) {
+        const [tasks] = await run('SELECT task_id, status FROM ai_model_tasks WHERE task_id = ? LIMIT 1 FOR UPDATE', [jobs[0].model_task_id])
+        const task = tasks?.[0]
+        if (!task) throw new Error('period_review_model_task_missing')
+        if (!MODEL_TASK_TERMINAL_STATES.has(String(task.status || ''))) {
+          throw new Error('period_review_model_task_unresolved')
+        }
+        nextIdempotencyKey = `retry:${jobType}:${periodCaseId}:${crypto.randomUUID()}`
+        clearModelTask = true
+      }
+      await run(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?, attempt_count = 0, last_error_code = NULL,
+        lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, completed_at = NULL,
+        idempotency_key = ?, model_task_id = ${clearModelTask ? 'NULL' : 'model_task_id'}, updated_at = ? WHERE id = ?`,
+      [now, nextIdempotencyKey, now, jobs[0].id])
+    }
     else {
       const [insert] = await run(`INSERT INTO period_review_jobs
       (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
@@ -1526,6 +2213,7 @@ export async function recoverExpiredPeriodReviewJobs() {
 }
 
 export async function runPeriodReviewCycle() {
+  const recoveredModelTasks = await recoverAbandonedPeriodReviewModelTasks()
   const recoveredExpiredJobs = await recoverExpiredPeriodReviewJobs()
   const resumedDerivationJobs = await resumePeriodReviewDerivationJobs()
   const dailyPreparation = await prepareEligibleDailyReviews()
@@ -1533,7 +2221,7 @@ export async function runPeriodReviewCycle() {
   const monthlyPreparation = await prepareEligibleMonthlyReviews()
   const monthlyWorker = await runMonthlyReviewWorkerOnce()
   const derivationWorker = await runPeriodReviewDerivationOnce()
-  return { recoveredExpiredJobs, resumedDerivationJobs, dailyPreparation, dailyWorker, monthlyPreparation, monthlyWorker, derivationWorker }
+  return { recoveredModelTasks, recoveredExpiredJobs, resumedDerivationJobs, dailyPreparation, dailyWorker, monthlyPreparation, monthlyWorker, derivationWorker }
 }
 
 export function startPeriodReviewWorker(intervalMs = 60_000) {

@@ -1,9 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'fs'
+
+const periodReviewDb = vi.hoisted(() => ({
+  queryAll:vi.fn(), queryOne:vi.fn(), queryRun:vi.fn(), withTransaction:vi.fn(),
+  beijingNow:vi.fn(() => '2026-07-15 12:00:00'),
+}))
+vi.mock('../../server/db.js', () => periodReviewDb)
+
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
   compactPeriodTradeEvidence, dailyEvidenceSemanticHash, isTerminalTradeEvidenceReason, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey,
   monthlyReviewSourceHash, periodReviewAccessScope, samePeriodOutcomeSet, shouldRefreshDailyReviewCase, shouldUpgradePeriodMarketEvidence,
-  startPeriodReviewLeaseHeartbeat, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
+  startPeriodReviewLeaseHeartbeat, validateDailyReviewContent, validateMonthlyReviewContent,
+  validateMonthlyReviewMergeContent,
+  validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review lease heartbeat', () => {
@@ -25,6 +34,60 @@ describe('period review lease heartbeat', () => {
     expect(heartbeat.signal.aborted).toBe(false)
     expect(() => heartbeat.assertOwned()).not.toThrow()
     await heartbeat.stop()
+  })
+})
+
+describe('period review model-task recovery and retry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    periodReviewDb.queryAll.mockResolvedValue([])
+    periodReviewDb.queryRun.mockResolvedValue({ affectedRows:1 })
+  })
+
+  it('keeps an unresolved status-unknown review job out of the retry queue', async () => {
+    const run = vi.fn(async sql => {
+      if (sql.includes('SELECT cases.*')) return [[{ id:42, user_id:7, evidence_status:'complete', current_version_id:null, period_type:'daily' }]]
+      if (sql.includes('SELECT * FROM period_review_jobs')) return [[{ id:9, period_case_id:42, job_type:'daily_review',
+        idempotency_key:'daily:42:evidence', status:'status_unknown', model_task_id:'task-unknown' }]]
+      if (sql.includes('SELECT task_id, status')) return [[{ task_id:'task-unknown', status:'status_unknown' }]]
+      return [{ affectedRows:1 }]
+    })
+    periodReviewDb.withTransaction.mockImplementation(callback => callback(run))
+
+    await expect(retryPeriodReviewCase(42, { id:7, role:'user' }))
+      .rejects.toThrow('period_review_model_task_unresolved')
+    expect(run.mock.calls.some(([sql]) => sql.includes('UPDATE period_review_jobs SET status = \'queued\''))).toBe(false)
+  })
+
+  it('uses a new business key and clears a terminal model task before retrying', async () => {
+    const run = vi.fn(async sql => {
+      if (sql.includes('SELECT cases.*')) return [[{ id:42, user_id:7, evidence_status:'complete', current_version_id:null, period_type:'daily' }]]
+      if (sql.includes('SELECT * FROM period_review_jobs')) return [[{ id:9, period_case_id:42, job_type:'daily_review',
+        idempotency_key:'daily:42:evidence', status:'failed', model_task_id:'task-terminal' }]]
+      if (sql.includes('SELECT task_id, status')) return [[{ task_id:'task-terminal', status:'failed_terminal' }]]
+      return [{ affectedRows:1, insertId:10 }]
+    })
+    periodReviewDb.withTransaction.mockImplementation(callback => callback(run))
+
+    const result = await retryPeriodReviewCase(42, { id:7, role:'user' })
+    expect(result).toMatchObject({ queued:true, jobId:9 })
+    const update = run.mock.calls.find(([sql]) => sql.includes('idempotency_key = ?'))
+    expect(update).toBeTruthy()
+    expect(update[0]).toContain('model_task_id = NULL')
+    expect(update[1][1]).toMatch(/^retry:daily_review:42:/)
+  })
+
+  it('blocks a lost provider request and does not blindly resend it', async () => {
+    periodReviewDb.queryAll.mockResolvedValueOnce([{ task_id:'task-submitted', task_kind:'daily_review', status:'submitted',
+      lease_expires_at_utc_msc:90_000, task_deadline_at_utc_msc:300_000, fencing_token:4, provider_attempt_started:1 }])
+    periodReviewDb.queryOne.mockResolvedValueOnce({ id:9, status:'leased', period_case_id:42, period_type:'daily',
+      current_version_id:null, result_hash:null })
+
+    const result = await recoverAbandonedPeriodReviewModelTasks({ nowUtcMs:100_000 })
+    expect(result).toMatchObject({ scanned:1, statusUnknown:1, requeued:0, stale:0 })
+    expect(periodReviewDb.queryRun.mock.calls.some(([sql]) => sql.includes("status='status_unknown'"))).toBe(true)
+    expect(periodReviewDb.queryRun.mock.calls.some(([sql]) => sql.includes("status='queued'"))).toBe(false)
+    expect(periodReviewDb.queryRun.mock.calls.some(([sql]) => sql.includes("period_review_jobs SET status = 'status_unknown'"))).toBe(true)
   })
 })
 
@@ -231,8 +294,54 @@ describe('monthly review model boundary', () => {
         supporting_period_case_ids: [11, 12], confidence: 0.8 }], confidence: 0.8 }
     expect(validateMonthlyReviewContent(input, [11, 12]).memory_candidates[0].supporting_period_case_ids).toEqual([11, 12])
     expect(() => validateMonthlyReviewContent({ ...input, daily_assessments: input.daily_assessments.slice(0, 1) }, [11, 12])).toThrow('monthly_review_daily_coverage_incomplete')
+    expect(() => validateMonthlyReviewContent({ ...input, daily_assessments: [...input.daily_assessments, input.daily_assessments[0]] }, [11, 12]))
+      .toThrow('monthly_review_daily_coverage_incomplete')
     expect(() => validateMonthlyReviewContent({ ...input, memory_candidates: [{ ...input.memory_candidates[0], supporting_period_case_ids: [11] }] }, [11, 12])).toThrow('invalid_monthly_memory_candidate')
     expect(() => validateMonthlyReviewContent(input, [11, 12], [11])).toThrow('invalid_monthly_memory_candidate')
+  })
+
+  it('keeps verified chunk conflicts even when the merge model omits them', () => {
+    const input = { period_summary:'月度总结', decision_quality:'mixed',
+      daily_assessments:[{ period_case_id:11, decision_quality:'mixed', summary:'存在分歧', issue_codes:[] }],
+      recurring_patterns:[], strengths:[], risk_observations:[], chan_issue_summary:[], next_month_actions:[],
+      memory_candidates:[], conflict_groups:[], confidence:0.7 }
+    const conflicts = [{ conflict_key:'regime-split', supporting_period_case_ids:[11], candidates:[
+      { text:'趋势行情等待确认', market_regime:'trend', supporting_period_case_ids:[11], applicability:{} },
+      { text:'区间行情避免追价', market_regime:'range', supporting_period_case_ids:[11], applicability:{} },
+    ] }]
+    const result = validateMonthlyReviewMergeContent(input, [11], [11], conflicts)
+    expect(result.conflict_groups).toHaveLength(1)
+    expect(result.conflict_groups[0].candidates.map(item => item.market_regime)).toEqual(['trend', 'range'])
+  })
+
+  it('requires chunk-local structured conclusions to cite only IDs in that chunk', () => {
+    const context = { text:'趋势中确认稳定', supporting_period_case_ids:[11],
+      applicability:{ applicable_when:{ universal:false, market_regimes:['trend'] }, avoid_when:{} },
+      market_regime:'trend', confidence:0.8 }
+    const value = validateMonthlyReviewChunkContent({ period_summary:'分块总结', decision_quality:'good',
+      daily_assessments:[{ period_case_id:11, decision_quality:'good', summary:'执行稳定' }, { period_case_id:12, decision_quality:'mixed', summary:'确认偏早' }],
+      local_patterns:[context], strengths:[context], risks:[{ ...context, text:'区间误判', market_regime:'range' }],
+      chan_observations:[context], action_candidates:[context], conflict_groups:[], confidence:0.8 }, [11, 12])
+    expect(value.daily_assessments.map(item => item.period_case_id)).toEqual([11, 12])
+    expect(value.local_patterns[0].supporting_period_case_ids).toEqual([11])
+    expect(() => validateMonthlyReviewChunkContent({ period_summary:'分块总结', decision_quality:'good',
+      daily_assessments:[{ period_case_id:11, decision_quality:'good', summary:'执行稳定' }, { period_case_id:12, decision_quality:'mixed', summary:'确认偏早' }],
+      local_patterns:[{ ...context, supporting_period_case_ids:[99] }], strengths:[], risks:[], chan_observations:[], action_candidates:[], conflict_groups:[], confidence:0.8 }, [11, 12]))
+      .toThrow('monthly_review_chunk_support_invalid')
+  })
+
+  it('blocks manual monthly retry while a chunk checkpoint is unresolved', async () => {
+    const run = vi.fn(async sql => {
+      if (sql.includes('SELECT cases.*')) return [[{ id:42, user_id:7, evidence_status:'complete', current_version_id:null, period_type:'monthly' }]]
+      if (sql.includes('SELECT * FROM period_review_jobs')) return [[{ id:9, period_case_id:42, job_type:'monthly_review',
+        idempotency_key:'monthly:42:evidence', status:'queued', model_task_id:null }]]
+      if (sql.includes('period_review_monthly_checkpoints')) return [[{ id:12, status:'leased', model_task_id:'chunk-task' }]]
+      return [{ affectedRows:1, insertId:10 }]
+    })
+    periodReviewDb.withTransaction.mockImplementation(callback => callback(run))
+    await expect(retryPeriodReviewCase(42, { id:7, role:'user' }))
+      .rejects.toThrow('period_review_chunk_checkpoint_unresolved')
+    expect(run.mock.calls.some(([sql]) => sql.includes("UPDATE period_review_jobs SET status = 'queued'"))).toBe(false)
   })
 })
 
@@ -293,6 +402,8 @@ describe('period review runtime integration', () => {
     expect(migration).toContain('102_disable_legacy_trade_review_generation')
     expect(routes).toContain("error:'legacy_trade_review_disabled'")
     expect(periodReview).toContain('recoverExpiredPeriodReviewJobs')
+    expect(periodReview).toContain("unknown ? 'generating' : exhausted ? 'failed' : 'ready'")
+    expect(periodReview).toContain("jobStatus = unknown ? 'status_unknown' : exhausted ? 'failed' : 'queued'")
     expect(periodReview).toContain("isAiFeatureEnabled('review_generation_enabled'")
     expect(migration).toContain('uk_period_review_compatibility')
     expect(periodReview).toContain('cases.strategy_compatibility_hash IS NOT NULL')

@@ -4925,6 +4925,125 @@ const migrations = [
         CONSTRAINT fk_manual_analysis_model_task FOREIGN KEY (model_task_id) REFERENCES ai_model_tasks(task_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '165_monthly_review_chunk_checkpoints',
+    async up() {
+      // Monthly chunks are an isolated, append-preserving execution ledger.
+      // Existing period-review jobs/evidence require no backfill: the next
+      // monthly run materializes its own frozen evidence revision.
+      await queryRun(`CREATE TABLE IF NOT EXISTS period_review_monthly_checkpoints (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        period_review_job_id BIGINT NOT NULL,
+        evidence_hash CHAR(64) NOT NULL,
+        source_hash CHAR(64) NOT NULL,
+        chunk_index INT NOT NULL,
+        chunk_count INT NOT NULL,
+        max_days INT NOT NULL DEFAULT 8,
+        expected_period_case_ids_json TEXT NOT NULL,
+        expected_ids_hash CHAR(64) NOT NULL,
+        sources_json LONGTEXT NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        attempt_count INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 3,
+        next_attempt_at_utc_msc BIGINT DEFAULT NULL,
+        model_task_id CHAR(36) DEFAULT NULL,
+        lease_token CHAR(36) DEFAULT NULL,
+        lease_owner VARCHAR(191) DEFAULT NULL,
+        fencing_token BIGINT NOT NULL DEFAULT 0,
+        lease_expires_at_utc_msc BIGINT DEFAULT NULL,
+        content_json LONGTEXT DEFAULT NULL,
+        content_hash CHAR(64) DEFAULT NULL,
+        reused_from_checkpoint_id BIGINT DEFAULT NULL,
+        error_code VARCHAR(128) DEFAULT NULL,
+        error_message VARCHAR(512) DEFAULT NULL,
+        superseded_reason VARCHAR(128) DEFAULT NULL,
+        completed_at_utc_msc BIGINT DEFAULT NULL,
+        created_at_utc_msc BIGINT NOT NULL,
+        updated_at_utc_msc BIGINT NOT NULL,
+        UNIQUE KEY uk_monthly_review_checkpoint_key (period_review_job_id, evidence_hash, chunk_index),
+        KEY idx_monthly_review_checkpoint_claim (period_review_job_id, status, lease_expires_at_utc_msc, chunk_index),
+        KEY idx_monthly_review_checkpoint_evidence (period_review_job_id, evidence_hash, chunk_index),
+        KEY idx_monthly_review_checkpoint_model_task (model_task_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
+  },
+  {
+    id: '166_model_task_capacity_reservations',
+    async up() {
+      // Capacity policy is durable and database-configured. The default row is
+      // intentionally conservative; profile rows may override individual
+      // nullable fields without changing the shared default.
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_capacity_policies (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        policy_scope VARCHAR(16) NOT NULL DEFAULT 'default',
+        model_profile_id BIGINT NOT NULL DEFAULT 0,
+        max_concurrency INT DEFAULT NULL,
+        reserve_execution_critical_slots INT DEFAULT NULL,
+        background_per_user_cap INT DEFAULT NULL,
+        lease_ms INT DEFAULT NULL,
+        conservative_lease_ms INT DEFAULT NULL,
+        waiter_poll_ms INT DEFAULT NULL,
+        starvation_age_ms INT DEFAULT NULL,
+        enabled TINYINT NOT NULL DEFAULT 1,
+        created_at_utc_msc BIGINT NOT NULL,
+        updated_at_utc_msc BIGINT NOT NULL,
+        UNIQUE KEY uk_model_capacity_policy_scope_profile (policy_scope, model_profile_id),
+        KEY idx_model_capacity_policy_profile (model_profile_id, enabled)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_capacity_waiters (
+        waiter_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        owner_token CHAR(36) NOT NULL,
+        model_task_id CHAR(36) DEFAULT NULL,
+        model_profile_id BIGINT DEFAULT NULL,
+        user_id INT DEFAULT NULL,
+        usage_kind VARCHAR(32) NOT NULL,
+        queue_class VARCHAR(32) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'waiting',
+        lease_id CHAR(36) DEFAULT NULL,
+        requested_at_utc_msc BIGINT NOT NULL,
+        deadline_at_utc_msc BIGINT DEFAULT NULL,
+        granted_at_utc_msc BIGINT DEFAULT NULL,
+        cancelled_at_utc_msc BIGINT DEFAULT NULL,
+        created_at_utc_msc BIGINT NOT NULL,
+        updated_at_utc_msc BIGINT NOT NULL,
+        UNIQUE KEY uk_model_capacity_waiter_owner (owner_token),
+        KEY idx_model_capacity_waiter_queue (status, requested_at_utc_msc, waiter_id),
+        KEY idx_model_capacity_waiter_task (model_task_id, status),
+        KEY idx_model_capacity_waiter_deadline (status, deadline_at_utc_msc)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_capacity_leases (
+        lease_id CHAR(36) PRIMARY KEY,
+        owner_token CHAR(36) NOT NULL,
+        waiter_id BIGINT DEFAULT NULL,
+        model_task_id CHAR(36) DEFAULT NULL,
+        model_profile_id BIGINT DEFAULT NULL,
+        user_id INT DEFAULT NULL,
+        usage_kind VARCHAR(32) NOT NULL,
+        queue_class VARCHAR(32) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'active',
+        acquired_at_utc_msc BIGINT NOT NULL,
+        lease_expires_at_utc_msc BIGINT NOT NULL,
+        conservative_until_utc_msc BIGINT DEFAULT NULL,
+        release_reason VARCHAR(128) DEFAULT NULL,
+        released_at_utc_msc BIGINT DEFAULT NULL,
+        created_at_utc_msc BIGINT NOT NULL,
+        updated_at_utc_msc BIGINT NOT NULL,
+        UNIQUE KEY uk_model_capacity_lease_owner (lease_id, owner_token),
+        KEY idx_model_capacity_lease_active (status, lease_expires_at_utc_msc),
+        KEY idx_model_capacity_lease_profile (model_profile_id, status, lease_expires_at_utc_msc),
+        KEY idx_model_capacity_lease_user_queue (user_id, queue_class, status, lease_expires_at_utc_msc),
+        KEY idx_model_capacity_lease_task (model_task_id, status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      const now = Date.now()
+      await queryRun(`INSERT INTO ai_model_capacity_policies
+        (policy_scope, model_profile_id, max_concurrency,
+         reserve_execution_critical_slots, background_per_user_cap,
+         lease_ms, conservative_lease_ms, waiter_poll_ms, starvation_age_ms,
+         enabled, created_at_utc_msc, updated_at_utc_msc)
+        VALUES ('default', 0, 4, 1, 1, 120000, 300000, 250, 5000, 1, ?, ?)
+        ON DUPLICATE KEY UPDATE updated_at_utc_msc = updated_at_utc_msc`, [now, now])
+    }
   }
 ]
 

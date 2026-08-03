@@ -251,6 +251,24 @@ describe('prepareAndExecuteOrderIntent', () => {
     expect(reservation.status).toBe('released')
   })
 
+  it('runs the durable transaction fence before marking an intent as bridge_sending', async () => {
+    const beforeBridgeSendTx = vi.fn(({ run, intent:lockedIntent, intentId }) => {
+      expect(run).toBe(txRun)
+      expect(lockedIntent.status).toBe('prepared')
+      expect(intentId).toBe(1)
+      throw new Error('model_task_fence_lost')
+    })
+    const result = await prepareAndExecuteOrderIntent(baseArgs({
+      tradingAccountId:1,
+      beforeBridgeSendTx,
+    }))
+
+    expect(result).toMatchObject({ status:'rejected', message:'model_task_fence_lost' })
+    expect(beforeBridgeSendTx).toHaveBeenCalledTimes(1)
+    expect(mockBridge.mock.calls.filter(call => call[1] === 'open')).toHaveLength(0)
+    expect(reservation.status).toBe('released')
+  })
+
   it('runs destructive replacement work only after risk is prepared and before Bridge send', async () => {
     const lifecycle = []
     const afterRiskPrepared = vi.fn(({ intentId, bridgeAction, request }) => {

@@ -176,7 +176,11 @@ function buildAutoModelTaskInput({ promptTypeId, symbol, cycleId, cycleStartedAt
     frozenContext,
     scheduledAtUtcMs:cycleStartedAtMs,
     taskDeadlineAtUtcMs,
-    resultValidUntilUtcMsc:Number(resultValidUntilUtcMsc) || null,
+    // The model-task runtime consumes the camelCase `...UtcMs` contract and
+    // maps it to the durable `result_valid_until_utc_msc` column. Keep the
+    // database naming in frozen_context, but do not pass the legacy `Msc`
+    // property to createModelTaskTracker (and ultimately createModelTask).
+    resultValidUntilUtcMs:Number(resultValidUntilUtcMsc) || null,
     maxAttempts:1,
   }
 }
@@ -246,6 +250,25 @@ async function assertAutoInferenceBusinessGate({ tracker, lockGuard, resultValid
   if (!(await assertModelTaskOwned(tracker, phase))) return false
   const validUntil = Number(resultValidUntilUtcMsc)
   return Number.isFinite(validUntil) && Date.now() <= validUntil
+}
+
+async function assertAutoInferenceOrderSendTx({ tracker, run, resultValidUntilUtcMsc }) {
+  if (!tracker || typeof tracker.assertOwnedTx !== 'function') {
+    const error = new Error('model_task_transaction_fence_missing')
+    error.code = 'model_task_transaction_fence_missing'
+    throw error
+  }
+  const current = await tracker.assertOwnedTx(run)
+  const durableValidUntil = Number(current?.result_valid_until_utc_msc)
+  const cycleValidUntil = Number(resultValidUntilUtcMsc)
+  if (!Number.isFinite(durableValidUntil) || durableValidUntil <= 0
+    || !Number.isFinite(cycleValidUntil) || cycleValidUntil <= 0
+    || Date.now() > Math.min(durableValidUntil, cycleValidUntil)) {
+    const error = new Error('model_task_result_expired')
+    error.code = 'model_task_result_expired'
+    throw error
+  }
+  return current
 }
 
 function bridgeWeeklyWindow(userId, tradingAccountId = null, now = new Date()) {
@@ -2655,11 +2678,23 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         throw reject('pending_limit_reached', { remaining:remainingPendingCount, maximum:MAX_PENDING_PER_SYMBOL })
       }
     } : undefined
+    const beforeBridgeSend = async () => {
+      if (subscriberWeeklyWindow()) throw new Error('weekly_flatten_window')
+      if (lockGuard && !(await lockGuard.assertOwned('bridge_send'))) throw new Error('lock_lost_before_send')
+      if (modelTaskTracker && !(await assertAutoInferenceBusinessGate({
+        tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc, phase:'bridge_send',
+      }))) throw new Error('model_task_business_gate_failed')
+    }
+    const beforeBridgeSendTx = modelTaskTracker ? ({ run }) => assertAutoInferenceOrderSendTx({
+      tracker:modelTaskTracker, run, resultValidUntilUtcMsc,
+    }) : null
     const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute', {
       noFallback: true,
       sourceType: 'auto_delivery',
       signalId,
       deliveryId: `${signalId}:${userId}`,
+      beforeBridgeSend,
+      beforeBridgeSendTx,
       afterRiskPrepared,
       replacePendingTickets:[...replacementTicketSet],
     })
@@ -3063,6 +3098,7 @@ export const __schedulerTest = {
   buildAutoModelTaskInput,
   assertAutoInferenceApplyGate,
   assertAutoInferenceBusinessGate,
+  assertAutoInferenceOrderSendTx,
   schedulerUpdateMaintenanceReason,
   isMarketWaitReason,
   summarizeRuntimeMarketStates,

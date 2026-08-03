@@ -678,7 +678,11 @@ export async function executeOrderCore(userId, config, request, action, options 
           strategy_policy_gate:strategyGate,
         })
       }
+      if (typeof options.beforeBridgeSend === 'function') {
+        await options.beforeBridgeSend({ bridgeAction, request:approved })
+      }
     },
+    beforeBridgeSendTx: options.beforeBridgeSendTx,
     afterRiskPrepared: options.afterRiskPrepared,
     resolveTradingAccount: ({ actorId, account, requestedAccountId }) => syncTradingAccountIdentity(actorId, account, requestedAccountId),
     statefulValidate: ({ run, tradingAccountId, intentId, request: approved, risk, riskContext }) => evaluateStatefulRiskTx(run, {

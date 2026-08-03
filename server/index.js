@@ -39,6 +39,8 @@ import { cacheSetJSON } from './redis.js'
 import { initAutoSchedulers, startPeriodReviewWorker, startMemoryCompressionWorker, startManualAnalysisJobs,
   startHistoryCompareRecoveryWorker } from './routes/ai/index.js'
 import { recoverAbandonedAutoInferenceTasks } from './routes/ai/model-task-runtime.js'
+import { recoverAbandonedPeriodReviewModelTasks } from './routes/ai/period-review.js'
+import { recoverAbandonedMemoryCompressionModelTasks } from './routes/ai/memory-system.js'
 import { startOrderIntentReconciler } from './routes/ai/order-intents.js'
 import { startPositionManagementWorker } from './routes/ai/position-management-worker.js'
 import { authMiddleware, tokenVersionMatches } from './middleware/auth.js'
@@ -367,6 +369,20 @@ installFatalProcessHandlers()
   await recoverAutoInferenceTasks()
   const autoInferenceRecoveryTimer = setInterval(recoverAutoInferenceTasks, 30_000)
   autoInferenceRecoveryTimer.unref?.()
+  const recoverBackgroundModelTasks = async () => {
+    try {
+      const [periodReview, memoryCompression] = await Promise.all([
+        recoverAbandonedPeriodReviewModelTasks(), recoverAbandonedMemoryCompressionModelTasks(),
+      ])
+      if (periodReview.succeeded || periodReview.requeued || periodReview.statusUnknown || periodReview.stale
+        || memoryCompression.succeeded || memoryCompression.requeued || memoryCompression.statusUnknown || memoryCompression.stale) {
+        console.warn('[AI] Reconciled abandoned period/memory model tasks:', { periodReview, memoryCompression })
+      }
+    } catch (error) {
+      console.error('[AI] Period/memory model task recovery failed:', error.message)
+    }
+  }
+  await recoverBackgroundModelTasks()
   await initAutoSchedulers()
   startOrderIntentReconciler()
   startPositionManagementWorker()

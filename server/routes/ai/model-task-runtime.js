@@ -204,12 +204,37 @@ export async function cancelModelTaskById(taskId, reason = 'model_task_cancelled
   return false
 }
 
-export async function markModelTaskStatusUnknownById(taskId, reason = 'provider_status_unknown') {
+function recoveryWhere({ taskId = '', expectedStatus = null, fencingToken = null, nowUtcMs = null,
+  requireLeaseExpired = false, requireDeadlineReached = false, requireDeadlineNotReached = false,
+  requireLeaseOrDeadline = false } = {}) {
+  const clauses = ['task_id = ?']
+  const params = [String(taskId)]
+  if (expectedStatus) { clauses.push('status = ?'); params.push(String(expectedStatus)) }
+  if (fencingToken != null) { clauses.push('fencing_token = ?'); params.push(Number(fencingToken)) }
+  const now = Number(nowUtcMs) || Date.now()
+  const leaseExpired = '(lease_expires_at_utc_msc IS NULL OR lease_expires_at_utc_msc <= ?)'
+  const deadlineReached = '(task_deadline_at_utc_msc IS NOT NULL AND task_deadline_at_utc_msc > 0 AND task_deadline_at_utc_msc <= ?)'
+  if (requireLeaseOrDeadline) {
+    clauses.push(`(${leaseExpired} OR ${deadlineReached})`)
+    params.push(now, now)
+  } else {
+    if (requireLeaseExpired) { clauses.push(leaseExpired); params.push(now) }
+    if (requireDeadlineReached) { clauses.push(deadlineReached); params.push(now) }
+    if (requireDeadlineNotReached) {
+      clauses.push('(task_deadline_at_utc_msc IS NULL OR task_deadline_at_utc_msc <= 0 OR task_deadline_at_utc_msc > ?)')
+      params.push(now)
+    }
+  }
+  return { sql:clauses.join(' AND '), params }
+}
+
+export async function markModelTaskStatusUnknownById(taskId, reason = 'provider_status_unknown', guard = {}) {
   const now = Date.now()
+  const where = recoveryWhere({ ...guard, taskId })
   const result = await queryRun(`UPDATE ai_model_tasks SET status='status_unknown',
     error_code=?, error_message=?, lease_token=NULL, lease_owner=NULL, lease_expires_at_utc_msc=NULL,
-    updated_at_utc_msc=? WHERE task_id=? AND status IN ('submitted','provider_running','provider_quiet')`,
-  [String(reason).slice(0, 128), String(reason).slice(0, 512), now, String(taskId)])
+    updated_at_utc_msc=? WHERE ${where.sql} AND status IN ('leased','preparing','submitted','provider_running','provider_quiet')`,
+  [String(reason).slice(0, 128), String(reason).slice(0, 512), now, ...where.params])
   if (Number(result?.affectedRows ?? result?.changes ?? 0) > 0) {
     await appendModelTaskEvent(String(taskId), 'task_status_unknown', { reason })
     return true
@@ -240,19 +265,158 @@ export async function markModelTaskSucceededFromResult(taskId, { resultRef = nul
 // Source fingerprints are checked immediately before apply. If they changed,
 // the model output must never be applied even when the ordinary leased state
 // machine cannot transition directly from its current intermediate state.
-export async function markModelTaskCompletedStaleById(taskId, reason = 'model_task_source_stale') {
+export async function markModelTaskCompletedStaleById(taskId, reason = 'model_task_source_stale', guard = {}) {
   const now = Date.now()
+  const where = recoveryWhere({ ...guard, taskId })
   const result = await queryRun(`UPDATE ai_model_tasks SET status='completed_stale',
     error_code=?, error_message=?, completed_at_utc_msc=?,
     lease_token=NULL, lease_owner=NULL, lease_expires_at_utc_msc=NULL,
     last_activity_at_utc_msc=?, updated_at_utc_msc=?
-    WHERE task_id=? AND status NOT IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')`,
-  [String(reason).slice(0, 128), String(reason).slice(0, 512), now, now, now, String(taskId)])
+    WHERE ${where.sql} AND status NOT IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')`,
+  [String(reason).slice(0, 128), String(reason).slice(0, 512), now, now, now, ...where.params])
   if (Number(result?.affectedRows ?? result?.changes ?? 0) > 0) {
     await appendModelTaskEvent(String(taskId), 'task_completed_stale', { reason })
     return true
   }
   return false
+}
+
+// A leased model task may be returned to the queue only when there is durable
+// proof that no provider attempt was started. This path is intentionally
+// separate from the normal transition graph because `preparing` has no safe
+// in-process predecessor after a worker restart.
+export async function requeueAbandonedModelTaskById(taskId, reason = 'model_task_worker_abandoned', guard = {}) {
+  const now = Date.now()
+  const where = recoveryWhere({ ...guard, taskId })
+  const result = await queryRun(`UPDATE ai_model_tasks SET status='queued',
+    error_code=NULL, error_message=NULL, lease_token=NULL, lease_owner=NULL,
+    lease_expires_at_utc_msc=NULL, fencing_token=fencing_token + 1,
+    last_activity_at_utc_msc=?, updated_at_utc_msc=?
+    WHERE ${where.sql} AND status IN ('leased','preparing')
+      AND NOT EXISTS (SELECT 1 FROM ai_model_task_attempts attempts WHERE attempts.task_id = ai_model_tasks.task_id)`,
+  [now, now, ...where.params])
+  if (Number(result?.affectedRows ?? result?.changes ?? 0) > 0) {
+    await appendModelTaskEvent(String(taskId), 'task_requeued_after_recovery', { reason })
+    return true
+  }
+  return false
+}
+
+const BUSINESS_RECOVERY_ACTIVE_STATES = Object.freeze([
+  'leased', 'preparing', 'submitted', 'provider_running', 'provider_quiet',
+  'status_unknown', 'reconciling', 'response_received', 'validating', 'repairing',
+  'result_ready', 'applying',
+])
+
+/**
+ * Recover model tasks linked to a durable business job. The business module
+ * supplies an inspection callback so a model task is reconciled only after a
+ * persisted domain result is found. Unknown provider requests are never
+ * requeued; they remain blocked until their frozen deadline, then become
+ * completed_stale.
+ */
+export async function recoverAbandonedBusinessModelTasks({
+  taskKinds = null,
+  nowUtcMs = Date.now(),
+  limit = 500,
+  inspectBusiness = null,
+  onBusinessTransition = null,
+} = {}) {
+  const kinds = Array.isArray(taskKinds)
+    ? [...new Set(taskKinds.map(value => String(value || '').trim()).filter(Boolean))]
+    : []
+  const kindClause = kinds.length ? ` AND tasks.task_kind IN (${kinds.map(() => '?').join(',')})` : ''
+  const boundedLimit = Math.max(1, Math.min(1000, Number(limit) || 500))
+  const tasks = await queryAll(`SELECT tasks.*,
+      EXISTS (SELECT 1 FROM ai_model_task_attempts attempts WHERE attempts.task_id = tasks.task_id) AS provider_attempt_started
+    FROM ai_model_tasks tasks
+    WHERE tasks.status IN (${BUSINESS_RECOVERY_ACTIVE_STATES.map(() => '?').join(',')})${kindClause}
+    ORDER BY tasks.updated_at_utc_msc LIMIT ?`, [...BUSINESS_RECOVERY_ACTIVE_STATES, ...kinds, boundedLimit])
+  const result = {
+    scanned:tasks.length, succeeded:0, requeued:0, statusUnknown:0, stale:0, active:0, errors:0,
+  }
+  const now = Number(nowUtcMs) || Date.now()
+
+  for (const task of tasks) {
+    let business = null
+    try {
+      business = typeof inspectBusiness === 'function' ? await inspectBusiness(task) : null
+    } catch (error) {
+      result.errors += 1
+      console.error(`[ModelTaskRecovery task=${task.task_id}] business inspection failed:`, error.message)
+      continue
+    }
+
+    if (business?.succeeded === true) {
+      if (await markModelTaskSucceededFromResult(task.task_id, {
+        resultRef:business.resultRef || null, resultHash:business.resultHash || null,
+      })) result.succeeded += 1
+      continue
+    }
+
+    const leaseExpiresAt = Number(task.lease_expires_at_utc_msc)
+    const leaseExpired = !Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= now
+    const deadlineAt = Number(task.task_deadline_at_utc_msc)
+    const deadlineReached = Number.isFinite(deadlineAt) && deadlineAt > 0 && deadlineAt <= now
+    if (!leaseExpired && !deadlineReached) {
+      result.active += 1
+      continue
+    }
+
+    const status = String(task.status || '')
+    if (status === 'status_unknown') {
+      if (deadlineReached) {
+        if (await markModelTaskCompletedStaleById(task.task_id, 'model_task_status_unknown_deadline_expired', {
+          expectedStatus:status, fencingToken:Number(task.fencing_token || 0), nowUtcMs:now, requireDeadlineReached:true,
+        })) {
+          result.stale += 1
+          await onBusinessTransition?.({ action:'stale', task, business, reason:'model_task_status_unknown_deadline_expired' })
+        }
+      } else {
+        result.statusUnknown += 1
+        await onBusinessTransition?.({ action:'status_unknown', task, business, reason:'model_task_status_unknown' })
+      }
+      continue
+    }
+
+    if (['leased', 'preparing'].includes(status) && leaseExpired && !deadlineReached
+      && Number(task.provider_attempt_started) === 0) {
+      if (await requeueAbandonedModelTaskById(task.task_id, 'model_task_worker_abandoned_before_provider', {
+        expectedStatus:status, fencingToken:Number(task.fencing_token || 0), nowUtcMs:now,
+        requireLeaseExpired:true, requireDeadlineNotReached:true,
+      })) {
+        result.requeued += 1
+        await onBusinessTransition?.({ action:'requeued', task, business, reason:'model_task_worker_abandoned_before_provider' })
+      }
+      continue
+    }
+
+    if (((['leased', 'preparing'].includes(status) && Number(task.provider_attempt_started) > 0)
+      || ['submitted', 'provider_running', 'provider_quiet'].includes(status)) && leaseExpired && !deadlineReached) {
+      if (await markModelTaskStatusUnknownById(task.task_id, 'provider_status_unknown_after_recovery', {
+        expectedStatus:status, fencingToken:Number(task.fencing_token || 0), nowUtcMs:now,
+        requireLeaseExpired:true, requireDeadlineNotReached:true,
+      })) {
+        result.statusUnknown += 1
+        await onBusinessTransition?.({ action:'status_unknown', task, business, reason:'provider_status_unknown_after_recovery' })
+      }
+      continue
+    }
+
+    // Once a request reached a response/application stage without a durable
+    // business result, replay is unsafe. Finalize the envelope as stale and
+    // let the business job record a visible failed recovery outcome.
+    const staleReason = deadlineReached
+      ? 'model_task_deadline_expired_without_business_result'
+      : 'model_task_intermediate_result_missing'
+    if (await markModelTaskCompletedStaleById(task.task_id, staleReason, {
+      expectedStatus:status, fencingToken:Number(task.fencing_token || 0), nowUtcMs:now, requireLeaseOrDeadline:true,
+    })) {
+      result.stale += 1
+      await onBusinessTransition?.({ action:'stale', task, business, reason:staleReason })
+    }
+  }
+  return result
 }
 
 // Auto inference cannot be replayed after a process restart because its frozen
@@ -280,7 +444,10 @@ export async function recoverAbandonedAutoInferenceTasks({ nowUtcMs = Date.now()
       continue
     }
     if (['submitted','provider_running','provider_quiet'].includes(task.status) && !deadlineExpired) {
-      if (await markModelTaskStatusUnknownById(task.task_id, 'auto_inference_provider_status_unknown_after_restart')) {
+      if (await markModelTaskStatusUnknownById(task.task_id, 'auto_inference_provider_status_unknown_after_restart', {
+        expectedStatus:String(task.status), fencingToken:Number(task.fencing_token || 0), nowUtcMs:now,
+        requireLeaseExpired:true, requireDeadlineNotReached:true,
+      })) {
         result.statusUnknown += 1
       }
       continue
@@ -290,7 +457,10 @@ export async function recoverAbandonedAutoInferenceTasks({ nowUtcMs = Date.now()
       continue
     }
     if (await markModelTaskCompletedStaleById(task.task_id,
-      deadlineExpired ? 'auto_inference_task_deadline_expired' : 'auto_inference_worker_abandoned')) {
+      deadlineExpired ? 'auto_inference_task_deadline_expired' : 'auto_inference_worker_abandoned', {
+        expectedStatus:String(task.status), fencingToken:Number(task.fencing_token || 0), nowUtcMs:now,
+        requireLeaseOrDeadline:true,
+      })) {
       result.stale += 1
     }
   }

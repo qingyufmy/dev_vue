@@ -16,6 +16,7 @@ import { assertModelQuotaAvailable, buildModelQuotaCircuitContext, deferModelQuo
   recordModelQuotaExhausted, recordModelQuotaRecovered } from './model-quota-circuit.js'
 import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import { estimateModelInputTokens, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
+import { acquireModelTaskCapacity, retainModelTaskCapacityLease, releaseModelTaskCapacityLease } from './model-task-capacity.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
 const DEBUG_LLM = process.env.DEBUG_LLM === '1' || DEBUG_LLM_PAYLOAD
@@ -449,11 +450,15 @@ function logAutomaticModelRequest({ usageContext, phase, body, requestBytes }) {
 
 async function trackedModelRequest({
   url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider, signal,
-  onProviderRequest, onProviderUsage, protocol,
+  onProviderRequest, onProviderUsage, protocol, deadlineAtMs = null,
 }) {
   let usageLogId = null
+  let capacityLease = null
   let providerRequestStarted = false
   let providerUsageEmitted = false
+  let providerRequestId = null
+  let httpStatus = null
+  let providerResponseReceived = false
   const startedAt = Date.now()
   const requestBody = JSON.stringify(body)
   const requestBytes = Buffer.byteLength(requestBody, 'utf8')
@@ -464,6 +469,17 @@ async function trackedModelRequest({
   let quotaCircuitState = { probe:false }
   try {
     quotaCircuitState = await assertModelQuotaAvailable(quotaCircuitContext)
+    // Admission is deliberately before the durable submitted callback and the
+    // fetch. Waiting here cannot be mistaken for a provider submission and
+    // therefore cannot turn a capacity wait into status_unknown.
+    if (usageContext) {
+      capacityLease = await acquireModelTaskCapacity({
+        ...usageContext,
+        modelTaskId:usageContext.modelTaskId || usageContext.taskId || null,
+        signal,
+        deadlineAtMs,
+      })
+    }
     if (usageContext) {
       const reservation = await beginModelUsage({ ...usageContext, estimatedTokens })
       usageLogId = reservation.logId
@@ -486,6 +502,16 @@ async function trackedModelRequest({
       signal: requestSignal,
       redirect: 'error',
     })
+    httpStatus = Number(response?.status) > 0 ? Number(response.status) : null
+    providerRequestId = String(response.headers?.get?.('x-request-id') || '') || null
+    providerResponseReceived = true
+    // Any explicit HTTP response proves the provider received the request (or
+    // at least completed an HTTP admission decision). Free the slot before
+    // parsing/settling the response, including HTTP 429 and other errors.
+    if (capacityLease) {
+      await releaseModelTaskCapacityLease(capacityLease, response.ok ? 'provider_response' : 'provider_http_response')
+      capacityLease = null
+    }
     if (!response.ok) {
       const code = providerHttpError(url, provider, response.status)
       const stableCode = response.status === 429 ? 'model_quota_exhausted' : code
@@ -495,6 +521,8 @@ async function trackedModelRequest({
       error.providerStatus = response.status
       error.code = stableCode
       error.providerCode = code
+      error.providerRequestId = providerRequestId
+      error.httpStatus = response.status
       throw error
     }
     const data = await response.json()
@@ -503,7 +531,7 @@ async function trackedModelRequest({
     const fallbackTokens = Math.ceil((JSON.stringify(body).length + JSON.stringify(data).length) / 4)
     const tokenCount = usage.totalTokens || fallbackTokens
     const completion = modelResponseCompletion(data, protocol)
-    const providerRequestId = String(response.headers?.get?.('x-request-id') || data?.id || data?.response?.id || '') || null
+    providerRequestId = providerRequestId || String(data?.id || data?.response?.id || '') || null
     if (usageLogId) {
       try {
         await finishModelUsage(usageLogId, { tokenCount, ...usage, status: completion.truncated ? 'error' : 'success',
@@ -521,11 +549,29 @@ async function trackedModelRequest({
     await emitProviderTelemetry(onProviderUsage, { phase, status:completion.truncated ? 'error' : 'success', tokenCount,
       ...usage, providerRequestId, finishReason:completion.finishReason, incompleteDetails:completion.incompleteDetails,
       errorCode:completion.truncated ? 'output_truncated' : null,
-      requestBytes, responseBytes, durationMs: Date.now() - startedAt })
+      requestBytes, responseBytes, durationMs: Date.now() - startedAt,
+      httpStatus, responseReceived:providerResponseReceived })
     assertModelResponseComplete(data, protocol)
     if (quotaCircuitState.probe) await recordModelQuotaRecovered(quotaCircuitContext)
     return { response, data }
   } catch (error) {
+    if (capacityLease) {
+      try {
+        if (providerRequestStarted && !providerResponseReceived) {
+          // A transport failure after submit has no reliable provider outcome.
+          // Keep the reservation until the bounded deadline/conservative lease;
+          // never falsely release capacity that may still be in flight.
+          await retainModelTaskCapacityLease(capacityLease, { untilMs:deadlineAtMs, reason:'provider_response_unknown' })
+        } else {
+          // Callback, endpoint validation, quota, or usage accounting failed
+          // before submit. This path is safe to release immediately.
+          await releaseModelTaskCapacityLease(capacityLease, 'pre_submit_failure')
+        }
+      } catch (capacityError) {
+        console.error('[LLM] Failed to settle model capacity lease:', capacityError.message)
+      }
+      capacityLease = null
+    }
     if (usageLogId) {
       try {
         await finishModelUsage(usageLogId, { tokenCount: 0, status: 'error', errorCode: error.message,
@@ -536,8 +582,13 @@ async function trackedModelRequest({
       }
     }
     if (providerRequestStarted && !providerUsageEmitted) {
+      const errorRequestId = error?.providerRequestId || providerRequestId || null
+      const errorHttpStatus = Number(error?.httpStatus || error?.providerStatus || httpStatus)
       await emitProviderTelemetry(onProviderUsage, {
         phase, status: 'error', tokenCount: 0, errorCode: error.message,
+        providerRequestId:errorRequestId,
+        httpStatus:Number.isFinite(errorHttpStatus) && errorHttpStatus > 0 ? errorHttpStatus : null,
+        responseReceived:providerResponseReceived,
         requestBytes, responseBytes, durationMs: Date.now() - startedAt,
       })
     }
@@ -579,6 +630,7 @@ export async function requestJsonObject({
   const { response, data } = await trackedModelRequest({
     url, apiKey, body, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
     estimatedTokens, phase: 'request', provider, signal, onProviderRequest, onProviderUsage, protocol,
+    deadlineAtMs:taskDeadlineAtMs,
   })
   const nativeJsonMode = usesNativeJsonMode(provider, protocol)
   let content = extractLlmContent(data, protocol, nativeJsonMode)
@@ -597,6 +649,7 @@ export async function requestJsonObject({
     const { data: emptyRetryData } = await trackedModelRequest({
       url, apiKey, body:emptyRetryBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
       estimatedTokens:emptyRetryEstimate, phase:'repair', provider, signal, onProviderRequest, onProviderUsage, protocol,
+      deadlineAtMs:taskDeadlineAtMs,
     })
     content = extractLlmContent(emptyRetryData, protocol, true)
   }
@@ -630,6 +683,7 @@ export async function requestJsonObject({
     const { data: repairedData } = await trackedModelRequest({
       url, apiKey, body: repairBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
       estimatedTokens: repairEstimate, phase: 'repair', provider, signal, onProviderRequest, onProviderUsage, protocol,
+      deadlineAtMs:taskDeadlineAtMs,
     })
     const repaired = extractLlmContent(repairedData, protocol, nativeJsonMode)
     if (!repaired) throw new Error('LLM repair response content is empty')
@@ -842,6 +896,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       credentialSource: config._credential_source || (config._model_shared ? 'platform_shared' : 'user'),
       usage: config._usage || 'manual',
       strategyId: config._strategyId || null,
+      modelTaskId: config._modelTaskId || config._taskId || null,
     } : null
     const renderedUserPrompt = typeof config._comparison_replay_user_prompt === 'string'
       ? config._comparison_replay_user_prompt

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockQueryOne = vi.fn()
 const mockQueryRun = vi.fn()
+const capacity = vi.hoisted(() => ({ acquire:vi.fn(), release:vi.fn(), retain:vi.fn() }))
 
 vi.mock('../../server/db.js', () => ({
   queryOne: (...args) => mockQueryOne(...args),
@@ -10,6 +11,11 @@ vi.mock('../../server/db.js', () => ({
   withTransaction: vi.fn(),
   beijingNow: () => '2026-07-15 12:00:00',
   parseBeijing: value => value ? new Date(value) : null,
+}))
+vi.mock('../../server/routes/ai/model-task-capacity.js', () => ({
+  acquireModelTaskCapacity: (...args) => capacity.acquire(...args),
+  releaseModelTaskCapacityLease: (...args) => capacity.release(...args),
+  retainModelTaskCapacityLease: (...args) => capacity.retain(...args),
 }))
 
 import { requestJsonObject } from '../../server/routes/ai/llm.js'
@@ -28,9 +34,49 @@ const usageContext = {
 beforeEach(() => {
   vi.clearAllMocks()
   mockQueryRun.mockResolvedValueOnce({ insertId: 41 }).mockResolvedValueOnce({ changes: 1 })
+  capacity.acquire.mockResolvedValue({ leaseId:'capacity-lease', ownerToken:'capacity-owner' })
+  capacity.release.mockResolvedValue(true)
+  capacity.retain.mockResolvedValue(true)
 })
 
 describe('provider-call usage integration', () => {
+  it('waits for durable capacity before the submitted callback and provider fetch', async () => {
+    const order = []
+    capacity.acquire.mockImplementation(async () => { order.push('capacity'); return { leaseId:'lease-1', ownerToken:'owner-1' } })
+    mockFetch.mockImplementationOnce(async () => { order.push('fetch'); return {
+      ok:true, status:200,
+      json:async () => ({ choices:[{ message:{ content:'{"ok":true}' } }], usage:{ total_tokens:10 } }),
+    } })
+    await requestJsonObject({
+      url:'https://api.test/v1/chat/completions', apiKey:'test-key', model:'test-model',
+      temperature:0.3, maxTokens:500, messages:[{ role:'user', content:'test' }],
+      usageContext, onProviderRequest:async () => { order.push('submitted') },
+    })
+    expect(order).toEqual(['capacity', 'submitted', 'fetch'])
+    expect(capacity.release).toHaveBeenCalledWith(expect.objectContaining({ leaseId:'lease-1' }), 'provider_response')
+  })
+
+  it('releases capacity on HTTP 429 but retains it after a post-submit transport failure', async () => {
+    mockFetch.mockResolvedValueOnce({ ok:false, status:429, headers:{ get:() => 'req-429' } })
+    await expect(requestJsonObject({
+      url:'https://api.test/v1/chat/completions', apiKey:'test-key', model:'test-model',
+      temperature:0.3, maxTokens:500, messages:[], usageContext,
+    })).rejects.toThrow('model_quota_exhausted')
+    expect(capacity.release).toHaveBeenCalledWith(expect.any(Object), 'provider_http_response')
+    expect(capacity.retain).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    mockQueryRun.mockResolvedValueOnce({ insertId:41 }).mockResolvedValueOnce({ changes:1 })
+    capacity.acquire.mockResolvedValue({ leaseId:'lease-unknown', ownerToken:'owner-unknown' })
+    capacity.retain.mockResolvedValue(true)
+    mockFetch.mockRejectedValueOnce(new Error('socket_reset'))
+    await expect(requestJsonObject({
+      url:'https://api.test/v1/chat/completions', apiKey:'test-key', model:'test-model',
+      temperature:0.3, maxTokens:500, messages:[], usageContext,
+    })).rejects.toThrow('socket_reset')
+    expect(capacity.retain).toHaveBeenCalledWith(expect.objectContaining({ leaseId:'lease-unknown' }), expect.objectContaining({ reason:'provider_response_unknown' }))
+  })
+
   it('logs the exact UTF-8 request size for automatic provider calls without exposing content', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     mockFetch.mockResolvedValueOnce({

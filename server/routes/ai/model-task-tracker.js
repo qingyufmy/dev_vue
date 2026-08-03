@@ -1,5 +1,6 @@
 import { beginModelTaskAttempt, claimModelTaskById, createModelTask, finishModelTaskAttempt,
   renewModelTaskLease, transitionModelTask } from './model-task-runtime.js'
+import { classifyModelProviderError } from './model-provider-adapters.js'
 
 const CLAIMABLE_STATUSES = new Set(['queued', 'retry_wait'])
 const TERMINAL_STATUSES = new Set(['cancelled', 'failed_terminal', 'succeeded', 'completed_stale', 'completed_rejected'])
@@ -75,6 +76,16 @@ export async function createModelTaskTracker(input, {
   task = await transitionModelTask(task, 'preparing')
   let attempt = null
   let providerAttemptSequence = 0
+  // Keep the last provider attempt outcome in memory while the durable
+  // attempt row remains the source of truth.  A failed fetch can leave no
+  // response to inspect, so the request id/status captured by the usage
+  // callback are needed when deciding whether another request is safe.
+  let providerAttemptState = {
+    submitted:false,
+    responseReceived:false,
+    providerRequestId:null,
+    httpStatus:null,
+  }
   let stopped = false
   let fatalError = null
   let tail = Promise.resolve()
@@ -99,7 +110,8 @@ export async function createModelTaskTracker(input, {
     assertOwned()
     if (typeof run !== 'function') throw trackerError('model_task_transaction_runner_missing')
     try {
-      const result = await run(`SELECT task_id, status, lease_token, fencing_token, lease_expires_at_utc_msc
+      const result = await run(`SELECT task_id, status, lease_token, fencing_token, lease_expires_at_utc_msc,
+          result_valid_until_utc_msc
         FROM ai_model_tasks WHERE task_id = ? FOR UPDATE`, [task.task_id])
       const rows = Array.isArray(result?.[0]) ? result[0] : (Array.isArray(result) ? result : [])
       const current = rows[0]
@@ -187,6 +199,9 @@ export async function createModelTaskTracker(input, {
 
   return {
     get active() { return !stopped && !fatalError },
+    get status() { return task.status },
+    get task() { return { ...task } },
+    get providerRequestState() { return { ...providerAttemptState } },
     taskId:task.task_id,
     signal:controller.signal,
     assertOwned,
@@ -198,6 +213,12 @@ export async function createModelTaskTracker(input, {
       if (task.status === 'repairing') task = await transitionModelTask(task, 'submitted')
       if (task.status === 'preparing') task = await transitionModelTask(task, 'submitted')
       if (task.status !== 'submitted') throw trackerError('model_task_provider_request_invalid', task.status)
+      providerAttemptState = {
+        submitted:true,
+        responseReceived:false,
+        providerRequestId:event?.providerRequestId || null,
+        httpStatus:null,
+      }
       if (!attempt) {
         attempt = await beginModelTaskAttempt(task, {
           attemptNo:(Math.max(1, Number(task.attempt_count)) - 1) * 10 + (++providerAttemptSequence),
@@ -208,9 +229,21 @@ export async function createModelTaskTracker(input, {
     }),
     onProviderUsage:event => enqueue(async () => {
       if (!attempt) throw trackerError('model_task_attempt_missing')
+      const httpStatus = Number(event?.httpStatus)
+      const hasHttpStatus = Number.isFinite(httpStatus) && httpStatus > 0
+      const responseReceived = event?.responseReceived === true
+        || event?.status === 'success'
+        || (hasHttpStatus && httpStatus >= 200)
+      providerAttemptState = {
+        submitted:true,
+        responseReceived,
+        providerRequestId:event?.providerRequestId || providerAttemptState.providerRequestId || null,
+        httpStatus:hasHttpStatus ? httpStatus : providerAttemptState.httpStatus,
+      }
       await finishModelTaskAttempt(task, attempt, {
         status:event?.status === 'success' ? 'succeeded' : 'failed',
         providerRequestId:event?.providerRequestId,
+        httpStatus:hasHttpStatus ? httpStatus : undefined,
         inputTokens:event?.inputTokens, outputTokens:event?.outputTokens,
         reasoningTokens:event?.reasoningTokens, cachedTokens:event?.cachedTokens,
         totalTokens:event?.totalTokens || event?.tokenCount,
@@ -235,13 +268,59 @@ export async function createModelTaskTracker(input, {
       // require replaying an output that is no longer durably stored in the
       // generic envelope. Fail that attempt terminally instead of performing
       // an invalid transition or silently issuing a second provider request.
-      const target = exhausted || ['result_ready', 'applying'].includes(task.status)
-        ? 'failed_terminal' : 'retry_wait'
-      if (['leased', 'preparing', 'submitted', 'provider_running', 'provider_quiet', 'response_received',
-        'validating', 'repairing', 'result_ready', 'applying'].includes(task.status)) {
+      const status = String(task.status || '')
+      const responseStatus = Number(providerAttemptState.httpStatus)
+      const successfulResponse = providerAttemptState.responseReceived
+        && (!Number.isFinite(responseStatus) || responseStatus < 400)
+      const responseValidationFailure = successfulResponse
+        || ['response_received', 'validating', 'repairing'].includes(status)
+
+      // A complete provider response followed by schema/contract validation
+      // failure is still a controlled retry.  It is fundamentally different
+      // from a transport failure after submission, where replaying can issue
+      // a second billable request with an unknown first result.
+      let classification = null
+      let target
+      if (responseValidationFailure) {
+        target = exhausted || ['result_ready', 'applying'].includes(status)
+          ? 'failed_terminal' : 'retry_wait'
+      } else {
+        const providerStatus = Number(error?.providerStatus) > 0
+          ? Number(error.providerStatus)
+          : (Number.isFinite(responseStatus) && responseStatus >= 400 ? responseStatus : null)
+        const classificationError = providerStatus == null || error?.providerStatus != null
+          ? error
+          : Object.assign(error instanceof Error ? error : new Error(String(error || 'model_task_failed')), { providerStatus })
+        classification = classifyModelProviderError(classificationError, {
+          requestSubmitted:providerAttemptState.submitted && !providerAttemptState.responseReceived,
+          providerRequestId:error?.providerRequestId || providerAttemptState.providerRequestId || null,
+        })
+        if (classification.statusUnknown || classification.state === 'provider_quiet') {
+          // Unknown/quiet is deliberately independent of `exhausted`: the
+          // provider may still have accepted the request, so no retry budget
+          // can make a duplicate request safe.
+          target = classification.state
+        } else if (classification.state === 'retry_wait') {
+          target = exhausted ? 'failed_terminal' : 'retry_wait'
+        } else {
+          target = 'failed_terminal'
+        }
+      }
+
+      if (['leased', 'preparing', 'submitted', 'provider_running', 'provider_quiet', 'status_unknown',
+        'response_received', 'validating', 'repairing', 'result_ready', 'applying'].includes(status)
+        && target !== 'status_unknown' && target !== 'provider_quiet') {
         task = await transitionModelTask(task, target, {
-          errorCode:String(error?.code || error?.message || 'model_task_failed').slice(0, 128),
+          errorCode:String(classification?.code || error?.code || error?.message || 'model_task_failed').slice(0, 128),
           errorMessage:String(error?.message || error || 'model_task_failed').slice(0, 512),
+        })
+        return task
+      }
+      if (['submitted', 'provider_running', 'provider_quiet'].includes(status)
+        && ['status_unknown', 'provider_quiet'].includes(target)) {
+        task = await transitionModelTask(task, target, {
+          errorCode:String(classification?.code || error?.code || 'provider_status_unknown').slice(0, 128),
+          errorMessage:String(error?.message || error || classification?.code || 'provider_status_unknown').slice(0, 512),
         })
         return task
       }

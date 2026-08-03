@@ -7,6 +7,7 @@ import { canManagePlatformAiContent } from './platform-content-access.js'
 import { getEffectiveFeatureFlags, isAiFeatureEnabled } from './rollout-governance.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { createModelTaskTracker } from './model-task-tracker.js'
+import { recoverAbandonedBusinessModelTasks } from './model-task-runtime.js'
 
 const DEFAULT_BUDGET = 800
 const MAX_BUDGET = 1600
@@ -799,6 +800,58 @@ function modelEndpoint(model) {
   return { protocol, url: `${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}` }
 }
 
+async function inspectMemoryCompressionModelTask(task) {
+  const job = await queryOne(`SELECT jobs.id, jobs.status, jobs.user_id, jobs.scope_key, jobs.source_set_hash,
+      EXISTS (SELECT 1 FROM experience_memory_summaries summaries
+        WHERE summaries.user_id = jobs.user_id AND summaries.scope_key = jobs.scope_key
+          AND summaries.source_set_hash = jobs.source_set_hash AND summaries.status IN ('active','superseded')) AS result_persisted
+    FROM memory_compression_jobs jobs WHERE jobs.model_task_id = ? LIMIT 1`, [task.task_id])
+  if (!job) return null
+  const succeeded = job.status === 'succeeded' && Number(job.result_persisted) === 1
+  return { job, succeeded, resultRef:succeeded ? `memory_scope:${job.scope_key}` : null }
+}
+
+async function transitionMemoryCompressionBusiness({ action, task, business, reason }) {
+  const jobId = Number(business?.job?.id || 0)
+  if (!jobId) return
+  const now = beijingNow()
+  if (action === 'requeued') {
+    await queryRun(`UPDATE memory_compression_jobs SET status = 'queued', last_error_code = NULL,
+      lease_token = NULL, lease_expires_at = NULL, completed_at = NULL, updated_at = ?
+      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed','skipped')`,
+    [now, jobId, task.task_id])
+    return
+  }
+  if (action === 'status_unknown') {
+    await queryRun(`UPDATE memory_compression_jobs SET status = 'status_unknown', last_error_code = 'provider_status_unknown',
+      lease_token = NULL, lease_expires_at = NULL, updated_at = ?
+      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed','skipped')`,
+    [now, jobId, task.task_id])
+    return
+  }
+  if (action === 'stale') {
+    await queryRun(`UPDATE memory_compression_jobs SET status = 'failed', last_error_code = ?,
+      lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?
+      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed','skipped')`,
+    [String(reason || 'model_task_recovery_stale').slice(0, 128), now, now, jobId, task.task_id])
+  }
+}
+
+export async function recoverAbandonedMemoryCompressionModelTasks({ nowUtcMs = Date.now(), limit = 100 } = {}) {
+  return recoverAbandonedBusinessModelTasks({
+    taskKinds:['memory_compression'], nowUtcMs, limit,
+    inspectBusiness:inspectMemoryCompressionModelTask,
+    onBusinessTransition:transitionMemoryCompressionBusiness,
+  })
+}
+
+function providerResultUnknown(tracker, task = null) {
+  const status = String(task?.status || tracker?.status || '')
+  if (status === 'status_unknown' || status === 'provider_quiet') return true
+  const providerState = tracker?.providerRequestState
+  return providerState?.submitted === true && providerState?.responseReceived !== true
+}
+
 export async function runMemoryCompressionOnce({ requestModel = requestJsonObject } = {}) {
   const job = await claimCompressionJob()
   if (!job) return { claimed: false }
@@ -885,16 +938,19 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
     return { claimed: true, status: 'succeeded', scopeKey: job.scope_key }
   } catch (error) {
     let failure = error
+    let modelTask = null
     try {
-      await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
+      modelTask = await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
     } catch (trackerError) {
       failure = trackerError
       console.error(`[MemoryCompression scope=${job.scope_key}] model task failure:`, safeError(trackerError))
     }
+    const unknown = providerResultUnknown(job._modelTracker, modelTask)
     const exhausted = job.attempt_count >= Number(job.max_attempts)
     await queryRun(`UPDATE memory_compression_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
-      lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`, [exhausted ? 'failed' : 'queued', safeError(failure), beijingNow(), job.id, job.lease_token])
-    return { claimed: true, status: 'failed', error: safeError(failure) }
+      lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`,
+    [unknown ? 'status_unknown' : exhausted ? 'failed' : 'queued', unknown ? 'provider_status_unknown' : safeError(failure), beijingNow(), job.id, job.lease_token])
+    return { claimed: true, status: unknown ? 'status_unknown' : 'failed', error: safeError(failure) }
   } finally {
     try { await job._modelTracker?.stop() } catch (trackerError) {
       console.error(`[MemoryCompression scope=${job.scope_key}] model task stop:`, safeError(trackerError))
@@ -920,6 +976,7 @@ export async function rollbackMemorySummary(summaryId, userId) {
 export function startMemoryCompressionWorker(intervalMs = 60_000) {
   if (compressionTimer) return false
   compressionTimer = setInterval(() => void (async () => {
+    await recoverAbandonedMemoryCompressionModelTasks()
     if (await isAiFeatureEnabled('memory_compression_enabled')) await runMemoryCompressionOnce()
   })().catch(error => console.error('[MemoryCompression] cycle failed:', safeError(error))), Math.max(5000, Number(intervalMs)))
   compressionTimer.unref?.()

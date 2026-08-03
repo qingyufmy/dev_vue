@@ -90,6 +90,7 @@ import * as db from '../../server/db.js'
 import * as bridgeWs from '../../server/bridge-ws.js'
 import * as marketData from '../../server/routes/ai/market-data.js'
 import * as redisModule from '../../server/redis.js'
+import { createModelTask } from '../../server/routes/ai/model-task-runtime.js'
 import { __schedulerTest, selectSchedulerFallbackStrategy } from '../../server/routes/ai/scheduler.js'
 
 describe('legacy scheduler strategy repair', () => {
@@ -380,6 +381,53 @@ describe('durable automatic model-task gate', () => {
     expect(input.promptHash).toMatch(/^[a-f0-9]{64}$/)
     expect(input.outputContractHash).toMatch(/^[a-f0-9]{64}$/)
     expect(input.frozenContext).toMatchObject({ strategy_version:3, provider:'deepseek', model:'deepseek-chat', interval_minutes:5 })
+  })
+
+  it('passes the runtime validity field to createModelTask without changing the DB column contract', async () => {
+    const input = __schedulerTest.buildAutoModelTaskInput({
+      promptTypeId:7, symbol:'XAUUSD.s', cycleId:'7:XAUUSD:1', cycleStartedAtMs:1_000,
+      intervalMinutes:5,
+      strategy:{ id:7, version:3, scope:'platform' },
+      config:{ api_provider:'deepseek', model_name:'deepseek-chat', protocol:'chat_completions',
+        _model_profile_id:11, _credential_source:'platform_shared', system_prompt:'system',
+        _allowed_entry_methods:['market'] },
+      market:{ symbol:'XAUUSD', latest_price:2000 },
+      marketMeta:{ timezone_offset_minutes:180, clock_status:'progressing_tick', source:'bridge' },
+      primaryTimeframe:'M5', resultValidUntilUtcMsc:120_000,
+    })
+    expect(input.resultValidUntilUtcMs).toBe(120_000)
+    expect(input.resultValidUntilUtcMs).toBeGreaterThan(0)
+    expect(input).not.toHaveProperty('resultValidUntilUtcMsc')
+
+    db.queryRun.mockResolvedValue({ affectedRows:1 })
+    db.queryOne.mockResolvedValue({ task_id:'task-1', result_valid_until_utc_msc:120_000 })
+    await createModelTask(input)
+
+    const [insertSql, insertParams] = db.queryRun.mock.calls[0]
+    expect(insertSql).toContain('result_valid_until_utc_msc')
+    expect(insertParams[22]).toBe(input.resultValidUntilUtcMs)
+  })
+
+  it('checks the durable task fence and result deadline inside the order-send transaction', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(100_000)
+    try {
+      const run = vi.fn()
+      const tracker = {
+        assertOwnedTx:vi.fn().mockResolvedValue({ result_valid_until_utc_msc:120_000 }),
+      }
+      await expect(__schedulerTest.assertAutoInferenceOrderSendTx({
+        tracker, run, resultValidUntilUtcMsc:130_000,
+      })).resolves.toMatchObject({ result_valid_until_utc_msc:120_000 })
+      expect(tracker.assertOwnedTx).toHaveBeenCalledWith(run)
+
+      tracker.assertOwnedTx.mockResolvedValueOnce({ result_valid_until_utc_msc:90_000 })
+      await expect(__schedulerTest.assertAutoInferenceOrderSendTx({
+        tracker, run, resultValidUntilUtcMsc:130_000,
+      })).rejects.toThrow('model_task_result_expired')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

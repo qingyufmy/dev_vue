@@ -12,7 +12,7 @@ vi.mock('../../server/db.js', () => ({
 
 import { assertModelTaskTransition, canTransitionModelTask, createModelTask,
   markModelTaskCompletedStaleById, markModelTaskSucceededFromResult,
-  recoverAbandonedAutoInferenceTasks, renewModelTaskLease,
+  recoverAbandonedAutoInferenceTasks, recoverAbandonedBusinessModelTasks, renewModelTaskLease,
   transitionModelTask } from '../../server/routes/ai/model-task-runtime.js'
 
 describe('model task runtime state and fencing', () => {
@@ -88,6 +88,8 @@ describe('model task runtime state and fencing', () => {
     })
     expect(mockQueryRun.mock.calls[0][0]).toContain("status='status_unknown'")
     expect(mockQueryRun.mock.calls[0][0]).not.toContain("status='queued'")
+    expect(mockQueryRun.mock.calls[0][0]).toContain('fencing_token = ?')
+    expect(mockQueryRun.mock.calls[0][0]).toContain('lease_expires_at_utc_msc')
   })
 
   it('expires an unresolved auto request as stale after its task deadline', async () => {
@@ -98,6 +100,95 @@ describe('model task runtime state and fencing', () => {
 
     const result = await recoverAbandonedAutoInferenceTasks({ nowUtcMs:100_000 })
     expect(result.stale).toBe(1)
+    expect(mockQueryRun.mock.calls[0][0]).toContain("status='completed_stale'")
+  })
+
+  it('does not touch a healthy linked task lease during business recovery', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ task_id:'healthy', status:'submitted',
+      lease_expires_at_utc_msc:200_000, task_deadline_at_utc_msc:300_000, provider_attempt_started:1 }])
+
+    await expect(recoverAbandonedBusinessModelTasks({ taskKinds:['period_review_job'], nowUtcMs:100_000,
+      inspectBusiness:vi.fn().mockResolvedValue({ job:{ id:1 }, succeeded:false }) }))
+      .resolves.toMatchObject({ scanned:1, active:1, statusUnknown:0, stale:0 })
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('requeues an expired leased task only when no provider attempt exists', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ task_id:'preparing', status:'preparing',
+      lease_expires_at_utc_msc:90_000, task_deadline_at_utc_msc:300_000, provider_attempt_started:0 }])
+    mockQueryRun.mockResolvedValue({ affectedRows:1 })
+
+    await expect(recoverAbandonedBusinessModelTasks({ nowUtcMs:100_000,
+      inspectBusiness:vi.fn().mockResolvedValue({ job:{ id:1 }, succeeded:false }) }))
+      .resolves.toMatchObject({ requeued:1, statusUnknown:0, stale:0 })
+    expect(mockQueryRun.mock.calls[0][0]).toContain("status='queued'")
+    expect(mockQueryRun.mock.calls[0][0]).toContain("status IN ('leased','preparing')")
+    expect(mockQueryRun.mock.calls[1][1][2]).toBe('task_requeued_after_recovery')
+  })
+
+  it('marks a lost provider request unknown instead of requeuing it', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ task_id:'submitted', status:'submitted',
+      lease_expires_at_utc_msc:90_000, task_deadline_at_utc_msc:300_000, provider_attempt_started:1 }])
+    mockQueryRun.mockResolvedValue({ affectedRows:1 })
+
+    await expect(recoverAbandonedBusinessModelTasks({ nowUtcMs:100_000,
+      inspectBusiness:vi.fn().mockResolvedValue({ job:{ id:1 }, succeeded:false }) }))
+      .resolves.toMatchObject({ requeued:0, statusUnknown:1, stale:0 })
+    expect(mockQueryRun.mock.calls[0][0]).toContain("status='status_unknown'")
+    expect(mockQueryRun.mock.calls[0][0]).not.toContain("status='queued'")
+  })
+
+  it('treats an expired preparing task with an attempt record as unknown, never stale or queued', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ task_id:'preparing-requested', status:'preparing',
+      lease_expires_at_utc_msc:90_000, task_deadline_at_utc_msc:300_000, fencing_token:2,
+      provider_attempt_started:1 }])
+    mockQueryRun.mockResolvedValue({ affectedRows:1 })
+
+    await expect(recoverAbandonedBusinessModelTasks({ nowUtcMs:100_000,
+      inspectBusiness:vi.fn().mockResolvedValue({ job:{ id:1 }, succeeded:false }) }))
+      .resolves.toMatchObject({ requeued:0, statusUnknown:1, stale:0 })
+    expect(mockQueryRun.mock.calls[0][0]).toContain("status='status_unknown'")
+    expect(mockQueryRun.mock.calls[0][0]).toContain("'leased','preparing','submitted'")
+  })
+
+  it('does not update the business job when the lease is renewed after inspection', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ task_id:'renewed', status:'submitted',
+      lease_expires_at_utc_msc:90_000, task_deadline_at_utc_msc:300_000, fencing_token:7, provider_attempt_started:1 }])
+    mockQueryRun.mockResolvedValue({ affectedRows:0 })
+    const onBusinessTransition = vi.fn()
+
+    await expect(recoverAbandonedBusinessModelTasks({ nowUtcMs:100_000,
+      inspectBusiness:vi.fn().mockResolvedValue({ job:{ id:3 }, succeeded:false }), onBusinessTransition }))
+      .resolves.toMatchObject({ statusUnknown:0, stale:0, requeued:0 })
+    expect(onBusinessTransition).not.toHaveBeenCalled()
+  })
+
+  it('stales an unresolved intermediate result and reconciles a proven business success', async () => {
+    mockQueryAll.mockResolvedValueOnce([
+      { task_id:'result-ready', status:'result_ready', lease_expires_at_utc_msc:90_000,
+        task_deadline_at_utc_msc:300_000, provider_attempt_started:1 },
+      { task_id:'applied', status:'applying', lease_expires_at_utc_msc:90_000,
+        task_deadline_at_utc_msc:300_000, provider_attempt_started:1 },
+    ])
+    mockQueryRun.mockResolvedValue({ affectedRows:1 })
+    const inspectBusiness = vi.fn()
+      .mockResolvedValueOnce({ job:{ id:1 }, succeeded:false })
+      .mockResolvedValueOnce({ job:{ id:2 }, succeeded:true, resultRef:'period_review_case:2', resultHash:'hash-2' })
+
+    await expect(recoverAbandonedBusinessModelTasks({ nowUtcMs:100_000, inspectBusiness }))
+      .resolves.toMatchObject({ succeeded:1, stale:1 })
+    expect(mockQueryRun.mock.calls.some(([sql]) => sql.includes("status='completed_stale'"))).toBe(true)
+    expect(mockQueryRun.mock.calls.some(([, params]) => params?.includes('period_review_case:2'))).toBe(true)
+  })
+
+  it('stales status_unknown only after the frozen deadline', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ task_id:'unknown', status:'status_unknown',
+      lease_expires_at_utc_msc:null, task_deadline_at_utc_msc:99_000, provider_attempt_started:1 }])
+    mockQueryRun.mockResolvedValue({ affectedRows:1 })
+
+    await expect(recoverAbandonedBusinessModelTasks({ nowUtcMs:100_000,
+      inspectBusiness:vi.fn().mockResolvedValue({ job:{ id:1 }, succeeded:false }) }))
+      .resolves.toMatchObject({ stale:1, statusUnknown:0 })
     expect(mockQueryRun.mock.calls[0][0]).toContain("status='completed_stale'")
   })
 })

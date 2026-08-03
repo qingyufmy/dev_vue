@@ -424,6 +424,33 @@ describe('requestJsonObject', () => {
     })).rejects.toThrow('LLM HTTP 500')
   })
 
+  it('records a provider HTTP rejection for the durable tracker callback', async () => {
+    mockFetch.mockResolvedValue({ ok:false, status:429, headers:{ get:() => 'req-429' } })
+    const onProviderRequest = vi.fn()
+    const onProviderUsage = vi.fn()
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }], onProviderRequest, onProviderUsage,
+    })).rejects.toMatchObject({ providerStatus:429, providerRequestId:'req-429', httpStatus:429 })
+    expect(onProviderRequest).toHaveBeenCalledTimes(1)
+    expect(onProviderUsage).toHaveBeenCalledWith(expect.objectContaining({
+      status:'error', providerRequestId:'req-429', httpStatus:429, responseReceived:true,
+    }))
+  })
+
+  it('records a post-submit network loss without inventing a request id or HTTP status', async () => {
+    mockFetch.mockRejectedValue(new Error('socket closed'))
+    const onProviderRequest = vi.fn()
+    const onProviderUsage = vi.fn()
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }], onProviderRequest, onProviderUsage,
+    })).rejects.toThrow('socket closed')
+    expect(onProviderUsage).toHaveBeenCalledWith(expect.objectContaining({
+      status:'error', providerRequestId:null, httpStatus:null, responseReceived:false,
+    }))
+  })
+
   it('aborts an active provider request when the caller cancels it', async () => {
     const controller = new AbortController()
     let markFetchStarted
