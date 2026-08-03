@@ -541,6 +541,84 @@ describe('handleHistoryCompare', () => {
       }), expect.any(Object), expect.any(String))
     })
 
+    it('restores completed model-step checkpoints without issuing another provider request', async () => {
+      let manifest = null
+      const checkpoints = []
+      const params = {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', step:25,
+      }
+      const first = await handleHistoryCompare(1, params, {
+        onCheckpointManifest: value => { manifest = value },
+        onCheckpoint: value => { checkpoints.push(value) },
+      })
+      expect(first.status).toBe('success')
+      expect(manifest).toMatchObject({
+        version:1,
+        strategy_version:1,
+        strategy_fingerprint:expect.any(String),
+        prompt_hash:expect.any(String),
+        model_config_fingerprint:expect.any(String),
+        output_contract_hash:expect.any(String),
+        market_evidence_hash:expect.any(String),
+        manifest_fingerprint:expect.any(String),
+      })
+      expect(checkpoints.filter(item => item.checkpoint_status === 'completed'))
+        .toHaveLength(first.meta.evaluation_count * 2)
+
+      maybeAiSignal.mockClear()
+      const resumed = await handleHistoryCompare(1, params, {
+        checkpointManifest:manifest,
+        checkpoints,
+      })
+      expect(resumed.status).toBe('success')
+      expect(maybeAiSignal).not.toHaveBeenCalled()
+      expect(resumed.results).toEqual(first.results)
+    })
+
+    it('rejects a checkpoint when the frozen source manifest changes', async () => {
+      let manifest = null
+      const checkpoints = []
+      const params = {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', step:25,
+      }
+      await handleHistoryCompare(1, params, {
+        onCheckpointManifest: value => { manifest = value },
+        onCheckpoint: value => { checkpoints.push(value) },
+      })
+      const changed = { ...manifest, prompt_hash:'changed-prompt-hash', manifest_fingerprint:'stale' }
+      maybeAiSignal.mockClear()
+      const result = await handleHistoryCompare(1, params, {
+        checkpointManifest:changed,
+        checkpoints,
+      })
+      expect(result).toEqual({ status:'error', message:'history_compare_checkpoint_source_stale' })
+      expect(maybeAiSignal).not.toHaveBeenCalled()
+    })
+
+    it('fails closed when a provider submission checkpoint is still unresolved', async () => {
+      let manifest = null
+      const checkpoints = []
+      const params = {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', step:25,
+      }
+      await handleHistoryCompare(1, params, {
+        onCheckpointManifest: value => { manifest = value },
+        onCheckpoint: value => { checkpoints.push(value) },
+      })
+      const submitting = checkpoints.find(item => item.checkpoint_status === 'submitting')
+      expect(submitting).toBeTruthy()
+      maybeAiSignal.mockClear()
+      const result = await handleHistoryCompare(1, params, {
+        checkpointManifest:manifest,
+        checkpoints:[submitting],
+      })
+      expect(result).toEqual({ status:'error', message:'history_compare_status_unknown' })
+      expect(maybeAiSignal).not.toHaveBeenCalled()
+    })
+
     it('replays the exact stored prompts for selected closed-trade snapshots', async () => {
       mockGetStrategyById.mockResolvedValueOnce({
         id:1, scope:'platform', symbols_json:'["XAUUSD"]', system_prompt:'current-v5-prompt',
@@ -1063,10 +1141,30 @@ describe('historical comparison frontend contract', () => {
   it('keeps background reconciliation and cancellation in the authoritative backend', () => {
     const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
     expect(backend).toContain('async function reconcileInterruptedHistoryCompareJobs')
-    expect(backend).toContain("stale.error = 'history_compare_interrupted'")
+    expect(backend).toContain('queueHistoryCompareJob(stale)')
+    expect(backend).toContain("history_compare_checkpoint_source_stale")
+    expect(backend).not.toContain("stale.error = 'history_compare_interrupted'")
     expect(backend).toContain('abort_controller:new AbortController()')
     expect(backend).toContain('job.abort_controller.abort')
     expect(backend).toContain('historyCompareJobs.delete(job.id)')
+  })
+
+  it('keeps the optional manual-task transaction fence before ai_signals insertion', () => {
+    const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+    const fence = backend.indexOf('await options.assertCanApplyTx?.(run)')
+    const insert = backend.indexOf('INSERT INTO ai_signals')
+    expect(fence).toBeGreaterThanOrEqual(0)
+    expect(insert).toBeGreaterThan(fence)
+  })
+
+  it('deletes comparison checkpoints and their terminal job atomically', () => {
+    const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+    const start = backend.indexOf('export async function deleteHistoryCompareJob')
+    const section = backend.slice(start, backend.indexOf('export const __historyCompareJobsTest', start))
+    expect(section).toContain('await withTransaction(async run =>')
+    expect(section.indexOf('DELETE FROM ai_model_compare_checkpoints'))
+      .toBeLessThan(section.indexOf('DELETE FROM ai_model_compare_jobs'))
+    expect(section).not.toContain('result?.changes')
   })
 
   it('uses only fully closed candles and preserves the strategy decision clock', () => {

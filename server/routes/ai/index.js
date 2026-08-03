@@ -11,7 +11,7 @@ import { maybeAiSignal, requestJsonObject } from './llm.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistoryCompareJob,
   cancelHistoryCompareJob, listHistoryCompareJobs, deleteHistoryCompareJob,
-  buildStrategyContextFromTags } from './strategy.js'
+  buildStrategyContextFromTags, startHistoryCompareRecoveryWorker } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
 import { applyBridgeRuntimeState, getBridgeDiagnostics, isBridgeAlive } from '../../bridge-ws.js'
 import { buildAiAccessContext, observerAccessError, observerHttpRequestAllowed } from './observer-access.js'
@@ -53,6 +53,8 @@ import { getPositionManagementSettings, getPositionManagementTask, listPositionM
   savePositionManagementSettings, getPositionManagementAdminSettings,
   saveGlobalPositionManagementControl } from './position-management.js'
 import { getPositionManagementWorkerStatus } from './position-management-worker.js'
+import { createManualAnalysisJob, getManualAnalysisJob, cancelManualAnalysisJob,
+  startManualAnalysisJobs } from './manual-analysis-jobs.js'
 
 const router = Router()
 
@@ -1059,6 +1061,29 @@ router.get('/ai/period-reviews', authMiddleware, async (req, res) => {
   catch (error) { reviewError(res, error) }
 })
 
+// Manual analysis is a durable, non-executing task. The short inline window
+// keeps fast responses compatible with the old synchronous client while slow
+// requests continue after the browser disconnects and are polled by job id.
+router.post('/ai/manual-analysis/jobs', authMiddleware, async (req, res) => {
+  try {
+    const job = await createManualAnalysisJob(req.user.id, req.body || {}, {
+      userRole:req.user.role,
+    })
+    const inline = ['succeeded', 'failed', 'cancelled', 'status_unknown', 'completed_stale', 'expired'].includes(job?.status)
+    res.status(inline ? 200 : 202).json({ ok:true, job })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/manual-analysis/jobs/:jobId', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, job:await getManualAnalysisJob(req.user.id, req.params.jobId) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.delete('/ai/manual-analysis/jobs/:jobId', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, job:await cancelManualAnalysisJob(req.user.id, req.params.jobId) }) }
+  catch (error) { reviewError(res, error) }
+})
+
 router.get('/ai/period-reviews/summary', authMiddleware, async (req, res) => {
   try { res.json({ ok: true, summary: await getPeriodReviewSummary(req.user) }) }
   catch (error) { reviewError(res, error) }
@@ -1213,7 +1238,7 @@ router.delete('/ai/admin/platform-experience/:id', authMiddleware, async (req, r
   catch (error) { reviewError(res, error) }
 })
 
-export { initAutoSchedulers }
+export { initAutoSchedulers, startManualAnalysisJobs, startHistoryCompareRecoveryWorker }
 
 export { mt5Bridge, platformRates } from './market-data.js'
 export { getPlatformMarketStatus } from './platform-market-data.js'

@@ -834,8 +834,12 @@ button {
 .manual-inference-dialog .order-confirm-head small { color:var(--text-secondary); font-size:12px; font-weight:400; }
 .manual-inference-body { display:grid; gap:20px; padding:20px 24px 8px; }
 .manual-inference-status { display:flex; align-items:center; gap:12px; padding:14px; border:1px solid color-mix(in srgb,var(--gold-primary) 35%,var(--border-default)); border-radius:12px; background:color-mix(in srgb,var(--gold-primary) 6%,var(--bg-card)); }
+.manual-inference-status.is-background { border-color:color-mix(in srgb,var(--status-connected) 40%,var(--border-default)); background:var(--status-connected-bg); }
+.manual-inference-status.is-error { border-color:var(--status-danger-border); background:var(--status-danger-bg); }
+.manual-inference-status.is-complete { border-color:color-mix(in srgb,var(--status-connected) 40%,var(--border-default)); background:var(--status-connected-bg); }
 .manual-inference-status > div { display:flex; flex-direction:column; gap:3px; }
 .manual-inference-status small { color:var(--text-secondary); line-height:1.45; }
+.manual-inference-status .status-state-mark { width:20px; height:20px; flex:0 0 auto; border:2px solid currentColor; border-radius:50%; }
 .status-spinner { width:20px; height:20px; flex:0 0 auto; border:2px solid color-mix(in srgb,var(--gold-primary) 24%,transparent); border-top-color:var(--gold-primary); border-radius:50%; animation:inference-spin .8s linear infinite; }
 @keyframes inference-spin { to { transform:rotate(360deg); } }
 

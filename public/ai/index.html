@@ -27,7 +27,7 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260803modelruntime1" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260803modelruntime2" />
     <link rel="stylesheet" href="/ai/responsive.css?v=20260724position3" />
   </head>
   <body>
@@ -1218,9 +1218,10 @@
           <div class="model-compare-select hidden"><div class="model-compare-header"><i data-lucide="layers" size="16"></i><strong>模型选择</strong><small>勾选至少 2 个模型进行同场分析对比</small></div><div id="modelCompareCheckboxGroup" class="model-compare-grid"></div><div id="modelCompareHint" class="model-compare-hint"></div></div>
           <div class="execution-mode-row"><div><strong>结果处理方式</strong><small>建议先查看结果，再手动复核执行。</small></div><label id="manualAutoExecuteControl" class="manual-auto-execute"><input id="manualAutoExecute" type="checkbox"><span class="mode-option safe">只生成建议</span><span class="mode-option live">风控通过后自动执行</span></label></div>
           <div id="manualAutoExecuteNotice" class="inline-alert danger hidden" role="alert"><i data-lucide="triangle-alert" size="18"></i><span>本次分析可能产生真实订单，提交前会再次确认。</span></div>
-          <div id="manualInferenceStatus" class="manual-inference-status hidden" role="status"><span class="status-spinner" aria-hidden="true"></span><div><strong>正在生成交易建议</strong><small>正在获取行情、计算指标并调用模型，请保持页面打开。</small></div></div>
+          <div id="manualInferenceStatus" class="manual-inference-status hidden" role="status" aria-live="polite"><span class="status-spinner" aria-hidden="true"></span><div><strong>正在生成交易建议</strong><small>正在获取行情、计算指标并调用模型。</small></div></div>
         </div>
         <div class="order-confirm-actions">
+          <button id="manualInferenceAbort" class="btn btn-danger-soft hidden" type="button">取消后台任务</button>
           <button id="manualInferenceCancel" class="btn" type="button">关闭</button>
           <button id="runAnalysisBtn" class="btn btn-primary" type="button"><i data-lucide="play" size="16"></i>开始分析</button>
         </div>
@@ -1282,7 +1283,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260803modelruntime1"></script>
+    <script src="/ai/app.js?v=20260803modelruntime2"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

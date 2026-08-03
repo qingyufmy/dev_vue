@@ -186,3 +186,71 @@ export async function listRecoverableModelTasks(limit = 100) {
      'response_received','validating','repairing','retry_wait','result_ready','applying')
     ORDER BY updated_at_utc_msc LIMIT ?`, [Math.max(1, Math.min(1000, Number(limit) || 100))])
 }
+
+// Explicit user cancellation is allowed without borrowing a worker lease. A
+// stale worker is fenced by the status predicate and can no longer transition
+// or apply a result after this update.
+export async function cancelModelTaskById(taskId, reason = 'model_task_cancelled') {
+  const now = Date.now()
+  const result = await queryRun(`UPDATE ai_model_tasks SET status='cancelled',
+    error_code=?, error_message=?, completed_at_utc_msc=?,
+    lease_token=NULL, lease_owner=NULL, lease_expires_at_utc_msc=NULL, updated_at_utc_msc=?
+    WHERE task_id=? AND status NOT IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')`,
+  [String(reason).slice(0, 128), String(reason).slice(0, 512), now, now, String(taskId)])
+  if (Number(result?.affectedRows ?? result?.changes ?? 0) > 0) {
+    await appendModelTaskEvent(String(taskId), 'task_cancelled', { reason })
+    return true
+  }
+  return false
+}
+
+export async function markModelTaskStatusUnknownById(taskId, reason = 'provider_status_unknown') {
+  const now = Date.now()
+  const result = await queryRun(`UPDATE ai_model_tasks SET status='status_unknown',
+    error_code=?, error_message=?, lease_token=NULL, lease_owner=NULL, lease_expires_at_utc_msc=NULL,
+    updated_at_utc_msc=? WHERE task_id=? AND status IN ('submitted','provider_running','provider_quiet')`,
+  [String(reason).slice(0, 128), String(reason).slice(0, 512), now, String(taskId)])
+  if (Number(result?.affectedRows ?? result?.changes ?? 0) > 0) {
+    await appendModelTaskEvent(String(taskId), 'task_status_unknown', { reason })
+    return true
+  }
+  return false
+}
+
+// Reconciliation may discover a durable domain result after the worker lease
+// disappeared (for example, the process died immediately after ai_signals
+// committed). The result row is the proof that applying already completed, so
+// finish the envelope without allowing a stale worker to write any new data.
+export async function markModelTaskSucceededFromResult(taskId, { resultRef = null, resultHash = null } = {}) {
+  const now = Date.now()
+  const result = await queryRun(`UPDATE ai_model_tasks SET status='succeeded',
+    result_ref=COALESCE(?, result_ref), result_hash=COALESCE(?, result_hash),
+    error_code=NULL, error_message=NULL, completed_at_utc_msc=?,
+    lease_token=NULL, lease_owner=NULL, lease_expires_at_utc_msc=NULL,
+    last_activity_at_utc_msc=?, updated_at_utc_msc=?
+    WHERE task_id=? AND status NOT IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')`,
+  [resultRef, resultHash, now, now, now, String(taskId)])
+  if (Number(result?.affectedRows ?? result?.changes ?? 0) > 0) {
+    await appendModelTaskEvent(String(taskId), 'task_reconciled_from_result', { result_ref:resultRef })
+    return true
+  }
+  return false
+}
+
+// Source fingerprints are checked immediately before apply. If they changed,
+// the model output must never be applied even when the ordinary leased state
+// machine cannot transition directly from its current intermediate state.
+export async function markModelTaskCompletedStaleById(taskId, reason = 'model_task_source_stale') {
+  const now = Date.now()
+  const result = await queryRun(`UPDATE ai_model_tasks SET status='completed_stale',
+    error_code=?, error_message=?, completed_at_utc_msc=?,
+    lease_token=NULL, lease_owner=NULL, lease_expires_at_utc_msc=NULL,
+    last_activity_at_utc_msc=?, updated_at_utc_msc=?
+    WHERE task_id=? AND status NOT IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')`,
+  [String(reason).slice(0, 128), String(reason).slice(0, 512), now, now, now, String(taskId)])
+  if (Number(result?.affectedRows ?? result?.changes ?? 0) > 0) {
+    await appendModelTaskEvent(String(taskId), 'task_completed_stale', { reason })
+    return true
+  }
+  return false
+}

@@ -663,7 +663,7 @@ export async function loadPrivatePortfolioContext(userId) {
   return { positions: positionsData.positions, pendingOrders }
 }
 
-export async function handleAnalyze(userId, params) {
+export async function handleAnalyze(userId, params, options = {}) {
   const { session_id = 'default', symbol, strategy_id, auto_execute = false } = params
   if (!symbol) return { status: 'error', message: 'symbol required' }
   if (!strategy_id) return { status: 'error', message: 'strategy required' }
@@ -684,6 +684,9 @@ export async function handleAnalyze(userId, params) {
   config.enable_auto_trade = Boolean(auto_execute)
   config._market_only = strategy.scope === 'platform'
   config._include_portfolio_context = strategy.scope === 'private' && Boolean(Number(strategy.include_portfolio_context))
+  if (options.abortSignal) config._abortSignal = options.abortSignal
+  if (typeof options.onProviderRequest === 'function') config._onProviderRequest = options.onProviderRequest
+  if (typeof options.onProviderUsage === 'function') config._onProviderUsage = options.onProviderUsage
   const prompt = strategy.system_prompt || ''
   const tags = policy.marketDataPlan.timeframes.map(item => ({ tf: item.timeframe, count: item.kline_count }))
 
@@ -839,14 +842,16 @@ export async function handleAnalyze(userId, params) {
   const decisionJson = JSON.stringify(decision)
   const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
   if (!renderedEvidence) throw new Error('inference_evidence_missing')
+  if (typeof options.assertCanApply === 'function') await options.assertCanApply()
   const persisted = await withTransaction(async run => {
+    await options.assertCanApplyTx?.(run)
     const [result] = await run(`INSERT INTO ai_signals(user_id, prompt_type_id, source, session_id, symbol, timeframe, signal_type, confidence, recommended_volume,
       position_size_tier, position_size_factor, position_size_reason,
       analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier,
       market_data_json, token_count, ai_model, ttl_seconds, created_at,
       created_at_utc_msc, terminal_timezone_offset_minutes, terminal_clock_status, terminal_clock_source,
-      entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json)
-      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json, inference_task_id)
+      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       [userId, Number(strategy.id), session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.position_size_tier || null, signal.position_size_factor ?? null, signal.position_size_reason || null,
         signal.analysis, signal.reasoning, signal.stop_loss_price || null,
@@ -855,7 +860,7 @@ export async function handleAnalyze(userId, params) {
         marketJson, tokenCount, (config || {}).model_name || 'deepseek-chat', signalTtlSeconds(primaryTf), createdAt,
         createdAtUtcMsc, terminalOffsetMinutes, terminalClockStatus, terminalClockSource,
         signal.entry_method || 'market', signal.limit_price || null, signal.stop_limit_price || null, signal.pending_valid_until || null,
-        SIGNAL_SCHEMA_VERSION, decisionJson])
+        SIGNAL_SCHEMA_VERSION, decisionJson, options.taskId || null])
     const snapshotId = await persistInferenceSnapshotTx(run, {
       signalId: result.insertId, strategyId: Number(strategy.id), strategyVersion: Number(strategy.version || 1), strategyScope: strategy.scope, ownerUserId: Number(strategy.owner_user_id || 0),
       standardSymbol: stripBrokerSuffix(symbol).toUpperCase(), marketSource: ratesResp.market_meta?.source || 'platform_admin_bridge',
@@ -1162,6 +1167,13 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : async () => {}
   const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false
   const abortSignal = options.abortSignal || null
+  const expectedCheckpointManifest = options.checkpointManifest || null
+  const checkpointRowsByUnit = options.checkpointsByUnit instanceof Map
+    ? options.checkpointsByUnit
+    : new Map((options.checkpoints || []).map(row => [String(row.unit_key), row]))
+  const onCheckpointManifest = typeof options.onCheckpointManifest === 'function'
+    ? options.onCheckpointManifest : async () => {}
+  const onCheckpoint = typeof options.onCheckpoint === 'function' ? options.onCheckpoint : async () => {}
 
   const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
   if (!user || user.role !== 'admin') return { status: 'error', message: 'admin_only' }
@@ -1310,8 +1322,15 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       content_hash:sample.content_hash,
       prompt_hash:sample.prompt_hash,
       strategy_version:sample.strategy_version,
+      output_schema_version:sample.output_schema_version || null,
+      market_source:'inference_snapshot',
     }))
-    : historyWindows.map(item => comparisonRatesEvidence(item.timeframe, item.window?.periodRates))
+    : historyWindows.map(item => ({
+      ...comparisonRatesEvidence(item.timeframe, item.window?.periodRates),
+      market_source:item.window?.marketMeta?.source || item.window?.marketMeta?.source_type || null,
+      timezone_offset_minutes:Number.isFinite(Number(item.window?.marketMeta?.timezone_offset_minutes))
+        ? Number(item.window.marketMeta.timezone_offset_minutes) : null,
+    }))
   const selectedWindow = historyWindows.find(item => item.timeframe === requestedTimeframe)
   const evaluationWindow = historyWindows.find(item => item.timeframe === evaluationTimeframe)
   const evaluationDurationMs = (TIMEFRAME_MINUTES[evaluationTimeframe] || 1) * 60_000
@@ -1433,6 +1452,26 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   }
   const modelRuntimeSnapshots = Object.fromEntries(validModels.map(({ modelId, resolved }) =>
     [modelId, comparisonModelSnapshot(modelId, resolved)]))
+  const checkpointManifest = buildHistoryCompareCheckpointManifest({
+    strategy, strategyRuntimeSnapshot, snapshotRun, dataSource, validModels,
+    modelRuntimeSnapshots, decisionPoints, marketDataEvidence, prompt,
+  })
+  if (expectedCheckpointManifest
+    && !historyCompareCheckpointManifestMatches(expectedCheckpointManifest, checkpointManifest)) {
+    return { status:'error', message:'history_compare_checkpoint_source_stale' }
+  }
+  const checkpointRows = [...checkpointRowsByUnit.values()]
+  if (checkpointRows.some(row => !['completed', 'failed'].includes(String(row.checkpoint_status || 'completed')))) {
+    return { status:'error', message:'history_compare_status_unknown' }
+  }
+  const completedCheckpointRows = checkpointRows.filter(row => String(row.checkpoint_status || 'completed') === 'completed')
+  if (completedCheckpointRows.some(row => !historyCompareCheckpointMatchesManifest(row, checkpointManifest)
+    || !row.result || typeof row.result !== 'object')) {
+    return { status:'error', message:'history_compare_checkpoint_source_stale' }
+  }
+  const completedCheckpointRowsByUnit = new Map(completedCheckpointRows
+    .map(row => [String(row.unit_key), row]))
+  await onCheckpointManifest(checkpointManifest)
   const modelTelemetry = Object.fromEntries(validModels.map(({ modelId }) => [modelId, {
     provider_request_count:0,
     repair_request_count:0,
@@ -1521,7 +1560,50 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         strategyPolicy:policy.strategyPolicy,
       }, market.strategy_context, { rawPolicy:policy.strategyPolicy })
 
+    const persistCheckpointState = async (modelId, state = {}) => {
+      const modelSnapshot = modelRuntimeSnapshots[modelId]
+      await onCheckpoint({
+        model_id:Number(modelId),
+        unit_key:historyCompareCheckpointUnitKey(modelId, stepNumber),
+        unit_index:stepNumber,
+        checkpoint_status:state.checkpoint_status || 'completed',
+        error_code:state.error_code || null,
+        decision_time_utc_msc:decisionUtcMs,
+        outcome_time_utc_msc:compareRateUtcMs(decisionPoint.outcomeKline),
+        snapshot_id:decisionPoint.snapshotSample?.snapshot_id == null ? null : Number(decisionPoint.snapshotSample.snapshot_id),
+        strategy_fingerprint:checkpointManifest.strategy_fingerprint,
+        prompt_hash:checkpointManifest.prompt_hash,
+        snapshot_fingerprint:checkpointManifest.snapshot_fingerprint,
+        model_config_fingerprint:modelSnapshot?.runtime_config_sha256 || '',
+        output_contract_hash:checkpointManifest.output_contract_hash,
+        market_evidence_hash:checkpointManifest.market_evidence_hash,
+        result:state.result || null,
+        telemetry:state.telemetry || {},
+        input_evidence:state.input_evidence || null,
+      })
+    }
+
     const inferenceTasks = validModels.map(async ({ modelId, resolved }) => {
+      const checkpointUnitKey = historyCompareCheckpointUnitKey(modelId, stepNumber)
+      const checkpoint = completedCheckpointRowsByUnit.get(checkpointUnitKey)
+      if (checkpoint) {
+        const restoredTelemetry = checkpoint.telemetry || {}
+        for (const key of Object.keys(modelTelemetry[modelId])) {
+          modelTelemetry[modelId][key] += Math.max(0, Number(restoredTelemetry[key]) || 0)
+        }
+        if (checkpoint.input_evidence) {
+          const evidenceKey = `${decisionUtcMs}:${decisionPoint.snapshotSample?.snapshot_id || stepNumber}`
+          decisionInputEvidence.set(evidenceKey, checkpoint.input_evidence)
+        }
+        return {
+          modelId,
+          checkpoint:true,
+          restoredSignal:checkpoint.result,
+          latencyMs:Number(checkpoint.result?.latency_ms || 0),
+        }
+      }
+      const telemetryBefore = { ...modelTelemetry[modelId] }
+      let preparedEvidence = null
       const snapshotVolumeRange = decisionPoint.snapshotSample?.market_snapshot?.ai_volume_range || currentAiVolumeRange
       const config = {
         ...resolved.model,
@@ -1556,6 +1638,13 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           modelTelemetry[modelId].token_count += Math.max(0, Number(tokenCount) || 0)
         },
         _onInferencePrepared:({ systemPrompt, userPrompt, outputSchemaVersion }) => {
+          preparedEvidence = {
+            decision_time_utc_msc:decisionUtcMs,
+            snapshot_id:decisionPoint.snapshotSample?.snapshot_id || null,
+            system_prompt_sha256:comparisonFingerprint(systemPrompt || ''),
+            user_prompt_sha256:comparisonFingerprint(userPrompt || ''),
+            output_schema_version:outputSchemaVersion || null,
+          }
           const evidenceKey = `${decisionUtcMs}:${decisionPoint.snapshotSample?.snapshot_id || stepNumber}`
           if (decisionInputEvidence.has(evidenceKey)) return
           decisionInputEvidence.set(evidenceKey, {
@@ -1574,6 +1663,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
         }
       }
+      await persistCheckpointState(modelId, { checkpoint_status:'submitting' })
       const startedAt = Date.now()
       try {
         let signal = await maybeAiSignal(null, config, market, prompt)
@@ -1596,25 +1686,49 @@ export async function handleHistoryCompare(userId, params, options = {}) {
             signal = applyConstraintAction(signal, postInference).signal
           }
         }
+        const telemetry = Object.fromEntries(Object.keys(modelTelemetry[modelId]).map(key => [
+          key, Math.max(0, Number(modelTelemetry[modelId][key]) - Number(telemetryBefore[key] || 0)),
+        ]))
         return {
           modelId,
           latencyMs: Date.now() - startedAt,
           signal: { ...signal, _inference_source: signal._inference_source || 'unknown' },
           rawSignalType,
           strategyPolicyRuntime,
+          preparedEvidence,
+          telemetry,
         }
       } catch (error) {
         if (abortSignal?.aborted) throw error
+        const telemetry = Object.fromEntries(Object.keys(modelTelemetry[modelId]).map(key => [
+          key, Math.max(0, Number(modelTelemetry[modelId][key]) - Number(telemetryBefore[key] || 0)),
+        ]))
         return {
           modelId,
           latencyMs:Date.now() - startedAt,
           error:boundedComparisonError(error.message, 'inference_failed'),
+          preparedEvidence,
+          telemetry,
         }
       }
     })
 
     const results = await Promise.all(inferenceTasks)
+    const persistCompletedUnit = async (result, modelSignal) => {
+      if (result.checkpoint) return
+      await persistCheckpointState(result.modelId, {
+        checkpoint_status:modelSignal.signal_type === 'error' ? 'failed' : 'completed',
+        error_code:modelSignal.error || null,
+        result:modelSignal,
+        telemetry:result.telemetry || {},
+        input_evidence:result.preparedEvidence || null,
+      })
+    }
     for (const result of results) {
+      if (result.checkpoint) {
+        modelSignals[result.modelId].push(result.restoredSignal)
+        continue
+      }
       const outcomeKline = decisionPoint.outcomeKline
       const outcomeUtcMs = compareRateUtcMs(outcomeKline)
       const outcomeTime = outcomeUtcMs == null ? null : new Date(outcomeUtcMs).toISOString()
@@ -1622,34 +1736,40 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       const closePrice = Number(outcomeKline.close)
 
       if (result.error) {
-        modelSignals[result.modelId].push({
+        const modelSignal = {
           decision_time:new Date(decisionUtcMs).toISOString(), outcome_time:outcomeTime, time:outcomeTime,
           decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:outcomeUtcMs,
           signal_type: 'error', decision_class:'model_error', confidence: 0, next_bar_move: 0,
           latency_ms: result.latencyMs || 0, error: result.error,
-        })
+        }
+        modelSignals[result.modelId].push(modelSignal)
+        await persistCompletedUnit(result, modelSignal)
         continue
       }
 
       const signal = result.signal
       const inferenceSource = signal?._inference_source || 'unknown'
       if (inferenceSource !== 'ai') {
-        modelSignals[result.modelId].push({
+        const modelSignal = {
           decision_time:new Date(decisionUtcMs).toISOString(), outcome_time:outcomeTime, time:outcomeTime,
           decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:outcomeUtcMs,
           signal_type: 'error', decision_class:'model_error', confidence: 0, next_bar_move: 0, latency_ms: result.latencyMs || 0,
           error: signal?.reasoning || 'inference_failed',
-        })
+        }
+        modelSignals[result.modelId].push(modelSignal)
+        await persistCompletedUnit(result, modelSignal)
         continue
       }
       const direction = comparisonDirection(signal.signal_type)
       if (direction === 'unknown') {
-        modelSignals[result.modelId].push({
+        const modelSignal = {
           decision_time:new Date(decisionUtcMs).toISOString(), outcome_time:outcomeTime, time:outcomeTime,
           decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:outcomeUtcMs,
           signal_type:'error', decision_class:'model_error', confidence:0, next_bar_move:0, latency_ms:result.latencyMs || 0,
           error:'invalid_model_signal_type',
-        })
+        }
+        modelSignals[result.modelId].push(modelSignal)
+        await persistCompletedUnit(result, modelSignal)
         continue
       }
       let nextBarMove = 0
@@ -1664,7 +1784,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       const executionEligible = (direction === 'buy' || direction === 'sell')
         && comparisonValidation?.execution_eligible !== false
 
-      modelSignals[result.modelId].push({
+      const modelSignal = {
         decision_time:new Date(decisionUtcMs).toISOString(), outcome_time:outcomeTime, time:outcomeTime,
         decision_time_utc_msc:decisionUtcMs, outcome_time_utc_msc:outcomeUtcMs,
         signal_type: direction, decision_class:decisionClass,
@@ -1702,7 +1822,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           take_profit_3_price:signal.take_profit_3_price,
           recommended_take_profit_tier:signal.recommended_take_profit_tier,
         } : null,
-      })
+      }
+      modelSignals[result.modelId].push(modelSignal)
+      await persistCompletedUnit(result, modelSignal)
     }
     await onProgress({
       stage: 'evaluating',
@@ -2051,6 +2173,7 @@ function historyCompareJobFromRow(row) {
     completed_steps: Number(row.completed_steps || 0),
     total_steps: Number(row.total_steps || 0),
     params: safeCompareJson(row.params_json, {}),
+    checkpoint_manifest: safeCompareJson(row.checkpoint_manifest_json, null),
     result: safeCompareJson(row.result_json, null),
     error: row.error_code || null,
     cancel_requested: Boolean(row.cancel_requested),
@@ -2073,18 +2196,227 @@ async function persistHistoryCompareJob(job, { insert = false } = {}) {
   if (insert) {
     await queryRun(`INSERT INTO ai_model_compare_jobs
       (id, user_id, status, stage, progress_percent, completed_steps, total_steps,
-       params_json, result_json, error_code, cancel_requested, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`, values)
+       params_json, checkpoint_manifest_json, result_json, error_code, cancel_requested, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`, [
+      ...values.slice(0, 8), job.checkpoint_manifest ? JSON.stringify(job.checkpoint_manifest) : null, ...values.slice(8),
+    ])
     return
   }
   await queryRun(`UPDATE ai_model_compare_jobs SET status = ?, stage = ?, progress_percent = ?,
-    completed_steps = ?, total_steps = ?, result_json = ?, error_code = ?, cancel_requested = ?,
+    completed_steps = ?, total_steps = ?, checkpoint_manifest_json = ?, result_json = ?, error_code = ?, cancel_requested = ?,
     completed_at = CASE WHEN ? IN ('succeeded','failed','cancelled') THEN NOW() ELSE completed_at END,
     updated_at = NOW() WHERE id = ? AND user_id = ?`, [
     job.status, job.stage, job.progress_percent || 0, job.completed_steps || 0, job.total_steps || 0,
+    job.checkpoint_manifest ? JSON.stringify(job.checkpoint_manifest) : null,
     job.result ? JSON.stringify(job.result) : null, persistedError, job.cancel_requested ? 1 : 0,
     job.status, job.id, job.user_id,
   ])
+}
+
+const HISTORY_COMPARE_CHECKPOINT_VERSION = 1
+
+function historyCompareCheckpointUnitKey(modelId, unitIndex) {
+  return `${Number(unitIndex)}:${Number(modelId)}`
+}
+
+function historyCompareCheckpointFromRow(row) {
+  if (!row) return null
+  return {
+    job_id:String(row.job_id),
+    model_id:Number(row.model_id),
+    unit_key:String(row.unit_key),
+    unit_index:Number(row.unit_index),
+    decision_time_utc_msc:Number(row.decision_time_utc_msc),
+    outcome_time_utc_msc:row.outcome_time_utc_msc == null ? null : Number(row.outcome_time_utc_msc),
+    snapshot_id:row.snapshot_id == null ? null : Number(row.snapshot_id),
+    checkpoint_status:String(row.checkpoint_status || row.status || 'completed'),
+    error_code:row.error_code == null ? null : String(row.error_code),
+    strategy_fingerprint:String(row.strategy_fingerprint || ''),
+    prompt_hash:String(row.prompt_hash || ''),
+    snapshot_fingerprint:row.snapshot_fingerprint == null ? null : String(row.snapshot_fingerprint),
+    model_config_fingerprint:String(row.model_config_fingerprint || ''),
+    output_contract_hash:String(row.output_contract_hash || ''),
+    market_evidence_hash:String(row.market_evidence_hash || ''),
+    result:safeCompareJson(row.result_json, null),
+    telemetry:safeCompareJson(row.telemetry_json, null) || {},
+    input_evidence:safeCompareJson(row.input_evidence_json, null),
+  }
+}
+
+async function loadHistoryCompareCheckpoints(jobId) {
+  const rows = await queryAll(`SELECT * FROM ai_model_compare_checkpoints
+    WHERE job_id = ? ORDER BY unit_index ASC, model_id ASC`, [String(jobId)])
+  return (rows || []).map(historyCompareCheckpointFromRow).filter(Boolean)
+}
+
+async function persistHistoryCompareCheckpoint(jobId, checkpoint) {
+  await queryRun(`INSERT INTO ai_model_compare_checkpoints
+    (job_id, model_id, unit_key, unit_index, checkpoint_status, error_code, decision_time_utc_msc, outcome_time_utc_msc,
+     snapshot_id, strategy_fingerprint, prompt_hash, snapshot_fingerprint, model_config_fingerprint,
+     output_contract_hash, market_evidence_hash, result_json, telemetry_json, input_evidence_json,
+     created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+    ON DUPLICATE KEY UPDATE
+      checkpoint_status = VALUES(checkpoint_status), error_code = VALUES(error_code),
+      decision_time_utc_msc = VALUES(decision_time_utc_msc),
+      outcome_time_utc_msc = VALUES(outcome_time_utc_msc),
+      snapshot_id = VALUES(snapshot_id),
+      strategy_fingerprint = VALUES(strategy_fingerprint),
+      prompt_hash = VALUES(prompt_hash),
+      snapshot_fingerprint = VALUES(snapshot_fingerprint),
+      model_config_fingerprint = VALUES(model_config_fingerprint),
+      output_contract_hash = VALUES(output_contract_hash),
+      market_evidence_hash = VALUES(market_evidence_hash),
+      result_json = VALUES(result_json), telemetry_json = VALUES(telemetry_json),
+      input_evidence_json = VALUES(input_evidence_json), updated_at = NOW()`, [
+    String(jobId), Number(checkpoint.model_id), String(checkpoint.unit_key), Number(checkpoint.unit_index),
+    String(checkpoint.checkpoint_status || 'completed'), checkpoint.error_code == null
+      ? null : boundedComparisonError(checkpoint.error_code, 'checkpoint_failed', 128),
+    Number(checkpoint.decision_time_utc_msc), checkpoint.outcome_time_utc_msc == null ? null : Number(checkpoint.outcome_time_utc_msc),
+    checkpoint.snapshot_id == null ? null : Number(checkpoint.snapshot_id), String(checkpoint.strategy_fingerprint || ''),
+    String(checkpoint.prompt_hash || ''), checkpoint.snapshot_fingerprint == null ? null : String(checkpoint.snapshot_fingerprint),
+    String(checkpoint.model_config_fingerprint || ''), String(checkpoint.output_contract_hash || ''),
+    String(checkpoint.market_evidence_hash || ''), JSON.stringify(checkpoint.result || null),
+    JSON.stringify(checkpoint.telemetry || {}), checkpoint.input_evidence ? JSON.stringify(checkpoint.input_evidence) : null,
+  ])
+}
+
+function historyCompareCheckpointManifestFingerprint(manifest) {
+  const { manifest_fingerprint: _ignored, ...content } = manifest || {}
+  return comparisonFingerprint(content)
+}
+
+function buildHistoryCompareCheckpointManifest({ strategy, strategyRuntimeSnapshot, snapshotRun,
+  dataSource, validModels, modelRuntimeSnapshots, decisionPoints, marketDataEvidence, prompt }) {
+  const strategyFingerprint = strategyRuntimeSnapshot?.runtime_config_sha256
+    || comparisonFingerprint(strategyRuntimeSnapshot || {})
+  const promptHash = strategyRuntimeSnapshot?.system_prompt_sha256 || comparisonFingerprint(prompt || '')
+  const snapshotFingerprint = snapshotRun?.fingerprint || null
+  const modelConfigFingerprint = comparisonFingerprint(Object.values(modelRuntimeSnapshots || {})
+    .map(model => model.runtime_config_sha256 || comparisonFingerprint(model)).sort())
+  const outputContractHash = comparisonFingerprint({
+    signal_schema_version:SIGNAL_SCHEMA_VERSION,
+    comparison_run_version:'history-compare-v7',
+    snapshot_output_schema_version:snapshotRun?.output_schema_version || null,
+  })
+  const marketEvidenceHash = comparisonFingerprint(marketDataEvidence || [])
+  const units = (decisionPoints || []).map((point, unitIndex) => ({
+    unit_index:unitIndex,
+    decision_time_utc_msc:Number(point.decisionUtcMs),
+    outcome_time_utc_msc:compareRateUtcMs(point.outcomeKline),
+    snapshot_id:point.snapshotSample?.snapshot_id == null ? null : Number(point.snapshotSample.snapshot_id),
+  }))
+  const manifest = {
+    version:HISTORY_COMPARE_CHECKPOINT_VERSION,
+    data_source:dataSource,
+    strategy_id:Number(strategy?.id || strategyRuntimeSnapshot?.strategy_id || 0),
+    strategy_version:Number(strategyRuntimeSnapshot?.strategy_version || strategy?.version || 1),
+    strategy_fingerprint:strategyFingerprint,
+    prompt_hash:promptHash,
+    snapshot_fingerprint:snapshotFingerprint,
+    snapshot_ids:snapshotRun?.snapshot_ids || null,
+    model_config_fingerprint:modelConfigFingerprint,
+    models:Object.values(modelRuntimeSnapshots || {}).map(model => ({
+      model_profile_id:Number(model.model_profile_id),
+      model_config_fingerprint:model.runtime_config_sha256 || comparisonFingerprint(model),
+    })).sort((a, b) => a.model_profile_id - b.model_profile_id),
+    output_contract_hash:outputContractHash,
+    market_evidence_hash:marketEvidenceHash,
+    market_evidence:marketDataEvidence || [],
+    units,
+  }
+  return { ...manifest, manifest_fingerprint:historyCompareCheckpointManifestFingerprint(manifest) }
+}
+
+function historyCompareCheckpointManifestMatches(expected, actual) {
+  if (!expected || !actual) return !expected && !actual
+  return Number(expected.version) === Number(actual.version)
+    && String(expected.manifest_fingerprint || '') === String(actual.manifest_fingerprint || '')
+}
+
+function historyCompareCheckpointMatchesManifest(checkpoint, manifest) {
+  if (!checkpoint || !manifest) return false
+  const model = (manifest.models || []).find(item => Number(item.model_profile_id) === Number(checkpoint.model_id))
+  const unit = (manifest.units || [])[Number(checkpoint.unit_index)]
+  return Boolean(model && unit)
+    && checkpoint.unit_key === historyCompareCheckpointUnitKey(checkpoint.model_id, checkpoint.unit_index)
+    && Number(checkpoint.decision_time_utc_msc) === Number(unit.decision_time_utc_msc)
+    && Number(checkpoint.outcome_time_utc_msc || 0) === Number(unit.outcome_time_utc_msc || 0)
+    && Number(checkpoint.snapshot_id || 0) === Number(unit.snapshot_id || 0)
+    && checkpoint.strategy_fingerprint === manifest.strategy_fingerprint
+    && checkpoint.prompt_hash === manifest.prompt_hash
+    && checkpoint.snapshot_fingerprint === (manifest.snapshot_fingerprint || null)
+    && checkpoint.model_config_fingerprint === model.model_config_fingerprint
+    && checkpoint.output_contract_hash === manifest.output_contract_hash
+    && checkpoint.market_evidence_hash === manifest.market_evidence_hash
+}
+
+function queueHistoryCompareJob(job) {
+  if (!job || job.execution_queued || ['succeeded', 'failed', 'cancelled'].includes(job.status)) return
+  job.execution_queued = true
+  if (!job.abort_controller) job.abort_controller = new AbortController()
+  queueMicrotask(async () => {
+    job.execution_queued = false
+    try {
+      if (job.cancel_requested || job.status === 'cancelled') {
+        job.status = 'cancelled'
+        job.stage = 'cancelled'
+        job.updated_at = new Date().toISOString()
+        job.updated_at_ms = Date.now()
+        try { await persistHistoryCompareJob(job) } finally { historyCompareJobs.delete(job.id) }
+        return
+      }
+      job.status = 'running'
+      job.stage = 'preparing'
+      job.updated_at = new Date().toISOString()
+      job.updated_at_ms = Date.now()
+      await persistHistoryCompareJob(job)
+      const checkpoints = await loadHistoryCompareCheckpoints(job.id)
+      const result = await handleHistoryCompare(job.user_id, job.params, {
+        shouldCancel: () => job.cancel_requested || job.abort_controller.signal.aborted,
+        abortSignal:job.abort_controller.signal,
+        checkpointManifest:job.checkpoint_manifest,
+        checkpoints,
+        onCheckpointManifest: async manifest => {
+          job.checkpoint_manifest = manifest
+          job.updated_at = new Date().toISOString()
+          job.updated_at_ms = Date.now()
+          await persistHistoryCompareJob(job)
+        },
+        onCheckpoint: checkpoint => persistHistoryCompareCheckpoint(job.id, checkpoint),
+        onProgress: async progress => {
+          Object.assign(job, progress, { updated_at: new Date().toISOString(), updated_at_ms: Date.now() })
+          await persistHistoryCompareJob(job)
+        },
+      })
+      if (job.cancel_requested || result.status === 'cancelled') {
+        job.status = 'cancelled'
+        job.stage = 'cancelled'
+      } else if (result.status === 'success') {
+        job.status = 'succeeded'
+        job.stage = 'completed'
+        job.progress_percent = 100
+        job.result = result
+      } else {
+        job.status = 'failed'
+        job.stage = 'failed'
+        job.error = boundedComparisonError(result.message)
+      }
+    } catch (error) {
+      job.status = job.cancel_requested ? 'cancelled' : 'failed'
+      job.stage = job.status
+      job.error = job.cancel_requested ? null : boundedComparisonError(error.message)
+    }
+    job.updated_at = new Date().toISOString()
+    job.updated_at_ms = Date.now()
+    try {
+      await persistHistoryCompareJob(job)
+    } catch (error) {
+      console.error(`[ModelCompare] Failed to persist final job state ${job.id}:`, error.message)
+    } finally {
+      if (['succeeded', 'failed', 'cancelled'].includes(job.status)) historyCompareJobs.delete(job.id)
+    }
+  })
 }
 
 async function reconcileInterruptedHistoryCompareJobs(userId) {
@@ -2093,13 +2425,39 @@ async function reconcileInterruptedHistoryCompareJobs(userId) {
   for (const row of rows || []) {
     const stale = historyCompareJobFromRow(row)
     if (!stale || historyCompareJobs.has(stale.id)) continue
-    stale.status = 'failed'
-    stale.stage = 'failed'
-    stale.error = 'history_compare_interrupted'
-    stale.cancel_requested = false
-    await persistHistoryCompareJob(stale)
+    stale.abort_controller = new AbortController()
+    if (stale.status === 'cancelling' || stale.cancel_requested) {
+      stale.cancel_requested = true
+      stale.status = 'cancelled'
+      stale.stage = 'cancelled'
+      await persistHistoryCompareJob(stale)
+      continue
+    }
+    historyCompareJobs.set(stale.id, stale)
+    queueHistoryCompareJob(stale)
   }
 }
+
+export async function startHistoryCompareJobs() {
+  const rows = await queryAll(`SELECT * FROM ai_model_compare_jobs
+    WHERE status IN ('queued','running','cancelling') ORDER BY created_at ASC`)
+  for (const row of rows || []) {
+    const job = historyCompareJobFromRow(row)
+    if (!job || historyCompareJobs.has(job.id)) continue
+    job.abort_controller = new AbortController()
+    if (job.status === 'cancelling' || job.cancel_requested) {
+      job.cancel_requested = true
+      job.status = 'cancelled'
+      job.stage = 'cancelled'
+      await persistHistoryCompareJob(job)
+      continue
+    }
+    historyCompareJobs.set(job.id, job)
+    queueHistoryCompareJob(job)
+  }
+}
+
+export const startHistoryCompareRecoveryWorker = startHistoryCompareJobs
 
 export async function startHistoryCompareJob(userId, params) {
   const user = await queryOne('SELECT role FROM users WHERE id = ?', [userId])
@@ -2177,6 +2535,7 @@ export async function startHistoryCompareJob(userId, params) {
     completed_steps: 0,
     total_steps: 0,
     result: null,
+    checkpoint_manifest: null,
     error: null,
     params:normalizedParams,
     cancel_requested: false,
@@ -2192,61 +2551,7 @@ export async function startHistoryCompareJob(userId, params) {
     historyCompareJobs.delete(job.id)
     throw error
   }
-  queueMicrotask(async () => {
-    try {
-      if (job.cancel_requested || job.status === 'cancelled') {
-        job.status = 'cancelled'
-        job.stage = 'cancelled'
-        job.updated_at = new Date().toISOString()
-        job.updated_at_ms = Date.now()
-        try {
-          await persistHistoryCompareJob(job)
-        } finally {
-          historyCompareJobs.delete(job.id)
-        }
-        return
-      }
-      job.status = 'running'
-      job.stage = 'preparing'
-      job.updated_at = new Date().toISOString()
-      job.updated_at_ms = Date.now()
-      await persistHistoryCompareJob(job)
-      const result = await handleHistoryCompare(userId, normalizedParams, {
-        shouldCancel: () => job.cancel_requested || job.abort_controller.signal.aborted,
-        abortSignal:job.abort_controller.signal,
-        onProgress: async progress => {
-          Object.assign(job, progress, { updated_at: new Date().toISOString(), updated_at_ms: Date.now() })
-          await persistHistoryCompareJob(job)
-        },
-      })
-      if (job.cancel_requested || result.status === 'cancelled') {
-        job.status = 'cancelled'
-        job.stage = 'cancelled'
-      } else if (result.status === 'success') {
-        job.status = 'succeeded'
-        job.stage = 'completed'
-        job.progress_percent = 100
-        job.result = result
-      } else {
-        job.status = 'failed'
-        job.stage = 'failed'
-        job.error = boundedComparisonError(result.message)
-      }
-    } catch (error) {
-      job.status = job.cancel_requested ? 'cancelled' : 'failed'
-      job.stage = job.status
-      job.error = job.cancel_requested ? null : boundedComparisonError(error.message)
-    }
-    job.updated_at = new Date().toISOString()
-    job.updated_at_ms = Date.now()
-    try {
-      await persistHistoryCompareJob(job)
-    } catch (error) {
-      console.error(`[ModelCompare] Failed to persist final job state ${job.id}:`, error.message)
-    } finally {
-      if (['succeeded', 'failed', 'cancelled'].includes(job.status)) historyCompareJobs.delete(job.id)
-    }
-  })
+  queueHistoryCompareJob(job)
   return publicHistoryCompareJob(job)
 }
 
@@ -2258,17 +2563,26 @@ export async function getHistoryCompareJob(userId, jobId) {
   }
   if (!job || job.user_id !== Number(userId)) throw new Error('history_compare_job_not_found')
   if (['queued', 'running', 'cancelling'].includes(job.status) && !historyCompareJobs.has(job.id)) {
-    job.status = 'failed'
-    job.stage = 'failed'
-    job.error = 'history_compare_interrupted'
-    await persistHistoryCompareJob(job)
+    job.abort_controller = new AbortController()
+    historyCompareJobs.set(job.id, job)
+    queueHistoryCompareJob(job)
   }
   return publicHistoryCompareJob(job)
 }
 
 export async function cancelHistoryCompareJob(userId, jobId) {
-  const job = historyCompareJobs.get(String(jobId))
-  if (!job || job.user_id !== Number(userId)) return getHistoryCompareJob(userId, jobId)
+  let job = historyCompareJobs.get(String(jobId))
+  if (!job) {
+    const row = await queryOne('SELECT * FROM ai_model_compare_jobs WHERE id = ? AND user_id = ?', [String(jobId), Number(userId)])
+    job = historyCompareJobFromRow(row)
+    if (!job || job.user_id !== Number(userId)) throw new Error('history_compare_job_not_found')
+    if (['queued', 'running', 'cancelling'].includes(job.status)) {
+      job.abort_controller = new AbortController()
+      historyCompareJobs.set(job.id, job)
+      queueHistoryCompareJob(job)
+    }
+  }
+  if (job.user_id !== Number(userId)) throw new Error('history_compare_job_not_found')
   if (['succeeded', 'failed', 'cancelled'].includes(job.status)) return publicHistoryCompareJob(job)
   job.cancel_requested = true
   job.status = job.status === 'queued' ? 'cancelled' : 'cancelling'
@@ -2284,16 +2598,15 @@ export async function cancelHistoryCompareJob(userId, jobId) {
 
 export async function listHistoryCompareJobs(userId, limit = 10) {
   const rows = await queryAll(`SELECT id, user_id, status, stage, progress_percent,
-    completed_steps, total_steps, params_json, error_code, cancel_requested, created_at, updated_at
+    completed_steps, total_steps, params_json, checkpoint_manifest_json, error_code, cancel_requested, created_at, updated_at
     FROM ai_model_compare_jobs WHERE user_id = ?
     ORDER BY created_at DESC LIMIT ?`, [Number(userId), Math.max(1, Math.min(30, Number(limit) || 10))])
   const jobs = rows.map(historyCompareJobFromRow).filter(Boolean)
   for (const job of jobs) {
     if (['queued', 'running', 'cancelling'].includes(job.status) && !historyCompareJobs.has(job.id)) {
-      job.status = 'failed'
-      job.stage = 'failed'
-      job.error = 'history_compare_interrupted'
-      await persistHistoryCompareJob(job)
+      job.abort_controller = new AbortController()
+      historyCompareJobs.set(job.id, job)
+      queueHistoryCompareJob(job)
     }
   }
   return jobs
@@ -2305,10 +2618,15 @@ export async function deleteHistoryCompareJob(userId, jobId) {
   if (active && ['queued', 'running', 'cancelling'].includes(active.status)) {
     return cancelHistoryCompareJob(userId, jobId)
   }
-  const result = await queryRun(`DELETE FROM ai_model_compare_jobs
-    WHERE id = ? AND user_id = ? AND status IN ('succeeded','failed','cancelled')`,
-  [String(jobId), Number(userId)])
-  if (!Number(result?.changes || 0)) throw new Error('history_compare_job_not_found')
+  await withTransaction(async run => {
+    const [rows] = await run(`SELECT id FROM ai_model_compare_jobs
+      WHERE id = ? AND user_id = ? AND status IN ('succeeded','failed','cancelled') FOR UPDATE`,
+    [String(jobId), Number(userId)])
+    if (!rows?.[0]) throw new Error('history_compare_job_not_found')
+    await run('DELETE FROM ai_model_compare_checkpoints WHERE job_id = ?', [String(jobId)])
+    await run('DELETE FROM ai_model_compare_jobs WHERE id = ? AND user_id = ?',
+      [String(jobId), Number(userId)])
+  })
   historyCompareJobs.delete(String(jobId))
   return { id: String(jobId), status: 'deleted' }
 }

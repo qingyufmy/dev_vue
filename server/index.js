@@ -36,7 +36,8 @@ import bridgeMaintenanceRoutes from './routes/bridge-maintenance.js'
 import bridgeRuntimeControlRoutes from './routes/bridge-runtime-control.js'
 import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON } from './redis.js'
-import { initAutoSchedulers, startPeriodReviewWorker } from './routes/ai/index.js'
+import { initAutoSchedulers, startPeriodReviewWorker, startManualAnalysisJobs,
+  startHistoryCompareRecoveryWorker } from './routes/ai/index.js'
 import { startOrderIntentReconciler } from './routes/ai/order-intents.js'
 import { startPositionManagementWorker } from './routes/ai/position-management-worker.js'
 import { authMiddleware, tokenVersionMatches } from './middleware/auth.js'
@@ -349,6 +350,7 @@ installFatalProcessHandlers()
   await listenHttpServer(server, PORT)
   console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
 
+  await startHistoryCompareRecoveryWorker()
   const modelUsageRecoveryTimer = setInterval(recoverModelUsageReservations, 5 * 60 * 1000)
   modelUsageRecoveryTimer.unref?.()
   await initAutoSchedulers()
@@ -356,6 +358,7 @@ installFatalProcessHandlers()
   startPositionManagementWorker()
   startAdminPositionProtectionWorker()
   startPeriodReviewWorker()
+  startManualAnalysisJobs()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   startWeeklySystemFlatten()
   startMembershipExpiryNotificationWorker()

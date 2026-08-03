@@ -4841,6 +4841,90 @@ const migrations = [
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_signals' AND INDEX_NAME = 'uk_ai_signal_inference_task'`)
       if (!signalIndexes.length) await queryRun('CREATE UNIQUE INDEX uk_ai_signal_inference_task ON ai_signals (inference_task_id)')
     }
+  },
+  {
+    id: '163_model_compare_checkpoints',
+    async up() {
+      const jobColumns = new Set((await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_compare_jobs'`)).map(row => row.COLUMN_NAME))
+      if (!jobColumns.has('checkpoint_manifest_json')) {
+        await queryRun('ALTER TABLE ai_model_compare_jobs ADD COLUMN checkpoint_manifest_json LONGTEXT DEFAULT NULL AFTER params_json')
+      }
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_compare_checkpoints (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        job_id CHAR(36) NOT NULL,
+        model_id INT NOT NULL,
+        unit_key VARCHAR(191) NOT NULL,
+        unit_index INT NOT NULL,
+        checkpoint_status VARCHAR(24) NOT NULL DEFAULT 'completed',
+        error_code VARCHAR(128) DEFAULT NULL,
+        decision_time_utc_msc BIGINT NOT NULL,
+        outcome_time_utc_msc BIGINT DEFAULT NULL,
+        snapshot_id BIGINT DEFAULT NULL,
+        strategy_fingerprint CHAR(64) NOT NULL,
+        prompt_hash CHAR(64) NOT NULL,
+        snapshot_fingerprint CHAR(64) DEFAULT NULL,
+        model_config_fingerprint CHAR(64) NOT NULL,
+        output_contract_hash CHAR(64) NOT NULL,
+        market_evidence_hash CHAR(64) NOT NULL,
+        result_json LONGTEXT DEFAULT NULL,
+        telemetry_json TEXT DEFAULT NULL,
+        input_evidence_json TEXT DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_model_compare_checkpoint (job_id, model_id, unit_key),
+        KEY idx_model_compare_checkpoint_job (job_id, unit_index)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      const checkpointColumns = new Set((await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_compare_checkpoints'`)).map(row => row.COLUMN_NAME))
+      if (!checkpointColumns.has('checkpoint_status')) {
+        await queryRun("ALTER TABLE ai_model_compare_checkpoints ADD COLUMN checkpoint_status VARCHAR(24) NOT NULL DEFAULT 'completed' AFTER unit_index")
+        if (checkpointColumns.has('status')) {
+          await queryRun("UPDATE ai_model_compare_checkpoints SET checkpoint_status = status WHERE status IN ('submitting','completed','failed')")
+        }
+      }
+      if (!checkpointColumns.has('error_code')) {
+        await queryRun("ALTER TABLE ai_model_compare_checkpoints ADD COLUMN error_code VARCHAR(128) DEFAULT NULL AFTER checkpoint_status")
+      }
+      const resultColumn = (await queryAll(`SELECT IS_NULLABLE FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_compare_checkpoints'
+          AND COLUMN_NAME = 'result_json'`))[0]
+      if (resultColumn?.IS_NULLABLE === 'NO') {
+        await queryRun('ALTER TABLE ai_model_compare_checkpoints MODIFY COLUMN result_json LONGTEXT DEFAULT NULL')
+      }
+    }
+  },
+  {
+    id: '164_manual_analysis_jobs',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_manual_analysis_jobs (
+        job_id CHAR(36) PRIMARY KEY,
+        user_id INT NOT NULL,
+        strategy_id INT NOT NULL,
+        strategy_version INT NOT NULL DEFAULT 1,
+        strategy_prompt_hash CHAR(64) NOT NULL,
+        request_hash CHAR(64) NOT NULL,
+        params_json LONGTEXT NOT NULL,
+        model_task_id CHAR(36) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'queued',
+        stage VARCHAR(48) NOT NULL DEFAULT 'queued',
+        result_json LONGTEXT DEFAULT NULL,
+        signal_id BIGINT DEFAULT NULL,
+        error_code VARCHAR(128) DEFAULT NULL,
+        error_message VARCHAR(512) DEFAULT NULL,
+        cancel_requested TINYINT NOT NULL DEFAULT 0,
+        lease_token CHAR(36) DEFAULT NULL,
+        fencing_token BIGINT NOT NULL DEFAULT 0,
+        deadline_at_utc_msc BIGINT NOT NULL,
+        completed_at_utc_msc BIGINT DEFAULT NULL,
+        created_at_utc_msc BIGINT NOT NULL,
+        updated_at_utc_msc BIGINT NOT NULL,
+        UNIQUE KEY uk_manual_analysis_model_task (model_task_id),
+        KEY idx_manual_analysis_user_created (user_id, created_at_utc_msc),
+        KEY idx_manual_analysis_status (status, updated_at_utc_msc),
+        CONSTRAINT fk_manual_analysis_model_task FOREIGN KEY (model_task_id) REFERENCES ai_model_tasks(task_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

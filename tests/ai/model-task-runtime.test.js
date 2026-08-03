@@ -11,6 +11,7 @@ vi.mock('../../server/db.js', () => ({
 }))
 
 import { assertModelTaskTransition, canTransitionModelTask, createModelTask,
+  markModelTaskCompletedStaleById, markModelTaskSucceededFromResult,
   renewModelTaskLease, transitionModelTask } from '../../server/routes/ai/model-task-runtime.js'
 
 describe('model task runtime state and fencing', () => {
@@ -44,5 +45,21 @@ describe('model task runtime state and fencing', () => {
     await expect(transitionModelTask({ task_id:'task-1', status:'result_ready', lease_token:'old', fencing_token:3 },
       'applying')).rejects.toThrow('model_task_fence_lost')
     expect(mockQueryRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('reconciles a durable result without re-running the worker', async () => {
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:1 }).mockResolvedValueOnce({ affectedRows:1 })
+    await expect(markModelTaskSucceededFromResult('task-1', {
+      resultRef:'ai_signals:88', resultHash:'hash-88',
+    })).resolves.toBe(true)
+    expect(mockQueryRun.mock.calls[0][0]).toContain("status='succeeded'")
+    expect(mockQueryRun.mock.calls[0][0]).toContain('lease_owner=NULL')
+  })
+
+  it('can fail closed as stale from an intermediate state', async () => {
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:1 }).mockResolvedValueOnce({ affectedRows:1 })
+    await expect(markModelTaskCompletedStaleById('task-2', 'manual_analysis_model_stale')).resolves.toBe(true)
+    expect(mockQueryRun.mock.calls[0][0]).toContain("status='completed_stale'")
+    expect(mockQueryRun.mock.calls[0][1]).toContain('manual_analysis_model_stale')
   })
 })

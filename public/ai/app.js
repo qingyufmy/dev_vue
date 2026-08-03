@@ -71,6 +71,11 @@ const state = {
   reviewListError: "",
   reviewListRequestVersion: 0,
   reviewListObserver: null,
+  manualAnalysisJob: null,
+  manualAnalysisPollTimer: null,
+  manualAnalysisPollGeneration: 0,
+  manualAnalysisSubmitting: false,
+  manualAnalysisCancelling: false,
   memoryTierFilter: "all",
   memoryItems: [],
   memorySummaries: [],
@@ -85,6 +90,12 @@ const state = {
   inferenceChartSignalKey: null,
   inferenceChartLayers: { segments: true, centers: true, divergence: true, entries: true, levels: true },
 };
+
+const MANUAL_ANALYSIS_TASK_STORAGE_KEY = "aurum.ai.manual-analysis.task";
+const MANUAL_ANALYSIS_POLL_INTERVAL_MS = 3000;
+const MANUAL_ANALYSIS_TERMINAL_STATUSES = new Set([
+  "succeeded", "failed", "cancelled", "status_unknown", "completed_stale", "expired",
+]);
 
 // ===== History Cache =====
 let _historyCache = null;      // { filters: string, data: object }
@@ -4595,6 +4606,10 @@ async function bootstrap() {
     $('proOverlay')?.classList.add('hidden');
     await loadObserverChannels();
     showApp(true);
+    // Manual non-trading analysis jobs survive a closed modal or browser tab.
+    // Restore the task id after authentication so a later page load can resume
+    // status polling without submitting a second model request.
+    void restoreManualAnalysisJob();
     checkChangelog();
     void checkMembershipExpiryReminder();
     // Connect WebSocket FIRST — all data flows through it (with 10s timeout)
@@ -7349,7 +7364,326 @@ function setManualInferenceModal(open) {
   if (!modal) return;
   modal.classList.toggle("hidden", !open);
   document.body.classList.toggle("modal-open", open);
-  if (open) setTimeout(() => $("analyzeStrategy")?.focus(), 0);
+  if (open) {
+    if (state.manualAnalysisJob && !manualAnalysisJobIsTerminal(state.manualAnalysisJob)) {
+      renderManualAnalysisJobStatus(state.manualAnalysisJob);
+    }
+    setTimeout(() => $("analyzeStrategy")?.focus(), 0);
+  }
+}
+
+function manualAnalysisJobStatus(job) {
+  return String(job?.status || job?.job_status || "queued").trim().toLowerCase();
+}
+
+function manualAnalysisJobIsTerminal(job) {
+  return MANUAL_ANALYSIS_TERMINAL_STATUSES.has(manualAnalysisJobStatus(job));
+}
+
+function manualAnalysisJobMatches(job, { sessionId = "default", strategyId, symbol } = {}) {
+  if (!job?.id) return false;
+  const jobStrategyId = Number(job.strategy_id ?? job.params?.strategy_id);
+  const jobSymbol = String(job.symbol ?? job.params?.symbol ?? "").trim().toUpperCase();
+  return String(job.session_id ?? job.params?.session_id ?? "default") === String(sessionId)
+    && jobStrategyId === Number(strategyId)
+    && jobSymbol === String(symbol || "").trim().toUpperCase();
+}
+
+function readManualAnalysisTask() {
+  try {
+    const raw = localStorage.getItem(MANUAL_ANALYSIS_TASK_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && parsed.id ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistManualAnalysisTask(job) {
+  if (!job?.id) return;
+  try {
+    localStorage.setItem(MANUAL_ANALYSIS_TASK_STORAGE_KEY, JSON.stringify({
+      id: job.id,
+      status: manualAnalysisJobStatus(job),
+      session_id: job.session_id ?? job.params?.session_id ?? "default",
+      strategy_id: job.strategy_id ?? job.params?.strategy_id ?? null,
+      symbol: job.symbol ?? job.params?.symbol ?? null,
+      user_id: state.user?.id ?? null,
+      updated_at: new Date().toISOString(),
+    }));
+  } catch {
+    // localStorage is an enhancement; a blocked storage context must not stop analysis.
+  }
+}
+
+function clearManualAnalysisTask() {
+  try { localStorage.removeItem(MANUAL_ANALYSIS_TASK_STORAGE_KEY); } catch {}
+}
+
+function stopManualAnalysisPolling() {
+  if (state.manualAnalysisPollTimer) clearTimeout(state.manualAnalysisPollTimer);
+  state.manualAnalysisPollTimer = null;
+  state.manualAnalysisPollGeneration += 1;
+}
+
+function manualAnalysisResultSignal(job) {
+  let result = job?.result;
+  if (typeof result === "string") {
+    try { result = JSON.parse(result); } catch { result = null; }
+  }
+  const signal = result?.signal || result?.result?.signal || result?.signal_data || job?.signal;
+  if (signal && typeof signal === "object") return signal;
+  return result && typeof result === "object" && result.id != null ? result : null;
+}
+
+function manualAnalysisErrorMessage(value) {
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return apiErrorMessage(String(value));
+  }
+  if (typeof value === "object") {
+    const nested = value.error && value.error !== value ? value.error : null;
+    if (nested) {
+      const nestedMessage = manualAnalysisErrorMessage(nested);
+      if (nestedMessage) return nestedMessage;
+    }
+    const code = value.code ?? value.error_code ?? value.reason_code ?? "";
+    const message = value.message ?? value.detail ?? value.reason ?? "";
+    const combined = [code, message]
+      .map(item => typeof item === "string" || typeof item === "number" ? String(item).trim() : "")
+      .filter(Boolean)
+      .filter((item, index, items) => items.indexOf(item) === index)
+      .join("：");
+    if (combined) return apiErrorMessage(combined);
+  }
+  return "后台分析未完成，请重新分析";
+}
+
+function manualAnalysisStatusTitle(status) {
+  return {
+    succeeded: "后台分析已完成",
+    failed: "后台分析失败",
+    cancelled: "后台分析已取消",
+    status_unknown: "后台分析状态未知",
+    completed_stale: "后台分析结果已过期",
+    expired: "后台分析任务已过期",
+  }[status] || "后台分析失败";
+}
+
+function manualAnalysisStatusDetail(status, errorMessage = "") {
+  if (status === "status_unknown") return "服务商状态暂时无法确认，为避免重复调用未自动重试。";
+  if (status === "completed_stale") return "后台分析结果已过期，为避免使用过期建议未自动重试，请重新分析。";
+  if (status === "expired") return "后台分析任务已过期，为避免重复调用未自动重试，请重新分析。";
+  if (status === "cancelled") return "本次后台分析已取消，没有生成交易建议。";
+  if (status === "succeeded") return "交易建议已生成，正在刷新分析结果。";
+  return errorMessage || "后台分析未完成，请检查原因后重试。";
+}
+
+function renderManualAnalysisJobStatus(job, { errorMessage = "" } = {}) {
+  const statusEl = $("manualInferenceStatus");
+  if (!statusEl) return;
+  const status = manualAnalysisJobStatus(job);
+  const terminal = manualAnalysisJobIsTerminal(job);
+  const active = !terminal && ["queued", "running"].includes(status);
+  const failure = status === "failed" || status === "cancelled" || status === "status_unknown" || status === "completed_stale" || status === "expired";
+  const title = active ? "后台分析中" : manualAnalysisStatusTitle(status);
+  const detail = active ? "任务已在后台继续执行，可以关闭窗口；关闭窗口不会取消任务。" : manualAnalysisStatusDetail(status, errorMessage);
+  statusEl.className = `manual-inference-status ${active ? "is-background" : failure ? "is-error" : "is-complete"}`;
+  statusEl.innerHTML = `<span class="${active ? "status-spinner" : "status-state-mark"}" aria-hidden="true"></span><div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></div>`;
+  statusEl.classList.remove("hidden");
+  $("manualInferenceAbort")?.classList.toggle("hidden", !active);
+  if (active) {
+    $("runAnalysisBtn").disabled = true;
+    $("manualInferenceClose").disabled = false;
+    $("manualInferenceCancel").disabled = false;
+  } else if (!state.manualAnalysisSubmitting) {
+    $("runAnalysisBtn").disabled = false;
+    $("manualInferenceClose").disabled = false;
+    $("manualInferenceCancel").disabled = false;
+  }
+  initIcons();
+}
+
+async function applyManualAnalysisSignal(best, elapsedMs = null, { autoExecute = false, announce = true } = {}) {
+  if (!best) throw new Error("未返回有效信号");
+  if (best.id != null) {
+    state.latestSignalId = best.id;
+    _lastSignalId = best.id;
+    setAnalysisSelectionIntent(best.id, { source:"manual", followLatest:true });
+  }
+  renderSignal(best, elapsedMs);
+  setManualInferenceModal(false);
+  showSignalNotification(best);
+  await loadSignals({ skipResultRender: true });
+  const firstItem = document.querySelector(".analysis-history-item");
+  if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  if (!announce) return;
+  const elapsed = Number(elapsedMs);
+  if (autoExecute && best.signal_type !== "hold" && !best.auto_executed) toast("信号已生成，但自动执行未完成；请查看风控决策与拒绝原因", "warning");
+  else toast(autoExecute && best.auto_executed ? `信号已生成并通过风控执行，耗时 ${(elapsed/1000).toFixed(1)}s` : Number.isFinite(elapsed) ? `信号已生成，耗时 ${(elapsed/1000).toFixed(1)}s` : "信号已生成", "success");
+}
+
+async function finishManualAnalysisJob(job, { announce = true } = {}) {
+  const status = manualAnalysisJobStatus(job);
+  stopManualAnalysisPolling();
+  if (status === "succeeded") {
+    const best = manualAnalysisResultSignal(job);
+    if (!best) {
+      const failedJob = { ...job, status:"failed", error:"manual_analysis_result_missing" };
+      state.manualAnalysisJob = null;
+      clearManualAnalysisTask();
+      renderManualAnalysisJobStatus(failedJob, { errorMessage:"任务已结束，但没有返回有效交易建议，请重新分析。" });
+      if (announce) toast("后台分析未返回有效交易建议，请重新分析", "error");
+      return;
+    }
+    state.manualAnalysisJob = null;
+    clearManualAnalysisTask();
+    const elapsedMs = Number(job.elapsed_ms ?? job.duration_ms ?? job.metrics?.elapsed_ms);
+    await applyManualAnalysisSignal(best, Number.isFinite(elapsedMs) ? elapsedMs : null, { announce:false });
+    if (announce) toast(Number.isFinite(elapsedMs) ? `后台分析完成，耗时 ${(elapsedMs / 1000).toFixed(1)}s` : "后台分析完成，交易建议已生成", "success");
+    return;
+  }
+  const terminalJob = { ...job, status };
+  state.manualAnalysisJob = null;
+  clearManualAnalysisTask();
+  const errorMessage = manualAnalysisErrorMessage(job.error || job.error_code || "");
+  renderManualAnalysisJobStatus(terminalJob, { errorMessage });
+  if (announce) {
+    const statusMessage = manualAnalysisStatusDetail(status, errorMessage);
+    toast(status === "cancelled" ? "后台分析已取消" : status === "status_unknown" ? statusMessage : `${manualAnalysisStatusTitle(status)}：${statusMessage}`, status === "cancelled" ? "info" : "error");
+  }
+}
+
+function scheduleManualAnalysisPoll(job, { announce = true } = {}) {
+  if (!job?.id || manualAnalysisJobIsTerminal(job)) {
+    if (job?.id && manualAnalysisJobIsTerminal(job)) void finishManualAnalysisJob(job, { announce });
+    return;
+  }
+  stopManualAnalysisPolling();
+  state.manualAnalysisJob = job;
+  persistManualAnalysisTask(job);
+  renderManualAnalysisJobStatus(job);
+  const generation = state.manualAnalysisPollGeneration;
+  const poll = async () => {
+    if (generation !== state.manualAnalysisPollGeneration || !state.manualAnalysisJob?.id) return;
+    try {
+      const response = await api(`/api/ai/manual-analysis/jobs/${encodeURIComponent(job.id)}`, { timeout:20000 });
+      const next = response.job || response;
+      if (generation !== state.manualAnalysisPollGeneration) return;
+      state.manualAnalysisJob = next;
+      if (manualAnalysisJobIsTerminal(next)) {
+        await finishManualAnalysisJob(next, { announce });
+        return;
+      }
+      persistManualAnalysisTask(next);
+      renderManualAnalysisJobStatus(next);
+    } catch (error) {
+      if (generation !== state.manualAnalysisPollGeneration) return;
+      if (Number(error?.status) === 404) {
+        await finishManualAnalysisJob({ ...job, status:"failed", error:"manual_analysis_job_missing" }, { announce });
+        return;
+      }
+      renderManualAnalysisJobStatus(state.manualAnalysisJob || job, { errorMessage:"暂时无法读取任务状态，系统会自动重试。" });
+    }
+    if (generation === state.manualAnalysisPollGeneration && state.manualAnalysisJob?.id) {
+      state.manualAnalysisPollTimer = setTimeout(poll, MANUAL_ANALYSIS_POLL_INTERVAL_MS);
+    }
+  };
+  state.manualAnalysisPollTimer = setTimeout(poll, MANUAL_ANALYSIS_POLL_INTERVAL_MS);
+}
+
+async function restoreManualAnalysisJob() {
+  const stored = readManualAnalysisTask();
+  if (!stored?.id) return;
+  if (stored.user_id && state.user?.id && Number(stored.user_id) !== Number(state.user.id)) {
+    clearManualAnalysisTask();
+    return;
+  }
+  state.manualAnalysisJob = stored;
+  if (manualAnalysisJobIsTerminal(stored)) {
+    clearManualAnalysisTask();
+    state.manualAnalysisJob = null;
+    return;
+  }
+  scheduleManualAnalysisPoll(stored, { announce:true });
+}
+
+async function cancelManualAnalysisJob() {
+  const job = state.manualAnalysisJob;
+  if (!job?.id || manualAnalysisJobIsTerminal(job) || state.manualAnalysisCancelling) return;
+  if (!await showConfirm("确认取消后台分析", "取消后本次任务不会继续调用模型，也不会生成交易建议。", { confirmText:"确认取消", danger:true })) return;
+  state.manualAnalysisCancelling = true;
+  $("manualInferenceAbort").disabled = true;
+  try {
+    const response = await api(`/api/ai/manual-analysis/jobs/${encodeURIComponent(job.id)}`, { method:"DELETE", timeout:20000 });
+    const cancelled = response.job || { ...job, status:"cancelled" };
+    stopManualAnalysisPolling();
+    state.manualAnalysisJob = null;
+    clearManualAnalysisTask();
+    renderManualAnalysisJobStatus({ ...cancelled, status:"cancelled" });
+    toast("后台分析已取消", "info");
+  } catch (error) {
+    toast(error.message, "error");
+    renderManualAnalysisJobStatus(job);
+  } finally {
+    state.manualAnalysisCancelling = false;
+    $("manualInferenceAbort")?.removeAttribute("disabled");
+  }
+}
+
+async function runManualAnalysisAsync({ strategyId, symbol }) {
+  if (state.manualAnalysisSubmitting) return;
+  const active = state.manualAnalysisJob && !manualAnalysisJobIsTerminal(state.manualAnalysisJob)
+    ? state.manualAnalysisJob : null;
+  const stored = readManualAnalysisTask();
+  const existing = active || (stored && !manualAnalysisJobIsTerminal(stored) ? stored : null);
+  if (existing) {
+    if (manualAnalysisJobMatches(existing, { strategyId, symbol })) {
+      state.manualAnalysisJob = existing;
+      scheduleManualAnalysisPoll(existing);
+      toast("已有后台分析任务，已继续跟踪", "info");
+    } else {
+      toast("已有其他后台分析任务正在运行，请等待完成或先取消", "warning");
+    }
+    return;
+  }
+
+  state.manualAnalysisSubmitting = true;
+  $("runAnalysisBtn").disabled = true;
+  $("executeSignalBtn").disabled = true;
+  $("manualInferenceClose").disabled = false;
+  $("manualInferenceCancel").disabled = false;
+  setText("analysisLatency", "后台分析中");
+  setText("signalFreshness", "等待结果");
+  renderManualAnalysisJobStatus({ status:"running" });
+  try {
+    const response = await api("/api/ai/manual-analysis/jobs", {
+      method:"POST",
+      body:{ session_id:"default", strategy_id:strategyId, symbol, include_positions:false, auto_execute:false },
+      timeout:20000,
+    });
+    const job = response.job || response;
+    if (!job?.id) throw new Error("后台分析任务未返回任务编号");
+    state.manualAnalysisJob = job;
+    persistManualAnalysisTask(job);
+    if (manualAnalysisJobIsTerminal(job)) await finishManualAnalysisJob(job);
+    else scheduleManualAnalysisPoll(job);
+  } catch (error) {
+    state.manualAnalysisJob = null;
+    clearManualAnalysisTask();
+    setText("analysisLatency", "--");
+    setText("signalFreshness", "--");
+    renderManualAnalysisJobStatus({ status:"failed" }, { errorMessage:error.message });
+    toast(error.message, "error");
+  } finally {
+    state.manualAnalysisSubmitting = false;
+    if (!state.manualAnalysisJob) {
+      $("runAnalysisBtn").disabled = false;
+      $("manualInferenceAbort")?.classList.add("hidden");
+    }
+    initIcons();
+  }
 }
 
 async function runAnalysis() {
@@ -7374,10 +7708,13 @@ async function runAnalysis() {
 
   if (autoExecute && !await showConfirm("确认本次自动执行", `策略生成的非观望信号将立即经过风控并尝试下单。\n\n策略：${$("analyzeStrategy").selectedOptions[0]?.textContent || strategyId}\n品种：${symbol}`, { confirmText:"确认推理并自动执行", danger:true })) return;
 
+  if (!autoExecute) return runManualAnalysisAsync({ strategyId, symbol });
+
   $("runAnalysisBtn").disabled = true;
   $("executeSignalBtn").disabled = true;
   const statusEl = $("manualInferenceStatus");
   statusEl?.classList.remove("hidden");
+  $("manualInferenceAbort")?.classList.add("hidden");
   $("manualInferenceClose").disabled = true;
   $("manualInferenceCancel").disabled = true;
   setText("analysisLatency", "推理中");
@@ -7392,19 +7729,7 @@ async function runAnalysis() {
     const best = result?.signal;
     if (!best) throw new Error("未返回有效信号");
     const elapsed = Math.round(performance.now() - started);
-    if (best.id != null) {
-      state.latestSignalId = best.id;
-      _lastSignalId = best.id;
-      setAnalysisSelectionIntent(best.id, { source:"manual", followLatest:true });
-    }
-    renderSignal(best, elapsed);
-    setManualInferenceModal(false);
-    showSignalNotification(best);
-    await loadSignals({ skipResultRender: true });
-    const firstItem = document.querySelector(".analysis-history-item");
-    if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    if (autoExecute && best.signal_type !== "hold" && !best.auto_executed) toast("信号已生成，但自动执行未完成；请查看风控决策与拒绝原因", "warning");
-    else toast(autoExecute && best.auto_executed ? `信号已生成并通过风控执行，耗时 ${(elapsed/1000).toFixed(1)}s` : `信号已生成，耗时 ${(elapsed/1000).toFixed(1)}s`, "success");
+    await applyManualAnalysisSignal(best, elapsed, { autoExecute });
   } catch (error) {
     setText("analysisLatency", "--");
     setText("signalFreshness", "--");
@@ -9203,8 +9528,10 @@ function bindEvents() {
   $("openManualInferenceBtn")?.addEventListener("click", () => setManualInferenceModal(true));
   $("manualInferenceClose")?.addEventListener("click", () => setManualInferenceModal(false));
   $("manualInferenceCancel")?.addEventListener("click", () => setManualInferenceModal(false));
+  $("manualInferenceAbort")?.addEventListener("click", () => cancelManualAnalysisJob());
   $("manualInferenceModal")?.addEventListener("click", event => {
-    if (event.target === $("manualInferenceModal") && !$("runAnalysisBtn")?.disabled) setManualInferenceModal(false);
+    const asyncActive = state.manualAnalysisSubmitting || (state.manualAnalysisJob && !manualAnalysisJobIsTerminal(state.manualAnalysisJob));
+    if (event.target === $("manualInferenceModal") && (asyncActive || !$("runAnalysisBtn")?.disabled)) setManualInferenceModal(false);
   });
   $("compareResultsClose")?.addEventListener("click", () => setCompareResultsModal(false));
   $("compareResultsCloseBtn")?.addEventListener("click", () => setCompareResultsModal(false));
