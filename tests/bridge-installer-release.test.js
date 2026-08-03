@@ -8,9 +8,9 @@ describe('bridge installer release descriptor', () => {
       version:'3.0.0',
       v3:true,
       buildDate:'2026-08-03',
-      fileSize:26533886,
-      sha256:'179D38CFA9B6E63BBBB035A25ABCD3718664903AE929756E1ADEA890C0789EF8',
-      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'179d38cfa9b6e63bbbb035a25abcd3718664903ae929756e1adea890c0789ef8'}/LiangjianBridgeSetup.exe`,
+      fileSize:26540225,
+      sha256:'2905F7AB40600AA6D75FE083C3E70F3FA5A8735312F2E848A8B283A91669599B',
+      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'2905f7ab40600aa6d75fe083c3e70f3fa5a8735312f2e848a8b283a91669599b'}/LiangjianBridgeSetup.exe`,
     })
   })
 

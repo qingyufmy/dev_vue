@@ -8,8 +8,8 @@ const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.me
 
 describe('AI position management workspace', () => {
   it('publishes the automatic-exit UI with a fresh asset cache key', () => {
-    expect(html).toContain('/ai/styles.css?v=20260803bridge300r2')
-    expect(html).toContain('/ai/app.js?v=20260803bridge300r2')
+    expect(html).toContain('/ai/styles.css?v=20260803bridge300r3')
+    expect(html).toContain('/ai/app.js?v=20260803bridge300r3')
   })
 
   it('keeps position management inside AI trader instead of adding another top-level module', () => {

@@ -4916,7 +4916,7 @@ function initBridgeModal() {
   $("bridgePauseConfirm")?.addEventListener("click", () => updateBridgeRuntimeControl(false));
 
   $("downloadExe")?.addEventListener("click", async () => {
-    let url = "https://qiniu.acadfx.com/bridge/bootstrapper/179d38cfa9b6e63bbbb035a25abcd3718664903ae929756e1adea890c0789ef8/LiangjianBridgeSetup.exe";
+    let url = "https://qiniu.acadfx.com/bridge/bootstrapper/2905f7ab40600aa6d75fe083c3e70f3fa5a8735312f2e848a8b283a91669599b/LiangjianBridgeSetup.exe";
     let version = "3.0.0";
     try {
       const resp = await fetch("/api/bridge/version");
