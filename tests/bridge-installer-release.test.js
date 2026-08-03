@@ -7,10 +7,10 @@ describe('bridge installer release descriptor', () => {
     expect(resolveBridgeInstallerRelease({})).toMatchObject({
       version:'3.0.0',
       v3:true,
-      buildDate:'2026-08-02',
-      fileSize:26521132,
-      sha256:'79389AFD8EF9FE5E9687399D0FD96D5C50767586C46382E117C1F079287FD7B9',
-      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'79389afd8ef9fe5e9687399d0fd96d5c50767586c46382e117c1f079287fd7b9'}/LiangjianBridgeSetup.exe`,
+      buildDate:'2026-08-03',
+      fileSize:26533886,
+      sha256:'179D38CFA9B6E63BBBB035A25ABCD3718664903AE929756E1ADEA890C0789EF8',
+      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'179d38cfa9b6e63bbbb035a25abcd3718664903ae929756e1adea890c0789ef8'}/LiangjianBridgeSetup.exe`,
     })
   })
 
