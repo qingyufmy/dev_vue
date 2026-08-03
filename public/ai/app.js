@@ -5238,6 +5238,7 @@ let _klineLastBar = null;
 let _klineCandles = [];
 let _klinePositionSeries = [];
 let _klinePositionTooltip = null;
+const KLINE_POSITION_ENTRY_COLOR = '#d4af37';
 let _klineVolRefreshTimer = null;
 let _klineMutationObserver = null;
 let _klineResizeObserver = null;
@@ -5343,35 +5344,30 @@ function syncKlinePositionEntries() {
   const markerSummary = [];
   for (const position of positions) {
     const buy = String(position.type || '').toLowerCase() === 'buy';
-    const color = buy ? '#ef5b66' : '#20b486';
     const direction = buy ? '多仓' : '空仓';
     const price = Number(position.price_open);
     const entryTime = klinePositionTimeSeconds(position);
     const start = klinePositionStartIndex(_klineCandles, entryTime);
+    markerSummary.push(`${direction} ${volumeText(position.volume)}，入场价 ${fmt(price, klinePositionPriceDigits(position))}${start.visible ? '' : '，入场时间在当前图表范围外'}`);
+    if (!start.visible) continue;
     const series = _klineChart.addLineSeries({
-      title:`${direction}入场`, color, lineWidth:1,
-      lineStyle:LightweightCharts.LineStyle.Dashed,
-      pointMarkersVisible:false, crosshairMarkerVisible:true,
-      crosshairMarkerRadius:4, lastValueVisible:true, priceLineVisible:false,
+      color:KLINE_POSITION_ENTRY_COLOR,
+      lineVisible:false,
+      pointMarkersVisible:true,
+      pointMarkersRadius:4,
+      crosshairMarkerVisible:false,
+      lastValueVisible:false,
+      priceLineVisible:false,
       priceFormat:{ type:'price', precision:klinePositionPriceDigits(position), minMove:10 ** -klinePositionPriceDigits(position) },
     });
-    series.setData(_klineCandles.slice(start.index).map(candle => ({ time:candle.time, value:price })));
-    if (start.visible) {
-      series.setMarkers([{
-        time:_klineCandles[start.index].time,
-        position:'inBar', color,
-        shape:buy ? 'arrowUp' : 'arrowDown',
-        text:`${direction}入场`,
-      }]);
-    }
-    _klinePositionSeries.push({ series, position, direction, color, entryVisible:start.visible });
-    markerSummary.push(`${direction} ${volumeText(position.volume)}，入场价 ${fmt(price, klinePositionPriceDigits(position))}${start.visible ? '' : '，入场时间在当前图表范围外'}`);
+    series.setData([{ time:_klineCandles[start.index].time, value:price }]);
+    _klinePositionSeries.push({ series, position, direction });
   }
   const container = document.getElementById('klineChart');
   if (container) {
     container.setAttribute('role', 'img');
     container.setAttribute('aria-label', markerSummary.length
-      ? `K 线图；当前品种持仓：${markerSummary.join('；')}`
+      ? `K 线图；当前品种持仓入场点使用金色标记：${markerSummary.join('；')}`
       : 'K 线图；当前品种没有持仓入场标记');
   }
   ensureKlinePositionTooltip();
@@ -5381,17 +5377,21 @@ function handleKlinePositionCrosshair(param) {
   const tooltip = ensureKlinePositionTooltip();
   const container = document.getElementById('klineChart');
   if (!tooltip || !container || !param?.point || !param.seriesData) return hideKlinePositionTooltip();
-  const matches = _klinePositionSeries.filter(item => param.seriesData.has(item.series));
+  const matches = _klinePositionSeries.filter(item => {
+    if (!param.seriesData.has(item.series)) return false;
+    const coordinate = item.series.priceToCoordinate(Number(item.position.price_open));
+    return Number.isFinite(coordinate) && Math.abs(param.point.y - coordinate) <= 12;
+  });
   if (!matches.length || param.point.x < 0 || param.point.y < 0
     || param.point.x > container.clientWidth || param.point.y > container.clientHeight) {
     return hideKlinePositionTooltip();
   }
-  tooltip.innerHTML = matches.map(({ position, direction, entryVisible }) => {
+  tooltip.innerHTML = matches.map(({ position, direction }) => {
     const buy = direction === '多仓';
     const digits = klinePositionPriceDigits(position);
     return `<div class="kline-position-tooltip-row ${buy ? 'is-buy' : 'is-sell'}">
       <strong>${direction}</strong><span class="num">${escapeHtml(volumeText(position.volume))}</span>
-      <small>入场 ${fmt(position.price_open, digits)} · #${escapeHtml(position.ticket || '--')}${entryVisible ? '' : ' · 早于图表范围'}</small>
+      <small>入场 ${fmt(position.price_open, digits)} · #${escapeHtml(position.ticket || '--')}</small>
     </div>`;
   }).join('');
   tooltip.hidden = false;
