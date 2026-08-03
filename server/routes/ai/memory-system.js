@@ -6,6 +6,7 @@ import { sha256 } from './inference-snapshots.js'
 import { canManagePlatformAiContent } from './platform-content-access.js'
 import { getEffectiveFeatureFlags, isAiFeatureEnabled } from './rollout-governance.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
+import { createShadowModelTaskTracker } from './model-task-tracker.js'
 
 const DEFAULT_BUDGET = 800
 const MAX_BUDGET = 1600
@@ -764,9 +765,30 @@ async function claimCompressionJob() {
     if (!rows[0]) return null
     const token = crypto.randomUUID()
     await run(`UPDATE memory_compression_jobs SET status = 'leased', lease_token = ?, lease_expires_at = ?,
-      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [token, afterSeconds(180), beijingNow(), rows[0].id])
+      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [token, afterSeconds(120), beijingNow(), rows[0].id])
     return { ...rows[0], lease_token: token, attempt_count: Number(rows[0].attempt_count) + 1 }
   })
+}
+
+function startMemoryCompressionLeaseHeartbeat(job) {
+  const controller = new AbortController()
+  let stopped = false
+  let pending = null
+  const renew = async () => {
+    if (stopped || pending) return
+    pending = queryRun(`UPDATE memory_compression_jobs SET lease_expires_at = ?, updated_at = ?
+      WHERE id = ? AND status = 'leased' AND lease_token = ?`,
+    [afterSeconds(120), beijingNow(), job.id, job.lease_token]).then(result => {
+      if (Number(result?.affectedRows ?? result?.changes ?? 0) !== 1 && !controller.signal.aborted) {
+        controller.abort(new Error('compression_lease_lost'))
+      }
+    }).catch(error => { if (!controller.signal.aborted) controller.abort(error) }).finally(() => { pending = null })
+    await pending
+  }
+  const timer = setInterval(renew, 30_000)
+  timer.unref?.()
+  return { signal:controller.signal, assertOwned:() => controller.signal.throwIfAborted(),
+    async stop() { stopped = true; clearInterval(timer); if (pending) await pending } }
 }
 
 function modelEndpoint(model) {
@@ -780,6 +802,8 @@ function modelEndpoint(model) {
 export async function runMemoryCompressionOnce({ requestModel = requestJsonObject } = {}) {
   const job = await claimCompressionJob()
   if (!job) return { claimed: false }
+  const lease = startMemoryCompressionLeaseHeartbeat(job)
+  job._deadlineAtMs = Date.now() + 60 * 60_000
   try {
     if (!await isAiFeatureEnabled('memory_compression_enabled', job.user_id)) {
       await queryRun(`UPDATE memory_compression_jobs SET status = 'skipped', last_error_code = 'memory_compression_disabled',
@@ -794,12 +818,27 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
     const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: null, usage: 'memory_compression' })
     if (!resolved.model) throw new Error(resolved.error || 'compression_model_unavailable')
     const endpoint = modelEndpoint(resolved.model)
+    const tracker = await createShadowModelTaskTracker({
+      taskKind:'memory_compression', queueClass:'background', ownerUserId:job.user_id,
+      domainType:'memory_compression_job', domainId:job.id,
+      idempotencyKey:`memory_compression:${job.id}:${job.source_set_hash}`,
+      snapshotHash:job.source_set_hash, inputHash:job.source_set_hash,
+      provider:resolved.model.provider, model:resolved.model.model_name,
+      modelProfileId:resolved.model_profile_id, protocol:endpoint.protocol,
+      credentialSource:resolved.credential_source, frozenContext:{ scope_key:job.scope_key, source_set_hash:job.source_set_hash },
+      maxAttempts:Number(job.max_attempts) || 3, taskDeadlineAtUtcMs:job._deadlineAtMs,
+    }, { workerId:`memory-compression:${process.pid}`, linkTask:taskId => queryRun(`UPDATE memory_compression_jobs
+      SET model_task_id = COALESCE(model_task_id, ?) WHERE id = ?`, [taskId, job.id]) })
+    job._modelTracker = tracker
     const input = current.map(item => ({ id: Number(item.id), scope: parse(item.scope_json, {}), conditions: parse(item.conditions_json, {}), lesson: item.lesson_text, anti_pattern: item.anti_pattern_text }))
     const category = current[0] ? memoryCategory(current[0]) : 'general'
     const applicability = mergeMemoryApplicability(current)
     const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider, model: resolved.model.model_name,
       temperature: 0.1, maxTokens: Math.min(resolved.model.max_tokens || 1600, 1800), thinkingEnabled: resolved.model.thinking_enabled,
       reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
+      timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs,
+      signal:lease.signal, onProviderRequest:event => tracker.onProviderRequest(event),
+      onProviderUsage:event => tracker.onProviderUsage(event),
       messages: [{ role: 'system', content: '把用户确认的交易经验压缩成保留适用条件和冲突边界的摘要。不得创造新规则，不得提高仓位或风险。只返回 JSON。' },
         { role: 'user', content: JSON.stringify({ output: { summary: 'string <= 1200 tokens', source_memory_ids: ids }, memories: input }) }],
       usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'memory_compression', strategyId: null },
@@ -807,6 +846,9 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
     const outputIds = Array.isArray(output.source_memory_ids) ? output.source_memory_ids.map(Number).sort((a, b) => a - b) : []
     const summaryText = sanitizeMemoryText(output.summary, 12000)
     if (!summaryText || tokenCount(summaryText) > SUMMARY_MAX_TOKENS || JSON.stringify(outputIds) !== JSON.stringify(ids)) throw new Error('invalid_compression_output')
+    await tracker.resultReady({ resultHash:sha256(JSON.stringify(output)) })
+    lease.assertOwned()
+    await tracker.applying()
     await withTransaction(async run => {
       const [locked] = await run('SELECT * FROM memory_compression_jobs WHERE id = ? FOR UPDATE', [job.id])
       if (!locked[0] || locked[0].lease_token !== job.lease_token || locked[0].status !== 'leased') throw new Error('compression_lease_lost')
@@ -826,12 +868,17 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
       await run(`UPDATE memory_compression_jobs SET status = 'succeeded', completed_at = ?, lease_token = NULL,
         lease_expires_at = NULL, updated_at = ? WHERE id = ?`, [now, now, job.id])
     })
+    await tracker.succeeded({ resultRef:`memory_scope:${job.scope_key}` })
     return { claimed: true, status: 'succeeded', scopeKey: job.scope_key }
   } catch (error) {
+    await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
     const exhausted = job.attempt_count >= Number(job.max_attempts)
     await queryRun(`UPDATE memory_compression_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
       lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`, [exhausted ? 'failed' : 'queued', safeError(error), beijingNow(), job.id, job.lease_token])
     return { claimed: true, status: 'failed', error: safeError(error) }
+  } finally {
+    await job._modelTracker?.stop()
+    await lease.stop()
   }
 }
 

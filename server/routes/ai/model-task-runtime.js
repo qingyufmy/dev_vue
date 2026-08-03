@@ -10,11 +10,11 @@ const TRANSITIONS = Object.freeze({
   leased:['preparing', 'queued', 'cancelled', 'failed_terminal'],
   preparing:['submitted', 'retry_wait', 'failed_terminal', 'cancelled'],
   submitted:['provider_running', 'provider_quiet', 'status_unknown', 'response_received', 'retry_wait', 'failed_terminal', 'cancelled'],
-  provider_running:['provider_quiet', 'status_unknown', 'response_received', 'failed_terminal', 'cancelled'],
-  provider_quiet:['provider_running', 'status_unknown', 'response_received', 'failed_terminal', 'cancelled'],
+  provider_running:['provider_quiet', 'status_unknown', 'response_received', 'retry_wait', 'failed_terminal', 'cancelled'],
+  provider_quiet:['provider_running', 'status_unknown', 'response_received', 'retry_wait', 'failed_terminal', 'cancelled'],
   status_unknown:['reconciling', 'response_received', 'failed_terminal', 'completed_stale', 'cancelled'],
   reconciling:['provider_running', 'provider_quiet', 'status_unknown', 'response_received', 'retry_wait', 'failed_terminal'],
-  response_received:['validating', 'failed_terminal'],
+  response_received:['validating', 'retry_wait', 'failed_terminal'],
   validating:['repairing', 'retry_wait', 'result_ready', 'failed_terminal', 'completed_rejected'],
   repairing:['submitted', 'retry_wait', 'result_ready', 'failed_terminal'],
   retry_wait:['queued', 'cancelled', 'failed_terminal'],
@@ -97,6 +97,28 @@ export async function claimNextModelTask({ taskKinds = null, leaseMs = 120_000, 
   })
 }
 
+export async function claimModelTaskById(taskId, { leaseMs = 120_000, workerId = null } = {}) {
+  return withTransaction(async run => {
+    const now = Date.now()
+    const [rows] = await run(`SELECT * FROM ai_model_tasks WHERE task_id = ? FOR UPDATE`, [taskId])
+    const task = rows[0]
+    if (!task || !['queued', 'retry_wait'].includes(task.status)
+      || Number(task.scheduled_at_utc_msc) > now
+      || (Number(task.lease_expires_at_utc_msc) > now && task.lease_token)) return null
+    const leaseToken = crypto.randomUUID()
+    const fencingToken = Number(task.fencing_token || 0) + 1
+    const expiresAt = now + Math.max(1_000, Number(leaseMs) || 120_000)
+    await run(`UPDATE ai_model_tasks SET status = 'leased', lease_token = ?, fencing_token = ?,
+      lease_owner = ?, lease_expires_at_utc_msc = ?, last_activity_at_utc_msc = ?,
+      attempt_count = attempt_count + 1, updated_at_utc_msc = ? WHERE task_id = ?`,
+    [leaseToken, fencingToken, workerId || null, expiresAt, now, now, taskId])
+    await appendModelTaskEvent(taskId, 'task_leased', { worker_id:workerId, fencing_token:fencingToken }, null, run)
+    return { ...task, status:'leased', lease_token:leaseToken, fencing_token:fencingToken,
+      lease_owner:workerId || null, lease_expires_at_utc_msc:expiresAt,
+      attempt_count:Number(task.attempt_count || 0) + 1 }
+  })
+}
+
 export async function renewModelTaskLease(task, leaseMs = 120_000) {
   const now = Date.now()
   const result = await queryRun(`UPDATE ai_model_tasks SET lease_expires_at_utc_msc = ?,
@@ -130,14 +152,15 @@ export async function transitionModelTask(task, toStatus, patch = {}) {
 
 export async function beginModelTaskAttempt(task, input = {}) {
   const now = Date.now()
+  const attemptNo = Math.max(1, Number(input.attemptNo) || Number(task.attempt_count) || 1)
   const result = await queryRun(`INSERT INTO ai_model_task_attempts
     (task_id, attempt_no, fencing_token, provider_request_id, provider_idempotency_key,
      status, request_started_at_utc_msc, last_activity_at_utc_msc, created_at_utc_msc, updated_at_utc_msc)
     VALUES (?, ?, ?, ?, ?, 'submitted', ?, ?, ?, ?)`,
-  [task.task_id, Number(task.attempt_count), Number(task.fencing_token), input.providerRequestId || null,
+  [task.task_id, attemptNo, Number(task.fencing_token), input.providerRequestId || null,
     input.providerIdempotencyKey || null, now, now, now, now])
-  await appendModelTaskEvent(task.task_id, 'attempt_started', { attempt_no:Number(task.attempt_count) }, result.insertId)
-  return { id:result.insertId, task_id:task.task_id, attempt_no:Number(task.attempt_count),
+  await appendModelTaskEvent(task.task_id, 'attempt_started', { attempt_no:attemptNo }, result.insertId)
+  return { id:result.insertId, task_id:task.task_id, attempt_no:attemptNo,
     fencing_token:Number(task.fencing_token), status:'submitted' }
 }
 

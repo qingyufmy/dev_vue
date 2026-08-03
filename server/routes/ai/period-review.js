@@ -12,6 +12,7 @@ import { createPlatformExperienceCandidateFromApprovedPeriodReview } from './pla
 import { canManagePlatformAiContent, platformAiContentManagerSql } from './platform-content-access.js'
 import { applyDefaultObserverClockBootstrap } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
+import { createShadowModelTaskTracker } from './model-task-tracker.js'
 
 const DAY_MS = 86400000
 const DAILY_GRACE_MINUTES = 30
@@ -794,6 +795,34 @@ function modelEndpoint(model) {
   return { protocol, url: `${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}` }
 }
 
+async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, taskKind) {
+  const tracker = await createShadowModelTaskTracker({
+    taskKind,
+    queueClass:'background',
+    ownerUserId:job.user_id,
+    strategyId:job.strategy_id,
+    domainType:'period_review_job',
+    domainId:job.id,
+    idempotencyKey:`period_review:${job.id}:${job.idempotency_key}`,
+    snapshotHash:job.evidence_hash || sha256(JSON.stringify(evidence)),
+    inputHash:sha256(JSON.stringify(evidence)),
+    provider:resolved.model.provider,
+    model:resolved.model.model_name,
+    modelProfileId:resolved.model_profile_id,
+    protocol:endpoint.protocol,
+    credentialSource:resolved.credential_source,
+    frozenContext:{ period_case_id:Number(job.period_case_id), evidence_hash:job.evidence_hash },
+    maxAttempts:Number(job.max_attempts) || 3,
+    taskDeadlineAtUtcMs:job._deadlineAtMs,
+  }, {
+    workerId:`period-review:${process.pid}`,
+    linkTask:taskId => queryRun(`UPDATE period_review_jobs SET model_task_id = COALESCE(model_task_id, ?)
+      WHERE id = ?`, [taskId, job.id]),
+  })
+  job._modelTracker = tracker
+  return tracker
+}
+
 async function claimDailyReviewJob() {
   return withTransaction(async run => {
     const [rows] = await run(`SELECT jobs.*, cases.user_id, cases.strategy_id, cases.evidence_json, cases.evidence_hash
@@ -821,6 +850,7 @@ async function generateDailyReview(job, requestModel) {
   const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: job.strategy_id, usage: 'review' })
   if (!resolved.model) throw new Error(resolved.error || 'daily_review_model_unavailable')
   const endpoint = modelEndpoint(resolved.model)
+  const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'daily_review')
   const outcomeIds = evidence.sources.map(item => Number(item.outcome_id))
   const shape = { period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
     trade_assessments: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence', summary: 'string', issue_codes: ['string'] })),
@@ -848,10 +878,14 @@ async function generateDailyReview(job, requestModel) {
       { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
     ],
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
+    onProviderRequest:event => tracker.onProviderRequest(event),
+    onProviderUsage:event => tracker.onProviderUsage(event),
     onProgress: stage => setPeriodReviewJobStage(job, stage),
     validateObject: value => validateDailyReviewContent(value, outcomeIds),
   })
-  return { content: validateDailyReviewContent(output, outcomeIds), resolved }
+  const content = validateDailyReviewContent(output, outcomeIds)
+  await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
+  return { content, resolved }
 }
 
 async function finishDailyReviewSuccess(job, generated) {
@@ -910,15 +944,19 @@ export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObjec
     if (!await isAiFeatureEnabled('review_generation_enabled', job.user_id)) return skipDisabledPeriodReviewJob(job)
     const generated = await generateDailyReview(job, requestModel)
     lease.assertOwned()
+    await job._modelTracker?.applying()
     await finishDailyReviewSuccess(job, generated)
+    await job._modelTracker?.succeeded({ resultRef:`period_review_case:${job.period_case_id}` })
     await setPeriodReviewJobStage(job, 'succeeded', 'success')
     return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
   } catch (error) {
+    await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
     await finishDailyReviewFailure(job, error)
     await setPeriodReviewJobStage(job, job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
       job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
     return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
   } finally {
+    await job._modelTracker?.stop()
     await lease.stop()
   }
 }
@@ -950,6 +988,7 @@ async function generateMonthlyReview(job, requestModel) {
   const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: job.strategy_id, usage: 'review' })
   if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
   const endpoint = modelEndpoint(resolved.model)
+  const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'monthly_review_merge')
   const dailyCaseIds = evidence.sources.map(item => Number(item.period_case_id))
   const approvedDailyCaseIds = evidence.sources.filter(item => item.review_status === 'approved').map(item => Number(item.period_case_id))
   const shape = { period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
@@ -983,10 +1022,14 @@ async function generateMonthlyReview(job, requestModel) {
       { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
     ],
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
+    onProviderRequest:event => tracker.onProviderRequest(event),
+    onProviderUsage:event => tracker.onProviderUsage(event),
     onProgress: stage => setPeriodReviewJobStage(job, stage),
     validateObject: value => validateMonthlyReviewContent(value, dailyCaseIds, approvedDailyCaseIds),
   })
-  return { content: validateMonthlyReviewContent(output, dailyCaseIds, approvedDailyCaseIds), resolved }
+  const content = validateMonthlyReviewContent(output, dailyCaseIds, approvedDailyCaseIds)
+  await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
+  return { content, resolved }
 }
 
 async function finishMonthlyReviewSuccess(job, generated) {
@@ -1034,15 +1077,19 @@ export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObj
     if (!await isAiFeatureEnabled('review_generation_enabled', job.user_id)) return skipDisabledPeriodReviewJob(job)
     const generated = await generateMonthlyReview(job, requestModel)
     lease.assertOwned()
+    await job._modelTracker?.applying()
     await finishMonthlyReviewSuccess(job, generated)
+    await job._modelTracker?.succeeded({ resultRef:`period_review_case:${job.period_case_id}` })
     await setPeriodReviewJobStage(job, 'succeeded', 'success')
     return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
   } catch (error) {
+    await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
     await finishMonthlyReviewFailure(job, error)
     await setPeriodReviewJobStage(job, job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
       job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
     return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
   } finally {
+    await job._modelTracker?.stop()
     await lease.stop()
   }
 }
