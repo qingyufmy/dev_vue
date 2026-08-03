@@ -249,6 +249,29 @@ describe('platform market data', () => {
     expect(db.queryRun).toHaveBeenCalledWith(expect.stringContaining('account_login'), expect.arrayContaining([1, 'Demo', '123456', 'mt5|demo|123456']))
   })
 
+  it('never persists an observer bootstrap offset as the target terminal own clock', async () => {
+    bridge.clock.mockReturnValue({
+      connected:true, platform:'mt5', broker_server:'Demo', account_login:123456,
+      timezone_offset_minutes:180, clock_status:'observer_bootstrap',
+      clock_source:'default_observer_source', source_clock_status:'persisted_stale',
+    })
+    const historicalRates = [rate(0, 2000), rate(1, 2001), rate(2, 2002)].map(item => {
+      const { timezone_offset_minutes, clock_status, ...withoutClock } = item
+      return withoutClock
+    })
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', rates:historicalRates })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:3 })
+
+    const sourceWrite = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO market_data_sources'))
+    expect(sourceWrite?.[0]).toContain("NULL, 'unknown', NULL, NULL")
+    expect(sourceWrite?.[1]).toEqual([1, 'Demo', '123456', 'mt5|demo|123456'])
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('INSERT INTO market_clock_samples'))).toBe(false)
+    expect(result.market_meta).toMatchObject({
+      timezone_offset_minutes:180, clock_status:'observer_bootstrap',
+    })
+  })
+
   it('derives broker time for MT4 rates that only expose server and UTC milliseconds', async () => {
     bridge.clock.mockReturnValue({ connected:true, timezone_offset_minutes:null,
       clock_status:'unknown', broker_server:'Demo', account_login:123456 })

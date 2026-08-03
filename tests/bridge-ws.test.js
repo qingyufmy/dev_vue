@@ -87,6 +87,7 @@ import {
   normalizeBridgeMarketState,
   recordBridgeMarketState,
   buildBrowserHeartbeatClock,
+  applyDefaultObserverClockBootstrap,
   getPlatformMarketClockState,
   getLatestBridgeMt5Clock,
   sendToAdminBrowsers,
@@ -455,6 +456,42 @@ describe('getOwnBridgeMarketState', () => {
   })
 })
 
+describe('default observer clock bootstrap', () => {
+  const now = Date.UTC(2026, 7, 3, 6, 0, 0)
+  const target = {
+    connected:true, broker_server:'Broker-Demo', account_login:'90001',
+    timezone_offset_minutes:null, clock_status:'unavailable',
+  }
+  const observer = {
+    source_id:3, bridge_user_id:7, trading_account_id:12,
+    broker_server:'broker-demo', timezone_offset_minutes:180,
+    clock_status:'persisted_stale', last_calibrated_at_utc_msc:now - 2 * 24 * 60 * 60 * 1000,
+  }
+
+  it('temporarily inherits a recent trusted clock from the same broker server', () => {
+    expect(applyDefaultObserverClockBootstrap(target, observer, now)).toMatchObject({
+      broker_server:'Broker-Demo', timezone_offset_minutes:180,
+      clock_status:'observer_bootstrap', clock_source:'default_observer_source',
+      source_clock_status:'persisted_stale', source_id:3,
+      source_bridge_user_id:7, source_trading_account_id:12,
+    })
+  })
+
+  it('never replaces the terminal own trusted clock', () => {
+    const verified = { ...target, timezone_offset_minutes:120, clock_status:'verified' }
+    expect(applyDefaultObserverClockBootstrap(verified, observer, now)).toBe(verified)
+  })
+
+  it('rejects a different broker server or calibration older than seven days', () => {
+    expect(applyDefaultObserverClockBootstrap(target, {
+      ...observer, broker_server:'Other-Broker',
+    }, now)).toBe(target)
+    expect(applyDefaultObserverClockBootstrap(target, {
+      ...observer, last_calibrated_at_utc_msc:now - 8 * 24 * 60 * 60 * 1000,
+    }, now)).toBe(target)
+  })
+})
+
 describe('bridge-reported market state', () => {
   it('keeps the pending action name for oversized payload diagnostics', () => {
     const source = readFileSync(new URL('../server/bridge-ws.js', import.meta.url), 'utf8')
@@ -541,6 +578,26 @@ describe('bridge-reported market state', () => {
       timezone_offset_minutes:180,
     })
   })
+
+  it('exposes the same-broker observer bootstrap clock without inventing a quote time', () => {
+    expect(buildBrowserHeartbeatClock(null, null, null, {
+      timezone_offset_minutes:180,
+      clock_status:'observer_bootstrap',
+      clock_source:'default_observer_source',
+      source_clock_status:'persisted_stale',
+      source_id:9,
+      source_last_calibrated_at_utc_msc:Date.UTC(2026, 6, 27, 6, 12, 34),
+    })).toEqual({
+      mt5_time:null,
+      observed_at_utc_msc:null,
+      timezone_offset_minutes:180,
+      clock_status:'observer_bootstrap',
+      clock_source:'default_observer_source',
+      source_clock_status:'persisted_stale',
+      source_id:9,
+      source_last_calibrated_at_utc_msc:Date.UTC(2026, 6, 27, 6, 12, 34),
+    })
+  })
 })
 
 describe('getAllBridges', () => {
@@ -581,6 +638,34 @@ describe('sendBridgeCommand', () => {
     expect(result.status).toBe('rejected')
     expect(result.code).toBe('terminal_clock_unverified')
     expect(result.message).toBe('交易平台时间尚未校准')
+    vi.useRealTimers()
+  })
+
+  it('uses the same-broker default observer clock for the first-install weekly risk window', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-17T20:00:00.000Z'))
+    queryOne.mockImplementation(async sql => String(sql).includes('UNIX_TIMESTAMP') ? {
+      source_id:3, bridge_user_id:77, trading_account_id:12,
+      broker_server:'Broker-Demo', timezone_offset_minutes:180,
+      source_clock_status:'persisted_stale',
+      last_calibrated_at_utc_msc:Date.now() - 24 * 60 * 60 * 1000,
+    } : null)
+    initBridgeWS(new EventEmitter())
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([{
+      terminal_instance_id:'terminal-new', platform:'mt5',
+      account_ref:{ broker_server:'broker-demo', login:'90001' },
+    }])
+    mockBridgeV3Business.connectedUsers.mockReturnValue([{
+      userId:91, connected:true, alive:true, lastSeen:Date.now(),
+    }])
+
+    const result = await sendBridgeCommand(91, 'open', {
+      symbol:'XAUUSD', terminal_instance_id:'terminal-new',
+    })
+
+    expect(result.status).toBe('rejected')
+    expect(result.code).toBe('weekly_market_close_risk_lock')
     vi.useRealTimers()
   })
 

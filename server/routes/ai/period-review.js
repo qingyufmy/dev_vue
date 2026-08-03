@@ -10,6 +10,8 @@ import { isAiFeatureEnabled } from './rollout-governance.js'
 import { createMemoryFromApprovedPeriodReview } from './memory-system.js'
 import { createPlatformExperienceCandidateFromApprovedPeriodReview } from './platform-experience.js'
 import { canManagePlatformAiContent, platformAiContentManagerSql } from './platform-content-access.js'
+import { applyDefaultObserverClockBootstrap } from './terminal-clock.js'
+import { getDefaultObserverSourceClock } from './observer-channels.js'
 
 const DAY_MS = 86400000
 const DAILY_GRACE_MINUTES = 30
@@ -216,7 +218,7 @@ export function groupDailyReviewOutcomes(rows, { offsetMinutes = null, asOfUtcMs
     const bounds = reviewPeriodBounds('daily', periodKey, rowOffset)
     if (Number(asOfUtcMs) < bounds.endUtcMs + DAILY_GRACE_MINUTES * 60000) continue
     const key = [row.user_id, row.trading_account_id, row.strategy_id, periodKey].join(':')
-    if (!groups.has(key)) groups.set(key, { periodType: 'daily', periodKey, ...bounds, userId: Number(row.user_id), tradingAccountId: Number(row.trading_account_id), strategyId: Number(row.strategy_id), strategyVersion: Number(row.strategy_version || 1), strategyVersions:[], strategyScope: row.strategy_scope, outcomes: [] })
+    if (!groups.has(key)) groups.set(key, { periodType: 'daily', periodKey, ...bounds, userId: Number(row.user_id), tradingAccountId: Number(row.trading_account_id), strategyId: Number(row.strategy_id), strategyVersion: Number(row.strategy_version || 1), strategyVersions:[], strategyScope: row.strategy_scope, clockStatus:String(row.clock_status || 'account_terminal'), outcomes: [] })
     const group = groups.get(key)
     const version = Number(row.strategy_version || 1)
     if (!group.strategyVersions.includes(version)) group.strategyVersions.push(version)
@@ -417,7 +419,7 @@ async function eligibleOutcomeRows(limit) {
   const recentLimit = Math.max(1, batchLimit - backlogLimit)
   const select = `SELECT so.*, snap.strategy_id, snap.strategy_version, snap.strategy_scope,
       u.role AS user_role, u.plan_source AS user_plan_source,
-      mds.timezone_offset_minutes, mds.clock_status,
+      ta.broker_server, mds.timezone_offset_minutes, mds.clock_status,
       (SELECT sod.raw_json FROM signal_outcome_deals sod WHERE sod.outcome_id = so.id ORDER BY sod.deal_time DESC, sod.id DESC LIMIT 1) AS last_deal_raw_json
     FROM signal_outcomes so
     JOIN users u ON u.id = so.user_id
@@ -443,7 +445,16 @@ async function eligibleOutcomeRows(limit) {
   ])
   const merged = new Map()
   for (const row of [...backlog, ...recent]) merged.set(Number(row.id), row)
-  return [...merged.values()]
+  const observerClock = await getDefaultObserverSourceClock().catch(() => null)
+  return [...merged.values()].map(row => {
+    const clock = applyDefaultObserverClockBootstrap({
+      broker_server:row.broker_server,
+      timezone_offset_minutes:row.timezone_offset_minutes,
+      clock_status:row.clock_status,
+    }, observerClock)
+    return { ...row, timezone_offset_minutes:clock.timezone_offset_minutes ?? null,
+      clock_status:clock.clock_status || 'unknown' }
+  })
 }
 
 async function prepareTradeEvidence(outcome) {
@@ -608,7 +619,7 @@ export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Dat
       || row.timezone_offset_minutes === '' || !Number.isInteger(Number(row.timezone_offset_minutes))).length,
     groups: groups.length, ready: 0, incomplete: 0, clock:{ status:'per_account' } }
   for (const group of groups) {
-    const prepared = await upsertDailyGroup(group, { status:'account_terminal' })
+    const prepared = await upsertDailyGroup(group, { status:group.clockStatus || 'account_terminal' })
     result[prepared.complete ? 'ready' : 'incomplete'] += 1
   }
   return result

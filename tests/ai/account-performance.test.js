@@ -81,6 +81,29 @@ describe('MT5 account performance windows', () => {
     await expect(getAccountPerformanceSyncWindow(7, 11)).rejects.toThrow('terminal_clock_unverified')
     expect(run.mock.calls.some(([sql]) => sql.includes('INSERT INTO mt5_account_performance_sync_state'))).toBe(false)
   })
+
+  it('uses the recent default observer clock for a first install on the same broker server', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-22T23:30:00Z'))
+    const run = vi.fn(async sql => sql.includes('FROM trading_accounts ta')
+      ? [[{ ...context, timezone_offset_minutes:null, clock_status:'unknown' }], []]
+      : [{ affectedRows:1 }, []])
+    db.withTransaction.mockImplementation(fn => fn(run))
+    db.queryOne.mockResolvedValue({
+      source_id:4, bridge_user_id:88, trading_account_id:44,
+      broker_server:'dootechnology-demo', timezone_offset_minutes:-120,
+      source_clock_status:'persisted_stale',
+      last_calibrated_at_utc_msc:Date.now() - 2 * 24 * 60 * 60 * 1000,
+    })
+
+    const window = await getAccountPerformanceSyncWindow(7, 11)
+
+    expect(window).toMatchObject({
+      timezone_offset_minutes:-120, clock_status:'observer_bootstrap',
+      clock_source:'default_observer_source', source_clock_status:'persisted_stale',
+    })
+    vi.useRealTimers()
+  })
 })
 
 describe('MT5 account performance persistence', () => {

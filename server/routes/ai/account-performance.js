@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { beijingNow, parseBeijing, queryOne, withTransaction } from '../../db.js'
+import { resolveDefaultObserverClockBootstrap } from './terminal-clock.js'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const DAY_MS = 86_400_000
@@ -101,7 +102,8 @@ async function accountSyncContext(run, userId, accountId, lock = false) {
 export async function getAccountPerformanceSyncWindow(userId, accountId, { recent = false } = {}) {
   return withTransaction(async run => {
     const account = await accountSyncContext(run, userId, accountId, true)
-    const clock = terminalClock(account)
+    const effectiveClock = await resolveDefaultObserverClockBootstrap(account)
+    const clock = terminalClock(effectiveClock)
     const firstConnectedAt = account.ownership_started_at || account.first_verified_at
     const firstConnectedUtcMs = firstConnectedAt instanceof Date
       ? firstConnectedAt.getTime() : parseBeijing(firstConnectedAt)?.getTime()
@@ -123,7 +125,9 @@ export async function getAccountPerformanceSyncWindow(userId, accountId, { recen
     return { ...window, account:{ id:Number(account.id), server:account.broker_server,
       login:String(account.login_account), currency:account.account_currency || null },
       first_connected_at:firstConnectedAt, timezone_offset_minutes:clock.offsetMinutes,
-      clock_status:clock.status }
+      clock_status:clock.status,
+      clock_source:effectiveClock.clock_source || 'account_terminal',
+      source_clock_status:effectiveClock.source_clock_status || null }
   })
 }
 

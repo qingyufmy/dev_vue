@@ -146,18 +146,30 @@ async function loadChanStructureAnchor(sourceId, standardSymbol, timeframe) {
 async function ensureSource(bridgeUserId, clock, sampleRate) {
   const identity = sourceIdentity(bridgeUserId, clock)
   if (!hasStableSourceIdentity(identity)) return null
-  await queryRun(`INSERT INTO market_data_sources
-    (bridge_user_id, broker_server, account_login, source_key, timezone_offset_minutes, clock_status, clock_residual_ms, last_calibrated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
-    ON DUPLICATE KEY UPDATE broker_server=VALUES(broker_server), account_login=VALUES(account_login),
-      timezone_offset_minutes=VALUES(timezone_offset_minutes), clock_status=VALUES(clock_status),
-      clock_residual_ms=VALUES(clock_residual_ms), last_calibrated_at=NOW()`,
-  [identity.bridgeUserId, identity.brokerServer, identity.accountLogin, identity.sourceKey,
-    clock.timezone_offset_minutes, clock.clock_status, clock.clock_residual_ms])
+  const observerBootstrap = String(clock?.clock_status || '').trim().toLowerCase() === 'observer_bootstrap'
+    || String(clock?.clock_source || '').trim().toLowerCase() === 'default_observer_source'
+  if (observerBootstrap) {
+    // The inherited offset may normalize this request, but it is not proof that
+    // the target terminal calibrated its own clock. Keep target clock evidence empty.
+    await queryRun(`INSERT INTO market_data_sources
+      (bridge_user_id, broker_server, account_login, source_key, timezone_offset_minutes, clock_status, clock_residual_ms, last_calibrated_at)
+      VALUES (?, ?, ?, ?, NULL, 'unknown', NULL, NULL)
+      ON DUPLICATE KEY UPDATE broker_server=VALUES(broker_server), account_login=VALUES(account_login)`,
+    [identity.bridgeUserId, identity.brokerServer, identity.accountLogin, identity.sourceKey])
+  } else {
+    await queryRun(`INSERT INTO market_data_sources
+      (bridge_user_id, broker_server, account_login, source_key, timezone_offset_minutes, clock_status, clock_residual_ms, last_calibrated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+      ON DUPLICATE KEY UPDATE broker_server=VALUES(broker_server), account_login=VALUES(account_login),
+        timezone_offset_minutes=VALUES(timezone_offset_minutes), clock_status=VALUES(clock_status),
+        clock_residual_ms=VALUES(clock_residual_ms), last_calibrated_at=NOW()`,
+    [identity.bridgeUserId, identity.brokerServer, identity.accountLogin, identity.sourceKey,
+      clock.timezone_offset_minutes, clock.clock_status, clock.clock_residual_ms])
+  }
   const source = await queryOne(`SELECT id FROM market_data_sources
     WHERE bridge_user_id = ? AND source_key = ? LIMIT 1`, [identity.bridgeUserId, identity.sourceKey])
   const now = Date.now()
-  if (source && now - (recentSampleAt.get(source.id) || 0) >= 300000) {
+  if (!observerBootstrap && source && now - (recentSampleAt.get(source.id) || 0) >= 300000) {
     recentSampleAt.set(source.id, now)
     await queryRun(`INSERT INTO market_clock_samples
       (source_id, raw_tick_time_msc, normalized_utc_msc, timezone_offset_minutes, residual_ms, status)

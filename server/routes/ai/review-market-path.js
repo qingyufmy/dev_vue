@@ -3,6 +3,7 @@ import { sha256 } from './inference-snapshots.js'
 import { queryAll, queryOne } from '../../db.js'
 import { stripBrokerSuffix } from './utils.js'
 import { loadPeriodMarketWindow } from './period-market-evidence.js'
+import { resolveDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
 
 const parse = (value, fallback = {}) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const TIMEFRAME_MS = { M1: 60000, M5: 300000, M15: 900000, M30: 1800000, H1: 3600000, H4: 14400000, D1: 86400000 }
@@ -65,18 +66,16 @@ export function calculateHoldingPathMetrics({ rates = [], deals = [], direction 
 }
 
 async function reviewMarketOffset(userId, tradingAccountId) {
-  const row = await queryOne(`SELECT mds.timezone_offset_minutes, mds.clock_status
+  const row = await queryOne(`SELECT accounts.broker_server,
+      mds.timezone_offset_minutes, mds.clock_status
     FROM trading_accounts accounts
-    JOIN market_data_sources mds ON mds.bridge_user_id = accounts.user_id
+    LEFT JOIN market_data_sources mds ON mds.bridge_user_id = accounts.user_id
       AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(accounts.broker_server)
       AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(accounts.login_account AS CHAR)
-    WHERE accounts.user_id = ? AND accounts.id = ? AND mds.timezone_offset_minutes IS NOT NULL
+    WHERE accounts.user_id = ? AND accounts.id = ?
     ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`, [Number(userId), Number(tradingAccountId)])
-  const status = String(row?.clock_status || '').trim().toLowerCase()
-  const offset = Number(row?.timezone_offset_minutes)
-  return Number.isInteger(offset) && offset >= -720 && offset <= 840
-    && status && !['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(status)
-    ? offset : null
+  const clock = await resolveDefaultObserverClockBootstrap(row || {})
+  return trustedTerminalClock(clock) ? Number(clock.timezone_offset_minutes) : null
 }
 
 function slimChan(chan) {

@@ -23,6 +23,7 @@ import { resolvePlatformAiVolumeRange } from './risk-policy.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
 import { indicatorRequiredHistory } from './indicator-registry.js'
+import { resolveDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
 import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
@@ -86,29 +87,30 @@ async function resolveCompareTimezoneOffset(params = {}) {
   const userId = Number(params.user_id)
   let row = null
   if (strategyId > 0) {
-    row = await queryOne(`SELECT mds.timezone_offset_minutes, mds.clock_status
+    row = await queryOne(`SELECT accounts.broker_server,
+      mds.timezone_offset_minutes, mds.clock_status
       FROM ai_observer_sources sources
       JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
-      JOIN market_data_sources mds ON mds.bridge_user_id = sources.bridge_user_id
+      LEFT JOIN market_data_sources mds ON mds.bridge_user_id = sources.bridge_user_id
         AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(accounts.broker_server)
         AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(accounts.login_account AS CHAR)
       WHERE sources.strategy_id = ? AND sources.status = 'active'
       ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`, [strategyId])
   }
   if (!row && tradingAccountId > 0) {
-    row = await queryOne(`SELECT mds.timezone_offset_minutes, mds.clock_status
+    row = await queryOne(`SELECT accounts.broker_server,
+      mds.timezone_offset_minutes, mds.clock_status
       FROM trading_accounts accounts
-      JOIN market_data_sources mds ON mds.bridge_user_id = accounts.user_id
+      LEFT JOIN market_data_sources mds ON mds.bridge_user_id = accounts.user_id
         AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(accounts.broker_server)
         AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(accounts.login_account AS CHAR)
       WHERE accounts.id = ? ${userId > 0 ? 'AND accounts.user_id = ?' : ''}
       ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`,
     [tradingAccountId, ...(userId > 0 ? [userId] : [])])
   }
-  const status = String(row?.clock_status || '').trim().toLowerCase()
-  const offset = normalizeCompareTimezoneOffset(row?.timezone_offset_minutes)
-  if (offset == null || !status
-    || ['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(status)) {
+  const clock = await resolveDefaultObserverClockBootstrap(row || {})
+  const offset = normalizeCompareTimezoneOffset(clock?.timezone_offset_minutes)
+  if (offset == null || !trustedTerminalClock(clock)) {
     throw new Error('terminal_clock_unverified')
   }
   return offset

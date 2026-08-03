@@ -17,6 +17,8 @@ import { parseStrategyPolicy } from './strategy-policy.js'
 import { evaluateSignalStrategyPolicyBeforeSubmission } from './strategy-policy-execution.js'
 import { subscriptionAllowsExecution, subscriptionAllowsInference } from './subscription-schedule.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
+import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
+import { getDefaultObserverSourceClock } from './observer-channels.js'
 
 export { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 export const DEFAULT_SELECTED_TAKE_PROFIT = 2
@@ -321,6 +323,7 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
             s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
             ss.id AS subscription_id, ss.trading_account_id, ss.schedule_enabled, ss.schedule_timezone,
             ss.schedule_weekdays_json, ss.schedule_windows_json, ss.outside_window_behavior,
+            ta.broker_server AS runtime_broker_server,
             mds.timezone_offset_minutes AS runtime_timezone_offset_minutes,
             mds.clock_status AS runtime_clock_status,
             u.plan, u.role
@@ -348,7 +351,22 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
        AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))`,
     [promptTypeId]
   )
-  const filtered = rows.filter(r => {
+  const needsObserverClock = rows.some(row => !trustedTerminalClock({
+    timezone_offset_minutes:row.runtime_timezone_offset_minutes,
+    clock_status:row.runtime_clock_status,
+  }))
+  const observerClock = needsObserverClock
+    ? await getDefaultObserverSourceClock().catch(() => null) : null
+  const clockRows = rows.map(row => {
+    const clock = applyDefaultObserverClockBootstrap({
+      broker_server:row.runtime_broker_server,
+      timezone_offset_minutes:row.runtime_timezone_offset_minutes,
+      clock_status:row.runtime_clock_status,
+    }, observerClock)
+    return { ...row, runtime_timezone_offset_minutes:clock.timezone_offset_minutes ?? null,
+      runtime_clock_status:clock.clock_status || 'unknown' }
+  })
+  const filtered = clockRows.filter(r => {
     if (r.strategy_scope === 'private' && Number(r.strategy_owner_user_id) !== Number(r.user_id)) return false
     if (!subscriptionAllowsInference(r)) return false
     const effectiveSymbols = resolveEffectiveSymbols(r.selected_symbols_json, r.strategy_symbols_json)
@@ -368,6 +386,7 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
 export async function getDeliverySubscriptionRuntime(userId, promptTypeId, symbol) {
   const rows = await queryAll(
     `SELECT ss.*, apt.symbols_json AS strategy_symbols_json,
+       ta.broker_server AS runtime_broker_server,
        mds.timezone_offset_minutes AS runtime_timezone_offset_minutes,
        mds.clock_status AS runtime_clock_status
      FROM strategy_subscriptions ss
@@ -382,8 +401,23 @@ export async function getDeliverySubscriptionRuntime(userId, promptTypeId, symbo
      ORDER BY ss.updated_at DESC, ss.id DESC`,
     [userId, promptTypeId]
   )
+  const needsObserverClock = rows.some(row => !trustedTerminalClock({
+    timezone_offset_minutes:row.runtime_timezone_offset_minutes,
+    clock_status:row.runtime_clock_status,
+  }))
+  const observerClock = needsObserverClock
+    ? await getDefaultObserverSourceClock().catch(() => null) : null
+  const clockRows = rows.map(row => {
+    const clock = applyDefaultObserverClockBootstrap({
+      broker_server:row.runtime_broker_server,
+      timezone_offset_minutes:row.runtime_timezone_offset_minutes,
+      clock_status:row.runtime_clock_status,
+    }, observerClock)
+    return { ...row, runtime_timezone_offset_minutes:clock.timezone_offset_minutes ?? null,
+      runtime_clock_status:clock.clock_status || 'unknown' }
+  })
   const wanted = stripBrokerSuffix(String(symbol || '').toUpperCase())
-  const subscription = rows.find(row => resolveEffectiveSymbols(row.symbols_json, row.strategy_symbols_json)
+  const subscription = clockRows.find(row => resolveEffectiveSymbols(row.symbols_json, row.strategy_symbols_json)
     .some(item => stripBrokerSuffix(String(item).toUpperCase()) === wanted))
   if (!subscription) return null
   return { ...subscription, in_schedule: subscriptionAllowsExecution(subscription) }

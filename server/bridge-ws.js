@@ -9,13 +9,16 @@ import { getRegisteredAutoSchedulerState } from './routes/ai/runtime-state-regis
 import { weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
 import { buildAiAccessContext, observerAccessError, observerWsActionAllowed } from './routes/ai/observer-access.js'
-import { getDefaultObserverSource, observerSourceSupportsSymbol, resolveObserverSourceForUser } from './routes/ai/observer-channels.js'
+import { getDefaultObserverSource, getDefaultObserverSourceClock, observerSourceSupportsSymbol, resolveObserverSourceForUser } from './routes/ai/observer-channels.js'
 import { tokenVersionMatches } from './middleware/auth.js'
 import { consumeBridgeConnectionTicket } from './bridge-auth-session.js'
 import { BRIDGE_V3_WS_PATH, createBridgeV3Gateway } from './bridge-v3/gateway.js'
 import { setBridgeReleaseNotifier } from './bridge-v3/release-events.js'
 import { createBridgeV3BusinessAdapter } from './bridge-v3/business-adapter.js'
 import { createObserverQuoteFeedManager } from './observer-quote-feed.js'
+import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './routes/ai/terminal-clock.js'
+
+export { applyDefaultObserverClockBootstrap } from './routes/ai/terminal-clock.js'
 
 import { JWT_SECRET } from './config.js'
 
@@ -45,12 +48,35 @@ const PERFORMANCE_SYNC_INTERVAL_MS = 15 * 60 * 1000
 const PERFORMANCE_SYNC_CHUNKS_PER_RUN = 3
 const OBSERVER_QUOTE_INTERVAL_MS = 1000
 const OBSERVER_QUOTE_FRESH_MS = 2500
+let defaultObserverClockCache = null
+let defaultObserverClockRefresh = null
+let defaultObserverClockLastRefresh = 0
 export const BRIDGE_WS_LIMITS = Object.freeze({
   maxPayloadBytes: 32 * 1024 * 1024,
   maxBrowserMessageBytes: 256 * 1024,
   maxInitQueueMessages: 32,
   maxInitQueueBytes: 4 * 1024 * 1024,
 })
+
+async function refreshDefaultObserverClock() {
+  if (defaultObserverClockRefresh) return defaultObserverClockRefresh
+  defaultObserverClockRefresh = getDefaultObserverSourceClock()
+    .then(clock => {
+      defaultObserverClockLastRefresh = Date.now()
+      defaultObserverClockCache = clock ? {
+        ...clock,
+        clock_status:clock.source_clock_status,
+      } : null
+      return defaultObserverClockCache
+    })
+    .catch(error => {
+      defaultObserverClockLastRefresh = Date.now()
+      console.warn('[BridgeWS] Default observer clock refresh failed:', error.message)
+      return defaultObserverClockCache
+    })
+    .finally(() => { defaultObserverClockRefresh = null })
+  return defaultObserverClockRefresh
+}
 
 function observerQuoteTradeMode(quote) {
   const explicit = Number(quote?.symbol_trade_mode)
@@ -594,7 +620,7 @@ function applyBridgeMarketState(bridge, payload, userId, receivedAt = Date.now()
   return normalized
 }
 
-export function buildBrowserHeartbeatClock(sharedQuote, clockBridge, marketState) {
+export function buildBrowserHeartbeatClock(sharedQuote, clockBridge, marketState, effectiveClock = null) {
   const clockSource = sharedQuote?.time
     ? { time:sharedQuote.time, observedAtUtcMsc:sharedQuote.observed_at_utc_msc }
     : clockBridge?.mt5TimeStr
@@ -603,7 +629,7 @@ export function buildBrowserHeartbeatClock(sharedQuote, clockBridge, marketState
         ? { time:marketState.mt5TimeStr, observedAtUtcMsc:marketState.observedAtUtcMsc }
         : null
   const observedAtValue = Number(clockSource?.observedAtUtcMsc)
-  return {
+  const heartbeatClock = {
     mt5_time:clockSource?.time || null,
     observed_at_utc_msc:Number.isFinite(observedAtValue) && observedAtValue > 0
       ? observedAtValue : null,
@@ -611,6 +637,19 @@ export function buildBrowserHeartbeatClock(sharedQuote, clockBridge, marketState
       ?? clockBridge?.timezoneOffsetMinutes ?? marketState?.timezoneOffsetMinutes ?? null,
     clock_status:sharedQuote?.clock_status
       || clockBridge?.clockStatus || marketState?.clockStatus || 'unknown',
+  }
+  if (trustedTerminalClock(heartbeatClock) || !trustedTerminalClock(effectiveClock)) {
+    return heartbeatClock
+  }
+  return {
+    ...heartbeatClock,
+    timezone_offset_minutes:Number(effectiveClock.timezone_offset_minutes),
+    clock_status:String(effectiveClock.clock_status),
+    clock_source:effectiveClock.clock_source || null,
+    source_clock_status:effectiveClock.source_clock_status || null,
+    source_id:Number(effectiveClock.source_id) || null,
+    source_last_calibrated_at_utc_msc:
+      Number(effectiveClock.source_last_calibrated_at_utc_msc) || null,
   }
 }
 
@@ -777,7 +816,7 @@ export function getPlatformMarketClockState(userId, tradingAccountId = null, ter
   const legacyAccountMatches = !(requestedAccountId > 0)
     || Number(bridge?.tradingAccountId || 0) === requestedAccountId
   if (!terminalInstanceId && legacyAccountMatches && bridge?.ws?.readyState === 1) {
-    return {
+    return applyDefaultObserverClockBootstrap({
       bridge_user_id:numericUserId || null,
       connected:true,
       timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? hb.timezone_offset_minutes ?? null,
@@ -787,7 +826,7 @@ export function getPlatformMarketClockState(userId, tradingAccountId = null, ter
       broker_server:bridge.brokerServer || null,
       account_login:bridge.accountLogin || null,
       platform:String(hb.platform || bridge.platform || bridgePlatform(numericUserId, tradingAccountId) || '').trim().toLowerCase() || null,
-    }
+    }, defaultObserverClockCache)
   }
   const route = terminalInstanceId
     ? (bridgeV3Business?.connectedTerminals(numericUserId) || [])
@@ -799,7 +838,7 @@ export function getPlatformMarketClockState(userId, tradingAccountId = null, ter
     .find(item => Number(item.userId) === numericUserId)
   const marketState = bridgeV3MarketStateForContext(
     numericUserId, tradingAccountId, route?.terminal_instance_id) || {}
-  return {
+  return applyDefaultObserverClockBootstrap({
     bridge_user_id:numericUserId || null,
     connected:Boolean(route),
     timezone_offset_minutes:marketState.timezoneOffsetMinutes ?? null,
@@ -809,11 +848,19 @@ export function getPlatformMarketClockState(userId, tradingAccountId = null, ter
     broker_server:route?.account_ref?.broker_server || null,
     account_login:route?.account_ref?.login || null,
     platform:String(route?.platform || bridgePlatform(numericUserId, tradingAccountId) || '').trim().toLowerCase() || null,
-  }
+  }, defaultObserverClockCache)
+}
+
+export async function getEffectivePlatformMarketClockState(userId, tradingAccountId = null, terminalInstanceId = null) {
+  const current = getPlatformMarketClockState(userId, tradingAccountId, terminalInstanceId)
+  if (trustedTerminalClock(current)) return current
+  if (!defaultObserverClockCache
+    || Date.now() - defaultObserverClockLastRefresh > 60_000) await refreshDefaultObserverClock()
+  return getPlatformMarketClockState(userId, tradingAccountId, terminalInstanceId)
 }
 
 async function getLabTimezoneOffsetMinutes(userId, tradingAccountId = null) {
-  const clock = getPlatformMarketClockState(userId, tradingAccountId)
+  const clock = await getEffectivePlatformMarketClockState(userId, tradingAccountId)
   if (clock.timezone_offset_minutes == null || clock.timezone_offset_minutes === '') return null
   const offset = Number(clock.timezone_offset_minutes)
   const status = String(clock.clock_status || '').trim().toLowerCase()
@@ -826,6 +873,9 @@ async function getLabTimezoneOffsetMinutes(userId, tradingAccountId = null) {
 export function initBridgeWS(server) {
   // Cache admin userId at startup
   getAdminUserId().catch(() => {})
+  defaultObserverClockCache = null
+  defaultObserverClockLastRefresh = 0
+  refreshDefaultObserverClock().catch(() => {})
   wss = new WebSocketServer({ noServer: true, maxPayload: BRIDGE_WS_LIMITS.maxPayloadBytes })
   const v3Gateway = createBridgeV3Gateway({
     onTerminalReady:synchronizeBridgeV3TerminalIdentity,
@@ -1056,7 +1106,11 @@ async function handleBrowser(ws, url, req) {
       const autoReasoningEnabled = access.mode === 'full'
         ? await readAutomaticAnalysisEnabled(userId)
         : alive ? await readAutomaticAnalysisEnabled(dataUserId) : undefined
-      const heartbeatClock = buildBrowserHeartbeatClock(sharedQuote, clockBridge, v3MarketState)
+      const effectiveClock = dataUserId ? await getEffectivePlatformMarketClockState(
+        Number(dataUserId), observerContext?.channel?.trading_account_id,
+        dataRoute?.terminal_instance_id) : null
+      const heartbeatClock = buildBrowserHeartbeatClock(
+        sharedQuote, clockBridge, v3MarketState, effectiveClock)
       ws.send(JSON.stringify({
         type: 'hb',
         seq: msg.seq,
@@ -3109,7 +3163,7 @@ async function handleBrowserCommand(ws, userId, msg) {
 export async function sendBridgeCommand(userId, action, params, timeoutMs = 5000, options = {}) {
   const numericUserId = Number(userId)
   if (action === 'open' || action === 'pending') {
-    const clock = getPlatformMarketClockState(
+    const clock = await getEffectivePlatformMarketClockState(
       numericUserId,
       options.tradingAccountId ?? params?.trading_account_id ?? null,
       params?.terminal_instance_id ?? null)

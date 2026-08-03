@@ -180,12 +180,28 @@ export async function getDefaultObserverSource() {
   return queryOne(`SELECT sources.id AS source_id, sources.bridge_user_id,
       sources.trading_account_id, sources.strategy_id, sources.name AS source_name,
       channels.id AS channel_id, channels.name AS channel_name, channels.slug AS channel_slug,
-      strategies.symbols_json
+      strategies.symbols_json, accounts.broker_server, accounts.login_account
     FROM ai_observer_channels channels
     JOIN ai_observer_sources sources ON sources.id = channels.source_id
     JOIN auto_prompt_types strategies ON strategies.id = sources.strategy_id
+    LEFT JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
     WHERE channels.is_default = 1 AND channels.status = 'active' AND sources.status = 'active'
     ORDER BY channels.updated_at DESC, channels.id DESC LIMIT 1`)
+}
+
+export async function getDefaultObserverSourceClock() {
+  return queryOne(`SELECT sources.id AS source_id, sources.bridge_user_id,
+      sources.trading_account_id, accounts.broker_server, accounts.login_account,
+      mds.timezone_offset_minutes, mds.clock_status AS source_clock_status,
+      UNIX_TIMESTAMP(mds.last_calibrated_at) * 1000 AS last_calibrated_at_utc_msc
+    FROM ai_observer_channels channels
+    JOIN ai_observer_sources sources ON sources.id = channels.source_id
+    JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
+    JOIN market_data_sources mds ON mds.bridge_user_id = sources.bridge_user_id
+      AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(accounts.broker_server)
+      AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(accounts.login_account AS CHAR)
+    WHERE channels.is_default = 1 AND channels.status = 'active' AND sources.status = 'active'
+    ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`)
 }
 
 export function observerSourceSupportsSymbol(source, symbol) {

@@ -12,7 +12,7 @@ vi.mock('../../server/db.js', () => db)
 import {
   createObserverChannel, createObserverSource, deleteObserverChannel,
   deleteObserverSource,
-  getDefaultObserverSource, invalidateObserverChannelCache,
+  getDefaultObserverSource, getDefaultObserverSourceClock, invalidateObserverChannelCache,
   listObserverChannelsForUser, replaceObserverChannelAssignments,
   resolveObserverSourceForUser, updateObserverSource, observerSourceSupportsSymbol,
 } from '../../server/routes/ai/observer-channels.js'
@@ -44,6 +44,22 @@ describe('observer sources and channels', () => {
     expect(observerSourceSupportsSymbol(source, 'XAUUSD.s')).toBe(true)
     expect(observerSourceSupportsSymbol(source, 'EURUSD')).toBe(true)
     expect(observerSourceSupportsSymbol(source, 'GBPUSD')).toBe(false)
+  })
+
+  it('loads the latest persisted clock for the exact default-source account', async () => {
+    db.queryOne.mockResolvedValue({
+      source_id:2, bridge_user_id:7, trading_account_id:12,
+      broker_server:'Broker-Demo', login_account:'12345678',
+      timezone_offset_minutes:180, source_clock_status:'persisted_stale',
+    })
+    await expect(getDefaultObserverSourceClock()).resolves.toMatchObject({
+      broker_server:'Broker-Demo', timezone_offset_minutes:180,
+    })
+    const sql = db.queryOne.mock.calls[0][0]
+    expect(sql).toContain('channels.is_default = 1')
+    expect(sql).toContain('mds.broker_server')
+    expect(sql).toContain('mds.account_login')
+    expect(sql).toContain('ORDER BY mds.last_calibrated_at DESC')
   })
 
   it('creates a source for an eligible bridge account and its own trading account', async () => {
