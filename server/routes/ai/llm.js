@@ -349,13 +349,56 @@ function extractLlmContent(data, protocol, expectJson = false) {
   return msg?.content || (expectJson ? '' : msg?.reasoning_content) || ''
 }
 
-function extractTokenCount(data) {
+export function extractTokenUsage(data) {
   const usage = data?.usage || data?.response?.usage || {}
-  const total = usage.total_tokens ?? usage.totalTokens
-  if (Number.isFinite(Number(total))) return Math.max(0, Math.trunc(Number(total)))
-  const input = usage.input_tokens ?? usage.prompt_tokens ?? 0
-  const output = usage.output_tokens ?? usage.completion_tokens ?? 0
-  return Math.max(0, Math.trunc(Number(input) + Number(output)))
+  const safe = value => Number.isFinite(Number(value)) ? Math.max(0, Math.trunc(Number(value))) : 0
+  const inputTokens = safe(usage.input_tokens ?? usage.prompt_tokens)
+  const outputTokens = safe(usage.output_tokens ?? usage.completion_tokens)
+  const reasoningTokens = safe(usage.reasoning_tokens ?? usage.output_tokens_details?.reasoning_tokens
+    ?? usage.completion_tokens_details?.reasoning_tokens)
+  const cachedTokens = safe(usage.cached_tokens ?? usage.input_tokens_details?.cached_tokens
+    ?? usage.prompt_tokens_details?.cached_tokens)
+  const reportedTotal = usage.total_tokens ?? usage.totalTokens
+  const totalTokens = Number.isFinite(Number(reportedTotal))
+    ? safe(reportedTotal)
+    : inputTokens + outputTokens
+  return { inputTokens, outputTokens, reasoningTokens, cachedTokens, totalTokens }
+}
+
+export function modelResponseCompletion(data, protocol = 'chat_completions') {
+  if (protocol === 'responses') {
+    const incompleteDetails = data?.incomplete_details || data?.response?.incomplete_details || null
+    const status = String(data?.status || data?.response?.status || '').toLowerCase()
+    const reason = String(incompleteDetails?.reason || incompleteDetails?.code || '').toLowerCase()
+    const truncated = status === 'incomplete' || /max[_ ]?(?:output_)?tokens|length/.test(reason)
+    return { truncated, finishReason:status || null, incompleteDetails }
+  }
+  const finishReason = data?.choices?.[0]?.finish_reason ?? data?.choices?.[0]?.finishReason ?? null
+  return {
+    truncated:String(finishReason || '').toLowerCase() === 'length',
+    finishReason:finishReason == null ? null : String(finishReason),
+    incompleteDetails:null,
+  }
+}
+
+function assertModelResponseComplete(data, protocol) {
+  const completion = modelResponseCompletion(data, protocol)
+  if (!completion.truncated) return completion
+  const error = new Error('output_truncated')
+  error.code = 'output_truncated'
+  error.finishReason = completion.finishReason
+  error.incompleteDetails = completion.incompleteDetails
+  throw error
+}
+
+function remainingRequestTimeout(deadlineAtMs, configuredTimeoutMs) {
+  const remaining = Math.trunc(Number(deadlineAtMs) - Date.now())
+  if (!Number.isFinite(remaining) || remaining <= 0) {
+    const error = new Error('model_task_deadline_exceeded')
+    error.code = 'model_task_deadline_exceeded'
+    throw error
+  }
+  return Math.max(1, Math.min(Math.trunc(Number(configuredTimeoutMs) || remaining), remaining))
 }
 
 function providerHttpError(url, provider, status) {
@@ -401,10 +444,11 @@ function logAutomaticModelRequest({ usageContext, phase, body, requestBytes }) {
 
 async function trackedModelRequest({
   url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider, signal,
-  onProviderRequest, onProviderUsage,
+  onProviderRequest, onProviderUsage, protocol,
 }) {
   let usageLogId = null
   let providerRequestStarted = false
+  let providerUsageEmitted = false
   const startedAt = Date.now()
   const requestBody = JSON.stringify(body)
   const requestBytes = Buffer.byteLength(requestBody, 'utf8')
@@ -450,12 +494,17 @@ async function trackedModelRequest({
     }
     const data = await response.json()
     responseBytes = Buffer.byteLength(JSON.stringify(data), 'utf8')
-    const reportedTokens = extractTokenCount(data)
+    const usage = extractTokenUsage(data)
     const fallbackTokens = Math.ceil((JSON.stringify(body).length + JSON.stringify(data).length) / 4)
-    const tokenCount = reportedTokens || fallbackTokens
+    const tokenCount = usage.totalTokens || fallbackTokens
+    const completion = modelResponseCompletion(data, protocol)
+    const providerRequestId = String(response.headers?.get?.('x-request-id') || data?.id || data?.response?.id || '') || null
     if (usageLogId) {
       try {
-        await finishModelUsage(usageLogId, { tokenCount, status: 'success', requestBytes, responseBytes, durationMs: Date.now() - startedAt })
+        await finishModelUsage(usageLogId, { tokenCount, ...usage, status: completion.truncated ? 'error' : 'success',
+          errorCode:completion.truncated ? 'output_truncated' : null, providerRequestId,
+          finishReason:completion.finishReason, incompleteDetails:completion.incompleteDetails,
+          requestBytes, responseBytes, durationMs: Date.now() - startedAt })
       } catch (logError) {
         // The reservation remains at its conservative estimate. Do not repeat a
         // provider call merely because post-call accounting could not finalize.
@@ -463,19 +512,25 @@ async function trackedModelRequest({
       }
       usageLogId = null
     }
-    await emitProviderTelemetry(onProviderUsage, { phase, status: 'success', tokenCount, requestBytes, responseBytes, durationMs: Date.now() - startedAt })
+    await emitProviderTelemetry(onProviderUsage, { phase, status:completion.truncated ? 'error' : 'success', tokenCount,
+      ...usage, providerRequestId, finishReason:completion.finishReason, incompleteDetails:completion.incompleteDetails,
+      errorCode:completion.truncated ? 'output_truncated' : null,
+      requestBytes, responseBytes, durationMs: Date.now() - startedAt })
+    providerUsageEmitted = true
+    assertModelResponseComplete(data, protocol)
     if (quotaCircuitState.probe) await recordModelQuotaRecovered(quotaCircuitContext)
     return { response, data }
   } catch (error) {
     if (usageLogId) {
       try {
         await finishModelUsage(usageLogId, { tokenCount: 0, status: 'error', errorCode: error.message,
+          accountingStatus:providerRequestStarted && !Number(error?.providerStatus) ? 'usage_unknown' : 'settled',
           requestBytes, responseBytes, durationMs: Date.now() - startedAt })
       } catch (logError) {
         console.error('[LLM] Failed to finalize usage log:', logError.message)
       }
     }
-    if (providerRequestStarted) {
+    if (providerRequestStarted && !providerUsageEmitted) {
       await emitProviderTelemetry(onProviderUsage, {
         phase, status: 'error', tokenCount: 0, errorCode: error.message,
         requestBytes, responseBytes, durationMs: Date.now() - startedAt,
@@ -504,21 +559,25 @@ export async function requestJsonObject({
   reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null,
   onProgress = null, validateObject = null, signal = null,
   onProviderRequest = null, onProviderUsage = null, repairContext = null,
+  allowFollowupRequests = true, deadlineAtMs = null,
 }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
   signal?.throwIfAborted()
+  const taskDeadlineAtMs = deadlineAtMs != null && Number.isFinite(Number(deadlineAtMs))
+    ? Number(deadlineAtMs)
+    : Date.now() + Math.max(1, Math.trunc(Number(timeout) || 120000))
   const body = buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort })
   const estimatedTokens = Math.ceil(JSON.stringify(messages).length / 4) + Math.max(0, Number(maxTokens) || 0)
   await emitModelProgress(onProgress, 'model_request')
   const { response, data } = await trackedModelRequest({
-    url, apiKey, body, timeout, usageContext, estimatedTokens, phase: 'request', provider, signal,
-    onProviderRequest, onProviderUsage,
+    url, apiKey, body, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
+    estimatedTokens, phase: 'request', provider, signal, onProviderRequest, onProviderUsage, protocol,
   })
   const nativeJsonMode = usesNativeJsonMode(provider, protocol)
   let content = extractLlmContent(data, protocol, nativeJsonMode)
-  if (!content && nativeJsonMode) {
+  if (!content && nativeJsonMode && allowFollowupRequests) {
     signal?.throwIfAborted()
     await emitModelProgress(onProgress, 'repairing')
     const emptyRetryMessages = [
@@ -531,8 +590,8 @@ export async function requestJsonObject({
     })
     const emptyRetryEstimate = Math.ceil(JSON.stringify(emptyRetryMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
     const { data: emptyRetryData } = await trackedModelRequest({
-      url, apiKey, body:emptyRetryBody, timeout, usageContext, estimatedTokens:emptyRetryEstimate,
-      phase:'repair', provider, signal, onProviderRequest, onProviderUsage,
+      url, apiKey, body:emptyRetryBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
+      estimatedTokens:emptyRetryEstimate, phase:'repair', provider, signal, onProviderRequest, onProviderUsage, protocol,
     })
     content = extractLlmContent(emptyRetryData, protocol, true)
   }
@@ -542,6 +601,7 @@ export async function requestJsonObject({
     const parsed = parseJsonObject(content)
     return typeof validateObject === 'function' ? validateObject(parsed, { phase:'initial' }) : parsed
   } catch (exc) {
+    if (!allowFollowupRequests) throw exc
     signal?.throwIfAborted()
     await emitModelProgress(onProgress, 'repairing')
     const repairMessages = repairContext ? [
@@ -563,8 +623,8 @@ export async function requestJsonObject({
     })
     const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
     const { data: repairedData } = await trackedModelRequest({
-      url, apiKey, body: repairBody, timeout, usageContext, estimatedTokens: repairEstimate,
-      phase: 'repair', provider, signal, onProviderRequest, onProviderUsage,
+      url, apiKey, body: repairBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
+      estimatedTokens: repairEstimate, phase: 'repair', provider, signal, onProviderRequest, onProviderUsage, protocol,
     })
     const repaired = extractLlmContent(repairedData, protocol, nativeJsonMode)
     if (!repaired) throw new Error('LLM repair response content is empty')
@@ -810,6 +870,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       signal: config._abortSignal || null,
       onProviderRequest:config._onProviderRequest || null,
       onProviderUsage:config._onProviderUsage || null,
+      allowFollowupRequests:!String(config._usage || '').startsWith('auto'),
       repairContext:{
         outputFormat,
         requiredCoverage:positionManagementEnabled ? {

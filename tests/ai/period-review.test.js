@@ -1,10 +1,32 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
   compactPeriodTradeEvidence, dailyEvidenceSemanticHash, isTerminalTradeEvidenceReason, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey,
   monthlyReviewSourceHash, periodReviewAccessScope, samePeriodOutcomeSet, shouldRefreshDailyReviewCase, shouldUpgradePeriodMarketEvidence,
-  validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
+  startPeriodReviewLeaseHeartbeat, validateDailyReviewContent, validateMonthlyReviewContent } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
+
+describe('period review lease heartbeat', () => {
+  it('aborts the model attempt and fences writes when lease renewal is rejected', async () => {
+    const heartbeat = startPeriodReviewLeaseHeartbeat({ id:7, lease_token:'lease-a' }, {
+      intervalMs:60_000, renew:vi.fn().mockResolvedValue({ affectedRows:0 }),
+    })
+    await heartbeat.renewNow()
+    expect(heartbeat.signal.aborted).toBe(true)
+    expect(() => heartbeat.assertOwned()).toThrow('period_review_job_lease_lost')
+    await heartbeat.stop()
+  })
+
+  it('keeps ownership after a successful renewal', async () => {
+    const heartbeat = startPeriodReviewLeaseHeartbeat({ id:7, lease_token:'lease-a' }, {
+      intervalMs:60_000, renew:vi.fn().mockResolvedValue({ affectedRows:1 }),
+    })
+    await heartbeat.renewNow()
+    expect(heartbeat.signal.aborted).toBe(false)
+    expect(() => heartbeat.assertOwned()).not.toThrow()
+    await heartbeat.stop()
+  })
+})
 
 describe('period review calendar', () => {
   it('uses the calibrated MT5 offset for daily boundaries', () => {

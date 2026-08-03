@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, configuredModelMaxTokens, compactInferenceMarketPayload, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, configuredModelMaxTokens, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
 import { compactRates } from '../../server/routes/ai/utils.js'
 
 describe('model output budgets', () => {
@@ -217,6 +217,38 @@ describe('requestJsonObject', () => {
     expect(result).toEqual({ key: 'value' })
     expect(mockFetch).toHaveBeenCalledTimes(1)
     expect(mockFetch.mock.calls[0][1].redirect).toBe('error')
+  })
+
+  it('records split token usage without learning output budget from total tokens', () => {
+    expect(extractTokenUsage({ usage:{ prompt_tokens:1200, completion_tokens:300, total_tokens:1500,
+      prompt_tokens_details:{ cached_tokens:500 }, completion_tokens_details:{ reasoning_tokens:180 } } }))
+      .toEqual({ inputTokens:1200, outputTokens:300, reasoningTokens:180, cachedTokens:500, totalTokens:1500 })
+  })
+
+  it('fails closed on Chat Completions length truncation before JSON validation or repair', async () => {
+    mockFetch.mockResolvedValue({ ok:true, status:200, headers:{ get:() => 'req-truncated' },
+      json:() => Promise.resolve({ choices:[{ finish_reason:'length', message:{ content:'{"ok":true}' } }],
+        usage:{ prompt_tokens:10, completion_tokens:20, total_tokens:30 } }) })
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:20,
+      messages:[{ role:'user', content:'test' }],
+    })).rejects.toMatchObject({ message:'output_truncated', code:'output_truncated', finishReason:'length' })
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('recognizes Responses incomplete_details as truncation', () => {
+    expect(modelResponseCompletion({ status:'incomplete', incomplete_details:{ reason:'max_output_tokens' } }, 'responses'))
+      .toMatchObject({ truncated:true, finishReason:'incomplete' })
+  })
+
+  it('does not issue an empty retry or format repair when follow-up requests are disabled', async () => {
+    mockFetch.mockResolvedValue({ ok:true, status:200,
+      json:() => Promise.resolve({ choices:[{ finish_reason:'stop', message:{ content:'invalid json' } }] }) })
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }], allowFollowupRequests:false,
+    })).rejects.toThrow()
+    expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 
   it('DeepSeek 请求默认启用 JSON Object 模式', async () => {

@@ -26,6 +26,48 @@ let periodReviewWakeRequested = false
 const parse = (value, fallback = null) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const safeError = error => String(error?.message || error || 'period_review_failed').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 128)
 
+export function startPeriodReviewLeaseHeartbeat(job, {
+  intervalMs = 30_000,
+  renew = async currentJob => queryRun(`UPDATE period_review_jobs
+    SET lease_expires_at = ?, updated_at = ?
+    WHERE id = ? AND status = 'leased' AND lease_token = ?`,
+  [afterSeconds(120), beijingNow(), currentJob.id, currentJob.lease_token]),
+} = {}) {
+  const controller = new AbortController()
+  let stopped = false
+  let lost = false
+  let pending = null
+  const markLost = error => {
+    if (lost || stopped) return
+    lost = true
+    const reason = error instanceof Error ? error : new Error('period_review_job_lease_lost')
+    if (!controller.signal.aborted) controller.abort(reason)
+  }
+  const renewOnce = async () => {
+    if (stopped || lost || pending) return
+    pending = Promise.resolve(renew(job)).then(result => {
+      const affected = Number(result?.affectedRows ?? result?.changes ?? 0)
+      if (affected !== 1) markLost(new Error('period_review_job_lease_lost'))
+    }).catch(error => markLost(error)).finally(() => { pending = null })
+    await pending
+  }
+  const timer = setInterval(renewOnce, Math.max(1, Number(intervalMs) || 30_000))
+  timer.unref?.()
+  return {
+    signal:controller.signal,
+    get lost() { return lost },
+    assertOwned() {
+      if (lost) throw controller.signal.reason || new Error('period_review_job_lease_lost')
+    },
+    renewNow:renewOnce,
+    async stop() {
+      stopped = true
+      clearInterval(timer)
+      if (pending) await pending
+    },
+  }
+}
+
 export function periodReviewAccessScope(actor, alias = 'cases') {
   const userId = Number(actor?.id || 0)
   if (!userId) throw new Error('invalid_user')
@@ -766,7 +808,7 @@ async function claimDailyReviewJob() {
     if (!rows[0]) return null
     const token = crypto.randomUUID()
     await run(`UPDATE period_review_jobs SET status = 'leased', progress_stage = 'preparing', stage_updated_at = ?, lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
-      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [beijingNow(), token, afterSeconds(300), beijingNow(), rows[0].id])
+      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [beijingNow(), token, afterSeconds(120), beijingNow(), rows[0].id])
     await run(`UPDATE period_review_cases SET status = 'generating', updated_at = ?
       WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), rows[0].period_case_id])
     return { ...rows[0], lease_token: token, attempt_count: Number(rows[0].attempt_count) + 1 }
@@ -799,6 +841,8 @@ async function generateDailyReview(job, requestModel) {
     model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
     maxTokens: Number(resolved.model.max_tokens || 3000), thinkingEnabled: resolved.model.thinking_enabled,
     reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
+    timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs,
+    signal:job._abortSignal || null,
     messages: [
       { role: 'system', content: `你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。period_market 是按策略周期提取的完整交易日行情，缠论结构已基于完整窗口计算；必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` },
       { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
@@ -858,10 +902,14 @@ async function skipDisabledPeriodReviewJob(job) {
 export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
   const job = await claimDailyReviewJob()
   if (!job) return { claimed: false }
+  job._deadlineAtMs = Date.now() + 60 * 60_000
+  const lease = startPeriodReviewLeaseHeartbeat(job)
+  job._abortSignal = lease.signal
   await setPeriodReviewJobStage(job, 'preparing')
   try {
     if (!await isAiFeatureEnabled('review_generation_enabled', job.user_id)) return skipDisabledPeriodReviewJob(job)
     const generated = await generateDailyReview(job, requestModel)
+    lease.assertOwned()
     await finishDailyReviewSuccess(job, generated)
     await setPeriodReviewJobStage(job, 'succeeded', 'success')
     return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
@@ -870,6 +918,8 @@ export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObjec
     await setPeriodReviewJobStage(job, job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
       job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
     return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
+  } finally {
+    await lease.stop()
   }
 }
 
@@ -887,7 +937,7 @@ async function claimMonthlyReviewJob() {
     if (!rows[0]) return null
     const token = crypto.randomUUID()
     await run(`UPDATE period_review_jobs SET status = 'leased', progress_stage = 'preparing', stage_updated_at = ?, lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
-      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [beijingNow(), token, afterSeconds(420), beijingNow(), rows[0].id])
+      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [beijingNow(), token, afterSeconds(120), beijingNow(), rows[0].id])
     await run(`UPDATE period_review_cases SET status = 'generating', updated_at = ?
       WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), rows[0].period_case_id])
     return { ...rows[0], lease_token: token, attempt_count: Number(rows[0].attempt_count) + 1 }
@@ -926,6 +976,8 @@ async function generateMonthlyReview(job, requestModel) {
     model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
     maxTokens: Number(resolved.model.max_tokens || 4000), thinkingEnabled: resolved.model.thinking_enabled,
     reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
+    timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs,
+    signal:job._abortSignal || null,
     messages: [
       { role: 'system', content: `你是严格的交易月度复盘分析器。基础统计以系统数据为准，不得自行重算。period_market_digest 是各个交易日使用完整日内 K 线计算后的行情与缠论结构摘要，只能从日复盘和这些摘要中识别跨日重复模式；未确认的日复盘只能作为待核实证据。必须区分缠论数据、结构计算、确认延迟、AI解读和策略规则问题。记忆候选必须至少由两个不同交易日支持，不得创造新规则或提高风险。\n\n以下输出契约不可违反：\n${contract}` },
       { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
@@ -974,10 +1026,14 @@ async function finishMonthlyReviewFailure(job, error) {
 export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
   const job = await claimMonthlyReviewJob()
   if (!job) return { claimed: false }
+  job._deadlineAtMs = Date.now() + 6 * 60 * 60_000
+  const lease = startPeriodReviewLeaseHeartbeat(job)
+  job._abortSignal = lease.signal
   await setPeriodReviewJobStage(job, 'preparing')
   try {
     if (!await isAiFeatureEnabled('review_generation_enabled', job.user_id)) return skipDisabledPeriodReviewJob(job)
     const generated = await generateMonthlyReview(job, requestModel)
+    lease.assertOwned()
     await finishMonthlyReviewSuccess(job, generated)
     await setPeriodReviewJobStage(job, 'succeeded', 'success')
     return { claimed: true, status: 'succeeded', periodCaseId: Number(job.period_case_id) }
@@ -986,6 +1042,8 @@ export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObj
     await setPeriodReviewJobStage(job, job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
       job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
     return { claimed: true, status: 'failed', periodCaseId: Number(job.period_case_id), error: safeError(error) }
+  } finally {
+    await lease.stop()
   }
 }
 

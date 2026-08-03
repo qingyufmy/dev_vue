@@ -788,6 +788,13 @@ function completionIntervalCooldownSeconds(intervalMinutes, completedAtMs = Date
   )
 }
 
+function failedCycleCooldownSeconds(intervalMinutes, reason, consecutiveFailures = 1, providerRequestStarted = false) {
+  const retrySeconds = Math.ceil(retryDelayMs(reason, consecutiveFailures) / 1000)
+  return providerRequestStarted
+    ? Math.max(completionIntervalCooldownSeconds(intervalMinutes), retrySeconds)
+    : retrySeconds
+}
+
 function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, cycleSnapshot) {
   for (const key in autoSchedulerState) {
     const st = autoSchedulerState[key]
@@ -1164,6 +1171,12 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     let cycleStatus = 'error'
     let cycleReason = 'exception'
     let cycleSnapshot = null
+    let providerRequestStarted = false
+    const previousOnProviderRequest = resolvedConfig._onProviderRequest
+    resolvedConfig._onProviderRequest = async event => {
+      providerRequestStarted = true
+      if (typeof previousOnProviderRequest === 'function') await previousOnProviderRequest(event)
+    }
     try {
       if (lockGuard.lost) { cycleReason = 'lock_lost'; throw new Error('lock lost during renewal') }
       const cycleResult = await runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, {
@@ -1195,16 +1208,16 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     } finally {
       // Stop lock renewal timer
       if (lockGuard.renewTimer) clearInterval(lockGuard.renewTimer)
+      if (previousOnProviderRequest) resolvedConfig._onProviderRequest = previousOnProviderRequest
+      else delete resolvedConfig._onProviderRequest
       // A successful cycle receives the full configured interval after all
       // inference, persistence and delivery work has completed. Model runtime
       // must not consume any part of the interval before the next cycle.
       const finalizedAtMs = Date.now()
-      const recoveryDeadlineMs = cycleStatus === 'success'
-        ? nextCompletionIntervalDeadlineMs(st.intervalMinutes, finalizedAtMs)
-        : finalizedAtMs + retryDelayMs(cycleReason, st._consecutiveModelFailures)
       const cooldownSecs = cycleStatus === 'success'
         ? completionIntervalCooldownSeconds(st.intervalMinutes, finalizedAtMs)
-        : calculateRecoverySeconds(recoveryDeadlineMs, finalizedAtMs)
+        : failedCycleCooldownSeconds(st.intervalMinutes, cycleReason, st._consecutiveModelFailures, providerRequestStarted)
+      const recoveryDeadlineMs = finalizedAtMs + cooldownSecs * 1000
       st.nextRunInSeconds = cooldownSecs
       const finalized = await finalizeLock(key, lockToken, cooldownSecs)
       if (!finalized) {
@@ -2622,6 +2635,7 @@ export const __schedulerTest = {
   acquireDeliveryInventoryLock,
   nextCompletionIntervalDeadlineMs,
   completionIntervalCooldownSeconds,
+  failedCycleCooldownSeconds,
   schedulerUpdateMaintenanceReason,
   isMarketWaitReason,
   summarizeRuntimeMarketStates,

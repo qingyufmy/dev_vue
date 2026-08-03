@@ -72,7 +72,7 @@ MT5 累计收益、入出金和平仓统计必须按 `mt5_account_ownership_hist
 
 管理员登录量见智桥后提供“新增观摩源”入口；新来源必须先验证 `plan_source=observer_source` 的专用账户，并绑定未被其他档案使用的独立终端目录和交易账户。观摩源由 3.0 核心以隔离档案运行，不再启动旧版子 Bridge 界面。普通用户不显示观摩源和管理员连接设置入口，且一个客户端只连接一个本人交易账户。
 
-自动推理成功后必须对齐下一个固定时间槽，不得按“模型完成时间 + 周期”累计漂移。`inference_snapshots.klines_json` 兼容普通 JSON 与 `gzip-base64:` 压缩格式，读取必须统一使用 `parseSnapshotJson()`，不得直接 `JSON.parse()`。模型调用流量以 `ai_model_usage_logs` 中的请求字节、响应字节和耗时字段为准。
+自动推理在服务商请求进入终态后必须等待完整配置周期；慢推理期间错过的周期直接丢弃，不按固定时间槽补跑，也不得立即连续推理。失败退避长于配置周期时采用更长等待；尚未发起模型请求的前置条件检查才允许短周期重试。`inference_snapshots.klines_json` 兼容普通 JSON 与 `gzip-base64:` 压缩格式，读取必须统一使用 `parseSnapshotJson()`，不得直接 `JSON.parse()`。模型调用流量以 `ai_model_usage_logs` 中的请求字节、响应字节和耗时字段为准。
 模型结构化输出参数必须按供应商与协议白名单启用，不得向所有 OpenAI 兼容端点统一写死。DeepSeek Chat API 使用 `response_format: { type: 'json_object' }`；火山 Agent Plan Responses API 使用 `text.format: { type: 'json_object' }`。现有动态输出模板与后端字段校验仍是交易合同，JSON Mode 只负责保证 JSON 语法，不得替代业务校验。
 
 历史信号快照的模型对比必须锁定快照所属策略版本及当时可恢复的周期、入场方式、缠论和策略范围，禁止混入当前策略配置。统计指标的分子与分母必须来自同一响应集合；约束无效信号可参与模型方向和置信度评估，但不得进入成交回放。

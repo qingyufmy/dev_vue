@@ -383,15 +383,31 @@ export async function beginModelUsage({ userId, profileId, credentialSource, usa
   })
 }
 
-export async function finishModelUsage(logId, { tokenCount = 0, status = 'success', errorCode = null,
+export async function finishModelUsage(logId, { tokenCount = 0, inputTokens = 0, outputTokens = 0,
+  reasoningTokens = 0, cachedTokens = 0, status = 'success', errorCode = null,
+  providerRequestId = null, finishReason = null, incompleteDetails = null,
+  accountingStatus = null,
   requestBytes = 0, responseBytes = 0, durationMs = 0 } = {}) {
   if (!logId) return
   const safeTokens = Math.max(0, Math.trunc(Number(tokenCount) || 0))
+  const normalizedAccountingStatus = ['settled', 'estimated', 'usage_unknown'].includes(accountingStatus)
+    ? accountingStatus
+    : (safeTokens > 0 ? 'settled' : (status === 'success' ? 'estimated' : 'usage_unknown'))
+  const preserveReservation = normalizedAccountingStatus === 'usage_unknown'
   await queryRun(
     `UPDATE ai_model_usage_logs
-     SET token_count = ?, request_status = ?, error_code = ?, request_bytes = ?, response_bytes = ?, duration_ms = ?
+     SET token_count = ${preserveReservation ? 'token_count' : '?'}, input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, cached_tokens = ?,
+       request_status = ?, error_code = ?, provider_request_id = ?, finish_reason = ?, incomplete_details_json = ?,
+       accounting_status = ?, request_bytes = ?, response_bytes = ?, duration_ms = ?
      WHERE id = ? AND request_status = 'reserved'`,
-    [safeTokens, status, errorCode ? String(errorCode).slice(0, 128) : null,
+    [...(preserveReservation ? [] : [safeTokens]),
+      Math.max(0, Math.trunc(Number(inputTokens) || 0)), Math.max(0, Math.trunc(Number(outputTokens) || 0)),
+      Math.max(0, Math.trunc(Number(reasoningTokens) || 0)), Math.max(0, Math.trunc(Number(cachedTokens) || 0)),
+      status, errorCode ? String(errorCode).slice(0, 128) : null,
+      providerRequestId ? String(providerRequestId).slice(0, 191) : null,
+      finishReason ? String(finishReason).slice(0, 64) : null,
+      incompleteDetails ? JSON.stringify(incompleteDetails).slice(0, 4000) : null,
+      normalizedAccountingStatus,
       Math.max(0, Math.trunc(Number(requestBytes) || 0)), Math.max(0, Math.trunc(Number(responseBytes) || 0)),
       Math.max(0, Math.trunc(Number(durationMs) || 0)), logId]
   )

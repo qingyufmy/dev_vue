@@ -115,10 +115,11 @@ describe('provider-call usage integration', () => {
 
     expect(mockQueryRun).toHaveBeenCalledTimes(2)
     expect(mockQueryRun.mock.calls[1][1]).toEqual([
-      123, 'success', null, expect.any(Number), expect.any(Number), expect.any(Number), 41,
+      123, 80, 43, 0, 0, 'success', null, null, null, null, 'settled',
+      expect.any(Number), expect.any(Number), expect.any(Number), 41,
     ])
-    expect(mockQueryRun.mock.calls[1][1][3]).toBeGreaterThan(0)
-    expect(mockQueryRun.mock.calls[1][1][4]).toBeGreaterThan(0)
+    expect(mockQueryRun.mock.calls[1][1][11]).toBeGreaterThan(0)
+    expect(mockQueryRun.mock.calls[1][1][12]).toBeGreaterThan(0)
   })
 
   it('finalizes a reserved row as error when the provider fails', async () => {
@@ -130,9 +131,10 @@ describe('provider-call usage integration', () => {
     })).rejects.toThrow('model_quota_exhausted')
 
     expect(mockQueryRun.mock.calls[1][1]).toEqual([
-      0, 'error', 'model_quota_exhausted', expect.any(Number), 0, expect.any(Number), 41,
+      0, 0, 0, 0, 0, 'error', 'model_quota_exhausted', null, null, null, 'settled',
+      expect.any(Number), 0, expect.any(Number), 41,
     ])
-    expect(mockQueryRun.mock.calls[1][1][3]).toBeGreaterThan(0)
+    expect(mockQueryRun.mock.calls[1][1][11]).toBeGreaterThan(0)
   })
 
   it('finalizes the usage reservation when an active request is cancelled', async () => {
@@ -154,7 +156,9 @@ describe('provider-call usage integration', () => {
 
     await expect(request).rejects.toThrow('history_compare_cancelled')
     expect(mockQueryRun.mock.calls[1][1]).toEqual([
-      0, 'error', 'history_compare_cancelled', expect.any(Number), 0, expect.any(Number), 41,
+      0, 0, 0, 0, 'error', 'history_compare_cancelled', null, null, null, 'usage_unknown',
+      expect.any(Number), 0, expect.any(Number), 41,
     ])
+    expect(mockQueryRun.mock.calls[1][0]).toContain('token_count = token_count')
   })
 })

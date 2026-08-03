@@ -288,6 +288,13 @@ describe('scheduler wait cadence', () => {
     expect(__schedulerTest.schedulerWaitLabel('market_closed')).toBe('市场休市，等待开市')
   })
 
+  it('waits at least one full configured interval after every provider-started failure', () => {
+    expect(__schedulerTest.failedCycleCooldownSeconds(5, 'ai_failed', 1, true)).toBe(300)
+    expect(__schedulerTest.failedCycleCooldownSeconds(5, 'ai_failed', 4, true)).toBe(300)
+    expect(__schedulerTest.failedCycleCooldownSeconds(2, 'ai_failed', 4, true)).toBe(300)
+    expect(__schedulerTest.failedCycleCooldownSeconds(5, 'exception', 1, false)).toBe(20)
+  })
+
   it('treats only explicit per-symbol market waits as market pauses', () => {
     expect(__schedulerTest.isMarketWaitReason('market_closed')).toBe(true)
     expect(__schedulerTest.isMarketWaitReason('market_stale_tick')).toBe(true)

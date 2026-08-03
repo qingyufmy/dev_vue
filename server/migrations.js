@@ -4691,6 +4691,32 @@ const migrations = [
           WHERE id = ? AND terminal_timezone_offset_minutes IS NULL`, [offset, row.id])
       }
     }
+  },
+  {
+    id: '161_model_usage_completion_evidence',
+    async up() {
+      const wanted = {
+        input_tokens:'INT NOT NULL DEFAULT 0',
+        output_tokens:'INT NOT NULL DEFAULT 0',
+        reasoning_tokens:'INT NOT NULL DEFAULT 0',
+        cached_tokens:'INT NOT NULL DEFAULT 0',
+        provider_request_id:'VARCHAR(191) DEFAULT NULL',
+        finish_reason:'VARCHAR(64) DEFAULT NULL',
+        incomplete_details_json:'TEXT DEFAULT NULL',
+        accounting_status:"VARCHAR(24) NOT NULL DEFAULT 'estimated'",
+      }
+      const columns = new Set((await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_usage_logs'`)).map(row => row.COLUMN_NAME))
+      for (const [name, definition] of Object.entries(wanted)) {
+        if (!columns.has(name)) await queryRun(`ALTER TABLE ai_model_usage_logs ADD COLUMN ${name} ${definition}`)
+      }
+      const indexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_usage_logs'
+          AND INDEX_NAME = 'idx_usage_provider_request'`)
+      if (!indexes.length) {
+        await queryRun('CREATE INDEX idx_usage_provider_request ON ai_model_usage_logs (provider_request_id)')
+      }
+    }
   }
 ]
 
