@@ -212,6 +212,7 @@ describe('monthly review model boundary', () => {
 
 describe('period review runtime integration', () => {
   const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
+  const periodReview = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
   const server = readFileSync(new URL('../../server/index.js', import.meta.url), 'utf8')
   const platform = readFileSync(new URL('../../server/routes/ai/platform-experience.js', import.meta.url), 'utf8')
   const migration = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
@@ -223,11 +224,14 @@ describe('period review runtime integration', () => {
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/retry'")
     expect(routes).toContain("router.get('/ai/period-reviews/summary'")
-    expect(readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')).toContain('daily_total:0, monthly_total:0')
+    expect(periodReview).toContain('daily_total:0, monthly_total:0')
     expect(routes).toContain("router.get('/ai/period-reviews/:id/job-status'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/read'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/derivation/retry'")
-    expect(routes).toContain('listPeriodReviewCases(req.user, req.query)')
+    expect(routes).toContain('{ ...req.query, includePageInfo:true }')
+    expect(periodReview).toContain('ORDER BY cases.created_at DESC, cases.id DESC')
+    expect(periodReview).toContain("cases.status IN ('evidence_pending','incomplete','ready','generating','failed')")
+    expect(periodReview).toContain('has_more:pageRows.length > safeLimit')
     expect(routes).toContain('confirmPeriodReviewCase({ periodCaseId, actor: req.user')
   })
 

@@ -1055,7 +1055,7 @@ router.get('/ai/reviews', authMiddleware, async (req, res) => {
 })
 
 router.get('/ai/period-reviews', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, cases: await listPeriodReviewCases(req.user, req.query) }) }
+  try { res.json({ ok: true, ...(await listPeriodReviewCases(req.user, { ...req.query, includePageInfo:true })) }) }
   catch (error) { reviewError(res, error) }
 })
 

@@ -63,6 +63,13 @@ const state = {
   reviewDetailJobKey: null,
   reviewFilter: "",
   reviewPeriodFilter: "",
+  reviewListOffset: 0,
+  reviewListPageSize: 8,
+  reviewListHasMore: true,
+  reviewListLoading: false,
+  reviewListError: "",
+  reviewListRequestVersion: 0,
+  reviewListObserver: null,
   memoryTierFilter: "all",
   memoryItems: [],
   memorySummaries: [],
@@ -3541,13 +3548,77 @@ function stopReviewDetailPolling() {
   state.reviewDetailJobKey = null;
 }
 
+function periodReviewListUrl() {
+  const params = new URLSearchParams({
+    limit:String(state.reviewListPageSize),
+    offset:String(state.reviewListOffset),
+  });
+  if (state.reviewPeriodFilter) params.set("periodType", state.reviewPeriodFilter);
+  if (state.reviewFilter) params.set("status", state.reviewFilter);
+  return `/api/ai/period-reviews?${params.toString()}`;
+}
+
+function disconnectReviewListObserver() {
+  state.reviewListObserver?.disconnect();
+  state.reviewListObserver = null;
+}
+
+function bindReviewListStream() {
+  disconnectReviewListObserver();
+  const sentinel = document.querySelector("[data-review-stream-sentinel]");
+  const loadMore = document.querySelector("[data-review-load-more]");
+  const requestNextPage = () => loadReviewCaseStream().catch(error => toast(error.message, "error"));
+  loadMore?.addEventListener("click", requestNextPage);
+  if (!sentinel || state.reviewListLoading || !state.reviewListHasMore || !("IntersectionObserver" in window)) return;
+  state.reviewListObserver = new IntersectionObserver(entries => {
+    if (entries.some(entry => entry.isIntersecting)) requestNextPage();
+  }, { root:null, rootMargin:"180px 0px" });
+  state.reviewListObserver.observe(sentinel);
+}
+
+async function loadReviewCaseStream({ reset = false } = {}) {
+  if (reset) {
+    state.reviewListRequestVersion += 1;
+    state.reviewListOffset = 0;
+    state.reviewListHasMore = true;
+    state.reviewListLoading = false;
+    state.reviewListError = "";
+    state.reviewCases = [];
+    disconnectReviewListObserver();
+  }
+  if (state.reviewListLoading || !state.reviewListHasMore) return;
+  const requestVersion = state.reviewListRequestVersion;
+  const requestedOffset = state.reviewListOffset;
+  state.reviewListLoading = true;
+  state.reviewListError = "";
+  renderReviewCases();
+  try {
+    const data = await api(periodReviewListUrl());
+    if (requestVersion !== state.reviewListRequestVersion) return;
+    const rows = data.cases || [];
+    if (requestedOffset === 0) state.reviewCases = rows;
+    else {
+      const known = new Set(state.reviewCases.map(item => String(item.id)));
+      state.reviewCases = [...state.reviewCases, ...rows.filter(item => !known.has(String(item.id)))];
+    }
+    state.reviewListOffset = Number(data.pagination?.next_offset ?? requestedOffset + rows.length);
+    state.reviewListHasMore = Boolean(data.pagination?.has_more ?? rows.length >= state.reviewListPageSize);
+  } catch (error) {
+    if (requestVersion === state.reviewListRequestVersion) state.reviewListError = localizeReason(error.message);
+    throw error;
+  } finally {
+    if (requestVersion === state.reviewListRequestVersion) {
+      state.reviewListLoading = false;
+      renderReviewCases();
+    }
+  }
+}
+
 async function loadReviewMemory() {
-  const query = state.reviewPeriodFilter ? `?periodType=${encodeURIComponent(state.reviewPeriodFilter)}` : "";
   const platformManager = canManagePlatformAiContent();
-  const [reviewData, memoryData, profileData, featureData] = platformManager
-    ? await Promise.all([api(`/api/ai/period-reviews${query}`), api("/api/ai/admin/platform-experience"), Promise.resolve({ profiles:[] }), Promise.resolve({ flags:{ user:{} } })])
-    : await Promise.all([api(`/api/ai/period-reviews${query}`), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
-  state.reviewCases = reviewData.cases || [];
+  const [, memoryData, profileData, featureData] = platformManager
+    ? await Promise.all([loadReviewCaseStream({ reset:true }), api("/api/ai/admin/platform-experience"), Promise.resolve({ profiles:[] }), Promise.resolve({ flags:{ user:{} } })])
+    : await Promise.all([loadReviewCaseStream({ reset:true }), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
   state.memoryItems = memoryData.items || [];
   state.memorySummaries = memoryData.summaries || [];
   state.memorySettings = memoryData.settings || {};
@@ -3579,9 +3650,15 @@ async function saveUserFeatureFlags() {
 function renderReviewCases() {
   const host = $("reviewCaseList"); if (!host) return;
   const statusClass = status => status === "approved" ? "success" : ["failed", "incomplete", "needs_revision"].includes(status) ? "danger" : "warning";
-  const pending = new Set(["evidence_pending", "incomplete", "ready", "generating", "failed"]);
-  const items = state.reviewCases.filter(item => !state.reviewFilter || (state.reviewFilter === "pending" ? pending.has(item.status) : item.status === state.reviewFilter));
-  host.innerHTML = items.length ? items.map(item => {
+  const items = state.reviewCases;
+  const streamStatus = state.reviewListLoading
+    ? `<div class="review-stream-status is-loading" role="status"><i data-lucide="loader-circle" size="15"></i><span>${items.length ? '正在加载更多复盘…' : '正在读取策略复盘…'}</span></div>`
+    : state.reviewListError
+      ? `<div class="review-stream-status is-error" role="alert"><span>${escapeHtml(state.reviewListError)}</span><button class="text-action" type="button" data-review-load-more>重新加载</button></div>`
+      : state.reviewListHasMore
+      ? `<div class="review-stream-status" data-review-stream-sentinel><button class="text-action" type="button" data-review-load-more>继续加载</button><span>向下滚动自动加载</span></div>`
+      : items.length ? `<div class="review-stream-status is-complete"><i data-lucide="check" size="14"></i><span>已显示全部 ${items.length} 条复盘</span></div>` : "";
+  host.innerHTML = items.length ? `${items.map(item => {
     const selected = Number(item.id) === Number(state.selectedReviewId);
     const effectiveStatus = periodReviewEffectiveStatus(item);
     const icon = item.status === "approved" ? "check" : item.status === "needs_revision" ? "triangle-alert" : item.status === "failed" ? "x" : effectiveStatus === "model_request" ? "sparkles" : "clock-3";
@@ -3598,8 +3675,13 @@ function renderReviewCases() {
       </span>
       <span class="review-case-arrow" aria-hidden="true"><i data-lucide="chevron-right" size="16"></i></span>
     </button>`;
-  }).join("") : '<div class="review-list-empty empty-state"><span class="review-empty-icon"><i data-lucide="inbox" size="20"></i></span><strong>暂无符合条件的周期复盘</strong><span>系统会在交易日或自然月结束后，按策略汇总完整证据并生成复盘。</span></div>';
+  }).join("")}${streamStatus}` : state.reviewListLoading
+    ? '<div class="review-list-loading" aria-label="正在加载复盘"><div class="workspace-skeleton"></div><div class="workspace-skeleton"></div><div class="workspace-skeleton"></div></div>'
+    : state.reviewListError
+      ? `<div class="review-list-empty empty-state"><span class="review-empty-icon"><i data-lucide="circle-alert" size="20"></i></span><strong>复盘列表加载失败</strong><span>${escapeHtml(state.reviewListError)}</span><button class="btn btn-secondary btn-sm" type="button" data-review-load-more>重新加载</button></div>`
+      : '<div class="review-list-empty empty-state"><span class="review-empty-icon"><i data-lucide="inbox" size="20"></i></span><strong>暂无符合条件的周期复盘</strong><span>系统会在交易日或自然月结束后，按策略汇总完整证据并生成复盘。</span></div>';
   initIcons();
+  bindReviewListStream();
 }
 
 function syncReviewEditorFromFields() {
@@ -8973,7 +9055,9 @@ function bindEvents() {
       item.setAttribute("aria-selected", String(selected));
       item.tabIndex = selected ? 0 : -1;
     });
-    state.reviewFilter = button.dataset.reviewFilter; renderReviewCases();
+    state.reviewFilter = button.dataset.reviewFilter;
+    state.selectedReviewId = null;
+    loadReviewCaseStream({ reset:true }).catch(error => toast(error.message,"error"));
   }));
   document.querySelectorAll("[data-review-period]").forEach(button => button.addEventListener("click", () => {
     document.querySelectorAll("[data-review-period]").forEach(item => {
@@ -8983,7 +9067,7 @@ function bindEvents() {
       item.tabIndex = selected ? 0 : -1;
     });
     state.reviewPeriodFilter = button.dataset.reviewPeriod; state.selectedReviewId = null;
-    loadReviewMemory().catch(error => toast(error.message,"error"));
+    loadReviewCaseStream({ reset:true }).catch(error => toast(error.message,"error"));
   }));
   ["[data-review-filter]", "[data-review-period]"].forEach(selector => {
     document.querySelectorAll(selector).forEach(button => button.addEventListener("keydown", event => {

@@ -9397,6 +9397,22 @@ a.signal-link:hover {
   padding: 0 10px 10px;
 }
 
+.review-list-loading { display: grid; gap: 8px; }
+.review-stream-status {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+.review-stream-status .text-action { min-height: 34px; padding: 0 8px; color: var(--gold-light); }
+.review-stream-status.is-loading { color: var(--text-secondary); }
+.review-stream-status.is-error { flex-wrap: wrap; color: #fda4af; }
+.review-stream-status.is-complete { border-top: 1px solid rgba(148, 163, 184, .1); }
+
 #review-memory .review-case-button {
   position: relative;
   display: grid;

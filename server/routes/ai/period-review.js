@@ -984,7 +984,7 @@ function periodReviewContentForCase(reviewCase, content) {
   throw new Error('invalid_review_period_type')
 }
 
-export async function listPeriodReviewCases(actor, { periodType = null, status = null, limit = 50, offset = 0 } = {}) {
+export async function listPeriodReviewCases(actor, { periodType = null, status = null, limit = 50, offset = 0, includePageInfo = false } = {}) {
   const access = periodReviewAccessScope(actor)
   const params = [access.userId, ...access.params]
   let where = `WHERE ${access.sql}`
@@ -992,10 +992,16 @@ export async function listPeriodReviewCases(actor, { periodType = null, status =
     if (!['daily', 'monthly'].includes(periodType)) throw new Error('invalid_review_period_type')
     where += ' AND cases.period_type = ?'; params.push(periodType)
   }
-  if (status) { where += ' AND cases.status = ?'; params.push(status) }
+  if (status === 'pending') {
+    where += ` AND cases.status IN ('evidence_pending','incomplete','ready','generating','failed')`
+  } else if (status) {
+    if (!['draft', 'approved', 'needs_revision'].includes(status)) throw new Error('invalid_review_status')
+    where += ' AND cases.status = ?'; params.push(status)
+  }
   const safeLimit = Math.min(100, Math.max(1, Number(limit || 50)))
   const safeOffset = Math.max(0, Number(offset || 0))
-  const fetchLimit = Math.min(500, Math.max(safeLimit, (safeOffset + safeLimit) * 4))
+  const pageLimit = safeLimit + (includePageInfo ? 1 : 0)
+  const fetchLimit = Math.min(500, Math.max(pageLimit, (safeOffset + pageLimit) * 4))
   params.push(fetchLimit, 0)
   const rows = await queryAll(`SELECT cases.id, cases.user_id, cases.period_type, cases.period_key, cases.trading_account_id,
       cases.strategy_id, cases.strategy_version, cases.strategy_scope, cases.timezone_offset_minutes,
@@ -1012,7 +1018,7 @@ export async function listPeriodReviewCases(actor, { periodType = null, status =
     LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
       AND derivation.period_version_id = cases.approved_version_id
     LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = ? ${where}
-    ORDER BY cases.period_start_utc_msc DESC, cases.period_type, cases.id DESC LIMIT ? OFFSET ?`, params)
+    ORDER BY cases.created_at DESC, cases.id DESC LIMIT ? OFFSET ?`, params)
   const logicalRows = []
   const logicalIndexes = new Map()
   for (const row of rows) {
@@ -1023,10 +1029,21 @@ export async function listPeriodReviewCases(actor, { periodType = null, status =
     const index = logicalIndexes.get(key)
     if (row.status === 'approved' && logicalRows[index].status !== 'approved') logicalRows[index] = row
   }
-  return logicalRows.slice(safeOffset, safeOffset + safeLimit).map(row => {
+  const pageRows = logicalRows.slice(safeOffset, safeOffset + pageLimit)
+  const cases = pageRows.slice(0, safeLimit).map(row => {
     const evidence = parse(row.evidence_json, {})
     return { ...row, evidence_json: undefined, statistics: evidence.statistics || {}, source_quality: evidence.source_quality || null }
   })
+  if (!includePageInfo) return cases
+  return {
+    cases,
+    pagination: {
+      limit:safeLimit,
+      offset:safeOffset,
+      next_offset:safeOffset + cases.length,
+      has_more:pageRows.length > safeLimit,
+    },
+  }
 }
 
 export async function getPeriodReviewCase(periodCaseId, actor) {
