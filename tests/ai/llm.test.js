@@ -673,7 +673,7 @@ describe('OpenAI-compatible provider URL', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions')
   })
 
-  it('routes Kimi Code through its subscription endpoint with the configured automatic output limit', async () => {
+  it('routes Kimi Code through its subscription endpoint with an adaptive budget below the configured hard cap', async () => {
     vi.clearAllMocks()
     mockFetch.mockResolvedValue({
       ok: true,
@@ -689,7 +689,7 @@ describe('OpenAI-compatible provider URL', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.kimi.com/coding/v1/chat/completions')
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(body.thinking.type).toBe('disabled')
-    expect(body.max_tokens).toBe(30000)
+    expect(body.max_tokens).toBe(2000)
   })
 
   it('does not turn an externally cancelled inference into a HOLD signal', async () => {

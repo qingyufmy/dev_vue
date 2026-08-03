@@ -1305,4 +1305,14 @@ describe('route permissions and credential redaction', () => {
     expect(adminApp).not.toContain('_strategyPolicyDraft')
     expect(adminApp).not.toContain('payload.strategy_policy')
   })
+
+  it('explains automatic task budgets and the model output hard cap in both model editors', () => {
+    expect(html).toContain('任务预算')
+    expect(html).toContain('模型输出硬上限')
+    expect(html).toContain('不会每次固定申请')
+    expect(html).toContain('单次请求安全上限（秒）')
+    expect(adminApp).toContain('任务预算：自动管理')
+    expect(adminApp).toContain("textContent='模型输出硬上限'")
+    expect(adminApp).toContain("textContent='单次请求安全上限（毫秒）'")
+  })
 })

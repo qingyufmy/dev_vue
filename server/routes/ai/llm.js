@@ -14,6 +14,8 @@ import { buildPositionManagementOutputFormat, hasActivePositionManagementGroups,
   validatePositionManagementResponse } from './position-management.js'
 import { assertModelQuotaAvailable, buildModelQuotaCircuitContext, deferModelQuotaProbe,
   recordModelQuotaExhausted, recordModelQuotaRecovered } from './model-quota-circuit.js'
+import { getModelProviderCapabilities } from './model-provider-capabilities.js'
+import { estimateModelInputTokens, selectModelTaskBudget } from './model-task-budget.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
 const DEBUG_LLM = process.env.DEBUG_LLM === '1' || DEBUG_LLM_PAYLOAD
@@ -845,19 +847,41 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     if (String(config._usage || '').startsWith('auto') && promptChars > AUTO_INFERENCE_MAX_PROMPT_CHARS) {
       throw new Error(`auto_inference_prompt_budget_exceeded:${promptChars}`)
     }
+    const usageKind = String(config._usage || 'manual')
+    const taskKind = usageKind.startsWith('auto') ? 'auto_inference'
+      : usageKind === 'model_compare' ? 'model_compare' : 'manual_analysis'
+    let capabilities = {}
+    try {
+      capabilities = await getModelProviderCapabilities(config._model_profile_id)
+    } catch (error) {
+      console.warn('[LLM] Model capability lookup unavailable, using profile hard cap only:', error.message)
+    }
+    const budget = selectModelTaskBudget({
+      taskKind,
+      profileHardCap:configuredModelMaxTokens(config),
+      providerOutputCap:capabilities.max_output_tokens,
+      contextWindowTokens:capabilities.context_window_tokens,
+      estimatedInputTokens:estimateModelInputTokens([
+        { role:'system', content:cleanPrompt }, { role:'user', content:renderedUserPrompt },
+      ]),
+      schemaNeedTokens:Math.max(1200, Math.ceil(outputFormat.length / 2.5)),
+    })
+    if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
+    config._selectedOutputBudget = budget
     if (typeof config._onInferencePrepared === 'function') {
       config._onInferencePrepared({
         systemPrompt: cleanPrompt,
         userPrompt: renderedUserPrompt,
         outputSchemaVersion: config._comparison_replay_output_schema_version || sha256(outputFormat),
         aiPayload,
+        modelTaskBudget:budget,
       })
     }
     const parsed = await requestJsonObject({
       url, apiKey, provider,
       model: config.model_name || 'deepseek-chat',
       temperature: parseFloat(config.temperature ?? 0.3),
-      maxTokens: configuredModelMaxTokens(config),
+      maxTokens: budget.selectedMaxOutputTokens,
       thinkingEnabled,
       reasoningEffort: config.reasoning_effort || 'max',
       protocol,
