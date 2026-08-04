@@ -272,6 +272,93 @@ async function assertAutoInferenceOrderSendTx({ tracker, run, resultValidUntilUt
   return current
 }
 
+function recoveryFenceError(reason) {
+  const error = new Error(reason)
+  error.code = reason
+  error.reason = reason
+  return error
+}
+
+function recoveryFenceRow(result) {
+  const rows = Array.isArray(result?.[0]) ? result[0]
+    : Array.isArray(result) ? result : []
+  return rows[0] || null
+}
+
+function validateSignalDeliveryRecoveryRow(row, expectedTaskId) {
+  if (!row || String(row.execution_status || '').toLowerCase() !== 'executing'
+    || row.order_intent_id != null
+    || String(row.inference_task_id || '') !== expectedTaskId
+    || String(row.task_id || '') !== expectedTaskId
+    || String(row.model_task_status || '').toLowerCase() !== 'succeeded') {
+    throw recoveryFenceError('delivery_recovery_untrusted')
+  }
+  const createdAtUtcMsc = Number(row.created_at_utc_msc)
+  const ttlSeconds = Number(row.ttl_seconds)
+  const resultValidUntilUtcMsc = Number(row.result_valid_until_utc_msc)
+  if (!Number.isFinite(createdAtUtcMsc) || createdAtUtcMsc <= 0
+    || !Number.isFinite(ttlSeconds) || ttlSeconds <= 0
+    || !Number.isFinite(resultValidUntilUtcMsc) || resultValidUntilUtcMsc <= 0) {
+    throw recoveryFenceError('delivery_recovery_untrusted')
+  }
+  const deadline = Math.min(resultValidUntilUtcMsc, createdAtUtcMsc + ttlSeconds * 1000)
+  if (!Number.isFinite(deadline) || Date.now() > deadline) {
+    throw recoveryFenceError('delivery_recovery_expired')
+  }
+  return row
+}
+
+async function assertSignalDeliveryRecoveryLive({ recoveryContext, userId, signalId }) {
+  const expectedTaskId = String(recoveryContext?.taskId || '').trim()
+  if (!expectedTaskId) throw recoveryFenceError('delivery_recovery_untrusted')
+  const row = await queryOne(`
+    SELECT d.execution_status, d.order_intent_id,
+      s.inference_task_id, s.created_at_utc_msc, s.ttl_seconds,
+      t.task_id, t.status AS model_task_status, t.result_valid_until_utc_msc
+    FROM auto_signal_deliveries d
+    JOIN ai_signals s ON s.id = d.signal_id
+    JOIN ai_model_tasks t ON t.task_id = s.inference_task_id
+    WHERE d.signal_id = ? AND d.user_id = ? LIMIT 1
+  `, [signalId, userId])
+  return validateSignalDeliveryRecoveryRow(row, expectedTaskId)
+}
+
+async function releaseUnsentDeliveryClaim(signalId, userId) {
+  return queryRun(
+    `UPDATE auto_signal_deliveries
+     SET execution_status = 'not_attempted', execution_claimed_at = NULL, execution_result = NULL
+     WHERE signal_id = ? AND user_id = ? AND execution_status = 'executing'
+       AND order_intent_id IS NULL`,
+    [signalId, userId])
+}
+
+function recoveryReplacementUnsafe(recoveryContext, replacementTargets) {
+  return Boolean(recoveryContext && Array.isArray(replacementTargets) && replacementTargets.length > 0)
+}
+
+/**
+ * Durable fence for a recovered delivery. The model task is already terminal,
+ * so it cannot be represented by the live model-task tracker. Re-check the
+ * delivery, signal and task together inside the order-intent transaction just
+ * before markBridgeSending changes the intent to bridge_sending.
+ */
+async function assertSignalDeliveryRecoveryTx({ run, recoveryContext, userId, signalId }) {
+  const expectedTaskId = String(recoveryContext?.taskId || '').trim()
+  if (!expectedTaskId) throw recoveryFenceError('delivery_recovery_untrusted')
+  const result = await run(`
+    SELECT d.execution_status, d.order_intent_id,
+      s.inference_task_id, s.created_at_utc_msc, s.ttl_seconds,
+      t.task_id, t.status AS model_task_status, t.result_valid_until_utc_msc
+    FROM auto_signal_deliveries d
+    JOIN ai_signals s ON s.id = d.signal_id
+    JOIN ai_model_tasks t ON t.task_id = s.inference_task_id
+    WHERE d.signal_id = ? AND d.user_id = ?
+    FOR UPDATE
+  `, [signalId, userId])
+  const row = recoveryFenceRow(result)
+  return validateSignalDeliveryRecoveryRow(row, expectedTaskId)
+}
+
 function bridgeWeeklyWindow(userId, tradingAccountId = null, now = new Date()) {
   const clock = getPlatformMarketClockState(userId, tradingAccountId)
   return isWeeklyFlattenWindow(now, clock.timezone_offset_minutes)
@@ -2066,6 +2153,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         promptTypeId,
         symbol,
         createdAt,
+        signalType:signal.signal_type,
+        pendingAction:signal.pending_action,
       })) {
         deliveryValues.push('(?, ?, ?, ?, ?, ?, ?, ?, ?)')
         deliveryParams.push(delivery.signalId, delivery.userId, delivery.promptTypeId, delivery.symbol,
@@ -2284,13 +2373,16 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
 
 // === Delivery execution for a single subscriber ===
 async function executeDelivery(userId, signalId, signal, unifiedConfig, market, promptTypeId, symbol, createdAt,
-  lockGuard, modelTaskTracker = null, resultValidUntilUtcMsc = null) {
+  lockGuard, modelTaskTracker = null, resultValidUntilUtcMsc = null, recoveryContext = null) {
   const endDeliveryExecution = beginBridgeDeliveryExecution(userId)
   const l = (msg) => console.log(`[Delivery U${userId}] signal=${signalId} ${symbol}: ${msg}`)
   let inventoryLock = null
+  let deliveryClaimed = false
   const setTerminalStatus = (status, reason, details = {}) => queryRun(
-    'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?',
-    [status, JSON.stringify({ status, reason, details }), signalId, userId])
+    `UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ?
+     WHERE signal_id = ? AND user_id = ? AND execution_status = ?`,
+    [status, JSON.stringify({ status, reason, details }), signalId, userId,
+      deliveryClaimed ? 'executing' : 'not_attempted'])
   const finishBeforeRisk = async (status, reason, details = {}) => {
     await setTerminalStatus(status, reason, details)
     const action = status === 'rejected' ? 'ai_auto_execute_rejected'
@@ -2330,6 +2422,12 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       await setTerminalStatus('skipped', 'outside_schedule', { subscription_id: subscriptionRuntime.id })
       return
     }
+    // Do not claim a delivery while its target Bridge is offline. A fresh
+    // signal remains eligible for the periodic recovery pass.
+    if (!isBridgeAlive(userId)) {
+      l('waiting: bridge not alive before claim')
+      return
+    }
     // Atomic delivery claiming: only one executor can proceed (Fix 3)
     const claimed = await queryRun(
       `UPDATE auto_signal_deliveries SET execution_status = 'executing', execution_claimed_at = NOW()
@@ -2337,6 +2435,17 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       [signalId, userId])
     if (!claimed || claimed.changes !== 1) {
       l('skipped: already claimed or terminal state')
+      return
+    }
+    deliveryClaimed = true
+
+    // Close the claim race: if the Bridge disconnected after the atomic claim,
+    // release only an untouched claim. Once an order intent exists, recovery
+    // must reconcile it instead of replaying the signal.
+    if (!isBridgeAlive(userId)) {
+      const released = await releaseUnsentDeliveryClaim(signalId, userId)
+      if (released?.changes === 1) l('waiting: bridge disconnected after claim; untouched claim released')
+      else l('stopped: bridge disconnected after claim but claim was no longer untouched')
       return
     }
 
@@ -2455,37 +2564,52 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         // Replacement cancellation is intentionally deferred until the new
         // durable order intent has passed all risk checks and reserved risk.
         replacementTargets = cancellable
+        // A recovered task has no live model-task lease to fence the
+        // replacement callback. Never cancel an existing order and then fail
+        // the new order's recovery fence.
+        if (recoveryReplacementUnsafe(recoveryContext, replacementTargets)) {
+          await finishBeforeRisk('skipped', 'delivery_recovery_replacement_unsafe', { count:cancellable.length })
+          return
+        }
       } else {
         if (!(await isUserEligibleForAutoExecution(userId))) {
           await finishBeforeRisk('skipped', 'auto_execution_permission_changed')
           return
         }
         for (const item of cancellable) {
-        const ticket = item.ticket ?? item.mt5_ticket
-        if (!ticket) continue
-        try {
-          await assertAiPendingCancelEnabled()
-        } catch {
-          await finishBeforeRisk('skipped', 'ai_pending_cancel_disabled', { ticket:String(ticket) })
-          return
-        }
-        const cancelled = await mt5Bridge(userId, 'cancel_pending', {
-          ticket,
-          expected_state: pendingManagementExpectedState(item),
-        }, { noFallback:true })
-        if (cancelled?.status !== 'success') {
-          await insertAudit(null, userId, 'ai_cancel_pending_failed', symbol,
-            { signal_id:signalId, prompt_type_id:promptTypeId, ticket:String(ticket), reason:pendingActionReason, error:cancelled?.message },
-            { status:'error', message:cancelled?.message }, 'warning').catch(() => {})
-          await finishBeforeRisk('rejected', 'pending_cancel_failed', { ticket:String(ticket), pending_action_reason:pendingActionReason })
-          return
-        }
-        await queryRun(
-          "UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE pending_ticket = ? AND user_id = ?",
-          [String(ticket), userId]).catch(() => {})
-        await insertAudit(null, userId, 'ai_cancel_pending', symbol,
-          { signal_id:signalId, prompt_type_id:promptTypeId, ticket:String(ticket), pending_type:item.side || item.pending_type || item.order_type || null, reason:pendingActionReason },
-          { status:'cancelled', ticket:String(ticket) }, 'success').catch(() => {})
+          const ticket = item.ticket ?? item.mt5_ticket
+          if (!ticket) continue
+          try {
+            await assertAiPendingCancelEnabled()
+          } catch {
+            await finishBeforeRisk('skipped', 'ai_pending_cancel_disabled', { ticket:String(ticket) })
+            return
+          }
+          if (recoveryContext) {
+            try {
+              await assertSignalDeliveryRecoveryLive({ recoveryContext, userId, signalId })
+            } catch (error) {
+              await finishBeforeRisk('skipped', error.reason || error.message || 'delivery_recovery_untrusted', { ticket:String(ticket) })
+              return
+            }
+          }
+          const cancelled = await mt5Bridge(userId, 'cancel_pending', {
+            ticket,
+            expected_state: pendingManagementExpectedState(item),
+          }, { noFallback:true })
+          if (cancelled?.status !== 'success') {
+            await insertAudit(null, userId, 'ai_cancel_pending_failed', symbol,
+              { signal_id:signalId, prompt_type_id:promptTypeId, ticket:String(ticket), reason:pendingActionReason, error:cancelled?.message },
+              { status:'error', message:cancelled?.message }, 'warning').catch(() => {})
+            await finishBeforeRisk('rejected', 'pending_cancel_failed', { ticket:String(ticket), pending_action_reason:pendingActionReason })
+            return
+          }
+          await queryRun(
+            "UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE pending_ticket = ? AND user_id = ?",
+            [String(ticket), userId]).catch(() => {})
+          await insertAudit(null, userId, 'ai_cancel_pending', symbol,
+            { signal_id:signalId, prompt_type_id:promptTypeId, ticket:String(ticket), pending_type:item.side || item.pending_type || item.order_type || null, reason:pendingActionReason },
+            { status:'cancelled', ticket:String(ticket) }, 'success').catch(() => {})
         }
         await finishBeforeRisk('success', 'pending_cancelled', { count:cancellable.length, pending_action_reason:pendingActionReason })
         return
@@ -2716,9 +2840,15 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc, phase:'bridge_send',
       }))) throw new Error('model_task_business_gate_failed')
     }
-    const beforeBridgeSendTx = modelTaskTracker ? ({ run }) => assertAutoInferenceOrderSendTx({
-      tracker:modelTaskTracker, run, resultValidUntilUtcMsc,
-    }) : null
+    const beforeBridgeSendTx = modelTaskTracker
+      ? ({ run }) => assertAutoInferenceOrderSendTx({
+        tracker:modelTaskTracker, run, resultValidUntilUtcMsc,
+      })
+      : recoveryContext
+        ? ({ run }) => assertSignalDeliveryRecoveryTx({
+          run, recoveryContext, userId, signalId,
+        })
+        : null
     const execResult = await executeOrder(userId, riskConfig, order, 'ai_auto_execute', {
       noFallback: true,
       sourceType: 'auto_delivery',
@@ -2770,14 +2900,22 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         user_id:Number(userId), signal_id:Number(signalId), status:'success',
       }, { scopes:['ai-operations', 'risk-audit'], refresh:true })
     } else {
-      const status = execResult.status === 'rejected' ? 'rejected' : execResult.status === 'uncertain' ? 'uncertain' : 'failed'
+      const recoveryFenceFailure = recoveryContext
+        && ['delivery_recovery_expired', 'delivery_recovery_untrusted'].includes(String(execResult?.message || ''))
+      const status = recoveryFenceFailure ? 'skipped'
+        : execResult.status === 'rejected' ? 'rejected' : execResult.status === 'uncertain' ? 'uncertain' : 'failed'
+      const executionResult = recoveryFenceFailure
+        ? JSON.stringify({ status:'skipped', reason:execResult.message, details:execResult.details || {} })
+        : JSON.stringify(execResult)
       await queryRun(
         `UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?`,
-        [status, JSON.stringify(execResult), signalId, userId])
+        [status, executionResult, signalId, userId])
       l(`auto-execute ${status}: ${execResult.message || execResult.status}`)
-      await insertAudit(null, userId, status === 'rejected' ? 'ai_auto_execute_rejected' : 'ai_auto_execute', symbol,
+      await insertAudit(null, userId, recoveryFenceFailure ? 'ai_auto_execute_skipped'
+        : status === 'rejected' ? 'ai_auto_execute_rejected' : 'ai_auto_execute', symbol,
         { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, error: execResult.message },
-        execResult, status === 'rejected' ? 'warning' : 'error')
+        recoveryFenceFailure ? { status:'skipped', reason:execResult.message } : execResult,
+        recoveryFenceFailure ? 'info' : status === 'rejected' ? 'warning' : 'error')
       sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signalId, status })
       broadcastAdminEvent('ai', 'signal_execution_updated', {
         user_id:Number(userId), signal_id:Number(signalId), status,
@@ -2876,6 +3014,12 @@ export function startAutoSchedulerReconciler() {
 // === Pending Order Reconciler ===
 const PENDING_RECONCILE_INTERVAL_SEC = 30
 let _pendingReconcileInterval = null
+const SIGNAL_DELIVERY_RECOVERY_BATCH_SIZE = 50
+const SIGNAL_DELIVERY_RECOVERY_WAIT_TASK_STATES = new Set([
+  'queued', 'leased', 'preparing', 'submitted', 'provider_running', 'provider_quiet',
+  'status_unknown', 'reconciling', 'response_received', 'validating', 'repairing',
+  'retry_wait', 'result_ready', 'applying',
+])
 
 export function stopPendingReconciler() {
   if (_pendingReconcileInterval) { clearInterval(_pendingReconcileInterval); _pendingReconcileInterval = null }
@@ -2887,6 +3031,216 @@ export function startPendingReconciler() {
     try { await reconcilePendingOrders() } catch (e) { console.error('[PendingReconciler] Error:', e.message) }
   }, PENDING_RECONCILE_INTERVAL_SEC * 1000)
   console.log(`[PendingReconciler] Started (every ${PENDING_RECONCILE_INTERVAL_SEC}s)`)
+}
+
+function parseRecoveryJson(value) {
+  if (value && typeof value === 'object') return value
+  if (typeof value !== 'string' || !value.trim()) return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function signalDeliveryRecoveryDeadline(row, nowMs = Date.now()) {
+  const createdAtUtcMsc = Number(row?.created_at_utc_msc)
+  const ttlSeconds = Number(row?.ttl_seconds)
+  const resultValidUntilUtcMsc = Number(row?.result_valid_until_utc_msc)
+  if (!Number.isFinite(createdAtUtcMsc) || createdAtUtcMsc <= 0
+    || !Number.isFinite(ttlSeconds) || ttlSeconds <= 0
+    || !Number.isFinite(resultValidUntilUtcMsc) || resultValidUntilUtcMsc <= 0) {
+    return { trusted:false, reason:'delivery_recovery_untrusted', deadlineUtcMsc:null }
+  }
+  const deadlineUtcMsc = Math.min(resultValidUntilUtcMsc, createdAtUtcMsc + ttlSeconds * 1000)
+  if (!Number.isFinite(deadlineUtcMsc) || nowMs > deadlineUtcMsc) {
+    return { trusted:true, reason:'delivery_recovery_expired', deadlineUtcMsc }
+  }
+  return { trusted:true, reason:null, deadlineUtcMsc }
+}
+
+function signalDeliveryRecoveryActionable(row, decision) {
+  const signalType = String(row?.signal_type || '').trim().toLowerCase()
+  const pendingAction = String(row?.pending_action || decision?.pending_action || '').trim().toLowerCase()
+  if (!signalType) return { actionable:false, reason:'delivery_recovery_untrusted' }
+  if (signalType === 'hold') {
+    return pendingAction === 'cancel'
+      ? { actionable:true, signalType, pendingAction }
+      : { actionable:false, reason:'hold_signal_no_execution' }
+  }
+  if (!/^(buy|sell)(?:_|$)/.test(signalType)) {
+    return { actionable:false, reason:'delivery_recovery_untrusted' }
+  }
+  return { actionable:true, signalType, pendingAction }
+}
+
+async function closeUnattemptedDelivery(row, reason, details = {}) {
+  const executionResult = JSON.stringify({
+    status:'skipped', reason, details, recovered_at_utc_msc:Date.now(),
+  })
+  const updated = await queryRun(
+    `UPDATE auto_signal_deliveries
+     SET execution_status = 'skipped', execution_result = ?
+     WHERE id = ? AND execution_status = 'not_attempted'`,
+    [executionResult, row.id])
+  if (updated?.changes === 1) {
+    try {
+      await insertAudit(null, row.user_id, 'ai_delivery_recovery_skipped', row.symbol,
+        { signal_id:row.signal_id, delivery_id:row.id, prompt_type_id:row.prompt_type_id, reason, details },
+        { status:'skipped', reason, details }, 'info')
+    } catch {}
+    try {
+      sendToBrowsers(row.user_id, {
+        type:'signal_execution_updated', signal_id:row.signal_id, status:'skipped', reason,
+      })
+    } catch {}
+  }
+  return updated?.changes === 1
+}
+
+/**
+ * Recover only fresh, trusted actionable deliveries. This function deliberately
+ * delegates all execution checks and the atomic claim to executeDelivery.
+ */
+export async function reconcileUnattemptedSignalDeliveries({
+  limit = SIGNAL_DELIVERY_RECOVERY_BATCH_SIZE,
+  executeDeliveryFn = executeDelivery,
+  nowMs = Date.now(),
+} = {}) {
+  const batchSize = Math.max(1, Math.min(Number(limit) || SIGNAL_DELIVERY_RECOVERY_BATCH_SIZE, SIGNAL_DELIVERY_RECOVERY_BATCH_SIZE))
+  let rows = []
+  try {
+    rows = await queryAll(`
+      SELECT d.id, d.user_id, d.signal_id, d.prompt_type_id, d.symbol,
+        d.execution_status, d.order_intent_id,
+        s.signal_type, s.confidence, s.recommended_volume,
+        s.position_size_tier, s.position_size_factor, s.position_size_reason,
+        s.analysis, s.reasoning, s.stop_loss_price,
+        s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price,
+        s.recommended_take_profit_tier, s.entry_method, s.limit_price,
+        s.stop_limit_price, s.pending_valid_until,
+        s.created_at, s.created_at_utc_msc, s.ttl_seconds,
+        s.decision_json, s.market_data_json, s.inference_task_id,
+        t.task_id, t.status AS model_task_status, t.result_valid_until_utc_msc
+      FROM auto_signal_deliveries d
+      LEFT JOIN ai_signals s ON s.id = d.signal_id
+      LEFT JOIN ai_model_tasks t ON t.task_id = s.inference_task_id
+      WHERE d.execution_status = 'not_attempted'
+      ORDER BY s.created_at_utc_msc DESC, d.id DESC LIMIT ?
+    `, [batchSize])
+  } catch (error) {
+    console.error('[PendingReconciler] signal delivery recovery query error:', error.message)
+    return { selected:0, attempted:0, recovered:0, skipped:0 }
+  }
+
+  const summary = { selected:0, attempted:0, recovered:0, skipped:0 }
+  for (const row of (Array.isArray(rows) ? rows : [])) {
+    summary.selected += 1
+    try {
+      const decision = parseRecoveryJson(row.decision_json)
+      const actionability = signalDeliveryRecoveryActionable(row, decision)
+      if (!actionability.actionable) {
+        const closed = await closeUnattemptedDelivery(row, actionability.reason,
+          { pending_action:row.pending_action || decision?.pending_action || null })
+        if (closed) summary.skipped += 1
+        continue
+      }
+      const modelTaskStatus = String(row.model_task_status || '').toLowerCase()
+      if (row.order_intent_id != null) {
+        const closed = await closeUnattemptedDelivery(row, 'delivery_recovery_untrusted', {
+          order_intent_id:row.order_intent_id,
+        })
+        if (closed) summary.skipped += 1
+        continue
+      }
+      const deadline = signalDeliveryRecoveryDeadline(row, nowMs)
+      // A task can still be moving through its normal state machine after the
+      // signal row is committed. Keep it pending only while its result window
+      // remains valid; status_unknown and other interrupted states must not
+      // occupy the recovery queue forever after their deadline.
+      if (SIGNAL_DELIVERY_RECOVERY_WAIT_TASK_STATES.has(modelTaskStatus)) {
+        if (deadline.trusted && !deadline.reason) continue
+        const closed = await closeUnattemptedDelivery(row, deadline.reason || 'delivery_recovery_untrusted', {
+          deadline_utc_msc:deadline.deadlineUtcMsc,
+          model_task_status:modelTaskStatus,
+        })
+        if (closed) summary.skipped += 1
+        continue
+      }
+      if (modelTaskStatus !== 'succeeded'
+        || !row.inference_task_id
+        || String(row.task_id || '') !== String(row.inference_task_id || '')) {
+        const closed = await closeUnattemptedDelivery(row, 'delivery_recovery_untrusted', {
+          model_task_status:row.model_task_status || null,
+          inference_task_id:row.inference_task_id || null,
+          task_id:row.task_id || null,
+          order_intent_id:row.order_intent_id || null,
+        })
+        if (closed) summary.skipped += 1
+        continue
+      }
+      if (!deadline.trusted || deadline.reason === 'delivery_recovery_expired') {
+        const closed = await closeUnattemptedDelivery(row, deadline.reason || 'delivery_recovery_untrusted', {
+          deadline_utc_msc:deadline.deadlineUtcMsc,
+        })
+        if (closed) summary.skipped += 1
+        continue
+      }
+      if (!decision || !parseRecoveryJson(row.market_data_json)) {
+        const closed = await closeUnattemptedDelivery(row, 'delivery_recovery_untrusted', {
+          missing_evidence:!decision ? 'decision_json' : 'market_data_json',
+        })
+        if (closed) summary.skipped += 1
+        continue
+      }
+      // Bridge offline is intentionally a no-op: leave not_attempted for the
+      // next round instead of converting a recoverable signal into skipped.
+      if (!isBridgeAlive(row.user_id)) continue
+      const market = parseRecoveryJson(row.market_data_json)
+      const signal = {
+        ...row,
+        ...decision,
+        id:Number(row.signal_id),
+        signal_type:row.signal_type,
+        confidence:row.confidence,
+        recommended_volume:row.recommended_volume,
+        position_size_tier:row.position_size_tier,
+        position_size_factor:row.position_size_factor,
+        position_size_reason:row.position_size_reason,
+        analysis:row.analysis,
+        reasoning:row.reasoning,
+        stop_loss_price:row.stop_loss_price,
+        take_profit_1_price:row.take_profit_1_price,
+        take_profit_2_price:row.take_profit_2_price,
+        take_profit_3_price:row.take_profit_3_price,
+        recommended_take_profit_tier:row.recommended_take_profit_tier,
+        entry_method:row.entry_method,
+        limit_price:row.limit_price,
+        stop_limit_price:row.stop_limit_price,
+        pending_valid_until:row.pending_valid_until,
+        pending_action:decision.pending_action || null,
+        symbol:row.symbol,
+        created_at:row.created_at,
+        created_at_utc_msc:Number(row.created_at_utc_msc),
+        ttl_seconds:Number(row.ttl_seconds),
+        market_data:market,
+      }
+      summary.attempted += 1
+      await executeDeliveryFn(
+        Number(row.user_id), Number(row.signal_id), signal, null, market,
+        Number(row.prompt_type_id), row.symbol, row.created_at, null, null,
+        deadline.deadlineUtcMsc,
+        { taskId:String(row.inference_task_id) },
+      )
+      summary.recovered += 1
+    } catch (error) {
+      // One malformed row or transient DB/Bridge error must not stop the
+      // reconciler from processing the rest of the batch.
+      console.error(`[PendingReconciler] delivery ${row?.id || '?'} recovery error:`, error.message)
+    }
+  }
+  return summary
 }
 
 export async function reconcilePendingOrders() {
@@ -2919,6 +3273,11 @@ export async function reconcilePendingOrders() {
   )
 
   const allRows = [...deliveryRows, ...signalRows]
+  try {
+    await reconcileUnattemptedSignalDeliveries()
+  } catch (error) {
+    console.error('[PendingReconciler] signal delivery recovery error:', error.message)
+  }
   if (!allRows.length) return
 
   const byUser = {}
@@ -3082,20 +3441,38 @@ function durableDeliveryRecovery(intent) {
   return null
 }
 
-function buildSignalDeliveryRows({ signalId, userIds, onlineUserIds, promptTypeId, symbol, createdAt }) {
+function buildSignalDeliveryRows({ signalId, userIds, onlineUserIds, promptTypeId, symbol, createdAt,
+  signalType = null, pendingAction = null }) {
   const online = onlineUserIds instanceof Set ? onlineUserIds : new Set(onlineUserIds || [])
+  const normalizedSignalType = String(signalType || '').trim().toLowerCase()
+  const normalizedPendingAction = String(pendingAction || '').trim().toLowerCase()
+  const holdWithoutCancel = normalizedSignalType === 'hold' && normalizedPendingAction !== 'cancel'
   return [...new Set(userIds || [])].map(userId => {
     const isOnline = online.has(userId)
+    if (holdWithoutCancel) {
+      return {
+        signalId,
+        userId,
+        promptTypeId,
+        symbol,
+        deliveryStatus:isOnline ? 'delivered' : 'stored_offline',
+        executionStatus:'skipped',
+        executionResult:JSON.stringify({
+          status:'skipped', reason:'hold_signal_no_execution', history_available:true,
+        }),
+        createdAt,
+      }
+    }
     return {
       signalId,
       userId,
       promptTypeId,
       symbol,
       deliveryStatus:isOnline ? 'delivered' : 'stored_offline',
-      executionStatus:isOnline ? 'not_attempted' : 'skipped',
-      executionResult:isOnline ? null : JSON.stringify({
-        status:'skipped', reason:'bridge_offline_at_signal_time', history_available:true,
-      }),
+      // Actionable signals stay recoverable even when the subscriber Bridge
+      // was offline when the shared signal was written.
+      executionStatus:'not_attempted',
+      executionResult:null,
       createdAt,
     }
   })
@@ -3110,6 +3487,12 @@ export const __schedulerTest = {
   countPendingForSymbolDirection,
   selectOwnedStrategyPendingOrders,
   buildSignalDeliveryRows,
+  reconcileUnattemptedSignalDeliveries,
+  signalDeliveryRecoveryDeadline,
+  signalDeliveryRecoveryActionable,
+  assertSignalDeliveryRecoveryTx,
+  releaseUnsentDeliveryClaim,
+  recoveryReplacementUnsafe,
   isFilledHistoryOrder,
   createLockGuard,
   discardSharedSignalForWeeklyWindow,

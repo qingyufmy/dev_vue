@@ -596,8 +596,169 @@ describe('automatic inference bridge snapshot', () => {
       createdAt:'2026-07-24 12:00:00',
     })).toEqual([
       expect.objectContaining({ userId:7, deliveryStatus:'delivered', executionStatus:'not_attempted', executionResult:null }),
-      expect.objectContaining({ userId:8, deliveryStatus:'stored_offline', executionStatus:'skipped' }),
+      expect.objectContaining({ userId:8, deliveryStatus:'stored_offline', executionStatus:'not_attempted', executionResult:null }),
     ])
+  })
+
+  it('creates HOLD deliveries as skipped instead of leaving an execution claim', () => {
+    expect(__schedulerTest.buildSignalDeliveryRows({
+      signalId:13,
+      userIds:new Set([7]),
+      onlineUserIds:new Set([7]),
+      promptTypeId:3,
+      symbol:'XAUUSD',
+      createdAt:'2026-07-24 12:00:00',
+      signalType:'hold',
+      pendingAction:'none',
+    })).toEqual([
+      expect.objectContaining({
+        executionStatus:'skipped',
+        executionResult:JSON.stringify({ status:'skipped', reason:'hold_signal_no_execution', history_available:true }),
+      }),
+    ])
+  })
+})
+
+describe('unattempted signal delivery recovery', () => {
+  const freshRow = () => {
+    const now = Date.now()
+    return {
+      id:91, user_id:7, signal_id:191, prompt_type_id:3, symbol:'XAUUSD',
+      execution_status:'not_attempted', order_intent_id:null,
+      signal_type:'buy', pending_action:'none', confidence:0.8, recommended_volume:0.03,
+      position_size_tier:'light', position_size_factor:0.5, position_size_reason:'risk',
+      analysis:'analysis', reasoning:'reasoning', stop_loss_price:1990,
+      take_profit_1_price:2010, take_profit_2_price:2020, take_profit_3_price:2030,
+      recommended_take_profit_tier:1, entry_method:'market', limit_price:null,
+      stop_limit_price:null, pending_valid_until:null, created_at:'2026-07-24 12:00:00',
+      created_at_utc_msc:now - 1_000, ttl_seconds:120,
+      decision_json:JSON.stringify({ stop_loss_price:1990, take_profit_1_price:2010 }),
+      market_data_json:JSON.stringify({ latest_price:2000 }),
+      inference_task_id:'task-recovery-1', task_id:'task-recovery-1',
+      model_task_status:'succeeded', result_valid_until_utc_msc:now + 60_000,
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    bridgeWs.isBridgeAlive.mockReturnValue(true)
+    db.queryRun.mockResolvedValue({ changes:0 })
+  })
+
+  it('replays only a fresh actionable row through the existing delivery executor', async () => {
+    const row = freshRow()
+    db.queryAll.mockResolvedValueOnce([row])
+    const executeDeliveryFn = vi.fn().mockResolvedValue(undefined)
+
+    const result = await __schedulerTest.reconcileUnattemptedSignalDeliveries({ executeDeliveryFn })
+
+    expect(result).toMatchObject({ selected:1, attempted:1, recovered:1, skipped:0 })
+    expect(executeDeliveryFn).toHaveBeenCalledTimes(1)
+    expect(executeDeliveryFn.mock.calls[0][2]).toMatchObject({
+      recommended_volume:0.03, stop_loss_price:1990, take_profit_1_price:2010,
+      entry_method:'market', position_size_tier:'light', analysis:'analysis',
+    })
+    expect(executeDeliveryFn.mock.calls[0].at(-1)).toEqual({ taskId:'task-recovery-1' })
+  })
+
+  it('closes expired and untrusted rows without calling the executor', async () => {
+    const expired = freshRow()
+    expired.result_valid_until_utc_msc = Date.now() - 1
+    const untrusted = freshRow()
+    untrusted.id = 92
+    untrusted.signal_id = 192
+    untrusted.model_task_status = 'failed_terminal'
+    db.queryAll.mockResolvedValueOnce([expired, untrusted])
+    db.queryRun.mockResolvedValue({ changes:1 })
+    const executeDeliveryFn = vi.fn()
+
+    const result = await __schedulerTest.reconcileUnattemptedSignalDeliveries({ executeDeliveryFn })
+
+    expect(result).toMatchObject({ selected:2, attempted:0, recovered:0, skipped:2 })
+    expect(executeDeliveryFn).not.toHaveBeenCalled()
+    const reasons = db.queryRun.mock.calls
+      .map(call => { try { return JSON.parse(call[1]?.[0] || '{}').reason } catch { return null } })
+      .filter(Boolean)
+    expect(reasons).toEqual(expect.arrayContaining(['delivery_recovery_expired', 'delivery_recovery_untrusted']))
+  })
+
+  it('does not close or execute a delivery while its model task is still active', async () => {
+    const row = freshRow()
+    row.model_task_status = 'provider_running'
+    db.queryAll.mockResolvedValueOnce([row])
+    const executeDeliveryFn = vi.fn()
+
+    const result = await __schedulerTest.reconcileUnattemptedSignalDeliveries({ executeDeliveryFn })
+
+    expect(result).toMatchObject({ selected:1, attempted:0, recovered:0, skipped:0 })
+    expect(executeDeliveryFn).not.toHaveBeenCalled()
+    expect(db.queryRun).not.toHaveBeenCalled()
+  })
+
+  it('closes an interrupted active task after its trusted result deadline expires', async () => {
+    const row = freshRow()
+    row.model_task_status = 'status_unknown'
+    row.result_valid_until_utc_msc = Date.now() - 1
+    db.queryAll.mockResolvedValueOnce([row])
+    db.queryRun.mockResolvedValue({ changes:1 })
+    const executeDeliveryFn = vi.fn()
+
+    const result = await __schedulerTest.reconcileUnattemptedSignalDeliveries({ executeDeliveryFn })
+
+    expect(result).toMatchObject({ selected:1, attempted:0, recovered:0, skipped:1 })
+    expect(executeDeliveryFn).not.toHaveBeenCalled()
+    expect(JSON.parse(db.queryRun.mock.calls[0][1][0])).toMatchObject({
+      reason:'delivery_recovery_expired',
+      details:{ model_task_status:'status_unknown' },
+    })
+  })
+
+  it('leaves a fresh row untouched while its Bridge is offline', async () => {
+    db.queryAll.mockResolvedValueOnce([freshRow()])
+    bridgeWs.isBridgeAlive.mockReturnValue(false)
+    const executeDeliveryFn = vi.fn()
+
+    const result = await __schedulerTest.reconcileUnattemptedSignalDeliveries({ executeDeliveryFn })
+
+    expect(result).toMatchObject({ selected:1, attempted:0, recovered:0, skipped:0 })
+    expect(executeDeliveryFn).not.toHaveBeenCalled()
+    expect(db.queryRun).not.toHaveBeenCalled()
+  })
+
+  it('uses a conditional untouched-claim release so concurrent recovery cannot replay', async () => {
+    db.queryRun.mockResolvedValue({ changes:1 })
+    const result = await __schedulerTest.releaseUnsentDeliveryClaim(191, 7)
+    expect(result).toMatchObject({ changes:1 })
+    expect(db.queryRun.mock.calls[0][0]).toContain("execution_status = 'executing'")
+    expect(db.queryRun.mock.calls[0][0]).toContain('order_intent_id IS NULL')
+  })
+
+  it('blocks recovered replacement cancellation before any old order is cancelled', () => {
+    expect(__schedulerTest.recoveryReplacementUnsafe({ taskId:'task-recovery-1' }, [{ ticket:'88' }])).toBe(true)
+    expect(__schedulerTest.recoveryReplacementUnsafe({ taskId:'task-recovery-1' }, [])).toBe(false)
+    expect(__schedulerTest.recoveryReplacementUnsafe(null, [{ ticket:'88' }])).toBe(false)
+  })
+
+  it('rechecks task state and deadline inside the order-intent transaction fence', async () => {
+    const now = Date.now()
+    const run = vi.fn().mockResolvedValue([[{
+      execution_status:'executing', order_intent_id:null,
+      inference_task_id:'task-recovery-1', task_id:'task-recovery-1', model_task_status:'succeeded',
+      created_at_utc_msc:now - 1_000, ttl_seconds:120, result_valid_until_utc_msc:now + 60_000,
+    }]])
+    await expect(__schedulerTest.assertSignalDeliveryRecoveryTx({
+      run, recoveryContext:{ taskId:'task-recovery-1' }, userId:7, signalId:191,
+    })).resolves.toBeTruthy()
+    expect(run.mock.calls[0][0]).toContain('FOR UPDATE')
+
+    run.mockResolvedValueOnce([[{
+      execution_status:'executing', order_intent_id:null,
+      inference_task_id:'task-recovery-1', task_id:'task-recovery-1', model_task_status:'failed',
+      created_at_utc_msc:now - 1_000, ttl_seconds:120, result_valid_until_utc_msc:now + 60_000,
+    }]])
+    await expect(__schedulerTest.assertSignalDeliveryRecoveryTx({
+      run, recoveryContext:{ taskId:'task-recovery-1' }, userId:7, signalId:191,
+    })).rejects.toMatchObject({ reason:'delivery_recovery_untrusted' })
   })
 })
 
