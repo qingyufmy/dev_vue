@@ -682,6 +682,42 @@ describe('unattempted signal delivery recovery', () => {
     expect(reasons).toEqual(expect.arrayContaining(['delivery_recovery_expired', 'delivery_recovery_untrusted']))
   })
 
+  it('writes at most one recovery audit summary per user, symbol and reason', async () => {
+    const first = freshRow()
+    first.result_valid_until_utc_msc = Date.now() - 1
+    const sameGroup = { ...first, id:92, signal_id:192 }
+    const otherUser = { ...first, id:93, signal_id:193, user_id:8 }
+    const otherSymbol = { ...first, id:94, signal_id:194, symbol:'EURUSD' }
+    const otherReason = { ...first, id:95, signal_id:195, model_task_status:'failed_terminal' }
+    db.queryAll.mockResolvedValueOnce([first, sameGroup, otherUser, otherSymbol, otherReason])
+    db.queryRun.mockResolvedValue({ changes:1 })
+    const executeDeliveryFn = vi.fn()
+
+    await __schedulerTest.reconcileUnattemptedSignalDeliveries({ executeDeliveryFn })
+
+    const configMod = await import('../../server/routes/ai/config.js')
+    const calls = configMod.insertAudit.mock.calls
+      .filter(call => call[2] === 'ai_delivery_recovery_summary')
+    expect(calls).toHaveLength(4)
+    expect(calls).toContainEqual(expect.arrayContaining([
+      null, 7, 'ai_delivery_recovery_summary', 'XAUUSD',
+      expect.objectContaining({ reason:'delivery_recovery_expired', count:2 }),
+    ]))
+  })
+
+  it('does not summarize a recovery row lost to a concurrent status update', async () => {
+    const expired = freshRow()
+    expired.result_valid_until_utc_msc = Date.now() - 1
+    db.queryAll.mockResolvedValueOnce([expired])
+    db.queryRun.mockResolvedValue({ changes:0 })
+
+    await __schedulerTest.reconcileUnattemptedSignalDeliveries({ executeDeliveryFn:vi.fn() })
+
+    const configMod = await import('../../server/routes/ai/config.js')
+    expect(configMod.insertAudit.mock.calls
+      .filter(call => call[2] === 'ai_delivery_recovery_summary')).toHaveLength(0)
+  })
+
   it('does not close or execute a delivery while its model task is still active', async () => {
     const row = freshRow()
     row.model_task_status = 'provider_running'

@@ -8,6 +8,7 @@ import { stripBrokerSuffix, utcMscToTerminalTime } from './routes/ai/utils.js'
 import { getRegisteredAutoSchedulerState } from './routes/ai/runtime-state-registry.js'
 import { weeklyRiskLockResult } from './jobs/weekly-risk-window.js'
 import { localizeAuditRow } from './audit-localization.js'
+import { collapseRecoveryAuditRows } from './routes/ai/audit-log-view.js'
 import { buildAiAccessContext, observerAccessError, observerWsActionAllowed } from './routes/ai/observer-access.js'
 import { getDefaultObserverSource, getDefaultObserverSourceClock, observerSourceSupportsSymbol, resolveObserverSourceForUser } from './routes/ai/observer-channels.js'
 import { tokenVersionMatches } from './middleware/auth.js'
@@ -2442,8 +2443,8 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'audit_logs': {
         // 审计日志只显示自己的数据
-        let ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY created_at_utc_msc DESC, id DESC LIMIT 100', [userId])
-        const logs = await Promise.all(ownRows.map(async row => {
+        const ownRows = await queryAll('SELECT * FROM trade_audit_logs WHERE user_id = ? ORDER BY created_at_utc_msc DESC, id DESC LIMIT 500', [userId])
+        const localizedRows = await Promise.all(ownRows.map(async row => {
           const item = { ...row }
           try { item.request = JSON.parse(item.request_json) } catch { item.request = {} }
           try { item.result = JSON.parse(item.result_json) } catch { item.result = {} }
@@ -2459,6 +2460,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           delete item.result_json
           return localizeAuditRow(item)
         }))
+        const logs = collapseRecoveryAuditRows(localizedRows).slice(0, 100)
         result = { status: 'success', logs }
         break
       }

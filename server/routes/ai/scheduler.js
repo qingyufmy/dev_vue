@@ -3096,11 +3096,6 @@ async function closeUnattemptedDelivery(row, reason, details = {}) {
     [executionResult, row.id])
   if (updated?.changes === 1) {
     try {
-      await insertAudit(null, row.user_id, 'ai_delivery_recovery_skipped', row.symbol,
-        { signal_id:row.signal_id, delivery_id:row.id, prompt_type_id:row.prompt_type_id, reason, details },
-        { status:'skipped', reason, details }, 'info')
-    } catch {}
-    try {
       sendToBrowsers(row.user_id, {
         type:'signal_execution_updated', signal_id:row.signal_id, status:'skipped', reason,
       })
@@ -3145,6 +3140,27 @@ export async function reconcileUnattemptedSignalDeliveries({
   }
 
   const summary = { selected:0, attempted:0, recovered:0, skipped:0 }
+  const auditGroups = new Map()
+  const recordClosed = (row, reason) => {
+    summary.skipped += 1
+    const key = [Number(row.user_id), String(row.symbol || '').toUpperCase(), String(reason || '')].join('|')
+    const group = auditGroups.get(key) || {
+      userId:Number(row.user_id), symbol:row.symbol || null, reason:String(reason || 'delivery_recovery_untrusted'),
+      count:0, firstSignalId:null, lastSignalId:null, firstDeliveryId:null, lastDeliveryId:null,
+    }
+    group.count += 1
+    const signalId = Number(row.signal_id)
+    const deliveryId = Number(row.id)
+    if (Number.isInteger(signalId) && signalId > 0) {
+      group.firstSignalId = group.firstSignalId == null ? signalId : Math.min(group.firstSignalId, signalId)
+      group.lastSignalId = group.lastSignalId == null ? signalId : Math.max(group.lastSignalId, signalId)
+    }
+    if (Number.isInteger(deliveryId) && deliveryId > 0) {
+      group.firstDeliveryId = group.firstDeliveryId == null ? deliveryId : Math.min(group.firstDeliveryId, deliveryId)
+      group.lastDeliveryId = group.lastDeliveryId == null ? deliveryId : Math.max(group.lastDeliveryId, deliveryId)
+    }
+    auditGroups.set(key, group)
+  }
   for (const row of (Array.isArray(rows) ? rows : [])) {
     summary.selected += 1
     try {
@@ -3153,7 +3169,7 @@ export async function reconcileUnattemptedSignalDeliveries({
       if (!actionability.actionable) {
         const closed = await closeUnattemptedDelivery(row, actionability.reason,
           { pending_action:row.pending_action || decision?.pending_action || null })
-        if (closed) summary.skipped += 1
+        if (closed) recordClosed(row, actionability.reason)
         continue
       }
       const modelTaskStatus = String(row.model_task_status || '').toLowerCase()
@@ -3161,7 +3177,7 @@ export async function reconcileUnattemptedSignalDeliveries({
         const closed = await closeUnattemptedDelivery(row, 'delivery_recovery_untrusted', {
           order_intent_id:row.order_intent_id,
         })
-        if (closed) summary.skipped += 1
+        if (closed) recordClosed(row, 'delivery_recovery_untrusted')
         continue
       }
       const deadline = signalDeliveryRecoveryDeadline(row, nowMs)
@@ -3175,7 +3191,7 @@ export async function reconcileUnattemptedSignalDeliveries({
           deadline_utc_msc:deadline.deadlineUtcMsc,
           model_task_status:modelTaskStatus,
         })
-        if (closed) summary.skipped += 1
+        if (closed) recordClosed(row, deadline.reason || 'delivery_recovery_untrusted')
         continue
       }
       if (modelTaskStatus !== 'succeeded'
@@ -3187,21 +3203,21 @@ export async function reconcileUnattemptedSignalDeliveries({
           task_id:row.task_id || null,
           order_intent_id:row.order_intent_id || null,
         })
-        if (closed) summary.skipped += 1
+        if (closed) recordClosed(row, 'delivery_recovery_untrusted')
         continue
       }
       if (!deadline.trusted || deadline.reason === 'delivery_recovery_expired') {
         const closed = await closeUnattemptedDelivery(row, deadline.reason || 'delivery_recovery_untrusted', {
           deadline_utc_msc:deadline.deadlineUtcMsc,
         })
-        if (closed) summary.skipped += 1
+        if (closed) recordClosed(row, deadline.reason || 'delivery_recovery_untrusted')
         continue
       }
       if (!decision || !parseRecoveryJson(row.market_data_json)) {
         const closed = await closeUnattemptedDelivery(row, 'delivery_recovery_untrusted', {
           missing_evidence:!decision ? 'decision_json' : 'market_data_json',
         })
-        if (closed) summary.skipped += 1
+        if (closed) recordClosed(row, 'delivery_recovery_untrusted')
         continue
       }
       // Bridge offline is intentionally a no-op: leave not_attempted for the
@@ -3248,6 +3264,24 @@ export async function reconcileUnattemptedSignalDeliveries({
       // One malformed row or transient DB/Bridge error must not stop the
       // reconciler from processing the rest of the batch.
       console.error(`[PendingReconciler] delivery ${row?.id || '?'} recovery error:`, error.message)
+    }
+  }
+  for (const group of auditGroups.values()) {
+    try {
+      await insertAudit(null, group.userId, 'ai_delivery_recovery_summary', group.symbol, {
+        reason:group.reason,
+        count:group.count,
+        first_signal_id:group.firstSignalId,
+        last_signal_id:group.lastSignalId,
+        first_delivery_id:group.firstDeliveryId,
+        last_delivery_id:group.lastDeliveryId,
+      }, {
+        status:'skipped',
+        reason:group.reason,
+        count:group.count,
+      }, 'info')
+    } catch (error) {
+      console.warn(`[PendingReconciler] recovery audit summary failed user=${group.userId}:`, error.message)
     }
   }
   return summary

@@ -9415,7 +9415,9 @@ function auditActionType(row) {
 }
 
 function auditActionText(row) {
-  return userVisibleText(row?.action, userVisibleText(row?.action_code, "系统审计操作"));
+  const action = userVisibleText(row?.action, userVisibleText(row?.action_code, "系统审计操作"));
+  const repeatCount = Number(row?.repeat_count || 0);
+  return repeatCount > 1 ? `${action} · 合并 ${repeatCount} 条` : action;
 }
 
 function auditReasonText(row) {

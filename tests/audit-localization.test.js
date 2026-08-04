@@ -69,6 +69,19 @@ describe('audit localization', () => {
       .toBe('已被替换')
   })
 
+  it('keeps delivery recovery summaries specific and user-readable', () => {
+    expect(prepareAuditRecord('ai_delivery_recovery_summary', {
+      reason:'delivery_recovery_expired', count:50,
+    }, {
+      status:'skipped', reason:'delivery_recovery_expired', count:50,
+    }, 'info')).toMatchObject({
+      action:'历史信号恢复汇总',
+      status:'信息',
+      request:{ reason:'历史信号已超过安全恢复时限', count:50 },
+      result:{ status:'已跳过', reason:'历史信号已超过安全恢复时限', count:50 },
+    })
+  })
+
   it('formats portfolio alignment outcomes with concrete counts', () => {
     expect(formatRiskReason('opposite_position_exists', { count:3 }))
       .toBe('当前账户已有反向持仓，本次不新增仓位：检测到 3 个反向持仓')
