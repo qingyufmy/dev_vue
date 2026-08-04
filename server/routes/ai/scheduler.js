@@ -2499,6 +2499,16 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       }
     }
 
+    // The DB/risk checks above can take long enough for the Bridge to drop
+    // after the claim. Re-check before the first terminal snapshot command and
+    // release only the still-untouched claim.
+    if (!isBridgeAlive(userId)) {
+      const released = await releaseUnsentDeliveryClaim(signalId, userId)
+      if (released?.changes === 1) l('waiting: bridge disconnected before portfolio snapshot; untouched claim released')
+      else l('stopped: bridge disconnected before portfolio snapshot but claim was no longer untouched')
+      return
+    }
+
     const [positionsResponse, pendingResponse, strategyDeliveries] = await Promise.all([
       mt5Bridge(userId, 'positions', { symbol }, { noFallback:true }),
       mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true }),
@@ -3034,11 +3044,11 @@ export function startPendingReconciler() {
 }
 
 function parseRecoveryJson(value) {
-  if (value && typeof value === 'object') return value
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
   if (typeof value !== 'string' || !value.trim()) return null
   try {
     const parsed = JSON.parse(value)
-    return parsed && typeof parsed === 'object' ? parsed : null
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
   } catch {
     return null
   }
