@@ -50,13 +50,13 @@ vi.mock('../../server/routes/ai/market-data.js', () => ({
 
 vi.mock('../../server/routes/ai/llm.js', () => ({
   maybeAiSignal: vi.fn(async (_db, config, _market, _prompt) => {
-    config?._onInferencePrepared?.({
+    await config?._onInferencePrepared?.({
       systemPrompt:'rendered-system-prompt',
       userPrompt:'rendered-user-prompt',
       outputSchemaVersion:'schema-v1',
     })
-    config?._onProviderRequest?.({ phase:'request' })
-    config?._onProviderUsage?.({ phase:'request', status:'success', tokenCount:123 })
+    await config?._onProviderRequest?.({ phase:'request' })
+    await config?._onProviderUsage?.({ phase:'request', status:'success', tokenCount:123, responseReceived:true })
     return {
       signal_type: 'buy',
       confidence: 0.8,
@@ -77,6 +77,12 @@ vi.mock('../../server/routes/ai/llm.js', () => ({
       model_name: config?.model_name,
     }
   }),
+}))
+
+const mockCreateModelTaskTracker = vi.fn()
+const mockTrackerInstances = []
+vi.mock('../../server/routes/ai/model-task-tracker.js', () => ({
+  createModelTaskTracker: (...args) => mockCreateModelTaskTracker(...args),
 }))
 
 vi.mock('../../server/routes/ai/config.js', () => ({
@@ -184,6 +190,34 @@ import {
 import { maybeAiSignal } from '../../server/routes/ai/llm.js'
 const defaultMaybeAiSignalImplementation = maybeAiSignal.getMockImplementation()
 
+function makeModelTaskTracker(input = {}, options = {}) {
+  const taskId = `compare-task-${String(input.idempotencyKey || 'unknown').slice(-12)}`
+  let status = 'preparing'
+  const task = {
+    task_id:taskId,
+    task_deadline_at_utc_msc:Number(input.taskDeadlineAtUtcMs) || Date.now() + 900_000,
+    result_valid_until_utc_msc:Number(input.resultValidUntilUtcMs) || Date.now() + 900_000,
+  }
+  return {
+    taskId,
+    task,
+    signal:new AbortController().signal,
+    get status() { return status },
+    get active() { return !['succeeded', 'failed_terminal', 'completed_stale', 'completed_rejected'].includes(status) },
+    persistBudget:vi.fn(async () => true),
+    onProviderRequest:vi.fn(async () => { status = 'submitted' }),
+    onProviderUsage:vi.fn(async event => { status = event?.status === 'success' ? 'response_received' : status }),
+    onProviderActivity:vi.fn(async () => { status = 'provider_running' }),
+    onProviderQuiet:vi.fn(async () => { status = 'provider_quiet' }),
+    resultReady:vi.fn(async () => { status = 'result_ready' }),
+    applying:vi.fn(async () => { status = 'applying' }),
+    succeeded:vi.fn(async () => { status = 'succeeded' }),
+    failed:vi.fn(async () => { status = options.unknownOnFail ? 'status_unknown' : 'failed_terminal' }),
+    completedStale:vi.fn(async () => { status = 'completed_stale' }),
+    stop:vi.fn(async () => {}),
+  }
+}
+
 function makeRates(count = 100) {
   return Array.from({ length: count }, (_, i) => ({
     time: new Date(Date.UTC(2026, 6, 1, 0, i * 30)).toISOString(),
@@ -214,7 +248,16 @@ const mockModelProfile = (id) => ({
 describe('handleAnalyzeCompare', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockQueryOne.mockReset()
+    mockQueryRun.mockReset()
+    mockQueryAll.mockReset()
     maybeAiSignal.mockImplementation(defaultMaybeAiSignalImplementation)
+    mockTrackerInstances.length = 0
+    mockCreateModelTaskTracker.mockImplementation(async input => {
+      const tracker = makeModelTaskTracker(input)
+      mockTrackerInstances.push({ input, tracker })
+      return tracker
+    })
     mockMt5Bridge.mockResolvedValue({ rates: makeRates(100), market_meta: { source: 'platform_admin_bridge', timezone_offset_minutes: -480 } })
     mockResolveOwnedModelProfileForRuntime.mockImplementation(async (id) => mockModelProfile(id))
   })
@@ -295,6 +338,49 @@ describe('handleAnalyzeCompare', () => {
       expect(mockResolveOwnedModelProfileForRuntime).toHaveBeenCalledWith(20, 1)
       expect(mockResolveOwnedModelProfileForRuntime).toHaveBeenCalledWith(30, 1)
     })
+
+    it('creates one deterministic background task per live model unit', async () => {
+      await handleAnalyzeCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1, request_id:'live-task-proof',
+      })
+      expect(mockCreateModelTaskTracker).toHaveBeenCalledTimes(2)
+      const inputs = mockCreateModelTaskTracker.mock.calls.map(call => call[0])
+      expect(new Set(inputs.map(input => input.taskKind))).toEqual(new Set(['model_compare']))
+      expect(new Set(inputs.map(input => input.queueClass))).toEqual(new Set(['background']))
+      expect(inputs.map(input => input.domainType)).toEqual(['model_compare_unit', 'model_compare_unit'])
+      expect(inputs.map(input => input.domainId)).toEqual(expect.arrayContaining([
+        expect.stringContaining(':live:live:10:10'), expect.stringContaining(':live:live:20:20'),
+      ]))
+      expect(new Set(inputs.map(input => input.idempotencyKey)).size).toBe(2)
+      expect(inputs.every(input => input.snapshotHash === input.frozenContext.market_evidence_hash)).toBe(true)
+      expect(maybeAiSignal).toHaveBeenCalledTimes(2)
+    })
+
+    it('persists the live completed checkpoint before marking its task succeeded', async () => {
+      const callOrder = []
+      mockQueryRun.mockImplementation(async (sql) => {
+        const text = String(sql)
+        if (text.includes('ai_model_compare_checkpoints')) callOrder.push('checkpoint')
+        if (text.includes('ai_model_compare_jobs SET status')) callOrder.push('job')
+        return { affectedRows:1 }
+      })
+      mockCreateModelTaskTracker.mockImplementation(async input => {
+        const tracker = makeModelTaskTracker(input)
+        const succeeded = tracker.succeeded
+        tracker.succeeded = vi.fn(async (...args) => {
+          callOrder.push('task_succeeded')
+          return succeeded(...args)
+        })
+        mockTrackerInstances.push({ input, tracker })
+        return tracker
+      })
+      await handleAnalyzeCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1, request_id:'live-order-proof',
+      })
+      expect(callOrder.indexOf('checkpoint')).toBeGreaterThanOrEqual(0)
+      expect(callOrder.indexOf('task_succeeded')).toBeGreaterThan(callOrder.indexOf('checkpoint'))
+      expect(mockTrackerInstances.every(({ tracker }) => tracker.succeeded.mock.calls.length === 1)).toBe(true)
+    })
   })
 
   describe('durable live comparison boundary', () => {
@@ -315,6 +401,48 @@ describe('handleAnalyzeCompare', () => {
       await startHistoryCompareJobs()
       expect(mockQueryRun).toHaveBeenCalledWith(expect.stringContaining("live_compare_status_unknown_after_restart"))
       expect(mockQueryAll).toHaveBeenCalledWith(expect.stringContaining("<> 'live'"))
+    })
+
+    it('waits for every live unit before surfacing an initialization failure', async () => {
+      let resolvePeerFinished
+      const peerFinished = new Promise(resolve => { resolvePeerFinished = resolve })
+      let peerSettled = false
+      let jobUpdated = false
+      let modelTenCheckpointAttempts = 0
+      mockQueryRun.mockImplementation(async (sql, args = []) => {
+        const text = String(sql)
+        if (text.includes('ai_model_compare_checkpoints') && Number(args[1]) === 10
+          && modelTenCheckpointAttempts++ === 0) {
+          await peerFinished
+          throw new Error('checkpoint_initialization_failed')
+        }
+        if (text.includes('ai_model_compare_jobs SET')) {
+          jobUpdated = true
+          expect(peerSettled).toBe(true)
+        }
+        return { affectedRows:1 }
+      })
+      maybeAiSignal.mockImplementation(async (_db, config, market, prompt) => {
+        const result = await defaultMaybeAiSignalImplementation(_db, config, market, prompt)
+        if (Number(config._model_profile_id) !== 20) return result
+        resolvePeerFinished()
+        await new Promise(resolve => {
+          const timer = setTimeout(resolve, 100)
+          config._abortSignal?.addEventListener('abort', () => {
+            clearTimeout(timer)
+            resolve()
+          }, { once:true })
+        })
+        peerSettled = true
+        if (config._abortSignal?.aborted) throw config._abortSignal.reason || new Error('model_compare_batch_aborted')
+        return result
+      })
+      await expect(handleAnalyzeCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1, request_id:'live-init-failure',
+      })).rejects.toThrow('checkpoint_initialization_failed')
+      expect(maybeAiSignal).toHaveBeenCalledTimes(1)
+      expect(peerSettled).toBe(true)
+      expect(jobUpdated).toBe(true)
     })
   })
 
@@ -417,7 +545,16 @@ describe('handleHistoryCompare', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockQueryOne.mockReset()
+    mockQueryRun.mockReset()
+    mockQueryAll.mockReset()
     maybeAiSignal.mockImplementation(defaultMaybeAiSignalImplementation)
+    mockTrackerInstances.length = 0
+    mockCreateModelTaskTracker.mockImplementation(async input => {
+      const tracker = makeModelTaskTracker(input)
+      mockTrackerInstances.push({ input, tracker })
+      return tracker
+    })
     mockResolveOwnedModelProfileForRuntime.mockImplementation(async (id) => mockModelProfile(id))
   })
 
@@ -563,6 +700,113 @@ describe('handleHistoryCompare', () => {
       }), expect.any(Object), expect.any(String))
     })
 
+    it('stores model_task_id in each history submitting checkpoint', async () => {
+      const checkpoints = []
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      }, { onCheckpoint:checkpoint => { checkpoints.push(checkpoint) } })
+      expect(result.status).toBe('success')
+      const submitting = checkpoints.filter(item => item.checkpoint_status === 'submitting')
+      expect(submitting.length).toBeGreaterThan(0)
+      expect(submitting.some(item => typeof item.telemetry?.model_task_id === 'string')).toBe(true)
+      expect(mockTrackerInstances.length).toBe(result.meta.evaluation_count * 2)
+    })
+
+    it('waits for every history unit before surfacing a checkpoint initialization failure', async () => {
+      let resolvePeerFinished
+      const peerFinished = new Promise(resolve => { resolvePeerFinished = resolve })
+      let peerSettled = false
+      let modelTenCheckpointAttempts = 0
+      const checkpoints = []
+      const onCheckpoint = async checkpoint => {
+        checkpoints.push(checkpoint)
+        if (checkpoint.checkpoint_status === 'submitting'
+          && Number(checkpoint.model_id) === 10
+          && modelTenCheckpointAttempts++ === 0) {
+          await peerFinished
+          await new Promise(resolve => setTimeout(resolve, 20))
+          throw new Error('history_checkpoint_initialization_failed')
+        }
+      }
+      maybeAiSignal.mockImplementation(async (_db, config, market, prompt) => {
+        const result = await defaultMaybeAiSignalImplementation(_db, config, market, prompt)
+        if (Number(config._model_profile_id) === 20) {
+          resolvePeerFinished()
+          peerSettled = true
+        }
+        return result
+      })
+      await expect(handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      }, { onCheckpoint })).rejects.toThrow('history_checkpoint_initialization_failed')
+      expect(maybeAiSignal).toHaveBeenCalledTimes(1)
+      expect(peerSettled).toBe(true)
+      expect(mockTrackerInstances.some(({ tracker }) => tracker.completedStale.mock.calls.length === 1)).toBe(true)
+      expect(mockTrackerInstances.every(({ tracker }) => tracker.stop.mock.calls.length >= 1)).toBe(true)
+      expect(checkpoints.some(checkpoint => checkpoint.checkpoint_status === 'completed')).toBe(false)
+    })
+
+    it('keeps a history unit idempotency key stable across scheduler wall-clock drift', async () => {
+      const params = {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      }
+      const nowSpy = vi.spyOn(Date, 'now')
+      try {
+        nowSpy.mockReturnValue(1785800000000)
+        await handleHistoryCompare(1, params)
+        const firstKeys = mockCreateModelTaskTracker.mock.calls.map(call => call[0].idempotencyKey)
+        nowSpy.mockReturnValue(1785801000000)
+        await handleHistoryCompare(1, params)
+        const secondKeys = mockCreateModelTaskTracker.mock.calls
+          .slice(firstKeys.length).map(call => call[0].idempotencyKey)
+        expect(secondKeys).toEqual(firstKeys)
+      } finally {
+        nowSpy.mockRestore()
+      }
+    })
+
+    it('keeps a provider-unknown history unit submitting and returns status_unknown', async () => {
+      mockCreateModelTaskTracker.mockImplementation(async input => {
+        const tracker = makeModelTaskTracker(input, { unknownOnFail:true })
+        mockTrackerInstances.push({ input, tracker })
+        return tracker
+      })
+      maybeAiSignal.mockRejectedValueOnce(Object.assign(new Error('provider_connection_lost'), { code:'provider_connection_lost' }))
+      const checkpoints = []
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      }, { onCheckpoint:checkpoint => { checkpoints.push(checkpoint) } })
+      expect(result).toEqual({ status:'status_unknown', message:'history_compare_status_unknown' })
+      expect(maybeAiSignal).toHaveBeenCalledTimes(2)
+      expect(checkpoints.some(item => item.checkpoint_status === 'submitting'
+        && item.telemetry?.model_task_id === mockTrackerInstances[0]?.tracker.taskId)).toBe(true)
+      expect(checkpoints.some(item => item.checkpoint_status === 'failed')).toBe(false)
+    })
+
+    it.each(['active', 'terminal'])('does not call a provider when task creation reports a %s duplicate', async duplicateState => {
+      const duplicate = Object.assign(new Error(`model_task_duplicate_${duplicateState}`), { code:`model_task_duplicate_${duplicateState}` })
+      mockCreateModelTaskTracker.mockRejectedValueOnce(duplicate)
+      mockQueryOne.mockImplementation(async sql => {
+        const text = String(sql)
+        if (text.includes('ai_model_tasks')) return { task_id:'existing-compare-task', status:duplicateState === 'active' ? 'provider_running' : 'succeeded' }
+        if (text.includes('timezone_offset_minutes')) return { timezone_offset_minutes:180, clock_status:'progressing_tick' }
+        return { role:'admin' }
+      })
+      const checkpoints = []
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      }, { onCheckpoint:checkpoint => { checkpoints.push(checkpoint) } })
+      expect(result.status).toBe('status_unknown')
+      expect(maybeAiSignal).toHaveBeenCalledTimes(1)
+      expect(maybeAiSignal.mock.calls.every(call => Number(call[1]?._model_profile_id) !== 10)).toBe(true)
+      expect(checkpoints.some(item => item.telemetry?.model_task_id === 'existing-compare-task')).toBe(true)
+    })
+
     it('restores completed model-step checkpoints without issuing another provider request', async () => {
       let manifest = null
       const checkpoints = []
@@ -637,7 +881,7 @@ describe('handleHistoryCompare', () => {
         checkpointManifest:manifest,
         checkpoints:[submitting],
       })
-      expect(result).toEqual({ status:'error', message:'history_compare_status_unknown' })
+      expect(result).toEqual({ status:'status_unknown', message:'history_compare_status_unknown' })
       expect(maybeAiSignal).not.toHaveBeenCalled()
     })
 
@@ -718,7 +962,8 @@ describe('handleHistoryCompare', () => {
     it('passes a shared abort signal to every model and exits when it is cancelled', async () => {
       const controller = new AbortController()
       maybeAiSignal.mockImplementation(async (_db, config) => {
-        expect(config._abortSignal).toBe(controller.signal)
+        expect(config._abortSignal).toBeInstanceOf(AbortSignal)
+        expect(config._abortSignal).not.toBe(controller.signal)
         controller.abort(new Error('history_compare_cancelled'))
         throw controller.signal.reason
       })
@@ -1056,6 +1301,11 @@ describe('POST /ai/model-compare/history route', () => {
     expect(routes).toContain('startHistoryCompareJob(req.user.id, req.body || {})')
     expect(routes).toContain("router.get('/ai/model-compare/history/:jobId'")
     expect(routes).toContain("router.delete('/ai/model-compare/history/:jobId'")
+  })
+
+  it('passes the durable history job id into unit task identity', () => {
+    const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+    expect(backend).toContain('jobId:job.id')
   })
 
   it('exposes a lightweight recent-job list', () => {

@@ -20,6 +20,7 @@ import { loadPeriodMarketWindow } from './period-market-evidence.js'
 import { normalizeBacktestOptions, simulateVirtualAccount } from './model-backtest.js'
 import { resolveModelSnapshotSelection } from './model-snapshot-samples.js'
 import { resolvePlatformAiVolumeRange } from './risk-policy.js'
+import { createModelTaskTracker } from './model-task-tracker.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
 import { indicatorRequiredHistory } from './indicator-registry.js'
@@ -1012,8 +1013,9 @@ export async function handleAnalyze(userId, params, options = {}) {
   return { status: 'success', signal, market }
 }
 
-async function executeAnalyzeCompare(userId, params) {
+async function executeAnalyzeCompare(userId, params, options = {}) {
   const { symbol, model_ids, strategy_id } = params
+  const jobId = String(options.jobId || liveCompareJobId(liveCompareIdempotency(userId, params)))
   if (!symbol) return { status: 'error', message: 'symbol required' }
   if (!strategy_id) return { ok: false, error: 'strategy_id_required' }
   if (!Array.isArray(model_ids) || model_ids.length < 2 || model_ids.length > 5) {
@@ -1087,7 +1089,27 @@ async function executeAnalyzeCompare(userId, params) {
     }
   }
 
-  const inferenceTasks = validModels.map(({ modelId, resolved }) => {
+  const liveMarketEvidenceHash = comparisonFingerprint({
+    symbol,
+    timeframe:primaryTf,
+    rates,
+    market_meta:ratesResp.market_meta || null,
+    market,
+  })
+  const liveCompareCheckpointContext = {
+    strategyFingerprint:comparisonFingerprint({
+      strategy_id:Number(strategy.id), strategy_version:Number(strategy.version || 1),
+      scope:strategy.scope || null, policy:policy.compiledPolicy || policy,
+    }),
+    promptHash:comparisonFingerprint(prompt),
+    snapshotFingerprint:liveMarketEvidenceHash,
+    outputContractHash:comparisonFingerprint('ai_signal_compare_v1'),
+    marketEvidenceHash:liveMarketEvidenceHash,
+  }
+
+  const liveBatchAbortController = new AbortController()
+  const liveTrackers = new Set()
+  const inferenceTaskPromises = validModels.map(async ({ modelId, resolved }, modelIndex) => {
     const config = {
       ...resolved.model,
       system_prompt: prompt,
@@ -1111,10 +1133,79 @@ async function executeAnalyzeCompare(userId, params) {
       config._strategyPolicyRuntime = strategyPolicyRuntime
       if (strategyPolicyRuntime.mode === 'enforce') config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
     }
-    return maybeAiSignal(null, config, market, prompt).then(signal => {
+    const unitKey = `live:${modelId}`
+    const taskEnvelope = compareUnitTaskInput({
+      userId, strategy, config, jobId, mode:'live', unitKey, modelId,
+      promptHash:liveCompareCheckpointContext.promptHash,
+      snapshotHash:liveCompareCheckpointContext.snapshotFingerprint,
+      outputContractHash:liveCompareCheckpointContext.outputContractHash,
+      marketEvidenceHash:liveCompareCheckpointContext.marketEvidenceHash,
+      decisionUtcMs:Date.now(),
+    })
+    let tracker = null
+    let restoreCallbacks = null
+    let preparedEvidence = null
+    const checkpointBase = {
+      model_id:Number(modelId), unit_key:unitKey, unit_index:modelIndex,
+      decision_time_utc_msc:Date.now(), outcome_time_utc_msc:null, snapshot_id:null,
+      strategy_fingerprint:liveCompareCheckpointContext.strategyFingerprint,
+      prompt_hash:liveCompareCheckpointContext.promptHash,
+      snapshot_fingerprint:liveCompareCheckpointContext.snapshotFingerprint,
+      model_config_fingerprint:taskEnvelope.modelConfigFingerprint,
+      output_contract_hash:liveCompareCheckpointContext.outputContractHash,
+      market_evidence_hash:liveCompareCheckpointContext.marketEvidenceHash,
+    }
+    try {
+      await persistHistoryCompareCheckpoint(jobId, {
+        ...checkpointBase, checkpoint_status:'submitting', telemetry:{},
+      })
+      if (liveBatchAbortController.signal.aborted) {
+        throw liveBatchAbortController.signal.reason || new Error('model_compare_batch_aborted')
+      }
+      try {
+        tracker = await createModelTaskTracker(taskEnvelope.input, {
+          workerId:`model-compare:${jobId}:${unitKey}`,
+        })
+      } catch (error) {
+        const duplicate = /model_task_duplicate_(active|terminal)/.test(String(error?.code || error?.message || ''))
+        if (duplicate) {
+          const existingTask = await loadCompareTaskByIdempotency(taskEnvelope.input)
+          await persistHistoryCompareCheckpoint(jobId, {
+            ...checkpointBase, checkpoint_status:'submitting',
+            telemetry:{ model_task_id:existingTask?.task_id || null },
+          })
+          return { model_id:modelId, status:'status_unknown', error:'model_compare_status_unknown',
+            model_task_id:existingTask?.task_id || null }
+        }
+        throw error
+      }
+      liveTrackers.add(tracker)
+      if (liveBatchAbortController.signal.aborted) {
+        throw liveBatchAbortController.signal.reason || new Error('model_compare_batch_aborted')
+      }
+      restoreCallbacks = installCompareTrackerCallbacks(config, tracker, {
+        abortSignal:liveBatchAbortController.signal,
+        taskDeadlineAtUtcMs:taskEnvelope.deadlines.attemptSafetyDeadlineUtcMs,
+        resultValidUntilUtcMs:taskEnvelope.deadlines.attemptSafetyDeadlineUtcMs,
+        onInferencePrepared:evidence => {
+          preparedEvidence = {
+            system_prompt_sha256:comparisonFingerprint(evidence?.systemPrompt || ''),
+            user_prompt_sha256:comparisonFingerprint(evidence?.userPrompt || ''),
+            output_schema_version:evidence?.outputSchemaVersion || null,
+          }
+        },
+      })
+      await persistHistoryCompareCheckpoint(jobId, {
+        ...checkpointBase,
+        checkpoint_status:'submitting',
+        telemetry:{ model_task_id:tracker.taskId },
+      })
+      let signal = await maybeAiSignal(null, config, market, prompt)
       const inferenceSource = signal?._inference_source || 'unknown'
       if (inferenceSource !== 'ai') {
-        return { model_id: modelId, status: 'error', error: signal?.reasoning || 'inference_failed' }
+        const error = new Error(signal?.reasoning || 'inference_failed')
+        error.code = 'model_compare_inference_failed'
+        throw error
       }
       delete signal._inference_source
       if (strategyPolicyRuntime) {
@@ -1136,7 +1227,7 @@ async function executeAnalyzeCompare(userId, params) {
         }
       }
       const profile = resolved.model
-      return {
+      const result = {
         model_id: modelId,
         model_name: profile.model_name,
         provider: profile.provider || profile.api_provider,
@@ -1149,14 +1240,72 @@ async function executeAnalyzeCompare(userId, params) {
         latest_price: market.latest_price,
         strategy_policy_runtime:strategyPolicyRuntime,
       }
-    }).catch(error => {
-      return { model_id: modelId, status: 'error', error: error.message || 'inference_failed' }
-    })
+      await tracker.resultReady({ resultRef:`model_compare:${jobId}:${unitKey}`, resultHash:comparisonFingerprint(result) })
+      await tracker.applying()
+      await persistHistoryCompareCheckpoint(jobId, {
+        ...checkpointBase,
+        checkpoint_status:'completed',
+        result:result.signal,
+        telemetry:{ model_task_id:tracker.taskId },
+        input_evidence:preparedEvidence,
+      })
+      await tracker.succeeded({ resultRef:`model_compare:${jobId}:${unitKey}`, resultHash:comparisonFingerprint(result) })
+      return result
+    } catch (error) {
+      if (compareTrackerIsUnknown(tracker, error)) {
+        return { model_id:modelId, status:'status_unknown', error:'model_compare_status_unknown', model_task_id:tracker?.taskId || null }
+      }
+      if (!tracker) throw error
+      if (tracker) {
+        try {
+          await tracker.failed(error, true)
+          if (compareTrackerIsUnknown(tracker, error)) {
+            return { model_id:modelId, status:'status_unknown', error:'model_compare_status_unknown', model_task_id:tracker.taskId }
+          }
+          if (['failed_terminal', 'completed_rejected'].includes(String(tracker.status || ''))) {
+            await persistHistoryCompareCheckpoint(jobId, {
+              ...checkpointBase,
+              checkpoint_status:'failed', error_code:error.code || error.message || 'inference_failed',
+              result:{ signal_type:'error', error:error.message || 'inference_failed' },
+              telemetry:{ model_task_id:tracker.taskId }, input_evidence:preparedEvidence,
+            })
+          }
+        } catch (transitionError) {
+          if (compareTrackerIsUnknown(tracker, transitionError)) {
+            return { model_id:modelId, status:'status_unknown', error:'model_compare_status_unknown', model_task_id:tracker.taskId }
+          }
+        }
+      }
+      return { model_id:modelId, status:'error', error:error.message || 'inference_failed' }
+    } finally {
+      restoreCallbacks?.()
+      await tracker?.stop?.().catch(() => {})
+    }
   })
 
-  const inferenceResults = await Promise.all(inferenceTasks)
+  const inferenceTasks = inferenceTaskPromises.map(task => task.catch(error => {
+    if (!liveBatchAbortController.signal.aborted) liveBatchAbortController.abort(error)
+    throw error
+  }))
+  const settledInference = await Promise.allSettled(inferenceTasks)
+  const rejectedInference = settledInference.find(item => item.status === 'rejected')
+  if (rejectedInference) {
+    if (!liveBatchAbortController.signal.aborted) liveBatchAbortController.abort(rejectedInference.reason)
+    await Promise.allSettled([...liveTrackers].map(async tracker => {
+      if (['result_ready', 'applying'].includes(String(tracker.status || ''))) {
+        await tracker.completedStale('model_compare_peer_rejected').catch(() => {})
+      }
+      await tracker.stop?.().catch(() => {})
+    }))
+    throw rejectedInference.reason
+  }
+  const inferenceResults = settledInference.map(item => item.value)
   for (const r of inferenceResults) {
     results.push(r)
+  }
+
+  if (inferenceResults.some(result => result?.status === 'status_unknown')) {
+    return { ok:false, status:'status_unknown', error:'model_compare_status_unknown', job_id:jobId }
   }
 
   const models = Object.fromEntries(validModels.map(({ modelId, resolved }) => [modelId, {
@@ -1188,6 +1337,158 @@ function liveCompareSourceHash(userId, params = {}) {
 function liveCompareJobId(idempotencyHash) {
   const value = String(idempotencyHash || '').padEnd(32, '0')
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-4${value.slice(13, 16)}-a${value.slice(17, 20)}-${value.slice(20, 32)}`
+}
+
+function mergeCompareAbortSignals(...signals) {
+  const active = signals.filter(Boolean)
+  if (active.length <= 1) return active[0] || null
+  if (typeof AbortSignal?.any === 'function') return AbortSignal.any(active)
+  const controller = new AbortController()
+  const abort = event => {
+    if (!controller.signal.aborted) controller.abort(event?.target?.reason)
+  }
+  active.forEach(signal => {
+    if (signal.aborted) abort({ target: signal })
+    else signal.addEventListener('abort', abort, { once:true })
+  })
+  return controller.signal
+}
+
+function compareUnitIdempotencyKey({ jobId, mode, unitKey, modelId, inputHash, modelConfigFingerprint }) {
+  // Keep the durable key below the historical VARCHAR(191) limit while
+  // retaining every source component in the hashed payload.
+  const source = [String(jobId), String(mode), String(unitKey), Number(modelId), String(inputHash || ''),
+    String(modelConfigFingerprint || '')].join(':')
+  return `mc:${comparisonFingerprint(source)}`
+}
+
+function compareUnitTaskInput({ userId, strategy, config, jobId, mode, unitKey, modelId,
+  inputHash, promptHash, snapshotHash, outputContractHash, marketEvidenceHash,
+  decisionUtcMs, resultValidUntilUtcMs = null }) {
+  const nowUtcMs = Date.now()
+  const deadlines = modelTaskDeadlines('model_compare', { nowUtcMs })
+  const modelConfigFingerprint = comparisonFingerprint({
+    model_profile_id:Number(config?._model_profile_id || modelId),
+    provider:config?.provider || config?.api_provider || null,
+    model_name:config?.model_name || null,
+    api_base_url_sha256:comparisonFingerprint(config?.api_base_url || ''),
+    protocol:config?.protocol || config?._protocol || 'chat_completions',
+    credential_source:config?._credential_source || null,
+    temperature:Number(config?.temperature ?? 0.3),
+    thinking_enabled:config?.thinking_enabled !== 0 && config?.thinking_enabled !== false,
+    reasoning_effort:config?.reasoning_effort || null,
+  })
+  const sourceHash = inputHash || comparisonFingerprint({ jobId, mode, unitKey, modelId,
+    promptHash, modelConfigFingerprint, snapshotHash, marketEvidenceHash })
+  return {
+    modelConfigFingerprint,
+    deadlines,
+    input: {
+      taskKind:'model_compare',
+      queueClass:'background',
+      ownerUserId:Number(userId) || 0,
+      strategyId:Number(strategy?.id) || null,
+      domainType:'model_compare_unit',
+      domainId:`${String(jobId)}:${String(mode)}:${String(unitKey)}:${Number(modelId)}`,
+      idempotencyKey:compareUnitIdempotencyKey({
+        jobId, mode, unitKey, modelId, inputHash:sourceHash, modelConfigFingerprint,
+      }),
+      snapshotHash:snapshotHash || null,
+      inputHash:sourceHash,
+      promptHash:promptHash || null,
+      outputContractHash:outputContractHash || null,
+      provider:config?.provider || config?.api_provider || null,
+      model:config?.model_name || null,
+      modelProfileId:Number(config?._model_profile_id || modelId) || null,
+      protocol:config?.protocol || config?._protocol || 'chat_completions',
+      credentialSource:config?._credential_source || null,
+      frozenContext:{
+        compare_job_id:String(jobId), compare_mode:String(mode), unit_key:String(unitKey),
+        model_id:Number(modelId), decision_time_utc_msc:Number(decisionUtcMs) || null,
+        input_hash:sourceHash, prompt_hash:promptHash || null,
+        snapshot_hash:snapshotHash || null, market_evidence_hash:marketEvidenceHash || null,
+      },
+      scheduledAtUtcMs:nowUtcMs,
+      // The generic task envelope retains the longer task deadline. The LLM
+      // request itself receives the per-attempt safety deadline below.
+      taskDeadlineAtUtcMs:deadlines.taskDeadlineUtcMs,
+      resultValidUntilUtcMs:Number(resultValidUntilUtcMs) || deadlines.taskDeadlineUtcMs,
+      maxAttempts:1,
+    },
+  }
+}
+
+function installCompareTrackerCallbacks(config, tracker, {
+  abortSignal = null, onProviderRequest = null, onProviderUsage = null,
+  onProviderActivity = null, onProviderQuiet = null, onInferencePrepared = null,
+  taskDeadlineAtUtcMs = null, resultValidUntilUtcMs = null,
+} = {}) {
+  const previous = {
+    onProviderRequest:config._onProviderRequest,
+    onProviderUsage:config._onProviderUsage,
+    onProviderActivity:config._onProviderActivity,
+    onProviderQuiet:config._onProviderQuiet,
+    onInferencePrepared:config._onInferencePrepared,
+    abortSignal:config._abortSignal || null,
+  }
+  config._modelTaskId = tracker.taskId
+  config._taskDeadlineAtUtcMs = Number(taskDeadlineAtUtcMs)
+    || Number(tracker.task?.task_deadline_at_utc_msc) || null
+  config._resultValidUntilUtcMs = Number(resultValidUntilUtcMs)
+    || Number(tracker.task?.result_valid_until_utc_msc) || null
+  config._abortSignal = mergeCompareAbortSignals(previous.abortSignal, abortSignal, tracker.signal)
+  config._onProviderRequest = async event => {
+    await tracker.onProviderRequest(event)
+    await previous.onProviderRequest?.(event)
+    await onProviderRequest?.(event)
+  }
+  config._onProviderUsage = async event => {
+    await tracker.onProviderUsage(event)
+    await previous.onProviderUsage?.(event)
+    await onProviderUsage?.(event)
+  }
+  config._onProviderActivity = async event => {
+    await tracker.onProviderActivity(event)
+    await previous.onProviderActivity?.(event)
+    await onProviderActivity?.(event)
+  }
+  config._onProviderQuiet = async event => {
+    await tracker.onProviderQuiet(event)
+    await previous.onProviderQuiet?.(event)
+    await onProviderQuiet?.(event)
+  }
+  config._onInferencePrepared = async evidence => {
+    await tracker.persistBudget(evidence?.modelTaskBudget)
+    await previous.onInferencePrepared?.(evidence)
+    await onInferencePrepared?.(evidence)
+  }
+  return () => {
+    if (previous.onProviderRequest) config._onProviderRequest = previous.onProviderRequest
+    else delete config._onProviderRequest
+    if (previous.onProviderUsage) config._onProviderUsage = previous.onProviderUsage
+    else delete config._onProviderUsage
+    if (previous.onProviderActivity) config._onProviderActivity = previous.onProviderActivity
+    else delete config._onProviderActivity
+    if (previous.onProviderQuiet) config._onProviderQuiet = previous.onProviderQuiet
+    else delete config._onProviderQuiet
+    if (previous.onInferencePrepared) config._onInferencePrepared = previous.onInferencePrepared
+    else delete config._onInferencePrepared
+    if (previous.abortSignal) config._abortSignal = previous.abortSignal
+    else delete config._abortSignal
+  }
+}
+
+function compareTrackerIsUnknown(tracker, error = null) {
+  const status = String(tracker?.status || '')
+  const code = String(error?.code || error?.message || '')
+  return ['status_unknown', 'provider_quiet'].includes(status)
+    || /model_task_duplicate_(active|terminal)|status_unknown|provider_quiet|result_expired/.test(code)
+}
+
+async function loadCompareTaskByIdempotency(taskInput) {
+  if (!taskInput?.taskKind || !taskInput?.idempotencyKey) return null
+  return queryOne(`SELECT task_id, status FROM ai_model_tasks
+    WHERE task_kind = ? AND idempotency_key = ? LIMIT 1`, [taskInput.taskKind, taskInput.idempotencyKey])
 }
 
 function parseLiveCompareResult(row) {
@@ -1248,13 +1549,17 @@ export async function handleAnalyzeCompare(userId, params = {}) {
   }
 
   try {
-    const result = await executeAnalyzeCompare(userId, params)
+    const result = await executeAnalyzeCompare(userId, params, { jobId })
+    const statusUnknown = result?.status === 'status_unknown'
+      || result?.error === 'model_compare_status_unknown'
     const succeeded = result?.ok === true
     await queryRun(`UPDATE ai_model_compare_jobs SET status = ?, stage = ?, progress_percent = 100,
       completed_steps = total_steps, result_json = ?, error_code = ?, completed_at = NOW(), updated_at = NOW()
       WHERE id = ? AND user_id = ? AND status = 'running'`,
-    [succeeded ? 'succeeded' : 'failed', succeeded ? 'succeeded' : 'failed', JSON.stringify(result),
-      succeeded ? null : String(result?.error || result?.message || 'model_compare_failed').slice(0, 255),
+    [statusUnknown ? 'status_unknown' : succeeded ? 'succeeded' : 'failed',
+      statusUnknown ? 'status_unknown' : succeeded ? 'succeeded' : 'failed', JSON.stringify(result),
+      statusUnknown ? 'model_compare_status_unknown'
+        : succeeded ? null : String(result?.error || result?.message || 'model_compare_failed').slice(0, 255),
       jobId, Number(userId)])
     return result
   } catch (error) {
@@ -1277,6 +1582,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : async () => {}
   const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false
   const abortSignal = options.abortSignal || null
+  const compareJobId = String(options.jobId || `history-${comparisonFingerprint({ userId:Number(userId), params })}`)
   const expectedCheckpointManifest = options.checkpointManifest || null
   const checkpointRowsByUnit = options.checkpointsByUnit instanceof Map
     ? options.checkpointsByUnit
@@ -1572,14 +1878,24 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   }
   const checkpointRows = [...checkpointRowsByUnit.values()]
   if (checkpointRows.some(row => !['completed', 'failed'].includes(String(row.checkpoint_status || 'completed')))) {
-    return { status:'error', message:'history_compare_status_unknown' }
+    return { status:'status_unknown', message:'history_compare_status_unknown' }
   }
   const completedCheckpointRows = checkpointRows.filter(row => String(row.checkpoint_status || 'completed') === 'completed')
   if (completedCheckpointRows.some(row => !historyCompareCheckpointMatchesManifest(row, checkpointManifest)
     || !row.result || typeof row.result !== 'object')) {
     return { status:'error', message:'history_compare_checkpoint_source_stale' }
   }
+  const failedCheckpointRows = checkpointRows.filter(row => String(row.checkpoint_status || '') === 'failed')
+  if (failedCheckpointRows.some(row => !historyCompareCheckpointMatchesManifest(row, checkpointManifest))) {
+    return { status:'error', message:'history_compare_checkpoint_source_stale' }
+  }
+  if (failedCheckpointRows.some(row => !row.result || typeof row.result !== 'object')) {
+    return { status:'status_unknown', message:'history_compare_status_unknown' }
+  }
   const completedCheckpointRowsByUnit = new Map(completedCheckpointRows
+    .map(row => [String(row.unit_key), row]))
+  const failedCheckpointRowsByUnit = new Map(checkpointRows
+    .filter(row => String(row.checkpoint_status || '') === 'failed')
     .map(row => [String(row.unit_key), row]))
   await onCheckpointManifest(checkpointManifest)
   const modelTelemetry = Object.fromEntries(validModels.map(({ modelId }) => [modelId, {
@@ -1693,7 +2009,10 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       })
     }
 
-    const inferenceTasks = validModels.map(async ({ modelId, resolved }) => {
+    const historyBatchAbortController = new AbortController()
+    const historyStepAbortSignal = mergeCompareAbortSignals(abortSignal, historyBatchAbortController.signal)
+    const historyStepTrackers = new Set()
+    const inferenceTaskPromises = validModels.map(async ({ modelId, resolved }) => {
       const checkpointUnitKey = historyCompareCheckpointUnitKey(modelId, stepNumber)
       const checkpoint = completedCheckpointRowsByUnit.get(checkpointUnitKey)
       if (checkpoint) {
@@ -1710,6 +2029,23 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           checkpoint:true,
           restoredSignal:checkpoint.result,
           latencyMs:Number(checkpoint.result?.latency_ms || 0),
+        }
+      }
+      const failedCheckpoint = failedCheckpointRowsByUnit.get(checkpointUnitKey)
+      if (failedCheckpoint) {
+        const restoredTelemetry = failedCheckpoint.telemetry || {}
+        for (const key of Object.keys(modelTelemetry[modelId])) {
+          modelTelemetry[modelId][key] += Math.max(0, Number(restoredTelemetry[key]) || 0)
+        }
+        if (failedCheckpoint.input_evidence) {
+          const evidenceKey = `${decisionUtcMs}:${decisionPoint.snapshotSample?.snapshot_id || stepNumber}`
+          decisionInputEvidence.set(evidenceKey, failedCheckpoint.input_evidence)
+        }
+        return {
+          modelId,
+          checkpoint:true,
+          restoredSignal:failedCheckpoint.result,
+          latencyMs:Number(failedCheckpoint.result?.latency_ms || 0),
         }
       }
       const telemetryBefore = { ...modelTelemetry[modelId] }
@@ -1737,34 +2073,6 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         _comparison_replay_system_prompt:decisionPoint.snapshotSample?.system_prompt,
         _comparison_replay_user_prompt:decisionPoint.snapshotSample?.user_prompt,
         _comparison_replay_output_schema_version:decisionPoint.snapshotSample?.output_schema_version,
-        _abortSignal:abortSignal,
-        _onProviderRequest:({ phase }) => {
-          modelTelemetry[modelId].provider_request_count += 1
-          if (phase === 'repair') modelTelemetry[modelId].repair_request_count += 1
-        },
-        _onProviderUsage:({ status, tokenCount }) => {
-          if (status === 'success') modelTelemetry[modelId].successful_request_count += 1
-          else modelTelemetry[modelId].failed_request_count += 1
-          modelTelemetry[modelId].token_count += Math.max(0, Number(tokenCount) || 0)
-        },
-        _onInferencePrepared:({ systemPrompt, userPrompt, outputSchemaVersion }) => {
-          preparedEvidence = {
-            decision_time_utc_msc:decisionUtcMs,
-            snapshot_id:decisionPoint.snapshotSample?.snapshot_id || null,
-            system_prompt_sha256:comparisonFingerprint(systemPrompt || ''),
-            user_prompt_sha256:comparisonFingerprint(userPrompt || ''),
-            output_schema_version:outputSchemaVersion || null,
-          }
-          const evidenceKey = `${decisionUtcMs}:${decisionPoint.snapshotSample?.snapshot_id || stepNumber}`
-          if (decisionInputEvidence.has(evidenceKey)) return
-          decisionInputEvidence.set(evidenceKey, {
-            decision_time_utc_msc:decisionUtcMs,
-            snapshot_id:decisionPoint.snapshotSample?.snapshot_id || null,
-            system_prompt_sha256:comparisonFingerprint(systemPrompt || ''),
-            user_prompt_sha256:comparisonFingerprint(userPrompt || ''),
-            output_schema_version:outputSchemaVersion || null,
-          })
-        },
       }
       const strategyPolicyRuntime = baseStrategyPolicyRuntime ? structuredClone(baseStrategyPolicyRuntime) : null
       if (strategyPolicyRuntime) {
@@ -1773,66 +2081,236 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
         }
       }
-      await persistCheckpointState(modelId, { checkpoint_status:'submitting' })
-      const startedAt = Date.now()
+      const unitInputHash = comparisonFingerprint({
+        job_id:compareJobId, mode:'history', unit_key:checkpointUnitKey,
+        decision_time_utc_msc:decisionUtcMs, snapshot_id:decisionPoint.snapshotSample?.snapshot_id || null,
+        strategy_fingerprint:checkpointManifest.strategy_fingerprint,
+        prompt_hash:checkpointManifest.prompt_hash,
+        snapshot_fingerprint:checkpointManifest.snapshot_fingerprint,
+        model_config_fingerprint:modelRuntimeSnapshots[modelId]?.runtime_config_sha256 || '',
+        output_contract_hash:checkpointManifest.output_contract_hash,
+        market_evidence_hash:checkpointManifest.market_evidence_hash,
+      })
+      const taskEnvelope = compareUnitTaskInput({
+        userId, strategy, config, jobId:compareJobId, mode:'history', unitKey:checkpointUnitKey,
+        modelId, inputHash:unitInputHash,
+        promptHash:checkpointManifest.prompt_hash,
+        snapshotHash:checkpointManifest.snapshot_fingerprint,
+        outputContractHash:checkpointManifest.output_contract_hash,
+        marketEvidenceHash:checkpointManifest.market_evidence_hash,
+        decisionUtcMs,
+      })
+      let tracker = null
+      let restoreCallbacks = null
+      await persistCheckpointState(modelId, { checkpoint_status:'submitting', telemetry:{} })
+      if (historyStepAbortSignal?.aborted) {
+        throw historyStepAbortSignal.reason || new Error('history_compare_batch_aborted')
+      }
       try {
-        let signal = await maybeAiSignal(null, config, market, prompt)
-        const rawSignalType = signal.signal_type
-        if (strategyPolicyRuntime && runtimePolicy.compiledPolicy) {
-          const workflow = validateWorkflowTrace(runtimePolicy.compiledPolicy, signal, {
-            indicators:strategyPolicyRuntime.indicators,
-            signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
+        try {
+          tracker = await createModelTaskTracker(taskEnvelope.input, {
+            workerId:`model-compare:${compareJobId}:${checkpointUnitKey}`,
           })
-          strategyPolicyRuntime.workflow_state = workflow
-          const postInference = evaluateStrategyConstraints(runtimePolicy.compiledPolicy, {
-            stages:workflow.stages, decision:workflow.decision, indicators:strategyPolicyRuntime.indicators,
-            signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' }, market,
-          }, 'post_inference')
-          strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
-          if (runtimePolicy.policyMode === 'enforce') {
-            signal.strategy_policy_decision = workflow.decision
-            signal = applyConstraintAction(signal, strategyPolicyRuntime.constraint_results.pre_inference).signal
-            signal = applyConstraintAction(signal, workflowGateEvaluation(workflow)).signal
-            signal = applyConstraintAction(signal, postInference).signal
+        } catch (error) {
+          const duplicate = /model_task_duplicate_(active|terminal)/.test(String(error?.code || error?.message || ''))
+          if (duplicate) {
+            const existingTask = await loadCompareTaskByIdempotency(taskEnvelope.input)
+            await persistCheckpointState(modelId, {
+              checkpoint_status:'submitting', telemetry:{ model_task_id:existingTask?.task_id || null },
+            })
+            return { modelId, status:'status_unknown', error:'history_compare_status_unknown',
+              model_task_id:existingTask?.task_id || null }
+          }
+          throw error
+        }
+        historyStepTrackers.add(tracker)
+        if (historyStepAbortSignal?.aborted) {
+          throw historyStepAbortSignal.reason || new Error('history_compare_batch_aborted')
+        }
+        restoreCallbacks = installCompareTrackerCallbacks(config, tracker, {
+          abortSignal:historyStepAbortSignal,
+          taskDeadlineAtUtcMs:taskEnvelope.deadlines.attemptSafetyDeadlineUtcMs,
+          resultValidUntilUtcMs:taskEnvelope.deadlines.attemptSafetyDeadlineUtcMs,
+          onProviderRequest:({ phase }) => {
+            modelTelemetry[modelId].provider_request_count += 1
+            if (phase === 'repair') modelTelemetry[modelId].repair_request_count += 1
+          },
+          onProviderUsage:({ status, tokenCount }) => {
+            if (status === 'success') modelTelemetry[modelId].successful_request_count += 1
+            else modelTelemetry[modelId].failed_request_count += 1
+            modelTelemetry[modelId].token_count += Math.max(0, Number(tokenCount) || 0)
+          },
+          onInferencePrepared:({ systemPrompt, userPrompt, outputSchemaVersion }) => {
+            preparedEvidence = {
+              decision_time_utc_msc:decisionUtcMs,
+              snapshot_id:decisionPoint.snapshotSample?.snapshot_id || null,
+              system_prompt_sha256:comparisonFingerprint(systemPrompt || ''),
+              user_prompt_sha256:comparisonFingerprint(userPrompt || ''),
+              output_schema_version:outputSchemaVersion || null,
+            }
+            const evidenceKey = `${decisionUtcMs}:${decisionPoint.snapshotSample?.snapshot_id || stepNumber}`
+            if (decisionInputEvidence.has(evidenceKey)) return
+            decisionInputEvidence.set(evidenceKey, preparedEvidence)
+          },
+        })
+        await persistCheckpointState(modelId, {
+          checkpoint_status:'submitting', telemetry:{ model_task_id:tracker.taskId },
+        })
+        const startedAt = Date.now()
+        try {
+          let signal = await maybeAiSignal(null, config, market, prompt)
+          const rawSignalType = signal.signal_type
+          if (strategyPolicyRuntime && runtimePolicy.compiledPolicy) {
+            const workflow = validateWorkflowTrace(runtimePolicy.compiledPolicy, signal, {
+              indicators:strategyPolicyRuntime.indicators,
+              signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
+            })
+            strategyPolicyRuntime.workflow_state = workflow
+            const postInference = evaluateStrategyConstraints(runtimePolicy.compiledPolicy, {
+              stages:workflow.stages, decision:workflow.decision, indicators:strategyPolicyRuntime.indicators,
+              signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' }, market,
+            }, 'post_inference')
+            strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
+            if (runtimePolicy.policyMode === 'enforce') {
+              signal.strategy_policy_decision = workflow.decision
+              signal = applyConstraintAction(signal, strategyPolicyRuntime.constraint_results.pre_inference).signal
+              signal = applyConstraintAction(signal, workflowGateEvaluation(workflow)).signal
+              signal = applyConstraintAction(signal, postInference).signal
+            }
+          }
+          const telemetry = Object.fromEntries(Object.keys(modelTelemetry[modelId]).map(key => [
+            key, Math.max(0, Number(modelTelemetry[modelId][key]) - Number(telemetryBefore[key] || 0)),
+          ]))
+          await tracker.resultReady({
+            resultRef:`model_compare:${compareJobId}:${checkpointUnitKey}`,
+            resultHash:comparisonFingerprint(signal),
+          })
+          await tracker.applying()
+          restoreCallbacks?.()
+          return {
+            modelId,
+            latencyMs: Date.now() - startedAt,
+            signal: { ...signal, _inference_source: signal._inference_source || 'unknown' },
+            rawSignalType,
+            strategyPolicyRuntime,
+            preparedEvidence,
+            telemetry,
+            tracker,
+          }
+        } catch (error) {
+          if (historyStepAbortSignal?.aborted) throw error
+          const telemetry = Object.fromEntries(Object.keys(modelTelemetry[modelId]).map(key => [
+            key, Math.max(0, Number(modelTelemetry[modelId][key]) - Number(telemetryBefore[key] || 0)),
+          ]))
+          try {
+            await tracker.failed(error, true)
+          } catch (transitionError) {
+            if (compareTrackerIsUnknown(tracker, transitionError)) {
+              restoreCallbacks?.()
+              await tracker.stop().catch(() => {})
+              return { modelId, status:'status_unknown', error:'history_compare_status_unknown', model_task_id:tracker.taskId }
+            }
+            error = transitionError
+          }
+          if (compareTrackerIsUnknown(tracker, error)) {
+            restoreCallbacks?.()
+            await tracker.stop().catch(() => {})
+            return { modelId, status:'status_unknown', error:'history_compare_status_unknown', model_task_id:tracker.taskId }
+          }
+          restoreCallbacks?.()
+          return {
+            modelId,
+            latencyMs:Date.now() - startedAt,
+            error:boundedComparisonError(error.message, 'inference_failed'),
+            preparedEvidence,
+            telemetry,
+            tracker,
           }
         }
-        const telemetry = Object.fromEntries(Object.keys(modelTelemetry[modelId]).map(key => [
-          key, Math.max(0, Number(modelTelemetry[modelId][key]) - Number(telemetryBefore[key] || 0)),
-        ]))
-        return {
-          modelId,
-          latencyMs: Date.now() - startedAt,
-          signal: { ...signal, _inference_source: signal._inference_source || 'unknown' },
-          rawSignalType,
-          strategyPolicyRuntime,
-          preparedEvidence,
-          telemetry,
-        }
       } catch (error) {
-        if (abortSignal?.aborted) throw error
-        const telemetry = Object.fromEntries(Object.keys(modelTelemetry[modelId]).map(key => [
-          key, Math.max(0, Number(modelTelemetry[modelId][key]) - Number(telemetryBefore[key] || 0)),
-        ]))
-        return {
-          modelId,
-          latencyMs:Date.now() - startedAt,
-          error:boundedComparisonError(error.message, 'inference_failed'),
-          preparedEvidence,
-          telemetry,
+        restoreCallbacks?.()
+        if (historyStepAbortSignal?.aborted) {
+          if (tracker) await tracker.failed(error, true).catch(() => {})
+          await tracker?.stop?.().catch(() => {})
+          throw error
         }
+        if (tracker && compareTrackerIsUnknown(tracker, error)) {
+          await tracker.stop().catch(() => {})
+          return { modelId, status:'status_unknown', error:'history_compare_status_unknown', model_task_id:tracker.taskId }
+        }
+        if (tracker) {
+          await tracker.failed(error, true).catch(() => {})
+          if (compareTrackerIsUnknown(tracker, error)) {
+            await tracker.stop().catch(() => {})
+            return { modelId, status:'status_unknown', error:'history_compare_status_unknown', model_task_id:tracker.taskId }
+          }
+          await tracker.stop().catch(() => {})
+        }
+        if (!tracker) throw error
+        return { modelId, error:boundedComparisonError(error.message, 'inference_failed') }
       }
     })
 
-    const results = await Promise.all(inferenceTasks)
+    const inferenceTasks = inferenceTaskPromises.map(task => task.catch(error => {
+      if (!historyBatchAbortController.signal.aborted) historyBatchAbortController.abort(error)
+      throw error
+    }))
+    const settledInference = await Promise.allSettled(inferenceTasks)
+    const rejectedInference = settledInference.find(item => item.status === 'rejected')
+    if (rejectedInference) {
+      if (!historyBatchAbortController.signal.aborted) historyBatchAbortController.abort(rejectedInference.reason)
+      await Promise.allSettled([...historyStepTrackers].map(async tracker => {
+        if (['result_ready', 'applying'].includes(String(tracker.status || ''))) {
+          await tracker.completedStale('model_compare_peer_rejected').catch(() => {})
+        }
+        await tracker.stop?.().catch(() => {})
+      }))
+      throw rejectedInference.reason
+    }
+    const results = settledInference.map(item => item.value)
+    if (results.some(result => result?.status === 'status_unknown')) {
+      await Promise.all(results.map(async result => {
+        if (!result?.tracker) return
+        if (['result_ready', 'applying'].includes(String(result.tracker.status || ''))) {
+          await result.tracker.completedStale('model_compare_peer_status_unknown').catch(() => {})
+        }
+        await result.tracker.stop?.().catch(() => {})
+      }))
+      return { status:'status_unknown', message:'history_compare_status_unknown' }
+    }
     const persistCompletedUnit = async (result, modelSignal) => {
       if (result.checkpoint) return
-      await persistCheckpointState(result.modelId, {
-        checkpoint_status:modelSignal.signal_type === 'error' ? 'failed' : 'completed',
-        error_code:modelSignal.error || null,
-        result:modelSignal,
-        telemetry:result.telemetry || {},
-        input_evidence:result.preparedEvidence || null,
-      })
+      const terminalFailure = modelSignal.signal_type === 'error'
+      try {
+        if (terminalFailure && result.tracker
+          && !['failed_terminal', 'completed_rejected', 'succeeded'].includes(String(result.tracker.status || ''))) {
+          await result.tracker.failed({
+            code:modelSignal.error || 'model_compare_inference_failed',
+            message:modelSignal.error || 'model_compare_inference_failed',
+          }, true)
+          if (compareTrackerIsUnknown(result.tracker)) {
+            throw Object.assign(new Error('history_compare_status_unknown'), { code:'history_compare_status_unknown' })
+          }
+        }
+        await persistCheckpointState(result.modelId, {
+          checkpoint_status:terminalFailure ? 'failed' : 'completed',
+          error_code:modelSignal.error || null,
+          result:modelSignal,
+          telemetry:{ ...(result.telemetry || {}), model_task_id:result.tracker?.taskId || null },
+          input_evidence:result.preparedEvidence || null,
+        })
+        if (!terminalFailure && result.tracker) {
+          await result.tracker.succeeded({
+            resultRef:`model_compare:${compareJobId}:${historyCompareCheckpointUnitKey(result.modelId, stepNumber)}`,
+            resultHash:comparisonFingerprint(modelSignal),
+          })
+        }
+      } catch (error) {
+        if (result.tracker) await result.tracker.failed(error, true).catch(() => {})
+        throw error
+      } finally {
+        await result.tracker?.stop?.().catch(() => {})
+      }
     }
     for (const result of results) {
       if (result.checkpoint) {
@@ -2462,7 +2940,7 @@ function historyCompareCheckpointMatchesManifest(checkpoint, manifest) {
 }
 
 function queueHistoryCompareJob(job) {
-  if (!job || job.execution_queued || ['succeeded', 'failed', 'cancelled'].includes(job.status)) return
+  if (!job || job.execution_queued || ['succeeded', 'failed', 'cancelled', 'status_unknown'].includes(job.status)) return
   job.execution_queued = true
   if (!job.abort_controller) job.abort_controller = new AbortController()
   queueMicrotask(async () => {
@@ -2487,6 +2965,7 @@ function queueHistoryCompareJob(job) {
         abortSignal:job.abort_controller.signal,
         checkpointManifest:job.checkpoint_manifest,
         checkpoints,
+        jobId:job.id,
         onCheckpointManifest: async manifest => {
           job.checkpoint_manifest = manifest
           job.updated_at = new Date().toISOString()
@@ -2507,6 +2986,10 @@ function queueHistoryCompareJob(job) {
         job.stage = 'completed'
         job.progress_percent = 100
         job.result = result
+      } else if (result.status === 'status_unknown') {
+        job.status = 'status_unknown'
+        job.stage = 'status_unknown'
+        job.error = 'history_compare_status_unknown'
       } else {
         job.status = 'failed'
         job.stage = 'failed'
@@ -2524,7 +3007,7 @@ function queueHistoryCompareJob(job) {
     } catch (error) {
       console.error(`[ModelCompare] Failed to persist final job state ${job.id}:`, error.message)
     } finally {
-      if (['succeeded', 'failed', 'cancelled'].includes(job.status)) historyCompareJobs.delete(job.id)
+      if (['succeeded', 'failed', 'cancelled', 'status_unknown'].includes(job.status)) historyCompareJobs.delete(job.id)
     }
   })
 }
