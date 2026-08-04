@@ -12,7 +12,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   monthlyReviewSourceHash, periodReviewAccessScope, samePeriodOutcomeSet, shouldRefreshDailyReviewCase, shouldUpgradePeriodMarketEvidence,
   startPeriodReviewLeaseHeartbeat, validateDailyReviewContent, validateMonthlyReviewContent,
   validateMonthlyReviewMergeContent,
-  validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase } from '../../server/routes/ai/period-review.js'
+  validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase,
+  refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review lease heartbeat', () => {
@@ -75,6 +76,79 @@ describe('period review model-task recovery and retry', () => {
     expect(update).toBeTruthy()
     expect(update[0]).toContain('model_task_id = NULL')
     expect(update[1][1]).toMatch(/^retry:daily_review:42:/)
+  })
+
+  it('rotates a succeeded daily job when its evidence changes', async () => {
+    const state = { period_case_id:42, job_type:'daily_review', status:'succeeded',
+      idempotency_key:'daily:42:old-evidence', model_task_id:'task-succeeded' }
+    const run = vi.fn(async (sql, params) => {
+      if (sql.includes('UPDATE period_review_jobs SET idempotency_key')) {
+        const [idempotencyKey, , updatedAt, periodCaseId, jobType] = params
+        if (state.period_case_id === periodCaseId && state.job_type === jobType) {
+          Object.assign(state, { idempotency_key:idempotencyKey, model_task_id:null, status:'queued', updated_at:updatedAt })
+        }
+        return { affectedRows:1 }
+      }
+      return { affectedRows:1 }
+    })
+
+    const result = await refreshPeriodReviewJobForEvidence(run, { periodType:'daily', periodCaseId:42,
+      evidenceHash:'new-daily-evidence', now:'2026-08-04 12:00:00' })
+
+    expect(result).toMatchObject({ jobType:'daily_review', periodCaseId:42,
+      idempotencyKey:'daily:42:new-daily-evidence' })
+    expect(state).toMatchObject({ status:'queued', idempotency_key:'daily:42:new-daily-evidence', model_task_id:null })
+    expect(run.mock.calls[0][0]).toContain('model_task_id = NULL')
+    expect(run.mock.calls[0][1]).toEqual(['daily:42:new-daily-evidence', '2026-08-04 12:00:00',
+      '2026-08-04 12:00:00', 42, 'daily_review'])
+  })
+
+  it('rotates a succeeded monthly job when its source snapshot changes', async () => {
+    const state = { period_case_id:84, job_type:'monthly_review', status:'succeeded',
+      idempotency_key:'monthly:84:old-sources', model_task_id:'monthly-task-succeeded' }
+    const run = vi.fn(async (sql, params) => {
+      if (sql.includes('UPDATE period_review_jobs SET idempotency_key')) {
+        const [idempotencyKey, , updatedAt, periodCaseId, jobType] = params
+        if (state.period_case_id === periodCaseId && state.job_type === jobType) {
+          Object.assign(state, { idempotency_key:idempotencyKey, model_task_id:null, status:'queued', updated_at:updatedAt })
+        }
+        return { affectedRows:1 }
+      }
+      return { affectedRows:1 }
+    })
+
+    const result = await refreshPeriodReviewJobForEvidence(run, { periodType:'monthly', periodCaseId:84,
+      evidenceHash:'new-monthly-sources', now:'2026-08-04 12:00:00' })
+
+    expect(result).toMatchObject({ jobType:'monthly_review', periodCaseId:84,
+      idempotencyKey:'monthly:84:new-monthly-sources' })
+    expect(state).toMatchObject({ status:'queued', idempotency_key:'monthly:84:new-monthly-sources', model_task_id:null })
+    expect(run.mock.calls[0][0]).toContain('model_task_id = NULL')
+    expect(run.mock.calls[0][1]).toEqual(['monthly:84:new-monthly-sources', '2026-08-04 12:00:00',
+      '2026-08-04 12:00:00', 84, 'monthly_review'])
+  })
+
+  it('refreshes an existing monthly case without a version only once after evidence persistence', () => {
+    expect(monthlyReviewJobRefreshStages({ id:84, current_version_id:null }, true, { id:9 }))
+      .toEqual({ rotateInTransaction:false, rotateAfterEvidence:true })
+    expect(monthlyReviewJobRefreshStages({ id:84, current_version_id:null }, true))
+      .toEqual({ rotateInTransaction:false, rotateAfterEvidence:false })
+    expect(monthlyReviewJobRefreshStages({ id:84, current_version_id:19 }, true))
+      .toEqual({ rotateInTransaction:true, rotateAfterEvidence:false })
+  })
+
+  it('accepts a mysql2 transaction ResultSetHeader tuple', async () => {
+    const run = vi.fn().mockResolvedValue([{ affectedRows:1 }, []])
+    const result = await refreshPeriodReviewJobForEvidence(run, { periodType:'monthly', periodCaseId:84,
+      evidenceHash:'tuple-evidence', now:'2026-08-04 12:00:00' })
+    expect(result).toMatchObject({ affectedRows:1, idempotencyKey:'monthly:84:tuple-evidence' })
+  })
+
+  it('fails closed when the evidence refresh cannot update its job row', async () => {
+    const run = vi.fn().mockResolvedValue({ affectedRows:0 })
+    await expect(refreshPeriodReviewJobForEvidence(run, { periodType:'daily', periodCaseId:42,
+      evidenceHash:'new-evidence', now:'2026-08-04 12:00:00' }))
+      .rejects.toThrow('period_review_job_refresh_conflict')
   })
 
   it('blocks a lost provider request and does not blindly resend it', async () => {

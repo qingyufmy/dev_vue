@@ -210,6 +210,46 @@ export function monthlyReviewSourceHash(rows = []) {
   return sha256(JSON.stringify(sources))
 }
 
+/**
+ * Rotate the business job key whenever a period review is rebuilt from a new
+ * evidence snapshot. The model-task id is detached alongside case
+ * invalidation; evidence JSON is persisted immediately afterwards, so this is
+ * a sequencing/fencing guard rather than one database transaction covering
+ * both writes.
+ */
+export async function refreshPeriodReviewJobForEvidence(run, {
+  periodType, periodCaseId, evidenceHash, now = beijingNow(),
+} = {}) {
+  if (typeof run !== 'function') throw new Error('period_review_job_transaction_required')
+  const normalizedType = String(periodType || '').toLowerCase()
+  const jobType = normalizedType === 'daily' ? 'daily_review'
+    : normalizedType === 'monthly' ? 'monthly_review' : null
+  const caseId = Number(periodCaseId)
+  const hash = String(evidenceHash || '').trim()
+  if (!jobType || !Number.isSafeInteger(caseId) || caseId <= 0 || !hash) {
+    throw new Error('period_review_job_evidence_identity_invalid')
+  }
+  const idempotencyKey = `${normalizedType}:${caseId}:${hash}`
+  const result = await run(`UPDATE period_review_jobs SET idempotency_key = ?, model_task_id = NULL,
+      status = 'queued', progress_stage = 'queued', stage_updated_at = ?, attempt_count = 0,
+      last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
+      completed_at = NULL, updated_at = ?
+      WHERE period_case_id = ? AND job_type = ? AND job_slot = 0`,
+  [idempotencyKey, now, now, caseId, jobType])
+  const resultHeader = Array.isArray(result) ? result[0] : result
+  const affectedRows = Number(resultHeader?.affectedRows ?? resultHeader?.changes ?? 0)
+  if (affectedRows !== 1) throw new Error('period_review_job_refresh_conflict')
+  return { idempotencyKey, jobType, periodCaseId:caseId,
+    affectedRows }
+}
+
+export function monthlyReviewJobRefreshStages(existingCase, sourceChanged, existingJob = null) {
+  const rotateInTransaction = Boolean(existingCase?.current_version_id && sourceChanged)
+  const rotateAfterEvidence = Boolean(existingCase && !rotateInTransaction
+    && !existingCase.current_version_id && sourceChanged && existingJob)
+  return { rotateInTransaction, rotateAfterEvidence }
+}
+
 function afterSeconds(seconds) {
   const date = new Date(Date.now() + (8 * 3600 + seconds) * 1000)
   return date.toISOString().replace('T', ' ').slice(0, 19)
@@ -653,9 +693,14 @@ async function upsertDailyGroup(group, clock) {
       evidenceHash: existingCase.evidence_hash, reused:true, refreshReason:refresh.reason }
     if (existingJob?.status === 'skipped' && !existingCase.current_version_id) {
       const now = beijingNow()
-      await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
-        attempt_count = 0, last_error_code = NULL, next_attempt_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`,
-      [now, now, existingJob.id])
+      if (existingCase.evidence_hash) {
+        await refreshPeriodReviewJobForEvidence(queryRun, { periodType:'daily', periodCaseId:existingCase.id,
+          evidenceHash:existingCase.evidence_hash, now })
+      } else {
+        await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
+          attempt_count = 0, last_error_code = NULL, model_task_id = NULL, next_attempt_at = NULL,
+          completed_at = NULL, updated_at = ? WHERE id = ?`, [now, now, existingJob.id])
+      }
       return { id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
         sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash, requeued:true }
     }
@@ -715,10 +760,8 @@ async function upsertDailyGroup(group, clock) {
         WHERE period_case_id = ? AND period_version_id = ? AND status NOT IN ('superseded')`, [now, existingCase.id, oldVersionId])
       await run(`UPDATE period_review_cases SET status = 'ready', current_version_id = NULL, approved_version_id = NULL,
         evidence_status = 'pending', evidence_reason = 'daily_evidence_changed', updated_at = ? WHERE id = ?`, [now, existingCase.id])
-      await run(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
-        attempt_count = 0, last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL,
-        next_attempt_at = NULL, completed_at = NULL, updated_at = ?
-        WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0`, [now, now, existingCase.id])
+      await refreshPeriodReviewJobForEvidence(run, { periodType:'daily', periodCaseId:existingCase.id,
+        evidenceHash, now })
     })
   }
   await queryRun(`INSERT INTO period_review_cases
@@ -785,45 +828,33 @@ async function upsertMonthlyGroup(group, clock) {
     ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
   [group.periodKey, group.userId, group.tradingAccountId, group.strategyId])
   let sourceChangedForExisting = false
+  let existingJob = null
   if (existingCase) {
     group.strategyVersion = Number(existingCase.strategy_version || group.strategyVersion || 1)
-    const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
+    existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
     const sourceChanged = monthlyReviewSourceHash(group.dailyCases) !== monthlyReviewSourceHash(existingEvidence.sources || [])
     sourceChangedForExisting = sourceChanged
     if (existingCase.current_version_id && !sourceChanged) return { id: Number(existingCase.id), periodKey: group.periodKey,
       sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, reused:true }
-    if (existingCase.current_version_id && sourceChanged) {
-      const now = beijingNow()
-      await withTransaction(async run => {
-        const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [existingCase.id])
-        if (!locked[0] || Number(locked[0].current_version_id || 0) !== Number(existingCase.current_version_id)) throw new Error('period_review_version_conflict')
-        const oldVersionId = Number(locked[0].approved_version_id || locked[0].current_version_id)
-        // Keep confirmed memories active until they are explicitly replaced
-        // or revoked. Review evidence lifecycle must not mutate memory policy.
-        await run(`UPDATE period_review_derivation_jobs SET status = 'superseded', lease_token = NULL,
-          lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
-          WHERE period_case_id = ? AND period_version_id = ? AND status NOT IN ('superseded')`, [now, existingCase.id, oldVersionId])
-        await run(`UPDATE period_review_cases SET status = 'ready', current_version_id = NULL, approved_version_id = NULL,
-          evidence_status = 'pending', evidence_reason = 'monthly_sources_changed', updated_at = ? WHERE id = ?`, [now, existingCase.id])
-        await run(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
-          attempt_count = 0, last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL,
-          next_attempt_at = NULL, completed_at = NULL, updated_at = ?
-          WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0`, [now, now, existingCase.id])
-      })
-    }
     if (existingJob?.status === 'skipped' && !existingCase.current_version_id) {
       const now = beijingNow()
-      await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
-        attempt_count = 0, last_error_code = NULL, next_attempt_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`,
-      [now, now, existingJob.id])
+      if (existingCase.evidence_hash) {
+        await refreshPeriodReviewJobForEvidence(queryRun, { periodType:'monthly', periodCaseId:existingCase.id,
+          evidenceHash:existingCase.evidence_hash, now })
+      } else {
+        await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
+          attempt_count = 0, last_error_code = NULL, model_task_id = NULL, next_attempt_at = NULL,
+          completed_at = NULL, updated_at = ? WHERE id = ?`, [now, now, existingJob.id])
+      }
       return { id:Number(existingCase.id), periodKey:group.periodKey, sourceCount:Number(existingCase.source_count || 0),
         evidenceHash:existingCase.evidence_hash, requeued:true }
     }
     if (!sourceChanged && existingJob) return { id: Number(existingCase.id), periodKey: group.periodKey,
       sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
   }
+  const refreshStages = monthlyReviewJobRefreshStages(existingCase, sourceChangedForExisting, existingJob)
   const sources = group.dailyCases.map(row => ({ period_case_id: Number(row.id), period_key: row.period_key,
     trading_account_id: Number(row.trading_account_id || 0), review_status: row.status,
     evidence_hash: row.evidence_hash, content_hash: row.current_content_hash,
@@ -844,6 +875,22 @@ async function upsertMonthlyGroup(group, clock) {
   }
   const evidenceHash = sha256(JSON.stringify(evidence))
   const now = beijingNow()
+  if (refreshStages.rotateInTransaction) {
+    await withTransaction(async run => {
+      const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [existingCase.id])
+      if (!locked[0] || Number(locked[0].current_version_id || 0) !== Number(existingCase.current_version_id || 0)) throw new Error('period_review_version_conflict')
+      const oldVersionId = Number(locked[0].approved_version_id || locked[0].current_version_id)
+      // Keep confirmed memories active until they are explicitly replaced
+      // or revoked. Review evidence lifecycle must not mutate memory policy.
+      if (oldVersionId > 0) await run(`UPDATE period_review_derivation_jobs SET status = 'superseded', lease_token = NULL,
+          lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
+          WHERE period_case_id = ? AND period_version_id = ? AND status NOT IN ('superseded')`, [now, existingCase.id, oldVersionId])
+      await run(`UPDATE period_review_cases SET status = 'ready', current_version_id = NULL, approved_version_id = NULL,
+        evidence_status = 'pending', evidence_reason = 'monthly_sources_changed', updated_at = ? WHERE id = ?`, [now, existingCase.id])
+      await refreshPeriodReviewJobForEvidence(run, { periodType:'monthly', periodCaseId:existingCase.id,
+        evidenceHash, now })
+    })
+  }
   await queryRun(`INSERT INTO period_review_cases
     (period_type, period_key, user_id, trading_account_id, strategy_id, strategy_version, strategy_versions_json, strategy_compatibility_hash, strategy_scope,
      timezone_offset_minutes, period_start_utc_msc, period_end_utc_msc, status, evidence_status,
@@ -869,12 +916,12 @@ async function upsertMonthlyGroup(group, clock) {
     await queryRun(`INSERT IGNORE INTO period_review_jobs
       (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
       VALUES (?, 'monthly_review', ?, 'queued', 0, 3, ?, ?)`, [periodCase.id, `monthly:${periodCase.id}:${evidenceHash}`, now, now])
-    if (sourceChangedForExisting || !existingCase) {
-      await queryRun(`UPDATE period_review_jobs SET idempotency_key = ?, model_task_id = NULL, status = 'queued',
-        progress_stage = 'queued', attempt_count = 0, last_error_code = NULL, lease_token = NULL,
-        lease_expires_at = NULL, next_attempt_at = NULL, completed_at = NULL, updated_at = ?
-        WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0`,
-      [`monthly:${periodCase.id}:${evidenceHash}`, now, periodCase.id])
+    // A source change with an existing version was already rotated in the
+    // transaction above. Rewriting the row again after the case becomes
+    // complete would race a worker that has just claimed the new job.
+    if (refreshStages.rotateAfterEvidence) {
+      await refreshPeriodReviewJobForEvidence(queryRun, { periodType:'monthly', periodCaseId:periodCase.id,
+        evidenceHash, now })
     }
   }
   return { id: Number(periodCase.id), periodKey: group.periodKey, sourceCount: sources.length, evidenceHash }
