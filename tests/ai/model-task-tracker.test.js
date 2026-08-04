@@ -56,6 +56,29 @@ describe('authoritative model task tracker', () => {
     await expect(tracker.stop()).rejects.toThrow('model_task_lease_lost')
   })
 
+  it('drains a renewal queued behind success without turning the terminal task into lease loss', async () => {
+    let releaseSuccess
+    const successGate = new Promise(resolve => { releaseSuccess = resolve })
+    runtime.transitionModelTask.mockImplementation(async (task, status) => {
+      if (status === 'succeeded') await successGate
+      return { ...task, status }
+    })
+    const tracker = await createModelTaskTracker({ taskKind:'daily_review', idempotencyKey:'daily:terminal-renew' }, {
+      renewIntervalMs:60_000,
+    })
+    const succeeded = tracker.succeeded({ resultRef:'review:1' })
+    await vi.waitFor(() => expect(runtime.transitionModelTask)
+      .toHaveBeenCalledWith(expect.any(Object), 'succeeded', { resultRef:'review:1' }))
+    const queuedRenewal = tracker.renewNow()
+    releaseSuccess()
+    await succeeded
+    const stopped = tracker.stop()
+    await expect(queuedRenewal).resolves.toBe(true)
+    await expect(stopped).resolves.toBeUndefined()
+    expect(runtime.renewModelTaskLease).not.toHaveBeenCalled()
+    expect(tracker.status).toBe('succeeded')
+  })
+
   it('rejects an existing active idempotent task before a second provider request can start', async () => {
     const requestModel = vi.fn()
     runtime.createModelTask.mockResolvedValueOnce({

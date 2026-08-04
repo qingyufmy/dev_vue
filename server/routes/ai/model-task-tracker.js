@@ -137,8 +137,13 @@ export async function createModelTaskTracker(input, {
   }
 
   const enqueue = operation => {
+    // Reject work submitted after stop(), while still allowing operations that
+    // were already accepted to drain. This is important for a lease renewal
+    // queued behind the final terminal transition.
+    if (stopped) return Promise.reject(trackerError('model_task_tracker_stopped'))
     const current = tail.then(async () => {
-      assertOwned()
+      if (fatalError) throw fatalError
+      controller.signal.throwIfAborted()
       try {
         const result = await operation()
         // stop() intentionally waits for the already queued operation. Do not
@@ -159,6 +164,9 @@ export async function createModelTaskTracker(input, {
   }
 
   const renewOnce = () => enqueue(async () => {
+    // A timer may have queued this renewal while the terminal transition was
+    // still in flight. The durable task no longer needs a lease once terminal.
+    if (TERMINAL_STATUSES.has(String(task.status || ''))) return true
     const renewed = await renewModelTaskLease(task, leaseMs)
     if (!renewed) throw trackerError('model_task_lease_lost')
     return true
