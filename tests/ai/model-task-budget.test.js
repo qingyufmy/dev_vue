@@ -16,6 +16,7 @@ describe('model task adaptive budget', () => {
       providerOutputCap:64000, contextWindowTokens:128000, estimatedInputTokens:70000, schemaNeedTokens:30000 })
     expect(complex.selectedMaxOutputTokens).toBe(30000)
     expect(complex.sufficient).toBe(true)
+    expect(complex.contextWindowTokens).toBe(128000)
   })
 
   it('does not impose a hidden 30000 ceiling above the database profile hard cap', () => {

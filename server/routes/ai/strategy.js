@@ -693,6 +693,8 @@ export async function handleAnalyze(userId, params, options = {}) {
   if (typeof options.onProviderUsage === 'function') config._onProviderUsage = options.onProviderUsage
   if (typeof options.onProviderActivity === 'function') config._onProviderActivity = options.onProviderActivity
   if (typeof options.onProviderQuiet === 'function') config._onProviderQuiet = options.onProviderQuiet
+  const onInferencePrepared = typeof options.onInferencePrepared === 'function'
+    ? options.onInferencePrepared : null
   const prompt = strategy.system_prompt || ''
   const tags = policy.marketDataPlan.timeframes.map(item => ({ tf: item.timeframe, count: item.kline_count }))
 
@@ -797,7 +799,10 @@ export async function handleAnalyze(userId, params, options = {}) {
     config._memoryMode = strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off')
   }
   let renderedEvidence = null
-  if (config) config._onInferencePrepared = evidence => { renderedEvidence = evidence }
+  if (config) config._onInferencePrepared = async evidence => {
+    renderedEvidence = evidence
+    await onInferencePrepared?.(evidence)
+  }
   let signal
   try {
     signal = await maybeAiSignal(null, config, market, prompt)

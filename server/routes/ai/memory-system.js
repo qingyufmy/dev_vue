@@ -1004,6 +1004,7 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
       return true
     } })
     job._modelTracker = tracker
+    await tracker.persistBudget(modelCall.budget)
     const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider, model: resolved.model.model_name,
       temperature: 0.1, maxTokens:modelCall.budget.selectedMaxOutputTokens, thinkingEnabled: resolved.model.thinking_enabled,
       reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,

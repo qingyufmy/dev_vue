@@ -992,7 +992,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     })
     const requestDeadlineAtMs = Math.min(deadlines.attemptSafetyDeadlineUtcMs, deadlines.taskDeadlineUtcMs)
     if (typeof config._onInferencePrepared === 'function') {
-      config._onInferencePrepared({
+      await config._onInferencePrepared({
         systemPrompt: cleanPrompt,
         userPrompt: renderedUserPrompt,
         outputSchemaVersion: config._comparison_replay_output_schema_version || sha256(outputFormat),

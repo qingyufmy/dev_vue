@@ -1,5 +1,5 @@
 import { beginModelTaskAttempt, claimModelTaskById, createModelTask, finishModelTaskAttempt,
-  renewModelTaskLease, transitionModelTask } from './model-task-runtime.js'
+  persistModelTaskBudget, renewModelTaskLease, transitionModelTask } from './model-task-runtime.js'
 import { classifyModelProviderError } from './model-provider-adapters.js'
 
 const CLAIMABLE_STATUSES = new Set(['queued', 'retry_wait'])
@@ -206,6 +206,10 @@ export async function createModelTaskTracker(input, {
     signal:controller.signal,
     assertOwned,
     assertOwnedTx,
+    persistBudget:budget => enqueue(async () => {
+      task = await persistModelTaskBudget(task, budget)
+      return task
+    }),
     renewNow:renewOnce,
     onProviderRequest:event => enqueue(async () => {
       if (task.status === 'response_received') task = await transitionModelTask(task, 'validating')
@@ -273,6 +277,7 @@ export async function createModelTaskTracker(input, {
         inputTokens:event?.inputTokens, outputTokens:event?.outputTokens,
         reasoningTokens:event?.reasoningTokens, cachedTokens:event?.cachedTokens,
         totalTokens:event?.totalTokens || event?.tokenCount,
+        requestBytes:event?.requestBytes, responseBytes:event?.responseBytes,
         finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails,
         errorCode:event?.errorCode,
       })

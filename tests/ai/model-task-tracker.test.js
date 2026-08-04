@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const runtime = vi.hoisted(() => ({
   createModelTask:vi.fn(), claimModelTaskById:vi.fn(), transitionModelTask:vi.fn(),
   renewModelTaskLease:vi.fn(), beginModelTaskAttempt:vi.fn(), finishModelTaskAttempt:vi.fn(),
+  persistModelTaskBudget:vi.fn(),
 }))
 
 vi.mock('../../server/routes/ai/model-task-runtime.js', () => runtime)
@@ -20,6 +21,7 @@ function setupRuntime() {
   runtime.renewModelTaskLease.mockResolvedValue(true)
   runtime.beginModelTaskAttempt.mockResolvedValue({ id:11, task_id:'task-1', attempt_no:1, fencing_token:1 })
   runtime.finishModelTaskAttempt.mockResolvedValue(undefined)
+  runtime.persistModelTaskBudget.mockImplementation(async (task, budget) => ({ ...task, ...budget }))
 }
 
 describe('authoritative model task tracker', () => {
@@ -34,6 +36,15 @@ describe('authoritative model task tracker', () => {
     await expect(createModelTaskTracker({ taskKind:'daily_review', idempotencyKey:'daily:1' }))
       .rejects.toThrow('event_insert_failed')
     expect(runtime.claimModelTaskById).not.toHaveBeenCalled()
+  })
+
+  it('serializes a fenced budget write before provider callbacks', async () => {
+    const tracker = await createModelTaskTracker({ taskKind:'daily_review', idempotencyKey:'daily:budget' }, { renewIntervalMs:60_000 })
+    await tracker.persistBudget({ estimatedInputTokens:100, selectedMaxOutputTokens:200, contextWindowTokens:4096 })
+    expect(runtime.persistModelTaskBudget).toHaveBeenCalledWith(expect.objectContaining({
+      task_id:'task-1', lease_token:'lease-1', fencing_token:1,
+    }), expect.objectContaining({ selectedMaxOutputTokens:200 }))
+    await tracker.stop()
   })
 
   it('remembers lease renewal failure and surfaces it through ownership and stop', async () => {

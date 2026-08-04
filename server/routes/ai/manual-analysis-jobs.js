@@ -5,7 +5,7 @@ import { getStrategyById } from './strategy-ownership.js'
 import { getAnalyzeApiKey } from './config.js'
 import { modelTaskDeadlines } from './model-task-budget.js'
 import { beginModelTaskAttempt, claimModelTaskById, createModelTask,
-  finishModelTaskAttempt, renewModelTaskLease, transitionModelTask,
+  finishModelTaskAttempt, persistModelTaskBudget, renewModelTaskLease, transitionModelTask,
   cancelModelTaskById, markModelTaskStatusUnknownById,
   markModelTaskSucceededFromResult, markModelTaskCompletedStaleById } from './model-task-runtime.js'
 
@@ -515,6 +515,10 @@ async function processManualAnalysisJob(jobId) {
         taskId:String(job.model_task_id), abortSignal:controller.signal, assertCanApply, assertCanApplyTx,
         taskDeadlineAtUtcMs:Number(task.task_deadline_at_utc_msc) || Number(job.deadline_at_utc_msc) || null,
         resultValidUntilUtcMs:Number(task.result_valid_until_utc_msc) || Number(job.deadline_at_utc_msc) || null,
+        onInferencePrepared:async evidence => {
+          await assertCanApply()
+          task = await persistModelTaskBudget(task, evidence?.modelTaskBudget)
+        },
         onProviderRequest:async event => {
           await assertCanApply()
           if (task.status === 'response_received') task = await transitionModelTask(task, 'validating')
@@ -539,6 +543,7 @@ async function processManualAnalysisJob(jobId) {
             await finishModelTaskAttempt(task, attempt, { status:event?.status === 'success' ? 'succeeded' : 'failed', providerRequestId:event?.providerRequestId,
               inputTokens:event?.inputTokens, outputTokens:event?.outputTokens, reasoningTokens:event?.reasoningTokens,
               cachedTokens:event?.cachedTokens, totalTokens:event?.totalTokens || event?.tokenCount,
+              requestBytes:event?.requestBytes, responseBytes:event?.responseBytes,
               finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails, errorCode:event?.errorCode })
             attempt = null
           }

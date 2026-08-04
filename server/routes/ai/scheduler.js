@@ -1624,6 +1624,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
   let previousOnProviderUsage = null
   let previousOnProviderActivity = null
   let previousOnProviderQuiet = null
+  let previousOnInferencePrepared = null
   let previousAbortSignal = null
   const finishModelTaskAfterSignalGate = async (type, reason) => {
     if (modelTaskSettled || !modelTaskTracker) return
@@ -1855,6 +1856,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     previousOnProviderUsage = config._onProviderUsage
     previousOnProviderActivity = config._onProviderActivity
     previousOnProviderQuiet = config._onProviderQuiet
+    previousOnInferencePrepared = config._onInferencePrepared
     previousAbortSignal = config._abortSignal || null
     if (modelTaskTracker.signal) {
       config._abortSignal = previousAbortSignal
@@ -1892,9 +1894,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     const t3 = Date.now()
     l(`calling AI (model=${config.model_name}, thinking=${config.thinking_enabled !== false}, effort=${config.reasoning_effort || 'max'})...`)
     let renderedEvidence = null
-    config._onInferencePrepared = evidence => { renderedEvidence = evidence }
+    config._onInferencePrepared = async evidence => {
+      renderedEvidence = evidence
+      await previousOnInferencePrepared?.(evidence)
+      await modelTaskTracker.persistBudget(evidence?.modelTaskBudget)
+    }
     let signal = await maybeAiSignal(null, config, market)
-    delete config._onInferencePrepared
+    if (previousOnInferencePrepared) config._onInferencePrepared = previousOnInferencePrepared
+    else delete config._onInferencePrepared
     market.inference_source = signal._inference_source || 'unknown'
     const aiSource = signal._inference_source
     delete signal._inference_source
@@ -2264,6 +2271,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       else delete config._onProviderActivity
       if (previousOnProviderQuiet) config._onProviderQuiet = previousOnProviderQuiet
       else delete config._onProviderQuiet
+      if (previousOnInferencePrepared) config._onInferencePrepared = previousOnInferencePrepared
+      else delete config._onInferencePrepared
       if (previousAbortSignal) config._abortSignal = previousAbortSignal
       else delete config._abortSignal
     }

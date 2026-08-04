@@ -1398,6 +1398,7 @@ async function generateDailyReview(job, requestModel) {
   job._attemptDeadlineAtMs = modelCall.attemptSafetyDeadlineUtcMs
   job._modelBudget = modelCall.budget
   const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'daily_review')
+  await tracker.persistBudget(modelCall.budget)
   const requestSignal = job._abortSignal && tracker.signal
     ? AbortSignal.any([job._abortSignal, tracker.signal])
     : tracker.signal || job._abortSignal || null
@@ -1587,6 +1588,7 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
   job._modelBudget = modelCall.budget
   const tracker = await startMonthlyReviewChunkModelTask(job, resolved, endpoint, checkpoint, chunk)
   job._modelTracker = tracker
+  await tracker.persistBudget(modelCall.budget)
   const requestSignal = [job._abortSignal, checkpointLease.signal, tracker.signal].filter(Boolean).length > 1
     ? AbortSignal.any([job._abortSignal, checkpointLease.signal, tracker.signal].filter(Boolean))
     : tracker.signal || checkpointLease.signal || job._abortSignal || null
@@ -1679,6 +1681,7 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
   job._modelBudget = modelCall.budget
   const tracker = await startPeriodReviewModelTask(job, resolved, endpoint,
     verifiedMonthlyMergeEvidence(evidence, checkpointResult), 'monthly_review_merge')
+  await tracker.persistBudget(modelCall.budget)
   const requestSignal = job._abortSignal && tracker.signal
     ? AbortSignal.any([job._abortSignal, tracker.signal]) : tracker.signal || job._abortSignal || null
   const output = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted, provider:resolved.model.provider,

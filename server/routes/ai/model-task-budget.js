@@ -43,6 +43,7 @@ export function selectModelTaskBudget({ taskKind, profileHardCap, providerOutput
     schemaNeedTokens:schemaNeed,
     estimatedInputTokens:Math.max(0, Math.trunc(Number(estimatedInputTokens) || 0)),
     contextRoomTokens:Number.isFinite(contextRoom) ? contextRoom : null,
+    contextWindowTokens:contextWindow,
     profileHardCap:profileCap,
     providerOutputCap:Number.isFinite(providerCap) ? providerCap : null,
     taskCap:null,

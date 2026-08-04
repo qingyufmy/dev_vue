@@ -130,6 +130,35 @@ export async function renewModelTaskLease(task, leaseMs = 120_000) {
   return Number(result?.affectedRows ?? result?.changes ?? 0) === 1
 }
 
+export async function persistModelTaskBudget(task, budget = {}) {
+  const now = Date.now()
+  const estimatedInputTokens = Math.max(0, Math.trunc(Number(budget.estimatedInputTokens) || 0))
+  const selectedOutputBudget = Math.max(0, Math.trunc(Number(budget.selectedMaxOutputTokens) || 0))
+  if (!selectedOutputBudget) throw new Error('model_task_budget_invalid')
+  const schemaNeedTokens = Math.max(0, Math.trunc(Number(budget.schemaNeedTokens) || 0))
+  const contextWindowTokens = Number(budget.contextWindowTokens) > 0
+    ? Math.trunc(Number(budget.contextWindowTokens)) : null
+  const providerOutputCap = Number(budget.providerOutputCap) > 0
+    ? Math.trunc(Number(budget.providerOutputCap)) : null
+  const result = await queryRun(`UPDATE ai_model_tasks SET estimated_input_tokens = ?,
+    selected_output_budget = ?, schema_need_tokens = ?, context_window_tokens = ?,
+    provider_output_cap = ?, last_activity_at_utc_msc = ?, updated_at_utc_msc = ?
+    WHERE task_id = ? AND lease_token = ? AND fencing_token = ?
+      AND status = 'preparing'`,
+  [estimatedInputTokens, selectedOutputBudget, schemaNeedTokens, contextWindowTokens,
+    providerOutputCap, now, now, task.task_id, task.lease_token, Number(task.fencing_token)])
+  if (Number(result?.affectedRows ?? result?.changes ?? 0) !== 1) throw new Error('model_task_fence_lost')
+  const persisted = {
+    estimatedInputTokens,
+    selectedMaxOutputTokens:selectedOutputBudget,
+    schemaNeedTokens,
+    contextWindowTokens,
+    providerOutputCap,
+  }
+  await appendModelTaskEvent(task.task_id, 'budget_persisted', persisted)
+  return { ...task, ...persisted }
+}
+
 export async function transitionModelTask(task, toStatus, patch = {}) {
   assertModelTaskTransition(task.status, toStatus)
   const now = Date.now()
@@ -169,12 +198,13 @@ export async function finishModelTaskAttempt(task, attempt, patch = {}) {
   const result = await queryRun(`UPDATE ai_model_task_attempts SET status = ?, provider_request_id = COALESCE(?, provider_request_id),
     response_received_at_utc_msc = ?, last_activity_at_utc_msc = ?, input_tokens = ?, output_tokens = ?,
     reasoning_tokens = ?, cached_tokens = ?, total_tokens = ?, finish_reason = ?, incomplete_details_json = ?,
-    http_status = ?, error_code = ?, error_message = ?, updated_at_utc_msc = ?
+    request_bytes = ?, response_bytes = ?, http_status = ?, error_code = ?, error_message = ?, updated_at_utc_msc = ?
     WHERE id = ? AND task_id = ? AND fencing_token = ?`,
   [patch.status || 'succeeded', patch.providerRequestId || null, now, now,
     Number(patch.inputTokens) || 0, Number(patch.outputTokens) || 0, Number(patch.reasoningTokens) || 0,
     Number(patch.cachedTokens) || 0, Number(patch.totalTokens) || 0, patch.finishReason || null,
-    json(patch.incompleteDetails), Number(patch.httpStatus) || null, patch.errorCode || null,
+    json(patch.incompleteDetails), Math.max(0, Number(patch.requestBytes) || 0),
+    Math.max(0, Number(patch.responseBytes) || 0), Number(patch.httpStatus) || null, patch.errorCode || null,
     patch.errorMessage || null, now, attempt.id, task.task_id, Number(task.fencing_token)])
   if (Number(result?.affectedRows ?? result?.changes ?? 0) !== 1) throw new Error('model_task_attempt_fence_lost')
   await appendModelTaskEvent(task.task_id, 'attempt_finished', patch, attempt.id)

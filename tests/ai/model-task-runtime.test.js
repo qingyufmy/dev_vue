@@ -11,7 +11,8 @@ vi.mock('../../server/db.js', () => ({
 }))
 
 import { assertModelTaskTransition, canTransitionModelTask, createModelTask,
-  markModelTaskCompletedStaleById, markModelTaskSucceededFromResult,
+  finishModelTaskAttempt, markModelTaskCompletedStaleById, markModelTaskSucceededFromResult,
+  persistModelTaskBudget,
   recoverAbandonedAutoInferenceTasks, recoverAbandonedBusinessModelTasks, renewModelTaskLease,
   transitionModelTask } from '../../server/routes/ai/model-task-runtime.js'
 
@@ -39,6 +40,45 @@ describe('model task runtime state and fencing', () => {
     mockQueryRun.mockResolvedValueOnce({ affectedRows:1 })
     await expect(renewModelTaskLease({ task_id:'task-1', lease_token:'lease-1', fencing_token:4 }, 120000)).resolves.toBe(true)
     expect(mockQueryRun.mock.calls[0][1].slice(-3)).toEqual(['task-1', 'lease-1', 4])
+  })
+
+  it('persists the selected budget only for the current lease and fencing generation', async () => {
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:1 }).mockResolvedValueOnce({ affectedRows:1 })
+    const task = { task_id:'task-budget', status:'preparing', lease_token:'lease-budget', fencing_token:8 }
+    await expect(persistModelTaskBudget(task, {
+      estimatedInputTokens:321, selectedMaxOutputTokens:2048, schemaNeedTokens:1500,
+      contextWindowTokens:16384, providerOutputCap:4096,
+    })).resolves.toMatchObject({ estimatedInputTokens:321, selectedMaxOutputTokens:2048 })
+    expect(mockQueryRun.mock.calls[0][0]).toContain('estimated_input_tokens = ?')
+    expect(mockQueryRun.mock.calls[0][0]).toContain('task_id = ? AND lease_token = ? AND fencing_token = ?')
+    expect(mockQueryRun.mock.calls[0][1].slice(-3)).toEqual(['task-budget', 'lease-budget', 8])
+    expect(mockQueryRun.mock.calls[1][1]).toContain('budget_persisted')
+  })
+
+  it('fails closed when the fenced budget update affects no row', async () => {
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:0 })
+    await expect(persistModelTaskBudget({ task_id:'task-stale', lease_token:'old', fencing_token:2 }, {
+      estimatedInputTokens:1, selectedMaxOutputTokens:2,
+    })).rejects.toThrow('model_task_fence_lost')
+    expect(mockQueryRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a missing output budget before touching the task row', async () => {
+    await expect(persistModelTaskBudget({ task_id:'task-budget' }, {
+      estimatedInputTokens:100, selectedMaxOutputTokens:0,
+    })).rejects.toThrow('model_task_budget_invalid')
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('writes request and response bytes when finishing an attempt', async () => {
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:1 }).mockResolvedValueOnce({ affectedRows:1 })
+    await expect(finishModelTaskAttempt(
+      { task_id:'task-bytes', fencing_token:5 }, { id:19 },
+      { status:'succeeded', requestBytes:1234, responseBytes:5678, inputTokens:12, outputTokens:34 },
+    )).resolves.toBeUndefined()
+    expect(mockQueryRun.mock.calls[0][0]).toContain('request_bytes = ?, response_bytes = ?')
+    expect(mockQueryRun.mock.calls[0][1]).toContain(1234)
+    expect(mockQueryRun.mock.calls[0][1]).toContain(5678)
   })
 
   it('rejects a stale worker result when the fencing update affects no row', async () => {

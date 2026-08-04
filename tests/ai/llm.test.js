@@ -858,6 +858,30 @@ describe('maybeAiSignal', () => {
     vi.clearAllMocks()
   })
 
+  it('waits for inference preparation persistence before sending the provider request', async () => {
+    mockFetch.mockResolvedValue({
+      ok:true,
+      json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify({
+        signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+        analysis:'等待', reasoning:'预算记录完成',
+      }) } }] }),
+    })
+    let release
+    const persisted = new Promise(resolve => { release = resolve })
+    const request = maybeAiSignal(null, {
+      api_key_encrypted:'test-key', api_provider:'deepseek', model_name:'deepseek-chat',
+      _onInferencePrepared:async evidence => {
+        expect(evidence.modelTaskBudget.selectedMaxOutputTokens).toBeGreaterThan(0)
+        await persisted
+      },
+    }, { symbol:'XAUUSD', timeframe:'M5', latest_price:2000, strategy_context:{ timeframes:{} } })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(mockFetch).not.toHaveBeenCalled()
+    release()
+    await request
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
   it('无配置返回 hold', async () => {
     const market = { symbol: 'XAUUSD', timeframe: 'M5' }
     const result = await maybeAiSignal(null, null, market)
