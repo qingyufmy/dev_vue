@@ -5,6 +5,38 @@ export const MODEL_PROVIDER_CAPABILITY_KEYS = Object.freeze([
   'supports_idempotency', 'supports_structured_output', 'supports_usage_split',
 ])
 
+// These are the only provider endpoints that the service can attest to at
+// runtime without an administrator having verified a model profile.  The
+// exact hostname, protocol and provider are all part of the match on purpose:
+// a proxy, gateway or OpenAI-compatible provider must never inherit the
+// official provider's streaming contract by accident.
+const BUILTIN_VERIFIED_ENDPOINTS = Object.freeze([
+  { provider:'deepseek', protocol:'chat_completions', hostname:'api.deepseek.com' },
+  { provider:'volcengine_agent_plan', protocol:'responses', hostname:'ark.cn-beijing.volces.com' },
+])
+
+function builtinCapabilityFor({ provider, protocol, url } = {}) {
+  let parsed
+  try { parsed = new URL(String(url || '')) } catch { return null }
+  if (parsed.protocol !== 'https:') return null
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '')
+  const matched = BUILTIN_VERIFIED_ENDPOINTS.find(item => item.provider === provider
+    && item.protocol === protocol && item.hostname === hostname)
+  if (!matched) return null
+  return {
+    ...Object.fromEntries(MODEL_PROVIDER_CAPABILITY_KEYS.map(key => [key, false])),
+    supports_stream:true,
+    supports_request_id:true,
+    context_window_tokens:null,
+    max_output_tokens:null,
+    verified_at_utc_msc:null,
+    verification_status:'verified',
+    capability_source:'builtin_verified',
+    provider:matched.provider,
+    protocol:matched.protocol,
+  }
+}
+
 export function normalizeProviderCapabilities(row = {}) {
   const verificationStatus = String(row.verification_status || 'unverified')
   const isVerified = verificationStatus === 'verified'
@@ -15,6 +47,7 @@ export function normalizeProviderCapabilities(row = {}) {
     max_output_tokens:isVerified && Number(row.max_output_tokens) > 0 ? Number(row.max_output_tokens) : null,
     verified_at_utc_msc:Number(row.verified_at_utc_msc) > 0 ? Number(row.verified_at_utc_msc) : null,
     verification_status:verificationStatus,
+    ...(row.capability_source ? { capability_source:String(row.capability_source) } : {}),
   }
 }
 
@@ -24,6 +57,29 @@ export async function getModelProviderCapabilities(modelProfileId) {
     WHERE model_profile_id = ? LIMIT 1`, [Number(modelProfileId)])
   return normalizeProviderCapabilities(row || {})
 }
+
+/**
+ * Resolve capabilities at the point a request is built.  A verified database
+ * row is authoritative, including an explicit `supports_stream = 0`.  When a
+ * profile has no verified row, only the two exact official HTTPS endpoints
+ * above receive the small builtin attestation.  No token limits are inferred
+ * for builtin capabilities.
+ */
+export async function resolveModelProviderCapabilities({
+  modelProfileId = null, provider = null, protocol = null, url = null,
+} = {}) {
+  let profileCapabilities = normalizeProviderCapabilities()
+  if (Number(modelProfileId)) profileCapabilities = await getModelProviderCapabilities(modelProfileId)
+  if (profileCapabilities.verification_status === 'verified') {
+    return { ...profileCapabilities, capability_source:profileCapabilities.capability_source || 'db_verified' }
+  }
+  return builtinCapabilityFor({ provider, protocol, url }) || profileCapabilities
+}
+
+// Small aliases make the runtime resolver discoverable to call sites that
+// describe this as a provider capability lookup rather than a profile lookup.
+export const resolveRuntimeModelProviderCapabilities = resolveModelProviderCapabilities
+export const builtinModelProviderCapabilities = builtinCapabilityFor
 
 export async function saveModelProviderCapabilities(modelProfileId, capabilities, actorUserId) {
   const normalized = normalizeProviderCapabilities({ ...capabilities,

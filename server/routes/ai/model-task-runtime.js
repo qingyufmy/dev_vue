@@ -210,6 +210,37 @@ export async function finishModelTaskAttempt(task, attempt, patch = {}) {
   await appendModelTaskEvent(task.task_id, 'attempt_finished', patch, attempt.id)
 }
 
+/**
+ * Persist provider activity without allowing a stale worker/fencing generation
+ * to refresh a task that it no longer owns.  The tracker deliberately calls
+ * this at a bounded cadence (with the first byte forced through immediately),
+ * while every call remains fenced against both the task and attempt rows.
+ */
+export async function touchModelTaskActivity(task, attempt, {
+  firstByte = false, lastActivityAtUtcMs = Date.now(),
+} = {}) {
+  if (!task?.task_id || !attempt?.id) throw new Error('model_task_activity_attempt_missing')
+  const now = Number(lastActivityAtUtcMs) > 0 ? Number(lastActivityAtUtcMs) : Date.now()
+  const attemptResult = await queryRun(`UPDATE ai_model_task_attempts SET
+      first_byte_at_utc_msc = CASE WHEN ? = 1 THEN COALESCE(first_byte_at_utc_msc, ?) ELSE first_byte_at_utc_msc END,
+      last_activity_at_utc_msc = ?, updated_at_utc_msc = ?
+    WHERE id = ? AND task_id = ? AND fencing_token = ?`,
+  [firstByte ? 1 : 0, now, now, now, attempt.id, task.task_id, Number(task.fencing_token)])
+  if (Number(attemptResult?.affectedRows ?? attemptResult?.changes ?? 0) !== 1) {
+    throw new Error('model_task_attempt_fence_lost')
+  }
+  const taskResult = await queryRun(`UPDATE ai_model_tasks SET last_activity_at_utc_msc = ?, updated_at_utc_msc = ?
+    WHERE task_id = ? AND lease_token = ? AND fencing_token = ?
+      AND status NOT IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')`,
+  [now, now, task.task_id, task.lease_token, Number(task.fencing_token)])
+  if (Number(taskResult?.affectedRows ?? taskResult?.changes ?? 0) !== 1) {
+    throw new Error('model_task_fence_lost')
+  }
+  return { firstByte:Boolean(firstByte), lastActivityAtUtcMs:now }
+}
+
+export const touchModelTaskProviderActivity = touchModelTaskActivity
+
 export async function listRecoverableModelTasks(limit = 100) {
   return queryAll(`SELECT * FROM ai_model_tasks WHERE status IN
     ('leased','preparing','submitted','provider_running','provider_quiet','status_unknown','reconciling',

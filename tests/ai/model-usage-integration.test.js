@@ -23,6 +23,13 @@ import { requestJsonObject } from '../../server/routes/ai/llm.js'
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
+function streamBody(parts) {
+  const encoder = new TextEncoder()
+  return { async *[Symbol.asyncIterator]() {
+    for (const part of parts) yield encoder.encode(part)
+  } }
+}
+
 const usageContext = {
   userId: 7,
   profileId: 10,
@@ -75,6 +82,33 @@ describe('provider-call usage integration', () => {
       temperature:0.3, maxTokens:500, messages:[], usageContext,
     })).rejects.toThrow('socket_reset')
     expect(capacity.retain).toHaveBeenCalledWith(expect.objectContaining({ leaseId:'lease-unknown' }), expect.objectContaining({ reason:'provider_response_unknown' }))
+  })
+
+  it('retains capacity after stream headers when the provider disconnects before terminal', async () => {
+    mockFetch.mockResolvedValueOnce({ ok:true, status:200, headers:{ get:() => 'req-stream' },
+      body:streamBody(['data: {"id":"req-stream","choices":[{"delta":{"content":"{"}}]}\n\n']) })
+    await expect(requestJsonObject({
+      url:'https://api.deepseek.com/chat/completions', provider:'deepseek', apiKey:'test-key', model:'deepseek-chat',
+      temperature:0.3, maxTokens:500, messages:[], usageContext,
+    })).rejects.toMatchObject({ code:'provider_sse_terminal_missing' })
+    expect(capacity.release).not.toHaveBeenCalled()
+    expect(capacity.retain).toHaveBeenCalledWith(expect.objectContaining({ leaseId:'capacity-lease' }),
+      expect.objectContaining({ reason:'provider_response_unknown' }))
+  })
+
+  it('releases capacity only after a terminal stream event', async () => {
+    mockFetch.mockResolvedValueOnce({ ok:true, status:200, headers:{ get:() => 'req-stream' },
+      body:streamBody([
+        'data: {"id":"req-stream","choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}\n\n',
+        'data: {"choices":[{"finish_reason":"stop"}],"usage":{"total_tokens":3}}\n\n',
+        'data: [DONE]\n\n',
+      ]) })
+    await requestJsonObject({
+      url:'https://api.deepseek.com/chat/completions', provider:'deepseek', apiKey:'test-key', model:'deepseek-chat',
+      temperature:0.3, maxTokens:500, messages:[], usageContext,
+    })
+    expect(capacity.release).toHaveBeenCalledWith(expect.objectContaining({ leaseId:'capacity-lease' }), 'provider_stream_terminal')
+    expect(capacity.retain).not.toHaveBeenCalled()
   })
 
   it('logs the exact UTF-8 request size for automatic provider calls without exposing content', async () => {

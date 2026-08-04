@@ -14,7 +14,7 @@ import { buildPositionManagementOutputFormat, hasActivePositionManagementGroups,
   validatePositionManagementResponse } from './position-management.js'
 import { assertModelQuotaAvailable, buildModelQuotaCircuitContext, deferModelQuotaProbe,
   recordModelQuotaExhausted, recordModelQuotaRecovered } from './model-quota-circuit.js'
-import { getModelProviderCapabilities } from './model-provider-capabilities.js'
+import { resolveModelProviderCapabilities } from './model-provider-capabilities.js'
 import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
 import { acquireModelTaskCapacity, retainModelTaskCapacityLease, releaseModelTaskCapacityLease } from './model-task-capacity.js'
 
@@ -286,7 +286,8 @@ function usesNativeJsonMode(provider, protocol) {
     || (provider === 'volcengine_agent_plan' && protocol === 'responses')
 }
 
-function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort }) {
+function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort,
+  supportsStream = false }) {
   if (protocol === 'responses') {
     const instructions = messages
       .filter(message => message.role === 'system')
@@ -297,6 +298,7 @@ function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens
       .filter(message => message.role !== 'system')
       .map(message => ({ role: message.role, content: String(message.content || '') }))
     const body = { model, input, max_output_tokens: maxTokens }
+    if (supportsStream) body.stream = true
     if (instructions) body.instructions = instructions
     // Ark Agent Plan follows the Responses API structured-output contract.
     // Keep this provider-scoped: other Responses-compatible gateways may
@@ -313,6 +315,10 @@ function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens
   }
 
   const body = { model, messages }
+  if (supportsStream) {
+    body.stream = true
+    body.stream_options = { include_usage:true }
+  }
   // DeepSeek's JSON Output contract guarantees syntactically valid JSON when
   // the prompt also explicitly requests JSON (our inference prompt does).
   if (provider === 'deepseek') {
@@ -448,10 +454,220 @@ function logAutomaticModelRequest({ usageContext, phase, body, requestBytes }) {
   )
 }
 
+// Provider streams are untrusted input. Keep the parser deliberately small and
+// bounded so a broken gateway cannot grow an in-memory buffer indefinitely.
+export const MODEL_PROVIDER_SSE_LIMITS = Object.freeze({
+  maxEvents:20_000,
+  maxBytes:16 * 1024 * 1024,
+  maxLineBytes:256 * 1024,
+})
+
+function providerStreamError(code, detail = '') {
+  const error = new Error(detail ? `${code}:${detail}` : code)
+  error.code = code
+  return error
+}
+
+function parseSseField(line) {
+  if (line.startsWith(':')) return { comment:true }
+  const separator = line.indexOf(':')
+  const field = separator < 0 ? line : line.slice(0, separator)
+  const value = separator < 0 ? '' : line.slice(separator + 1).replace(/^ /, '')
+  if (!['data', 'event'].includes(field)) throw providerStreamError('provider_sse_malformed', `field:${field}`)
+  return { field, value }
+}
+
+/**
+ * Read one provider SSE response and call `onEvent` for every valid event.
+ * The callback may be async and is intentionally awaited before accepting the
+ * next event, which makes a failed fenced activity update stop the stream.
+ */
+export async function parseProviderSseResponse(response, {
+  protocol = 'chat_completions', onEvent = null, limits = MODEL_PROVIDER_SSE_LIMITS,
+} = {}) {
+  const body = response?.body
+  const reader = body?.getReader?.()
+  const iterator = !reader && body && typeof body[Symbol.asyncIterator] === 'function'
+    ? body[Symbol.asyncIterator]() : null
+  if (!reader && !iterator) throw providerStreamError('provider_sse_body_unavailable')
+
+  const maxEvents = Math.max(1, Number(limits?.maxEvents) || MODEL_PROVIDER_SSE_LIMITS.maxEvents)
+  const maxBytes = Math.max(1, Number(limits?.maxBytes) || MODEL_PROVIDER_SSE_LIMITS.maxBytes)
+  const maxLineBytes = Math.max(1, Number(limits?.maxLineBytes) || MODEL_PROVIDER_SSE_LIMITS.maxLineBytes)
+  const decoder = new TextDecoder('utf-8', { fatal:true })
+  let responseBytes = 0
+  let lineBuffer = ''
+  let eventType = ''
+  let dataLines = []
+  let eventCount = 0
+  let terminal = false
+  let terminalEvent = null
+  let chat = {
+    id:null,
+    object:'chat.completion',
+    choices:[{ index:0, message:{ role:'assistant', content:'', reasoning_content:'' }, finish_reason:null }],
+    usage:null,
+  }
+  let responseData = null
+  let responseText = ''
+  let responseUsage = null
+
+  const appendLine = async line => {
+    const lineBytes = Buffer.byteLength(line, 'utf8')
+    if (lineBytes > maxLineBytes) throw providerStreamError('provider_sse_line_too_large')
+    if (line === '') {
+      if (!dataLines.length && !eventType) return
+      const rawData = dataLines.join('\n')
+      if (!rawData) throw providerStreamError('provider_sse_malformed', 'empty_data')
+      if (++eventCount > maxEvents) throw providerStreamError('provider_sse_event_limit_exceeded')
+      const explicitDone = rawData.trim() === '[DONE]'
+      let parsed = null
+      if (!explicitDone) {
+        try { parsed = JSON.parse(rawData) } catch { throw providerStreamError('provider_sse_invalid_json') }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw providerStreamError('provider_sse_invalid_event')
+        }
+      }
+      const inferredType = String(eventType || parsed?.type || '').trim()
+      const event = { eventType:inferredType, data:parsed, rawData, done:explicitDone, responseBytes }
+      if (typeof onEvent === 'function') await onEvent(event)
+
+      if (explicitDone) {
+        terminal = true
+        terminalEvent = event
+      } else if (protocol === 'responses') {
+        const type = inferredType || String(parsed?.type || '').trim()
+        if (type === 'error' || type === 'response.error') {
+          const error = providerStreamError('provider_stream_error', String(parsed?.error?.message || parsed?.message || 'provider_error'))
+          error.streamTerminal = true
+          throw error
+        }
+        if (type === 'response.output_text.delta') {
+          const delta = parsed?.delta ?? parsed?.text ?? parsed?.output_text_delta
+          if (delta != null && typeof delta !== 'string') throw providerStreamError('provider_sse_invalid_event', 'output_text_delta')
+          responseText += String(delta || '')
+        }
+        if (type === 'response.completed' || type === 'response.incomplete' || type === 'response.failed') {
+          const full = parsed?.response && typeof parsed.response === 'object' ? parsed.response : parsed
+          responseData = structuredClone(full)
+          responseUsage = responseData?.usage || parsed?.usage || responseUsage
+          terminal = true
+          terminalEvent = event
+          if (type === 'response.failed') {
+            const error = providerStreamError('provider_response_failed', String(full?.error?.message || parsed?.error?.message || 'provider_response_failed'))
+            error.streamTerminal = true
+            throw error
+          }
+        }
+        if (parsed?.response?.usage) responseUsage = parsed.response.usage
+        if (parsed?.usage) responseUsage = parsed.usage
+      } else {
+        const chunk = parsed
+        if (chunk.id) chat.id = String(chunk.id)
+        if (chunk.object) chat.object = String(chunk.object)
+        if (chunk.usage && typeof chunk.usage === 'object') chat.usage = chunk.usage
+        const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : null
+        if (choice) {
+          if (Number.isInteger(Number(choice.index))) chat.choices[0].index = Number(choice.index)
+          const delta = choice.delta && typeof choice.delta === 'object' ? choice.delta : null
+          const message = choice.message && typeof choice.message === 'object' ? choice.message : null
+          const source = delta || message
+          if (source) {
+            if (source.role && !chat.choices[0].message.role) chat.choices[0].message.role = String(source.role)
+            if (typeof source.content === 'string') chat.choices[0].message.content += source.content
+            if (typeof source.reasoning_content === 'string') chat.choices[0].message.reasoning_content += source.reasoning_content
+            if (typeof source.reasoning === 'string') chat.choices[0].message.reasoning_content += source.reasoning
+          }
+          if (choice.finish_reason != null || choice.finishReason != null) {
+            chat.choices[0].finish_reason = choice.finish_reason ?? choice.finishReason
+          }
+        }
+      }
+      eventType = ''
+      dataLines = []
+      return
+    }
+    const parsedField = parseSseField(line)
+    if (parsedField.comment) return
+    if (parsedField.field === 'event') {
+      if (eventType) throw providerStreamError('provider_sse_malformed', 'duplicate_event')
+      eventType = parsedField.value.trim()
+      if (!eventType) throw providerStreamError('provider_sse_malformed', 'empty_event')
+    } else {
+      dataLines.push(parsedField.value)
+    }
+  }
+
+  const appendText = async text => {
+    lineBuffer += text
+    for (;;) {
+      const newline = lineBuffer.indexOf('\n')
+      if (newline < 0) break
+      let line = lineBuffer.slice(0, newline)
+      lineBuffer = lineBuffer.slice(newline + 1)
+      if (line.endsWith('\r')) line = line.slice(0, -1)
+      await appendLine(line)
+      if (terminal) break
+    }
+    // Limit the retained partial line as well as complete lines. A malicious
+    // provider can otherwise avoid the line limit by withholding a newline.
+    if (!terminal && Buffer.byteLength(lineBuffer, 'utf8') > maxLineBytes) {
+      throw providerStreamError('provider_sse_line_too_large')
+    }
+  }
+
+  try {
+  while (!terminal) {
+    const next = reader ? await reader.read() : await iterator.next()
+    if (next.done) break
+    const chunk = next.value
+    const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk, 'utf8') : Number(chunk?.byteLength || 0)
+    responseBytes += bytes
+    if (responseBytes > maxBytes) throw providerStreamError('provider_sse_response_too_large')
+    let text
+    try {
+      text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream:true })
+    } catch { throw providerStreamError('provider_sse_invalid_utf8') }
+    await appendText(text)
+  }
+  if (!terminal) {
+    try { await appendText(decoder.decode()) } catch { throw providerStreamError('provider_sse_invalid_utf8') }
+    if (lineBuffer) {
+      await appendLine(lineBuffer)
+      lineBuffer = ''
+    }
+  }
+  if (!terminal) throw providerStreamError('provider_sse_terminal_missing')
+
+  if (protocol === 'responses') {
+    if (!responseData) {
+      const output = responseText
+        ? [{ type:'message', content:[{ type:'output_text', text:responseText }] }]
+        : []
+      responseData = { status:'completed', output_text:responseText, output }
+    } else if (responseText && !String(responseData.output_text || '').trim()) {
+      responseData.output_text = responseText
+      if (!Array.isArray(responseData.output) || !responseData.output.length) {
+        responseData.output = [{ type:'message', content:[{ type:'output_text', text:responseText }] }]
+      }
+    }
+    if (responseUsage && !responseData.usage) responseData.usage = responseUsage
+    return { data:responseData, responseBytes, terminalEvent, eventCount }
+  }
+  return { data:chat, responseBytes, terminalEvent, eventCount }
+  } catch (error) {
+    if (error && typeof error === 'object') {
+      error.responseBytes = responseBytes
+      error.eventCount = eventCount
+    }
+    throw error
+  }
+}
+
 async function trackedModelRequest({
   url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider, signal,
   onProviderRequest, onProviderUsage, onProviderActivity, onProviderQuiet,
-  providerQuietAfterMs = 60_000, protocol, deadlineAtMs = null,
+  providerQuietAfterMs = 60_000, protocol, supportsStream = false, deadlineAtMs = null,
 }) {
   let usageLogId = null
   let capacityLease = null
@@ -461,14 +677,29 @@ async function trackedModelRequest({
   let httpStatus = null
   let providerResponseReceived = false
   let quietTimer = null
+  let firstProviderStreamEvent = false
   const startedAt = Date.now()
   const requestBody = JSON.stringify(body)
   const requestBytes = Buffer.byteLength(requestBody, 'utf8')
   let responseBytes = 0
+  let streamTerminal = false
   const quotaCircuitContext = buildModelQuotaCircuitContext({
     usageContext, provider, model:body?.model, url,
   })
   let quotaCircuitState = { probe:false }
+  const quietDelayMs = Math.max(1_000, Number(providerQuietAfterMs) || 60_000)
+  const resetProviderQuietTimer = () => {
+    if (quietTimer) { clearTimeout(quietTimer); quietTimer = null }
+    if (typeof onProviderQuiet !== 'function') return
+    quietTimer = setTimeout(() => {
+      void emitProviderTelemetry(onProviderQuiet, { phase, state:'provider_quiet', providerRequestId })
+        .catch(error => console.error('[LLM] Provider quiet callback failed:', error.message))
+    }, quietDelayMs)
+    quietTimer.unref?.()
+  }
+  const clearProviderQuietTimer = () => {
+    if (quietTimer) { clearTimeout(quietTimer); quietTimer = null }
+  }
   try {
     quotaCircuitState = await assertModelQuotaAvailable(quotaCircuitContext)
     // Admission is deliberately before the durable submitted callback and the
@@ -496,13 +727,7 @@ async function trackedModelRequest({
     signal?.throwIfAborted()
     await emitProviderTelemetry(onProviderRequest, { phase })
     providerRequestStarted = true
-    if (typeof onProviderQuiet === 'function') {
-      quietTimer = setTimeout(() => {
-        void emitProviderTelemetry(onProviderQuiet, { phase, state:'provider_quiet', providerRequestId })
-          .catch(error => console.error('[LLM] Provider quiet callback failed:', error.message))
-      }, Math.max(1_000, Number(providerQuietAfterMs) || 60_000))
-      quietTimer.unref?.()
-    }
+    resetProviderQuietTimer()
     logAutomaticModelRequest({ usageContext, phase, body, requestBytes })
     const response = await fetch(url, {
       method: 'POST',
@@ -511,17 +736,20 @@ async function trackedModelRequest({
       signal: requestSignal,
       redirect: 'error',
     })
-    if (quietTimer) { clearTimeout(quietTimer); quietTimer = null }
     httpStatus = Number(response?.status) > 0 ? Number(response.status) : null
     providerRequestId = String(response.headers?.get?.('x-request-id') || '') || null
-    providerResponseReceived = true
+    const streamingResponse = Boolean(response?.ok && supportsStream && body?.stream === true && response?.body)
+    if (!streamingResponse) providerResponseReceived = true
     await emitProviderTelemetry(onProviderActivity, {
-      phase, state:'response_headers', providerRequestId, httpStatus, responseReceived:true,
+      phase, state:'response_headers', providerRequestId, httpStatus,
+      responseReceived:streamingResponse ? false : true,
     })
+    if (streamingResponse) resetProviderQuietTimer()
+    else clearProviderQuietTimer()
     // Any explicit HTTP response proves the provider received the request (or
     // at least completed an HTTP admission decision). Free the slot before
     // parsing/settling the response, including HTTP 429 and other errors.
-    if (capacityLease) {
+    if (capacityLease && !streamingResponse) {
       await releaseModelTaskCapacityLease(capacityLease, response.ok ? 'provider_response' : 'provider_http_response')
       capacityLease = null
     }
@@ -538,8 +766,42 @@ async function trackedModelRequest({
       error.httpStatus = response.status
       throw error
     }
-    const data = await response.json()
-    responseBytes = Buffer.byteLength(JSON.stringify(data), 'utf8')
+    let data
+    if (streamingResponse) {
+      const parsed = await parseProviderSseResponse(response, {
+        protocol,
+        onEvent:async event => {
+          responseBytes = Math.max(responseBytes, Number(event?.responseBytes) || 0)
+          const eventType = event.done ? '[DONE]' : String(event.eventType || event.data?.type || 'provider.event')
+          const terminalEvent = event.done || (protocol === 'responses'
+            && ['response.completed', 'response.incomplete', 'response.failed', 'error', 'response.error'].includes(eventType))
+          const eventRequestId = event.data?.id || event.data?.response?.id
+          if (eventRequestId && !providerRequestId) providerRequestId = String(eventRequestId)
+          resetProviderQuietTimer()
+          await emitProviderTelemetry(onProviderActivity, {
+            phase, state:terminalEvent ? 'provider_terminal' : 'provider_event',
+            providerEventType:eventType, providerRequestId,
+            firstByte:!firstProviderStreamEvent, responseReceived:terminalEvent,
+            responseBytes,
+          })
+          firstProviderStreamEvent = true
+        },
+      })
+      responseBytes = parsed.responseBytes
+      streamTerminal = parsed.terminalEvent?.done === true
+        || (protocol === 'responses' && ['response.completed', 'response.incomplete', 'response.failed'].includes(
+          String(parsed.terminalEvent?.eventType || parsed.terminalEvent?.data?.type || '')))
+      providerResponseReceived = streamTerminal
+      data = parsed.data
+      if (capacityLease && streamTerminal) {
+        clearProviderQuietTimer()
+        await releaseModelTaskCapacityLease(capacityLease, response.ok ? 'provider_stream_terminal' : 'provider_http_response')
+        capacityLease = null
+      }
+    } else {
+      data = await response.json()
+      responseBytes = Buffer.byteLength(JSON.stringify(data), 'utf8')
+    }
     const usage = extractTokenUsage(data)
     const fallbackTokens = Math.ceil((JSON.stringify(body).length + JSON.stringify(data).length) / 4)
     const tokenCount = usage.totalTokens || fallbackTokens
@@ -565,10 +827,16 @@ async function trackedModelRequest({
       requestBytes, responseBytes, durationMs: Date.now() - startedAt,
       httpStatus, responseReceived:providerResponseReceived })
     assertModelResponseComplete(data, protocol)
+    clearProviderQuietTimer()
     if (quotaCircuitState.probe) await recordModelQuotaRecovered(quotaCircuitContext)
     return { response, data }
   } catch (error) {
-    if (quietTimer) { clearTimeout(quietTimer); quietTimer = null }
+    clearProviderQuietTimer()
+    if (Number(error?.responseBytes) > responseBytes) responseBytes = Number(error.responseBytes)
+    if (error?.streamTerminal === true) {
+      streamTerminal = true
+      providerResponseReceived = true
+    }
     if (capacityLease) {
       try {
         if (providerRequestStarted && !providerResponseReceived) {
@@ -579,7 +847,8 @@ async function trackedModelRequest({
         } else {
           // Callback, endpoint validation, quota, or usage accounting failed
           // before submit. This path is safe to release immediately.
-          await releaseModelTaskCapacityLease(capacityLease, 'pre_submit_failure')
+          await releaseModelTaskCapacityLease(capacityLease,
+            providerResponseReceived ? 'provider_stream_terminal_error' : 'pre_submit_failure')
         }
       } catch (capacityError) {
         console.error('[LLM] Failed to settle model capacity lease:', capacityError.message)
@@ -627,6 +896,7 @@ async function emitModelProgress(onProgress, stage) {
 export async function requestJsonObject({
   url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled,
   reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null,
+  capabilities = null, modelProfileId = null,
   onProgress = null, validateObject = null, signal = null,
   onProviderRequest = null, onProviderUsage = null, onProviderActivity = null, onProviderQuiet = null,
   providerQuietAfterMs = 60_000, repairContext = null,
@@ -640,13 +910,35 @@ export async function requestJsonObject({
   const taskDeadlineAtMs = deadlineAtMs != null && Number.isFinite(Number(deadlineAtMs))
     ? Number(deadlineAtMs)
     : Date.now() + Math.max(1, Math.trunc(Number(timeout) || 120000))
-  const body = buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort })
+  let resolvedCapabilities = capabilities
+  if (!resolvedCapabilities || typeof resolvedCapabilities.supports_stream !== 'boolean') {
+    try {
+      resolvedCapabilities = await resolveModelProviderCapabilities({
+        modelProfileId:modelProfileId || usageContext?.profileId || null,
+        provider, protocol, url,
+      })
+    } catch (error) {
+      // A capability lookup outage must not turn a custom endpoint into an
+      // implicitly streamed request. Official builtin matching remains a
+      // safe, deterministic fallback when no DB row can be read.
+      console.warn('[LLM] Runtime provider capability lookup unavailable:', error.message)
+      resolvedCapabilities = { supports_stream:false, supports_request_id:false, verification_status:'unverified' }
+      if (!Number(modelProfileId || usageContext?.profileId)) {
+        try {
+          resolvedCapabilities = await resolveModelProviderCapabilities({ provider, protocol, url })
+        } catch { /* keep streaming disabled */ }
+      }
+    }
+  }
+  const supportsStream = resolvedCapabilities?.supports_stream === true
+  const body = buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort,
+    supportsStream })
   const estimatedTokens = Math.ceil(JSON.stringify(messages).length / 4) + Math.max(0, Number(maxTokens) || 0)
   await emitModelProgress(onProgress, 'model_request')
   const { response, data } = await trackedModelRequest({
     url, apiKey, body, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
     estimatedTokens, phase: 'request', provider, signal, onProviderRequest, onProviderUsage,
-    onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol,
+    onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol, supportsStream,
     deadlineAtMs:taskDeadlineAtMs,
   })
   const nativeJsonMode = usesNativeJsonMode(provider, protocol)
@@ -667,13 +959,13 @@ export async function requestJsonObject({
     ]
     const emptyRetryBody = buildLlmRequestBody({
       protocol, provider, model, temperature:0, maxTokens, messages:emptyRetryMessages,
-      thinkingEnabled, reasoningEffort,
+      thinkingEnabled, reasoningEffort, supportsStream,
     })
     const emptyRetryEstimate = Math.ceil(JSON.stringify(emptyRetryMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
     const { data: emptyRetryData } = await trackedModelRequest({
       url, apiKey, body:emptyRetryBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
       estimatedTokens:emptyRetryEstimate, phase:'repair', provider, signal, onProviderRequest, onProviderUsage,
-      onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol,
+      onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol, supportsStream,
       deadlineAtMs:taskDeadlineAtMs,
     })
     content = extractLlmContent(emptyRetryData, protocol, true)
@@ -715,13 +1007,13 @@ export async function requestJsonObject({
     ]
     const repairBody = buildLlmRequestBody({
       protocol, provider, model, temperature: 0, maxTokens, messages: repairMessages,
-      thinkingEnabled, reasoningEffort,
+      thinkingEnabled, reasoningEffort, supportsStream,
     })
     const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
     const { data: repairedData } = await trackedModelRequest({
       url, apiKey, body: repairBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
       estimatedTokens: repairEstimate, phase: 'repair', provider, signal, onProviderRequest, onProviderUsage,
-      onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol,
+      onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol, supportsStream,
       deadlineAtMs:taskDeadlineAtMs,
     })
     const repaired = extractLlmContent(repairedData, protocol, nativeJsonMode)
@@ -949,7 +1241,9 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       : usageKind === 'model_compare' ? 'model_compare' : 'manual_analysis'
     let capabilities = {}
     try {
-      capabilities = await getModelProviderCapabilities(config._model_profile_id)
+      capabilities = await resolveModelProviderCapabilities({
+        modelProfileId:config._model_profile_id, provider, protocol, url,
+      })
     } catch (error) {
       console.warn('[LLM] Model capability lookup unavailable, using profile hard cap only:', error.message)
     }
@@ -1008,6 +1302,8 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       thinkingEnabled,
       reasoningEffort: config.reasoning_effort || 'max',
       protocol,
+      capabilities,
+      modelProfileId:config._model_profile_id || null,
       timeout: Math.max(1, requestDeadlineAtMs - Date.now()),
       deadlineAtMs:requestDeadlineAtMs,
       followupValidUntilMs:Number(config._resultValidUntilUtcMs) || deadlines.taskDeadlineUtcMs,

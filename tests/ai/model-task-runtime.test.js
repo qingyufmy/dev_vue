@@ -14,7 +14,7 @@ import { assertModelTaskTransition, canTransitionModelTask, createModelTask,
   finishModelTaskAttempt, markModelTaskCompletedStaleById, markModelTaskSucceededFromResult,
   persistModelTaskBudget,
   recoverAbandonedAutoInferenceTasks, recoverAbandonedBusinessModelTasks, renewModelTaskLease,
-  transitionModelTask } from '../../server/routes/ai/model-task-runtime.js'
+  touchModelTaskActivity, transitionModelTask } from '../../server/routes/ai/model-task-runtime.js'
 
 describe('model task runtime state and fencing', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -79,6 +79,27 @@ describe('model task runtime state and fencing', () => {
     expect(mockQueryRun.mock.calls[0][0]).toContain('request_bytes = ?, response_bytes = ?')
     expect(mockQueryRun.mock.calls[0][1]).toContain(1234)
     expect(mockQueryRun.mock.calls[0][1]).toContain(5678)
+  })
+
+  it('touches provider activity only for the current attempt and task fencing generation', async () => {
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:1 }).mockResolvedValueOnce({ affectedRows:1 })
+    await expect(touchModelTaskActivity(
+      { task_id:'task-live', lease_token:'lease-live', fencing_token:7 }, { id:31 },
+      { firstByte:true, lastActivityAtUtcMs:12_345 },
+    )).resolves.toEqual({ firstByte:true, lastActivityAtUtcMs:12_345 })
+    expect(mockQueryRun.mock.calls[0][0]).toContain('first_byte_at_utc_msc')
+    expect(mockQueryRun.mock.calls[0][1].slice(-3)).toEqual([31, 'task-live', 7])
+    expect(mockQueryRun.mock.calls[1][0]).toContain('lease_token = ? AND fencing_token = ?')
+    expect(mockQueryRun.mock.calls[1][1].slice(-3)).toEqual(['task-live', 'lease-live', 7])
+  })
+
+  it('fails closed before refreshing the task when the attempt activity fence is lost', async () => {
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:0 })
+    await expect(touchModelTaskActivity(
+      { task_id:'task-stale', lease_token:'old-lease', fencing_token:2 }, { id:32 },
+      { firstByte:true, lastActivityAtUtcMs:22_000 },
+    )).rejects.toThrow('model_task_attempt_fence_lost')
+    expect(mockQueryRun).toHaveBeenCalledTimes(1)
   })
 
   it('rejects a stale worker result when the fencing update affects no row', async () => {

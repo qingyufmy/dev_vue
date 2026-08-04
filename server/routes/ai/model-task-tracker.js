@@ -1,6 +1,8 @@
-import { beginModelTaskAttempt, claimModelTaskById, createModelTask, finishModelTaskAttempt,
-  persistModelTaskBudget, renewModelTaskLease, transitionModelTask } from './model-task-runtime.js'
+import * as modelTaskRuntime from './model-task-runtime.js'
 import { classifyModelProviderError } from './model-provider-adapters.js'
+
+const { beginModelTaskAttempt, claimModelTaskById, createModelTask, finishModelTaskAttempt,
+  persistModelTaskBudget, renewModelTaskLease, transitionModelTask } = modelTaskRuntime
 
 const CLAIMABLE_STATUSES = new Set(['queued', 'retry_wait'])
 const TERMINAL_STATUSES = new Set(['cancelled', 'failed_terminal', 'succeeded', 'completed_stale', 'completed_rejected'])
@@ -86,6 +88,9 @@ export async function createModelTaskTracker(input, {
     providerRequestId:null,
     httpStatus:null,
   }
+  let lastPersistedActivityAtUtcMs = 0
+  let firstBytePersisted = false
+  const ACTIVITY_PERSIST_INTERVAL_MS = 5_000
   let stopped = false
   let fatalError = null
   let tail = Promise.resolve()
@@ -223,6 +228,8 @@ export async function createModelTaskTracker(input, {
         providerRequestId:event?.providerRequestId || null,
         httpStatus:null,
       }
+      lastPersistedActivityAtUtcMs = 0
+      firstBytePersisted = false
       if (!attempt) {
         attempt = await beginModelTaskAttempt(task, {
           attemptNo:(Math.max(1, Number(task.attempt_count)) - 1) * 10 + (++providerAttemptSequence),
@@ -243,6 +250,19 @@ export async function createModelTaskTracker(input, {
         submitted:true,
         providerRequestId:event?.providerRequestId || providerAttemptState.providerRequestId || null,
       }
+      const activityNow = Date.now()
+      const firstByte = event?.firstByte === true
+      const shouldPersist = (firstByte && !firstBytePersisted) || !lastPersistedActivityAtUtcMs
+        || activityNow - lastPersistedActivityAtUtcMs >= ACTIVITY_PERSIST_INTERVAL_MS
+      const touchActivity = Object.prototype.hasOwnProperty.call(modelTaskRuntime, 'touchModelTaskActivity')
+        ? modelTaskRuntime.touchModelTaskActivity : null
+      if (shouldPersist && typeof touchActivity === 'function') {
+        await touchActivity(task, attempt, {
+          firstByte, lastActivityAtUtcMs:activityNow,
+        })
+        lastPersistedActivityAtUtcMs = activityNow
+        firstBytePersisted = firstBytePersisted || firstByte
+      }
       return true
     }),
     onProviderQuiet:event => enqueue(async () => {
@@ -261,9 +281,10 @@ export async function createModelTaskTracker(input, {
       if (!attempt) throw trackerError('model_task_attempt_missing')
       const httpStatus = Number(event?.httpStatus)
       const hasHttpStatus = Number.isFinite(httpStatus) && httpStatus > 0
+      const hasExplicitResponseReceived = Object.prototype.hasOwnProperty.call(event || {}, 'responseReceived')
       const responseReceived = event?.responseReceived === true
-        || event?.status === 'success'
-        || (hasHttpStatus && httpStatus >= 200)
+        || (!hasExplicitResponseReceived && (event?.status === 'success'
+          || (hasHttpStatus && httpStatus >= 200)))
       providerAttemptState = {
         submitted:true,
         responseReceived,

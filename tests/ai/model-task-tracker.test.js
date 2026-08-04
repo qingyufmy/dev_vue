@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const runtime = vi.hoisted(() => ({
   createModelTask:vi.fn(), claimModelTaskById:vi.fn(), transitionModelTask:vi.fn(),
   renewModelTaskLease:vi.fn(), beginModelTaskAttempt:vi.fn(), finishModelTaskAttempt:vi.fn(),
-  persistModelTaskBudget:vi.fn(),
+  persistModelTaskBudget:vi.fn(), touchModelTaskActivity:vi.fn(),
 }))
 
 vi.mock('../../server/routes/ai/model-task-runtime.js', () => runtime)
@@ -22,6 +22,7 @@ function setupRuntime() {
   runtime.beginModelTaskAttempt.mockResolvedValue({ id:11, task_id:'task-1', attempt_no:1, fencing_token:1 })
   runtime.finishModelTaskAttempt.mockResolvedValue(undefined)
   runtime.persistModelTaskBudget.mockImplementation(async (task, budget) => ({ ...task, ...budget }))
+  runtime.touchModelTaskActivity.mockResolvedValue(undefined)
 }
 
 describe('authoritative model task tracker', () => {
@@ -139,5 +140,36 @@ describe('authoritative model task tracker', () => {
     expect(runtime.transitionModelTask.mock.calls.map(([, status]) => status))
       .toEqual(['preparing', 'submitted', 'provider_quiet', 'provider_running', 'response_received'])
     await tracker.stop()
+  })
+
+  it('persists the first provider byte immediately and throttles later activity', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(10_000)
+    try {
+      const tracker = await createModelTaskTracker({ taskKind:'daily_review', idempotencyKey:'daily:activity-touch' }, { renewIntervalMs:60_000 })
+      await tracker.onProviderRequest({ phase:'request' })
+      await tracker.onProviderActivity({ phase:'request', state:'provider_event', firstByte:true })
+      await tracker.onProviderActivity({ phase:'request', state:'provider_event', firstByte:true })
+      await tracker.onProviderActivity({ phase:'request', state:'provider_event', firstByte:false })
+      expect(runtime.touchModelTaskActivity).toHaveBeenCalledTimes(1)
+      expect(runtime.touchModelTaskActivity.mock.calls[0][1]).toMatchObject({ id:11 })
+      expect(runtime.touchModelTaskActivity.mock.calls[0][2]).toMatchObject({ firstByte:true, lastActivityAtUtcMs:10_000 })
+      vi.setSystemTime(15_001)
+      await tracker.onProviderActivity({ phase:'request', state:'provider_event', firstByte:false })
+      expect(runtime.touchModelTaskActivity).toHaveBeenCalledTimes(2)
+      expect(runtime.touchModelTaskActivity.mock.calls[1][2]).toMatchObject({ firstByte:false, lastActivityAtUtcMs:15_001 })
+      await tracker.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('fences the worker when the activity touch fails', async () => {
+    const tracker = await createModelTaskTracker({ taskKind:'daily_review', idempotencyKey:'daily:activity-fence' }, { renewIntervalMs:60_000 })
+    await tracker.onProviderRequest({ phase:'request' })
+    runtime.touchModelTaskActivity.mockRejectedValueOnce(new Error('model_task_fence_lost'))
+    await expect(tracker.onProviderActivity({ phase:'request', firstByte:true })).rejects.toThrow('model_task_fence_lost')
+    expect(tracker.signal.aborted).toBe(true)
+    await expect(tracker.stop()).rejects.toThrow('model_task_fence_lost')
   })
 })
