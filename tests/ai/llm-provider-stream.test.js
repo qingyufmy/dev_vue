@@ -87,4 +87,33 @@ describe('official provider SSE requests', () => {
       limits:{ maxEvents:1, maxBytes:1024, maxLineBytes:1024 },
     })).rejects.toMatchObject({ code:'provider_sse_event_limit_exceeded' })
   })
+
+  it('closes the provider iterator after both a terminal event and a parser failure', async () => {
+    const encoder = new TextEncoder()
+    const terminalReturn = vi.fn(async () => ({ done:true }))
+    const terminalBody = {
+      [Symbol.asyncIterator]:() => {
+        let sent = false
+        return {
+          next:async () => sent
+            ? { done:true }
+            : (sent = true, { done:false, value:encoder.encode('data: [DONE]\n\n') }),
+          return:terminalReturn,
+        }
+      },
+    }
+    await parseProviderSseResponse(response(terminalBody))
+    expect(terminalReturn).toHaveBeenCalledTimes(1)
+
+    const malformedReturn = vi.fn(async () => ({ done:true }))
+    const malformedBody = {
+      [Symbol.asyncIterator]:() => ({
+        next:async () => ({ done:false, value:encoder.encode('garbage\n\n') }),
+        return:malformedReturn,
+      }),
+    }
+    await expect(parseProviderSseResponse(response(malformedBody)))
+      .rejects.toMatchObject({ code:'provider_sse_malformed' })
+    expect(malformedReturn).toHaveBeenCalledTimes(1)
+  })
 })

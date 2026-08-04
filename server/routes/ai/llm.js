@@ -617,50 +617,60 @@ export async function parseProviderSseResponse(response, {
   }
 
   try {
-  while (!terminal) {
-    const next = reader ? await reader.read() : await iterator.next()
-    if (next.done) break
-    const chunk = next.value
-    const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk, 'utf8') : Number(chunk?.byteLength || 0)
-    responseBytes += bytes
-    if (responseBytes > maxBytes) throw providerStreamError('provider_sse_response_too_large')
-    let text
-    try {
-      text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream:true })
-    } catch { throw providerStreamError('provider_sse_invalid_utf8') }
-    await appendText(text)
-  }
-  if (!terminal) {
-    try { await appendText(decoder.decode()) } catch { throw providerStreamError('provider_sse_invalid_utf8') }
-    if (lineBuffer) {
-      await appendLine(lineBuffer)
-      lineBuffer = ''
+    while (!terminal) {
+      const next = reader ? await reader.read() : await iterator.next()
+      if (next.done) break
+      const chunk = next.value
+      const bytes = typeof chunk === 'string' ? Buffer.byteLength(chunk, 'utf8') : Number(chunk?.byteLength || 0)
+      responseBytes += bytes
+      if (responseBytes > maxBytes) throw providerStreamError('provider_sse_response_too_large')
+      let text
+      try {
+        text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream:true })
+      } catch { throw providerStreamError('provider_sse_invalid_utf8') }
+      await appendText(text)
     }
-  }
-  if (!terminal) throw providerStreamError('provider_sse_terminal_missing')
-
-  if (protocol === 'responses') {
-    if (!responseData) {
-      const output = responseText
-        ? [{ type:'message', content:[{ type:'output_text', text:responseText }] }]
-        : []
-      responseData = { status:'completed', output_text:responseText, output }
-    } else if (responseText && !String(responseData.output_text || '').trim()) {
-      responseData.output_text = responseText
-      if (!Array.isArray(responseData.output) || !responseData.output.length) {
-        responseData.output = [{ type:'message', content:[{ type:'output_text', text:responseText }] }]
+    if (!terminal) {
+      try { await appendText(decoder.decode()) } catch { throw providerStreamError('provider_sse_invalid_utf8') }
+      if (lineBuffer) {
+        await appendLine(lineBuffer)
+        lineBuffer = ''
       }
     }
-    if (responseUsage && !responseData.usage) responseData.usage = responseUsage
-    return { data:responseData, responseBytes, terminalEvent, eventCount }
-  }
-  return { data:chat, responseBytes, terminalEvent, eventCount }
+    if (!terminal) throw providerStreamError('provider_sse_terminal_missing')
+
+    if (protocol === 'responses') {
+      if (!responseData) {
+        const output = responseText
+          ? [{ type:'message', content:[{ type:'output_text', text:responseText }] }]
+          : []
+        responseData = { status:'completed', output_text:responseText, output }
+      } else if (responseText && !String(responseData.output_text || '').trim()) {
+        responseData.output_text = responseText
+        if (!Array.isArray(responseData.output) || !responseData.output.length) {
+          responseData.output = [{ type:'message', content:[{ type:'output_text', text:responseText }] }]
+        }
+      }
+      if (responseUsage && !responseData.usage) responseData.usage = responseUsage
+      return { data:responseData, responseBytes, terminalEvent, eventCount }
+    }
+    return { data:chat, responseBytes, terminalEvent, eventCount }
   } catch (error) {
     if (error && typeof error === 'object') {
       error.responseBytes = responseBytes
       error.eventCount = eventCount
     }
     throw error
+  } finally {
+    // A provider terminal event can arrive before the HTTP body itself closes.
+    // Explicitly close the reader/iterator so the connection is not left with
+    // unread SSE bytes after success, validation failure, or parser rejection.
+    if (reader) {
+      try { await reader.cancel() } catch {}
+      try { reader.releaseLock?.() } catch {}
+    } else if (typeof iterator?.return === 'function') {
+      try { await iterator.return() } catch {}
+    }
   }
 }
 
