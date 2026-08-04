@@ -381,6 +381,18 @@ describe('durable automatic model-task gate', () => {
     expect(input.promptHash).toMatch(/^[a-f0-9]{64}$/)
     expect(input.outputContractHash).toMatch(/^[a-f0-9]{64}$/)
     expect(input.frozenContext).toMatchObject({ strategy_version:3, provider:'deepseek', model:'deepseek-chat', interval_minutes:5 })
+    expect(input.taskDeadlineAtUtcMs).toBe(601_000)
+  })
+
+  it('does not shorten the automatic task budget to the legacy profile timeout', () => {
+    const input = __schedulerTest.buildAutoModelTaskInput({
+      promptTypeId:7, symbol:'XAUUSD', cycleId:'7:XAUUSD:2', cycleStartedAtMs:10_000,
+      intervalMinutes:5, strategy:{ id:7, version:3, scope:'platform' },
+      config:{ request_timeout_ms:120_000, api_provider:'deepseek', model_name:'deepseek-chat' },
+      market:{ symbol:'XAUUSD', latest_price:2000 }, marketMeta:null,
+      primaryTimeframe:'M5', resultValidUntilUtcMsc:120_000,
+    })
+    expect(input.taskDeadlineAtUtcMs).toBe(610_000)
   })
 
   it('passes the runtime validity field to createModelTask without changing the DB column contract', async () => {

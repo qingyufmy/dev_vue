@@ -6,13 +6,15 @@ export const MODEL_PROVIDER_CAPABILITY_KEYS = Object.freeze([
 ])
 
 export function normalizeProviderCapabilities(row = {}) {
-  const normalized = Object.fromEntries(MODEL_PROVIDER_CAPABILITY_KEYS.map(key => [key, Boolean(Number(row[key]))]))
+  const verificationStatus = String(row.verification_status || 'unverified')
+  const isVerified = verificationStatus === 'verified'
+  const normalized = Object.fromEntries(MODEL_PROVIDER_CAPABILITY_KEYS.map(key => [key, isVerified && Boolean(Number(row[key]))]))
   return {
     ...normalized,
-    context_window_tokens:Number(row.context_window_tokens) > 0 ? Number(row.context_window_tokens) : null,
-    max_output_tokens:Number(row.max_output_tokens) > 0 ? Number(row.max_output_tokens) : null,
+    context_window_tokens:isVerified && Number(row.context_window_tokens) > 0 ? Number(row.context_window_tokens) : null,
+    max_output_tokens:isVerified && Number(row.max_output_tokens) > 0 ? Number(row.max_output_tokens) : null,
     verified_at_utc_msc:Number(row.verified_at_utc_msc) > 0 ? Number(row.verified_at_utc_msc) : null,
-    verification_status:String(row.verification_status || 'unverified'),
+    verification_status:verificationStatus,
   }
 }
 

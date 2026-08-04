@@ -14,6 +14,8 @@ import { applyDefaultObserverClockBootstrap } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
 import { createModelTaskTracker } from './model-task-tracker.js'
 import { MODEL_TASK_TERMINAL_STATES, recoverAbandonedBusinessModelTasks } from './model-task-runtime.js'
+import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget } from './model-task-budget.js'
+import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import {
   MONTHLY_REVIEW_CHECKPOINT_STATUSES,
   assertMonthlyReviewCheckpointCoverage,
@@ -39,6 +41,48 @@ let periodReviewCycleRunning = false
 let periodReviewWakeRequested = false
 const parse = (value, fallback = null) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const safeError = error => String(error?.message || error || 'period_review_failed').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 128)
+
+function requestTimeoutForAttempt(_model, attemptSafetyDeadlineUtcMs, nowUtcMs = Date.now()) {
+  const remaining = Math.max(1, Math.trunc(Number(attemptSafetyDeadlineUtcMs) - Number(nowUtcMs)))
+  // request_timeout_ms is deliberately not used as the business deadline.
+  // Passing the remaining task-attempt window keeps injected providers and the
+  // real HTTP client bounded by the same safety deadline.
+  return remaining
+}
+
+async function preparePeriodReviewModelCall(taskKind, resolved, messages, schemaNeedTokens, {
+  nowUtcMs = Date.now(), businessDeadlineUtcMs = null,
+} = {}) {
+  let capabilities = {}
+  try {
+    capabilities = await getModelProviderCapabilities(resolved?.model_profile_id) || {}
+  } catch (error) {
+    console.warn(`[PeriodReview] provider capability lookup unavailable for ${taskKind}:`, safeError(error))
+  }
+  const estimatedInputTokens = estimateModelInputTokens(messages)
+  const budget = selectModelTaskBudget({
+    taskKind,
+    profileHardCap:Number(resolved?.model?.max_tokens) || undefined,
+    providerOutputCap:capabilities.max_output_tokens,
+    contextWindowTokens:capabilities.context_window_tokens,
+    estimatedInputTokens,
+    schemaNeedTokens,
+  })
+  // The profile/provider/context limits are hard caps. Fail explicitly when
+  // those caps cannot satisfy the output contract; never restore a fixed
+  // legacy size or send a request that is known to be undersized.
+  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
+  const rawDeadlines = modelTaskDeadlines(taskKind, { nowUtcMs, businessDeadlineUtcMs })
+  const deadlines = {
+    ...rawDeadlines,
+    attemptSafetyDeadlineUtcMs:Math.min(rawDeadlines.attemptSafetyDeadlineUtcMs, rawDeadlines.taskDeadlineUtcMs),
+  }
+  return {
+    budget,
+    ...deadlines,
+    requestTimeoutMs:requestTimeoutForAttempt(resolved?.model, deadlines.attemptSafetyDeadlineUtcMs, nowUtcMs),
+  }
+}
 
 export function startPeriodReviewLeaseHeartbeat(job, {
   intervalMs = 30_000,
@@ -1326,10 +1370,6 @@ async function generateDailyReview(job, requestModel) {
   const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: job.strategy_id, usage: 'review' })
   if (!resolved.model) throw new Error(resolved.error || 'daily_review_model_unavailable')
   const endpoint = modelEndpoint(resolved.model)
-  const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'daily_review')
-  const requestSignal = job._abortSignal && tracker.signal
-    ? AbortSignal.any([job._abortSignal, tracker.signal])
-    : tracker.signal || job._abortSignal || null
   const outcomeIds = evidence.sources.map(item => Number(item.outcome_id))
   const shape = { period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
     trade_assessments: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence', summary: 'string', issue_codes: ['string'] })),
@@ -1346,19 +1386,34 @@ async function generateDailyReview(job, requestModel) {
     `trade_assessments 和 chan_diagnoses 必须各包含 ${outcomeIds.length} 项，并且 outcome_id 只能且必须完整覆盖：${outcomeIds.join(', ')}。`,
     '不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。',
   ].join('\n')
+  const messages = [
+    { role: 'system', content: `你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。period_market 是按策略周期提取的完整交易日行情，缠论结构已基于完整窗口计算；必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` },
+    { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
+  ]
+  const modelCall = await preparePeriodReviewModelCall('daily_review', resolved, messages,
+    Math.max(3000, Math.ceil(JSON.stringify(shape).length / 2.5)), {
+      nowUtcMs:Date.now(), businessDeadlineUtcMs:job._deadlineAtMs,
+    })
+  job._deadlineAtMs = modelCall.taskDeadlineUtcMs
+  job._attemptDeadlineAtMs = modelCall.attemptSafetyDeadlineUtcMs
+  job._modelBudget = modelCall.budget
+  const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'daily_review')
+  const requestSignal = job._abortSignal && tracker.signal
+    ? AbortSignal.any([job._abortSignal, tracker.signal])
+    : tracker.signal || job._abortSignal || null
   const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider,
     model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
-    maxTokens: Number(resolved.model.max_tokens || 3000), thinkingEnabled: resolved.model.thinking_enabled,
+    maxTokens:modelCall.budget.selectedMaxOutputTokens, thinkingEnabled: resolved.model.thinking_enabled,
     reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
-    timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs,
+    timeout:modelCall.requestTimeoutMs, deadlineAtMs:modelCall.attemptSafetyDeadlineUtcMs,
+    followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs,
     signal:requestSignal,
-    messages: [
-      { role: 'system', content: `你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。period_market 是按策略周期提取的完整交易日行情，缠论结构已基于完整窗口计算；必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` },
-      { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
-    ],
+    messages,
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
     onProviderRequest:event => tracker.onProviderRequest(event),
     onProviderUsage:event => tracker.onProviderUsage(event),
+    onProviderActivity:event => tracker.onProviderActivity(event),
+    onProviderQuiet:event => tracker.onProviderQuiet(event),
     onProgress: stage => setPeriodReviewJobStage(job, stage),
     validateObject: value => validateDailyReviewContent(value, outcomeIds),
   })
@@ -1385,8 +1440,10 @@ async function finishDailyReviewSuccess(job, generated) {
         VALUES (?, ?, ?, 'ai', NULL, ?, ?, 'AI daily review draft', ?)`, [job.period_case_id, nextVersionNo, parentVersionId, body, sha256(body), now])
       await run(`UPDATE period_review_cases SET status = 'draft', current_version_id = ?, updated_at = ? WHERE id = ?`, [insert.insertId, now, job.period_case_id])
     }
-    await run(`UPDATE period_review_jobs SET status = 'succeeded', model_profile_id = ?, credential_source = ?, completed_at = ?,
-      lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?`, [generated.resolved.model_profile_id, generated.resolved.credential_source, now, now, job.id])
+    await run(`UPDATE period_review_jobs SET status = 'succeeded', progress_stage = 'succeeded', stage_updated_at = ?,
+      model_profile_id = ?, credential_source = ?, last_error_code = NULL, next_attempt_at = NULL, completed_at = ?,
+      lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?`,
+    [now, generated.resolved.model_profile_id, generated.resolved.credential_source, now, now, job.id])
   })
 }
 
@@ -1429,7 +1486,7 @@ async function skipDisabledPeriodReviewJob(job) {
 export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
   const job = await claimDailyReviewJob()
   if (!job) return { claimed: false }
-  job._deadlineAtMs = Date.now() + 60 * 60_000
+  job._deadlineAtMs = modelTaskDeadlines('daily_review', { nowUtcMs:Date.now() }).taskDeadlineUtcMs
   const lease = startPeriodReviewLeaseHeartbeat(job)
   job._abortSignal = lease.signal
   await setPeriodReviewJobStage(job, 'preparing')
@@ -1494,11 +1551,6 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
   const endpoint = modelEndpoint(resolved.model)
   const checkpointLease = startMonthlyReviewCheckpointLeaseHeartbeat(checkpoint)
   job._checkpointLease = checkpointLease
-  const tracker = await startMonthlyReviewChunkModelTask(job, resolved, endpoint, checkpoint, chunk)
-  job._modelTracker = tracker
-  const requestSignal = [job._abortSignal, checkpointLease.signal, tracker.signal].filter(Boolean).length > 1
-    ? AbortSignal.any([job._abortSignal, checkpointLease.signal, tracker.signal].filter(Boolean))
-    : tracker.signal || checkpointLease.signal || job._abortSignal || null
   const expectedIds = chunk.expected_period_case_ids || chunk.expectedPeriodCaseIds
   const shape = {
     period_summary:'string', decision_quality:'good|mixed|poor|insufficient_evidence',
@@ -1522,18 +1574,34 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
     'local_patterns、strengths、risks、chan_observations、action_candidates 的每项必须是结构化对象，带 supporting_period_case_ids、applicability 和 market_regime；支持 ID 只能来自本分块。',
     '互相矛盾的行情经验必须分别放在 conflict_groups.candidates 中，不能合并成一条；每个候选仍需保留自己的行情状态、适用条件和支持 ID。',
   ].join('\n')
+  const messages = [
+    { role:'system', content:`你是严格的交易月度复盘分块分析器。只能分析本分块已冻结的日复盘和行情摘要，不得自行补造统计。\n\n${contract}` },
+    { role:'user', content:JSON.stringify({ required_output:shape, chunk }) },
+  ]
+  const modelCall = await preparePeriodReviewModelCall('monthly_review_chunk', resolved, messages,
+    Math.max(3500, Math.ceil(JSON.stringify(shape).length / 2.5)), {
+      nowUtcMs:Date.now(), businessDeadlineUtcMs:job._deadlineAtMs,
+    })
+  job._deadlineAtMs = modelCall.taskDeadlineUtcMs
+  job._attemptDeadlineAtMs = modelCall.attemptSafetyDeadlineUtcMs
+  job._modelBudget = modelCall.budget
+  const tracker = await startMonthlyReviewChunkModelTask(job, resolved, endpoint, checkpoint, chunk)
+  job._modelTracker = tracker
+  const requestSignal = [job._abortSignal, checkpointLease.signal, tracker.signal].filter(Boolean).length > 1
+    ? AbortSignal.any([job._abortSignal, checkpointLease.signal, tracker.signal].filter(Boolean))
+    : tracker.signal || checkpointLease.signal || job._abortSignal || null
   const output = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted, provider:resolved.model.provider,
     model:resolved.model.model_name, temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
-    maxTokens:Number(resolved.model.max_tokens || 3500), thinkingEnabled:resolved.model.thinking_enabled,
+    maxTokens:modelCall.budget.selectedMaxOutputTokens, thinkingEnabled:resolved.model.thinking_enabled,
     reasoningEffort:resolved.model.reasoning_effort, protocol:endpoint.protocol,
-    timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs, signal:requestSignal,
-    messages:[
-      { role:'system', content:`你是严格的交易月度复盘分块分析器。只能分析本分块已冻结的日复盘和行情摘要，不得自行补造统计。\n\n${contract}` },
-      { role:'user', content:JSON.stringify({ required_output:shape, chunk }) },
-    ],
+    timeout:modelCall.requestTimeoutMs, deadlineAtMs:modelCall.attemptSafetyDeadlineUtcMs,
+    followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs, signal:requestSignal,
+    messages,
     usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
     onProviderRequest:event => tracker.onProviderRequest(event),
     onProviderUsage:event => tracker.onProviderUsage(event),
+    onProviderActivity:event => tracker.onProviderActivity(event),
+    onProviderQuiet:event => tracker.onProviderQuiet(event),
     onProgress:stage => setPeriodReviewJobStage(job, `monthly_chunk_${Number(chunk.chunk_index)}`,
       'info', stage),
     validateObject:value => validateMonthlyReviewChunkContent(value, expectedIds),
@@ -1579,10 +1647,6 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
   const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review' })
   if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
   const endpoint = modelEndpoint(resolved.model)
-  const tracker = await startPeriodReviewModelTask(job, resolved, endpoint,
-    verifiedMonthlyMergeEvidence(evidence, checkpointResult), 'monthly_review_merge')
-  const requestSignal = job._abortSignal && tracker.signal
-    ? AbortSignal.any([job._abortSignal, tracker.signal]) : tracker.signal || job._abortSignal || null
   const dailyCaseIds = checkpointResult.expectedPeriodCaseIds
   const approvedDailyCaseIds = evidence.sources.filter(item => item.review_status === 'approved')
     .map(item => Number(item.period_case_id)).filter(id => dailyCaseIds.includes(id))
@@ -1602,17 +1666,31 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
     'memory_candidates 必须仅引用已确认日复盘且每项至少两个不同日复盘支持；不满足时返回空数组。',
     '冲突行情经验必须保留为独立 conflict_groups.candidates，分别写明 market_regime、applicability 与 supporting_period_case_ids，不得静默合并。',
   ].join('\n')
+  const messages = [
+    { role:'system', content:`你是严格的交易月度复盘汇总分析器。只能使用 verified_chunks、verified_daily_assessments 和确定性统计/元数据；不得读取或重建未验证来源。\n\n${contract}` },
+    { role:'user', content:JSON.stringify({ required_output:shape, evidence:mergeEvidence }) },
+  ]
+  const modelCall = await preparePeriodReviewModelCall('monthly_review_merge', resolved, messages,
+    Math.max(4000, Math.ceil(JSON.stringify(shape).length / 2.5)), {
+      nowUtcMs:Date.now(), businessDeadlineUtcMs:job._deadlineAtMs,
+    })
+  job._deadlineAtMs = modelCall.taskDeadlineUtcMs
+  job._attemptDeadlineAtMs = modelCall.attemptSafetyDeadlineUtcMs
+  job._modelBudget = modelCall.budget
+  const tracker = await startPeriodReviewModelTask(job, resolved, endpoint,
+    verifiedMonthlyMergeEvidence(evidence, checkpointResult), 'monthly_review_merge')
+  const requestSignal = job._abortSignal && tracker.signal
+    ? AbortSignal.any([job._abortSignal, tracker.signal]) : tracker.signal || job._abortSignal || null
   const output = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted, provider:resolved.model.provider,
     model:resolved.model.model_name, temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
-    maxTokens:Number(resolved.model.max_tokens || 4000), thinkingEnabled:resolved.model.thinking_enabled,
+    maxTokens:modelCall.budget.selectedMaxOutputTokens, thinkingEnabled:resolved.model.thinking_enabled,
     reasoningEffort:resolved.model.reasoning_effort, protocol:endpoint.protocol,
-    timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs, signal:requestSignal,
-    messages:[
-      { role:'system', content:`你是严格的交易月度复盘汇总分析器。只能使用 verified_chunks、verified_daily_assessments 和确定性统计/元数据；不得读取或重建未验证来源。\n\n${contract}` },
-      { role:'user', content:JSON.stringify({ required_output:shape, evidence:mergeEvidence }) },
-    ],
+    timeout:modelCall.requestTimeoutMs, deadlineAtMs:modelCall.attemptSafetyDeadlineUtcMs,
+    followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs, signal:requestSignal,
+    messages,
     usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
     onProviderRequest:event => tracker.onProviderRequest(event), onProviderUsage:event => tracker.onProviderUsage(event),
+    onProviderActivity:event => tracker.onProviderActivity(event), onProviderQuiet:event => tracker.onProviderQuiet(event),
     onProgress:stage => setPeriodReviewJobStage(job, stage),
     validateObject:value => validateMonthlyReviewMergeContent(value, dailyCaseIds, approvedDailyCaseIds,
       mergeEvidence.conflict_groups),
@@ -1642,9 +1720,10 @@ async function finishMonthlyReviewSuccess(job, generated) {
       [job.period_case_id, nextVersionNo, parentVersionId, body, sha256(body), now])
       await run(`UPDATE period_review_cases SET status = 'draft', current_version_id = ?, updated_at = ? WHERE id = ?`, [insert.insertId, now, job.period_case_id])
     }
-    await run(`UPDATE period_review_jobs SET status = 'succeeded', model_profile_id = ?, credential_source = ?, completed_at = ?,
+    await run(`UPDATE period_review_jobs SET status = 'succeeded', progress_stage = 'succeeded', stage_updated_at = ?,
+      model_profile_id = ?, credential_source = ?, last_error_code = NULL, next_attempt_at = NULL, completed_at = ?,
       lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?`,
-    [generated.resolved.model_profile_id, generated.resolved.credential_source, now, now, job.id])
+    [now, generated.resolved.model_profile_id, generated.resolved.credential_source, now, now, job.id])
   })
 }
 
@@ -1664,7 +1743,7 @@ async function finishMonthlyReviewFailure(job, error, modelTask = null) {
 export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
   const job = await claimMonthlyReviewJob()
   if (!job) return { claimed: false }
-  job._deadlineAtMs = Date.now() + 6 * 60 * 60_000
+  job._deadlineAtMs = modelTaskDeadlines('monthly_review_merge', { nowUtcMs:Date.now() }).taskDeadlineUtcMs
   const lease = startPeriodReviewLeaseHeartbeat(job)
   job._abortSignal = lease.signal
   await setPeriodReviewJobStage(job, 'preparing')

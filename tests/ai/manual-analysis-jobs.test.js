@@ -23,7 +23,7 @@ vi.mock('../../server/routes/ai/model-task-runtime.js', () => ({
   markModelTaskSucceededFromResult, markModelTaskCompletedStaleById,
 }))
 
-import { createManualAnalysisJob, __manualAnalysisJobsTest } from '../../server/routes/ai/manual-analysis-jobs.js'
+import { createManualAnalysisJob, recoverManualAnalysisJobs, __manualAnalysisJobsTest } from '../../server/routes/ai/manual-analysis-jobs.js'
 
 describe('manual analysis durable jobs', () => {
   beforeEach(() => {
@@ -90,6 +90,32 @@ describe('manual analysis durable jobs', () => {
     })
     expect(job).toMatchObject({ id:'job-1', status:'failed', error:{ code:'provider_error', message:'provider unavailable' } })
     expect(job).not.toHaveProperty('systemPrompt')
+  })
+
+  it('classifies only a submitted request without a verified response as status unknown', () => {
+    expect(__manualAnalysisJobsTest.providerOutcomeUnknown({ submitted:true, responseReceived:false })).toBe(true)
+    expect(__manualAnalysisJobsTest.providerOutcomeUnknown({ submitted:true, responseReceived:true })).toBe(false)
+    expect(__manualAnalysisJobsTest.providerOutcomeUnknown({ submitted:false, responseReceived:false })).toBe(false)
+  })
+
+  it('keeps status unknown before its task deadline and finalizes it stale after the deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(100_000)
+      queryAll.mockResolvedValueOnce([{ job_id:'job-unknown', model_task_id:'task-unknown',
+        status:'status_unknown', task_status:'status_unknown', task_deadline_at_utc_msc:120_000 }])
+      await recoverManualAnalysisJobs()
+      expect(markModelTaskCompletedStaleById).not.toHaveBeenCalled()
+
+      vi.setSystemTime(130_000)
+      queryAll.mockResolvedValueOnce([{ job_id:'job-unknown', model_task_id:'task-unknown',
+        status:'status_unknown', task_status:'status_unknown', task_deadline_at_utc_msc:120_000 }])
+      await recoverManualAnalysisJobs()
+      expect(markModelTaskCompletedStaleById).toHaveBeenCalledWith('task-unknown',
+        'manual_analysis_status_unknown_deadline_expired', expect.objectContaining({ requireDeadlineReached:true }))
+      expect(queryRun).toHaveBeenCalledWith(expect.stringContaining('UPDATE ai_manual_analysis_jobs SET'),
+        expect.arrayContaining(['completed_stale']))
+    } finally { vi.useRealTimers() }
   })
 
   it('restores an already committed signal using the same handleAnalyze shape', () => {

@@ -11,6 +11,22 @@ describe('model provider capabilities and adapters', () => {
     })
   })
 
+  it('does not trust capability flags or token limits until the profile is verified', () => {
+    expect(normalizeProviderCapabilities({
+      verification_status:'unverified',
+      supports_stream:1,
+      supports_poll:1,
+      context_window_tokens:128000,
+      max_output_tokens:32000,
+    })).toMatchObject({
+      supports_stream:false,
+      supports_poll:false,
+      context_window_tokens:null,
+      max_output_tokens:null,
+      verification_status:'unverified',
+    })
+  })
+
   it('never calls poll or cancel when the exact profile capability is unverified', async () => {
     const implementation = { poll:vi.fn(), cancel:vi.fn(), submit:vi.fn() }
     const adapter = createModelProviderAdapter(normalizeProviderCapabilities(), implementation)

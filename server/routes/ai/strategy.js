@@ -24,6 +24,7 @@ import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
 import { indicatorRequiredHistory } from './indicator-registry.js'
 import { resolveDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
+import { modelTaskDeadlines } from './model-task-budget.js'
 import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
@@ -686,8 +687,12 @@ export async function handleAnalyze(userId, params, options = {}) {
   config._include_portfolio_context = strategy.scope === 'private' && Boolean(Number(strategy.include_portfolio_context))
   if (options.abortSignal) config._abortSignal = options.abortSignal
   if (options.taskId) config._modelTaskId = String(options.taskId)
+  if (Number(options.taskDeadlineAtUtcMs) > 0) config._taskDeadlineAtUtcMs = Number(options.taskDeadlineAtUtcMs)
+  if (Number(options.resultValidUntilUtcMs) > 0) config._resultValidUntilUtcMs = Number(options.resultValidUntilUtcMs)
   if (typeof options.onProviderRequest === 'function') config._onProviderRequest = options.onProviderRequest
   if (typeof options.onProviderUsage === 'function') config._onProviderUsage = options.onProviderUsage
+  if (typeof options.onProviderActivity === 'function') config._onProviderActivity = options.onProviderActivity
+  if (typeof options.onProviderQuiet === 'function') config._onProviderQuiet = options.onProviderQuiet
   const prompt = strategy.system_prompt || ''
   const tags = policy.marketDataPlan.timeframes.map(item => ({ tf: item.timeframe, count: item.kline_count }))
 
@@ -1002,7 +1007,7 @@ export async function handleAnalyze(userId, params, options = {}) {
   return { status: 'success', signal, market }
 }
 
-export async function handleAnalyzeCompare(userId, params) {
+async function executeAnalyzeCompare(userId, params) {
   const { symbol, model_ids, strategy_id } = params
   if (!symbol) return { status: 'error', message: 'symbol required' }
   if (!strategy_id) return { ok: false, error: 'strategy_id_required' }
@@ -1154,6 +1159,105 @@ export async function handleAnalyzeCompare(userId, params) {
     provider: resolved.model.provider || resolved.model.api_provider,
   }]))
   return { ok: true, results, models, market_snapshot: market }
+}
+
+function liveCompareIdempotency(userId, params = {}, nowMs = Date.now()) {
+  const explicit = String(params.idempotency_key || params.request_id || '').trim()
+  const source = explicit || JSON.stringify({
+    window:Math.floor(Number(nowMs) / (10 * 60_000)),
+    user_id:Number(userId), strategy_id:Number(params.strategy_id || 0),
+    symbol:String(params.symbol || '').toUpperCase(),
+    model_ids:Array.isArray(params.model_ids) ? [...new Set(params.model_ids.map(Number))].sort((a, b) => a - b) : [],
+  })
+  return crypto.createHash('sha256').update(`live-model-compare:${Number(userId)}:${source}`).digest('hex')
+}
+
+function liveCompareSourceHash(userId, params = {}) {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    user_id:Number(userId), strategy_id:Number(params.strategy_id || 0),
+    symbol:String(params.symbol || '').toUpperCase(),
+    model_ids:Array.isArray(params.model_ids) ? [...new Set(params.model_ids.map(Number))].sort((a, b) => a - b) : [],
+  })).digest('hex')
+}
+
+function liveCompareJobId(idempotencyHash) {
+  const value = String(idempotencyHash || '').padEnd(32, '0')
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-4${value.slice(13, 16)}-a${value.slice(17, 20)}-${value.slice(20, 32)}`
+}
+
+function parseLiveCompareResult(row) {
+  if (!row?.result_json) return null
+  try { return JSON.parse(row.result_json) } catch { return null }
+}
+
+/**
+ * Live comparison keeps its synchronous response contract, but the durable
+ * row is the billing/idempotency boundary. A client retry within the same
+ * ten-minute input window returns the committed result or the active state;
+ * it never starts a second set of provider calls.
+ */
+export async function handleAnalyzeCompare(userId, params = {}) {
+  const nowMs = Date.now()
+  const explicitIdempotency = Boolean(String(params.idempotency_key || params.request_id || '').trim())
+  const sourceHash = liveCompareSourceHash(userId, params)
+  if (!explicitIdempotency) {
+    const active = await queryOne(`SELECT * FROM ai_model_compare_jobs WHERE user_id = ?
+      AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.job_type')) = 'live'
+      AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.live_source_hash')) = ?
+      AND status IN ('queued','running','status_unknown') ORDER BY created_at DESC LIMIT 1`,
+    [Number(userId), sourceHash])
+    const activeDeadline = Number(safeCompareJson(active?.params_json, {})?.live_deadline_at_utc_msc || 0)
+    if (active && (!activeDeadline || activeDeadline > nowMs)) {
+      return parseLiveCompareResult(active) || { ok:false, status:String(active.status || 'running'),
+        error:active.error_code || 'model_compare_already_running', job_id:String(active.id) }
+    }
+  }
+  const idempotencyHash = liveCompareIdempotency(userId, params)
+  const jobId = liveCompareJobId(idempotencyHash)
+  const compareDeadline = modelTaskDeadlines('model_compare', { nowUtcMs:nowMs }).attemptSafetyDeadlineUtcMs
+  const persistedParams = {
+    ...params,
+    job_type:'live',
+    live_idempotency_hash:idempotencyHash,
+    live_source_hash:sourceHash,
+    live_deadline_at_utc_msc:compareDeadline,
+  }
+  try {
+    await queryRun(`INSERT INTO ai_model_compare_jobs
+      (id, user_id, status, stage, progress_percent, completed_steps, total_steps,
+       params_json, result_json, error_code, cancel_requested, created_at, updated_at)
+      VALUES (?, ?, 'running', 'inference', 5, 0, ?, ?, NULL, NULL, 0, NOW(), NOW())`,
+    [jobId, Number(userId), Array.isArray(params.model_ids) ? params.model_ids.length : 0, JSON.stringify(persistedParams)])
+  } catch (error) {
+    const duplicate = error?.code === 'ER_DUP_ENTRY' || /duplicate/i.test(String(error?.message || ''))
+    if (!duplicate) throw error
+    const existing = await queryOne('SELECT * FROM ai_model_compare_jobs WHERE id = ? AND user_id = ? LIMIT 1',
+      [jobId, Number(userId)])
+    const committed = parseLiveCompareResult(existing)
+    if (existing?.status === 'succeeded' && committed) return committed
+    if (['running', 'queued'].includes(String(existing?.status || ''))) {
+      return { ok:false, status:'running', error:'model_compare_already_running', job_id:jobId }
+    }
+    return committed || { ok:false, status:String(existing?.status || 'status_unknown'),
+      error:existing?.error_code || 'model_compare_status_unknown', job_id:jobId }
+  }
+
+  try {
+    const result = await executeAnalyzeCompare(userId, params)
+    const succeeded = result?.ok === true
+    await queryRun(`UPDATE ai_model_compare_jobs SET status = ?, stage = ?, progress_percent = 100,
+      completed_steps = total_steps, result_json = ?, error_code = ?, completed_at = NOW(), updated_at = NOW()
+      WHERE id = ? AND user_id = ? AND status = 'running'`,
+    [succeeded ? 'succeeded' : 'failed', succeeded ? 'succeeded' : 'failed', JSON.stringify(result),
+      succeeded ? null : String(result?.error || result?.message || 'model_compare_failed').slice(0, 255),
+      jobId, Number(userId)])
+    return result
+  } catch (error) {
+    await queryRun(`UPDATE ai_model_compare_jobs SET status = 'failed', stage = 'failed', progress_percent = 100,
+      error_code = ?, completed_at = NOW(), updated_at = NOW() WHERE id = ? AND user_id = ? AND status = 'running'`,
+    [String(error?.code || error?.message || 'model_compare_failed').slice(0, 255), jobId, Number(userId)]).catch(() => {})
+    throw error
+  }
 }
 
 export async function handleHistoryCompare(userId, params, options = {}) {
@@ -2422,7 +2526,8 @@ function queueHistoryCompareJob(job) {
 
 async function reconcileInterruptedHistoryCompareJobs(userId) {
   const rows = await queryAll(`SELECT * FROM ai_model_compare_jobs
-    WHERE user_id = ? AND status IN ('queued','running','cancelling')`, [Number(userId)])
+    WHERE user_id = ? AND status IN ('queued','running','cancelling')
+      AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.job_type')), 'history') <> 'live'`, [Number(userId)])
   for (const row of rows || []) {
     const stale = historyCompareJobFromRow(row)
     if (!stale || historyCompareJobs.has(stale.id)) continue
@@ -2440,8 +2545,14 @@ async function reconcileInterruptedHistoryCompareJobs(userId) {
 }
 
 export async function startHistoryCompareJobs() {
+  await queryRun(`UPDATE ai_model_compare_jobs SET status = 'status_unknown', stage = 'status_unknown',
+    error_code = 'live_compare_status_unknown_after_restart', completed_at = NOW(), updated_at = NOW()
+    WHERE status IN ('queued','running','cancelling')
+      AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.job_type')) = 'live'`)
   const rows = await queryAll(`SELECT * FROM ai_model_compare_jobs
-    WHERE status IN ('queued','running','cancelling') ORDER BY created_at ASC`)
+    WHERE status IN ('queued','running','cancelling')
+      AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.job_type')), 'history') <> 'live'
+    ORDER BY created_at ASC`)
   for (const row of rows || []) {
     const job = historyCompareJobFromRow(row)
     if (!job || historyCompareJobs.has(job.id)) continue
@@ -2562,7 +2673,7 @@ export async function getHistoryCompareJob(userId, jobId) {
     const row = await queryOne('SELECT * FROM ai_model_compare_jobs WHERE id = ? AND user_id = ?', [String(jobId), Number(userId)])
     job = historyCompareJobFromRow(row)
   }
-  if (!job || job.user_id !== Number(userId)) throw new Error('history_compare_job_not_found')
+  if (!job || job.user_id !== Number(userId) || job.params?.job_type === 'live') throw new Error('history_compare_job_not_found')
   if (['queued', 'running', 'cancelling'].includes(job.status) && !historyCompareJobs.has(job.id)) {
     job.abort_controller = new AbortController()
     historyCompareJobs.set(job.id, job)
@@ -2576,14 +2687,14 @@ export async function cancelHistoryCompareJob(userId, jobId) {
   if (!job) {
     const row = await queryOne('SELECT * FROM ai_model_compare_jobs WHERE id = ? AND user_id = ?', [String(jobId), Number(userId)])
     job = historyCompareJobFromRow(row)
-    if (!job || job.user_id !== Number(userId)) throw new Error('history_compare_job_not_found')
+    if (!job || job.user_id !== Number(userId) || job.params?.job_type === 'live') throw new Error('history_compare_job_not_found')
     if (['queued', 'running', 'cancelling'].includes(job.status)) {
       job.abort_controller = new AbortController()
       historyCompareJobs.set(job.id, job)
       queueHistoryCompareJob(job)
     }
   }
-  if (job.user_id !== Number(userId)) throw new Error('history_compare_job_not_found')
+  if (job.user_id !== Number(userId) || job.params?.job_type === 'live') throw new Error('history_compare_job_not_found')
   if (['succeeded', 'failed', 'cancelled'].includes(job.status)) return publicHistoryCompareJob(job)
   job.cancel_requested = true
   job.status = job.status === 'queued' ? 'cancelled' : 'cancelling'
@@ -2601,6 +2712,7 @@ export async function listHistoryCompareJobs(userId, limit = 10) {
   const rows = await queryAll(`SELECT id, user_id, status, stage, progress_percent,
     completed_steps, total_steps, params_json, checkpoint_manifest_json, error_code, cancel_requested, created_at, updated_at
     FROM ai_model_compare_jobs WHERE user_id = ?
+      AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.job_type')), 'history') <> 'live'
     ORDER BY created_at DESC LIMIT ?`, [Number(userId), Math.max(1, Math.min(30, Number(limit) || 10))])
   const jobs = rows.map(historyCompareJobFromRow).filter(Boolean)
   for (const job of jobs) {
@@ -2621,7 +2733,8 @@ export async function deleteHistoryCompareJob(userId, jobId) {
   }
   await withTransaction(async run => {
     const [rows] = await run(`SELECT id FROM ai_model_compare_jobs
-      WHERE id = ? AND user_id = ? AND status IN ('succeeded','failed','cancelled') FOR UPDATE`,
+      WHERE id = ? AND user_id = ? AND status IN ('succeeded','failed','cancelled')
+        AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.job_type')), 'history') <> 'live' FOR UPDATE`,
     [String(jobId), Number(userId)])
     if (!rows?.[0]) throw new Error('history_compare_job_not_found')
     await run('DELETE FROM ai_model_compare_checkpoints WHERE job_id = ?', [String(jobId)])

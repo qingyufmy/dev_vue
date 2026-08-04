@@ -114,4 +114,19 @@ describe('authoritative model task tracker', () => {
     expect(tracker.status).toBe('retry_wait')
     await tracker.stop()
   })
+
+  it('records quiet and resumed provider states before accepting a terminal response', async () => {
+    const tracker = await createModelTaskTracker({ taskKind:'daily_review', idempotencyKey:'daily:activity' }, { renewIntervalMs:60_000 })
+    await tracker.onProviderRequest({ phase:'request' })
+    await tracker.onProviderQuiet({ phase:'request' })
+    expect(tracker.status).toBe('provider_quiet')
+    await tracker.onProviderActivity({ phase:'request', state:'response_headers', providerRequestId:'req-activity' })
+    expect(tracker.status).toBe('provider_running')
+    await tracker.onProviderUsage({ phase:'request', status:'success', httpStatus:200,
+      responseReceived:true, providerRequestId:'req-activity' })
+    expect(tracker.status).toBe('response_received')
+    expect(runtime.transitionModelTask.mock.calls.map(([, status]) => status))
+      .toEqual(['preparing', 'submitted', 'provider_quiet', 'provider_running', 'response_received'])
+    await tracker.stop()
+  })
 })

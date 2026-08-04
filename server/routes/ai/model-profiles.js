@@ -22,6 +22,13 @@ function normalizeRequestTimeout(value, fallback = null) {
   return timeout
 }
 
+function normalizeMaxTokens(value, fallback = null) {
+  if (value === undefined || value === null || value === '') return fallback
+  const tokens = Number(value)
+  if (!Number.isInteger(tokens) || tokens < 100) throw new Error('model_max_tokens_invalid')
+  return tokens
+}
+
 function parseAllowedPlans(value) {
   if (Array.isArray(value)) return value.map(String)
   if (value && typeof value === 'object') return Object.values(value).map(String)
@@ -58,6 +65,7 @@ export async function createModelProfile(userId, payload, callerRole) {
   const ownerUserId = scope === MODEL_PROFILE_SCOPE.PLATFORM ? 0 : userId
   const providerConfig = normalizeModelProviderProfile(payload)
   const requestTimeoutMs = normalizeRequestTimeout(payload.request_timeout_ms)
+  const maxTokens = normalizeMaxTokens(payload.max_tokens, 8000)
   let keyEnc = null
   let keyVersion = null
   if (payload.api_key) {
@@ -79,7 +87,7 @@ export async function createModelProfile(userId, payload, callerRole) {
       keyEnc,
       keyVersion,
       payload.temperature ?? 0.3,
-      payload.max_tokens ?? 8000,
+      maxTokens,
       providerConfig.thinking_enabled,
       providerConfig.reasoning_effort,
       requestTimeoutMs,
@@ -131,6 +139,7 @@ export async function updateModelProfile(id, userId, payload) {
   if (existing.owner_user_id !== userId) throw new Error('model_profile_access_denied')
   const providerConfig = normalizeModelProviderProfile(payload, existing)
   const requestTimeoutMs = normalizeRequestTimeout(payload.request_timeout_ms, existing.request_timeout_ms)
+  const maxTokens = normalizeMaxTokens(payload.max_tokens)
 
   let keyEnc = existing.api_key_encrypted
   let keyVersion = existing.key_version
@@ -155,7 +164,7 @@ export async function updateModelProfile(id, userId, payload) {
       providerConfig.api_base_url,
       keyEnc !== undefined ? keyEnc : null,
       keyVersion,
-      payload.temperature ?? null, payload.max_tokens ?? null,
+      payload.temperature ?? null, maxTokens,
       providerConfig.thinking_enabled,
       providerConfig.reasoning_effort,
       requestTimeoutMs,

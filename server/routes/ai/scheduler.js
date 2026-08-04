@@ -32,6 +32,7 @@ import {
 } from '../../bridge-v3/update-maintenance-registry.js'
 import { trustedTerminalClock } from './terminal-clock.js'
 import * as modelTaskTrackerModule from './model-task-tracker.js'
+import { modelTaskDeadlines } from './model-task-budget.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -115,7 +116,7 @@ export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinut
 
 function buildAutoModelTaskInput({ promptTypeId, symbol, cycleId, cycleStartedAtMs, strategy,
   config, market, marketMeta, primaryTimeframe, intervalMinutes, resultValidUntilUtcMsc,
-  renderedEvidence = null }) {
+  taskDeadlineAtUtcMsc = null, renderedEvidence = null }) {
   const marketJson = JSON.stringify(market || {})
   const evidencePrompt = renderedEvidence
     ? `${renderedEvidence.systemPrompt || ''}\n${renderedEvidence.userPrompt || ''}`
@@ -127,8 +128,8 @@ function buildAutoModelTaskInput({ promptTypeId, symbol, cycleId, cycleStartedAt
     strategy_id:Number(strategy?.id || promptTypeId), strategy_version:Number(strategy?.version || 1),
   }))
   const promptHash = sha256(evidencePrompt)
-  const configuredDeadlineMs = Math.max(60_000, Number(config?.request_timeout_ms) || 120_000)
-  const taskDeadlineAtUtcMs = cycleStartedAtMs + Math.min(10 * 60_000, configuredDeadlineMs)
+  const taskDeadlineAtUtcMs = Number(taskDeadlineAtUtcMsc)
+    || modelTaskDeadlines('auto_inference', { nowUtcMs:cycleStartedAtMs }).taskDeadlineUtcMs
   const trustedClock = marketMeta && trustedTerminalClock(marketMeta) ? marketMeta : null
   const frozenContext = {
     cycle_id:cycleId,
@@ -1621,6 +1622,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
   let cycleError = null
   let previousOnProviderRequest = null
   let previousOnProviderUsage = null
+  let previousOnProviderActivity = null
+  let previousOnProviderQuiet = null
   let previousAbortSignal = null
   const finishModelTaskAfterSignalGate = async (type, reason) => {
     if (modelTaskSettled || !modelTaskTracker) return
@@ -1823,8 +1826,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     // Enforce mode: create one durable envelope before the first provider
     // callback.  The task freezes the cycle inputs and is also the fencing
     // token used by the signal application transaction.
-    const configuredDeadlineMs = Math.max(60_000, Number(config?.request_timeout_ms) || 120_000)
-    const taskDeadlineAtUtcMsc = cycleStartedAtMs + Math.min(10 * 60_000, configuredDeadlineMs)
+    const taskDeadlineAtUtcMsc = modelTaskDeadlines('auto_inference', {
+      nowUtcMs:cycleStartedAtMs,
+    }).taskDeadlineUtcMs
     const resultValidUntilUtcMsc = Math.min(
       Date.now() + Math.max(1, Number(signalTtlSeconds(primaryTf)) || 120) * 1000,
       taskDeadlineAtUtcMsc,
@@ -1833,7 +1837,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     const modelTaskInput = buildAutoModelTaskInput({
       promptTypeId, symbol, cycleId, cycleStartedAtMs, strategy:pt, config,
       market, marketMeta:ratesResp.market_meta, primaryTimeframe:primaryTf,
-      intervalMinutes, resultValidUntilUtcMsc,
+      intervalMinutes, resultValidUntilUtcMsc, taskDeadlineAtUtcMsc,
     })
     const createTracker = getAutoModelTaskTrackerFactory()
     modelTaskTracker = await createTracker(modelTaskInput, {
@@ -1845,8 +1849,12 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       throw error
     }
     config._modelTaskId = modelTaskTracker.taskId
+    config._taskDeadlineAtUtcMs = taskDeadlineAtUtcMsc
+    config._resultValidUntilUtcMs = resultValidUntilUtcMsc
     previousOnProviderRequest = config._onProviderRequest
     previousOnProviderUsage = config._onProviderUsage
+    previousOnProviderActivity = config._onProviderActivity
+    previousOnProviderQuiet = config._onProviderQuiet
     previousAbortSignal = config._abortSignal || null
     if (modelTaskTracker.signal) {
       config._abortSignal = previousAbortSignal
@@ -1856,7 +1864,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     let providerRequestCount = 0
     config._onProviderRequest = async event => {
       providerRequestCount += 1
-      if (providerRequestCount > 1) {
+      const previousProviderState = modelTaskTracker.providerRequestState
+      const controlledRepair = providerRequestCount === 2 && previousProviderState?.responseReceived === true
+      if (providerRequestCount > 1 && !controlledRepair) {
         const error = new Error('auto_inference_duplicate_provider_request')
         error.code = 'auto_inference_duplicate_provider_request'
         await modelTaskTracker.failed(error, true)
@@ -1868,6 +1878,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     config._onProviderUsage = async event => {
       if (typeof previousOnProviderUsage === 'function') await previousOnProviderUsage(event)
       await modelTaskTracker.onProviderUsage({ ...event, cycleId })
+    }
+    config._onProviderActivity = async event => {
+      if (typeof previousOnProviderActivity === 'function') await previousOnProviderActivity(event)
+      await modelTaskTracker.onProviderActivity({ ...event, cycleId })
+    }
+    config._onProviderQuiet = async event => {
+      if (typeof previousOnProviderQuiet === 'function') await previousOnProviderQuiet(event)
+      await modelTaskTracker.onProviderQuiet({ ...event, cycleId })
     }
 
     await broadcastAutoProgress(promptTypeId, symbol, { stage: 'ai', label: 'AI 模型深度推理', progress_percent: 46 })
@@ -2242,6 +2260,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       else delete config._onProviderRequest
       if (previousOnProviderUsage) config._onProviderUsage = previousOnProviderUsage
       else delete config._onProviderUsage
+      if (previousOnProviderActivity) config._onProviderActivity = previousOnProviderActivity
+      else delete config._onProviderActivity
+      if (previousOnProviderQuiet) config._onProviderQuiet = previousOnProviderQuiet
+      else delete config._onProviderQuiet
       if (previousAbortSignal) config._abortSignal = previousAbortSignal
       else delete config._abortSignal
     }

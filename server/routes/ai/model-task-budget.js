@@ -1,11 +1,11 @@
 const TASK_POLICIES = Object.freeze({
-  auto_inference:{ floor:2_000, cap:30_000, attemptMs:10 * 60_000, taskMs:10 * 60_000 },
-  manual_analysis:{ floor:2_000, cap:30_000, attemptMs:15 * 60_000, taskMs:30 * 60_000 },
-  daily_review:{ floor:3_000, cap:30_000, attemptMs:20 * 60_000, taskMs:60 * 60_000 },
-  monthly_review_chunk:{ floor:3_000, cap:30_000, attemptMs:20 * 60_000, taskMs:6 * 60 * 60_000 },
-  monthly_review_merge:{ floor:4_000, cap:30_000, attemptMs:20 * 60_000, taskMs:6 * 60 * 60_000 },
-  model_compare:{ floor:2_000, cap:30_000, attemptMs:15 * 60_000, taskMs:24 * 60 * 60_000 },
-  memory_compression:{ floor:1_600, cap:12_000, attemptMs:15 * 60_000, taskMs:60 * 60_000 },
+  auto_inference:{ floor:2_000, defaultCap:30_000, attemptMs:10 * 60_000, taskMs:10 * 60_000 },
+  manual_analysis:{ floor:2_000, defaultCap:30_000, attemptMs:15 * 60_000, taskMs:30 * 60_000 },
+  daily_review:{ floor:3_000, defaultCap:30_000, attemptMs:20 * 60_000, taskMs:60 * 60_000 },
+  monthly_review_chunk:{ floor:3_000, defaultCap:30_000, attemptMs:20 * 60_000, taskMs:6 * 60 * 60_000 },
+  monthly_review_merge:{ floor:4_000, defaultCap:30_000, attemptMs:20 * 60_000, taskMs:6 * 60 * 60_000 },
+  model_compare:{ floor:2_000, defaultCap:30_000, attemptMs:15 * 60_000, taskMs:24 * 60 * 60_000 },
+  memory_compression:{ floor:1_600, defaultCap:12_000, attemptMs:15 * 60_000, taskMs:60 * 60_000 },
 })
 
 export function modelTaskPolicy(taskKind) {
@@ -22,7 +22,7 @@ export function selectModelTaskBudget({ taskKind, profileHardCap, providerOutput
   contextWindowTokens = null, estimatedInputTokens = 0, schemaNeedTokens = 0,
   historicalOutputP95 = 0, truncatedOutputHighWatermark = 0, safetyReserveRatio = 0.15 } = {}) {
   const policy = modelTaskPolicy(taskKind)
-  const profileCap = Math.max(1, Math.trunc(Number(profileHardCap) || policy.cap))
+  const profileCap = Math.max(1, Math.trunc(Number(profileHardCap) || policy.defaultCap))
   const providerCap = Number(providerOutputCap) > 0 ? Math.trunc(Number(providerOutputCap)) : Number.POSITIVE_INFINITY
   const contextWindow = Number(contextWindowTokens) > 0 ? Math.trunc(Number(contextWindowTokens)) : null
   const safetyReserve = contextWindow ? Math.ceil(contextWindow * Math.max(0.1, Number(safetyReserveRatio) || 0.15)) : 0
@@ -33,7 +33,10 @@ export function selectModelTaskBudget({ taskKind, profileHardCap, providerOutput
   const historyNeed = Math.max(0, Math.ceil((Number(historicalOutputP95) || 0) * 1.35))
   const truncationNeed = Math.max(0, Math.ceil((Number(truncatedOutputHighWatermark) || 0) * 2))
   const taskNeed = Math.max(policy.floor, schemaNeed, historyNeed, truncationNeed)
-  const hardLimit = Math.min(profileCap, providerCap, policy.cap, contextRoom)
+  // The database profile is the operator-controlled output hard cap. Do not
+  // add an invisible task-level ceiling on top of it; verified provider and
+  // context-window limits remain authoritative safety bounds.
+  const hardLimit = Math.min(profileCap, providerCap, contextRoom)
   const selected = Math.max(0, Math.min(hardLimit, taskNeed))
   return {
     selectedMaxOutputTokens:selected,
@@ -42,7 +45,7 @@ export function selectModelTaskBudget({ taskKind, profileHardCap, providerOutput
     contextRoomTokens:Number.isFinite(contextRoom) ? contextRoom : null,
     profileHardCap:profileCap,
     providerOutputCap:Number.isFinite(providerCap) ? providerCap : null,
-    taskCap:policy.cap,
+    taskCap:null,
     sufficient:selected >= schemaNeed,
     reason:selected < schemaNeed ? 'output_budget_insufficient'
       : truncationNeed >= Math.max(policy.floor, schemaNeed, historyNeed) ? 'output_truncation_growth'

@@ -8,6 +8,8 @@ import { getEffectiveFeatureFlags, isAiFeatureEnabled } from './rollout-governan
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { createModelTaskTracker } from './model-task-tracker.js'
 import { recoverAbandonedBusinessModelTasks } from './model-task-runtime.js'
+import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget } from './model-task-budget.js'
+import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 
 const DEFAULT_BUDGET = 800
 const MAX_BUDGET = 1600
@@ -26,6 +28,46 @@ let compressionTimer = null
 const parse = (value, fallback) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const tokenCount = value => Math.max(1, Math.ceil(Buffer.byteLength(String(value || ''), 'utf8') / 4))
 const safeError = error => String(error?.message || error || 'memory_error').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 128)
+
+function requestTimeoutForAttempt(_model, attemptSafetyDeadlineUtcMs, nowUtcMs = Date.now()) {
+  const remaining = Math.max(1, Math.trunc(Number(attemptSafetyDeadlineUtcMs) - Number(nowUtcMs)))
+  // A profile timeout is not the business deadline. Use the remaining task
+  // attempt window so an injected provider and the HTTP client share one
+  // bounded safety cutoff.
+  return remaining
+}
+
+async function prepareMemoryCompressionModelCall(resolved, messages, {
+  nowUtcMs = Date.now(), businessDeadlineUtcMs = null,
+} = {}) {
+  let capabilities = {}
+  try {
+    capabilities = await getModelProviderCapabilities(resolved?.model_profile_id) || {}
+  } catch (error) {
+    console.warn('[MemoryCompression] provider capability lookup unavailable:', safeError(error))
+  }
+  const budget = selectModelTaskBudget({
+    taskKind:'memory_compression',
+    profileHardCap:Number(resolved?.model?.max_tokens) || undefined,
+    providerOutputCap:capabilities.max_output_tokens,
+    contextWindowTokens:capabilities.context_window_tokens,
+    estimatedInputTokens:estimateModelInputTokens(messages),
+    schemaNeedTokens:Math.max(1_200, Math.ceil(JSON.stringify(messages).length / 8)),
+  })
+  // Keep profile/provider/context limits as hard caps and fail explicitly
+  // when they cannot satisfy the output contract.
+  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
+  const rawDeadlines = modelTaskDeadlines('memory_compression', { nowUtcMs, businessDeadlineUtcMs })
+  const deadlines = {
+    ...rawDeadlines,
+    attemptSafetyDeadlineUtcMs:Math.min(rawDeadlines.attemptSafetyDeadlineUtcMs, rawDeadlines.taskDeadlineUtcMs),
+  }
+  return {
+    budget,
+    ...deadlines,
+    requestTimeoutMs:requestTimeoutForAttempt(resolved?.model, deadlines.attemptSafetyDeadlineUtcMs, nowUtcMs),
+  }
+}
 
 function directionSide(value) {
   const normalized = String(value || '').trim().toLowerCase()
@@ -752,6 +794,39 @@ export async function maybeQueueCompression(userId, key, force = false) {
   const sourceHash = sha256(JSON.stringify(ids))
   await queryRun(`UPDATE experience_memory_summaries SET status = 'stale', invalidated_at = ?
     WHERE user_id = ? AND scope_key = ? AND status = 'active' AND source_set_hash <> ?`, [beijingNow(), userId, key, sourceHash])
+  const existing = await queryOne(`SELECT id, status, attempt_count, max_attempts, model_task_id
+    FROM memory_compression_jobs WHERE user_id = ? AND scope_key = ? AND source_set_hash = ? LIMIT 1`,
+  [userId, key, sourceHash])
+  if (existing) {
+    const existingStatus = String(existing.status || '')
+    const oldTask = existing.model_task_id
+      ? await queryOne(`SELECT task_id, status, task_deadline_at_utc_msc, error_code
+        FROM ai_model_tasks WHERE task_id = ? LIMIT 1`, [existing.model_task_id])
+      : null
+    const deadlineReached = Number(oldTask?.task_deadline_at_utc_msc) > 0
+      && Number(oldTask.task_deadline_at_utc_msc) <= Date.now()
+    const staleUnknown = existingStatus === 'status_unknown'
+      && oldTask?.status === 'completed_stale' && deadlineReached
+    if (staleUnknown && Number(existing.attempt_count || 0) < Number(existing.max_attempts || 3)) {
+      const reset = await queryRun(`UPDATE memory_compression_jobs SET status = 'queued',
+        last_error_code = 'provider_status_unknown_retry_queued', model_task_id = NULL,
+        lease_token = NULL, lease_expires_at = NULL, completed_at = NULL, updated_at = ?
+        WHERE id = ? AND user_id = ? AND scope_key = ? AND source_set_hash = ?
+          AND status = 'status_unknown' AND model_task_id = ?`,
+      [beijingNow(), existing.id, userId, key, sourceHash, existing.model_task_id])
+      const affected = Number(reset?.affectedRows ?? reset?.changes ?? 0)
+      if (affected === 1 || reset == null) {
+        return { queued:true, requeued:true, sourceHash, itemCount:ids.length, totalTokens }
+      }
+    }
+    if (existingStatus === 'status_unknown') {
+      return { queued:false, reason:'provider_status_unknown', sourceHash, itemCount:ids.length, totalTokens }
+    }
+    if (['queued', 'leased'].includes(existingStatus)) {
+      return { queued:existingStatus === 'queued', reason:existingStatus === 'leased' ? 'already_leased' : undefined,
+        sourceHash, itemCount:ids.length, totalTokens }
+    }
+  }
   await queryRun(`INSERT IGNORE INTO memory_compression_jobs
     (user_id, scope_key, source_memory_ids_json, source_set_hash, status, attempt_count, max_attempts, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'queued', 0, 3, ?, ?)`, [userId, key, JSON.stringify(ids), sourceHash, beijingNow(), beijingNow()])
@@ -802,6 +877,7 @@ function modelEndpoint(model) {
 
 async function inspectMemoryCompressionModelTask(task) {
   const job = await queryOne(`SELECT jobs.id, jobs.status, jobs.user_id, jobs.scope_key, jobs.source_set_hash,
+      jobs.attempt_count, jobs.max_attempts, jobs.model_task_id,
       EXISTS (SELECT 1 FROM experience_memory_summaries summaries
         WHERE summaries.user_id = jobs.user_id AND summaries.scope_key = jobs.scope_key
           AND summaries.source_set_hash = jobs.source_set_hash AND summaries.status IN ('active','superseded')) AS result_persisted
@@ -830,6 +906,20 @@ async function transitionMemoryCompressionBusiness({ action, task, business, rea
     return
   }
   if (action === 'stale') {
+    const statusUnknownDeadline = String(reason || '') === 'model_task_status_unknown_deadline_expired'
+    const attemptsRemaining = Number(business?.job?.attempt_count || 0) < Number(business?.job?.max_attempts || 3)
+    if (statusUnknownDeadline && attemptsRemaining) {
+      // The generic model task is already completed_stale at this point. Keep
+      // its immutable audit trail, but release the unique business row for a
+      // fresh model task. The status_unknown window above never reaches this
+      // branch, so an in-flight provider request is never duplicated.
+      await queryRun(`UPDATE memory_compression_jobs SET status = 'queued',
+        last_error_code = 'provider_status_unknown_retry_queued', model_task_id = NULL,
+        lease_token = NULL, lease_expires_at = NULL, completed_at = NULL, updated_at = ?
+        WHERE id = ? AND model_task_id = ? AND status = 'status_unknown'`,
+      [now, jobId, task.task_id])
+      return
+    }
     await queryRun(`UPDATE memory_compression_jobs SET status = 'failed', last_error_code = ?,
       lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?
       WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed','skipped')`,
@@ -856,7 +946,7 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
   const job = await claimCompressionJob()
   if (!job) return { claimed: false }
   const lease = startMemoryCompressionLeaseHeartbeat(job)
-  job._deadlineAtMs = Date.now() + 60 * 60_000
+  job._deadlineAtMs = modelTaskDeadlines('memory_compression', { nowUtcMs:Date.now() }).taskDeadlineUtcMs
   try {
     if (!await isAiFeatureEnabled('memory_compression_enabled', job.user_id)) {
       await queryRun(`UPDATE memory_compression_jobs SET status = 'skipped', last_error_code = 'memory_compression_disabled',
@@ -871,10 +961,32 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
     const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: null, usage: 'memory_compression' })
     if (!resolved.model) throw new Error(resolved.error || 'compression_model_unavailable')
     const endpoint = modelEndpoint(resolved.model)
+    const input = current.map(item => ({ id: Number(item.id), scope: parse(item.scope_json, {}), conditions: parse(item.conditions_json, {}), lesson: item.lesson_text, anti_pattern: item.anti_pattern_text }))
+    const category = current[0] ? memoryCategory(current[0]) : 'general'
+    const applicability = mergeMemoryApplicability(current)
+    const messages = [
+      { role: 'system', content: '把用户确认的交易经验压缩成保留适用条件和冲突边界的摘要。不得创造新规则，不得提高仓位或风险。只返回 JSON。' },
+      { role: 'user', content: JSON.stringify({ output: { summary: 'string <= 1200 tokens', source_memory_ids: ids }, memories: input }) },
+    ]
+    const modelCall = await prepareMemoryCompressionModelCall(resolved, messages, {
+      nowUtcMs:Date.now(), businessDeadlineUtcMs:job._deadlineAtMs,
+    })
+    job._deadlineAtMs = modelCall.taskDeadlineUtcMs
+    job._attemptDeadlineAtMs = modelCall.attemptSafetyDeadlineUtcMs
+    job._modelBudget = modelCall.budget
+    const baseIdempotencyKey = `memory_compression:${job.id}:${job.source_set_hash}`
+    const priorModelTaskId = job.model_task_id || null
+    let idempotencyKey = `${baseIdempotencyKey}:attempt:${Math.max(1, Number(job.attempt_count) || 1)}`
+    if (priorModelTaskId) {
+      const priorTask = await queryOne(`SELECT task_id, status, idempotency_key
+        FROM ai_model_tasks WHERE task_id = ? LIMIT 1`, [priorModelTaskId])
+      if (priorTask && ['queued', 'retry_wait'].includes(String(priorTask.status || ''))
+        && priorTask.idempotency_key) idempotencyKey = priorTask.idempotency_key
+    }
     const tracker = await createModelTaskTracker({
       taskKind:'memory_compression', queueClass:'background', ownerUserId:job.user_id,
       domainType:'memory_compression_job', domainId:job.id,
-      idempotencyKey:`memory_compression:${job.id}:${job.source_set_hash}`,
+      idempotencyKey,
       snapshotHash:job.source_set_hash, inputHash:job.source_set_hash,
       provider:resolved.model.provider, model:resolved.model.model_name,
       modelProfileId:resolved.model_profile_id, protocol:endpoint.protocol,
@@ -882,7 +994,8 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
       maxAttempts:Number(job.max_attempts) || 3, taskDeadlineAtUtcMs:job._deadlineAtMs,
     }, { workerId:`memory-compression:${process.pid}`, linkTask:async taskId => {
       const result = await queryRun(`UPDATE memory_compression_jobs
-        SET model_task_id = COALESCE(model_task_id, ?) WHERE id = ?`, [taskId, job.id])
+        SET model_task_id = CASE WHEN model_task_id IS NULL OR model_task_id = ? THEN ? ELSE model_task_id END
+        WHERE id = ?`, [priorModelTaskId, taskId, job.id])
       const affected = Number(result?.affectedRows ?? result?.changes)
       if (Number.isFinite(affected) && affected < 1) {
         const linked = await queryOne('SELECT model_task_id FROM memory_compression_jobs WHERE id = ? LIMIT 1', [job.id])
@@ -891,18 +1004,17 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
       return true
     } })
     job._modelTracker = tracker
-    const input = current.map(item => ({ id: Number(item.id), scope: parse(item.scope_json, {}), conditions: parse(item.conditions_json, {}), lesson: item.lesson_text, anti_pattern: item.anti_pattern_text }))
-    const category = current[0] ? memoryCategory(current[0]) : 'general'
-    const applicability = mergeMemoryApplicability(current)
     const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider, model: resolved.model.model_name,
-      temperature: 0.1, maxTokens: Math.min(resolved.model.max_tokens || 1600, 1800), thinkingEnabled: resolved.model.thinking_enabled,
+      temperature: 0.1, maxTokens:modelCall.budget.selectedMaxOutputTokens, thinkingEnabled: resolved.model.thinking_enabled,
       reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
-      timeout:Number(resolved.model.request_timeout_ms || 120000), deadlineAtMs:job._deadlineAtMs,
+      timeout:modelCall.requestTimeoutMs, deadlineAtMs:modelCall.attemptSafetyDeadlineUtcMs,
+      followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs,
       signal:AbortSignal.any([lease.signal, tracker.signal]),
       onProviderRequest:event => tracker.onProviderRequest(event),
       onProviderUsage:event => tracker.onProviderUsage(event),
-      messages: [{ role: 'system', content: '把用户确认的交易经验压缩成保留适用条件和冲突边界的摘要。不得创造新规则，不得提高仓位或风险。只返回 JSON。' },
-        { role: 'user', content: JSON.stringify({ output: { summary: 'string <= 1200 tokens', source_memory_ids: ids }, memories: input }) }],
+      onProviderActivity:event => tracker.onProviderActivity(event),
+      onProviderQuiet:event => tracker.onProviderQuiet(event),
+      messages,
       usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'memory_compression', strategyId: null },
     })
     const outputIds = Array.isArray(output.source_memory_ids) ? output.source_memory_ids.map(Number).sort((a, b) => a - b) : []
@@ -931,8 +1043,8 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
       [job.user_id, Number(current[0]?.strategy_id || 0) || null, category, JSON.stringify(applicability),
         JSON.stringify(applicability.avoid_when || {}), job.scope_key, Number(versions[0].max_version) + 1,
         JSON.stringify(ids), job.source_set_hash, summaryText, tokenCount(summaryText), resolved.model_profile_id, resolved.credential_source, now])
-      await run(`UPDATE memory_compression_jobs SET status = 'succeeded', completed_at = ?, lease_token = NULL,
-        lease_expires_at = NULL, updated_at = ? WHERE id = ?`, [now, now, job.id])
+      await run(`UPDATE memory_compression_jobs SET status = 'succeeded', last_error_code = NULL,
+        completed_at = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?`, [now, now, job.id])
     })
     await tracker.succeeded({ resultRef:`memory_scope:${job.scope_key}` })
     return { claimed: true, status: 'succeeded', scopeKey: job.scope_key }

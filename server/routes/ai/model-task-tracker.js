@@ -227,6 +227,32 @@ export async function createModelTaskTracker(input, {
       }
       return attempt
     }),
+    onProviderActivity:event => enqueue(async () => {
+      if (task.status === 'submitted' || task.status === 'provider_quiet') {
+        task = await transitionModelTask(task, 'provider_running')
+      }
+      if (task.status !== 'provider_running' && task.status !== 'response_received') {
+        throw trackerError('model_task_provider_activity_invalid', task.status)
+      }
+      providerAttemptState = {
+        ...providerAttemptState,
+        submitted:true,
+        providerRequestId:event?.providerRequestId || providerAttemptState.providerRequestId || null,
+      }
+      return true
+    }),
+    onProviderQuiet:event => enqueue(async () => {
+      if (task.status === 'submitted' || task.status === 'provider_running') {
+        task = await transitionModelTask(task, 'provider_quiet')
+      }
+      if (task.status !== 'provider_quiet') throw trackerError('model_task_provider_quiet_invalid', task.status)
+      providerAttemptState = {
+        ...providerAttemptState,
+        submitted:true,
+        providerRequestId:event?.providerRequestId || providerAttemptState.providerRequestId || null,
+      }
+      return true
+    }),
     onProviderUsage:event => enqueue(async () => {
       if (!attempt) throw trackerError('model_task_attempt_missing')
       const httpStatus = Number(event?.httpStatus)
@@ -251,7 +277,7 @@ export async function createModelTaskTracker(input, {
         errorCode:event?.errorCode,
       })
       attempt = null
-      if (event?.status === 'success' && task.status === 'submitted') {
+      if (event?.status === 'success' && ['submitted', 'provider_running', 'provider_quiet'].includes(task.status)) {
         task = await transitionModelTask(task, 'response_received', {
           finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails,
         })

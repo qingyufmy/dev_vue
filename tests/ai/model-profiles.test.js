@@ -292,6 +292,22 @@ describe('model profile authorization and defaults', () => {
     }, 'pro')).rejects.toThrow('model_request_timeout_out_of_range')
   })
 
+  it('accepts an operator-configured output cap above 30000 without a hidden ceiling', async () => {
+    mockQueryRun.mockResolvedValueOnce({ insertId: 10 })
+    mockQueryOne.mockResolvedValueOnce(null)
+    await createModelProfile(1, {
+      provider:'deepseek', model_name:'deepseek-chat', max_tokens:50000,
+    }, 'pro')
+    expect(mockQueryRun.mock.calls[0][1][8]).toBe(50000)
+  })
+
+  it('rejects invalid model output caps before writing the profile', async () => {
+    await expect(createModelProfile(1, {
+      provider:'deepseek', model_name:'deepseek-chat', max_tokens:0,
+    }, 'pro')).rejects.toThrow('model_max_tokens_invalid')
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
   it('preserves request timeout during partial profile updates', async () => {
     const existing = profile({ request_timeout_ms: 180000 })
     mockQueryOne

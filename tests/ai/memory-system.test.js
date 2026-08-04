@@ -39,6 +39,21 @@ describe('memory compression model-task recovery', () => {
     expect(db.queryRun.mock.calls.some(([sql]) => sql.includes("status='status_unknown'"))).toBe(true)
     expect(db.queryRun.mock.calls.some(([sql]) => sql.includes("status='queued'"))).toBe(false)
   })
+
+  it('releases a status-unknown source only after its stale task deadline', async () => {
+    db.queryAll.mockResolvedValueOnce([{ task_id:'task-compress', task_kind:'memory_compression', status:'status_unknown',
+      lease_expires_at_utc_msc:90_000, task_deadline_at_utc_msc:100_000, fencing_token:3, provider_attempt_started:1 }])
+    db.queryOne.mockResolvedValueOnce({ id:8, status:'status_unknown', user_id:9, scope_key:'5:general:*:*', source_set_hash:'hash',
+      attempt_count:1, max_attempts:3, model_task_id:'task-compress', result_persisted:0 })
+    db.queryRun.mockResolvedValue({ affectedRows:1 })
+
+    const result = await recoverAbandonedMemoryCompressionModelTasks({ nowUtcMs:100_001 })
+    expect(result).toMatchObject({ scanned:1, statusUnknown:0, requeued:0, stale:1 })
+    const release = db.queryRun.mock.calls.find(([sql]) => sql.includes("status = 'queued'"))
+    expect(release).toBeTruthy()
+    expect(release[0]).toContain('model_task_id = NULL')
+    expect(release[1]).toContain('task-compress')
+  })
 })
 
 describe('personal memory input hardening', () => {

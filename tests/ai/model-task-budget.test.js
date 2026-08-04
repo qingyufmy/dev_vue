@@ -18,6 +18,15 @@ describe('model task adaptive budget', () => {
     expect(complex.sufficient).toBe(true)
   })
 
+  it('does not impose a hidden 30000 ceiling above the database profile hard cap', () => {
+    const complex = selectModelTaskBudget({ taskKind:'monthly_review_merge', profileHardCap:50000,
+      providerOutputCap:64000, contextWindowTokens:160000, estimatedInputTokens:70000, schemaNeedTokens:42000 })
+    expect(complex.selectedMaxOutputTokens).toBe(42000)
+    expect(complex.profileHardCap).toBe(50000)
+    expect(complex.taskCap).toBeNull()
+    expect(complex.sufficient).toBe(true)
+  })
+
   it('fails closed when the complete output contract cannot fit in context', () => {
     const result = selectModelTaskBudget({ taskKind:'auto_inference', profileHardCap:30000,
       contextWindowTokens:32000, estimatedInputTokens:27000, schemaNeedTokens:8000 })

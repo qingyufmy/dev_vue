@@ -15,7 +15,7 @@ import { buildPositionManagementOutputFormat, hasActivePositionManagementGroups,
 import { assertModelQuotaAvailable, buildModelQuotaCircuitContext, deferModelQuotaProbe,
   recordModelQuotaExhausted, recordModelQuotaRecovered } from './model-quota-circuit.js'
 import { getModelProviderCapabilities } from './model-provider-capabilities.js'
-import { estimateModelInputTokens, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
+import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
 import { acquireModelTaskCapacity, retainModelTaskCapacityLease, releaseModelTaskCapacityLease } from './model-task-capacity.js'
 
 const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
@@ -450,7 +450,8 @@ function logAutomaticModelRequest({ usageContext, phase, body, requestBytes }) {
 
 async function trackedModelRequest({
   url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider, signal,
-  onProviderRequest, onProviderUsage, protocol, deadlineAtMs = null,
+  onProviderRequest, onProviderUsage, onProviderActivity, onProviderQuiet,
+  providerQuietAfterMs = 60_000, protocol, deadlineAtMs = null,
 }) {
   let usageLogId = null
   let capacityLease = null
@@ -459,6 +460,7 @@ async function trackedModelRequest({
   let providerRequestId = null
   let httpStatus = null
   let providerResponseReceived = false
+  let quietTimer = null
   const startedAt = Date.now()
   const requestBody = JSON.stringify(body)
   const requestBytes = Buffer.byteLength(requestBody, 'utf8')
@@ -494,6 +496,13 @@ async function trackedModelRequest({
     signal?.throwIfAborted()
     await emitProviderTelemetry(onProviderRequest, { phase })
     providerRequestStarted = true
+    if (typeof onProviderQuiet === 'function') {
+      quietTimer = setTimeout(() => {
+        void emitProviderTelemetry(onProviderQuiet, { phase, state:'provider_quiet', providerRequestId })
+          .catch(error => console.error('[LLM] Provider quiet callback failed:', error.message))
+      }, Math.max(1_000, Number(providerQuietAfterMs) || 60_000))
+      quietTimer.unref?.()
+    }
     logAutomaticModelRequest({ usageContext, phase, body, requestBytes })
     const response = await fetch(url, {
       method: 'POST',
@@ -502,9 +511,13 @@ async function trackedModelRequest({
       signal: requestSignal,
       redirect: 'error',
     })
+    if (quietTimer) { clearTimeout(quietTimer); quietTimer = null }
     httpStatus = Number(response?.status) > 0 ? Number(response.status) : null
     providerRequestId = String(response.headers?.get?.('x-request-id') || '') || null
     providerResponseReceived = true
+    await emitProviderTelemetry(onProviderActivity, {
+      phase, state:'response_headers', providerRequestId, httpStatus, responseReceived:true,
+    })
     // Any explicit HTTP response proves the provider received the request (or
     // at least completed an HTTP admission decision). Free the slot before
     // parsing/settling the response, including HTTP 429 and other errors.
@@ -555,6 +568,7 @@ async function trackedModelRequest({
     if (quotaCircuitState.probe) await recordModelQuotaRecovered(quotaCircuitContext)
     return { response, data }
   } catch (error) {
+    if (quietTimer) { clearTimeout(quietTimer); quietTimer = null }
     if (capacityLease) {
       try {
         if (providerRequestStarted && !providerResponseReceived) {
@@ -614,8 +628,10 @@ export async function requestJsonObject({
   url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled,
   reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null,
   onProgress = null, validateObject = null, signal = null,
-  onProviderRequest = null, onProviderUsage = null, repairContext = null,
+  onProviderRequest = null, onProviderUsage = null, onProviderActivity = null, onProviderQuiet = null,
+  providerQuietAfterMs = 60_000, repairContext = null,
   allowFollowupRequests = true, deadlineAtMs = null,
+  followupValidUntilMs = null, minimumFollowupWindowMs = 15_000,
 }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
@@ -629,12 +645,20 @@ export async function requestJsonObject({
   await emitModelProgress(onProgress, 'model_request')
   const { response, data } = await trackedModelRequest({
     url, apiKey, body, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
-    estimatedTokens, phase: 'request', provider, signal, onProviderRequest, onProviderUsage, protocol,
+    estimatedTokens, phase: 'request', provider, signal, onProviderRequest, onProviderUsage,
+    onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol,
     deadlineAtMs:taskDeadlineAtMs,
   })
   const nativeJsonMode = usesNativeJsonMode(provider, protocol)
   let content = extractLlmContent(data, protocol, nativeJsonMode)
   if (!content && nativeJsonMode && allowFollowupRequests) {
+    const validUntil = followupValidUntilMs == null ? null : Number(followupValidUntilMs)
+    if (validUntil != null && Number.isFinite(validUntil)
+      && Date.now() + Math.max(1, Number(minimumFollowupWindowMs) || 15_000) >= validUntil) {
+      const error = new Error('model_task_result_expired')
+      error.code = 'model_task_result_expired'
+      throw error
+    }
     signal?.throwIfAborted()
     await emitModelProgress(onProgress, 'repairing')
     const emptyRetryMessages = [
@@ -648,18 +672,32 @@ export async function requestJsonObject({
     const emptyRetryEstimate = Math.ceil(JSON.stringify(emptyRetryMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
     const { data: emptyRetryData } = await trackedModelRequest({
       url, apiKey, body:emptyRetryBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
-      estimatedTokens:emptyRetryEstimate, phase:'repair', provider, signal, onProviderRequest, onProviderUsage, protocol,
+      estimatedTokens:emptyRetryEstimate, phase:'repair', provider, signal, onProviderRequest, onProviderUsage,
+      onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol,
       deadlineAtMs:taskDeadlineAtMs,
     })
     content = extractLlmContent(emptyRetryData, protocol, true)
   }
-  if (!content) throw new Error(`LLM response content is empty, protocol=${protocol}, status=${response.status}, body=${JSON.stringify(data).substring(0, 300)}`)
+  if (!content) {
+    const error = new Error('ai_response_missing_json_object')
+    error.code = 'ai_response_missing_json_object'
+    error.protocol = protocol
+    error.httpStatus = Number(response?.status) || null
+    throw error
+  }
   await emitModelProgress(onProgress, 'validating')
   try {
     const parsed = parseJsonObject(content)
     return typeof validateObject === 'function' ? validateObject(parsed, { phase:'initial' }) : parsed
   } catch (exc) {
     if (!allowFollowupRequests) throw exc
+    const validUntil = followupValidUntilMs == null ? null : Number(followupValidUntilMs)
+    if (validUntil != null && Number.isFinite(validUntil)
+      && Date.now() + Math.max(1, Number(minimumFollowupWindowMs) || 15_000) >= validUntil) {
+      const error = new Error('model_task_result_expired')
+      error.code = 'model_task_result_expired'
+      throw error
+    }
     signal?.throwIfAborted()
     await emitModelProgress(onProgress, 'repairing')
     const repairMessages = repairContext ? [
@@ -682,7 +720,8 @@ export async function requestJsonObject({
     const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
     const { data: repairedData } = await trackedModelRequest({
       url, apiKey, body: repairBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
-      estimatedTokens: repairEstimate, phase: 'repair', provider, signal, onProviderRequest, onProviderUsage, protocol,
+      estimatedTokens: repairEstimate, phase: 'repair', provider, signal, onProviderRequest, onProviderUsage,
+      onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol,
       deadlineAtMs:taskDeadlineAtMs,
     })
     const repaired = extractLlmContent(repairedData, protocol, nativeJsonMode)
@@ -947,6 +986,11 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     })
     if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
     config._selectedOutputBudget = budget
+    const deadlines = modelTaskDeadlines(taskKind, {
+      nowUtcMs:Date.now(),
+      businessDeadlineUtcMs:Number(config._taskDeadlineAtUtcMs) || null,
+    })
+    const requestDeadlineAtMs = Math.min(deadlines.attemptSafetyDeadlineUtcMs, deadlines.taskDeadlineUtcMs)
     if (typeof config._onInferencePrepared === 'function') {
       config._onInferencePrepared({
         systemPrompt: cleanPrompt,
@@ -964,7 +1008,9 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       thinkingEnabled,
       reasoningEffort: config.reasoning_effort || 'max',
       protocol,
-      timeout: config.request_timeout_ms || 120000,
+      timeout: Math.max(1, requestDeadlineAtMs - Date.now()),
+      deadlineAtMs:requestDeadlineAtMs,
+      followupValidUntilMs:Number(config._resultValidUntilUtcMs) || deadlines.taskDeadlineUtcMs,
       messages: [
         { role: 'system', content: cleanPrompt },
         { role: 'user', content: renderedUserPrompt },
@@ -973,7 +1019,9 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       signal: config._abortSignal || null,
       onProviderRequest:config._onProviderRequest || null,
       onProviderUsage:config._onProviderUsage || null,
-      allowFollowupRequests:!String(config._usage || '').startsWith('auto'),
+      onProviderActivity:config._onProviderActivity || null,
+      onProviderQuiet:config._onProviderQuiet || null,
+      allowFollowupRequests:true,
       repairContext:{
         outputFormat,
         requiredCoverage:positionManagementEnabled ? {

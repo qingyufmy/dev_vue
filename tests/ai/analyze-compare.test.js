@@ -179,6 +179,7 @@ import {
   handleAnalyzeCompare,
   handleHistoryCompare,
   resolveStrategyEvaluationTimeframe,
+  startHistoryCompareJobs,
 } from '../../server/routes/ai/strategy.js'
 import { maybeAiSignal } from '../../server/routes/ai/llm.js'
 const defaultMaybeAiSignalImplementation = maybeAiSignal.getMockImplementation()
@@ -293,6 +294,27 @@ describe('handleAnalyzeCompare', () => {
       expect(mockResolveOwnedModelProfileForRuntime).toHaveBeenCalledWith(10, 1)
       expect(mockResolveOwnedModelProfileForRuntime).toHaveBeenCalledWith(20, 1)
       expect(mockResolveOwnedModelProfileForRuntime).toHaveBeenCalledWith(30, 1)
+    })
+  })
+
+  describe('durable live comparison boundary', () => {
+    it('returns the committed result for a duplicate request without calling providers again', async () => {
+      const committed = { ok:true, results:[{ model_id:10, status:'success' }], models:{}, market_snapshot:{ symbol:'XAUUSD' } }
+      mockQueryRun.mockRejectedValueOnce(Object.assign(new Error('Duplicate entry'), { code:'ER_DUP_ENTRY' }))
+      mockQueryOne.mockResolvedValueOnce({ status:'succeeded', result_json:JSON.stringify(committed) })
+      const result = await handleAnalyzeCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1, request_id:'same-live-request',
+      })
+      expect(result).toEqual(committed)
+      expect(maybeAiSignal).not.toHaveBeenCalled()
+    })
+
+    it('marks an interrupted live comparison unknown instead of replaying it as history', async () => {
+      mockQueryRun.mockResolvedValue({ affectedRows:1 })
+      mockQueryAll.mockResolvedValue([])
+      await startHistoryCompareJobs()
+      expect(mockQueryRun).toHaveBeenCalledWith(expect.stringContaining("live_compare_status_unknown_after_restart"))
+      expect(mockQueryAll).toHaveBeenCalledWith(expect.stringContaining("<> 'live'"))
     })
   })
 

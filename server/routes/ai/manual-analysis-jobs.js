@@ -15,6 +15,7 @@ const RENEW_MS = 30 * 1000
 const MAX_JSON_BYTES = 1024 * 1024
 
 const activeJobs = new Map()
+let recoveryTimer = null
 
 function stableValue(value) {
   if (value === undefined) return null
@@ -104,6 +105,10 @@ function isTerminalJob(status) {
 
 function isTerminalTaskStatus(status) {
   return ['cancelled', 'failed_terminal', 'succeeded', 'completed_stale', 'completed_rejected'].includes(String(status))
+}
+
+function providerOutcomeUnknown(state) {
+  return state?.submitted === true && state?.responseReceived !== true
 }
 
 function publicJob(row) {
@@ -251,6 +256,27 @@ export async function createManualAnalysisJob(userId, body = {}, options = {}) {
       || existingModel.profileId && existingModel.profileId !== requestedModel.profileId
       || existingModel.credentialSource && existingModel.credentialSource !== requestedModel.credentialSource
     if (envelopeConflict) throw new Error('manual_analysis_idempotency_conflict')
+    if (String(taskResult.task.status) === 'status_unknown'
+      && Number(taskResult.task.task_deadline_at_utc_msc || 0) > 0
+      && Number(taskResult.task.task_deadline_at_utc_msc) <= now) {
+      const stale = await markModelTaskCompletedStaleById(taskResult.task.task_id,
+        'manual_analysis_status_unknown_deadline_expired', { requireDeadlineReached:true, nowUtcMs:now })
+      if (stale) {
+        const existingJob = await loadJobByTask(taskResult.task.task_id)
+        if (existingJob) {
+          await updateJob(existingJob.job_id, { status:'completed_stale', stage:'completed_stale',
+            errorCode:'manual_analysis_status_unknown_deadline_expired',
+            errorMessage:'provider outcome remained unknown until the task deadline', completedAtUtcMs:now })
+        }
+        taskResult = { ...taskResult, task:{ ...taskResult.task, status:'completed_stale' } }
+      } else {
+        const refreshed = await queryOne('SELECT * FROM ai_model_tasks WHERE task_id = ? LIMIT 1',
+          [taskResult.task.task_id])
+        if (refreshed && isTerminalTaskStatus(refreshed.status)) {
+          taskResult = { ...taskResult, task:refreshed }
+        }
+      }
+    }
   }
   // A completed task is a historical result, not an active idempotency slot.
   // Allow a deliberate repeat while retaining the same-key dedupe guarantee
@@ -406,6 +432,7 @@ async function processManualAnalysisJob(jobId) {
     renewTimer.unref?.()
     let attempt = null
     let attemptSequence = 0
+    let providerAttemptState = { submitted:false, responseReceived:false, providerRequestId:null, httpStatus:null }
     const assertCanApply = async () => {
       await leaseChain
       if (leaseLost || controller.signal.aborted) {
@@ -486,16 +513,28 @@ async function processManualAnalysisJob(jobId) {
       await updateJob(key, { stage:'submitting' })
       const result = await handleAnalyze(Number(job.user_id), boundedJson(job.params_json, {}) || {}, {
         taskId:String(job.model_task_id), abortSignal:controller.signal, assertCanApply, assertCanApplyTx,
+        taskDeadlineAtUtcMs:Number(task.task_deadline_at_utc_msc) || Number(job.deadline_at_utc_msc) || null,
+        resultValidUntilUtcMs:Number(task.result_valid_until_utc_msc) || Number(job.deadline_at_utc_msc) || null,
         onProviderRequest:async event => {
           await assertCanApply()
           if (task.status === 'response_received') task = await transitionModelTask(task, 'validating')
           if (task.status === 'validating') task = await transitionModelTask(task, 'repairing')
           if (task.status === 'repairing') task = await transitionModelTask(task, 'submitted')
           if (task.status === 'preparing') task = await transitionModelTask(task, 'submitted')
+          providerAttemptState = { submitted:true, responseReceived:false,
+            providerRequestId:event?.providerRequestId || null, httpStatus:null }
           attempt = await beginModelTaskAttempt(task, { attemptNo:(Math.max(1, Number(task.attempt_count)) - 1) * 10 + (++attemptSequence), providerRequestId:event?.providerRequestId || null })
           await updateJob(key, { stage:'provider_running' })
         },
         onProviderUsage:async event => {
+          const httpStatus = Number(event?.httpStatus)
+          providerAttemptState = {
+            submitted:true,
+            responseReceived:event?.responseReceived === true || event?.status === 'success'
+              || (Number.isFinite(httpStatus) && httpStatus > 0),
+            providerRequestId:event?.providerRequestId || providerAttemptState.providerRequestId || null,
+            httpStatus:Number.isFinite(httpStatus) && httpStatus > 0 ? httpStatus : null,
+          }
           if (attempt) {
             await finishModelTaskAttempt(task, attempt, { status:event?.status === 'success' ? 'succeeded' : 'failed', providerRequestId:event?.providerRequestId,
               inputTokens:event?.inputTokens, outputTokens:event?.outputTokens, reasoningTokens:event?.reasoningTokens,
@@ -503,7 +542,21 @@ async function processManualAnalysisJob(jobId) {
               finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails, errorCode:event?.errorCode })
             attempt = null
           }
-          if (event?.status === 'success' && task.status === 'submitted') task = await transitionModelTask(task, 'response_received', { finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails })
+          if (event?.status === 'success' && ['submitted', 'provider_running', 'provider_quiet'].includes(task.status)) {
+            task = await transitionModelTask(task, 'response_received', { finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails })
+          }
+        },
+        onProviderActivity:async () => {
+          if (task.status === 'submitted' || task.status === 'provider_quiet') {
+            task = await transitionModelTask(task, 'provider_running')
+          }
+          await updateJob(key, { stage:'provider_running' })
+        },
+        onProviderQuiet:async () => {
+          if (task.status === 'submitted' || task.status === 'provider_running') {
+            task = await transitionModelTask(task, 'provider_quiet')
+          }
+          await updateJob(key, { stage:'provider_quiet' })
         },
       })
       await assertCanApply()
@@ -549,6 +602,10 @@ async function processManualAnalysisJob(jobId) {
           await markModelTaskStatusUnknownById(task.task_id, code).catch(() => {})
           await updateJob(key, { status:'status_unknown', stage:'status_unknown', errorCode:code, errorMessage:'task lease was lost before completion could be verified' })
         }
+      } else if (providerOutcomeUnknown(providerAttemptState)) {
+        await markModelTaskStatusUnknownById(task.task_id, 'provider_status_unknown').catch(() => {})
+        await updateJob(key, { status:'status_unknown', stage:'status_unknown', errorCode:'provider_status_unknown',
+          errorMessage:'provider request was submitted but no terminal response could be verified' })
       } else {
         await ensureTaskFailed(task, error, true)
         await updateJob(key, { status:'failed', stage:'failed', errorCode:code, errorMessage:String(error?.message || code).slice(0, 512), completedAtUtcMs:Date.now() })
@@ -612,11 +669,25 @@ export async function cancelManualAnalysisJob(userId, jobId) {
 
 export async function recoverManualAnalysisJobs() {
   const rows = await queryAll(`SELECT j.*, t.status AS task_status, t.frozen_model_profile_id
+      , t.task_deadline_at_utc_msc
     FROM ai_manual_analysis_jobs j LEFT JOIN ai_model_tasks t ON t.task_id = j.model_task_id
-    WHERE j.status IN ('queued','running') ORDER BY j.created_at_utc_msc LIMIT 100`)
+    WHERE j.status IN ('queued','running','status_unknown') ORDER BY j.created_at_utc_msc LIMIT 100`)
   for (const row of rows) {
     try {
       const taskStatus = String(row.task_status || '')
+      if (row.status === 'status_unknown' || taskStatus === 'status_unknown') {
+        const deadlineAt = Number(row.task_deadline_at_utc_msc || row.deadline_at_utc_msc || 0)
+        if (deadlineAt > 0 && deadlineAt <= Date.now()) {
+          const stale = await markModelTaskCompletedStaleById(row.model_task_id,
+            'manual_analysis_status_unknown_deadline_expired', { requireDeadlineReached:true, nowUtcMs:Date.now() })
+          if (stale) {
+            await updateJob(row.job_id, { status:'completed_stale', stage:'completed_stale',
+              errorCode:'manual_analysis_status_unknown_deadline_expired',
+              errorMessage:'provider outcome remained unknown until the task deadline', completedAtUtcMs:Date.now() })
+          }
+        }
+        continue
+      }
       if (['submitted','provider_running','provider_quiet'].includes(taskStatus)) {
         await markModelTaskStatusUnknownById(row.model_task_id, 'provider_status_unknown').catch(() => {})
         await updateJob(row.job_id, { status:'status_unknown', stage:'status_unknown', errorCode:'provider_status_unknown', errorMessage:'provider request was submitted before restart and cannot be polled' })
@@ -635,6 +706,12 @@ export async function recoverManualAnalysisJobs() {
 
 export function startManualAnalysisJobs() {
   recoverManualAnalysisJobs().catch(error => console.error('[ManualAnalysis] startup recovery failed:', error.message))
+  if (!recoveryTimer) {
+    recoveryTimer = setInterval(() => {
+      recoverManualAnalysisJobs().catch(error => console.error('[ManualAnalysis] periodic recovery failed:', error.message))
+    }, 30_000)
+    recoveryTimer.unref?.()
+  }
 }
 
 export const __manualAnalysisJobsTest = {
@@ -646,5 +723,6 @@ export const __manualAnalysisJobsTest = {
   publicJob,
   normalizedParams,
   isTerminalJob,
+  providerOutcomeUnknown,
   processManualAnalysisJob,
 }

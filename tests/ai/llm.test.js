@@ -200,8 +200,11 @@ describe('requestJsonObject', () => {
   })
 
   it('成功解析 JSON 响应', async () => {
+    const onProviderActivity = vi.fn()
     mockFetch.mockResolvedValue({
       ok: true,
+      status: 200,
+      headers: { get:() => 'req-success' },
       json: () => Promise.resolve({ choices: [{ message: { content: '{"key": "value"}' } }] })
     })
 
@@ -211,12 +214,16 @@ describe('requestJsonObject', () => {
       model: 'test-model',
       temperature: 0.7,
       maxTokens: 2000,
-      messages: [{ role: 'user', content: 'test' }]
+      messages: [{ role: 'user', content: 'test' }],
+      onProviderActivity,
     })
 
     expect(result).toEqual({ key: 'value' })
     expect(mockFetch).toHaveBeenCalledTimes(1)
     expect(mockFetch.mock.calls[0][1].redirect).toBe('error')
+    expect(onProviderActivity).toHaveBeenCalledWith(expect.objectContaining({
+      state:'response_headers', providerRequestId:'req-success', responseReceived:true,
+    }))
   })
 
   it('records split token usage without learning output budget from total tokens', () => {
@@ -249,6 +256,30 @@ describe('requestJsonObject', () => {
       messages:[{ role:'user', content:'test' }], allowFollowupRequests:false,
     })).rejects.toThrow()
     expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not start a repair when the business result will expire before the safety window', async () => {
+    mockFetch.mockResolvedValue({ ok:true, status:200,
+      json:() => Promise.resolve({ choices:[{ finish_reason:'stop', message:{ content:'invalid json' } }] }) })
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }], followupValidUntilMs:Date.now() + 10_000,
+    })).rejects.toMatchObject({ code:'model_task_result_expired' })
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not expose raw provider response fragments when content is empty', async () => {
+    mockFetch.mockResolvedValue({ ok:true, status:200,
+      json:() => Promise.resolve({ secret:'do-not-leak', choices:[{ message:{ content:'' } }] }) })
+    let failure
+    try {
+      await requestJsonObject({
+        url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+        messages:[{ role:'user', content:'test' }], allowFollowupRequests:false,
+      })
+    } catch (error) { failure = error }
+    expect(failure).toMatchObject({ code:'ai_response_missing_json_object', httpStatus:200 })
+    expect(String(failure?.message)).not.toContain('do-not-leak')
   })
 
   it('DeepSeek 请求默认启用 JSON Object 模式', async () => {
