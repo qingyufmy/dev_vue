@@ -498,6 +498,10 @@ export function normalizeTakeProfitMode(value) {
 
 export function signalOrderPayload(signal, config, market, confirm) {
   const takeProfitMode = normalizeTakeProfitMode(config?.take_profit_mode)
+  const createdAtUtcMsc = Number(signal.created_at_utc_msc)
+  const signalCreatedAt = Number.isFinite(createdAtUtcMsc) && createdAtUtcMsc > 0
+    ? Math.trunc(createdAtUtcMsc)
+    : signal.created_at || null
   const recommendedTierValue = Number(signal.recommended_take_profit_tier)
   const recommendedTier = [1, 2, 3].includes(recommendedTierValue) ? recommendedTierValue : null
   const requestedTier = takeProfitMode === DEFAULT_TAKE_PROFIT_MODE
@@ -544,7 +548,7 @@ export function signalOrderPayload(signal, config, market, confirm) {
     normalization_info: signal.normalization_info || null,
     reference_price: market.latest_price,
     atr_anchor: market.atr_anchor,
-    signal_created_at: signal.created_at || beijingNow(),
+    signal_created_at: signalCreatedAt,
     entry_method: entryMethod,
   }
 

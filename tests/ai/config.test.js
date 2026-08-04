@@ -102,6 +102,22 @@ describe('replacement risk projection', () => {
   })
 })
 describe('signalOrderPayload', () => {
+  it('优先使用可信的 UTC 毫秒时间，缺失时不伪造当前时间', () => {
+    const createdAtUtcMsc = Date.parse('2026-07-15T12:59:59.000Z')
+    const signal = {
+      symbol: 'XAUUSD', signal_type: 'buy', recommended_volume: 0.03,
+      stop_loss_price: 1990, take_profit_1_price: 2010,
+      created_at: '2026-07-15 20:59:59', created_at_utc_msc: createdAtUtcMsc,
+    }
+    const market = { latest_price: 2000 }
+
+    expect(signalOrderPayload(signal, {}, market, true).signal_created_at).toBe(createdAtUtcMsc)
+    expect(signalOrderPayload({ ...signal, created_at_utc_msc: null }, {}, market, true).signal_created_at)
+      .toBe(signal.created_at)
+    expect(signalOrderPayload({ ...signal, created_at: null, created_at_utc_msc: null }, {}, market, true).signal_created_at)
+      .toBeNull()
+  })
+
   it('生成正确的订单载荷', () => {
     const signal = {
       symbol: 'XAUUSD',

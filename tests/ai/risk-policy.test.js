@@ -212,6 +212,16 @@ describe('L1/L4/L5 core risk gate', () => {
     expect(run({ nowMs: Date.parse('2026-07-18T02:00:00Z'), quote: { time_msc: Date.parse('2026-07-18T02:00:00Z') }, request: { signal_created_at: '2026-07-18T01:59:00Z' } }).reject_code).toBe('R4.2_WEEKEND_PROTECTION')
   })
 
+  it('accepts a fresh UTC millisecond signal timestamp but fails closed for stale or untrusted timestamps', () => {
+    const fresh = run({ request: { signal_created_at: nowMs - 1_000 } })
+    expect(fresh.decision_status).not.toBe('reject')
+    expect(fresh.rule_results.some(item => item.code === 'R4.3_SIGNAL_EXPIRED' && item.outcome === 'reject')).toBe(false)
+
+    expect(run({ request: { signal_created_at: nowMs - 300_001 } }).reject_code).toBe('R4.3_SIGNAL_EXPIRED')
+    expect(run({ request: { signal_created_at: '2026-07-15 20:59:59' } }).reject_code).toBe('R4.3_SIGNAL_EXPIRED')
+    expect(run({ request: { signal_created_at: null } }).reject_code).toBe('R4.3_SIGNAL_EXPIRED')
+  })
+
   it('calculates weekend protection in the calibrated MT5 timezone instead of Beijing time', () => {
     const previouslyWrong = Date.parse('2026-07-17T14:30:00Z') // 北京周五22:30，MT5 UTC+3 周五17:30
     expect(weekendProtectionState(previouslyWrong, 120, 180, 'verified').protected).toBe(false)
