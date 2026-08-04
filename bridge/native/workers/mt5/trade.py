@@ -16,6 +16,16 @@ class TradeError(RuntimeError):
 class Mt5TradeExecutor:
     """Strict MT5 mutation/query adapter for the native Worker IPC."""
 
+    # Execution reconciliation is a targeted safety check, not a history
+    # export.  Keep the fallback bounded even when an old server sends an
+    # excessively large lookback value.  A bounded/incomplete scan must never
+    # be interpreted as proof that an order was not executed.
+    DEFAULT_LOOKBACK_SECONDS = 172_800
+    MAX_LOOKBACK_SECONDS = 30 * 24 * 60 * 60
+    MAX_ACTIVE_ROWS = 500
+    MAX_HISTORY_ROWS = 500
+    MAX_EXACT_TICKET_QUERIES = 3
+
     def __init__(self, mt5: Any, route: Any, ensure_identity: Callable[[], tuple[Any, Any]],
                  resolve_symbol: Callable[[str], str], clock_msc: Callable[[], int] | None = None,
                  report_exception: Callable[[str, BaseException], None] | None = None):
@@ -377,7 +387,26 @@ class Mt5TradeExecutor:
         expected_magic = params.get("magic")
         tickets = {str(params.get(key) or "") for key in ("trade_ticket", "pending_ticket", "ticket")}
         tickets.discard("")
-        lookback = int(params.get("lookback_seconds") or 172_800)
+        try:
+            requested_lookback = int(params.get("lookback_seconds") or self.DEFAULT_LOOKBACK_SECONDS)
+        except (TypeError, ValueError):
+            requested_lookback = self.DEFAULT_LOOKBACK_SECONDS
+        requested_lookback = max(1, requested_lookback)
+        lookback = min(requested_lookback, self.MAX_LOOKBACK_SECONDS)
+        lookback_limited = requested_lookback > self.MAX_LOOKBACK_SECONDS
+
+        # A ticket is a broker-owned identity.  Query it directly and avoid a
+        # date-range history scan altogether.  `trade_ticket` normally holds a
+        # position id; a fallback order/deal lookup is still exact and bounded.
+        exact_tickets: list[int] = []
+        for value in tickets:
+            try:
+                ticket = int(value)
+            except (TypeError, ValueError):
+                continue
+            if ticket > 0 and ticket not in exact_tickets:
+                exact_tickets.append(ticket)
+        exact_tickets = exact_tickets[: self.MAX_EXACT_TICKET_QUERIES]
 
         def matches(row: Any) -> bool:
             if symbol and str(getattr(row, "symbol", "")) != symbol:
@@ -391,34 +420,110 @@ class Mt5TradeExecutor:
                 return bool(tickets & row_tickets)
             return bool(reference) and str(getattr(row, "comment", "") or "") == reference
 
-        active = self.mt5.orders_get(symbol=symbol) if kind == "pending" and symbol \
-            else self.mt5.orders_get() if kind == "pending" \
-            else self.mt5.positions_get(symbol=symbol) if symbol else self.mt5.positions_get()
-        if active is None:
-            raise TradeError("orders_query_failed" if kind == "pending" else "positions_query_failed")
-        row = next((item for item in active if matches(item)), None)
-        source = "active_order" if row is not None and kind == "pending" \
-            else "active_position" if row is not None else ""
         deal = None
-        if row is None:
+        active_truncated = False
+        history_truncated = False
+        row = None
+        source = ""
+
+        if exact_tickets:
+            # Active queries are exact when the MT5 Python package supports the
+            # documented ticket filter.  Never fall back to an unfiltered
+            # active list for a known ticket.
+            for ticket in exact_tickets:
+                active = (self.mt5.orders_get(ticket=ticket) if kind == "pending"
+                          else self.mt5.positions_get(ticket=ticket))
+                if active is None:
+                    raise TradeError("orders_query_failed" if kind == "pending" else "positions_query_failed")
+                row = next((item for item in active if matches(item)), None)
+                if row is not None:
+                    source = "active_order" if kind == "pending" else "active_position"
+                    break
+
+            # Use exact history predicates as well.  The order/position/deal
+            # relationship differs between market and pending executions, so
+            # each fallback remains explicit and individually bounded.
+            if row is None:
+                for ticket in exact_tickets:
+                    if kind == "pending":
+                        history_orders = self.mt5.history_orders_get(ticket=ticket)
+                        if history_orders is None:
+                            raise TradeError("history_orders_query_failed")
+                        row = next((item for item in history_orders if matches(item)), None)
+                        if row is not None:
+                            source = "history_order"
+                            break
+                        history_deals = self.mt5.history_deals_get(ticket=ticket)
+                        if history_deals is None:
+                            raise TradeError("history_deals_query_failed")
+                        deal = next((item for item in history_deals if matches(item)), None)
+                        if deal is not None:
+                            source = "history_deal"
+                            break
+                    else:
+                        history_deals = self.mt5.history_deals_get(position=ticket)
+                        if history_deals is None:
+                            raise TradeError("history_deals_query_failed")
+                        deal = next((item for item in history_deals if matches(item)), None)
+                        if deal is not None:
+                            source = "history_deal"
+                            break
+                        history_orders = self.mt5.history_orders_get(position=ticket)
+                        if history_orders is None:
+                            raise TradeError("history_orders_query_failed")
+                        row = next((item for item in history_orders if matches(item)), None)
+                        if row is not None:
+                            source = "history_order"
+                            break
+                        # Some brokers expose the position as an order id in
+                        # the deal history.  Keep this exact by ticket rather
+                        # than opening a broad date range.
+                        history_deals = self.mt5.history_deals_get(ticket=ticket)
+                        if history_deals is None:
+                            raise TradeError("history_deals_query_failed")
+                        deal = next((item for item in history_deals if matches(item)), None)
+                        if deal is not None:
+                            source = "history_deal"
+                            break
+        else:
+            active = self.mt5.orders_get(symbol=symbol) if kind == "pending" and symbol \
+                else self.mt5.orders_get() if kind == "pending" \
+                else self.mt5.positions_get(symbol=symbol) if symbol else self.mt5.positions_get()
+            if active is None:
+                raise TradeError("orders_query_failed" if kind == "pending" else "positions_query_failed")
+            active_rows = tuple(active)
+            active_truncated = len(active_rows) > self.MAX_ACTIVE_ROWS
+            row = next((item for item in active_rows[:self.MAX_ACTIVE_ROWS] if matches(item)), None)
+            source = "active_order" if row is not None and kind == "pending" \
+                else "active_position" if row is not None else ""
+
+        if row is None and deal is None and not exact_tickets:
             date_to = datetime.now(timezone.utc) + timedelta(minutes=5)
             date_from = date_to - timedelta(seconds=lookback)
             history_orders = self.mt5.history_orders_get(date_from, date_to)
             if history_orders is None:
                 raise TradeError("history_orders_query_failed")
-            row = next((item for item in reversed(history_orders) if matches(item)), None)
+            history_order_rows = tuple(history_orders)
+            history_truncated = len(history_order_rows) > self.MAX_HISTORY_ROWS
+            row = next((item for item in reversed(history_order_rows[-self.MAX_HISTORY_ROWS:]) if matches(item)), None)
             if row is not None:
                 source = "history_order"
             if row is None:
                 history_deals = self.mt5.history_deals_get(date_from, date_to)
                 if history_deals is None:
                     raise TradeError("history_deals_query_failed")
-                deal = next((item for item in reversed(history_deals) if matches(item)), None)
+                history_deal_rows = tuple(history_deals)
+                history_truncated = history_truncated or len(history_deal_rows) > self.MAX_HISTORY_ROWS
+                deal = next((item for item in reversed(history_deal_rows[-self.MAX_HISTORY_ROWS:]) if matches(item)), None)
                 if deal is not None:
                     source = "history_deal"
         found = row or deal
-        raw: dict[str, Any] = {"found": found is not None, "complete": True,
+        complete = bool(exact_tickets) or not (active_truncated or history_truncated or lookback_limited)
+        raw: dict[str, Any] = {"found": found is not None, "complete": complete,
                                "lookback_seconds": lookback}
+        if not complete:
+            raw["reason"] = "history_lookup_budget_exhausted"
+            raw["requested_lookback_seconds"] = requested_lookback
         evidence = None
         if found is not None:
             order = getattr(found, "order", None) or (getattr(found, "ticket", None) if kind == "pending" else None)
@@ -474,13 +579,15 @@ class Mt5TradeExecutor:
         original = params["original_params"]
         elapsed = self._clock_msc() - int(params["original_issued_at_utc_msc"])
         settled = elapsed >= int(params.get("settle_after_msc") or 15_000)
+        complete = bool(observed.get("complete", False))
+        found = bool(observed.get("found", False))
 
         def unresolved(code: str) -> dict[str, Any]:
-            return {"status": "failed", "error_code": code} if settled \
+            return {"status": "failed", "error_code": code} if settled and complete \
                 else {"status": "pending", "error_code": "reconciliation_settlement_pending"}
 
         if action == "place_order":
-            if not observed["found"]:
+            if not found:
                 return unresolved("execution_not_found_after_settlement")
             if observed.get("pending_state") in {"cancelled", "rejected", "expired"}:
                 return {"status": "failed",
@@ -488,13 +595,21 @@ class Mt5TradeExecutor:
             return {"status": "succeeded"}
 
         if action == "cancel_order":
-            if source == "active_order":
+            if not found:
+                return unresolved("pending_order_history_unverified")
+            if source == "active_order" or observed.get("pending_state") == "pending":
                 return unresolved("pending_order_still_active")
             if observed.get("pending_state") in {"filled", "partially_filled"}:
                 return {"status": "failed", "error_code": "pending_order_already_filled"}
-            return {"status": "succeeded"}
+            if source == "history_order" and observed.get("pending_state") in {
+                "cancelled", "rejected", "expired",
+            }:
+                return {"status": "succeeded"}
+            return unresolved("pending_order_evidence_incomplete")
 
         if action == "close_position":
+            if not found:
+                return unresolved("position_history_unverified")
             if source != "active_position":
                 return {"status": "succeeded"}
             expected = original.get("expected_state") or {}

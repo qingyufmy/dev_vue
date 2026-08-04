@@ -75,7 +75,10 @@ describe('observer sources and channels', () => {
     const source = await createObserverSource(1, {
       name:'稳健账户', bridge_user_id:7, trading_account_id:12, strategy_id:3, notes:'主观摩源',
     })
-    expect(source).toMatchObject({ id:5, bridge_user_id:7, trading_account_id:12, strategy_id:3 })
+    expect(source).toMatchObject({
+      id:5, bridge_user_id:7, trading_account_id:12, strategy_id:3,
+      runtime_transition:{ reason:'created', reconnect_required:true },
+    })
     expect(db.withTransaction).toHaveBeenCalledTimes(1)
     expect(db.queryRun.mock.calls[0][1]).toEqual(expect.arrayContaining(['稳健账户', 7, 12, 3, 'active', '主观摩源', 1]))
     expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))).toBe(true)
@@ -113,7 +116,10 @@ describe('observer sources and channels', () => {
       auto_inference_enabled:false, trade_send_enabled:false,
     })
 
-    expect(source).toMatchObject({ auto_inference_enabled:false, trade_send_enabled:false })
+    expect(source).toMatchObject({
+      auto_inference_enabled:false, trade_send_enabled:false,
+      runtime_transition:{ reason:'created', reconnect_required:true },
+    })
     const subscriptionCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO strategy_subscriptions'))
     const schedulerCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO auto_scheduler'))
     const bridgeSettingsCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO user_bridge_settings'))
@@ -145,7 +151,11 @@ describe('observer sources and channels', () => {
 
     const source = await updateObserverSource(5, { auto_inference_enabled:false, trade_send_enabled:false })
 
-    expect(source).toMatchObject({ auto_inference_enabled:false, trade_send_enabled:false })
+    expect(source).toMatchObject({
+      auto_inference_enabled:false, trade_send_enabled:false,
+      runtime_transition:{ reason:'runtime_updated', reconnect_required:false,
+        previous_bridge_user_id:7, previous_trading_account_id:12 },
+    })
     expect(db.withTransaction).toHaveBeenCalledTimes(1)
     const subscriptionCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('UPDATE strategy_subscriptions SET trading_account_id'))
     const schedulerCall = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO auto_scheduler'))
@@ -201,6 +211,7 @@ describe('observer sources and channels', () => {
 
     await expect(deleteObserverSource(5)).resolves.toMatchObject({
       id:5, bridge_user_id:7, strategy_id:3,
+      runtime_transition:{ reason:'deleted', reconnect_required:true, previous_bridge_user_id:7 },
     })
     expect(run.mock.calls.some(([sql]) => sql.includes('UPDATE strategy_subscriptions'))).toBe(true)
     expect(run.mock.calls.some(([sql]) => sql.includes('UPDATE auto_scheduler'))).toBe(true)

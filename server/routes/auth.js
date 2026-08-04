@@ -9,10 +9,9 @@ import { systemConfigRowsToMap } from '../system-config-secrets.js'
 import { sendVerificationSms } from '../sms.js'
 import { generateCaptcha, verifyCaptcha } from '../captcha.js'
 import { decorateMembership } from '../membership.js'
-import { disconnectUserBridgeConnections, disconnectUserSockets } from '../bridge-ws.js'
+import { disconnectUserSockets } from '../bridge-ws.js'
 import {
-  createBridgeConnectionTicket, createBridgeRefreshSession,
-  useBridgeRefreshSession, revokeBridgeRefreshSession, revokeBridgeRefreshSessions,
+  createBridgeConnectionTicket, useBridgeRefreshSession, revokeBridgeRefreshSessions,
 } from '../bridge-auth-session.js'
 import {
   approveBridgePairing, consumeBridgePairing, createManagedObserverSession,
@@ -347,20 +346,6 @@ router.post('/register', async (req, res) => {
   }
 })
 
-router.post('/auth/bridge-session', authMiddleware, async (req, res) => {
-  try {
-    const session = await createBridgeRefreshSession(req.user, { userAgent: req.get('user-agent'), ip: req.ip })
-    res.json({ ok: true, refreshToken: session.refreshToken, refreshExpiresInSeconds: session.expiresInSeconds })
-  } catch (err) {
-    const membershipBlocked = err.code === 'bridge_membership_required'
-    res.status(membershipBlocked ? 403 : 500).json({
-      ok: false,
-      code: err.code || 'bridge_session_failed',
-      error: membershipBlocked ? '当前会员状态不能使用桥接软件' : '桥接登录会话创建失败，请稍后重试',
-    })
-  }
-})
-
 router.post('/auth/bridge-pair/start', async (req, res) => {
   try {
     const pairing = await startBridgePairing({
@@ -497,15 +482,9 @@ router.post('/auth/bridge-refresh', async (req, res) => {
   }
 })
 
-router.post('/auth/bridge-revoke', authMiddleware, async (req, res) => {
-  await revokeBridgeRefreshSession(req.user.id, req.body?.refreshToken)
-  disconnectUserBridgeConnections(req.user.id, 'Bridge signed out')
-  res.json({ ok: true })
-})
-
 router.post('/login', async (req, res) => {
   try {
-    const { email, phone: rawPhone, password, method, verifyToken, client } = req.body
+    const { email, phone: rawPhone, password, method, verifyToken } = req.body
     const phone = normalizePhone(rawPhone)
     const loginId = phone || email
     if (!loginId) return res.json({ ok: false, error: '请输入邮箱或手机号' })
@@ -567,21 +546,13 @@ router.post('/login', async (req, res) => {
     safeUser.authMethod = user.auth_method || 'email'
     safeUser.telegramBinding = getTelegramBinding(user)
 
-    let bridgeSession = null
-    const shouldCreateBridgeSession = client === 'bridge' && (user.role === 'admin' || membership.effectivePlan === 'pro')
     if (method === 'code' && tokenRecord) {
       const codeLogin = await withTransaction(async run => {
         const consumed = await consumeVerificationRecord(run, tokenRecord.id)
         if (!consumed) return { ok: false }
-        const session = shouldCreateBridgeSession
-          ? await createBridgeRefreshSession(user, { userAgent: req.get('user-agent'), ip: req.ip, run })
-          : null
-        return { ok: true, session }
+        return { ok: true }
       })
       if (!codeLogin.ok) return res.json({ ok: false, error: '验证已过期，请重新验证' })
-      bridgeSession = codeLogin.session
-    } else if (shouldCreateBridgeSession) {
-      bridgeSession = await createBridgeRefreshSession(user, { userAgent: req.get('user-agent'), ip: req.ip })
     }
 
     logAudit({ userId: user.id, action: 'login', ip: req.ip, userAgent: req.get('user-agent') })
@@ -590,10 +561,6 @@ router.post('/login', async (req, res) => {
       ok: true,
       token,
       user: safeUser,
-      ...(bridgeSession ? {
-        refreshToken: bridgeSession.refreshToken,
-        refreshExpiresInSeconds: bridgeSession.expiresInSeconds,
-      } : {}),
     })
   } catch (err) {
     console.error('Login error:', err)

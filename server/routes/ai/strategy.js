@@ -525,7 +525,10 @@ export function buildChanTimeframeAlignment(timeframes, primaryTimeframe, contex
   }
 }
 
-export const __strategyTest = { clearChanHistoryHints, buildChanTimeframeAlignment }
+export const __strategyTest = {
+  clearChanHistoryHints, buildChanTimeframeAlignment,
+  buildAutoExecuteGuardRejection, resolveAutoExecuteGuard,
+}
 
 export async function attachAtrAnchor(userId, symbol, market, primaryTimeframe) {
   const timeframes = market.strategy_context?.timeframes || {}
@@ -650,6 +653,31 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
 
 export async function executeOrder(userId, config, request, action, options = {}) {
   return executeOrderCore(userId, config, request, action, options)
+}
+
+const AUTO_EXECUTE_GUARD_REQUIRED = 'manual_auto_execute_guard_required'
+const AUTO_EXECUTE_GUARD_REJECTED = 'manual_auto_execute_guard_rejected'
+
+export function buildAutoExecuteGuardRejection(error = null, fallbackCode = AUTO_EXECUTE_GUARD_REJECTED) {
+  const rawCode = String(error?.code || error?.error_code || fallbackCode)
+  const code = /^[a-z][a-z0-9_:-]{1,127}$/i.test(rawCode) ? rawCode : fallbackCode
+  const message = code === 'manual_auto_execute_request_disconnected'
+    ? '发起自动执行请求的浏览器连接已断开'
+    : code === AUTO_EXECUTE_GUARD_REQUIRED
+      ? '自动执行缺少请求授权'
+      : '自动执行授权未通过'
+  return { status:'rejected', error_code:code, message }
+}
+
+export async function resolveAutoExecuteGuard(guard, context = {}) {
+  if (typeof guard !== 'function') return buildAutoExecuteGuardRejection(null, AUTO_EXECUTE_GUARD_REQUIRED)
+  try {
+    const decision = await guard(context)
+    if (decision === true) return null
+    return buildAutoExecuteGuardRejection(decision)
+  } catch (error) {
+    return buildAutoExecuteGuardRejection(error)
+  }
 }
 
 export async function loadPrivatePortfolioContext(userId) {
@@ -946,7 +974,17 @@ export async function handleAnalyze(userId, params, options = {}) {
   })
 
   if (signal.signal_type !== 'hold' && config && config.enable_auto_trade) {
-    if (!isTradeEnabled(userId)) {
+    const guardRejection = await resolveAutoExecuteGuard(options.assertAutoExecute, {
+      userId, signal, market,
+    })
+    if (guardRejection) {
+      signal.execution_result = guardRejection
+      await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(guardRejection), signal.id])
+      await insertAudit(null, userId, 'ai_execute', signal.symbol,
+        { signal_id:signal.id, source:'analyze_auto', reason:guardRejection.error_code },
+        guardRejection, 'rejected')
+      sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: 'rejected' })
+    } else if (!isTradeEnabled(userId)) {
       console.log(`[Analyze] Auto-execute blocked: trade_send_enabled=0`)
       await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', reason: 'trade_send_disabled' }, { status: 'rejected', message: '交易发送已关闭' }, 'rejected')
       signal.execution_result = { status: 'rejected', message: '交易发送已关闭' }
@@ -960,8 +998,21 @@ export async function handleAnalyze(userId, params, options = {}) {
         max_position_size: config.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
       }
       const orderPayload = signalOrderPayload(signal, riskCfg, market, true)
+      const assertAutoExecuteBeforeSend = async () => {
+        const rejection = await resolveAutoExecuteGuard(options.assertAutoExecute, {
+          userId, signal, market,
+        })
+        if (rejection) throw Object.assign(new Error(rejection.error_code), {
+          code:rejection.error_code,
+        })
+        return true
+      }
 
-      const execResult = await executeOrder(userId, riskCfg, orderPayload, 'ai_execute', { sourceType: 'manual_ai' })
+      const execResult = await executeOrder(userId, riskCfg, orderPayload, 'ai_execute', {
+        sourceType:'manual_ai',
+        beforeBridgeSend:assertAutoExecuteBeforeSend,
+        beforeWrite:assertAutoExecuteBeforeSend,
+      })
       signal.execution_result = execResult
       await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(execResult || {}), signal.id])
       if (execResult && execResult.status === 'success') {

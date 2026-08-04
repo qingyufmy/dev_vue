@@ -821,6 +821,18 @@ pub struct ManagedProcess {
     job: KillOnCloseJob,
 }
 
+/// The small amount of process state that callers need for diagnostics.
+///
+/// Child output intentionally remains attached to the null device. Worker output can contain
+/// broker/account details (and Python tracebacks can contain local paths), so the runtime reports
+/// only the exit classification and optional platform exit code instead of forwarding raw output
+/// into Bridge logs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManagedProcessState {
+    Running,
+    Exited { exit_code: Option<i32> },
+}
+
 impl ManagedProcess {
     pub fn spawn(spec: &ProcessSpec) -> Result<Self, RuntimeError> {
         let job = KillOnCloseJob::new()?;
@@ -854,6 +866,16 @@ impl ManagedProcess {
         self.child
             .try_wait()
             .map_err(|_| RuntimeError::new("bridge_worker_process_wait_failed"))
+    }
+
+    /// Polls the child without exposing stdout/stderr contents to callers.
+    pub fn state(&mut self) -> Result<ManagedProcessState, RuntimeError> {
+        Ok(match self.try_wait()? {
+            Some(status) => ManagedProcessState::Exited {
+                exit_code: exit_code(status),
+            },
+            None => ManagedProcessState::Running,
+        })
     }
 
     pub fn terminate(&mut self) -> Result<(), RuntimeError> {
@@ -1164,9 +1186,15 @@ mod tests {
             .arg("/C")
             .arg("ping -n 30 127.0.0.1 >NUL");
         let mut child = ManagedProcess::spawn(&spec).expect("managed child");
-        assert!(child.try_wait().expect("initial wait").is_none());
+        assert_eq!(
+            child.state().expect("initial state"),
+            ManagedProcessState::Running
+        );
         child.terminate().expect("terminate job");
-        assert!(child.try_wait().expect("final wait").is_some());
+        assert!(matches!(
+            child.state().expect("final state"),
+            ManagedProcessState::Exited { .. }
+        ));
     }
 
     #[test]

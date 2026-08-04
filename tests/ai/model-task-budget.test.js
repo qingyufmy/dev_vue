@@ -52,6 +52,16 @@ describe('model task adaptive budget', () => {
       completedSamples:2, truncatedSamples:1 })
   })
 
+  it('ignores repair and empty-retry rows when learning the primary budget high-water', () => {
+    expect(summarizeModelOutputHistory([
+      { request_phase:'request', output_tokens:1200, request_status:'success', accounting_status:'settled', finish_reason:'stop' },
+      { request_phase:'repair', output_tokens:9000, request_status:'error', accounting_status:'settled', error_code:'output_truncated', finish_reason:'length' },
+      { request_phase:'repair', output_tokens:8000, request_status:'success', accounting_status:'settled', finish_reason:'stop' },
+      { request_phase:null, output_tokens:1600, request_status:'success', accounting_status:'settled', finish_reason:'stop' },
+    ])).toEqual({ historicalOutputP95:1600, truncatedOutputHighWatermark:0,
+      completedSamples:2, truncatedSamples:0 })
+  })
+
   it('uses the smaller business deadline and keeps manual timeout as a tightening cap', () => {
     expect(modelTaskDeadlines('daily_review', {
       nowUtcMs:1000, manualAttemptMs:90_000, businessDeadlineUtcMs:200_000,

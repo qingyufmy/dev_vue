@@ -6,6 +6,7 @@ import { queryOne } from '../db.js'
 import { consumeBridgeConnectionTicket } from '../bridge-auth-session.js'
 import {
   createCommandLedgerEntry,
+  expireQueuedCommands,
   markCommandDeliveryUncertain,
   markCommandDispatched,
   recordCommandResult,
@@ -21,9 +22,18 @@ import {
 export const BRIDGE_V3_WS_PATH = '/aurum-api/bridge/v3/ws'
 export const BRIDGE_V3_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 export const BRIDGE_V3_CONNECTION_STALE_MS = 45_000
+export const BRIDGE_V3_TRANSPORT_PING_TIMEOUT_MS = BRIDGE_V3_CONNECTION_STALE_MS
 export const BRIDGE_V3_ELIGIBILITY_RECHECK_MS = 30_000
+// One native outbox pump can enqueue up to 200 records. Keep one complete
+// recovery batch admissible while retaining a hard per-connection ceiling.
+export const BRIDGE_V3_INBOUND_QUEUE_MAX_MESSAGES = 256
+export const BRIDGE_V3_INBOUND_QUEUE_MAX_BYTES = 8 * 1024 * 1024
 const AUTH_QUEUE_MAX_MESSAGES = 16
 const AUTH_QUEUE_MAX_BYTES = 1024 * 1024
+const INBOUND_QUEUE_PAUSE_MESSAGES = 192
+const INBOUND_QUEUE_RESUME_MESSAGES = 64
+const INBOUND_QUEUE_PAUSE_BYTES = 6 * 1024 * 1024
+const INBOUND_QUEUE_RESUME_BYTES = 2 * 1024 * 1024
 const MAX_PENDING_QUOTES_PER_CONNECTION = 64
 const MAX_PENDING_DATA_REQUESTS_PER_CONNECTION = 32
 const TRANSPORT_PING_INTERVAL_MS = 10_000
@@ -99,6 +109,7 @@ export function createBridgeV3Gateway({
   disconnectTerminals = disconnectBridgeTerminalSessions,
   applyDelta = applyBridgeDataDelta,
   createLedgerEntry = createCommandLedgerEntry,
+  expireQueued = expireQueuedCommands,
   markDispatched = markCommandDispatched,
   markUncertain = markCommandDeliveryUncertain,
   recordResult = recordCommandResult,
@@ -123,9 +134,15 @@ export function createBridgeV3Gateway({
     return Object.assign(new Error(code), { code })
   }
 
+  function tradeEnabledForUser(user) {
+    return String(user?.role || '').toLowerCase() === 'admin'
+      ? user?.trade_send_enabled == null || Number(user.trade_send_enabled) === 1
+      : Number(user?.trade_send_enabled) === 1
+  }
+
   function sessionCloseCode(errorCode, ready) {
     if (!ready) return 4002
-    return ['bridge_membership_required', 'bridge_session_revoked'].includes(errorCode)
+    return ['bridge_membership_required', 'bridge_session_revoked', 'observer_source_binding_changed'].includes(errorCode)
       ? 4004
       : null
   }
@@ -173,6 +190,66 @@ export function createBridgeV3Gateway({
       && now() - Number(connection.lastSeen || 0) <= BRIDGE_V3_CONNECTION_STALE_MS
   }
 
+  function resumeInboundSocket(connection) {
+    if (!connection?.inboundSocketPaused) return
+    connection.inboundSocketPaused = false
+    try { connection.ws?._socket?.resume?.() } catch {}
+  }
+
+  function adjustInboundSocketFlow(connection) {
+    if (!connection || connection.closed || connection.inboundStopped) return
+    const processingSize = connection.inboundProcessing?.size || 0
+    const processingCount = connection.inboundProcessing ? 1 : 0
+    const totalMessages = connection.inboundQueue.length + processingCount
+    const totalBytes = connection.inboundQueueBytes + processingSize
+    if (!connection.inboundSocketPaused
+      && (totalMessages >= INBOUND_QUEUE_PAUSE_MESSAGES || totalBytes >= INBOUND_QUEUE_PAUSE_BYTES)) {
+      try {
+        if (typeof connection.ws?._socket?.pause === 'function') {
+          connection.ws._socket.pause()
+          connection.inboundSocketPaused = true
+        }
+      } catch {}
+    } else if (connection.inboundSocketPaused
+      && totalMessages <= INBOUND_QUEUE_RESUME_MESSAGES && totalBytes <= INBOUND_QUEUE_RESUME_BYTES) {
+      resumeInboundSocket(connection)
+    }
+  }
+
+  function clearInboundQueueReferences(connection) {
+    if (!connection) return
+    connection.authQueue = []
+    connection.authQueueBytes = 0
+    connection.inboundQueue = []
+    connection.inboundQueueBytes = 0
+    connection.inboundProcessing = null
+    resumeInboundSocket(connection)
+  }
+
+  function closeConnection(connection, code, details = null, closeCode = null) {
+    if (!connection || connection.closed) return false
+    connection.closed = true
+    connection.inboundStopped = true
+    clearInboundQueueReferences(connection)
+    protocolError(connection.ws, code, details, { closeCode })
+    unregisterConnection(connection)
+    return true
+  }
+
+  function closeTransportPingTimeout(connection) {
+    if (!connection || connection.closed) return false
+    connection.closed = true
+    connection.inboundStopped = true
+    clearInboundQueueReferences(connection)
+    connection.pingOutstandingAt = 0
+    try {
+      if (typeof connection.ws.terminate === 'function') connection.ws.terminate()
+      else connection.ws.close(1001, 'bridge_ping_timeout')
+    } catch {}
+    unregisterConnection(connection)
+    return true
+  }
+
   function terminalInitialSyncReady(connection, terminalInstanceId) {
     const synchronizedStreams = connection.initialSnapshotStreams.get(terminalInstanceId)
     return REQUIRED_INITIAL_STREAMS.every(stream => synchronizedStreams?.has(stream))
@@ -180,6 +257,9 @@ export function createBridgeV3Gateway({
 
   function unregisterConnection(connection) {
     if (connection.pingInterval) clearInterval(connection.pingInterval)
+    if (connection.pingTimeoutTimer) clearTimeout(connection.pingTimeoutTimer)
+    connection.pingTimeoutTimer = null
+    clearInboundQueueReferences(connection)
     for (const terminal of connection.terminals.values()) {
       const current = connectionsByTerminal.get(terminal.terminal_instance_id)
       if (current?.connection === connection) {
@@ -245,9 +325,7 @@ export function createBridgeV3Gateway({
     connection.userId = Number(user.id)
     connection.tokenVersion = Number(credential.tokenVersion || 0)
     connection.nextEligibilityCheckAt = now() + BRIDGE_V3_ELIGIBILITY_RECHECK_MS
-    connection.tradeEnabled = String(user.role || '').toLowerCase() === 'admin'
-      ? user.trade_send_enabled == null || Number(user.trade_send_enabled) === 1
-      : Number(user.trade_send_enabled) === 1
+    connection.tradeEnabled = tradeEnabledForUser(user)
     connection.observerAccountRef = String(user.plan_source || '') === 'observer_source'
       && user.observer_login_account && user.observer_broker_server
       ? { login:String(user.observer_login_account), broker_server:String(user.observer_broker_server) }
@@ -262,8 +340,17 @@ export function createBridgeV3Gateway({
     connection.nextEligibilityCheckAt = checkedAt + BRIDGE_V3_ELIGIBILITY_RECHECK_MS
     let user
     try {
-      user = await queryOneFn(`SELECT id, role, token_version,
+      user = await queryOneFn(`SELECT id, role, plan_source, token_version,
+        (SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = users.id LIMIT 1) AS trade_send_enabled,
         (SELECT connection_enabled FROM user_bridge_settings WHERE user_id = users.id LIMIT 1) AS connection_enabled,
+        (SELECT accounts.login_account FROM ai_observer_sources sources
+          JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
+            AND accounts.user_id = users.id AND accounts.is_deleted = 0
+          WHERE sources.bridge_user_id = users.id AND sources.status = 'active' LIMIT 1) AS observer_login_account,
+        (SELECT accounts.broker_server FROM ai_observer_sources sources
+          JOIN trading_accounts accounts ON accounts.id = sources.trading_account_id
+            AND accounts.user_id = users.id AND accounts.is_deleted = 0
+          WHERE sources.bridge_user_id = users.id AND sources.status = 'active' LIMIT 1) AS observer_broker_server,
         (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
         FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [connection.userId])
     } catch {
@@ -282,6 +369,23 @@ export function createBridgeV3Gateway({
       connection.tradeEnabled = false
       throw gatewayError('bridge_runtime_paused')
     }
+    const planSource = String(user.plan_source || '')
+    if (planSource === 'observer_source') {
+      const currentRef = user.observer_login_account && user.observer_broker_server
+        ? { login:String(user.observer_login_account), broker_server:String(user.observer_broker_server) }
+        : null
+      if (!currentRef || !connection.observerAccountRef
+        || currentRef.login.trim() !== connection.observerAccountRef.login.trim()
+        || currentRef.broker_server.trim().toLowerCase()
+          !== connection.observerAccountRef.broker_server.trim().toLowerCase()) {
+        connection.tradeEnabled = false
+        throw gatewayError('observer_source_binding_changed')
+      }
+    } else if (connection.observerAccountRef) {
+      connection.tradeEnabled = false
+      throw gatewayError('observer_source_binding_changed')
+    }
+    connection.tradeEnabled = tradeEnabledForUser(user)
   }
 
   async function acceptHello(connection, message) {
@@ -493,11 +597,96 @@ export function createBridgeV3Gateway({
     throw Object.assign(new Error('bridge_message_type_unexpected'), { code:'bridge_message_type_unexpected' })
   }
 
+  function reportInboundError(connection, error) {
+    if (connection.closed) return true
+    const code = error?.code || 'bridge_message_rejected'
+    const validation = Array.isArray(error?.details) ? ` details=${error.details.join('|')}` : ''
+    console.warn(`[BridgeV3] message rejected user=${connection.userId ?? 'unknown'} code=${code}${validation}`)
+    const closeCode = sessionCloseCode(code, connection.ready)
+    if (closeCode) {
+      closeConnection(connection, code, error?.message || null, closeCode)
+      return true
+    }
+    protocolError(connection.ws, code, error?.message || null)
+    return false
+  }
+
+  function drainInboundQueue(connection) {
+    if (connection.closed || connection.inboundStopped || !connection.authReady
+      || connection.inboundDrainRunning) return
+    connection.inboundDrainRunning = true
+    Promise.resolve().then(async () => {
+      while (!connection.closed && !connection.inboundStopped && connection.inboundQueue.length) {
+        const entry = connection.inboundQueue.shift()
+        connection.inboundQueueBytes = Math.max(0, connection.inboundQueueBytes - entry.size)
+        connection.inboundProcessing = entry
+        adjustInboundSocketFlow(connection)
+        try {
+          await handleMessage(connection, entry.raw)
+        } catch (error) {
+          reportInboundError(connection, error)
+        } finally {
+          if (connection.inboundProcessing === entry) connection.inboundProcessing = null
+          adjustInboundSocketFlow(connection)
+        }
+      }
+    }).catch(error => {
+      // Keep the detached drain promise handled even if an unexpected callback
+      // throws outside handleMessage's normal rejection path.
+      try { reportInboundError(connection, error) } catch {}
+    }).finally(() => {
+      connection.inboundDrainRunning = false
+      if (!connection.closed && !connection.inboundStopped && connection.authReady
+        && connection.inboundQueue.length) drainInboundQueue(connection)
+    })
+  }
+
+  function rejectInboundQueueOverflow(connection) {
+    if (!connection || connection.closed || connection.inboundStopped) return false
+    return closeConnection(connection, 'bridge_inbound_queue_overflow', null, 1013)
+  }
+
+  function enqueueInboundMessage(connection, raw) {
+    if (!connection || connection.closed || connection.inboundStopped) return false
+    const size = byteLength(raw)
+    const processingSize = connection.inboundProcessing?.size || 0
+    const processingCount = connection.inboundProcessing ? 1 : 0
+    if (connection.inboundQueue.length + processingCount >= BRIDGE_V3_INBOUND_QUEUE_MAX_MESSAGES
+      || connection.inboundQueueBytes + processingSize + size > BRIDGE_V3_INBOUND_QUEUE_MAX_BYTES) {
+      rejectInboundQueueOverflow(connection)
+      return false
+    }
+    connection.inboundQueue.push({ raw, size })
+    connection.inboundQueueBytes += size
+    adjustInboundSocketFlow(connection)
+    drainInboundQueue(connection)
+    return true
+  }
+
+  function activateInboundQueue(connection) {
+    if (connection.closed || connection.inboundStopped) return false
+    const queued = connection.authQueue
+    const queuedBytes = connection.authQueueBytes
+    connection.authQueue = []
+    connection.authQueueBytes = 0
+    if (queued.length > BRIDGE_V3_INBOUND_QUEUE_MAX_MESSAGES
+      || queuedBytes > BRIDGE_V3_INBOUND_QUEUE_MAX_BYTES) {
+      rejectInboundQueueOverflow(connection)
+      return false
+    }
+    connection.inboundQueue = queued.map(raw => ({ raw, size:byteLength(raw) }))
+    connection.inboundQueueBytes = queuedBytes
+    connection.authReady = true
+    drainInboundQueue(connection)
+    return true
+  }
+
   wss.on('connection', (ws, req) => {
     const connection = {
       ws,
       userId:null,
       authenticated:false,
+      authReady:false,
       ready:false,
       sessionId:null,
       terminals:new Map(),
@@ -505,74 +694,87 @@ export function createBridgeV3Gateway({
       closed:false,
       authQueue:[],
       authQueueBytes:0,
+      inboundQueue:[],
+      inboundQueueBytes:0,
+      inboundProcessing:null,
+      inboundDrainRunning:false,
+      inboundStopped:false,
+      inboundSocketPaused:false,
       tokenVersion:null,
       nextEligibilityCheckAt:0,
       pingInterval:null,
+      pingTimeoutTimer:null,
       pingOutstandingAt:0,
       transportRttMs:null,
     }
     const url = new URL(req.url, 'http://localhost')
     const onMessage = raw => {
-      if (!connection.authenticated) {
+      if (connection.closed || connection.inboundStopped) return
+      if (!connection.authReady) {
         const size = byteLength(raw)
         if (connection.authQueue.length >= AUTH_QUEUE_MAX_MESSAGES
           || connection.authQueueBytes + size > AUTH_QUEUE_MAX_BYTES) {
-          connection.authQueue = []
-          protocolError(ws, 'bridge_auth_queue_overflow', null, { closeCode:1009 })
+          closeConnection(connection, 'bridge_auth_queue_overflow', null, 1009)
           return
         }
         connection.authQueue.push(raw)
         connection.authQueueBytes += size
         return
       }
-      handleMessage(connection, raw).catch(error => {
-        const validation = Array.isArray(error.details) ? ` details=${error.details.join('|')}` : ''
-        console.warn(`[BridgeV3] message rejected user=${connection.userId ?? 'unknown'} code=${error.code || 'bridge_message_rejected'}${validation}`)
-        protocolError(ws, error.code || 'bridge_message_rejected', error.message, {
-          closeCode:sessionCloseCode(error.code, connection.ready),
-        })
-      })
+      enqueueInboundMessage(connection, raw)
     }
     ws.on('message', onMessage)
     ws.on('close', () => {
       if (connection.closed) return
       connection.closed = true
+      connection.inboundStopped = true
+      clearInboundQueueReferences(connection)
       unregisterConnection(connection)
     })
     ws.on('pong', () => {
       if (!connection.pingOutstandingAt) return
       connection.transportRttMs = Math.max(0, now() - connection.pingOutstandingAt)
       connection.pingOutstandingAt = 0
+      if (connection.pingTimeoutTimer) clearTimeout(connection.pingTimeoutTimer)
+      connection.pingTimeoutTimer = null
     })
     ws.on('error', () => {})
 
     if (typeof ws.ping === 'function') {
       connection.pingInterval = setInterval(() => {
-        if (connection.closed || ws.readyState !== 1 || connection.pingOutstandingAt) return
-        connection.pingOutstandingAt = now()
-        try { ws.ping() } catch { connection.pingOutstandingAt = 0 }
+        if (connection.closed) return
+        const current = now()
+        if (connection.pingOutstandingAt
+          && current - connection.pingOutstandingAt >= BRIDGE_V3_TRANSPORT_PING_TIMEOUT_MS) {
+          closeTransportPingTimeout(connection)
+          return
+        }
+        if (ws.readyState !== 1 || connection.pingOutstandingAt) return
+        connection.pingOutstandingAt = current
+        connection.pingTimeoutTimer = setTimeout(() => {
+          if (connection.closed || !connection.pingOutstandingAt) return
+          if (now() - connection.pingOutstandingAt >= BRIDGE_V3_TRANSPORT_PING_TIMEOUT_MS) {
+            closeTransportPingTimeout(connection)
+          }
+        }, BRIDGE_V3_TRANSPORT_PING_TIMEOUT_MS)
+        connection.pingTimeoutTimer.unref?.()
+        try {
+          ws.ping()
+        } catch {
+          connection.pingOutstandingAt = 0
+          if (connection.pingTimeoutTimer) clearTimeout(connection.pingTimeoutTimer)
+          connection.pingTimeoutTimer = null
+        }
       }, TRANSPORT_PING_INTERVAL_MS)
       connection.pingInterval.unref?.()
     }
 
-    authenticate(connection, url).then(async () => {
-      const queued = connection.authQueue
-      connection.authQueue = []
-      connection.authQueueBytes = 0
-      for (const raw of queued) {
-        if (connection.closed) break
-        try { await handleMessage(connection, raw) } catch (error) {
-          const validation = Array.isArray(error.details) ? ` details=${error.details.join('|')}` : ''
-          console.warn(`[BridgeV3] queued message rejected user=${connection.userId ?? 'unknown'} code=${error.code || 'bridge_message_rejected'}${validation}`)
-          protocolError(ws, error.code || 'bridge_message_rejected', error.message, {
-            closeCode:sessionCloseCode(error.code, connection.ready),
-          })
-          break
-        }
-      }
+    authenticate(connection, url).then(() => {
+      activateInboundQueue(connection)
     }).catch(error => {
+      if (connection.closed) return
       console.warn(`[BridgeV3] authentication rejected code=${error.code || 'bridge_auth_failed'}`)
-      protocolError(ws, error.code || 'bridge_auth_failed', null, { closeCode:4002 })
+      closeConnection(connection, error.code || 'bridge_auth_failed', null, 4002)
     })
   })
 
@@ -600,9 +802,19 @@ export function createBridgeV3Gateway({
           : { status:ledger.command.status, command_id:command.command_id, duplicate:true }
       }
 
+      // The ledger owns the current transport envelope after a queued retry;
+      // never send an older epoch/deadline than the row we are about to mark.
+      const dispatchCommand = {
+        ...command,
+        connection_epoch:Number.isSafeInteger(Number(ledger.command.connection_epoch))
+          ? Number(ledger.command.connection_epoch) : command.connection_epoch,
+        deadline_utc_msc:Number.isSafeInteger(Number(ledger.command.deadline_at_utc_msc))
+          ? Number(ledger.command.deadline_at_utc_msc) : command.deadline_utc_msc,
+      }
+
       const routed = connectionsByTerminal.get(command.terminal_instance_id)
       if (!routed || !connectionAlive(routed.connection) || routed.connection.userId !== Number(userId)
-        || !sameBridgeRoute(routeFromTerminal(routed.terminal), command)) {
+        || !sameBridgeRoute(routeFromTerminal(routed.terminal), dispatchCommand)) {
         return { status:'queued', command_id:command.command_id, error:'bridge_terminal_not_connected' }
       }
       if (command.action !== 'query_execution'
@@ -610,7 +822,7 @@ export function createBridgeV3Gateway({
         return { status:'queued', command_id:command.command_id, error:'bridge_terminal_initial_sync_pending' }
       }
       await markDispatched(command.command_id, {
-        connectionEpoch:command.connection_epoch,
+        connectionEpoch:dispatchCommand.connection_epoch,
         nowUtcMsc,
       })
 
@@ -627,7 +839,7 @@ export function createBridgeV3Gateway({
           resolve, timer, connection:routed.connection,
           terminalInstanceId:command.terminal_instance_id,
         })
-        if (!safeSend(routed.connection.ws, command)) {
+        if (!safeSend(routed.connection.ws, dispatchCommand)) {
           clearTimeout(timer)
           pendingResults.delete(command.command_id)
           markUncertain(command.command_id, { reason:'bridge_send_failed', nowUtcMsc:now() })
@@ -654,7 +866,6 @@ export function createBridgeV3Gateway({
     expectedDowntimeSeconds = 60,
     ttlSeconds = 90,
   }) {
-    purgeExpiredLeases()
     const actorId = Number(actorUserId)
     const authorized = new Set((authorizedUserIds || []).map(Number))
     const terminalIds = Array.isArray(terminalInstanceIds) ? terminalInstanceIds.map(String) : []
@@ -670,6 +881,10 @@ export function createBridgeV3Gateway({
       || !Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 180) {
       throw gatewayError('bridge_maintenance_request_invalid')
     }
+    // Expired in-memory leases are safe to purge before route authorization;
+    // the durable command sweep must wait until all request and terminal
+    // authorization checks have passed so invalid requests remain read-only.
+    purgeExpiredLeases()
     const routes = []
     for (const terminalId of terminalIds) {
       const routed = connectionsByTerminal.get(terminalId)
@@ -682,6 +897,8 @@ export function createBridgeV3Gateway({
       }
       routes.push(routed)
     }
+    const nowUtcMsc = now()
+    await expireQueued({ nowUtcMsc })
     const lease = {
       lease_id:`lease_${randomUUID()}`,
       actor_user_id:actorId,
@@ -700,7 +917,7 @@ export function createBridgeV3Gateway({
       const locallyActive = activeCommandCount(terminalIds)
         + Array.from(pendingResults.values())
           .filter(pending => terminalIds.includes(pending.terminalInstanceId)).length
-      const durableOutstanding = await countOutstanding(terminalIds)
+      const durableOutstanding = await countOutstanding(terminalIds, { nowUtcMsc })
       if (locallyActive > 0 || durableOutstanding > 0) {
         releaseLeaseInternal(lease)
         return {
@@ -884,7 +1101,7 @@ export function createBridgeV3Gateway({
     }
     for (const connection of connections) {
       connection.tradeEnabled = false
-      protocolError(connection.ws, reason, null, { closeCode:4004 })
+      closeConnection(connection, reason, null, 4004)
     }
     return connections.size
   }

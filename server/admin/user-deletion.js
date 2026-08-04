@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs'
 import { queryOne, withTransaction } from '../db.js'
+import { disconnectUserSockets } from '../bridge-ws.js'
 
 export async function anonymizeAdminUser({ actor, targetUserId }) {
   const userId = Number(targetUserId)
@@ -28,16 +29,16 @@ export async function anonymizeAdminUser({ actor, targetUserId }) {
     await run("UPDATE trading_accounts SET observe_status = 'deleted', is_deleted = 1, updated_at = NOW() WHERE user_id = ?", [userId])
     await run('DELETE FROM user_bridge_settings WHERE user_id = ?', [userId])
     await run('DELETE FROM crypto_watch_list WHERE user_id = ?', [userId])
-    await run('DELETE FROM bridge_connection_status WHERE user_id = ?', [userId])
     await run('UPDATE bridge_refresh_sessions SET revoked_at = COALESCE(revoked_at, NOW()), updated_at = NOW() WHERE user_id = ?', [userId])
     await run(`UPDATE users SET email = ?, phone = NULL, password = ?, nickname = ?, avatar = '',
       role = 'user', plan = 'free', plan_expires_at = NULL, telegram_id = NULL, telegram_username = NULL,
       telegram_name = NULL, telegram_chat_id = NULL, referral_code = NULL, referral_credit = 0,
-      deletion_status = 'anonymized', deleted_at = NOW(), updated_at = NOW() WHERE id = ?`,
+      token_version = token_version + 1, deletion_status = 'anonymized', deleted_at = NOW(), updated_at = NOW() WHERE id = ?`,
     [anonymizedEmail, destroyedPassword, `已删除用户 #${userId}`, userId])
     await run(`INSERT INTO audit_logs (user_id, user_email, user_nickname, action, target_type, target_id, detail, created_at)
       VALUES (?, ?, ?, 'user_anonymized', 'user', ?, ?, NOW())`, [actor.id, actor.email || '', actor.nickname || '', userId,
       JSON.stringify({ retained:['orders','trade_audit_logs','order_intents','risk_decisions','inference_snapshots','review_evidence'], credentials_destroyed:true })])
   })
+  disconnectUserSockets(userId, 'User account anonymized')
   return { id:userId, email:user.email }
 }

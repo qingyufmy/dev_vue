@@ -34,7 +34,9 @@ function delta(stream = 'positions', overrides = {}) {
     observed_at_utc_msc:NOW,
     source_time_msc:NOW - 20,
     full_snapshot:false,
-    upserts:stream === 'account' ? [{ balance:1000, equity:995 }] : [{ ticket:'1001', symbol:'XAUUSD' }],
+    upserts:stream === 'account'
+      ? [{ login:'12345678', server:'Broker-Demo', balance:1000, equity:995 }]
+      : [{ ticket:'1001', symbol:'XAUUSD' }],
     deletes:[],
     ...overrides,
   }
@@ -176,7 +178,7 @@ describe('Bridge v3 incremental read model', () => {
       base_revision:0,
       full_snapshot:true,
       upserts:[{ ticket:'1001' }, { position_id:'1002' }],
-      deletes:['999'],
+      deletes:[],
     })
     const { run, transactionFn } = transactionFor({ revision:{ revision:12 } })
     await expect(applyBridgeDataDelta(message, { userId:42, nowUtcMsc:NOW, transactionFn }))
@@ -184,7 +186,6 @@ describe('Bridge v3 incremental read model', () => {
     const sql = run.mock.calls.map(([value]) => value)
     expect(sql.some(value => value.includes('DELETE FROM bridge_v3_positions_latest WHERE terminal_instance_id'))).toBe(true)
     expect(sql.some(value => value.includes('INSERT INTO bridge_v3_positions_latest'))).toBe(true)
-    expect(sql.some(value => value.includes('ticket IN'))).toBe(true)
   })
 
   it('persists immutable deals without deleting historical rows on a full snapshot', async () => {

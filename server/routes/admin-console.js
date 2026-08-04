@@ -7,8 +7,9 @@ import { getAdminAiOperationsOverview } from '../admin/ai-operations.js'
 import { updateObserverChannel, updateObserverSource } from './ai/observer-channels.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource, listObserverChannelAssignments, replaceObserverChannelAssignments } from './ai/observer-channels.js'
 import { reconcileAutoSchedulers } from './ai/scheduler.js'
-import { applyBridgeRuntimeState, isBridgeAlive, broadcastAdminEvent } from '../bridge-ws.js'
+import { isBridgeAlive, broadcastAdminEvent } from '../bridge-ws.js'
 import { createObserverSourceAccount } from './ai/observer-source-accounts.js'
+import { synchronizeObserverSourceRuntime } from './ai/observer-source-runtime.js'
 import { getAdminPlatformRiskPolicy, getAdminRiskAuditOverview, listAdminAuditEvents, saveAdminPlatformRiskPolicy } from '../admin/risk-audit.js'
 import { setGlobalKillSwitch } from './ai/risk-state.js'
 import { deleteAdminCourse, getAdminContentSystemOverview, getAdminCourse, listAdminCourses, listAdminFeedback, saveAdminCourse } from '../admin/content-system.js'
@@ -217,11 +218,7 @@ router.patch('/admin/ai/observer-sources/:id/runtime', authMiddleware, adminOnly
       auto_inference_enabled:req.body?.auto_inference_enabled,
       trade_send_enabled:req.body?.trade_send_enabled,
     })
-    await reconcileAutoSchedulers()
-    const runtime_sync = await applyBridgeRuntimeState(Number(source.bridge_user_id), {
-      tradeEnabled:Boolean(source.trade_send_enabled),
-      autoReasoningEnabled:Boolean(source.auto_inference_enabled),
-    })
+    const runtime_sync = await synchronizeObserverSourceRuntime(source)
     res.json({ ok:true, source, runtime_sync })
   } catch (error) { adminAiError(res, error) }
 })
@@ -243,13 +240,13 @@ router.post('/admin/ai/observer-source-accounts',authMiddleware,adminOnly,async(
   try{res.status(201).json({ok:true,account:await createObserverSourceAccount(req.user.id,req.body||{})})}catch(error){adminAiError(res,error)}
 })
 router.post('/admin/ai/observer-sources',authMiddleware,adminOnly,async(req,res)=>{
-  try{const source=await createObserverSource(req.user.id,req.body||{});await reconcileAutoSchedulers();await applyBridgeRuntimeState(Number(source.bridge_user_id),{tradeEnabled:Boolean(source.trade_send_enabled),autoReasoningEnabled:Boolean(source.auto_inference_enabled)});res.status(201).json({ok:true,source})}catch(error){adminAiError(res,error)}
+  try{const source=await createObserverSource(req.user.id,req.body||{});const runtime_sync=await synchronizeObserverSourceRuntime(source);res.status(201).json({ok:true,source,runtime_sync})}catch(error){adminAiError(res,error)}
 })
 router.put('/admin/ai/observer-sources/:id',authMiddleware,adminOnly,async(req,res)=>{
-  try{const source=await updateObserverSource(req.params.id,req.body||{});await reconcileAutoSchedulers();await applyBridgeRuntimeState(Number(source.bridge_user_id),{tradeEnabled:Boolean(source.trade_send_enabled),autoReasoningEnabled:Boolean(source.auto_inference_enabled)});res.json({ok:true,source})}catch(error){adminAiError(res,error)}
+  try{const source=await updateObserverSource(req.params.id,req.body||{});const runtime_sync=await synchronizeObserverSourceRuntime(source);res.json({ok:true,source,runtime_sync})}catch(error){adminAiError(res,error)}
 })
 router.delete('/admin/ai/observer-sources/:id',authMiddleware,adminOnly,async(req,res)=>{
-  try{res.json({ok:true,deleted:await deleteObserverSource(req.params.id)})}catch(error){adminAiError(res,error)}
+  try{const deleted=await deleteObserverSource(req.params.id);const runtime_sync=await synchronizeObserverSourceRuntime(deleted,{deleted:true});res.json({ok:true,deleted,runtime_sync})}catch(error){adminAiError(res,error)}
 })
 
 router.patch('/admin/ai/observer-channels/:id', authMiddleware, adminOnly, async (req, res) => {
@@ -499,8 +496,6 @@ router.get('/admin/users', authMiddleware, adminOnly, async (req, res) => {
     const rows = await queryAll(`SELECT u.id, u.uid, u.email, u.phone, u.nickname, u.avatar, u.role,
       u.plan, u.plan_source, u.plan_expires_at, u.created_at, u.last_seen_at,
       (u.plan IN ('plus','pro') AND u.plan_expires_at IS NOT NULL AND u.plan_expires_at < NOW()) AS membership_expired,
-      EXISTS(SELECT 1 FROM bridge_connection_status b WHERE b.user_id = u.id AND b.connected = 1
-        AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 90 SECOND)) AS bridge_connected,
       (SELECT COUNT(*) FROM trading_accounts ta WHERE ta.user_id = u.id AND ta.is_deleted = 0) AS mt5_account_count,
       (SELECT COUNT(*) FROM auto_prompt_types apt WHERE apt.owner_user_id = u.id AND apt.deleted_at IS NULL) AS strategy_count
       FROM users u WHERE ${clause} ORDER BY u.created_at DESC LIMIT ? OFFSET ?`, [...params, pageSize, offset])

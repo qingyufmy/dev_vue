@@ -21,9 +21,7 @@ vi.mock('../server/captcha.js', () => ({
 vi.mock('../server/bridge-auth-session.js', () => ({
   assertBridgeEligible: vi.fn(),
   createBridgeConnectionTicket: vi.fn(async () => ({ ticket: 'ticket', expiresInSeconds: 30 })),
-  createBridgeRefreshSession: vi.fn(async () => ({ refreshToken: 'refresh-token', expiresInSeconds: 7776000 })),
   useBridgeRefreshSession: vi.fn(async () => ({ user: { id: 3 }, expiresInSeconds: 7776000 })),
-  revokeBridgeRefreshSession: vi.fn(async () => true),
   revokeBridgeRefreshSessions: vi.fn(async () => {}),
 }))
 vi.mock('../server/bridge-pairing.js', () => ({
@@ -35,18 +33,14 @@ vi.mock('../server/bridge-pairing.js', () => ({
   consumeBridgePairing: vi.fn(async () => ({ status: 'pending' })),
 }))
 vi.mock('../server/bridge-ws.js', () => ({
-  disconnectUserBridgeConnections:vi.fn(),
   disconnectUserSockets:vi.fn(),
 }))
 
 import { queryOne, queryAll, queryRun, withTransaction } from '../server/db.js'
 import { verifyCaptcha } from '../server/captcha.js'
 import authRouter from '../server/routes/auth.js'
-import {
-  createBridgeRefreshSession, useBridgeRefreshSession,
-  revokeBridgeRefreshSession, revokeBridgeRefreshSessions,
-} from '../server/bridge-auth-session.js'
-import { disconnectUserBridgeConnections, disconnectUserSockets } from '../server/bridge-ws.js'
+import { useBridgeRefreshSession, revokeBridgeRefreshSessions } from '../server/bridge-auth-session.js'
+import { disconnectUserSockets } from '../server/bridge-ws.js'
 import { approveBridgePairing, consumeBridgePairing, startBridgePairing } from '../server/bridge-pairing.js'
 
 withTransaction.mockImplementation(callback => callback(async (sql, params = []) => {
@@ -158,14 +152,6 @@ describe('auth.js — reset password rules', () => {
 describe('auth.js — Bridge sessions', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('bootstraps a refresh credential from a still-valid access token', async () => {
-    const { json } = await callRoute('post', '/auth/bridge-session', {}, {
-      id: 3, role: 'user', plan: 'pro', plan_expires_at: null,
-    })
-    expect(json).toMatchObject({ ok: true, refreshToken: 'refresh-token' })
-    expect(createBridgeRefreshSession).toHaveBeenCalled()
-  })
-
   it('returns a new short-lived token for a valid refresh credential', async () => {
     const { json } = await callRoute('post', '/auth/bridge-refresh', { refreshToken: 'refresh-token' })
     expect(json).toMatchObject({ ok: true, token: 'mock-token-123', bridgeRole:'user' })
@@ -201,17 +187,6 @@ describe('auth.js — Bridge sessions', () => {
 
     expect(result.status).toBe(503)
     expect(result.json).toMatchObject({ ok:false, code:'bridge_refresh_unavailable' })
-  })
-
-  it('revokes only the current Bridge refresh credential on explicit logout', async () => {
-    const { json } = await callRoute('post', '/auth/bridge-revoke', {
-      refreshToken: 'current-device-refresh-token',
-    }, { id:3, role:'user', plan:'pro' })
-
-    expect(json).toEqual({ ok:true })
-    expect(revokeBridgeRefreshSession).toHaveBeenCalledWith(3, 'current-device-refresh-token')
-    expect(disconnectUserBridgeConnections).toHaveBeenCalledWith(3, 'Bridge signed out')
-    expect(revokeBridgeRefreshSessions).not.toHaveBeenCalled()
   })
 
   it('starts, approves, and polls browser pairing without putting a refresh token in the URL', async () => {

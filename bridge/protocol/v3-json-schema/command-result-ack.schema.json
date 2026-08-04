@@ -26,5 +26,5 @@
     "connection_epoch": { "type": "integer", "minimum": 1 },
     "status": { "enum": ["applied", "duplicate"] }
   },
-  "additionalProperties": false
+  "unevaluatedProperties": false
 }

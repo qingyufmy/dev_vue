@@ -223,7 +223,7 @@ describe('reconcilePendingOrders', () => {
     await reconcilePendingOrders()
 
     expect(marketData.mt5Bridge).toHaveBeenCalledWith(10, 'order_lookup', {
-      expected_kind:'pending', pending_ticket:'5021', lookback_seconds:315_360_000,
+      expected_kind:'pending', pending_ticket:'5021', lookback_seconds:30 * 24 * 60 * 60,
     }, { noFallback:true })
     expect(marketData.mt5Bridge.mock.calls.some(([, action]) => action === 'history')).toBe(false)
     const filledCall = db.queryRun.mock.calls.find(c => c[0].includes("'filled'"))

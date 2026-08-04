@@ -4,7 +4,7 @@ use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +21,13 @@ const DEFAULT_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const DEFAULT_RETAINED_FILES: usize = 10;
 const DEFAULT_RECENT_LOG_LINES: usize = 1_000;
 const MAX_RECENT_LOG_LINES: usize = 10_000;
+// The log viewer refreshes automatically.  Keep each file refresh bounded even when a
+// retained log file contains very long messages or has grown unexpectedly.
+const MAX_LOG_TAIL_BYTES: usize = 256 * 1024;
+const MAX_LOG_REFRESH_BYTES: usize = 4 * 1024 * 1024;
+const MAX_LOG_LINE_BYTES: usize = 64 * 1024;
+const LOG_TAIL_READ_BLOCK_BYTES: usize = 16 * 1024;
+const MT5_DIAGNOSTIC_FILE_NAME: &str = "mt5-worker-diagnostics.jsonl";
 const SECRET_NAMES: [&str; 7] = [
     "access_token",
     "refresh_token",
@@ -64,7 +71,13 @@ pub struct LoggerConfig {
 
 #[derive(Clone, Debug)]
 pub struct BridgeLogReader {
-    log_directory: PathBuf,
+    log_directories: Vec<LogDirectorySource>,
+}
+
+#[derive(Clone, Debug)]
+struct LogDirectorySource {
+    directory: PathBuf,
+    label: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -79,10 +92,91 @@ struct DisplayLogRecord {
     message: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct DiagnosticLogRecord {
+    #[serde(default)]
+    observed_at_utc_msc: Option<i64>,
+    #[serde(default)]
+    event: Option<String>,
+    #[serde(default)]
+    stage: Option<String>,
+    #[serde(default)]
+    exception_type: Option<String>,
+    #[serde(default)]
+    error_code: Option<String>,
+    #[serde(default)]
+    consecutive_failures: Option<u32>,
+}
+
+#[derive(Clone, Copy)]
+enum LogFileKind {
+    Bridge,
+    Mt5Diagnostic,
+}
+
+struct LogLineCandidate {
+    timestamp_utc: Option<String>,
+    source_key: String,
+    line_number: usize,
+    rendered: String,
+}
+
 impl BridgeLogReader {
     pub fn new(log_directory: impl AsRef<Path>) -> Result<Self, LogError> {
+        Self::from_directories([log_directory])
+    }
+
+    /// Creates a reader over a fixed set of log directories.
+    ///
+    /// The reader never walks outside the directories supplied by the caller.  Keeping the
+    /// directory list explicit lets the UI aggregate the default profile and its existing
+    /// observer profiles without exposing arbitrary files under the application data root.  Each
+    /// directory only contributes `bridge-*.log` and the exact MT5 diagnostic file.
+    pub fn from_directories<I>(log_directories: I) -> Result<Self, LogError>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<Path>,
+    {
+        let mut directories = Vec::new();
+        for directory in log_directories {
+            directories.push((None, directory.as_ref().to_path_buf()));
+        }
+        Self::from_directory_sources(directories)
+    }
+
+    /// Creates a reader over explicitly named sources.  Labels are supplied by the caller (the
+    /// UI uses validated profile IDs); they are never inferred from a filesystem path.
+    pub fn from_named_directories<I, S, P>(sources: I) -> Result<Self, LogError>
+    where
+        I: IntoIterator<Item = (S, P)>,
+        S: AsRef<str>,
+        P: AsRef<Path>,
+    {
+        let mut directories = Vec::new();
+        for (label, directory) in sources {
+            let label = label.as_ref();
+            validate_source_label(label)?;
+            directories.push((Some(label.to_owned()), directory.as_ref().to_path_buf()));
+        }
+        Self::from_directory_sources(directories)
+    }
+
+    fn from_directory_sources(sources: Vec<(Option<String>, PathBuf)>) -> Result<Self, LogError> {
+        let mut directories = Vec::new();
+        for (label, directory) in sources {
+            let directory = absolute_path(&directory, "bridge_log_reader_path_invalid")?;
+            if !directories
+                .iter()
+                .any(|existing: &LogDirectorySource| existing.directory == directory)
+            {
+                directories.push(LogDirectorySource { directory, label });
+            }
+        }
+        if directories.is_empty() {
+            return Err(LogError::new("bridge_log_reader_path_invalid"));
+        }
         Ok(Self {
-            log_directory: absolute_path(log_directory.as_ref(), "bridge_log_reader_path_invalid")?,
+            log_directories: directories,
         })
     }
 
@@ -90,73 +184,80 @@ impl BridgeLogReader {
         let max_lines = max_lines
             .unwrap_or(DEFAULT_RECENT_LOG_LINES)
             .clamp(1, MAX_RECENT_LOG_LINES);
-        if !self.log_directory.is_dir() {
+        let mut existing_directory_count = 0_usize;
+        let mut directory_read_failures = 0_usize;
+        let mut files = Vec::new();
+        for source in &self.log_directories {
+            if !source.directory.is_dir() {
+                continue;
+            }
+            existing_directory_count = existing_directory_count.saturating_add(1);
+            let Ok(entries) = fs::read_dir(&source.directory) else {
+                directory_read_failures = directory_read_failures.saturating_add(1);
+                continue;
+            };
+            files.extend(entries.filter_map(Result::ok).filter_map(|entry| {
+                let path = entry.path();
+                log_file_kind(&path).map(|kind| (path, kind, source.label.clone()))
+            }));
+        }
+        if existing_directory_count == 0 {
             return Ok("暂无日志。".to_owned());
         }
-        let mut files = fs::read_dir(&self.log_directory)
-            .map_err(|_| LogError::new("bridge_log_read_failed"))?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| is_bridge_log_path(path))
-            .collect::<Vec<_>>();
         files.sort_by(|left, right| {
-            let left_modified = fs::metadata(left)
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(UNIX_EPOCH);
-            let right_modified = fs::metadata(right)
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(UNIX_EPOCH);
-            right_modified.cmp(&left_modified).then_with(|| {
-                right
-                    .file_name()
-                    .map(|value| value.to_string_lossy().to_ascii_lowercase())
-                    .cmp(
-                        &left
-                            .file_name()
-                            .map(|value| value.to_string_lossy().to_ascii_lowercase()),
-                    )
-            })
+            left.0
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .cmp(&right.0.to_string_lossy().to_ascii_lowercase())
         });
-        let mut blocks = Vec::new();
-        let mut collected_lines = 0_usize;
-        for path in files {
-            let remaining = max_lines.saturating_sub(collected_lines);
-            if remaining == 0 {
-                break;
-            }
-            let file = fs::File::open(path).map_err(|_| LogError::new("bridge_log_read_failed"))?;
-            let mut reader = BufReader::with_capacity(16 * 1024, file);
-            let mut line = String::new();
-            let mut file_lines = VecDeque::with_capacity(remaining);
-            loop {
-                line.clear();
-                let read = reader
-                    .read_line(&mut line)
-                    .map_err(|_| LogError::new("bridge_log_read_failed"))?;
-                if read == 0 {
-                    break;
-                }
-                let line = line.trim_end_matches(['\r', '\n']);
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if file_lines.len() == remaining {
-                    file_lines.pop_front();
-                }
-                file_lines.push_back(format_display_log_line(line));
-            }
-            if !file_lines.is_empty() {
-                collected_lines += file_lines.len();
-                blocks.push(file_lines.into_iter().collect::<Vec<_>>());
-            }
+        let discovered_file_count = files.len();
+        debug_assert!(planned_tail_read_bytes(discovered_file_count) <= MAX_LOG_REFRESH_BYTES);
+        let file_tail_budget = per_file_tail_budget(discovered_file_count);
+        let mut candidates = Vec::new();
+        let mut readable_file_count = 0_usize;
+        for (path, kind, label) in files {
+            let Ok(tail) = read_log_file_tail(&path, file_tail_budget) else {
+                continue;
+            };
+            readable_file_count = readable_file_count.saturating_add(1);
+            let mut file_lines = VecDeque::with_capacity(max_lines);
+            let source_key = path.to_string_lossy().to_ascii_lowercase();
+            let mut last_valid_timestamp = None;
+            let context = LogFileContext {
+                kind,
+                label: label.as_deref(),
+                source_key: &source_key,
+            };
+            tail.for_each_line(|line_number, line| {
+                append_log_line_candidate(
+                    line,
+                    &context,
+                    line_number,
+                    &mut last_valid_timestamp,
+                    &mut file_lines,
+                    max_lines,
+                );
+            });
+            candidates.extend(file_lines);
         }
-        if collected_lines == 0 {
+        if discovered_file_count > 0 && readable_file_count == 0 {
+            return Err(LogError::new("bridge_log_read_failed"));
+        }
+        if discovered_file_count == 0 && directory_read_failures == existing_directory_count {
+            return Err(LogError::new("bridge_log_read_failed"));
+        }
+        if candidates.is_empty() {
             return Ok("暂无日志。".to_owned());
         }
-        Ok(blocks
-            .into_iter()
-            .rev()
-            .flatten()
+        candidates.sort_by(|left, right| {
+            compare_log_timestamps(&left.timestamp_utc, &right.timestamp_utc)
+                .then_with(|| left.source_key.cmp(&right.source_key))
+                .then_with(|| left.line_number.cmp(&right.line_number))
+        });
+        let first = candidates.len().saturating_sub(max_lines);
+        Ok(candidates
+            .drain(first..)
+            .map(|candidate| candidate.rendered)
             .collect::<Vec<_>>()
             .join("\r\n"))
     }
@@ -595,6 +696,18 @@ fn validate_identifier(value: &str, error_code: &'static str) -> Result<(), LogE
     Ok(())
 }
 
+fn validate_source_label(value: &str) -> Result<(), LogError> {
+    if value.is_empty()
+        || value.len() > 40
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(LogError::new("bridge_log_source_label_invalid"));
+    }
+    Ok(())
+}
+
 fn append_sync(path: &Path, payload: &[u8]) -> Result<(), LogError> {
     let mut file = OpenOptions::new()
         .create(true)
@@ -648,21 +761,178 @@ fn absolute_path(path: &Path, error_code: &'static str) -> Result<PathBuf, LogEr
     }
 }
 
-fn is_bridge_log_path(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
+fn log_file_kind(path: &Path) -> Option<LogFileKind> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.file_type().is_file() {
+        return None;
     }
-    let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
-        return false;
-    };
-    let file_name = file_name.to_ascii_lowercase();
-    file_name.starts_with("bridge-") && file_name.ends_with(".log")
+    let file_name = path.file_name().and_then(OsStr::to_str)?;
+    let lowercase_name = file_name.to_ascii_lowercase();
+    if lowercase_name.starts_with("bridge-") && lowercase_name.ends_with(".log") {
+        Some(LogFileKind::Bridge)
+    } else if lowercase_name == MT5_DIAGNOSTIC_FILE_NAME {
+        Some(LogFileKind::Mt5Diagnostic)
+    } else {
+        None
+    }
 }
 
-fn format_display_log_line(line: &str) -> String {
-    let Ok(record) = serde_json::from_str::<DisplayLogRecord>(line) else {
-        return line.to_owned();
+/// Plans an equal tail-read budget for every discovered file.  The single-file cap protects a
+/// small source set from oversized reads, while the aggregate cap protects the auto-refresh path
+/// when many observer profiles are configured.  Integer division intentionally leaves any
+/// remainder unused so the planned sum can never exceed MAX_LOG_REFRESH_BYTES.
+fn per_file_tail_budget(discovered_file_count: usize) -> usize {
+    if discovered_file_count == 0 {
+        return 0;
+    }
+    (MAX_LOG_REFRESH_BYTES / discovered_file_count).min(MAX_LOG_TAIL_BYTES)
+}
+
+fn planned_tail_read_bytes(discovered_file_count: usize) -> usize {
+    per_file_tail_budget(discovered_file_count).saturating_mul(discovered_file_count)
+}
+
+struct LogFileTail {
+    bytes: Vec<u8>,
+    starts_at_file_beginning: bool,
+}
+
+/// Reads only a bounded byte window ending at the current file end.  The caller must parse
+/// complete lines from the returned window; a partial first line is intentionally discarded when
+/// the window starts in the middle of a retained file.
+fn read_log_file_tail(path: &Path, max_bytes: usize) -> Result<LogFileTail, ()> {
+    let max_bytes = max_bytes.min(MAX_LOG_TAIL_BYTES);
+    if max_bytes == 0 {
+        return Ok(LogFileTail {
+            bytes: Vec::new(),
+            starts_at_file_beginning: true,
+        });
+    }
+    let mut file = fs::File::open(path).map_err(|_| ())?;
+    let file_length = file.seek(SeekFrom::End(0)).map_err(|_| ())?;
+    let requested_bytes = usize::try_from(file_length)
+        .unwrap_or(max_bytes)
+        .min(max_bytes);
+    let start_offset = file_length.saturating_sub(requested_bytes as u64);
+    file.seek(SeekFrom::Start(start_offset)).map_err(|_| ())?;
+
+    let mut bytes = Vec::with_capacity(requested_bytes);
+    let mut remaining = requested_bytes;
+    while remaining > 0 {
+        let block_size = remaining.min(LOG_TAIL_READ_BLOCK_BYTES);
+        let previous_length = bytes.len();
+        bytes.resize(previous_length + block_size, 0);
+        let read = file.read(&mut bytes[previous_length..]).map_err(|_| ())?;
+        if read == 0 {
+            // The file changed under us (for example, rotation/truncation).  Do not expose a
+            // potentially mixed or incomplete snapshot to the viewer.
+            return Err(());
+        }
+        bytes.truncate(previous_length + read);
+        remaining -= read;
+    }
+    Ok(LogFileTail {
+        bytes,
+        starts_at_file_beginning: start_offset == 0,
+    })
+}
+
+impl LogFileTail {
+    fn for_each_line(&self, mut callback: impl FnMut(usize, &str)) {
+        let mut line_start = if self.starts_at_file_beginning {
+            0
+        } else {
+            match self.bytes.iter().position(|byte| *byte == b'\n') {
+                Some(newline) => newline.saturating_add(1),
+                None => return,
+            }
+        };
+        let mut line_number = 0_usize;
+        while line_start < self.bytes.len() {
+            let Some(relative_end) = self.bytes[line_start..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+            else {
+                break;
+            };
+            let line_end = line_start + relative_end;
+            if let Ok(line) = std::str::from_utf8(&self.bytes[line_start..line_end]) {
+                callback(line_number, line);
+            }
+            line_number = line_number.saturating_add(1);
+            line_start = line_end.saturating_add(1);
+        }
+        // A final line ending at EOF is complete even when the logger has not flushed its final
+        // newline yet.  It is still subject to MAX_LOG_LINE_BYTES and tail truncation above.
+        if line_start < self.bytes.len()
+            && (self.starts_at_file_beginning || line_number > 0)
+            && let Ok(line) = std::str::from_utf8(&self.bytes[line_start..])
+        {
+            callback(line_number, line);
+        }
+    }
+}
+
+struct LogFileContext<'a> {
+    kind: LogFileKind,
+    label: Option<&'a str>,
+    source_key: &'a str,
+}
+
+fn append_log_line_candidate(
+    line: &str,
+    context: &LogFileContext<'_>,
+    line_number: usize,
+    last_valid_timestamp: &mut Option<String>,
+    file_lines: &mut VecDeque<LogLineCandidate>,
+    max_lines: usize,
+) {
+    if line.len() > MAX_LOG_LINE_BYTES {
+        return;
+    }
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    if line.trim().is_empty() {
+        return;
+    }
+    let formatted = match context.kind {
+        LogFileKind::Bridge => {
+            let (rendered, timestamp_utc) = format_display_log_line(line);
+            if timestamp_utc.is_some() {
+                *last_valid_timestamp = timestamp_utc.clone();
+            }
+            Some((
+                rendered,
+                timestamp_utc.or_else(|| last_valid_timestamp.clone()),
+            ))
+        }
+        // Diagnostic records are a separate, strictly allow-listed format.  Invalid or unknown
+        // records are dropped rather than falling back to raw text, since the worker file may
+        // contain future or accidentally sensitive fields.
+        LogFileKind::Mt5Diagnostic => format_diagnostic_log_line(line),
     };
+    let Some((rendered, timestamp_utc)) = formatted else {
+        return;
+    };
+    let rendered = match context.label {
+        Some(label) => format!("[{label}]  {rendered}"),
+        None => rendered,
+    };
+    if file_lines.len() == max_lines {
+        file_lines.pop_front();
+    }
+    file_lines.push_back(LogLineCandidate {
+        timestamp_utc,
+        source_key: context.source_key.to_owned(),
+        line_number,
+        rendered,
+    });
+}
+
+fn format_display_log_line(line: &str) -> (String, Option<String>) {
+    let Ok(record) = serde_json::from_str::<DisplayLogRecord>(line) else {
+        return (line.to_owned(), None);
+    };
+    let timestamp_utc = canonical_timestamp(&record.timestamp_utc);
     let timestamp = format_local_log_timestamp(&record.timestamp_utc)
         .unwrap_or_else(|| record.timestamp_utc.trim().to_owned());
     let level = match record.level.as_str() {
@@ -670,12 +940,171 @@ fn format_display_log_line(line: &str) -> String {
         "error" => "错误",
         _ => "信息",
     };
-    match record.message.as_deref().map(str::trim) {
+    let rendered = match record.message.as_deref().map(str::trim) {
         Some(message) if !message.is_empty() => {
             format!("{timestamp}  [{level}]  {}  {message}", record.event_name)
         }
         _ => format!("{timestamp}  [{level}]  {}", record.event_name),
+    };
+    (rendered, timestamp_utc)
+}
+
+fn format_diagnostic_log_line(line: &str) -> Option<(String, Option<String>)> {
+    let record = serde_json::from_str::<DiagnosticLogRecord>(line).ok()?;
+    let event = safe_diagnostic_value(record.event.as_deref())?;
+    if !matches!(
+        event.as_str(),
+        "mt5_worker_terminal_session_restart" | "mt5_worker_unexpected_exception"
+    ) {
+        return None;
     }
+    let timestamp_utc = record
+        .observed_at_utc_msc
+        .and_then(format_utc_timestamp_msc);
+    let timestamp = timestamp_utc
+        .as_deref()
+        .and_then(format_local_log_timestamp)
+        .unwrap_or_else(|| "时间未知".to_owned());
+    let level = match event.as_str() {
+        "mt5_worker_terminal_session_restart" | "mt5_worker_unexpected_exception" => "错误",
+        _ => "信息",
+    };
+    let mut fields = Vec::new();
+    if let Some(stage) = safe_diagnostic_value(record.stage.as_deref()) {
+        fields.push(format!("阶段={stage}"));
+    }
+    if let Some(exception_type) = safe_diagnostic_value(record.exception_type.as_deref()) {
+        fields.push(format!("异常类型={exception_type}"));
+    }
+    if let Some(error_code) = safe_diagnostic_value(record.error_code.as_deref()) {
+        fields.push(format!("错误码={error_code}"));
+    }
+    if let Some(consecutive_failures) = record.consecutive_failures {
+        fields.push(format!("连续失败={consecutive_failures}"));
+    }
+    let suffix = if fields.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", fields.join("  "))
+    };
+    Some((
+        format!("{timestamp}  [{level}]  诊断事件={event}{suffix}"),
+        timestamp_utc,
+    ))
+}
+
+fn safe_diagnostic_value(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let value = value
+        .chars()
+        .take(96)
+        .map(|character| {
+            if character.is_control() {
+                '?'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    Some(redact(&value))
+}
+
+fn compare_log_timestamps(left: &Option<String>, right: &Option<String>) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => left.cmp(right),
+        // A raw fallback after a valid record inherits that record's timestamp.  A raw line at
+        // the beginning of a file remains oldest, so it cannot displace newer timestamped data
+        // when the global line budget is applied.
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn canonical_timestamp(value: &str) -> Option<String> {
+    let value = value.trim();
+    let bytes = value.as_bytes();
+    if bytes.len() < 20
+        || bytes.get(4) != Some(&b'-')
+        || bytes.get(7) != Some(&b'-')
+        || bytes.get(10) != Some(&b'T')
+        || bytes.get(13) != Some(&b':')
+        || bytes.get(16) != Some(&b':')
+        || bytes.last() != Some(&b'Z')
+        || !bytes[0..4].iter().all(u8::is_ascii_digit)
+        || !bytes[5..7].iter().all(u8::is_ascii_digit)
+        || !bytes[8..10].iter().all(u8::is_ascii_digit)
+        || !bytes[11..13].iter().all(u8::is_ascii_digit)
+        || !bytes[14..16].iter().all(u8::is_ascii_digit)
+        || !bytes[17..19].iter().all(u8::is_ascii_digit)
+    {
+        return None;
+    }
+    let fraction = if bytes.get(19) == Some(&b'.') {
+        if bytes.len() <= 21 || !bytes[20..bytes.len() - 1].iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        &value[20..value.len() - 1]
+    } else if bytes.len() == 20 {
+        ""
+    } else {
+        return None;
+    };
+    let mut normalized_fraction = fraction.chars().take(9).collect::<String>();
+    while normalized_fraction.len() < 9 {
+        normalized_fraction.push('0');
+    }
+    Some(format!(
+        "{}-{}-{}T{}:{}:{}.{normalized_fraction}Z",
+        &value[0..4],
+        &value[5..7],
+        &value[8..10],
+        &value[11..13],
+        &value[14..16],
+        &value[17..19],
+    ))
+}
+
+fn format_utc_timestamp_msc(value: i64) -> Option<String> {
+    if value <= 0 {
+        return None;
+    }
+    let seconds = value.div_euclid(1_000);
+    let millis = value.rem_euclid(1_000);
+    let days = seconds.div_euclid(86_400);
+    let day_seconds = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    if !(0..=9_999).contains(&year) {
+        return None;
+    }
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z",
+        day_seconds / 3_600,
+        (day_seconds % 3_600) / 60,
+        day_seconds % 60,
+    ))
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i64, i64, i64) {
+    let shifted = days_since_unix_epoch + 719_468;
+    let era = if shifted >= 0 {
+        shifted / 146_097
+    } else {
+        (shifted - 146_096) / 146_097
+    };
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_part = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
+    let month = month_part + if month_part < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
 }
 
 fn format_local_log_timestamp(value: &str) -> Option<String> {
@@ -931,6 +1360,23 @@ mod tests {
     }
 
     #[test]
+    fn recent_log_reader_does_not_let_an_old_raw_line_displace_new_timestamped_data() {
+        let root = unique_test_directory("reader-raw-order");
+        fs::create_dir_all(&root).expect("reader raw order directory");
+        fs::write(root.join("bridge-old.log"), "old raw fallback\n").expect("old raw log");
+        fs::write(
+            root.join("bridge-new.log"),
+            "{\"timestamp_utc\":\"2026-07-29T12:35:56.789Z\",\"level\":\"info\",\"event_name\":\"new-event\",\"message\":null}\n",
+        )
+        .expect("new timestamped log");
+        let reader = BridgeLogReader::new(&root).expect("raw order reader");
+        let text = reader.read_recent_text(Some(1)).expect("raw order text");
+        assert!(text.contains("new-event"));
+        assert!(!text.contains("old raw fallback"));
+        fs::remove_dir_all(root).expect("remove raw order fixture");
+    }
+
+    #[test]
     fn recent_log_reader_uses_the_same_empty_state_as_dotnet() {
         let root = unique_test_directory("reader-empty");
         let reader = BridgeLogReader::new(&root).expect("reader");
@@ -938,6 +1384,261 @@ mod tests {
             reader.read_recent_text(None).expect("empty state"),
             "暂无日志。"
         );
+    }
+
+    #[test]
+    fn recent_log_reader_aggregates_explicit_profile_directories_with_one_line_budget() {
+        let root = unique_test_directory("reader-profiles");
+        let default_logs = root.join("logs");
+        let observer_logs = root.join("profiles").join("source-a").join("logs");
+        fs::create_dir_all(&default_logs).expect("default log directory");
+        fs::create_dir_all(&observer_logs).expect("observer log directory");
+        fs::write(
+            default_logs.join("bridge-default.log"),
+            "{\"timestamp_utc\":\"2026-07-29T12:34:56.789Z\",\"level\":\"info\",\"event_name\":\"default_event\",\"message\":null}\n",
+        )
+        .expect("default log");
+        fs::write(
+            observer_logs.join("bridge-observer.log"),
+            "{\"timestamp_utc\":\"2026-07-29T12:35:56.789Z\",\"level\":\"error\",\"event_name\":\"observer_event\",\"message\":null}\n",
+        )
+        .expect("observer log");
+
+        let reader = BridgeLogReader::from_directories([&default_logs, &observer_logs])
+            .expect("profile log reader");
+        let text = reader
+            .read_recent_text(Some(2))
+            .expect("profile recent text");
+        assert!(text.contains("default_event"));
+        assert!(text.contains("observer_event"));
+        assert!(!text.contains("[default]"));
+        assert!(!text.contains("[source-a]"));
+        assert_eq!(text.lines().count(), 2);
+
+        fs::remove_dir_all(root).expect("remove profile log fixture");
+    }
+
+    #[test]
+    fn named_log_sources_render_stable_labels_for_each_profile() {
+        let root = unique_test_directory("reader-named-sources");
+        let default_logs = root.join("default-logs");
+        let observer_logs = root.join("observer-logs");
+        fs::create_dir_all(&default_logs).expect("default log directory");
+        fs::create_dir_all(&observer_logs).expect("observer log directory");
+        fs::write(
+            default_logs.join("bridge-default.log"),
+            "{\"timestamp_utc\":\"2026-07-29T12:34:56.789Z\",\"level\":\"info\",\"event_name\":\"default_event\",\"message\":null}\n",
+        )
+        .expect("default log");
+        fs::write(
+            observer_logs.join(MT5_DIAGNOSTIC_FILE_NAME),
+            "{\"observed_at_utc_msc\":1785326400000,\"event\":\"mt5_worker_terminal_session_restart\",\"stage\":\"worker_request\",\"error_code\":\"mt5_account_unavailable\",\"consecutive_failures\":3}\n",
+        )
+        .expect("observer diagnostic log");
+
+        let reader = BridgeLogReader::from_named_directories(vec![
+            ("default".to_owned(), default_logs.clone()),
+            ("source-1".to_owned(), observer_logs.clone()),
+        ])
+        .expect("named profile log reader");
+        let text = reader
+            .read_recent_text(Some(2))
+            .expect("named profile text");
+        assert!(text.contains("[default]  "));
+        assert!(text.contains("[source-1]  "));
+        assert!(text.contains("[source-1]  2026-"));
+        assert_eq!(text.lines().count(), 2);
+
+        fs::remove_dir_all(root).expect("remove named profile fixture");
+    }
+
+    #[test]
+    fn named_log_source_labels_are_strictly_validated() {
+        let root = unique_test_directory("reader-invalid-label");
+        let invalid =
+            BridgeLogReader::from_named_directories(vec![("source.bad".to_owned(), root.clone())])
+                .expect_err("invalid source label must fail closed");
+        assert_eq!(invalid.code(), "bridge_log_source_label_invalid");
+
+        let too_long = "x".repeat(41);
+        let invalid = BridgeLogReader::from_named_directories(vec![(too_long, root.clone())])
+            .expect_err("overlong source label must fail closed");
+        assert_eq!(invalid.code(), "bridge_log_source_label_invalid");
+    }
+
+    #[test]
+    fn recent_log_reader_merges_interleaved_profiles_after_each_file_tail_budget() {
+        let root = unique_test_directory("reader-interleaved");
+        let default_logs = root.join("logs");
+        let observer_logs = root.join("profiles").join("source-a").join("logs");
+        fs::create_dir_all(&default_logs).expect("default log directory");
+        fs::create_dir_all(&observer_logs).expect("observer log directory");
+        let default_lines = (0..8)
+            .map(|index| {
+                format!(
+                    "{{\"timestamp_utc\":\"2026-07-29T12:{:02}:00.000Z\",\"level\":\"info\",\"event_name\":\"default-{index}\",\"message\":null}}",
+                    index * 2
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let observer_lines = (0..3)
+            .map(|index| {
+                format!(
+                    "{{\"timestamp_utc\":\"2026-07-29T12:{:02}:00.000Z\",\"level\":\"info\",\"event_name\":\"observer-{index}\",\"message\":null}}",
+                    index * 2 + 11
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(default_logs.join("bridge-default.log"), default_lines).expect("default log");
+        fs::write(observer_logs.join("bridge-observer.log"), observer_lines).expect("observer log");
+
+        let reader = BridgeLogReader::from_directories([&default_logs, &observer_logs])
+            .expect("profile log reader");
+        let text = reader
+            .read_recent_text(Some(4))
+            .expect("profile recent text");
+        assert_eq!(text.lines().count(), 4);
+        assert!(text.contains("default-6"));
+        assert!(text.contains("default-7"));
+        assert!(text.contains("observer-1"));
+        assert!(text.contains("observer-2"));
+        assert!(!text.contains("default-0"));
+
+        fs::remove_dir_all(root).expect("remove interleaved profile fixture");
+    }
+
+    #[test]
+    fn recent_log_reader_reads_a_bounded_tail_and_keeps_recent_complete_lines() {
+        let root = unique_test_directory("reader-bounded-tail");
+        fs::create_dir_all(&root).expect("bounded tail directory");
+        let path = root.join("bridge-history.log");
+        let mut payload = vec![b'x'; MAX_LOG_TAIL_BYTES + 32 * 1024];
+        payload.extend_from_slice(b"\n");
+        payload.extend_from_slice(
+            b"{\"timestamp_utc\":\"2026-07-29T12:35:56.789Z\",\"level\":\"info\",\"event_name\":\"recent-tail-event\",\"message\":null}\n",
+        );
+        fs::write(&path, payload).expect("bounded tail log");
+
+        let tail = read_log_file_tail(&path, MAX_LOG_TAIL_BYTES).expect("tail read");
+        assert_eq!(tail.bytes.len(), MAX_LOG_TAIL_BYTES);
+        assert!(!tail.starts_at_file_beginning);
+
+        let reader = BridgeLogReader::new(&root).expect("bounded tail reader");
+        let text = reader.read_recent_text(Some(1)).expect("bounded tail text");
+        assert!(text.contains("recent-tail-event"));
+        assert!(!text.contains("xxxxxxxx"));
+        fs::remove_dir_all(root).expect("remove bounded tail fixture");
+    }
+
+    #[test]
+    fn recent_log_reader_tail_budget_is_bounded_for_small_and_large_source_sets() {
+        for file_count in [1, 10, 187] {
+            let per_file = per_file_tail_budget(file_count);
+            let planned = planned_tail_read_bytes(file_count);
+            assert!(per_file <= MAX_LOG_TAIL_BYTES);
+            assert!(planned <= MAX_LOG_REFRESH_BYTES);
+            assert_eq!(planned, per_file.saturating_mul(file_count));
+        }
+        assert_eq!(per_file_tail_budget(0), 0);
+        assert_eq!(planned_tail_read_bytes(1), MAX_LOG_TAIL_BYTES);
+        assert_eq!(per_file_tail_budget(10), MAX_LOG_TAIL_BYTES);
+        assert_eq!(per_file_tail_budget(187), MAX_LOG_REFRESH_BYTES / 187);
+    }
+
+    #[test]
+    fn recent_log_reader_skips_invalid_utf8_file_lines_but_keeps_other_sources() {
+        let root = unique_test_directory("reader-invalid-utf8");
+        fs::create_dir_all(&root).expect("invalid utf8 directory");
+        fs::write(root.join("bridge-invalid.log"), [0xff, 0xfe, b'\n']).expect("invalid utf8 log");
+        fs::write(
+            root.join("bridge-valid.log"),
+            b"{\"timestamp_utc\":\"2026-07-29T12:35:56.789Z\",\"level\":\"info\",\"event_name\":\"valid-after-invalid\",\"message\":null}\n",
+        )
+        .expect("valid log");
+
+        let reader = BridgeLogReader::new(&root).expect("invalid utf8 reader");
+        let text = reader.read_recent_text(Some(2)).expect("invalid utf8 text");
+        assert!(text.contains("valid-after-invalid"));
+        assert!(!text.contains("bridge-invalid"));
+        fs::remove_dir_all(root).expect("remove invalid utf8 fixture");
+    }
+
+    #[test]
+    fn recent_log_reader_returns_safe_empty_state_when_all_records_decode_invalid() {
+        let root = unique_test_directory("reader-all-invalid");
+        fs::create_dir_all(&root).expect("all invalid directory");
+        fs::write(root.join("bridge-invalid.log"), [0xff, 0xfe, b'\n']).expect("all invalid log");
+        // A file with an invalid UTF-8 record is still a readable file at the byte level, so the
+        // reader safely reports the same empty state used for an allow-listed file with no valid
+        // records rather than surfacing decoder details.
+        let reader = BridgeLogReader::new(&root).expect("all invalid reader");
+        assert_eq!(
+            reader.read_recent_text(Some(2)).expect("safe empty state"),
+            "暂无日志。"
+        );
+        fs::remove_dir_all(root).expect("remove all unreadable fixture");
+    }
+
+    #[test]
+    fn recent_log_reader_skips_overlong_lines_without_scanning_unbounded_input() {
+        let root = unique_test_directory("reader-overlong-line");
+        fs::create_dir_all(&root).expect("overlong directory");
+        let mut payload = vec![b'X'; MAX_LOG_LINE_BYTES + 1];
+        payload.extend_from_slice(b"\n");
+        payload.extend_from_slice(
+            b"{\"timestamp_utc\":\"2026-07-29T12:35:56.789Z\",\"level\":\"info\",\"event_name\":\"after-overlong\",\"message\":null}\n",
+        );
+        fs::write(root.join("bridge-overlong.log"), payload).expect("overlong log");
+        let reader = BridgeLogReader::new(&root).expect("overlong reader");
+        let text = reader.read_recent_text(Some(2)).expect("overlong text");
+        assert!(text.contains("after-overlong"));
+        assert!(!text.contains('X'));
+        fs::remove_dir_all(root).expect("remove overlong fixture");
+    }
+
+    #[test]
+    fn recent_log_reader_formats_only_allow_listed_mt5_diagnostics() {
+        let root = unique_test_directory("reader-diagnostics");
+        fs::create_dir_all(&root).expect("diagnostic directory");
+        fs::write(
+            root.join(MT5_DIAGNOSTIC_FILE_NAME),
+            concat!(
+                "{\"observed_at_utc_msc\":1785326400000,\"event\":\"mt5_worker_terminal_session_restart\",\"stage\":\"worker_request\",\"error_code\":\"mt5_account_unavailable\",\"consecutive_failures\":3,\"password\":\"diagnostic-secret\"}\n",
+                "not-json diagnostic-secret\n",
+                "{\"unknown\":\"diagnostic-secret\",\"password\":\"diagnostic-secret\"}\n",
+                "{\"observed_at_utc_msc\":1785326400001,\"event\":\"diagnostic-secret-event\",\"password\":\"diagnostic-secret\"}\n",
+            ),
+        )
+        .expect("diagnostic log");
+        fs::write(
+            root.join("other.jsonl"),
+            "{\"event\":\"mt5_worker_unexpected_exception\",\"password\":\"diagnostic-secret\"}\n",
+        )
+        .expect("ordinary jsonl");
+
+        let reader = BridgeLogReader::new(&root).expect("diagnostic reader");
+        let text = reader.read_recent_text(Some(10)).expect("diagnostic text");
+        assert!(text.contains("诊断事件=mt5_worker_terminal_session_restart"));
+        assert!(text.contains("阶段=worker_request"));
+        assert!(text.contains("错误码=mt5_account_unavailable"));
+        assert!(text.contains("连续失败=3"));
+        assert!(!text.contains("diagnostic-secret"));
+        assert!(!text.contains("not-json"));
+        assert!(!text.contains("password"));
+        assert!(!text.contains("other.jsonl"));
+
+        fs::remove_dir_all(root).expect("remove diagnostic fixture");
+    }
+
+    #[test]
+    fn diagnostic_epoch_timestamp_is_normalized_for_global_ordering() {
+        assert_eq!(
+            format_utc_timestamp_msc(1_700_000_000_123),
+            Some("2023-11-14T22:13:20.123Z".to_owned())
+        );
+        assert_eq!(format_utc_timestamp_msc(0), None);
     }
 
     fn logger(root: impl AsRef<Path>, max_file_bytes: u64, retained_files: usize) -> BridgeLogger {

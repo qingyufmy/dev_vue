@@ -9,7 +9,7 @@ vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel: vi.fn() }))
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject: vi.fn() }))
 
-import { buildPeriodMemoryScope, buildPersonalMemoryRetrievalContext, memorySimilarity, rankMemoryCandidates,
+import { buildApplicability, buildPeriodMemoryScope, buildPersonalMemoryRetrievalContext, memorySimilarity, mergeMemoryApplicability, rankMemoryCandidates,
   retrievePersonalMemory, sanitizeMemoryText, recoverAbandonedMemoryCompressionModelTasks } from '../../server/routes/ai/memory-system.js'
 
 beforeEach(() => vi.clearAllMocks())
@@ -134,6 +134,139 @@ describe('memory retrieval ranking', () => {
       divergence:{ confirmed:true, type:'bottom' }, current_center:{ status:'broken_down' } } }, 'M5', ['limit']))
       .toMatchObject({ volatilityBucket:'high', chanReliability:'high', chanTrendState:'downward_exhaustion',
         chanSegmentDirection:'sell', chanDivergence:'bottom', chanCenterState:'broken_down' })
+  })
+
+  it('stores one normalized context tuple for a newly created applicability scope', () => {
+    expect(buildApplicability({ symbol:'XAUUSD', timeframe:'H1', direction:'buy_limit', entry_method:'LIMIT',
+      market_regime:'Trend', volatility_bucket:'HIGH', chan_reliability:'High', chan_trend_state:'UP',
+      chan_segment_direction:'buy', chan_divergence:'Bottom', chan_center_state:'Inside' }))
+      .toMatchObject({ applicable_when:{ context_tuples:[{
+        symbol:'xauusd', timeframe:'h1', direction:'buy', entry_method:'limit', market_regime:'trend',
+        volatility_bucket:'high', chan_reliability:'high', chan_trend_state:'up', chan_segment_direction:'buy',
+        chan_divergence:'bottom', chan_center_state:'inside',
+      }] } })
+  })
+
+  it('requires one source context tuple instead of accepting a cross-product', () => {
+    const source = [
+      { id:1, applicability_json:JSON.stringify({ applicable_when:{ symbols:['xauusd'], timeframes:['h1'],
+        directions:['buy'], market_regimes:['trend'], context_tuples:[{ symbol:'xauusd', timeframe:'h1', direction:'buy', market_regime:'trend' }] } }) },
+      { id:2, applicability_json:JSON.stringify({ applicable_when:{ symbols:['xauusd'], timeframes:['h1'],
+        directions:['sell'], market_regimes:['range'], context_tuples:[{ symbol:'xauusd', timeframe:'h1', direction:'sell', market_regime:'range' }] } }) },
+    ]
+    const merged = mergeMemoryApplicability(source)
+    expect(merged.applicable_when.context_tuples).toHaveLength(2)
+    const rank = context => rankMemoryCandidates([{ id:9, strategy_id:5, confidence:0.9, updated_at:'2026-07-15 10:00:00',
+      applicability_json:JSON.stringify(merged), symbol:'XAUUSD', timeframe:'H1' }], { strategy_id:5, symbol:'XAUUSD', timeframe:'H1', ...context })[0]
+    expect(rank({ direction:'sell', market_regime:'trend' })).toMatchObject({ eligible:false })
+    expect(rank({ direction:'sell', market_regime:'trend' }).reasons).toContain('context_tuple_mismatch')
+    expect(rank({ direction:'buy', market_regime:'trend' })).toMatchObject({ eligible:true })
+    expect(rank({ direction:'sell', market_regime:'range' })).toMatchObject({ eligible:true })
+  })
+
+  it('applies a tuple-only override to the related source tuple and arrays', () => {
+    const source = [
+      { id:31, applicability_json:JSON.stringify({ applicable_when:{ directions:['buy'], market_regimes:['trend'],
+        context_tuples:[{ direction:'buy', market_regime:'trend' }] } }) },
+      { id:32, applicability_json:JSON.stringify({ applicable_when:{ directions:['sell'], market_regimes:['range'],
+        context_tuples:[{ direction:'sell', market_regime:'range' }] } }) },
+    ]
+    const merged = mergeMemoryApplicability(source, { applicable_when:{ context_tuples:[{ direction:'buy', market_regime:'trend' }] } })
+    expect(merged.applicable_when).toMatchObject({ directions:['buy'], market_regimes:['trend'],
+      context_tuples:[{ direction:'buy', market_regime:'trend' }] })
+    expect(merged.applicable_when.directions).not.toContain('sell')
+    expect(merged.applicable_when.market_regimes).not.toContain('range')
+  })
+
+  it('fails closed when a tuple-only override is unsupported by source tuples', () => {
+    const source = [
+      { id:33, applicability_json:JSON.stringify({ applicable_when:{ directions:['buy'], market_regimes:['trend'],
+        context_tuples:[{ direction:'buy', market_regime:'trend' }] } }) },
+      { id:34, applicability_json:JSON.stringify({ applicable_when:{ directions:['sell'], market_regimes:['range'],
+        context_tuples:[{ direction:'sell', market_regime:'range' }] } }) },
+    ]
+    const merged = mergeMemoryApplicability(source, { applicable_when:{ context_tuples:[{ direction:'buy', market_regime:'range' }] } })
+    expect(merged.applicable_when.context_tuples).toEqual([])
+    const ranked = rankMemoryCandidates([{ id:35, strategy_id:5, confidence:0.9, updated_at:'2026-07-15 10:00:00',
+      applicability_json:JSON.stringify(merged) }], { strategy_id:5, direction:'buy', market_regime:'trend' })[0]
+    expect(ranked.eligible).toBe(false)
+    expect(ranked.reasons).toContain('context_tuple_malformed')
+  })
+
+  it('filters related tuples when a top-level field override narrows the source', () => {
+    const source = [
+      { id:36, applicability_json:JSON.stringify({ applicable_when:{ directions:['buy'], market_regimes:['trend'],
+        context_tuples:[{ direction:'buy', market_regime:'trend' }] } }) },
+      { id:37, applicability_json:JSON.stringify({ applicable_when:{ directions:['sell'], market_regimes:['range'],
+        context_tuples:[{ direction:'sell', market_regime:'range' }] } }) },
+    ]
+    const merged = mergeMemoryApplicability(source, { applicable_when:{ directions:['buy'] } })
+    expect(merged.applicable_when).toMatchObject({ directions:['buy'], market_regimes:['trend'],
+      context_tuples:[{ direction:'buy', market_regime:'trend' }] })
+  })
+
+  it('keeps legacy independent-field memories unchanged and prevents overrides from broadening source tuples', () => {
+    const legacy = rankMemoryCandidates([{ id:10, strategy_id:5, confidence:0.9, updated_at:'2026-07-15 10:00:00',
+      applicability_json:JSON.stringify({ applicable_when:{ directions:['buy','sell'], market_regimes:['trend','range'] } }) }],
+    { strategy_id:5, direction:'sell', market_regime:'trend' })[0]
+    expect(legacy.eligible).toBe(true)
+    const source = [
+      { id:11, applicability_json:JSON.stringify({ applicable_when:{ directions:['buy'], market_regimes:['trend'],
+        context_tuples:[{ direction:'buy', market_regime:'trend' }] } }) },
+      { id:12, applicability_json:JSON.stringify({ applicable_when:{ directions:['sell'], market_regimes:['range'],
+        context_tuples:[{ direction:'sell', market_regime:'range' }] } }) },
+    ]
+    const overridden = mergeMemoryApplicability(source, { applicable_when:{ directions:['buy','sell'], market_regimes:['trend','range'] } })
+    expect(overridden.applicable_when.context_tuples).toHaveLength(2)
+    const ranked = context => rankMemoryCandidates([{ id:13, strategy_id:5, confidence:0.9, updated_at:'2026-07-15 10:00:00',
+      applicability_json:JSON.stringify(overridden) }], { strategy_id:5, ...context })[0]
+    expect(ranked({ direction:'sell', market_regime:'trend' })).toMatchObject({ eligible:false })
+    expect(ranked({ direction:'sell', market_regime:'range' })).toMatchObject({ eligible:true })
+  })
+
+  it('falls back to legacy matching for a mixed legacy and tuple source cluster', () => {
+    const merged = mergeMemoryApplicability([
+      { id:17, applicability_json:JSON.stringify({ applicable_when:{ directions:['buy'], market_regimes:['trend'],
+        context_tuples:[{ direction:'buy', market_regime:'trend' }] } }) },
+      { id:18, applicability_json:JSON.stringify({ applicable_when:{ directions:['sell'], market_regimes:['range'] } }) },
+    ])
+    expect(merged.applicable_when.context_tuples).toBeUndefined()
+    const ranked = rankMemoryCandidates([{ id:19, strategy_id:5, confidence:0.9, updated_at:'2026-07-15 10:00:00',
+      applicability_json:JSON.stringify(merged) }], { strategy_id:5, direction:'sell', market_regime:'trend' })[0]
+    expect(ranked.eligible).toBe(true)
+    expect(ranked.reasons).not.toContain('context_tuple_mismatch')
+  })
+
+  it('does not let a universal model override broaden non-universal source memories', () => {
+    const merged = mergeMemoryApplicability([
+      { id:20, applicability_json:JSON.stringify({ applicable_when:{ directions:['buy'], market_regimes:['trend'],
+        context_tuples:[{ direction:'buy', market_regime:'trend' }] } }) },
+      { id:21, applicability_json:JSON.stringify({ applicable_when:{ directions:['sell'], market_regimes:['range'],
+        context_tuples:[{ direction:'sell', market_regime:'range' }] } }) },
+    ], { applicable_when:{ universal:true, directions:['buy','sell'], market_regimes:['trend','range'] } })
+    expect(merged.applicable_when.universal).toBe(false)
+    const ranked = rankMemoryCandidates([{ id:22, strategy_id:5, confidence:0.9, updated_at:'2026-07-15 10:00:00',
+      applicability_json:JSON.stringify(merged) }], { strategy_id:5, direction:'sell', market_regime:'trend' })[0]
+    expect(ranked.eligible).toBe(false)
+    expect(ranked.reasons).toContain('context_tuple_mismatch')
+  })
+
+  it('keeps universal and avoid_when semantics while malformed tuple metadata fails closed', () => {
+    const universal = rankMemoryCandidates([{ id:14, strategy_id:5, symbol:'XAUUSD', timeframe:'H1', confidence:0.9, updated_at:'2026-07-15 10:00:00',
+      applicability_json:JSON.stringify({ applicable_when:{ universal:true,
+        context_tuples:[{ direction:'buy', market_regime:'trend' }] } }),
+      avoid_when_json:JSON.stringify({ market_regime:['range'] }) }], { strategy_id:5, symbol:'XAUUSD', timeframe:'H1', direction:'sell', market_regime:'trend' })[0]
+    expect(universal.eligible).toBe(true)
+    const avoided = rankMemoryCandidates([{ id:15, strategy_id:5, symbol:'XAUUSD', timeframe:'H1', confidence:0.9, updated_at:'2026-07-15 10:00:00',
+      applicability_json:JSON.stringify({ applicable_when:{ universal:true,
+        context_tuples:[{ direction:'buy', market_regime:'trend' }] } }),
+      avoid_when_json:JSON.stringify({ market_regime:['range'] }) }], { strategy_id:5, symbol:'XAUUSD', timeframe:'H1', direction:'buy', market_regime:'range' })[0]
+    expect(avoided.eligible).toBe(false)
+    const malformed = rankMemoryCandidates([{ id:16, confidence:0.9, updated_at:'2026-07-15 10:00:00',
+      applicability_json:JSON.stringify({ applicable_when:{ directions:['buy','sell'], market_regimes:['trend','range'],
+        context_tuples:[{ direction:['buy','sell'], market_regime:'trend' }] } }) }], { direction:'sell', market_regime:'trend' })[0]
+    expect(malformed.eligible).toBe(false)
+    expect(malformed.reasons).toContain('context_tuple_malformed')
   })
 })
 

@@ -295,7 +295,14 @@ export async function createObserverSource(actorId, input = {}) {
     return result.insertId
   })
   invalidateObserverChannelCache()
-  return { ...await queryOne('SELECT * FROM ai_observer_sources WHERE id = ?', [sourceId]), ...runtime }
+  return {
+    ...await queryOne('SELECT * FROM ai_observer_sources WHERE id = ?', [sourceId]),
+    ...runtime,
+    runtime_transition:{
+      reason:'created', reconnect_required:true, previous_bridge_user_id:null,
+      previous_trading_account_id:null, previous_status:null,
+    },
+  }
 }
 
 export async function updateObserverSource(id, input = {}) {
@@ -331,12 +338,26 @@ export async function updateObserverSource(id, input = {}) {
     if (status === 'active') await syncObserverSourceRuntime(bridgeUser.id, tradingAccountId, strategyId, runtime, db)
   })
   invalidateObserverChannelCache()
-  return { ...await queryOne('SELECT * FROM ai_observer_sources WHERE id = ?', [Number(id)]), ...runtime }
+  const reconnectRequired = Number(existing.bridge_user_id) !== Number(bridgeUser.id)
+    || Number(existing.trading_account_id || 0) !== Number(tradingAccountId || 0)
+    || existing.status !== status
+  return {
+    ...await queryOne('SELECT * FROM ai_observer_sources WHERE id = ?', [Number(id)]),
+    ...runtime,
+    runtime_transition:{
+      reason:reconnectRequired ? 'binding_changed' : 'runtime_updated',
+      reconnect_required:reconnectRequired,
+      previous_bridge_user_id:Number(existing.bridge_user_id),
+      previous_trading_account_id:Number(existing.trading_account_id) || null,
+      previous_status:existing.status,
+    },
+  }
 }
 
 export async function deleteObserverSource(id) {
   const sourceId = Number(id)
-  const existing = await queryOne('SELECT id, bridge_user_id, strategy_id FROM ai_observer_sources WHERE id = ?', [sourceId])
+  const existing = await queryOne(`SELECT id, bridge_user_id, trading_account_id, strategy_id, status
+    FROM ai_observer_sources WHERE id = ?`, [sourceId])
   if (!existing) throw new Error('observer_source_not_found')
   const usage = await queryOne('SELECT COUNT(*) AS count FROM ai_observer_channels WHERE source_id = ?', [sourceId])
   if (Number(usage?.count || 0) > 0) throw new Error('observer_source_has_channels')
@@ -349,7 +370,15 @@ export async function deleteObserverSource(id) {
   return {
     id:sourceId,
     bridge_user_id:Number(existing.bridge_user_id),
+    trading_account_id:Number(existing.trading_account_id) || null,
     strategy_id:Number(existing.strategy_id) || null,
+    status:existing.status,
+    runtime_transition:{
+      reason:'deleted', reconnect_required:true,
+      previous_bridge_user_id:Number(existing.bridge_user_id),
+      previous_trading_account_id:Number(existing.trading_account_id) || null,
+      previous_status:existing.status,
+    },
   }
 }
 

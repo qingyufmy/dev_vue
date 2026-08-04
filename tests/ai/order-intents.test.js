@@ -499,6 +499,21 @@ describe('recovery and reconciliation', () => {
     expect(reservation.status).toBe('active')
   })
 
+  it('keeps a ticketless intent older than the bounded window for manual review', async () => {
+    intent = {
+      id:1, user_id:1, status:'uncertain', bridge_command_ref:'AI-OLD', symbol:'XAUUSD',
+      created_at:'2025-01-01 00:00:00',
+    }
+    reservation = { order_intent_id:1, status:'active' }
+    mockQueryAll.mockResolvedValue([intent])
+
+    await expect(reconcileUncertainOrderIntents({ bridge:mockBridge })).resolves.toBe(0)
+
+    expect(mockBridge).not.toHaveBeenCalled()
+    expect(intent.status).toBe('uncertain')
+    expect(reservation.status).toBe('active')
+  })
+
   it('releases uncertain risk when MT5 history confirms a broker rejection', async () => {
     intent = {
       id:1, user_id:1, status:'uncertain', bridge_command_ref:'AI-1', symbol:'XAUUSD',

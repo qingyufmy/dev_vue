@@ -15,6 +15,8 @@ describe('manual analysis background task UI contract', () => {
     expect(app).toContain('api("/api/ai/manual-analysis/jobs", {')
     expect(app).toContain('method:"POST"')
     expect(app).toContain('include_positions:false, auto_execute:false')
+    expect(app).toContain('const requestId = globalThis.crypto?.randomUUID?.()')
+    expect(app).toContain('request_id:requestId')
     expect(app).toContain('api(`/api/ai/manual-analysis/jobs/${encodeURIComponent(job.id)}`')
     expect(app).toContain('method:"DELETE"')
     expect(app).toContain('scheduleManualAnalysisPoll')

@@ -58,6 +58,7 @@ export function selectModelTaskBudget({ taskKind, profileHardCap, providerOutput
 export function summarizeModelOutputHistory(rows = []) {
   const completed = rows
     .filter(row => Number(row?.output_tokens) > 0
+      && (row?.request_phase == null || row.request_phase === 'request')
       && row?.request_status === 'success'
       && row?.accounting_status === 'settled'
       && !['length', 'incomplete'].includes(String(row?.finish_reason || '').toLowerCase()))
@@ -65,6 +66,7 @@ export function summarizeModelOutputHistory(rows = []) {
     .sort((a, b) => a - b)
   const truncated = rows
     .filter(row => Number(row?.output_tokens) > 0
+      && (row?.request_phase == null || row.request_phase === 'request')
       && (row?.error_code === 'output_truncated'
         || ['length', 'incomplete'].includes(String(row?.finish_reason || '').toLowerCase())))
     .map(row => Number(row.output_tokens))

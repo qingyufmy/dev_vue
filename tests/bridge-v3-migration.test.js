@@ -12,6 +12,16 @@ describe('Bridge v3 schema migration', () => {
     expect(migrations).toContain('connection_epoch BIGINT UNSIGNED NOT NULL')
     expect(migrations).toContain('idx_bridge_v3_command_ready (status, deadline_at_utc_msc)')
     expect(migrations).toContain('CREATE TABLE IF NOT EXISTS bridge_v3_command_events')
+    expect(migrations).toContain("id: '167_bridge_v3_command_envelope_hash'")
+    expect(migrations).not.toContain('business_payload_hash')
+    expect(migrations).toContain('envelope_hash CHAR(64) DEFAULT NULL')
+  })
+
+  it('adds one idempotent primary-versus-repair usage phase column', () => {
+    expect(migrations).toContain("id: '168_model_usage_request_phase'")
+    expect(migrations).toContain("request_phase VARCHAR(16) NOT NULL DEFAULT 'request'")
+    expect(migrations).toContain("COLUMN_NAME = 'request_phase'")
+    expect(migrations.match(/id: '168_model_usage_request_phase'/g)).toHaveLength(1)
   })
 
   it('creates terminal session, revision, account, position and order read models', () => {
@@ -52,5 +62,10 @@ describe('Bridge v3 schema migration', () => {
     expect(migrations).toContain('information_schema.STATISTICS')
     expect(migrations).toContain('CREATE TABLE IF NOT EXISTS bridge_update_events')
     expect(migrations).toContain('uk_bridge_update_event (installation_id, release_id, state, updated_at_utc_msc)')
+  })
+
+  it('drops the retired legacy connection-status read model after V3 takeover', () => {
+    expect(migrations).toContain("id: '170_remove_legacy_bridge_connection_status'")
+    expect(migrations).toContain('DROP TABLE IF EXISTS bridge_connection_status')
   })
 })

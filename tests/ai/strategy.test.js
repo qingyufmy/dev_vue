@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { attachAtrAnchor, buildChanTimeframeAlignment, buildStrategyContextFromTags, chanNeedsMoreHistory, loadPrivatePortfolioContext, resolveChanHistoryCount, shouldPersistChanAnchor, __strategyTest } from '../../server/routes/ai/strategy.js'
 
 const mockMt5Bridge = vi.fn()
@@ -172,6 +173,42 @@ describe('buildStrategyContextFromTags', () => {
     })
     expect(result.timeframes).toHaveProperty('M5')
     expect(result.timeframes).not.toHaveProperty('H1')
+  })
+})
+
+describe('manual auto-execute guard', () => {
+  const strategySource = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+
+  it('reuses the guard for the final Bridge write gate', () => {
+    const executeBlock = strategySource.slice(strategySource.indexOf("const execResult = await executeOrder"))
+    expect(executeBlock).toContain('beforeBridgeSend:assertAutoExecuteBeforeSend')
+    expect(executeBlock).toContain('beforeWrite:assertAutoExecuteBeforeSend')
+  })
+
+  it('fails closed when no explicit guard is supplied', async () => {
+    await expect(__strategyTest.resolveAutoExecuteGuard()).resolves.toEqual({
+      status:'rejected', error_code:'manual_auto_execute_guard_required',
+      message:'自动执行缺少请求授权',
+    })
+  })
+
+  it('records a clear rejection when the guard returns false or throws', async () => {
+    await expect(__strategyTest.resolveAutoExecuteGuard(() => false)).resolves.toMatchObject({
+      status:'rejected', error_code:'manual_auto_execute_guard_rejected',
+    })
+    await expect(__strategyTest.resolveAutoExecuteGuard(() => {
+      throw Object.assign(new Error('socket closed'), { code:'manual_auto_execute_request_disconnected' })
+    })).resolves.toEqual({
+      status:'rejected', error_code:'manual_auto_execute_request_disconnected',
+      message:'发起自动执行请求的浏览器连接已断开',
+    })
+  })
+
+  it('allows execution only for an explicit true guard result', async () => {
+    await expect(__strategyTest.resolveAutoExecuteGuard(() => true)).resolves.toBeNull()
+    await expect(__strategyTest.resolveAutoExecuteGuard(() => ({ allowed:true }))).resolves.toMatchObject({
+      status:'rejected', error_code:'manual_auto_execute_guard_rejected',
+    })
   })
 })
 

@@ -5044,6 +5044,49 @@ const migrations = [
         VALUES ('default', 0, 4, 1, 1, 120000, 300000, 250, 5000, 1, ?, ?)
         ON DUPLICATE KEY UPDATE updated_at_utc_msc = updated_at_utc_msc`, [now, now])
     }
+  },
+  {
+    id: '167_bridge_v3_command_envelope_hash',
+    async up() {
+      const columns = await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'bridge_v3_command_ledger'
+          AND COLUMN_NAME = 'envelope_hash'`)
+      if (!columns.length) await queryRun(
+        'ALTER TABLE bridge_v3_command_ledger ADD COLUMN envelope_hash CHAR(64) DEFAULT NULL AFTER payload_hash'
+      )
+    }
+  },
+  {
+    id: '168_model_usage_request_phase',
+    async up() {
+      const columns = await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_usage_logs'
+          AND COLUMN_NAME = 'request_phase'`)
+      if (!columns.length) {
+        await queryRun("ALTER TABLE ai_model_usage_logs ADD COLUMN request_phase VARCHAR(16) NOT NULL DEFAULT 'request' AFTER `usage`")
+      }
+    }
+  },
+  {
+    id: '169_bridge_v3_command_retention_index',
+    async up() {
+      const indexes = await queryAll(`SELECT INDEX_NAME
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'bridge_v3_command_ledger'
+          AND INDEX_NAME = 'idx_bridge_v3_command_retention' LIMIT 1`)
+      if (!indexes.length) await queryRun(`ALTER TABLE bridge_v3_command_ledger
+        ADD KEY idx_bridge_v3_command_retention (status, completed_at_utc_msc, command_id)`)
+    }
+  },
+  {
+    id: '170_remove_legacy_bridge_connection_status',
+    async up() {
+      // Bridge V3 terminal sessions are now the sole connection authority.
+      // This legacy table contained only ephemeral online status.
+      await queryRun('DROP TABLE IF EXISTS bridge_connection_status')
+    }
   }
 ]
 

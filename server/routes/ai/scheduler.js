@@ -3360,7 +3360,9 @@ export async function reconcilePendingOrders() {
       const getOrderLookup = ticket => {
         if (!lookupByTicket.has(ticket)) {
           lookupByTicket.set(ticket, mt5Bridge(userId, 'order_lookup', {
-            expected_kind:'pending', pending_ticket:ticket, lookback_seconds:315_360_000,
+            // The pending ticket is an exact broker identity; the bounded
+            // lookback is only a compatibility guard for old adapters.
+            expected_kind:'pending', pending_ticket:ticket, lookback_seconds:30 * 24 * 60 * 60,
           }, { noFallback:true }))
         }
         return lookupByTicket.get(ticket)

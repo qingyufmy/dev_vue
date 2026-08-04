@@ -9,11 +9,13 @@ const db = vi.hoisted(() => ({
 }))
 const transaction = vi.hoisted(() => ({ run:vi.fn() }))
 const bridge = vi.hoisted(() => ({ revokeBridgeRefreshSessions:vi.fn() }))
+const sockets = vi.hoisted(() => ({ disconnectUserSockets:vi.fn() }))
 const passwordHash = vi.hoisted(() => vi.fn())
 
 vi.mock('../../server/db.js', () => db)
 vi.mock('bcryptjs', () => ({ default:{ hash:passwordHash } }))
 vi.mock('../../server/bridge-auth-session.js', () => bridge)
+vi.mock('../../server/bridge-ws.js', () => sockets)
 
 import { updateAdminUserProfile } from '../../server/routes/ai/admin-user-profile.js'
 
@@ -45,18 +47,21 @@ describe('operations user profile editing', () => {
     }))
     expect(db.logAudit.mock.calls[0][0].detail).not.toContain('Newpass2026')
     expect(bridge.revokeBridgeRefreshSessions).toHaveBeenCalledWith(7, { run:transaction.run })
+    expect(sockets.disconnectUserSockets).toHaveBeenCalledWith(7, 'Password reset by administrator')
   })
 
   it('clears expiry and membership source when switching to free', async () => {
     db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:null, plan:'pro', plan_expires_at:'2026-12-31 23:59:59', plan_source:'paid' })
     await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ plan:'free', expires_at:'2027-01-01' } })
-    const [sql, params] = db.queryRun.mock.calls[0]
+    const [sql, params] = transaction.run.mock.calls[0]
     expect(sql).toContain('plan_source = NULL')
     const planIndex = sql.split(', ').findIndex(fragment => fragment.includes('plan = ?'))
     const expiryIndex = sql.split(', ').findIndex(fragment => fragment.includes('plan_expires_at = ?'))
     expect(params[planIndex]).toBe('free')
     expect(params[expiryIndex]).toBeNull()
     expect(passwordHash).not.toHaveBeenCalled()
+    expect(bridge.revokeBridgeRefreshSessions).toHaveBeenCalledWith(7, { run:transaction.run })
+    expect(sockets.disconnectUserSockets).toHaveBeenCalledWith(7, 'Account permissions changed')
   })
 
   it.each([
@@ -82,7 +87,8 @@ describe('operations user profile editing', () => {
       nickname:'新昵称', email:'NEW@example.com', phone:'+8613900000000', role:'user',
     } })
     expect(result).toMatchObject({ nickname:'新昵称', email:'new@example.com', phone:'13900000000', role:'user' })
-    expect(db.queryRun.mock.calls[0][0]).toContain('nickname = ?')
+    expect(transaction.run.mock.calls[0][0]).toContain('nickname = ?')
+    expect(sockets.disconnectUserSockets).toHaveBeenCalledWith(7, 'Account permissions changed')
   })
 
   it('allows a phone-registered user to remain without a bound email', async () => {
@@ -103,6 +109,25 @@ describe('operations user profile editing', () => {
     } })
     expect(result).toMatchObject({ email:null, phone:null, nickname:'旧账户新名称' })
     expect(db.queryRun).toHaveBeenCalledTimes(1)
+    expect(sockets.disconnectUserSockets).not.toHaveBeenCalled()
+  })
+
+  it('does not revoke sessions for nickname, avatar or phone-only changes', async () => {
+    await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{
+      nickname:'nickname-updated', avatar:'/avatar.png', phone:'+8613900000000',
+    } })
+    expect(db.withTransaction).not.toHaveBeenCalled()
+    expect(db.queryRun).toHaveBeenCalledTimes(1)
+    expect(bridge.revokeBridgeRefreshSessions).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserSockets).not.toHaveBeenCalled()
+  })
+
+  it('does not disconnect sockets when a sensitive profile transaction rolls back', async () => {
+    db.withTransaction.mockRejectedValueOnce(new Error('profile transaction failed'))
+    await expect(updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ role:'admin' } }))
+      .rejects.toThrow('profile transaction failed')
+    expect(sockets.disconnectUserSockets).not.toHaveBeenCalled()
+    expect(db.queryRun).not.toHaveBeenCalled()
   })
 
   it('requires at least one login contact while keeping observer source email mandatory', async () => {

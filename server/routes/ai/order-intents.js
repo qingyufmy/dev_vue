@@ -13,6 +13,10 @@ const LEASE_SECONDS = 30
 const RESERVATION_SECONDS = 10 * 60
 const RECONCILE_INTERVAL_MS = 30_000
 const DEFINITIVE_ABSENCE_GRACE_MS = 5 * 60_000
+// A command reference without a broker ticket is only safe to search within
+// a bounded recent window. Older intents stay uncertain for manual review;
+// they must not be finalized from an incomplete history response.
+const MAX_RECONCILIATION_LOOKBACK_SECONDS = 30 * 24 * 60 * 60
 
 let reconcileTimer = null
 
@@ -478,7 +482,8 @@ function reconciliationLookbackSeconds(intent, nowMs = Date.now()) {
     ? `${raw.replace(' ', 'T')}+08:00` : raw
   const createdMs = Date.parse(normalized)
   if (!Number.isFinite(createdMs)) return 48 * 60 * 60
-  return Math.max(6 * 60 * 60, Math.min(10 * 365 * 24 * 60 * 60, Math.ceil((nowMs - createdMs) / 1000) + 60 * 60))
+  return Math.max(6 * 60 * 60, Math.min(MAX_RECONCILIATION_LOOKBACK_SECONDS,
+    Math.ceil((nowMs - createdMs) / 1000) + 60 * 60))
 }
 
 function intentAgeMs(intent, nowMs = Date.now()) {
@@ -496,6 +501,12 @@ export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit
   )
   let resolved = 0
   for (const intent of intents) {
+    const exactTicket = String(intent?.trade_ticket || intent?.pending_ticket || '').trim()
+    if (!exactTicket && intentAgeMs(intent) > MAX_RECONCILIATION_LOOKBACK_SECONDS * 1000) {
+      // The broker can no longer be searched authoritatively by comment alone.
+      // Keep the risk reservation and intent in uncertain for manual review.
+      continue
+    }
     const bridgePayload = safeParse(intent.bridge_payload_json, {})
     const expectedKind = bridgePayload.action === 'pending' ? 'pending' : 'trade'
     let lookup = null

@@ -16,9 +16,8 @@
     "connection_epoch": { "type": "integer", "minimum": 1 },
     "stream": { "enum": ["account", "positions", "orders", "deals", "symbols", "quotes", "rates"] },
     "revision": { "type": "integer", "minimum": 1 },
-    "status": { "enum": ["applied", "duplicate", "gap", "rejected"] },
-    "expected_revision": { "type": ["integer", "null"], "minimum": 1 },
-    "error_code": { "type": ["string", "null"], "maxLength": 128 }
+    "status": { "enum": ["applied", "duplicate", "gap"] },
+    "expected_revision": { "type": ["integer", "null"], "minimum": 1 }
   },
-  "additionalProperties": false
+  "unevaluatedProperties": false
 }

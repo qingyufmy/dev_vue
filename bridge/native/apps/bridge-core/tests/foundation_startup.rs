@@ -1,5 +1,5 @@
 use bridge_contract::AccountRef;
-use bridge_foundation::{profile_instance_id, resolve_profile_paths};
+use bridge_foundation::{DEFAULT_PROFILE_ID, profile_instance_id, resolve_profile_paths};
 use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
     LocalControlResult, UiStateSnapshot,
@@ -369,8 +369,12 @@ fn mt4_expert_action_installs_and_rechecks_the_selected_terminal_over_local_cont
 fn signed_update_state_is_projected_and_manual_activation_is_persisted_over_local_control() {
     let root = unique_test_directory();
     fs::create_dir_all(&root).expect("fixture root");
-    prepare_unpaired_mt4_selection(&root, "default");
-    let update_path = root.join(UPDATE_STATE_FILE_NAME);
+    // Keep the update state at the default profile's root-level path while using a unique profile
+    // id to isolate this test's local-control pipe from an installed default Bridge instance.
+    let profile_id = unique_profile_id();
+    prepare_unpaired_mt4_selection(&root, &profile_id);
+    let default_paths = resolve_profile_paths(&root, DEFAULT_PROFILE_ID).expect("default paths");
+    let update_path = default_paths.data_directory.join(UPDATE_STATE_FILE_NAME);
     let update_store = BridgeUpdateStateStore::with_clock(&update_path, || 1_800_000_000_123)
         .expect("update state store");
     update_store
@@ -393,14 +397,15 @@ fn signed_update_state_is_projected_and_manual_activation_is_persisted_over_loca
         })
         .expect("waiting update state");
     let child = Command::new(env!("CARGO_BIN_EXE_liangjian-bridge-core"))
+        .args(["--profile", &profile_id, "--background"])
         .env("AURUM_BRIDGE_DATA_DIR", &root)
         .env("AURUM_BRIDGE_UPDATE_STATE_PATH", &update_path)
         .env("LOCALAPPDATA", root.join("local"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn default native core");
-    let state = wait_for_ui_state("default");
+        .expect("spawn isolated native core");
+    let state = wait_for_ui_state(&profile_id);
     let notice = state.update_notice.expect("ready update notice");
     assert_eq!(notice.version, "3.0.1");
     assert!(notice.urgent);
@@ -409,7 +414,7 @@ fn signed_update_state_is_projected_and_manual_activation_is_persisted_over_loca
 
     assert_eq!(
         local_control_request(
-            "default",
+            &profile_id,
             "request-update-activate",
             LocalControlAction::UpdateActivate,
         ),
@@ -421,7 +426,7 @@ fn signed_update_state_is_projected_and_manual_activation_is_persisted_over_loca
         .expect("persisted update state");
     assert!(persisted.manual_activation_requested);
     let LocalControlResult::State { state } = local_control_request(
-        "default",
+        &profile_id,
         "request-updated-state",
         LocalControlAction::GetState,
     ) else {
@@ -435,13 +440,13 @@ fn signed_update_state_is_projected_and_manual_activation_is_persisted_over_loca
     );
 
     SingleInstanceGuard::request_shutdown(
-        &profile_instance_id("default").expect("default instance id"),
+        &profile_instance_id(&profile_id).expect("test instance id"),
     )
     .expect("request shutdown");
     let output = child.wait_with_output().expect("wait native core");
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
-    let paths = resolve_profile_paths(&root, "default").expect("default profile paths");
+    let paths = resolve_profile_paths(&root, &profile_id).expect("test profile paths");
     assert!(
         log_events(&paths.data_directory).contains(&"native_update_manual_activation_requested")
     );

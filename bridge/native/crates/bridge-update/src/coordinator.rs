@@ -168,7 +168,7 @@ impl BridgeUpdateCoordinator {
         let rollout_channel = read_rollout_channel(&environment.install_root)?;
         let activation_store =
             ReleaseActivationStore::new(environment.install_root.join(VERSION_POINTER_FILE_NAME))?;
-        Ok(Some(Self {
+        let coordinator = Self {
             environment,
             verifier,
             state_store,
@@ -178,7 +178,11 @@ impl BridgeUpdateCoordinator {
             manifest_client: None,
             installation_id,
             rollout_channel,
-        }))
+        };
+        // Storage cleanup is deliberately best-effort: a locked diagnostic or
+        // cache file must never prevent the Bridge from starting.
+        let _ = coordinator.prune_release_storage();
+        Ok(Some(coordinator))
     }
 
     #[cfg(test)]
@@ -544,7 +548,28 @@ impl BridgeUpdateCoordinator {
             manual_activation_requested,
             Some(staged_at),
         ))?;
+        let _ = self.prune_release_storage();
         Ok(Some(staged))
+    }
+
+    fn prune_release_storage(&self) -> Result<ReleaseStoragePruneReport, UpdateError> {
+        let pointer = self.activation_store.load()?;
+        let mut protected_versions = HashSet::from([
+            self.environment.current_version.clone(),
+            pointer.active_version,
+            pointer.last_known_good_version,
+        ]);
+        if let Some(target) = self
+            .state_store
+            .load()?
+            .and_then(|state| state.target_version)
+        {
+            protected_versions.insert(target);
+        }
+        Ok(prune_release_storage(
+            &self.environment.install_root,
+            &protected_versions,
+        ))
     }
 
     async fn stage_manifest(
@@ -698,6 +723,113 @@ impl Drop for TemporaryDirectoryCleanup {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ReleaseStoragePruneReport {
+    versions_removed: usize,
+    packages_removed: usize,
+    quarantines_removed: usize,
+}
+
+fn prune_release_storage(
+    install_root: &Path,
+    protected_versions: &HashSet<String>,
+) -> ReleaseStoragePruneReport {
+    let mut report = ReleaseStoragePruneReport::default();
+    let versions_root = install_root.join("versions");
+    let mut protected_package_hashes = HashSet::new();
+    for version in protected_versions {
+        let marker = versions_root.join(version).join(RELEASE_MARKER_FILE_NAME);
+        let Ok(payload) = fs::read(marker) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_slice::<ReleaseManifest>(&payload) else {
+            continue;
+        };
+        if manifest.release_version != *version {
+            continue;
+        }
+        protected_package_hashes.extend(
+            manifest
+                .packages
+                .into_iter()
+                .map(|package| package.sha256.to_ascii_lowercase()),
+        );
+    }
+
+    if let Ok(entries) = fs::read_dir(&versions_root) {
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if protected_versions.contains(&name) || DotNetVersion::parse(&name).is_none() {
+                continue;
+            }
+            let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            if !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || metadata.file_attributes() & 0x400 != 0
+            {
+                continue;
+            }
+            if fs::remove_dir_all(entry.path()).is_ok() {
+                report.versions_removed += 1;
+            }
+        }
+    }
+
+    let cache_root = install_root.join("cache").join("packages");
+    if let Ok(entries) = fs::read_dir(cache_root) {
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(hash) = name.strip_suffix(".zip") else {
+                continue;
+            };
+            if hash.len() != 64
+                || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || protected_package_hashes.contains(&hash.to_ascii_lowercase())
+            {
+                continue;
+            }
+            let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.file_attributes() & 0x400 != 0
+            {
+                continue;
+            }
+            if fs::remove_file(entry.path()).is_ok() {
+                report.packages_removed += 1;
+            }
+        }
+    }
+
+    let quarantine_root = install_root.join("quarantine");
+    let mut quarantines = fs::read_dir(quarantine_root)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let metadata = fs::symlink_metadata(entry.path()).ok()?;
+            if !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || metadata.file_attributes() & 0x400 != 0
+            {
+                return None;
+            }
+            Some((metadata.modified().unwrap_or(UNIX_EPOCH), entry.path()))
+        })
+        .collect::<Vec<_>>();
+    quarantines.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+    for (_, path) in quarantines.into_iter().skip(2) {
+        if fs::remove_dir_all(path).is_ok() {
+            report.quarantines_removed += 1;
+        }
+    }
+    report
 }
 
 fn validate_package_set(
@@ -1081,6 +1213,77 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn release_storage_pruning_preserves_active_artifacts_and_bounds_diagnostics() {
+        let root = test_directory("storage-prune");
+        for version in ["2.9.0", "3.0.0", "3.0.1"] {
+            fs::create_dir_all(root.join("versions").join(version)).expect("version directory");
+        }
+        let package = package_for_release(
+            "core",
+            b"protected-package",
+            "https://example.test/protected.zip".to_owned(),
+        );
+        let manifest = ReleaseManifest {
+            schema_version: 2,
+            release_version: "3.0.0".to_owned(),
+            release_id: Some("release-storage-test".to_owned()),
+            generated_at_utc_msc: 1,
+            published_at_utc_msc: Some(1),
+            expires_at_utc_msc: None,
+            priority: Some("normal".to_owned()),
+            minimum_launcher_version: "1.0.0".to_owned(),
+            minimum_idle_seconds: Some(120),
+            activation_deadline_utc_msc: None,
+            rollout_channel: Some("stable".to_owned()),
+            rollout_percentage: Some(100),
+            packages: vec![package.clone()],
+            signature: "fixture".to_owned(),
+        };
+        fs::write(
+            root.join("versions/3.0.0").join(RELEASE_MARKER_FILE_NAME),
+            serde_json::to_vec(&manifest).expect("release marker"),
+        )
+        .expect("write release marker");
+        let cache = root.join("cache/packages");
+        fs::create_dir_all(&cache).expect("package cache");
+        fs::write(cache.join(format!("{}.zip", package.sha256)), b"protected")
+            .expect("protected cache package");
+        let unused_hash = "b".repeat(64);
+        fs::write(cache.join(format!("{unused_hash}.zip")), b"unused")
+            .expect("unused cache package");
+        for index in 0..4 {
+            fs::create_dir_all(root.join("quarantine").join(format!("invalid-{index}")))
+                .expect("quarantine directory");
+        }
+
+        let report = prune_release_storage(
+            &root,
+            &HashSet::from(["3.0.0".to_owned(), "3.0.1".to_owned()]),
+        );
+
+        assert_eq!(
+            report,
+            ReleaseStoragePruneReport {
+                versions_removed: 1,
+                packages_removed: 1,
+                quarantines_removed: 2,
+            }
+        );
+        assert!(root.join("versions/3.0.0").is_dir());
+        assert!(root.join("versions/3.0.1").is_dir());
+        assert!(!root.join("versions/2.9.0").exists());
+        assert!(cache.join(format!("{}.zip", package.sha256)).is_file());
+        assert!(!cache.join(format!("{unused_hash}.zip")).exists());
+        assert_eq!(
+            fs::read_dir(root.join("quarantine"))
+                .expect("quarantine")
+                .count(),
+            2
+        );
+        fs::remove_dir_all(root).expect("cleanup storage fixture");
+    }
 
     #[tokio::test]
     async fn signed_loopback_release_is_downloaded_and_staged_as_one_native_version() {

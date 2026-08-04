@@ -5,6 +5,8 @@
 #define BRIDGE_PROTOCOL_VERSION 3
 #define ADAPTER_VERSION "3.0.0"
 #define MAX_HISTORY_WINDOW_MSC 1576800000000
+#define QUERY_COMMENT_MAX_ROWS 500
+#define QUERY_COMMENT_LOOKBACK_MSC 2592000000
 
 input string InpPipeName = "AURUMBridgeV3";
 
@@ -2224,17 +2226,44 @@ void ExecuteModifyPosition(const string command_id, const int ticket,
   }
 
 bool SelectQueryOrder(const int ticket, const string expected_symbol,
-   const string bridge_command_ref, const int expected_magic, const int pool)
-  {
+   const string bridge_command_ref, const int expected_magic, const int pool,
+   bool &scan_complete, const long min_history_utc_msc)
+   {
+   scan_complete = true;
+   // A broker ticket is an exact identity.  It must take precedence over the
+   // durable comment fallback so a large history tab can never be scanned for
+   // a ticket that is already known.
+   if(ticket > 0)
+      {
+       if(!OrderSelect(ticket, SELECT_BY_TICKET, pool))
+          return(false);
+       bool selected_active = OrderCloseTime() == 0;
+       if((pool == MODE_TRADES && !selected_active)
+          || (pool == MODE_HISTORY && selected_active))
+          return(false);
+       if(expected_symbol != "" && OrderSymbol() != expected_symbol)
+          return(false);
+       return(OrderMagicNumber() == expected_magic);
+      }
    if(bridge_command_ref != "")
-     {
-      int total = pool == MODE_TRADES ? OrdersTotal() : OrdersHistoryTotal();
-      for(int index = total - 1; index >= 0; index--)
-        {
-         if(!OrderSelect(index, SELECT_BY_POS, pool))
-            continue;
-         if(OrderComment() != bridge_command_ref)
-            continue;
+      {
+       int total = pool == MODE_TRADES ? OrdersTotal() : OrdersHistoryTotal();
+       if(total > QUERY_COMMENT_MAX_ROWS) scan_complete = false;
+       int scanned = 0;
+       for(int index = total - 1; index >= 0 && scanned < QUERY_COMMENT_MAX_ROWS; index--)
+         {
+          scanned++;
+          if(!OrderSelect(index, SELECT_BY_POS, pool))
+             continue;
+          if(pool == MODE_HISTORY)
+            {
+             datetime event_time = OrderCloseTime() > 0 ? OrderCloseTime() : OrderOpenTime();
+             if(!g_server_offset_valid || ServerTimeToUtcMsc(event_time,
+                CurrentServerOffsetMsc()) < min_history_utc_msc)
+                continue;
+            }
+          if(OrderComment() != bridge_command_ref)
+             continue;
          if(expected_symbol != "" && OrderSymbol() != expected_symbol)
             continue;
          if(OrderMagicNumber() != expected_magic)
@@ -2243,30 +2272,28 @@ bool SelectQueryOrder(const int ticket, const string expected_symbol,
         }
       return(false);
      }
-   if(ticket <= 0 || !OrderSelect(ticket, SELECT_BY_TICKET, pool))
-      return(false);
-   bool selected_active = OrderCloseTime() == 0;
-   if((pool == MODE_TRADES && !selected_active)
-      || (pool == MODE_HISTORY && selected_active))
-      return(false);
-   if(expected_symbol != "" && OrderSymbol() != expected_symbol)
-      return(false);
-   return(OrderMagicNumber() == expected_magic);
-  }
+   return(false);
+   }
 
 void ExecuteQuery(const string command_id, const int ticket,
    const string expected_symbol, const string expected_kind,
    const string bridge_command_ref, const int expected_magic)
   {
    ResetLastError();
+   long now_utc_msc = ((long)TimeGMT()) * 1000;
+   long min_history_utc_msc = now_utc_msc - QUERY_COMMENT_LOOKBACK_MSC;
+   bool active_scan_complete = true;
+   bool history_scan_complete = true;
+   if(ticket <= 0 && bridge_command_ref != "" && !g_server_offset_valid)
+      history_scan_complete = false;
    bool active = SelectQueryOrder(ticket, expected_symbol, bridge_command_ref,
-      expected_magic, MODE_TRADES);
+      expected_magic, MODE_TRADES, active_scan_complete, min_history_utc_msc);
    bool found = active;
    if(!found)
       found = SelectQueryOrder(ticket, expected_symbol, bridge_command_ref,
-         expected_magic, MODE_HISTORY);
+         expected_magic, MODE_HISTORY, history_scan_complete, min_history_utc_msc);
    if(!found)
-     {
+      {
       SendCommandResult(command_id, 1, "", "", 0, 0,
          "{\"found\":false,\"complete\":false,"
          "\"reason\":\"mt4_history_range_unverified\"}");
@@ -2286,7 +2313,10 @@ void ExecuteQuery(const string command_id, const int ticket,
       else
          pending_state = "cancelled";
      }
-   string raw = "{\"found\":true,\"complete\":true"
+   bool complete = ticket > 0
+      ? (active ? active_scan_complete : history_scan_complete)
+      : (active ? active_scan_complete : history_scan_complete);
+   string raw = "{\"found\":true,\"complete\":" + (complete ? "true" : "false")
       + ",\"kind\":\"" + kind + "\""
       + ",\"source\":\"" + (active
          ? (is_market ? "active_position" : "active_order")

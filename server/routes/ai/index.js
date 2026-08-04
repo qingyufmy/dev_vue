@@ -20,6 +20,7 @@ import { createObserverChannel, createObserverSource, deleteObserverChannel, del
   replaceObserverChannelAssignments, resolveObserverSourceForUser,
   updateObserverChannel, updateObserverSource } from './observer-channels.js'
 import { createObserverSourceAccount } from './observer-source-accounts.js'
+import { synchronizeObserverSourceRuntime } from './observer-source-runtime.js'
 import { canManagePlatformAiContent, isObserverSourceAccount } from './platform-content-access.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 import { listMemoryItems, listMemorySummaries, revokeMemoryItem, activateDuplicateMemory,
@@ -63,38 +64,26 @@ const __dirname = dirname(__filename)
 const BRIDGE_VERSION = readFileSync(join(__dirname, '../../../VERSION'), 'utf-8').trim()
 const BRIDGE_RELEASE = resolveBridgeInstallerRelease()
 
-router.get('/bridge/version', (req, res) => {
+router.get('/bridge/version', (req, res, next) => {
+  // This router is mounted at both /api and /aurum-api for AI compatibility.
+  // Keep exactly one retired-client update surface.
+  if (req.baseUrl !== '/api') return next()
   res.json({
     version: BRIDGE_RELEASE.version || BRIDGE_VERSION,
     build_date: BRIDGE_RELEASE.buildDate,
-    changelog: `量见智桥 ${BRIDGE_RELEASE.version || BRIDGE_VERSION} 正式版`,
-    bridge_ticket_required: process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN !== '1',
-    legacy_bridge_query_token_enabled: process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN === '1',
-    auto_update_enabled: BRIDGE_RELEASE.v3,
-    auto_update_disabled_reason: BRIDGE_RELEASE.v3 ? null : 'signed_update_manifest_required',
-    update_protocol: BRIDGE_RELEASE.v3 ? 'signed_manifest_v2' : 'legacy_manual_installer',
-    updater_url: '',
     full_url: BRIDGE_RELEASE.fullUrl,
     file_size: BRIDGE_RELEASE.fileSize,
-    sha256: BRIDGE_RELEASE.sha256
+    sha256: BRIDGE_RELEASE.sha256,
+    v3: BRIDGE_RELEASE.v3 === true,
   })
 })
 
 router.get('/bridge/ws-health', authMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' })
-  let recentStatus = []
-  try {
-    recentStatus = await queryAll(
-      'SELECT user_id AS userId, connected, connected_at AS connectedAt, disconnected_at AS disconnectedAt, last_close_code AS lastCloseCode, last_close_reason AS lastCloseReason, last_error AS lastError, client_version AS clientVersion, mt5_collect_timeout_count AS mt5CollectTimeoutCount, updated_at AS updatedAt FROM bridge_connection_status ORDER BY updated_at DESC LIMIT 50'
-    )
-  } catch (e) {
-    console.error('[BridgeWS] ws-health recentStatus query failed:', e.message)
-  }
   res.json({
     ok: true,
     serverTime: new Date().toISOString(),
     bridges: getBridgeDiagnostics(),
-    recentStatus,
   })
 })
 
@@ -187,19 +176,6 @@ async function reconcileAiRuntime(userId = null) {
   }
 }
 
-async function applyObserverBridgeRuntime(source) {
-  try {
-    const result = await applyBridgeRuntimeState(Number(source.bridge_user_id), {
-      tradeEnabled:source.status === 'active' && Boolean(source.trade_send_enabled),
-      autoReasoningEnabled:source.status === 'active' && Boolean(source.auto_inference_enabled),
-    })
-    return { ok:true, result }
-  } catch (error) {
-    console.error('[AI Runtime] observer bridge apply failed:', error)
-    return { ok:false, degraded:true, error:'observer_bridge_runtime_sync_pending' }
-  }
-}
-
 router.get('/ai/admin/observer-sources', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
   try {
@@ -241,11 +217,7 @@ router.post('/ai/admin/observer-sources', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
   try {
     const source = await createObserverSource(req.user.id, req.body || {})
-    const [scheduler_sync, bridge_sync] = await Promise.all([
-      reconcileAiRuntime(), applyObserverBridgeRuntime(source),
-    ])
-    const runtime_sync = { scheduler_sync, bridge_sync,
-      degraded:!scheduler_sync.ok || !bridge_sync.ok }
+    const runtime_sync = await synchronizeObserverSourceRuntime(source)
     await auditAiMutation(req, 'observer_source_created', 'ai_observer_source', source.id, {
       bridge_user_id:source.bridge_user_id, trading_account_id:source.trading_account_id,
       strategy_id:source.strategy_id, status:source.status,
@@ -259,11 +231,7 @@ router.put('/ai/admin/observer-sources/:id', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
   try {
     const source = await updateObserverSource(req.params.id, req.body || {})
-    const [scheduler_sync, bridge_sync] = await Promise.all([
-      reconcileAiRuntime(), applyObserverBridgeRuntime(source),
-    ])
-    const runtime_sync = { scheduler_sync, bridge_sync,
-      degraded:!scheduler_sync.ok || !bridge_sync.ok }
+    const runtime_sync = await synchronizeObserverSourceRuntime(source)
     await auditAiMutation(req, 'observer_source_updated', 'ai_observer_source', source.id, {
       bridge_user_id:source.bridge_user_id, trading_account_id:source.trading_account_id,
       strategy_id:source.strategy_id, status:source.status,
@@ -277,12 +245,7 @@ router.delete('/ai/admin/observer-sources/:id', async (req, res) => {
   if (!requireAiAdmin(req, res)) return
   try {
     const deleted = await deleteObserverSource(req.params.id)
-    const [scheduler_sync, bridge_sync] = await Promise.all([
-      reconcileAiRuntime(),
-      applyObserverBridgeRuntime({ ...deleted, status:'disabled', trade_send_enabled:false, auto_inference_enabled:false }),
-    ])
-    const runtime_sync = { scheduler_sync, bridge_sync,
-      degraded:!scheduler_sync.ok || !bridge_sync.ok }
+    const runtime_sync = await synchronizeObserverSourceRuntime(deleted, { deleted:true })
     await auditAiMutation(req, 'observer_source_deleted', 'ai_observer_source', deleted.id)
     res.json({ ok:true, deleted, runtime_sync })
   }

@@ -340,7 +340,11 @@ impl TerminalSessionHandle {
             worker_consecutive_failures: worker.consecutive_failures,
             collector_consecutive_failures: collector.consecutive_failures,
             last_success_at_utc_msc: collector.last_success_at_utc_msc,
-            error_code: collector.error_code.or(worker.error_code),
+            // Prefer the worker's own lifecycle/error signal. The collector can only observe the
+            // resulting registry/channel failure and would otherwise hide the actionable worker
+            // code with a generic `worker_registry_not_ready` error. Readiness remains fenced by
+            // both states, so this ordering does not make a failed worker usable.
+            error_code: preferred_terminal_error(worker.error_code, collector.error_code),
             history: self.history.status(),
             mt4_expert_restart_required: false,
         }
@@ -1113,6 +1117,13 @@ fn worker_error(error: WorkerHostError) -> TerminalSessionError {
     TerminalSessionError::new(error.code())
 }
 
+fn preferred_terminal_error(
+    worker_error_code: Option<String>,
+    collector_error_code: Option<String>,
+) -> Option<String> {
+    worker_error_code.or(collector_error_code)
+}
+
 fn projection_error(error: bridge_terminal_data::ProjectionError) -> TerminalSessionError {
     TerminalSessionError::new(error.code())
 }
@@ -1131,6 +1142,22 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn worker_error_code_takes_precedence_over_collector_fallback() {
+        assert_eq!(
+            preferred_terminal_error(
+                Some("worker_process_exit".to_owned()),
+                Some("worker_registry_not_ready".to_owned()),
+            )
+            .as_deref(),
+            Some("worker_process_exit")
+        );
+        assert_eq!(
+            preferred_terminal_error(None, Some("collector_retrying".to_owned())).as_deref(),
+            Some("collector_retrying")
+        );
+    }
     use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
 
     fn route(epoch: i64) -> WorkerRoute {

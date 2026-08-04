@@ -35,6 +35,9 @@ const MONTHLY_GRACE_MINUTES = 120
 const DAILY_COMPLETE_RECHECK_MS = 15 * 60 * 1000
 const DAILY_INCOMPLETE_RECHECK_MS = 60 * 60 * 1000
 const DAILY_SETTLE_MS = 24 * 60 * 60 * 1000
+const MONTHLY_REVIEW_GROUP_LIMIT_MAX = 200
+const MONTHLY_REVIEW_GROUP_LIMIT_DEFAULT = 100
+const MONTHLY_REVIEW_GROUP_SCAN_MAX = 800
 const TERMINAL_TRADE_EVIDENCE_REASONS = new Set(['inference_snapshot_incomplete', 'historical_prompt_missing'])
 let periodReviewTimer = null
 let periodReviewCycleRunning = false
@@ -811,15 +814,81 @@ export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Dat
   return result
 }
 
-async function eligibleDailyReviewRows(limit) {
-  return queryAll(`SELECT cases.*, versions.content_json AS current_content_json,
+function monthlyReviewGroupLimit(limit = MONTHLY_REVIEW_GROUP_LIMIT_DEFAULT) {
+  const value = Number(limit)
+  if (!Number.isFinite(value)) return MONTHLY_REVIEW_GROUP_LIMIT_DEFAULT
+  return Math.min(MONTHLY_REVIEW_GROUP_LIMIT_MAX, Math.max(1, Math.trunc(value)))
+}
+
+async function eligibleMonthlyReviewRows(limit) {
+  const groupLimit = monthlyReviewGroupLimit(limit)
+  // Scan a bounded overfetch so groups that are not yet past the per-account
+  // month-end grace window do not consume the output group cap. The definitive
+  // timezone/month-end check remains in groupMonthlyReviewCases(), which uses
+  // each daily row's authoritative offset rather than an aggregate offset.
+  const scanLimit = Math.min(MONTHLY_REVIEW_GROUP_SCAN_MAX, Math.max(groupLimit, groupLimit * 4))
+  return queryAll(`WITH candidate_groups AS (
+      SELECT daily.user_id,
+          COALESCE(daily.trading_account_id, 0) AS trading_account_id,
+          daily.strategy_id,
+          LEFT(daily.period_key, 7) AS period_key,
+          MAX(daily.updated_at) AS latest_daily_updated_at,
+          MAX(monthly.id) AS monthly_case_id,
+          MAX(monthly.current_version_id) AS monthly_current_version_id,
+          MAX(monthly.updated_at) AS monthly_updated_at,
+          MAX(monthly_jobs.id) AS monthly_job_id,
+          MAX(CASE WHEN monthly_jobs.status = 'skipped' THEN 1 ELSE 0 END) AS monthly_job_skipped
+        FROM period_review_cases daily
+        JOIN period_review_versions daily_versions ON daily_versions.id = daily.current_version_id
+        LEFT JOIN ai_feature_flags global_flags
+          ON global_flags.scope = 'global' AND global_flags.user_id = 0
+        LEFT JOIN ai_feature_flags user_flags
+          ON user_flags.scope = 'user' AND user_flags.user_id = daily.user_id
+        LEFT JOIN period_review_cases monthly ON monthly.id = (
+          SELECT candidate.id
+          FROM period_review_cases candidate
+          WHERE candidate.period_type = 'monthly'
+            AND candidate.period_key = LEFT(daily.period_key, 7)
+            AND candidate.user_id = daily.user_id
+            AND COALESCE(candidate.trading_account_id, 0) = COALESCE(daily.trading_account_id, 0)
+            AND candidate.strategy_id = daily.strategy_id
+            AND candidate.status <> 'superseded'
+          ORDER BY CASE WHEN candidate.status = 'approved' THEN 0 ELSE 1 END,
+            candidate.updated_at DESC, candidate.id DESC LIMIT 1
+        )
+        LEFT JOIN period_review_jobs monthly_jobs ON monthly_jobs.period_case_id = monthly.id
+          AND monthly_jobs.job_type = 'monthly_review' AND monthly_jobs.job_slot = 0
+        WHERE daily.period_type = 'daily' AND daily.evidence_status = 'complete'
+          AND daily.strategy_compatibility_hash IS NOT NULL
+          AND daily.status IN ('draft','edited','approved','needs_revision','deferred')
+          AND COALESCE(global_flags.review_generation_enabled, 0) = 1
+          AND COALESCE(user_flags.review_generation_enabled, 1) = 1
+        GROUP BY daily.user_id, COALESCE(daily.trading_account_id, 0), daily.strategy_id,
+          LEFT(daily.period_key, 7)
+        HAVING (monthly_case_id IS NULL
+            OR (monthly_current_version_id IS NULL
+              AND (monthly_job_id IS NULL OR monthly_job_skipped = 1))
+            OR (monthly_current_version_id IS NOT NULL
+              AND (monthly_updated_at IS NULL OR latest_daily_updated_at > monthly_updated_at)))
+        ORDER BY LEFT(daily.period_key, 7) ASC, latest_daily_updated_at ASC,
+          daily.user_id ASC, COALESCE(daily.trading_account_id, 0) ASC,
+          daily.strategy_id ASC, LEFT(daily.period_key, 7) ASC
+        LIMIT ?
+    )
+    SELECT cases.*, versions.content_json AS current_content_json,
       versions.content_hash AS current_content_hash
-    FROM period_review_cases cases
+    FROM candidate_groups candidates
+    JOIN period_review_cases cases
+      ON cases.period_type = 'daily'
+      AND cases.user_id = candidates.user_id
+      AND COALESCE(cases.trading_account_id, 0) = candidates.trading_account_id
+      AND cases.strategy_id = candidates.strategy_id
+      AND LEFT(cases.period_key, 7) = candidates.period_key
     JOIN period_review_versions versions ON versions.id = cases.current_version_id
-    WHERE cases.period_type = 'daily' AND cases.evidence_status = 'complete'
+    WHERE cases.evidence_status = 'complete'
       AND cases.strategy_compatibility_hash IS NOT NULL
       AND cases.status IN ('draft','edited','approved','needs_revision','deferred')
-    ORDER BY cases.period_key DESC, cases.id DESC LIMIT ?`, [Math.min(3000, Math.max(1, Number(limit || 1000)))])
+    ORDER BY cases.period_key ASC, cases.id ASC`, [scanLimit])
 }
 
 async function upsertMonthlyGroup(group, clock) {
@@ -927,14 +996,17 @@ async function upsertMonthlyGroup(group, clock) {
   return { id: Number(periodCase.id), periodKey: group.periodKey, sourceCount: sources.length, evidenceHash }
 }
 
-export async function prepareEligibleMonthlyReviews({ limit = 1000, asOfUtcMs = Date.now() } = {}) {
-  const rows = await eligibleDailyReviewRows(limit)
-  const userIds = [...new Set(rows.map(row => Number(row.user_id)).filter(id => id > 0))]
-  const enabledEntries = await Promise.all(userIds.map(async userId => [userId, await isAiFeatureEnabled('review_generation_enabled', userId)]))
-  const enabledUsers = new Set(enabledEntries.filter(([, enabled]) => enabled).map(([userId]) => userId))
-  const enabledRows = rows.filter(row => enabledUsers.has(Number(row.user_id)))
-  const groups = groupMonthlyReviewCases(enabledRows, { asOfUtcMs })
-  const result = { scanned: rows.length, skippedDisabled:rows.length - enabledRows.length,
+export async function prepareEligibleMonthlyReviews({ limit = MONTHLY_REVIEW_GROUP_LIMIT_DEFAULT, asOfUtcMs = Date.now() } = {}) {
+  const groupLimit = monthlyReviewGroupLimit(limit)
+  const rows = await eligibleMonthlyReviewRows(groupLimit)
+  const candidateGroupKeys = new Set(rows.map(row => [Number(row.user_id), Number(row.trading_account_id || 0),
+    Number(row.strategy_id), String(row.period_key || '').slice(0, 7)].join(':')))
+  // Candidate selection is bounded in SQL; grace, timezone, and duplicate-day
+  // rules are authoritative in the existing grouping helper. Apply the caller's
+  // group cap only after those rules have produced complete monthly groups.
+  const groups = groupMonthlyReviewCases(rows, { asOfUtcMs }).slice(0, groupLimit)
+  const result = { scanned: rows.length, candidateGroups:candidateGroupKeys.size,
+    skippedDisabled:0,
     groups: groups.length, ready: 0, clock:{ status:'per_account' } }
   for (const group of groups) {
     await upsertMonthlyGroup(group, { status:'account_terminal' })

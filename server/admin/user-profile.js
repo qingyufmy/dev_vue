@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs'
 import { beijingNow, logAudit, queryOne, queryRun, withTransaction } from '../db.js'
 import { revokeBridgeRefreshSessions } from '../bridge-auth-session.js'
+import { disconnectUserSockets } from '../bridge-ws.js'
 
 const VALID_PLANS = new Set(['free', 'plus', 'pro'])
 const VALID_ROLES = new Set(['user', 'admin'])
@@ -106,6 +107,17 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
   const expiryInput = has(input, 'expires_at') ? input.expires_at : input.expiresAt
   const expiry = normalizeExpiry(plan, hasExpiry ? expiryInput : currentExpiry)
 
+  const targetEmail = target.email ? String(target.email).trim().toLowerCase() : null
+  const targetRole = String(target.role || 'user').trim().toLowerCase()
+  const targetPlan = String(target.plan || 'free').trim().toLowerCase()
+  const dateOnly = value => value == null || String(value).trim() === ''
+    ? null : String(value).slice(0, 10)
+  const sensitiveChange = Boolean(password)
+    || email !== targetEmail
+    || role !== targetRole
+    || plan !== targetPlan
+    || dateOnly(expiry) !== dateOnly(targetPlan === 'free' ? null : currentExpiry)
+
   const now = beijingNow()
   const updates = [
     'email = ?', 'phone = ?', 'nickname = ?', 'avatar = ?', 'role = ?',
@@ -117,13 +129,15 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
     updates.push('password = ?')
     params.push(await bcrypt.hash(password, 10))
   }
+  if (sensitiveChange) updates.push('token_version = token_version + 1')
   params.push(uid)
   const updateSql = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`
-  if (password) {
+  if (sensitiveChange) {
     await withTransaction(async run => {
       await run(updateSql, params)
       await revokeBridgeRefreshSessions(uid, { run })
     })
+    disconnectUserSockets(uid, password ? 'Password reset by administrator' : 'Account permissions changed')
   } else {
     await queryRun(updateSql, params)
   }

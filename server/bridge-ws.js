@@ -12,7 +12,6 @@ import { collapseRecoveryAuditRows } from './routes/ai/audit-log-view.js'
 import { buildAiAccessContext, observerAccessError, observerWsActionAllowed } from './routes/ai/observer-access.js'
 import { getDefaultObserverSource, getDefaultObserverSourceClock, observerSourceSupportsSymbol, resolveObserverSourceForUser } from './routes/ai/observer-channels.js'
 import { tokenVersionMatches } from './middleware/auth.js'
-import { consumeBridgeConnectionTicket } from './bridge-auth-session.js'
 import { BRIDGE_V3_WS_PATH, createBridgeV3Gateway } from './bridge-v3/gateway.js'
 import { setBridgeReleaseNotifier } from './bridge-v3/release-events.js'
 import { createBridgeV3BusinessAdapter } from './bridge-v3/business-adapter.js'
@@ -23,20 +22,17 @@ export { applyDefaultObserverClockBootstrap } from './routes/ai/terminal-clock.j
 
 import { JWT_SECRET } from './config.js'
 
-// Per-user state
-const bridges = new Map()       // userId -> { ws, lastSeen }
+// Per-user browser/admin state. Bridge connections are owned exclusively by
+// the V3 gateway; this module keeps only browser sockets and V3 read-model
+// metadata.
 const browsers = new Map()      // userId -> Set<ws>
 const adminBrowsers = new Set() // authenticated admin console sockets
-const pendingCommands = new Map() // commandId -> { resolve, timer, userId, action, ws, bridgeGeneration }
 const performanceSyncJobs = new Set()
 const performanceSyncTimers = new Map()
 const riskSnapshotRefreshTimers = new Map()
 let adminUserId = null          // cached admin userId for fallback
 let adminUserIdLastCheck = 0
 const ADMIN_CACHE_TTL = ADMIN_CACHE_TTL_MS
-const _bridgeInitGen = new Map() // userId -> generation number (防并发 init 污染状态)
-
-let cmdCounter = 0
 let wss = null
 let bridgeV3Business = null
 const bridgeV3MarketStates = new Map()
@@ -55,8 +51,6 @@ let defaultObserverClockLastRefresh = 0
 export const BRIDGE_WS_LIMITS = Object.freeze({
   maxPayloadBytes: 32 * 1024 * 1024,
   maxBrowserMessageBytes: 256 * 1024,
-  maxInitQueueMessages: 32,
-  maxInitQueueBytes: 4 * 1024 * 1024,
 })
 
 async function refreshDefaultObserverClock() {
@@ -138,50 +132,9 @@ export function isAllowedBrowserWsOrigin(req, type) {
   return isCorsOriginAllowed(origin, CORS_ORIGINS)
 }
 
-export function createBridgeInitMessageQueue(ws) {
-  let messages = []
-  let queuedBytes = 0
-  let overflowed = false
-  let attached = true
-  const detach = () => {
-    if (!attached) return
-    attached = false
-    ws.off('message', enqueue)
-  }
-  const enqueue = data => {
-    if (overflowed) return
-    const messageBytes = wsMessageByteLength(data)
-    if (messages.length >= BRIDGE_WS_LIMITS.maxInitQueueMessages
-      || queuedBytes + messageBytes > BRIDGE_WS_LIMITS.maxInitQueueBytes) {
-      overflowed = true
-      messages = []
-      queuedBytes = 0
-      detach()
-      try { ws.close(1009, 'Bridge initialization payload limit exceeded') } catch {}
-      return
-    }
-    messages.push(data)
-    queuedBytes += messageBytes
-  }
-  ws.on('message', enqueue)
-  return {
-    get overflowed() { return overflowed },
-    detach,
-    drain() {
-      detach()
-      const queued = messages
-      messages = []
-      queuedBytes = 0
-      return queued
-    },
-  }
-}
-
 function hasAccountBridgeConnection(userId, accountId) {
   const numericUserId = Number(userId)
   const numericAccountId = Number(accountId)
-  const bridge = bridges.get(Number(userId))
-  if (bridge?.ws?.readyState === 1 && Number(bridge.tradingAccountId || 0) === numericAccountId) return true
   const connectedIds = new Set((bridgeV3Business?.connectedTerminals(numericUserId) || [])
     .map(route => route.terminal_instance_id))
   const bindings = bridgeV3TradingAccounts.get(numericUserId)
@@ -233,10 +186,7 @@ function observerQuoteDescriptor(dataUserId, observerContext, dataRoute, symbol)
 
 function bridgePlatform(userId, tradingAccountId = null) {
   const route = bridgeV3RouteForContext(userId, tradingAccountId)
-  if (route?.platform) return route.platform
-  const legacy = bridges.get(Number(userId))
-  if (legacy?.ws?.readyState === 1) return legacy._clientHeartbeat?.platform || 'mt5'
-  return null
+  return route?.platform || null
 }
 
 function scheduleAccountPerformanceSync(userId, accountId, { recent = false, delayMs = 0 } = {}) {
@@ -384,17 +334,10 @@ async function synchronizeBridgeV3TerminalIdentity({ userId, terminal, connectio
       await bridgeV3Business.execute(Number(previousUserId), 'toggle_trade', { enable:false })
       bridgeV3Business.disconnectUser(Number(previousUserId), 'bridge_account_ownership_transferred')
     }
-    const previousBridge = bridges.get(Number(previousUserId))
-    if (previousBridge?.ws?.readyState === 1) {
-      previousBridge.tradeEnabled = false
-      previousBridge.autoReasoningEnabled = false
-      try { await sendBridgeCommand(previousUserId, 'toggle_trade', { enable:false }, 2000, { noFallback:true }) } catch {}
-      try { previousBridge.ws.close(4004, 'MT5 account ownership transferred') } catch {}
-    }
   }
 }
 
-function forgetBridgeV3TerminalIdentity({ userId, terminal }) {
+async function forgetBridgeV3TerminalIdentity({ userId, terminal }) {
   const bindings = bridgeV3TradingAccounts.get(Number(userId))
   bindings?.delete(terminal.terminal_instance_id)
   if (bindings?.size === 0) bridgeV3TradingAccounts.delete(Number(userId))
@@ -414,6 +357,13 @@ function forgetBridgeV3TerminalIdentity({ userId, terminal }) {
     platform:terminal.platform,
     terminal_instance_id:terminal.terminal_instance_id,
   }, { scopes:['overview', 'users', 'ai-operations', 'risk-audit'] })
+  if (!isBridgeAlive(Number(userId))) {
+    const ai = await import('./routes/ai/index.js')
+    await Promise.allSettled([
+      ai.stopAutoScheduler(Number(userId)),
+      ai.removeUserRuntimeAutoSubscription(Number(userId)),
+    ])
+  }
 }
 
 const TRADE_REF_KEYS = new Set([
@@ -678,10 +628,6 @@ function bridgeV3MarketStateForContext(userId, tradingAccountId = null, terminal
 
 export function recordBridgeMarketState(userId, payload, receivedAt = Date.now(), context = {}) {
   const numericUserId = Number(userId)
-  const bridge = bridges.get(numericUserId)
-  if (bridge?.ws?.readyState === 1) {
-    return applyBridgeMarketState(bridge, payload, numericUserId, receivedAt)
-  }
   if (!bridgeV3Business?.hasConnectedTerminal(numericUserId)) return null
   const route = context.terminalInstanceId
     ? { terminal_instance_id:String(context.terminalInstanceId) }
@@ -811,24 +757,6 @@ async function resolveDefaultPlatformMarketContext(user, symbol) {
 
 export function getPlatformMarketClockState(userId, tradingAccountId = null, terminalInstanceId = null) {
   const numericUserId = Number(userId)
-  const bridge = bridges.get(numericUserId)
-  const hb = bridge?._clientHeartbeat || {}
-  const requestedAccountId = Number(tradingAccountId)
-  const legacyAccountMatches = !(requestedAccountId > 0)
-    || Number(bridge?.tradingAccountId || 0) === requestedAccountId
-  if (!terminalInstanceId && legacyAccountMatches && bridge?.ws?.readyState === 1) {
-    return applyDefaultObserverClockBootstrap({
-      bridge_user_id:numericUserId || null,
-      connected:true,
-      timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? hb.timezone_offset_minutes ?? null,
-      clock_status:bridge.clockStatus || hb.clock_status || 'unknown',
-      clock_residual_ms:bridge.clockResidualMs ?? hb.clock_residual_ms ?? null,
-      last_seen_at_utc_msc:bridge.lastSeen || null,
-      broker_server:bridge.brokerServer || null,
-      account_login:bridge.accountLogin || null,
-      platform:String(hb.platform || bridge.platform || bridgePlatform(numericUserId, tradingAccountId) || '').trim().toLowerCase() || null,
-    }, defaultObserverClockCache)
-  }
   const route = terminalInstanceId
     ? (bridgeV3Business?.connectedTerminals(numericUserId) || [])
       .find(item => item.terminal_instance_id === String(terminalInstanceId))
@@ -878,7 +806,6 @@ export function initBridgeWS(server) {
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost')
     const type = url.searchParams.get('type')
-    const tokenPresent = Boolean(url.searchParams.get('token') || readCookie(req, 'ws_token'))
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress
 
     if (url.pathname === BRIDGE_V3_WS_PATH) {
@@ -889,6 +816,31 @@ export function initBridgeWS(server) {
         try { socket.destroy() } catch {}
       }
     } else if (url.pathname === '/aurum-api/bridge/ws') {
+      if (type === 'bridge') {
+        const body = 'This Bridge endpoint is retired. Update via /api/bridge/version.\n'
+        const response = [
+          'HTTP/1.1 426 Upgrade Required',
+          'Connection: close',
+          'Content-Type: text/plain; charset=utf-8',
+          'Link: </api/bridge/version>; rel="update"',
+          `Content-Length: ${Buffer.byteLength(body, 'utf8')}`,
+          '',
+          body,
+        ].join('\r\n')
+        try {
+          if (typeof socket.end === 'function') socket.end(response)
+          else {
+            socket.write(response)
+            socket.destroy()
+          }
+        } catch {}
+        return
+      }
+      if (type !== 'browser' && type !== 'admin') {
+        try { socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n') } catch {}
+        try { socket.destroy() } catch {}
+        return
+      }
       if (!isAllowedBrowserWsOrigin(req, type)) {
         console.warn(`[BridgeWS] rejected ${type || 'unknown'} websocket origin`)
         try { socket.write?.('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n') } catch {}
@@ -896,7 +848,7 @@ export function initBridgeWS(server) {
         return
       }
       if (process.env.DEBUG_BRIDGE_WS === '1') {
-        console.log(`[BridgeWS] upgrade path=/aurum-api/bridge/ws type=${type} tokenPresent=${tokenPresent} ip=${ip}`)
+        console.log(`[BridgeWS] upgrade path=/aurum-api/bridge/ws type=${type} ip=${ip}`)
       }
       try {
         wss.handleUpgrade(req, socket, head, (ws) => {
@@ -917,13 +869,6 @@ export function initBridgeWS(server) {
 
     if (type === 'admin') return handleAdmin(ws, url, req)
     if (type === 'browser') return handleBrowser(ws, url, req)
-    if (type === 'bridge') {
-      handleBridge(ws, url).catch(error => {
-        console.error('[BridgeWS] bridge initialization failed:', error.message)
-        try { ws.close(4002, 'Bridge authentication failed') } catch {}
-      })
-      return
-    }
     ws.close(4000, 'Unknown type')
   })
 
@@ -1080,19 +1025,14 @@ async function handleBrowser(ws, url, req) {
       const v3MarketState = quoteClockUserId ? bridgeV3MarketStateForContext(
         Number(quoteClockUserId), observerContext?.channel?.trading_account_id,
         dataRoute?.terminal_instance_id) : null
-      const clockBridge = quoteClockUserId ? bridges.get(Number(quoteClockUserId)) : null
       const usingFallback = access.mode === 'observer'
       const connected = Boolean(dataUserId && isBridgeAlive(dataUserId))
       const alive = connected
       // In observer mode the visible switches describe the platform observer
       // account. Mutations remain blocked by the observer action allowlist.
       const tradeEnabled = alive ? isTradeEnabled(dataUserId) : undefined
-      // A V3 terminal is tracked by bridgeV3Business rather than the legacy
-      // bridges map. Keep the browser heartbeat compatible with both paths.
       // The automatic-analysis switch belongs to the user's strategy
-      // subscription. V3 terminals are not stored in the legacy `bridges`
-      // map, so reading bridge.autoReasoningEnabled would incorrectly emit
-      // false every heartbeat for otherwise healthy MT4/MT5 V3 sessions.
+      // subscription and is independent from the terminal transport.
       const autoReasoningEnabled = access.mode === 'full'
         ? await readAutomaticAnalysisEnabled(userId)
         : alive ? await readAutomaticAnalysisEnabled(dataUserId) : undefined
@@ -1100,7 +1040,7 @@ async function handleBrowser(ws, url, req) {
         Number(dataUserId), observerContext?.channel?.trading_account_id,
         dataRoute?.terminal_instance_id) : null
       const heartbeatClock = buildBrowserHeartbeatClock(
-        sharedQuote, clockBridge, v3MarketState, effectiveClock)
+        sharedQuote, null, v3MarketState, effectiveClock)
       ws.send(JSON.stringify({
         type: 'hb',
         seq: msg.seq,
@@ -1133,513 +1073,8 @@ async function handleBrowser(ws, url, req) {
   })
 }
 
-// ============ Bridge Connection ============
-
-async function handleBridge(ws, url) {
-  const initQueue = createBridgeInitMessageQueue(ws)
-  // Buffer early messages through authentication and runtime setup, with strict bounds.
-
-  let userId = null
-  let credentialTokenVersion = null
-  const ticket = url.searchParams.get('ticket')
-  if (ticket) {
-    try {
-      const payload = await consumeBridgeConnectionTicket(ticket)
-      userId = payload.userId
-      credentialTokenVersion = Number(payload.tokenVersion || 0)
-    } catch (error) {
-      initQueue.detach()
-      console.warn(`[BridgeWS] bridge ticket rejected: ${error.code || 'invalid'}`)
-      ws.close(4002, 'Invalid or expired bridge ticket')
-      return
-    }
-  } else if (process.env.ALLOW_LEGACY_BRIDGE_QUERY_TOKEN === '1') {
-    const token = url.searchParams.get('token')
-    let decoded = null
-    try { decoded = jwt.verify(token, JWT_SECRET) } catch (error) {
-      console.error('[BridgeWS] legacy bridge auth failed:', error.message)
-    }
-    userId = decoded?.userId
-    credentialTokenVersion = Number(decoded?.tokenVersion || 0)
-    if (userId) console.warn(`[BridgeWS] legacy query-token authentication used user=${userId}`)
-  }
-  if (!userId) {
-    initQueue.detach()
-    console.log('[BridgeWS] bridge auth failed: no valid credential')
-    ws.close(4002, 'Bridge ticket required')
-    return
-  }
-
-  // Check user plan — only Pro allowed (async, blocks bridge setup)
-  try {
-    const user = await queryOne(`SELECT plan, plan_expires_at, role, token_version,
-    (role = 'admin' OR (plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW()))) AS has_pro_access
-    FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [userId])
-    if (initQueue.overflowed || ws.readyState !== 1) { initQueue.detach(); return }
-    if (!user) { initQueue.detach(); ws.close(4002, 'User not found'); return }
-    if (Number(user.token_version || 0) !== credentialTokenVersion) { initQueue.detach(); ws.close(4002, 'Session revoked'); return }
-    if (!user.has_pro_access) {
-      const now = new Date()
-      const expired = user.plan_expires_at && new Date(user.plan_expires_at) < now
-      const reason = expired ? '会员已过期，请续费后重试' : `当前会员等级(${user.plan})不可使用桥接，请升级Pro会员`
-      console.log(`[BridgeWS] User ${userId} rejected: ${reason}`)
-      initQueue.detach()
-      ws.close(4003, reason)
-      return
-    }
-    await _initBridge(ws, userId, user, initQueue)
-    // 重放缓存消息
-  } catch (err) {
-    initQueue.detach()
-    console.error('[BridgeWS] Plan check error:', err)
-    ws.close(4002, 'Server error')
-  }
-}
-
-async function _initBridge(ws, userId, user, initQueue = null) {
-  // Generation counter — prevents stale async init from corrupting a newer bridge's state
-  const gen = (_bridgeInitGen.get(userId) || 0) + 1
-  _bridgeInitGen.set(userId, gen)
-  const abortStaleInit = () => {
-    initQueue?.detach()
-    try { if (ws.readyState === 1) ws.close(4001, 'Replaced by newer connection') } catch {}
-  }
-
-  // Close old bridge connection if still open (one bridge per account)
-  const existing = bridges.get(userId)
-  if (existing) {
-    if (existing._pingInterval) clearInterval(existing._pingInterval)
-    if (existing._performanceSyncTimer) clearTimeout(existing._performanceSyncTimer)
-    if (existing.ws && existing.ws.readyState === 1) {
-      try { existing.ws.close(4001, 'Replaced by new connection') } catch {}
-    }
-    for (const [commandId, pending] of pendingCommands) {
-      if (pending.userId === Number(userId) && pending.ws === existing.ws) {
-        clearTimeout(pending.timer)
-        pendingCommands.delete(commandId)
-        pending.resolve({ status:'error', error:'Bridge connection replaced before command result' })
-      }
-    }
-  }
-
-  let initComplete = false
-
-  // Register close + error handlers BEFORE any await (so close during init is caught)
-  ws.on('close', async (code, reason) => {
-    const reasonStr = reason?.toString() || ''
-    if (!initComplete) {
-      console.log(`[BridgeWS] close during init user=${userId} code=${code} reason=${reasonStr}`)
-      const current = bridges.get(userId)
-      if (current && current.ws !== ws) {
-        console.log(`[BridgeWS] stale init close user=${userId}, newer bridge remains active`)
-        return
-      }
-      if (current && current.ws === ws) {
-        if (current._pingInterval) clearInterval(current._pingInterval)
-        if (current._performanceSyncTimer) clearTimeout(current._performanceSyncTimer)
-        bridges.delete(userId)
-      }
-      sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
-      broadcastAdminEvent('bridge', 'disconnected', {
-        user_id:Number(userId), connected:false, alive:false,
-      }, { scopes:['overview', 'users', 'ai-operations', 'risk-audit'] })
-      return
-    }
-    const bridge = bridges.get(userId)
-    if (bridge) {
-      if (bridge._pingInterval) clearInterval(bridge._pingInterval)
-      if (bridge._performanceSyncTimer) clearTimeout(bridge._performanceSyncTimer)
-    }
-    if (!bridge || bridge.ws !== ws) {
-      console.log(`[BridgeWS] stale close user=${userId}, new bridge already connected — skipping cleanup`)
-      return
-    }
-    // Detailed close logging
-    const now = Date.now()
-    const duration = bridge._connectTime ? Math.round((now - bridge._connectTime) / 1000) : '?'
-    const lastSeenAge = bridge.lastSeen ? Math.round((now - bridge.lastSeen) / 1000) : '?'
-    const lastPongAge = bridge.lastPong ? Math.round((now - bridge.lastPong) / 1000) : '?'
-    const lastType = bridge._lastMessageType || '?'
-    let pendingCount = 0
-    for (const [, p] of pendingCommands) { if (p.userId === userId) pendingCount++ }
-    console.log(`[BridgeWS] bridge closed user=${userId} code=${code} reason=${reasonStr} duration=${duration}s lastSeenAge=${lastSeenAge}s lastPongAge=${lastPongAge}s lastType=${lastType} pending=${pendingCount}`)
-
-    bridges.delete(userId)
-    sendToBrowsers(userId, { type: 'disconnect', reason: 'bridge_closed' })
-    broadcastAdminEvent('bridge', 'disconnected', {
-      user_id:Number(userId), connected:false, alive:false,
-    }, { scopes:['overview', 'users', 'ai-operations', 'risk-audit'] })
-    // Persist close status to DB
-    try {
-      await queryRun(
-        `INSERT INTO bridge_connection_status (user_id, connected, disconnected_at, last_close_code, last_close_reason, updated_at)
-         VALUES (?, 0, NOW(), ?, ?, NOW())
-         ON DUPLICATE KEY UPDATE connected=0, disconnected_at=NOW(), last_close_code=?, last_close_reason=?, updated_at=NOW()`,
-        [userId, code, reasonStr.slice(0, 255), code, reasonStr.slice(0, 255)]
-      )
-    } catch (e) { console.error(`[BridgeWS] Failed to persist close status user=${userId}:`, e.message) }
-    for (const [cmdId, pending] of pendingCommands) {
-      if (pending.userId === userId) {
-        clearTimeout(pending.timer)
-        pendingCommands.delete(cmdId)
-        pending.resolve({ status: 'error', error: 'Bridge disconnected' })
-      }
-    }
-    try {
-      const ai = await import('./routes/ai/index.js')
-      await ai.stopAutoScheduler(userId)
-      await ai.removeUserRuntimeAutoSubscription(userId)
-      // Preserve the configured subscription state while runtime execution is paused.
-      let schedulerEnabled = false
-      try {
-        const schedRow = await queryOne(`SELECT id FROM strategy_subscriptions
-          WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1 LIMIT 1`, [userId])
-        schedulerEnabled = Boolean(schedRow)
-      } catch (e) { console.warn('[BridgeWS] Failed to read subscription state on disconnect:', e.message) }
-      sendToBrowsers(userId, { type: 'auto_state', enabled: schedulerEnabled, runtime_subscribed: false, reason: 'user_bridge_offline' })
-    } catch (e) {
-      console.error('[BridgeWS] Failed to stop auto-reasoning on disconnect:', e.message)
-    }
-  })
-
-  ws.on('error', (err) => {
-    const pendingActions = []
-    for (const pending of pendingCommands.values()) {
-      if (pending.userId === Number(userId) && pending.ws === ws && pending.action) {
-        pendingActions.push(pending.action)
-        if (pendingActions.length >= 5) break
-      }
-    }
-    const actionDetail = pendingActions.length ? ` pendingActions=${pendingActions.join(',')}` : ''
-    console.error(`[BridgeWS] Bridge error user=${userId}${actionDetail}:`, err.message)
-    try {
-      queryRun(
-        `UPDATE bridge_connection_status SET last_error=?, updated_at=NOW() WHERE user_id=?`,
-        [err.message?.slice(0, 255) || '', userId]
-      ).catch((e) => console.warn('[BridgeWS] Failed to log bridge error:', e.message))
-    } catch {}
-  })
-
-  // Read bridge settings from DB (trade_send / auto_reasoning state)
-  let dbTradeEnabled = false
-  let hasDbRow = false
-  try {
-    const row = await queryOne('SELECT trade_send_enabled FROM user_bridge_settings WHERE user_id = ?', [userId])
-    if (_bridgeInitGen.get(userId) !== gen) {
-      console.log(`[BridgeWS] Stale init for user ${userId}, aborting`)
-      abortStaleInit()
-      return
-    }
-    if (row) {
-      hasDbRow = true
-      dbTradeEnabled = !!row.trade_send_enabled
-    }
-  } catch (e) {
-    console.error(`[BridgeWS] Failed to read user_bridge_settings for user ${userId}:`, e.message)
-  }
-  // The subscription switch is the user-owned source of truth. auto_scheduler
-  // is a derived runtime row and may temporarily lag during reconciliation.
-  let schedulerAutoEnabled = false
-  try {
-    const schedRow = await queryOne(`SELECT id FROM strategy_subscriptions
-      WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1 LIMIT 1`, [userId])
-    if (_bridgeInitGen.get(userId) !== gen) { abortStaleInit(); return }
-    schedulerAutoEnabled = Boolean(schedRow)
-  } catch (e) { console.error('[BridgeWS] Failed to read automatic-analysis subscription:', e.message) }
-
-  if (initQueue?.overflowed || ws.readyState !== 1) {
-    initQueue?.detach()
-    return
-  }
-
-  // Admin defaults to tradeEnabled=true if no DB record exists, but respects explicit DB value of 0
-  // Non-admin: use DB value as-is (defaults to false when no row)
-  const isAdmin = userId === (adminUserId || -1)
-  const defaultTrade = isAdmin ? (hasDbRow ? dbTradeEnabled : true) : dbTradeEnabled
-  const replacedOld = !!existing
-  const bridgeEntry = { ws, generation:gen, lastSeen: Date.now(), tradeEnabled: defaultTrade, autoReasoningEnabled: schedulerAutoEnabled, lastPong: Date.now(), lastTradeMode: -1, marketState: null, marketStates: new Map(), _pingInterval: null, _connectTime: Date.now() }
-  bridges.set(userId, bridgeEntry)
-  ws._userId = userId
-  console.log(`[BridgeWS] bridge connected user=${userId} role=${user?.role || 'unknown'} plan=${user?.plan || 'unknown'} replacedOld=${replacedOld}`)
-  broadcastAdminEvent('bridge', 'connected', {
-    user_id:Number(userId),
-    connected:true,
-    alive:true,
-    trade_enabled:Boolean(defaultTrade),
-    auto_reasoning_enabled:Boolean(schedulerAutoEnabled),
-  }, { scopes:['overview', 'users', 'ai-operations', 'risk-audit'] })
-  // Persist connection status to DB
-  try {
-    await queryRun(
-      `INSERT INTO bridge_connection_status (user_id, connected, connected_at, last_close_code, last_close_reason, last_error, updated_at)
-       VALUES (?, 1, NOW(), NULL, NULL, NULL, NOW())
-       ON DUPLICATE KEY UPDATE connected=1, connected_at=NOW(), last_close_code=NULL, last_close_reason=NULL, last_error=NULL, updated_at=NOW()`,
-      [userId]
-    )
-  } catch (e) { console.error(`[BridgeWS] Failed to persist connect status user=${userId}:`, e.message) }
-
-  // Notify browsers with the current user-owned subscription state.
-  sendToBrowsers(userId, { type: 'hb', mt5_connected: true, mt5_alive: true,
-    platform:'mt5', trade_enabled: defaultTrade,
-    auto_reasoning_enabled: schedulerAutoEnabled, trade_mode: -1 })
-
-  // A bridge reconnecting during the weekend risk window must immediately
-  // reconcile any system-owned positions left from the Friday session.
-  import('./jobs/weekly-system-flatten.js')
-    .then(({ triggerWeeklySystemFlattenForUser }) => triggerWeeklySystemFlattenForUser(userId))
-    .catch(e => console.error(`[WeeklyFlatten] Reconnect trigger failed user=${userId}:`, e.message))
-
-  // Restore automatic analysis only when a subscription explicitly enables it.
-  if (process.env.DEBUG_BRIDGE_WS === '1') {
-    console.log(`[BridgeWS] _initBridge user ${userId}: autoScheduler=${schedulerAutoEnabled} hasDbRow=${hasDbRow}`)
-  }
-  if (schedulerAutoEnabled) {
-    try {
-      const ai = await import('./routes/ai/index.js')
-      if (_bridgeInitGen.get(userId) !== gen) { abortStaleInit(); return }
-      await ai.stopAutoScheduler(userId)
-      await ai.startAutoScheduler(userId)
-      // Sync Redis subscription
-      const restoredCfg = await ai.getAutoConfig(null, userId)
-      if (restoredCfg?.enabled) {
-        await ai.syncUserRedisSubscription(userId, restoredCfg.prompt_type_id, restoredCfg.selected_symbols || [], true)
-        await ai.reconcileAutoSchedulers()
-      }
-      console.log(`[BridgeWS] Auto-reasoning restored for user ${userId}`)
-      sendToBrowsers(userId, { type: 'auto_state', enabled: true, runtime_subscribed: true, reason: 'bridge_connected' })
-    } catch (e) {
-      console.error(`[BridgeWS] Failed to restore auto-reasoning for user ${userId}:`, e.message)
-    }
-  }
-
-  // Server-side ping every 15s — if bridge doesn't reply within 45s, close
-  bridgeEntry._pingInterval = setInterval(() => {
-    const bridge = bridges.get(userId)
-    if (!bridge || bridge.ws !== ws) { clearInterval(bridgeEntry._pingInterval); return }
-    // Check last activity (any message or pong)
-    const lastActivity = Math.max(bridge.lastPong || 0, bridge.lastSeen || 0, bridge.lastMessageAt || 0)
-    if (Date.now() - lastActivity > 45000) {
-      const lastPongAge = bridge.lastPong ? Math.round((Date.now() - bridge.lastPong) / 1000) : '?'
-      const lastSeenAge = bridge.lastSeen ? Math.round((Date.now() - bridge.lastSeen) / 1000) : '?'
-      console.log(`[BridgeWS] ping timeout user=${userId} lastPongAge=${lastPongAge}s lastSeenAge=${lastSeenAge}s readyState=${ws.readyState}`)
-      try { ws.close(4003, 'Ping timeout') } catch (e) {
-        console.error(`[BridgeWS] ping timeout close failed user=${userId} error=${e.message}`)
-      }
-      clearInterval(bridgeEntry._pingInterval)
-      return
-    }
-    // Send both protocol-level ping and application-level ping
-    try { ws.ping() } catch {}
-    try { ws.send(JSON.stringify({ type: 'ping', ts: Date.now() })) } catch {}
-  }, 15000)
-
-  ws.on('pong', () => {
-    const bridge = bridges.get(userId)
-    if (bridge) { bridge.lastSeen = Date.now(); bridge.lastPong = Date.now() }
-  })
-
-  const onBridgeMessage = (data) => {
-    let msg
-    try { msg = JSON.parse(data) } catch(e) { return }
-
-    const bridge = bridges.get(userId)
-    if (bridge) {
-      bridge.lastSeen = Date.now()
-      bridge.lastMessageAt = Date.now()
-      bridge._lastMessageType = msg.type || '?'
-    }
-
-    // Regular status write (throttled)
-    if (bridge && (!bridge._lastDbWrite || Date.now() - bridge._lastDbWrite > 60000)) {
-      bridge._lastDbWrite = Date.now()
-      queryRun('UPDATE users SET bridge_heartbeat = NOW() WHERE id = ?', [userId]).catch(() => {})
-      const hb = bridge._clientHeartbeat || {}
-      queryRun(
-        `UPDATE bridge_connection_status SET last_seen_at=NOW(), last_message_type=?, client_version=?, mt5_collect_timeout_count=?, updated_at=NOW() WHERE user_id=?`,
-        [msg.type || '?', hb.client_version || null, hb.mt5_collect_timeout_count || 0, userId]
-      ).catch(() => {})
-    }
-
-    // Heartbeat time write (independent throttle)
-    const isHeartbeat = msg.type === 'hb' || msg.type === 'pong'
-    if (bridge && isHeartbeat && (!bridge._lastPongDbWrite || Date.now() - bridge._lastPongDbWrite > 60000)) {
-      bridge._lastPongDbWrite = Date.now()
-      queryRun(
-        `UPDATE bridge_connection_status SET last_pong_at=NOW(), updated_at=NOW() WHERE user_id=?`,
-        [userId]
-      ).catch(() => {})
-    }
-
-    // Store client heartbeat data
-    if (msg.type === 'hb' && bridge) {
-      bridge._clientHeartbeat = {
-        ts: msg.ts,
-        client_version: msg.client_version,
-        platform:['mt4', 'mt5'].includes(String(msg.platform || '').toLowerCase())
-          ? String(msg.platform).toLowerCase() : 'mt5',
-        mt5_collect_timeout_count: msg.mt5_collect_timeout_count || 0,
-        last_data_sent_age_sec: msg.last_data_sent_age_sec ?? -1,
-        last_quote_time: msg.last_quote_time || null,
-        timezone_offset_minutes: msg.timezone_offset_minutes ?? null,
-        clock_status: msg.clock_status || 'unknown',
-        clock_residual_ms: msg.clock_residual_ms ?? null,
-        receivedAt: Date.now(),
-      }
-      applyBridgeMarketState(bridge, msg, userId)
-      broadcastAdminEvent('bridge', 'heartbeat', {
-        user_id:Number(userId),
-        connected:true,
-        alive:Boolean(bridge.ws?.readyState === 1 && Date.now() - bridge.lastSeen < 20_000),
-        platform:bridge._clientHeartbeat?.platform || 'mt5',
-        last_seen_at_utc_msc:bridge.lastSeen || null,
-        mt5_time:bridge.mt5TimeStr || msg.last_quote_time || null,
-        timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? msg.timezone_offset_minutes ?? null,
-        market_state:bridge.marketState?.state || null,
-        trade_mode:typeof bridge.lastTradeMode === 'number' ? bridge.lastTradeMode : -1,
-      }, {
-        scopes:['overview', 'users', 'ai-operations', 'risk-audit'],
-        refresh:false,
-        throttleKey:`admin-bridge-heartbeat:${userId}`,
-        minIntervalMs:5000,
-      })
-    }
-
-    if (msg.type === 'data') {
-      if (bridge && msg.quote) {
-        bridge.timezoneOffsetMinutes = msg.quote.timezone_offset_minutes ?? bridge.timezoneOffsetMinutes ?? null
-        bridge.clockStatus = msg.quote.clock_status || bridge.clockStatus || 'unknown'
-        bridge.clockResidualMs = msg.quote.clock_residual_ms ?? bridge.clockResidualMs ?? null
-        bridge.brokerServer = msg.account?.server || bridge.brokerServer || null
-        bridge.accountLogin = msg.account?.login || bridge.accountLogin || null
-      }
-      const explicitMarketState = bridge && msg.quote ? applyBridgeMarketState(bridge, { symbol: msg.quote.symbol, ...msg.quote }, userId) : null
-      if (bridge && msg.quote && typeof msg.quote.time === 'string') {
-        const now = Date.now()
-        bridge.lastTickMs = now
-        const prev = bridge.mt5TimeStr
-        bridge.mt5TimeStr = msg.quote.time
-        if (!explicitMarketState && prev !== undefined) {
-          if (msg.quote.time !== prev) {
-            if (bridge.lastTradeMode !== 4) {
-              console.log(`[BridgeWS] User ${userId}: market OPENED (tick=${msg.quote.time}, was tradeMode=${bridge.lastTradeMode})`)
-            }
-            bridge.lastTradeMode = 4
-            bridge._sameTickStart = null
-          } else {
-            if (!bridge._sameTickStart) bridge._sameTickStart = now
-            if (now - bridge._sameTickStart > MARKET_SAME_TICK_CLOSED_MS) {
-              if (bridge.lastTradeMode !== 0) {
-                console.log(`[BridgeWS] User ${userId}: market CLOSED (tick stuck at ${msg.quote.time} for >5s, was tradeMode=${bridge.lastTradeMode})`)
-              }
-              bridge.lastTradeMode = 0
-            }
-          }
-        }
-      }
-      const tradeMode = bridge ? bridge.lastTradeMode : -1
-      sendToBrowsers(userId, { type: 'data', trade_mode: tradeMode, ...msg })
-      broadcastAdminEvent('market', 'tick', {
-        user_id:Number(userId),
-        platform:bridge?._clientHeartbeat?.platform || 'mt5',
-        timezone_offset_minutes:bridge?.timezoneOffsetMinutes ?? bridge?._clientHeartbeat?.timezone_offset_minutes ?? null,
-        trade_mode:tradeMode,
-        quote:msg.quote ? {
-          symbol:msg.quote.symbol || null,
-          bid:msg.quote.bid ?? null,
-          ask:msg.quote.ask ?? null,
-          time:msg.quote.time || null,
-          market_state:msg.quote.market_state || bridge?.marketState?.state || null,
-          market_reason:msg.quote.market_reason || bridge?.marketState?.detailReason || null,
-        } : null,
-      }, {
-        scopes:['ai-operations', 'risk-audit'],
-        refresh:false,
-        throttleKey:`admin-market-tick:${userId}`,
-        minIntervalMs:1000,
-      })
-
-      if (bridge && msg.positions) {
-        const curTickets = msg.positions.map(p => p.ticket).sort().join(',')
-        const prevTickets = bridge._lastPositionTickets || ''
-        if (curTickets !== prevTickets) {
-          bridge._lastPositionTickets = curTickets
-        }
-      }
-    } else if (msg.type === 'hb' || msg.type === 'pong') {
-      if (bridge) bridge.lastPong = Date.now()
-    } else if (msg.type === 'result') {
-      if (msg.command_id) {
-        const pending = pendingCommands.get(msg.command_id)
-        if (pending && pending.userId === Number(userId) && pending.ws === ws
-          && pending.bridgeGeneration === Number(bridge?.generation || 0)) {
-          clearTimeout(pending.timer)
-          pendingCommands.delete(msg.command_id)
-          pending.resolve(msg.result)
-        }
-      }
-    }
-  }
-  ws.on('message', onBridgeMessage)
-  // Register then detach synchronously so no message can fall into an init gap.
-  for (const data of initQueue?.drain() || []) onBridgeMessage(data)
-
-  initComplete = true
-  try {
-    const syncResult = await sendBridgeCommand(userId, 'toggle_trade', { enable: defaultTrade }, 5000, { noFallback: true })
-    if (syncResult?.status !== 'success') {
-      console.warn(`[BridgeWS] Failed to synchronize trade state user=${userId}:`, syncResult?.message || syncResult?.error || 'unknown_error')
-    }
-  } catch (error) {
-    console.warn(`[BridgeWS] Trade state synchronization failed user=${userId}:`, error.message)
-  }
-  try {
-    const account = await sendBridgeCommand(userId, 'account', {}, 5000, { noFallback: true })
-    if (account?.status === 'success' && account.server && account.login !== undefined) {
-      const currentBridge = bridges.get(userId)
-      if (currentBridge?.ws === ws) {
-        currentBridge.brokerServer = account.server
-        currentBridge.accountLogin = account.login
-      }
-      const ai = await import('./routes/ai/index.js')
-      const identity = await ai.syncTradingAccountIdentity(userId, account)
-      if (currentBridge?.ws === ws) currentBridge.tradingAccountId = identity.accountId
-      if (identity.verified) {
-        queueAccountPerformanceSync(userId, identity.accountId, { recent:false, delayMs:250 })
-        queueIncompleteRiskSnapshotRefresh(userId, ai)
-      }
-      sendToBrowsers(userId, {
-        type: 'account_switched',
-        account: { id:identity.accountId, server:account.server, login:account.login },
-        switched: Boolean(identity.switched),
-        ownership_transferred: Boolean(identity.ownershipTransferred),
-        verified: Boolean(identity.verified),
-        anomaly_code: identity.anomalyCode || null,
-      })
-      for (const previousUserId of identity.previousOwnerUserIds || []) {
-        sendToBrowsers(previousUserId, {
-          type: 'account_transferred',
-          account: { server:account.server, login:account.login },
-          reason: 'new_trade_authorized_bridge_connected',
-        })
-        await ai.stopAutoScheduler(previousUserId).catch(() => {})
-        await ai.removeUserRuntimeAutoSubscription(previousUserId).catch(() => {})
-        const previousBridge = bridges.get(Number(previousUserId))
-        if (previousBridge?.ws?.readyState === 1) {
-          previousBridge.tradeEnabled = false
-          previousBridge.autoReasoningEnabled = false
-          try { await sendBridgeCommand(previousUserId, 'toggle_trade', { enable:false }, 2000, { noFallback:true }) } catch {}
-          try { previousBridge.ws.close(4004, 'MT5 account ownership transferred') } catch {}
-        }
-      }
-    } else {
-      console.warn(`[BridgeWS] Account identity synchronization skipped user=${userId}:`, account?.message || account?.error || 'identity_unavailable')
-    }
-  } catch (error) {
-    console.warn(`[BridgeWS] Account identity synchronization failed user=${userId}:`, error.message)
-  }
-}
-
 // ============ Helpers ============
+// Legacy Bridge 1.x handler removed; V3 is the only bridge transport.
 
 function validHistoryDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))
@@ -1694,14 +1129,9 @@ export function sendToAdminBrowsers(data) {
 
 export function disconnectUserBridgeConnections(userId, reason = 'Bridge session revoked') {
   const id = Number(userId)
-  const bridge = bridges.get(id)
-  if (bridge) {
-    if (bridge._pingInterval) clearInterval(bridge._pingInterval)
-    if (bridge._performanceSyncTimer) clearTimeout(bridge._performanceSyncTimer)
-    try { bridge.ws?.close(4002, reason) } catch {}
-    bridges.delete(id)
+  if (typeof bridgeV3Business?.disconnectUser === 'function') {
+    bridgeV3Business.disconnectUser(id, reason)
   }
-  bridgeV3Business?.disconnectUser(id, reason)
 }
 
 export function disconnectUserSockets(userId, reason = 'Session revoked') {
@@ -1779,6 +1209,51 @@ function notifyBridgeV3DataChanged(update = {}) {
   if (event) sendToBrowsers(Number(update.userId), event)
 }
 
+const MANUAL_AUTO_EXECUTE_DISCONNECTED = 'manual_auto_execute_request_disconnected'
+
+function browserSetForUser(userId) {
+  return browsers.get(userId) || browsers.get(Number(userId)) || null
+}
+
+export function isBrowserSocketRegistered(userId, ws) {
+  return ws?.readyState === 1 && Boolean(browserSetForUser(userId)?.has(ws))
+}
+
+export function createBrowserAutoExecuteGuard(userId, ws) {
+  const controller = new AbortController()
+  let disposed = false
+  const disconnected = () => Object.assign(
+    new Error(MANUAL_AUTO_EXECUTE_DISCONNECTED),
+    { code:MANUAL_AUTO_EXECUTE_DISCONNECTED },
+  )
+  const abort = () => {
+    if (!controller.signal.aborted) controller.abort(disconnected())
+  }
+  const assertConnected = () => {
+    if (controller.signal.aborted) {
+      throw controller.signal.reason instanceof Error ? controller.signal.reason : disconnected()
+    }
+    if (!isBrowserSocketRegistered(userId, ws)) {
+      abort()
+      throw controller.signal.reason
+    }
+    return true
+  }
+  ws.on?.('close', abort)
+  ws.on?.('error', abort)
+  if (!isBrowserSocketRegistered(userId, ws)) abort()
+  return {
+    signal:controller.signal,
+    assertConnected,
+    dispose() {
+      if (disposed) return
+      disposed = true
+      ws.off?.('close', abort)
+      ws.off?.('error', abort)
+    },
+  }
+}
+
 function sendToBrowsers(userId, data) {
   const set = browsers.get(userId)
   if (set) {
@@ -1823,6 +1298,8 @@ export function buildBrowserCommandResult(commandId, data = {}) {
 
 async function handleBrowserCommand(ws, userId, msg) {
   const { command_id, action, params = {} } = msg
+  const autoExecuteGuard = action === 'analyze' && params?.auto_execute === true
+    ? createBrowserAutoExecuteGuard(userId, ws) : null
   const reply = (data) => {
     if (ws.readyState === 1) {
       try { ws.send(JSON.stringify(buildBrowserCommandResult(command_id, data))) } catch (error) {
@@ -1968,11 +1445,10 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'open': {
         // Check trade send enabled
-        const openBridge = bridges.get(userId) || (isBridgeAlive(userId)
-          ? { ws:{ readyState:1 }, tradeEnabled:isTradeEnabled(userId) }
-          : null)
-        if (!openBridge || openBridge.ws?.readyState !== 1 || openBridge.tradeEnabled === false) {
-          result = { status: 'rejected', message: !openBridge || openBridge.ws?.readyState !== 1 ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
+        const openConnected = isBridgeAlive(userId)
+        const openTradeEnabled = openConnected && isTradeEnabled(userId)
+        if (!openConnected || !openTradeEnabled) {
+          result = { status: 'rejected', message: !openConnected ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
           await ai.insertAudit(null, userId, 'manual_open', params.symbol, params, result, 'rejected')
           break
         }
@@ -1980,9 +1456,8 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'close': {
-        const clBridge = bridges.get(userId) || (isBridgeAlive(userId)
-          ? { ws:{ readyState:1 }, tradeEnabled:isTradeEnabled(userId) }
-          : null)
+        const closeConnected = isBridgeAlive(userId)
+        const closeTradeEnabled = closeConnected && isTradeEnabled(userId)
         const closeParams = {
           ticket:params.ticket,
           confirm:params.confirm === true,
@@ -1993,8 +1468,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           await ai.insertAudit(null, userId, 'manual_close', null, closeParams, result, 'rejected')
           break
         }
-        if (!clBridge || clBridge.ws?.readyState !== 1 || clBridge.tradeEnabled === false) {
-          result = { status: 'rejected', message: !clBridge || clBridge.ws?.readyState !== 1 ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
+        if (!closeConnected || !closeTradeEnabled) {
+          result = { status: 'rejected', message: !closeConnected ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
           await ai.insertAudit(null, userId, 'manual_close', null, closeParams, result, 'rejected')
           break
         }
@@ -2004,9 +1479,6 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'toggle_trade': {
         result = await ai.mt5Bridge(userId, 'toggle_trade', { enable: !!params.enable })
-        // Update local trade state
-        const bridge = bridges.get(userId)
-        if (bridge && result.status === 'success') bridge.tradeEnabled = !!params.enable
         // Persist to DB
         const newEnabled = !!params.enable
         try {
@@ -2089,7 +1561,10 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.mt5Bridge(dataUserId, 'diagnostics', routedParams(), { noFallback:true })
         break
       case 'analyze':
-        result = await ai.handleAnalyze(userId, params)
+        result = await ai.handleAnalyze(userId, params, autoExecuteGuard ? {
+          abortSignal:autoExecuteGuard.signal,
+          assertAutoExecute:autoExecuteGuard.assertConnected,
+        } : {})
         if (result?.signal) {
           result.signal = ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(result.signal, {
             requesterUserId: userId, requesterRole: user?.role || 'user',
@@ -2298,9 +1773,10 @@ async function handleBrowserCommand(ws, userId, msg) {
       }
       case 'execute': {
         // Check trade send enabled
-        const exBridge = bridges.get(userId)
-        if (!exBridge || exBridge.ws?.readyState !== 1 || exBridge.tradeEnabled === false) {
-          result = { status: 'rejected', message: !exBridge || exBridge.ws?.readyState !== 1 ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
+        const executeConnected = isBridgeAlive(userId)
+        const executeTradeEnabled = executeConnected && isTradeEnabled(userId)
+        if (!executeConnected || !executeTradeEnabled) {
+          result = { status: 'rejected', message: !executeConnected ? 'MT5 桥接未连接' : '交易发送已关闭，请先开启', details: {} }
           await ai.insertAudit(null, userId, 'ai_execute', null, params, result, 'rejected')
           break
         }
@@ -2408,8 +1884,7 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         // Check bridge connection when enabling
         if (newEnabled) {
-          const bridge = bridges.get(userId)
-          if (!bridge || bridge.ws?.readyState !== 1) {
+          if (!isBridgeAlive(userId)) {
             result = { status: 'error', message: '请先连接 MT5 桥接后再开启自动推理' }
             break
           }
@@ -2427,9 +1902,6 @@ async function handleBrowserCommand(ws, userId, msg) {
         for (const subscription of subscriptions) {
           await ai.updateSubscription(subscription.id, userId, user?.role || 'user', { execution_enabled: newEnabled })
         }
-        // Update in-memory bridge state
-        const bridgeAuto = bridges.get(userId)
-        if (bridgeAuto) bridgeAuto.autoReasoningEnabled = newEnabled
         // Sync Redis + reconcile
         const updatedCfg = await ai.getAutoConfig(null, userId)
         if (newEnabled) {
@@ -2624,8 +2096,8 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         const adminId = await getAdminUserId()
         let expUserId = adminId || userId
-        let bridgeOk = bridges.get(expUserId)?.ws?.readyState === 1
-        if (!bridgeOk && bridges.get(userId)?.ws?.readyState === 1) {
+        let bridgeOk = isBridgeAlive(expUserId)
+        if (!bridgeOk && isBridgeAlive(userId)) {
           expUserId = userId; bridgeOk = true
         }
         if (!bridgeOk) {
@@ -2838,20 +2310,19 @@ async function handleBrowserCommand(ws, userId, msg) {
           // 8. Connected bridges (WSS + trade mode info)
           (async () => {
             const list = []
-            for (const [uid, bridge] of bridges) {
-              if (bridge.ws?.readyState === 1) {
-                const info = await queryOne('SELECT nickname, email, plan FROM users WHERE id = ?', [uid])
-                const settings = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [uid])
-                list.push({
-                  userId: uid,
-                  nickname: info?.nickname || '',
-                  email: info?.email || '',
-                  plan: info?.plan || 'free',
-                  tradeEnabled: !!settings?.trade_send_enabled,
-                  autoReasoning: !!settings?.auto_reasoning_enabled,
-                  lastSeen: bridge.lastSeen
-                })
-              }
+            for (const connected of bridgeV3Business?.connectedUsers?.() || []) {
+              const uid = Number(connected.userId)
+              const info = await queryOne('SELECT nickname, email, plan FROM users WHERE id = ?', [uid])
+              const settings = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [uid])
+              list.push({
+                userId: uid,
+                nickname: info?.nickname || '',
+                email: info?.email || '',
+                plan: info?.plan || 'free',
+                tradeEnabled: !!settings?.trade_send_enabled,
+                autoReasoning: !!settings?.auto_reasoning_enabled,
+                lastSeen: connected.lastSeen || null,
+              })
             }
             return list
           })(),
@@ -3050,10 +2521,10 @@ async function handleBrowserCommand(ws, userId, msg) {
             }
           })(),
           (async () => {
-            const bridge = bridges.get(tid)
-            const connected = !!(bridge && bridge.ws?.readyState === 1)
-            const alive = connected && (Date.now() - bridge.lastSeen < 20000)
-            return { connected, alive, lastSeen: bridge?.lastSeen || null }
+            const connected = Boolean(bridgeV3Business?.hasConnectedTerminal(tid))
+            const runtime = (bridgeV3Business?.connectedUsers?.() || [])
+              .find(item => Number(item.userId) === Number(tid))
+            return { connected, alive:Boolean(runtime?.alive), lastSeen:runtime?.lastSeen || null }
           })()
         ])
 
@@ -3120,8 +2591,7 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         // Enrich page results with bridge/settings status (only current page)
         const enriched = await Promise.all(rows.map(async r => {
-          const bridge = bridges.get(r.id)
-          const connected = !!(bridge && bridge.ws?.readyState === 1)
+          const connected = Boolean(bridgeV3Business?.hasConnectedTerminal(Number(r.id)))
           const settings = await queryOne('SELECT trade_send_enabled, auto_reasoning_enabled FROM user_bridge_settings WHERE user_id = ?', [r.id])
           const scheduler = await queryOne(`SELECT id FROM strategy_subscriptions
             WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1 LIMIT 1`, [r.id])
@@ -3150,6 +2620,8 @@ async function handleBrowserCommand(ws, userId, msg) {
   } catch (err) {
     console.error('[BridgeWS] handleBrowserCommand error:', err.message)
     reply({ status: 'error', message: '操作失败，请重试' })
+  } finally {
+    autoExecuteGuard?.dispose()
   }
 }
 
@@ -3166,81 +2638,24 @@ export async function sendBridgeCommand(userId, action, params, timeoutMs = 5000
     if (riskLock) return riskLock
   }
 
-  if (bridgeV3Business?.supports(action) && bridgeV3Business.hasConnectedTerminal(numericUserId)) {
-    return bridgeV3Business.execute(numericUserId, action, params, { ...options, timeoutMs })
+  if (!bridgeV3Business?.hasConnectedTerminal?.(numericUserId)) {
+    return { status:'error', error:'Bridge not connected' }
   }
-  let bridge = bridges.get(numericUserId)
-
-  if (!bridge || bridge.ws.readyState !== 1) {
-    return { status: 'error', error: 'Bridge not connected' }
+  if (!bridgeV3Business?.supports(action)) {
+    return { status:'error', error:'bridge_v3_action_unsupported' }
   }
-  const initialGeneration = Number(bridge.generation || 0)
-  if (options.expectedGeneration != null
-    && initialGeneration !== Number(options.expectedGeneration)) {
-    return { status:'error', error:'Bridge generation changed before command write' }
-  }
-
-  const cmdId = `cmd_${Date.now()}_${++cmdCounter}`
-  if (typeof options.beforeWrite === 'function') {
-    try {
-      const allowed = await options.beforeWrite({
-        commandId:cmdId,
-        bridgeGeneration:initialGeneration,
-        userId:numericUserId,
-        action,
-      })
-      if (allowed === false) return { status:'error', error:'Bridge command write blocked' }
-    } catch (error) {
-      return { status:'error', error:`Bridge command write blocked: ${error.message}` }
-    }
-  }
-
-  // The durable guard above may await database I/O. Resolve the connection
-  // again immediately before ws.send so a reconnect cannot inherit a command
-  // prepared for an older Bridge generation.
-  bridge = bridges.get(numericUserId)
-  if (!bridge || bridge.ws.readyState !== 1) {
-    return { status:'error', error:'Bridge disconnected before command write' }
-  }
-  if (options.expectedGeneration != null
-    && Number(bridge.generation || 0) !== Number(options.expectedGeneration)) {
-    return { status:'error', error:'Bridge generation changed before command write' }
-  }
-
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      pendingCommands.delete(cmdId)
-      resolve({ status: 'error', error: 'Bridge command timeout' })
-    }, timeoutMs)
-
-    pendingCommands.set(cmdId, {
-      resolve, timer, userId:numericUserId,
-      action:String(action || '').slice(0, 64),
-      ws:bridge.ws, bridgeGeneration:Number(bridge.generation || 0),
-    })
-    try {
-      bridge.ws.send(JSON.stringify({ type: 'command', command_id: cmdId, action, params }))
-    } catch {
-      clearTimeout(timer)
-      pendingCommands.delete(cmdId)
-      resolve({ status: 'error', error: 'Bridge send failed' })
-    }
-  })
+  return bridgeV3Business.execute(numericUserId, action, params, { ...options, timeoutMs })
 }
 
 // Check if a user has an active bridge
 export function isBridgeAlive(userId) {
   const numericUserId = Number(userId)
-  const bridge = bridges.get(numericUserId)
-  return Boolean(bridge && bridge.ws.readyState === 1 && (Date.now() - bridge.lastSeen < 20000))
-    || Boolean(bridgeV3Business?.hasConnectedTerminal(numericUserId))
+  return Boolean(bridgeV3Business?.hasConnectedTerminal(numericUserId))
 }
 
 // Check if live trading is enabled for a user
 export function isTradeEnabled(userId) {
   const numericUserId = Number(userId)
-  const bridge = bridges.get(numericUserId)
-  if (bridge?.ws?.readyState === 1) return bridge.tradeEnabled !== false
   return bridgeV3Business?.isTradeEnabled(numericUserId) === true
 }
 
@@ -3303,22 +2718,16 @@ export function releaseBridgeMaintenanceLease(actorUserId, leaseId) {
 // desired state also survives bridge restarts.
 export async function applyBridgeRuntimeState(userId, { tradeEnabled, autoReasoningEnabled } = {}) {
   const numericUserId = Number(userId)
-  const bridge = bridges.get(numericUserId)
   const connected = isBridgeAlive(numericUserId)
   let tradeApplied = !connected
   let tradeError = null
 
-  if (bridge && typeof autoReasoningEnabled === 'boolean') {
-    bridge.autoReasoningEnabled = autoReasoningEnabled
-  }
   if (connected && typeof tradeEnabled === 'boolean') {
     // Disable locally before the command is acknowledged so no server-side
     // order can slip through while the bridge processes the switch.
-    if (!tradeEnabled && bridge) bridge.tradeEnabled = false
     const result = await sendBridgeCommand(numericUserId, 'toggle_trade', { enable:tradeEnabled }, 5000, { noFallback:true })
     tradeApplied = result?.status === 'success'
-    if (tradeApplied && bridge) bridge.tradeEnabled = tradeEnabled
-    else tradeError = result?.message || result?.error || 'bridge_runtime_sync_failed'
+    if (!tradeApplied) tradeError = result?.message || result?.error || 'bridge_runtime_sync_failed'
   }
 
   if (typeof autoReasoningEnabled === 'boolean') {
@@ -3334,8 +2743,8 @@ export async function applyBridgeRuntimeState(userId, { tradeEnabled, autoReason
       platform:bridgePlatform(numericUserId),
       trade_enabled:connected ? isTradeEnabled(numericUserId) : tradeEnabled,
       auto_reasoning_enabled:typeof autoReasoningEnabled === 'boolean'
-        ? autoReasoningEnabled : Boolean(bridge?.autoReasoningEnabled),
-      trade_mode:typeof bridge?.lastTradeMode === 'number' ? bridge.lastTradeMode : -1,
+        ? autoReasoningEnabled : undefined,
+      trade_mode:await getBridgeTradeMode(numericUserId),
     })
   }
   return { connected, trade_applied:tradeApplied, trade_error:tradeError }
@@ -3350,12 +2759,9 @@ const MARKET_TICK_STALE_MS = 120_000
 // Unified market state function
 export function getOwnBridgeMarketState(userId, symbol = null) {
   const numericUserId = Number(userId)
-  const legacy = bridges.get(numericUserId)
-  const bridge = legacy?.ws?.readyState === 1
-    ? legacy
-    : bridgeV3Business?.hasConnectedTerminal(numericUserId)
-      ? bridgeV3MarketStateForContext(numericUserId) || {}
-      : null
+  const bridge = bridgeV3Business?.hasConnectedTerminal(numericUserId)
+    ? bridgeV3MarketStateForContext(numericUserId) || {}
+    : null
   if (!bridge) {
     return {
       alive: false, isOpen: false, tradeMode: -1,
@@ -3406,12 +2812,9 @@ export function getOwnBridgeMarketState(userId, symbol = null) {
 // Returns 0=closed, 1=LONGONLY, 2=SHORTONLY, 3=CLOSEONLY, 4=FULL, -1=unknown
 export async function getBridgeTradeMode(userId) {
   const numericUserId = Number(userId)
-  const legacy = bridges.get(numericUserId)
-  const bridge = legacy?.ws?.readyState === 1
-    ? legacy
-    : bridgeV3Business?.hasConnectedTerminal(numericUserId)
-      ? bridgeV3MarketStateForContext(numericUserId)
-      : null
+  const bridge = bridgeV3Business?.hasConnectedTerminal(numericUserId)
+    ? bridgeV3MarketStateForContext(numericUserId)
+    : null
   if (!bridge) return -1
   // Use real-time trade mode detected from MT5 tick_time advancement
   if (typeof bridge.lastTradeMode === 'number') return bridge.lastTradeMode
@@ -3421,27 +2824,13 @@ export async function getBridgeTradeMode(userId) {
 
 // Get all connected bridges (for admin)
 export function getAllBridges() {
-  const byUser = new Map()
-  for (const [userId, bridge] of bridges) {
-    byUser.set(Number(userId), {
-      userId,
-      connected: bridge.ws.readyState === 1,
-      alive: Date.now() - bridge.lastSeen < 20000,
-      lastSeen: bridge.lastSeen,
-    })
-  }
-  for (const item of bridgeV3Business?.connectedUsers?.() || []) {
-    const existing = byUser.get(Number(item.userId))
-    byUser.set(Number(item.userId), existing
-      ? {
-          ...existing,
-          connected:existing.connected || item.connected,
-          alive:existing.alive || item.alive,
-          lastSeen:Math.max(Number(existing.lastSeen || 0), Number(item.lastSeen || 0)),
-        }
-      : item)
-  }
-  return Array.from(byUser.values())
+  return (bridgeV3Business?.connectedUsers?.() || []).map(item => ({
+    ...item,
+    userId:Number(item.userId),
+    connected:Boolean(item.connected),
+    alive:Boolean(item.alive),
+    lastSeen:Number(item.lastSeen || 0) || null,
+  }))
 }
 
 // Count live terminal connections rather than users. One user may connect an
@@ -3455,12 +2844,6 @@ export function getConnectedBridgeStats() {
     stats.total++
   }
 
-  const now = Date.now()
-  for (const bridge of bridges.values()) {
-    if (bridge.ws?.readyState === 1 && now - Number(bridge.lastSeen || 0) < 20_000) {
-      add(bridge._clientHeartbeat?.platform)
-    }
-  }
   for (const item of bridgeV3Business?.connectedUsers?.() || []) {
     for (const route of bridgeV3Business.connectedTerminals(Number(item.userId))) add(route.platform)
   }
@@ -3469,29 +2852,38 @@ export function getConnectedBridgeStats() {
 
 export function getBridgeDiagnostics() {
   const now = Date.now()
-  return Array.from(bridges.entries()).map(([userId, bridge]) => {
-    const hb = bridge._clientHeartbeat || {}
-    return {
-      userId,
-      readyState: bridge.ws?.readyState ?? -1,
-      connected: bridge.ws?.readyState === 1,
-      alive: !!(bridge.ws?.readyState === 1 && now - bridge.lastSeen < 20000),
-      connectedSeconds: bridge._connectTime ? Math.round((now - bridge._connectTime) / 1000) : 0,
-      lastSeenAgeSeconds: bridge.lastSeen ? Math.round((now - bridge.lastSeen) / 1000) : -1,
-      lastPongAgeSeconds: bridge.lastPong ? Math.round((now - bridge.lastPong) / 1000) : -1,
-      lastMessageType: bridge._lastMessageType || '?',
-      generation: Number(bridge.generation || 0),
-      tradeEnabled: !!bridge.tradeEnabled,
-      autoReasoningEnabled: !!bridge.autoReasoningEnabled,
-      lastTradeMode: typeof bridge.lastTradeMode === 'number' ? bridge.lastTradeMode : -1,
-      mt5TimeStr: bridge.mt5TimeStr || null,
-      lastTickAgeSeconds: bridge.lastTickMs ? Math.round((now - bridge.lastTickMs) / 1000) : -1,
-      clientVersion: hb.client_version || null,
-      mt5CollectTimeoutCount: hb.mt5_collect_timeout_count || 0,
-      lastDataSentAgeSec: hb.last_data_sent_age_sec ?? -1,
-      lastQuoteTime: hb.last_quote_time || null,
+  const diagnostics = []
+  for (const user of bridgeV3Business?.connectedUsers?.() || []) {
+    const userId = Number(user.userId)
+    for (const route of bridgeV3Business?.connectedTerminals(userId) || []) {
+      const state = bridgeV3MarketStateForContext(userId, null, route.terminal_instance_id) || {}
+      const lastSeen = Number(route.last_seen_at_utc_msc || user.lastSeen || 0)
+      const lastTick = Number(state.lastTickMs || state.receivedAt || 0)
+      diagnostics.push({
+        userId,
+        terminalInstanceId:route.terminal_instance_id,
+        platform:route.platform || null,
+        readyState:1,
+        connected:true,
+        alive:Boolean(user.alive),
+        connectedSeconds:0,
+        lastSeenAgeSeconds:lastSeen ? Math.max(0, Math.round((now - lastSeen) / 1000)) : -1,
+        lastPongAgeSeconds:-1,
+        lastMessageType:'v3',
+        generation:Number(route.connection_generation || user.generation || 0),
+        tradeEnabled:bridgeV3Business?.isTradeEnabled(userId) === true,
+        autoReasoningEnabled:null,
+        lastTradeMode:typeof state.lastTradeMode === 'number' ? state.lastTradeMode : -1,
+        mt5TimeStr:state.mt5TimeStr || null,
+        lastTickAgeSeconds:lastTick ? Math.max(0, Math.round((now - lastTick) / 1000)) : -1,
+        clientVersion:route.bridge_version || null,
+        mt5CollectTimeoutCount:0,
+        lastDataSentAgeSec:-1,
+        lastQuoteTime:state.mt5TimeStr || null,
+      })
     }
-  })
+  }
+  return diagnostics
 }
 
 export function getBridgeRuntimeDiagnostics(userId) {
@@ -3520,45 +2912,24 @@ export function getBridgeRuntimeDiagnostics(userId) {
       })),
     }
   }
-  const bridge = bridges.get(id)
-  const connected = Boolean(bridge?.ws?.readyState === 1 && Date.now() - Number(bridge.lastSeen || 0) < 20_000)
   return {
-    connected,
-    terminal_count:connected ? 1 : 0,
-    platform:connected ? bridge?._clientHeartbeat?.platform || 'mt5' : null,
-    bridge_version:bridge?._clientHeartbeat?.client_version || null,
+    connected:false,
+    terminal_count:0,
+    platform:null,
+    bridge_version:null,
     transport_latency_msc:null,
-    last_seen_at_utc_msc:Number(bridge?.lastSeen || 0) || null,
-    last_data_at_utc_msc:Number(bridge?.lastTickMs || 0) || null,
+    last_seen_at_utc_msc:null,
+    last_data_at_utc_msc:null,
     terminals:[],
   }
 }
 
 export function getBridgeGeneration(userId) {
-  const bridge = bridges.get(Number(userId))
-  if (bridge && bridge.ws?.readyState === 1) return Number(bridge.generation || 0)
   return bridgeV3Business?.getGeneration(Number(userId)) ?? null
 }
 
 export function getLatestBridgeMt5Clock() {
   let latest = null
-  for (const [userId, bridge] of bridges.entries()) {
-    const heartbeatQuoteTime = bridge._clientHeartbeat?.last_quote_time || null
-    const time = bridge.mt5TimeStr || heartbeatQuoteTime
-    const receivedAt = Number(bridge.lastTickMs || bridge._clientHeartbeat?.receivedAt || 0)
-    if (!time || bridge.ws?.readyState !== 1) continue
-    if (!latest || receivedAt > latest.received_at) {
-      latest = {
-        time:String(time),
-        user_id:Number(userId),
-        platform:bridge._clientHeartbeat?.platform || 'mt5',
-        received_at:receivedAt || null,
-        observed_at_utc_msc:bridge.observedAtUtcMsc ?? null,
-        timezone_offset_minutes:bridge.timezoneOffsetMinutes ?? bridge._clientHeartbeat?.timezone_offset_minutes ?? null,
-        clock_status:bridge.clockStatus || bridge._clientHeartbeat?.clock_status || 'unknown',
-      }
-    }
-  }
   for (const [userId, states] of bridgeV3MarketStates.entries()) {
     if (!bridgeV3Business?.hasConnectedTerminal(Number(userId))) continue
     for (const [terminalInstanceId, marketState] of states.entries()) {

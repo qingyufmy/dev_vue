@@ -9,7 +9,7 @@
     "v": { "const": 3 },
     "type": { "const": "error" },
     "error_code": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "details": { "type": ["object", "null"] }
+    "details": { "type": ["object", "array", "string", "number", "boolean", "null"] }
   },
-  "additionalProperties": false
+  "unevaluatedProperties": false
 }

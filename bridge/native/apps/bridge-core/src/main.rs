@@ -5,11 +5,11 @@ mod mt5_terminal_discovery;
 mod observer_terminal;
 
 use bridge_foundation::{
-    CliMode, DEFAULT_PROFILE_ID, HealthCheckOptions, MT5_WORKER_RELATIVE_PATH,
-    PYTHON_RELATIVE_PATH, StartupReadyOptions, default_data_directory, default_root_data_directory,
-    list_observer_profiles, parse_cli, profile_instance_id, read_runtime_status_snapshot,
-    resolve_installed_root, resolve_profile_paths, run_health_check, write_runtime_status_snapshot,
-    write_startup_ready_signal,
+    CliMode, DEFAULT_PROFILE_ID, HealthCheckOptions, MAX_OBSERVER_PROFILES,
+    MT5_WORKER_RELATIVE_PATH, PYTHON_RELATIVE_PATH, StartupReadyOptions, default_data_directory,
+    default_root_data_directory, list_observer_profiles, parse_cli, profile_instance_id,
+    read_runtime_status_snapshot, resolve_installed_root, resolve_profile_paths, run_health_check,
+    write_runtime_status_snapshot, write_startup_ready_signal,
 };
 use bridge_local_control::{
     EndpointSettingsSelection, LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction,
@@ -2989,6 +2989,9 @@ async fn configure_observer_profile(
             "bridge_observer_profile_not_found"
         });
     }
+    if create && profiles.len() >= MAX_OBSERVER_PROFILES {
+        return rejected("bridge_observer_profile_limit_exceeded");
+    }
     let resolved = match observer_terminal::resolve_observer_terminal(
         &observer.platform,
         std::path::Path::new(&observer.terminal_directory),
@@ -4228,27 +4231,28 @@ fn runtime_status_fingerprint(snapshot: &NativeRuntimeStatusSnapshot) -> String 
         .iter()
         .map(|terminal| {
             format!(
-                "{}:{}:{}:{}:{}:{}:{}",
+                "{}:{}:{}:{}:{}:{}:{}:{}:{}",
                 terminal.terminal_instance_id,
                 terminal.state,
                 terminal.worker_state,
                 terminal.collector_state,
                 terminal.data_ready,
-                terminal.worker_consecutive_failures,
-                terminal.error_code.as_deref().unwrap_or("")
+                terminal.error_code.as_deref().unwrap_or(""),
+                terminal.history_state,
+                terminal.history_error_code.as_deref().unwrap_or(""),
+                terminal.mt4_expert_restart_required,
             )
         })
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}",
         snapshot.phase,
         snapshot.server_state,
         snapshot.server_error_code.as_deref().unwrap_or(""),
         terminals,
         snapshot.reconciliation.pending,
         snapshot.reconciliation.error_codes.join(","),
-        snapshot.reconciliation.consecutive_failures,
         snapshot
             .reconciliation
             .fatal_error_code
@@ -4263,14 +4267,43 @@ fn log_runtime_status(logger: &BridgeLogger, snapshot: &NativeRuntimeStatusSnaps
         .iter()
         .filter(|terminal| terminal.data_ready)
         .count();
+    let terminal_states = runtime_error_summary(
+        snapshot
+            .terminals
+            .iter()
+            .map(|terminal| terminal.state.as_str()),
+    );
+    let history_states = runtime_error_summary(
+        snapshot
+            .terminals
+            .iter()
+            .map(|terminal| terminal.history_state.as_str()),
+    );
+    let terminal_errors = runtime_error_summary(
+        snapshot
+            .terminals
+            .iter()
+            .filter_map(|terminal| terminal.error_code.as_deref()),
+    );
+    let history_errors = runtime_error_summary(
+        snapshot
+            .terminals
+            .iter()
+            .filter_map(|terminal| terminal.history_error_code.as_deref()),
+    );
     let message = format!(
-        "phase={} server={} terminals={} ready={} reconciliation_pending={} server_error={} reconciliation_errors={}",
+        "profile={} phase={} server={} terminals={} ready={} terminal_states={} history_states={} reconciliation_pending={} server_error={} terminal_errors={} history_errors={} reconciliation_errors={}",
+        snapshot.profile_id,
         snapshot.phase,
         snapshot.server_state,
         snapshot.terminals.len(),
         ready,
+        terminal_states,
+        history_states,
         snapshot.reconciliation.pending,
         snapshot.server_error_code.as_deref().unwrap_or("none"),
+        terminal_errors,
+        history_errors,
         if snapshot.reconciliation.error_codes.is_empty() {
             "none".to_owned()
         } else {
@@ -4283,6 +4316,23 @@ fn log_runtime_status(logger: &BridgeLogger, snapshot: &NativeRuntimeStatusSnaps
         logger.warning("native_runtime_status_changed", Some(&message));
     } else {
         logger.info("native_runtime_status_changed", Some(&message));
+    }
+}
+
+fn runtime_error_summary<'a, I>(codes: I) -> String
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut unique = codes
+        .filter(|code| !code.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    unique.sort();
+    unique.dedup();
+    if unique.is_empty() {
+        "none".to_owned()
+    } else {
+        unique.join(",")
     }
 }
 
@@ -4387,6 +4437,7 @@ mod tests {
     use bridge_contract::{AccountRef, DataDeltaMessage};
     use bridge_security_win::BridgeCredential;
     use bridge_transport::load_endpoint_settings;
+    use liangjian_bridge_core::NativeTerminalRuntimeStatus;
 
     #[tokio::test]
     async fn pairing_retry_allows_only_the_latest_attempt_to_commit() {
@@ -4411,6 +4462,58 @@ mod tests {
         attempts.invalidate().await;
         assert!(!attempts.is_current(third));
         assert_eq!(attempts.complete_current(third, || "stale").await, None);
+    }
+
+    #[test]
+    fn runtime_status_fingerprint_tracks_history_errors_but_not_failure_counters() {
+        let mut snapshot = NativeRuntimeStatusSnapshot::inactive(
+            "source-1",
+            VERSION,
+            1_800_000_000_000,
+            "degraded",
+            "reconnecting",
+            None,
+        )
+        .expect("runtime snapshot");
+        snapshot.terminals.push(NativeTerminalRuntimeStatus {
+            terminal_instance_id: "mt5_source_terminal".to_owned(),
+            platform: "mt5".to_owned(),
+            connection_epoch: 1,
+            state: "degraded".to_owned(),
+            worker_state: "restarting".to_owned(),
+            collector_state: "retrying".to_owned(),
+            data_ready: false,
+            worker_consecutive_failures: 1,
+            collector_consecutive_failures: 2,
+            last_success_at_utc_msc: None,
+            error_code: Some("worker_process_exit".to_owned()),
+            history_state: "retrying".to_owned(),
+            history_consecutive_failures: 1,
+            history_last_success_at_utc_msc: None,
+            history_error_code: Some("history_sync_failed".to_owned()),
+            mt4_expert_restart_required: false,
+        });
+        let baseline = runtime_status_fingerprint(&snapshot);
+        snapshot.terminals[0].worker_consecutive_failures = 7;
+        snapshot.terminals[0].collector_consecutive_failures = 8;
+        snapshot.terminals[0].history_consecutive_failures = 9;
+        snapshot.reconciliation.consecutive_failures = 10;
+        assert_eq!(runtime_status_fingerprint(&snapshot), baseline);
+
+        snapshot.terminals[0].history_error_code = Some("history_cursor_invalid".to_owned());
+        assert_ne!(runtime_status_fingerprint(&snapshot), baseline);
+        snapshot.terminals[0].history_error_code = Some("history_sync_failed".to_owned());
+        snapshot.terminals[0].history_state = "ready".to_owned();
+        assert_ne!(runtime_status_fingerprint(&snapshot), baseline);
+    }
+
+    #[test]
+    fn runtime_error_summary_is_stable_and_redacted_to_codes() {
+        assert_eq!(
+            runtime_error_summary(["worker_b", "worker_a", "worker_b", ""].into_iter()),
+            "worker_a,worker_b"
+        );
+        assert_eq!(runtime_error_summary([""].into_iter()), "none");
     }
 
     #[test]

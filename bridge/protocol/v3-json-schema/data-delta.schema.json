@@ -7,7 +7,7 @@
   "required": [
     "v", "type", "message_id", "sent_at_utc_msc", "terminal_instance_id",
     "account_ref", "connection_epoch", "stream", "revision", "base_revision",
-    "observed_at_utc_msc", "source_time_msc", "upserts", "deletes"
+    "observed_at_utc_msc", "source_time_msc", "full_snapshot", "upserts", "deletes"
   ],
   "properties": {
     "v": { "const": 3 },
@@ -29,8 +29,24 @@
     "observed_at_utc_msc": { "type": "integer", "minimum": 1 },
     "source_time_msc": { "type": ["integer", "null"], "minimum": 0 },
     "full_snapshot": { "type": "boolean" },
-    "upserts": { "type": "array", "maxItems": 10000 },
-    "deletes": { "type": "array", "items": { "type": ["string", "integer"] }, "maxItems": 10000 }
+    "upserts": { "type": "array", "items": { "type": "object" }, "maxItems": 10000 },
+    "deletes": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "type": "string", "minLength": 1, "maxLength": 64 },
+          { "type": "integer", "minimum": 0 }
+        ]
+      },
+      "maxItems": 10000
+    }
   },
-  "additionalProperties": false
+  "if": { "properties": { "full_snapshot": { "const": true } }, "required": ["full_snapshot"] },
+  "then": {
+    "properties": {
+      "base_revision": { "const": 0 },
+      "deletes": { "maxItems": 0 }
+    }
+  },
+  "unevaluatedProperties": false
 }

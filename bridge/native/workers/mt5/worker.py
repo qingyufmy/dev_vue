@@ -32,6 +32,10 @@ TERMINAL_SESSION_FATAL_ERRORS = frozenset({
     "mt5_account_unavailable",
     "mt5_terminal_disconnected",
 })
+# A single terminal-session read can fail while MT5 is reconnecting.  Keep the
+# IPC session alive for a small bounded number of consecutive failures so the
+# supervisor does not churn the worker on every transient disconnect.
+TERMINAL_SESSION_FAILURE_THRESHOLD = 3
 TERMINAL_LOGIN_WAIT_SECONDS = 30.0
 TERMINAL_LOGIN_POLL_SECONDS = 0.5
 RATE_TIMEFRAMES = frozenset({
@@ -61,6 +65,30 @@ def _report_unexpected_exception(stage: str, error: BaseException) -> None:
             "event": "mt5_worker_unexpected_exception",
             "stage": stage,
             "exception_type": type(error).__name__,
+        }
+        mode = "w" if target.is_file() and target.stat().st_size >= MAX_DIAGNOSTIC_BYTES else "a"
+        with target.open(mode, encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(record, ensure_ascii=True, separators=(",", ":")) + "\n")
+    except (OSError, TypeError, ValueError):
+        return
+
+
+def _report_terminal_session_failure(error_code: str, consecutive_failures: int) -> None:
+    """Persist one redacted record when terminal-session recovery is exhausted."""
+    if error_code not in TERMINAL_SESSION_FATAL_ERRORS:
+        return
+    path = os.environ.get(DIAGNOSTIC_PATH_ENV, "").strip()
+    if not path:
+        return
+    try:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "observed_at_utc_msc": int(time.time() * 1000),
+            "event": "mt5_worker_terminal_session_restart",
+            "stage": "worker_request",
+            "error_code": error_code,
+            "consecutive_failures": int(consecutive_failures),
         }
         mode = "w" if target.is_file() and target.stat().st_size >= MAX_DIAGNOSTIC_BYTES else "a"
         with target.open(mode, encoding="utf-8", newline="\n") as stream:
@@ -1483,6 +1511,10 @@ class Mt5Worker:
         self.adapter = adapter
         self.route = route
         self.restart_error_code: str | None = None
+        self.consecutive_terminal_failures = 0
+        self._request_terminal_failure = False
+        self._request_failure_recorded = False
+        self._restart_diagnostic_reported = False
         self.trade = Mt5TradeExecutor(
             adapter.mt5,
             route,
@@ -1499,11 +1531,38 @@ class Mt5Worker:
             raise
 
     def _record_restart_error(self, error_code: str) -> None:
-        if error_code in TERMINAL_SESSION_FATAL_ERRORS:
+        if error_code not in TERMINAL_SESSION_FATAL_ERRORS:
+            return
+        self._request_terminal_failure = True
+        # An identity check can be reported both through the trade callback and
+        # the outer WorkerError handler.  Count one terminal fault per request,
+        # not one fault per stack frame.
+        if self._request_failure_recorded:
+            return
+        self._request_failure_recorded = True
+        self.consecutive_terminal_failures = min(
+            self.consecutive_terminal_failures + 1,
+            TERMINAL_SESSION_FAILURE_THRESHOLD,
+        )
+        if self.consecutive_terminal_failures >= TERMINAL_SESSION_FAILURE_THRESHOLD:
             self.restart_error_code = error_code
+            if not self._restart_diagnostic_reported:
+                _report_terminal_session_failure(
+                    error_code, self.consecutive_terminal_failures
+                )
+                self._restart_diagnostic_reported = True
+
+    def _complete_successful_request(self, response: dict[str, Any]) -> dict[str, Any]:
+        if not self._request_terminal_failure:
+            self.consecutive_terminal_failures = 0
+            self.restart_error_code = None
+            self._restart_diagnostic_reported = False
+        return response
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         request_id = str(request.get("request_id") or "")
+        self._request_terminal_failure = False
+        self._request_failure_recorded = False
         try:
             self._validate_request(request)
             operation = request["operation"]
@@ -1519,9 +1578,9 @@ class Mt5Worker:
                         or len(set(streams)) != len(streams)
                         or any(item not in {"account", "positions", "orders"} for item in streams)):
                     raise WorkerError("worker_snapshot_streams_invalid")
-                return self._response(request_id, "snapshot", {
+                return self._complete_successful_request(self._response(request_id, "snapshot", {
                     "snapshot": self.adapter.collect_snapshot(streams)
-                })
+                }))
             if operation == "quote":
                 payload = self._request_payload(body)
                 if set(payload) != {"symbol"}:
@@ -1529,7 +1588,9 @@ class Mt5Worker:
                 symbol = payload.get("symbol")
                 if not isinstance(symbol, str) or symbol.strip() != symbol or not symbol or len(symbol) > 64:
                     raise WorkerError("worker_quote_symbol_invalid")
-                return self._response(request_id, "quote", {"quote": self.adapter.quote(symbol)})
+                return self._complete_successful_request(
+                    self._response(request_id, "quote", {"quote": self.adapter.quote(symbol)})
+                )
             if operation == "history_sync":
                 payload = self._request_payload(body)
                 if set(payload) != {"cursor", "limit"} or not isinstance(payload.get("cursor"), dict):
@@ -1537,9 +1598,9 @@ class Mt5Worker:
                 cursor = payload["cursor"]
                 if set(cursor) != {"time_msc", "ticket"}:
                     raise WorkerError("worker_history_cursor_invalid")
-                return self._response(request_id, "history_batch", {
+                return self._complete_successful_request(self._response(request_id, "history_batch", {
                     "batch": self.adapter.history_sync(cursor, payload.get("limit"))
-                })
+                }))
             if operation == "data":
                 payload = self._request_payload(body)
                 if set(payload) != {"action", "params"} or not isinstance(payload.get("params"), dict):
@@ -1548,11 +1609,11 @@ class Mt5Worker:
                 if action not in {"rates", "symbols", "symbol_snapshot", "risk_snapshot",
                                   "performance_daily", "pending_order_state", "diagnostics"}:
                     raise WorkerError("worker_data_action_invalid")
-                return self._response(request_id, "data", {"data": {
+                return self._complete_successful_request(self._response(request_id, "data", {"data": {
                     "action": action,
                     "observed_at_utc_msc": self.adapter.clock.now_utc_msc(),
                     "payload": self.adapter.data(action, payload["params"]),
-                }})
+                }}))
             if operation in {"execute_command", "query_execution"}:
                 if set(body) != {"command"} or not isinstance(body.get("command"), dict):
                     raise WorkerError("worker_request_payload_invalid")
@@ -1560,7 +1621,9 @@ class Mt5Worker:
                 self._validate_command(request_id, operation, command)
                 self.adapter._ensure_identity()
                 result = self.trade.execute(command, read_only=operation == "query_execution")
-                return self._response(request_id, "command_result", {"result": result})
+                return self._complete_successful_request(
+                    self._response(request_id, "command_result", {"result": result})
+                )
             raise WorkerError("worker_operation_unsupported")
         except WorkerError as error:
             self._record_restart_error(error.code)

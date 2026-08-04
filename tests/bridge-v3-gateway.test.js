@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   BRIDGE_V3_CONNECTION_STALE_MS,
   BRIDGE_V3_ELIGIBILITY_RECHECK_MS,
+  BRIDGE_V3_INBOUND_QUEUE_MAX_BYTES,
+  BRIDGE_V3_INBOUND_QUEUE_MAX_MESSAGES,
+  BRIDGE_V3_TRANSPORT_PING_TIMEOUT_MS,
   BRIDGE_V3_WS_PATH,
   createBridgeV3Gateway,
 } from '../server/bridge-v3/gateway.js'
@@ -160,6 +163,35 @@ function heartbeat(sentAt = NOW) {
   }
 }
 
+function dataDelta(sequence, overrides = {}) {
+  return {
+    ...hello().terminals[0],
+    v:3,
+    type:'data_delta',
+    message_id:`msg_01JGATEWAY_DELTA_${sequence}`,
+    sent_at_utc_msc:NOW,
+    stream:'positions',
+    revision:sequence,
+    base_revision:sequence - 1,
+    observed_at_utc_msc:NOW,
+    source_time_msc:NOW,
+    full_snapshot:false,
+    upserts:[],
+    deletes:[],
+    ...overrides,
+  }
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 async function flush() {
   for (let index = 0; index < 12; index++) await Promise.resolve()
 }
@@ -175,6 +207,7 @@ function setup(overrides = {}) {
     disconnectTerminals:vi.fn().mockResolvedValue({ changes:1 }),
     applyDelta:vi.fn().mockResolvedValue({ status:'applied', expected_revision:2 }),
     createLedgerEntry:vi.fn().mockResolvedValue({ command:{ status:'queued' } }),
+    expireQueued:vi.fn().mockResolvedValue({ changes:0 }),
     markDispatched:vi.fn().mockResolvedValue({ status:'dispatched' }),
     markUncertain:vi.fn().mockResolvedValue({ command:{ status:'uncertain' } }),
     recordResult:vi.fn().mockImplementation(message => Promise.resolve({ command:{ result:message } })),
@@ -208,7 +241,9 @@ async function completeInitialSync(ws) {
       observed_at_utc_msc:NOW,
       source_time_msc:NOW,
       full_snapshot:true,
-      upserts:stream === 'account' ? [{ login:12345678 }] : [],
+      upserts:stream === 'account'
+        ? [{ login:12345678, server:'Broker-Demo' }]
+        : [],
       deletes:[],
     })))
     await flush()
@@ -275,6 +310,140 @@ describe('Bridge v3 websocket gateway', () => {
     expect(gateway.isTradeEnabled(42)).toBe(false)
   })
 
+  it('processes authenticated messages strictly in arrival order with one handler in flight', async () => {
+    const releases = []
+    const entered = []
+    let active = 0
+    let maximumActive = 0
+    const applyDelta = vi.fn(message => new Promise(resolve => {
+      entered.push(message.message_id)
+      active += 1
+      maximumActive = Math.max(maximumActive, active)
+      releases.push(() => {
+        active -= 1
+        resolve({ status:'applied', expected_revision:message.revision + 1 })
+      })
+    }))
+    const { gateway } = setup({ applyDelta })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    ws.emit('message', Buffer.from(JSON.stringify(dataDelta(1, { full_snapshot:true, base_revision:0 }))))
+    ws.emit('message', Buffer.from(JSON.stringify(dataDelta(2))))
+    await flush()
+
+    expect(applyDelta).toHaveBeenCalledTimes(1)
+    expect(maximumActive).toBe(1)
+    releases.shift()()
+    await vi.waitFor(() => expect(applyDelta).toHaveBeenCalledTimes(2))
+    expect(entered).toEqual(['msg_01JGATEWAY_DELTA_1', 'msg_01JGATEWAY_DELTA_2'])
+    expect(maximumActive).toBe(1)
+    releases.shift()()
+    await flush()
+  })
+
+  it('keeps authentication-queued messages ahead of messages arriving during hello setup', async () => {
+    const registration = deferred()
+    const entered = []
+    const { gateway } = setup({
+      registerTerminal:vi.fn(() => registration.promise),
+      applyDelta:vi.fn(async message => {
+        entered.push(message.message_id)
+        return { status:'applied', expected_revision:message.revision + 1 }
+      }),
+    })
+    const ws = fakeWs()
+    gateway.handleUpgrade({ url:`${BRIDGE_V3_WS_PATH}?ticket=ticket-value` }, { ws }, Buffer.alloc(0))
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    ws.emit('message', Buffer.from(JSON.stringify(dataDelta(1, { full_snapshot:true, base_revision:0 }))))
+    await flush()
+
+    ws.emit('message', Buffer.from(JSON.stringify(dataDelta(2))))
+    await flush()
+    expect(entered).toEqual([])
+
+    registration.resolve({ connected:true })
+    await vi.waitFor(() => expect(entered).toHaveLength(2))
+    expect(entered).toEqual(['msg_01JGATEWAY_DELTA_1', 'msg_01JGATEWAY_DELTA_2'])
+  })
+
+  it('closes once with 1013 when the authenticated message-count budget is exhausted', async () => {
+    const blocked = deferred()
+    const applyDelta = vi.fn(() => blocked.promise)
+    const { gateway } = setup({ applyDelta })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    ws.emit('message', Buffer.from(JSON.stringify(dataDelta(1, { full_snapshot:true, base_revision:0 }))))
+    await flush()
+    for (let sequence = 2; sequence <= BRIDGE_V3_INBOUND_QUEUE_MAX_MESSAGES + 1; sequence++) {
+      ws.emit('message', Buffer.from(JSON.stringify(dataDelta(sequence))))
+    }
+    await flush()
+
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'error', error_code:'bridge_inbound_queue_overflow',
+    })
+    expect(ws.close).toHaveBeenCalledTimes(1)
+    expect(ws.close).toHaveBeenCalledWith(1013, 'bridge_inbound_queue_overflow')
+    expect(applyDelta).toHaveBeenCalledTimes(1)
+    ws.emit('message', Buffer.from(JSON.stringify(dataDelta(999))))
+    expect(ws.close).toHaveBeenCalledTimes(1)
+    blocked.resolve({ status:'applied', expected_revision:2 })
+    await flush()
+    expect(applyDelta).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts the active message toward the authenticated byte budget', async () => {
+    const blocked = deferred()
+    const applyDelta = vi.fn(() => blocked.promise)
+    const { gateway } = setup({ applyDelta })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    const padding = 'x'.repeat(Math.ceil(BRIDGE_V3_INBOUND_QUEUE_MAX_BYTES / 3))
+    ws.emit('message', Buffer.from(JSON.stringify(dataDelta(1, {
+      full_snapshot:true, base_revision:0, padding,
+    }))))
+    await flush()
+    ws.emit('message', Buffer.from(JSON.stringify(dataDelta(2, { padding }))))
+    ws.emit('message', Buffer.from(JSON.stringify(dataDelta(3, { padding }))))
+    await flush()
+
+    expect(ws.close).toHaveBeenCalledWith(1013, 'bridge_inbound_queue_overflow')
+    expect(applyDelta).toHaveBeenCalledTimes(1)
+    blocked.resolve({ status:'applied', expected_revision:2 })
+    await flush()
+  })
+
+  it('uses socket backpressure before a legitimate native recovery batch reaches the hard limit', async () => {
+    const blocked = deferred()
+    const applyDelta = vi.fn()
+      .mockImplementationOnce(() => blocked.promise)
+      .mockResolvedValue({ status:'applied', expected_revision:2 })
+    const { gateway } = setup({ applyDelta })
+    const ws = await connect(gateway)
+    ws._socket = { pause:vi.fn(), resume:vi.fn() }
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    ws.emit('message', Buffer.from(JSON.stringify(dataDelta(1, { full_snapshot:true, base_revision:0 }))))
+    await flush()
+    for (let sequence = 2; sequence <= 200; sequence++) {
+      ws.emit('message', Buffer.from(JSON.stringify(dataDelta(sequence))))
+    }
+    await flush()
+
+    expect(ws._socket.pause).toHaveBeenCalledOnce()
+    expect(ws.close).not.toHaveBeenCalledWith(1013, 'bridge_inbound_queue_overflow')
+    blocked.resolve({ status:'applied', expected_revision:2 })
+    await vi.waitFor(() => expect(applyDelta).toHaveBeenCalledTimes(200))
+    expect(ws._socket.resume).toHaveBeenCalledOnce()
+  })
+
   it('rejects a new server session while the user has explicitly paused Bridge', async () => {
     const { gateway } = setup({
       queryOneFn:vi.fn().mockResolvedValue({
@@ -302,7 +471,29 @@ describe('Bridge v3 websocket gateway', () => {
       ws.emit('pong')
 
       expect(gateway.listConnectedTerminals(42)[0].transport_rtt_msc).toBe(23)
+      expect(ws.close).not.toHaveBeenCalled()
       ws.emit('close')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('closes and unregisters a connection whose transport ping has no pong', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    try {
+      const { gateway } = setup({ now:() => Date.now() })
+      const ws = await connect(gateway, { withPing:true })
+      ws.emit('message', Buffer.from(JSON.stringify(hello())))
+      await flush()
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(ws.ping).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(BRIDGE_V3_TRANSPORT_PING_TIMEOUT_MS + 10_000)
+
+      expect(ws.close).toHaveBeenCalledWith(1001, 'bridge_ping_timeout')
+      expect(gateway.listConnectedTerminals(42)).toEqual([])
+      expect(gateway.listConnectedUsers()).toEqual([])
     } finally {
       vi.useRealTimers()
     }
@@ -392,6 +583,116 @@ describe('Bridge v3 websocket gateway', () => {
     expect(queryOneFn).toHaveBeenCalledTimes(2)
     expect(ws.send.mock.calls).toHaveLength(sendsBeforeHeartbeat)
     expect(ws.close).not.toHaveBeenCalled()
+    expect(gateway.isTradeEnabled(42)).toBe(true)
+  })
+
+  it('closes and unregisters an observer connection when its source account changes', async () => {
+    let clock = NOW
+    const queryOneFn = vi.fn()
+      .mockResolvedValueOnce({
+        id:42, role:'user', plan:'pro', plan_source:'observer_source', token_version:3,
+        has_pro_access:1, trade_send_enabled:1,
+        observer_login_account:'12345678', observer_broker_server:'Broker-Demo',
+      })
+      .mockResolvedValueOnce({
+        id:42, role:'user', plan:'pro', plan_source:'observer_source', token_version:3,
+        has_pro_access:1, trade_send_enabled:1,
+        observer_login_account:'87654321', observer_broker_server:'Broker-Demo',
+      })
+    const { gateway, dependencies } = setup({ queryOneFn, now:() => clock })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    clock += BRIDGE_V3_ELIGIBILITY_RECHECK_MS
+    ws.emit('message', Buffer.from(JSON.stringify(heartbeat(clock))))
+    await flush()
+
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({
+      type:'error', error_code:'observer_source_binding_changed',
+    })
+    expect(ws.close).toHaveBeenCalledWith(4004, 'observer_source_binding_changed')
+    expect(gateway.listConnectedTerminals(42)).toEqual([])
+    expect(gateway.listConnectedUsers()).toEqual([])
+    expect(dependencies.disconnectTerminals).toHaveBeenCalledWith(
+      'session_01JGATEWAY01', 42, expect.objectContaining({ nowUtcMsc:clock }),
+    )
+  })
+
+  it('closes and unregisters an observer connection when its active source is unavailable', async () => {
+    let clock = NOW
+    const queryOneFn = vi.fn()
+      .mockResolvedValueOnce({
+        id:42, role:'user', plan:'pro', plan_source:'observer_source', token_version:3,
+        has_pro_access:1, trade_send_enabled:1,
+        observer_login_account:'12345678', observer_broker_server:'Broker-Demo',
+      })
+      .mockResolvedValueOnce({
+        id:42, role:'user', plan:'pro', plan_source:'observer_source', token_version:3,
+        has_pro_access:1, trade_send_enabled:1,
+        observer_login_account:null, observer_broker_server:null,
+      })
+    const { gateway } = setup({ queryOneFn, now:() => clock })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    clock += BRIDGE_V3_ELIGIBILITY_RECHECK_MS
+    ws.emit('message', Buffer.from(JSON.stringify(heartbeat(clock))))
+    await flush()
+
+    expect(ws.close).toHaveBeenCalledWith(4004, 'observer_source_binding_changed')
+    expect(gateway.listConnectedTerminals(42)).toEqual([])
+  })
+
+  it('synchronizes trade_send_enabled changes on an online connection', async () => {
+    let clock = NOW
+    const queryOneFn = vi.fn()
+      .mockResolvedValueOnce({
+        id:42, role:'user', plan:'pro', plan_source:'paid', token_version:3,
+        has_pro_access:1, trade_send_enabled:1,
+      })
+      .mockResolvedValueOnce({
+        id:42, role:'user', plan:'pro', plan_source:'paid', token_version:3,
+        has_pro_access:1, trade_send_enabled:0,
+      })
+    const { gateway } = setup({ queryOneFn, now:() => clock })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    expect(gateway.isTradeEnabled(42)).toBe(true)
+
+    clock += BRIDGE_V3_ELIGIBILITY_RECHECK_MS
+    ws.emit('message', Buffer.from(JSON.stringify(heartbeat(clock))))
+    await flush()
+
+    expect(gateway.isTradeEnabled(42)).toBe(false)
+    expect(ws.close).not.toHaveBeenCalled()
+  })
+
+  it('does not apply observer binding checks to an ordinary account', async () => {
+    let clock = NOW
+    const queryOneFn = vi.fn()
+      .mockResolvedValueOnce({
+        id:42, role:'user', plan:'pro', plan_source:'paid', token_version:3,
+        has_pro_access:1, trade_send_enabled:1,
+      })
+      .mockResolvedValueOnce({
+        id:42, role:'user', plan:'pro', plan_source:'paid', token_version:3,
+        has_pro_access:1, trade_send_enabled:1,
+        observer_login_account:'87654321', observer_broker_server:'Other-Broker',
+      })
+    const { gateway } = setup({ queryOneFn, now:() => clock })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    clock += BRIDGE_V3_ELIGIBILITY_RECHECK_MS
+    ws.emit('message', Buffer.from(JSON.stringify(heartbeat(clock))))
+    await flush()
+
+    expect(ws.close).not.toHaveBeenCalled()
+    expect(gateway.listConnectedTerminals(42)).toHaveLength(1)
     expect(gateway.isTradeEnabled(42)).toBe(true)
   })
 
@@ -569,7 +870,7 @@ describe('Bridge v3 websocket gateway', () => {
       observed_at_utc_msc:NOW,
       source_time_msc:NOW,
       full_snapshot:false,
-      upserts:[{ login:'1001' }],
+      upserts:[{ login:'12345678', server:'Broker-Demo' }],
       deletes:[],
     })))
     await flush()
@@ -730,6 +1031,8 @@ describe('Bridge v3 websocket gateway', () => {
 
     expect(gateway.isTradeEnabled(42)).toBe(false)
     expect(ws.close).toHaveBeenCalledWith(4004, 'bridge_account_ownership_transferred')
+    expect(gateway.listConnectedTerminals(42)).toEqual([])
+    expect(gateway.listConnectedUsers()).toEqual([])
   })
 
   it('keeps commands queued until all initial snapshots are acknowledged', async () => {
@@ -802,6 +1105,44 @@ describe('Bridge v3 websocket gateway', () => {
       status:'applied',
     })
     expect(dependencies.markUncertain).not.toHaveBeenCalled()
+  })
+
+  it('uses the recovered ledger epoch and deadline for the websocket envelope', async () => {
+    const recovered = command({
+      connection_epoch:8, issued_at_utc_msc:NOW + 1_000, deadline_utc_msc:NOW + 20_000,
+    })
+    const { gateway, dependencies } = setup({
+      createLedgerEntry:vi.fn().mockResolvedValue({ command:{
+        status:'queued', connection_epoch:8, deadline_at_utc_msc:NOW + 20_000,
+      } }),
+    })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify({ ...hello(), terminals:[{
+      ...hello().terminals[0], connection_epoch:8,
+    }] })))
+    await flush()
+    for (const [index, stream] of ['account', 'positions', 'orders'].entries()) {
+      ws.emit('message', Buffer.from(JSON.stringify({
+        ...hello().terminals[0], connection_epoch:8,
+        v:3, type:'data_delta', message_id:`msg_01JGATEWAY_RECOVERED_${stream}`,
+        sent_at_utc_msc:NOW, stream, revision:index + 1, base_revision:0,
+        observed_at_utc_msc:NOW, source_time_msc:NOW,
+        full_snapshot:true,
+        upserts:stream === 'account' ? [{ login:12345678, server:'Broker-Demo' }] : [],
+        deletes:[],
+      })))
+      await flush()
+    }
+
+    const pending = gateway.sendCommand(42, recovered)
+    await flush()
+    expect(dependencies.markDispatched).toHaveBeenCalledWith(recovered.command_id,
+      expect.objectContaining({ connectionEpoch:8 }))
+    const sent = ws.send.mock.calls.map(([payload]) => JSON.parse(payload))
+      .find(payload => payload.type === 'command')
+    expect(sent).toMatchObject({ connection_epoch:8, deadline_utc_msc:NOW + 20_000 })
+    ws.emit('message', Buffer.from(JSON.stringify({ ...result(), connection_epoch:8 })))
+    await expect(pending).resolves.toMatchObject({ status:'succeeded' })
   })
 
   it('blocks new commands before ledger admission while a maintenance lease is active', async () => {
@@ -879,6 +1220,20 @@ describe('Bridge v3 websocket gateway', () => {
       acquired:false, code:'bridge_maintenance_commands_in_flight',
     })
     expect(gateway.maintenanceByTerminal.size).toBe(0)
+  })
+
+  it('expires durable queued commands before checking maintenance capacity', async () => {
+    const order = []
+    const { gateway, dependencies } = setup({
+      expireQueued:vi.fn(async () => { order.push('expire'); return { changes:1 } }),
+      countOutstanding:vi.fn(async () => { order.push('count'); return 0 }),
+    })
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    await expect(gateway.acquireMaintenanceLease(maintenanceRequest())).resolves.toMatchObject({ acquired:true })
+    expect(order).toEqual(['expire', 'count'])
+    expect(dependencies.countOutstanding).toHaveBeenCalledWith(['terminal_01JGATEWAY1'], { nowUtcMsc:NOW })
   })
 
   it('fails closed when a lease names a terminal outside the authorized users', async () => {
@@ -1004,5 +1359,34 @@ describe('Bridge v3 websocket gateway', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('terminates explicitly when the socket drops after ledger dispatch commit', async () => {
+    let ws
+    const { gateway, dependencies } = setup({
+      markDispatched:vi.fn(async () => {
+        ws.readyState = 3
+        ws.emit('close')
+        return { status:'dispatched' }
+      }),
+    })
+    ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+    await completeInitialSync(ws)
+
+    await expect(gateway.sendCommand(42, command())).resolves.toMatchObject({
+      status:'uncertain', command_id:'command_01JGATEWAY01',
+    })
+    expect(dependencies.markUncertain).toHaveBeenCalledWith('command_01JGATEWAY01',
+      expect.objectContaining({ reason:'bridge_send_failed' }))
+
+    dependencies.createLedgerEntry.mockResolvedValueOnce({
+      command:{ status:'uncertain', result:{ status:'uncertain' } },
+    })
+    await expect(gateway.sendCommand(42, command({
+      connection_epoch:8, issued_at_utc_msc:NOW + 1_000, deadline_utc_msc:NOW + 20_000,
+    }))).resolves.toMatchObject({ status:'uncertain', duplicate:true })
+    expect(dependencies.markDispatched).toHaveBeenCalledOnce()
   })
 })

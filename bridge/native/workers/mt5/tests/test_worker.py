@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import math
 import sys
 import tempfile
@@ -201,8 +202,11 @@ class FakeMt5:
     def history_deals_get(self, *args, **kwargs):
         self.history_deal_queries.append((args, dict(kwargs)))
         position = kwargs.get("position")
-        if position is not None:
-            return tuple(item for item in self.history_deals if item.position_id == position)
+        ticket = kwargs.get("ticket")
+        if position is not None or ticket is not None:
+            return tuple(item for item in self.history_deals
+                         if (position is None or item.position_id == position)
+                         and (ticket is None or item.order == ticket))
         if len(args) == 2:
             start, end = args
             return tuple(item for item in self.history_deals
@@ -764,23 +768,97 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("mt5_login_mismatch", response["payload"]["error_code"])
         self.assertIsNone(self.worker.restart_error_code)
 
-    def test_terminal_session_loss_requests_a_supervised_worker_restart(self):
+    def test_single_terminal_session_loss_stays_in_worker_for_recovery(self):
         self.mt5.account_info = lambda: None
 
         response = self.worker.handle(self.request("collect_snapshot", {"streams": ["account"]}))
 
         self.assertEqual("error", response["outcome"])
         self.assertEqual("mt5_account_unavailable", response["payload"]["error_code"])
-        self.assertEqual("mt5_account_unavailable", self.worker.restart_error_code)
+        self.assertIsNone(self.worker.restart_error_code)
+        self.assertEqual(1, self.worker.consecutive_terminal_failures)
 
-    def test_disconnected_terminal_requests_a_supervised_worker_restart(self):
+    def test_single_disconnected_terminal_stays_in_worker_for_recovery(self):
         self.mt5.terminal_info = lambda: Terminal(False, True, False)
 
         response = self.worker.handle(self.request("collect_snapshot", {"streams": ["account"]}))
 
         self.assertEqual("error", response["outcome"])
         self.assertEqual("mt5_terminal_disconnected", response["payload"]["error_code"])
-        self.assertEqual("mt5_terminal_disconnected", self.worker.restart_error_code)
+        self.assertIsNone(self.worker.restart_error_code)
+        self.assertEqual(1, self.worker.consecutive_terminal_failures)
+
+    def test_sustained_terminal_session_loss_requests_a_supervised_worker_restart(self):
+        self.mt5.account_info = lambda: None
+
+        for index in range(2):
+            response = self.worker.handle(self.request(
+                "collect_snapshot", {"streams": ["account"]},
+                f"request_01JRESTARTFAIL{index}",
+            ))
+            self.assertEqual("error", response["outcome"])
+            self.assertIsNone(self.worker.restart_error_code)
+            self.assertEqual(index + 1, self.worker.consecutive_terminal_failures)
+
+        response = self.worker.handle(self.request(
+            "collect_snapshot", {"streams": ["account"]}, "request_01JRESTARTFAIL2"
+        ))
+        self.assertEqual("error", response["outcome"])
+        self.assertEqual("mt5_account_unavailable", self.worker.restart_error_code)
+        self.assertEqual(3, self.worker.consecutive_terminal_failures)
+
+    def test_successful_request_clears_terminal_session_failure_counter(self):
+        self.mt5.account_info = lambda: None
+        failed = self.worker.handle(self.request(
+            "collect_snapshot", {"streams": ["account"]}, "request_01JRESTARTRESET0"
+        ))
+        self.assertEqual("mt5_account_unavailable", failed["payload"]["error_code"])
+        self.assertEqual(1, self.worker.consecutive_terminal_failures)
+
+        self.mt5.account_info = lambda: Account(
+            123456, "Broker-Demo", 10_000.0, 10_000.0, 10_000.0, True, True
+        )
+        recovered = self.worker.handle(self.request(
+            "collect_snapshot", {"streams": ["account"]}, "request_01JRESTARTRESET1"
+        ))
+        self.assertEqual("snapshot", recovered["outcome"])
+        self.assertIsNone(self.worker.restart_error_code)
+        self.assertEqual(0, self.worker.consecutive_terminal_failures)
+
+        self.mt5.account_info = lambda: None
+        sparse = self.worker.handle(self.request(
+            "collect_snapshot", {"streams": ["account"]}, "request_01JRESTARTRESET2"
+        ))
+        self.assertEqual("mt5_account_unavailable", sparse["payload"]["error_code"])
+        self.assertIsNone(self.worker.restart_error_code)
+        self.assertEqual(1, self.worker.consecutive_terminal_failures)
+
+    def test_terminal_restart_threshold_writes_one_redacted_diagnostic(self):
+        self.mt5.account_info = lambda: None
+        with tempfile.TemporaryDirectory() as root:
+            diagnostic = Path(root) / "worker.jsonl"
+            with patch.dict("os.environ", {
+                "AURUM_BRIDGE_DIAGNOSTIC_PATH": str(diagnostic),
+            }):
+                for index in range(3):
+                    self.worker.handle(self.request(
+                        "collect_snapshot", {"streams": ["account"]},
+                        f"request_01JRESTARTDIAG{index}",
+                    ))
+
+            payload = diagnostic.read_text(encoding="utf-8")
+            records = [json.loads(line) for line in payload.splitlines()]
+            self.assertEqual(1, len(records))
+            self.assertEqual({
+                "event": "mt5_worker_terminal_session_restart",
+                "stage": "worker_request",
+                "error_code": "mt5_account_unavailable",
+                "consecutive_failures": 3,
+            }, {key: records[0][key] for key in (
+                "event", "stage", "error_code", "consecutive_failures")})
+            self.assertGreater(records[0]["observed_at_utc_msc"], 0)
+            self.assertNotIn("Broker-Demo", payload)
+            self.assertNotIn("123456", payload)
 
     def test_trade_request_detects_terminal_loss_before_execution(self):
         self.mt5.account_info = lambda: None
@@ -789,11 +867,12 @@ class WorkerTests(unittest.TestCase):
 
         self.assertEqual("error", response["outcome"])
         self.assertEqual("mt5_account_unavailable", response["payload"]["error_code"])
-        self.assertEqual("mt5_account_unavailable", self.worker.restart_error_code)
+        self.assertIsNone(self.worker.restart_error_code)
+        self.assertEqual(1, self.worker.consecutive_terminal_failures)
         self.assertEqual([], self.mt5.checks)
         self.assertEqual([], self.mt5.sent)
 
-    def test_terminal_loss_during_trade_precheck_is_uncertain_and_restarts_worker(self):
+    def test_terminal_loss_during_trade_precheck_is_uncertain_without_immediate_restart(self):
         original_account_info = self.mt5.account_info
         calls = 0
 
@@ -809,7 +888,8 @@ class WorkerTests(unittest.TestCase):
         result = response["payload"]["result"]
         self.assertEqual("uncertain", result["status"])
         self.assertEqual("mt5_execution_exception", result["error_code"])
-        self.assertEqual("mt5_account_unavailable", self.worker.restart_error_code)
+        self.assertIsNone(self.worker.restart_error_code)
+        self.assertEqual(1, self.worker.consecutive_terminal_failures)
         self.assertEqual([], self.mt5.checks)
         self.assertEqual([], self.mt5.sent)
 
@@ -990,6 +1070,59 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual([], self.mt5.checks)
         self.assertEqual([], self.mt5.sent)
 
+    def test_query_execution_uses_exact_ticket_history_without_date_range_scan(self):
+        self.mt5.positions = []
+        self.mt5.orders = []
+        self.mt5.history_orders = {}
+        self.mt5.history_deals = [
+            SimpleNamespace(
+                ticket=9001, order=8001, position_id=501, symbol="XAUUSD.s",
+                type=0, entry=0, magic=234000, reason=0, comment="BROKER-REWRITTEN",
+                volume=0.01, price=2295.0, profit=0.0, commission=0.0, swap=0.0,
+                fee=0.0, sl=2285.0, tp=2315.0, time=1_800_000_000,
+                time_msc=1_800_000_000_000,
+            ),
+        ]
+        command = self.command("query_execution", {
+            "symbol": "XAUUSD", "expected_kind": "trade", "trade_ticket": "501",
+            "bridge_command_ref": "AI-LOOKUP", "lookback_seconds": 10 * 365 * 24 * 60 * 60,
+        }, "command_01JEXACTTICKET")
+
+        response = self.worker.handle(self.command_request("query_execution", command))
+
+        result = response["payload"]["result"]
+        self.assertTrue(result["raw_result"]["found"])
+        self.assertTrue(result["raw_result"]["complete"])
+        self.assertEqual("history_deal", result["raw_result"]["current_state"])
+        self.assertTrue(any(kwargs.get("position") == 501 for _, kwargs in self.mt5.history_deal_queries))
+        self.assertTrue(all(len(args) == 0 for args, _ in self.mt5.history_deal_queries))
+        self.assertTrue(all(len(args) == 0 for args, _ in self.mt5.history_order_queries))
+
+    def test_reference_history_budget_returns_incomplete_instead_of_absence(self):
+        self.mt5.positions = []
+        self.mt5.orders = []
+        history_rows = [SimpleNamespace(
+            ticket=index, position_id=0, symbol="XAUUSD.s", magic=234000,
+            comment="OTHER", state=self.mt5.ORDER_STATE_FILLED,
+        ) for index in range(self.worker.trade.MAX_HISTORY_ROWS + 1)]
+        self.mt5.history_orders_get = lambda *args, **_kwargs: history_rows if len(args) == 2 else ()
+        self.mt5.history_deals_get = lambda *args, **_kwargs: () if len(args) == 2 else ()
+        command = self.command("query_execution", {
+            "symbol": "XAUUSD", "expected_kind": "trade",
+            "bridge_command_ref": "AI-MISSING",
+            "lookback_seconds": self.worker.trade.MAX_LOOKBACK_SECONDS + 1,
+        }, "command_01JBUDGETBOUND")
+
+        response = self.worker.handle(self.command_request("query_execution", command))
+
+        raw = response["payload"]["result"]["raw_result"]
+        self.assertFalse(raw["found"])
+        self.assertFalse(raw["complete"])
+        self.assertEqual("history_lookup_budget_exhausted", raw["reason"])
+        self.assertEqual(self.worker.trade.MAX_LOOKBACK_SECONDS, raw["lookback_seconds"])
+        self.assertEqual(self.worker.trade.MAX_LOOKBACK_SECONDS + 1,
+                         raw["requested_lookback_seconds"])
+
     def test_missing_order_result_is_uncertain_and_never_replayed(self):
         self.mt5.order_send = lambda request: self.mt5.sent.append(dict(request))
         command = self.command(command_id="command_01JUNCERTAIN")
@@ -1114,6 +1247,100 @@ class WorkerTests(unittest.TestCase):
         )
         self.assertEqual([], self.mt5.sent)
 
+    def _resolve_reconciliation(self, action, observed, source, original_params,
+                                elapsed_msc=0):
+        params = {
+            "original_action": action,
+            "original_params": original_params,
+            "original_issued_at_utc_msc": self.now,
+            "settle_after_msc": 15_000,
+        }
+        self.worker.trade._clock_msc = lambda: self.now + elapsed_msc
+        return self.worker.trade._resolve_reconciliation(params, observed, source)
+
+    def test_cancel_reconciliation_requires_complete_history_before_final_failure(self):
+        missing = {"found": False, "complete": True}
+        self.assertEqual(
+            {"status": "pending", "error_code": "reconciliation_settlement_pending"},
+            self._resolve_reconciliation("cancel_order", missing, "", {"ticket": "999"}),
+        )
+        self.assertEqual(
+            {"status": "failed", "error_code": "pending_order_history_unverified"},
+            self._resolve_reconciliation("cancel_order", missing, "", {"ticket": "999"}, 15_001),
+        )
+        incomplete = {"found": False, "complete": False}
+        self.assertEqual(
+            {"status": "pending", "error_code": "reconciliation_settlement_pending"},
+            self._resolve_reconciliation("cancel_order", incomplete, "", {"ticket": "999"}, 15_001),
+        )
+
+    def test_cancel_reconciliation_requires_positive_terminal_order_evidence(self):
+        original = {"ticket": "202"}
+        self.assertEqual(
+            {"status": "succeeded"},
+            self._resolve_reconciliation("cancel_order", {
+                "found": True, "complete": True, "pending_state": "cancelled",
+            }, "history_order", original),
+        )
+        self.assertEqual(
+            {"status": "failed", "error_code": "pending_order_already_filled"},
+            self._resolve_reconciliation("cancel_order", {
+                "found": True, "complete": True, "pending_state": "filled",
+            }, "history_order", original, 15_001),
+        )
+        self.assertEqual(
+            {"status": "pending", "error_code": "reconciliation_settlement_pending"},
+            self._resolve_reconciliation("cancel_order", {
+                "found": True, "complete": True, "pending_state": "pending",
+            }, "active_order", original),
+        )
+        self.assertEqual(
+            {"status": "failed", "error_code": "pending_order_still_active"},
+            self._resolve_reconciliation("cancel_order", {
+                "found": True, "complete": True, "pending_state": "pending",
+            }, "active_order", original, 15_001),
+        )
+        self.assertEqual(
+            {"status": "failed", "error_code": "pending_order_evidence_incomplete"},
+            self._resolve_reconciliation("cancel_order", {
+                "found": True, "complete": True, "pending_state": "unknown",
+            }, "history_order", original, 15_001),
+        )
+
+    def test_close_reconciliation_requires_history_or_verified_volume_reduction(self):
+        original = {"ticket": "501", "volume": 0.005,
+                    "expected_state": {"volume": 0.01}}
+        missing = {"found": False, "complete": True}
+        self.assertEqual(
+            {"status": "pending", "error_code": "reconciliation_settlement_pending"},
+            self._resolve_reconciliation("close_position", missing, "", original),
+        )
+        self.assertEqual(
+            {"status": "failed", "error_code": "position_history_unverified"},
+            self._resolve_reconciliation("close_position", missing, "", original, 15_001),
+        )
+        self.assertEqual(
+            {"status": "succeeded"},
+            self._resolve_reconciliation("close_position", {
+                "found": True, "complete": True,
+            }, "history_deal", original),
+        )
+        self.assertEqual(
+            {"status": "succeeded"},
+            self._resolve_reconciliation("close_position", {
+                "found": True, "complete": True, "volume": 0.005,
+            }, "active_position", original),
+        )
+        active = {"found": True, "complete": True, "volume": 0.007}
+        self.assertEqual(
+            {"status": "pending", "error_code": "reconciliation_settlement_pending"},
+            self._resolve_reconciliation("close_position", active, "active_position", original),
+        )
+        self.assertEqual(
+            {"status": "failed", "error_code": "position_still_open"},
+            self._resolve_reconciliation("close_position", active, "active_position", original, 15_001),
+        )
+
     def test_reconciliation_resolves_observed_place_cancel_and_position_modify(self):
         self.mt5.positions = [SimpleNamespace(
             ticket=501, symbol="XAUUSD.s", volume=0.01, type=0, magic=777,
@@ -1145,7 +1372,7 @@ class WorkerTests(unittest.TestCase):
             "query_execution", self.command("query_execution", cancel_params, "query_01JCANCEL99")
         ))
         self.assertEqual(
-            {"status": "succeeded"},
+            {"status": "pending", "error_code": "reconciliation_settlement_pending"},
             cancelled["payload"]["result"]["raw_result"]["resolution"],
         )
 

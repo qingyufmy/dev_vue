@@ -8,8 +8,8 @@ mod settings;
 mod terminal_directory;
 
 use bridge_foundation::{
-    CliMode, DEFAULT_PROFILE_ID, default_data_directory, default_root_data_directory, parse_cli,
-    profile_instance_id, validate_profile_id,
+    CliMode, DEFAULT_PROFILE_ID, default_root_data_directory, parse_cli, profile_instance_id,
+    validate_profile_id,
 };
 use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
@@ -2754,18 +2754,23 @@ unsafe fn handle_command(hwnd: HWND, app: &mut AppState, id: i32, notification: 
         }
         CONTROL_OBSERVER => unsafe { open_observer_dialog(hwnd, app) },
         CONTROL_DETECT => unsafe { begin_action(hwnd, app, LocalControlAction::Redetect) },
-        CONTROL_LOGS => match default_data_directory(&app.profile_id) {
-            Ok(data_directory) => match unsafe {
-                log_viewer::show_or_refresh(
-                    app.log_window,
-                    hwnd,
-                    &data_directory.join("logs"),
-                    app.brand_icon,
-                )
-            } {
-                Ok(log_window) => app.log_window = log_window,
-                Err(code) => show_error(hwnd, code),
-            },
+        CONTROL_LOGS => match default_root_data_directory() {
+            Ok(root_data_directory) => {
+                match log_viewer::profile_log_directories(&root_data_directory) {
+                    Ok(log_directories) => match unsafe {
+                        log_viewer::show_or_refresh(
+                            app.log_window,
+                            hwnd,
+                            &log_directories,
+                            app.brand_icon,
+                        )
+                    } {
+                        Ok(log_window) => app.log_window = log_window,
+                        Err(code) => show_error(hwnd, code),
+                    },
+                    Err(code) => show_error(hwnd, code),
+                }
+            }
             Err(code) => show_error(hwnd, code),
         },
         CONTROL_SETTINGS => match unsafe {
@@ -3149,6 +3154,9 @@ fn error_message(code: &str) -> &'static str {
         "bridge_pair_source_invalid" => "所选观摩账户已不可用，请刷新后重新选择。",
         "bridge_observer_profile_exists" => "该观摩源名称已经存在，请直接打开已有观摩源。",
         "bridge_observer_profile_not_found" => "该观摩源已不存在，请刷新后重试。",
+        "bridge_observer_profile_limit_exceeded" => {
+            "观摩源数量已达到上限，请先删除不再使用的观摩源。"
+        }
         "bridge_observer_profile_not_configured" => "请先设置观摩账户和独立交易终端。",
         "observer_terminal_already_assigned" => {
             "该交易终端已被主账户或其他观摩源使用，请选择独立终端。"

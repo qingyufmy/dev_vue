@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-import { queryOne, queryRun, withTransaction } from '../db.js'
+import { queryOne, withTransaction } from '../db.js'
 import { assertBridgeV3Message, sameBridgeRoute } from './protocol.js'
 
 export const BRIDGE_COMMAND_STATUSES = Object.freeze(new Set([
@@ -8,6 +8,7 @@ export const BRIDGE_COMMAND_STATUSES = Object.freeze(new Set([
 ]))
 
 const FINAL_RESULTS = new Set(['succeeded', 'rejected', 'failed'])
+export const BRIDGE_COMMAND_HISTORY_RETENTION_MS = 180 * 24 * 60 * 60 * 1000
 
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue)
@@ -23,17 +24,35 @@ export function sha256Json(value) {
   return createHash('sha256').update(stableJson(value)).digest('hex')
 }
 
-export function commandPayloadHash(command, userId) {
-  return sha256Json({
+function normalizedBusinessIdentity(command, userId) {
+  return {
     user_id:Number(userId),
     command_id:command.command_id,
-    terminal_instance_id:command.terminal_instance_id,
-    account_ref:command.account_ref,
-    connection_epoch:command.connection_epoch,
-    issued_at_utc_msc:command.issued_at_utc_msc,
-    deadline_utc_msc:command.deadline_utc_msc,
-    action:command.action,
+    terminal_instance_id:String(command.terminal_instance_id || '').trim(),
+    account_ref:{
+      broker_server:String(command.account_ref?.broker_server || '').trim().toLowerCase(),
+      login:String(command.account_ref?.login || '').trim(),
+    },
+    action:String(command.action || '').trim(),
     params:command.params,
+  }
+}
+
+/** Hash only the durable business operation; transport envelope fields are excluded. */
+export function commandBusinessPayloadHash(command, userId) {
+  return sha256Json(normalizedBusinessIdentity(command, userId))
+}
+
+/** Backward-compatible public name. New rows store this business hash. */
+export function commandPayloadHash(command, userId) {
+  return commandBusinessPayloadHash(command, userId)
+}
+
+export function commandEnvelopeHash(command) {
+  return sha256Json({
+    connection_epoch:Number(command.connection_epoch),
+    issued_at_utc_msc:Number(command.issued_at_utc_msc),
+    deadline_utc_msc:Number(command.deadline_utc_msc),
   })
 }
 
@@ -59,9 +78,37 @@ export function normalizeCommandLedgerRow(row) {
     dispatch_attempt_count:Number(row.dispatch_attempt_count || 0),
     last_dispatched_at_utc_msc:row.last_dispatched_at_utc_msc == null ? null : Number(row.last_dispatched_at_utc_msc),
     completed_at_utc_msc:row.completed_at_utc_msc == null ? null : Number(row.completed_at_utc_msc),
+    payload_hash:row.payload_hash || null,
+    envelope_hash:row.envelope_hash || null,
     params:parseJson(row.params_json) || {},
     result:parseJson(row.result_json),
   }
+}
+
+function rowBusinessIdentity(row) {
+  return {
+    user_id:Number(row.user_id),
+    command_id:row.command_id,
+    terminal_instance_id:String(row.terminal_instance_id || '').trim(),
+    account_ref:{
+      broker_server:String(row.broker_server || '').trim().toLowerCase(),
+      login:String(row.login_account || '').trim(),
+    },
+    action:String(row.action || '').trim(),
+    params:parseJson(row.params_json),
+  }
+}
+
+function sameBusinessPayload(row, command, userId) {
+  const identity = rowBusinessIdentity(row)
+  if (identity.params == null) return false
+  return sha256Json(identity) === commandBusinessPayloadHash(command, userId)
+}
+
+function hasDispatchEvidence(row) {
+  return Number(row.dispatch_attempt_count || 0) > 0
+    || ['dispatched', 'uncertain', 'succeeded', 'rejected', 'failed'].includes(String(row.status || ''))
+    || row.result_hash != null || row.result_json != null || row.result_status != null
 }
 
 function rowRoute(row) {
@@ -84,33 +131,88 @@ async function appendEvent(run, commandId, eventType, fromStatus, toStatus, deta
 export async function createCommandLedgerEntry(command, {
   userId,
   nowUtcMsc = Date.now(),
-  queryOneFn = queryOne,
-  queryRunFn = queryRun,
+  transactionFn = withTransaction,
 } = {}) {
   assertBridgeV3Message(command, { nowUtcMsc })
   if (command.type !== 'command') throw ledgerError('bridge_command_type_invalid')
   if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) throw ledgerError('bridge_command_user_invalid')
 
-  const payloadHash = commandPayloadHash(command, userId)
+  const businessPayloadHash = commandBusinessPayloadHash(command, userId)
+  const envelopeHash = commandEnvelopeHash(command)
   const paramsJson = stableJson(command.params)
-  const inserted = await queryRunFn(
-    `INSERT IGNORE INTO bridge_v3_command_ledger
-      (command_id, user_id, terminal_instance_id, broker_server, login_account,
-       connection_epoch, action, params_json, payload_hash, status, deadline_at_utc_msc)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
-    [
-      command.command_id, Number(userId), command.terminal_instance_id,
-      command.account_ref.broker_server.trim(), String(command.account_ref.login).trim(),
-      command.connection_epoch, command.action, paramsJson, payloadHash, command.deadline_utc_msc,
-    ]
-  )
-  const row = normalizeCommandLedgerRow(await queryOneFn(
-    'SELECT * FROM bridge_v3_command_ledger WHERE command_id = ? LIMIT 1',
-    [command.command_id]
-  ))
-  if (!row) throw ledgerError('bridge_command_persist_failed')
-  if (row.payload_hash !== payloadHash) throw ledgerError('bridge_command_id_conflict')
-  return { created:Number(inserted?.changes || 0) === 1, command:row }
+  return transactionFn(async run => {
+    // Acquire the command-id uniqueness lock in the same transaction as the
+    // row read. A no-op duplicate update keeps concurrent first requests from
+    // racing between SELECT and INSERT without overwriting business fields.
+    const [inserted] = await run(`INSERT INTO bridge_v3_command_ledger
+        (command_id, user_id, terminal_instance_id, broker_server, login_account,
+         connection_epoch, action, params_json, payload_hash, envelope_hash,
+         status, deadline_at_utc_msc)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+        ON DUPLICATE KEY UPDATE command_id = command_id`, [
+        command.command_id, Number(userId), command.terminal_instance_id,
+        command.account_ref.broker_server.trim(), String(command.account_ref.login).trim(),
+        command.connection_epoch, command.action, paramsJson, businessPayloadHash,
+        envelopeHash, command.deadline_utc_msc,
+      ])
+    const [rows] = await run(
+      'SELECT * FROM bridge_v3_command_ledger WHERE command_id = ? LIMIT 1 FOR UPDATE',
+      [command.command_id]
+    )
+    let row = normalizeCommandLedgerRow(rows?.[0])
+    if (!row) throw ledgerError('bridge_command_persist_failed')
+
+    const created = Number(inserted?.affectedRows ?? inserted?.changes ?? 0) === 1
+    if (created) {
+      await appendEvent(run, command.command_id, 'queued', null, 'queued', {
+        payload_hash:businessPayloadHash, envelope_hash:envelopeHash,
+      })
+      return { created:true, command:row }
+    }
+
+    if (!sameBusinessPayload(row, command, userId)) throw ledgerError('bridge_command_id_conflict')
+
+    const [evidenceEvents] = await run(`SELECT event_type FROM bridge_v3_command_events
+      WHERE command_id = ? AND event_type IN
+        ('dispatched', 'delivery_uncertain', 'result_received', 'reconciled')
+      ORDER BY id DESC LIMIT 1 FOR UPDATE`, [command.command_id])
+    const eventShowsDispatch = (evidenceEvents || []).some(event => Boolean(event?.event_type))
+    if (eventShowsDispatch && ['queued', 'expired'].includes(String(row.status || ''))) {
+      throw ledgerError('bridge_command_reconciliation_required')
+    }
+
+    if (['queued', 'expired'].includes(String(row.status || '')) && hasDispatchEvidence(row)) {
+      throw ledgerError('bridge_command_reconciliation_required')
+    }
+
+    if (['queued', 'expired'].includes(String(row.status || ''))) {
+      const wasExpired = row.status === 'expired'
+      await run(`UPDATE bridge_v3_command_ledger
+        SET connection_epoch = ?, deadline_at_utc_msc = ?, envelope_hash = ?,
+            payload_hash = ?, status = 'queued', completed_at_utc_msc = NULL,
+            result_status = NULL, result_json = NULL, result_hash = NULL,
+            error_code = NULL, error_message = NULL, updated_at = CURRENT_TIMESTAMP(3)
+        WHERE command_id = ? AND status IN ('queued', 'expired')
+          AND dispatch_attempt_count = 0 AND result_hash IS NULL`, [
+        command.connection_epoch, command.deadline_utc_msc, envelopeHash,
+        businessPayloadHash, command.command_id,
+      ])
+      await appendEvent(run, command.command_id, 'resumed', row.status, 'queued', {
+        previous_status:row.status, resumed_from_expired:wasExpired,
+        connection_epoch:command.connection_epoch, deadline_utc_msc:command.deadline_utc_msc,
+        payload_hash:businessPayloadHash,
+        envelope_hash:envelopeHash,
+      })
+      const [resumedRows] = await run(
+        'SELECT * FROM bridge_v3_command_ledger WHERE command_id = ? LIMIT 1 FOR UPDATE',
+        [command.command_id]
+      )
+      row = normalizeCommandLedgerRow(resumedRows?.[0])
+      if (!row) throw ledgerError('bridge_command_persist_failed')
+      return { created:false, resumed:true, command:row }
+    }
+    return { created:false, command:row }
+  })
 }
 
 export async function markCommandDispatched(commandId, {
@@ -233,11 +335,60 @@ export async function recordCommandResult(message, {
 
 export async function expireQueuedCommands({
   nowUtcMsc = Date.now(),
-  queryRunFn = queryRun,
+  limit = 100,
+  transactionFn = withTransaction,
 } = {}) {
-  return queryRunFn(`UPDATE bridge_v3_command_ledger
-    SET status = 'expired', completed_at_utc_msc = ?, error_code = 'command_expired'
-    WHERE status = 'queued' AND deadline_at_utc_msc <= ?`, [nowUtcMsc, nowUtcMsc])
+  const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 500) : 100
+  return transactionFn(async run => {
+    const [rows] = await run(`SELECT command_id FROM bridge_v3_command_ledger
+      WHERE status = 'queued' AND deadline_at_utc_msc <= ?
+      ORDER BY deadline_at_utc_msc, command_id LIMIT ? FOR UPDATE`, [nowUtcMsc, safeLimit])
+    let changes = 0
+    for (const row of rows || []) {
+      const [updated] = await run(`UPDATE bridge_v3_command_ledger
+        SET status = 'expired', completed_at_utc_msc = ?, error_code = 'command_expired'
+        WHERE command_id = ? AND status = 'queued' AND deadline_at_utc_msc <= ?`,
+      [nowUtcMsc, row.command_id, nowUtcMsc])
+      if (Number(updated?.affectedRows || 0) !== 1) continue
+      await appendEvent(run, row.command_id, 'expired', 'queued', 'expired', {
+        now_utc_msc:nowUtcMsc, source:'maintenance_expiry_sweep',
+      })
+      changes += 1
+    }
+    return { changes }
+  })
+}
+
+export async function pruneFinalizedCommands({
+  nowUtcMsc = Date.now(),
+  retentionMs = BRIDGE_COMMAND_HISTORY_RETENTION_MS,
+  limit = 500,
+  transactionFn = withTransaction,
+} = {}) {
+  const safeRetentionMs = Number.isSafeInteger(retentionMs) && retentionMs >= 30 * 24 * 60 * 60 * 1000
+    ? retentionMs : BRIDGE_COMMAND_HISTORY_RETENTION_MS
+  const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 2_000) : 500
+  const cutoffUtcMsc = nowUtcMsc - safeRetentionMs
+  return transactionFn(async run => {
+    const [rows] = await run(`SELECT command_id FROM bridge_v3_command_ledger
+      WHERE completed_at_utc_msc IS NOT NULL AND completed_at_utc_msc <= ?
+        AND (status IN ('succeeded', 'rejected', 'failed')
+          OR (status = 'expired' AND dispatch_attempt_count = 0 AND result_hash IS NULL))
+      ORDER BY completed_at_utc_msc, command_id LIMIT ? FOR UPDATE`, [cutoffUtcMsc, safeLimit])
+    const commandIds = (rows || []).map(row => String(row.command_id || '')).filter(Boolean)
+    if (commandIds.length === 0) return { changes:0 }
+
+    const placeholders = commandIds.map(() => '?').join(', ')
+    await run(`DELETE FROM bridge_v3_command_events
+      WHERE command_id IN (${placeholders})`, commandIds)
+    const [deleted] = await run(`DELETE FROM bridge_v3_command_ledger
+      WHERE command_id IN (${placeholders})
+        AND completed_at_utc_msc <= ?
+        AND (status IN ('succeeded', 'rejected', 'failed')
+          OR (status = 'expired' AND dispatch_attempt_count = 0 AND result_hash IS NULL))`,
+    [...commandIds, cutoffUtcMsc])
+    return { changes:Number(deleted?.affectedRows || deleted?.changes || 0) }
+  })
 }
 
 export async function getCommandLedgerEntry(commandId, { queryOneFn = queryOne } = {}) {
@@ -249,6 +400,7 @@ export async function getCommandLedgerEntry(commandId, { queryOneFn = queryOne }
 
 export async function countOutstandingCommands(terminalInstanceIds, {
   queryOneFn = queryOne,
+  nowUtcMsc = Date.now(),
 } = {}) {
   if (!Array.isArray(terminalInstanceIds) || terminalInstanceIds.length < 1
     || terminalInstanceIds.length > 64
@@ -260,8 +412,8 @@ export async function countOutstandingCommands(terminalInstanceIds, {
   const row = await queryOneFn(
     `SELECT COUNT(*) AS count FROM bridge_v3_command_ledger
       WHERE terminal_instance_id IN (${terminalInstanceIds.map(() => '?').join(', ')})
-        AND status IN ('queued', 'dispatched')`,
-    terminalInstanceIds,
+        AND (status = 'dispatched' OR (status = 'queued' AND deadline_at_utc_msc > ?))`,
+    [...terminalInstanceIds, nowUtcMsc],
   )
   return Number(row?.count || 0)
 }

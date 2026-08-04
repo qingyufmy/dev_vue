@@ -18,6 +18,7 @@ const SUPPORTED_ACTIONS = new Set([
 const RATE_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
 const DEFAULT_FRESHNESS_MS = 30_000
 const MAX_HISTORY_EVIDENCE_REFS = 100
+const MAX_ORDER_LOOKUP_SECONDS = 30 * 24 * 60 * 60
 
 function adapterError(code) {
   return Object.assign(new Error(code), { code })
@@ -805,7 +806,7 @@ export function createBridgeV3BusinessAdapter({
     }
     if (bridgeCommandRef.length > 64
       || !Number.isSafeInteger(lookbackSeconds)
-      || lookbackSeconds < 3_600 || lookbackSeconds > 315_360_000) {
+      || lookbackSeconds < 3_600 || lookbackSeconds > MAX_ORDER_LOOKUP_SECONDS) {
       throw adapterError('order_lookup_params_invalid')
     }
     for (const value of [tradeTicket, pendingTicket, ticket]) {

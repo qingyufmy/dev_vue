@@ -384,6 +384,21 @@ describe('model usage accounting', () => {
     expect(mockQueryRun.mock.calls[0][0]).toContain("'reserved'")
   })
 
+  it('records request and repair phases while defaulting unknown phases to request', async () => {
+    mockQueryRun
+      .mockResolvedValueOnce({ insertId: 21 })
+      .mockResolvedValueOnce({ insertId: 22 })
+    await beginModelUsage({
+      userId: 2, profileId: 10, credentialSource: 'user', usage: 'manual', requestPhase:'repair',
+    })
+    await beginModelUsage({
+      userId: 2, profileId: 10, credentialSource: 'user', usage: 'manual', requestPhase:'unexpected',
+    })
+    expect(mockQueryRun.mock.calls[0][0]).toContain('request_phase')
+    expect(mockQueryRun.mock.calls[0][1]).toContain('repair')
+    expect(mockQueryRun.mock.calls[1][1]).toContain('request')
+  })
+
   it('atomically reserves platform quota under a user row lock', async () => {
     mockTx
       .mockResolvedValueOnce([[{ id: 2, plan: 'pro' }]])
@@ -395,6 +410,21 @@ describe('model usage accounting', () => {
     })
     expect(result).toEqual({ logId: 44, reservedTokens: 2500 })
     expect(mockTx.mock.calls[0][0]).toContain('FOR UPDATE')
+  })
+
+  it('keeps repair requests in the shared quota aggregate', async () => {
+    mockTx
+      .mockResolvedValueOnce([[{ id: 2, plan: 'pro' }]])
+      .mockResolvedValueOnce([[policy({ share_for_manual: 1 })]])
+      .mockResolvedValueOnce([[{ cnt: 3, tokens: 1000 }]])
+      .mockResolvedValueOnce([{ insertId: 45 }])
+    await beginModelUsage({
+      userId: 2, profileId: 99, credentialSource: 'platform_shared', usage: 'manual',
+      requestPhase:'repair', estimatedTokens:2500,
+    })
+    const quotaSql = mockTx.mock.calls.find(([sql]) => String(sql).includes('COUNT(*)'))?.[0]
+    expect(quotaSql).toContain('SUM(token_count)')
+    expect(quotaSql).not.toContain('request_phase')
   })
 
   it('rejects a platform request when the request quota is exhausted', async () => {

@@ -427,6 +427,8 @@ describe('durable state and protection boundaries', () => {
     expect(canTransitionPositionManagement('EVIDENCE_CONFIRMED', 'HELD')).toBe(true)
     expect(canTransitionPositionManagement('CLOSE_UNCERTAIN', 'CLOSE_RECONCILING')).toBe(true)
     expect(canTransitionPositionManagement('PENDING_FILLED_DURING_CANCEL', 'MANUAL_REVIEW')).toBe(true)
+    expect(canTransitionPositionManagement('EVIDENCE_CONFIRMED', 'PRECONDITIONS_LOCKED')).toBe(false)
+    expect(canTransitionPositionManagement('PRECONDITIONS_LOCKED', 'CLOSE_INTENT_CREATED')).toBe(false)
     expect(canTransitionPositionManagement('HELD', 'PRECONDITIONS_LOCKED')).toBe(false)
     expect(canTransitionPositionManagement('COMPLETED', 'REENTRY_SENT')).toBe(false)
   })

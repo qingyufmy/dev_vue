@@ -24,6 +24,19 @@ const MAX_SHORT_MEMORY_ITEMS = 5
 const MAX_LONG_MEMORY_ITEMS = 3
 const MAX_UNIVERSAL_MEMORY_ITEMS = 1
 const MEMORY_MATCH_THRESHOLD = 5
+const MEMORY_CONTEXT_FIELDS = [
+  { field:'symbol', plural:'symbols' },
+  { field:'timeframe', plural:'timeframes' },
+  { field:'direction', plural:'directions', direction:true },
+  { field:'entry_method', plural:'entry_methods' },
+  { field:'market_regime', plural:'market_regimes' },
+  { field:'volatility_bucket', plural:'volatility_buckets' },
+  { field:'chan_reliability', plural:'chan_reliabilities' },
+  { field:'chan_trend_state', plural:'chan_trend_states' },
+  { field:'chan_segment_direction', plural:'chan_segment_directions', direction:true },
+  { field:'chan_divergence', plural:'chan_divergences' },
+  { field:'chan_center_state', plural:'chan_center_states' },
+]
 let compressionTimer = null
 const parse = (value, fallback) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const tokenCount = value => Math.max(1, Math.ceil(Buffer.byteLength(String(value || ''), 'utf8') / 4))
@@ -143,11 +156,96 @@ export function classifyMemoryText(value) {
   return 'general'
 }
 
-function memoryApplicability(item) {
+function arrayValues(value) {
+  return [...new Set((Array.isArray(value) ? value : value == null || value === '' ? [] : [value])
+    .map(item => String(item || '').trim().toLowerCase()).filter(Boolean))]
+}
+
+function hasOwn(object, key) {
+  return Boolean(object && typeof object === 'object' && Object.prototype.hasOwnProperty.call(object, key))
+}
+
+function normalizeContextValue(field, value) {
+  if (value && typeof value === 'object') return null
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) return null
+  if (field.direction) return directionSide(normalized)
+  return normalized
+}
+
+function normalizeTupleScalar(field, value) {
+  if (value == null || value === '') return { valid:true, value:null }
+  if (typeof value === 'object' && !Array.isArray(value)) return { valid:false, value:null }
+  const rawValues = Array.isArray(value) ? value : [value]
+  const normalized = [...new Set(rawValues.map(item => normalizeContextValue(field, item)))]
+  if (normalized.some(value => !value) || normalized.length !== 1) return { valid:false, value:null }
+  return { valid:true, value:normalized[0] }
+}
+
+function normalizeContextTuple(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { valid:false, tuple:null }
+  const tuple = {}
+  let hasValue = false
+  for (const field of MEMORY_CONTEXT_FIELDS) {
+    const keys = [field.field, field.plural].filter((key, index, all) => all.indexOf(key) === index)
+    const present = keys.filter(key => hasOwn(value, key))
+    if (!present.length) continue
+    let normalized = null
+    for (const key of present) {
+      const next = normalizeTupleScalar(field, value[key])
+      if (!next.valid) return { valid:false, tuple:null }
+      if (next.value && normalized && next.value !== normalized) return { valid:false, tuple:null }
+      normalized = next.value || normalized
+    }
+    if (normalized) {
+      tuple[field.field] = normalized
+      hasValue = true
+    }
+  }
+  return hasValue ? { valid:true, tuple } : { valid:false, tuple:null }
+}
+
+function normalizeContextTuples(value) {
+  // An explicitly supplied empty/non-array value carries no provable
+  // applicability. Treat it as malformed instead of silently falling back to
+  // independent legacy fields and widening the supported context.
+  if (!Array.isArray(value) || !value.length) return { state:'malformed', tuples:[] }
+  const tuples = []
+  const seen = new Set()
+  for (const item of value) {
+    const normalized = normalizeContextTuple(item)
+    if (!normalized.valid) return { state:'malformed', tuples:[] }
+    const key = JSON.stringify(normalized.tuple)
+    if (!seen.has(key)) { seen.add(key); tuples.push(normalized.tuple) }
+  }
+  return { state:'valid', tuples }
+}
+
+function applicabilityObject(item) {
   const stored = parse(item.applicability_json, null)
   const conditions = parse(item.conditions_json, {}) || {}
-  const applicable = stored?.applicable_when || stored || conditions.applicable_when || {}
+  return stored?.applicable_when || stored || conditions.applicable_when || {}
+}
+
+function tupleMetadataFromApplicability(applicable) {
+  const keys = ['context_tuples', 'contextTuples'].filter(key => hasOwn(applicable, key))
+  if (!keys.length) return { state:'absent', tuples:[] }
+  const parsed = keys.map(key => normalizeContextTuples(applicable[key]))
+  // If both spellings are supplied, accepting one while ignoring a malformed
+  // sibling would itself broaden applicability. Require every declaration to
+  // be valid and merge only the normalized tuples.
+  if (parsed.some(item => item.state === 'malformed')) {
+    return { state:'malformed', tuples:[] }
+  }
+  const tuples = dedupeContextTuples(parsed.flatMap(item => item.tuples))
+  if (!tuples.length) return { state:'malformed', tuples:[] }
+  return { state:'valid', tuples }
+}
+
+function memoryApplicability(item) {
+  const applicable = applicabilityObject(item)
   const scalar = (key, fallback = null) => applicable[key] ?? item[key] ?? fallback
+  const tupleMetadata = tupleMetadataFromApplicability(applicable)
   return {
     universal:Boolean(applicable.universal),
     symbols:arrayValues(applicable.symbols ?? scalar('symbol')),
@@ -161,12 +259,9 @@ function memoryApplicability(item) {
     chan_segment_directions:arrayValues(applicable.chan_segment_directions ?? applicable.chan_segment_direction).map(directionSide).filter(Boolean),
     chan_divergences:arrayValues(applicable.chan_divergences ?? applicable.chan_divergence),
     chan_center_states:arrayValues(applicable.chan_center_states ?? applicable.chan_center_state),
+    contextTuples:tupleMetadata.tuples,
+    contextTupleState:tupleMetadata.state,
   }
-}
-
-function arrayValues(value) {
-  return [...new Set((Array.isArray(value) ? value : value == null || value === '' ? [] : [value])
-    .map(item => String(item || '').trim().toLowerCase()).filter(Boolean))]
 }
 
 function memoryCategory(item) {
@@ -177,7 +272,10 @@ function memoryCategory(item) {
 
 function applicabilitySignature(item) {
   const applicable = memoryApplicability(item)
-  return sha256(JSON.stringify({ category:memoryCategory(item), ...applicable })).slice(0, 16)
+  const { contextTuples, contextTupleState, ...legacy } = applicable
+  return sha256(JSON.stringify({ category:memoryCategory(item), ...legacy,
+    ...(contextTupleState === 'valid' ? { context_tuples:contextTuples } : contextTupleState === 'malformed'
+      ? { context_tuples_state:'malformed' } : {}) })).slice(0, 16)
 }
 
 function scopeKey(item) {
@@ -217,28 +315,172 @@ export function buildPeriodMemoryScope(reviewCase, evidence = {}) {
   }
 }
 
-function buildApplicability(scope = {}, { universal = false } = {}) {
-  return { applicable_when: {
-    universal:Boolean(universal),
-    symbols:arrayValues(scope.symbol), timeframes:arrayValues(scope.timeframe),
-    directions:arrayValues(directionSide(scope.direction)).filter(Boolean),
-    entry_methods:arrayValues(scope.entry_method), market_regimes:arrayValues(scope.market_regime),
-  }, avoid_when:{} }
+export function buildApplicability(scope = {}, { universal = false } = {}) {
+  const applicable = { universal:Boolean(universal) }
+  for (const field of MEMORY_CONTEXT_FIELDS) {
+    const raw = scope[field.field]
+    const values = arrayValues(raw)
+    applicable[field.plural] = field.direction ? values.map(directionSide).filter(Boolean) : values
+  }
+  const tuple = normalizeContextTuple(scope)
+  if (tuple.valid) applicable.context_tuples = [tuple.tuple]
+  return { applicable_when:applicable, avoid_when:{} }
 }
 
-function mergeMemoryApplicability(items = [], override = null) {
-  if (override && typeof override === 'object') {
-    const applicable = override.applicable_when && typeof override.applicable_when === 'object' ? override.applicable_when : override
-    return { applicable_when:{ ...applicable, universal:Boolean(applicable.universal) },
-      avoid_when:override.avoid_when && typeof override.avoid_when === 'object' ? override.avoid_when : {} }
+function dedupeContextTuples(tuples = []) {
+  const unique = []
+  const seen = new Set()
+  for (const tuple of tuples) {
+    const key = JSON.stringify(tuple)
+    if (!seen.has(key)) { seen.add(key); unique.push(tuple) }
   }
+  return unique
+}
+
+function normalizeOverrideField(applicable, field) {
+  const keys = [field.plural, field.field].filter(key => hasOwn(applicable, key))
+  if (!keys.length) return { declared:false, valid:true, values:[] }
+  let values = null
+  for (const key of keys) {
+    const raw = applicable[key]
+    // The review validators serialize unspecified fields as empty arrays.
+    // Preserve that contract; only a non-empty declaration narrows scope.
+    if (raw == null || raw === '' || (Array.isArray(raw) && !raw.length)) continue
+    if (typeof raw === 'object' && !Array.isArray(raw)) {
+      return { declared:true, valid:false, values:[] }
+    }
+    const source = Array.isArray(raw) ? raw : [raw]
+    const normalized = [...new Set(source.map(value => normalizeContextValue(field, value)))]
+    if (normalized.some(value => !value)) return { declared:true, valid:false, values:[] }
+    if (values && (values.length !== normalized.length || values.some(value => !normalized.includes(value)))) {
+      return { declared:true, valid:false, values:[] }
+    }
+    values = normalized
+  }
+  return values ? { declared:true, valid:true, values } : { declared:false, valid:true, values:[] }
+}
+
+function tupleFieldValues(tuples, field) {
+  return [...new Set(tuples.map(tuple => tuple?.[field.field]).filter(Boolean))]
+}
+
+function tupleMatchesFilter(sourceTuple, filterTuple) {
+  return Object.entries(filterTuple).every(([field, value]) => sourceTuple?.[field] === value)
+}
+
+function emptyApplicability(avoidWhen = {}) {
+  return { applicable_when:{ universal:false,
+    ...Object.fromEntries(MEMORY_CONTEXT_FIELDS.map(field => [field.plural, []])),
+    context_tuples:[] }, avoid_when:avoidWhen }
+}
+
+export function mergeMemoryApplicability(items = [], override = null) {
   const values = items.map(memoryApplicability)
   const merge = key => [...new Set(values.flatMap(item => item[key] || []))]
-  return { applicable_when:{ universal:false, symbols:merge('symbols'), timeframes:merge('timeframes'),
-    directions:merge('directions'), entry_methods:merge('entry_methods'), market_regimes:merge('market_regimes'),
-    volatility_buckets:merge('volatility_buckets'), chan_reliabilities:merge('chan_reliabilities'),
-    chan_trend_states:merge('chan_trend_states'), chan_segment_directions:merge('chan_segment_directions'),
-    chan_divergences:merge('chan_divergences'), chan_center_states:merge('chan_center_states') }, avoid_when:{} }
+  const sourceFields = Object.fromEntries(MEMORY_CONTEXT_FIELDS.map(field => [field.plural, merge(field.plural)]))
+  const sourceTupleMalformed = values.some(item => item.contextTupleState === 'malformed')
+  const sourceTupleMode = values.length > 0 && values.every(item => item.contextTupleState === 'valid')
+  // A merged memory must not turn a legacy source's independent arrays into a
+  // tuple-constrained record. Keep tuple mode only when every source carries
+  // valid tuple metadata; mixed legacy/new clusters retain legacy matching.
+  const sourceTuples = sourceTupleMode ? dedupeContextTuples(values.flatMap(item => item.contextTuples)) : []
+  const hasOverride = Boolean(override && typeof override === 'object' && !Array.isArray(override))
+  const applicable = hasOverride && override.applicable_when && typeof override.applicable_when === 'object'
+    ? override.applicable_when : hasOverride ? override : null
+  const overrideTupleMetadata = applicable ? tupleMetadataFromApplicability(applicable)
+    : { state:'absent', tuples:[] }
+  const avoidWhen = hasOverride && override.avoid_when && typeof override.avoid_when === 'object' ? override.avoid_when : {}
+  const overrideMalformed = overrideTupleMetadata.state === 'malformed'
+  const sourceUniversal = values.length > 0 && values.every(item => item.universal)
+  const overrideFields = Object.fromEntries(MEMORY_CONTEXT_FIELDS.map(field => [field.plural,
+    applicable ? normalizeOverrideField(applicable, field) : { declared:false, valid:true, values:[] }]))
+  const invalidOverrideField = Object.values(overrideFields).some(field => !field.valid)
+  // Malformed tuple metadata or malformed top-level declarations must not
+  // recover through legacy arrays. Return an explicit empty tuple marker so
+  // ranking remains fail-closed after JSON serialization/deserialization.
+  if (sourceTupleMalformed || overrideMalformed || invalidOverrideField) return emptyApplicability(avoidWhen)
+
+  const overrideHasFieldConstraint = Object.values(overrideFields).some(field => field.declared)
+  const overrideHasTupleConstraint = overrideTupleMetadata.state === 'valid'
+  const hasOverrideConstraint = overrideHasFieldConstraint || overrideHasTupleConstraint
+  let filteredTuples = sourceTuples
+  if (sourceTupleMode && hasOverrideConstraint) {
+    // Every value/tuple explicitly requested by the override must be
+    // supported. Dropping only the unsupported part would make an invalid
+    // override look like a valid narrowing operation.
+    if (overrideHasTupleConstraint && overrideTupleMetadata.tuples.some(filterTuple =>
+      !sourceTuples.some(sourceTuple => tupleMatchesFilter(sourceTuple, filterTuple)))) {
+      return emptyApplicability(avoidWhen)
+    }
+    for (const field of MEMORY_CONTEXT_FIELDS) {
+      const constraint = overrideFields[field.plural]
+      if (!constraint.declared) continue
+      const supported = tupleFieldValues(sourceTuples, field)
+      if (constraint.values.some(value => !supported.includes(value))) return emptyApplicability(avoidWhen)
+    }
+    if (overrideHasTupleConstraint) filteredTuples = filteredTuples.filter(sourceTuple =>
+      overrideTupleMetadata.tuples.some(filterTuple => tupleMatchesFilter(sourceTuple, filterTuple)))
+    for (const field of MEMORY_CONTEXT_FIELDS) {
+      const constraint = overrideFields[field.plural]
+      if (!constraint.declared) continue
+      filteredTuples = filteredTuples.filter(tuple => hasOwn(tuple, field.field)
+        && constraint.values.includes(tuple[field.field]))
+    }
+    // A declared override combination unsupported by source tuples is an
+    // empty supported range, never a reason to keep all source tuples.
+    if (!filteredTuples.length) return emptyApplicability(avoidWhen)
+  }
+
+  // Legacy-only and mixed clusters have no tuple relation to preserve. A
+  // tuple override can still narrow each declared field, but it may not add
+  // values absent from the source arrays.
+  if (!sourceTupleMode && overrideHasTupleConstraint) {
+    for (const tuple of overrideTupleMetadata.tuples) {
+      for (const field of MEMORY_CONTEXT_FIELDS) {
+        if (!hasOwn(tuple, field.field)) continue
+        if (!sourceFields[field.plural].includes(tuple[field.field])) return emptyApplicability(avoidWhen)
+      }
+    }
+  }
+  if (!sourceTupleMode && overrideHasFieldConstraint) {
+    for (const field of MEMORY_CONTEXT_FIELDS) {
+      const constraint = overrideFields[field.plural]
+      if (!constraint.declared) continue
+      if (constraint.values.some(value => !sourceFields[field.plural].includes(value))) {
+        return emptyApplicability(avoidWhen)
+      }
+    }
+  }
+
+  const resultFields = {}
+  for (const field of MEMORY_CONTEXT_FIELDS) {
+    const constraint = overrideFields[field.plural]
+    let sourceValues = sourceFields[field.plural]
+    if (sourceTupleMode && filteredTuples.length) {
+      // Once tuple mode is active, values represented by a source tuple must
+      // come from the retained tuples; this prevents stale array values from a
+      // dropped tuple from reintroducing a contradictory combination.
+      const hasTupleField = sourceTuples.some(tuple => hasOwn(tuple, field.field))
+      if (hasTupleField) sourceValues = tupleFieldValues(filteredTuples, field)
+    }
+    if (!sourceTupleMode && overrideHasTupleConstraint) {
+      const tupleValues = tupleFieldValues(overrideTupleMetadata.tuples, field)
+      if (tupleValues.length) sourceValues = sourceValues.filter(value => tupleValues.includes(value))
+    }
+    if (constraint.declared) sourceValues = sourceValues.filter(value => constraint.values.includes(value))
+    resultFields[field.plural] = sourceValues
+  }
+  const overrideUniversal = applicable && hasOwn(applicable, 'universal') ? Boolean(applicable.universal) : true
+  const outputApplicable = applicable ? { ...applicable } : {}
+  delete outputApplicable.context_tuples
+  delete outputApplicable.contextTuples
+  for (const field of MEMORY_CONTEXT_FIELDS) {
+    delete outputApplicable[field.field]
+    delete outputApplicable[field.plural]
+  }
+  const output = { ...outputApplicable, universal:sourceUniversal && overrideUniversal, ...resultFields }
+  if (sourceTupleMode) output.context_tuples = filteredTuples
+  return { applicable_when:output, avoid_when:avoidWhen }
 }
 
 function buildMemoryPayload(reviewCase, version) {
@@ -600,6 +842,47 @@ function recencyScore(date) {
   return Math.exp(-ageDays / 90)
 }
 
+function tupleFieldValue(tuple, field) {
+  const raw = tuple?.[field.field] ?? tuple?.[field.plural]
+  const normalized = normalizeTupleScalar(field, raw)
+  return normalized.valid ? normalized.value : null
+}
+
+function tupleMatchesContext(tuple, context = {}) {
+  let compared = 0
+  for (const field of MEMORY_CONTEXT_FIELDS) {
+    const expected = tupleFieldValue(tuple, field)
+    if (!expected) continue
+    const current = context[field.field]
+    if (current == null || current === '') {
+      if (field.field === 'entry_method' && Array.isArray(context.allowed_entry_methods)
+        && context.allowed_entry_methods.length) {
+        compared += 1
+        if (!context.allowed_entry_methods.map(value => String(value).toLowerCase()).includes(expected)) return { matched:false, compared }
+      }
+      continue
+    }
+    const normalized = normalizeContextValue(field, current)
+    compared += 1
+    if (!normalized || normalized !== expected) return { matched:false, compared }
+  }
+  return { matched:true, compared }
+}
+
+function contextTupleCompatibility(applicability, context) {
+  if (applicability.contextTupleState === 'absent') return { present:false, matched:false, compared:0 }
+  if (applicability.contextTupleState !== 'valid') {
+    return { present:true, matched:false, compared:0, malformed:true }
+  }
+  let compared = 0
+  for (const tuple of applicability.contextTuples) {
+    const result = tupleMatchesContext(tuple, context)
+    compared = Math.max(compared, result.compared)
+    if (result.matched && result.compared > 0) return { present:true, matched:true, compared:result.compared }
+  }
+  return { present:true, matched:false, compared }
+}
+
 export function rankMemoryCandidates(items, context = {}) {
   return items.map(item => {
     const reasons = []
@@ -640,6 +923,13 @@ export function rankMemoryCandidates(items, context = {}) {
     match('market_regime', 1, true)
     match('volatility_bucket', 1); match('chan_reliability', 1); match('chan_trend_state', 1.5)
     match('chan_segment_direction', 1); match('chan_divergence', 1.5); match('chan_center_state', 1)
+    const tupleMatch = contextTupleCompatibility(applicability, context)
+    if (tupleMatch.malformed) {
+      eligible = false; reasons.push('context_tuple_malformed')
+    } else if (tupleMatch.present && !applicability.universal) {
+      if (tupleMatch.matched) { matchedSpecific += 1; reasons.push('context_tuple_match') }
+      else { eligible = false; reasons.push('context_tuple_mismatch') }
+    }
     const avoid = parse(item.avoid_when_json, {}) || {}
     for (const [field, blocked] of Object.entries(avoid)) {
       const current = context[field]

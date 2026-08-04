@@ -196,10 +196,11 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('if (refreshSignalTickets) requests.push(loadSignalTickets())')
   })
 
-  it('updates the active bridge entry before synchronizing account identity', () => {
-    expect(bridgeWs).toContain('const currentBridge = bridges.get(userId)')
-    expect(bridgeWs).toContain('currentBridge.brokerServer = account.server')
-    expect(bridgeWs).toContain('syncTradingAccountIdentity(userId, account)')
+  it('binds the active V3 terminal only after synchronizing account identity', () => {
+    const identity = bridgeWs.indexOf('syncTradingAccountIdentity(Number(userId), account)')
+    const binding = bridgeWs.indexOf('bindings.set(terminal.terminal_instance_id, identity.accountId)', identity)
+    expect(identity).toBeGreaterThan(0)
+    expect(binding).toBeGreaterThan(identity)
   })
 
   it('anchors overview live candles to MT5 quote time instead of creating weekend bars from the browser clock', () => {
@@ -642,9 +643,9 @@ describe('AI governance navigation and DOM contract', () => {
   it('refreshes every account-scoped view after a live MT5 account switch', () => {
     expect(app).toContain("msg.type === 'account_switched'")
     expect(app).toContain("msg.type === 'account_transferred'")
-    expect(bridgeWs).toContain("type: 'account_switched'")
-    expect(bridgeWs).toContain("type: 'account_transferred'")
-    expect(bridgeWs).toContain("previousBridge.ws.close(4004")
+    expect(bridgeWs).toContain("type:'account_switched'")
+    expect(bridgeWs).toContain("type:'account_transferred'")
+    expect(bridgeWs).toContain("bridgeV3Business.disconnectUser(Number(previousUserId), 'bridge_account_ownership_transferred')")
     const start = app.indexOf('async function handleAccountSwitched')
     const end = app.indexOf('async function handleAccountTransferred', start)
     const handler = app.slice(start, end)

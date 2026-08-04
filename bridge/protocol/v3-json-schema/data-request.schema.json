@@ -21,5 +21,5 @@
     "action": { "enum": ["rates", "symbol_snapshot", "risk_snapshot", "performance_daily", "symbols", "history", "chart_data", "pending_order_state", "diagnostics"] },
     "params": { "type": "object" }
   },
-  "additionalProperties": false
+  "unevaluatedProperties": false
 }

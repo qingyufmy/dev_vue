@@ -62,6 +62,7 @@ const state = {
   reviewSummaryTimer: null,
   reviewDetailPollTimer: null,
   reviewDetailJobKey: null,
+  reviewDetailRequestVersion: 0,
   reviewFilter: "",
   reviewPeriodFilter: "",
   reviewListOffset: 0,
@@ -101,6 +102,7 @@ const MANUAL_ANALYSIS_TERMINAL_STATUSES = new Set([
 let _historyCache = null;      // { filters: string, data: object }
 let _historyChartCache = null; // { filters: string, data: object }
 let _prevPositionCount = 0;
+let _sessionInvalidating = false;
 
 function normalizeBridgePlatform(value) {
   return String(value || "").trim().toLowerCase() === "mt4" ? "mt4" : "mt5";
@@ -1690,6 +1692,7 @@ async function api(path, options = {}) {
       error.status = response.status;
       error.code = code;
       error.incidentId = data.incident_id || null;
+      if (response.status === 401) invalidateSession();
       throw error;
     }
     if (data?.runtime_sync?.degraded) {
@@ -1765,6 +1768,81 @@ function clearAccountContextCaches() {
   _prevPositionCount = 0;
   if ($("positionsBody")) $("positionsBody").innerHTML = renderPositionRows([], true);
   if ($("dashboardPositionsBody")) $("dashboardPositionsBody").innerHTML = renderPositionRows([], false);
+}
+
+function invalidateSession() {
+  if (_sessionInvalidating) return false;
+  _sessionInvalidating = true;
+
+  // Stop every timer that could issue another request or schedule a reconnect
+  // after the browser session has been revoked.
+  if (state._reconnectTimer) { clearTimeout(state._reconnectTimer); state._reconnectTimer = null; }
+  if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }
+  if (_personalBridgeRefreshTimer) { clearTimeout(_personalBridgeRefreshTimer); _personalBridgeRefreshTimer = null; }
+  if (_bridgeDataRefreshTimer) { clearTimeout(_bridgeDataRefreshTimer); _bridgeDataRefreshTimer = null; }
+  if (_bridgeControlRefreshTimer) { clearInterval(_bridgeControlRefreshTimer); _bridgeControlRefreshTimer = null; }
+  if (_signalMonitorUpdateTimer) { clearTimeout(_signalMonitorUpdateTimer); _signalMonitorUpdateTimer = null; }
+  if (state._posRefreshTimer) { clearTimeout(state._posRefreshTimer); state._posRefreshTimer = null; }
+  if (state.positionManagementRealtimeTimer) { clearTimeout(state.positionManagementRealtimeTimer); state.positionManagementRealtimeTimer = null; }
+  stopRealtimeSync();
+  stopPresenceHeartbeat();
+  stopUiTimer();
+  stopLiveQuoteRefreshTimer();
+  stopKlineRefreshTimers();
+  clearKlineData('读取失败');
+  stopPositionProtectionPolling();
+  stopManualAnalysisPolling();
+  stopReviewDetailPolling();
+  if (state.reviewSummaryTimer) clearInterval(state.reviewSummaryTimer);
+  state.reviewSummaryTimer = null;
+  state.reviewListRequestVersion += 1;
+  state.reviewDetailRequestVersion += 1;
+  _bridgeDataRefreshStreams.clear();
+
+  // Reject commands before closing the socket so callers cannot remain
+  // pending if the WebSocket close event is delayed by the browser.
+  for (const [id, pending] of _wsPending) {
+    clearTimeout(pending.timer);
+    pending.reject(new Error('登录状态已失效'));
+    _wsPending.delete(id);
+  }
+  const ws = state.bridgeWs;
+  state.bridgeWs = null;
+  if (ws) { try { ws.close() } catch {} }
+
+  clearAccountContextCaches();
+  state.token = "";
+  state.user = null;
+  state.aiAccess = null;
+  state.observerChannels = [];
+  state.selectedObserverChannelId = null;
+  state.signals = [];
+  state.selectedSignal = null;
+  state.dashboardSignal = null;
+  state.latestSignalId = null;
+  state.auditRows = [];
+  state.modelProfiles = [];
+  state.reviewCases = [];
+  state.reviewSummary = { pending:0, issues:0, unread:0, pending_confirmation:0, generating:0, failed:0, total:0, daily_total:0, monthly_total:0, daily_attention:0, monthly_attention:0 };
+  state.reviewSummaryInitialized = false;
+  state.memoryItems = [];
+  state.memorySummaries = [];
+  state.memorySettings = {};
+  state.platformMemoryPolicies = [];
+  state.platformMemoryEvaluation = {};
+  state.signalTickets = {};
+  state.closeSignalTickets = {};
+  clearManualAnalysisTask();
+  if (window.AuthSession) window.AuthSession.clear();
+  else {
+    setAuth("");
+    localStorage.removeItem("ws_token");
+    localStorage.removeItem("ws_user");
+    document.cookie = "ws_token=; Max-Age=0; Path=/; SameSite=Lax";
+  }
+  showApp(false);
+  window.location.href = "/ai/auth/?mode=login";
+  return true;
 }
 
 async function handleAccountSwitched(msg = {}) {
@@ -2033,7 +2111,8 @@ function connectBridgeStatusWs(onReady) {
     _wsPending.clear();
     _fireReady(); // ensure bootstrap() doesn't hang when WS fails to connect
     // Auth failure (server closed with 4002) -> don't retry
-    if (e.code === 4002) { setBadge("gatewayMode", "认证失败，请重新登录", "danger"); return; }
+    if (e.code === 4002) { invalidateSession(); return; }
+    if (_sessionInvalidating) return;
     // Prevent duplicate reconnect timers
     if (state._reconnectTimer) clearTimeout(state._reconnectTimer);
     setBadge("gatewayMode", "WebSocket断开-重连中...", "neutral");
@@ -3908,9 +3987,11 @@ function schedulePeriodReviewDetailPoll(review) {
   const caseId = Number(review.id), timezoneOffset = review.timezone_offset_minutes != null
     && review.timezone_offset_minutes !== "" && Number.isInteger(Number(review.timezone_offset_minutes))
     ? Number(review.timezone_offset_minutes) : null;
+  const requestVersion = state.reviewDetailRequestVersion;
   state.reviewDetailJobKey = `${review.job_status}:${review.progress_stage}:${review.attempt_count}:${review.next_attempt_at || ''}`;
   state.reviewDetailPollTimer = setTimeout(async () => {
-    if (Number(state.selectedReviewId) !== caseId || activeTabId() !== "review-memory") return;
+    if (requestVersion !== state.reviewDetailRequestVersion
+      || Number(state.selectedReviewId) !== caseId || activeTabId() !== "review-memory") return;
     try {
       const data = await api(`/api/ai/period-reviews/${caseId}/job-status`), job = { ...(data.job || {}), timezone_offset_minutes:timezoneOffset };
       const nextKey = `${job.job_status}:${job.progress_stage}:${job.attempt_count}:${job.next_attempt_at || ''}:${job.current_version_id || ''}`;
@@ -3959,9 +4040,16 @@ function reviewStrategyProvenance(review = {}) {
   return versions.length > 1 ? `覆盖 ${versions.length} 个兼容策略版本` : "策略配置来源已记录";
 }
 
+function periodReviewDetailErrorHtml(error) {
+  const message = localizeReason(error?.message || "") || "暂时无法读取该复盘详情，请稍后重试";
+  return `<div class="review-empty-state empty-state is-error" role="alert"><span class="review-empty-icon"><i data-lucide="circle-alert" size="20"></i></span><strong>复盘详情读取失败</strong><span>${escapeHtml(message)}</span><button class="btn btn-secondary btn-sm" type="button" data-review-action="reload-detail">重新加载</button></div>`;
+}
+
 async function openPeriodReviewDetail(id, { silent = false } = {}) {
   stopReviewDetailPolling();
-  state.selectedReviewId = Number(id); renderReviewCases();
+  const requestedId = Number(id);
+  const requestVersion = ++state.reviewDetailRequestVersion;
+  state.selectedReviewId = requestedId; renderReviewCases();
   const reviewLayout = document.querySelector(".period-review-layout");
   reviewLayout?.classList.add("has-mobile-detail");
   const detail = $("reviewDetail");
@@ -3970,9 +4058,14 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
   try {
     data = await api(`/api/ai/period-reviews/${id}`);
   } catch (error) {
-    reviewLayout?.classList.remove("has-mobile-detail");
+    if (requestVersion !== state.reviewDetailRequestVersion
+      || Number(state.selectedReviewId) !== requestedId) return null;
+    if (detail) detail.innerHTML = periodReviewDetailErrorHtml(error);
+    initIcons();
     throw error;
   }
+  if (requestVersion !== state.reviewDetailRequestVersion
+    || Number(state.selectedReviewId) !== requestedId) return null;
   const review = data.review || {};
   const current = (review.versions || []).find(item => Number(item.id) === Number(review.current_version_id)) || review.versions?.at(-1);
   const content = current?.content || {};
@@ -4010,6 +4103,8 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     ...(content.period_chan_assessment ? [{ ...content.period_chan_assessment, explanation:`整日结构：${content.period_chan_assessment.explanation || '无补充说明'}` }] : []),
     ...(content.chan_diagnoses || []),
   ];
+  if (requestVersion !== state.reviewDetailRequestVersion
+    || Number(state.selectedReviewId) !== requestedId) return null;
   detail.innerHTML = `<button class="review-mobile-back" type="button" data-review-action="back-list"><i data-lucide="arrow-left" size="16"></i>返回复盘列表</button><header class="period-review-detail-header">
       <div><span class="period-review-type ${isMonthly ? 'monthly' : 'daily'}"><i data-lucide="${isMonthly ? 'calendar-range' : 'calendar-days'}" size="14"></i>${isMonthly ? '月复盘' : '日复盘'}</span><h2>${escapeHtml(review.period_key || '--')}</h2><p>${escapeHtml(review.strategy_title || `策略 #${review.strategy_id}`)} · ${escapeHtml(strategyProvenance)}</p><p class="period-review-period-scope"><i data-lucide="clock-3" size="13"></i>${escapeHtml(periodScope)}</p></div>
       <div class="period-review-header-state"><span class="status-chip ${statusClass}">${escapeHtml(reviewStatusLabel(review.status))}</span>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div>
@@ -4039,13 +4134,18 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
   initIcons();
   if (current && Number(review.is_unread)) {
     api(`/api/ai/period-reviews/${id}/read`, { method:"POST", body:{ version_id:current.id } }).then(() => {
+      if (requestVersion !== state.reviewDetailRequestVersion
+        || Number(state.selectedReviewId) !== requestedId) return;
       const item = state.reviewCases.find(row => Number(row.id) === Number(id));
       if (item) item.is_unread = 0;
       renderReviewCases();
       loadReviewSummary({ announce:false }).catch(() => {});
     }).catch(() => {});
   }
+  if (requestVersion !== state.reviewDetailRequestVersion
+    || Number(state.selectedReviewId) !== requestedId) return null;
   schedulePeriodReviewDetailPoll(review);
+  return review;
 }
 
 const memoryCategoryLabels = {
@@ -4375,23 +4475,7 @@ function handleAccountCenterMessage(event) {
 }
 
 function logout() {
-  if (state.bridgeWs) { try { state.bridgeWs.close() } catch {} state.bridgeWs = null; }
-  stopRealtimeSync();
-  stopPresenceHeartbeat();
-  stopReviewDetailPolling();
-  if (state.reviewSummaryTimer) clearInterval(state.reviewSummaryTimer);
-  state.reviewSummaryTimer = null;
-  state.user = null;
-  state.selectedSignal = null;
-  if (window.AuthSession) window.AuthSession.clear();
-  else {
-    setAuth("");
-    localStorage.removeItem("ws_token");
-    localStorage.removeItem("ws_user");
-    document.cookie = "ws_token=; Max-Age=0; Path=/; SameSite=Lax";
-  }
-  showApp(false);
-  window.location.href = "/ai/auth/?mode=login";
+  invalidateSession();
 }
 
 // Presence heartbeat — updates last_seen_at for online count
@@ -4638,7 +4722,7 @@ async function bootstrap() {
     refreshTabData(activeTabId());
   } catch (error) {
     if (error?.name === "ApiError" && Number(error.status) === 401) {
-      logout();
+      invalidateSession();
       return;
     }
     console.error("[Bootstrap] AI 实验室初始化失败:", error);
@@ -4965,21 +5049,21 @@ function initBridgeModal() {
   $("bridgePauseConfirm")?.addEventListener("click", () => updateBridgeRuntimeControl(false));
 
   $("downloadExe")?.addEventListener("click", async () => {
-    let url = "https://qiniu.acadfx.com/bridge/bootstrapper/2905f7ab40600aa6d75fe083c3e70f3fa5a8735312f2e848a8b283a91669599b/LiangjianBridgeSetup.exe";
-    let version = "3.0.0";
     try {
       const resp = await fetch("/api/bridge/version");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      if (data.full_url || data.updater_url) url = data.full_url || data.updater_url;
-      if (data.version) {
-        version = String(data.version).replace(/^v?/i, "v");
-        window._bridgeVersion = version;
-      }
-    } catch {}
-    const a = document.createElement("a");
-    a.href = url; a.download = url.split("/").pop(); a.click();
-    toast(`正在下载量见智桥 ${version}`, "success");
+      if (!data.full_url) throw new Error("bridge_download_url_missing");
+      const version = data.version ? String(data.version).replace(/^v?/i, "v") : "最新版";
+      window._bridgeVersion = version;
+      const a = document.createElement("a");
+      a.href = data.full_url;
+      a.download = data.full_url.split("/").pop();
+      a.click();
+      toast(`正在下载量见智桥 ${version}`, "success");
+    } catch {
+      toast("下载信息加载失败，请稍后重试", "error");
+    }
   });
 
 }
@@ -5285,6 +5369,9 @@ let _klineVolumeSeries = null;
 let _klineTimeframe = 'M5';
 let _klineLastBar = null;
 let _klineCandles = [];
+let _klineDataKey = '';
+let _klineRequestVersion = 0;
+let _klineDataAvailable = false;
 let _klinePositionSeries = [];
 let _klinePositionTooltip = null;
 const KLINE_POSITION_ENTRY_COLOR = '#d4af37';
@@ -5352,6 +5439,28 @@ function clearKlinePositionEntries() {
   if (_klinePositionTooltip) {
     _klinePositionTooltip.hidden = true;
     _klinePositionTooltip.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function klineRequestKey(symbol, timeframe = _klineTimeframe) {
+  return `${String(symbol || '').trim().toUpperCase()}::${String(timeframe || '').trim().toUpperCase()}`;
+}
+
+function clearKlineData(status = '暂无行情', key = null) {
+  _klineDataAvailable = false;
+  _klineCandles = [];
+  _klineLastBar = null;
+  if (key != null) _klineDataKey = key;
+  clearKlinePositionEntries();
+  try { _klineSeries?.setData([]); } catch { /* chart may not be ready */ }
+  try { _klineVolumeSeries?.setData([]); } catch { /* chart may not be ready */ }
+  setText('klineLastPrice', '--');
+  const sourceBadge = $('klineDataSource');
+  if (sourceBadge) {
+    sourceBadge.textContent = status;
+    sourceBadge.dataset.state = status === '读取失败' ? 'error' : 'empty';
+    sourceBadge.classList.remove('is-platform', 'is-fallback');
+    sourceBadge.title = status;
   }
 }
 
@@ -5587,9 +5696,22 @@ async function loadKlineData() {
   if (document.hidden || activeTabId() !== 'dashboard') return;
   if (!_klineSeries) return; // Chart not initialized yet (e.g. admin on dashboard tab)
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
+  const timeframe = _klineTimeframe;
+  const requestVersion = ++_klineRequestVersion;
+  const requestKey = klineRequestKey(symbol, timeframe);
+  const isCurrentRequest = () => requestVersion === _klineRequestVersion
+    && requestKey === klineRequestKey(
+      $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD",
+      _klineTimeframe,
+    );
+  if (_klineDataKey !== requestKey) clearKlineData('暂无行情', requestKey);
   try {
-    const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 200 });
-    if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
+    const data = await wsApi('rates', { symbol, timeframe, count: 200 });
+    if (!isCurrentRequest()) return;
+    if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) {
+      clearKlineData(data?.status === 'success' ? '暂无行情' : '读取失败', requestKey);
+      return;
+    }
     const sourceBadge = $('klineDataSource');
     if (sourceBadge) {
       const meta = data.market_meta || {};
@@ -5613,7 +5735,10 @@ async function loadKlineData() {
     }
     const normalized = [...cleanRows.values()].sort((a, b) => a.candle.time - b.candle.time);
     const candles = normalized.map(item => item.candle);
-    if (!candles.length) throw new Error('no_valid_kline_ohlc');
+    if (!candles.length) {
+      clearKlineData('暂无行情', requestKey);
+      return;
+    }
     const volumes = normalized.map(({ row, candle }) => ({
       time: candle.time,
       value: Math.max(0, Number(row.tick_volume || row.volume || 0) || 0),
@@ -5624,6 +5749,9 @@ async function loadKlineData() {
     _klineVolumeSeries.setData(volumes);
     _klineCandles = candles;
     _klineLastBar = candles[candles.length - 1];
+    _klineDataKey = requestKey;
+    _klineDataAvailable = true;
+    if (sourceBadge) sourceBadge.dataset.state = 'ready';
     syncKlinePositionEntries();
 
     // Update last price display
@@ -5631,6 +5759,8 @@ async function loadKlineData() {
 
     _klineChart.timeScale().fitContent();
   } catch (e) {
+    if (!isCurrentRequest()) return;
+    clearKlineData('读取失败', requestKey);
     const bridgeUnavailable = state._lastGatewayLive !== true;
     if (!bridgeUnavailable && !String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
       console.error('loadKlineData:', e);
@@ -5643,19 +5773,36 @@ async function refreshKlineVolume() {
   if (document.hidden || activeTabId() !== 'dashboard') return;
   if (state.marketTradeMode === 0 || !_klineVolumeSeries || !_klineLastBar) return;
   const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
+  const timeframe = _klineTimeframe;
+  const requestVersion = _klineRequestVersion;
+  const requestKey = klineRequestKey(symbol, timeframe);
   try {
-    const data = await wsApi('rates', { symbol, timeframe: _klineTimeframe, count: 1 });
-    if (data && data.status === 'success' && Array.isArray(data.rates) && data.rates.length) {
-      const b = data.rates.at(-1);
-      const vol = Number(b.tick_volume || b.volume || 0);
-      const color = Number(b.close) >= Number(b.open) ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)';
-      _klineVolumeSeries.update({ time: _klineLastBar.time, value: vol, color: color });
+    const data = await wsApi('rates', { symbol, timeframe, count: 1 });
+    if (requestVersion !== _klineRequestVersion || requestKey !== _klineDataKey
+      || requestKey !== klineRequestKey(
+        $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD",
+        _klineTimeframe,
+      )) return;
+    if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) {
+      clearKlineData(data?.status === 'success' ? '暂无行情' : '读取失败', requestKey);
+      return;
     }
-  } catch (e) { /* ignore */ }
+    const b = data.rates.at(-1);
+    const open = Number(b?.open), high = Number(b?.high), low = Number(b?.low), close = Number(b?.close);
+    if (![open, high, low, close].every(Number.isFinite) || open <= 0 || high <= 0 || low <= 0 || close <= 0 || high < low) {
+      clearKlineData('暂无行情', requestKey);
+      return;
+    }
+    const vol = Number(b.tick_volume || b.volume || 0);
+    const color = close >= open ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)';
+    _klineVolumeSeries.update({ time: _klineLastBar.time, value: vol, color: color });
+  } catch (e) {
+    if (requestVersion === _klineRequestVersion && requestKey === _klineDataKey) clearKlineData('读取失败', requestKey);
+  }
 }
 
 function updateKlineTick(bid, ask, quote = {}) {
-  if (!_klineSeries || state.marketTradeMode === 0) return;
+  if (!_klineSeries || !_klineDataAvailable || state.marketTradeMode === 0) return;
   const price = Number(bid);
   if (!Number.isFinite(price) || price <= 0) return;
   // Always anchor the live candle to the broker quote timestamp. During a
@@ -7657,10 +7804,13 @@ async function runManualAnalysisAsync({ strategyId, symbol }) {
   setText("analysisLatency", "后台分析中");
   setText("signalFreshness", "等待结果");
   renderManualAnalysisJobStatus({ status:"running" });
+  // One explicit replay key per intentional UI invocation. Keep it stable for
+  // this request even if the inline call waits or the browser disconnects.
+  const requestId = globalThis.crypto?.randomUUID?.() || `manual-analysis-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   try {
     const response = await api("/api/ai/manual-analysis/jobs", {
       method:"POST",
-      body:{ session_id:"default", strategy_id:strategyId, symbol, include_positions:false, auto_execute:false },
+      body:{ session_id:"default", strategy_id:strategyId, symbol, include_positions:false, auto_execute:false, request_id:requestId },
       timeout:20000,
     });
     const job = response.job || response;
@@ -9980,12 +10130,20 @@ function bindEvents() {
     if (reviewAction) {
       const caseId = state.selectedReviewId, versionId = Number(reviewAction.dataset.versionId || 0), action = reviewAction.dataset.reviewAction;
       if (action === "back-list") {
-        document.querySelector(".period-review-layout")?.classList.remove("has-mobile-detail");
+        stopReviewDetailPolling();
+        state.reviewDetailRequestVersion += 1;
+        state.selectedReviewId = null;
+        renderReviewCases();
+        const reviewLayout = document.querySelector(".period-review-layout");
+        reviewLayout?.classList.remove("has-mobile-detail");
         document.querySelector(".review-queue")?.scrollIntoView({ behavior:"smooth", block:"start" });
         return;
       }
       try {
-        if (action === "retry") {
+        if (action === "reload-detail") {
+          await openPeriodReviewDetail(caseId);
+        }
+        else if (action === "retry") {
           reviewAction.disabled = true;
           reviewAction.innerHTML = '<i data-lucide="loader-circle" size="14"></i>正在进入队列';
           await api(`/api/ai/period-reviews/${caseId}/retry`, { method:"POST" });

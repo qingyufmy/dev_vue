@@ -27,5 +27,5 @@
     "connection_epoch": { "type": "integer", "minimum": 1 },
     "symbol": { "type": "string", "minLength": 1, "maxLength": 64 }
   },
-  "additionalProperties": false
+  "unevaluatedProperties": false
 }

@@ -13,6 +13,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 pub const DEFAULT_PROFILE_ID: &str = "default";
+pub const MAX_OBSERVER_PROFILES: usize = 16;
 pub const MT5_WORKER_RELATIVE_PATH: &str = "modules/adapter.mt5.python/worker.py";
 pub const PYTHON_RELATIVE_PATH: &str = "runtime/python/python.exe";
 
@@ -450,6 +451,9 @@ pub fn list_observer_profiles(
     }
     profiles.sort();
     profiles.dedup();
+    if profiles.len() > MAX_OBSERVER_PROFILES {
+        return Err("bridge_observer_profile_limit_exceeded");
+    }
     Ok(profiles)
 }
 
@@ -817,6 +821,20 @@ mod tests {
         assert_eq!(
             list_observer_profiles(&root).expect("observer profiles"),
             vec!["source-a".to_owned(), "source-b".to_owned()]
+        );
+        fs::remove_dir_all(root).expect("remove profiles fixture");
+    }
+
+    #[test]
+    fn observer_profile_listing_fails_closed_above_the_process_budget() {
+        let root = unique_test_directory("profile-limit");
+        for index in 0..=MAX_OBSERVER_PROFILES {
+            fs::create_dir_all(root.join("profiles").join(format!("source-{index:02}")))
+                .expect("observer profile");
+        }
+        assert_eq!(
+            list_observer_profiles(&root),
+            Err("bridge_observer_profile_limit_exceeded")
         );
         fs::remove_dir_all(root).expect("remove profiles fixture");
     }

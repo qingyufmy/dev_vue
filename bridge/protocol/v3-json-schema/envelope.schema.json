@@ -20,6 +20,5 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
     },
     "sent_at_utc_msc": { "type": "integer", "minimum": 1 }
-  },
-  "additionalProperties": true
+  }
 }

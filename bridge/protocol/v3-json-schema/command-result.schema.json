@@ -26,7 +26,7 @@
     "connection_epoch": { "type": "integer", "minimum": 1 },
     "status": { "enum": ["succeeded", "rejected", "failed", "uncertain"] },
     "completed_at_utc_msc": { "type": "integer", "minimum": 1 },
-    "error_code": { "type": ["string", "null"], "maxLength": 128 },
+    "error_code": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9_]{1,128}$" },
     "error_message": { "type": ["string", "null"], "maxLength": 1000 },
     "raw_result": { "type": ["object", "null"] },
     "evidence": {
@@ -34,13 +34,13 @@
       "required": ["observed_at_utc_msc"],
       "properties": {
         "observed_at_utc_msc": { "type": "integer", "minimum": 1 },
-        "order_tickets": { "type": "array", "items": { "type": "string", "maxLength": 64 }, "maxItems": 100 },
-        "position_tickets": { "type": "array", "items": { "type": "string", "maxLength": 64 }, "maxItems": 100 },
-        "deal_tickets": { "type": "array", "items": { "type": "string", "maxLength": 64 }, "maxItems": 100 },
+        "order_tickets": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "maxItems": 100 },
+        "position_tickets": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "maxItems": 100 },
+        "deal_tickets": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "maxItems": 100 },
         "broker_retcode": { "type": ["integer", "null"] }
       },
       "additionalProperties": false
     }
   },
-  "additionalProperties": false
+  "unevaluatedProperties": false
 }

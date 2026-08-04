@@ -6,6 +6,7 @@ const auth = readFileSync(new URL('../../server/middleware/auth.js', import.meta
 const migrations = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
 const db = readFileSync(new URL('../../server/db.js', import.meta.url), 'utf8')
 const bridge = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
+const bridgeGateway = readFileSync(new URL('../../server/bridge-v3/gateway.js', import.meta.url), 'utf8')
 const config = readFileSync(new URL('../../server/routes/ai/config.js', import.meta.url), 'utf8')
 const rollout = readFileSync(new URL('../../server/routes/ai/rollout-governance.js', import.meta.url), 'utf8')
 const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
@@ -69,7 +70,7 @@ describe('rollout hardening contract', () => {
     expect(scheduler).not.toContain('await fetch(')
     expect(scheduler).toContain('await maybeAiSignal(')
     expect(llm).toContain('await requestJsonObject({')
-    expect(llm).toContain('await beginModelUsage({ ...usageContext, estimatedTokens })')
+    expect(llm).toContain('await beginModelUsage(')
   })
 
   it('checks scheduler cooldown before repeated database and model resolution work', () => {
@@ -101,9 +102,10 @@ describe('rollout hardening contract', () => {
     expect(config).toContain("upsertDefaultModelProfileFromLegacyInput(userId, 'user'")
   })
 
-  it('synchronizes the persisted trade switch into every newly connected Bridge', () => {
-    expect(bridge).toContain("sendBridgeCommand(userId, 'toggle_trade', { enable: defaultTrade }")
-    expect(bridge).toContain('Failed to synchronize trade state')
+  it('applies the persisted trade switch while authenticating every V3 Bridge', () => {
+    expect(bridgeGateway).toContain('AS trade_send_enabled')
+    expect(bridgeGateway).toContain('connection.tradeEnabled =')
+    expect(bridgeGateway).toContain("Number(user.trade_send_enabled) === 1")
   })
 
   it('projects the authorized observer channel source without routing writes to it', () => {

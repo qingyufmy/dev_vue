@@ -91,10 +91,10 @@ import {
   getPlatformMarketClockState,
   getLatestBridgeMt5Clock,
   sendToAdminBrowsers,
+  disconnectUserSockets,
   broadcastAdminEvent,
   browserSessionToken,
   BRIDGE_WS_LIMITS,
-  createBridgeInitMessageQueue,
   isAllowedBrowserWsOrigin,
   normalizeBridgePage,
   normalizeBridgePageSize,
@@ -102,6 +102,8 @@ import {
   buildBrowserCommandResult,
   buildBridgeDataChangedEvent,
   buildObserverBrowserPayload,
+  createBrowserAutoExecuteGuard,
+  isBrowserSocketRegistered,
 } from '../server/bridge-ws.js'
 import { queryOne } from '../server/db.js'
 
@@ -179,29 +181,6 @@ describe('browser websocket authentication transport', () => {
     expect(wsMessageByteLength('abc')).toBe(3)
     expect(wsMessageByteLength('交易')).toBe(6)
     expect(wsMessageByteLength(Buffer.alloc(7))).toBe(7)
-  })
-})
-
-describe('bridge initialization queue limits', () => {
-  it('closes and clears a peer that floods messages before authentication completes', () => {
-    const ws = new EventEmitter()
-    ws.close = vi.fn()
-    const queue = createBridgeInitMessageQueue(ws)
-    for (let index = 0; index <= BRIDGE_WS_LIMITS.maxInitQueueMessages; index++) ws.emit('message', Buffer.from('{}'))
-    expect(queue.overflowed).toBe(true)
-    expect(ws.close).toHaveBeenCalledWith(1009, expect.stringContaining('payload limit'))
-    expect(queue.drain()).toEqual([])
-  })
-
-  it('drains accepted early messages exactly once', () => {
-    const ws = new EventEmitter()
-    ws.close = vi.fn()
-    const queue = createBridgeInitMessageQueue(ws)
-    ws.emit('message', Buffer.from('{"type":"hb"}'))
-    expect(queue.drain()).toHaveLength(1)
-    ws.emit('message', Buffer.from('{"type":"hb"}'))
-    expect(queue.drain()).toEqual([])
-    expect(ws.close).not.toHaveBeenCalled()
   })
 })
 
@@ -347,13 +326,17 @@ describe('initBridgeWS', () => {
     expect(fakeSocket.destroy).toHaveBeenCalled()
   })
 
-  it('calls handleUpgrade for bridge path', () => {
+  it('retires the legacy bridge path before websocket upgrade', () => {
     const server = new EventEmitter()
     initBridgeWS(server)
-    const fakeSocket = { destroy: vi.fn() }
+    const fakeSocket = { end:vi.fn(), write:vi.fn(), destroy:vi.fn() }
     const req = { url: '/aurum-api/bridge/ws?type=bridge&token=tok', headers: {}, socket: { remoteAddress: '127.0.0.1' } }
     server.emit('upgrade', req, fakeSocket, Buffer.alloc(0))
-    expect(mockWss.handleUpgrade).toHaveBeenCalled()
+    expect(fakeSocket.end).toHaveBeenCalledWith(expect.stringContaining('HTTP/1.1 426 Upgrade Required'))
+    expect(fakeSocket.end).toHaveBeenCalledWith(expect.stringContaining('Link: </api/bridge/version>; rel="update"'))
+    expect(fakeSocket.write).not.toHaveBeenCalled()
+    expect(fakeSocket.destroy).not.toHaveBeenCalled()
+    expect(mockWss.handleUpgrade).not.toHaveBeenCalled()
   })
 
   it('routes the v3 bridge path without destroying its socket', () => {
@@ -428,6 +411,57 @@ describe('initBridgeWS', () => {
     browserWs.emit('close')
     mockBridgeV3Business.connectedTerminals.mockReturnValue([])
   })
+
+  it('includes authenticated admin sockets in user-wide session revocation', async () => {
+    queryOne.mockResolvedValue({ id:42, role:'admin', token_version:0 })
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls
+      .filter(([event]) => event === 'connection')
+      .at(-1)?.[1]
+    const adminWs = new EventEmitter()
+    adminWs.readyState = 1
+    adminWs.send = vi.fn()
+    adminWs.close = vi.fn()
+
+    await connectionHandler(adminWs, {
+      url:'/aurum-api/bridge/ws?type=admin',
+      headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
+    })
+    disconnectUserSockets(42, 'session test')
+
+    expect(adminWs.close).toHaveBeenCalledWith(4002, 'session test')
+  })
+
+  it('aborts an inline auto-execute guard on browser close and removes listeners', async () => {
+    queryOne.mockResolvedValue({ id:42, token_version:0 })
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls
+      .filter(([event]) => event === 'connection')
+      .at(-1)?.[1]
+    const browserWs = new EventEmitter()
+    browserWs.readyState = 1
+    browserWs.send = vi.fn()
+    browserWs.close = vi.fn()
+    await connectionHandler(browserWs, {
+      url:'/aurum-api/bridge/ws?type=browser',
+      headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
+    })
+
+    expect(isBrowserSocketRegistered(42, browserWs)).toBe(true)
+    const guard = createBrowserAutoExecuteGuard(42, browserWs)
+    expect(guard.signal.aborted).toBe(false)
+    expect(browserWs.listenerCount('close')).toBe(2)
+    expect(browserWs.listenerCount('error')).toBe(2)
+    browserWs.readyState = 3
+    browserWs.emit('close')
+    expect(guard.signal.aborted).toBe(true)
+    expect(guard.signal.reason).toMatchObject({ code:'manual_auto_execute_request_disconnected' })
+    guard.dispose()
+    expect(browserWs.listenerCount('close')).toBe(1)
+    expect(browserWs.listenerCount('error')).toBe(1)
+  })
 })
 
 describe('isBridgeAlive', () => {
@@ -493,10 +527,20 @@ describe('default observer clock bootstrap', () => {
 })
 
 describe('bridge-reported market state', () => {
-  it('keeps the pending action name for oversized payload diagnostics', () => {
+  it('keeps legacy bridge transport diagnostics out of the V3-only websocket service', () => {
     const source = readFileSync(new URL('../server/bridge-ws.js', import.meta.url), 'utf8')
-    expect(source).toContain("action:String(action || '').slice(0, 64)")
-    expect(source).toContain("pendingActions=${pendingActions.join(',')}")
+    expect(source).not.toContain('function handleBridge(')
+    expect(source).not.toContain('pendingActions=${pendingActions.join(\',\')}')
+  })
+
+  it('reconciles automatic scheduling after the final V3 terminal disconnects', () => {
+    const source = readFileSync(new URL('../server/bridge-ws.js', import.meta.url), 'utf8')
+    const start = source.indexOf('async function forgetBridgeV3TerminalIdentity')
+    const end = source.indexOf('function bridgeV3UserMarketStates', start)
+    const disconnect = source.slice(start, end)
+    expect(disconnect).toContain('if (!isBridgeAlive(Number(userId)))')
+    expect(disconnect).toContain('ai.stopAutoScheduler(Number(userId))')
+    expect(disconnect).toContain('ai.removeUserRuntimeAutoSubscription(Number(userId))')
   })
 
   it('maps explicit bridge states to the legacy trade-mode contract', () => {
@@ -627,7 +671,11 @@ describe('getBridgeTradeMode', () => {
 })
 
 describe('sendBridgeCommand', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(false)
+    mockBridgeV3Business.supports.mockReturnValue(false)
+  })
 
   it('fails closed when a new order has no account-specific terminal clock', async () => {
     vi.useFakeTimers()
@@ -683,6 +731,32 @@ describe('sendBridgeCommand', () => {
   it('returns error with noFallback option when no bridge', async () => {
     const result = await sendBridgeCommand(1, 'account', {}, 5000, { noFallback: true })
     expect(result.status).toBe('error')
+  })
+
+  it('routes connected commands through the V3 business adapter with version metadata', async () => {
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.supports.mockReturnValue(true)
+    mockBridgeV3Business.execute.mockResolvedValue({ status:'success', command_id:'v3-command' })
+
+    const params = { terminal_instance_id:'terminal-v3', symbol:'XAUUSD' }
+    const result = await sendBridgeCommand(91, 'account', params, 4321, {
+      noFallback:true, expectedGeneration:7,
+    })
+
+    expect(result).toEqual({ status:'success', command_id:'v3-command' })
+    expect(mockBridgeV3Business.execute).toHaveBeenCalledWith(91, 'account', params, {
+      noFallback:true, expectedGeneration:7, timeoutMs:4321,
+    })
+  })
+
+  it('rejects connected commands unsupported by the V3 adapter', async () => {
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.supports.mockReturnValue(false)
+
+    await expect(sendBridgeCommand(91, 'legacy_action', {})).resolves.toEqual({
+      status:'error', error:'bridge_v3_action_unsupported',
+    })
+    expect(mockBridgeV3Business.execute).not.toHaveBeenCalled()
   })
 })
 

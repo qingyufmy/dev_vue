@@ -31,5 +31,5 @@
     "rollout_channel": { "enum": ["internal", "stable"] },
     "reason": { "enum": ["published", "rollback"] }
   },
-  "additionalProperties": false
+  "unevaluatedProperties": false
 }

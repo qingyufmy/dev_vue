@@ -336,14 +336,16 @@ export async function logModelUsage(userId, profileId, credentialSource, usage, 
  * reserve their worst-case token budget under a per-user row lock so concurrent
  * requests cannot all pass the same quota check.
  */
-export async function beginModelUsage({ userId, profileId, credentialSource, usage, strategyId = null, estimatedTokens = 0 }) {
+export async function beginModelUsage({ userId, profileId, credentialSource, usage, strategyId = null,
+  estimatedTokens = 0, requestPhase = 'request' }) {
   const safeEstimate = Math.max(0, Math.trunc(Number(estimatedTokens) || 0))
+  const normalizedRequestPhase = requestPhase === 'repair' ? 'repair' : 'request'
   if (credentialSource !== 'platform_shared') {
     const result = await queryRun(
       `INSERT INTO ai_model_usage_logs
-        (user_id, model_profile_id, credential_source, \`usage\`, strategy_id, token_count, request_status, error_code, created_at)
-       VALUES (?, ?, ?, ?, ?, 0, 'reserved', NULL, ?)`,
-      [userId || 0, profileId || null, credentialSource || 'user', usage, strategyId, beijingNow()]
+        (user_id, model_profile_id, credential_source, \`usage\`, strategy_id, request_phase, token_count, request_status, error_code, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, 'reserved', NULL, ?)`,
+      [userId || 0, profileId || null, credentialSource || 'user', usage, strategyId, normalizedRequestPhase, beijingNow()]
     )
     return { logId: result.insertId, reservedTokens: 0 }
   }
@@ -384,9 +386,9 @@ export async function beginModelUsage({ userId, profileId, credentialSource, usa
 
     const [insert] = await run(
       `INSERT INTO ai_model_usage_logs
-        (user_id, model_profile_id, credential_source, \`usage\`, strategy_id, token_count, request_status, error_code, created_at)
-       VALUES (?, ?, 'platform_shared', ?, ?, ?, 'reserved', NULL, ?)`,
-      [userId, profileId || null, usage, strategyId, safeEstimate, beijingNow()]
+        (user_id, model_profile_id, credential_source, \`usage\`, strategy_id, request_phase, token_count, request_status, error_code, created_at)
+       VALUES (?, ?, 'platform_shared', ?, ?, ?, ?, 'reserved', NULL, ?)`,
+      [userId, profileId || null, usage, strategyId, normalizedRequestPhase, safeEstimate, beijingNow()]
     )
     return { logId: insert.insertId, reservedTokens: safeEstimate }
   })

@@ -2,7 +2,7 @@ use crate::{
     ExpectedWorker, WorkerCapability, WorkerClient, WorkerEndpoint, WorkerHostError,
     WorkerPipeListener, WorkerRoute,
 };
-use bridge_runtime_win::{ManagedProcess, ProcessSpec};
+use bridge_runtime_win::{ManagedProcess, ManagedProcessState, ProcessSpec};
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -117,6 +117,14 @@ pub struct WorkerProcessSession {
     endpoint: WorkerEndpoint,
 }
 
+/// A compatibility-preserving process poll result. `is_running` remains available for existing
+/// callers, while supervisors that need a useful restart diagnostic can retain the exit code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkerProcessState {
+    Running,
+    Exited { exit_code: Option<i32> },
+}
+
 impl WorkerProcessSession {
     pub async fn launch(
         program: WorkerProgram,
@@ -160,8 +168,15 @@ impl WorkerProcessSession {
         self.process.id()
     }
 
+    pub fn state(&mut self) -> Result<WorkerProcessState, WorkerHostError> {
+        Ok(match self.process.state().map_err(runtime_error)? {
+            ManagedProcessState::Running => WorkerProcessState::Running,
+            ManagedProcessState::Exited { exit_code } => WorkerProcessState::Exited { exit_code },
+        })
+    }
+
     pub fn is_running(&mut self) -> Result<bool, WorkerHostError> {
-        Ok(self.process.try_wait().map_err(runtime_error)?.is_none())
+        Ok(matches!(self.state()?, WorkerProcessState::Running))
     }
 
     pub fn terminate(&mut self) -> Result<(), WorkerHostError> {
@@ -285,6 +300,42 @@ mod tests {
         assert_ne!(session.process_id(), 0);
         session.terminate().expect("terminate job");
         assert!(!session.is_running().expect("stopped"));
+    }
+
+    #[tokio::test]
+    async fn natural_worker_exit_keeps_a_structured_exit_code() {
+        let executable = env::current_exe().expect("test executable");
+        let working_directory = executable.parent().expect("test directory");
+        let program = WorkerProgram::new(&executable, working_directory)
+            .expect("program")
+            .arg("process_session::tests::worker_process_helper_entry")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(HELPER_FLAG, "1")
+            .expect("helper env")
+            .env("AURUM_TEST_WORKER_LIFETIME_MSC", "20")
+            .expect("lifetime env");
+        let mut session = WorkerProcessSession::launch(
+            program,
+            route(),
+            BTreeSet::from([WorkerCapability::QueryExecution]),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("worker session");
+        let state = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match session.state().expect("worker state") {
+                    WorkerProcessState::Running => {
+                        tokio::time::sleep(Duration::from_millis(5)).await
+                    }
+                    WorkerProcessState::Exited { exit_code } => break exit_code,
+                }
+            }
+        })
+        .await
+        .expect("worker exit timeout");
+        assert_eq!(state, Some(0));
     }
 
     #[tokio::test]

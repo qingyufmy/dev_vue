@@ -13,7 +13,7 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   startPeriodReviewLeaseHeartbeat, validateDailyReviewContent, validateMonthlyReviewContent,
   validateMonthlyReviewMergeContent,
   validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase,
-  refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages } from '../../server/routes/ai/period-review.js'
+  refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review lease heartbeat', () => {
@@ -354,6 +354,90 @@ describe('monthly review aggregation', () => {
       review_status:'draft', evidence_hash:'e1', content_hash:'v1' }]))
     expect(monthlyReviewSourceHash([source])).not.toBe(monthlyReviewSourceHash([{ ...source, status:'approved' }]))
     expect(monthlyReviewSourceHash([source])).not.toBe(monthlyReviewSourceHash([{ ...source, current_content_hash:'v2' }]))
+  })
+})
+
+describe('monthly review preparation candidate groups', () => {
+  const asOfUtcMs = Date.parse('2026-04-01T00:00:00Z')
+  const daily = (id, day, updatedAt = '2026-03-01 00:00:00') => ({
+    id, period_type:'daily', period_key:day, user_id:7, trading_account_id:1, strategy_id:3,
+    strategy_version:2, strategy_scope:'private', strategy_versions_json:'[2]', timezone_offset_minutes:180,
+    current_version_id:id + 100, status:'approved', evidence_status:'complete',
+    strategy_compatibility_hash:'daily-scope-hash', evidence_hash:`evidence-${id}`, current_content_hash:`content-${id}`,
+    updated_at:updatedAt, evidence_json:JSON.stringify({ statistics:{ trade_count:1, wins:1, losses:0, breakeven:0,
+      net_profit:10, gross_profit:10, gross_loss:0, external_intervention_count:0 } }), current_content_json:'{}',
+  })
+
+  function mockPreparationDb({ rows = [] } = {}) {
+    periodReviewDb.queryAll.mockResolvedValue(rows)
+    periodReviewDb.queryOne.mockImplementation(async sql => {
+      if (sql.includes("scope = 'global'")) return { review_generation_enabled:1 }
+      if (sql.includes("scope = 'user'")) return { review_generation_enabled:1 }
+      if (sql.includes("status <> 'superseded'")) return null
+      if (sql.includes("SELECT * FROM period_review_cases WHERE period_type = 'monthly'")) {
+        return { id:500, period_type:'monthly', current_version_id:null, evidence_json:null, evidence_hash:null, source_count:0 }
+      }
+      return null
+    })
+    periodReviewDb.queryRun.mockResolvedValue({ affectedRows:1, insertId:500 })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPreparationDb()
+  })
+
+  it('limits by candidate month groups but retrieves every eligible day in a selected month', async () => {
+    mockPreparationDb({
+      rows:[daily(1, '2026-02-02'), daily(2, '2026-02-16'), daily(3, '2026-02-27')],
+    })
+
+    const result = await prepareEligibleMonthlyReviews({ limit:1, asOfUtcMs })
+    expect(periodReviewDb.queryAll).toHaveBeenCalledTimes(1)
+    const candidateQuery = periodReviewDb.queryAll.mock.calls[0]
+    expect(candidateQuery[1]).toEqual([4])
+    expect(candidateQuery[0]).toContain('WITH candidate_groups AS')
+    expect(candidateQuery[0]).toContain('LEFT JOIN ai_feature_flags global_flags')
+    expect(candidateQuery[0]).toContain('LEFT JOIN ai_feature_flags user_flags')
+    expect(candidateQuery[0]).toContain('COALESCE(global_flags.review_generation_enabled, 0) = 1')
+    expect(candidateQuery[0]).toContain('COALESCE(user_flags.review_generation_enabled, 1) = 1')
+    expect(candidateQuery[0].indexOf('COALESCE(global_flags.review_generation_enabled, 0) = 1'))
+      .toBeLessThan(candidateQuery[0].lastIndexOf('LIMIT ?'))
+    expect(candidateQuery[0]).not.toContain('MAX(daily.timezone_offset_minutes)')
+    expect(candidateQuery[0]).toContain('COALESCE(cases.trading_account_id, 0) = candidates.trading_account_id')
+    expect(candidateQuery[0]).toContain('LEFT(cases.period_key, 7) = candidates.period_key')
+    expect(candidateQuery[0]).not.toContain("predicates.join(' OR ')")
+    expect(periodReviewDb.queryOne.mock.calls.some(([sql]) => sql.includes('ai_feature_flags'))).toBe(false)
+    expect(result).toMatchObject({ candidateGroups:1, scanned:3, groups:1, ready:1 })
+  })
+
+  it('keeps synced groups out, reselects changed or recoverable groups, and hard-caps the group limit', async () => {
+    mockPreparationDb({
+      rows:[daily(4, '2026-01-15'), daily(5, '2026-02-15')],
+    })
+
+    const result = await prepareEligibleMonthlyReviews({ limit:999999, asOfUtcMs })
+    const candidateQuery = periodReviewDb.queryAll.mock.calls[0]
+    expect(candidateQuery[0]).toContain('monthly_case_id IS NULL')
+    expect(candidateQuery[0]).toContain('monthly_job_id IS NULL OR monthly_job_skipped = 1')
+    expect(candidateQuery[0]).toContain('latest_daily_updated_at > monthly_updated_at')
+    expect(candidateQuery[0]).not.toContain('monthly_end_utc_msc')
+    expect(candidateQuery[1]).toEqual([800])
+    expect(result.candidateGroups).toBe(2)
+  })
+
+  it('hard-caps prepared groups after complete monthly grouping', async () => {
+    const rows = []
+    for (let index = 0; index < 201; index += 1) {
+      const date = new Date(Date.UTC(2000, index, 15))
+      const periodKey = date.toISOString().slice(0, 7)
+      rows.push(daily(index + 1, `${periodKey}-15`))
+    }
+    mockPreparationDb({ rows })
+
+    const result = await prepareEligibleMonthlyReviews({ limit:999999, asOfUtcMs })
+    expect(periodReviewDb.queryAll).toHaveBeenCalledTimes(1)
+    expect(result).toMatchObject({ candidateGroups:201, groups:200, ready:200 })
   })
 })
 

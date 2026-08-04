@@ -1,6 +1,6 @@
+use bridge_foundation::{DEFAULT_PROFILE_ID, list_observer_profiles, resolve_profile_paths};
 use bridge_observability::BridgeLogReader;
-use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -108,10 +108,21 @@ pub(super) unsafe fn handle_dialog_tab(
 pub(super) unsafe fn show_or_refresh(
     existing: HWND,
     owner: HWND,
-    log_directory: &Path,
+    log_directories: &[(String, PathBuf)],
     icon: HICON,
 ) -> Result<HWND, &'static str> {
+    let reader = BridgeLogReader::from_named_directories(
+        log_directories
+            .iter()
+            .map(|(label, directory)| (label.as_str(), directory.as_path())),
+    )
+    .map_err(|error| error.code())?;
     if !existing.is_null() && unsafe { IsWindow(existing) } != 0 {
+        let state_pointer =
+            unsafe { GetWindowLongPtrW(existing, GWLP_USERDATA) } as *mut LogViewerState;
+        if !state_pointer.is_null() {
+            unsafe { (*state_pointer).reader = reader };
+        }
         unsafe {
             ShowWindow(existing, SW_SHOWNORMAL);
             SetForegroundWindow(existing);
@@ -119,8 +130,6 @@ pub(super) unsafe fn show_or_refresh(
         }
         return Ok(existing);
     }
-    fs::create_dir_all(log_directory).map_err(|_| "bridge_log_directory_failed")?;
-    let reader = BridgeLogReader::new(log_directory).map_err(|error| error.code())?;
     let instance = unsafe { GetModuleHandleW(null()) };
     register_window_class(instance, icon)?;
     let lifetime_transferred = Arc::new(AtomicBool::new(false));
@@ -188,6 +197,21 @@ pub(super) unsafe fn show_or_refresh(
         SetForegroundWindow(hwnd);
     }
     Ok(hwnd)
+}
+
+pub(super) fn profile_log_directories(
+    root_data_directory: &Path,
+) -> Result<Vec<(String, PathBuf)>, &'static str> {
+    let default_paths = resolve_profile_paths(root_data_directory, DEFAULT_PROFILE_ID)?;
+    let mut directories = vec![(
+        DEFAULT_PROFILE_ID.to_owned(),
+        default_paths.data_directory.join("logs"),
+    )];
+    for profile_id in list_observer_profiles(root_data_directory)? {
+        let paths = resolve_profile_paths(root_data_directory, &profile_id)?;
+        directories.push((profile_id, paths.data_directory.join("logs")));
+    }
+    Ok(directories)
 }
 
 fn register_window_class(instance: HINSTANCE, icon: HICON) -> Result<(), &'static str> {
@@ -646,6 +670,7 @@ fn color_ref(color: Rgb) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn log_viewer_geometry_tracks_dotnet_dpi_scaling() {
@@ -680,5 +705,35 @@ mod tests {
         assert!(is_log_action_button(CONTROL_COPY));
         assert!(!is_log_action_button(CONTROL_AUTO_REFRESH));
         assert!(!is_log_action_button(CONTROL_CONTENT));
+    }
+
+    #[test]
+    fn profile_log_directories_are_default_plus_valid_observer_profiles() {
+        let root = std::env::temp_dir().join(format!(
+            "liangjian-bridge-ui-log-profiles-{}-{}",
+            std::process::id(),
+            super::super::now_utc_msc()
+        ));
+        fs::create_dir_all(root.join("profiles").join("source-2")).expect("source 2");
+        fs::create_dir_all(root.join("profiles").join("source-1")).expect("source 1");
+        fs::write(root.join("profiles").join("ignored.txt"), b"ignored").expect("ignored");
+
+        let directories = profile_log_directories(&root).expect("profile log directories");
+        assert_eq!(
+            directories,
+            vec![
+                ("default".to_owned(), root.join("logs")),
+                (
+                    "source-1".to_owned(),
+                    root.join("profiles").join("source-1").join("logs")
+                ),
+                (
+                    "source-2".to_owned(),
+                    root.join("profiles").join("source-2").join("logs")
+                ),
+            ]
+        );
+
+        fs::remove_dir_all(root).expect("remove profile directory fixture");
     }
 }

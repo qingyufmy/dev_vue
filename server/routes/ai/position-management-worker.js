@@ -6,7 +6,6 @@ import { stripBrokerSuffix } from './utils.js'
 import {
   broadcastPositionManagementTask,
   claimPositionManagementLease,
-  createPositionManagementCommand,
   transitionPositionManagementTask,
 } from './position-management.js'
 
@@ -18,6 +17,9 @@ const CLOSE_RECOVERY_STATES = [
 ]
 const PENDING_RECOVERY_STATES = [
   'PENDING_CANCEL_INTENT', 'PENDING_CANCEL_SENT', 'PENDING_RECONCILING', 'PENDING_UNCERTAIN',
+]
+const PREPARATION_RECOVERY_STATES = [
+  'PRECONDITIONS_LOCKED', 'CLOSE_INTENT_CREATED', 'PENDING_CANCEL_INTENT',
 ]
 const MODE_RANK = new Map([['display', 0], ['auto_exit', 1], ['auto_reverse', 2]])
 
@@ -404,105 +406,325 @@ async function assertNettingOutcomeExclusive(run, task, expectedState) {
   if (competitors.length) throw new Error('position_management_netting_competitor_changed')
 }
 
-async function lockExitPreconditions(task, lease, preflight) {
-  const locked = await withTransaction(async run => {
-    const [taskRows] = await run('SELECT * FROM ai_position_management_tasks WHERE id = ? FOR UPDATE', [task.id])
-    const current = taskRows?.[0]
-    if (!current || current.status !== 'EVIDENCE_CONFIRMED') throw new Error('position_management_lock_state_changed')
-    if (Number(current.state_version) !== Number(task.state_version)
-      || Number(current.fencing_token) !== Number(lease.fencing_token)
-      || current.lease_token !== lease.lease_token) {
-      throw new Error('position_management_lock_fence_changed')
-    }
-    const [ownershipRows] = await run(`SELECT id FROM mt5_account_ownership_history
-      WHERE id = ? AND user_id = ? AND trading_account_id = ? AND ended_at IS NULL FOR UPDATE`,
-    [current.ownership_history_id, current.user_id, current.trading_account_id])
-    if (!ownershipRows?.[0]) throw new Error('position_management_ownership_changed')
-    const [outcomeRows] = await run(`SELECT id, status, attribution_status, external_intervention
-      FROM signal_outcomes WHERE id = ? FOR UPDATE`, [current.outcome_id])
-    const outcome = outcomeRows?.[0]
-    if (!outcome || outcome.status !== 'open' || outcome.attribution_status !== 'attributed'
-      || Number(outcome.external_intervention || 0) !== 0) {
-      throw new Error('position_management_outcome_changed')
-    }
-    await assertNettingOutcomeExclusive(run, current, preflight.expectedState)
-    const now = beijingNow()
-    const [updated] = await run(`UPDATE ai_position_management_tasks
-      SET precondition_hash = ?, status = 'PRECONDITIONS_LOCKED', state_version = state_version + 1,
-        updated_at = ? WHERE id = ? AND status = 'EVIDENCE_CONFIRMED' AND state_version = ?
-        AND fencing_token = ? AND lease_token = ? AND lease_expires_at > NOW()`, [
-      preflight.preconditionHash, now, current.id, current.state_version,
-      lease.fencing_token, lease.lease_token,
-    ])
-    if (Number(updated?.affectedRows || 0) !== 1) throw new Error('position_management_precondition_lock_conflict')
-    await run(`UPDATE signal_outcomes SET status = 'closing', updated_at = ?
-      WHERE id = ? AND status = 'open'`, [now, current.outcome_id])
-    await run(`INSERT INTO ai_position_management_events
-      (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
-      VALUES (?, 'EVIDENCE_CONFIRMED', 'PRECONDITIONS_LOCKED', 'preconditions_locked', ?, ?, 'worker', ?)`, [
-      current.id, '账户归属、Bridge 代际、持仓身份、全量归属与保护状态已锁定',
-      JSON.stringify({ precondition_hash:preflight.preconditionHash, expected_state:preflight.expectedState }), now,
-    ])
-    return {
-      ...current,
-      status:'PRECONDITIONS_LOCKED',
-      state_version:Number(current.state_version) + 1,
-      precondition_hash:preflight.preconditionHash,
-      precondition_json:JSON.stringify(preflight.expectedState),
-      updated_at:now,
-    }
-  })
-  broadcastPositionManagementTask(locked, 'preconditions_locked')
-  return locked
+function preparationError(code) {
+  const error = new Error(code)
+  error.code = code
+  return error
 }
 
-async function lockPendingPreconditions(task, lease, preflight) {
-  const locked = await withTransaction(async run => {
+function parseStoredJson(value) {
+  try {
+    return { ok:true, value:value == null || value === '' ? {} : JSON.parse(value) }
+  } catch {
+    return { ok:false, value:null }
+  }
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalJson(value[key])]))
+  }
+  return value
+}
+
+function sameJsonPayload(left, right) {
+  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right))
+}
+
+function assertAccountOwnership(current, ownership) {
+  if (!ownership || Number(ownership.id) !== Number(current.ownership_history_id)
+    || Number(ownership.user_id) !== Number(current.user_id)
+    || Number(ownership.trading_account_id) !== Number(current.trading_account_id)
+    || ownership.ended_at
+    || upper(ownership.broker_server_key) !== upper(current.broker_server_key)
+    || ref(ownership.login_account) !== ref(current.login_account)) {
+    throw preparationError('position_management_ownership_changed')
+  }
+}
+
+function assertFinalExitOutcome(current, outcome, expectedState) {
+  const expectedVolume = num(expectedState.volume)
+  if (!outcome || outcome.status !== 'open' || outcome.attribution_status !== 'attributed'
+    || Number(outcome.external_intervention || 0) !== 0
+    || ref(outcome.position_id) !== ref(expectedState.ticket)
+    || !expectedVolume || expectedVolume <= 0
+    || !sameVolume(outcome.expected_volume, expectedVolume)
+    || !sameVolume(outcome.entry_volume, expectedVolume)
+    || Number(outcome.closed_volume || 0) > 1e-8
+    || String(outcome.entry_direction || '').toLowerCase() !== String(expectedState.direction || '').toLowerCase()
+    || Number(outcome.system_magic || 0) !== Number(expectedState.magic || 0)) {
+    throw preparationError('position_management_outcome_changed')
+  }
+  if (canonicalSymbol(outcome.original_symbol || outcome.symbol) !== canonicalSymbol(current.original_symbol || current.standard_symbol)
+    || canonicalSymbol(expectedState.symbol) !== canonicalSymbol(current.original_symbol || current.standard_symbol)) {
+    throw preparationError('position_management_position_identity_changed')
+  }
+}
+
+function assertFinalPendingOutcome(current, outcome, expectedState) {
+  if (!outcome || outcome.status !== 'open'
+    || !['pending', 'attributed'].includes(String(outcome.attribution_status || '').toLowerCase())
+    || Number(outcome.external_intervention || 0) !== 0
+    || ref(outcome.pending_ticket) !== ref(expectedState.ticket)
+    || (ref(outcome.position_id) && !isLegacyPendingPositionAlias(outcome))
+    || canonicalSymbol(outcome.original_symbol || outcome.symbol) !== canonicalSymbol(current.original_symbol || current.standard_symbol)
+    || canonicalSymbol(expectedState.symbol) !== canonicalSymbol(current.original_symbol || current.standard_symbol)) {
+    throw preparationError('position_management_pending_outcome_changed')
+  }
+  const expectedVolume = num(expectedState.volume)
+  if (!expectedVolume || expectedVolume <= 0 || !sameVolume(outcome.expected_volume, expectedVolume)) {
+    throw preparationError('position_management_pending_outcome_changed')
+  }
+}
+
+function preparationStatusMatchesTask(taskType, status) {
+  if (status === 'PRECONDITIONS_LOCKED') return true
+  return taskType === 'pending_cancel'
+    ? status === 'PENDING_CANCEL_INTENT'
+    : status === 'CLOSE_INTENT_CREATED'
+}
+
+function assertPreparationTaskLease(current, task, lease) {
+  if (!current || current.status !== 'EVIDENCE_CONFIRMED') throw preparationError('position_management_lock_state_changed')
+  if (Number(current.state_version) !== Number(task.state_version)
+    || Number(current.fencing_token) !== Number(lease.fencing_token)
+    || current.lease_token !== lease.lease_token
+    || Number(current.bridge_generation) !== Number(task.bridge_generation)) {
+    throw preparationError('position_management_lock_fence_changed')
+  }
+}
+
+function commandPayloadMatches(command, operationId, commandType, expectedState, request) {
+  if (!command || command.operation_id !== operationId
+    || command.command_type !== commandType || Number(command.command_sequence) !== 1) return false
+  const expected = parseStoredJson(command.expected_state_json)
+  const storedRequest = parseStoredJson(command.request_json)
+  return expected.ok && storedRequest.ok
+    && sameJsonPayload(expected.value, expectedState)
+    && sameJsonPayload(storedRequest.value, request)
+}
+
+function assertPreparedCommandConsistency(context) {
+  const command = context?.command
+  const task = context?.task
+  const outcome = context?.outcome
+  const isPending = task?.task_type === 'pending_cancel'
+  const commandType = isPending ? 'cancel_system_pending' : 'close_system_position'
+  const expectedOperationId = `PM-${task?.id}-${commandType}-1`
+  if (!command || command.operation_id !== expectedOperationId
+    || command.command_type !== commandType || Number(command.command_sequence) !== 1) {
+    throw preparationError('position_management_command_payload_conflict')
+  }
+  if (command.send_status !== 'prepared' || command.bridge_command_id) {
+    throw preparationError('position_management_command_already_sent')
+  }
+  const expected = parseStoredJson(command.expected_state_json)
+  const request = parseStoredJson(command.request_json)
+  const expectedTicket = isPending ? outcome?.pending_ticket : outcome?.position_id
+  const expectedDirection = String(outcome?.entry_direction || '').toLowerCase()
+  const expectedVolume = num(outcome?.expected_volume)
+  if (!expected.ok || !request.ok || !expected.value || !request.value
+    || ref(expected.value.ticket) !== ref(expectedTicket)
+    || ref(request.value.ticket) !== ref(expectedTicket)
+    || canonicalSymbol(expected.value.symbol) !== canonicalSymbol(task?.original_symbol || task?.standard_symbol)
+    || String(expected.value.direction || '').toLowerCase() !== expectedDirection
+    || Number(expected.value.magic || 0) !== SYSTEM_MAGIC
+    || !expectedVolume || !sameVolume(expected.value.volume, expectedVolume)
+    || upper(expected.value.broker_server_key) !== upper(task?.broker_server_key)
+    || ref(expected.value.login_account) !== ref(task?.login_account)) {
+    throw preparationError('position_management_command_payload_conflict')
+  }
+  return expected.value
+}
+
+/**
+ * Finalize the precondition lock, intent and deterministic prepared command as
+ * one database transaction.  PRECONDITIONS_LOCKED is used only as an
+ * uncommitted audit transition; callers never observe it as a stable state.
+ */
+export async function preparePositionManagementExecution(task, lease, preflight) {
+  const isPending = task.task_type === 'pending_cancel'
+  const commandType = isPending ? 'cancel_system_pending' : 'close_system_position'
+  const intentStatus = isPending ? 'PENDING_CANCEL_INTENT' : 'CLOSE_INTENT_CREATED'
+  const intentEvent = isPending ? 'pending_cancel_intent_created' : 'close_intent_created'
+  const operationId = `PM-${task.id}-${commandType}-1`
+  const expectedState = preflight?.expectedState || {}
+  const request = { ticket:expectedState.ticket }
+  const prepared = await withTransaction(async run => {
     const [taskRows] = await run('SELECT * FROM ai_position_management_tasks WHERE id = ? FOR UPDATE', [task.id])
     const current = taskRows?.[0]
-    if (!current || current.status !== 'EVIDENCE_CONFIRMED') throw new Error('position_management_lock_state_changed')
-    if (Number(current.state_version) !== Number(task.state_version)
-      || Number(current.fencing_token) !== Number(lease.fencing_token)
-      || current.lease_token !== lease.lease_token) {
-      throw new Error('position_management_lock_fence_changed')
-    }
-    const [ownershipRows] = await run(`SELECT id FROM mt5_account_ownership_history
+    assertPreparationTaskLease(current, task, lease)
+
+    const [ownershipRows] = await run(`SELECT * FROM mt5_account_ownership_history
       WHERE id = ? AND user_id = ? AND trading_account_id = ? AND ended_at IS NULL FOR UPDATE`,
     [current.ownership_history_id, current.user_id, current.trading_account_id])
-    if (!ownershipRows?.[0]) throw new Error('position_management_ownership_changed')
-    const [outcomeRows] = await run(`SELECT id, status, attribution_status, external_intervention,
-        pending_ticket, position_id, entry_deal_ticket
-      FROM signal_outcomes WHERE id = ? FOR UPDATE`, [current.outcome_id])
+    assertAccountOwnership(current, ownershipRows?.[0])
+
+    const [outcomeRows] = await run('SELECT * FROM signal_outcomes WHERE id = ? FOR UPDATE', [current.outcome_id])
     const outcome = outcomeRows?.[0]
-    if (!outcome || outcome.status !== 'open'
-      || (ref(outcome.position_id) && !isLegacyPendingPositionAlias(outcome))
-      || ref(outcome.pending_ticket) !== ref(preflight.expectedState.ticket)
-      || Number(outcome.external_intervention || 0) !== 0) {
-      throw new Error('position_management_pending_outcome_changed')
+    if (isPending) assertFinalPendingOutcome(current, outcome, expectedState)
+    else assertFinalExitOutcome(current, outcome, expectedState)
+    if (isPending) {
+      const [controlRows] = await run(`SELECT ai_pending_cancel_enabled
+        FROM global_position_management_control WHERE id = 1 FOR UPDATE`)
+      if (Number(controlRows?.[0]?.ai_pending_cancel_enabled ?? 0) !== 1) {
+        throw preparationError('ai_pending_cancel_disabled')
+      }
+    } else {
+      const [controlRows] = await run(`SELECT maximum_mode
+        FROM global_position_management_control WHERE id = 1 FOR UPDATE`)
+      const [settingRows] = await run(`SELECT execution_mode
+        FROM user_position_management_settings WHERE user_id = ? FOR UPDATE`, [current.user_id])
+      const finalMode = effectiveRuntimeMode(settingRows?.[0] || {}, controlRows?.[0] || {}, current.execution_mode || 'display')
+      if (!['auto_exit', 'auto_reverse'].includes(finalMode)) {
+        throw preparationError('formal_exit_not_enabled')
+      }
     }
+    if (!isPending) await assertNettingOutcomeExclusive(run, current, expectedState)
+
+    const [commandRows] = await run(`SELECT * FROM ai_position_management_commands
+      WHERE task_id = ? AND command_type = ? AND command_sequence = ? FOR UPDATE`,
+    [current.id, commandType, 1])
+    let command = commandRows?.[0] || null
+    if (!command) {
+      const [operationRows] = await run(`SELECT * FROM ai_position_management_commands
+        WHERE operation_id = ? FOR UPDATE`, [operationId])
+      if (operationRows?.length) throw preparationError('position_management_command_payload_conflict')
+    }
+    if (command) {
+      if (!commandPayloadMatches(command, operationId, commandType, expectedState, request)) {
+        throw preparationError('position_management_command_payload_conflict')
+      }
+      if (command.send_status !== 'prepared' || command.bridge_command_id) {
+        throw preparationError('position_management_command_already_sent')
+      }
+    }
+
     const now = beijingNow()
-    const [updated] = await run(`UPDATE ai_position_management_tasks
+    const [locked] = await run(`UPDATE ai_position_management_tasks
       SET precondition_hash = ?, status = 'PRECONDITIONS_LOCKED', state_version = state_version + 1,
         updated_at = ? WHERE id = ? AND status = 'EVIDENCE_CONFIRMED' AND state_version = ?
         AND fencing_token = ? AND lease_token = ? AND lease_expires_at > NOW()`, [
       preflight.preconditionHash, now, current.id, current.state_version,
       lease.fencing_token, lease.lease_token,
     ])
-    if (Number(updated?.affectedRows || 0) !== 1) throw new Error('position_management_precondition_lock_conflict')
+    if (Number(locked?.affectedRows || 0) !== 1) throw preparationError('position_management_precondition_lock_conflict')
+    if (!isPending) {
+      const [outcomeUpdate] = await run(`UPDATE signal_outcomes SET status = 'closing', updated_at = ?
+        WHERE id = ? AND status = 'open'`, [now, current.outcome_id])
+      if (Number(outcomeUpdate?.affectedRows || 0) !== 1) throw preparationError('position_management_outcome_lock_conflict')
+    }
     await run(`INSERT INTO ai_position_management_events
       (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
-      VALUES (?, 'EVIDENCE_CONFIRMED', 'PRECONDITIONS_LOCKED', 'pending_preconditions_locked', ?, ?, 'worker', ?)`, [
-      current.id, '账户归属、Bridge 代际和策略挂单身份已锁定',
-      JSON.stringify({ precondition_hash:preflight.preconditionHash, expected_state:preflight.expectedState }), now,
+      VALUES (?, 'EVIDENCE_CONFIRMED', 'PRECONDITIONS_LOCKED', ?, ?, ?, 'worker', ?)`, [
+      current.id, isPending ? 'pending_preconditions_locked' : 'preconditions_locked',
+      isPending ? '账户归属、Bridge 代际和策略挂单身份已锁定' : '账户归属、Bridge 代际、持仓身份、全量归属与保护状态已锁定',
+      JSON.stringify({ precondition_hash:preflight.preconditionHash, expected_state:expectedState }), now,
     ])
+    const lockedVersion = Number(current.state_version) + 1
+    const [intent] = await run(`UPDATE ai_position_management_tasks
+      SET status = ?, state_version = state_version + 1, updated_at = ?
+      WHERE id = ? AND status = 'PRECONDITIONS_LOCKED' AND state_version = ?
+        AND fencing_token = ? AND lease_token = ? AND lease_expires_at > NOW()`, [
+      intentStatus, now, current.id, lockedVersion, lease.fencing_token, lease.lease_token,
+    ])
+    if (Number(intent?.affectedRows || 0) !== 1) throw preparationError('position_management_intent_conflict')
+    await run(`INSERT INTO ai_position_management_events
+      (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
+      VALUES (?, 'PRECONDITIONS_LOCKED', ?, ?, ?, ?, 'worker', ?)`, [
+      current.id, intentStatus, intentEvent,
+      isPending ? '已创建稳定业务操作号对应的挂单取消意图' : '已创建稳定业务操作号对应的平仓意图',
+      JSON.stringify({ precondition_hash:preflight.preconditionHash, operation_id:operationId }), now,
+    ])
+
+    if (!command) {
+      const [inserted] = await run(`INSERT INTO ai_position_management_commands
+        (task_id, command_sequence, operation_id, command_type, expected_state_json, request_json,
+         send_status, reconciliation_status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'prepared', 'pending', ?, ?)`, [
+        current.id, 1, operationId, commandType, JSON.stringify(expectedState), JSON.stringify(request), now, now,
+      ])
+      if (!Number(inserted?.insertId) && Number(inserted?.affectedRows || 0) !== 1) {
+        throw preparationError('position_management_command_prepare_failed')
+      }
+      command = {
+        id:Number(inserted?.insertId) || null,
+        task_id:Number(current.id), command_sequence:1, operation_id:operationId,
+        command_type:commandType, expected_state_json:JSON.stringify(expectedState),
+        request_json:JSON.stringify(request), send_status:'prepared', reconciliation_status:'pending',
+        created_at:now, updated_at:now,
+      }
+    }
     return {
-      ...current, status:'PRECONDITIONS_LOCKED', state_version:Number(current.state_version) + 1,
-      precondition_hash:preflight.preconditionHash,
-      precondition_json:JSON.stringify(preflight.expectedState), updated_at:now,
+      task:{ ...current, status:intentStatus, state_version:Number(current.state_version) + 2,
+        precondition_hash:preflight.preconditionHash, updated_at:now },
+      command,
     }
   })
-  broadcastPositionManagementTask(locked, 'pending_preconditions_locked')
-  return locked
+  broadcastPositionManagementTask(prepared.task, intentEvent)
+  return prepared
+}
+
+export async function recoverInterruptedPreparation(task, lease) {
+  const recovered = await withTransaction(async run => {
+    const [taskRows] = await run('SELECT * FROM ai_position_management_tasks WHERE id = ? FOR UPDATE', [task.id])
+    const current = taskRows?.[0]
+    if (!current || !PREPARATION_RECOVERY_STATES.includes(String(current.status))) {
+      throw preparationError('position_management_recovery_state_changed')
+    }
+    if (!preparationStatusMatchesTask(current.task_type, String(current.status))) {
+      throw preparationError('position_management_recovery_state_task_type_mismatch')
+    }
+    if (Number(current.fencing_token) !== Number(lease.fencing_token)
+      || current.lease_token !== lease.lease_token) {
+      throw preparationError('position_management_recovery_fence_changed')
+    }
+    const [commands] = await run(`SELECT id, command_type, operation_id, send_status, bridge_command_id
+      FROM ai_position_management_commands WHERE task_id = ? FOR UPDATE`, [current.id])
+    if (commands?.length) throw preparationError('position_management_recovery_command_exists')
+    const [sendEvents] = await run(`SELECT id FROM ai_position_management_events
+      WHERE task_id = ? AND event_type IN ('close_send_started', 'pending_cancel_send_started')
+      FOR UPDATE`, [current.id])
+    if (sendEvents?.length) throw preparationError('position_management_recovery_send_evidence')
+    const [outcomeRows] = await run('SELECT * FROM signal_outcomes WHERE id = ? FOR UPDATE', [current.outcome_id])
+    const outcome = outcomeRows?.[0]
+    if (!outcome) throw preparationError('position_management_recovery_outcome_missing')
+    const isPending = current.task_type === 'pending_cancel'
+    if (isPending) {
+      if (String(outcome.status || '').toLowerCase() !== 'open'
+        || (ref(outcome.position_id) && !isLegacyPendingPositionAlias(outcome))) {
+        throw preparationError('position_management_recovery_outcome_changed')
+      }
+    } else if (!['open', 'closing'].includes(String(outcome.status || '').toLowerCase())) {
+      throw preparationError('position_management_recovery_outcome_changed')
+    } else if (String(outcome.status || '').toLowerCase() === 'closing') {
+      const [outcomeUpdate] = await run(`UPDATE signal_outcomes SET status = 'open', updated_at = ?
+        WHERE id = ? AND status = 'closing'`, [beijingNow(), current.outcome_id])
+      if (Number(outcomeUpdate?.affectedRows || 0) !== 1) {
+        throw preparationError('position_management_recovery_outcome_conflict')
+      }
+    }
+    const now = beijingNow()
+    const [updated] = await run(`UPDATE ai_position_management_tasks
+      SET status = 'EVIDENCE_CONFIRMED', precondition_hash = NULL,
+        state_version = state_version + 1, updated_at = ?
+      WHERE id = ? AND status = ? AND fencing_token = ? AND lease_token = ?
+        AND lease_expires_at > NOW()`, [
+      now, current.id, current.status, lease.fencing_token, lease.lease_token,
+    ])
+    if (Number(updated?.affectedRows || 0) !== 1) throw preparationError('position_management_recovery_conflict')
+    await run(`INSERT INTO ai_position_management_events
+      (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
+      VALUES (?, ?, 'EVIDENCE_CONFIRMED', 'preparation_recovered', ?, ?, 'worker', ?)`, [
+      current.id, current.status, '未发现已持久化命令或发送证据，已恢复并等待完整实时前置校验',
+      JSON.stringify({ previous_status:current.status, command_absent:true, send_evidence_absent:true }), now,
+    ])
+    return { ...current, status:'EVIDENCE_CONFIRMED', precondition_hash:null,
+      state_version:Number(current.state_version) + 1, updated_at:now }
+  })
+  broadcastPositionManagementTask(recovered, 'preparation_recovered')
+  return recovered
 }
 
 async function markCloseCommandSending(task, lease, command, commandId, bridgeGeneration) {
@@ -826,17 +1048,8 @@ async function preparePendingCancelTask(context, lease, bridge = mt5Bridge) {
     return transition(task, lease, preflight.targetAbsent ? 'REJECTED' : 'REJECTED',
       'pending_cancel_precondition_rejected', '自动取消前置条件未通过，未向 MT5 发送任何命令', preflight)
   }
-  task = await lockPendingPreconditions(task, lease, preflight)
-  task = await transition(task, lease, 'PENDING_CANCEL_INTENT', 'pending_cancel_intent_created',
-    '已创建稳定业务操作号对应的挂单取消意图', { precondition_hash:preflight.preconditionHash })
-  const command = await createPositionManagementCommand({
-    taskId:task.id,
-    commandType:'cancel_system_pending',
-    commandSequence:1,
-    expectedState:preflight.expectedState,
-    request:{ ticket:preflight.expectedState.ticket },
-  })
-  return executePreparedPendingCancel({ ...context, task, command }, lease, bridge)
+  const prepared = await preparePositionManagementExecution(task, lease, preflight)
+  return executePreparedPendingCancel({ ...context, task:prepared.task, command:prepared.command }, lease, bridge)
 }
 
 async function prepareExitTask(context, lease, bridge = mt5Bridge) {
@@ -865,41 +1078,95 @@ async function prepareExitTask(context, lease, bridge = mt5Bridge) {
     return transition(task, lease, preflight.targetAbsent ? 'EXPIRED' : 'REJECTED',
       'exit_precondition_rejected', '自动平仓前置条件未通过，未向 MT5 发送任何命令', preflight)
   }
-  task = await lockExitPreconditions(task, lease, preflight)
-  task = await transition(task, lease, 'CLOSE_INTENT_CREATED', 'close_intent_created',
-    '已创建稳定业务操作号对应的平仓意图', { precondition_hash:preflight.preconditionHash })
-  const command = await createPositionManagementCommand({
-    taskId:task.id,
-    commandType:'close_system_position',
-    commandSequence:1,
-    expectedState:preflight.expectedState,
-    request:{ ticket:preflight.expectedState.ticket },
-  })
-  return executePreparedClose({ ...context, task, command }, lease, bridge)
+  const prepared = await preparePositionManagementExecution(task, lease, preflight)
+  return executePreparedClose({ ...context, task:prepared.task, command:prepared.command }, lease, bridge)
+}
+
+const PREPARATION_SAFETY_ERRORS = new Set([
+  'position_management_command_payload_conflict',
+  'position_management_command_already_sent',
+  'position_management_recovery_command_exists',
+  'position_management_recovery_send_evidence',
+  'position_management_recovery_state_changed',
+  'position_management_recovery_state_task_type_mismatch',
+  'position_management_recovery_outcome_changed',
+  'position_management_recovery_outcome_conflict',
+  'position_management_recovery_outcome_missing',
+  'position_management_recovery_conflict',
+])
+
+function isPreparationSafetyError(error) {
+  return PREPARATION_SAFETY_ERRORS.has(String(error?.code || error?.message || ''))
+}
+
+async function failClosedPreparation(context, lease, error) {
+  if (!context?.task || !canFailClosedFromPreparation(context.task.status)) return null
+  return transition(context.task, lease, 'MANUAL_REVIEW', 'manual_review_required',
+    '持仓管理准备阶段发现不可能或已发送状态，已停止自动处理并转人工复核', {
+      code:String(error?.code || error?.message || 'position_management_preparation_unsafe'),
+    })
+}
+
+function canFailClosedFromPreparation(status) {
+  return ['EVIDENCE_CONFIRMED', ...PREPARATION_RECOVERY_STATES].includes(String(status || ''))
+}
+
+function isCrossTaskTypeIntent(task) {
+  return (task?.task_type === 'pending_cancel' && task.status === 'CLOSE_INTENT_CREATED')
+    || (task?.task_type !== 'pending_cancel' && task.status === 'PENDING_CANCEL_INTENT')
 }
 
 async function processTask(taskId, bridge) {
   const lease = await claimPositionManagementLease(taskId, LEASE_SECONDS)
   if (!lease) return false
+  let context = null
   try {
-    const context = await loadTaskContext(taskId)
+    context = await loadTaskContext(taskId)
     if (!context) return false
+    if (isCrossTaskTypeIntent(context.task)) {
+      await failClosedPreparation(context, lease,
+        preparationError('position_management_state_task_type_mismatch'))
+      return true
+    }
     if (context.task.task_type === 'pending_cancel') {
       if (context.task.status === 'EVIDENCE_CONFIRMED') await preparePendingCancelTask(context, lease, bridge)
-      else if (context.task.status === 'PENDING_CANCEL_INTENT' && context.command?.send_status === 'prepared') {
-        await executePreparedPendingCancel(context, lease, bridge)
+      else if (context.task.status === 'PRECONDITIONS_LOCKED') {
+        if (context.command) await failClosedPreparation(context, lease,
+          preparationError('position_management_recovery_command_exists'))
+        else await recoverInterruptedPreparation(context.task, lease)
+      } else if (context.task.status === 'PENDING_CANCEL_INTENT') {
+        if (context.command?.send_status === 'prepared') {
+          assertPreparedCommandConsistency(context)
+          await executePreparedPendingCancel(context, lease, bridge)
+        }
+        else if (context.command) await failClosedPreparation(context, lease,
+          preparationError('position_management_command_already_sent'))
+        else await recoverInterruptedPreparation(context.task, lease)
       } else if (PENDING_RECOVERY_STATES.includes(context.task.status)) {
         await reconcilePendingCancelTask(context, lease, bridge)
       }
     } else {
       if (context.task.status === 'EVIDENCE_CONFIRMED') await prepareExitTask(context, lease, bridge)
-      else if (context.task.status === 'CLOSE_INTENT_CREATED' && context.command?.send_status === 'prepared') {
-        await executePreparedClose(context, lease, bridge)
+      else if (context.task.status === 'PRECONDITIONS_LOCKED') {
+        if (context.command) await failClosedPreparation(context, lease,
+          preparationError('position_management_recovery_command_exists'))
+        else await recoverInterruptedPreparation(context.task, lease)
+      } else if (context.task.status === 'CLOSE_INTENT_CREATED') {
+        if (context.command?.send_status === 'prepared') {
+          assertPreparedCommandConsistency(context)
+          await executePreparedClose(context, lease, bridge)
+        }
+        else if (context.command) await failClosedPreparation(context, lease,
+          preparationError('position_management_command_already_sent'))
+        else await recoverInterruptedPreparation(context.task, lease)
       } else if (CLOSE_RECOVERY_STATES.includes(context.task.status)) {
         await reconcileCloseTask(context, lease, bridge)
       }
     }
     return true
+  } catch (error) {
+    if (isPreparationSafetyError(error)) await failClosedPreparation(context, lease, error).catch(() => {})
+    throw error
   } finally {
     await releaseLease(taskId, lease.lease_token).catch(() => {})
   }
@@ -915,7 +1182,8 @@ export async function runPositionManagementWorkerOnce({ bridge = mt5Bridge, limi
   try {
     const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 50))
     processed += await expireInactiveAutomaticExitCandidates(safeLimit)
-    const states = [...new Set(['EVIDENCE_CONFIRMED', ...CLOSE_RECOVERY_STATES, ...PENDING_RECOVERY_STATES])]
+    const states = [...new Set(['EVIDENCE_CONFIRMED', ...PREPARATION_RECOVERY_STATES,
+      ...CLOSE_RECOVERY_STATES, ...PENDING_RECOVERY_STATES])]
     const rows = await queryAll(`SELECT id FROM ai_position_management_tasks
       WHERE task_type IN ('position_exit','pending_cancel')
         AND status IN (${states.map(() => '?').join(',')})

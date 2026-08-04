@@ -36,5 +36,5 @@
     },
     "params": { "type": "object" }
   },
-  "additionalProperties": false
+  "unevaluatedProperties": false
 }

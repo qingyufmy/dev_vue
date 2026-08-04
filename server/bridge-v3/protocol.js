@@ -23,6 +23,8 @@ export const BRIDGE_V3_DATA_STREAMS = Object.freeze(new Set([
   'account', 'positions', 'orders', 'deals', 'symbols', 'quotes', 'rates',
 ]))
 
+const BRIDGE_V3_HEARTBEAT_STREAMS = new Set(['account', 'positions', 'orders', 'deals'])
+
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/
 const INSTALLATION_ID_PATTERN = /^install_[a-f0-9]{32}$/
 const UPDATE_REPORT_STATES = new Set(['healthy', 'rolled_back', 'failed'])
@@ -143,14 +145,84 @@ function validateHello(message, nowUtcMsc) {
   return errors
 }
 
+function validateHeartbeat(message) {
+  const errors = validateEnvelope(message)
+  validateId(errors, 'session_id', message.session_id)
+  if (!Array.isArray(message.terminals) || message.terminals.length < 1 || message.terminals.length > 32) {
+    errors.push('terminals:invalid')
+    return errors
+  }
+  const ids = new Set()
+  for (const [index, terminal] of message.terminals.entries()) {
+    if (!isRecord(terminal)) {
+      errors.push(`terminals.${index}:invalid`)
+      continue
+    }
+    validateId(errors, `terminals.${index}.terminal_instance_id`, terminal.terminal_instance_id)
+    if (!isPositiveInteger(terminal.connection_epoch)) {
+      errors.push(`terminals.${index}.connection_epoch:invalid`)
+    }
+    if (ids.has(terminal.terminal_instance_id)) {
+      errors.push(`terminals.${index}.terminal_instance_id:duplicate`)
+    }
+    ids.add(terminal.terminal_instance_id)
+    if (!isRecord(terminal.streams)) {
+      errors.push(`terminals.${index}.streams:required_object`)
+      continue
+    }
+    for (const [stream, observedAt] of Object.entries(terminal.streams)) {
+      if (!BRIDGE_V3_HEARTBEAT_STREAMS.has(stream)) {
+        errors.push(`terminals.${index}.streams.${stream}:unsupported`)
+      } else if (!isPositiveInteger(observedAt)) {
+        errors.push(`terminals.${index}.streams.${stream}:invalid`)
+      }
+    }
+  }
+  return errors
+}
+
 function validateCommandResult(message) {
   const errors = validateEnvelope(message)
   validateId(errors, 'command_id', message.command_id)
   validateTerminalRoute(errors, message)
   if (!BRIDGE_V3_RESULT_STATUSES.has(message.status)) errors.push('status:unsupported')
   if (!isPositiveInteger(message.completed_at_utc_msc)) errors.push('completed_at_utc_msc:invalid')
+  if (message.error_code !== undefined && message.error_code !== null
+    && (typeof message.error_code !== 'string' || !/^[A-Za-z0-9_]{1,128}$/.test(message.error_code))) {
+    errors.push('error_code:invalid')
+  }
+  if (message.error_message !== undefined && message.error_message !== null
+    && (typeof message.error_message !== 'string' || message.error_message.length > 1000)) {
+    errors.push('error_message:invalid')
+  }
+  if (message.raw_result !== undefined && message.raw_result !== null && !isRecord(message.raw_result)) {
+    errors.push('raw_result:invalid')
+  }
   if (!isRecord(message.evidence)) errors.push('evidence:required_object')
-  else if (!isPositiveInteger(message.evidence.observed_at_utc_msc)) errors.push('evidence.observed_at_utc_msc:invalid')
+  else {
+    const evidence = message.evidence
+    if (!isPositiveInteger(evidence.observed_at_utc_msc)) {
+      errors.push('evidence.observed_at_utc_msc:invalid')
+    }
+    for (const field of ['order_tickets', 'position_tickets', 'deal_tickets']) {
+      const tickets = evidence[field]
+      if (tickets === undefined) continue
+      if (!Array.isArray(tickets)) {
+        errors.push(`evidence.${field}:required_array`)
+        continue
+      }
+      if (tickets.length > 100) errors.push(`evidence.${field}:too_many`)
+      for (const [index, ticket] of tickets.entries()) {
+        if (typeof ticket !== 'string' || !ticket.trim() || ticket.length > 64) {
+          errors.push(`evidence.${field}.${index}:invalid`)
+        }
+      }
+    }
+    if (evidence.broker_retcode !== undefined && evidence.broker_retcode !== null
+      && !Number.isSafeInteger(evidence.broker_retcode)) {
+      errors.push('evidence.broker_retcode:invalid')
+    }
+  }
   return errors
 }
 
@@ -180,14 +252,17 @@ function validateQuote(message) {
   const errors = validateQuoteRequest(message)
   if (!isPositiveInteger(message.observed_at_utc_msc)) errors.push('observed_at_utc_msc:invalid')
   if (!['succeeded', 'rejected'].includes(message.status)) errors.push('status:unsupported')
+  const hasErrorCode = message.error_code !== undefined && message.error_code !== null
+  const validErrorCode = typeof message.error_code === 'string'
+    && Boolean(message.error_code.trim()) && message.error_code.length <= 128
   if (message.status === 'succeeded') {
     if (!Number.isFinite(message.bid) || message.bid <= 0) errors.push('bid:invalid')
     if (!Number.isFinite(message.ask) || message.ask <= 0) errors.push('ask:invalid')
     if (Number.isFinite(message.bid) && Number.isFinite(message.ask) && message.ask < message.bid) {
       errors.push('ask:below_bid')
     }
-  } else if (typeof message.error_code !== 'string'
-    || !message.error_code.trim() || message.error_code.length > 128) {
+    if (hasErrorCode) errors.push('error_code:forbidden')
+  } else if (!validErrorCode) {
     errors.push('error_code:invalid')
   }
   if (message.last !== undefined && message.last !== null
@@ -205,6 +280,16 @@ function validateQuote(message) {
   }
   if (message.point !== undefined && message.point !== null
     && (!Number.isFinite(message.point) || message.point <= 0)) errors.push('point:invalid')
+  if (message.timezone_offset_minutes !== undefined && message.timezone_offset_minutes !== null
+    && (!Number.isInteger(message.timezone_offset_minutes)
+      || message.timezone_offset_minutes < -840 || message.timezone_offset_minutes > 840)) {
+    errors.push('timezone_offset_minutes:invalid')
+  }
+  if (message.clock_status !== undefined && message.clock_status !== null
+    && (typeof message.clock_status !== 'string'
+      || !message.clock_status.length || message.clock_status.length > 64)) {
+    errors.push('clock_status:invalid')
+  }
   return errors
 }
 
@@ -233,15 +318,47 @@ function validateDataDelta(message) {
   if (!BRIDGE_V3_DATA_STREAMS.has(message.stream)) errors.push('stream:unsupported')
   if (!isPositiveInteger(message.revision)) errors.push('revision:invalid')
   if (!Number.isSafeInteger(message.base_revision) || message.base_revision < 0) errors.push('base_revision:invalid')
+  if (typeof message.full_snapshot !== 'boolean') errors.push('full_snapshot:invalid')
   if (isPositiveInteger(message.revision) && Number.isSafeInteger(message.base_revision)
     && message.full_snapshot !== true
     && message.revision !== message.base_revision + 1) errors.push('revision:not_next')
   if (message.full_snapshot === true && message.base_revision !== 0) errors.push('base_revision:full_snapshot_requires_zero')
+  if (message.full_snapshot === true && Array.isArray(message.deletes) && message.deletes.length) {
+    errors.push('deletes:full_snapshot_requires_empty')
+  }
   if (!isPositiveInteger(message.observed_at_utc_msc)) errors.push('observed_at_utc_msc:invalid')
   if (message.source_time_msc !== null
     && (!Number.isSafeInteger(message.source_time_msc) || message.source_time_msc < 0)) errors.push('source_time_msc:invalid')
   if (!Array.isArray(message.upserts)) errors.push('upserts:required_array')
+  else {
+    if (message.upserts.length > 10_000) errors.push('upserts:too_many')
+    for (const [index, item] of message.upserts.entries()) {
+      if (!isRecord(item)) errors.push(`upserts.${index}:required_object`)
+    }
+  }
   if (!Array.isArray(message.deletes)) errors.push('deletes:required_array')
+  else {
+    if (message.deletes.length > 10_000) errors.push('deletes:too_many')
+    for (const [index, ticket] of message.deletes.entries()) {
+      const validString = typeof ticket === 'string' && ticket.trim().length > 0 && ticket.length <= 64
+      const validNumber = Number.isSafeInteger(ticket) && ticket >= 0
+      if (!validString && !validNumber) errors.push(`deletes.${index}:invalid`)
+    }
+  }
+  if (message.stream === 'account' && Array.isArray(message.upserts) && Array.isArray(message.deletes)
+    && message.upserts.length === 1 && message.deletes.length === 0 && isRecord(message.upserts[0])) {
+    const account = message.upserts[0]
+    const routeLogin = String(message.account_ref?.login || '').trim()
+    const loginMatches = typeof account.login === 'string'
+      ? account.login === routeLogin
+      : Number.isSafeInteger(account.login) && account.login >= 0 && String(account.login) === routeLogin
+    const serverMatches = typeof account.server === 'string'
+      && account.server === String(message.account_ref?.broker_server || '').trim()
+    if (!loginMatches || !serverMatches) errors.push('account:route_mismatch')
+  } else if (message.stream === 'account'
+    && Array.isArray(message.upserts) && Array.isArray(message.deletes)) {
+    errors.push('account:invalid')
+  }
   return errors
 }
 
@@ -270,6 +387,7 @@ export function validateBridgeV3Message(message, { nowUtcMsc = Date.now() } = {}
   else if (message.type === 'command') errors = validateCommand(message, nowUtcMsc)
   else if (message.type === 'command_result') errors = validateCommandResult(message)
   else if (message.type === 'command_result_ack') errors = validateCommandResultAck(message)
+  else if (message.type === 'heartbeat') errors = validateHeartbeat(message)
   else if (message.type === 'quote_request') errors = validateQuoteRequest(message)
   else if (message.type === 'quote') errors = validateQuote(message)
   else if (message.type === 'data_request') errors = validateDataRequest(message)

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, configuredModelMaxTokens, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
 import { compactRates } from '../../server/routes/ai/utils.js'
 
@@ -8,6 +9,19 @@ describe('model output budgets', () => {
     expect(configuredModelMaxTokens({ _usage:'auto_private', max_tokens:150000 })).toBe(150000)
     expect(configuredModelMaxTokens({ _usage:'manual', max_tokens:30000 })).toBe(30000)
     expect(configuredModelMaxTokens({ _usage:'auto_platform' })).toBe(2000)
+  })
+})
+
+describe('model usage phase accounting contract', () => {
+  const source = readFileSync(new URL('../../server/routes/ai/llm.js', import.meta.url), 'utf8')
+
+  it('records the actual request or repair phase for every tracked provider call', () => {
+    expect(source).toContain('requestPhase:phase')
+    expect(source).toContain("phase:'repair'")
+  })
+
+  it('limits adaptive history to primary requests while retaining legacy NULL rows', () => {
+    expect(source).toContain("(request_phase = 'request' OR request_phase IS NULL)")
   })
 })
 
@@ -296,6 +310,52 @@ describe('requestJsonObject', () => {
 
     const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(requestBody.response_format).toEqual({ type:'json_object' })
+  })
+
+  it.each([
+    [true, 12345],
+    [false, 6789],
+  ])('DeepSeek thinking=%s sends the selected Chat output budget', async (thinkingEnabled, selectedMaxOutputTokens) => {
+    mockFetch.mockResolvedValue({
+      ok:true,
+      status:200,
+      json:() => Promise.resolve({ choices:[{ message:{ content:'{"ok":true}' } }] }),
+    })
+
+    await requestJsonObject({
+      url:'https://api.deepseek.com/chat/completions', apiKey:'test-key', provider:'deepseek',
+      model:'deepseek-v4-pro', maxTokens:selectedMaxOutputTokens, thinkingEnabled,
+      reasoningEffort:'high', messages:[{ role:'user', content:'test' }],
+    })
+
+    const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(requestBody.max_tokens).toBe(selectedMaxOutputTokens)
+    expect(requestBody.response_format).toEqual({ type:'json_object' })
+    if (thinkingEnabled) {
+      expect(requestBody.thinking).toEqual({ type:'enabled' })
+      expect(requestBody.reasoning_effort).toBe('high')
+    } else {
+      expect(requestBody.thinking).toBeUndefined()
+      expect(requestBody.reasoning_effort).toBeUndefined()
+    }
+  })
+
+  it('does not add a max_tokens field to an unknown thinking gateway', async () => {
+    mockFetch.mockResolvedValue({
+      ok:true,
+      status:200,
+      json:() => Promise.resolve({ choices:[{ message:{ content:'{"ok":true}' } }] }),
+    })
+
+    await requestJsonObject({
+      url:'https://example.test/v1/chat/completions', apiKey:'test-key', provider:'openai_compatible',
+      model:'custom-thinking-model', maxTokens:4321, thinkingEnabled:true,
+      messages:[{ role:'user', content:'test' }],
+    })
+
+    const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(requestBody).not.toHaveProperty('max_tokens')
+    expect(requestBody.reasoning_effort).toBe('max')
   })
 
   it('DeepSeek JSON Mode 空正文会重试且不会解析思考内容', async () => {

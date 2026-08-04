@@ -173,6 +173,17 @@ describe('MT4 EA uncertain execution contract', () => {
     expect(block).not.toContain('\\"found\\":false,\\"complete\\":true')
   })
 
+  it('uses the ticket as an exact lookup key and bounds comment fallback scans', () => {
+    const select = functionBlock('bool SelectQueryOrder', 'void ExecuteQuery')
+    expect(source).toContain('#define QUERY_COMMENT_MAX_ROWS 500')
+    expect(source).toContain('#define QUERY_COMMENT_LOOKBACK_MSC 2592000000')
+    expect(select).toContain('if(ticket > 0)')
+    expect(select).toContain('SELECT_BY_TICKET')
+    expect(select).toContain('QUERY_COMMENT_MAX_ROWS')
+    expect(select).toContain('min_history_utc_msc')
+    expect(select).toContain('OrdersHistoryTotal()')
+  })
+
   it('publishes enough source state to reconcile every management command', () => {
     const block = functionBlock('void ExecuteQuery', 'void SendTradeFailure')
     for (const evidence of [

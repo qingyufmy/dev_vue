@@ -38,7 +38,7 @@
 - `bridge-worker-host` 已建立版本化 Core ↔ Worker IPC 合同：4 MiB 小端长度前缀 JSON 帧、会话 nonce、终端/账户/epoch 路由、请求关联、超时后通道熔断和能力协商均严格校验；`query_execution` 使用独立只读操作，不能进入交易执行操作。Windows 管道使用当前用户 SID 的保护 DACL、拒绝远程客户端和首实例防抢占；Worker 只有在受 Job Object 管理的子进程完成严格握手后才会交付客户端。注册表通过终端 claim 和单调代际号原子替换客户端，请求前后均执行 fencing；崩溃按 1/2/4/8/10 秒退避重启，新账户 claim 会终止旧 supervisor，避免路由争抢。
 - `bridge-mt4` 已冻结 Rust 与 MT4 EA / .NET 对照实现共用的本地二进制合同：4 MiB 小端长度前缀、严格 UTF-8、协议 3 的 Hello / Welcome、账户/持仓/挂单采集、扩展数据、历史分页、交易指令/结果和关闭消息。正式 EA 3.0.0 的执行请求会同时核对终端实例、Broker、登录号、epoch、期限及 MT4 四层交易权限；管理指令将服务端 `expected_state.volume` 作为执行前持仓手数，将顶层 `volume` 作为本次平仓手数，因而能在防串单校验不降级的前提下部分平仓。挂单修改同样必须核对品种、方向、Magic、手数及旧 SL/TP，并在 `OrderModify` 后复查终端事实。MQL4 解码器会在零长度 UTF-8 字段处直接返回空字符串，避免把后续二进制帧误当成可选价格、备注或查询参数；首次注册后会主动切换到 Core 分配的专用账户管道，专用管道连续失败 5 次才回退公共注册管道，避免重复注册造成运行时重载风暴，同时保留 Core 重启及切换账户后的自恢复能力。此前 3.2.x 开发握手号会明确提示重新加载；正式 3.0.0 只在新鲜 tick 到达时校准 Broker 时区偏移，并按“登录号 + Broker 服务器”隔离持久化最近有效样本；停市时冻结偏移并标记缓存状态，避免 `TimeCurrent()` 停止而本机 UTC 继续前进造成时区漂移，也不会在同登录号跨服务器切换时复用旧偏移。响应 ID、格式或管道超时异常会熔断当前连接。历史归档仍以 250 条和 4 MiB 为硬边界，但首次同步窗口覆盖完整时间范围，避免从 2000 年开始按 30 天重复扫描大量空窗口；交易完成后 Core 立即唤醒快照和历史采集。已 dispatch 但没有可信结果的命令进入持久化 `uncertain`，只允许根据 EA 返回的活动订单、活动持仓或历史事实核对，不自动重发交易。连接层使用当前用户 SID 保护 DACL、拒绝远程客户端并支持首实例防抢占，正式 Core 已接入默认 MT4 注册管道和按终端隔离的重连管道。
 - MT5 交易动作参数合同已在 Core → Worker IPC 边界冻结：`place_order`、`cancel_order`、`modify_order`、`modify_position`、`close_position` 与只读 `query_execution` 按服务器业务适配器的实际字段逐项校验；缺失必填字段、非法票号/数值、管理目标快照不完整或未知字段均在写入 Worker 管道前失败关闭。正式 Core 已启用 MT5 Dispatcher，但只有服务器确认当前账户、持仓和挂单三类初始全量快照后才放行交易。
-- `workers/mt5` 已实现独立的 MT5 Python Worker：每次请求复核终端、经纪商服务器、登录号和连接状态；账户、持仓和挂单字段无损转发，列表带 ticket 且受 4 MiB 帧限制；报价、品种列表和最多 5,000 根 K 线通过独立只读 IPC 动作返回，K 线沿用经纪商时区校准，时钟未可信时失败关闭。交易侧已声明 `execute_command` / `query_execution` 能力，在进入交易适配器、`order_check` 前及 `order_send` 前复核账户和算法交易权限，执行结果缺失或发送异常只返回 `uncertain` 且按 command id 缓存，绝不在 Worker 内自动重放。终端会话失效会先返回稳定错误，再主动结束当前 Worker，交由 Rust supervisor 使用新进程和既定退避重新初始化 MT5；账户或 Broker 路由不匹配不会进入无效重启循环。Rust 测试会启动真实 Python 子进程并通过受保护命名管道验证快照、报价、品种、K 线和交易回执互操作；Core 独立进程测试覆盖服务器数据请求、SQLite 缓存、交易命令、账本、Dispatcher、Worker 回执、交易 Outbox 与结果 ACK 闭环。
+- `workers/mt5` 已实现独立的 MT5 Python Worker：每次请求复核终端、经纪商服务器、登录号和连接状态；账户、持仓和挂单字段无损转发，列表带 ticket 且受 4 MiB 帧限制；报价、品种列表和最多 5,000 根 K 线通过独立只读 IPC 动作返回，K 线沿用经纪商时区校准，时钟未可信时失败关闭。交易侧已声明 `execute_command` / `query_execution` 能力，在进入交易适配器、`order_check` 前及 `order_send` 前复核账户和算法交易权限，执行结果缺失或发送异常只返回 `uncertain` 且按 command id 缓存，绝不在 Worker 内自动重放。终端会话失效先返回稳定错误；连续 3 次终端会话故障后才主动结束当前 Worker，交由 Rust supervisor 使用新进程和既定退避重新初始化 MT5；账户或 Broker 路由不匹配不会进入无效重启循环。Rust 测试会启动真实 Python 子进程并通过受保护命名管道验证快照、报价、品种、K 线和交易回执互操作；Core 独立进程测试覆盖服务器数据请求、SQLite 缓存、交易命令、账本、Dispatcher、Worker 回执、交易 Outbox 与结果 ACK 闭环。
 - `scripts/bridge-native/test-mt5-demo.py` 提供显式 `--execute` 的 MT5 demo 验收入口：只允许 demo 账户和无既有仓位的测试品种，所有测试对象使用唯一 comment 并在失败路径自动清理。`--matrix` 会按经纪商最小手数依次完成限价挂单、改单、撤单、开仓、修改 SL/TP、部分平仓和全部平仓；`--faults` 验证本地参数拒绝和真实经纪商 `order_check` 拒绝；只读 `--history-smoke` 验证有界历史批次和游标，`--market-data-smoke` 验证品种解析、100 根 M5 K 线和 UTC 时钟校准，`--observe-recovery-seconds` 用于验收终端关闭后按 supervisor 同款退避重新初始化，这三项均不发送交易。2026-07-29 已在真实 MT5 demo 上完成管理矩阵、`order_volume_below_minimum` / `mt5_check_retcode_10016` 两类拒绝验证、历史同步和市场数据冒烟，以及终端 PID 关闭→会话失效→单次重启→新 PID 恢复在线的闭环；每次交易测试结束后复查测试品种持仓和挂单均为 0。正式 Core 除隔离假 MT5 的端到端命令、历史/品种/K 线请求、SQLite 缓存和 Worker 换进程恢复测试外，还已在真实 `DooTechnology-Demo` 账户 `596520` 完成低于最小手数的安全拒单闭环：服务器命令先进入持久化账本，真实 Worker 返回 `order_volume_below_minimum`，回执获服务器 ACK 后账本落为 `acked`，测试前后终端持仓和挂单票号集合完全一致。正式成功执行链路也已在同一账户完成两类往返：市价开仓结果 ACK 后从持仓增量提取真实 position ticket（不假定 order ticket 等于 position ticket），携带完整目标快照设置按当前报价与 Broker 距离动态生成的 SL/TP 并由 Worker 复查终端事实，随后携带更新后的保护快照平仓；限价挂单价格同样动态生成，挂单 ACK 后从订单增量提取真实 ticket，携带完整 `expected_state` 修改价格并复查，最后再次携带目标快照撤单。六次 MT5 Broker 返回码均为 `10009`，六个账本均为 `acked`，两项测试前后终端活动持仓与挂单票号集合完全一致。
 - MT5 正式持仓管理链路已进一步覆盖部分平仓：服务器开仓 `0.02` 手并设置 SL/TP 后先平仓 `0.01` 手，Core 从下一次真实持仓增量校验剩余 `0.01` 手及当前 position ticket，再发送最终平仓。开仓、保护修改、部分平仓和最终平仓四次 Broker 返回码均为 `10009`、四个账本均为 `acked`；与三步挂单管理合计七个正式命令全部 ACK，测试前后终端活动持仓与挂单票号集合完全一致。
 - `cargo run -p bridge-mt4 --example mt4_demo_acceptance -- ...` 提供显式 `--execute` 的 MT4 demo 验收入口：Broker 名必须包含 `Demo`，EA 会先返回账户/终端/程序交易权限和品种最小、最大及步进手数，且目标品种必须没有既有持仓或挂单；通过后才按唯一 comment 交易，并按实际票号复查清理结果。`--execute --partial-close` 会开两倍测试手数、部分平仓一半、核对剩余持仓，再全部平仓；`--execute --matrix` 还会执行最小手数以下拒单、限价挂单、错误 Magic 防串号拒绝、改单、撤单、错误 SL 拒绝、有效 SL/TP、部分及全部平仓，任一步失败都会按最新终端事实清理测试品种；`--observe-recovery-seconds` 只读记录在线、断开和恢复状态；`--market-data-smoke` 只读核对实时买卖价、Broker 时区与服务器时间、品种列表，以及严格按时间升序的 100 根 M5 K线和 OHLC 合法性；`--history-smoke` 将终端可见历史按游标全量写入临时 SQLite，关闭并重新打开数据库后逐页核对，无需向服务器发送整包历史。MT4 官方 API 只能读取终端“账户历史”页当前可见范围，因此完整历史要求该页选择“全部历史”，验收报告会明确标记这一边界。2026-07-30 已使用 EA 3.2.7 在 `UltimaMarkets-Demo` 账户 `4250502` 完成全矩阵：无效手数返回原始 MT4 `131`，挂单票号 `103462324`，持仓票号 `103462326`，部分平仓后的剩余票号 `103462327`，最终无持仓或挂单残留。EA 3.2.8 进一步完成连续会话公共重注册和真实 MT4 进程关闭→重启→约 27.3 秒恢复在线的只读闭环，恢复后再次连接成功。EA 3.2.9 为 K线负载补齐 `source=mt4`，并在同一模拟账户真实核对报价 `4075.51/4075.72`、UTC+3 服务器时间、307 个品种和 100 根 `XAUUSD` M5 K线通过。EA 3.2.10 将 13 条终端可见记录单批落入 SQLite，数据库重开后按每页 2 条完整读取 12 笔交易、共 6 页且无重复或遗漏。EA 3.2.11 已通过真实进程级只读验收：模拟账户注册后进入专用管道，Core 状态为 `online/ready`，SQLite 历史归档通过服务器 `data_request(history)` 按 20 条上限返回 `mt4_sqlite` 完整分页响应，且验收服务器未发送任何交易指令；同一真实账户还完成服务器低于最小手数命令的正式拒单闭环，EA 返回原始 `131`，Core 上报 `mt4_error_131`，服务器 ACK 后账本为 `acked`，活动投影不存在测试订单标记。正式成功执行链路也已使用同一 demo 账户完成两次最小手数往返：服务器开仓结果 ACK 后从持仓增量提取真实 ticket 和价格，带完整 `expected_state` 设置相距 20 美元的 SL/TP 并由 EA 复查终端事实，最后携带更新后的保护快照按同一 ticket 平仓；开仓、修改保护与平仓 Broker 返回码均为 `0`，三个账本均为 `acked`，最终活动投影无测试 Magic 或 comment 残留。同一验收服务器还在 `DooTechnology-Demo` 账户 `596520` 完成 MT5 正式进程闭环：首次归档 25,828 笔规范化交易后，服务器按 20 条上限取得 `mt5_sqlite` 完整分页响应，Core/Worker 保持 `online/ready`，全程未发送交易指令。
@@ -61,6 +61,30 @@
 开发构建和本地验收只使用 `config/development/server-endpoints.json` 中的
 `http://127.0.0.1:3000`。统一验证脚本会在 Release 构建完成后把这份配置复制到
 Core 旁边。正式服务器地址不写入 Native 源码，只能在用户明确要求最终打包时由发布流程注入。
+
+### 从源码启动 Debug UI/Core
+
+使用统一入口可避免 Debug 目录残留旧版 Worker 或错误服务端点。脚本默认执行
+`cargo build --locked`（仅构建 Debug UI/Core），随后只在仓库内的
+`target/x86_64-pc-windows-msvc/debug` 目录同步当前 `worker.py`、`trade.py` 和开发端点，
+并校验随包 CPython、MetaTrader5 和 NumPy 依赖。脚本不会停止已有进程；如果同目录
+Debug UI 或 Core 已运行，会以 `native_source_process_already_running` 失败。直接调用使用
+前台、可见的 PowerShell 控制台：
+
+```powershell
+.\scripts\bridge-native\start-native-source.ps1
+```
+
+已有 Debug 构建且确认运行时完整时可跳过 Cargo 构建；脚本仍会重新校验端点、运行时、依赖
+和源码同步：
+
+```powershell
+.\scripts\bridge-native\start-native-source.ps1 -SkipBuild
+```
+
+Debug 启动要求仓库内存在 `runtime/python/python.exe`、`runtime-metadata.json`、
+`Lib/site-packages/MetaTrader5`（含二进制扩展）和 `Lib/site-packages/numpy`；不会回退到
+系统 Python、用户 `%APPDATA%`、已安装 Bridge 或任何 MT4/MT5 终端目录。
 
 ### UI 黄金状态
 

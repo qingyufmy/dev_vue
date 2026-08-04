@@ -22,8 +22,19 @@ describe('bridge installer release descriptor', () => {
       BRIDGE_INSTALLER_SIZE_BYTES:'84044167',
       BRIDGE_INSTALLER_SHA256:'b'.repeat(64),
     })).toMatchObject({
-      version:'3.1.0', fileSize:84044167, sha256:'B'.repeat(64), v3:true,
+      version:'3.1.0', buildDate:'2026-07-28',
+      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'b'.repeat(64)}/LiangjianBridgeSetup.exe`,
+      fileSize:84044167, sha256:'B'.repeat(64), v3:true,
     })
+  })
+
+  it('publishes the complete V3 version metadata contract', async () => {
+    const source = await readFile(new URL('../server/routes/ai/index.js', import.meta.url), 'utf8')
+    expect(source).toContain("router.get('/bridge/version'")
+    expect(source).toContain("if (req.baseUrl !== '/api') return next()")
+    for (const field of ['version:', 'build_date:', 'full_url:', 'file_size:', 'sha256:', 'v3:']) {
+      expect(source).toContain(field)
+    }
   })
 
   it('fails startup closed for a partial, mutable, or malformed V3 descriptor', () => {
@@ -49,12 +60,30 @@ describe('bridge installer release descriptor', () => {
     })).toThrow('bridge_installer_release_configuration_invalid')
   })
 
-  it('redirects authenticated compatibility routes directly to the verified 3.0 installer', async () => {
+  it('does not expose the retired installer compatibility routes', async () => {
     const source = await readFile(new URL('../server/index.js', import.meta.url), 'utf8')
-    expect(source).toContain("['setup', 'exe', 'exe-file'].includes(platform)")
-    expect(source).toContain('res.redirect(302, bridgeInstallerRelease.fullUrl)')
+    expect(source).not.toContain("app.get('/ai/bridge/:platform'")
+    expect(source).not.toContain('bridgeInstallerRelease')
     expect(source).not.toContain("app.get('/ai/bridge/config'")
     expect(source).not.toContain('AURUM_Bridge.exe')
     expect(source).not.toContain("platform === 'mac'")
+  })
+
+  it('does not expose retired Bridge login or session routes', async () => {
+    const source = await readFile(new URL('../server/routes/auth.js', import.meta.url), 'utf8')
+    expect(source).not.toContain("router.post('/auth/bridge-session'")
+    expect(source).not.toContain("router.post('/auth/bridge-revoke'")
+    expect(source).not.toContain("client === 'bridge'")
+  })
+
+  it('downloads only from the current version endpoint response', async () => {
+    const source = await readFile(new URL('../public/ai/app.js', import.meta.url), 'utf8')
+    const start = source.indexOf('$("downloadExe")?.addEventListener')
+    const end = source.indexOf('async function updateBridgeRuntimeControl', start)
+    const handler = source.slice(start, end)
+    expect(handler).toContain('fetch("/api/bridge/version")')
+    expect(handler).toContain('data.full_url')
+    expect(handler).not.toContain('data.updater_url')
+    expect(handler).not.toContain('qiniu.acadfx.com')
   })
 })

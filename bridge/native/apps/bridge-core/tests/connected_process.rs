@@ -494,6 +494,12 @@ fn native_core_update_drain_times_out_on_an_active_command_and_recovers_admissio
 
 #[test]
 fn default_core_hosts_an_enabled_observer_profile_without_a_second_ui() {
+    if local_control_profile_is_active(DEFAULT_PROFILE_ID)
+        || local_control_profile_is_active("source-1")
+    {
+        eprintln!("skipping default-profile process test while an installed Bridge is running");
+        return;
+    }
     let _default_profile_guard = DEFAULT_PROFILE_TEST_LOCK
         .lock()
         .expect("default profile test lock");
@@ -632,6 +638,12 @@ fn default_core_hosts_an_enabled_observer_profile_without_a_second_ui() {
 
 #[test]
 fn default_core_does_not_report_launcher_ready_when_an_expected_observer_is_offline() {
+    if local_control_profile_is_active(DEFAULT_PROFILE_ID)
+        || local_control_profile_is_active("source-1")
+    {
+        eprintln!("skipping default-profile process test while an installed Bridge is running");
+        return;
+    }
     let _default_profile_guard = DEFAULT_PROFILE_TEST_LOCK
         .lock()
         .expect("default profile test lock");
@@ -1607,6 +1619,18 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
 
 fn request_local_control(profile_id: &str, action: LocalControlAction) -> LocalControlResult {
     try_request_local_control(profile_id, action).expect("local control response")
+}
+
+fn local_control_profile_is_active(profile_id: &str) -> bool {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("local control probe runtime");
+    runtime.block_on(async {
+        LocalControlPipeClient::connect(profile_id, Duration::from_millis(100))
+            .await
+            .is_ok()
+    })
 }
 
 fn try_request_local_control(

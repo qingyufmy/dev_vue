@@ -1794,24 +1794,51 @@ impl OutboxStore {
                 ],
             )
             .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
-        transaction
-            .execute(
-                "DELETE FROM execution_receipts
-                 WHERE command_id IN (
-                   SELECT command_id FROM execution_receipts
-                   ORDER BY completed_at_utc_msc DESC, command_id DESC
-                   LIMIT -1 OFFSET ?1
-                 )
-                 AND NOT EXISTS (
-                   SELECT 1 FROM outbox_messages pending
-                   WHERE pending.acked_at_utc_msc IS NULL
-                     AND pending.message_type = 'command_result'
-                     AND json_valid(pending.payload_json) = 1
-                     AND json_extract(pending.payload_json, '$.command_id') = execution_receipts.command_id
-                 );",
-                [receipt_limit as i64],
-            )
-            .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+        let trim_candidates = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT receipt.command_id
+                     FROM execution_receipts receipt
+                     LEFT JOIN native_command_ledger ledger
+                       ON ledger.command_id = receipt.command_id
+                     WHERE receipt.command_id IN (
+                         SELECT command_id FROM execution_receipts
+                         ORDER BY completed_at_utc_msc DESC, command_id DESC
+                         LIMIT -1 OFFSET ?1
+                       )
+                       AND receipt.status != 'uncertain'
+                       AND (ledger.command_id IS NULL OR ledger.status = 'acked')
+                       AND NOT EXISTS (
+                         SELECT 1 FROM outbox_messages pending
+                         WHERE pending.acked_at_utc_msc IS NULL
+                           AND pending.message_type = 'command_result'
+                           AND json_valid(pending.payload_json) = 1
+                           AND json_extract(pending.payload_json, '$.command_id') = receipt.command_id
+                       )
+                     ORDER BY receipt.completed_at_utc_msc DESC, receipt.command_id DESC;",
+                )
+                .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+            statement
+                .query_map([receipt_limit as i64], |row| row.get::<_, String>(0))
+                .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?
+        };
+        for command_id in trim_candidates {
+            transaction
+                .execute(
+                    "DELETE FROM execution_receipts WHERE command_id = ?1;",
+                    [&command_id],
+                )
+                .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+            transaction
+                .execute(
+                    "DELETE FROM native_command_ledger
+                     WHERE command_id = ?1 AND status = 'acked';",
+                    [&command_id],
+                )
+                .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))?;
+        }
         transaction
             .commit()
             .map_err(|_| StoreError::new("bridge_store_execution_receipt_write_failed"))
@@ -4685,10 +4712,46 @@ mod tests {
         assert_eq!(candidates[0].command, command);
         assert_eq!(candidates[0].uncertain_receipt.as_ref(), Some(&uncertain));
 
+        let trim_probe_one = command_result(
+            "command_01JTRIMSAFE01",
+            "result_01JTRIMSAFE001",
+            1_700_000_000_008,
+        );
+        let trim_probe_two = command_result(
+            "command_01JTRIMSAFE02",
+            "result_01JTRIMSAFE002",
+            1_700_000_000_009,
+        );
+        store
+            .save_execution_receipt(&trim_probe_one, 1)
+            .expect("first trim probe");
+        assert!(
+            store
+                .acknowledge(&trim_probe_one.message_id, "applied")
+                .expect("ack trim probe")
+        );
+        store
+            .save_execution_receipt(&trim_probe_two, 1)
+            .expect("second trim probe");
+        assert_eq!(
+            store
+                .execution_receipt(&command.command_id)
+                .expect("uncertain receipt survives trimming")
+                .as_ref(),
+            Some(&uncertain)
+        );
+        assert_eq!(
+            store
+                .reconciliation_candidates(10)
+                .expect("uncertain candidate survives trimming")
+                .len(),
+            1
+        );
+
         let resolved = command_result(
             &command.command_id,
             "result_01JLEDGER002",
-            1_700_000_000_009,
+            1_700_000_000_010,
         );
         assert!(
             store

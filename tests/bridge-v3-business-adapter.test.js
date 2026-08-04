@@ -395,14 +395,22 @@ describe('Bridge v3 business compatibility adapter', () => {
 
   it('allows ticket-only order reconciliation without a symbol', async () => {
     const { adapter, gateway } = setup({ commandResult:{
-      status:'succeeded', raw_result:{ found:false, complete:true, lookback_seconds:315_360_000 },
+      status:'succeeded', raw_result:{ found:false, complete:true, lookback_seconds:2_592_000 },
     } })
     await expect(adapter.execute(42, 'order_lookup', {
-      expected_kind:'pending', pending_ticket:'5003', lookback_seconds:315_360_000,
+      expected_kind:'pending', pending_ticket:'5003', lookback_seconds:2_592_000,
     })).resolves.toMatchObject({ status:'success', found:false, complete:true })
     expect(gateway.sendCommand).toHaveBeenCalledWith(42, expect.objectContaining({
-      action:'query_execution', params:{ expected_kind:'pending', pending_ticket:'5003', lookback_seconds:315_360_000 },
+      action:'query_execution', params:{ expected_kind:'pending', pending_ticket:'5003', lookback_seconds:2_592_000 },
     }), { timeoutMs:5000 })
+  })
+
+  it('rejects an order reconciliation lookback beyond the 30-day safety window', async () => {
+    const { adapter, gateway } = setup()
+    await expect(adapter.execute(42, 'order_lookup', {
+      expected_kind:'trade', trade_ticket:'999', lookback_seconds:2_592_001,
+    })).resolves.toMatchObject({ status:'error', error:'order_lookup_params_invalid' })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
   })
 
   it('derives a versioned market state from a fresh transient quote', async () => {

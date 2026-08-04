@@ -25,6 +25,15 @@ vi.mock('../../server/routes/ai/model-task-runtime.js', () => ({
 
 import { createManualAnalysisJob, recoverManualAnalysisJobs, __manualAnalysisJobsTest } from '../../server/routes/ai/manual-analysis-jobs.js'
 
+function mockManualJobLookups(job, task = null) {
+  queryOne.mockImplementation(async sql => {
+    if (sql.includes('FROM ai_manual_analysis_jobs')) return job
+    if (sql.includes('FROM ai_signals')) return null
+    if (sql.includes('FROM ai_model_tasks')) return task
+    return null
+  })
+}
+
 describe('manual analysis durable jobs', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -72,12 +81,73 @@ describe('manual analysis durable jobs', () => {
     expect(createModelTask).toHaveBeenCalledTimes(1)
   })
 
+  it('reuses a non-terminal task for an explicit client key', async () => {
+    const existingTask = { task_id:'task-live-explicit', status:'queued',
+      frozen_context_json:JSON.stringify({ strategy_version:3 }) }
+    const existingJob = { job_id:'job-live-explicit', user_id:9, model_task_id:'task-live-explicit', strategy_id:7,
+      strategy_version:3, status:'queued', stage:'queued', deadline_at_utc_msc:Date.now() + 60_000,
+      params_json:'{"symbol":"XAUUSD","strategy_id":7,"auto_execute":false}', created_at_utc_msc:1 }
+    createModelTask.mockResolvedValue({ created:false, task:existingTask })
+    mockManualJobLookups(existingJob, existingTask)
+    const job = await createManualAnalysisJob(9, {
+      symbol:'XAUUSD', strategy_id:7, request_id:'explicit-live-key',
+    }, { waitForCompletion:false })
+    expect(job.id).toBe('job-live-explicit')
+    expect(createModelTask).toHaveBeenCalledTimes(1)
+    expect(createModelTask.mock.calls[0][0].idempotencyKey).toBe('manual:9:explicit-live-key')
+  })
+
+  it('replays a terminal task for an explicit client key without creating a retry', async () => {
+    const existingTask = { task_id:'task-terminal', status:'succeeded' }
+    const existingJob = { job_id:'job-terminal', user_id:9, model_task_id:'task-terminal', strategy_id:7,
+      strategy_version:3, status:'succeeded', stage:'completed', result_json:'{"status":"success"}',
+      params_json:'{"symbol":"XAUUSD","strategy_id":7,"auto_execute":false}', created_at_utc_msc:1 }
+    createModelTask.mockResolvedValue({ created:false, task:existingTask })
+    mockManualJobLookups(existingJob, existingTask)
+    const job = await createManualAnalysisJob(9, {
+      symbol:'XAUUSD', strategy_id:7, request_id:'terminal-replay-key',
+    }, { waitForCompletion:false })
+    expect(job).toMatchObject({ id:'job-terminal', status:'succeeded', result:{ status:'success' } })
+    expect(createModelTask).toHaveBeenCalledTimes(1)
+    expect(createModelTask.mock.calls[0][0].idempotencyKey).toBe('manual:9:terminal-replay-key')
+  })
+
+  it('retries a terminal task for a deliberate no-key repeat', async () => {
+    const oldTask = { task_id:'task-old-terminal', status:'succeeded' }
+    const newTask = { task_id:'task-new-repeat', status:'queued' }
+    const existingJob = { job_id:'job-new-repeat', user_id:9, model_task_id:'task-new-repeat', strategy_id:7,
+      strategy_version:3, status:'queued', stage:'queued', deadline_at_utc_msc:Date.now() + 60_000,
+      params_json:'{"symbol":"XAUUSD","strategy_id":7,"auto_execute":false}', created_at_utc_msc:1 }
+    createModelTask
+      .mockResolvedValueOnce({ created:false, task:oldTask })
+      .mockResolvedValueOnce({ created:true, task:newTask })
+    mockManualJobLookups(existingJob, newTask)
+    const job = await createManualAnalysisJob(9, {
+      symbol:'XAUUSD', strategy_id:7,
+    }, { waitForCompletion:false })
+    expect(job.id).toBe('job-new-repeat')
+    expect(createModelTask).toHaveBeenCalledTimes(2)
+    expect(createModelTask.mock.calls[1][0].idempotencyKey).toMatch(/^manual:9:source:.+:retry:/)
+  })
+
   it('rejects reusing an explicit idempotency key with a different frozen request', async () => {
     createModelTask.mockResolvedValue({ created:false, task:{
       task_id:'task-conflict', status:'provider_running', input_hash:'different-input',
     } })
     await expect(createManualAnalysisJob(9, {
       symbol:'XAUUSD', strategy_id:7, request_id:'same-client-key',
+    }, { waitForCompletion:false })).rejects.toThrow('manual_analysis_idempotency_conflict')
+    expect(queryRun).not.toHaveBeenCalled()
+  })
+
+  it('rejects an explicit key when the frozen provider protocol changed', async () => {
+    getAnalyzeApiKey.mockResolvedValue({ api_provider:'deepseek', model_name:'deepseek-chat',
+      protocol:'responses', _model_profile_id:4, _credential_source:'user' })
+    createModelTask.mockResolvedValue({ created:false, task:{
+      task_id:'task-protocol-conflict', status:'provider_running', frozen_protocol:'chat_completions',
+    } })
+    await expect(createManualAnalysisJob(9, {
+      symbol:'XAUUSD', strategy_id:7, request_id:'same-protocol-key',
     }, { waitForCompletion:false })).rejects.toThrow('manual_analysis_idempotency_conflict')
     expect(queryRun).not.toHaveBeenCalled()
   })

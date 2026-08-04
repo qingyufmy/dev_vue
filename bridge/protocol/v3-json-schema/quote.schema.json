@@ -41,8 +41,8 @@
     "error_code": { "type": "string", "minLength": 1, "maxLength": 128 }
   },
   "oneOf": [
-    { "properties": { "status": { "const": "succeeded" } }, "required": ["bid", "ask"] },
+    { "properties": { "status": { "const": "succeeded" } }, "required": ["bid", "ask"], "not": { "required": ["error_code"] } },
     { "properties": { "status": { "const": "rejected" } }, "required": ["error_code"] }
   ],
-  "additionalProperties": false
+  "unevaluatedProperties": false
 }

@@ -90,6 +90,7 @@ function modelTuple(model = {}) {
     provider:String(model.api_provider || model.provider || '').trim().toLowerCase() || null,
     model:String(model.model_name || model.model || '').trim() || null,
     profileId:Number(model._model_profile_id || model.model_profile_id || 0) || null,
+    protocol:String(model._protocol || model.protocol || '').trim().toLowerCase() || null,
     credentialSource:String(model._credential_source || model.credential_source || '').trim() || null,
   }
 }
@@ -199,7 +200,7 @@ async function resolveFrozenModel(userId, params) {
       model: config?.model_name || config?.model || null,
       modelProfileId: Number(config?._model_profile_id) || null,
       credentialSource: config?._credential_source || null,
-      protocol: config?.protocol || null,
+      protocol: config?.protocol || config?._protocol || null,
     }
   } catch (error) {
     // Model availability is checked again by handleAnalyze. Do not put a
@@ -222,9 +223,9 @@ export async function createManualAnalysisJob(userId, body = {}, options = {}) {
   const frozenModel = await resolveFrozenModel(userId, frozenParams)
   const inputHash = sha256(frozenParams)
   const requestKey = String(params.idempotency_key || params.request_id || '').trim()
-  // The request hash is the durable idempotency boundary. An explicit key can
-  // intentionally create a new run for the same market input; otherwise two
-  // concurrent submissions of the same request share one model task.
+  // Explicit client keys are durable replay boundaries; calls without a key
+  // use the frozen source hash for concurrent-request dedupe and preserve
+  // deliberate repeat behavior after a terminal task.
   const sourceHash = sha256({ input_hash:inputHash, strategy_version:strategy.strategyVersion,
     prompt_hash:strategy.promptHash, model:frozenModel })
   let idempotencyKey = requestKey
@@ -247,13 +248,17 @@ export async function createManualAnalysisJob(userId, body = {}, options = {}) {
   if (!taskResult.created) {
     const existingModel = modelTuple({ provider:taskResult.task.frozen_provider, model:taskResult.task.frozen_model,
       model_profile_id:taskResult.task.frozen_model_profile_id,
+      protocol:taskResult.task.frozen_protocol,
       credential_source:taskResult.task.frozen_credential_source })
     const requestedModel = modelTuple(frozenModel)
+    const existingFrozenContext = parseJsonField(taskResult.task.frozen_context_json, {}) || {}
     const envelopeConflict = taskResult.task.input_hash && String(taskResult.task.input_hash) !== inputHash
       || taskResult.task.prompt_hash && String(taskResult.task.prompt_hash) !== strategy.promptHash
+      || existingFrozenContext.strategy_version && Number(existingFrozenContext.strategy_version) !== Number(strategy.strategyVersion)
       || existingModel.provider && existingModel.provider !== requestedModel.provider
       || existingModel.model && existingModel.model !== requestedModel.model
       || existingModel.profileId && existingModel.profileId !== requestedModel.profileId
+      || existingModel.protocol && existingModel.protocol !== requestedModel.protocol
       || existingModel.credentialSource && existingModel.credentialSource !== requestedModel.credentialSource
     if (envelopeConflict) throw new Error('manual_analysis_idempotency_conflict')
     if (String(taskResult.task.status) === 'status_unknown'
@@ -278,10 +283,10 @@ export async function createManualAnalysisJob(userId, body = {}, options = {}) {
       }
     }
   }
-  // A completed task is a historical result, not an active idempotency slot.
-  // Allow a deliberate repeat while retaining the same-key dedupe guarantee
-  // for queued/running tasks.
-  if (!taskResult.created && isTerminalTaskStatus(taskResult.task.status)) {
+  // A completed task is a historical result for an explicit client key. Keep
+  // that key as a durable replay boundary; only a deliberate no-key repeat is
+  // allowed to allocate a fresh random task.
+  if (!requestKey && !taskResult.created && isTerminalTaskStatus(taskResult.task.status)) {
     idempotencyKey = `${idempotencyKey}:retry:${crypto.randomUUID()}`
     taskResult = await createModelTask({
       taskKind:'manual_analysis', queueClass:'interactive', ownerUserId:Number(userId),

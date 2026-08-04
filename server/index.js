@@ -43,8 +43,7 @@ import { recoverAbandonedPeriodReviewModelTasks } from './routes/ai/period-revie
 import { recoverAbandonedMemoryCompressionModelTasks } from './routes/ai/memory-system.js'
 import { startOrderIntentReconciler } from './routes/ai/order-intents.js'
 import { startPositionManagementWorker } from './routes/ai/position-management-worker.js'
-import { authMiddleware, tokenVersionMatches } from './middleware/auth.js'
-import { hasActiveMembership } from './membership.js'
+import { tokenVersionMatches } from './middleware/auth.js'
 import { initBridgeWS } from './bridge-ws.js'
 import { startMonitor } from './crypto/monitor.js'
 import { initCryptoWallet } from './crypto/wallet.js'
@@ -56,11 +55,10 @@ import { startPaymentSideEffectWorker } from './jobs/payment-side-effects.js'
 import { securityHeaders } from './security-headers.js'
 import { blockPrivateVideoStatic } from './video-access.js'
 import { installFatalProcessHandlers, listenHttpServer } from './runtime-lifecycle.js'
-import { resolveBridgeInstallerRelease } from './bridge-installer-release.js'
 import { createBridgePairStartLimiter } from './bridge-pair-rate-limit.js'
+import { pruneFinalizedCommands } from './bridge-v3/command-ledger.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const bridgeInstallerRelease = resolveBridgeInstallerRelease()
 
 // .env is loaded by server/config.js via dotenv — no manual parsing needed
 
@@ -122,8 +120,6 @@ const writeLimiter = rateLimit({
 })
 app.use('/api/login', authLimiter)
 app.use('/api/auth/bridge-refresh', bridgeAuthLimiter)
-app.use('/api/auth/bridge-session', bridgeAuthLimiter)
-app.use('/api/auth/bridge-revoke', authLimiter)
 app.use('/api/auth/bridge-pair/start', bridgePairStartLimiter)
 app.use('/api/auth/bridge-pair/token', bridgeAuthLimiter)
 app.use('/api/auth/bridge-pair/approve', authLimiter)
@@ -254,20 +250,6 @@ app.use('/ai', express.static(join(__dirname, '..', 'public', 'ai'), {
   }
 }))
 
-// Bridge 3.0 installer download compatibility entry.
-app.get('/ai/bridge/:platform', authMiddleware, (req, res) => {
-  // Only Pro and admin users can download bridge software
-  if (!hasActiveMembership(req.user, 'pro')) {
-    return res.status(403).json({ ok: false, error: '仅 Pro 会员可下载桥接软件' })
-  }
-  const platform = req.params.platform
-  if (['setup', 'exe', 'exe-file'].includes(platform)) {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
-    return res.redirect(302, bridgeInstallerRelease.fullUrl)
-  }
-  res.status(400).json({ status: 'error', message: '仅支持 Windows 版量见智桥' })
-})
-
 app.get('/ai', noCache, (req, res) => {
   res.sendFile(join(__dirname, '..', 'public', 'ai', 'index.html'))
 })
@@ -352,6 +334,23 @@ installFatalProcessHandlers()
   await recoverModelUsageReservations()
   await listenHttpServer(server, PORT)
   console.log(`Wall Street Skill server running on http://localhost:${PORT}`)
+
+  const pruneBridgeCommandHistory = async () => {
+    try {
+      let total = 0
+      while (total < 10_000) {
+        const { changes } = await pruneFinalizedCommands()
+        total += changes
+        if (changes < 500) break
+      }
+      if (total > 0) console.log(`[BridgeV3] Pruned ${total} finalized command ledger rows`)
+    } catch (error) {
+      console.error('[BridgeV3] Command ledger pruning failed:', error.message)
+    }
+  }
+  await pruneBridgeCommandHistory()
+  const bridgeCommandPruneTimer = setInterval(pruneBridgeCommandHistory, 24 * 60 * 60 * 1000)
+  bridgeCommandPruneTimer.unref?.()
 
   await startHistoryCompareRecoveryWorker()
   const modelUsageRecoveryTimer = setInterval(recoverModelUsageReservations, 5 * 60 * 1000)

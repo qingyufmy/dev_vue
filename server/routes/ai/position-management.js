@@ -14,15 +14,18 @@ const MODE_RANK = new Map(POSITION_MANAGEMENT_MODES.map((mode, index) => [mode, 
 const TERMINAL_STATES = new Set(['HELD', 'EXPIRED', 'REJECTED', 'FAILED', 'COMPLETED', 'EXIT_ONLY_COMPLETED'])
 const TRANSITIONS = new Map(Object.entries({
   CANDIDATE:['EVIDENCE_CONFIRMED', 'HELD', 'EXPIRED', 'REJECTED'],
-  EVIDENCE_CONFIRMED:['PRECONDITIONS_LOCKED', 'HELD', 'EXPIRED', 'REJECTED'],
-  PRECONDITIONS_LOCKED:['PENDING_CANCEL_INTENT', 'CLOSE_INTENT_CREATED', 'COMPLETED', 'REJECTED'],
-  PENDING_CANCEL_INTENT:['PENDING_CANCEL_SENT', 'FAILED'],
+  // The worker commits the lock and executable intent atomically.  Keep the
+  // legacy lock state recoverable/manual-only; it must never be created by the
+  // generic transition API as a stable externally visible state.
+  EVIDENCE_CONFIRMED:['HELD', 'EXPIRED', 'REJECTED', 'MANUAL_REVIEW'],
+  PRECONDITIONS_LOCKED:['FAILED', 'MANUAL_REVIEW'],
+  PENDING_CANCEL_INTENT:['PENDING_CANCEL_SENT', 'FAILED', 'MANUAL_REVIEW'],
   PENDING_CANCEL_SENT:['PENDING_RECONCILING', 'PENDING_UNCERTAIN'],
   PENDING_RECONCILING:['PENDING_CANCEL_CONFIRMED', 'PENDING_FILLED_DURING_CANCEL', 'PENDING_UNCERTAIN'],
   PENDING_CANCEL_CONFIRMED:['CLOSE_INTENT_CREATED', 'COMPLETED'],
   PENDING_FILLED_DURING_CANCEL:['MANUAL_REVIEW'],
   PENDING_UNCERTAIN:['PENDING_RECONCILING', 'MANUAL_REVIEW'],
-  CLOSE_INTENT_CREATED:['CLOSE_SENT', 'FAILED'],
+  CLOSE_INTENT_CREATED:['CLOSE_SENT', 'FAILED', 'MANUAL_REVIEW'],
   CLOSE_SENT:['CLOSE_RECONCILING', 'CLOSE_PARTIAL', 'CLOSE_UNCERTAIN'],
   CLOSE_RECONCILING:['CLOSE_CONFIRMED', 'CLOSE_PARTIAL', 'CLOSE_UNCERTAIN'],
   CLOSE_PARTIAL:['CLOSE_RECONCILING', 'MANUAL_REVIEW'],
@@ -39,6 +42,11 @@ const object = value => value && !Array.isArray(value) && typeof value === 'obje
 const text = (value, max = 500) => typeof value === 'string' ? value.trim().slice(0, max) : ''
 const number = value => Number.isFinite(Number(value)) ? Number(value) : null
 const json = (value, fallback = {}) => { try { return value ? JSON.parse(value) : fallback } catch { return fallback } }
+const canonicalJson = value => Array.isArray(value) ? value.map(canonicalJson)
+  : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalJson(value[key])]))
+    : value
+const sameJsonPayload = (left, right) => JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right))
 const hash = value => crypto.createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex')
 const stableId = (prefix, parts) => `${prefix}_${hash(parts).slice(0, 32)}`
 
@@ -841,13 +849,45 @@ export async function createPositionManagementCommand({ taskId, commandType, com
   const sequence = Math.max(1, Number(commandSequence) || 1)
   const operationId = `PM-${taskId}-${commandType}-${sequence}`
   const now = beijingNow()
-  await queryRun(`INSERT INTO ai_position_management_commands
-    (task_id, command_sequence, operation_id, command_type, expected_state_json, request_json,
-     send_status, reconciliation_status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'prepared', 'pending', ?, ?)
-    ON DUPLICATE KEY UPDATE operation_id = operation_id`, [
-    taskId, sequence, operationId, commandType, JSON.stringify(expectedState || {}), JSON.stringify(request || {}), now, now,
-  ])
+  const expectedPayload = expectedState || {}
+  const requestPayload = request || {}
+  await withTransaction(async run => {
+    const [rows] = await run(`SELECT * FROM ai_position_management_commands
+      WHERE task_id = ? AND command_type = ? AND command_sequence = ? FOR UPDATE`,
+    [taskId, commandType, sequence])
+    let existing = rows?.[0] || null
+    if (!existing) {
+      const [operationRows] = await run(`SELECT * FROM ai_position_management_commands
+        WHERE operation_id = ? FOR UPDATE`, [operationId])
+      if (operationRows?.length) throw new Error('position_management_command_payload_conflict')
+    }
+    if (existing) {
+      let storedExpected = null
+      let storedRequest = null
+      try {
+        storedExpected = JSON.parse(existing.expected_state_json || '{}')
+        storedRequest = JSON.parse(existing.request_json || '{}')
+      } catch {
+        throw new Error('position_management_command_payload_conflict')
+      }
+      if (existing.operation_id !== operationId || existing.command_type !== commandType
+        || Number(existing.command_sequence) !== sequence
+        || !sameJsonPayload(storedExpected, expectedPayload)
+        || !sameJsonPayload(storedRequest, requestPayload)) {
+        throw new Error('position_management_command_payload_conflict')
+      }
+      if (existing.send_status !== 'prepared' || existing.bridge_command_id) {
+        throw new Error('position_management_command_already_sent')
+      }
+      return
+    }
+    await run(`INSERT INTO ai_position_management_commands
+      (task_id, command_sequence, operation_id, command_type, expected_state_json, request_json,
+       send_status, reconciliation_status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'prepared', 'pending', ?, ?)`, [
+      taskId, sequence, operationId, commandType, JSON.stringify(expectedPayload), JSON.stringify(requestPayload), now, now,
+    ])
+  })
   return queryOne('SELECT * FROM ai_position_management_commands WHERE operation_id = ?', [operationId])
 }
 

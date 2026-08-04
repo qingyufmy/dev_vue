@@ -331,7 +331,13 @@ function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens
       ? (model === 'k3' ? { type: 'enabled', effort: 'max' } : { type: 'enabled' })
       : { type: 'enabled' }
     if (provider === 'kimi_code') body.max_tokens = maxTokens
-    else body.reasoning_effort = reasoningEffort || 'max'
+    else {
+      // DeepSeek's thinking Chat Completions contract still requires the
+      // selected output budget. Keep this capability mapping provider-scoped;
+      // unknown thinking gateways must retain their existing wire shape.
+      if (provider === 'deepseek') body.max_tokens = maxTokens
+      body.reasoning_effort = reasoningEffort || 'max'
+    }
   } else if (provider === 'kimi_code') {
     body.thinking = { type: 'disabled' }
     body.max_tokens = maxTokens
@@ -724,7 +730,7 @@ async function trackedModelRequest({
       })
     }
     if (usageContext) {
-      const reservation = await beginModelUsage({ ...usageContext, estimatedTokens })
+      const reservation = await beginModelUsage({ ...usageContext, estimatedTokens, requestPhase:phase })
       usageLogId = reservation.logId
     }
     await assertSafeModelEndpoint(url)
@@ -1270,6 +1276,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
           FROM ai_model_usage_logs
           WHERE model_profile_id = ? AND \`usage\` = ? AND input_tokens BETWEEN ? AND ?
             AND output_tokens > 0
+            AND (request_phase = 'request' OR request_phase IS NULL)
           ORDER BY id DESC LIMIT 100`, [
           config._model_profile_id, usageKind, lowerInputBound, upperInputBound,
         ])

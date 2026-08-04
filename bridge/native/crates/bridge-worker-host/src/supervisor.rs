@@ -1,3 +1,4 @@
+use crate::process_session::WorkerProcessState;
 use crate::{
     WorkerCapability, WorkerHostError, WorkerProcessSession, WorkerProgram, WorkerRegistry,
     WorkerRoute,
@@ -10,6 +11,8 @@ use std::time::Duration;
 use tokio::net::windows::named_pipe::NamedPipeServer;
 use tokio::sync::watch;
 use tokio::time::Instant;
+
+const WORKER_PROCESS_EXITED_ERROR_CODE: &str = "bridge_worker_process_exited";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkerLifecycleState {
@@ -27,6 +30,10 @@ pub struct WorkerLifecycleSnapshot {
     pub consecutive_failures: u32,
     pub client_generation: Option<u64>,
     pub process_id: Option<u32>,
+    /// The last observed child exit code, when the worker has exited. This is intentionally kept
+    /// separate from `error_code`: the latter is a stable, redacted classification suitable for
+    /// logs and UI while this field is useful to local diagnostics.
+    pub process_exit_code: Option<i32>,
     pub error_code: Option<String>,
 }
 
@@ -90,6 +97,7 @@ impl WorkerSupervisor {
             consecutive_failures: 0,
             client_generation: None,
             process_id: None,
+            process_exit_code: None,
             error_code: None,
         });
         Ok(Self {
@@ -137,6 +145,7 @@ impl WorkerSupervisor {
                 None,
                 None,
                 None,
+                None,
             );
             let launch = WorkerProcessSession::launch(
                 self.program.clone(),
@@ -165,6 +174,7 @@ impl WorkerSupervisor {
                     self.publish(
                         WorkerLifecycleState::Restarting,
                         failures,
+                        None,
                         None,
                         None,
                         Some(error.code()),
@@ -205,6 +215,7 @@ impl WorkerSupervisor {
                 Some(lease.generation()),
                 Some(process_id),
                 None,
+                None,
             );
             let started_at = Instant::now();
             let mut stable_reset = false;
@@ -219,13 +230,15 @@ impl WorkerSupervisor {
                 if !self.registry.is_claim_current(&claim).await {
                     break ActiveOutcome::Superseded;
                 }
+                match session.state() {
+                    Ok(WorkerProcessState::Running) => {}
+                    Ok(WorkerProcessState::Exited { exit_code }) => {
+                        break ActiveOutcome::ProcessExited(exit_code);
+                    }
+                    Err(error) => break ActiveOutcome::OwnedFailure(error),
+                }
                 if !session.client().is_healthy() {
                     break ActiveOutcome::Failed("worker_channel_unavailable");
-                }
-                match session.is_running() {
-                    Ok(true) => {}
-                    Ok(false) => break ActiveOutcome::Failed("bridge_worker_process_exited"),
-                    Err(error) => break ActiveOutcome::OwnedFailure(error),
                 }
                 if !stable_reset && started_at.elapsed() >= self.policy.stable_run_threshold {
                     failures = 0;
@@ -235,6 +248,7 @@ impl WorkerSupervisor {
                         failures,
                         Some(lease.generation()),
                         Some(process_id),
+                        None,
                         None,
                     );
                 }
@@ -252,11 +266,23 @@ impl WorkerSupervisor {
                     superseded = true;
                     break;
                 }
+                ActiveOutcome::ProcessExited(exit_code) => {
+                    failures = increment_failures(failures, self.policy.maximum_failure_counter);
+                    self.publish(
+                        WorkerLifecycleState::Restarting,
+                        failures,
+                        None,
+                        None,
+                        exit_code,
+                        Some(WORKER_PROCESS_EXITED_ERROR_CODE),
+                    );
+                }
                 ActiveOutcome::Failed(error_code) => {
                     failures = increment_failures(failures, self.policy.maximum_failure_counter);
                     self.publish(
                         WorkerLifecycleState::Restarting,
                         failures,
+                        None,
                         None,
                         None,
                         Some(error_code),
@@ -285,6 +311,7 @@ impl WorkerSupervisor {
                 WorkerLifecycleState::Stopped
             },
             failures,
+            None,
             None,
             None,
             terminal_error.as_ref().map(|error| error.code()),
@@ -329,6 +356,7 @@ impl WorkerSupervisor {
         consecutive_failures: u32,
         client_generation: Option<u64>,
         process_id: Option<u32>,
+        process_exit_code: Option<i32>,
         error_code: Option<&str>,
     ) {
         self.status.send_replace(WorkerLifecycleSnapshot {
@@ -337,6 +365,7 @@ impl WorkerSupervisor {
             consecutive_failures,
             client_generation,
             process_id,
+            process_exit_code,
             error_code: error_code.map(str::to_owned),
         });
     }
@@ -345,6 +374,7 @@ impl WorkerSupervisor {
 enum ActiveOutcome {
     Stopped,
     Superseded,
+    ProcessExited(Option<i32>),
     Failed(&'static str),
     OwnedFailure(WorkerHostError),
 }
@@ -442,6 +472,20 @@ mod tests {
             async move { supervisor.run().await }
         });
         let first = wait_for_ready_generation(&mut status, None).await;
+        let exited = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = status.borrow().clone();
+                if snapshot.state == WorkerLifecycleState::Restarting
+                    && snapshot.error_code.as_deref() == Some(WORKER_PROCESS_EXITED_ERROR_CODE)
+                {
+                    return snapshot;
+                }
+                status.changed().await.expect("status change");
+            }
+        })
+        .await
+        .expect("exit diagnostic timeout");
+        assert_eq!(exited.process_exit_code, Some(0));
         let second = wait_for_ready_generation(&mut status, Some(first)).await;
         assert!(second > first);
         handle.request_stop();
