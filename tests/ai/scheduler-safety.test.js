@@ -435,6 +435,23 @@ describe('durable automatic model-task gate', () => {
       .resolves.toMatchObject({ allowed:true })
   })
 
+  it('anchors the scheduler deadline at completedAt plus interval without doubling it', async () => {
+    const completedAt = 1_000_000
+    const nowMs = completedAt + 1
+    db.queryOne.mockResolvedValue({
+      task_id:'task-3', status:'succeeded', completed_at_utc_msc:completedAt,
+      provider_request_started:1, frozen_context_json:JSON.stringify({ interval_minutes:5 }),
+    })
+    const gate = await __schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, nowMs)
+    const state = {}
+    __schedulerTest.schedulerNextRunAt(state, gate.nextAllowedAt, nowMs)
+    expect(state).toMatchObject({
+      nextRunInSeconds:300,
+      nextRunAtUtc:new Date(completedAt + 300_000).toISOString(),
+    })
+    expect(Date.parse(state.nextRunAtUtc)).toBe(completedAt + 300_000)
+  })
+
   it('freezes execution-critical task identity and all source hashes', () => {
     const input = __schedulerTest.buildAutoModelTaskInput({
       promptTypeId:7, symbol:'XAUUSD.s', cycleId:'7:XAUUSD:1', cycleStartedAtMs:1_000,

@@ -10,6 +10,37 @@ function number(value) {
   return Number(value || 0)
 }
 
+function parseUtcMs(value) {
+  const timestamp = Date.parse(String(value || ''))
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function runtimeNextRun(state, cooldownTtl, nowMs = Date.now()) {
+  const waitReason = String(state?.wait_reason || '')
+  const cooldownWait = ['cooldown', 'cooldown_recovered'].includes(waitReason)
+  const cooldownTtlKnown = cooldownTtl !== null && cooldownTtl !== undefined
+    && Number.isFinite(Number(cooldownTtl))
+  if (cooldownWait && cooldownTtlKnown) {
+    const seconds = Math.max(0, Number(cooldownTtl))
+    return {
+      seconds,
+      atUtc:seconds > 0 ? new Date(nowMs + seconds * 1000).toISOString() : '',
+    }
+  }
+  const atMs = parseUtcMs(state?.next_run_at_utc)
+  if (atMs !== null) {
+    return {
+      seconds:Math.max(0, Math.ceil((atMs - nowMs) / 1000)),
+      atUtc:new Date(atMs).toISOString(),
+    }
+  }
+  const legacySeconds = Math.max(0, number(state?.next_run_in_seconds))
+  return {
+    seconds:legacySeconds,
+    atUtc:legacySeconds > 0 ? new Date(nowMs + legacySeconds * 1000).toISOString() : '',
+  }
+}
+
 function parseSchedulerSymbols(value) {
   if (Array.isArray(value)) return value
   if (typeof value !== 'string' || !value.trim()) return []
@@ -59,6 +90,11 @@ export async function readSchedulerRuntime(dbRows) {
         subscriberCount = number(await redis.scard(`auto:scheduler:${key}:subs`))
       } catch {}
       if (subscriberCount <= 0) subscriberCount = number(state.subscriber_count)
+      let cooldownTtl = null
+      if (['cooldown', 'cooldown_recovered'].includes(String(state.wait_reason || ''))) {
+        try { cooldownTtl = Number(await redis.ttl(`auto:scheduler:cooldown:${key}`)) } catch {}
+      }
+      const nextRun = runtimeNextRun(state, cooldownTtl)
       schedulers.push({
         key,
         strategy_id:strategyId,
@@ -75,7 +111,9 @@ export async function readSchedulerRuntime(dbRows) {
         progress_seq:number(state.progress_seq),
         interval_minutes:number(state.interval_minutes || dbInfo?.interval_minutes || 5),
         subscriber_count:subscriberCount,
-        next_run_in_seconds:number(state.next_run_in_seconds),
+        next_run_in_seconds:nextRun.seconds,
+        next_run_at_utc:nextRun.atUtc,
+        state_updated_at_utc:state.state_updated_at_utc || null,
         last_run_at:state.last_run_at || null,
       })
     }

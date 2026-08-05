@@ -1,6 +1,6 @@
 const state = {
   view:'overview', profile:null, overview:null, users:[], pagination:null, search:'', membership:'all', page:1, selectedUser:null,
-  realtime:{ ws:null, reconnectTimer:null, heartbeatTimer:null, schedulerTimer:null, reconnectAttempts:0, lastEventAt:0, terminalTime:'', terminalUserId:0, terminalPlatform:'mt5', terminalTimezoneOffsetMinutes:null, pendingRefresh:false, refreshTimer:null, authFailed:false },
+  realtime:{ ws:null, reconnectTimer:null, heartbeatTimer:null, adminPongWatchdogTimer:null, schedulerTimer:null, schedulerSyncTimer:null, schedulerSyncInFlight:false, schedulerSyncRequestSeq:0, reconnectAttempts:0, lastEventAt:0, lastPongAt:0, terminalTime:'', terminalUserId:0, terminalPlatform:'mt5', terminalTimezoneOffsetMinutes:null, pendingRefresh:false, refreshTimer:null, authFailed:false, aiOperationsRequestSeq:0, aiOperationsAbortController:null },
   commercialTab:'orders', commercialOverview:null,
   orderPage:1, orderSearch:'', orderStatus:'all',
   notificationPage:1, notificationSearch:'', notificationStatus:'all', notificationChannel:'all',
@@ -163,20 +163,47 @@ function updateAiOpsTerminalClock(value, userId = 0, platform = '', timezoneOffs
   }
 }
 
+function schedulerRemainingSeconds(item, nowMs = Date.now()) {
+  const deadline = Date.parse(String(item?.next_run_at_utc || ''))
+  if (Number.isFinite(deadline)) return Math.max(0, Math.ceil((deadline - nowMs) / 1000))
+  return Math.max(0, Number(item?.next_run_in_seconds || 0))
+}
+
 function patchSchedulerRealtime(message) {
-  if (message?.scope !== 'ai' || !['auto_progress','auto_progress_done'].includes(message.reason)) return
+  if (message?.scope !== 'ai' || !['scheduler_state','auto_progress','auto_progress_done'].includes(message.reason)) return false
   const runtime = state.aiOperations?.scheduler?.runtime
-  if (!Array.isArray(runtime)) return
+  if (!Array.isArray(runtime)) return false
   const data = message.data || {}
-  const item = runtime.find(row => Number(row.strategy_id) === Number(data.prompt_type_id) && String(row.symbol || '') === String(data.symbol || ''))
-  if (!item) return
-  if (message.reason === 'auto_progress') {
+  const item = runtime.find(row => (data.key && String(row.key || '') === String(data.key))
+    || (Number(row.strategy_id) === Number(data.prompt_type_id ?? data.strategy_id)
+      && String(row.symbol || '') === String(data.symbol || '')))
+  if (!item) return false
+  if (message.reason === 'scheduler_state') {
+    Object.assign(item, {
+      running:data.running !== false,
+      in_flight:Boolean(data.in_flight),
+      wait_reason:String(data.wait_reason || ''),
+      last_error:String(data.last_error || ''),
+      stage:String(data.stage || item.stage || 'idle'),
+      stage_label:String(data.stage_label || item.stage_label || ''),
+      progress_percent:Number(data.progress_percent ?? item.progress_percent ?? 0),
+      progress_seq:Number(data.progress_seq ?? item.progress_seq ?? 0),
+      subscriber_count:Number(data.subscriber_count ?? item.subscriber_count ?? 0),
+      next_run_in_seconds:Number(data.next_run_in_seconds ?? 0),
+      next_run_at_utc:String(data.next_run_at_utc || ''),
+      state_updated_at_utc:String(data.updated_at || item.state_updated_at_utc || ''),
+    })
+  } else if (message.reason === 'auto_progress') {
     Object.assign(item, { running:data.running !== false, in_flight:true, wait_reason:'', last_error:'', stage:data.stage || item.stage, stage_label:data.stage_label || item.stage_label, progress_percent:Number(data.progress_percent || 0), subscriber_count:Number(data.subscribers_count ?? item.subscriber_count) })
+    if (data.next_run_at_utc !== undefined) item.next_run_at_utc = String(data.next_run_at_utc || '')
+    if (data.updated_at) item.state_updated_at_utc = String(data.updated_at)
   } else {
     const failed = data.status && !['success','skipped'].includes(data.status)
-    Object.assign(item, { running:data.running !== false, in_flight:false, stage:'idle', stage_label:'', progress_percent:Number(data.progress_percent || 0), next_run_in_seconds:Number(data.next_run_in_seconds || 0), wait_reason:failed ? String(data.reason || '') : '', last_error:data.status === 'failed' ? String(data.reason || '') : '' })
+    Object.assign(item, { running:data.running !== false, in_flight:false, stage:'idle', stage_label:'', progress_percent:Number(data.progress_percent || 0), next_run_in_seconds:Number(data.next_run_in_seconds || 0), next_run_at_utc:String(data.next_run_at_utc || ''), wait_reason:failed ? String(data.reason || '') : '', last_error:data.status === 'failed' ? String(data.reason || '') : '' })
+    if (data.updated_at) item.state_updated_at_utc = String(data.updated_at)
   }
-  if (state.view === 'ai-operations' && state.aiTab === 'scheduler' && !adminHasTransientInteraction()) renderAiOperationsContent()
+  if (state.view === 'ai-operations' && state.aiTab === 'scheduler' && !adminHasTransientInteraction({ ignoreNavigationInput:true })) renderAiOperationsContent()
+  return true
 }
 
 function realtimeEventAffectsView(event) {
@@ -186,14 +213,17 @@ function realtimeEventAffectsView(event) {
   return scopes.some(scope => allowed.has(scope))
 }
 
-function adminHasTransientInteraction() {
+function adminHasTransientInteraction({ ignoreNavigationInput = false } = {}) {
   const openModal = [...document.querySelectorAll('.modal-layer')].some(item => !item.hidden)
-  const tagName = document.activeElement?.tagName || ''
-  return openModal || ['INPUT', 'TEXTAREA', 'SELECT'].includes(tagName)
+  const active = document.activeElement
+  const tagName = active?.tagName || ''
+  const navigationInput = active?.id === 'adminQuickNavSearch'
+  return openModal || (['INPUT', 'TEXTAREA', 'SELECT'].includes(tagName) && !(ignoreNavigationInput && navigationInput))
 }
 
 function scheduleAdminRealtimeRefresh() {
-  if (adminHasTransientInteraction()) {
+  const schedulerPage = state.view === 'ai-operations' && state.aiTab === 'scheduler'
+  if (adminHasTransientInteraction({ ignoreNavigationInput:schedulerPage })) {
     state.realtime.pendingRefresh = true
     adminRealtimeStatus('pending', '有新数据待更新', '当前正在编辑，完成后会自动更新')
     return
@@ -202,12 +232,29 @@ function scheduleAdminRealtimeRefresh() {
   state.realtime.refreshTimer = setTimeout(async () => {
     state.realtime.refreshTimer = null
     state.realtime.pendingRefresh = false
-    try { await setView(state.view) } catch (error) { handleError(error) }
+    try {
+      const currentSchedulerPage = state.view === 'ai-operations' && state.aiTab === 'scheduler'
+      if (currentSchedulerPage) await loadAiOperations(true)
+      else await setView(state.view)
+    } catch (error) { handleError(error) }
   }, 550)
 }
 
 function flushPendingAdminRealtimeRefresh() {
-  if (state.realtime.pendingRefresh && !adminHasTransientInteraction()) scheduleAdminRealtimeRefresh()
+  const schedulerPage = state.view === 'ai-operations' && state.aiTab === 'scheduler'
+  if (state.realtime.pendingRefresh && !adminHasTransientInteraction({ ignoreNavigationInput:schedulerPage })) scheduleAdminRealtimeRefresh()
+}
+
+function calibrateSchedulerRuntimeSilently() {
+  if (state.view !== 'ai-operations' || state.aiTab !== 'scheduler') return
+  if (state.realtime.schedulerSyncInFlight) return
+  state.realtime.schedulerSyncInFlight = true
+  const requestSeq = ++state.realtime.schedulerSyncRequestSeq
+  Promise.resolve(loadAiOperations(true)).catch(error => {
+    if (error?.name !== 'AbortError') console.warn('[AdminAI] scheduler calibration failed:', error.message)
+  }).finally(() => {
+    if (state.realtime.schedulerSyncRequestSeq === requestSeq) state.realtime.schedulerSyncInFlight = false
+  })
 }
 
 function handleAdminRealtimeMessage(message) {
@@ -220,6 +267,12 @@ function handleAdminRealtimeMessage(message) {
       if (lastAt) lastAt.textContent = clock
     }
     adminRealtimeStatus('live', '实时在线', '已连接服务器实时推送')
+    calibrateSchedulerRuntimeSilently()
+    return
+  }
+  if (message.type === 'admin_pong') {
+    state.realtime.lastPongAt = Date.now()
+    if (message.server_time) state.realtime.lastEventAt = Date.parse(message.server_time) || state.realtime.lastEventAt
     return
   }
   if (message.type !== 'admin_event') return
@@ -229,15 +282,19 @@ function handleAdminRealtimeMessage(message) {
   if (lastAt) lastAt.textContent = clock
   if (message.reason === 'tick') updateAiOpsTerminalClock(message.data?.quote?.time, message.data?.user_id, message.data?.platform, message.data?.timezone_offset_minutes)
   if (message.reason === 'heartbeat') updateAiOpsTerminalClock(message.data?.mt5_time, message.data?.user_id, message.data?.platform, message.data?.timezone_offset_minutes)
-  patchSchedulerRealtime(message)
+  const schedulerPatched = patchSchedulerRealtime(message)
   adminRealtimeStatus('live', '实时在线', `已接收服务器实时推送，最近更新 ${clock}`)
-  if (message.refresh !== false && realtimeEventAffectsView(message)) scheduleAdminRealtimeRefresh()
+  if (!schedulerPatched && message.refresh !== false && realtimeEventAffectsView(message)) scheduleAdminRealtimeRefresh()
 }
 
 function stopAdminRealtimeHeartbeat() {
   if (state.realtime.heartbeatTimer) {
     clearInterval(state.realtime.heartbeatTimer)
     state.realtime.heartbeatTimer = null
+  }
+  if (state.realtime.adminPongWatchdogTimer) {
+    clearInterval(state.realtime.adminPongWatchdogTimer)
+    state.realtime.adminPongWatchdogTimer = null
   }
 }
 
@@ -266,6 +323,7 @@ function connectAdminRealtime() {
   state.realtime.ws = ws
   ws.onopen = () => {
     state.realtime.reconnectAttempts = 0
+    state.realtime.lastPongAt = Date.now()
     adminRealtimeStatus('live', '实时在线', '已连接服务器实时推送')
     ws.send(JSON.stringify({ type:'subscribe', scopes:Object.keys(REALTIME_VIEW_SCOPES) }))
     stopAdminRealtimeHeartbeat()
@@ -273,6 +331,13 @@ function connectAdminRealtime() {
       if (ws.readyState !== WebSocket.OPEN) return
       try { ws.send(JSON.stringify({ type:'hb', seq:Date.now() })) } catch {}
     }, 25_000)
+    state.realtime.adminPongWatchdogTimer = setInterval(() => {
+      if (state.realtime.ws !== ws || ws.readyState !== WebSocket.OPEN) return
+      if (Date.now() - Number(state.realtime.lastPongAt || 0) <= 70_000) return
+      adminRealtimeStatus('waiting', '实时连接失活，正在重连', '心跳未收到服务器回应，正在重建实时通道')
+      try { ws.close(4001, 'admin_pong_timeout') } catch { scheduleAdminRealtimeReconnect() }
+    }, 10_000)
+    calibrateSchedulerRuntimeSilently()
   }
   ws.onmessage = event => {
     try { handleAdminRealtimeMessage(JSON.parse(event.data)) } catch {}
@@ -919,7 +984,8 @@ function schedulerCards(data) {
     const reason = item.last_error ? schedulerReason(item.last_error, true) : item.wait_reason ? schedulerReason(item.wait_reason) : '运行状态正常'
     const progress = Math.max(0, Math.min(100, Number(item.progress_percent || 0)))
     const detail = item.in_flight ? (item.stage_label || '正在执行分析任务') : reason
-    return `<article class="runtime-card ${item.in_flight ? 'is-running' : ''}" data-scheduler-key="${escapeHtml(item.key || `${item.strategy_id}:${item.symbol}`)}"><header><div><strong>${escapeHtml(item.strategy_name || `策略 #${item.strategy_id}`)}</strong><small>${escapeHtml(item.symbol || '--')} · 每 ${Number(item.interval_minutes || 5)} 分钟</small></div><span class="badge ${tone}">${stateText}</span></header><div class="runtime-facts"><span>订阅用户<strong>${Number(item.subscriber_count || 0)}</strong></span><span>下次运行<strong data-next-run>${item.next_run_in_seconds > 0 ? `${item.next_run_in_seconds} 秒` : '--'}</strong></span></div>${item.in_flight ? `<div class="scheduler-progress" aria-label="分析进度 ${progress}%"><span style="width:${Math.max(3,progress)}%"></span></div>` : ''}<p>${escapeHtml(detail)}</p></article>`
+    const nextRunSeconds = schedulerRemainingSeconds(item)
+    return `<article class="runtime-card ${item.in_flight ? 'is-running' : ''}" data-scheduler-key="${escapeHtml(item.key || `${item.strategy_id}:${item.symbol}`)}"><header><div><strong>${escapeHtml(item.strategy_name || `策略 #${item.strategy_id}`)}</strong><small>${escapeHtml(item.symbol || '--')} · 每 ${Number(item.interval_minutes || 5)} 分钟</small></div><span class="badge ${tone}">${stateText}</span></header><div class="runtime-facts"><span>订阅用户<strong>${Number(item.subscriber_count || 0)}</strong></span><span>下次运行<strong data-next-run>${nextRunSeconds > 0 ? `${nextRunSeconds} 秒` : '--'}</strong></span></div>${item.in_flight ? `<div class="scheduler-progress" aria-label="分析进度 ${progress}%"><span style="width:${Math.max(3,progress)}%"></span></div>` : ''}<p>${escapeHtml(detail)}</p></article>`
   })
   configured.filter(item => !runtimeIds.has(Number(item.strategy_id))).forEach(item => cards.push(`<article class="runtime-card"><header><div><strong>${escapeHtml(item.strategy_name || `策略 #${item.strategy_id}`)}</strong><small>每 ${Number(item.interval_minutes || 5)} 分钟</small></div><span class="badge">等待实例</span></header><div class="runtime-facts"><span>订阅用户<strong>${Number(item.subscriber_count || 0)}</strong></span><span>运行实例<strong>未启动</strong></span></div><p>等待桥接或调度条件满足</p></article>`))
   return `<div class="runtime-grid">${cards.join('')}</div>`
@@ -928,6 +994,8 @@ function schedulerCards(data) {
 function stopAiSchedulerTicker() {
   if (state.realtime.schedulerTimer) clearInterval(state.realtime.schedulerTimer)
   state.realtime.schedulerTimer = null
+  if (state.realtime.schedulerSyncTimer) clearInterval(state.realtime.schedulerSyncTimer)
+  state.realtime.schedulerSyncTimer = null
 }
 function startAiSchedulerTicker() {
   stopAiSchedulerTicker()
@@ -935,25 +1003,26 @@ function startAiSchedulerTicker() {
     if (state.view !== 'ai-operations' || state.aiTab !== 'scheduler') return stopAiSchedulerTicker()
     const runtime = state.aiOperations?.scheduler?.runtime || []
     runtime.forEach(item => {
-      if (!item.in_flight && Number(item.next_run_in_seconds) > 0) item.next_run_in_seconds = Number(item.next_run_in_seconds) - 1
       const card = document.querySelector(`[data-scheduler-key="${CSS.escape(String(item.key || `${item.strategy_id}:${item.symbol}`))}"]`)
       const node = card?.querySelector('[data-next-run]')
-      if (node) node.textContent = Number(item.next_run_in_seconds) > 0 ? `${Number(item.next_run_in_seconds)} 秒` : '--'
+      const remaining = schedulerRemainingSeconds(item)
+      if (node) node.textContent = remaining > 0 ? `${remaining} 秒` : '--'
     })
   }, 1000)
+  state.realtime.schedulerSyncTimer = setInterval(calibrateSchedulerRuntimeSilently, 20_000)
 }
 function aiSchedulerContent(data) {
   const rows = data.model_usage || []
   const runtime = data.scheduler?.runtime || []
   const configured = data.scheduler?.configured || []
-  const active = runtime.filter(item => item.in_flight || (item.running && !item.wait_reason && !item.last_error)).length
-  const waiting = runtime.filter(item => item.wait_reason && !item.last_error).length + configured.filter(item => !runtime.some(runtimeItem => Number(runtimeItem.strategy_id) === Number(item.strategy_id))).length
+  const active = runtime.filter(item => item.in_flight).length
+  const waiting = runtime.filter(item => !item.in_flight && (item.running || item.wait_reason) && !item.last_error).length + configured.filter(item => !runtime.some(runtimeItem => Number(runtimeItem.strategy_id) === Number(item.strategy_id))).length
   const errors = runtime.filter(item => item.last_error).length
   const requests = rows.reduce((sum, row) => sum + Number(row.requests || 0), 0)
   const failures = rows.reduce((sum, row) => sum + Number(row.failures || 0), 0)
   return `<section class="ai-runtime-strip" aria-label="调度运行摘要">
       <div><span class="provider-dot ${data.scheduler?.runtime_available ? 'ok' : ''}"></span><p><small>数据通道</small><strong>${data.scheduler?.runtime_available ? '实时运行态' : '数据库降级态'}</strong></p></div>
-      <div><small>运行中</small><strong>${active}</strong><span>个策略实例</span></div>
+      <div><small>正在推理</small><strong>${active}</strong><span>个策略实例</span></div>
       <div><small>等待条件</small><strong>${waiting}</strong><span>个待执行实例</span></div>
       <div class="${errors ? 'has-error' : ''}"><small>调度异常</small><strong>${errors}</strong><span>${errors ? '需要处理' : '当前正常'}</span></div>
       <div><small>24h 模型质量</small><strong>${percent(requests - failures, requests)}</strong><span>${requests} 次调用</span></div>
@@ -1301,16 +1370,30 @@ function renderAiOperationsContent() {
   if (state.aiTab === 'scheduler') startAiSchedulerTicker()
 }
 async function loadAiOperations(silent = false) {
+  const requestSeq = ++state.realtime.aiOperationsRequestSeq
+  state.realtime.aiOperationsAbortController?.abort()
+  const controller = typeof AbortController === 'function' ? new AbortController() : null
+  state.realtime.aiOperationsAbortController = controller
   if (!silent) document.querySelector('#aiOperationsContent').innerHTML = '<div class="panel"><div class="empty-state">正在汇总 AI 运行数据…</div></div>'
-  const data = await api('/api/admin/ai/overview')
-  state.aiOperations = data.operations
-  const clock = data.operations?.mt5_clock || {}
-  const summary = data.operations?.summary || {}
-  const connectedMt4 = Number(summary.connected_mt4_bridges || 0)
-  const connectedMt5 = Number(summary.connected_mt5_bridges || 0)
-  const connectedPlatform = clock.platform || (connectedMt4 > 0 && connectedMt5 === 0 ? 'mt4' : connectedMt5 > 0 && connectedMt4 === 0 ? 'mt5' : '')
-  updateAiOpsTerminalClock(clock.time, clock.user_id, connectedPlatform, clock.timezone_offset_minutes)
-  renderAiOperationsContent()
+  try {
+    const data = controller
+      ? await api('/api/admin/ai/overview', { signal:controller.signal })
+      : await api('/api/admin/ai/overview')
+    if (requestSeq !== state.realtime.aiOperationsRequestSeq) return
+    state.aiOperations = data.operations
+    const clock = data.operations?.mt5_clock || {}
+    const summary = data.operations?.summary || {}
+    const connectedMt4 = Number(summary.connected_mt4_bridges || 0)
+    const connectedMt5 = Number(summary.connected_mt5_bridges || 0)
+    const connectedPlatform = clock.platform || (connectedMt4 > 0 && connectedMt5 === 0 ? 'mt4' : connectedMt5 > 0 && connectedMt4 === 0 ? 'mt5' : '')
+    updateAiOpsTerminalClock(clock.time, clock.user_id, connectedPlatform, clock.timezone_offset_minutes)
+    renderAiOperationsContent()
+  } catch (error) {
+    if (error?.name === 'AbortError' || requestSeq !== state.realtime.aiOperationsRequestSeq) return
+    throw error
+  } finally {
+    if (requestSeq === state.realtime.aiOperationsRequestSeq) state.realtime.aiOperationsAbortController = null
+  }
 }
 function positionManagementModeLabel(mode) {
   return ['auto_exit','auto_reverse'].includes(mode)?'已开启':'已关闭'
@@ -1443,8 +1526,14 @@ async function renderAiOperations() {
   main.querySelector('[data-ai-refresh]').addEventListener('click', async event => {
     const button = event.currentTarget
     button.disabled = true
-    try { await renderAiOperations(); toast('AI 运营数据已刷新', 'success') }
+    try {
+      if (state.aiTab === 'governance') await loadAiGovernance()
+      else if (state.aiTab === 'model-compare') await loadModelCompareWorkspace()
+      else await loadAiOperations()
+      toast('AI 运营数据已刷新', 'success')
+    }
     catch (error) { button.disabled = false; handleError(error) }
+    finally { button.disabled = false }
   })
   if (state.aiTab === 'model-compare') await loadModelCompareWorkspace()
   else await loadAiOperations()
@@ -2208,6 +2297,10 @@ async function renderSystemSettingsPage(){
 }
 
 async function setView(view) {
+  if (state.view === 'ai-operations' && view !== 'ai-operations') {
+    state.realtime.aiOperationsRequestSeq += 1
+    state.realtime.aiOperationsAbortController?.abort()
+  }
   state.view = view
   window.scrollTo(0,0)
   document.querySelector('#adminMain').classList.toggle('ai-operations-page', view === 'ai-operations')
@@ -2296,11 +2389,14 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     flushPendingAdminRealtimeRefresh()
     if (!state.realtime.ws && !state.realtime.authFailed) connectAdminRealtime()
+    calibrateSchedulerRuntimeSilently()
   }
 })
 window.addEventListener('beforeunload', () => {
   if (state.realtime.reconnectTimer) clearTimeout(state.realtime.reconnectTimer)
   stopAdminRealtimeHeartbeat()
+  stopAiSchedulerTicker()
+  state.realtime.aiOperationsAbortController?.abort()
   try { state.realtime.ws?.close(1000, 'page_unload') } catch {}
 })
 document.querySelector('#accountButton').addEventListener('click', () => openAdminAccountCenter('overview'))

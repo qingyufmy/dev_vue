@@ -15,6 +15,7 @@ vi.mock('../../server/bridge-ws.js', () => ({
   getBridgeTradeMode: vi.fn(() => 4),
   sendBridgeCommand: vi.fn(),
   sendToBrowsers: vi.fn(),
+  broadcastAdminEvent: vi.fn(),
 }))
 
 vi.mock('../../server/routes/ai/market-data.js', () => ({
@@ -196,15 +197,49 @@ describe('subscription index health', () => {
 
     await updateSchedulerRedisState('7:XAUUSD', {
       running:true, subscribers:new Set([42]), subscriberCount:1, intervalMinutes:5,
+      nextRunInSeconds:120, nextRunAtUtc:'2026-08-05T05:02:00.000Z',
     })
     expect(sets.get('auto:scheduler:keys')).toEqual(new Set(['7:XAUUSD']))
     expect(sets.get('auto:scheduler:7:XAUUSD:subs')).toEqual(new Set(['42']))
-    expect(hashes.get('auto:scheduler:7:XAUUSD:state')).toMatchObject({ running:'1', subscriber_count:'1' })
+    expect(hashes.get('auto:scheduler:7:XAUUSD:state')).toMatchObject({
+      running:'1', subscriber_count:'1', next_run_in_seconds:'120', next_run_at_utc:'2026-08-05T05:02:00.000Z',
+    })
+    expect(bridgeWs.broadcastAdminEvent).toHaveBeenCalledTimes(1)
+    expect(bridgeWs.broadcastAdminEvent.mock.calls[0][1]).toBe('scheduler_state')
+
+    await updateSchedulerRedisState('7:XAUUSD', {
+      running:true, subscribers:new Set([42]), subscriberCount:1, intervalMinutes:5,
+      nextRunInSeconds:120, nextRunAtUtc:'2026-08-05T05:02:00.000Z',
+    })
+    expect(bridgeWs.broadcastAdminEvent).toHaveBeenCalledTimes(1)
+
+    await updateSchedulerRedisState('7:XAUUSD', {
+      running:true, subscribers:new Set([42]), subscriberCount:1, intervalMinutes:5,
+      progressPercent:55, progressSeq:2,
+      nextRunInSeconds:120, nextRunAtUtc:'2026-08-05T05:02:00.000Z',
+    })
+    // Progress is already carried by auto_progress; scheduler_state dedupe
+    // should not suppress or duplicate events for progress-only changes.
+    expect(bridgeWs.broadcastAdminEvent).toHaveBeenCalledTimes(1)
+
+    await updateSchedulerRedisState('7:XAUUSD', {
+      running:true, subscribers:new Set([42]), subscriberCount:1, intervalMinutes:5,
+      waitReason:'cooldown', nextRunInSeconds:90, nextRunAtUtc:'2026-08-05T05:01:30.000Z',
+    })
+    expect(bridgeWs.broadcastAdminEvent).toHaveBeenCalledTimes(2)
+
+    await updateSchedulerRedisState('7:XAUUSD', {
+      running:true, subscribers:new Set([42]), subscriberCount:1, intervalMinutes:5,
+      waitReason:'cooldown', nextRunInSeconds:90, nextRunAtUtc:'2026-08-05T05:01:30.000Z',
+    })
+    expect(bridgeWs.broadcastAdminEvent).toHaveBeenCalledTimes(2)
 
     await updateSchedulerRedisState('7:XAUUSD', { running:false })
     expect(sets.get('auto:scheduler:keys') || new Set()).not.toContain('7:XAUUSD')
     expect(sets.has('auto:scheduler:7:XAUUSD:subs')).toBe(false)
     expect(hashes.has('auto:scheduler:7:XAUUSD:state')).toBe(false)
+    expect(bridgeWs.broadcastAdminEvent).toHaveBeenCalledTimes(3)
+    expect(bridgeWs.broadcastAdminEvent.mock.calls[2][2]).toMatchObject({ running:false, key:'7:XAUUSD' })
   })
 })
 

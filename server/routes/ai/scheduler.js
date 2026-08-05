@@ -546,6 +546,73 @@ const REDIS_SUBS_SUFFIX = ':subs'
 const REDIS_USER_PREFIX = 'auto:user:'
 const REDIS_USER_SUFFIX = ':auto'
 let subscriptionIndexHealth = { ok:false, error:'not_initialized', updatedAt:null }
+const schedulerAdminEventSnapshots = new Map()
+
+function schedulerNextRun(state, seconds, atMs = Date.now()) {
+  const normalizedSeconds = Math.max(0, Number(seconds) || 0)
+  state.nextRunInSeconds = normalizedSeconds
+  state.nextRunAtUtc = normalizedSeconds > 0
+    ? new Date(Number(atMs) + normalizedSeconds * 1000).toISOString()
+    : ''
+  return normalizedSeconds
+}
+
+function schedulerNextRunAt(state, deadlineMs, nowMs = Date.now()) {
+  const deadline = Number(deadlineMs)
+  const now = Number(nowMs)
+  if (!Number.isFinite(deadline) || !Number.isFinite(now)) return schedulerNextRun(state, 0, now)
+  const remainingMs = deadline - now
+  const remainingSeconds = remainingMs > 0 ? Math.max(1, Math.ceil(remainingMs / 1000)) : 0
+  state.nextRunInSeconds = remainingSeconds
+  state.nextRunAtUtc = remainingSeconds > 0 ? new Date(deadline).toISOString() : ''
+  return remainingSeconds
+}
+
+function schedulerStateEventData(key, state, updatedAtUtc) {
+  const separator = String(key || '').indexOf(':')
+  const promptTypeId = Number(state?.promptTypeId || (separator >= 0 ? String(key).slice(0, separator) : 0))
+  const symbol = String(state?.symbol || (separator >= 0 ? String(key).slice(separator + 1) : ''))
+  return {
+    key:String(key || ''),
+    strategy_id:promptTypeId,
+    prompt_type_id:promptTypeId,
+    symbol,
+    running:Boolean(state?.running),
+    in_flight:Boolean(state?.inFlight),
+    wait_reason:String(state?.waitReason || ''),
+    last_error:String(state?.lastError || ''),
+    stage:String(state?.stage || 'idle'),
+    stage_label:String(state?.stageLabel || ''),
+    progress_percent:Number(state?.progressPercent || 0),
+    progress_seq:Number(state?.progressSeq || 0),
+    subscriber_count:Number(state?.subscriberCount || state?.subscribers?.size || 0),
+    next_run_in_seconds:Number(state?.nextRunInSeconds || 0),
+    next_run_at_utc:String(state?.nextRunAtUtc || ''),
+    updated_at:String(updatedAtUtc || state?.stateUpdatedAtUtc || new Date().toISOString()),
+  }
+}
+
+function schedulerStateEventSignature(data) {
+  return JSON.stringify({
+    key:data.key, running:data.running, in_flight:data.in_flight,
+    wait_reason:data.wait_reason, last_error:data.last_error,
+    stage:data.stage, stage_label:data.stage_label,
+    subscriber_count:data.subscriber_count, next_run_at_utc:data.next_run_at_utc,
+  })
+}
+
+function publishSchedulerStateEvent(key, state, updatedAtUtc) {
+  if (typeof broadcastAdminEvent !== 'function') return
+  const eventData = schedulerStateEventData(key, state, updatedAtUtc)
+  const schedulerKey = String(key || '')
+  const signature = schedulerStateEventSignature(eventData)
+  if (signature === schedulerAdminEventSnapshots.get(schedulerKey)) return
+  broadcastAdminEvent('ai', 'scheduler_state', eventData, {
+    scopes:['ai-operations'],
+    refresh:false,
+  })
+  schedulerAdminEventSnapshots.set(schedulerKey, signature)
+}
 
 // === Redis Subscription Helpers ===
 export async function syncUserRedisSubscription(userId, promptTypeId, symbols, enabled) {
@@ -726,7 +793,15 @@ export async function updateSchedulerRedisState(key, state) {
 
   try {
     await syncSchedulerRedisIndex(redis, key, state)
-    if (!state?.running) return
+    const stateUpdatedAtUtc = new Date().toISOString()
+    state.stateUpdatedAtUtc = stateUpdatedAtUtc
+    if (!state?.running) {
+      publishSchedulerStateEvent(key, state, stateUpdatedAtUtc)
+      return
+    }
+    if (Number(state.nextRunInSeconds) > 0 && !state.nextRunAtUtc) {
+      schedulerNextRun(state, state.nextRunInSeconds)
+    }
     const fields = {
       running: state.running ? '1' : '0',
       in_flight: state.inFlight ? '1' : '0',
@@ -735,6 +810,8 @@ export async function updateSchedulerRedisState(key, state) {
       last_error: state.lastError || '',
       wait_reason: state.waitReason || '',
       next_run_in_seconds: String(state.nextRunInSeconds || 0),
+      next_run_at_utc: state.nextRunAtUtc || '',
+      state_updated_at_utc: stateUpdatedAtUtc,
       last_run_at: state.lastRunAt || '',
       stage: state.stage || 'idle',
       stage_label: state.stageLabel || '',
@@ -755,6 +832,7 @@ export async function updateSchedulerRedisState(key, state) {
       fields.market_mt5_time = state.marketState.mt5TimeStr || ''
     }
     await redis.hset(`${REDIS_SUBS_PREFIX}${key}:state`, fields)
+    publishSchedulerStateEvent(key, state, stateUpdatedAtUtc)
   } catch (e) { console.error('[updateSchedulerRedisState]', key, e.message) }
 }
 
@@ -802,11 +880,11 @@ export async function getUserAutoRuntimeStatus(userId) {
     WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1
     ORDER BY updated_at DESC, id DESC LIMIT 1`, [userId])
   if (!activeSubscription) {
-    return { enabled: false, running: false, paused_reason: 'disabled', prompt_type_id: null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'idle', last_error: '', next_run_in_seconds: 0, last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
+    return { enabled: false, running: false, paused_reason: 'disabled', prompt_type_id: null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'idle', last_error: '', next_run_in_seconds: 0, next_run_at_utc: '', state_updated_at_utc: '', last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
   }
   const scheduler = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
   if (!scheduler || !scheduler.enabled) {
-    return { enabled: true, running: false, paused_reason: 'no_runtime_scheduler', prompt_type_id: Number(activeSubscription.strategy_id) || null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'paused', last_error: '', next_run_in_seconds: 0, last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
+    return { enabled: true, running: false, paused_reason: 'no_runtime_scheduler', prompt_type_id: Number(activeSubscription.strategy_id) || null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'paused', last_error: '', next_run_in_seconds: 0, next_run_at_utc: '', state_updated_at_utc: '', last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
   }
 
   let selectedSymbols = []
@@ -843,6 +921,8 @@ export async function getUserAutoRuntimeStatus(userId) {
   let overallMarketWaitReason = ''
   let overallLastRunAt = ''
   let overallLastSignalId = null
+  let earliestNextRunAtUtc = ''
+  let latestStateUpdatedAtUtc = ''
   let totalSubscribers = 0
   const activeCycles = []
 
@@ -860,6 +940,8 @@ export async function getUserAutoRuntimeStatus(userId) {
     if (isMarketWaitReason(st.waitReason) && !overallMarketWaitReason) overallMarketWaitReason = st.waitReason
     if (st.lastRunAt && (!overallLastRunAt || st.lastRunAt > overallLastRunAt)) overallLastRunAt = st.lastRunAt
     if (st.lastSignalId) overallLastSignalId = st.lastSignalId
+    if (st.nextRunAtUtc && (!earliestNextRunAtUtc || st.nextRunAtUtc < earliestNextRunAtUtc)) earliestNextRunAtUtc = st.nextRunAtUtc
+    if (st.stateUpdatedAtUtc && st.stateUpdatedAtUtc > latestStateUpdatedAtUtc) latestStateUpdatedAtUtc = st.stateUpdatedAtUtc
     if (st.inFlight) {
       activeCycles.push({
         cycle_id: st.cycleId || `${key}:running`,
@@ -878,7 +960,10 @@ export async function getUserAutoRuntimeStatus(userId) {
     if (redis) {
       try {
         const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
-        if (ttl > 0 && ttl < earliestNextRun) earliestNextRun = ttl
+        if (ttl > 0 && ttl < earliestNextRun) {
+          earliestNextRun = ttl
+          earliestNextRunAtUtc = new Date(Date.now() + ttl * 1000).toISOString()
+        }
       } catch (e) { console.warn('[Scheduler] Redis TTL check failed:', e.message) }
     }
   }
@@ -940,6 +1025,8 @@ export async function getUserAutoRuntimeStatus(userId) {
     wait_reason: overallWaitReason,
     paused_reason: pausedReason,
     next_run_in_seconds: nextRunSeconds,
+    next_run_at_utc: earliestNextRunAtUtc,
+    state_updated_at_utc: latestStateUpdatedAtUtc,
     last_run_at: overallLastRunAt,
     last_signal_id: overallLastSignalId,
     admin_bridge_online: adminBridgeOnline,
@@ -1127,6 +1214,8 @@ async function broadcastAutoProgress(promptTypeId, symbol, progress) {
     stage: st.stage,
     label: st.stageLabel,
     progress_percent: st.progressPercent,
+    next_run_at_utc: st.nextRunAtUtc || '',
+    updated_at: st.stateUpdatedAtUtc || '',
   }
   for (const uid of st.subscribers) {
     try { sendToBrowsers(uid, payload) } catch (e) { console.warn('[Scheduler] Failed to send progress to browser:', e.message) }
@@ -1142,6 +1231,8 @@ async function broadcastAutoProgress(promptTypeId, symbol, progress) {
     running:Boolean(st.running),
     in_flight:true,
     next_run_in_seconds:Number(st.nextRunInSeconds || 0),
+    next_run_at_utc:st.nextRunAtUtc || '',
+    updated_at:st.stateUpdatedAtUtc || '',
   }, {
     scopes:['ai-operations'],
     refresh:false,
@@ -1235,6 +1326,8 @@ function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, cycleSn
             seq: Number(cycleSnapshot?.progressSeq || 0) + 1,
             progress_percent: status === 'success' ? 100 : Number(cycleSnapshot?.progressPercent || 0),
             next_run_in_seconds:Number(cycleSnapshot?.nextRunInSeconds || st.nextRunInSeconds || 0),
+            next_run_at_utc:cycleSnapshot?.nextRunAtUtc || st.nextRunAtUtc || '',
+            updated_at:st.stateUpdatedAtUtc || '',
           })
         } catch (e) { console.warn('[Scheduler] Failed to send progress_done to browser:', e.message) }
       }
@@ -1246,6 +1339,8 @@ function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, cycleSn
         reason:String(reason || ''),
         progress_percent:status === 'success' ? 100 : Number(cycleSnapshot?.progressPercent || 0),
         next_run_in_seconds:Number(cycleSnapshot?.nextRunInSeconds || st.nextRunInSeconds || 0),
+        next_run_at_utc:cycleSnapshot?.nextRunAtUtc || st.nextRunAtUtc || '',
+        updated_at:st.stateUpdatedAtUtc || '',
         running:Boolean(st.running),
         in_flight:false,
       }, { scopes:['ai-operations'], refresh:true })
@@ -1392,6 +1487,8 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     lastError: null,
     waitReason: '',
     nextRunInSeconds: 0,
+    nextRunAtUtc: '',
+    stateUpdatedAtUtc: '',
     subscriberCount: subSet.size,
     subscribers: subSet,
     stage: 'idle',
@@ -1421,7 +1518,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.lastError = null
       st.waitReason = 'redis_unavailable'
       const delay = retryDelayMs('redis_unavailable')
-      st.nextRunInSeconds = Math.round(delay / 1000)
+      schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
@@ -1430,7 +1527,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     try {
       const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
       if (ttl > 0) {
-        st.nextRunInSeconds = ttl
+        schedulerNextRun(st, ttl)
         st.waitReason = 'cooldown'
         await updateSchedulerRedisState(key, st)
         autoSchedulerState[key].timer = setTimeout(tick, Math.min(ttl * 1000, 30000))
@@ -1440,9 +1537,13 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       console.warn('[Scheduler] Redis TTL check failed, failing closed:', e.message)
       st.waitReason = 'redis_error'
       st.lastError = 'cooldown_check_failed'
+      schedulerNextRun(st, 15)
+      await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, 15000)
       return
     }
+
+    schedulerNextRun(st, 0)
 
     // Refresh subscribers
     try {
@@ -1464,7 +1565,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.lastError = 'strategy_disabled'
       st.waitReason = ''
       const delay = retryDelayMs('strategy_disabled')
-      st.nextRunInSeconds = Math.round(delay / 1000)
+      schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
@@ -1478,7 +1579,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       const delay = Math.max(1000, Number(end?.getTime() || Date.now() + 60_000) - Date.now())
       st.lastError = null
       st.waitReason = 'weekly_flatten_window'
-      st.nextRunInSeconds = Math.round(delay / 1000)
+      schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
@@ -1488,7 +1589,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.lastError = null
       st.waitReason = updateMaintenanceReason
       const delay = retryDelayMs(st.waitReason)
-      st.nextRunInSeconds = Math.round(delay / 1000)
+      schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
@@ -1499,7 +1600,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.waitReason = ptRow.scope === 'private' ? 'owner_bridge_offline' : 'admin_bridge_offline'
       if (shouldLogSchedulerWait(st, st.waitReason)) console.log(`[UnifiedScheduler] ${key}: ${schedulerWaitLabel(st.waitReason)}`)
       const delay = retryDelayMs(st.waitReason)
-      st.nextRunInSeconds = Math.round(delay / 1000)
+      schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
@@ -1517,7 +1618,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.lastError = null
       st.waitReason = marketState.reason
       const delay = retryDelayMs(marketState.reason)
-      st.nextRunInSeconds = Math.round(delay / 1000)
+      schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
@@ -1538,7 +1639,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     } catch (error) {
       st.lastError = 'model_task_gate_failed'
       st.waitReason = 'model_task_gate_failed'
-      st.nextRunInSeconds = Math.round(retryDelayMs('exception') / 1000)
+      schedulerNextRun(st, Math.round(retryDelayMs('exception') / 1000))
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, retryDelayMs('exception'))
       return
@@ -1546,10 +1647,16 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     if (!modelTaskGate.allowed) {
       st.lastError = modelTaskGate.reason === 'model_task_status_unknown' ? 'model_task_status_unknown' : null
       st.waitReason = modelTaskGate.reason
-      st.nextRunInSeconds = Number(modelTaskGate.nextRunInSeconds
-        || Math.ceil(retryDelayMs(modelTaskGate.reason) / 1000))
+      const modelTaskDeadlineMs = Number(modelTaskGate.nextAllowedAt)
+      const hasModelTaskDeadline = Number.isFinite(modelTaskDeadlineMs) && modelTaskDeadlineMs > 0
+      if (hasModelTaskDeadline) schedulerNextRunAt(st, modelTaskDeadlineMs)
+      else schedulerNextRun(st, Number(modelTaskGate.nextRunInSeconds
+        || Math.ceil(retryDelayMs(modelTaskGate.reason) / 1000)))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, Math.max(1000, st.nextRunInSeconds * 1000))
+      const modelTaskDelayMs = hasModelTaskDeadline
+        ? Math.max(1000, modelTaskDeadlineMs - Date.now())
+        : Math.max(1000, st.nextRunInSeconds * 1000)
+      autoSchedulerState[key].timer = setTimeout(tick, modelTaskDelayMs)
       return
     }
 
@@ -1562,7 +1669,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.lastError = error.message || 'no_api_key'
       st.waitReason = ''
       const delay = retryDelayMs(st.lastError)
-      st.nextRunInSeconds = Math.round(delay / 1000)
+      schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
@@ -1579,7 +1686,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       // than a platform error, and publish it immediately to the dashboard.
       st.lastError = ''
       st.waitReason = 'lock_busy'
-      st.nextRunInSeconds = await schedulerLockWaitSeconds(key)
+      schedulerNextRun(st, await schedulerLockWaitSeconds(key))
       st.stage = 'idle'
       st.stageLabel = ''
       await updateSchedulerRedisState(key, st)
@@ -1592,7 +1699,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.lastError = null
       st.waitReason = maintenanceBeganWhileLocking
       const delay = retryDelayMs(st.waitReason)
-      st.nextRunInSeconds = Math.round(delay / 1000)
+      schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, delay)
       return
@@ -1605,6 +1712,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st.progressSeq = 0
     st.cycleStartedAt = new Date().toISOString()
     st.stageUpdatedAt = st.cycleStartedAt
+    schedulerNextRun(st, 0)
     st.cycleId = `${key}:${Date.now()}`
     st.lastError = ''
     st.waitReason = ''
@@ -1675,7 +1783,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
         ? completionIntervalCooldownSeconds(st.intervalMinutes, finalizedAtMs)
         : failedCycleCooldownSeconds(st.intervalMinutes, cycleReason, st._consecutiveModelFailures, providerRequestStarted)
       const recoveryDeadlineMs = finalizedAtMs + cooldownSecs * 1000
-      st.nextRunInSeconds = cooldownSecs
+      schedulerNextRun(st, cooldownSecs, finalizedAtMs)
       const finalized = await finalizeLock(key, lockToken, cooldownSecs)
       if (!finalized) {
         st.waitReason = 'finalize_failed'
@@ -1689,6 +1797,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
         progressSeq: st.progressSeq,
         progressPercent: st.progressPercent,
         nextRunInSeconds: cooldownSecs,
+        nextRunAtUtc: st.nextRunAtUtc,
       }
       st.inFlight = false
       st.stage = 'idle'
@@ -1717,7 +1826,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
           recoveryState._recoveryDeadlineMs = null
           recoveryState.waitReason = ''
           recoveryState.lastError = ''
-          recoveryState.nextRunInSeconds = 0
+          schedulerNextRun(recoveryState, 0)
           await updateSchedulerRedisState(key, recoveryState)
           if (isCurrent()) recoveryState.timer = setTimeout(tick, 0)
         }
@@ -1736,7 +1845,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
             if (lockVal && lockVal !== lockToken) {
               const ttl = await redis.ttl(`${REDIS_LOCK_PREFIX}${key}`)
               if (!isCurrent()) return
-              recoveryState.nextRunInSeconds = ttl > 0 ? ttl : 15
+              schedulerNextRun(recoveryState, ttl > 0 ? ttl : 15)
               await updateSchedulerRedisState(key, recoveryState)
               scheduleRecovery(_recoveryFn, 15000)
               return
@@ -1745,7 +1854,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
             if (!isCurrent()) return
             if (cooldownTtl > 0) {
               recoveryState.waitReason = 'cooldown_recovered'
-              recoveryState.nextRunInSeconds = cooldownTtl
+              schedulerNextRun(recoveryState, cooldownTtl)
               await updateSchedulerRedisState(key, recoveryState)
               scheduleRecovery(_recoveryFn, Math.min(cooldownTtl * 1000, 30000))
               return
@@ -1761,7 +1870,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
                 if (racedTtl <= 0) throw new Error('cooldown recovery write was not confirmed')
               }
               recoveryState.waitReason = 'cooldown_recovered'
-              recoveryState.nextRunInSeconds = remainingSeconds
+              schedulerNextRun(recoveryState, remainingSeconds)
               await updateSchedulerRedisState(key, recoveryState)
               scheduleRecovery(_recoveryFn, Math.min(remainingSeconds * 1000, 30000))
               return
@@ -3631,6 +3740,7 @@ export const __schedulerTest = {
   nextCompletionIntervalDeadlineMs,
   completionIntervalCooldownSeconds,
   failedCycleCooldownSeconds,
+  schedulerNextRunAt,
   autoModelTaskDomainId,
   checkAutoModelTaskGate,
   buildAutoModelTaskInput,
