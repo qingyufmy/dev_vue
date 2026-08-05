@@ -57,6 +57,7 @@ import { blockPrivateVideoStatic } from './video-access.js'
 import { installFatalProcessHandlers, listenHttpServer } from './runtime-lifecycle.js'
 import { createBridgePairStartLimiter } from './bridge-pair-rate-limit.js'
 import { pruneFinalizedCommands } from './bridge-v3/command-ledger.js'
+import { createAutoInferenceRecoveryLogDeduper } from './ai-recovery-log.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -304,6 +305,7 @@ app.get('*', (req, res) => {
 // Start MT5 Bridge (use venv Python with MetaTrader5 package)
 // Init DB and start
 const server = http.createServer(app)
+const autoInferenceRecoveryLogDeduper = createAutoInferenceRecoveryLogDeduper()
 // HTTP timeout settings — prevent reverse proxy / long-poll issues with WebSocket upgrade
 server.keepAliveTimeout = 5000
 server.headersTimeout = 15000
@@ -358,7 +360,7 @@ installFatalProcessHandlers()
   const recoverAutoInferenceTasks = async () => {
     try {
       const recovered = await recoverAbandonedAutoInferenceTasks()
-      if (recovered.succeeded || recovered.statusUnknown || recovered.stale) {
+      if (autoInferenceRecoveryLogDeduper.shouldLog(recovered)) {
         console.warn('[AI] Reconciled abandoned auto inference tasks:', recovered)
       }
     } catch (error) {

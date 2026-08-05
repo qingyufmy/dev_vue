@@ -640,13 +640,16 @@ export async function rebuildRedisSubscriptions() {
          AND (u.role = 'admin' OR (u.plan = 'pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at >= NOW())))
     `)
 
-    let onlineCount = 0
+    const onlineUserIds = new Set()
     for (const row of rows) {
-      // Only add to runtime subs if bridge is online
-      if (!isBridgeAlive(row.user_id)) continue
-
       const userSymbols = resolveEffectiveSymbols(row.selected_symbols_json, row.strategy_symbols_json)
       if (userSymbols.length === 0) continue
+
+      // Redis is the durable subscription index, not the online-bridge list.
+      // Keep every valid configuration indexed while the Bridge is offline so
+      // startup/reconnect can resume without waiting for a full config write.
+      const bridgeOnline = isBridgeAlive(row.user_id)
+      if (bridgeOnline) onlineUserIds.add(String(row.user_id))
 
       const userKey = `${REDIS_USER_PREFIX}${row.user_id}${REDIS_USER_SUFFIX}`
       await redis.hset(userKey, {
@@ -660,15 +663,14 @@ export async function rebuildRedisSubscriptions() {
         await redis.sadd(`${REDIS_SUBS_PREFIX}${k}${REDIS_SUBS_SUFFIX}`, row.user_id)
         await redis.sadd(REDIS_SCHEDULER_KEYS, k)
       }
-      onlineCount++
     }
 
     const keysCount = await redis.scard(REDIS_SCHEDULER_KEYS)
     subscriptionIndexHealth = {
-      ok:true, error:null, schedulerKeys:Number(keysCount), onlineUsers:onlineCount,
+      ok:true, error:null, schedulerKeys:Number(keysCount), onlineUsers:onlineUserIds.size,
       configuredUsers:rows.length, updatedAt:new Date().toISOString(),
     }
-    console.log(`[Redis] Rebuilt subscription index: ${keysCount} scheduler keys, ${onlineCount} online users (of ${rows.length} configured)`)
+    console.log(`[Redis] Rebuilt subscription index: ${keysCount} scheduler keys, ${onlineUserIds.size} online users (of ${rows.length} configured)`)
     return subscriptionIndexHealth
   } catch (e) {
     console.error('[Redis] rebuildRedisSubscriptions error:', e.message)
@@ -681,11 +683,50 @@ export function getSubscriptionIndexHealth() {
   return { ...subscriptionIndexHealth }
 }
 
+async function syncSchedulerRedisIndex(redis, key, state) {
+  const schedulerKey = String(key || '').trim()
+  if (!schedulerKey) return
+  const subsKey = `${REDIS_SUBS_PREFIX}${schedulerKey}${REDIS_SUBS_SUFFIX}`
+  const stateKey = `${REDIS_SUBS_PREFIX}${schedulerKey}:state`
+
+  // A stopped scheduler must disappear from all runtime indexes.  Keep this
+  // cleanup in the same helper used by state publication so a late stopped
+  // write can never re-add a key after reconcile removed it.
+  if (!state?.running) {
+    await redis.del(subsKey)
+    await redis.del(stateKey)
+    await redis.srem(REDIS_SCHEDULER_KEYS, schedulerKey)
+    return
+  }
+
+  // State publication is also the repair path for Redis writes lost during a
+  // restart.  Re-add the scheduler key and make the subscriber set converge
+  // to the in-memory configured set whenever that set is available.
+  await redis.sadd(REDIS_SCHEDULER_KEYS, schedulerKey)
+  if (!Object.prototype.hasOwnProperty.call(state, 'subscribers')) return
+
+  const configuredSubscribers = state.subscribers instanceof Set
+    ? [...state.subscribers]
+    : (Array.isArray(state.subscribers) ? state.subscribers : [])
+  const normalizedSubscribers = configuredSubscribers
+    .map(value => String(value ?? '').trim())
+    .filter(Boolean)
+  const configuredSet = new Set(normalizedSubscribers)
+  const existingSubscribersRaw = await redis.smembers(subsKey)
+  const existingSubscribers = Array.isArray(existingSubscribersRaw) ? existingSubscribersRaw : []
+  const staleSubscribers = existingSubscribers.filter(value => !configuredSet.has(String(value)))
+  if (staleSubscribers.length > 0) await redis.srem(subsKey, ...staleSubscribers)
+  if (normalizedSubscribers.length > 0) await redis.sadd(subsKey, ...normalizedSubscribers)
+  else await redis.del(subsKey)
+}
+
 export async function updateSchedulerRedisState(key, state) {
   const redis = getRedis()
   if (!redis) return
 
   try {
+    await syncSchedulerRedisIndex(redis, key, state)
+    if (!state?.running) return
     const fields = {
       running: state.running ? '1' : '0',
       in_flight: state.inFlight ? '1' : '0',
@@ -1306,7 +1347,7 @@ export async function reconcileAutoSchedulers({ suppressErrors = false } = {}) {
     // Start or update schedulers
     for (const k of neededKeys) {
       const meta = neededKeyMeta[k]
-      if (autoSchedulerState[k]) {
+      if (autoSchedulerState[k]?.running) {
         autoSchedulerState[k].intervalMinutes = meta.intervalMinutes
         autoSchedulerState[k].subscriberCount = autoSchedulerState[k].subscribers?.size || 0
         await updateSchedulerRedisState(k, autoSchedulerState[k])
@@ -1325,7 +1366,13 @@ export async function reconcileAutoSchedulers({ suppressErrors = false } = {}) {
 // === Unified Scheduler Start/Stop ===
 async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) {
   const key = buildSchedulerKey(promptTypeId, symbol)
-  if (autoSchedulerState[key]?.running) return
+  if (autoSchedulerState[key]?.running) {
+    // Reconcile is also a Redis repair pass.  A process/Redis restart may
+    // leave the in-memory worker alive while its key or subscribers set is
+    // missing, so publish the current state before returning.
+    await updateSchedulerRedisState(key, autoSchedulerState[key])
+    return
+  }
 
   const subscribers = await getAutoSubscribers(promptTypeId, symbol)
   if (subscribers.length === 0) return

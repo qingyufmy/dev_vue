@@ -3,17 +3,49 @@ import { getRedis, isRedisAvailable } from '../redis.js'
 import { getAiRolloutHealth } from '../routes/ai/rollout-governance.js'
 import { getReviewAdminHealth } from '../routes/ai/review-workflow.js'
 import { listObserverChannels, listObserverSources } from '../routes/ai/observer-channels.js'
+import { stripBrokerSuffix } from '../routes/ai/utils.js'
 import { getConnectedBridgeStats, getLatestBridgeMt5Clock, isBridgeAlive } from '../bridge-ws.js'
 
 function number(value) {
   return Number(value || 0)
 }
 
-async function readSchedulerRuntime(dbRows) {
+function parseSchedulerSymbols(value) {
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function schedulerRuntimeCandidates(dbRows, indexedKeys) {
+  const candidates = new Set((Array.isArray(indexedKeys) ? indexedKeys : [])
+    .map(key => String(key || '').trim()).filter(Boolean))
+  for (const row of Array.isArray(dbRows) ? dbRows : []) {
+    const strategyId = Number(row?.strategy_id)
+    if (!Number.isFinite(strategyId) || strategyId <= 0) continue
+    for (const symbol of parseSchedulerSymbols(row?.symbols_json)) {
+      const normalized = stripBrokerSuffix(symbol)
+      if (normalized) candidates.add(`${strategyId}:${normalized}`)
+    }
+  }
+  return [...candidates]
+}
+
+export async function readSchedulerRuntime(dbRows) {
   const redis = getRedis()
   if (!redis || !isRedisAvailable()) return { available:false, schedulers:[] }
   try {
-    const keys = await redis.smembers('auto:scheduler:keys')
+    const configuredRows = Array.isArray(dbRows) ? dbRows : []
+    // The key set is an index and can be lost independently of the runtime
+    // hashes during a Redis restart.  Derive candidates from active strategy
+    // configuration as a read-only fallback so the admin view still exposes
+    // the state hash until the scheduler repair path recreates the index.
+    const indexedKeys = await redis.smembers('auto:scheduler:keys')
+    const keys = schedulerRuntimeCandidates(configuredRows, indexedKeys)
     const schedulers = []
     for (const key of keys) {
       const state = await redis.hgetall(`auto:scheduler:${key}:state`)
@@ -21,7 +53,12 @@ async function readSchedulerRuntime(dbRows) {
       const separator = key.indexOf(':')
       const strategyId = Number(separator >= 0 ? key.slice(0, separator) : key)
       const symbol = separator >= 0 ? key.slice(separator + 1) : ''
-      const dbInfo = dbRows.find(row => Number(row.strategy_id) === strategyId)
+      const dbInfo = configuredRows.find(row => Number(row.strategy_id) === strategyId)
+      let subscriberCount = 0
+      try {
+        subscriberCount = number(await redis.scard(`auto:scheduler:${key}:subs`))
+      } catch {}
+      if (subscriberCount <= 0) subscriberCount = number(state.subscriber_count)
       schedulers.push({
         key,
         strategy_id:strategyId,
@@ -37,7 +74,7 @@ async function readSchedulerRuntime(dbRows) {
         progress_percent:number(state.progress_percent),
         progress_seq:number(state.progress_seq),
         interval_minutes:number(state.interval_minutes || dbInfo?.interval_minutes || 5),
-        subscriber_count:number(await redis.scard(`auto:scheduler:${key}:subs`)),
+        subscriber_count:subscriberCount,
         next_run_in_seconds:number(state.next_run_in_seconds),
         last_run_at:state.last_run_at || null,
       })

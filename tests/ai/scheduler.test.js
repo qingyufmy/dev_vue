@@ -55,6 +55,12 @@ vi.mock('../../server/routes/ai/config.js', () => ({
   getUnifiedAutoInferenceConfig: vi.fn(() => null),
   getAutoSubscribers: vi.fn(() => []),
   parsePromptSymbols: vi.fn(() => ['XAUUSD']),
+  resolveEffectiveSymbols: vi.fn((selected, strategy) => {
+    try {
+      const parsed = JSON.parse(selected || strategy || '[]')
+      return Array.isArray(parsed) ? parsed : []
+    } catch { return [] }
+  }),
   buildBridgeOrderCall: vi.fn(() => ({ bridgeAction: 'open', params: {} })),
 }))
 
@@ -74,6 +80,7 @@ vi.mock('../../server/routes/ai/strategy.js', () => ({
 vi.mock('../../server/routes/ai/utils.js', () => ({
   attachSignalTiming: vi.fn(),
   signalTtlSeconds: vi.fn(() => 120),
+  stripBrokerSuffix: vi.fn(s => String(s || '').toUpperCase()),
   stripTimeframeTags: vi.fn((s) => s),
   round2: vi.fn((n) => n),
   parseTimeframeTags: vi.fn(() => []),
@@ -84,10 +91,11 @@ vi.mock('../../server/redis.js', () => ({
   isRedisAvailable: vi.fn(() => false),
 }))
 
-import { getSubscriptionIndexHealth, getUserAutoRuntimeStatus, isAutoSchedulerRunning, rebuildRedisSubscriptions } from '../../server/routes/ai/scheduler.js'
+import { autoSchedulerState, getSubscriptionIndexHealth, getUserAutoRuntimeStatus, isAutoSchedulerRunning, rebuildRedisSubscriptions, updateSchedulerRedisState } from '../../server/routes/ai/scheduler.js'
 import * as db from '../../server/db.js'
 import * as marketData from '../../server/routes/ai/market-data.js'
 import * as bridgeWs from '../../server/bridge-ws.js'
+import * as redis from '../../server/redis.js'
 
 describe('isAutoSchedulerRunning', () => {
   it('未启动的调度器返回 false', () => {
@@ -96,7 +104,12 @@ describe('isAutoSchedulerRunning', () => {
 })
 
 describe('automatic-analysis control state', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    redis.getRedis.mockReturnValue(null)
+    redis.isRedisAvailable.mockReturnValue(false)
+    for (const key of Object.keys(autoSchedulerState)) delete autoSchedulerState[key]
+  })
 
   it('reports disabled when no subscription has automatic analysis enabled', async () => {
     db.queryOne.mockResolvedValueOnce(null)
@@ -123,6 +136,75 @@ describe('subscription index health', () => {
   it('records Redis unavailability instead of reporting a silent successful rebuild', async () => {
     await expect(rebuildRedisSubscriptions()).resolves.toMatchObject({ ok:false, error:'redis_unavailable' })
     expect(getSubscriptionIndexHealth()).toMatchObject({ ok:false, error:'redis_unavailable' })
+  })
+
+  it('indexes configured users even when their Bridge is offline', async () => {
+    const sets = new Map()
+    const hashes = new Map()
+    const fakeRedis = {
+      smembers: vi.fn(async key => [...(sets.get(key) || new Set())]),
+      scard: vi.fn(async key => (sets.get(key) || new Set()).size),
+      sadd: vi.fn(async (key, ...values) => {
+        const set = sets.get(key) || new Set()
+        for (const value of values) set.add(String(value))
+        sets.set(key, set)
+      }),
+      srem: vi.fn(async (key, ...values) => {
+        const set = sets.get(key) || new Set()
+        for (const value of values) set.delete(String(value))
+        sets.set(key, set)
+      }),
+      del: vi.fn(async key => { sets.delete(key); hashes.delete(key) }),
+      hset: vi.fn(async (key, fields) => hashes.set(key, { ...(hashes.get(key) || {}), ...fields })),
+      hgetall: vi.fn(async key => hashes.get(key) || {}),
+    }
+    redis.getRedis.mockReturnValue(fakeRedis)
+    redis.isRedisAvailable.mockReturnValue(true)
+    bridgeWs.isBridgeAlive.mockReturnValue(false)
+    db.queryAll.mockResolvedValueOnce([{
+      user_id:42, prompt_type_id:7, selected_symbols_json:'["XAUUSD"]', strategy_symbols_json:'["XAUUSD"]',
+    }])
+
+    await expect(rebuildRedisSubscriptions()).resolves.toMatchObject({
+      ok:true, schedulerKeys:1, onlineUsers:0, configuredUsers:1,
+    })
+    expect(sets.get('auto:scheduler:keys')).toEqual(new Set(['7:XAUUSD']))
+    expect(sets.get('auto:scheduler:7:XAUUSD:subs')).toEqual(new Set(['42']))
+    expect(hashes.get('auto:user:42:auto')).toMatchObject({ enabled:'1', prompt_type_id:'7' })
+  })
+
+  it('repairs a missing runtime index on state publication and removes it on stop', async () => {
+    const sets = new Map()
+    const hashes = new Map()
+    const fakeRedis = {
+      smembers: vi.fn(async key => [...(sets.get(key) || new Set())]),
+      sadd: vi.fn(async (key, ...values) => {
+        const set = sets.get(key) || new Set()
+        for (const value of values) set.add(String(value))
+        sets.set(key, set)
+      }),
+      srem: vi.fn(async (key, ...values) => {
+        const set = sets.get(key) || new Set()
+        for (const value of values) set.delete(String(value))
+        sets.set(key, set)
+      }),
+      del: vi.fn(async key => { sets.delete(key); hashes.delete(key) }),
+      hset: vi.fn(async (key, fields) => hashes.set(key, { ...(hashes.get(key) || {}), ...fields })),
+    }
+    redis.getRedis.mockReturnValue(fakeRedis)
+    redis.isRedisAvailable.mockReturnValue(true)
+
+    await updateSchedulerRedisState('7:XAUUSD', {
+      running:true, subscribers:new Set([42]), subscriberCount:1, intervalMinutes:5,
+    })
+    expect(sets.get('auto:scheduler:keys')).toEqual(new Set(['7:XAUUSD']))
+    expect(sets.get('auto:scheduler:7:XAUUSD:subs')).toEqual(new Set(['42']))
+    expect(hashes.get('auto:scheduler:7:XAUUSD:state')).toMatchObject({ running:'1', subscriber_count:'1' })
+
+    await updateSchedulerRedisState('7:XAUUSD', { running:false })
+    expect(sets.get('auto:scheduler:keys') || new Set()).not.toContain('7:XAUUSD')
+    expect(sets.has('auto:scheduler:7:XAUUSD:subs')).toBe(false)
+    expect(hashes.has('auto:scheduler:7:XAUUSD:state')).toBe(false)
   })
 })
 
