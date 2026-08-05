@@ -4456,7 +4456,7 @@ async function refreshTabData(tabId) {
     startKlineRefreshTimer();
   } else if (tabId === "history") {
     updateHistoryRangeUI();
-    await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
+    await Promise.allSettled([loadAccount(), loadHistory(true), loadHistoryChart(true)]);
   } else if (tabId === "audit") {
     await loadAudit();
   } else if (tabId === "model-strategy") {
@@ -9564,7 +9564,7 @@ async function refreshHistoryPage() {
   // Clear caches so fresh data is fetched
   _historyCache = null;
   _historyChartCache = null;
-  await Promise.allSettled([loadAccount(), loadHistory(), loadHistoryChart()]);
+  await Promise.allSettled([loadAccount(), loadHistory(true), loadHistoryChart(true)]);
 }
 
 async function exportHistory() {
@@ -10427,7 +10427,7 @@ function bindEvents() {
         "refresh-quote": refreshQuote,
         "refresh-signals": loadSignals,
         "refresh-analysis-history": loadSignals,
-        "refresh-history": loadHistory,
+        "refresh-history": () => loadHistory(true),
         "refresh-trading-page": refreshTradingPage,
         "refresh-history-page": refreshHistoryPage,
         "refresh-audit": loadAudit,
