@@ -140,6 +140,8 @@ describe('automatic inference deployment drain', () => {
     expect(cli).toContain('process.exit(1)')
     expect(cli).not.toContain('process.exitCode')
     expect(cli).toContain('if (isMainModule())')
+    expect(cli).toContain("return import('../../server/routes/ai/auto-inference-deployment-drain.js')")
+    expect(cli).toContain('console.log = () => {}')
     const wrapper = readFileSync(new URL('../../scripts/deploy/auto-inference-drain.sh', import.meta.url), 'utf8')
     expect(wrapper).toContain('trap cleanup_drain EXIT INT TERM')
     expect(wrapper).toContain('node "$DRAIN_CLI" wait')

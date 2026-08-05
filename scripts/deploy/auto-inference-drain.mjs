@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 
-import {
-  beginAutoInferenceDeploymentDrain,
-  endAutoInferenceDeploymentDrain,
-  waitForAutoInferenceDeploymentDrain,
-} from '../../server/routes/ai/auto-inference-deployment-drain.js'
 import { pathToFileURL } from 'node:url'
+
+async function loadDrainApi() {
+  return import('../../server/routes/ai/auto-inference-deployment-drain.js')
+}
 
 function parseArgs(argv) {
   const [command = '', ...rest] = argv
@@ -57,11 +56,16 @@ async function output(value) {
   })
 }
 
-export async function runAutoInferenceDrainCli(argv = process.argv.slice(2)) {
+export async function runAutoInferenceDrainCli(argv = process.argv.slice(2), { loadApi = loadDrainApi } = {}) {
   const options = parseArgs(argv)
   if (!['begin', 'wait', 'end'].includes(options.command)) {
     throw new Error('usage: auto-inference-drain.mjs <begin|wait|end> [options]')
   }
+  const {
+    beginAutoInferenceDeploymentDrain,
+    endAutoInferenceDeploymentDrain,
+    waitForAutoInferenceDeploymentDrain,
+  } = await loadApi()
 
   if (options.command === 'begin') {
     const result = await beginAutoInferenceDeploymentDrain({
@@ -99,12 +103,19 @@ function isMainModule() {
 }
 
 async function runMain() {
+  // server/config.js and server/redis.js emit informational startup messages
+  // with console.log. Keep stdout reserved for the single JSON protocol line
+  // consumed by the deployment wrapper.
+  const originalConsoleLog = console.log
+  console.log = () => {}
   try {
     const code = await runAutoInferenceDrainCli()
     process.exit(code)
   } catch (error) {
     await output({ ok:false, error:String(error?.code || error?.message || 'auto_inference_drain_failed') })
     process.exit(1)
+  } finally {
+    console.log = originalConsoleLog
   }
 }
 
@@ -116,4 +127,4 @@ if (isMainModule()) {
   })
 }
 
-export const __autoInferenceDrainCliTest = { parseArgs, numberOption }
+export const __autoInferenceDrainCliTest = { parseArgs, numberOption, loadDrainApi }
