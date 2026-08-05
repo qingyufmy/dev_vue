@@ -98,6 +98,7 @@ import {
   isAllowedBrowserWsOrigin,
   normalizeBridgePage,
   normalizeBridgePageSize,
+  enrichHistoryProtectionRows,
   wsMessageByteLength,
   buildBrowserCommandResult,
   buildBridgeDataChangedEvent,
@@ -192,6 +193,68 @@ describe('bridge history pagination bounds', () => {
     expect(normalizeBridgePageSize('50')).toBe(50)
     expect(normalizeBridgePageSize('9999')).toBe(200)
     expect(normalizeBridgePageSize('invalid')).toBe(20)
+  })
+})
+
+describe('history protection display evidence', () => {
+  const historyRow = {
+    ticket:'702529338', order:'702529338', position_id:'702529338',
+    stop_loss:4154.8, take_profit:4179.5,
+  }
+
+  it('shows a successful verified platform protection update without mutating raw MT5 entry values', () => {
+    const [row] = enrichHistoryProtectionRows([historyRow], [{
+      trading_account_id:1,
+      entry_order_ticket:'702529338',
+      position_id:'702529338',
+      target_ticket:'702529338',
+      target_status:'succeeded',
+      target_result_json:JSON.stringify({ stop_loss:4134.8, take_profit:4190.5 }),
+      protection_job_id:7,
+      target_completed_at:'2026-08-05 06:30:00',
+    }], { tradingAccountId:1 })
+
+    expect(row).toMatchObject({
+      stop_loss:4154.8,
+      take_profit:4179.5,
+      mt5_entry_stop_loss:4154.8,
+      mt5_entry_take_profit:4179.5,
+      last_verified_stop_loss:4134.8,
+      last_verified_take_profit:4190.5,
+      display_stop_loss:4134.8,
+      display_take_profit:4190.5,
+      stop_loss_source:'verified_platform_protection',
+      take_profit_source:'verified_platform_protection',
+    })
+  })
+
+  it('does not override MT5 entry protection with failed, unknown or cross-account evidence', () => {
+    const evidence = [
+      { trading_account_id:1, target_status:'failed', target_ticket:'702529338', target_result_json:'{"stop_loss":4134.8}' },
+      { trading_account_id:2, target_status:'succeeded', target_ticket:'702529338', target_result_json:'{"stop_loss":4100,"take_profit":4200}' },
+    ]
+    const [row] = enrichHistoryProtectionRows([historyRow], evidence, { tradingAccountId:1 })
+    expect(row).toMatchObject({
+      display_stop_loss:4154.8,
+      display_take_profit:4179.5,
+      last_verified_stop_loss:null,
+      last_verified_take_profit:null,
+      stop_loss_source:'mt5_entry_order',
+      take_profit_source:'mt5_entry_order',
+    })
+  })
+
+  it('applies stop loss and take profit evidence independently', () => {
+    const [row] = enrichHistoryProtectionRows([historyRow], [{
+      trading_account_id:1,
+      target_status:'succeeded',
+      target_ticket:'702529338',
+      target_result_json:'{"stop_loss":4134.8,"take_profit":0}',
+    }], { tradingAccountId:1 })
+    expect(row.display_stop_loss).toBe(4134.8)
+    expect(row.display_take_profit).toBe(4179.5)
+    expect(row.stop_loss_source).toBe('verified_platform_protection')
+    expect(row.take_profit_source).toBe('mt5_entry_order')
   })
 })
 

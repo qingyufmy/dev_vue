@@ -4,7 +4,7 @@ import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing
 import { stripBrokerSuffix } from './utils.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { mt5Bridge, computeAtr14 } from './market-data.js'
-import { prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localization.js'
+import { buildSafeExecutionOutcome, prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localization.js'
 import { isEncryptionAvailable } from '../../ai-credential.js'
 import { resolveAiTaskModel, upsertDefaultModelProfileFromLegacyInput } from './model-profiles.js'
 import { prepareAndExecuteOrderIntent } from './order-intents.js'
@@ -56,6 +56,7 @@ export class RiskReject extends Error {
     super(reason)
     this.reason = reason
     this.details = details
+    this.classification = 'risk_rejection'
   }
 }
 
@@ -514,14 +515,14 @@ export function signalOrderPayload(signal, config, market, confirm) {
   // Absolute model volume is a historical read-only fallback. Current signals
   // carry a risk tier and the versioned risk gate derives their real volume.
   const legacyVolume = positionSizeTier ? 0 : Number(signal.recommended_volume)
-  const executionCeiling = Number(config?.max_position_size)
 
   const payload = {
     symbol: signal.symbol,
     order_type: baseOrderType,
-    volume: positionSizeTier
-      ? (Number.isFinite(executionCeiling) && executionCeiling > 0 ? executionCeiling : 0)
-      : legacyVolume,
+    // A tier is intentionally represented by the internal zero sentinel. It
+    // is not an absolute lot size and must stay that way until the versioned
+    // risk gate applies account equity, the tier factor and broker steps.
+    volume: legacyVolume,
     position_size_tier: positionSizeTier || null,
     position_size_factor: positionSizeTier ? positionSizeFactor(positionSizeTier) : 1,
     position_size_reason: signal.position_size_reason || '',
@@ -625,7 +626,11 @@ export async function executeOrderCore(userId, config, request, action, options 
     try {
       await assertAiPendingOrderEnabled()
     } catch (error) {
-      const result = { status:'rejected', message:error?.reason || error?.message || 'ai_pending_order_disabled' }
+      const result = buildSafeExecutionOutcome({
+        status:'rejected', classification:'risk_rejection',
+        reason:error?.reason || error?.message || 'ai_pending_order_disabled',
+        details:error?.details || {}, stage:'before_bridge_send', field:'execution',
+      })
       await insertAudit(null, userId, action, request.symbol, request, result, 'rejected')
       return result
     }
@@ -644,12 +649,17 @@ export async function executeOrderCore(userId, config, request, action, options 
     options,
     validateRequest: async (legacyConfig, account, prepared, context) => {
       if (prepared.confirm !== true) throw new RiskReject('confirmation_required')
-      const resolved = await resolveEffectiveRiskPolicy({
-        userId,
-        tradingAccountId: context.tradingAccountId ?? options.tradingAccountId ?? prepared.trading_account_id ?? null,
-        riskProfileId: options.riskProfileId ?? prepared.risk_profile_id ?? null,
-        legacyConfig,
-      })
+      // loadRiskContext resolves this once before the Bridge snapshot. Reuse
+      // that exact policy/version for deterministic validation and persistence;
+      // a fallback is retained for alternate callers that provide no context.
+      const resolved = context.resolved_risk_policy
+        ? { policy: context.resolved_risk_policy, policyVersionIds: context.risk_policy_version_ids || [] }
+        : await resolveEffectiveRiskPolicy({
+          userId,
+          tradingAccountId: context.tradingAccountId ?? options.tradingAccountId ?? prepared.trading_account_id ?? null,
+          riskProfileId: options.riskProfileId ?? prepared.risk_profile_id ?? null,
+          legacyConfig,
+        })
       const decision = evaluateCoreRisk({ request: prepared, account, quote: context.quote, instrument: context.instrument,
         brokerCalculation: context.broker_calculation, policy: resolved.policy, ruleModes })
       const decisionId = await persistRiskDecision(context.intentId, decision, resolved.policyVersionIds)
@@ -694,6 +704,26 @@ export async function executeOrderCore(userId, config, request, action, options 
       ruleModes,
     }),
     loadRiskContext: async ({ bridge, actorId, tradingAccountId, request: prepared, account, quote, bridgeOptions }) => {
+      let resolved
+      try {
+        resolved = await resolveEffectiveRiskPolicy({
+          userId: actorId,
+          tradingAccountId,
+          riskProfileId: options.riskProfileId ?? prepared.risk_profile_id ?? null,
+          legacyConfig: config,
+        })
+      } catch (error) {
+        error.stage = error.stage || 'risk_policy'
+        error.field = error.field || 'policy'
+        throw error
+      }
+      const riskCalculationVolume = Number(resolved?.policy?.max_position_size)
+      if (!Number.isFinite(riskCalculationVolume) || riskCalculationVolume <= 0) {
+        throw Object.assign(new Error('risk_calculation_volume_invalid'), {
+          reason:'risk_calculation_volume_invalid', stage:'risk_policy', field:'risk_calculation_volume',
+          details:{ risk_calculation_volume: riskCalculationVolume },
+        })
+      }
       if (!(Number(prepared.atr_anchor) > 0)) {
         const ratesResult = await bridge(actorId, 'rates', { symbol: prepared.symbol, timeframe: 'H1', count: 30 }, bridgeOptions)
         const atr = computeAtr14(ratesResult?.rates || [])
@@ -703,7 +733,9 @@ export async function executeOrderCore(userId, config, request, action, options 
           COALESCE(ras.last_risk_snapshot_at, ras.updated_at, ta.first_verified_at) AS incremental_baseline_at
         FROM trading_accounts ta LEFT JOIN risk_account_state ras ON ras.trading_account_id = ta.id
         WHERE ta.id = ? AND ta.user_id = ? AND ta.is_deleted = 0 LIMIT 1`, [tradingAccountId, actorId])
-      if (!stateCursor) throw new Error('trading_account_not_found')
+      if (!stateCursor) throw Object.assign(new Error('trading_account_not_found'), {
+        reason:'trading_account_not_found', stage:'risk_context', field:'account',
+      })
       const entryPrice = Number(prepared.limit_price || prepared.quote_price || prepared.reference_price || 0)
       const snapshotOptions = { ...(bridgeOptions || {}), timeoutMs: Math.max(10_000, Number(bridgeOptions?.timeoutMs) || 0), noFallback: true }
       const riskSnapshot = await bridge(actorId, 'risk_snapshot', {
@@ -712,14 +744,22 @@ export async function executeOrderCore(userId, config, request, action, options 
         last_deal_ticket: Number(stateCursor.last_deal_ticket || 0),
         baseline_from_utc_msc: Number(stateCursor.last_deal_time_msc || 0) ? 0 : (parseBeijing(stateCursor.incremental_baseline_at)?.getTime() || Date.now()),
         proposed_order: {
-          symbol: prepared.symbol, order_type: prepared.order_type, volume: Number(prepared.volume || 0),
+          symbol: prepared.symbol, order_type: prepared.order_type,
+          // A tiered signal keeps prepared.volume at its zero sentinel. The
+          // snapshot only needs a positive provisional volume so MT5 can
+          // calculate loss-per-lot; evaluateCoreRisk derives final volume.
+          volume: riskCalculationVolume,
           entry_price: entryPrice, sl: Number(prepared.sl || 0),
         },
       }, snapshotOptions)
       if (!riskSnapshot || riskSnapshot.status !== 'success') {
         const message = String(riskSnapshot?.message || riskSnapshot?.error || '')
-        if (message.includes('Unknown action: risk_snapshot')) throw new Error('bridge_upgrade_required_for_incremental_risk')
-        throw new Error(message || 'risk_snapshot_failed')
+        const reason = message.includes('Unknown action: risk_snapshot')
+          ? 'bridge_upgrade_required_for_incremental_risk' : 'risk_snapshot_failed'
+        throw Object.assign(new Error(reason), {
+          reason, stage:'risk_snapshot', field:'proposed_order',
+          details:{ risk_calculation_volume: riskCalculationVolume },
+        })
       }
       const replacementPendingTickets = sourceType === 'auto_delivery'
         ? new Set((Array.isArray(options.replacePendingTickets) ? options.replacePendingTickets : [])
@@ -734,7 +774,9 @@ export async function executeOrderCore(userId, config, request, action, options 
       }
       const wanted = stripBrokerSuffix(prepared.symbol)
       const instrument = instruments[wanted]
-      if (!instrument) throw new Error('symbol_metadata_not_found')
+      if (!instrument) throw Object.assign(new Error('symbol_metadata_not_found'), {
+        reason:'symbol_metadata_not_found', stage:'instrument', field:'instrument',
+      })
       const fxRates = {}
       const accountCurrency = String(account?.currency || '').toUpperCase()
       const quoteCurrencies = new Set([...(riskSnapshot.positions || []), ...(riskSnapshot.pending || []), prepared]
@@ -752,6 +794,9 @@ export async function executeOrderCore(userId, config, request, action, options 
       }
       return {
         account, quote, instrument, instruments, fxRates,
+        resolved_risk_policy: resolved.policy,
+        risk_policy_version_ids: resolved.policyVersionIds,
+        risk_calculation_volume: riskCalculationVolume,
         positions:riskSnapshot.positions || [], pending:projectedPending,
         replacement_pending_tickets:[...replacementPendingTickets],
         snapshot_complete: riskSnapshot.complete === true,

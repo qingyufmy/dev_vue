@@ -49,12 +49,11 @@ const context = {
   as_of:asOf,
   pending_groups:[{
     management_group_id:'pending_group_01',
-    allowed_evidence_refs:['bar:M15:1784736900000', 'condition:pending_invalid_01'],
+    allowed_evidence_refs:['bar:M15:1784736900000', 'snapshot:snapshot'],
   }],
   position_groups:[{
     management_group_id:'position_group_01', thesis_id:'thesis_01',
-    frozen_conditions:[{ condition_id:'invalidation_01', kind:'soft' }],
-    allowed_evidence_refs:['bar:M15:1784736900000', 'condition:invalidation_01'],
+    allowed_evidence_refs:['bar:M15:1784736900000', 'snapshot:snapshot'],
   }],
 }
 
@@ -68,12 +67,12 @@ function response(overrides = {}) {
     pending_evaluations:[{
       management_group_id:'pending_group_01', action:'cancel', reason:'原挂单结构已经失效',
       cancel_reason_code:'model_judgment',
-      evidence_refs:['condition:pending_invalid_01'],
+      evidence_refs:['bar:M15:1784736900000'],
     }],
     position_evaluations:[{
       management_group_id:'position_group_01', thesis_id:'thesis_01', action:'exit',
-      matched_condition_id:'invalidation_01', reversal_candidate:true,
-      reason:'原交易论点已经连续失效', evidence_refs:['condition:invalidation_01'],
+      exit_reason_code:'current_thesis_invalidated', reversal_candidate:true,
+      reason:'原交易论点已经连续失效', evidence_refs:['bar:M15:1784736900000'],
     }],
     analysis:'当前行情已经转为空头结构。',
     reasoning:'新仓、挂单与持仓分别完成独立判断。',
@@ -81,7 +80,7 @@ function response(overrides = {}) {
   }
 }
 
-describe('position management v1.2 contract', () => {
+describe('position management v1.3 current-state contract', () => {
   it('uses the explicit last closed bar instead of the forming candle', () => {
     const result = buildPositionManagementAsOf({
       timestamp:'2026-07-24 12:30:00',
@@ -128,26 +127,24 @@ describe('position management v1.2 contract', () => {
     expect(result.signal_type).toBe('hold')
     expect(result._position_management.validation.market_plan).toBe('invalid')
     expect(result._position_management.position_evaluations).toEqual([
-      expect.objectContaining({ action:'exit', matched_condition_id:'invalidation_01' }),
+      expect.objectContaining({ action:'exit', exit_reason_code:'current_thesis_invalidated' }),
     ])
   })
 
-  it('rejects invented condition ids without discarding another valid section', () => {
+  it('does not use the original condition id as a runtime exit gate', () => {
     const value = response({
       position_evaluations:[{
         management_group_id:'position_group_01', thesis_id:'thesis_01', action:'exit',
-        matched_condition_id:'invented_condition', reversal_candidate:false,
-        reason:'尝试改写条件', evidence_refs:['condition:invalidation_01'],
+        exit_reason_code:'trend_reversal', matched_condition_id:'invented_condition', reversal_candidate:false,
+        reason:'尝试改写条件', evidence_refs:['bar:M15:1784736900000'],
       }],
     })
     const result = validatePositionManagementResponse(value, context, plan => ({ ...plan, confidence:0.8 }))
     expect(result.signal_type).toBe('sell')
     expect(result._position_management.position_evaluations).toEqual([
-      expect.objectContaining({ action:'hold', validation_source:'server_fail_closed' }),
+      expect.objectContaining({ action:'exit', exit_reason_code:'trend_reversal' }),
     ])
-    expect(result._position_management.validation.errors).toContainEqual(
-      expect.objectContaining({ section:'position', code:'position_condition_invalid' }),
-    )
+    expect(result._position_management.position_evaluations[0]).not.toHaveProperty('matched_condition_id')
   })
 
   it('throws on the initial invalid management output so the common repair pass can run', () => {
@@ -168,7 +165,7 @@ describe('position management v1.2 contract', () => {
         reason:'原挂单继续保留', evidence_refs:['condition:not-allowed'],
       }],
       position_evaluations:[{
-        ...response().position_evaluations[0], action:'hold', matched_condition_id:null,
+        ...response().position_evaluations[0], action:'hold', exit_reason_code:null,
         reason:'原持仓继续持有', evidence_refs:['condition:not-allowed'],
       }],
     })
@@ -230,7 +227,7 @@ describe('position management v1.2 contract', () => {
         ...response().pending_evaluations[0], action:'keep', cancel_reason_code:null,
       }],
       position_evaluations:[{
-        ...response().position_evaluations[0], action:'hold', matched_condition_id:null,
+        ...response().position_evaluations[0], action:'hold', exit_reason_code:null,
       }],
     })
     expect(() => validatePositionManagementResponse(
@@ -248,7 +245,7 @@ describe('position management v1.2 contract', () => {
         evidence_refs:['condition:not-allowed'],
       }],
       position_evaluations:[{
-        ...response().position_evaluations[0], action:'hold', matched_condition_id:null,
+        ...response().position_evaluations[0], action:'hold', exit_reason_code:null,
         evidence_refs:['condition:not-allowed'],
       }],
     })
@@ -294,55 +291,36 @@ describe('position management v1.2 contract', () => {
       .toMatchObject({ action:'cancel', cancel_reason_code:'expired' })
   })
 
-  it('does not let a thesis cancellation cite an untriggered hard condition', () => {
+  it('allows a current thesis cancellation without a frozen-condition trigger', () => {
     const value = response({ pending_evaluations:[{
       ...response().pending_evaluations[0], cancel_reason_code:'thesis_invalidated',
-      evidence_refs:['condition:hard_01'],
+      evidence_refs:['bar:M15:1784736900000'],
     }] })
     const pendingGroup = {
       ...context.pending_groups[0],
-      allowed_evidence_refs:['condition:hard_01'],
-      frozen_conditions:[{
-        condition_id:'hard_01', kind:'hard', operator:'closed_bar_lte', threshold:4000,
-        evaluation_state:'not_triggered', observed_close:4010,
-      }],
+      allowed_evidence_refs:['bar:M15:1784736900000'],
     }
-    const invalid = validatePositionManagementResponse(value,
-      { ...context, pending_groups:[pendingGroup] }, plan => ({ ...plan, confidence:0.8 }))
-    expect(invalid._position_management.pending_evaluations[0]).toMatchObject({
-      action:'keep', validation_source:'server_fail_closed', cancel_reason_code:null,
-    })
-    expect(invalid._position_management.validation.errors).toContainEqual(
-      expect.objectContaining({ code:'pending_hard_condition_not_triggered' }),
-    )
     const valid = validatePositionManagementResponse(value,
-      { ...context, pending_groups:[{ ...pendingGroup, frozen_conditions:[{
-        ...pendingGroup.frozen_conditions[0], evaluation_state:'triggered', observed_close:3990,
-      }] }] }, plan => ({ ...plan, confidence:0.8 }))
+      { ...context, pending_groups:[pendingGroup] }, plan => ({ ...plan, confidence:0.8 }))
+    expect(valid._position_management.validation.errors).toEqual([])
     expect(valid._position_management.pending_evaluations[0])
       .toMatchObject({ action:'cancel', cancel_reason_code:'thesis_invalidated' })
   })
 
   it.each(['expired', 'thesis_invalidated', 'risk_reduction', 'model_judgment'])
-    ('rejects %s when its evidence cites a not-triggered hard condition', cancelReasonCode => {
+    ('allows %s based on current evidence without frozen-condition evaluation', cancelReasonCode => {
       const value = response({ pending_evaluations:[{
         ...response().pending_evaluations[0], cancel_reason_code:cancelReasonCode,
-        reason:'风险依据', evidence_refs:['condition:hard_01'],
+        reason:'风险依据', evidence_refs:['bar:M15:1784736900000'],
       }] })
       const pendingGroup = {
-        ...context.pending_groups[0], allowed_evidence_refs:['condition:hard_01'],
-        pending_order_facts:[{ is_expired:true }], frozen_conditions:[{
-          condition_id:'hard_01', kind:'hard', operator:'closed_bar_lte', threshold:4000,
-          evaluation_state:'not_triggered', observed_close:4010,
-        }],
+        ...context.pending_groups[0], allowed_evidence_refs:['bar:M15:1784736900000'],
+        pending_order_facts:[{ is_expired:true }],
       }
       const result = validatePositionManagementResponse(value,
         { ...context, pending_groups:[pendingGroup] }, plan => ({ ...plan, confidence:0.8 }))
-      expect(result._position_management.validation.errors).toContainEqual(
-        expect.objectContaining({ code:'pending_hard_condition_not_triggered' }),
-      )
       expect(result._position_management.pending_evaluations[0]).toMatchObject({
-        action:'keep', validation_source:'server_fail_closed', cancel_reason_code:null,
+        action:'cancel', cancel_reason_code:cancelReasonCode,
       })
     })
 
@@ -350,7 +328,7 @@ describe('position management v1.2 contract', () => {
     ('does not let %s disguise an expiry claim', cancelReasonCode => {
       const value = response({ pending_evaluations:[{
         ...response().pending_evaluations[0], cancel_reason_code:cancelReasonCode,
-        reason:'该挂单已过期，应该撤销', evidence_refs:['condition:pending_invalid_01'],
+        reason:'该挂单已过期，应该撤销', evidence_refs:['bar:M15:1784736900000'],
       }] })
       const result = validatePositionManagementResponse(value, context,
         plan => ({ ...plan, confidence:0.8 }))
@@ -376,19 +354,47 @@ describe('position management v1.2 contract', () => {
     const parsed = JSON.parse(schema)
     expect(parsed.market_plan.pending_action).toBeUndefined()
     expect(parsed.market_plan.position_action).toBeUndefined()
+    expect(schema).toContain('exit_reason_code')
+    expect(schema).not.toContain('matched_condition_id')
     expect(schema).not.toContain('cancel_replace')
     expect(schema).not.toContain('"reverse"')
   })
 })
 
 describe('consecutive automatic-inference exit confirmation', () => {
-  it('requires two valid consecutive exit decisions and ignores condition changes', () => {
+  it('requires two distinct v1.3 inferences and current snapshots', () => {
     expect(AUTO_EXIT_CONFIRMATIONS_REQUIRED).toBe(2)
-    expect(resolveAutomaticExitConfirmation({ action:'exit', matched_condition_id:'condition-a' }, null))
+    expect(resolveAutomaticExitConfirmation({ action:'exit', decision_signal_id:101,
+      market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, null))
       .toMatchObject({ validation_status:'valid', confirmation_count:1 })
-    expect(resolveAutomaticExitConfirmation({ action:'exit', matched_condition_id:'condition-b' }, {
-      action:'exit', validation_status:'valid', matched_condition_id:'condition-a',
+    expect(resolveAutomaticExitConfirmation({ action:'exit', decision_signal_id:102,
+      market_snapshot_hash:'sha256:snapshot-b', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
+      action:'exit', validation_status:'valid', decision_signal_id:101,
+      market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
     })).toMatchObject({ validation_status:'valid', confirmation_count:2 })
+  })
+
+  it('does not increment when the task or snapshot is reused', () => {
+    const current = { action:'exit', decision_signal_id:102, task_id:7,
+      market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }
+    const previous = { action:'exit', validation_status:'valid', decision_signal_id:101, task_id:7,
+      market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }
+    expect(resolveAutomaticExitConfirmation(current, previous)).toMatchObject({
+      validation_status:'valid', confirmation_count:1,
+    })
+  })
+
+  it('does not combine a legacy or unknown previous contract with v1.3', () => {
+    expect(resolveAutomaticExitConfirmation({ action:'exit', decision_signal_id:102,
+      market_snapshot_hash:'sha256:snapshot-b', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
+      action:'exit', validation_status:'valid', decision_signal_id:101,
+      market_snapshot_hash:'sha256:snapshot-a', contract_version:'position-management-v1.2',
+    })).toMatchObject({ validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' })
+    expect(resolveAutomaticExitConfirmation({ action:'exit', decision_signal_id:103,
+      market_snapshot_hash:'sha256:snapshot-c', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
+      action:'exit', validation_status:'valid', decision_signal_id:102,
+      market_snapshot_hash:'sha256:snapshot-b',
+    })).toMatchObject({ validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' })
   })
 
   it('resets confirmation on hold or invalid model output', () => {
@@ -412,7 +418,9 @@ describe('consecutive automatic-inference exit confirmation', () => {
       ownership_history_id:5, broker_server_key:'Broker-Demo', login_account:'10001',
       strategy_id:2, strategy_version:4, origin_signal_id:100,
     }
-    const localContext = { ...context, _targets:new Map([['position_group_01', [target]]]) }
+    const localContext = { ...context,
+      as_of:{ ...context.as_of, market_snapshot_hash:'sha256:snapshot-a' },
+      _targets:new Map([['position_group_01', [target]]]) }
     const result = await persistPositionManagementEvaluations({ signalId:101, context:localContext,
       inferenceSource:'automatic_scheduler', management:{
       position_evaluations:[response().position_evaluations[0]], pending_evaluations:[],
@@ -424,9 +432,12 @@ describe('consecutive automatic-inference exit confirmation', () => {
 
   it('promotes the same task after a second consecutive valid exit', async () => {
     queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
-      .mockResolvedValueOnce({ id:11, decision_signal_id:101, action:'exit', validation_status:'valid' })
+      .mockResolvedValueOnce({ id:11, decision_signal_id:101, action:'exit', validation_status:'valid',
+        market_snapshot_hash:'snapshot-a', closed_bar_time_utc_ms:1784736900000,
+        model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }) })
       .mockResolvedValueOnce({ id:21, state_version:1, status:'CANDIDATE', user_id:7,
-        execution_mode:'auto_exit', task_type:'position_exit', management_group_id:'position_group_01', thesis_id:'thesis_01' })
+        execution_mode:'auto_exit', task_type:'position_exit', management_group_id:'position_group_01', thesis_id:'thesis_01',
+        model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }) })
     queryAll.mockResolvedValueOnce([])
     queryRun.mockResolvedValueOnce({ insertId:12, changes:1 })
       .mockResolvedValueOnce({ changes:1 })
@@ -438,7 +449,9 @@ describe('consecutive automatic-inference exit confirmation', () => {
       ownership_history_id:5, broker_server_key:'Broker-Demo', login_account:'10001',
       strategy_id:2, strategy_version:4, origin_signal_id:100,
     }
-    const localContext = { ...context, _targets:new Map([['position_group_01', [target]]]) }
+    const localContext = { ...context,
+      as_of:{ ...context.as_of, market_snapshot_hash:'sha256:snapshot-b' },
+      _targets:new Map([['position_group_01', [target]]]) }
     const result = await persistPositionManagementEvaluations({ signalId:102, context:localContext,
       inferenceSource:'automatic_scheduler', management:{
       position_evaluations:[response().position_evaluations[0]], pending_evaluations:[],
@@ -451,7 +464,8 @@ describe('consecutive automatic-inference exit confirmation', () => {
     queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
       .mockResolvedValueOnce({ id:12, decision_signal_id:102, action:'exit', validation_status:'valid' })
       .mockResolvedValueOnce({ id:21, state_version:3, status:'PRECONDITIONS_LOCKED', user_id:7,
-        execution_mode:'auto_exit', task_type:'position_exit', management_group_id:'position_group_01', thesis_id:'thesis_01' })
+        execution_mode:'auto_exit', task_type:'position_exit', management_group_id:'position_group_01', thesis_id:'thesis_01',
+        model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }) })
     queryAll.mockResolvedValueOnce([])
     queryRun.mockResolvedValueOnce({ insertId:13, changes:1 })
       .mockResolvedValueOnce({ changes:1 })
@@ -616,6 +630,7 @@ describe('durable state and protection boundaries', () => {
         outcome_id:11, pending_ticket:'O-11', position_id:'O-11', effective_pending_state:'pending',
         management_group_id:'group_pending', thesis_id:'thesis_pending', strategy_id:3, strategy_version:1,
         standard_symbol:'XAUUSD', direction:'sell', origin_signal_id:101, decision_timeframe:'M15',
+        output_contract_version:'position-management-v1.2',
         invalidation_conditions_json:'[]', evidence_refs_json:'[]',
       },
       {
@@ -626,7 +641,7 @@ describe('durable state and protection boundaries', () => {
       },
     ])
     const value = await loadActivePositionManagementContext({
-      strategyId:3, strategyVersion:1, symbol:'XAUUSD', decisionTimeframe:'M15',
+      strategyId:3, strategyVersion:99, symbol:'XAUUSD', decisionTimeframe:'M15',
       market:{
         strategy_reference_portfolio:{
           role:'platform_strategy_reference_portfolio', positions:[],
@@ -638,10 +653,12 @@ describe('durable state and protection boundaries', () => {
 
     expect(value.pending_groups).toEqual([expect.objectContaining({ management_group_id:'group_pending' })])
     expect(value.position_groups).toEqual([])
+    expect(value.pending_groups[0]).not.toHaveProperty('frozen_conditions')
     expect(value._targets.get('group_pending')[0].position_id).toBeNull()
+    expect(value._targets.get('group_pending')[0].strategy_version).toBe(1)
   })
 
-  it('injects expiry facts and evaluates hard conditions against the last closed bar', async () => {
+  it('injects terminal expiry facts but keeps original conditions out of active context', async () => {
     queryAll.mockResolvedValueOnce([{
       outcome_id:9305, pending_ticket:'O-9305', position_id:null, effective_pending_state:'pending',
       management_group_id:'group_9305', thesis_id:'thesis_9305', strategy_id:3, strategy_version:1,
@@ -668,8 +685,14 @@ describe('durable state and protection boundaries', () => {
     expect(value.pending_groups[0]).toMatchObject({
       management_group_id:'group_9305',
       pending_order_facts:[expect.objectContaining({ is_expired:false, valid_until_terminal:'2026-07-22 09:12:00' })],
-      frozen_conditions:[expect.objectContaining({ condition_id:'hard_9305', evaluation_state:'triggered', observed_close:3990 })],
     })
+    expect(value.pending_groups[0]).not.toHaveProperty('frozen_conditions')
+    expect(value.pending_groups[0].allowed_evidence_refs).toEqual(expect.arrayContaining([
+      'bar:M15:1784746680000',
+      expect.stringMatching(/^snapshot:/),
+      'pending:9305:terminal',
+    ]))
+    expect(value.pending_groups[0].allowed_evidence_refs).not.toContain('condition:hard_9305')
   })
 
   it('does not accept the retired auto-reverse mode through the settings API', async () => {

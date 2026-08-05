@@ -1133,8 +1133,8 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const pendingRule = strategySchema.hasPending ? `\n\n${PENDING_LIFECYCLE_RULE}` : ''
     const positionManagementRule = positionManagementEnabled ? `
 
-## 持仓管理 v1.2 强制边界
-输入中的 position_management_context 由服务端生成。你必须完整返回其中每一个挂单管理组和持仓管理组，且只能原样引用给出的 management_group_id、thesis_id、condition_id 和 evidence_refs。挂单动作只允许 keep 或 cancel；持仓动作只允许 hold 或 exit。cancel 时必须填写 cancel_reason_code，仅允许 expired | thesis_invalidated | risk_reduction | model_judgment；expired 必须与对应组服务端 is_expired=true 一致，不能使用 timestamp、MT5墙钟或叙述自行比较。thesis_invalidated 只能引用服务端 evaluation_state=triggered 的硬条件，不能引用 not_triggered 或 unknown 硬条件；soft 条件只能作为 model_required 参考。禁止输出 replace、reverse、ticket、手数或任何账户身份。不得修改冻结条件、失效价格、条件类型、周期和确认次数。reversal_candidate 只表示解释性判断，不是执行命令。新建仓、挂单评估、持仓评估彼此独立；新建仓字段无效时也必须继续完成其他评估。` : ''
+## 持仓管理 v1.3 强制边界
+输入中的 position_management_context 由服务端生成。你必须基于本轮当前行情、当前持仓或挂单事实、当前止损止盈及当前策略证据，完整返回每一个挂单管理组和持仓管理组；只能原样引用给出的 management_group_id、thesis_id 和 evidence_refs。原始信号的交易论点、失效条件及原始止损止盈只用于历史说明，不是本轮继续持有、平仓或撤单的硬门槛。挂单动作只允许 keep 或 cancel；cancel 时必须填写 cancel_reason_code，仅允许 expired | thesis_invalidated | risk_reduction | model_judgment，其中 expired 必须与对应组服务端 is_expired=true 一致，不能使用 timestamp、MT4/MT5 墙钟或叙述自行比较。持仓动作只允许 hold 或 exit；exit 时必须填写 exit_reason_code，仅允许 current_thesis_invalidated | trend_reversal | risk_reduction | model_judgment，hold 时该字段必须为 null。所有结论必须引用本轮允许的当前证据。禁止输出 replace、reverse、ticket、手数或任何账户身份。reversal_candidate 只表示解释性判断，不是执行命令。新建仓、挂单评估、持仓评估彼此独立；新建仓字段无效时也必须继续完成其他评估。` : ''
     const strategyPolicyRule = typeof config._strategyPolicyPrompt === 'string' && config._strategyPolicyPrompt
       ? `\n\n${config._strategyPolicyPrompt}` : ''
     const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + positionManagementRule + platformExperience + personalMemoryRule + strategyPolicyRule + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + (positionManagementEnabled ? '' : pendingRule)
@@ -1338,13 +1338,6 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
   }
 }
 
-const COMPARISON_LIVE_RISK_REASONS = new Set([
-  'atr_anchor_unavailable_hold',
-  'sl_widened',
-  'sl_widen_min_lot_hold',
-  'sl_too_far_hold',
-])
-
 /**
  * Preserve the model's original decision for offline comparison. The normal
  * live path is still evaluated so its diagnostics remain available, but live
@@ -1371,12 +1364,8 @@ export function buildModelComparisonSignal(raw, normalized, config = {}, market 
   const referencePrice = Number(market?.latest_price)
   const anchorPrice = entryMethod !== 'market' && entryMethod !== 'observe' ? limitPrice : referencePrice
   const errors = new Set()
-  const warnings = new Set()
   const normalizationReason = normalized?.normalization_info?.reason || normalized?.normalization_info?.type || null
-  if (normalizationReason) {
-    if (COMPARISON_LIVE_RISK_REASONS.has(normalizationReason)) warnings.add(normalizationReason)
-    else errors.add(normalizationReason)
-  }
+  if (normalizationReason) errors.add(normalizationReason)
 
   const validTypes = new Set(['buy', 'sell', 'hold', 'buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit'])
   if (!validTypes.has(signalType)) errors.add('invalid_signal_type')
@@ -1416,7 +1405,6 @@ export function buildModelComparisonSignal(raw, normalized, config = {}, market 
   }
   const pendingValidMinutes = Math.min(Math.max(parseInt(raw?.pending_valid_minutes) || 240, 1), 1440)
   const validationErrors = [...errors]
-  const validationWarnings = [...warnings]
   return {
     ...normalized,
     signal_type:signalType,
@@ -1445,7 +1433,7 @@ export function buildModelComparisonSignal(raw, normalized, config = {}, market 
       status:validationErrors.length ? 'invalid' : 'valid',
       execution_eligible:isTrade && validationErrors.length === 0,
       errors:validationErrors,
-      warnings:validationWarnings,
+      warnings:[],
       live_risk_bypassed:true,
     },
   }

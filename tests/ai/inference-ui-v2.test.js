@@ -136,7 +136,7 @@ describe('inference workspace V2 contract', () => {
   it('keeps concrete execution outcomes visible even after the signal expires', () => {
     expect(app.indexOf('if (executionStatus && executionStatus !== "success")')).toBeLessThan(app.indexOf('if (signalIsStale(signal)) return { state:"expired"'))
     expect(app).toContain('opposite_position_exists:"当前账户已有反向持仓，本次不新增仓位"')
-    expect(app).toContain('title: rejected ? "风控未放行" : skipped ? "本次未执行"')
+    expect(app).toContain('title: brokerRejected ? `${bridgePlatformLabel()} 拒绝订单` : rejected ? "风控未放行" : skipped ? "本次未执行"')
   })
 
   it('shows completed pending cancellation details in the inference result', () => {

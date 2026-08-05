@@ -1498,10 +1498,6 @@ const API_ERROR_MESSAGES = {
   invalid_take_profit_direction: "止盈价格与交易方向不符",
   invalid_recommended_take_profit_tier: "AI 推荐的止盈档位无效",
   ai_volume_out_of_platform_range: "订单执行上限不符合交易平台手数规则",
-  confidence_below_risk_threshold: "置信度低于策略风险阈值",
-  atr_anchor_unavailable_hold: "缺少可靠 ATR 锚点",
-  sl_widen_min_lot_hold: "扩大止损后所需手数低于最小值",
-  sl_too_far_hold: "止损距离超出允许范围",
   backtest_instrument_incomplete: "交易品种合约参数不完整",
   backtest_execution_candles_unavailable: "缺少用于订单回放的 M1 历史行情",
   backtest_symbol_snapshot_unavailable: "桥接端未返回交易品种合约参数",
@@ -3360,7 +3356,7 @@ const RISK_DECISION_LABELS = {
   "R5_SCHEMA_STOP_LIMIT_PRICE":"Stop Limit 触发后限价无效", "R5_SCHEMA_AI_POSITION_SIZE_TIER":"AI 返回的仓位档位无效",
   "R1_INSTRUMENT_DATA_INCOMPLETE":"品种交易参数不完整", "R1_SYMBOL_TRADE_DISABLED":"品种当前禁止交易",
   "R1.1_SYMBOL_NOT_ALLOWED":"品种不在允许范围", "R1.2_STOP_LOSS_REQUIRED":"缺少止损",
-  "R1.3_SL_WIDEN_VOLUME_DOWN":"扩大止损并同步降低手数", "R1.4_STOP_LOSS_TOO_FAR":"止损距离超过上限",
+  "R1.4_STOP_LOSS_TOO_FAR":"止损距离超过上限",
   "R1.5_TAKE_PROFIT_REQUIRED":"缺少止盈", "R1.5_RR_TOO_LOW":"盈亏比低于最低要求",
   "R1.5_TP_TIER_UPGRADED":"改用满足盈亏比要求的更远止盈档位", "R1.6_SL_TP_DIRECTION":"止损或止盈方向错误",
   "R1.7_PENDING_DEVIATION":"挂单价格偏离当前报价过大", "R1.7_PENDING_DIRECTION":"挂单触发价方向与当前价格关系错误",
@@ -3431,7 +3427,6 @@ function riskRuleDescription(code, details = {}) {
   if (code === "R1.7_PENDING_DEVIATION") return `${label}：偏离 ${displayRiskNumber(details.deviation)}，允许上限 ${displayRiskNumber(details.maximum)}`;
   if (code === "R4.6_EXECUTION_PRICE_DEVIATION") return `${label}：当前 ${displayRiskNumber(details.current_price)}，允许 ${displayRiskNumber(details.allowed_min)} ～ ${displayRiskNumber(details.allowed_max)}（±${displayRiskNumber(details.maximum_pct, 3)}%）`;
   if (code === "PX.3_EXECUTION_PRICE_TOLERANCE") return `${label}：剩余 ${displayRiskNumber(details.remaining_price, 3)}，发送 ${displayRiskNumber(details.mt5_points, 0)} ${bridgePlatformLabel()} 点`;
-  if (code === "R1.3_SL_WIDEN_VOLUME_DOWN") return `${label}：止损 ${displayRiskNumber(details.from_sl)} → ${displayRiskNumber(details.to_sl)}，手数 ${displayRiskNumber(details.from_volume)} → ${displayRiskNumber(details.to_volume)}`;
   if (code === "R1.9_AI_VOLUME_OUT_OF_RANGE") return `${label}：执行上限 ${displayRiskNumber(details.volume)} 手，允许 ${displayRiskNumber(details.minimum)} ～ ${displayRiskNumber(details.maximum)} 手，步进 ${displayRiskNumber(details.step)} 手`;
   if (code === "R1.7_PENDING_DIRECTION") return `${label}：触发价 ${displayRiskNumber(details.trigger_price)}，当前价 ${displayRiskNumber(details.current_price)}`;
   if (code === "R1.7_STOP_LIMIT_RELATION") return `${label}：触发价 ${displayRiskNumber(details.trigger_price)}，触发后限价 ${displayRiskNumber(details.stop_limit_price)}`;
@@ -3463,6 +3458,9 @@ function resultRiskReason(result = {}) {
       : Array.isArray(result?.rule_results) ? result.rule_results : [];
   const rule = rejectionRule(rules, result.reject_code || (/^(?:R|PX)[A-Z0-9._-]+$/.test(result.message || "") ? result.message : ""));
   if (rule) return riskRuleDescription(rule.code, rule.details || {});
+  if (["preparation_failure", "broker_rejection"].includes(String(result.classification || "")) && result.message) {
+    return userVisibleText(result.message, "订单执行未完成，具体原因已记录");
+  }
   const reason = String(result.reason || result.reject_code || "").trim();
   return reason ? riskRuleDescription(reason, result.details || {}) : "";
 }
@@ -4456,7 +4454,7 @@ async function refreshTabData(tabId) {
     startKlineRefreshTimer();
   } else if (tabId === "history") {
     updateHistoryRangeUI();
-    await Promise.allSettled([loadAccount(), loadHistory(true), loadHistoryChart(true)]);
+    await loadHistoryViews({ forceRefresh:true, includeAccount:true });
   } else if (tabId === "audit") {
     await loadAudit();
   } else if (tabId === "model-strategy") {
@@ -7041,9 +7039,10 @@ function signalExecutionAdvice(signal) {
   if (executionStatus && executionStatus !== "success") {
     const rejected = executionStatus === "rejected";
     const skipped = executionStatus === "skipped";
+    const brokerRejected = execution?.classification === "broker_rejection";
     return {
       state: rejected ? "rejected" : skipped ? "skipped" : "failed",
-      title: rejected ? "风控未放行" : skipped ? "本次未执行" : "执行未完成",
+      title: brokerRejected ? `${bridgePlatformLabel()} 拒绝订单` : rejected ? "风控未放行" : skipped ? "本次未执行" : "执行未完成",
       description: resultRiskReason(execution) || userVisibleText(execution.message || execution.reason || execution.error, "系统未返回具体原因，请查看风控执行记录"),
       executable: false,
     };
@@ -9004,6 +9003,46 @@ async function loadHistoryChart(forceRefresh) {
   } catch (e) { console.error("loadHistoryChart:", e); }
 }
 
+let _historyViewsRefreshPromise = null;
+
+function loadHistoryViews({ forceRefresh = false, includeAccount = false } = {}) {
+  if (forceRefresh && _historyViewsRefreshPromise) return _historyViewsRefreshPromise;
+  const refresh = (async () => {
+    if (forceRefresh) {
+      _historyCache = null;
+      _historyChartCache = null;
+    }
+    const initial = [loadHistory(forceRefresh)];
+    if (includeAccount) initial.unshift(loadAccount());
+    await Promise.allSettled(initial);
+    // The table owns the single forced terminal sync. The chart then reads the
+    // refreshed Bridge archive instead of starting a second simultaneous sync.
+    await loadHistoryChart(false);
+  })();
+  if (!forceRefresh) return refresh;
+  _historyViewsRefreshPromise = refresh.finally(() => {
+    _historyViewsRefreshPromise = null;
+  });
+  return _historyViewsRefreshPromise;
+}
+
+function historyProtectionCell(row, field) {
+  const isStopLoss = field === "stop_loss";
+  const displayValue = row?.[isStopLoss ? "display_stop_loss" : "display_take_profit"]
+    ?? row?.[field];
+  if (!(Number(displayValue) > 0)) return "--";
+  const source = row?.[isStopLoss ? "stop_loss_source" : "take_profit_source"];
+  const entryValue = row?.[isStopLoss ? "mt5_entry_stop_loss" : "mt5_entry_take_profit"]
+    ?? row?.[field];
+  const verified = source === "verified_platform_protection";
+  const label = isStopLoss ? "止损" : "止盈";
+  const entryText = Number(entryValue) > 0 ? raw(entryValue) : "--";
+  const title = verified
+    ? `${label}显示平台最后一次已验证修改值；MT5 开仓历史订单值为 ${entryText}`
+    : `${label}来自 MT5 开仓历史订单；平仓历史不会返回后续未纳管的人工修改`;
+  return `<span class="history-protection-value" title="${escapeHtml(title)}">${escapeHtml(raw(displayValue))}${verified ? '<small>已更新</small>' : ''}</span>`;
+}
+
 function _renderHistoryRows(rows, tickets, closeTickets) {
   $("historyBody").innerHTML = rows.length ? rows.map((row) => {
     const dir = signalType(row.type);
@@ -9022,8 +9061,8 @@ function _renderHistoryRows(rows, tickets, closeTickets) {
       <td data-label="方向"><span class="tag ${dir}">${directionText(row.type || dir)}</span></td>
       <td data-label="手数" class="num">${escapeHtml(volumeText(row.volume))}</td>
       <td data-label="入场价" class="num">${escapeHtml(raw(row.entry_price))}</td>
-      <td data-label="止损" class="num">${row.stop_loss ? escapeHtml(raw(row.stop_loss)) : '--'}</td>
-      <td data-label="止盈" class="num">${row.take_profit ? escapeHtml(raw(row.take_profit)) : '--'}</td>
+      <td data-label="止损" class="num">${historyProtectionCell(row, "stop_loss")}</td>
+      <td data-label="止盈" class="num">${historyProtectionCell(row, "take_profit")}</td>
       <td data-label="平仓时间" class="num">${escapeHtml(formatTime(row.close_time || row.time))}</td>
       ${exitPriceCell}
       <td data-label="盈亏" class="${profitClass(row.profit)}">${fmt(row.profit)}</td>
@@ -9178,7 +9217,7 @@ function _renderHistoryChart(data) {
         state.historyFilters.page = 1;
         _historyCache = null;
         _historyChartCache = null;
-        Promise.allSettled([loadHistory(true), loadHistoryChart(true)]);
+        loadHistoryViews({ forceRefresh:true });
       },
       plugins: {
         legend: { display: false },
@@ -9267,6 +9306,20 @@ function positionManagementTaskMode(task = {}) {
 
 function positionManagementActionLabel(action) {
   return ({ exit:"建议平仓", cancel:"建议取消", hold:"继续持有", keep:"继续保留" })[action] || raw(action);
+}
+
+const POSITION_MANAGEMENT_DECISION_REASONS = Object.freeze({
+  current_thesis_invalidated:"当前行情已使本轮持仓逻辑失效",
+  trend_reversal:"当前趋势或结构已经反转",
+  risk_reduction:"基于当前风险状态建议降低风险",
+  model_judgment:"模型依据本轮综合证据作出判断",
+  expired:"交易终端已确认挂单过期",
+  thesis_invalidated:"当前行情已使挂单逻辑失效",
+});
+
+function positionManagementDecisionReason(model = {}) {
+  const code = String(model.exit_reason_code || model.cancel_reason_code || "").toLowerCase();
+  return POSITION_MANAGEMENT_DECISION_REASONS[code] || "";
 }
 
 function positionManagementBarTime(task) {
@@ -9520,9 +9573,11 @@ async function loadPositionManagementDetail(taskId, options = {}) {
     const evaluationRows = evaluations.length ? evaluations.map((item, index) => {
       const model = item.model || {};
       const condition = conditions.find(row => row.condition_id === model.matched_condition_id);
+      const currentReason = positionManagementDecisionReason(model);
       const valid = item.validation_status === "valid";
       const action = valid ? positionManagementActionLabel(item.action) : "结果无效";
-      return `<li class="management-confirmation-row ${escapeHtml(valid ? item.action : "invalid")}"><span class="management-confirmation-index">${index + 1}</span><div><header><strong>${escapeHtml(action)}</strong><time>${escapeHtml(compactTimeText(positionManagementDecisionTime(item)))}</time></header><p>${escapeHtml(item.reason || model.reason || "本轮没有可用说明")}</p>${condition ? `<small>${escapeHtml(positionManagementConditionText(condition))}</small>` : ""}</div></li>`;
+      const evidenceSummary = currentReason || (condition ? positionManagementConditionText(condition) : "");
+      return `<li class="management-confirmation-row ${escapeHtml(valid ? item.action : "invalid")}"><span class="management-confirmation-index">${index + 1}</span><div><header><strong>${escapeHtml(action)}</strong><time>${escapeHtml(compactTimeText(positionManagementDecisionTime(item)))}</time></header><p>${escapeHtml(item.reason || model.reason || "本轮没有可用说明")}</p>${evidenceSummary ? `<small>${escapeHtml(evidenceSummary)}</small>` : ""}</div></li>`;
     }).join("") : pendingCancelTask
       ? `<li class="management-confirmation-row cancel"><span class="management-confirmation-index">1</span><div><header><strong>建议撤单</strong><time>${escapeHtml(compactTimeText(positionManagementDecisionTime(task)))}</time></header><p>${escapeHtml(evaluation.reason || "AI 明确建议取消该策略挂单")}</p><small>单轮有效判断已完成，下一步仅执行挂单身份与状态校验。</small></div></li>`
       : `<li class="management-confirmation-empty">旧任务没有逐轮判断记录。</li>`;
@@ -9561,10 +9616,7 @@ async function refreshTradingPage() {
 }
 
 async function refreshHistoryPage() {
-  // Clear caches so fresh data is fetched
-  _historyCache = null;
-  _historyChartCache = null;
-  await Promise.allSettled([loadAccount(), loadHistory(true), loadHistoryChart(true)]);
+  await loadHistoryViews({ forceRefresh:true, includeAccount:true });
 }
 
 async function exportHistory() {
@@ -10427,7 +10479,7 @@ function bindEvents() {
         "refresh-quote": refreshQuote,
         "refresh-signals": loadSignals,
         "refresh-analysis-history": loadSignals,
-        "refresh-history": () => loadHistory(true),
+        "refresh-history": () => loadHistoryViews({ forceRefresh:true }),
         "refresh-trading-page": refreshTradingPage,
         "refresh-history-page": refreshHistoryPage,
         "refresh-audit": loadAudit,
@@ -10454,9 +10506,7 @@ function bindEvents() {
     try { getHistoryRangeParams(); }
     catch (error) { toast(error.message, 'error'); return; }
     state.historyFilters.page = 1;
-    _historyCache = null;
-    _historyChartCache = null;
-    Promise.allSettled([loadHistory(true), loadHistoryChart(true)]);
+    loadHistoryViews({ forceRefresh:true });
   });
   updateHistoryRangeUI();
   // Table filters further narrow trade rows inside the selected history scope.

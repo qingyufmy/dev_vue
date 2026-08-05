@@ -33,6 +33,7 @@ import {
 import { trustedTerminalClock } from './terminal-clock.js'
 import * as modelTaskTrackerModule from './model-task-tracker.js'
 import { modelTaskDeadlines } from './model-task-budget.js'
+import { buildSafeExecutionOutcome, buildSafeExecutionEvent } from '../../audit-localization.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -2608,24 +2609,25 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
   const l = (msg) => console.log(`[Delivery U${userId}] signal=${signalId} ${symbol}: ${msg}`)
   let inventoryLock = null
   let deliveryClaimed = false
-  const setTerminalStatus = (status, reason, details = {}) => queryRun(
+  const setTerminalStatus = (status, reason, details = {}, outcome = null) => queryRun(
     `UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ?
      WHERE signal_id = ? AND user_id = ? AND execution_status = ?`,
-    [status, JSON.stringify({ status, reason, details }), signalId, userId,
+    [status, JSON.stringify(outcome || { status, reason, details }), signalId, userId,
       deliveryClaimed ? 'executing' : 'not_attempted'])
   const finishBeforeRisk = async (status, reason, details = {}) => {
-    await setTerminalStatus(status, reason, details)
-    const action = status === 'rejected' ? 'ai_auto_execute_rejected'
-      : status === 'success' ? 'ai_auto_execute' : 'ai_auto_execute_skipped'
-    const severity = status === 'rejected' ? 'warning' : status === 'success' ? 'success' : 'info'
+    const safe = buildSafeExecutionOutcome({ status, reason, details, stage:'portfolio_alignment', field:'execution' })
+    await setTerminalStatus(safe.status, safe.reason, safe.details, safe)
+    const action = safe.classification === 'risk_rejection' ? 'ai_auto_execute_rejected'
+      : safe.status === 'success' ? 'ai_auto_execute' : 'ai_auto_execute_skipped'
+    const severity = safe.classification === 'risk_rejection' ? 'warning' : safe.status === 'success' ? 'success' : 'info'
     try {
       await insertAudit(null, userId, action, symbol,
-        { signal_id:signalId, delivery_signal_id:signalId, prompt_type_id:promptTypeId, stage:'portfolio_alignment', reason, details },
-        { status, reason, details }, severity)
+        { signal_id:signalId, delivery_signal_id:signalId, prompt_type_id:promptTypeId, stage:'portfolio_alignment', reason:safe.reason, details:safe.details },
+        safe, severity)
     } catch (error) {
       l(`pre-risk audit failed: ${error.message}`)
     }
-    sendToBrowsers(userId, { type:'signal_execution_updated', signal_id:signalId, status, reason, details })
+    sendToBrowsers(userId, buildSafeExecutionEvent(safe, { type:'signal_execution_updated', signal_id:signalId }))
   }
   try {
     if (isBridgeDeliveryMaintenancePaused(userId)) {
@@ -3107,25 +3109,27 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       }, { scopes:['ai-operations', 'risk-audit'], refresh:true })
     } else {
       const recoveryFenceFailure = recoveryContext
-        && ['delivery_recovery_expired', 'delivery_recovery_untrusted'].includes(String(execResult?.message || ''))
-      const status = recoveryFenceFailure ? 'skipped'
-        : execResult.status === 'rejected' ? 'rejected' : execResult.status === 'uncertain' ? 'uncertain' : 'failed'
-      const executionResult = recoveryFenceFailure
-        ? JSON.stringify({ status:'skipped', reason:execResult.message, details:execResult.details || {} })
-        : JSON.stringify(execResult)
+        && ['delivery_recovery_expired', 'delivery_recovery_untrusted'].includes(String(execResult?.reason || execResult?.reason_code || execResult?.message || ''))
+      const safe = recoveryFenceFailure
+        ? buildSafeExecutionOutcome({ status:'skipped', reason:execResult.reason || execResult.message, details:execResult.details || {}, stage:'execution', field:'execution' })
+        : buildSafeExecutionOutcome({ status:execResult.status, classification:execResult.classification,
+          reason:execResult.reason || execResult.reject_code || execResult.message, details:execResult.details || {},
+          stage:execResult.stage || '', field:execResult.field || '', retcode:execResult.retcode })
+      const status = safe.status
+      const executionResult = JSON.stringify(safe)
       await queryRun(
         `UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE signal_id = ? AND user_id = ?`,
         [status, executionResult, signalId, userId])
-      l(`auto-execute ${status}: ${execResult.message || execResult.status}`)
-      await insertAudit(null, userId, recoveryFenceFailure ? 'ai_auto_execute_skipped'
-        : status === 'rejected' ? 'ai_auto_execute_rejected' : 'ai_auto_execute', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, error: execResult.message },
-        recoveryFenceFailure ? { status:'skipped', reason:execResult.message } : execResult,
-        recoveryFenceFailure ? 'info' : status === 'rejected' ? 'warning' : 'error')
-      sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signalId, status })
-      broadcastAdminEvent('ai', 'signal_execution_updated', {
-        user_id:Number(userId), signal_id:Number(signalId), status,
-      }, { scopes:['ai-operations', 'risk-audit'], refresh:true })
+      l(`auto-execute ${status}: ${safe.message || safe.reason}`)
+      await insertAudit(null, userId, safe.classification === 'risk_rejection' ? 'ai_auto_execute_rejected'
+        : status === 'success' ? 'ai_auto_execute' : 'ai_auto_execute_skipped', symbol,
+        { signal_id:signalId, delivery_signal_id:signalId, prompt_type_id:promptTypeId,
+          stage:safe.stage || 'execution', reason:safe.reason, details:safe.details },
+        safe, safe.classification === 'risk_rejection' ? 'warning' : status === 'success' ? 'success' : 'info')
+      sendToBrowsers(userId, buildSafeExecutionEvent(safe, { type:'signal_execution_updated', signal_id:signalId }))
+      broadcastAdminEvent('ai', 'signal_execution_updated', buildSafeExecutionEvent(safe, {
+        user_id:Number(userId), signal_id:Number(signalId),
+      }), { scopes:['ai-operations', 'risk-audit'], refresh:true })
     }
   } catch (err) {
     l(`exception: ${err.message}`)
@@ -3138,9 +3142,14 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     } catch {}
     const recovery = durableDeliveryRecovery(durable)
     if (recovery) {
+      const recoveryOutcome = buildSafeExecutionOutcome({
+        status:recovery.status === 'success' ? 'success' : 'uncertain',
+        classification:recovery.status === 'success' ? 'execution_success' : 'execution_uncertain',
+        reason:recovery.status === 'success' ? 'success' : 'post_execution_persistence_failed',
+        details:{ ticket:recovery.ticket }, stage:'execution', field:'execution',
+      })
       const recoveredResult = JSON.stringify({
-        status:recovery.status, reconciled_from_order_intent:true,
-        reason:'post_execution_persistence_failed', message:err.message,
+        ...recoveryOutcome, reconciled_from_order_intent:true,
         ticket:recovery.ticket, kind:recovery.kind,
       })
       if (recovery.status === 'success' && recovery.kind === 'pending') {
@@ -3157,29 +3166,37 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
           WHERE signal_id = ? AND user_id = ?`, [recoveredResult, signalId, userId]).catch(() => {})
       }
       await insertAudit(null, userId, 'ai_auto_execute_state_preserved', symbol,
-        { signal_id:signalId, delivery_signal_id:signalId, prompt_type_id:promptTypeId, error:err.message },
-        { status:recovery.status, order_intent_status:durable.status, ticket:recovery.ticket },
+        { signal_id:signalId, delivery_signal_id:signalId, prompt_type_id:promptTypeId,
+          stage:'execution', reason:recoveryOutcome.reason, details:recoveryOutcome.details },
+        { ...recoveryOutcome, order_intent_status:durable.status, ticket:recovery.ticket },
         recovery.status === 'success' ? 'warning' : 'info').catch(() => {})
-      sendToBrowsers(userId, {
-        type:'signal_execution_updated', signal_id:signalId, status:recovery.status,
+      sendToBrowsers(userId, buildSafeExecutionEvent(recoveryOutcome, {
+        type:'signal_execution_updated', signal_id:signalId,
         pending_ticket:recovery.kind === 'pending' ? recovery.ticket : null,
         trade_ticket:recovery.kind === 'trade' ? recovery.ticket : null,
-      })
-      broadcastAdminEvent('ai', 'signal_execution_updated', {
-        user_id:Number(userId), signal_id:Number(signalId), status:recovery.status,
-      }, { scopes:['ai-operations', 'risk-audit'], refresh:true })
+      }))
+      broadcastAdminEvent('ai', 'signal_execution_updated', buildSafeExecutionEvent(recoveryOutcome, {
+        user_id:Number(userId), signal_id:Number(signalId),
+      }), { scopes:['ai-operations', 'risk-audit'], refresh:true })
       return
     }
+    const exceptionOutcome = buildSafeExecutionOutcome({
+      status:'failed', classification:'preparation_failure', reason:'system_execution_exception',
+      details:{}, stage:'execution', field:'execution',
+    })
     await queryRun(
       `UPDATE auto_signal_deliveries SET execution_status = 'failed', execution_result = ? WHERE signal_id = ? AND user_id = ?`,
-      [JSON.stringify({ status:'failed', reason:'system_execution_exception', details:{} }), signalId, userId]).catch(() => {})
+      [JSON.stringify(exceptionOutcome), signalId, userId]).catch(() => {})
     await insertAudit(null, userId, 'ai_auto_execute', symbol,
-      { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, error: err.message },
-      { status: 'error', message: err.message }, 'error')
-    sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signalId, status: 'failed' })
-    broadcastAdminEvent('ai', 'signal_execution_updated', {
-      user_id:Number(userId), signal_id:Number(signalId), status:'failed',
-    }, { scopes:['ai-operations', 'risk-audit'], refresh:true })
+      { signal_id:signalId, delivery_signal_id:signalId, prompt_type_id:promptTypeId,
+        stage:'execution', reason:exceptionOutcome.reason, details:exceptionOutcome.details },
+      exceptionOutcome, 'error')
+    sendToBrowsers(userId, buildSafeExecutionEvent(exceptionOutcome, {
+      type:'signal_execution_updated', signal_id:signalId,
+    }))
+    broadcastAdminEvent('ai', 'signal_execution_updated', buildSafeExecutionEvent(exceptionOutcome, {
+      user_id:Number(userId), signal_id:Number(signalId),
+    }), { scopes:['ai-operations', 'risk-audit'], refresh:true })
   } finally {
     if (inventoryLock?.token) {
       await finalizeLock(inventoryLock.key, inventoryLock.token, 0).catch(() => {})
@@ -3282,9 +3299,8 @@ function signalDeliveryRecoveryActionable(row, decision) {
 }
 
 async function closeUnattemptedDelivery(row, reason, details = {}) {
-  const executionResult = JSON.stringify({
-    status:'skipped', reason, details, recovered_at_utc_msc:Date.now(),
-  })
+  const safe = buildSafeExecutionOutcome({ status:'skipped', reason, details, stage:'execution', field:'execution' })
+  const executionResult = JSON.stringify({ ...safe, recovered_at_utc_msc:Date.now() })
   const updated = await queryRun(
     `UPDATE auto_signal_deliveries
      SET execution_status = 'skipped', execution_result = ?
@@ -3292,9 +3308,9 @@ async function closeUnattemptedDelivery(row, reason, details = {}) {
     [executionResult, row.id])
   if (updated?.changes === 1) {
     try {
-      sendToBrowsers(row.user_id, {
-        type:'signal_execution_updated', signal_id:row.signal_id, status:'skipped', reason,
-      })
+      sendToBrowsers(row.user_id, buildSafeExecutionEvent(safe, {
+        type:'signal_execution_updated', signal_id:row.signal_id,
+      }))
     } catch {}
   }
   return updated?.changes === 1

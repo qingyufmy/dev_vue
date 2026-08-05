@@ -92,7 +92,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('setText("quoteAsk", priceDisplay(q.ask))')
     expect(app).toContain('setText("quoteBid", priceDisplay(data.bid))')
     expect(app).toContain('setText("quoteAsk", priceDisplay(data.ask))')
-    expect(html).toContain('/ai/app.js?v=20260805history1')
+    expect(html).toContain('/ai/app.js?v=20260805repair1')
     expect(app).toContain('wsApi("platform_quote", { symbol })')
     expect(app).toContain('state.platformMarketSourceActive = platformQuote.available === true')
     expect(app).toContain('state.lastObserverQuote = {')
@@ -435,18 +435,22 @@ describe('AI governance navigation and DOM contract', () => {
     const refreshTabStart = app.indexOf('async function refreshTabData(tabId)')
     const refreshTabEnd = app.indexOf('async function withBusy', refreshTabStart)
     const historyTab = app.slice(refreshTabStart, refreshTabEnd)
-    expect(historyTab).toContain('loadHistory(true)')
-    expect(historyTab).toContain('loadHistoryChart(true)')
+    expect(historyTab).toContain('loadHistoryViews({ forceRefresh:true, includeAccount:true })')
 
     const refreshPageStart = app.indexOf('async function refreshHistoryPage()')
     const refreshPageEnd = app.indexOf('async function exportHistory()', refreshPageStart)
     const refreshPage = app.slice(refreshPageStart, refreshPageEnd)
-    expect(refreshPage).toContain('loadHistory(true)')
-    expect(refreshPage).toContain('loadHistoryChart(true)')
+    expect(refreshPage).toContain('loadHistoryViews({ forceRefresh:true, includeAccount:true })')
 
     const actionMapStart = app.indexOf('const tasks = {')
     const actionMapEnd = app.indexOf('if (tasks[action])', actionMapStart)
-    expect(app.slice(actionMapStart, actionMapEnd)).toContain('"refresh-history": () => loadHistory(true)')
+    expect(app.slice(actionMapStart, actionMapEnd)).toContain('"refresh-history": () => loadHistoryViews({ forceRefresh:true })')
+    const sharedRefreshStart = app.indexOf('function loadHistoryViews(')
+    const sharedRefreshEnd = app.indexOf('function historyProtectionCell(', sharedRefreshStart)
+    const sharedRefresh = app.slice(sharedRefreshStart, sharedRefreshEnd)
+    expect(sharedRefresh).toContain('loadHistory(forceRefresh)')
+    expect(sharedRefresh).toContain('loadHistoryChart(false)')
+    expect(sharedRefresh).not.toContain('loadHistoryChart(true)')
   })
 
   it('imports the database helper required by paginated execution decisions', () => {
@@ -638,7 +642,7 @@ describe('AI governance navigation and DOM contract', () => {
     const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z]+)/)?.[1]
     const appVersion = html.match(/app\.js\?v=([0-9a-z]+)/)?.[1]
     expect(stylesheetVersion).toBeTruthy()
-    expect(appVersion).toBe('20260805history1')
+    expect(appVersion).toBe('20260805repair1')
     expect(appVersion).toBe(stylesheetVersion)
   })
 

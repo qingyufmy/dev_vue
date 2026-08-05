@@ -114,8 +114,14 @@ function positionManagementDecision(signal = {}) {
   if (!value || Array.isArray(value) || typeof value !== 'object') return null
   const evaluations = key => (Array.isArray(value[key]) ? value[key] : []).map(item => ({
     management_group_id:cleanText(item?.management_group_id, 80),
+    ...(key === 'pending_evaluations' ? {
+      cancel_reason_code:item?.cancel_reason_code == null ? null : cleanText(item.cancel_reason_code, 40),
+    } : {}),
     ...(key === 'position_evaluations' ? {
       thesis_id:cleanText(item?.thesis_id, 80),
+      exit_reason_code:item?.exit_reason_code == null ? null : cleanText(item.exit_reason_code, 40),
+      // Kept only so archived v1.2 signals remain readable. v1.3 never uses
+      // the original condition identifier as an execution gate.
       matched_condition_id:item?.matched_condition_id == null ? null : cleanText(item.matched_condition_id, 80),
       reversal_candidate:Boolean(item?.reversal_candidate),
     } : {}),
@@ -251,7 +257,9 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
   }
   if (execution && execution.status && execution.status !== 'success') return {
     state: execution.status === 'rejected' ? 'rejected' : execution.status === 'skipped' ? 'skipped' : 'failed',
-    title: execution.status === 'rejected' ? '风控未放行' : execution.status === 'skipped' ? '本次未执行' : '执行未完成',
+    title: execution.classification === 'broker_rejection'
+      ? 'MT5 拒绝订单'
+      : execution.status === 'rejected' ? '风控未放行' : execution.status === 'skipped' ? '本次未执行' : '执行未完成',
     description: executionDescription(execution, '请查看风控中心中的具体决策原因。'),
     executable: false,
   }

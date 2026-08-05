@@ -1,12 +1,40 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatRiskReason,
+  buildSafeExecutionOutcome,
+  buildSafeExecutionEvent,
   localizeAuditRow,
   prepareAuditRecord,
   shouldSkipHoldAudit,
 } from '../server/audit-localization.js'
 
 describe('audit localization', () => {
+  it('keeps preparation, risk, broker and uncertain outcomes structurally distinct', () => {
+    const preparation = buildSafeExecutionOutcome({
+      status:'rejected', reason:'quote_snapshot_failed', stage:'quote_snapshot', field:'quote',
+    })
+    expect(preparation).toMatchObject({
+      status:'failed', classification:'preparation_failure', reason:'quote_snapshot_failed',
+      stage:'quote_snapshot', field:'quote',
+    })
+    expect(preparation.message).toContain('MT5 报价快照')
+
+    const risk = buildSafeExecutionOutcome({
+      status:'rejected', classification:'risk_rejection', reason:'R1.5_RR_TOO_LOW',
+      details:{ rules:[{ code:'R1.5_RR_TOO_LOW', outcome:'reject', details:{ rr:1.03, minimum:1.2 } }] },
+    })
+    expect(risk).toMatchObject({ status:'rejected', classification:'risk_rejection' })
+    expect(risk.message).toContain('1.03')
+    expect(risk.message).toContain('1.2')
+
+    const broker = buildSafeExecutionOutcome({
+      status:'rejected', classification:'broker_rejection', reason:'Invalid price', retcode:10015,
+    })
+    expect(buildSafeExecutionEvent(broker, { signal_id:9500 })).toMatchObject({
+      signal_id:9500, status:'rejected', classification:'broker_rejection',
+      reason:'MT5 挂单价格无效', reason_code:'Invalid price', retcode:10015,
+    })
+  })
   it('writes action, status and known result values in Chinese', () => {
     expect(prepareAuditRecord(
       'weekly_position_closed',

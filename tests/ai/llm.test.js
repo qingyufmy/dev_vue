@@ -207,7 +207,7 @@ describe('model comparison signal isolation', () => {
   const config = { _allowed_entry_methods:['market', 'limit'], _ai_volume_min:0.01, _ai_volume_max:1, _ai_volume_step:0.01 }
   const market = { latest_price:2000 }
 
-  it('preserves a raw trade when live ATR policy would have downgraded it', () => {
+  it('does not treat retired live stop-adjustment metadata as replay-eligible', () => {
     const raw = {
       _inference_source:'ai', signal_type:'buy_limit', entry_method:'limit', confidence:0.8,
       recommended_volume:0.03, limit_price:1995, pending_valid_minutes:60,
@@ -222,8 +222,8 @@ describe('model comparison signal isolation', () => {
       signal_type:'buy_limit', entry_method:'limit', recommended_volume:0.03,
       pending_valid_until:null,
       comparison_validation:{
-        status:'valid', execution_eligible:true,
-        warnings:['atr_anchor_unavailable_hold'], live_risk_bypassed:true,
+        status:'invalid', execution_eligible:false,
+        errors:['atr_anchor_unavailable_hold'], warnings:[], live_risk_bypassed:true,
       },
     })
   })

@@ -6,6 +6,7 @@ import { mt5Bridge } from './market-data.js'
 import { StatefulRiskReject, recordSuccessfulOpenTx } from './risk-state.js'
 import { createSignalOutcomeTx } from './signal-outcomes.js'
 import { broadcastAdminEvent, sendToBrowsers } from '../../bridge-ws.js'
+import { buildSafeExecutionOutcome, buildSafeExecutionEvent } from '../../audit-localization.js'
 
 const TERMINAL_STATUSES = new Set(['succeeded', 'rejected', 'failed'])
 const DETERMINISTIC_BROKER_RETCODES = new Set([10013, 10014, 10015, 10016, 10017, 10018, 10019, 10022, 10030, 10035, 10038])
@@ -30,6 +31,28 @@ function safeParse(value, fallback = {}) {
   try { return JSON.parse(value) } catch { return fallback }
 }
 
+function isRiskRejection(error) {
+  if (!error) return false
+  if (error.classification === 'risk_rejection') return true
+  if (error instanceof StatefulRiskReject) return true
+  if (Array.isArray(error.details?.rules)) return true
+  const reason = String(error.reason || error.reject_code || '').trim()
+  return /^(?:R\d|PX\.)[A-Z0-9._-]+$/i.test(reason)
+}
+
+function brokerResultValue(result, key) {
+  return result?.[key] ?? result?.mt5_result?.[key] ?? result?.raw_result?.[key]
+    ?? result?.result?.[key] ?? result?.evidence?.[key]
+}
+
+function brokerRetcode(result) {
+  return brokerResultValue(result, 'retcode') ?? brokerResultValue(result, 'broker_retcode') ?? null
+}
+
+function brokerReason(result) {
+  return brokerResultValue(result, 'message') || brokerResultValue(result, 'error') || ''
+}
+
 export function executionTicket(result, action = 'open') {
   if (isPendingAction(action)) {
     return result?.order ?? result?.pending_ticket ?? result?.ticket ?? result?.order_id ?? null
@@ -44,9 +67,9 @@ function isPendingAction(action) {
 
 function isDeterministicBrokerReject(result) {
   if (result?.status === 'rejected') return true
-  const retcode = Number(result?.retcode)
+  const retcode = Number(brokerRetcode(result))
   if (Number.isInteger(retcode) && DETERMINISTIC_BROKER_RETCODES.has(retcode)) return true
-  const message = String(result?.message || result?.error || '').trim().toLowerCase()
+  const message = String(brokerReason(result)).trim().toLowerCase()
   return ['invalid price', 'invalid stops', 'invalid volume', 'invalid expiration', 'invalid order', 'market closed', 'trade disabled', 'not enough money']
     .some(pattern => message.includes(pattern))
 }
@@ -268,11 +291,26 @@ async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeRe
   const succeeded = bridgeResult?.status === 'success' && ticket != null
   const explicitReject = isDeterministicBrokerReject(bridgeResult)
   const status = succeeded ? 'succeeded' : explicitReject ? 'rejected' : 'uncertain'
+  const retcode = brokerRetcode(bridgeResult)
+  const brokerMessage = brokerReason(bridgeResult)
+  const safeBroker = explicitReject
+    ? buildSafeExecutionOutcome({
+      status:'rejected', classification:'broker_rejection',
+      reason:brokerMessage || 'broker_rejected',
+      details:{ retcode }, retcode,
+      stage:'bridge_send', field:'execution',
+    })
+    : null
+  const safeUncertain = !succeeded && !explicitReject
+    ? buildSafeExecutionOutcome({
+      status:'uncertain', classification:'execution_uncertain', reason:'bridge_result_uncertain',
+      details:{}, stage:'bridge_send', field:'execution',
+    }) : null
   const result = succeeded
     ? bridgeResult
     : explicitReject
-      ? { ...bridgeResult, status: 'rejected' }
-      : { ...bridgeResult, status: 'uncertain', message: bridgeResult?.message || bridgeResult?.error || '订单结果待确认，禁止自动重发' }
+      ? { ...safeBroker, status:'rejected' }
+      : { ...safeUncertain, status:'uncertain' }
   await withTransaction(async run => {
     // Outcome creation needs the owning user, source and approved request too.
     // Selecting only lifecycle fields made a successful MT5 order fail during
@@ -285,7 +323,7 @@ async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeRe
       [
         status, succeeded && !isPendingAction(bridgeAction) ? String(ticket) : null,
         succeeded && isPendingAction(bridgeAction) ? String(ticket) : null,
-        JSON.stringify(result), succeeded ? null : (bridgeResult?.error || bridgeResult?.message || status),
+        JSON.stringify(result), succeeded ? null : (brokerMessage || status),
         beijingNow(), succeeded || explicitReject ? beijingNow() : null, intentId,
       ]
     )
@@ -303,9 +341,13 @@ async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeRe
 async function recoverPostSendFailure(intentId, leaseToken, error) {
   return withTransaction(async run => {
     const intent = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
-    if (!intent) return { status: 'uncertain', message: error.message, order_intent_id: intentId }
+    const safe = buildSafeExecutionOutcome({
+      status:'uncertain', classification:'execution_uncertain', reason:'post_send_finalization_failed',
+      details:{}, stage:'execution', field:'execution',
+    })
+    if (!intent) return { ...safe, status:'uncertain', order_intent_id: intentId }
     if (intent.status !== 'bridge_sending') return replayResult(intent)
-    const result = { status: 'uncertain', message: error.message || 'post_send_finalization_failed' }
+    const result = { ...safe, status:'uncertain' }
     await run(
       `UPDATE order_intents SET status = 'uncertain', result_json = ?, error_code = ?,
          lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`,
@@ -343,18 +385,32 @@ export async function prepareAndExecuteOrderIntent({
   bridge = mt5Bridge,
 }) {
   const actorId = toPositiveId(userId)
-  if (!actorId) return { status: 'rejected', message: 'invalid_user_id' }
+  if (!actorId) return buildSafeExecutionOutcome({
+    status:'failed', classification:'preparation_failure', reason:'invalid_user_id',
+    stage:'validation', field:'account',
+  })
   let accountId = toPositiveId(tradingAccountId)
   let account = null
+  let preparationStage = 'account_snapshot'
+  let preparationField = 'account'
   if (typeof resolveTradingAccount === 'function') {
     try {
+      preparationStage = 'account_snapshot'
+      preparationField = 'account'
       account = await bridge(actorId, 'account', {}, options)
       if (!account || account.status === 'error') throw new Error(account?.message || account?.error || 'account_snapshot_failed')
+      preparationStage = 'risk_context'
+      preparationField = 'account'
       const resolved = await resolveTradingAccount({ actorId, account, requestedAccountId: accountId })
       accountId = toPositiveId(resolved?.accountId)
       if (!accountId) throw new Error('trading_account_resolution_failed')
     } catch (error) {
-      return { status: 'rejected', message: error.message || 'trading_account_resolution_failed' }
+      const reason = error?.reason || error?.message || 'trading_account_resolution_failed'
+      return {
+        ...buildSafeExecutionOutcome({ status:'failed', classification:'preparation_failure', reason,
+          details:error?.details || {}, stage:error?.stage || preparationStage, field:error?.field || preparationField }),
+        order_intent_id:null,
+      }
     }
   }
   const effectiveClientId = clientRequestId || request.client_request_id || request.request_id || null
@@ -362,7 +418,10 @@ export async function prepareAndExecuteOrderIntent({
   try {
     idempotencyKey = buildOrderIdempotencyKey({ userId: actorId, tradingAccountId: accountId, signalId, clientRequestId: effectiveClientId })
   } catch (error) {
-    return { status: 'rejected', message: error.message }
+    return buildSafeExecutionOutcome({
+      status:'failed', classification:'preparation_failure', reason:error.message,
+      stage:'validation', field:'execution',
+    })
   }
   let claim
   try {
@@ -371,7 +430,10 @@ export async function prepareAndExecuteOrderIntent({
       sourceId: sourceId || signalId, clientRequestId: effectiveClientId, action, request,
     })
   } catch (error) {
-    return { status: 'error', message: error.message }
+    return buildSafeExecutionOutcome({
+      status:'failed', classification:'preparation_failure', reason:error.message,
+      stage:'risk_reservation', field:'execution',
+    })
   }
   if (claim.replay) return claim.replay
   const { intentId, leaseToken } = claim
@@ -379,27 +441,45 @@ export async function prepareAndExecuteOrderIntent({
   let quote = null
   let bridgeStarted = false
   try {
+    preparationStage = 'account_snapshot'
+    preparationField = 'account'
     account = account || await bridge(actorId, 'account', {}, options)
     if (!account || account.status === 'error') throw new Error(account?.message || account?.error || 'account_snapshot_failed')
     if (preparedRequest.symbol) {
+      preparationStage = 'quote_snapshot'
+      preparationField = 'quote'
       quote = await bridge(actorId, 'quote', { symbol: preparedRequest.symbol }, options)
       if (!quote || quote.status === 'error') throw new Error(quote?.message || quote?.error || 'quote_snapshot_failed')
     }
     if (typeof enrichRequest === 'function') {
+      preparationStage = 'validation'
+      preparationField = 'request'
       await enrichRequest({ request: preparedRequest, account, quote })
     }
+    preparationStage = 'risk_context'
+    preparationField = 'risk_snapshot'
     const riskContext = typeof loadRiskContext === 'function'
       ? await loadRiskContext({ bridge, actorId, tradingAccountId: accountId, request: preparedRequest, account, quote, bridgeOptions: options, intentId })
       : { quote, instrument: options.instrument || null }
+    preparationStage = 'validation'
+    preparationField = 'risk_policy'
     const risk = await validateRequest(config, account, preparedRequest, { ...riskContext, intentId, tradingAccountId: accountId })
     if (risk?.approved_order) Object.assign(preparedRequest, risk.approved_order)
+    preparationStage = 'risk_reservation'
+    preparationField = 'volume'
     await reserveRisk(intentId, leaseToken, actorId, accountId, preparedRequest, risk, statefulValidate, riskContext)
+    preparationStage = 'bridge_payload'
+    preparationField = 'bridge_payload'
     const { bridgeAction, bridgeParams } = buildBridgeCall(preparedRequest)
     if (!['open', 'pending'].includes(bridgeAction)) throw new Error('invalid_new_order_bridge_action')
     if (typeof beforeBridgeSend === 'function') {
+      preparationStage = 'before_bridge_send'
+      preparationField = 'execution'
       await beforeBridgeSend({ actorId, sourceType, bridgeAction, request:preparedRequest, intentId })
     }
     if (typeof afterRiskPrepared === 'function') {
+      preparationStage = 'before_bridge_send'
+      preparationField = 'execution'
       await afterRiskPrepared({
         actorId,
         sourceType,
@@ -410,6 +490,8 @@ export async function prepareAndExecuteOrderIntent({
         risk,
       })
     }
+    preparationStage = 'bridge_send'
+    preparationField = 'execution'
     const sending = await markBridgeSending(intentId, leaseToken, actorId, accountId, bridgeAction, bridgeParams,
       beforeBridgeSendTx)
     bridgeStarted = true
@@ -428,18 +510,28 @@ export async function prepareAndExecuteOrderIntent({
       try {
         return await recoverPostSendFailure(intentId, leaseToken, error)
       } catch {
-        return { status: 'uncertain', message: error.message || 'post_send_finalization_failed', order_intent_id: intentId }
+        return {
+        ...buildSafeExecutionOutcome({ status:'uncertain', classification:'execution_uncertain', reason:'post_send_finalization_failed',
+            details:{}, stage:'execution', field:'execution' }), order_intent_id:intentId,
+        }
       }
     }
     const reason = error?.reason || error?.message || 'order_prepare_failed'
     const awaitingConfirmation = reason === 'confirmation_required'
-    const result = {
-      status: awaitingConfirmation ? 'needs_confirmation' : 'rejected',
-      message: reason,
-      details: error?.details || {},
-      order_intent_id: intentId,
-    }
-    await finishBeforeSend(intentId, leaseToken, awaitingConfirmation ? 'awaiting_confirmation' : 'rejected', result, reason)
+    const result = awaitingConfirmation
+      ? {
+        status:'needs_confirmation', classification:'needs_confirmation', reason,
+        reason_code:reason, message:'需要人工确认', details:{}, order_intent_id:intentId,
+      }
+      : {
+        ...buildSafeExecutionOutcome({
+          status:isRiskRejection(error) ? 'rejected' : 'failed',
+          classification:isRiskRejection(error) ? 'risk_rejection' : 'preparation_failure',
+          reason, details:error?.details || {}, stage:error?.stage || preparationStage,
+          field:error?.field || preparationField, retcode:error?.retcode,
+        }), order_intent_id:intentId,
+      }
+    await finishBeforeSend(intentId, leaseToken, awaitingConfirmation ? 'awaiting_confirmation' : result.status, result, reason)
     return result
   }
 }
@@ -530,10 +622,17 @@ export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit
         await withTransaction(async run => {
           const current = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intent.id])
           if (!current || current.status !== 'uncertain') return
+          const reconciledOutcome = buildSafeExecutionOutcome({
+            status:definitiveReject ? 'rejected' : 'failed',
+            classification:definitiveReject ? 'broker_rejection' : 'preparation_failure',
+            reason:definitiveReject ? 'broker_rejected_order_confirmed' : 'order_not_found_after_complete_reconciliation',
+            details:{ lookback_seconds:Number(lookup.lookback_seconds) || null },
+            stage:'execution', field:'execution',
+            retcode:lookup.retcode ?? lookup.broker_retcode,
+          })
           const reconciledResult = {
-            status:definitiveReject ? 'rejected' : 'error', reconciled:true,
+            ...reconciledOutcome, reconciled:true,
             definitive_not_found:!definitiveReject, definitive_reject:definitiveReject,
-            message:definitiveReject ? 'broker_rejected_order_confirmed' : 'order_not_found_after_complete_reconciliation',
             lookback_seconds:Number(lookup.lookback_seconds) || null,
           }
           const terminalStatus = definitiveReject ? 'rejected' : 'failed'
@@ -568,19 +667,26 @@ export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit
           ])
           resolved += 1
         })
+        const reconciledOutcome = buildSafeExecutionOutcome({
+          status:definitiveReject ? 'rejected' : 'failed',
+          classification:definitiveReject ? 'broker_rejection' : 'preparation_failure',
+          reason:definitiveReject ? 'broker_rejected_order_confirmed' : 'order_not_found_after_complete_reconciliation',
+          details:{ lookback_seconds:Number(lookup.lookback_seconds) || null },
+          stage:'execution', field:'execution',
+          retcode:lookup.retcode ?? lookup.broker_retcode,
+        })
         for (const delivery of absentDeliveries) {
-          sendToBrowsers(intent.user_id, {
+          sendToBrowsers(intent.user_id, buildSafeExecutionEvent(reconciledOutcome, {
             type:'signal_execution_updated', signal_id:Number(delivery.signal_id),
-            status:definitiveReject ? 'rejected' : 'failed',
             reconciled:true, definitive_not_found:!definitiveReject, definitive_reject:definitiveReject,
-          })
+          }))
         }
         if (absentDeliveries.length) {
-          broadcastAdminEvent('ai', 'signal_execution_updated', {
-            user_id:Number(intent.user_id), status:definitiveReject ? 'rejected' : 'failed', reconciled:true,
+          broadcastAdminEvent('ai', 'signal_execution_updated', buildSafeExecutionEvent(reconciledOutcome, {
+            user_id:Number(intent.user_id), reconciled:true,
             definitive_not_found:!definitiveReject, definitive_reject:definitiveReject,
             signal_ids:absentDeliveries.map(item => Number(item.signal_id)),
-          }, { scopes:['ai-operations', 'risk-audit'], refresh:true })
+          }), { scopes:['ai-operations', 'risk-audit'], refresh:true })
         }
         continue
       }

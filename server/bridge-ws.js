@@ -1090,6 +1090,112 @@ export function normalizeBridgePageSize(value) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, 200) : 20
 }
 
+function historyReference(value) {
+  const normalized = String(value ?? '').trim()
+  return normalized && normalized !== '0' ? normalized : null
+}
+
+function historyRowReferences(row = {}) {
+  return [...new Set([
+    row.ticket, row.order, row.order_ticket, row.position, row.position_id,
+  ].map(historyReference).filter(Boolean))]
+}
+
+function parsedHistoryProtectionResult(value) {
+  if (!value) return null
+  if (typeof value === 'object') return value
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch { return null }
+}
+
+function positiveHistoryProtectionValue(value) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null
+}
+
+export function enrichHistoryProtectionRows(rows = [], evidenceRows = [], { tradingAccountId = null } = {}) {
+  const accountId = Number(tradingAccountId) || null
+  const byReference = new Map()
+  for (const evidence of evidenceRows || []) {
+    if (accountId && Number(evidence?.trading_account_id) !== accountId) continue
+    if (String(evidence?.target_status || '') !== 'succeeded') continue
+    const result = parsedHistoryProtectionResult(evidence.target_result_json)
+    if (!result) continue
+    const stopLoss = positiveHistoryProtectionValue(result.stop_loss)
+    const takeProfit = positiveHistoryProtectionValue(result.take_profit)
+    if (!stopLoss && !takeProfit) continue
+    const item = {
+      stopLoss,
+      takeProfit,
+      verifiedAt:evidence.target_completed_at || evidence.protection_updated_at || null,
+      jobId:Number(evidence.protection_job_id) || null,
+    }
+    for (const reference of [
+      evidence.entry_order_ticket, evidence.position_id, evidence.target_ticket,
+    ].map(historyReference).filter(Boolean)) {
+      if (!byReference.has(reference)) byReference.set(reference, item)
+    }
+  }
+
+  return (rows || []).map(row => {
+    const mt5EntryStopLoss = positiveHistoryProtectionValue(row?.stop_loss)
+    const mt5EntryTakeProfit = positiveHistoryProtectionValue(row?.take_profit)
+    const verified = historyRowReferences(row).map(reference => byReference.get(reference)).find(Boolean)
+    return {
+      ...row,
+      mt5_entry_stop_loss:mt5EntryStopLoss,
+      mt5_entry_take_profit:mt5EntryTakeProfit,
+      last_verified_stop_loss:verified?.stopLoss || null,
+      last_verified_take_profit:verified?.takeProfit || null,
+      display_stop_loss:verified?.stopLoss || mt5EntryStopLoss,
+      display_take_profit:verified?.takeProfit || mt5EntryTakeProfit,
+      stop_loss_source:verified?.stopLoss ? 'verified_platform_protection' : 'mt5_entry_order',
+      take_profit_source:verified?.takeProfit ? 'verified_platform_protection' : 'mt5_entry_order',
+      protection_verified_at:verified?.verifiedAt || null,
+      protection_job_id:verified?.jobId || null,
+    }
+  })
+}
+
+async function loadHistoryProtectionEvidence(userId, tradingAccountId, rows) {
+  const accountId = Number(tradingAccountId)
+  if (!Number.isInteger(accountId) || accountId <= 0 || !Array.isArray(rows) || !rows.length) return []
+  const references = [...new Set(rows.flatMap(historyRowReferences))].slice(0, 1_000)
+  if (!references.length) return []
+  const placeholders = references.map(() => '?').join(',')
+  return queryAll(`SELECT outcomes.trading_account_id, outcomes.entry_order_ticket, outcomes.position_id,
+      outcomes.protection_job_id, outcomes.protection_updated_at,
+      targets.ticket AS target_ticket, targets.status AS target_status,
+      targets.result_json AS target_result_json, targets.completed_at AS target_completed_at
+    FROM signal_outcomes outcomes
+    JOIN admin_position_protection_targets targets
+      ON targets.job_id = outcomes.protection_job_id
+      AND targets.outcome_id = outcomes.id
+      AND targets.user_id = outcomes.user_id
+      AND targets.trading_account_id = outcomes.trading_account_id
+      AND targets.status = 'succeeded'
+    WHERE outcomes.user_id = ? AND outcomes.trading_account_id = ?
+      AND (outcomes.entry_order_ticket IN (${placeholders})
+        OR outcomes.position_id IN (${placeholders})
+        OR targets.ticket IN (${placeholders}))
+    ORDER BY targets.completed_at DESC, targets.id DESC`, [
+    Number(userId), accountId, ...references, ...references, ...references,
+  ])
+}
+
+async function enrichHistoryResultProtection(userId, tradingAccountId, result) {
+  if (result?.status !== 'success' || !Array.isArray(result.orders) || !result.orders.length) return result
+  try {
+    const evidence = await loadHistoryProtectionEvidence(userId, tradingAccountId, result.orders)
+    result.orders = enrichHistoryProtectionRows(result.orders, evidence, { tradingAccountId })
+  } catch (error) {
+    console.warn(`[BridgeWS] History protection enrichment failed user=${userId} account=${tradingAccountId}:`, error.message)
+  }
+  return result
+}
+
 async function resolveHistoryRange(userId, params = {}) {
   const scope = ['all', 'platform', 'custom'].includes(params.history_scope) ? params.history_scope : 'all'
   if (scope === 'all') return { scope, date_from: null, date_to: null }
@@ -1520,6 +1626,10 @@ async function handleBrowserCommand(ws, userId, msg) {
 
           result = await ai.mt5Bridge(dataUserId, 'history', routedParams(bridgeParams), { timeoutMs: 30000, noFallback: true })
           if (result && typeof result === 'object') {
+            const activeTradingAccountId = Number(observerContext?.channel?.trading_account_id)
+              || Number(bridgeV3TradingAccounts.get(Number(dataUserId))?.get(dataRoute?.terminal_instance_id))
+              || null
+            await enrichHistoryResultProtection(dataUserId, activeTradingAccountId, result)
             result.history_range = range
             result.observer_source = access.read_only
           }

@@ -244,9 +244,11 @@ describe('prepareAndExecuteOrderIntent', () => {
     const result = await prepareAndExecuteOrderIntent(baseArgs({
       tradingAccountId:1,
       buildBridgeCall:vi.fn(request => ({ bridgeAction:'pending', bridgeParams:request })),
-      beforeBridgeSend:vi.fn(() => { throw Object.assign(new Error('ai_pending_order_disabled'), { reason:'ai_pending_order_disabled' }) }),
+      beforeBridgeSend:vi.fn(() => { throw Object.assign(new Error('ai_pending_order_disabled'), {
+        reason:'ai_pending_order_disabled', classification:'risk_rejection',
+      }) }),
     }))
-    expect(result).toMatchObject({ status:'rejected', message:'ai_pending_order_disabled' })
+    expect(result).toMatchObject({ status:'rejected', classification:'risk_rejection', reason:'ai_pending_order_disabled' })
     expect(mockBridge.mock.calls.filter(call => call[1] === 'pending')).toHaveLength(0)
     expect(reservation.status).toBe('released')
   })
@@ -263,7 +265,10 @@ describe('prepareAndExecuteOrderIntent', () => {
       beforeBridgeSendTx,
     }))
 
-    expect(result).toMatchObject({ status:'rejected', message:'model_task_fence_lost' })
+    expect(result).toMatchObject({
+      status:'failed', classification:'preparation_failure', reason:'model_task_fence_lost',
+      stage:'bridge_send', field:'execution',
+    })
     expect(beforeBridgeSendTx).toHaveBeenCalledTimes(1)
     expect(mockBridge.mock.calls.filter(call => call[1] === 'open')).toHaveLength(0)
     expect(reservation.status).toBe('released')
@@ -311,18 +316,20 @@ describe('prepareAndExecuteOrderIntent', () => {
     }))
 
     expect(result).toMatchObject({
-      status:'rejected',
-      message:'pending_cancel_failed',
+      status:'failed', classification:'preparation_failure', reason:'pending_cancel_failed',
       details:{ ticket:'88' },
     })
-    expect(intent.status).toBe('rejected')
+    expect(intent.status).toBe('failed')
     expect(reservation.status).toBe('released')
     expect(mockBridge.mock.calls.filter(call => call[1] === 'pending')).toHaveLength(0)
   })
 
   it('returns a pre-send manual validation error without touching the bridge', async () => {
     const result = await prepareAndExecuteOrderIntent(baseArgs({ signalId: null, request: { symbol: 'XAUUSD', confirm: true } }))
-    expect(result).toMatchObject({ status: 'rejected', message: 'client_request_id_required' })
+    expect(result).toMatchObject({
+      status:'failed', classification:'preparation_failure', reason:'client_request_id_required',
+      stage:'validation', field:'execution',
+    })
     expect(mockBridge).not.toHaveBeenCalled()
   })
 
@@ -372,7 +379,25 @@ describe('prepareAndExecuteOrderIntent', () => {
       return { status: 'error', message: 'Invalid price', retcode: 10015 }
     })
     const result = await prepareAndExecuteOrderIntent(baseArgs())
-    expect(result).toMatchObject({ status: 'rejected', message: 'Invalid price', retcode:10015 })
+    expect(result).toMatchObject({
+      status:'rejected', classification:'broker_rejection', reason:'Invalid price',
+      message:'MT5 挂单价格无效', retcode:10015,
+    })
+    expect(intent.status).toBe('rejected')
+    expect(reservation.status).toBe('released')
+  })
+
+  it('reads a deterministic MT5 rejection from a nested legacy result', async () => {
+    mockBridge.mockImplementation(async (_userId, action) => {
+      if (action === 'account') return { status:'success', equity:1000 }
+      if (action === 'quote') return { status:'success', bid:1, ask:2 }
+      return { status:'error', mt5_result:{ message:'Invalid stops', retcode:10016 } }
+    })
+    const result = await prepareAndExecuteOrderIntent(baseArgs())
+    expect(result).toMatchObject({
+      status:'rejected', classification:'broker_rejection', reason:'Invalid stops',
+      message:'MT5 止损或止盈价格无效', retcode:10016,
+    })
     expect(intent.status).toBe('rejected')
     expect(reservation.status).toBe('released')
   })

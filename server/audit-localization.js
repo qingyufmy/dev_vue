@@ -133,6 +133,8 @@ const VALUE_LABELS = {
   existing_pending_no_replace: '当前策略已有同向挂单，未收到替换指令',
   pending_cancel_failed: '策略挂单取消失败，本次未继续执行',
   pending_cancelled: '策略旧挂单已取消',
+  ai_pending_order_disabled: '平台当前已关闭 AI 挂单执行',
+  strategy_policy_pre_submit_blocked: '当前策略执行条件未通过发送前复核',
   subscription_inactive: '策略订阅当前未启用',
   outside_schedule: '当前不在自动推理运行时段内',
   system_execution_exception: '系统执行异常，详细信息已记录',
@@ -149,9 +151,49 @@ const VALUE_LABELS = {
   'R4.6_EXECUTION_PRICE_DEVIATION': '当前价格超出允许执行区间',
   'PX.3_EXECUTION_PRICE_TOLERANCE': '已按百分比换算 MT5 下单偏差',
   'R1.4_STOP_LOSS_TOO_FAR': '止损距离超过风控上限',
-  'R1.3_SL_WIDEN_VOLUME_DOWN': '止损距离已扩大并同步降低手数',
   bridge_upgrade_required_for_incremental_risk: '桥接软件版本过旧，请升级或重启最新版桥接软件',
   risk_snapshot_failed: '无法获取完整的 MT5 风险快照',
+  risk_calculation_volume_invalid: '风险计算手数无效',
+  preparation_failed: '订单准备未完成',
+  bridge_result_uncertain: 'MT5 执行结果待确认',
+  broker_rejected: 'MT5 拒绝了订单',
+  broker_rejected_order_confirmed: 'MT5 历史已确认订单被拒绝',
+  order_not_found_after_complete_reconciliation: '完整核对 MT5 历史后仍未找到订单',
+  invalid_volume: 'MT5 下单手数无效',
+  'Invalid volume': 'MT5 下单手数无效',
+  'Not enough money': 'MT5 账户保证金不足',
+  'Trade disabled': 'MT5 账户当前禁止交易',
+  'Market closed': 'MT5 当前市场已关闭',
+  account_snapshot_failed: '无法获取交易账户快照',
+  quote_snapshot_failed: '无法获取当前 MT5 报价',
+  symbol_metadata_not_found: '无法获取品种交易参数',
+  trading_account_not_found: '未找到当前交易账户',
+  trading_account_resolution_failed: '无法确认当前交易账户',
+  risk_policy_not_found: '无法读取当前账户风控策略',
+  risk_context: '账户风险数据准备',
+  risk_snapshot: 'MT5 风险快照',
+  risk_policy: '账户风控策略',
+  account_snapshot: '交易账户快照',
+  quote_snapshot: 'MT5 报价快照',
+  instrument: '品种交易参数',
+  validation: '订单参数校验',
+  stateful_risk: '账户状态风控',
+  bridge_payload: 'MT5 下单参数',
+  bridge_send: '发送到 MT5',
+  portfolio_alignment: '持仓与挂单对齐',
+  execution: '订单执行',
+  proposed_order: '风险快照试算订单',
+  risk_calculation_volume: '风险计算手数',
+  policy: '风控策略',
+  account: '交易账户',
+  symbol: '交易品种',
+  order_type: '订单方向',
+  volume: '订单手数',
+  sl: '止损价格',
+  tp: '止盈价格',
+  entry_price: '入场价格',
+  instrument_metadata: '品种交易参数',
+  execution_result: '执行结果',
   confirmation_required: '需要人工确认',
   mt5_terminal_autotrading_disabled: 'MT5 终端自动交易已关闭',
   mt5_account_trade_disabled: 'MT5 账户禁止交易',
@@ -235,6 +277,7 @@ export function formatRiskReason(code, details = {}) {
   const rawCode = String(code || '').trim()
   const label = auditValueLabel(rawCode)
   const base = label === rawCode ? '风控条件未满足' : label
+  if (rawCode === 'R1.5_RR_TOO_LOW') return `${base}：当前 ${displayNumber(details.rr ?? details.current)}，最低要求 ${displayNumber(details.minimum ?? details.limit)}`
   if (rawCode === 'R1.9_AI_VOLUME_OUT_OF_RANGE') return `${base}：执行上限 ${displayNumber(details.volume)} 手，允许范围 ${displayNumber(details.minimum)}～${displayNumber(details.maximum)} 手，步进 ${displayNumber(details.step)} 手`
   if (rawCode === 'R1.9_BELOW_MINIMUM_AFTER_RISK') {
     if (Number.isFinite(Number(details.theoretical_volume)) && Number.isFinite(Number(details.risk_cap)) && Number.isFinite(Number(details.minimum_lot_risk))) {
@@ -263,6 +306,178 @@ export function formatRiskReason(code, details = {}) {
   if (rawCode === 'pending_cancelled') return `${base}：已取消 ${displayNumber(details.count, 0)} 个当前策略挂单`
   if ((rawCode === 'R6_GLOBAL_KILL_SWITCH' || rawCode === 'R6_USER_KILL_SWITCH') && details.reason) return `${base}：${details.reason}`
   return base
+}
+
+// Only a compact, audited subset of execution evidence may cross the
+// realtime boundary.  Risk policy/account snapshots stay server-side.
+const SAFE_EXECUTION_DETAIL_KEYS = new Set([
+  'risk_decision_id', 'current', 'limit', 'minimum', 'maximum', 'step', 'volume',
+  'theoretical_volume', 'risk_cap', 'minimum_lot_risk', 'risk_calculation_volume', 'trigger_price',
+  'stop_limit_price', 'current_price', 'entry_price', 'quote_age_seconds',
+  'maximum_seconds', 'spread_points', 'remaining_seconds', 'count', 'remaining',
+  'allowed_min', 'allowed_max', 'maximum_pct', 'drawdown_pct', 'limit_pct',
+  'daily_loss_pct', 'daily_loss_limit_pct', 'loss_pct', 'rr', 'minimum_rr', 'deviation',
+  'stop_loss', 'take_profit',
+  'minimum_seconds', 'until', 'remaining_same_direction', 'lookback_seconds',
+  'ticket', 'tickets', 'retcode', 'stage', 'field', 'reason',
+  'pending_action_reason', 'pending_action', 'management_group_ids', 'model_task_status',
+])
+
+const PREPARATION_STAGES = Object.freeze({
+  account_snapshot: '交易账户快照', quote_snapshot: 'MT5 报价快照', risk_policy: '账户风控策略',
+  risk_context: '账户风险数据准备', risk_snapshot: 'MT5 风险快照', instrument: '品种交易参数',
+  validation: '订单参数校验', stateful_risk: '账户状态风控', risk_reservation: '风险额度预留',
+  bridge_payload: 'MT5 下单参数', before_bridge_send: '发送前安全检查',
+  bridge_send: '发送到 MT5',
+  portfolio_alignment: '持仓与挂单对齐', execution: '订单执行',
+})
+
+const PREPARATION_FIELDS = Object.freeze({
+  account: '交易账户', quote: '当前报价', policy: '风控策略', risk_snapshot: '风险快照',
+  proposed_order: '风险快照试算订单', risk_calculation_volume: '风险计算手数',
+  instrument: '品种交易参数', symbol: '交易品种', order_type: '订单方向', volume: '订单手数',
+  sl: '止损价格', tp: '止盈价格', bridge_payload: 'MT5 下单参数', execution: '执行流程',
+})
+
+export function localizeExecutionStage(value) {
+  const code = String(value || '').trim()
+  const localized = auditValueLabel(code)
+  return PREPARATION_STAGES[code] || (localized !== code ? localized : '交易准备')
+}
+
+export function localizeExecutionField(value) {
+  const code = String(value || '').trim()
+  const localized = auditValueLabel(code)
+  return PREPARATION_FIELDS[code] || (localized !== code ? localized : '执行参数')
+}
+
+function safeExecutionScalar(value) {
+  if (value == null) return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string') return value.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 120)
+  if (typeof value === 'boolean') return value
+  return null
+}
+
+export function sanitizeExecutionDetails(details = {}) {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return {}
+  const safe = {}
+  for (const [key, value] of Object.entries(details)) {
+    if (key === 'rules') {
+      safe.rules = (Array.isArray(value) ? value : []).slice(0, 16).map(rule => {
+        const code = String(rule?.code || '').trim().slice(0, 96)
+        if (!code) return null
+        const ruleDetails = sanitizeExecutionDetails(rule?.details || {})
+        const current = ruleDetails.current ?? ruleDetails.volume ?? ruleDetails.daily_loss_pct ?? ruleDetails.count ?? null
+        const limit = ruleDetails.limit ?? ruleDetails.maximum ?? ruleDetails.minimum ?? ruleDetails.limit_pct ?? null
+        return { code, outcome:String(rule?.outcome || 'reject').slice(0, 24), details:ruleDetails,
+          label:auditValueLabel(code) === code && /^(?:R\d|PX\.)/i.test(code) ? '风控条件未满足' : auditValueLabel(code),
+          ...(current == null ? {} : { current }), ...(limit == null ? {} : { limit }) }
+      }).filter(Boolean)
+      continue
+    }
+    if (!SAFE_EXECUTION_DETAIL_KEYS.has(key)) continue
+    if (Array.isArray(value)) {
+      if (['tickets', 'management_group_ids'].includes(key)) {
+        safe[key] = value.slice(0, 20).map(safeExecutionScalar).filter(item => item != null)
+      }
+      continue
+    }
+    const scalar = safeExecutionScalar(value)
+    if (scalar !== null) safe[key] = scalar
+  }
+  return safe
+}
+
+export function localizeBrokerRejection(reason, retcode = null) {
+  const known = auditValueLabel(reason)
+  if (known !== String(reason || '').trim()) return known
+  const code = retcode === null || retcode === undefined || retcode === '' ? null : Number(retcode)
+  return Number.isInteger(code) ? `MT5 拒绝了订单（返回码 ${code}）` : 'MT5 拒绝了订单'
+}
+
+export function localizeExecutionReason(reason, details = {}, classification = '') {
+  const code = String(reason || '').trim()
+  if (classification === 'risk_rejection') {
+    const rule = (details.rules || []).find(item => item?.outcome === 'reject')
+    return rule ? formatRiskReason(rule.code, rule.details || {}) : formatRiskReason(code, details)
+  }
+  if (classification === 'broker_rejection') return localizeBrokerRejection(code, details.retcode)
+  if (classification === 'preparation_failure') {
+    const stage = localizeExecutionStage(details.stage)
+    const field = details.field ? `（${localizeExecutionField(details.field)}）` : ''
+    const localized = auditValueLabel(code)
+    const reasonText = localized && localized !== code ? localized : '系统执行条件未满足'
+    return `订单准备未完成：${stage}${field}。${reasonText}`
+  }
+  return formatRiskReason(code, details)
+}
+
+const KNOWN_BROKER_REASONS = new Set([
+  'Invalid price', 'Invalid stops', 'Invalid volume', 'Not enough money',
+  'Trade disabled', 'Market closed', 'Unsupported filling mode',
+])
+
+function executionReasonCode(reason, classification, fallback) {
+  const raw = String(reason || '').trim()
+  if (!raw) return fallback
+  if (/^(?:R\d|PX\.)[A-Z0-9._-]+$/i.test(raw) || /^[a-z][a-z0-9_.:-]{1,96}$/i.test(raw)) return raw
+  if (KNOWN_BROKER_REASONS.has(raw)) return raw
+  return classification === 'broker_rejection' ? 'broker_rejected' : fallback
+}
+
+function inferExecutionClassification(status, reason, details, retcode) {
+  const code = String(reason || '').trim()
+  if (status === 'rejected' && (Array.isArray(details?.rules) || /^(?:R\d|PX\.)/i.test(code))) return 'risk_rejection'
+  if (status === 'rejected' && retcode !== null && retcode !== undefined && retcode !== ''
+    && Number.isInteger(Number(retcode))) return 'broker_rejection'
+  if (status === 'skipped') return 'execution_skipped'
+  if (status === 'success') return 'execution_success'
+  if (status === 'uncertain') return 'execution_uncertain'
+  return 'preparation_failure'
+}
+
+export function buildSafeExecutionOutcome({
+  status = 'failed', classification = '', reason = '', details = {}, stage = '', field = '', retcode = null,
+} = {}) {
+  const normalizedClassification = classification || inferExecutionClassification(
+    status, reason, details, retcode ?? details?.retcode ?? details?.broker_retcode)
+  const normalizedStatus = normalizedClassification === 'preparation_failure' && status === 'rejected' ? 'failed' : status
+  const fallback = normalizedClassification === 'broker_rejection' ? 'broker_rejected'
+    : normalizedClassification === 'preparation_failure' ? 'preparation_failed'
+      : normalizedClassification === 'execution_uncertain' ? 'bridge_result_uncertain'
+        : normalizedClassification === 'execution_success' ? 'success' : 'execution_skipped'
+  const reasonCode = executionReasonCode(reason, normalizedClassification, fallback)
+  const safeDetails = sanitizeExecutionDetails({ ...details,
+    ...(stage ? { stage } : {}), ...(field ? { field } : {}) })
+  const rawRetcode = retcode ?? details?.retcode ?? details?.broker_retcode
+  const numericRetcode = rawRetcode === null || rawRetcode === undefined || rawRetcode === '' ? null : Number(rawRetcode)
+  if (Number.isInteger(numericRetcode)) safeDetails.retcode = numericRetcode
+  return {
+    status: normalizedStatus,
+    classification: normalizedClassification,
+    reason: reasonCode,
+    reason_code: reasonCode,
+    message: localizeExecutionReason(reasonCode, safeDetails, normalizedClassification),
+    details: safeDetails,
+    ...(stage ? { stage } : {}),
+    ...(field ? { field } : {}),
+    ...(Number.isInteger(numericRetcode) ? { retcode: numericRetcode } : {}),
+  }
+}
+
+export function buildSafeExecutionEvent(outcome = {}, extra = {}) {
+  return {
+    ...extra,
+    status: outcome.status,
+    classification: outcome.classification,
+    reason: outcome.message || localizeExecutionReason(outcome.reason, outcome.details, outcome.classification),
+    reason_code: outcome.reason_code || outcome.reason,
+    details: sanitizeExecutionDetails(outcome.details),
+    ...(outcome.stage ? { stage: outcome.stage } : {}),
+    ...(outcome.field ? { field: outcome.field } : {}),
+    ...(outcome.retcode != null ? { retcode: outcome.retcode } : {}),
+  }
 }
 
 const USER_TEXT_KEYS = new Set(['reason', 'message', 'error', 'risk_block', 'last_error'])

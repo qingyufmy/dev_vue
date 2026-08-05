@@ -62,6 +62,24 @@ describe('signal presentation', () => {
     expect(normalizeDecisionFields({ bullish_score: 'bad', bearish_score: 50 })).toMatchObject({ bullish_score: null, bearish_score: null })
   })
 
+  it('preserves current-state position and pending decision reason codes for presentation', () => {
+    const result = normalizeDecisionFields({
+      signal_type:'hold', entry_method:'observe',
+      _position_management:{
+        contract_version:'position-management-v1.3',
+        pending_evaluations:[{ management_group_id:'pending-1', action:'cancel',
+          cancel_reason_code:'model_judgment', reason:'当前价格已经远离挂单结构', evidence_refs:['snapshot:one'] }],
+        position_evaluations:[{ management_group_id:'position-1', thesis_id:'thesis-1', action:'exit',
+          exit_reason_code:'trend_reversal', reason:'当前趋势已经反转', evidence_refs:['snapshot:one'] }],
+      },
+    })
+    expect(result.position_management).toMatchObject({
+      contract_version:'position-management-v1.3',
+      pending_evaluations:[expect.objectContaining({ cancel_reason_code:'model_judgment' })],
+      position_evaluations:[expect.objectContaining({ exit_reason_code:'trend_reversal' })],
+    })
+  })
+
   it('never marks a hold signal executable', () => {
     expect(buildExecutionAdvice({ signal_type: 'hold' })).toMatchObject({ state: 'observe', executable: false })
   })
@@ -117,6 +135,14 @@ describe('signal presentation', () => {
     const advice = buildExecutionAdvice({ signal_type: 'buy', execution_result: JSON.stringify({ status: 'rejected', message: '超过风险上限' }) })
     expect(advice).toMatchObject({ state: 'rejected', title: '风控未放行', executable: false })
     expect(advice.description).toContain('风险上限')
+  })
+
+  it('does not label an MT5 broker rejection as a risk rejection', () => {
+    const advice = buildExecutionAdvice({
+      signal_type:'buy',
+      execution_result:{ status:'rejected', classification:'broker_rejection', message:'MT5 挂单价格无效', retcode:10015 },
+    })
+    expect(advice).toMatchObject({ state:'rejected', title:'MT5 拒绝订单', description:'MT5 挂单价格无效' })
   })
 
   it('shows the concrete pre-risk portfolio alignment reason and count', () => {

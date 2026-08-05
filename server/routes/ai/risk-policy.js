@@ -406,9 +406,9 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
     && Math.abs(finite(brokerCalculation?.entry_price) - entry) <= brokerPriceTolerance
     && Math.abs(finite(brokerCalculation?.sl) - Number(approved.sl)) <= brokerPriceTolerance
   // MT5 order_calc_profit understands the broker's contract/currency rules.
-  // Only reuse it when it describes the final approved entry and SL; if the
-  // gate widened SL, the snapshot's calculation is stale and we fall back to
-  // symbol tick metadata instead of understating risk.
+  // Only reuse it when it describes the final approved entry and SL. If any
+  // approved price differs from the provisional snapshot request, fall back
+  // to symbol tick metadata instead of understating risk.
   const calculationSource = brokerCalculationMatches ? 'mt5_order_calc_profit' : 'symbol_tick_metadata'
   const riskPerLot = brokerCalculationMatches
     ? brokerLoss / brokerVolume

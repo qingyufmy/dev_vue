@@ -3,11 +3,20 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { broadcastAdminEvent, getBridgeGeneration, sendToBrowsers } from '../../bridge-ws.js'
 import { stripBrokerSuffix } from './utils.js'
 
-export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.2'
+export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.3'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
 export const AUTO_EXIT_CONFIRMATIONS_REQUIRED = 2
+
+// v1.3 evaluates the position/pending state that is true at the current
+// inference snapshot.  The original signal thesis and its protective prices
+// remain attached to the group for audit/replay, but they are deliberately
+// not used as executable gates for a new management decision.
+export const POSITION_EXIT_REASON_CODES = [
+  'current_thesis_invalidated', 'trend_reversal', 'risk_reduction', 'model_judgment',
+]
+const POSITION_EXIT_REASON_CODE_SET = new Set(POSITION_EXIT_REASON_CODES)
 
 const SYSTEM_MAGIC = 234000
 const MODE_RANK = new Map(POSITION_MANAGEMENT_MODES.map((mode, index) => [mode, index]))
@@ -180,8 +189,6 @@ export async function createTradeThesisTx(run, {
 }
 
 function publicGroup(row) {
-  const conditions = json(row.invalidation_conditions_json, [])
-  const evidenceRefs = json(row.evidence_refs_json, [])
   return {
     management_group_id:row.management_group_id,
     thesis_id:row.thesis_id,
@@ -191,8 +198,10 @@ function publicGroup(row) {
     direction:row.direction,
     original_signal_id:Number(row.origin_signal_id || row.signal_id),
     decision_timeframe:row.decision_timeframe,
-    frozen_conditions:Array.isArray(conditions) ? conditions : [],
-    allowed_evidence_refs:Array.isArray(evidenceRefs) ? evidenceRefs : [],
+    // Historical thesis evidence is intentionally omitted from the active
+    // model context.  It remains available through thesis/detail audit APIs;
+    // a v1.3 response may cite only current-state evidence below.
+    allowed_evidence_refs:[],
   }
 }
 
@@ -201,34 +210,6 @@ export function isActivePositionManagementOutcome(row) {
     && String(row?.effective_pending_state || '').toLowerCase() === 'pending') return true
   if (row?.position_id) return true
   return false
-}
-
-function evaluateFrozenConditions(conditions, market) {
-  return (Array.isArray(conditions) ? conditions : []).map(condition => {
-    const base = { ...condition, evaluation_state:'unknown', observed_close:null, observed_bar_time_utc_ms:null }
-    const timeframe = String(condition?.timeframe || '').trim()
-    const row = lastClosedBar(market, timeframe)
-    const observedClose = number(row?.close ?? row?.c ?? row?.price_close)
-    const observedTime = lastClosedBarTime(market, timeframe)
-    if (condition?.kind !== 'hard') {
-      return { ...base, evaluation_reason:'model_required' }
-    }
-    if (!(observedClose != null && Number.isFinite(observedTime))) {
-      return { ...base, evaluation_reason:'closed_bar_unavailable' }
-    }
-    const threshold = number(condition?.threshold)
-    if (threshold == null) return { ...base, evaluation_reason:'threshold_unavailable' }
-    let state = 'unknown'
-    if (condition.operator === 'closed_bar_lte') state = observedClose <= threshold ? 'triggered' : 'not_triggered'
-    else if (condition.operator === 'closed_bar_gte') state = observedClose >= threshold ? 'triggered' : 'not_triggered'
-    return {
-      ...base,
-      evaluation_state:state,
-      evaluation_reason:state === 'unknown' ? 'operator_unavailable' : null,
-      observed_close:observedClose,
-      observed_bar_time_utc_ms:observedTime,
-    }
-  })
 }
 
 function normalizePositionManagementOutcome(row) {
@@ -297,10 +278,11 @@ export async function loadActivePositionManagementContext({
     if (referenceOutcomeIds && !referenceOutcomeIds.has(Number(rawRow.outcome_id))) continue
     const row = normalizePositionManagementOutcome(rawRow)
     if (!isActivePositionManagementOutcome(row)) continue
-    if (strategyVersion && Number(row.strategy_version) !== Number(strategyVersion)) continue
+    // Active system positions/pending orders remain in the current-state
+    // review after a strategy version changes.  Keep the thesis version on
+    // the target for audit, but do not drop a live outcome from management.
     if (!groups.has(row.management_group_id)) {
       const group = { ...publicGroup(row), targets:[] }
-      group.frozen_conditions = evaluateFrozenConditions(group.frozen_conditions, market)
       group.pending_order_facts = []
       groups.set(row.management_group_id, group)
     }
@@ -308,6 +290,7 @@ export async function loadActivePositionManagementContext({
     if (pendingFact && row.pending_ticket && !row.position_id) {
       const group = groups.get(row.management_group_id)
       group.pending_order_facts.push(pendingFact)
+      group.allowed_evidence_refs.push(`pending:${row.outcome_id}:terminal`)
     }
     groups.get(row.management_group_id).targets.push(row)
   }
@@ -317,6 +300,8 @@ export async function loadActivePositionManagementContext({
   const asOf = buildPositionManagementAsOf(market, decisionTimeframe)
   const currentBarRef = asOf.closed_bar_time_utc_ms
     ? `bar:${asOf.decision_timeframe}:${asOf.closed_bar_time_utc_ms}` : null
+  const currentSnapshotRef = asOf.market_snapshot_hash
+    ? `snapshot:${String(asOf.market_snapshot_hash).replace(/^sha256:/, '')}` : null
   for (const group of groups.values()) {
     const hasPosition = group.targets.some(row => row.position_id)
     const hasPending = group.targets.some(row => row.pending_ticket && !row.position_id)
@@ -325,6 +310,7 @@ export async function loadActivePositionManagementContext({
     safe.allowed_evidence_refs = [...new Set([
       ...(safe.allowed_evidence_refs || []),
       ...(currentBarRef ? [currentBarRef] : []),
+      ...(currentSnapshotRef ? [currentSnapshotRef] : []),
     ])]
     if (hasPosition) positionGroups.push(safe)
     if (hasPending) pendingGroups.push(safe)
@@ -371,18 +357,18 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
     pending_evaluations:(context.pending_groups || []).map(group => ({
       management_group_id:group.management_group_id,
       action:'仅允许 keep | cancel',
-      cancel_reason_code:'cancel 时必填，仅允许 expired | thesis_invalidated | risk_reduction | model_judgment；keep 时必须为 null 或 none；expired 只能引用服务端 is_expired=true；thesis_invalidated 只能引用服务端已触发的硬条件',
+      cancel_reason_code:'cancel 时必填，仅允许 expired | thesis_invalidated | risk_reduction | model_judgment；keep 时必须为 null 或 none；expired 只能引用终端当前事实 is_expired=true；其他原因基于当前行情证据，不得把冻结条件当作硬门槛',
       reason:'简体中文具体依据',
-      evidence_refs:`只能引用：${group.allowed_evidence_refs.join('、') || '空集合'}`,
+      evidence_refs:`只能引用：${(group.allowed_evidence_refs || []).join('、') || '空集合'}`,
     })),
     position_evaluations:(context.position_groups || []).map(group => ({
       management_group_id:group.management_group_id,
       thesis_id:group.thesis_id,
       action:'仅允许 hold | exit',
-      matched_condition_id:`hold 时为 null；exit 时只能引用：${group.frozen_conditions.map(item => item.condition_id).join('、') || '空集合'}`,
+      exit_reason_code:'exit 时必填，仅允许 current_thesis_invalidated | trend_reversal | risk_reduction | model_judgment；hold 时必须为 null',
       reversal_candidate:'布尔值，仅为解释性判断，不是执行命令',
-      reason:'简体中文说明原交易论点是否失效',
-      evidence_refs:`只能引用：${group.allowed_evidence_refs.join('、') || '空集合'}`,
+      reason:'简体中文说明当前持仓结论',
+      evidence_refs:`只能引用：${(group.allowed_evidence_refs || []).join('、') || '空集合'}`,
     })),
     analysis:'简体中文行情分析',
     reasoning:'简体中文说明新信号、挂单和持仓三个部分的独立依据',
@@ -390,7 +376,13 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
 }
 
 function validateAsOf(value, context) {
-  if (String(value?.contract_version || '') !== POSITION_MANAGEMENT_CONTRACT_VERSION) throw new Error('position_management_contract_version_mismatch')
+  // A response and its server context must be from the same contract
+  // generation.  In particular, do not allow a rolling deployment to combine
+  // a v1.2 thesis/context with a v1.3 current-state response.
+  if (String(context?.contract_version || '') !== POSITION_MANAGEMENT_CONTRACT_VERSION
+    || String(value?.contract_version || '') !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
+    throw new Error('position_management_contract_version_mismatch')
+  }
   const asOf = object(value?.as_of)
   if (!asOf) throw new Error('position_management_as_of_required')
   if (String(asOf.decision_timeframe || '').toUpperCase() !== String(context.as_of.decision_timeframe || '').toUpperCase()) {
@@ -428,9 +420,11 @@ function hasManagementExecutionIntent(item, section) {
     const cancelReasonCode = rawCancelReasonCode == null ? '' : String(rawCancelReasonCode).trim().toLowerCase()
     return Boolean(cancelReasonCode && cancelReasonCode !== 'none')
   }
+  const exitReasonCode = item?.exit_reason_code
+  const normalizedExitReasonCode = String(exitReasonCode ?? '').trim().toLowerCase()
+  if (normalizedExitReasonCode && !['null', 'none'].includes(normalizedExitReasonCode)) return true
   if (action === 'exit' || (action && action !== 'hold')) return true
-  return action === 'hold' && item?.matched_condition_id != null
-    && String(item.matched_condition_id).trim() !== ''
+  return false
 }
 
 export function validatePositionManagementResponse(value, context, validateMarketPlan, {
@@ -492,14 +486,10 @@ export function validatePositionManagementResponse(value, context, validateMarke
       const reason = text(item.reason, 1000)
       if (!reason) throw new Error('pending_reason_required')
       const evidenceRefs = validateEvidenceRefs(item.evidence_refs, group.allowed_evidence_refs)
-      const conditionsByRef = new Map((group.frozen_conditions || [])
-        .map(condition => [`condition:${condition.condition_id}`, condition]))
-      const referencedHard = evidenceRefs
-        .map(ref => conditionsByRef.get(ref))
-        .filter(condition => condition?.kind === 'hard')
-      if (action === 'cancel' && referencedHard.some(condition => condition.evaluation_state === 'not_triggered')) {
-        throw new Error('pending_hard_condition_not_triggered')
-      }
+      // Frozen thesis conditions are retained for audit/replay only.  A
+      // current-state cancellation may rely on the model's current evidence;
+      // it must not be rejected merely because an original condition was not
+      // triggered in this snapshot.
       if (action === 'cancel' && cancelReasonCode !== 'expired'
         && /(?:过期|到期|超时|expired|timeout)/i.test(reason)) {
         throw new Error('pending_expiry_reason_code_mismatch')
@@ -507,11 +497,6 @@ export function validatePositionManagementResponse(value, context, validateMarke
       if (cancelReasonCode === 'expired') {
         const expired = (group.pending_order_facts || []).some(fact => fact?.is_expired === true)
         if (!expired) throw new Error('pending_expired_evidence_required')
-      }
-      if (action === 'cancel' && cancelReasonCode === 'thesis_invalidated') {
-        if (!referencedHard.some(condition => condition.evaluation_state === 'triggered')) {
-          throw new Error('pending_thesis_evidence_required')
-        }
       }
       seenPending.add(group.management_group_id)
       pendingEvaluations.push({ management_group_id:group.management_group_id, action,
@@ -526,17 +511,24 @@ export function validatePositionManagementResponse(value, context, validateMarke
       if (String(item.thesis_id || '') !== String(group.thesis_id)) throw new Error('position_thesis_invalid')
       const action = String(item.action || '').toLowerCase()
       if (!['hold', 'exit'].includes(action)) throw new Error('position_action_invalid')
-      const allowedConditions = new Set(group.frozen_conditions.map(condition => condition.condition_id))
-      const matchedConditionId = item.matched_condition_id == null ? null : String(item.matched_condition_id)
-      if (action === 'exit' && (!matchedConditionId || !allowedConditions.has(matchedConditionId))) throw new Error('position_condition_invalid')
-      if (action === 'hold' && matchedConditionId !== null) throw new Error('position_hold_condition_must_be_null')
+      const rawExitReasonCode = item?.exit_reason_code
+      const hasExitReasonCode = rawExitReasonCode !== undefined && rawExitReasonCode !== null
+        && String(rawExitReasonCode).trim() !== ''
+      const exitReasonCode = hasExitReasonCode ? String(rawExitReasonCode).trim().toLowerCase() : null
+      if (action === 'exit' && (!exitReasonCode || !POSITION_EXIT_REASON_CODE_SET.has(exitReasonCode))) {
+        throw new Error('position_exit_reason_code_required')
+      }
+      if (action === 'hold' && hasExitReasonCode && exitReasonCode !== 'null') {
+        throw new Error('position_hold_exit_reason_code_invalid')
+      }
       const reason = text(item.reason, 1000)
       if (!reason) throw new Error('position_reason_required')
       const evidenceRefs = validateEvidenceRefs(item.evidence_refs, group.allowed_evidence_refs)
       seenPosition.add(group.management_group_id)
       positionEvaluations.push({
         management_group_id:group.management_group_id, thesis_id:group.thesis_id, action,
-        matched_condition_id:matchedConditionId, reversal_candidate:Boolean(item.reversal_candidate),
+        exit_reason_code:exitReasonCode === 'null' ? null : exitReasonCode,
+        reversal_candidate:Boolean(item.reversal_candidate),
         reason, evidence_refs:evidenceRefs,
       })
     } catch (error) { errors.push({ section:'position', group_id:item?.management_group_id || null, code:error.message }) }
@@ -555,7 +547,7 @@ export function validatePositionManagementResponse(value, context, validateMarke
     errors.push({ section:'position', group_id:groupId, code:'evaluation_missing' })
     positionEvaluations.push({
       management_group_id:groupId, thesis_id:group.thesis_id, action:'hold',
-      matched_condition_id:null, reversal_candidate:false,
+      exit_reason_code:null, reversal_candidate:false,
       reason:'该管理组未通过模型输出校验，服务端按安全默认继续持有',
       evidence_refs:[], validation_source:'server_fail_closed',
     })
@@ -591,7 +583,7 @@ export function validatePositionManagementResponse(value, context, validateMarke
 function taskSummary(action, taskType) {
   if (taskType === 'pending_cancel') return action === 'cancel'
     ? 'AI 明确建议取消策略挂单，已进入挂单身份与状态校验' : '策略挂单继续保留'
-  return action === 'exit' ? 'AI 提出平掉策略持仓，当前仅记录并复核' : '原交易论点仍有效，继续持有'
+  return action === 'exit' ? 'AI 提出平掉策略持仓，当前仅记录并复核' : '当前行情仍支持继续持有'
 }
 
 async function resolveModes(targets) {
@@ -604,20 +596,95 @@ async function resolveModes(targets) {
   return { control:control || { maximum_mode:'display', ai_pending_cancel_enabled:0 }, byUser }
 }
 
+function managementContractVersion(value) {
+  if (!value || typeof value !== 'object') return null
+  const nested = value._position_management && typeof value._position_management === 'object'
+    ? value._position_management.contract_version : null
+  return String(value.contract_version || nested || '').trim() || null
+}
+
+function managementInferenceIdentity(value) {
+  const candidate = value?.inference_id ?? value?.decision_signal_id ?? value?.signal_id
+    ?? value?.evaluation_id ?? value?.id
+  const numeric = Number(candidate)
+  return Number.isFinite(numeric) && numeric > 0 ? String(Math.trunc(numeric)) : null
+}
+
+function managementTaskIdentity(value) {
+  const candidate = value?.task_id ?? value?.task_key ?? value?.management_task_id
+  if (candidate == null || String(candidate).trim() === '') return null
+  return String(candidate).trim()
+}
+
+function managementSnapshotIdentity(value) {
+  const hashValue = value?.market_snapshot_hash ?? value?.snapshot_hash
+  if (hashValue != null && String(hashValue).trim() !== '') {
+    return `hash:${String(hashValue).trim().replace(/^sha256:/i, '')}`
+  }
+  const closedBar = Number(value?.closed_bar_time_utc_ms)
+  if (Number.isFinite(closedBar) && closedBar > 0) return `bar:${Math.trunc(closedBar)}`
+  return null
+}
+
+/**
+ * Resolve the automatic exit counter from independent current-state
+ * evaluations.  A repeated write of the same inference or snapshot is not a
+ * new confirmation.  Explicit task identities are also required to differ;
+ * rows from an older or unknown contract remain audit-only during a rolling
+ * upgrade and cannot contribute a confirmation.
+ */
 export function resolveAutomaticExitConfirmation(current, previous = null) {
   const validationStatus = current?.validation_source === 'server_fail_closed' ? 'invalid' : 'valid'
   const action = String(current?.action || '').toLowerCase()
+  const currentContract = managementContractVersion(current)
+  const previousContract = managementContractVersion(previous)
+  if (currentContract && currentContract !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
+    return { validation_status:'invalid', confirmation_count:0, reset_reason:'position_management_contract_version_mismatch' }
+  }
   if (validationStatus !== 'valid') {
     return { validation_status:'invalid', confirmation_count:0, reset_reason:'invalid_inference_output' }
   }
   if (action !== 'exit') {
     return { validation_status:'valid', confirmation_count:0, reset_reason:'automatic_inference_hold' }
   }
+  if (previousContract && previousContract !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
+    return { validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' }
+  }
+  if (previous && !previousContract) {
+    // Legacy/unknown evaluation rows are audit history only.  They cannot be
+    // paired with a v1.3 current-state inference for automatic execution.
+    return { validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' }
+  }
   const previousExit = String(previous?.validation_status || '').toLowerCase() === 'valid'
     && String(previous?.action || '').toLowerCase() === 'exit'
+  if (!previousExit) {
+    return { validation_status:'valid', confirmation_count:1, reset_reason:null }
+  }
+
+  const currentInference = managementInferenceIdentity(current)
+  const previousInference = managementInferenceIdentity(previous)
+  const currentTask = managementTaskIdentity(current)
+  const previousTask = managementTaskIdentity(previous)
+  const currentSnapshot = managementSnapshotIdentity(current)
+  const previousSnapshot = managementSnapshotIdentity(previous)
+  const sameInference = Boolean(currentInference && previousInference && currentInference === previousInference)
+  const sameTask = Boolean(currentTask && previousTask && currentTask === previousTask)
+  const sameSnapshot = Boolean(currentSnapshot && previousSnapshot && currentSnapshot === previousSnapshot)
+  const distinctInference = Boolean(currentInference && previousInference && !sameInference)
+  const distinctSnapshot = Boolean(currentSnapshot && previousSnapshot && !sameSnapshot)
+
+  // Missing identity is intentionally fail-closed for the counter.  The
+  // first candidate remains visible, but an unknown/duplicate event cannot
+  // promote it to an executable exit.
+  if (sameInference || sameTask || sameSnapshot || !distinctInference || !distinctSnapshot) {
+    return {
+      validation_status:'valid', confirmation_count:1,
+      reset_reason:'automatic_confirmation_identity_not_distinct',
+    }
+  }
   return {
     validation_status:'valid',
-    confirmation_count:previousExit ? AUTO_EXIT_CONFIRMATIONS_REQUIRED : 1,
+    confirmation_count:AUTO_EXIT_CONFIRMATIONS_REQUIRED,
     reset_reason:null,
   }
 }
@@ -627,6 +694,10 @@ async function recordAutomaticPositionEvaluation({ signalId, context, target, ev
   const originalSymbol = String(target.original_symbol || target.symbol || target.standard_symbol || '')
   const standardSymbol = target.standard_symbol || stripBrokerSuffix(originalSymbol).toUpperCase()
   const validationStatus = evaluation.validation_source === 'server_fail_closed' ? 'invalid' : 'valid'
+  const storedEvaluation = {
+    ...evaluation,
+    contract_version:managementContractVersion(evaluation) || POSITION_MANAGEMENT_CONTRACT_VERSION,
+  }
   const result = await queryRun(`INSERT IGNORE INTO ai_position_management_evaluations
     (decision_signal_id, user_id, trading_account_id, outcome_id, position_id,
      management_group_id, thesis_id, original_symbol, standard_symbol, action,
@@ -637,8 +708,8 @@ async function recordAutomaticPositionEvaluation({ signalId, context, target, ev
     signalId, target.user_id, target.trading_account_id, target.outcome_id,
     target.position_id || null, target.management_group_id, target.thesis_id,
     originalSymbol, standardSymbol, evaluation.action, validationStatus,
-    evaluation.matched_condition_id || null, text(evaluation.reason, 1000) || null,
-    JSON.stringify(evaluation.evidence_refs || []), JSON.stringify(evaluation),
+    null, text(evaluation.reason, 1000) || null,
+    JSON.stringify(evaluation.evidence_refs || []), JSON.stringify(storedEvaluation),
     context.as_of.decision_timeframe, context.as_of.closed_bar_time_utc_ms,
     String(context.as_of.market_snapshot_hash).replace(/^sha256:/, ''), inferenceSource, now,
   ])
@@ -646,13 +717,22 @@ async function recordAutomaticPositionEvaluation({ signalId, context, target, ev
   const evaluationId = Number(result.insertId)
   const previous = inferenceSource === 'automatic_scheduler'
     ? await queryOne(`SELECT id, decision_signal_id, action, validation_status,
-        consecutive_exit_count, created_at
+        consecutive_exit_count, market_snapshot_hash, closed_bar_time_utc_ms,
+        model_evaluation_json, created_at
       FROM ai_position_management_evaluations
       WHERE outcome_id = ? AND management_group_id = ? AND inference_source = 'automatic_scheduler' AND id < ?
       ORDER BY id DESC LIMIT 1`, [target.outcome_id, target.management_group_id, evaluationId])
     : null
   const confirmation = inferenceSource === 'automatic_scheduler'
-    ? resolveAutomaticExitConfirmation(evaluation, previous)
+    ? resolveAutomaticExitConfirmation({ ...evaluation,
+      inference_id:String(signalId), decision_signal_id:Number(signalId),
+      market_snapshot_hash:context.as_of.market_snapshot_hash,
+      closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms,
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+    }, {
+      ...previous,
+      contract_version:managementContractVersion(json(previous?.model_evaluation_json, {})),
+    })
     : { validation_status:validationStatus, confirmation_count:0, reset_reason:null }
   await queryRun(`UPDATE ai_position_management_evaluations
     SET consecutive_exit_count = ? WHERE id = ?`, [confirmation.confirmation_count, evaluationId])
@@ -665,13 +745,20 @@ async function recordAutomaticPositionEvaluation({ signalId, context, target, ev
     reset_reason:confirmation.reset_reason,
     inference_source:inferenceSource,
     previous,
+    inference_id:String(signalId),
+    market_snapshot_hash:context.as_of.market_snapshot_hash,
+    closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms,
+    contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
     created_at:now,
   }
 }
 
 function automaticInferenceEvidence(record) {
-  const previous = record.previous && String(record.previous.action).toLowerCase() === 'exit'
-    && String(record.previous.validation_status).toLowerCase() === 'valid' ? record.previous : null
+  const previousContract = managementContractVersion(json(record.previous?.model_evaluation_json, {}))
+  const previous = record.confirmation_count >= AUTO_EXIT_CONFIRMATIONS_REQUIRED
+    && previousContract === POSITION_MANAGEMENT_CONTRACT_VERSION
+    && String(record.previous?.action).toLowerCase() === 'exit'
+    && String(record.previous?.validation_status).toLowerCase() === 'valid' ? record.previous : null
   const evaluationIds = [previous?.id, record.id].filter(Boolean).map(Number)
   const decisionSignalIds = [previous?.decision_signal_id, record.decision_signal_id].filter(Boolean).map(Number)
   return {
@@ -681,6 +768,11 @@ function automaticInferenceEvidence(record) {
     required_confirmations:AUTO_EXIT_CONFIRMATIONS_REQUIRED,
     evaluation_ids:evaluationIds,
     decision_signal_ids:decisionSignalIds,
+    snapshot_hashes:[previous?.market_snapshot_hash, record.market_snapshot_hash]
+      .filter(Boolean).map(value => String(value).replace(/^sha256:/i, '')),
+    closed_bar_times_utc_ms:[previous?.closed_bar_time_utc_ms, record.closed_bar_time_utc_ms]
+      .filter(value => Number.isFinite(Number(value))).map(value => Number(value)),
+    contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
     latest_evaluation_id:record.id,
     latest_decision_signal_id:record.decision_signal_id,
   }
@@ -736,6 +828,10 @@ async function createAutomaticExitTask({ signalId, context, target, evaluation, 
   const originalSymbol = String(target.original_symbol || target.symbol || target.standard_symbol || '')
   const confirmed = record.confirmation_count >= AUTO_EXIT_CONFIRMATIONS_REQUIRED
   const status = confirmed ? 'EVIDENCE_CONFIRMED' : 'CANDIDATE'
+  const storedEvaluation = {
+    ...evaluation,
+    contract_version:managementContractVersion(evaluation) || POSITION_MANAGEMENT_CONTRACT_VERSION,
+  }
   const taskKey = hash(['automatic_inference_exit', target.outcome_id, target.management_group_id,
     evidence.evaluation_ids[0] || record.id])
   const result = await queryRun(`INSERT IGNORE INTO ai_position_management_tasks
@@ -754,7 +850,7 @@ async function createAutomaticExitTask({ signalId, context, target, evaluation, 
     target.strategy_version || 1, target.management_group_id, target.thesis_id,
     target.origin_signal_id || null, signalId, target.outcome_id, context.as_of.decision_timeframe,
     context.as_of.closed_bar_time_utc_ms, String(context.as_of.market_snapshot_hash).replace(/^sha256:/, ''),
-    evaluation.reversal_candidate ? 1 : 0, JSON.stringify(evaluation), JSON.stringify(evidence),
+    evaluation.reversal_candidate ? 1 : 0, JSON.stringify(storedEvaluation), JSON.stringify(evidence),
     record.confirmation_count, AUTO_EXIT_CONFIRMATIONS_REQUIRED, status, confirmed ? 2 : 1, now, now,
   ])
   if (!Number(result?.insertId)) return null
@@ -778,11 +874,38 @@ async function createAutomaticExitTask({ signalId, context, target, evaluation, 
 
 async function advanceAutomaticExitCandidate({ signalId, context, target, evaluation, mode, record } = {}) {
   const evidence = automaticInferenceEvidence(record)
-  const task = await queryOne(`SELECT * FROM ai_position_management_tasks
+  const storedEvaluation = {
+    ...evaluation,
+    contract_version:managementContractVersion(evaluation) || POSITION_MANAGEMENT_CONTRACT_VERSION,
+  }
+  let task = await queryOne(`SELECT * FROM ai_position_management_tasks
     WHERE outcome_id = ? AND management_group_id = ? AND task_type = 'position_exit'
       AND status NOT IN ('HELD','EXPIRED','REJECTED','FAILED','COMPLETED','EXIT_ONLY_COMPLETED','MANUAL_REVIEW')
     ORDER BY id DESC LIMIT 1`, [target.outcome_id, target.management_group_id])
   if (task && task.status !== 'CANDIDATE') return null
+  if (task && task.status === 'CANDIDATE') {
+    const taskContract = managementContractVersion(parseManagementJson(task.model_evaluation_json, {}))
+    if (taskContract !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
+      // A pre-v1.3 candidate is audit history, never the second half of a
+      // current-state confirmation.  Retire it before creating a fresh task
+      // so two historical candidates cannot execute the same position.
+      const now = beijingNow()
+      const retired = await queryRun(`UPDATE ai_position_management_tasks
+        SET status = 'EXPIRED', completed_at = COALESCE(completed_at, ?), updated_at = ?
+        WHERE id = ? AND status = 'CANDIDATE'`, [now, now, task.id])
+      if (Number(retired?.changes ?? retired?.affectedRows ?? 0) !== 1) return null
+      await queryRun(`INSERT INTO ai_position_management_events
+        (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
+        VALUES (?, 'CANDIDATE', 'EXPIRED', 'management_contract_upgraded',
+          '旧版持仓判断已结束，后续仅使用当前行情重新确认', ?, 'system', ?)`, [
+        task.id, JSON.stringify({
+          previous_contract_version:taskContract || 'unknown',
+          current_contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+        }), now,
+      ])
+      task = null
+    }
+  }
   if (record.confirmation_count < AUTO_EXIT_CONFIRMATIONS_REQUIRED) {
     return task ? null : createAutomaticExitTask({ signalId, context, target, evaluation, mode, record, evidence })
   }
@@ -796,7 +919,7 @@ async function advanceAutomaticExitCandidate({ signalId, context, target, evalua
     WHERE id = ? AND status = 'CANDIDATE'`, [
     signalId, context.as_of.closed_bar_time_utc_ms,
     String(context.as_of.market_snapshot_hash).replace(/^sha256:/, ''),
-    evaluation.reversal_candidate ? 1 : 0, JSON.stringify(evaluation), JSON.stringify(evidence),
+    evaluation.reversal_candidate ? 1 : 0, JSON.stringify(storedEvaluation), JSON.stringify(evidence),
     AUTO_EXIT_CONFIRMATIONS_REQUIRED, AUTO_EXIT_CONFIRMATIONS_REQUIRED, now, task.id,
   ])
   if (Number(result?.changes ?? result?.affectedRows ?? 0) !== 1) return null
@@ -807,7 +930,7 @@ async function advanceAutomaticExitCandidate({ signalId, context, target, evalua
     task.id, JSON.stringify({ evaluation, evidence }), now,
   ])
   const updated = { ...task, status:'EVIDENCE_CONFIRMED', state_version:Number(task.state_version || 1) + 1,
-    decision_signal_id:signalId, model_evaluation_json:JSON.stringify(evaluation),
+    decision_signal_id:signalId, model_evaluation_json:JSON.stringify(storedEvaluation),
     evidence_validation_json:JSON.stringify(evidence), confirmation_count:AUTO_EXIT_CONFIRMATIONS_REQUIRED,
     required_confirmations:AUTO_EXIT_CONFIRMATIONS_REQUIRED, updated_at:now }
   broadcastPositionManagementTask(updated, 'automatic_confirmation_completed')
@@ -818,11 +941,28 @@ export async function persistPositionManagementEvaluations({
   signalId, context, management, inferenceSource = 'manual_analysis', synchronousPendingCancelGroupIds = null,
 } = {}) {
   if (!signalId || !context?._targets || !management) return []
-  const positionEvaluations = management.position_evaluations || []
+  if (context.contract_version
+    && String(context.contract_version) !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
+    throw new Error('position_management_contract_version_mismatch')
+  }
+  const suppliedContract = managementContractVersion(management)
+  if (suppliedContract && suppliedContract !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
+    throw new Error('position_management_contract_version_mismatch')
+  }
+  const positionEvaluations = Array.isArray(management.position_evaluations)
+    ? management.position_evaluations : []
+  const pendingEvaluations = Array.isArray(management.pending_evaluations)
+    ? management.pending_evaluations : []
+  for (const evaluation of [...positionEvaluations, ...pendingEvaluations]) {
+    const evaluationContract = managementContractVersion(evaluation)
+    if (evaluationContract && evaluationContract !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
+      throw new Error('position_management_contract_version_mismatch')
+    }
+  }
   const synchronousGroups = synchronousPendingCancelGroupIds instanceof Set
     ? synchronousPendingCancelGroupIds
     : new Set(Array.isArray(synchronousPendingCancelGroupIds) ? synchronousPendingCancelGroupIds : [])
-  const pendingCandidates = (management.pending_evaluations || [])
+  const pendingCandidates = pendingEvaluations
     .filter(item => item.action === 'cancel'
       && !synchronousGroups.has(String(item?.management_group_id || '')))
     .map(item => ({ ...item, taskType:'pending_cancel' }))
@@ -892,7 +1032,9 @@ export async function persistPositionManagementEvaluations({
         target.strategy_version || 1, target.management_group_id, target.thesis_id,
         target.origin_signal_id || null, signalId, target.outcome_id, context.as_of.decision_timeframe,
         context.as_of.closed_bar_time_utc_ms, String(context.as_of.market_snapshot_hash).replace(/^sha256:/, ''),
-        evaluation.action, evaluation.reversal_candidate ? 1 : 0, JSON.stringify(evaluation),
+        evaluation.action, evaluation.reversal_candidate ? 1 : 0,
+        JSON.stringify({ ...evaluation,
+          contract_version:managementContractVersion(evaluation) || POSITION_MANAGEMENT_CONTRACT_VERSION }),
         JSON.stringify(evidenceValidation), now, now,
       ])
       if (!Number(result?.insertId)) continue
@@ -1327,6 +1469,8 @@ export function buildSignalManagementActions({
         thesis_id:text(spec.thesis_id, 80) || text(evaluation?.thesis_id, 80) || null,
         signal_id:signalNumber,
         evaluation_id:managementNumber(evaluation?.id),
+        exit_reason_code:spec.task_type === 'position_exit'
+          ? (String(spec.exit_reason_code || '').toLowerCase() || null) : null,
         ticket:targetTicket,
         target_ticket:targetTicket,
         reason:managementReason(spec, evaluation, task),
