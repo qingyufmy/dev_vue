@@ -442,7 +442,6 @@ export function chanNeedsMoreHistory(chan) {
 
 export function shouldPersistChanAnchor(useChan, chan, chanDataQuality) {
   const anchor = chan?.structure_anchor || {}
-  const warnings = new Set(Array.isArray(chan?.warnings) ? chan.warnings : [])
   const structureTimeKeyReliable = chan?.structure_time_key_reliable === true
     || (chan?.structure_time_key_reliable == null && chan?.time_location_reliable === true)
   return Boolean(useChan && chan?.window_stable === true && Number(chan?.segment_count) >= 2
@@ -452,7 +451,6 @@ export function shouldPersistChanAnchor(useChan, chan, chanDataQuality) {
     && structureTimeKeyReliable
     && chan?.cache_internal_gap_unresolved === false
     && chan?.reliability !== 'low'
-    && !warnings.has('confirmed_structure_stale')
     && chan?.authoritative_terminal_chain_confirmed === true
     && Number(anchor.recommended_time_utc_msc) > 0
     && anchor.full_window_authoritative === true

@@ -1077,7 +1077,7 @@ describe('computeChan', () => {
   it('reports read-only bi centers separately from execution-grade segment centers', () => {
     const rates = makeRates(50)
     const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(rate => Number(rate.close))).histSeries)
-    expect(result).toMatchObject({ algorithm_version: 'chan_structure_v4', center_level: 'segment' })
+    expect(result).toMatchObject({ algorithm_version: 'chan_structure_v5', center_level: 'segment' })
     expect(result.bi_center_count).toBeGreaterThan(0)
     expect(result.latest_bi_center).toMatchObject({ structure_level: 'bi' })
     expect(result.center_count).toBe(0)
@@ -1530,10 +1530,10 @@ describe('divergence equal area no divergence', () => {
 
 describe('persistent Chan structure anchor', () => {
   const consensusSegmentChain = () => [
-    { id:1, stable_id:'entry', dir:'up', low:121, high:125, start_price:121, end_price:125, start_time_utc_msc:100, end_time_utc_msc:200 },
-    { id:2, stable_id:'s1', dir:'down', low:100, high:120, start_price:120, end_price:100, start_time_utc_msc:300, end_time_utc_msc:400 },
-    { id:3, stable_id:'p1', dir:'up', low:105, high:118, start_price:105, end_price:118, start_time_utc_msc:500, end_time_utc_msc:600 },
-    { id:4, stable_id:'c1', dir:'down', low:108, high:122, start_price:122, end_price:108, start_time_utc_msc:700, end_time_utc_msc:800 },
+    { id:1, stable_id:'entry', dir:'up', low:121, high:125, start_price:121, end_price:125, bi_count:3, start_time_utc_msc:100, end_time_utc_msc:200 },
+    { id:2, stable_id:'s1', dir:'down', low:100, high:120, start_price:120, end_price:100, bi_count:3, start_time_utc_msc:300, end_time_utc_msc:400 },
+    { id:3, stable_id:'p1', dir:'up', low:105, high:118, start_price:105, end_price:118, bi_count:3, start_time_utc_msc:500, end_time_utc_msc:600 },
+    { id:4, stable_id:'c1', dir:'down', low:108, high:122, start_price:122, end_price:108, bi_count:3, start_time_utc_msc:700, end_time_utc_msc:800 },
   ]
 
   it('prefers the terminal structure supported by more independent windows', () => {
@@ -2053,8 +2053,11 @@ describe('persistent Chan structure anchor', () => {
     expect(selected.warnings).not.toContain('divergence_evidence_unavailable')
   })
 
-  it('keeps a stale center as historical evidence without calling it the current range', () => {
-    const chain = consensusSegmentChain()
+  it('keeps long-lived confirmed structure usable while exposing age as diagnostics only', () => {
+    const chain = [
+      ...consensusSegmentChain(),
+      { id:5, stable_id:'extension', dir:'up', low:109, high:121, start_price:109, end_price:121, bi_count:3, start_time_utc_msc:900, end_time_utc_msc:1000 },
+    ]
     const center = {
       id:1, stable_id:'s1|c1', core_stable_id:'s1|p1|c1',
       core_segment_stable_ids:['s1', 'p1', 'c1'], status:'open',
@@ -2066,8 +2069,10 @@ describe('persistent Chan structure anchor', () => {
       window_stable:true, segment_count:4, center_count:1, raw_bar_count:raw,
       window_start_time_utc_msc:1, history_sufficient:true, closed_history_sufficient:true,
       time_location_reliable:true, structure_time_key_reliable:true,
-      cache_internal_gap_unresolved:false, latest_price:105, reliability:'low',
-      warnings:['confirmed_structure_stale'], _confirmed_segments:chain,
+      cache_internal_gap_unresolved:false, latest_price:130, reliability:'high',
+      confirmed_structure_age_bars:191, confirmed_structure_max_age_bars:null,
+      confirmed_structure_age_semantics:'diagnostic_only_no_expiry',
+      warnings:[], _confirmed_segments:chain,
       prev_segment:chain.at(-2), current_segment:chain.at(-1), latest_center:center,
       divergence:{ type:'none', confirmed:false, reason:'not_after_center' },
       forming_divergence:{ type:'none', confirmed:false, reason:'no_forming_segment' },
@@ -2078,12 +2083,15 @@ describe('persistent Chan structure anchor', () => {
     ])
 
     expect(selected.latest_center).toBeTruthy()
-    expect(selected.current_center).toBeNull()
+    expect(selected.current_center).toBeTruthy()
     expect(selected.active_center).toBeNull()
-    expect(selected.price_vs_center).toBe('none')
-    expect(selected.trend_state).toMatchObject({ state:'unavailable', reason:'confirmed_structure_stale' })
+    expect(selected.price_vs_center).toBe('above')
+    expect(selected.trend_state).toMatchObject({ state:'upward_breakout_pending', phase:'breakout_candidate' })
     expect(selected.entry_candidates).toEqual([])
-    expect(selected.structure_topology_reliable).toBe(false)
+    expect(selected.structure_topology_reliable).toBe(true)
+    expect(selected.confirmed_structure_age_bars).toBe(191)
+    expect(selected.confirmed_structure_max_age_bars).toBeNull()
+    expect(selected.warnings).not.toContain('confirmed_structure_stale')
   })
 
   it('intersects historical divergences without discarding an agreed current center', () => {
@@ -2181,7 +2189,7 @@ describe('persistent Chan structure anchor', () => {
     ])).toMatchObject({ temporal_identity_stable:false, temporal_closed_bar_support:2 })
     expect(summarizeTemporalBootstrapEvidence([
       snapshot(1000), snapshot(1100), snapshot(1200, 'entry', { warnings:['confirmed_structure_stale'] }),
-    ])).toMatchObject({ temporal_identity_stable:false, temporal_closed_bar_support:2 })
+    ])).toMatchObject({ temporal_identity_stable:true, temporal_closed_bar_support:3 })
     expect(summarizeTemporalBootstrapEvidence([
       snapshot(1000), snapshot(1000), snapshot(1200),
     ])).toMatchObject({ temporal_identity_stable:false })

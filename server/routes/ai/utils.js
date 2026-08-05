@@ -7,7 +7,7 @@ export const DEFAULT_PROMPT = 'You are a disciplined trading analyst. Return str
 export const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
 export const CHAN_HISTORY_COUNT = 300
 export const CHAN_MAX_HISTORY_COUNT = 2000
-export const CHAN_ALGORITHM_VERSION = 'chan_structure_v4'
+export const CHAN_ALGORITHM_VERSION = 'chan_structure_v5'
 
 const BROKER_SUFFIX_RE = /^([A-Z0-9]{4,12})\.(?:a|s|c|pro|std|z|ecn|m|raw|mini)$/i
 const GENERIC_MARKET_SUFFIX_RE = /^([A-Z0-9]{6,12})\.[A-Z0-9_-]{1,16}$/i

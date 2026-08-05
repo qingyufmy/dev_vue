@@ -23,6 +23,11 @@ describe('model usage phase accounting contract', () => {
   it('limits adaptive history to primary requests while retaining legacy NULL rows', () => {
     expect(source).toContain("(request_phase = 'request' OR request_phase IS NULL)")
   })
+
+  it('treats Chan structure age as diagnostics and legacy stale fields as non-current', () => {
+    expect(source).toContain('confirmed_structure_age_bars 仅是距最近确认线段终点的K线根数诊断值')
+    expect(source).toContain('confirmed_structure_stale，只能将其视为旧版历史快照的兼容字段')
+  })
 })
 
 describe('compact inference market payload', () => {

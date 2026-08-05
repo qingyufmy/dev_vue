@@ -293,7 +293,6 @@ describe('Chan structure anchor persistence', () => {
     ['minority entry identity', chan => { chan.cross_window_entry_support_count = 1 }],
     ['short source history', chan => { chan.source_history_count = 300 }],
     ['incomplete requested history', chan => { chan.history_sufficient = false }],
-    ['stale confirmed structure', chan => { chan.warnings = ['confirmed_structure_stale'] }],
     ['terminal phase absent from full window', chan => { chan.authoritative_terminal_chain_confirmed = false }],
     ['missing bootstrap identity', chan => { chan.structure_anchor.bootstrap_identity = null }],
     ['missing last confirmed segment time', chan => { chan.structure_anchor.last_confirmed_segment_time_utc_msc = null }],
@@ -303,6 +302,12 @@ describe('Chan structure anchor persistence', () => {
     const chan = persistableChan()
     mutate(chan)
     expect(shouldPersistChanAnchor(true, chan, { source_id:9 })).toBe(false)
+  })
+
+  it('does not let a legacy fixed-age warning block an otherwise valid anchor', () => {
+    const chan = persistableChan()
+    chan.warnings = ['confirmed_structure_stale']
+    expect(shouldPersistChanAnchor(true, chan, { source_id:9 })).toBe(true)
   })
 })
 
