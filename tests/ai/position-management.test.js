@@ -158,6 +158,106 @@ describe('position management v1.2 contract', () => {
     )).toThrow('position_management_output_invalid:position:position_group_01:evaluation_missing')
   })
 
+  it('fails closed without repair for keep/hold evidence and coverage defects', () => {
+    const invalidEvidence = response({
+      market_plan:{ signal_type:'hold', entry_method:'observe' },
+      pending_evaluations:[{
+        ...response().pending_evaluations[0], action:'keep', cancel_reason_code:null,
+        reason:'原挂单继续保留', evidence_refs:['condition:not-allowed'],
+      }],
+      position_evaluations:[{
+        ...response().position_evaluations[0], action:'hold', matched_condition_id:null,
+        reason:'原持仓继续持有', evidence_refs:['condition:not-allowed'],
+      }],
+    })
+    const options = { allowFailClosed:false, allowNonExecutionFailClosed:true }
+    const invalidEvidenceResult = validatePositionManagementResponse(
+      invalidEvidence, context, plan => ({ ...plan, confidence:0.8 }), options,
+    )
+    expect(invalidEvidenceResult._position_management.pending_evaluations[0]).toMatchObject({
+      action:'keep', validation_source:'server_fail_closed',
+    })
+    expect(invalidEvidenceResult._position_management.position_evaluations[0]).toMatchObject({
+      action:'hold', validation_source:'server_fail_closed',
+    })
+    expect(invalidEvidenceResult._position_management.validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ section:'pending', code:'evidence_refs_not_allowed' }),
+      expect.objectContaining({ section:'position', code:'evidence_refs_not_allowed' }),
+    ]))
+
+    const missingResult = validatePositionManagementResponse(
+      response({
+        market_plan:{ signal_type:'hold', entry_method:'observe' },
+        pending_evaluations:[], position_evaluations:[],
+      }),
+      context, plan => ({ ...plan, confidence:0.8 }), options,
+    )
+    expect(missingResult._position_management.pending_evaluations[0]).toMatchObject({
+      action:'keep', validation_source:'server_fail_closed',
+    })
+    expect(missingResult._position_management.position_evaluations[0]).toMatchObject({
+      action:'hold', validation_source:'server_fail_closed',
+    })
+    expect(missingResult._position_management.validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ section:'pending', code:'evaluation_missing' }),
+      expect.objectContaining({ section:'position', code:'evaluation_missing' }),
+    ]))
+  })
+
+  it('keeps repair strict for cancel/exit intent with management errors', () => {
+    const value = response({
+      pending_evaluations:[{
+        ...response().pending_evaluations[0], action:'cancel', evidence_refs:['condition:not-allowed'],
+      }],
+      position_evaluations:[{
+        ...response().position_evaluations[0], action:'exit', evidence_refs:['condition:not-allowed'],
+      }],
+    })
+    expect(() => validatePositionManagementResponse(
+      value,
+      context,
+      plan => ({ ...plan, confidence:0.8 }),
+      { allowFailClosed:false, allowNonExecutionFailClosed:true },
+    )).toThrow('position_management_output_invalid:pending:pending_group_01:evidence_refs_not_allowed')
+  })
+
+  it('keeps repair strict when the independent market plan is invalid', () => {
+    const value = response({
+      market_plan:{ signal_type:'hold', entry_method:'observe' },
+      pending_evaluations:[{
+        ...response().pending_evaluations[0], action:'keep', cancel_reason_code:null,
+      }],
+      position_evaluations:[{
+        ...response().position_evaluations[0], action:'hold', matched_condition_id:null,
+      }],
+    })
+    expect(() => validatePositionManagementResponse(
+      value,
+      context,
+      () => { throw new Error('market_plan_invalid') },
+      { allowFailClosed:false, allowNonExecutionFailClosed:true },
+    )).toThrow('position_management_output_invalid:market:market_plan_invalid')
+  })
+
+  it('keeps repair strict for management defects alongside an executable market plan', () => {
+    const value = response({
+      pending_evaluations:[{
+        ...response().pending_evaluations[0], action:'keep', cancel_reason_code:null,
+        evidence_refs:['condition:not-allowed'],
+      }],
+      position_evaluations:[{
+        ...response().position_evaluations[0], action:'hold', matched_condition_id:null,
+        evidence_refs:['condition:not-allowed'],
+      }],
+    })
+    expect(() => validatePositionManagementResponse(
+      value,
+      context,
+      plan => ({ ...plan, confidence:0.8 }),
+      { allowFailClosed:false, allowNonExecutionFailClosed:true },
+    )).toThrow('position_management_output_invalid:pending:pending_group_01:evidence_refs_not_allowed')
+  })
+
   it('accepts a complete management output during strict initial validation', () => {
     const result = validatePositionManagementResponse(
       response(),

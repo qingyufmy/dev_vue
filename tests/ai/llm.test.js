@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, configuredModelMaxTokens, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
 import { compactRates } from '../../server/routes/ai/utils.js'
+import { POSITION_MANAGEMENT_CONTRACT_VERSION } from '../../server/routes/ai/position-management.js'
 
 describe('model output budgets', () => {
   it('uses the configured model profile value for automated and manual inference', () => {
@@ -1025,6 +1026,151 @@ describe('maybeAiSignal', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(body.messages[0].content).toContain('禁止比较任何时间字符串来判断挂单是否过期')
     expect(body.messages[0].content).toContain('禁止仅以时间、有效期或过期为理由输出 cancel_pending')
+  })
+
+  it('does not repair a keep/hold management evidence defect and returns server fail-closed defaults', async () => {
+    const asOf = {
+      decision_timeframe:'M15',
+      closed_bar_time_utc_ms:1784736900000,
+      market_snapshot_hash:'sha256:position-management-test',
+    }
+    const positionManagementContext = {
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+      as_of:asOf,
+      pending_groups:[{
+        management_group_id:'pending_group_01',
+        allowed_evidence_refs:['bar:M15:1784736900000'],
+      }],
+      position_groups:[{
+        management_group_id:'position_group_01', thesis_id:'thesis_01', frozen_conditions:[],
+        allowed_evidence_refs:['bar:M15:1784736900000'],
+      }],
+    }
+    const response = {
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+      as_of:asOf,
+      market_regime:'range', trade_thesis:'mean_reversion',
+      market_plan:{
+        signal_type:'hold', entry_method:'observe', confidence:0.6,
+        position_size_tier:'observe', position_size_reason:'等待结构确认',
+        position_action:'observe', pending_action:'none', management_direction:'none',
+        analysis:'当前没有新的交易机会', reasoning:'等待下一轮确认',
+      },
+      pending_evaluations:[{
+        management_group_id:'pending_group_01', action:'keep', cancel_reason_code:null,
+        reason:'原挂单继续保留', evidence_refs:['condition:not-allowed'],
+      }],
+      position_evaluations:[{
+        management_group_id:'position_group_01', thesis_id:'thesis_01', action:'hold',
+        matched_condition_id:null, reversal_candidate:false,
+        reason:'原持仓继续持有', evidence_refs:['condition:not-allowed'],
+      }],
+      analysis:'当前没有新的交易机会', reasoning:'新仓、挂单与持仓分别完成独立判断',
+    }
+    mockFetch.mockResolvedValue({
+      ok:true,
+      json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify(response) } }] }),
+    })
+
+    const result = await maybeAiSignal(null, {
+      api_key_encrypted:'test-key', api_provider:'deepseek', model_name:'deepseek-chat',
+      max_tokens:2000, _allowed_entry_methods:['market'],
+      _positionManagementContext:positionManagementContext,
+    }, {
+      symbol:'XAUUSD', timeframe:'M15', latest_price:2000,
+      strategy_context:{ timeframes:{} },
+    })
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(result._position_management.validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ section:'pending', code:'evidence_refs_not_allowed' }),
+      expect.objectContaining({ section:'position', code:'evidence_refs_not_allowed' }),
+    ]))
+    expect(result._position_management.pending_evaluations[0]).toMatchObject({
+      action:'keep', validation_source:'server_fail_closed',
+    })
+    expect(result._position_management.position_evaluations[0]).toMatchObject({
+      action:'hold', validation_source:'server_fail_closed',
+    })
+  })
+
+  it('repairs cancel/exit management errors instead of accepting unsafe defaults', async () => {
+    const asOf = {
+      decision_timeframe:'M15',
+      closed_bar_time_utc_ms:1784736900000,
+      market_snapshot_hash:'sha256:position-management-repair-test',
+    }
+    const positionManagementContext = {
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+      as_of:asOf,
+      pending_groups:[{
+        management_group_id:'pending_group_01',
+        allowed_evidence_refs:['bar:M15:1784736900000'],
+      }],
+      position_groups:[{
+        management_group_id:'position_group_01', thesis_id:'thesis_01', frozen_conditions:[],
+        allowed_evidence_refs:['bar:M15:1784736900000'],
+      }],
+    }
+    const base = {
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+      as_of:asOf,
+      market_regime:'range', trade_thesis:'mean_reversion',
+      market_plan:{
+        signal_type:'hold', entry_method:'observe', confidence:0.6,
+        position_size_tier:'observe', position_size_reason:'等待结构确认',
+        position_action:'observe', pending_action:'none', management_direction:'none',
+        analysis:'当前没有新的交易机会', reasoning:'等待下一轮确认',
+      },
+      analysis:'当前没有新的交易机会', reasoning:'新仓、挂单与持仓分别完成独立判断',
+    }
+    const invalid = {
+      ...base,
+      pending_evaluations:[{
+        management_group_id:'pending_group_01', action:'cancel', cancel_reason_code:'model_judgment',
+        reason:'挂单依据已经失效', evidence_refs:['condition:not-allowed'],
+      }],
+      position_evaluations:[{
+        management_group_id:'position_group_01', thesis_id:'thesis_01', action:'exit',
+        matched_condition_id:'missing-condition', reversal_candidate:false,
+        reason:'持仓依据已经失效', evidence_refs:['condition:not-allowed'],
+      }],
+    }
+    const repaired = {
+      ...base,
+      pending_evaluations:[{
+        management_group_id:'pending_group_01', action:'keep', cancel_reason_code:null,
+        reason:'挂单依据仍然有效', evidence_refs:['bar:M15:1784736900000'],
+      }],
+      position_evaluations:[{
+        management_group_id:'position_group_01', thesis_id:'thesis_01', action:'hold',
+        matched_condition_id:null, reversal_candidate:false,
+        reason:'持仓依据仍然有效', evidence_refs:['bar:M15:1784736900000'],
+      }],
+    }
+    mockFetch
+      .mockResolvedValueOnce({
+        ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify(invalid) } }] }),
+      })
+      .mockResolvedValueOnce({
+        ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify(repaired) } }] }),
+      })
+
+    const result = await maybeAiSignal(null, {
+      api_key_encrypted:'test-key', api_provider:'deepseek', model_name:'deepseek-chat',
+      max_tokens:2000, _allowed_entry_methods:['market'],
+      _positionManagementContext:positionManagementContext,
+    }, {
+      symbol:'XAUUSD', timeframe:'M15', latest_price:2000,
+      strategy_context:{ timeframes:{} },
+    })
+
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(result._position_management.validation.errors).toEqual([])
+    expect(result._position_management.pending_evaluations[0].action).toBe('keep')
+    expect(result._position_management.position_evaluations[0].action).toBe('hold')
   })
 
   it('模型对比快照重放使用原始提示词而不是重新渲染当前行情', async () => {

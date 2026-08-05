@@ -251,13 +251,20 @@ describe('Bridge v3 business compatibility adapter', () => {
     const { adapter, gateway } = setup({ dataResponse:{
       status:'succeeded', payload:{ current_state:'history', final_state:'cancelled', source:'mt5' },
     } })
-    const expectedState = { ticket:'5001', symbol:'XAUUSD', direction:'buy', volume:0.1, magic:234000 }
+    const expectedState = {
+      ticket:'5001', symbol:'XAUUSD', direction:'buy', volume:0.1, magic:234000,
+      margin_mode:'hedging', internal_only:'server-audit-only',
+    }
 
     await expect(adapter.execute(42, 'pending_order_state', {
       ticket:'5001', expected_state:expectedState,
     })).resolves.toMatchObject({ status:'success', final_state:'cancelled' })
     expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
-      action:'pending_order_state', params:{ ticket:'5001', expected_state:expectedState },
+      action:'pending_order_state', params:{
+        ticket:'5001', expected_state:{
+          ticket:'5001', symbol:'XAUUSD', direction:'buy', volume:0.1, magic:234000,
+        },
+      },
     }), { timeoutMs:5000 })
 
     gateway.requestData.mockResolvedValueOnce({
@@ -751,6 +758,109 @@ describe('Bridge v3 business compatibility adapter', () => {
         expected_take_profit:2320, expected_state:expectedState,
       },
     }), { timeoutMs:5000 })
+  })
+
+  it('projects complete management state onto the strict Worker whitelist', async () => {
+    const { adapter, gateway } = setup({
+      positionRows:[{
+        ticket:10, symbol:'XAUUSD', type:0, volume:0.1, magic:234000, sl:2290, tp:2320,
+      }],
+      orderRows:[{
+        ticket:20, symbol:'XAUUSD', side:'buy', type:2,
+        volume_current:0.1, volume_initial:0.1, magic:234000,
+      }],
+    })
+    const positionState = {
+      broker_server_key:'Broker-Demo', login_account:'12345678',
+      ticket:'10', symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.1,
+      stop_loss:2290, take_profit:2320,
+      margin_mode:'hedging', internal_only:'server-audit-only',
+    }
+    const pendingState = {
+      ...positionState, ticket:'20', margin_mode:'netting', internal_only:'audit-only',
+    }
+    const wirePositionState = {
+      broker_server_key:'Broker-Demo', login_account:'12345678',
+      ticket:'10', symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.1,
+      stop_loss:2290, take_profit:2320,
+    }
+    const wirePendingState = { ...wirePositionState, ticket:'20' }
+
+    await expect(adapter.execute(42, 'close_system_position', {
+      ticket:'10', expected_state:positionState,
+    })).resolves.toMatchObject({ status:'success' })
+    await expect(adapter.execute(42, 'cancel_system_pending', {
+      ticket:'20', expected_state:pendingState,
+    })).resolves.toMatchObject({ status:'success' })
+    await expect(adapter.execute(42, 'modify_system_position_protection', {
+      ticket:'10', stop_loss:2295, expected_state:positionState,
+    })).resolves.toMatchObject({ status:'success' })
+
+    expect(gateway.sendCommand.mock.calls[0][1].params.expected_state).toEqual(wirePositionState)
+    expect(gateway.sendCommand.mock.calls[1][1].params.expected_state).toEqual(wirePendingState)
+    expect(gateway.sendCommand.mock.calls[2][1].params.expected_state).toEqual(wirePositionState)
+    for (const [, command] of gateway.sendCommand.mock.calls) {
+      expect(command.params.expected_state).not.toHaveProperty('margin_mode')
+      expect(command.params.expected_state).not.toHaveProperty('internal_only')
+    }
+    expect(positionState).toMatchObject({ margin_mode:'hedging', internal_only:'server-audit-only' })
+    expect(pendingState).toMatchObject({ margin_mode:'netting', internal_only:'audit-only' })
+  })
+
+  it('keeps legacy close and cancel commands compatible with a server-only expected state', async () => {
+    const { adapter, gateway } = setup()
+    const expectedState = {
+      ticket:'10', symbol:'XAUUSD', direction:'buy', magic:7, volume:0.1,
+      margin_mode:'hedging', internal_only:'server-audit-only',
+    }
+    const cancelExpectedState = { ...expectedState, ticket:'20' }
+
+    await expect(adapter.execute(42, 'close', {
+      ticket:'10', expected_state:expectedState,
+    })).resolves.toMatchObject({ status:'success' })
+    await expect(adapter.execute(42, 'cancel_pending', {
+      ticket:'20', expected_state:cancelExpectedState,
+    })).resolves.toMatchObject({ status:'success' })
+
+    expect(gateway.sendCommand).toHaveBeenNthCalledWith(1, 42, expect.objectContaining({
+      action:'close_position',
+      params:expect.objectContaining({
+        ticket:'10', expected_state:{
+          ticket:'10', symbol:'XAUUSD', direction:'buy', magic:7, volume:0.1,
+        },
+      }),
+    }), { timeoutMs:5000 })
+    expect(gateway.sendCommand).toHaveBeenNthCalledWith(2, 42, expect.objectContaining({
+      action:'cancel_order',
+      params:expect.objectContaining({
+        ticket:'20', expected_state:{
+          ticket:'20', symbol:'XAUUSD', direction:'buy', magic:7, volume:0.1,
+        },
+      }),
+    }), { timeoutMs:5000 })
+  })
+
+  it('fails closed before writing when required management state is missing or invalid', async () => {
+    const { adapter, gateway } = setup({ positionRows:[{
+      ticket:10, symbol:'XAUUSD', type:0, volume:0.1, magic:234000,
+    }] })
+
+    await expect(adapter.execute(42, 'close_system_position', {
+      ticket:'10', expected_state:{
+        ticket:'10', direction:'buy', magic:234000, volume:0.1,
+      },
+    })).resolves.toMatchObject({ status:'rejected', error:'management_expected_symbol_required' })
+    await expect(adapter.execute(42, 'modify_system_position_protection', {
+      ticket:'10', stop_loss:2295, expected_state:{
+        ticket:'10', symbol:'XAUUSD', direction:'long', magic:234000, volume:0.1,
+      },
+    })).resolves.toMatchObject({ status:'rejected', error:'management_expected_direction_invalid' })
+    await expect(adapter.execute(42, 'cancel_system_pending', {
+      ticket:'10', expected_state:{
+        ticket:'10', symbol:'XAUUSD', direction:'buy', magic:'not-an-integer', volume:0.1,
+      },
+    })).resolves.toMatchObject({ status:'rejected', error:'management_expected_state_invalid' })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
   })
 
   it('rejects a protection update when the current stop loss changed', async () => {

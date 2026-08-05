@@ -419,7 +419,23 @@ function validateEvidenceRefs(refs, allowed) {
   return normalized
 }
 
-export function validatePositionManagementResponse(value, context, validateMarketPlan, { allowFailClosed = true } = {}) {
+function hasManagementExecutionIntent(item, section) {
+  const rawAction = typeof item === 'string' ? item : item?.action
+  const action = String(rawAction || '').trim().toLowerCase()
+  if (section === 'pending') {
+    if (action === 'cancel' || (action && action !== 'keep')) return true
+    const rawCancelReasonCode = item?.cancel_reason_code
+    const cancelReasonCode = rawCancelReasonCode == null ? '' : String(rawCancelReasonCode).trim().toLowerCase()
+    return Boolean(cancelReasonCode && cancelReasonCode !== 'none')
+  }
+  if (action === 'exit' || (action && action !== 'hold')) return true
+  return action === 'hold' && item?.matched_condition_id != null
+    && String(item.matched_condition_id).trim() !== ''
+}
+
+export function validatePositionManagementResponse(value, context, validateMarketPlan, {
+  allowFailClosed = true, allowNonExecutionFailClosed = false,
+} = {}) {
   if (!object(value)) throw new Error('position_management_response_not_object')
   validateAsOf(value, context)
   const analysis = text(value.analysis, 4000)
@@ -449,8 +465,12 @@ export function validatePositionManagementResponse(value, context, validateMarke
   const errors = []
   const seenPending = new Set()
   const seenPosition = new Set()
+  const pendingItems = Array.isArray(value.pending_evaluations) ? value.pending_evaluations : []
+  const positionItems = Array.isArray(value.position_evaluations) ? value.position_evaluations : []
+  const hasExecutionIntent = pendingItems.some(item => hasManagementExecutionIntent(item, 'pending'))
+    || positionItems.some(item => hasManagementExecutionIntent(item, 'position'))
 
-  for (const item of Array.isArray(value.pending_evaluations) ? value.pending_evaluations : []) {
+  for (const item of pendingItems) {
     try {
       const group = pendingById.get(String(item?.management_group_id || ''))
       if (!group || seenPending.has(group.management_group_id)) throw new Error('pending_management_group_invalid')
@@ -499,7 +519,7 @@ export function validatePositionManagementResponse(value, context, validateMarke
     } catch (error) { errors.push({ section:'pending', group_id:item?.management_group_id || null, code:error.message }) }
   }
 
-  for (const item of Array.isArray(value.position_evaluations) ? value.position_evaluations : []) {
+  for (const item of positionItems) {
     try {
       const group = positionById.get(String(item?.management_group_id || ''))
       if (!group || seenPosition.has(group.management_group_id)) throw new Error('position_management_group_invalid')
@@ -541,7 +561,12 @@ export function validatePositionManagementResponse(value, context, validateMarke
     })
   }
 
-  if (!allowFailClosed && (marketError || errors.length)) {
+  const nonExecutionMarketPlan = String(marketPlan?.signal_type || '').toLowerCase() === 'hold'
+    && String(marketPlan?.entry_method || '').toLowerCase() === 'observe'
+  const requiresRepair = Boolean(marketError
+    || (errors.length && (!nonExecutionMarketPlan || hasExecutionIntent)))
+  if (!allowFailClosed && (marketError || errors.length)
+    && !(allowNonExecutionFailClosed && !requiresRepair)) {
     const details = [
       ...(marketError ? [`market:${marketError}`] : []),
       ...errors.map(error => `${error.section}:${error.group_id || 'unknown'}:${error.code}`),

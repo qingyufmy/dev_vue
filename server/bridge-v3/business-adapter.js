@@ -38,6 +38,24 @@ function cleanObject(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined))
 }
 
+// The server keeps the complete expected state for preconditions and audit
+// records, while Bridge Worker commands accept only the protocol contract
+// fields below. Keep this projection at the wire boundary so server-only
+// context (for example margin_mode) cannot make an otherwise valid command
+// fail strict Worker validation.
+const EXPECTED_STATE_WIRE_KEYS = [
+  'ticket', 'symbol', 'direction', 'magic', 'volume',
+  'broker_server_key', 'login_account', 'stop_loss', 'take_profit',
+]
+
+function wireExpectedState(value) {
+  // Preserve malformed values so the Worker still rejects them fail-closed;
+  // only object expected states are projected onto the protocol whitelist.
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return value
+  return cleanObject(Object.fromEntries(
+    EXPECTED_STATE_WIRE_KEYS.map(key => [key, value[key]])))
+}
+
 function normalizeHistoryEvidenceRefs(value) {
   if (value == null) return undefined
   if (!Array.isArray(value) || value.length > MAX_HISTORY_EVIDENCE_REFS) {
@@ -184,7 +202,7 @@ function tradeParams(action, params) {
       magic:action === 'close_system_position' ? SYSTEM_MAGIC : undefined,
       symbol:action === 'close_system_position' ? expected.symbol : undefined,
       side:action === 'close_system_position' ? expected.direction : undefined,
-      expected_state:params.expected_state,
+      expected_state:wireExpectedState(params.expected_state),
     })
   }
   if (action === 'modify_system_position_protection') {
@@ -199,7 +217,7 @@ function tradeParams(action, params) {
       take_profit:params.take_profit,
       expected_stop_loss:expected.stop_loss,
       expected_take_profit:expected.take_profit,
-      expected_state:params.expected_state,
+      expected_state:wireExpectedState(params.expected_state),
     })
   }
   const expected = params.expected_state || {}
@@ -209,7 +227,7 @@ function tradeParams(action, params) {
     magic:action === 'cancel_system_pending' ? SYSTEM_MAGIC : undefined,
     symbol:action === 'cancel_system_pending' ? expected.symbol : undefined,
     side:action === 'cancel_system_pending' ? expected.direction : undefined,
-    expected_state:params.expected_state,
+    expected_state:wireExpectedState(params.expected_state),
   })
 }
 
@@ -568,7 +586,8 @@ export function createBridgeV3BusinessAdapter({
         ? cleanObject({
             ticket:String(params.ticket || '').trim() || undefined,
             expected_state:params.expected_state && typeof params.expected_state === 'object'
-              && !Array.isArray(params.expected_state) ? params.expected_state : undefined,
+              && !Array.isArray(params.expected_state)
+              ? wireExpectedState(params.expected_state) : undefined,
           })
       : cleanObject({
           page:action === 'history' ? Number(params.page || 1) : undefined,

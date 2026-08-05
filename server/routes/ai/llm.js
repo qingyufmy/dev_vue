@@ -1338,7 +1338,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       validateObject: (value, validation = {}) => positionManagementEnabled
         ? validatePositionManagementResponse(value, positionManagementContext,
           marketPlan => validateAiSignalResponse(marketPlan, config._allowed_entry_methods),
-          { allowFailClosed:validation.phase === 'repair' })
+          {
+            allowFailClosed:validation.phase === 'repair',
+            allowNonExecutionFailClosed:validation.phase === 'initial',
+          })
         : validateAiSignalResponse(value, config._allowed_entry_methods),
     })
     parsed._inference_source = 'ai'
