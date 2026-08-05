@@ -130,8 +130,8 @@ async function syncObserverSourceRuntime(bridgeUserId, tradingAccountId, strateg
     ])
   }
   await db.execute(`INSERT INTO auto_scheduler
-    (user_id, enabled, prompt_type_id, risk_level, max_position_size, selected_take_profit, enable_auto_trade, selected_symbols_json, created_at, updated_at)
-    VALUES (?, ?, ?, 'medium', 0.05, 2, ?, ?, NOW(), NOW())
+    (user_id, enabled, prompt_type_id, max_position_size, enable_auto_trade, selected_symbols_json, created_at, updated_at)
+    VALUES (?, ?, ?, 0.05, ?, ?, NOW(), NOW())
     ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), prompt_type_id = VALUES(prompt_type_id),
       enable_auto_trade = VALUES(enable_auto_trade), selected_symbols_json = VALUES(selected_symbols_json), updated_at = NOW()`,
   [bridgeUserId, autoInferenceEnabled ? 1 : 0, strategyId, tradeSendEnabled ? 1 : 0, strategy.symbols_json])

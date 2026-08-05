@@ -127,7 +127,7 @@ describe('signalOrderPayload', () => {
       take_profit_1_price: 2010,
       id: 123
     }
-    const config = { selected_take_profit: 1 }
+    const config = { take_profit_mode: 'ai_recommended' }
     const market = { latest_price: 2000 }
 
     const result = signalOrderPayload(signal, config, market, true)
@@ -139,6 +139,16 @@ describe('signalOrderPayload', () => {
     expect(result.confirm).toBe(true)
     expect(result.source).toBe('ai')
     expect(result.signal_id).toBe(123)
+  })
+
+  it('ignores a legacy absolute volume when the current signal has a risk tier', () => {
+    const signal = {
+      symbol:'XAUUSD', signal_type:'buy', position_size_tier:'light', recommended_volume:4.5,
+      stop_loss_price:1990, take_profit_1_price:2010, recommended_take_profit_tier:1,
+    }
+    const result = signalOrderPayload(signal, {}, { latest_price:2000 }, true)
+    expect(result.volume).toBe(0)
+    expect(result.position_size_tier).toBe('light')
   })
 
   it('使用正确的止盈档位', () => {

@@ -6945,6 +6945,28 @@ function signalDecision(signal) {
   };
 }
 
+function stopLossDistanceSummary(signal, market = {}) {
+  const stored = signal?.stop_loss_diagnostics || signal?.decision?.stop_loss_diagnostics;
+  const storedDistance = Number(stored?.distance);
+  if (storedDistance > 0) {
+    const storedAtrRatio = Number(stored?.distance_atr);
+    return `距入场 ${priceDisplay(storedDistance)}${storedAtrRatio > 0 ? ` · ${fmt(storedAtrRatio, 2)} ATR` : ""}`;
+  }
+  const entryMethod = String(signal?.entry_method || "market").toLowerCase();
+  const entry = Number(entryMethod === "market"
+    ? market?.latest_price
+    : entryMethod === "stop_limit"
+      ? (signal?.stop_limit_price || signal?.limit_price)
+      : signal?.limit_price);
+  const stopLoss = Number(signal?.stop_loss_price);
+  if (!(entry > 0) || !(stopLoss > 0)) return "";
+  const distance = Math.abs(entry - stopLoss);
+  if (!(distance > 0)) return "";
+  const atr = Number(market?.atr_anchor);
+  const atrText = atr > 0 ? ` · ${fmt(distance / atr, 2)} ATR` : "";
+  return `距入场 ${priceDisplay(distance)}${atrText}`;
+}
+
 function canViewSignalExperienceUsage(signal, usage = {}) {
   const source = String(usage.source || "").toLowerCase();
   if (source === "platform") return state.user?.role === "admin";
@@ -7518,6 +7540,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   // CLOSE signals: market data nested in timeframes.X.summary
   const closeSummary = rawMarket.timeframes ? Object.values(rawMarket.timeframes)[0]?.summary || {} : {};
   const market = dir === "close" ? { ...closeSummary, latest_price: rawMarket.latest_price ?? closeSummary.latest_price } : rawMarket;
+  const stopLossDistance = stopLossDistanceSummary(signal, market);
   const account = dir === "close" ? (rawMarket.account || {}) : {};
   // CLOSE: positions from closeContext ({total, details}), others from market.positions
   const positions = dir === "close"
@@ -7593,7 +7616,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     ${renderPendingSignalInfo(signal, market)}
     <div class="signal-detail-grid execution-prices execution-targets">
       <div class="execution-price-item"><span>${signal.entry_method === "market" ? "参考市价" : "计划入场"}</span><strong>${escapeHtml(signal.limit_price || market.latest_price || "--")}</strong></div>
-      <div class="execution-price-item"><span>止损保护</span><strong>${escapeHtml(signal.stop_loss_price || "--")}</strong></div>
+      <div class="execution-price-item"><span>止损保护</span><strong>${escapeHtml(signal.stop_loss_price || "--")}</strong>${stopLossDistance ? `<small>${escapeHtml(stopLossDistance)}</small>` : ""}</div>
       <div class="execution-target-primary"><span>${takeProfitSelection.price ? "实际执行止盈" : "计划执行止盈"}</span><strong>${escapeHtml(takeProfitSelection.price || (takeProfitSelection.tier ? signal[`take_profit_${takeProfitSelection.tier}_price`] : null) || "--")}</strong><small>${escapeHtml(takeProfitSelection.sourceLabel)}${takeProfitSelection.tier ? ` · TP${takeProfitSelection.tier}` : ""}</small></div>
       <div class="take-profit-candidates"><span class="take-profit-heading">止盈候选 <small><i></i>AI 推荐</small></span><div>${[1,2,3].map(tier => `<span class="take-profit-chip ${takeProfitSelection.tier === tier ? "selected" : ""} ${takeProfitSelection.recommendedTier === tier ? "recommended" : ""}"><b>TP${tier}</b><strong>${escapeHtml(signal[`take_profit_${tier}_price`] || "--")}</strong></span>`).join("")}</div></div>
     </div>

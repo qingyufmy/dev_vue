@@ -3,7 +3,6 @@
 import { queryAll } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
-import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
 import { beginModelUsage, finishModelUsage } from './model-profiles.js'
 import { KIMI_CODE_CLIENT_IDENTITY, MODEL_PROVIDER_DEFAULTS, isKimiCodeRequest, modelProviderProtocol } from './model-providers.js'
 import { assertSafeModelEndpoint } from './model-endpoint-security.js'
@@ -103,7 +102,7 @@ export function formatPendingValidUntilUtc(validMinutes, nowMs = Date.now()) {
 }
 const PENDING_LIFECYCLE_RULE = `
 ## 挂单生命周期硬性规则
-挂单有效期由服务端按 UTC 事实提供。禁止比较任何时间字符串来判断挂单是否过期；同样禁止比较 timestamp、MT5 墙钟字符串或叙述来判断过期。只能使用服务端明确给出的 is_expired，必要时仅把 valid_until_utc_msc/valid_until_utc 作为事实展示；is_expired=false 或 unknown 都不得按过期取消。禁止在 analysis 或 reasoning 中声称未过期挂单已过期、超时失效或已自动取消；禁止仅以时间、有效期或过期为理由输出 cancel_pending。是否存在挂单只能依据 pending_orders 当前数组；数组中不存在时只能表述“当前输入未包含该挂单”，不得推断其已过期或已取消。非过期取消必须说明价格、结构、方向或风险方面的依据。`
+挂单有效期由服务端按 UTC 事实提供。禁止比较任何时间字符串来判断挂单是否过期；同样禁止比较 timestamp、MT5 墙钟字符串或叙述来判断过期。只能使用服务端明确给出的 is_expired，必要时仅把 valid_until_utc_msc/valid_until_utc 作为事实展示；is_expired=false 或 unknown 都不得按过期取消。禁止在 analysis 或 reasoning 中声称未过期挂单已过期、超时失效或已自动取消；禁止仅以时间、有效期或过期为理由输出 pending_action=cancel。是否存在挂单只能依据 pending_orders 当前数组；数组中不存在时只能表述“当前输入未包含该挂单”，不得推断其已过期或已取消。非过期取消必须说明价格、结构、方向或风险方面的依据。`
 
 const CHAN_DIVERGENCE_RULE = `
 ## 缠论背驰使用规则
@@ -181,11 +180,6 @@ function localizeAiSignalUserVisibleFields(signal) {
   if (signal?.experience_usage && typeof signal.experience_usage === 'object' && typeof signal.experience_usage.influence === 'string') {
     signal.experience_usage.influence = localizeInferenceNarrative(signal.experience_usage.influence)
   }
-  if (Array.isArray(signal?.cancel_pending)) {
-    signal.cancel_pending = signal.cancel_pending.map(item => item && typeof item === 'object'
-      ? { ...item, reason:localizeInferenceNarrative(item.reason) }
-      : item)
-  }
   const management = signal?._position_management
   if (management && typeof management === 'object') {
     for (const key of ['pending_evaluations', 'position_evaluations']) {
@@ -206,26 +200,25 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   bearish_score: "0-100，市场偏空倾向分。必须与bullish_score合计为100；表示当前行情方向倾向，不代表胜率或执行概率",
   position_size_tier: "必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓、标准仓。不得返回具体手数或自定义系数",
   position_size_reason: "必须字段。使用简体中文说明为什么选择该仓位档位，不得猜测用户账户余额或手数",
-  position_action: "必须字段。仅允许 open | hold_no_add | allow_add | observe。参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add；不得建议自动平仓",
+  position_action: "必须字段。仅允许 open | hold_no_add | allow_add | observe，只控制新开仓或加仓；退出持仓只能通过 position_evaluations。参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add",
   pending_action: "必须字段。仅允许 none | keep | cancel。输入中的同品种同方向可以同时存在多笔挂单，必须逐笔评估，系统不按数量限制也不做相同价格去重。none 表示本轮不管理现有挂单，若当前交易信号成立可以新增一笔；keep 表示保留现有挂单且本轮不新增；cancel 只表示取消模型选中的挂单，是否有新信号由 market_plan 独立决定。不得无条件加挂",
   pending_action_reason: "中文说明挂单处理依据。pending_action 为 cancel 时必须具体说明原挂单在哪个价格、市场结构或方向依据上已经失效，不得只写‘逻辑失效’，不得使用过期或超时作为原因；其他动作可返回空字符串",
   management_direction: "必须字段。仅允许 buy | sell | none。需要取消挂单时填写被管理挂单方向；其他情况填 none",
-  limit_price: "挂单价。buy_limit/sell_limit:入场价,订单直接挂在此价; buy_stop/sell_stop:触发价,价格到达后以市价成交; buy_stop_limit/sell_stop_limit:触发价,到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价,限价卖单须高于当前价;突破单相反,买单触发价须高于当前价,卖单触发价须低于当前价。距离参考：M15一般0.5-2 ATR,H1一般1-3 ATR",
+  limit_price: "挂单价。buy_limit/sell_limit:入场价，订单直接挂在此价；buy_stop/sell_stop:触发价，价格到达后以市价成交；buy_stop_limit/sell_stop_limit:触发价，到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价，限价卖单须高于当前价；突破单相反，买单触发价须高于当前价，卖单触发价须低于当前价。距离和关键位必须依据 strategy_context 中当前策略定义的周期角色、行情结构与波动证据判断",
   stop_limit_price: "Stop Limit 触发后挂出的限价，仅buy_stop_limit/sell_stop_limit时必填。limit_price始终是突破触发价：buy_stop_limit 的触发价高于当前价，stop_limit_price不得高于触发价；sell_stop_limit 的触发价低于当前价，stop_limit_price不得低于触发价",
   pending_valid_minutes: "挂单有效期(分钟)，1-1440，默认240",
-  stop_loss_price: "数字，buy/sell/挂单必须给出，hold可为null。买单止损须低于入场价，卖单止损须高于入场价。最小距离由风险等级决定：low=2倍ATR(14), medium=1.5倍, high=1倍，过近会被系统自动修正。止损位必须参考M15 K线的关键支撑/阻力位（support_resistance.s1/s2/r1/r2），设在M15级别关键位外侧，给足波动空间",
+  stop_loss_price: "数字，buy/sell/挂单必须由模型给出，hold可为null。买单止损须低于入场价，卖单止损须高于入场价。止损必须依据 strategy_context 中当前策略定义的周期角色、关键结构和波动证据确定，并在 invalidation_condition 或 reasoning 中说明失效依据；服务端不替模型补齐止损，也不改写有效止损",
   take_profit_1_price: "止盈-保守(第一目标位)，数字，buy/sell/挂单必须给出，hold可为null。买单止盈须高于入场价，卖单止盈须低于入场价。建议设在最近的支撑/阻力位，R:R至少1:1",
   take_profit_2_price: "止盈-标准(第二目标位)，数字，buy/sell/挂单必须给出，hold可为null。距离应大于tp1，R:R建议1:1.5-1:2",
   take_profit_3_price: "止盈-激进(第三目标位)，数字，可选。距离应大于tp2，R:R建议1:2-1:3。仅在趋势明确且有延续依据时提供",
   recommended_take_profit_tier: "必须字段。非hold仅允许1、2、3，表示AI综合行情后建议实际执行的止盈目标档位，并且对应目标价格必须存在；hold返回null。reasoning中必须说明选择该档位的行情依据",
-  cancel_pending: "必须字段（条件触发）。挂单有效期和过期判断只能使用服务端 is_expired / valid_until_utc_msc，禁止比较 timestamp、MT5墙钟字符串或叙述；is_expired=false或unknown时不得以过期为由取消。仅当价格条件明显失效、市场结构破坏、方向逻辑反转或风险需要收缩时，才输出取消条件；否则返回空数组[]。每个元素：symbol(必填), pending_type(可选), max_price(可选), min_price(可选), cancel_all(可选bool), reason(必填且必须是非时间原因)",
   decision_summary: "必填，中文，一句话给出用户最关心的结论；不超过80字。观望时明确说明为什么暂不执行",
   trigger_condition: "中文，说明该建议成立或挂单触发需要满足的市场条件；没有额外条件时返回空字符串",
-  invalidation_condition: "中文，说明什么市场变化会使当前建议失效；hold时可说明重新评估条件",
+  invalidation_condition: "交易信号必填，中文说明什么市场变化会使当前建议失效，并与止损依据一致；hold时可说明重新评估条件",
   key_reasons: ["2至4条关键行情依据，每条不超过60字，不包含账户、持仓或风控结论"],
   risk_factors: ["0至4条市场层面的不利因素，每条不超过60字，不包含账户或仓位信息"],
   analysis: "中文，按以下顺序：1.当前趋势方向和强度 2.关键支撑/阻力位 3.当前价与均线关系 4.波动率状态 5.潜在催化剂或风险事件",
-  reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望） 5.挂单管理：逐笔检查现有挂单状态和价格，说明本轮选择保留、取消或不管理的依据"
+  reasoning: "中文，说明信号方向依据、入场方式选择理由、风险评估和执行建议；如涉及挂单，再说明本轮保留、取消或不管理的依据"
 }, null, 2)
 
 export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, experienceSelection = null) {
@@ -238,9 +231,10 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   schema.signal_type = `仅允许 ${signalTypes.join(' | ')}。hold 表示观望；本策略支持的入场方式：${methods.map(item => labels[item]).join('、')}。禁止输出未列出的信号类型。`
   schema.entry_method = `必须字段。仅允许 observe | ${methods.join(' | ')}；hold 必须对应 observe，其他信号必须与 signal_type 一致。`
   delete schema.recommended_volume
+  delete schema.cancel_pending
   schema.position_size_tier = '必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓和标准仓。不得返回具体手数或自定义系数。'
   schema.position_size_reason = '必须字段。使用简体中文说明仓位档位的行情依据；不得猜测用户账户余额或手数。'
-  schema.position_action = '必须字段。仅允许 open | hold_no_add | allow_add | observe。平台参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add；暂不支持自动平仓。'
+  schema.position_action = '必须字段。仅允许 open | hold_no_add | allow_add | observe，只控制新开仓或加仓；退出持仓只能通过 position_evaluations。平台参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add。'
   schema.pending_action = '必须字段。仅允许 none | keep | cancel。同品种同方向可以同时存在多笔挂单，必须逐笔结合价格、方向、市场结构和风险评估；系统不按数量限制，也不做相同价格去重。none 表示本轮不管理现有挂单，若交易信号成立可以新增一笔；keep 表示保留现有挂单且本轮不新增；cancel 只取消模型选中的挂单，market_plan 是否形成新信号独立判断。不得无条件加挂。'
   schema.pending_action_reason = '中文字符串。pending_action 为 cancel 时必须说明可核验的具体依据，例如关键位被突破、原结构被破坏、方向逻辑反转或挂单价格已不符合当前结构；必须包含对应的价格、结构或方向变化，不得只写“逻辑失效”，不得以过期、超时或有效期为理由。其他动作返回空字符串。'
   schema.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 时填写被管理挂单方向；其他情况填 none。'
@@ -258,7 +252,6 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
     delete schema.limit_price
     delete schema.stop_limit_price
     delete schema.pending_valid_minutes
-    delete schema.cancel_pending
   } else if (!methods.includes('stop_limit')) {
     delete schema.stop_limit_price
   }
@@ -1040,7 +1033,7 @@ export async function requestJsonObject({
 export function validateAiSignalResponse(value, allowedEntryMethods) {
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('ai_response_not_object')
   const required = ['signal_type', 'entry_method', 'confidence', 'position_size_tier', 'position_size_reason',
-    'position_action', 'pending_action', 'pending_action_reason', 'management_direction', 'analysis', 'reasoning']
+    'position_action', 'pending_action', 'pending_action_reason', 'management_direction']
   const missing = required.filter(key => !(key in value))
   if (missing.length) throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
 
@@ -1055,6 +1048,10 @@ export function validateAiSignalResponse(value, allowedEntryMethods) {
         : signalType.endsWith('_limit') ? 'limit' : 'stop'
   if (entryMethod !== expectedMethod) throw new Error(`ai_response_entry_method_mismatch:${entryMethod || 'empty'}:${expectedMethod}`)
   if (entryMethod !== 'observe' && !methods.includes(entryMethod)) throw new Error(`ai_response_entry_method_not_allowed:${entryMethod}`)
+  if (signalType !== 'hold' && (!(('invalidation_condition' in value))
+    || typeof value.invalidation_condition !== 'string' || !value.invalidation_condition.trim())) {
+    throw new Error('ai_response_invalidation_condition_required')
+  }
 
   const confidence = Number(value.confidence)
   if (!Number.isFinite(confidence) || confidence <= 0 || confidence > 1) throw new Error('ai_response_invalid_confidence')
@@ -1076,8 +1073,11 @@ export function validateAiSignalResponse(value, allowedEntryMethods) {
   if (pendingAction === 'cancel' && (typeof value.pending_action_reason !== 'string' || !value.pending_action_reason.trim())) {
     throw new Error('ai_response_pending_action_reason_required')
   }
-  if (typeof value.analysis !== 'string' || !value.analysis.trim()) throw new Error('ai_response_analysis_required')
-  if (typeof value.reasoning !== 'string' || !value.reasoning.trim()) throw new Error('ai_response_reasoning_required')
+  for (const key of ['analysis', 'reasoning']) {
+    if (key in value && value[key] != null && typeof value[key] !== 'string') {
+      throw new Error(`ai_response_invalid_${key}`)
+    }
+  }
   return value
 }
 
@@ -1340,7 +1340,6 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
 
 const COMPARISON_LIVE_RISK_REASONS = new Set([
   'atr_anchor_unavailable_hold',
-  'confidence_below_risk_threshold',
   'sl_widened',
   'sl_widen_min_lot_hold',
   'sl_too_far_hold',
@@ -1470,6 +1469,9 @@ export function normalizeAiSignal(parsed, config, market) {
     if (parsed.pending_action_reason === undefined) parsed.pending_action_reason = ''
     if (!parsed.management_direction) parsed.management_direction = 'none'
   }
+  // The legacy cancellation field is no longer part of the model contract.
+  // Do not carry it into a new/current normalized result.
+  if (parsed && typeof parsed === 'object') delete parsed.cancel_pending
   localizeAiSignalUserVisibleFields(parsed)
   const cleanText = (value, maxLength) => typeof value === 'string' ? localizeInferenceNarrative(value).slice(0, maxLength) : ''
   const cleanList = value => Array.isArray(value)
@@ -1577,7 +1579,7 @@ export function normalizeAiSignal(parsed, config, market) {
   if (strictInference) {
     const strictRequired = ['signal_type', 'entry_method', 'position_size_tier', 'position_size_reason',
       'position_action', 'pending_action', 'pending_action_reason', 'management_direction']
-    if (signalType !== 'hold') strictRequired.push('stop_loss_price', 'take_profit_1_price')
+    if (signalType !== 'hold') strictRequired.push('invalidation_condition', 'stop_loss_price', 'take_profit_1_price')
     const missing = strictRequired.filter(key => parsed[key] === undefined || parsed[key] === null
       || (key !== 'pending_action_reason' && parsed[key] === ''))
     if (missing.length) return schemaHold(`missing:${missing.join(',')}`)
@@ -1659,22 +1661,12 @@ export function normalizeAiSignal(parsed, config, market) {
     ? formatPendingValidUntilUtc(pendingValidMinutes)
     : null
 
-  const riskLevel = (config || {}).risk_level || 'medium'
-  const RISK_TABLE = {
-    low:    { minConfidence: 0.60, slAtrMult: 2.0 },
-    medium: { minConfidence: 0.40, slAtrMult: 1.5 },
-    high:   { minConfidence: 0.25, slAtrMult: 1.2 },
-  }
-  const risk = RISK_TABLE[riskLevel] || RISK_TABLE.medium
-
-  const configuredMinPosition = Number(config?._ai_volume_min ?? market?.ai_volume_range?.min ?? 0.01)
-  const configuredMaxPosition = Number(config?._ai_volume_max ?? market?.ai_volume_range?.max ?? config?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE)
-  const minPosition = Number.isFinite(configuredMinPosition) && configuredMinPosition > 0 ? configuredMinPosition : 0.01
-  const maxPosition = Number.isFinite(configuredMaxPosition) && configuredMaxPosition >= minPosition ? configuredMaxPosition : minPosition
-  // New signals do not accept an absolute lot recommendation from the model.
-  // Keep this legacy database field as an internal execution ceiling; the
-  // deterministic risk gate derives the real lot size from stop-loss risk.
-  let recommendedVolume = signalType === 'hold' ? 0 : maxPosition
+  // New/current AI results never carry an executable lot recommendation. Keep
+  // an explicit historical value only on the non-strict read-only path.
+  const historicalVolume = Number(parsed?.recommended_volume)
+  const recommendedVolume = !strictInference && signalType !== 'hold'
+    && Number.isFinite(historicalVolume) && historicalVolume > 0
+    ? historicalVolume : 0
 
   let rawConfidence = parseFloat(parsed.confidence)
   if (!Number.isFinite(rawConfidence)) rawConfidence = 0
@@ -1740,32 +1732,6 @@ export function normalizeAiSignal(parsed, config, market) {
     return parsed
   }
 
-  if (signalType !== 'hold' && parsed.confidence < risk.minConfidence) {
-    const originalSignalType = signalType
-    const originalConfidence = parsed.confidence
-    signalType = 'hold'
-    parsed.signal_type = 'hold'
-    parsed.recommended_volume = 0
-    parsed.entry_method = 'observe'
-    parsed.position_size_tier = 'observe'
-    parsed.position_size_factor = 0
-    parsed.position_action = 'observe'
-    parsed.pending_action = 'none'
-    parsed.pending_action_reason = ''
-    parsed.management_direction = 'none'
-    parsed.limit_price = null
-    parsed.stop_limit_price = null
-    parsed.pending_valid_until = null
-    parsed.normalization_info = {
-      type:'confidence_below_risk_threshold',
-      reason:'confidence_below_risk_threshold',
-      original_signal_type:originalSignalType,
-      original_confidence:originalConfidence,
-      minimum_confidence:risk.minConfidence,
-    }
-    return parsed
-  }
-
   const context = market?.strategy_context || {}
   const alignment = context?.chan_timeframe_alignment || {}
   const missingFrames = Array.isArray(context.missing_timeframes) ? context.missing_timeframes.length
@@ -1792,21 +1758,9 @@ export function normalizeAiSignal(parsed, config, market) {
   if (signalType !== 'hold') {
     const isBuySide = signalType.startsWith('buy')
     const anchorPrice = (entryMethod !== 'market' && entryMethod !== 'observe' && limitPrice) ? limitPrice : (market.latest_price || 0)
-    const atr = Number(market.atr_anchor) || 0
-    if (!(atr > 0)) {
-      console.log(`[LLM] Closed hourly ATR unavailable for ${signalType}, holding`)
-      return { ...parsed, signal_type: 'hold', confidence: 0, entry_method: 'observe', recommended_volume: 0, limit_price: null, stop_limit_price: null, pending_valid_until: null, normalization_info: { type:'atr_anchor_unavailable_hold', reason:'atr_anchor_unavailable_hold', original_signal_type:signalType, original_entry_method:entryMethod } }
-    }
-    if (atr > 0 && anchorPrice > 0) {
-      const fallbackSlDistance = atr * risk.slAtrMult
-      if (!parsed.stop_loss_price) {
-        parsed.stop_loss_price = isBuySide
-          ? round2(anchorPrice - fallbackSlDistance) : round2(anchorPrice + fallbackSlDistance)
-      }
-
-      // Preserve a model-provided stop loss. The versioned risk gate validates
-      // the maximum distance and sizes the order from the actual loss amount;
-      // normalization must not silently create a different trade thesis.
+    if (anchorPrice > 0 && parsed.stop_loss_price) {
+      // Preserve a model-provided stop loss. The execution path validates the
+      // model's invalidation thesis; normalization must not create or rewrite it.
       const finalSlDistance = Math.abs(Number(parsed.stop_loss_price) - anchorPrice)
       if (!parsed.take_profit_1_price) {
         parsed.take_profit_1_price = isBuySide
@@ -1860,7 +1814,7 @@ export function normalizeAiSignal(parsed, config, market) {
     }
     // Reject if SL or TP1 are missing
     if (!parsed.stop_loss_price || !parsed.take_profit_1_price) {
-      console.log(`[LLM] Missing SL/TP for ${signalType} (atr=${atr}), rejecting`)
+      console.log(`[LLM] Missing model-provided SL/TP for ${signalType}, rejecting`)
       return schemaHold('missing_valid_sl_or_tp')
     }
     const recommendedTier = Number(parsed.recommended_take_profit_tier || (strictInference ? 0 : 1))

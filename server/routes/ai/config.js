@@ -22,7 +22,6 @@ import { getDefaultObserverSourceClock } from './observer-channels.js'
 import { auditTradingAccountId, buildAuditClockSnapshot } from './audit-clock.js'
 
 export { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
-export const DEFAULT_SELECTED_TAKE_PROFIT = 2
 export const DEFAULT_TAKE_PROFIT_MODE = 'ai_recommended'
 export const DEFAULT_TEMPERATURE = 0.3
 export const DEFAULT_MAX_TOKENS = 2000
@@ -186,9 +185,7 @@ export async function getAnalyzeApiKey(userId, sessionId, strategyId = null) {
     ...resolved.model,
     system_prompt: userConfig.system_prompt,
     enable_auto_trade: userConfig.enable_auto_trade,
-    risk_level: userConfig.risk_level,
     max_position_size: userConfig.max_position_size,
-    selected_take_profit: userConfig.selected_take_profit,
     _userId: userId,
     _usage: 'manual',
     _strategyId: strategyId,
@@ -258,13 +255,13 @@ export async function getAutoConfig(db, userId) {
       user_id: userId,
       enabled: 0,
       prompt_type_id: firstPt?.id || null,
-      risk_level: 'medium',
       max_position_size: DEFAULT_MAX_POSITION_SIZE,
-      selected_take_profit: DEFAULT_SELECTED_TAKE_PROFIT,
       enable_auto_trade: 1,
       selected_symbols: [],
     }
   }
+  delete row.risk_level
+  delete row.selected_take_profit
   row.selected_symbols = []
   if (!row.prompt_type_id) {
     const firstPt = await queryOne('SELECT id FROM auto_prompt_types WHERE is_active = 1 AND deleted_at IS NULL ORDER BY sort_order ASC, id ASC LIMIT 1')
@@ -329,9 +326,7 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserI
   return {
     ...resolved.model,
     system_prompt: pt.system_prompt || '',
-    risk_level: globalCfg?.risk_level || 'medium',
     max_position_size: globalCfg?.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
-    selected_take_profit: globalCfg?.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
     enable_auto_trade: !!globalCfg?.enable_auto_trade,
     thinking_enabled: resolved.model.thinking_enabled !== 0,
     reasoning_effort: resolved.model.reasoning_effort || 'max',
@@ -366,7 +361,7 @@ export async function getAutoSubscribers(promptTypeId, symbol, bridgeAliveCheck 
   const rows = await queryAll(
     `SELECT s.user_id, s.selected_symbols_json, apt.symbols_json as strategy_symbols_json,
             apt.scope AS strategy_scope, apt.owner_user_id AS strategy_owner_user_id,
-            s.risk_level, s.max_position_size, s.selected_take_profit, s.enable_auto_trade,
+            s.max_position_size, s.enable_auto_trade,
             ss.id AS subscription_id, ss.trading_account_id, ss.schedule_enabled, ss.schedule_timezone,
             ss.schedule_weekdays_json, ss.schedule_windows_json, ss.outside_window_behavior,
             ta.broker_server AS runtime_broker_server,
@@ -472,18 +467,16 @@ export async function getDeliverySubscriptionRuntime(userId, promptTypeId, symbo
 // === Delivery Execute Risk Config ===
 
 export async function getDeliveryExecuteRiskConfig(userId) {
-  const scheduler = await queryOne('SELECT risk_level, max_position_size, selected_take_profit, enable_auto_trade FROM auto_scheduler WHERE user_id = ?', [userId])
+  const scheduler = await queryOne('SELECT enable_auto_trade FROM auto_scheduler WHERE user_id = ?', [userId])
   if (scheduler) {
     return {
       enable_auto_trade: !!scheduler.enable_auto_trade,
-      selected_take_profit: scheduler.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
     }
   }
   const globalCfg = await getGlobalAutoConfig()
   if (!globalCfg) return null
   return {
     enable_auto_trade: !!globalCfg.enable_auto_trade,
-    selected_take_profit: globalCfg.selected_take_profit ?? DEFAULT_SELECTED_TAKE_PROFIT,
   }
 }
 
@@ -518,14 +511,16 @@ export function signalOrderPayload(signal, config, market, confirm) {
   const baseOrderType = st.startsWith('buy') ? 'buy' : st.startsWith('sell') ? 'sell' : st
   const entryMethod = signal.entry_method || (st.includes('stop_limit') ? 'stop_limit' : st.includes('limit') ? 'limit' : st.includes('stop') ? 'stop' : 'market')
   const positionSizeTier = normalizePositionSizeTier(signal.position_size_tier, st)
-  const legacyVolume = Number(signal.recommended_volume)
+  // Absolute model volume is a historical read-only fallback. Current signals
+  // carry a risk tier and the versioned risk gate derives their real volume.
+  const legacyVolume = positionSizeTier ? 0 : Number(signal.recommended_volume)
   const executionCeiling = Number(config?.max_position_size)
 
   const payload = {
     symbol: signal.symbol,
     order_type: baseOrderType,
-    volume: positionSizeTier && Number.isFinite(executionCeiling) && executionCeiling > 0
-      ? executionCeiling
+    volume: positionSizeTier
+      ? (Number.isFinite(executionCeiling) && executionCeiling > 0 ? executionCeiling : 0)
       : legacyVolume,
     position_size_tier: positionSizeTier || null,
     position_size_factor: positionSizeTier ? positionSizeFactor(positionSizeTier) : 1,

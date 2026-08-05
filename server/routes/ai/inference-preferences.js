@@ -4,9 +4,7 @@ const DEFAULT_PREFERENCE = Object.freeze({
   system_prompt: '',
   enable_auto_trade: false,
   enable_futures_trading: false,
-  risk_level: 'medium',
   max_position_size: 0.05,
-  selected_take_profit: 2,
 })
 
 function normalizeSessionId(value) {
@@ -21,9 +19,7 @@ function normalizeStoredPreference(row) {
     system_prompt: row.system_prompt || '',
     enable_auto_trade: !!row.enable_auto_trade,
     enable_futures_trading: !!row.enable_futures_trading,
-    risk_level: row.risk_level || DEFAULT_PREFERENCE.risk_level,
     max_position_size: Number(row.max_position_size ?? DEFAULT_PREFERENCE.max_position_size),
-    selected_take_profit: Number(row.selected_take_profit ?? DEFAULT_PREFERENCE.selected_take_profit),
   }
 }
 
@@ -57,24 +53,19 @@ export async function getInferencePreference(userId, sessionId = 'default') {
 
 export async function saveInferencePreference(userId, sessionId = 'default', input = {}) {
   const sid = normalizeSessionId(sessionId)
-  const riskLevel = String(input.risk_level || DEFAULT_PREFERENCE.risk_level)
-  if (!['low', 'medium', 'high'].includes(riskLevel)) throw new Error('invalid_risk_level')
   const maxPositionSize = Number(input.max_position_size)
   if (!Number.isFinite(maxPositionSize) || maxPositionSize < 0.01 || maxPositionSize > 5) throw new Error('invalid_max_position_size')
-  const selectedTakeProfit = Number(input.selected_take_profit)
-  if (![1, 2, 3].includes(selectedTakeProfit)) throw new Error('invalid_take_profit_selection')
   const systemPrompt = input.system_prompt == null ? null : String(input.system_prompt).trim()
   if (systemPrompt && systemPrompt.length > 100000) throw new Error('system_prompt_too_long')
   const now = beijingNow()
   await queryRun(`INSERT INTO ai_inference_preferences
     (user_id, session_id, system_prompt, enable_auto_trade, enable_futures_trading,
-     risk_level, max_position_size, selected_take_profit, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     max_position_size, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE system_prompt = VALUES(system_prompt),
       enable_auto_trade = VALUES(enable_auto_trade), enable_futures_trading = VALUES(enable_futures_trading),
-      risk_level = VALUES(risk_level), max_position_size = VALUES(max_position_size),
-      selected_take_profit = VALUES(selected_take_profit), updated_at = VALUES(updated_at)`,
+      max_position_size = VALUES(max_position_size), updated_at = VALUES(updated_at)`,
   [userId, sid, systemPrompt, input.enable_auto_trade ? 1 : 0, input.enable_futures_trading ? 1 : 0,
-    riskLevel, maxPositionSize, selectedTakeProfit, now, now])
+    maxPositionSize, now, now])
   return getInferencePreference(userId, sid)
 }

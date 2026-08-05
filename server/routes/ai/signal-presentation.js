@@ -1,6 +1,6 @@
 import { auditValueLabel, formatRiskReason } from '../../audit-localization.js'
 
-const SIGNAL_SCHEMA_VERSION = 4
+const SIGNAL_SCHEMA_VERSION = 5
 
 function cleanText(value, maxLength = 240) {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : ''
@@ -78,6 +78,28 @@ function parseJson(value) {
   if (!value) return null
   if (typeof value === 'object') return value
   try { return JSON.parse(value) } catch { return null }
+}
+
+function stopLossDiagnostics(signal = {}) {
+  const market = parseJson(signal.market_data) || parseJson(signal.market_data_json) || {}
+  const entryMethod = String(signal.entry_method || 'market').toLowerCase()
+  const entry = Number(entryMethod === 'market'
+    ? market.latest_price
+    : entryMethod === 'stop_limit'
+      ? (signal.stop_limit_price || signal.limit_price)
+      : signal.limit_price)
+  const stopLoss = Number(signal.stop_loss_price)
+  if (!(entry > 0) || !(stopLoss > 0)) return null
+  const distance = Math.abs(entry - stopLoss)
+  if (!(distance > 0)) return null
+  const atr = Number(market.atr_anchor)
+  return {
+    entry_price:entry,
+    stop_loss_price:stopLoss,
+    distance,
+    atr_anchor:atr > 0 ? atr : null,
+    distance_atr:atr > 0 ? Math.round(distance / atr * 1000) / 1000 : null,
+  }
 }
 
 function signalExperienceUsage(signal = {}) {
@@ -178,6 +200,7 @@ export function normalizeDecisionFields(signal = {}) {
     execution_valid_until_utc_msc:Number.isFinite(executionValidUntilUtcMsc) && executionValidUntilUtcMsc > 0
       ? Math.trunc(executionValidUntilUtcMsc) : null,
     candidate_entry:candidateEntry(signal),
+    stop_loss_diagnostics:stopLossDiagnostics(signal),
     position_management:positionManagementDecision(signal),
     experience_usage:experienceUsage(signal),
     ...directionScores(signal),

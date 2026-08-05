@@ -907,6 +907,7 @@ button {
 .execution-targets > div:first-child { border-left:0; }
 .execution-targets > div > span { margin-bottom:7px; color:var(--text-secondary); font-size:11px; letter-spacing:.02em; }
 .execution-targets > div > strong { font-size:17px; font-variant-numeric:tabular-nums; }
+.execution-price-item > small { margin-top:6px; color:var(--text-muted); font-size:10px; font-weight:600; font-variant-numeric:tabular-nums; }
 .execution-target-primary { position:relative; background:color-mix(in srgb,var(--gold-primary) 6%,transparent) !important; }
 .execution-target-primary::before { position:absolute; inset:12px auto 12px 0; width:2px; border-radius:2px; background:var(--gold-primary); content:""; }
 .execution-target-primary > strong { color:var(--gold-primary); font-size:19px !important; }

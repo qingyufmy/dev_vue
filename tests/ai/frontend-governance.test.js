@@ -1192,6 +1192,14 @@ describe('route permissions and credential redaction', () => {
     expect(routes).toContain('res.json({ ok:true, scheduler, runtime_sync })')
   })
 
+  it('shows the model stop distance and ATR context without storing another stop-loss field', () => {
+    expect(app).toContain('function stopLossDistanceSummary(signal, market = {})')
+    expect(app).toContain('距入场 ${priceDisplay(distance)}')
+    expect(app).toContain('const stopLossDistance = stopLossDistanceSummary(signal, market)')
+    expect(app).toContain('${stopLossDistance ? `<small>${escapeHtml(stopLossDistance)}</small>` : ""}')
+    expect(css).toContain('.execution-price-item > small')
+  })
+
   it('uses subscription state for the automatic-analysis badge and bypasses AI risk for manual orders', () => {
     const manualOpen = bridgeWs.slice(bridgeWs.indexOf("case 'open':"), bridgeWs.indexOf("case 'close':"))
     expect(manualOpen).toContain('executeManualOrderCore')

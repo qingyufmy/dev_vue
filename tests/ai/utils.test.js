@@ -250,7 +250,8 @@ describe('parseJsonObject', () => {
 describe('常量', () => {
   it('DEFAULT_PROMPT 存在', () => {
     expect(DEFAULT_PROMPT).toBeTruthy()
-    expect(DEFAULT_PROMPT).toContain('signal_type')
+    expect(DEFAULT_PROMPT).toContain('strict JSON object')
+    expect(DEFAULT_PROMPT).not.toContain('recommended_volume')
   })
 
   it('STRATEGY_TIMEFRAME_COUNTS 包含必要时间框架', () => {

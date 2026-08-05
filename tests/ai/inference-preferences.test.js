@@ -23,9 +23,11 @@ describe('inference preferences', () => {
     const preference = await getInferencePreference(8, 'default')
 
     expect(preference).toMatchObject({
-      system_prompt: '平台提示词', risk_level: 'medium', max_position_size: 0.05,
-      selected_take_profit: 2, _exists: false, _system_prompt_inherited: true,
+      system_prompt: '平台提示词', max_position_size: 0.05,
+      _exists: false, _system_prompt_inherited: true,
     })
+    expect(preference).not.toHaveProperty('risk_level')
+    expect(preference).not.toHaveProperty('selected_take_profit')
     expect(preference).not.toHaveProperty('api_key_encrypted')
   })
 
@@ -42,17 +44,17 @@ describe('inference preferences', () => {
 
     await expect(getInferencePreference(8)).resolves.toMatchObject({
       system_prompt: '用户提示词', enable_auto_trade: true, enable_futures_trading: false,
-      risk_level: 'low', max_position_size: 0.03, selected_take_profit: 1,
+      max_position_size: 0.03,
       _system_prompt_inherited: false,
     })
   })
 
   it('validates bounds before writing', async () => {
     await expect(saveInferencePreference(8, 'default', {
-      risk_level: 'medium', max_position_size: 0, selected_take_profit: 2,
+      max_position_size: 0,
     })).rejects.toThrow('invalid_max_position_size')
     await expect(saveInferencePreference(8, 'default', {
-      risk_level: 'medium', max_position_size: 5.01, selected_take_profit: 2,
+      max_position_size: 5.01,
     })).rejects.toThrow('invalid_max_position_size')
     expect(queryRun).not.toHaveBeenCalled()
   })
@@ -76,5 +78,7 @@ describe('inference preferences', () => {
     const sql = queryRun.mock.calls[0][0]
     expect(sql).toContain('INSERT INTO ai_inference_preferences')
     expect(sql).not.toContain('api_key')
+    expect(sql).not.toContain('risk_level')
+    expect(sql).not.toContain('selected_take_profit')
   })
 })

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, configuredModelMaxTokens, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
-import { compactRates } from '../../server/routes/ai/utils.js'
+import { compactRates, DEFAULT_PROMPT } from '../../server/routes/ai/utils.js'
 import { POSITION_MANAGEMENT_CONTRACT_VERSION } from '../../server/routes/ai/position-management.js'
 
 describe('model output budgets', () => {
@@ -103,6 +103,19 @@ describe('compact inference market payload', () => {
 })
 
 describe('buildStrategyOutputFormat', () => {
+  it('uses a single code-owned output contract without legacy volume or cancellation fields', () => {
+    const schema = JSON.parse(buildStrategyOutputFormat(null, ['market', 'limit']).outputFormat)
+    expect(DEFAULT_PROMPT).not.toContain('recommended_volume')
+    expect(DEFAULT_PROMPT).not.toMatch(/signal_type.*confidence.*analysis.*reasoning/i)
+    expect(schema).not.toHaveProperty('recommended_volume')
+    expect(schema).not.toHaveProperty('cancel_pending')
+    expect(schema.stop_loss_price).not.toMatch(/风险等级|low=|medium=|high=|自动修正|M15|H1/)
+    expect(schema.limit_price).not.toMatch(/M15|H1/)
+    expect(schema.stop_loss_price).toContain('strategy_context')
+    expect(schema.stop_loss_price).toContain('invalidation_condition')
+    expect(schema.position_action).toContain('退出持仓只能通过 position_evaluations')
+  })
+
   it('removes all pending-order fields from a market-only strategy', () => {
     const result = buildStrategyOutputFormat(null, ['market'])
     const schema = JSON.parse(result.outputFormat)
@@ -199,6 +212,7 @@ describe('model comparison signal isolation', () => {
       _inference_source:'ai', signal_type:'buy_limit', entry_method:'limit', confidence:0.8,
       recommended_volume:0.03, limit_price:1995, pending_valid_minutes:60,
       stop_loss_price:1985, take_profit_1_price:2010, recommended_take_profit_tier:1,
+      invalidation_condition:'跌破止损结构后建议失效',
     }
     const normalized = {
       ...raw, signal_type:'hold', entry_method:'observe', confidence:0, recommended_volume:0,
@@ -219,6 +233,7 @@ describe('model comparison signal isolation', () => {
       _inference_source:'ai', signal_type:'sell_limit', entry_method:'limit', confidence:0.75,
       recommended_volume:0.02, limit_price:1990,
       stop_loss_price:2010, take_profit_1_price:1970, recommended_take_profit_tier:1,
+      invalidation_condition:'突破失效位后建议失效',
     }
     const normalized = {
       ...raw, signal_type:'hold', entry_method:'observe', confidence:0, recommended_volume:0,
@@ -762,7 +777,8 @@ describe('validateAiSignalResponse', () => {
   it('rejects missing fields and mismatched entry methods before normalization', () => {
     expect(() => validateAiSignalResponse({ ...hold, entry_method: undefined }, ['market']))
       .toThrow('ai_response_entry_method_mismatch')
-    expect(() => validateAiSignalResponse({ ...hold, signal_type: 'sell_stop_limit', entry_method: 'limit', recommended_volume: 0.01 }, ['stop_limit']))
+    expect(() => validateAiSignalResponse({ ...hold, signal_type: 'sell_stop_limit', entry_method: 'limit', recommended_volume: 0.01,
+      invalidation_condition:'突破失效位后建议失效' }, ['stop_limit']))
       .toThrow('ai_response_entry_method_mismatch')
   })
 
@@ -783,6 +799,21 @@ describe('validateAiSignalResponse', () => {
     }
     expect(() => validateAiSignalResponse(legacy, ['market']))
       .toThrow('ai_response_pending_action_reason_required')
+  })
+
+  it('requires invalidation_condition for trades but leaves display narratives optional', () => {
+    const trade = {
+      ...hold, signal_type:'buy', entry_method:'market', position_size_tier:'light',
+      position_size_reason:'结构确认后采用轻仓', position_action:'open',
+      invalidation_condition:'跌破失效位后建议失效',
+    }
+    delete trade.analysis
+    delete trade.reasoning
+    expect(validateAiSignalResponse(trade, ['market'])).toBe(trade)
+    const missing = { ...trade }
+    delete missing.invalidation_condition
+    expect(() => validateAiSignalResponse(missing, ['market']))
+      .toThrow('ai_response_invalidation_condition_required')
   })
 })
 
@@ -903,17 +934,16 @@ describe('normalizeAiSignal', () => {
   }
 
   const baseConfig = {
-    risk_level: 'medium',
-    max_position_size: 0.05,
-    selected_take_profit: 1
+    max_position_size: 0.05
   }
 
   it('buy 信号正常处理', () => {
-    const parsed = { signal_type: 'buy', confidence: 0.7, recommended_volume: 0.03, bullish_score: 7, bearish_score: 3 }
+    const parsed = { signal_type: 'buy', confidence: 0.7, recommended_volume: 0.03,
+      stop_loss_price:1990, take_profit_1_price:2010, bullish_score: 7, bearish_score: 3 }
     const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
     expect(result.signal_type).toBe('buy')
     expect(result.confidence).toBeGreaterThan(0)
-    expect(result.recommended_volume).toBeGreaterThan(0)
+    expect(result.recommended_volume).toBe(0.03)
     expect(result.stop_loss_price).toBeTruthy()
     expect(result.take_profit_1_price).toBeTruthy()
     expect(result.bullish_score).toBe(70)
@@ -927,23 +957,26 @@ describe('normalizeAiSignal', () => {
     expect(result.recommended_volume).toBe(0)
   })
 
-  it('置信度低于阈值降级为 hold', () => {
-    const parsed = { signal_type: 'buy', confidence: 0.2, recommended_volume: 0.03 }
+  it('低置信度不再按风险等级自动降级', () => {
+    const parsed = { signal_type: 'buy', confidence: 0.2, recommended_volume: 0.03,
+      stop_loss_price:1990, take_profit_1_price:2010 }
     const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
-    expect(result.signal_type).toBe('hold')
+    expect(result.signal_type).toBe('buy')
   })
 
-  it('high 风险级别降低置信度阈值', () => {
+  it('风险等级不再参与信号降级', () => {
     const highRiskConfig = { ...baseConfig, risk_level: 'high' }
-    const parsed = { signal_type: 'buy', confidence: 0.3, recommended_volume: 0.03 }
+    const parsed = { signal_type: 'buy', confidence: 0.3, recommended_volume: 0.03,
+      stop_loss_price:1990, take_profit_1_price:2010 }
     const result = normalizeAiSignal(parsed, highRiskConfig, baseMarket)
     expect(result.signal_type).toBe('buy')
   })
 
-  it('volume 不超过 max_position_size', () => {
-    const parsed = { signal_type: 'buy', confidence: 0.8, recommended_volume: 0.1 }
+  it('历史非严格结果保留显式 recommended_volume', () => {
+    const parsed = { signal_type: 'buy', confidence: 0.8, recommended_volume: 0.1,
+      stop_loss_price:1990, take_profit_1_price:2010 }
     const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
-    expect(result.recommended_volume).toBeLessThanOrEqual(0.05 * 1.0) // medium risk multiplier
+    expect(result.recommended_volume).toBe(0.1)
   })
 
   it('未知 signal_type 降级为 hold', () => {
@@ -1028,6 +1061,7 @@ describe('maybeAiSignal', () => {
               take_profit_2_price: 2020,
               take_profit_3_price: 2030,
               recommended_take_profit_tier: 2,
+              invalidation_condition: '跌破止损结构后建议失效',
               analysis: 'test analysis',
               reasoning: 'test reasoning'
             })
@@ -1055,7 +1089,7 @@ describe('maybeAiSignal', () => {
     expect(result._inference_source).toBe('ai')
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(body.messages[0].content).toContain('禁止比较任何时间字符串来判断挂单是否过期')
-    expect(body.messages[0].content).toContain('禁止仅以时间、有效期或过期为理由输出 cancel_pending')
+    expect(body.messages[0].content).toContain('禁止仅以时间、有效期或过期为理由输出 pending_action=cancel')
   })
 
   it('does not repair a keep/hold management evidence defect and returns server fail-closed defaults', async () => {
@@ -1464,106 +1498,61 @@ describe('maybeAiSignal', () => {
   })
 })
 
-describe('normalizeAiSignal - SL/TP fallback', () => {
+describe('normalizeAiSignal - model-provided SL contract', () => {
   const market = { latest_price: 4000, atr_anchor: 10, atr_anchor_tf: 'H1', atr_14: 10, strategy_score: {} }
-  const config = { risk_level: 'medium', max_position_size: 0.05 }
+  const config = { max_position_size: 0.05 }
 
-  it('buy_limit: SL below limitPrice, TP above limitPrice', () => {
-    const result = normalizeAiSignal({
-      signal_type: 'buy_limit', confidence: 0.8, limit_price: 3980
-    }, config, market)
-    expect(result.stop_loss_price).toBeLessThan(3980)
-    expect(result.take_profit_1_price).toBeGreaterThan(3980)
-    expect(result.stop_loss_price).toBe(3965)
-    expect(result.take_profit_1_price).toBe(4002.5)
-  })
-
-  it('sell_stop: SL above limitPrice, TP below limitPrice', () => {
-    const result = normalizeAiSignal({
-      signal_type: 'sell_stop', confidence: 0.8, limit_price: 3990
-    }, config, market)
-    expect(result.stop_loss_price).toBeGreaterThan(3990)
-    expect(result.take_profit_1_price).toBeLessThan(3990)
-    expect(result.stop_loss_price).toBe(4005)
-    expect(result.take_profit_1_price).toBe(3967.5)
-  })
-
-  it('buy (market): SL/TP anchored to latest_price', () => {
-    const result = normalizeAiSignal({
-      signal_type: 'buy', confidence: 0.8
-    }, config, market)
-    expect(result.stop_loss_price).toBe(3985)
-    expect(result.take_profit_1_price).toBe(4022.5)
-  })
-
-  it('model-provided SL/TP not overwritten when distance sufficient', () => {
+  it('fails closed without synthesizing a missing stop loss', () => {
     const result = normalizeAiSignal({
       signal_type: 'buy_limit', confidence: 0.8, limit_price: 3980,
-      stop_loss_price: 3955, take_profit_1_price: 4020
     }, config, market)
-    expect(result.stop_loss_price).toBe(3955)
-    expect(result.take_profit_1_price).toBe(4020)
+    expect(result).toMatchObject({ signal_type:'hold', recommended_volume:0,
+      normalization_info:{ type:'l5_schema_hold', reason:'missing_valid_sl_or_tp' } })
+    expect(result.stop_loss_price).toBeUndefined()
   })
-  it('preserves a model-provided tight SL for the versioned risk gate', () => {
+
+  it('preserves a valid model stop loss and does not widen or narrow it', () => {
     const result = normalizeAiSignal({
       signal_type: 'buy_limit', confidence: 0.8, recommended_volume: 0.03, limit_price: 3980,
-      stop_loss_price: 3975, take_profit_1_price: 4000
+      stop_loss_price: 3975, take_profit_1_price: 4000,
     }, config, market)
-    expect(result.stop_loss_price).toBe(3975)
-    expect(result.recommended_volume).toBe(0.05)
-    expect(result.position_size_tier).toBe('light')
+    expect(result).toMatchObject({ signal_type:'buy_limit', recommended_volume:0.03,
+      position_size_tier:'light', stop_loss_price:3975, take_profit_1_price:4000 })
     expect(result.normalization_info?.type).not.toBe('sl_widened')
   })
 
-  it('使用小时级锚点派生止损和三档止盈', () => {
-    const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03 }, config, { ...market, atr_anchor: 15, atr_anchor_tf: 'H1' })
-    expect(result.stop_loss_price).toBe(3977.5)
-    expect(result.take_profit_1_price).toBe(4033.75)
-    expect(result.take_profit_2_price).toBe(4056.25)
-    expect(result.take_profit_3_price).toBe(4090)
+  it('keeps a model-provided distant stop loss for downstream policy checks', () => {
+    const result = normalizeAiSignal({ signal_type:'buy', confidence:0.8, recommended_volume:0.03,
+      stop_loss_price:3940, take_profit_1_price:4020 }, config, { ...market, atr_anchor:15 })
+    expect(result).toMatchObject({ signal_type:'buy', recommended_volume:0.03,
+      position_size_tier:'light', stop_loss_price:3940 })
   })
 
-  it('模型给出的远止损保留给版本化风控判断', () => {
-    const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03, stop_loss_price: 3940, take_profit_1_price: 4020 }, config, { ...market, atr_anchor: 15 })
-    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.05, position_size_tier:'light', stop_loss_price:3940 })
+  it('does not require ATR when the model supplies a valid stop loss', () => {
+    const result = normalizeAiSignal({ signal_type:'buy', confidence:0.8, recommended_volume:0.03,
+      stop_loss_price:3990, take_profit_1_price:4020 }, config, { ...market, atr_anchor:0 })
+    expect(result).toMatchObject({ signal_type:'buy', recommended_volume:0.03,
+      stop_loss_price:3990, take_profit_1_price:4020 })
+    expect(result.normalization_info?.type).not.toBe('atr_anchor_unavailable_hold')
   })
 
-  it('不会因为模型止损较近而改写手数或降级观望', () => {
-    const result = normalizeAiSignal({ signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03, stop_loss_price: 3996, take_profit_1_price: 4020 }, config, { ...market, atr_anchor: 15 })
-    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.05, position_size_tier:'light', stop_loss_price:3996 })
-  })
-
-  it('小时级ATR不可用时失败关闭', () => {
-    const result = normalizeAiSignal({
-      signal_type: 'buy', confidence: 0.8, recommended_volume: 0.03,
-      stop_loss_price: 3990, take_profit_1_price: 4020,
-    }, config, { ...market, atr_anchor: 0 })
-    expect(result).toMatchObject({
-      signal_type: 'hold', recommended_volume: 0,
-      normalization_info: { type: 'atr_anchor_unavailable_hold' },
-    })
-  })
-
-  it('高风险等级不会突破用户最大手数', () => {
-    const result = normalizeAiSignal({
-      signal_type: 'buy', confidence: 0.8, recommended_volume: 0.08,
-      stop_loss_price: 3990, take_profit_1_price: 4020,
-    }, { risk_level: 'high', max_position_size: 0.05 }, market)
-    expect(result.recommended_volume).toBe(0.05)
-  })
-
-  it('低风险等级仍以用户配置作为单笔最大手数', () => {
-    const result = normalizeAiSignal({
-      signal_type: 'buy', confidence: 0.8, recommended_volume: 0.05,
-      stop_loss_price: 3980, take_profit_1_price: 4030,
-    }, { risk_level: 'low', max_position_size: 0.05 }, market)
-    expect(result.recommended_volume).toBe(0.05)
+  it('keeps historical volume explicit while strict AI output uses zero', () => {
+    const historical = normalizeAiSignal({ signal_type:'buy', confidence:0.8, recommended_volume:0.08,
+      stop_loss_price:3990, take_profit_1_price:4020 }, config, market)
+    expect(historical.recommended_volume).toBe(0.08)
+    const current = normalizeAiSignal({ _inference_source:'ai', signal_type:'buy', entry_method:'market',
+      confidence:0.8, recommended_volume:0.08, position_size_tier:'light',
+      position_size_reason:'结构确认后采用轻仓', position_action:'open', pending_action:'none',
+      pending_action_reason:'', management_direction:'none', invalidation_condition:'跌破失效位后建议失效',
+      stop_loss_price:3990, take_profit_1_price:4020, recommended_take_profit_tier:1,
+    }, config, market)
+    expect(current).toMatchObject({ signal_type:'buy', recommended_volume:0 })
   })
 })
 
 describe('normalizeAiSignal - L5 strict schema', () => {
   const market = { latest_price: 2000, atr_anchor: 10, strategy_score: {}, volatility_pct: 0 }
-  const config = { risk_level: 'medium', max_position_size: 0.05 }
+  const config = { max_position_size: 0.05 }
   const strictHoldFields = {
     position_size_tier:'observe', position_size_reason:'等待结构确认', position_action:'observe',
     pending_action:'none', pending_action_reason:'', management_direction:'none',
@@ -1571,6 +1560,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
   const strictTradeFields = {
     position_size_tier:'light', position_size_reason:'结构确认后采用轻仓', position_action:'open',
     pending_action:'none', pending_action_reason:'', management_direction:'none',
+    invalidation_condition:'跌破失效位后当前建议失效',
   }
 
   it('keeps a valid AI hold with nullable trade prices and calibrated confidence', () => {
@@ -1605,6 +1595,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
       position_size_tier:'probe', position_size_reason:'等待回踩', position_action:'hold_no_add',
       pending_action:'none', pending_action_reason:'', management_direction:'none', limit_price:1995,
       stop_loss_price:1985, take_profit_1_price:2010, recommended_take_profit_tier:1,
+      invalidation_condition:'跌破失效位后当前建议失效',
       analysis:'偏多但不加仓', reasoning:'已有同向持仓',
     }, { ...config, _allowed_entry_methods:['limit'] }, market)
     expect(result).toMatchObject({
@@ -1638,24 +1629,24 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     })
   })
 
-  it('ignores a legacy absolute model volume and uses the configured execution ceiling', () => {
+  it('ignores a legacy absolute model volume in the current tier contract', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
       ...strictTradeFields,
       recommended_volume: 0.06, stop_loss_price: 1990, take_profit_1_price: 2020,
       recommended_take_profit_tier: 1,
     }, config, market)
-    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume:0.05, position_size_tier:'light', position_size_factor:0.5 })
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume:0, position_size_tier:'light', position_size_factor:0.5 })
   })
 
-  it('uses the configured platform volume range instead of a hard-coded maximum', () => {
+  it('does not copy a configured platform volume ceiling into the AI result', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
       ...strictTradeFields,
       recommended_volume: 0.08, stop_loss_price: 1990, take_profit_1_price: 2020,
       recommended_take_profit_tier: 1,
     }, { ...config, max_position_size: 0.1, _ai_volume_min: 0.02, _ai_volume_max: 0.1, _ai_volume_step: 0.02 }, market)
-    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0.1, position_size_tier:'light', position_size_factor:0.5 })
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume: 0, position_size_tier:'light', position_size_factor:0.5 })
   })
 
   it('does not let a legacy absolute volume control the new risk-tier contract', () => {
@@ -1665,7 +1656,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
       recommended_volume: 0.07, stop_loss_price: 1990, take_profit_1_price: 2020,
       recommended_take_profit_tier: 1,
     }, { ...config, max_position_size: 0.1, _ai_volume_min: 0.02, _ai_volume_max: 0.1, _ai_volume_step: 0.02 }, market)
-    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume:0.1, position_size_tier:'light', position_size_factor:0.5 })
+    expect(result).toMatchObject({ signal_type: 'buy', recommended_volume:0, position_size_tier:'light', position_size_factor:0.5 })
   })
 
   it('requires an explicit AI take-profit recommendation for executable signals', () => {

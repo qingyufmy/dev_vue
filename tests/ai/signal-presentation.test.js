@@ -21,10 +21,21 @@ describe('signal presentation', () => {
   })
   it('normalizes model fields and limits untrusted arrays', () => {
     const result = normalizeDecisionFields({ signal_type: 'buy', decision_summary: '  顺势做多  ', bullish_score: 63, bearish_score: 37, key_reasons: ['趋势向上', '', '回踩支撑', '量能改善', '结构完整', 'ignored'] })
-    expect(result.schema_version).toBe(4)
+    expect(result.schema_version).toBe(5)
     expect(result.decision_summary).toBe('顺势做多')
     expect(result.key_reasons).toHaveLength(4)
     expect(result).toMatchObject({ bullish_score: 63, bearish_score: 37 })
+  })
+
+  it('derives stop-loss distance and ATR context from existing signal evidence', () => {
+    const result = normalizeDecisionFields({
+      signal_type:'buy_limit', entry_method:'limit', limit_price:4160.5, stop_loss_price:4154.8,
+      market_data:{ latest_price:4162, atr_anchor:12.5 },
+    })
+    expect(result.stop_loss_diagnostics).toMatchObject({
+      entry_price:4160.5, stop_loss_price:4154.8, atr_anchor:12.5, distance_atr:0.456,
+    })
+    expect(result.stop_loss_diagnostics.distance).toBeCloseTo(5.7, 8)
   })
 
   it('persists sanitized candidate entry evidence for a normalized no-add hold', () => {
@@ -155,7 +166,7 @@ describe('signal presentation', () => {
 
   it('keeps legacy rows without a decision payload non-executable', () => {
     const result = attachSignalPresentation({ id: 1, signal_type: 'sell', entry_method: 'market' })
-    expect(result.decision.schema_version).toBe(4)
+    expect(result.decision.schema_version).toBe(5)
     expect(result.decision.position_action).toBe('')
     expect(result.execution_advice).toMatchObject({ state:'unavailable', executable:false })
   })

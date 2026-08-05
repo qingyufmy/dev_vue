@@ -45,7 +45,7 @@ vi.mock('../../server/routes/ai/config.js', () => ({
   insertAudit: vi.fn(),
   signalOrderPayload: vi.fn(() => ({ symbol: 'XAUUSD', order_type: 'buy', volume: 0.03, sl: 1990, tp: 2010 })),
   getExecuteRiskConfig: vi.fn(() => ({})),
-  getDeliveryExecuteRiskConfig: vi.fn(() => ({ enable_auto_trade: true, selected_take_profit: 1, max_position_size: 0.05 })),
+  getDeliveryExecuteRiskConfig: vi.fn(() => ({ enable_auto_trade: true })),
   validateTradeRequest: vi.fn(),
   RiskReject: class RiskReject extends Error {},
   getAutoPromptTypeById: vi.fn(() => ({ id: 1, title: 'test', symbols_json: '["XAUUSD"]', is_active: true })),
@@ -59,7 +59,6 @@ vi.mock('../../server/routes/ai/config.js', () => ({
   }),
   executeOrderCore: vi.fn(() => Promise.resolve({ status: 'success', order: 12345 })),
   DEFAULT_MAX_POSITION_SIZE: 0.05,
-  DEFAULT_SELECTED_TAKE_PROFIT: 2,
 }))
 
 vi.mock('../../server/routes/ai/strategy.js', () => ({
