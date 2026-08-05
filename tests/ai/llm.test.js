@@ -158,6 +158,8 @@ describe('experience usage normalization', () => {
       .toBe('不同历史窗口对中枢形成核心尚未达成共识；候选背驰所需的有效证据不足')
     expect(localizeInferenceNarrative('structure_anchor_bootstrap_pending'))
       .toBe('结构锚点正在用连续三根已收盘K线确认，暂不使用依赖进入段的背驰与买卖点')
+    expect(localizeInferenceNarrative('confirmed_structure_stale'))
+      .toBe('旧版结构快照中的历史字段（不代表当前引擎状态）')
   })
 
   it('drops hallucinated experience ids from model output', () => {

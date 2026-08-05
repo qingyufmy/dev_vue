@@ -138,6 +138,7 @@ const INFERENCE_NARRATIVE_REPLACEMENTS = [
   [/\bcenter_cross_window_unstable\b/gi, '不同历史窗口对中枢形成核心尚未达成共识'],
   [/\bcenter_entry_unconfirmed\b/gi, '中枢已确认，但进入段缺少跨窗口共识，仅背驰暂不可判'],
   [/\bstructure_anchor_bootstrap_pending\b/gi, '结构锚点正在用连续三根已收盘K线确认，暂不使用依赖进入段的背驰与买卖点'],
+  [/\bconfirmed_structure_stale\b/gi, '旧版结构快照中的历史字段（不代表当前引擎状态）'],
   [/\bmt4_historical_offset_unverified\b/gi, 'MT4 历史K线的绝对UTC时间为近似定位，不影响同源结构顺序'],
   [/\bdivergence_evidence_unavailable\b/gi, '背驰所需的有效力度证据不足'],
   [/\bdivergence_cross_window_unstable\b/gi, '不同历史窗口的背驰证据尚未收敛'],

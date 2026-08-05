@@ -2543,6 +2543,8 @@ function selectStableChanResult(candidates, options = {}) {
     structure_topology_reliable:structureTopologyReliable,
     segment_count:consensus.segments.length,
     center_count:summarizedCenters.length,
+    confirmed_structure_max_age_bars:null,
+    confirmed_structure_age_semantics:'diagnostic_only_no_expiry',
     current_segment:consensus.segments.at(-1) || null,
     prev_segment:consensus.segments.at(-2) || null,
     current_center:latestConsensusCenter,
@@ -2607,6 +2609,8 @@ function suppressUnconfirmedWindowStructure(primary) {
     historical_segment_run_count: 0,
     historical_segment_count: 0,
     confirmed_structure_age_bars: null,
+    confirmed_structure_max_age_bars: null,
+    confirmed_structure_age_semantics:'diagnostic_only_no_expiry',
     structure_anchor: {
       ...(primary.structure_anchor || {}),
       matched: false,
@@ -2689,6 +2693,8 @@ function protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationW
     temporal_closed_bar_validator_count:0,
     cross_window_entry_support_count:0,
     cross_window_entry_validator_count:0,
+    confirmed_structure_max_age_bars:null,
+    confirmed_structure_age_semantics:'diagnostic_only_no_expiry',
     authoritative_terminal_chain_confirmed:false,
     ...protectedEvidence,
     structure_anchor:{
