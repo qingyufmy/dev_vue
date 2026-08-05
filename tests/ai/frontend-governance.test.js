@@ -33,7 +33,53 @@ function loadUserVisibleText() {
   )
 }
 
+function loadAutoRuntimeRemainingSeconds() {
+  const start = app.indexOf('function autoRuntimeRemainingSeconds')
+  const end = app.indexOf('function renderAutoAnalyzeBadge', start)
+  const source = app.slice(start, end)
+  return new Function(`${source}\nreturn autoRuntimeRemainingSeconds;`)()
+}
+
 describe('AI governance navigation and DOM contract', () => {
+  it('falls back to the absolute scheduler deadline when seconds are missing', () => {
+    const remainingSeconds = loadAutoRuntimeRemainingSeconds()
+    const nowMs = Date.parse('2026-08-05T05:00:00.000Z')
+    expect(remainingSeconds({
+      receivedAtMs:nowMs, next_run_in_seconds:0,
+      next_run_at_utc:new Date(nowMs + 6_500).toISOString(),
+    }, nowMs)).toBe(7)
+    expect(remainingSeconds({
+      receivedAtMs:nowMs, next_run_in_seconds:30,
+      next_run_at_utc:new Date(nowMs + 60_000).toISOString(),
+    }, nowMs + 4_000)).toBe(26)
+  })
+
+  it('localizes model-task recovery and deployment draining states', () => {
+    expect(app).toContain('model_task_status_unknown: "模型服务商状态暂不可确认')
+    expect(app).toContain('model_task_active: \'上一轮模型任务仍在运行')
+    expect(app).toContain('model_task_cooldown: \'本轮模型任务已完成')
+    expect(app).toContain('model_task_completion_unknown: \'模型任务完成时间未知')
+    expect(app).toContain('deployment_draining: \'系统正在安全排空')
+    expect(app).toContain('deployment_drain_check_failed: \'部署排空状态暂不可确认')
+    expect(app).toContain('不会在恢复确认前重新发起分析')
+  })
+
+  it('keeps normal model cooldown in the ordinary countdown branch', () => {
+    const safetyBranchStart = app.indexOf("['model_task_status_unknown'")
+    const safetyBranchEnd = app.indexOf("} else if (s.paused_reason && marketPausePresentation", safetyBranchStart)
+    const safetyBranch = app.slice(safetyBranchStart, safetyBranchEnd)
+    expect(safetyBranch).not.toContain('model_task_cooldown')
+    expect(app).toContain("s.wait_reason || s.paused_reason")
+    expect(app).toContain('本轮模型任务已完成，等待完整配置周期')
+  })
+
+  it('checks the deployment drain lease before new scheduler cycles', () => {
+    expect(scheduler).toContain("readAutoInferenceDeploymentDrain({ redis })")
+    expect(scheduler).toContain("st.waitReason = 'deployment_draining'")
+    expect(scheduler).toContain("st.waitReason = 'deployment_drain_check_failed'")
+    expect(scheduler).toContain("schedulerNextRunAt(st, drainDeadlineMs)")
+  })
+
   it('does not present unknown internal tokens as an unreliable Chan segment', () => {
     const userVisibleText = loadUserVisibleText()
 

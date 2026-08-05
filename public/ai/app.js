@@ -321,6 +321,13 @@ function handleFormModalKeydown(event) {
 
 const REASON_MAP = {
   skipped: "已跳过（未满足执行条件）",
+  model_task_status_unknown: "模型服务商状态暂不可确认，正在安全恢复并避免重复请求",
+  model_task_active: "上一轮模型任务仍在运行，等待完成",
+  model_task_cooldown: "本轮模型任务已完成，等待完整配置周期",
+  model_task_completion_unknown: "模型任务完成时间未知，等待恢复确认",
+  model_task_gate_failed: "模型任务运行时暂不可用，等待恢复",
+  deployment_draining: "系统正在安全排空，等待任务完成",
+  deployment_drain_check_failed: "部署排空状态暂不可确认，暂停启动新分析",
   "Request executed": "MT5 已执行",
   "Unsupported filling mode": "MT5 不支持当前成交模式，已自动适配",
   "Invalid price": "MT5 拒绝挂单：挂单价格无效",
@@ -839,6 +846,13 @@ const AUTO_REASON_LABELS = {
   rates_failed: '行情获取失败',
   rates_empty: '行情为空',
   private_portfolio_context_unavailable: '持仓或挂单数据不完整',
+  model_task_status_unknown: '模型服务商状态暂不可确认，正在安全恢复并避免重复请求',
+  model_task_active: '上一轮模型任务仍在运行，等待完成',
+  model_task_cooldown: '本轮模型任务已完成，等待完整配置周期',
+  model_task_completion_unknown: '模型任务完成时间未知，等待恢复确认',
+  model_task_gate_failed: '模型任务运行时暂不可用，等待恢复',
+  deployment_draining: '系统正在安全排空，等待任务完成',
+  deployment_drain_check_failed: '部署排空状态暂不可确认，暂停启动新分析',
   exception: '运行异常',
   disabled: '已关闭',
   unknown: '未知',
@@ -1009,17 +1023,31 @@ function renderAutoProgress(cycles, ptName) {
   applyAutoBadge(label, 'running', title, { mode: primary?.stage === 'complete' ? 'complete' : 'running', stage, progress });
 }
 
+function autoRuntimeRemainingSeconds(runtime, nowMs = Date.now()) {
+  const receivedAtMs = Number(runtime?.receivedAtMs)
+  const backendSeconds = Number(runtime?.next_run_in_seconds)
+  if (Number.isFinite(receivedAtMs) && receivedAtMs > 0
+    && Number.isFinite(backendSeconds) && backendSeconds > 0) {
+    return Math.max(0, backendSeconds - Math.floor((nowMs - receivedAtMs) / 1000))
+  }
+
+  // Absolute UTC is the recovery path when older responses omit the seconds
+  // field (or explicitly report zero). It also keeps the badge accurate when
+  // a response arrives without the local receipt timestamp.
+  const deadlineMs = Date.parse(String(runtime?.next_run_at_utc || ''))
+  if (Number.isFinite(deadlineMs)) return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000))
+  return null
+}
+
 function renderAutoAnalyzeBadge(s) {
   if (!s) return;
   const ptName = s.prompt_type_name || '';
   const symbols = s.selected_symbols || [];
   const symbolsStr = symbols.join('、') || '未选择品种';
 
-  // Calculate remaining time
-  let remaining = null;
-  if (s.receivedAtMs && s.next_run_in_seconds) {
-    remaining = Math.max(0, s.next_run_in_seconds - Math.floor((Date.now() - s.receivedAtMs) / 1000));
-  }
+  // Calculate remaining time from the server's seconds and receipt timestamp;
+  // fall back to the absolute UTC deadline for older/degraded responses.
+  const remaining = autoRuntimeRemainingSeconds(s);
 
   let label, type, title;
   const cycles = activeAutoProgressCycles(s);
@@ -1061,6 +1089,21 @@ function renderAutoAnalyzeBadge(s) {
       progress_seq: 0, started_at: s.cycle_started_at || '',
     }], ptName);
     return;
+  } else if (['model_task_status_unknown', 'model_task_active', 'model_task_completion_unknown', 'model_task_gate_failed', 'deployment_draining', 'deployment_drain_check_failed'].includes(String(s.wait_reason || s.paused_reason || ''))) {
+    const reason = String(s.wait_reason || s.paused_reason || '')
+    const safeStatus = autoReasonText(reason)
+    const countdownText = remaining !== null && remaining > 0
+      ? `${String(Math.floor(remaining / 60)).padStart(2, '0')}:${String(remaining % 60).padStart(2, '0')}`
+      : ''
+    const countdown = countdownText
+      ? `，预计 ${countdownText} 后复查`
+      : '，等待恢复确认'
+    label = countdownText ? `自动分析 · 安全恢复 ${countdownText}` : `自动分析 · ${safeStatus}`
+    type = 'warning'
+    const safetyNote = reason === 'deployment_draining'
+      ? '系统正在排空，排空完成前不会启动新的自动分析'
+      : '为避免重复请求，系统不会在恢复确认前重新发起分析'
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：${safeStatus}${countdown}\n${safetyNote}`
   } else if (s.paused_reason && marketPausePresentation(s.paused_reason)) {
     const presentation = marketPausePresentation(s.paused_reason);
     label = presentation.label;
@@ -1393,6 +1436,13 @@ function clampPage(page, pageSize, total) {
 }
 
 const API_ERROR_MESSAGES = {
+  model_task_status_unknown: "模型服务商状态暂不可确认，系统正在安全恢复并避免重复请求",
+  model_task_active: "上一轮模型任务仍在运行，请等待完成",
+  model_task_cooldown: "本轮模型任务已完成，请等待完整配置周期",
+  model_task_completion_unknown: "模型任务完成时间未知，系统正在等待恢复确认",
+  model_task_gate_failed: "模型任务运行时暂不可用，系统正在等待恢复",
+  deployment_draining: "系统正在安全排空，请等待任务完成",
+  deployment_drain_check_failed: "部署排空状态暂不可确认，暂停启动新分析",
   encryption_master_key_missing: "服务器模型凭据加密密钥未正确配置，请联系管理员检查 32 字节 AES 密钥并重启服务",
   no_model_configured: "尚未配置可用模型，请先在“AI策略师 → 模型管理”中添加模型",
   no_platform_model: "平台尚未配置默认模型",

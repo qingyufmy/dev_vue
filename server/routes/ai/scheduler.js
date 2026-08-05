@@ -34,6 +34,7 @@ import { trustedTerminalClock } from './terminal-clock.js'
 import * as modelTaskTrackerModule from './model-task-tracker.js'
 import { modelTaskDeadlines } from './model-task-budget.js'
 import { buildSafeExecutionOutcome, buildSafeExecutionEvent } from '../../audit-localization.js'
+import { readAutoInferenceDeploymentDrain } from './auto-inference-deployment-drain.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -73,7 +74,7 @@ function parseFrozenModelTaskContext(task) {
  */
 export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinutes = 5, nowMs = Date.now()) {
   const domainId = autoModelTaskDomainId(promptTypeId, symbol)
-  const task = await queryOne(`SELECT task_id, status, completed_at_utc_msc, result_valid_until_utc_msc,
+  const task = await queryOne(`SELECT task_id, status, task_deadline_at_utc_msc, completed_at_utc_msc, result_valid_until_utc_msc,
       frozen_context_json, created_at_utc_msc, updated_at_utc_msc,
       EXISTS (SELECT 1 FROM ai_model_task_attempts a WHERE a.task_id = ai_model_tasks.task_id) AS provider_request_started
     FROM ai_model_tasks
@@ -84,9 +85,29 @@ export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinut
 
   const status = String(task.status || '').toLowerCase()
   if (!AUTO_MODEL_TASK_TERMINAL_STATES.has(status)) {
+    const taskDeadlineAtUtcMs = Number(task.task_deadline_at_utc_msc)
+    if (status === 'status_unknown' && Number.isFinite(taskDeadlineAtUtcMs) && taskDeadlineAtUtcMs > nowMs) {
+      return {
+        allowed:false,
+        reason:'model_task_status_unknown',
+        task,
+        domainId,
+        nextAllowedAt:taskDeadlineAtUtcMs,
+        nextRunInSeconds:Math.max(1, Math.ceil((taskDeadlineAtUtcMs - nowMs) / 1000)),
+      }
+    }
+    if (status === 'status_unknown') {
+      return {
+        allowed:false,
+        reason:'model_task_status_unknown',
+        task,
+        domainId,
+        nextRunInSeconds:Math.ceil(retryDelayMs('model_task_status_unknown') / 1000),
+      }
+    }
     return {
       allowed:false,
-      reason:status === 'status_unknown' ? 'model_task_status_unknown' : 'model_task_active',
+      reason:'model_task_active',
       task,
       domainId,
     }
@@ -542,6 +563,27 @@ function buildSchedulerKey(promptTypeId, symbol) {
   return `${promptTypeId}:${normalizeSymbolForScheduler(symbol)}`
 }
 
+function schedulerRuntimeNextRunAt(state, cooldownTtl, nowMs = Date.now()) {
+  const deadlines = []
+  const stateDeadline = Date.parse(String(state?.nextRunAtUtc || ''))
+  if (Number.isFinite(stateDeadline) && stateDeadline > nowMs) deadlines.push(stateDeadline)
+
+  // Keep compatibility with runtime states written before nextRunAtUtc was
+  // persisted, while preferring the absolute deadline whenever it exists.
+  if (!Number.isFinite(stateDeadline)) {
+    const legacySeconds = Number(state?.nextRunInSeconds)
+    if (Number.isFinite(legacySeconds) && legacySeconds > 0) {
+      deadlines.push(nowMs + legacySeconds * 1000)
+    }
+  }
+
+  const ttlSeconds = Number(cooldownTtl)
+  if (Number.isFinite(ttlSeconds) && ttlSeconds > 0) {
+    deadlines.push(nowMs + ttlSeconds * 1000)
+  }
+  return deadlines.length > 0 ? Math.max(...deadlines) : null
+}
+
 // === Redis Subscription Keys ===
 const REDIS_SCHEDULER_KEYS = 'auto:scheduler:keys'
 const REDIS_SUBS_PREFIX = 'auto:scheduler:'
@@ -917,14 +959,14 @@ export async function getUserAutoRuntimeStatus(userId) {
 
   // Find user's active scheduler keys
   const activeKeys = []
-  let earliestNextRun = Infinity
+  const statusNowMs = Date.now()
+  let earliestNextRunAtMs = null
   let anyInFlight = false
   let overallLastError = ''
   let overallWaitReason = ''
   let overallMarketWaitReason = ''
   let overallLastRunAt = ''
   let overallLastSignalId = null
-  let earliestNextRunAtUtc = ''
   let latestStateUpdatedAtUtc = ''
   let totalSubscribers = 0
   const activeCycles = []
@@ -943,7 +985,6 @@ export async function getUserAutoRuntimeStatus(userId) {
     if (isMarketWaitReason(st.waitReason) && !overallMarketWaitReason) overallMarketWaitReason = st.waitReason
     if (st.lastRunAt && (!overallLastRunAt || st.lastRunAt > overallLastRunAt)) overallLastRunAt = st.lastRunAt
     if (st.lastSignalId) overallLastSignalId = st.lastSignalId
-    if (st.nextRunAtUtc && (!earliestNextRunAtUtc || st.nextRunAtUtc < earliestNextRunAtUtc)) earliestNextRunAtUtc = st.nextRunAtUtc
     if (st.stateUpdatedAtUtc && st.stateUpdatedAtUtc > latestStateUpdatedAtUtc) latestStateUpdatedAtUtc = st.stateUpdatedAtUtc
     if (st.inFlight) {
       activeCycles.push({
@@ -959,15 +1000,24 @@ export async function getUserAutoRuntimeStatus(userId) {
       })
     }
 
-    // Check cooldown TTL
+    // The published runtime deadline remains useful even when Redis is
+    // unavailable. Redis can add a second constraint, but must not become
+    // the only source of the next-run timestamp.
+    let keyNextRunAtMs = schedulerRuntimeNextRunAt(st, null, statusNowMs)
     if (redis) {
       try {
         const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
-        if (ttl > 0 && ttl < earliestNextRun) {
-          earliestNextRun = ttl
-          earliestNextRunAtUtc = new Date(Date.now() + ttl * 1000).toISOString()
-        }
+        keyNextRunAtMs = schedulerRuntimeNextRunAt(st, ttl, statusNowMs)
+        // A key may be constrained by both its published runtime deadline and
+        // the Redis cooldown lease. It is safe to run only after both have
+        // elapsed, so take the later deadline for this key. Across symbols,
+        // the scheduler may run the first key whose constraints are ready.
       } catch (e) { console.warn('[Scheduler] Redis TTL check failed:', e.message) }
+    }
+
+    if (Number.isFinite(keyNextRunAtMs)
+      && (earliestNextRunAtMs === null || keyNextRunAtMs < earliestNextRunAtMs)) {
+      earliestNextRunAtMs = keyNextRunAtMs
     }
   }
 
@@ -1011,7 +1061,10 @@ export async function getUserAutoRuntimeStatus(userId) {
   }
 
   const running = activeKeys.length > 0 && !pausedReason
-  const nextRunSeconds = earliestNextRun === Infinity ? 0 : Math.max(0, earliestNextRun)
+  const nextRunSeconds = earliestNextRunAtMs === null
+    ? 0
+    : Math.max(0, Math.ceil((earliestNextRunAtMs - statusNowMs) / 1000))
+  const nextRunAtUtc = nextRunSeconds > 0 ? new Date(earliestNextRunAtMs).toISOString() : ''
 
   return {
     enabled: true,
@@ -1028,7 +1081,7 @@ export async function getUserAutoRuntimeStatus(userId) {
     wait_reason: overallWaitReason,
     paused_reason: pausedReason,
     next_run_in_seconds: nextRunSeconds,
-    next_run_at_utc: earliestNextRunAtUtc,
+    next_run_at_utc: nextRunAtUtc,
     state_updated_at_utc: latestStateUpdatedAtUtc,
     last_run_at: overallLastRunAt,
     last_signal_id: overallLastSignalId,
@@ -1153,6 +1206,8 @@ function retryDelayMs(reason, consecutiveFailures = 1) {
     case 'weekly_flatten_window':
     case 'lock_busy':
     case 'bridge_update_maintenance':
+    case 'deployment_draining':
+    case 'deployment_drain_check_failed':
       return 5000
     case 'market_closed':
     case 'market_restricted':
@@ -1289,6 +1344,8 @@ function schedulerWaitLabel(reason) {
     model_task_cooldown: '本轮模型任务已完成，等待完整配置周期',
     model_task_completion_unknown: '模型任务完成时间未知，等待恢复确认',
     model_task_gate_failed: '模型任务运行时不可用，等待恢复',
+    deployment_draining: '系统正在安全排空，等待任务完成',
+    deployment_drain_check_failed: '部署排空状态暂不可确认，暂停启动新分析',
   }
   return labels[reason] || `等待条件恢复（${reason}）`
 }
@@ -1543,6 +1600,41 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       schedulerNextRun(st, 15)
       await updateSchedulerRedisState(key, st)
       autoSchedulerState[key].timer = setTimeout(tick, 15000)
+      return
+    }
+
+    // A deployment drain blocks only the start of a new cycle. Existing
+    // in-flight work is allowed to finish, while the short recheck keeps the
+    // runtime state and admin countdown aligned with the lease expiry.
+    let deploymentDrain
+    try {
+      deploymentDrain = await readAutoInferenceDeploymentDrain({ redis })
+    } catch (error) {
+      deploymentDrain = { available:false, active:false, error:error?.message || 'drain_read_failed' }
+    }
+    if (!deploymentDrain.available) {
+      st.lastError = 'deployment_drain_check_failed'
+      st.waitReason = 'deployment_drain_check_failed'
+      schedulerNextRun(st, Math.ceil(retryDelayMs('deployment_drain_check_failed') / 1000))
+      await updateSchedulerRedisState(key, st)
+      autoSchedulerState[key].timer = setTimeout(tick, retryDelayMs('deployment_drain_check_failed'))
+      return
+    }
+    if (deploymentDrain.active) {
+      st.lastError = ''
+      st.waitReason = 'deployment_draining'
+      const ttlSeconds = Number(deploymentDrain.ttlSeconds)
+      const publishedDrainDeadlineMs = Number(deploymentDrain.expiresAtUtcMsc)
+      const drainDeadlineMs = Number.isFinite(publishedDrainDeadlineMs) && publishedDrainDeadlineMs > Date.now()
+        ? publishedDrainDeadlineMs
+        : Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : null
+      if (drainDeadlineMs) schedulerNextRunAt(st, drainDeadlineMs)
+      else schedulerNextRun(st, Math.ceil(retryDelayMs('deployment_draining') / 1000))
+      await updateSchedulerRedisState(key, st)
+      const drainDelayMs = drainDeadlineMs
+        ? Math.max(1000, Math.min(drainDeadlineMs - Date.now(), 30_000))
+        : retryDelayMs('deployment_draining')
+      autoSchedulerState[key].timer = setTimeout(tick, drainDelayMs)
       return
     }
 
@@ -3780,6 +3872,7 @@ export const __schedulerTest = {
   completionIntervalCooldownSeconds,
   failedCycleCooldownSeconds,
   schedulerNextRunAt,
+  schedulerRuntimeNextRunAt,
   autoModelTaskDomainId,
   checkAutoModelTaskGate,
   buildAutoModelTaskInput,

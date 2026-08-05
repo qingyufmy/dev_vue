@@ -92,7 +92,7 @@ vi.mock('../../server/redis.js', () => ({
   isRedisAvailable: vi.fn(() => false),
 }))
 
-import { autoSchedulerState, getSubscriptionIndexHealth, getUserAutoRuntimeStatus, isAutoSchedulerRunning, rebuildRedisSubscriptions, updateSchedulerRedisState } from '../../server/routes/ai/scheduler.js'
+import { __schedulerTest, autoSchedulerState, getSubscriptionIndexHealth, getUserAutoRuntimeStatus, isAutoSchedulerRunning, rebuildRedisSubscriptions, updateSchedulerRedisState } from '../../server/routes/ai/scheduler.js'
 import * as db from '../../server/db.js'
 import * as marketData from '../../server/routes/ai/market-data.js'
 import * as bridgeWs from '../../server/bridge-ws.js'
@@ -130,6 +130,30 @@ describe('automatic-analysis control state', () => {
     await expect(getUserAutoRuntimeStatus(42)).resolves.toMatchObject({
       enabled:true, running:false, paused_reason:'no_runtime_scheduler', prompt_type_id:7,
     })
+  })
+})
+
+describe('runtime countdown constraints', () => {
+  const nowMs = Date.parse('2026-08-05T05:00:00.000Z')
+
+  it('uses a future runtime deadline even when Redis has no cooldown TTL', () => {
+    const deadline = nowMs + 120_000
+    expect(__schedulerTest.schedulerRuntimeNextRunAt({
+      nextRunAtUtc:new Date(deadline).toISOString(),
+    }, -2, nowMs)).toBe(deadline)
+  })
+
+  it('takes the later constraint within a key and the earlier key across symbols', () => {
+    const firstKey = __schedulerTest.schedulerRuntimeNextRunAt({
+      nextRunAtUtc:new Date(nowMs + 180_000).toISOString(),
+    }, 300, nowMs)
+    const secondKey = __schedulerTest.schedulerRuntimeNextRunAt({
+      nextRunAtUtc:new Date(nowMs + 240_000).toISOString(),
+    }, 90, nowMs)
+
+    expect(firstKey).toBe(nowMs + 300_000)
+    expect(secondKey).toBe(nowMs + 240_000)
+    expect(Math.min(firstKey, secondKey)).toBe(nowMs + 240_000)
   })
 })
 

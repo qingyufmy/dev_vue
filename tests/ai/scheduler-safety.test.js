@@ -422,6 +422,32 @@ describe('durable automatic model-task gate', () => {
     expect(db.queryOne.mock.calls[0][0]).toContain('ai_model_task_attempts')
   })
 
+  it('uses a future status-unknown task deadline for safe recovery polling', async () => {
+    const nowMs = 1_000_000
+    db.queryOne.mockResolvedValue({
+      task_id:'task-unknown-deadline', status:'status_unknown',
+      task_deadline_at_utc_msc:nowMs + 45_000,
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, nowMs))
+      .resolves.toMatchObject({
+        allowed:false, reason:'model_task_status_unknown',
+        nextAllowedAt:nowMs + 45_000, nextRunInSeconds:45,
+      })
+    expect(db.queryOne.mock.calls[0][0]).toContain('task_deadline_at_utc_msc')
+  })
+
+  it('keeps a short status recheck after an unknown task deadline has passed', async () => {
+    const nowMs = 1_100_000
+    db.queryOne.mockResolvedValue({
+      task_id:'task-unknown-expired', status:'status_unknown',
+      task_deadline_at_utc_msc:nowMs - 1,
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, nowMs))
+      .resolves.toMatchObject({
+        allowed:false, reason:'model_task_status_unknown', nextRunInSeconds:15,
+      })
+  })
+
   it('keeps a full configured cooldown after a provider attempt across Redis loss', async () => {
     const completedAt = 1_000_000
     db.queryOne.mockResolvedValue({
