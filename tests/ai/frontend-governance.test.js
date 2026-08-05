@@ -138,7 +138,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('setText("quoteAsk", priceDisplay(q.ask))')
     expect(app).toContain('setText("quoteBid", priceDisplay(data.bid))')
     expect(app).toContain('setText("quoteAsk", priceDisplay(data.ask))')
-    expect(html).toContain('/ai/app.js?v=20260805repair1')
+    expect(html).toContain('/ai/app.js?v=20260805scheduler3')
     expect(app).toContain('wsApi("platform_quote", { symbol })')
     expect(app).toContain('state.platformMarketSourceActive = platformQuote.available === true')
     expect(app).toContain('state.lastObserverQuote = {')
@@ -688,7 +688,7 @@ describe('AI governance navigation and DOM contract', () => {
     const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z]+)/)?.[1]
     const appVersion = html.match(/app\.js\?v=([0-9a-z]+)/)?.[1]
     expect(stylesheetVersion).toBeTruthy()
-    expect(appVersion).toBe('20260805repair1')
+    expect(appVersion).toBe('20260805scheduler3')
     expect(appVersion).toBe(stylesheetVersion)
   })
 
