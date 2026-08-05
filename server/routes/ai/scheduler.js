@@ -332,10 +332,6 @@ async function releaseUnsentDeliveryClaim(signalId, userId) {
     [signalId, userId])
 }
 
-function recoveryReplacementUnsafe(recoveryContext, replacementTargets) {
-  return Boolean(recoveryContext && Array.isArray(replacementTargets) && replacementTargets.length > 0)
-}
-
 /**
  * Durable fence for a recovered delivery. The model task is already terminal,
  * so it cannot be represented by the live model-task tracker. Re-check the
@@ -413,12 +409,15 @@ function calculateRecoverySeconds(deadlineMs, nowMs = Date.now()) {
   return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000))
 }
 
-function selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, direction) {
+function selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, direction, managementGroupIds = null) {
   const expectedSymbol = stripBrokerSuffix(symbol)
   const expectedDirection = String(direction || '').toLowerCase()
   const filterDirection = direction !== undefined && direction !== null
   if (filterDirection && !['buy', 'sell'].includes(expectedDirection)) return []
+  const selectedGroups = managementGroupIds instanceof Set
+    ? managementGroupIds : managementGroupIds ? new Set(managementGroupIds) : null
   const strategyTickets = new Set((Array.isArray(strategyDeliveries) ? strategyDeliveries : [])
+    .filter(item => !selectedGroups || selectedGroups.has(String(item?.management_group_id || '').trim()))
     .map(item => String(item?.pending_ticket || '').trim())
     .filter(Boolean))
   return (Array.isArray(pendingOrders) ? pendingOrders : []).filter(item => {
@@ -432,6 +431,21 @@ function selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, sym
   })
 }
 
+function positionManagementDecision(signal) {
+  const value = signal?._position_management || signal?.position_management
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+}
+
+function synchronousPendingCancelGroupIds(signal) {
+  const signalType = String(signal?.signal_type || '').trim().toLowerCase()
+  if (signalType === 'hold' || !/^(buy|sell)(?:_|$)/.test(signalType)) return new Set()
+  const management = positionManagementDecision(signal)
+  return new Set((Array.isArray(management?.pending_evaluations) ? management.pending_evaluations : [])
+    .filter(item => String(item?.action || '').toLowerCase() === 'cancel')
+    .map(item => String(item?.management_group_id || '').trim())
+    .filter(Boolean))
+}
+
 /**
  * Resolve the model's pending-order action without imposing a quantity rule.
  *
@@ -440,7 +454,7 @@ function selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, sym
  * the authority on whether a new signal should add another one. `keep` is the
  * explicit no-new-order decision, while cancellation actions require matched
  * targets selected by the caller (including the model's direction for
- * cancel/cancel_replace).
+ * cancel).
  */
 function resolvePendingActionGate({ pendingAction, pendingOrders = [] } = {}) {
   const action = String(pendingAction || 'none').trim().toLowerCase()
@@ -453,7 +467,7 @@ function resolvePendingActionGate({ pendingAction, pendingOrders = [] } = {}) {
       targets,
     }
   }
-  if (action === 'cancel' || action === 'cancel_replace') {
+  if (action === 'cancel') {
     if (!targets.length) {
       return { action: 'skip', reason: 'reference_pending_not_matched', count: 0, targets: [] }
     }
@@ -462,59 +476,36 @@ function resolvePendingActionGate({ pendingAction, pendingOrders = [] } = {}) {
   return { action: 'proceed', reason: null, count: targets.length, targets: [] }
 }
 
-const POSITION_ID_FIELDS = Object.freeze(['ticket', 'order', 'order_ticket', 'position_id', 'identifier'])
-
-function positionIdentityTokens(position) {
-  const tokens = new Set()
-  let hasBrokerIdentity = false
-  for (const field of POSITION_ID_FIELDS) {
-    const value = String(position?.[field] ?? '').trim()
-    if (!value) continue
-    hasBrokerIdentity = true
-    // Keep a value-only token so the Bridge can change the alias used for the
-    // same position (for example ticket -> position_id) between snapshots.
-    tokens.add(`identity:${value}`)
-    tokens.add(`${field}:${value}`)
+function resolvePendingCancellationPlan({
+  signalType, pendingAction, pendingTargets = [], synchronousPendingCancelGroupIds = null,
+} = {}) {
+  const normalizedSignalType = String(signalType || '').trim().toLowerCase()
+  const isTradeSignal = /^(buy|sell)(?:_|$)/.test(normalizedSignalType)
+  const groupIds = synchronousPendingCancelGroupIds instanceof Set
+    ? synchronousPendingCancelGroupIds
+    : new Set(Array.isArray(synchronousPendingCancelGroupIds) ? synchronousPendingCancelGroupIds : [])
+  const targets = Array.isArray(pendingTargets) ? pendingTargets : []
+  const action = String(pendingAction || 'none').trim().toLowerCase()
+  if (isTradeSignal && groupIds.size > 0) {
+    return {
+      mode:'pre_order_cancel', continue_to_new_order:true, requires_targets:true,
+      reason:null, count:targets.length, targets,
+    }
   }
-  if (hasBrokerIdentity) return tokens
-  const symbol = stripBrokerSuffix(String(position?.symbol || '')).toUpperCase()
-  const side = String(position?.type ?? position?.side ?? '').trim().toLowerCase()
-  const volume = String(position?.volume ?? position?.volume_current ?? position?.volume_initial ?? '').trim()
-  const openPrice = String(position?.open_price ?? position?.price_open ?? position?.price ?? '').trim()
-  const openedAt = String(position?.time_msc ?? position?.open_time_msc ?? position?.time
-    ?? position?.open_time ?? position?.time_utc_msc ?? '').trim()
-  // Rows without a broker identity still need a stable comparison key. Open
-  // time/price/side/volume remain stable while current price and profit move.
-  tokens.add(`composite:${symbol}|${side}|${volume}|${openPrice}|${openedAt}`)
-  return tokens
-}
-
-function positionExposureSignature(position) {
-  const side = String(position?.type ?? position?.side ?? '').trim().toLowerCase()
-  const rawVolume = position?.volume ?? position?.volume_current ?? position?.volume_initial ?? ''
-  const rawOpenPrice = position?.open_price ?? position?.price_open ?? position?.price ?? ''
-  const volume = Number.isFinite(Number(rawVolume)) ? Number(rawVolume) : String(rawVolume).trim()
-  const openPrice = Number.isFinite(Number(rawOpenPrice)) ? Number(rawOpenPrice) : String(rawOpenPrice).trim()
-  return `${side}|${volume}|${openPrice}`
-}
-
-function findAppearedSymbolPositions(beforePositions, afterPositions, symbol) {
-  const expectedSymbol = stripBrokerSuffix(String(symbol || '')).toUpperCase()
-  const beforeRows = (Array.isArray(beforePositions) ? beforePositions : [])
-    .filter(item => stripBrokerSuffix(String(item?.symbol || '')).toUpperCase() === expectedSymbol)
-  return (Array.isArray(afterPositions) ? afterPositions : []).filter(item => {
-    if (stripBrokerSuffix(String(item?.symbol || '')).toUpperCase() !== expectedSymbol) return false
-    const afterTokens = positionIdentityTokens(item)
-    const previous = beforeRows.find(before => {
-      const beforeTokens = positionIdentityTokens(before)
-      return [...afterTokens].some(token => beforeTokens.has(token))
-    })
-    if (!previous) return true
-    // A netting account may merge a newly-filled pending order into an
-    // existing position identity. Treat a side/volume/open-price change as a
-    // newly appeared exposure, but ignore live quote/profit movement.
-    return positionExposureSignature(previous) !== positionExposureSignature(item)
-  })
+  if (action === 'cancel') {
+    if (!targets.length) return {
+      mode:'skip', continue_to_new_order:false, requires_targets:false,
+      reason:'reference_pending_not_matched', count:0, targets:[],
+    }
+    return {
+      mode:'pre_order_cancel', continue_to_new_order:normalizedSignalType !== 'hold', requires_targets:false,
+      reason:null, count:targets.length, targets,
+    }
+  }
+  return {
+    mode:'none', continue_to_new_order:true, requires_targets:false,
+    reason:null, count:0, targets:[],
+  }
 }
 
 function pendingManagementExpectedState(item) {
@@ -2250,6 +2241,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
           context:positionManagementContext,
           management:signal._position_management,
           inferenceSource:'automatic_scheduler',
+          synchronousPendingCancelGroupIds:synchronousPendingCancelGroupIds(signal),
         })
       } catch (error) {
         l(`position management task persistence failed (${error.message})`)
@@ -2585,9 +2577,13 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const [positionsResponse, pendingResponse, strategyDeliveries] = await Promise.all([
       mt5Bridge(userId, 'positions', { symbol }, { noFallback:true }),
       mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true }),
-      queryAll(`SELECT pending_ticket, trade_ticket FROM auto_signal_deliveries
-        WHERE user_id = ? AND prompt_type_id = ? AND (pending_ticket IS NOT NULL OR trade_ticket IS NOT NULL)
-        ORDER BY id DESC LIMIT 200`, [userId, promptTypeId]),
+      queryAll(`SELECT d.pending_ticket, d.trade_ticket,
+          COALESCE(outcomes.management_group_id, origin_signals.management_group_id) AS management_group_id
+        FROM auto_signal_deliveries d
+        LEFT JOIN signal_outcomes outcomes ON outcomes.delivery_id = d.id
+        LEFT JOIN ai_signals origin_signals ON origin_signals.id = d.signal_id
+        WHERE d.user_id = ? AND d.prompt_type_id = ? AND (d.pending_ticket IS NOT NULL OR d.trade_ticket IS NOT NULL)
+        ORDER BY d.id DESC LIMIT 200`, [userId, promptTypeId]),
     ])
     const positions = Array.isArray(positionsResponse?.positions) ? positionsResponse.positions : null
     const pendingOrders = pendingResponse?.orders ?? pendingResponse?.pending_list
@@ -2602,6 +2598,168 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const sameDirectionPositions = symbolPositions.filter(item => String(item.type || '').toLowerCase().startsWith(signalIsBuy ? 'buy' : 'sell'))
     const oppositePositions = symbolPositions.filter(item => !sameDirectionPositions.includes(item))
     const positionAction = String(signal.position_action || (sameDirectionPositions.length ? 'hold_no_add' : 'open')).toLowerCase()
+    const pendingAction = String(signal.pending_action || 'none').toLowerCase()
+    const pendingActionReason = String(signal.pending_action_reason || '').trim()
+    const managementDirection = String(signal.management_direction || (isTradeSignal ? (signalIsBuy ? 'buy' : 'sell') : 'none')).toLowerCase()
+    const syncPendingCancelGroupIds = synchronousPendingCancelGroupIds(signal)
+    // `keep` intentionally has no management direction in the model contract:
+    // it evaluates every current-strategy pending order for this symbol. Only
+    // cancel uses the model-provided direction to select targets.
+    const pendingTargets = syncPendingCancelGroupIds.size > 0 && isTradeSignal
+      ? selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, undefined, syncPendingCancelGroupIds)
+      : pendingAction === 'keep'
+        ? selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol)
+        : selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, managementDirection)
+    const strategyPendingTickets = new Set(strategyDeliveries.map(item => String(item.pending_ticket || '')).filter(Boolean))
+    const pendingDecision = syncPendingCancelGroupIds.size > 0 && isTradeSignal
+      ? { action:'manage', reason:null, count:pendingTargets.length, targets:pendingTargets }
+      : resolvePendingActionGate({ pendingAction, pendingOrders:pendingTargets })
+    if (pendingDecision.action === 'skip') {
+      await finishBeforeRisk('skipped', pendingDecision.reason, { count:pendingDecision.count })
+      return
+    }
+    const cancellationPlan = resolvePendingCancellationPlan({
+      signalType, pendingAction, pendingTargets:pendingDecision.targets,
+      synchronousPendingCancelGroupIds:syncPendingCancelGroupIds,
+    })
+    if (pendingDecision.action === 'manage') {
+      const cancellable = cancellationPlan.targets
+      if (cancellationPlan.requires_targets && !cancellable.length) {
+        await finishBeforeRisk('rejected', 'pending_cancel_target_unmatched', {
+          count:0, management_group_ids:[...syncPendingCancelGroupIds],
+        })
+        return
+      }
+      try {
+        await assertAiPendingCancelEnabled()
+        if (subscriberWeeklyWindow()) {
+          const error = new Error('weekly_flatten_window')
+          error.reason = 'weekly_flatten_window'
+          throw error
+        }
+        if (lockGuard && !(await lockGuard.assertOwned('pending_cancel'))) {
+          const error = new Error('lock_lost_before_pending_cancel')
+          error.reason = 'lock_lost_before_pending_cancel'
+          throw error
+        }
+        if (modelTaskTracker && !(await assertAutoInferenceBusinessGate({
+          tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc, phase:'pending_cancel',
+        }))) {
+          const error = new Error('model_task_business_gate_failed')
+          error.reason = 'model_task_business_gate_failed'
+          throw error
+        }
+        if (!(await isUserEligibleForAutoExecution(userId))) {
+          const error = new Error('auto_execution_permission_changed')
+          error.reason = 'auto_execution_permission_changed'
+          throw error
+        }
+        const currentResp = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true })
+        const currentOrders = currentResp?.orders ?? currentResp?.pending_list
+        if (!currentResp || currentResp.status === 'error' || !Array.isArray(currentOrders)) {
+          const error = new Error('pending_cancel_list_unavailable')
+          error.reason = 'pending_cancel_list_unavailable'
+          throw error
+        }
+        const currentByTicket = new Map(currentOrders.map(item =>
+          [String(item.ticket ?? item.mt5_ticket ?? '').trim(), item]))
+        const cancelledTickets = []
+        for (const item of cancellable) {
+          const ticket = String(item.ticket ?? item.mt5_ticket ?? '').trim()
+          const current = currentByTicket.get(ticket)
+          if (!ticket || !current) {
+            const error = new Error('pending_cancel_target_unmatched')
+            error.reason = 'pending_cancel_target_unmatched'
+            error.details = { ticket:ticket || null }
+            throw error
+          }
+          if (Number(current.magic || 0) !== 234000
+            || !strategyPendingTickets.has(ticket)
+            || stripBrokerSuffix(String(current.symbol || '')) !== stripBrokerSuffix(symbol)) {
+            const error = new Error('pending_cancel_ownership_changed')
+            error.reason = 'pending_cancel_ownership_changed'
+            error.details = { ticket }
+            throw error
+          }
+          if (recoveryContext) await assertSignalDeliveryRecoveryLive({ recoveryContext, userId, signalId })
+          if (lockGuard && !(await lockGuard.assertOwned(`pending_cancel:${ticket}`))) {
+            const error = new Error('lock_lost_before_pending_cancel')
+            error.reason = 'lock_lost_before_pending_cancel'
+            error.details = { ticket }
+            throw error
+          }
+          if (modelTaskTracker && !(await assertAutoInferenceBusinessGate({
+            tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc,
+            phase:`pending_cancel:${ticket}`,
+          }))) {
+            const error = new Error('model_task_business_gate_failed')
+            error.reason = 'model_task_business_gate_failed'
+            error.details = { ticket }
+            throw error
+          }
+          await assertAiPendingCancelEnabled()
+          const cancelled = await mt5Bridge(userId, 'cancel_pending', {
+            ticket,
+            expected_state: pendingManagementExpectedState(current),
+          }, { noFallback:true })
+          if (cancelled?.status !== 'success') {
+            await insertAudit(null, userId, 'ai_cancel_pending_failed', symbol,
+              { signal_id:signalId, prompt_type_id:promptTypeId, ticket, reason:pendingActionReason, error:cancelled?.message },
+              { status:'error', message:cancelled?.message }, 'warning').catch(() => {})
+            const error = new Error('pending_cancel_failed')
+            error.reason = 'pending_cancel_failed'
+            error.details = { ticket, bridge_message:cancelled?.message || null }
+            throw error
+          }
+          cancelledTickets.push(ticket)
+          await queryRun(
+            "UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE pending_ticket = ? AND user_id = ?",
+            [ticket, userId]).catch(() => {})
+          await insertAudit(null, userId, 'ai_cancel_pending', symbol,
+            { signal_id:signalId, prompt_type_id:promptTypeId, ticket, pending_type:current.side || current.pending_type || current.order_type || null, reason:pendingActionReason },
+            { status:'cancelled', ticket }, 'success').catch(() => {})
+        }
+        const confirmResp = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true })
+        const confirmOrders = confirmResp?.orders ?? confirmResp?.pending_list
+        if (!confirmResp || confirmResp.status === 'error' || !Array.isArray(confirmOrders)) {
+          const error = new Error('pending_cancel_confirm_unavailable')
+          error.reason = 'pending_cancel_confirm_unavailable'
+          throw error
+        }
+        const remaining = new Set(confirmOrders
+          .map(item => String(item?.ticket ?? item?.mt5_ticket ?? '').trim())
+          .filter(Boolean))
+        const stillPending = cancelledTickets.filter(ticket => remaining.has(ticket))
+        if (stillPending.length) {
+          const error = new Error('pending_cancel_unconfirmed')
+          error.reason = 'pending_cancel_unconfirmed'
+          error.details = { tickets:stillPending }
+          throw error
+        }
+      } catch (error) {
+        const reason = error.reason || error.message || 'pending_cancel_failed'
+        const skippedReasons = new Set([
+          'ai_pending_cancel_disabled', 'auto_execution_permission_changed',
+          'delivery_recovery_expired', 'delivery_recovery_untrusted',
+          'model_task_business_gate_failed', 'lock_lost_before_pending_cancel',
+          'weekly_flatten_window',
+        ])
+        await finishBeforeRisk(skippedReasons.has(reason) ? 'skipped' : 'rejected', reason, {
+          ...(error.details || {}), count:cancellable.length,
+        })
+        return
+      }
+      if (!cancellationPlan.continue_to_new_order) {
+        await finishBeforeRisk('success', 'pending_cancelled', {
+          count:cancellable.length, pending_action_reason:pendingActionReason,
+        })
+        return
+      }
+    }
+
+    // Position exposure gates belong to the independent new-order axis. A
+    // successful pending cancellation above must remain effective even when
+    // the new plan is later rejected for an existing/opposite position.
     if (isTradeSignal && oppositePositions.length) {
       await finishBeforeRisk('skipped', 'opposite_position_exists', { count:oppositePositions.length })
       return
@@ -2613,86 +2771,6 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     if (isTradeSignal && !sameDirectionPositions.length && ['allow_add', 'hold_no_add'].includes(positionAction)) {
       await finishBeforeRisk('skipped', 'reference_position_not_matched')
       return
-    }
-
-    const pendingAction = String(signal.pending_action || 'none').toLowerCase()
-    const pendingActionReason = String(signal.pending_action_reason || '').trim()
-    const managementDirection = String(signal.management_direction || (isTradeSignal ? (signalIsBuy ? 'buy' : 'sell') : 'none')).toLowerCase()
-    // `keep` intentionally has no management direction in the model contract:
-    // it evaluates every current-strategy pending order for this symbol. Only
-    // cancel/cancel_replace use the model-provided direction to select targets.
-    const pendingTargets = pendingAction === 'keep'
-      ? selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol)
-      : selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, managementDirection)
-    const strategyPendingTickets = new Set(strategyDeliveries.map(item => String(item.pending_ticket || '')).filter(Boolean))
-    const pendingDecision = resolvePendingActionGate({ pendingAction, pendingOrders:pendingTargets })
-    if (pendingDecision.action === 'skip') {
-      await finishBeforeRisk('skipped', pendingDecision.reason, { count:pendingDecision.count })
-      return
-    }
-    let replacementTargets = []
-    if (pendingDecision.action === 'manage') {
-      const cancellable = pendingDecision.targets
-      try {
-        await assertAiPendingCancelEnabled()
-      } catch {
-        await finishBeforeRisk('skipped', 'ai_pending_cancel_disabled', { count:cancellable.length })
-        return
-      }
-      if (pendingAction === 'cancel_replace' && signalType !== 'hold') {
-        // Replacement cancellation is intentionally deferred until the new
-        // durable order intent has passed all risk checks and reserved risk.
-        replacementTargets = cancellable
-        // A recovered task has no live model-task lease to fence the
-        // replacement callback. Never cancel an existing order and then fail
-        // the new order's recovery fence.
-        if (recoveryReplacementUnsafe(recoveryContext, replacementTargets)) {
-          await finishBeforeRisk('skipped', 'delivery_recovery_replacement_unsafe', { count:cancellable.length })
-          return
-        }
-      } else {
-        if (!(await isUserEligibleForAutoExecution(userId))) {
-          await finishBeforeRisk('skipped', 'auto_execution_permission_changed')
-          return
-        }
-        for (const item of cancellable) {
-          const ticket = item.ticket ?? item.mt5_ticket
-          if (!ticket) continue
-          try {
-            await assertAiPendingCancelEnabled()
-          } catch {
-            await finishBeforeRisk('skipped', 'ai_pending_cancel_disabled', { ticket:String(ticket) })
-            return
-          }
-          if (recoveryContext) {
-            try {
-              await assertSignalDeliveryRecoveryLive({ recoveryContext, userId, signalId })
-            } catch (error) {
-              await finishBeforeRisk('skipped', error.reason || error.message || 'delivery_recovery_untrusted', { ticket:String(ticket) })
-              return
-            }
-          }
-          const cancelled = await mt5Bridge(userId, 'cancel_pending', {
-            ticket,
-            expected_state: pendingManagementExpectedState(item),
-          }, { noFallback:true })
-          if (cancelled?.status !== 'success') {
-            await insertAudit(null, userId, 'ai_cancel_pending_failed', symbol,
-              { signal_id:signalId, prompt_type_id:promptTypeId, ticket:String(ticket), reason:pendingActionReason, error:cancelled?.message },
-              { status:'error', message:cancelled?.message }, 'warning').catch(() => {})
-            await finishBeforeRisk('rejected', 'pending_cancel_failed', { ticket:String(ticket), pending_action_reason:pendingActionReason })
-            return
-          }
-          await queryRun(
-            "UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE pending_ticket = ? AND user_id = ?",
-            [String(ticket), userId]).catch(() => {})
-          await insertAudit(null, userId, 'ai_cancel_pending', symbol,
-            { signal_id:signalId, prompt_type_id:promptTypeId, ticket:String(ticket), pending_type:item.side || item.pending_type || item.order_type || null, reason:pendingActionReason },
-            { status:'cancelled', ticket:String(ticket) }, 'success').catch(() => {})
-        }
-        await finishBeforeRisk('success', 'pending_cancelled', { count:cancellable.length, pending_action_reason:pendingActionReason })
-        return
-      }
     }
 
     const executionSignal = positionAction === 'allow_add'
@@ -2777,9 +2855,6 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       return
     }
 
-    const replacementTicketSet = new Set(replacementTargets
-      .map(item => String(item.ticket ?? item.mt5_ticket ?? '')).filter(Boolean))
-
     // Final lock check before sending MT5 order (Fix 2)
     if (subscriberWeeklyWindow()) {
       l('skipped: weekly flatten window began before order send')
@@ -2801,102 +2876,6 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       await setTerminalStatus('skipped', 'model_task_business_gate_failed').catch(() => {})
       return
     }
-    const afterRiskPrepared = replacementTargets.length ? async () => {
-      const reject = (reason, details = {}) => {
-        const error = new Error(reason)
-        error.reason = reason
-        error.details = details
-        return error
-      }
-      if (subscriberWeeklyWindow()) throw reject('weekly_flatten_window')
-      if (lockGuard && !(await lockGuard.assertOwned('replacement_cancel'))) {
-        throw reject('lock_lost_before_supersede_cancel')
-      }
-      if (modelTaskTracker && !(await assertAutoInferenceBusinessGate({
-        tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc, phase:'replacement_cancel',
-      }))) {
-        throw reject('model_task_business_gate_failed')
-      }
-      if (!(await isUserEligibleForAutoExecution(userId))) {
-        throw reject('auto_execution_permission_changed')
-      }
-      await assertAiPendingCancelEnabled()
-
-      const currentResp = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true })
-      const currentOrders = currentResp?.orders ?? currentResp?.pending_list
-      if (!currentResp || currentResp.status === 'error' || !Array.isArray(currentOrders)) {
-        throw reject('pending_list_unavailable')
-      }
-      const currentByTicket = new Map(currentOrders.map(item =>
-        [String(item.ticket ?? item.mt5_ticket ?? ''), item]))
-      for (const target of replacementTargets) {
-        const ticket = String(target.ticket ?? target.mt5_ticket ?? '')
-        const current = currentByTicket.get(ticket)
-        if (!ticket || !current) continue
-        if (Number(current.magic || 0) !== 234000 || !strategyPendingTickets.has(ticket)) {
-          throw reject('pending_replacement_ownership_changed', { ticket })
-        }
-        if (lockGuard && !(await lockGuard.assertOwned(`replacement_cancel:${ticket}`))) {
-          throw reject('lock_lost_before_supersede_cancel', { ticket })
-        }
-        if (modelTaskTracker && !(await assertAutoInferenceBusinessGate({
-          tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc,
-          phase:`replacement_cancel:${ticket}`,
-        }))) {
-          throw reject('model_task_business_gate_failed', { ticket })
-        }
-        await assertAiPendingCancelEnabled()
-        const cancelResult = await mt5Bridge(userId, 'cancel_pending', {
-          ticket,
-          expected_state: pendingManagementExpectedState(current),
-        }, { noFallback:true })
-        if (cancelResult?.status !== 'success') {
-          await insertAudit(null, userId, 'pending_supersede_failed', symbol,
-            { signal_id:signalId, prompt_type_id:promptTypeId, ticket, reason:pendingActionReason, error:cancelResult?.message },
-            { status:'error', message:cancelResult?.message }, 'warning').catch(() => {})
-          throw reject('pending_cancel_failed', { ticket, bridge_message:cancelResult?.message || null })
-        }
-        await queryRun(
-          "UPDATE auto_signal_deliveries SET pending_state = 'superseded' WHERE pending_ticket = ? AND user_id = ?",
-          [ticket, userId])
-        await insertAudit(null, userId, 'pending_superseded', symbol,
-          { signal_id:signalId, prompt_type_id:promptTypeId, ticket, pending_type:current.pending_type || current.order_type, reason:pendingActionReason },
-          { status:'superseded', ticket }, 'info')
-        l(`superseded old pending after replacement preflight: ticket=${ticket}`)
-      }
-
-      if (lockGuard && !(await lockGuard.assertOwned('replacement_confirm'))) {
-        throw reject('lock_lost_before_pending_confirm')
-      }
-      if (modelTaskTracker && !(await assertAutoInferenceBusinessGate({
-        tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc, phase:'replacement_confirm',
-      }))) {
-        throw reject('model_task_business_gate_failed')
-      }
-      const confirmResp = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true })
-      const confirmOrders = confirmResp?.orders ?? confirmResp?.pending_list
-      if (!confirmResp || confirmResp.status === 'error' || !Array.isArray(confirmOrders)) {
-        throw reject('pending_list_confirm_unavailable')
-      }
-      const confirmedTickets = new Set(confirmOrders
-        .map(item => String(item?.ticket ?? item?.mt5_ticket ?? '').trim())
-        .filter(Boolean))
-      const remainingReplacementTickets = [...replacementTicketSet]
-        .filter(ticket => confirmedTickets.has(ticket))
-      if (remainingReplacementTickets.length) {
-        throw reject('pending_supersede_incomplete', {
-          remaining_same_direction:remainingReplacementTickets.length,
-          remaining_tickets:remainingReplacementTickets,
-        })
-      }
-      const positionsAfterCancel = await mt5Bridge(userId, 'positions', { symbol }, { noFallback:true })
-      const currentPositions = positionsAfterCancel?.positions
-      if (!Array.isArray(currentPositions)) throw reject('portfolio_state_unavailable_after_replacement')
-      const appearedPositions = findAppearedSymbolPositions(symbolPositions, currentPositions, symbol)
-      if (appearedPositions.length) {
-        throw reject('replacement_pending_filled_before_send', { position_count:appearedPositions.length })
-      }
-    } : undefined
     const beforeBridgeSend = async () => {
       if (subscriberWeeklyWindow()) throw new Error('weekly_flatten_window')
       if (lockGuard && !(await lockGuard.assertOwned('bridge_send'))) throw new Error('lock_lost_before_send')
@@ -2920,8 +2899,6 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       deliveryId: `${signalId}:${userId}`,
       beforeBridgeSend,
       beforeBridgeSendTx,
-      afterRiskPrepared,
-      replacePendingTickets:[...replacementTicketSet],
     })
 
     const riskDecisionId = executionRiskDecisionId(execResult)
@@ -3584,15 +3561,15 @@ export const __schedulerTest = {
   isUserEligibleForAutoExecution,
   calculateRecoverySeconds,
   selectOwnedStrategyPendingOrders,
+  synchronousPendingCancelGroupIds,
   resolvePendingActionGate,
-  findAppearedSymbolPositions,
+  resolvePendingCancellationPlan,
   buildSignalDeliveryRows,
   reconcileUnattemptedSignalDeliveries,
   signalDeliveryRecoveryDeadline,
   signalDeliveryRecoveryActionable,
   assertSignalDeliveryRecoveryTx,
   releaseUnsentDeliveryClaim,
-  recoveryReplacementUnsafe,
   isFilledHistoryOrder,
   createLockGuard,
   discardSharedSignalForWeeklyWindow,

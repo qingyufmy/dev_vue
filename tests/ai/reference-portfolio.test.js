@@ -81,4 +81,55 @@ describe('platform reference portfolio', () => {
     await expect(loadPlatformReferencePortfolio({ strategyId:3, sourceUserId:7, symbol:'XAUUSD' }))
       .rejects.toThrow('reference_positions_unavailable')
   })
+
+  it('exposes UTC expiry facts separately from the MT5 display time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-22T02:58:00.000Z'))
+    mocks.queryAll.mockResolvedValue([
+      { outcome_id:9305, signal_id:9305, pending_ticket:'9305001', signal_type:'buy_limit',
+        pending_valid_until:'2026-07-22 06:12:00', terminal_timezone_offset_minutes:180,
+        original_stop_loss:4000, original_take_profits_json:'[4200]', thesis_id:'thesis-9305',
+        management_group_id:'group-9305' },
+    ])
+    mocks.mt5Bridge.mockImplementation(async (_userId, action) => action === 'positions'
+      ? { status:'success', positions:[] }
+      : { status:'success', orders:[{
+          ticket:'9305001', symbol:'XAUUSD', pending_type:'buy_limit', magic:234000,
+          price:4100, valid_until:'2026-07-22 09:12:00', sl:4000, tp:4200,
+        }] })
+
+    const result = await loadPlatformReferencePortfolio({ strategyId:3, sourceUserId:7, symbol:'XAUUSD' })
+    expect(result).toMatchObject({
+      captured_at:'2026-07-22T02:58:00.000Z',
+      captured_at_utc_msc:new Date('2026-07-22T02:58:00.000Z').getTime(),
+    })
+    expect(result.pending_orders[0]).toMatchObject({
+      valid_until_utc:'2026-07-22T06:12:00.000Z',
+      valid_until_terminal:'2026-07-22 09:12:00',
+      terminal_timezone_offset_minutes:180,
+      is_expired:false,
+      remaining_seconds:11640,
+    })
+    vi.useRealTimers()
+  })
+
+  it('does not infer expiry from an untrusted terminal wall-clock string', async () => {
+    mocks.queryAll.mockResolvedValue([{
+      outcome_id:9401, signal_id:9401, pending_ticket:'9401001', signal_type:'sell_limit',
+      pending_valid_until:null, terminal_timezone_offset_minutes:null,
+      thesis_id:'thesis-9401', management_group_id:'group-9401', original_take_profits_json:'[]',
+    }])
+    mocks.mt5Bridge.mockImplementation(async (_userId, action) => action === 'positions'
+      ? { status:'success', positions:[] }
+      : { status:'success', orders:[{
+          ticket:'9401001', symbol:'XAUUSD', pending_type:'sell_limit', magic:234000,
+          valid_until:'2026-07-22 09:12:00', price:4200,
+        }] })
+    const result = await loadPlatformReferencePortfolio({ strategyId:3, sourceUserId:7, symbol:'XAUUSD' })
+    expect(result.pending_orders[0]).toMatchObject({
+      valid_until_utc_msc:null, valid_until_utc:null, valid_until_terminal:null,
+      is_expired:null, remaining_seconds:null,
+    })
+    expect(result.pending_orders[0]).not.toHaveProperty('valid_until')
+  })
 })

@@ -5125,6 +5125,29 @@ const migrations = [
         )
       }
     }
+  },
+  {
+    id: '172_expand_position_management_bridge_command_id',
+    async up() {
+      const columns = await queryAll(`SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_position_management_commands'
+          AND COLUMN_NAME = 'bridge_command_id'`)
+      const column = columns?.[0]
+      if (!column) {
+        await queryRun('ALTER TABLE ai_position_management_commands ADD COLUMN bridge_command_id VARCHAR(128) DEFAULT NULL')
+      } else if (Number(column.CHARACTER_MAXIMUM_LENGTH) < 128) {
+        await queryRun('ALTER TABLE ai_position_management_commands MODIFY COLUMN bridge_command_id VARCHAR(128) DEFAULT NULL')
+      }
+    }
+  },
+  {
+    id: '173_remove_database_ai_signal_schema',
+    async up() {
+      // Output contracts are now versioned in llm.js. The old mutable table
+      // must not remain an alternate source of model instructions.
+      await queryRun('DROP TABLE IF EXISTS ai_signal_schema')
+    }
   }
 ]
 

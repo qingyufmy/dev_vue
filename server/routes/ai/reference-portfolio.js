@@ -12,6 +12,52 @@ function ticketKey(value) {
   return value == null ? '' : String(value).trim()
 }
 
+function parseUtcMsc(value) {
+  if (value instanceof Date) {
+    const time = value.getTime()
+    return Number.isFinite(time) ? time : null
+  }
+  if (typeof value === 'number' || (typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim()))) {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric) || numeric <= 0) return null
+    return numeric < 10_000_000_000 ? Math.trunc(numeric * 1000) : Math.trunc(numeric)
+  }
+  const text = String(value || '').trim()
+  if (!text) return null
+  // MySQL DATETIME columns in this application are stored as UTC despite
+  // having no timezone suffix. Never let the host timezone reinterpret them.
+  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(text)
+    ? text
+    : `${text.replace(' ', 'T')}Z`
+  const time = Date.parse(normalized)
+  return Number.isFinite(time) ? time : null
+}
+
+function formatTerminalTime(utcMsc, offsetMinutes) {
+  if (!Number.isFinite(utcMsc) || !Number.isFinite(offsetMinutes)) return null
+  return new Date(utcMsc + offsetMinutes * 60_000).toISOString().slice(0, 19).replace('T', ' ')
+}
+
+function pendingTimeFacts(ownership, capturedAtUtcMsc) {
+  const validUntilUtcMsc = parseUtcMsc(ownership?.pending_valid_until)
+  const offsetValue = ownership?.terminal_timezone_offset_minutes
+  const offset = offsetValue == null || offsetValue === '' ? null : Number(offsetValue)
+  const validOffset = Number.isInteger(offset) && offset >= -14 * 60 && offset <= 14 * 60 ? offset : null
+  const isExpired = validUntilUtcMsc == null ? null : capturedAtUtcMsc >= validUntilUtcMsc
+  return {
+    // Do not expose the Bridge's unlabeled terminal wall-clock string. It was
+    // the source of mixed-timezone comparisons such as signal #9305.
+    valid_until_utc_msc:validUntilUtcMsc,
+    valid_until_utc:validUntilUtcMsc == null ? null : new Date(validUntilUtcMsc).toISOString(),
+    valid_until_terminal:formatTerminalTime(validUntilUtcMsc, validOffset),
+    terminal_timezone_offset_minutes:validOffset,
+    is_expired:isExpired,
+    remaining_seconds:validUntilUtcMsc == null ? null : Math.ceil((validUntilUtcMsc - capturedAtUtcMsc) / 1000),
+    captured_at:new Date(capturedAtUtcMsc).toISOString(),
+    captured_at_utc_msc:capturedAtUtcMsc,
+  }
+}
+
 export async function loadPlatformReferencePortfolio({ strategyId, sourceUserId, symbol } = {}) {
   const [positionsResponse, pendingResponse, ownershipRows] = await Promise.all([
     // The strategy symbol is canonical (for example XAUUSD) while the terminal
@@ -24,7 +70,8 @@ export async function loadPlatformReferencePortfolio({ strategyId, sourceUserId,
         outcomes.entry_order_ticket, outcomes.position_id, outcomes.original_symbol,
         outcomes.actual_stop_loss, outcomes.actual_take_profit, outcomes.original_stop_loss,
         outcomes.original_take_profits_json, outcomes.thesis_id, outcomes.management_group_id,
-        signals.signal_type, signals.entry_method, signals.created_at
+        signals.signal_type, signals.entry_method, signals.created_at,
+        signals.pending_valid_until, signals.terminal_timezone_offset_minutes
       FROM signal_outcomes outcomes
       JOIN ai_signals signals ON signals.id = outcomes.signal_id
       WHERE outcomes.user_id = ? AND signals.prompt_type_id = ?
@@ -46,6 +93,7 @@ export async function loadPlatformReferencePortfolio({ strategyId, sourceUserId,
     if (ticketKey(row.entry_order_ticket)) byPositionRef.set(ticketKey(row.entry_order_ticket), row)
     if (ticketKey(row.pending_ticket)) byPendingTicket.set(ticketKey(row.pending_ticket), row)
   }
+  const capturedAtUtcMsc = Date.now()
   const positions = positionsResponse.positions
     .filter(item => Number(item.magic || 0) === SYSTEM_TRADE_MAGIC && sameSymbol(item.symbol, symbol))
     .map(item => ({ item, ownership:[item.position_id, item.identifier, item.ticket]
@@ -82,7 +130,7 @@ export async function loadPlatformReferencePortfolio({ strategyId, sourceUserId,
       actual_take_profit:Number(item.tp || 0) || null,
       original_stop_loss:Number(ownership.original_stop_loss || 0) || null,
       original_take_profits:jsonArray(ownership.original_take_profits_json),
-      valid_until:item.valid_until || null,
+      ...pendingTimeFacts(ownership, capturedAtUtcMsc),
     }))
   return {
     role:'platform_strategy_reference_portfolio',
@@ -92,7 +140,8 @@ export async function loadPlatformReferencePortfolio({ strategyId, sourceUserId,
     pending_orders:pending,
     position_count:positions.length,
     pending_count:pending.length,
-    captured_at:new Date().toISOString(),
+    captured_at:new Date(capturedAtUtcMsc).toISOString(),
+    captured_at_utc_msc:capturedAtUtcMsc,
   }
 }
 

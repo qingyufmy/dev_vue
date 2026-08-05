@@ -1,6 +1,6 @@
 // ai/llm.js — AI 推理 + 信号标准化
 
-import { queryAll, queryOne } from '../../db.js'
+import { queryAll } from '../../db.js'
 import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { DEFAULT_PROMPT, stripTimeframeTags, round2, parseJsonObject, aiFailureHold } from './utils.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './config.js'
@@ -103,7 +103,7 @@ export function formatPendingValidUntilUtc(validMinutes, nowMs = Date.now()) {
 }
 const PENDING_LIFECYCLE_RULE = `
 ## 挂单生命周期硬性规则
-挂单有效期、过期识别和到期取消由 MT5 与后端协调器负责。禁止比较任何时间字符串来判断挂单是否过期；禁止在 analysis 或 reasoning 中声称某挂单“已过期”“超时失效”“已自动取消”；禁止仅以时间、有效期或过期为理由输出 cancel_pending。cancel_pending 只能用于价格条件已明显失效、市场结构已破坏或方向逻辑已反转等非时间原因。是否存在挂单只能依据 pending_orders 当前数组；数组中不存在时只能表述“当前输入未包含该挂单”，不得推断其已过期或已取消。`
+挂单有效期由服务端按 UTC 事实提供。禁止比较任何时间字符串来判断挂单是否过期；同样禁止比较 timestamp、MT5 墙钟字符串或叙述来判断过期。只能使用服务端明确给出的 is_expired，必要时仅把 valid_until_utc_msc/valid_until_utc 作为事实展示；is_expired=false 或 unknown 都不得按过期取消。禁止在 analysis 或 reasoning 中声称未过期挂单已过期、超时失效或已自动取消；禁止仅以时间、有效期或过期为理由输出 cancel_pending。是否存在挂单只能依据 pending_orders 当前数组；数组中不存在时只能表述“当前输入未包含该挂单”，不得推断其已过期或已取消。非过期取消必须说明价格、结构、方向或风险方面的依据。`
 
 const CHAN_DIVERGENCE_RULE = `
 ## 缠论背驰使用规则
@@ -198,12 +198,8 @@ function localizeAiSignalUserVisibleFields(signal) {
   return signal
 }
 
-let _schemaCache = null
-let _schemaCacheTs = 0
-const SCHEMA_CACHE_TTL = 300_000 // 5 minutes
-
 const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
-  signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价立即执行; buy_limit/sell_limit=挂限价单; buy_stop/sell_stop=突破追单; buy_stop_limit/sell_stop_limit=突破后限价。方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时必须返回hold。挂单管理必须逐笔查看输入中的实时挂单，不得按数量替代判断：同品种同方向可以同时存在多笔挂单，模型要结合每笔价格、方向、市场结构和风险决定新增、保留、取消或替换，不得无条件加挂",
+  signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价立即执行; buy_limit/sell_limit=挂限价单; buy_stop/sell_stop=突破追单; buy_stop_limit/sell_stop_limit=突破后限价。方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时必须返回hold。挂单管理必须逐笔查看输入中的实时挂单，不得按数量替代判断：同品种同方向可以同时存在多笔挂单，模型要结合每笔价格、方向、市场结构和风险决定新建、保留或取消，不得无条件加挂",
   entry_method: "必须字段。仅允许 market | limit | stop | stop_limit | observe，并且必须与signal_type一致：buy/sell=market，*_limit=limit，*_stop=stop，*_stop_limit=stop_limit，hold=observe",
   confidence: "0.00-1.00，动态估算，禁止固定值。按趋势强度、位置结构、波动噪音、风险状态综合评估。BUY/SELL弱优势0.52-0.62，中等0.63-0.74，强共振>0.75。HOLD时0.55-0.68，明确回避风险可>0.70。hold时也不得为0",
   bullish_score: "0-100，市场偏多倾向分。必须与bearish_score合计为100；表示当前行情方向倾向，不代表胜率或执行概率",
@@ -211,9 +207,9 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   position_size_tier: "必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓、标准仓。不得返回具体手数或自定义系数",
   position_size_reason: "必须字段。使用简体中文说明为什么选择该仓位档位，不得猜测用户账户余额或手数",
   position_action: "必须字段。仅允许 open | hold_no_add | allow_add | observe。参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add；不得建议自动平仓",
-  pending_action: "必须字段。仅允许 none | keep | cancel | cancel_replace。输入中的同品种同方向可以同时存在多笔挂单，必须逐笔评估，系统不按数量限制也不做相同价格去重。none 表示本轮不管理现有挂单，若当前交易信号成立可以新增一笔；keep 表示保留现有挂单且本轮不新增；只有价格、结构或方向依据明确失效时才用 cancel 或 cancel_replace。不得无条件加挂或无条件替换",
-  pending_action_reason: "中文说明挂单处理依据。pending_action 为 cancel 或 cancel_replace 时必须具体说明原挂单在哪个价格、市场结构或方向依据上已经失效，不得只写‘逻辑失效’，不得使用过期或超时作为原因；其他动作可返回空字符串",
-  management_direction: "必须字段。仅允许 buy | sell | none。需要取消或替换挂单时填写被管理挂单方向；其他情况填 none",
+  pending_action: "必须字段。仅允许 none | keep | cancel。输入中的同品种同方向可以同时存在多笔挂单，必须逐笔评估，系统不按数量限制也不做相同价格去重。none 表示本轮不管理现有挂单，若当前交易信号成立可以新增一笔；keep 表示保留现有挂单且本轮不新增；cancel 只表示取消模型选中的挂单，是否有新信号由 market_plan 独立决定。不得无条件加挂",
+  pending_action_reason: "中文说明挂单处理依据。pending_action 为 cancel 时必须具体说明原挂单在哪个价格、市场结构或方向依据上已经失效，不得只写‘逻辑失效’，不得使用过期或超时作为原因；其他动作可返回空字符串",
+  management_direction: "必须字段。仅允许 buy | sell | none。需要取消挂单时填写被管理挂单方向；其他情况填 none",
   limit_price: "挂单价。buy_limit/sell_limit:入场价,订单直接挂在此价; buy_stop/sell_stop:触发价,价格到达后以市价成交; buy_stop_limit/sell_stop_limit:触发价,到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价,限价卖单须高于当前价;突破单相反,买单触发价须高于当前价,卖单触发价须低于当前价。距离参考：M15一般0.5-2 ATR,H1一般1-3 ATR",
   stop_limit_price: "Stop Limit 触发后挂出的限价，仅buy_stop_limit/sell_stop_limit时必填。limit_price始终是突破触发价：buy_stop_limit 的触发价高于当前价，stop_limit_price不得高于触发价；sell_stop_limit 的触发价低于当前价，stop_limit_price不得低于触发价",
   pending_valid_minutes: "挂单有效期(分钟)，1-1440，默认240",
@@ -222,14 +218,14 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   take_profit_2_price: "止盈-标准(第二目标位)，数字，buy/sell/挂单必须给出，hold可为null。距离应大于tp1，R:R建议1:1.5-1:2",
   take_profit_3_price: "止盈-激进(第三目标位)，数字，可选。距离应大于tp2，R:R建议1:2-1:3。仅在趋势明确且有延续依据时提供",
   recommended_take_profit_tier: "必须字段。非hold仅允许1、2、3，表示AI综合行情后建议实际执行的止盈目标档位，并且对应目标价格必须存在；hold返回null。reasoning中必须说明选择该档位的行情依据",
-  cancel_pending: "必须字段（条件触发）。挂单有效期、过期识别和到期取消由MT5与后端负责，禁止比较时间字符串判断过期，禁止以过期、超时或有效期为理由取消挂单。仅当价格条件明显失效、市场结构破坏或方向逻辑反转时，才输出取消条件；否则返回空数组[]。每个元素：symbol(必填), pending_type(可选), max_price(可选), min_price(可选), cancel_all(可选bool), reason(必填且必须是非时间原因)",
+  cancel_pending: "必须字段（条件触发）。挂单有效期和过期判断只能使用服务端 is_expired / valid_until_utc_msc，禁止比较 timestamp、MT5墙钟字符串或叙述；is_expired=false或unknown时不得以过期为由取消。仅当价格条件明显失效、市场结构破坏、方向逻辑反转或风险需要收缩时，才输出取消条件；否则返回空数组[]。每个元素：symbol(必填), pending_type(可选), max_price(可选), min_price(可选), cancel_all(可选bool), reason(必填且必须是非时间原因)",
   decision_summary: "必填，中文，一句话给出用户最关心的结论；不超过80字。观望时明确说明为什么暂不执行",
   trigger_condition: "中文，说明该建议成立或挂单触发需要满足的市场条件；没有额外条件时返回空字符串",
   invalidation_condition: "中文，说明什么市场变化会使当前建议失效；hold时可说明重新评估条件",
   key_reasons: ["2至4条关键行情依据，每条不超过60字，不包含账户、持仓或风控结论"],
   risk_factors: ["0至4条市场层面的不利因素，每条不超过60字，不包含账户或仓位信息"],
   analysis: "中文，按以下顺序：1.当前趋势方向和强度 2.关键支撑/阻力位 3.当前价与均线关系 4.波动率状态 5.潜在催化剂或风险事件",
-  reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望） 5.挂单管理：逐笔检查现有挂单状态和价格，说明本轮选择新增、保留、取消或替换的依据"
+  reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望） 5.挂单管理：逐笔检查现有挂单状态和价格，说明本轮选择保留、取消或不管理的依据"
 }, null, 2)
 
 export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, experienceSelection = null) {
@@ -245,9 +241,9 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   schema.position_size_tier = '必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓和标准仓。不得返回具体手数或自定义系数。'
   schema.position_size_reason = '必须字段。使用简体中文说明仓位档位的行情依据；不得猜测用户账户余额或手数。'
   schema.position_action = '必须字段。仅允许 open | hold_no_add | allow_add | observe。平台参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add；暂不支持自动平仓。'
-  schema.pending_action = '必须字段。仅允许 none | keep | cancel | cancel_replace。同品种同方向可以同时存在多笔挂单，必须逐笔结合价格、方向、市场结构和风险评估；系统不按数量限制，也不做相同价格去重。none 表示本轮不管理现有挂单，若交易信号成立可以新增一笔；keep 表示保留现有挂单且本轮不新增；只有逻辑失效或方向反转时才能 cancel 或 cancel_replace。不得无条件加挂或无条件替换。'
-  schema.pending_action_reason = '中文字符串。pending_action 为 cancel 或 cancel_replace 时必须说明可核验的具体依据，例如关键位被突破、原结构被破坏、方向逻辑反转或挂单价格已不符合当前结构；必须包含对应的价格、结构或方向变化，不得只写“逻辑失效”，不得以过期、超时或有效期为理由。其他动作返回空字符串。'
-  schema.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 或 cancel_replace 时填写被管理挂单方向；其他情况填 none。'
+  schema.pending_action = '必须字段。仅允许 none | keep | cancel。同品种同方向可以同时存在多笔挂单，必须逐笔结合价格、方向、市场结构和风险评估；系统不按数量限制，也不做相同价格去重。none 表示本轮不管理现有挂单，若交易信号成立可以新增一笔；keep 表示保留现有挂单且本轮不新增；cancel 只取消模型选中的挂单，market_plan 是否形成新信号独立判断。不得无条件加挂。'
+  schema.pending_action_reason = '中文字符串。pending_action 为 cancel 时必须说明可核验的具体依据，例如关键位被突破、原结构被破坏、方向逻辑反转或挂单价格已不符合当前结构；必须包含对应的价格、结构或方向变化，不得只写“逻辑失效”，不得以过期、超时或有效期为理由。其他动作返回空字符串。'
+  schema.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 时填写被管理挂单方向；其他情况填 none。'
   const experienceIds = [...new Set((experienceSelection?.selectedItemIds || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
   const experienceRefs = [...new Set((experienceSelection?.selectedRefs || experienceIds.map(id => `item:${id}`))
     .map(value => String(value || '').trim()).filter(Boolean))]
@@ -1088,14 +1084,13 @@ export function validateAiSignalResponse(value, allowedEntryMethods) {
   if (!['open', 'hold_no_add', 'allow_add', 'observe'].includes(positionAction)) throw new Error('ai_response_invalid_position_action')
   if (signalType === 'hold' && !['observe', 'hold_no_add'].includes(positionAction)) throw new Error('ai_response_hold_position_action_invalid')
   if (signalType !== 'hold' && !['open', 'hold_no_add', 'allow_add'].includes(positionAction)) throw new Error('ai_response_trade_position_action_invalid')
-  if (!['none', 'keep', 'cancel', 'cancel_replace'].includes(pendingAction)) throw new Error('ai_response_invalid_pending_action')
-  if (signalType === 'hold' && pendingAction === 'cancel_replace') throw new Error('ai_response_hold_cancel_replace_invalid')
+  if (!['none', 'keep', 'cancel'].includes(pendingAction)) throw new Error('ai_response_invalid_pending_action')
   const managementDirection = String(value.management_direction || '').toLowerCase()
   if (!['buy', 'sell', 'none'].includes(managementDirection)) throw new Error('ai_response_invalid_management_direction')
-  if (['cancel', 'cancel_replace'].includes(pendingAction) && managementDirection === 'none') {
+  if (pendingAction === 'cancel' && managementDirection === 'none') {
     throw new Error('ai_response_management_direction_required')
   }
-  if (['cancel', 'cancel_replace'].includes(pendingAction) && (typeof value.pending_action_reason !== 'string' || !value.pending_action_reason.trim())) {
+  if (pendingAction === 'cancel' && (typeof value.pending_action_reason !== 'string' || !value.pending_action_reason.trim())) {
     const legacyReason = Array.isArray(value.cancel_pending)
       ? value.cancel_pending.find(item => item && typeof item === 'object' && String(item.reason || '').trim())?.reason
       : ''
@@ -1124,18 +1119,9 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const effectivePrompt = typeof promptOverride === 'string' ? promptOverride : (config.system_prompt || DEFAULT_PROMPT)
     const prompt = stripTimeframeTags(effectivePrompt)
 
-    // Load output schema from DB (cached 5 min)
-    let outputFormat = ''
-    let schemaSource = 'default'
-    try {
-      if (_schemaCache && Date.now() - _schemaCacheTs < SCHEMA_CACHE_TTL) {
-        outputFormat = _schemaCache; schemaSource = 'cache'
-      } else {
-        const schema = await queryOne('SELECT schema_json FROM ai_signal_schema WHERE is_active = 1 LIMIT 1')
-        if (schema?.schema_json) { outputFormat = schema.schema_json; schemaSource = 'database'; _schemaCache = outputFormat; _schemaCacheTs = Date.now() }
-      }
-    } catch (e) { console.warn('[LLM] Failed to load output schema from DB, using default:', e.message) }
-    if (!outputFormat) outputFormat = DEFAULT_OUTPUT_FORMAT
+    // The output contract is versioned code, not mutable database content.
+    let outputFormat = DEFAULT_OUTPUT_FORMAT
+    const schemaSource = 'code'
     const strategySchema = buildStrategyOutputFormat(outputFormat, config._allowed_entry_methods, config._experienceSelection)
     outputFormat = strategySchema.outputFormat
     outputFormat = attachStrategyPolicyOutputFormat(outputFormat, config._strategyPolicyRuntime)
@@ -1147,10 +1133,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     if (DEBUG_LLM) console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
 
     const marketOnlyRule = config._market_only
-      ? '\n\n## 共享市场推理边界\n你只能分析输入中的市场行情、K线、技术指标和 platform_strategy_reference_portfolio。该参考组合仅表示本平台策略已经产生的持仓与挂单，不代表任何订阅用户的真实账户。禁止推测订阅用户的账户、余额、权益、持仓、挂单或个人风控信息。你只能选择不建仓、试探仓、轻仓或标准仓，不得返回绝对手数；用户实际手数由独立风控根据净值、真实止损亏损和 MT5 合约规格计算。参考组合已有同向持仓时，除非行情形成明确的延续加仓机会，否则 position_action 必须为 hold_no_add；即使允许加仓，系统也会限制为试探仓。参考挂单可以有多笔同品种同方向订单，必须逐笔结合价格、结构和风险决定动作：keep 表示保留且本轮不新增，none 表示不管理现有挂单且交易信号成立时可以新增，cancel/cancel_replace 只能取消或替换管理方向对应且由当前策略产生的挂单。系统不以数量代替模型判断，也不应无条件加挂。'
+      ? '\n\n## 共享市场推理边界\n你只能分析输入中的市场行情、K线、技术指标和 platform_strategy_reference_portfolio。该参考组合仅表示本平台策略已经产生的持仓与挂单，不代表任何订阅用户的真实账户。禁止推测订阅用户的账户、余额、权益、持仓、挂单或个人风控信息。你只能选择不建仓、试探仓、轻仓或标准仓，不得返回绝对手数；用户实际手数由独立风控根据净值、真实止损亏损和 MT5 合约规格计算。参考组合已有同向持仓时，除非行情形成明确的延续加仓机会，否则 position_action 必须为 hold_no_add；即使允许加仓，系统也会限制为试探仓。参考挂单可以有多笔同品种同方向订单，必须逐笔结合价格、结构和风险决定动作：keep 表示保留且本轮不新增，none 表示不管理现有挂单且交易信号成立时可以新增，cancel 只取消当前策略中模型选中的管理方向挂单；新建信号与取消决定彼此独立。系统不以数量代替模型判断，也不应无条件加挂。'
       : ''
     const privatePortfolioRule = !config._market_only && config._include_portfolio_context
-      ? '\n\n## 私有策略账户上下文\n输入中的 positions 与 pending_orders 是当前用户账户的完整实时数据，可能同时包含多笔同品种同方向挂单。请逐笔结合价格、方向、市场结构和风险判断 position_action 与 pending_action；系统不按数量限制或相同价格去重，由模型决定是否新增、保留、取消或替换。keep 表示保留现有挂单且本轮不新增，none 表示本轮不管理现有挂单且交易信号成立时可以新增；不得把余额或现有手数直接复制成新订单手数，新订单仍只返回固定仓位档位，实际手数由风控精算。'
+      ? '\n\n## 私有策略账户上下文\n输入中的 positions 与 pending_orders 是当前用户账户的完整实时数据，可能同时包含多笔同品种同方向挂单。请逐笔结合价格、方向、市场结构和风险判断 position_action 与 pending_action；系统不按数量限制或相同价格去重，由模型独立决定新建信号以及挂单保留或取消。keep 表示保留现有挂单且本轮不新增，none 表示本轮不管理现有挂单且交易信号成立时可以新增；不得把余额或现有手数直接复制成新订单手数，新订单仍只返回固定仓位档位，实际手数由风控精算。'
       : ''
     // Personal memory is untrusted data. Keep its content out of the system
     // prompt and append it to the user payload below. Shared platform inference
@@ -1168,8 +1154,8 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const pendingRule = strategySchema.hasPending ? `\n\n${PENDING_LIFECYCLE_RULE}` : ''
     const positionManagementRule = positionManagementEnabled ? `
 
-## 持仓管理 v1.1 强制边界
-输入中的 position_management_context 由服务端生成。你必须完整返回其中每一个挂单管理组和持仓管理组，且只能原样引用给出的 management_group_id、thesis_id、condition_id 和 evidence_refs。挂单动作只允许 keep 或 cancel；持仓动作只允许 hold 或 exit。禁止输出 replace、reverse、ticket、手数或任何账户身份。不得修改冻结条件、失效价格、条件类型、周期和确认次数。reversal_candidate 只表示解释性判断，不是执行命令。新建仓、挂单评估、持仓评估彼此独立；新建仓字段无效时也必须继续完成其他评估。` : ''
+## 持仓管理 v1.2 强制边界
+输入中的 position_management_context 由服务端生成。你必须完整返回其中每一个挂单管理组和持仓管理组，且只能原样引用给出的 management_group_id、thesis_id、condition_id 和 evidence_refs。挂单动作只允许 keep 或 cancel；持仓动作只允许 hold 或 exit。cancel 时必须填写 cancel_reason_code，仅允许 expired | thesis_invalidated | risk_reduction | model_judgment；expired 必须与对应组服务端 is_expired=true 一致，不能使用 timestamp、MT5墙钟或叙述自行比较。thesis_invalidated 只能引用服务端 evaluation_state=triggered 的硬条件，不能引用 not_triggered 或 unknown 硬条件；soft 条件只能作为 model_required 参考。禁止输出 replace、reverse、ticket、手数或任何账户身份。不得修改冻结条件、失效价格、条件类型、周期和确认次数。reversal_candidate 只表示解释性判断，不是执行命令。新建仓、挂单评估、持仓评估彼此独立；新建仓字段无效时也必须继续完成其他评估。` : ''
     const strategyPolicyRule = typeof config._strategyPolicyPrompt === 'string' && config._strategyPolicyPrompt
       ? `\n\n${config._strategyPolicyPrompt}` : ''
     const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + positionManagementRule + platformExperience + personalMemoryRule + strategyPolicyRule + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + (positionManagementEnabled ? '' : pendingRule)
@@ -1621,12 +1607,11 @@ export function normalizeAiSignal(parsed, config, market) {
   if (!['open', 'hold_no_add', 'allow_add', 'observe'].includes(parsed.position_action)) return schemaHold('invalid_position_action')
   if (signalType === 'hold' && !['observe', 'hold_no_add'].includes(parsed.position_action)) return schemaHold('invalid_hold_position_action')
   if (signalType !== 'hold' && !['open', 'hold_no_add', 'allow_add'].includes(parsed.position_action)) return schemaHold('invalid_trade_position_action')
-  if (!['none', 'keep', 'cancel', 'cancel_replace'].includes(parsed.pending_action)) return schemaHold('invalid_pending_action')
-  if (signalType === 'hold' && parsed.pending_action === 'cancel_replace') return schemaHold('invalid_hold_cancel_replace')
+  if (!['none', 'keep', 'cancel'].includes(parsed.pending_action)) return schemaHold('invalid_pending_action')
   if (!['buy', 'sell', 'none'].includes(parsed.management_direction)) return schemaHold('invalid_management_direction')
-  if (['cancel', 'cancel_replace'].includes(parsed.pending_action) && parsed.management_direction === 'none') return schemaHold('management_direction_required')
-  if (['cancel', 'cancel_replace'].includes(parsed.pending_action) && !parsed.pending_action_reason) return schemaHold('pending_action_reason_required')
-  if (!['cancel', 'cancel_replace'].includes(parsed.pending_action)) parsed.pending_action_reason = ''
+  if (parsed.pending_action === 'cancel' && parsed.management_direction === 'none') return schemaHold('management_direction_required')
+  if (parsed.pending_action === 'cancel' && !parsed.pending_action_reason) return schemaHold('pending_action_reason_required')
+  if (parsed.pending_action !== 'cancel') parsed.pending_action_reason = ''
 
   // Limit price validation — reject signal if pending order has no valid price
   let limitPrice = parsed.limit_price ? parseFloat(parsed.limit_price) : null
@@ -1737,7 +1722,6 @@ export function normalizeAiSignal(parsed, config, market) {
     parsed.position_size_tier = 'observe'
     parsed.position_size_factor = 0
     parsed.position_size_reason = '当前已有同向持仓，本次不新增仓位。'
-    parsed.pending_action = parsed.pending_action === 'cancel_replace' ? 'cancel' : parsed.pending_action
     parsed.management_direction = ['cancel'].includes(parsed.pending_action) ? parsed.management_direction : 'none'
     parsed.limit_price = null
     parsed.stop_limit_price = null

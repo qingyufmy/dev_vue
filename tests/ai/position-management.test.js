@@ -65,6 +65,7 @@ function response(overrides = {}) {
     market_plan:{ signal_type:'sell', entry_method:'market' },
     pending_evaluations:[{
       management_group_id:'pending_group_01', action:'cancel', reason:'原挂单结构已经失效',
+      cancel_reason_code:'model_judgment',
       evidence_refs:['condition:pending_invalid_01'],
     }],
     position_evaluations:[{
@@ -78,7 +79,7 @@ function response(overrides = {}) {
   }
 }
 
-describe('position management v1.1 contract', () => {
+describe('position management v1.2 contract', () => {
   it('uses the explicit last closed bar instead of the forming candle', () => {
     const result = buildPositionManagementAsOf({
       timestamp:'2026-07-24 12:30:00',
@@ -168,6 +169,97 @@ describe('position management v1.1 contract', () => {
     expect(result._position_management.position_evaluations[0].action).toBe('exit')
   })
 
+  it('requires server-confirmed expiry for an expired cancellation reason', () => {
+    const value = response({ pending_evaluations:[{
+      ...response().pending_evaluations[0], cancel_reason_code:'expired',
+    }] })
+    const notExpiredContext = { ...context, pending_groups:[{
+      ...context.pending_groups[0], pending_order_facts:[{ is_expired:false, valid_until_utc_msc:1784748720000 }],
+    }] }
+    const result = validatePositionManagementResponse(value, notExpiredContext,
+      plan => ({ ...plan, confidence:0.8 }))
+    expect(result._position_management.pending_evaluations[0]).toMatchObject({
+      action:'keep', validation_source:'server_fail_closed', cancel_reason_code:null,
+    })
+    expect(result._position_management.validation.errors).toContainEqual(
+      expect.objectContaining({ code:'pending_expired_evidence_required' }),
+    )
+    const expiredContext = { ...notExpiredContext, pending_groups:[{
+      ...notExpiredContext.pending_groups[0], pending_order_facts:[{ is_expired:true }],
+    }] }
+    expect(validatePositionManagementResponse(value, expiredContext,
+      plan => ({ ...plan, confidence:0.8 }))._position_management.pending_evaluations[0])
+      .toMatchObject({ action:'cancel', cancel_reason_code:'expired' })
+  })
+
+  it('does not let a thesis cancellation cite an untriggered hard condition', () => {
+    const value = response({ pending_evaluations:[{
+      ...response().pending_evaluations[0], cancel_reason_code:'thesis_invalidated',
+      evidence_refs:['condition:hard_01'],
+    }] })
+    const pendingGroup = {
+      ...context.pending_groups[0],
+      allowed_evidence_refs:['condition:hard_01'],
+      frozen_conditions:[{
+        condition_id:'hard_01', kind:'hard', operator:'closed_bar_lte', threshold:4000,
+        evaluation_state:'not_triggered', observed_close:4010,
+      }],
+    }
+    const invalid = validatePositionManagementResponse(value,
+      { ...context, pending_groups:[pendingGroup] }, plan => ({ ...plan, confidence:0.8 }))
+    expect(invalid._position_management.pending_evaluations[0]).toMatchObject({
+      action:'keep', validation_source:'server_fail_closed', cancel_reason_code:null,
+    })
+    expect(invalid._position_management.validation.errors).toContainEqual(
+      expect.objectContaining({ code:'pending_hard_condition_not_triggered' }),
+    )
+    const valid = validatePositionManagementResponse(value,
+      { ...context, pending_groups:[{ ...pendingGroup, frozen_conditions:[{
+        ...pendingGroup.frozen_conditions[0], evaluation_state:'triggered', observed_close:3990,
+      }] }] }, plan => ({ ...plan, confidence:0.8 }))
+    expect(valid._position_management.pending_evaluations[0])
+      .toMatchObject({ action:'cancel', cancel_reason_code:'thesis_invalidated' })
+  })
+
+  it.each(['expired', 'thesis_invalidated', 'risk_reduction', 'model_judgment'])
+    ('rejects %s when its evidence cites a not-triggered hard condition', cancelReasonCode => {
+      const value = response({ pending_evaluations:[{
+        ...response().pending_evaluations[0], cancel_reason_code:cancelReasonCode,
+        reason:'风险依据', evidence_refs:['condition:hard_01'],
+      }] })
+      const pendingGroup = {
+        ...context.pending_groups[0], allowed_evidence_refs:['condition:hard_01'],
+        pending_order_facts:[{ is_expired:true }], frozen_conditions:[{
+          condition_id:'hard_01', kind:'hard', operator:'closed_bar_lte', threshold:4000,
+          evaluation_state:'not_triggered', observed_close:4010,
+        }],
+      }
+      const result = validatePositionManagementResponse(value,
+        { ...context, pending_groups:[pendingGroup] }, plan => ({ ...plan, confidence:0.8 }))
+      expect(result._position_management.validation.errors).toContainEqual(
+        expect.objectContaining({ code:'pending_hard_condition_not_triggered' }),
+      )
+      expect(result._position_management.pending_evaluations[0]).toMatchObject({
+        action:'keep', validation_source:'server_fail_closed', cancel_reason_code:null,
+      })
+    })
+
+  it.each(['thesis_invalidated', 'risk_reduction', 'model_judgment'])
+    ('does not let %s disguise an expiry claim', cancelReasonCode => {
+      const value = response({ pending_evaluations:[{
+        ...response().pending_evaluations[0], cancel_reason_code:cancelReasonCode,
+        reason:'该挂单已过期，应该撤销', evidence_refs:['condition:pending_invalid_01'],
+      }] })
+      const result = validatePositionManagementResponse(value, context,
+        plan => ({ ...plan, confidence:0.8 }))
+      expect(result._position_management.validation.errors).toContainEqual(
+        expect.objectContaining({ code:'pending_expiry_reason_code_mismatch' }),
+      )
+      expect(result._position_management.pending_evaluations[0]).toMatchObject({
+        action:'keep', validation_source:'server_fail_closed', cancel_reason_code:null,
+      })
+    })
+
   it('expires the whole response when snapshot identity changes', () => {
     expect(() => validatePositionManagementResponse(response({
       as_of:{ ...asOf, market_snapshot_hash:'sha256:other' },
@@ -176,7 +268,7 @@ describe('position management v1.1 contract', () => {
 
   it('does not expose direct replace or reverse actions in the model schema', () => {
     const schema = buildPositionManagementOutputFormat(JSON.stringify({
-      signal_type:'buy | sell | hold', pending_action:'cancel_replace', position_action:'open',
+      signal_type:'buy | sell | hold', pending_action:'cancel', position_action:'open',
       analysis:'中文', reasoning:'中文',
     }), context)
     const parsed = JSON.parse(schema)
@@ -322,6 +414,41 @@ describe('single-inference pending cancellation', () => {
     expect(queryRun.mock.calls.some(call => String(call[0]).includes("status = 'EVIDENCE_CONFIRMED'"))).toBe(false)
     expect(queryRun.mock.calls.some(call => String(call[0]).includes('single_inference_pending_cancel_confirmed'))).toBe(true)
   })
+
+  it('does not enqueue an asynchronous task for a synchronous pending cancellation group', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+    const target = {
+      user_id:7, trading_account_id:3, outcome_id:29, pending_ticket:'O-29', position_id:null,
+      original_symbol:'XAUUSD.s', standard_symbol:'XAUUSD', management_group_id:'pending_group_01',
+      thesis_id:'thesis_pending_01', ownership_history_id:5, strategy_id:2, strategy_version:4,
+    }
+    const localContext = { ...context, _targets:new Map([['pending_group_01', [target]]]) }
+    const result = await persistPositionManagementEvaluations({ signalId:106, context:localContext,
+      inferenceSource:'automatic_scheduler', synchronousPendingCancelGroupIds:new Set(['pending_group_01']),
+      management:{ position_evaluations:[], pending_evaluations:[response().pending_evaluations[0]] } })
+    expect(result).toEqual([])
+    expect(queryRun).not.toHaveBeenCalled()
+  })
+
+  it('keeps hold plus cancel asynchronous when its group is not synchronous', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+    queryAll.mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:41, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+    const target = {
+      user_id:7, trading_account_id:3, outcome_id:39, pending_ticket:'O-39', position_id:null,
+      original_symbol:'XAUUSD.s', standard_symbol:'XAUUSD', management_group_id:'pending_group_01',
+      thesis_id:'thesis_pending_01', ownership_history_id:5, strategy_id:2, strategy_version:4,
+    }
+    const localContext = { ...context, _targets:new Map([['pending_group_01', [target]]]) }
+    const result = await persistPositionManagementEvaluations({ signalId:107, context:localContext,
+      inferenceSource:'automatic_scheduler', management:{
+        position_evaluations:[], pending_evaluations:[response().pending_evaluations[0]],
+      } })
+    expect(result).toEqual([expect.objectContaining({ task_type:'pending_cancel', candidate_action:'cancel' })])
+    expect(queryRun.mock.calls[0][0]).toContain('ai_position_management_tasks')
+    expect(queryRun.mock.calls[0][1]).toContain('pending_cancel')
+  })
 })
 
 describe('durable state and protection boundaries', () => {
@@ -410,6 +537,37 @@ describe('durable state and protection boundaries', () => {
     expect(value.pending_groups).toEqual([expect.objectContaining({ management_group_id:'group_pending' })])
     expect(value.position_groups).toEqual([])
     expect(value._targets.get('group_pending')[0].position_id).toBeNull()
+  })
+
+  it('injects expiry facts and evaluates hard conditions against the last closed bar', async () => {
+    queryAll.mockResolvedValueOnce([{
+      outcome_id:9305, pending_ticket:'O-9305', position_id:null, effective_pending_state:'pending',
+      management_group_id:'group_9305', thesis_id:'thesis_9305', strategy_id:3, strategy_version:1,
+      standard_symbol:'XAUUSD', direction:'buy', origin_signal_id:9305, decision_timeframe:'M15',
+      invalidation_conditions_json:JSON.stringify([{
+        condition_id:'hard_9305', kind:'hard', timeframe:'M15', operator:'closed_bar_lte', threshold:4000,
+      }]), evidence_refs_json:'[]',
+    }])
+    const value = await loadActivePositionManagementContext({
+      strategyId:3, strategyVersion:1, symbol:'XAUUSD', decisionTimeframe:'M15',
+      market:{
+        strategy_reference_portfolio:{
+          role:'platform_strategy_reference_portfolio', positions:[],
+          captured_at:'2026-07-22T02:58:00.000Z', captured_at_utc_msc:1784746680000,
+          pending_orders:[{ reference_id:'outcome:9305', valid_until_utc_msc:1784748720000,
+            valid_until_utc:'2026-07-22T06:12:00.000Z', valid_until_terminal:'2026-07-22 09:12:00',
+            terminal_timezone_offset_minutes:180, is_expired:false, remaining_seconds:11640 }],
+        },
+        strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{
+          time_utc_msc:1784746680000, close:3990,
+        } } } } },
+      },
+    })
+    expect(value.pending_groups[0]).toMatchObject({
+      management_group_id:'group_9305',
+      pending_order_facts:[expect.objectContaining({ is_expired:false, valid_until_terminal:'2026-07-22 09:12:00' })],
+      frozen_conditions:[expect.objectContaining({ condition_id:'hard_9305', evaluation_state:'triggered', observed_close:3990 })],
+    })
   })
 
   it('does not accept the retired auto-reverse mode through the settings API', async () => {

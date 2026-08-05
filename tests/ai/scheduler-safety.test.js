@@ -191,7 +191,11 @@ describe('weekly flatten inference boundary', () => {
 })
 
 describe('strategy-owned pending order selection', () => {
-  const deliveries = [{ pending_ticket:'10' }, { pending_ticket:'11' }, { pending_ticket:'12' }]
+  const deliveries = [
+    { pending_ticket:'10', management_group_id:'group-a' },
+    { pending_ticket:'11', management_group_id:'group-b' },
+    { pending_ticket:'12', management_group_id:'group-c' },
+  ]
 
   it('selects only system pending orders delivered by the current strategy', () => {
     const orders = [
@@ -224,7 +228,18 @@ describe('strategy-owned pending order selection', () => {
       .toEqual(orders)
   })
 
-  it('matches cancel and cancel_replace targets only in the requested direction', () => {
+  it('filters replacement cancellation by the selected management groups, not direction or quantity', () => {
+    const orders = [
+      { symbol:'XAUUSD.s', ticket:10, pending_type:'BUY_LIMIT', magic:234000 },
+      { symbol:'XAUUSD.s', ticket:11, pending_type:'BUY_STOP', magic:234000 },
+      { symbol:'XAUUSD.s', ticket:12, pending_type:'SELL_LIMIT', magic:234000 },
+    ]
+    expect(__schedulerTest.selectOwnedStrategyPendingOrders(
+      orders, deliveries, 'XAUUSD', undefined, new Set(['group-b']),
+    )).toEqual([orders[1]])
+  })
+
+  it('matches cancel targets only in the requested direction', () => {
     const orders = [
       { symbol:'XAUUSD.s', ticket:10, pending_type:'buy_limit', magic:234000 },
       { symbol:'XAUUSD.s', ticket:11, pending_type:'sell_limit', magic:234000 },
@@ -257,87 +272,41 @@ describe('model-driven pending action gate', () => {
       .toMatchObject({ action:'skip', reason:'reference_pending_not_matched' })
   })
 
-  it('requires direction-filtered targets for cancel and replacement actions', () => {
+  it('requires direction-filtered targets for cancel actions', () => {
     expect(__schedulerTest.resolvePendingActionGate({ pendingAction:'cancel', pendingOrders:[pending[0]] }))
       .toMatchObject({ action:'manage', count:1, targets:[pending[0]] })
-    expect(__schedulerTest.resolvePendingActionGate({ pendingAction:'cancel_replace', pendingOrders:[] }))
+    expect(__schedulerTest.resolvePendingActionGate({ pendingAction:'cancel', pendingOrders:[] }))
       .toMatchObject({ action:'skip', reason:'reference_pending_not_matched' })
   })
-})
 
-describe('replacement position appearance guard', () => {
-  it('does not treat an existing position as a newly filled pending order', () => {
-    const before = [{
-      symbol:'XAUUSD.s', ticket:7001, type:'buy', volume:0.02,
-      open_price:2000, price_current:2001, time_msc:1785885654984,
-    }]
-    const after = [{ ...before[0], price_current:2005, profit:10 }]
-    expect(__schedulerTest.findAppearedSymbolPositions(before, after, 'XAUUSD')).toEqual([])
+  it('derives synchronous cancellation dependencies from independent market and group decisions', () => {
+    expect(__schedulerTest.synchronousPendingCancelGroupIds({
+      signal_type:'buy',
+      position_management:{ pending_evaluations:[
+        { management_group_id:'group-a', action:'keep' },
+        { management_group_id:'group-b', action:'cancel' },
+      ] },
+    })).toEqual(new Set(['group-b']))
+    expect(__schedulerTest.synchronousPendingCancelGroupIds({
+      signal_type:'hold', position_management:{ pending_evaluations:[{ management_group_id:'group-b', action:'cancel' }] },
+    })).toEqual(new Set())
+  })
+  it('routes flat and grouped cancellations through the pre-order cancellation phase', () => {
+    const targets = [{ ticket:'10' }]
+    expect(__schedulerTest.resolvePendingCancellationPlan({
+      signalType:'buy', pendingAction:'cancel', pendingTargets:targets,
+    })).toMatchObject({ mode:'pre_order_cancel', continue_to_new_order:true, targets })
+    expect(__schedulerTest.resolvePendingCancellationPlan({
+      signalType:'buy_limit', pendingAction:'none', pendingTargets:targets,
+      synchronousPendingCancelGroupIds:new Set(['group-a']),
+    })).toMatchObject({ mode:'pre_order_cancel', continue_to_new_order:true, targets })
+    expect(__schedulerTest.resolvePendingCancellationPlan({
+      signalType:'hold', pendingAction:'cancel', pendingTargets:targets,
+    })).toMatchObject({ mode:'pre_order_cancel', continue_to_new_order:false, targets })
   })
 
-  it('detects a netting position exposure change under the same identity', () => {
-    const before = [{
-      symbol:'XAUUSD.s', ticket:7001, type:'buy', volume:0.02,
-      open_price:2000, time_msc:1785885654984,
-    }]
-    const volumeChanged = [{ ...before[0], volume:0.03, price_current:2005 }]
-    const openPriceChanged = [{ ...before[0], open_price:1999, price_current:2005 }]
-    expect(__schedulerTest.findAppearedSymbolPositions(before, volumeChanged, 'XAUUSD'))
-      .toEqual(volumeChanged)
-    expect(__schedulerTest.findAppearedSymbolPositions(before, openPriceChanged, 'XAUUSD'))
-      .toEqual(openPriceChanged)
-  })
-
-  it('detects a new position while tolerating broker symbol suffix changes', () => {
-    const before = [{
-      symbol:'XAUUSD.s', ticket:7001, type:'buy', volume:0.02,
-      open_price:2000, time_msc:1785885654984,
-    }]
-    const after = [
-      { ...before[0], symbol:'XAUUSD.c', price_current:2005 },
-      { symbol:'XAUUSD.c', ticket:7002, type:'buy', volume:0.01,
-        open_price:1995, time_msc:1785885655000 },
-    ]
-    expect(__schedulerTest.findAppearedSymbolPositions(before, after, 'XAUUSD'))
-      .toEqual([after[1]])
-  })
-
-  it('uses a stable composite key when terminal rows have no identity fields', () => {
-    const before = [{
-      symbol:'XAUUSD.s', type:'sell', volume:0.01, open_price:2010,
-      time_msc:1785885654984,
-    }]
-    const after = [{
-      symbol:'XAUUSD.c', type:'sell', volume:0.01, open_price:2010,
-      time_msc:1785885654984, price_current:2005,
-    }]
-    expect(__schedulerTest.findAppearedSymbolPositions(before, after, 'XAUUSD')).toEqual([])
-  })
-
-  it('accepts a broker identity alias change between position snapshots', () => {
-    const before = [{
-      symbol:'XAUUSD.s', type:'buy', volume:0.01, open_price:2000,
-      position_id:'7001', time_msc:1785885654984,
-    }]
-    const after = [{
-      symbol:'XAUUSD.s', type:'buy', volume:0.01, open_price:2000,
-      ticket:'7001', time_msc:1785885654984, price_current:2005,
-    }]
-    expect(__schedulerTest.findAppearedSymbolPositions(before, after, 'XAUUSD')).toEqual([])
-  })
-
-  it('does not let an identical composite hide a second identified position', () => {
-    const before = [{
-      symbol:'XAUUSD.s', ticket:'7001', type:'buy', volume:0.01,
-      open_price:2000, time_msc:1785885654984,
-    }]
-    const after = [
-      { ...before[0], price_current:2005 },
-      { symbol:'XAUUSD.s', ticket:'7002', type:'buy', volume:0.01,
-        open_price:2000, time_msc:1785885654984, price_current:2005 },
-    ]
-    expect(__schedulerTest.findAppearedSymbolPositions(before, after, 'XAUUSD'))
-      .toEqual([after[1]])
+  it('does not expose the retired recovery replacement gate', () => {
+    expect(__schedulerTest.recoveryReplacementUnsafe).toBeUndefined()
   })
 })
 
@@ -873,12 +842,6 @@ describe('unattempted signal delivery recovery', () => {
     expect(result).toMatchObject({ changes:1 })
     expect(db.queryRun.mock.calls[0][0]).toContain("execution_status = 'executing'")
     expect(db.queryRun.mock.calls[0][0]).toContain('order_intent_id IS NULL')
-  })
-
-  it('blocks recovered replacement cancellation before any old order is cancelled', () => {
-    expect(__schedulerTest.recoveryReplacementUnsafe({ taskId:'task-recovery-1' }, [{ ticket:'88' }])).toBe(true)
-    expect(__schedulerTest.recoveryReplacementUnsafe({ taskId:'task-recovery-1' }, [])).toBe(false)
-    expect(__schedulerTest.recoveryReplacementUnsafe(null, [{ ticket:'88' }])).toBe(false)
   })
 
   it('rechecks task state and deadline inside the order-intent transaction fence', async () => {

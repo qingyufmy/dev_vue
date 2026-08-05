@@ -3,7 +3,7 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { broadcastAdminEvent, getBridgeGeneration, sendToBrowsers } from '../../bridge-ws.js'
 import { stripBrokerSuffix } from './utils.js'
 
-export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.1'
+export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.2'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
@@ -203,6 +203,34 @@ export function isActivePositionManagementOutcome(row) {
   return false
 }
 
+function evaluateFrozenConditions(conditions, market) {
+  return (Array.isArray(conditions) ? conditions : []).map(condition => {
+    const base = { ...condition, evaluation_state:'unknown', observed_close:null, observed_bar_time_utc_ms:null }
+    const timeframe = String(condition?.timeframe || '').trim()
+    const row = lastClosedBar(market, timeframe)
+    const observedClose = number(row?.close ?? row?.c ?? row?.price_close)
+    const observedTime = lastClosedBarTime(market, timeframe)
+    if (condition?.kind !== 'hard') {
+      return { ...base, evaluation_reason:'model_required' }
+    }
+    if (!(observedClose != null && Number.isFinite(observedTime))) {
+      return { ...base, evaluation_reason:'closed_bar_unavailable' }
+    }
+    const threshold = number(condition?.threshold)
+    if (threshold == null) return { ...base, evaluation_reason:'threshold_unavailable' }
+    let state = 'unknown'
+    if (condition.operator === 'closed_bar_lte') state = observedClose <= threshold ? 'triggered' : 'not_triggered'
+    else if (condition.operator === 'closed_bar_gte') state = observedClose >= threshold ? 'triggered' : 'not_triggered'
+    return {
+      ...base,
+      evaluation_state:state,
+      evaluation_reason:state === 'unknown' ? 'operator_unavailable' : null,
+      observed_close:observedClose,
+      observed_bar_time_utc_ms:observedTime,
+    }
+  })
+}
+
 function normalizePositionManagementOutcome(row) {
   const activePending = Boolean(row?.pending_ticket)
     && String(row?.effective_pending_state || '').toLowerCase() === 'pending'
@@ -245,6 +273,22 @@ export async function loadActivePositionManagementContext({
       .map(item => /^outcome:(\d+)$/.exec(String(item?.reference_id || ''))?.[1])
       .filter(Boolean).map(Number))
     : null
+  const referencePendingByOutcome = referencePortfolio?.role === 'platform_strategy_reference_portfolio'
+    && Array.isArray(referencePortfolio?.pending_orders)
+    ? new Map(referencePortfolio.pending_orders
+      .map(item => [/^outcome:(\d+)$/.exec(String(item?.reference_id || ''))?.[1], item])
+      .filter(([id]) => id)
+      .map(([id, item]) => [Number(id), {
+        valid_until_utc_msc:item?.valid_until_utc_msc ?? null,
+        valid_until_utc:item?.valid_until_utc ?? null,
+        valid_until_terminal:item?.valid_until_terminal ?? null,
+        terminal_timezone_offset_minutes:item?.terminal_timezone_offset_minutes ?? null,
+        is_expired:item?.is_expired ?? null,
+        remaining_seconds:item?.remaining_seconds ?? null,
+        captured_at:item?.captured_at ?? referencePortfolio?.captured_at ?? null,
+        captured_at_utc_msc:item?.captured_at_utc_msc ?? referencePortfolio?.captured_at_utc_msc ?? null,
+      }]))
+    : new Map()
   const groups = new Map()
   for (const rawRow of rows) {
     // The reference portfolio is sourced from the terminal's current
@@ -254,7 +298,17 @@ export async function loadActivePositionManagementContext({
     const row = normalizePositionManagementOutcome(rawRow)
     if (!isActivePositionManagementOutcome(row)) continue
     if (strategyVersion && Number(row.strategy_version) !== Number(strategyVersion)) continue
-    if (!groups.has(row.management_group_id)) groups.set(row.management_group_id, { ...publicGroup(row), targets:[] })
+    if (!groups.has(row.management_group_id)) {
+      const group = { ...publicGroup(row), targets:[] }
+      group.frozen_conditions = evaluateFrozenConditions(group.frozen_conditions, market)
+      group.pending_order_facts = []
+      groups.set(row.management_group_id, group)
+    }
+    const pendingFact = referencePendingByOutcome.get(Number(row.outcome_id))
+    if (pendingFact && row.pending_ticket && !row.position_id) {
+      const group = groups.get(row.management_group_id)
+      group.pending_order_facts.push(pendingFact)
+    }
     groups.get(row.management_group_id).targets.push(row)
   }
   const pendingGroups = []
@@ -317,6 +371,7 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
     pending_evaluations:(context.pending_groups || []).map(group => ({
       management_group_id:group.management_group_id,
       action:'仅允许 keep | cancel',
+      cancel_reason_code:'cancel 时必填，仅允许 expired | thesis_invalidated | risk_reduction | model_judgment；keep 时必须为 null 或 none；expired 只能引用服务端 is_expired=true；thesis_invalidated 只能引用服务端已触发的硬条件',
       reason:'简体中文具体依据',
       evidence_refs:`只能引用：${group.allowed_evidence_refs.join('、') || '空集合'}`,
     })),
@@ -401,11 +456,46 @@ export function validatePositionManagementResponse(value, context, validateMarke
       if (!group || seenPending.has(group.management_group_id)) throw new Error('pending_management_group_invalid')
       const action = String(item.action || '').toLowerCase()
       if (!['keep', 'cancel'].includes(action)) throw new Error('pending_action_invalid')
+      const rawCancelReasonCode = item?.cancel_reason_code
+      const hasCancelReasonCode = rawCancelReasonCode !== undefined && rawCancelReasonCode !== null
+        && String(rawCancelReasonCode).trim() !== ''
+      if (action === 'cancel' && !hasCancelReasonCode) throw new Error('pending_cancel_reason_code_required')
+      if (action !== 'cancel' && hasCancelReasonCode
+        && String(rawCancelReasonCode).trim().toLowerCase() !== 'none') {
+        throw new Error('pending_keep_cancel_reason_code_invalid')
+      }
+      const cancelReasonCode = action === 'cancel'
+        ? String(rawCancelReasonCode).trim().toLowerCase() : null
+      if (cancelReasonCode && !['expired', 'thesis_invalidated', 'risk_reduction', 'model_judgment'].includes(cancelReasonCode)) {
+        throw new Error('pending_cancel_reason_code_invalid')
+      }
       const reason = text(item.reason, 1000)
       if (!reason) throw new Error('pending_reason_required')
       const evidenceRefs = validateEvidenceRefs(item.evidence_refs, group.allowed_evidence_refs)
+      const conditionsByRef = new Map((group.frozen_conditions || [])
+        .map(condition => [`condition:${condition.condition_id}`, condition]))
+      const referencedHard = evidenceRefs
+        .map(ref => conditionsByRef.get(ref))
+        .filter(condition => condition?.kind === 'hard')
+      if (action === 'cancel' && referencedHard.some(condition => condition.evaluation_state === 'not_triggered')) {
+        throw new Error('pending_hard_condition_not_triggered')
+      }
+      if (action === 'cancel' && cancelReasonCode !== 'expired'
+        && /(?:过期|到期|超时|expired|timeout)/i.test(reason)) {
+        throw new Error('pending_expiry_reason_code_mismatch')
+      }
+      if (cancelReasonCode === 'expired') {
+        const expired = (group.pending_order_facts || []).some(fact => fact?.is_expired === true)
+        if (!expired) throw new Error('pending_expired_evidence_required')
+      }
+      if (action === 'cancel' && cancelReasonCode === 'thesis_invalidated') {
+        if (!referencedHard.some(condition => condition.evaluation_state === 'triggered')) {
+          throw new Error('pending_thesis_evidence_required')
+        }
+      }
       seenPending.add(group.management_group_id)
-      pendingEvaluations.push({ management_group_id:group.management_group_id, action, reason, evidence_refs:evidenceRefs })
+      pendingEvaluations.push({ management_group_id:group.management_group_id, action,
+        cancel_reason_code:cancelReasonCode, reason, evidence_refs:evidenceRefs })
     } catch (error) { errors.push({ section:'pending', group_id:item?.management_group_id || null, code:error.message }) }
   }
 
@@ -436,6 +526,7 @@ export function validatePositionManagementResponse(value, context, validateMarke
     errors.push({ section:'pending', group_id:groupId, code:'evaluation_missing' })
     pendingEvaluations.push({
       management_group_id:groupId, action:'keep',
+      cancel_reason_code:null,
       reason:'该管理组未通过模型输出校验，服务端按安全默认继续保留挂单',
       evidence_refs:[], validation_source:'server_fail_closed',
     })
@@ -697,12 +788,17 @@ async function advanceAutomaticExitCandidate({ signalId, context, target, evalua
 }
 
 export async function persistPositionManagementEvaluations({
-  signalId, context, management, inferenceSource = 'manual_analysis',
+  signalId, context, management, inferenceSource = 'manual_analysis', synchronousPendingCancelGroupIds = null,
 } = {}) {
   if (!signalId || !context?._targets || !management) return []
   const positionEvaluations = management.position_evaluations || []
+  const synchronousGroups = synchronousPendingCancelGroupIds instanceof Set
+    ? synchronousPendingCancelGroupIds
+    : new Set(Array.isArray(synchronousPendingCancelGroupIds) ? synchronousPendingCancelGroupIds : [])
   const pendingCandidates = (management.pending_evaluations || [])
-    .filter(item => item.action === 'cancel').map(item => ({ ...item, taskType:'pending_cancel' }))
+    .filter(item => item.action === 'cancel'
+      && !synchronousGroups.has(String(item?.management_group_id || '')))
+    .map(item => ({ ...item, taskType:'pending_cancel' }))
   const allTargets = [
     ...positionEvaluations.flatMap(item => (context._targets.get(item.management_group_id) || [])
       .filter(target => targetMatchesPositionManagementTask(target, 'position_exit'))),
