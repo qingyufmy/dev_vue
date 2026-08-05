@@ -236,12 +236,15 @@ describe('stateful gate', () => {
     expect(updates[0].params).toContain('halted')
   })
 
-  it('detects price/time duplicates beyond signal-id idempotency', async () => {
+  it('allows a near-price order from a different signal and leaves idempotency to order intents', async () => {
     const duplicate = { approved_order_json: JSON.stringify({ order_type: 'buy', reference_price: 2000.5 }) }
-    const result = await evaluateStatefulRiskTx(runner({ duplicates: [duplicate] }), {
+    const observedRunner = runner({ duplicates: [duplicate] })
+    const result = await evaluateStatefulRiskTx(observedRunner, {
       userId: 2, accountId: 4, intentId: 9, request, policy: DEFAULT_RISK_POLICY, snapshot: snapshot(),
     })
-    expect(result.reject_code).toBe('R2.4_PRICE_TIME_DUPLICATE')
+    expect(result).toMatchObject({ approved_volume: request.volume, adjusted:false })
+    expect(result.reject_code).toBeUndefined()
+    expect(observedRunner.mock.calls.some(([sql]) => String(sql).includes('approved_order_json'))).toBe(false)
   })
 
   it('does not cap an approved order merely because the account is newly connected', async () => {

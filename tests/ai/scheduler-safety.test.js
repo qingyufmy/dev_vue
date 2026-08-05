@@ -215,23 +215,129 @@ describe('strategy-owned pending order selection', () => {
       orders, [{ pending_ticket:'99' }], 'XAUUSD', 'buy')).toEqual([])
   })
 
-  it('counts both directions for the same base symbol', () => {
-    expect(__schedulerTest.countPendingForSymbol([
-      { symbol: 'XAUUSD.s', pending_type: 'buy_limit' },
-      { symbol: 'XAUUSD.c', pending_type: 'sell_limit' },
-      { symbol: 'EURUSD', pending_type: 'buy_limit' },
-    ], 'XAUUSD')).toBe(2)
+  it('can select every owned pending order when keep has no management direction', () => {
+    const orders = [
+      { symbol:'XAUUSD.s', ticket:10, pending_type:'BUY_LIMIT', magic:234000 },
+      { symbol:'XAUUSD.s', ticket:11, pending_type:'SELL_LIMIT', magic:234000 },
+    ]
+    expect(__schedulerTest.selectOwnedStrategyPendingOrders(orders, deliveries, 'XAUUSD'))
+      .toEqual(orders)
   })
 
-  it('counts only the requested pending direction after supersede', () => {
+  it('matches cancel and cancel_replace targets only in the requested direction', () => {
     const orders = [
-      { symbol: 'XAUUSD.s', pending_type: 'buy_limit' },
-      { symbol: 'XAUUSD.c', pending_type: 'sell_limit' },
-      { symbol: 'XAUUSD', pending_type: 'buy_stop' },
-      { symbol: 'EURUSD', pending_type: 'buy_limit' },
+      { symbol:'XAUUSD.s', ticket:10, pending_type:'buy_limit', magic:234000 },
+      { symbol:'XAUUSD.s', ticket:11, pending_type:'sell_limit', magic:234000 },
     ]
-    expect(__schedulerTest.countPendingForSymbolDirection(orders, 'XAUUSD', 'buy')).toBe(2)
-    expect(__schedulerTest.countPendingForSymbolDirection(orders, 'XAUUSD', 'sell')).toBe(1)
+    expect(__schedulerTest.selectOwnedStrategyPendingOrders(orders, deliveries, 'XAUUSD', 'buy'))
+      .toEqual([orders[0]])
+    expect(__schedulerTest.selectOwnedStrategyPendingOrders(orders, deliveries, 'XAUUSD', 'sell'))
+      .toEqual([orders[1]])
+    expect(__schedulerTest.selectOwnedStrategyPendingOrders(orders, deliveries, 'XAUUSD', 'none'))
+      .toEqual([])
+  })
+})
+
+describe('model-driven pending action gate', () => {
+  const pending = [
+    { ticket:'10', pending_type:'buy_limit' },
+    { ticket:'11', pending_type:'buy_stop' },
+    { ticket:'12', pending_type:'sell_limit' },
+  ]
+
+  it('allows none to proceed even when multiple same-direction orders already exist', () => {
+    expect(__schedulerTest.resolvePendingActionGate({ pendingAction:'none', pendingOrders:pending.slice(0, 2) }))
+      .toMatchObject({ action:'proceed', count:2 })
+  })
+
+  it('keeps the explicit keep action as a no-new-order decision', () => {
+    expect(__schedulerTest.resolvePendingActionGate({ pendingAction:'keep', pendingOrders:pending }))
+      .toMatchObject({ action:'skip', reason:'existing_pending_kept', count:3 })
+    expect(__schedulerTest.resolvePendingActionGate({ pendingAction:'keep', pendingOrders:[] }))
+      .toMatchObject({ action:'skip', reason:'reference_pending_not_matched' })
+  })
+
+  it('requires direction-filtered targets for cancel and replacement actions', () => {
+    expect(__schedulerTest.resolvePendingActionGate({ pendingAction:'cancel', pendingOrders:[pending[0]] }))
+      .toMatchObject({ action:'manage', count:1, targets:[pending[0]] })
+    expect(__schedulerTest.resolvePendingActionGate({ pendingAction:'cancel_replace', pendingOrders:[] }))
+      .toMatchObject({ action:'skip', reason:'reference_pending_not_matched' })
+  })
+})
+
+describe('replacement position appearance guard', () => {
+  it('does not treat an existing position as a newly filled pending order', () => {
+    const before = [{
+      symbol:'XAUUSD.s', ticket:7001, type:'buy', volume:0.02,
+      open_price:2000, price_current:2001, time_msc:1785885654984,
+    }]
+    const after = [{ ...before[0], price_current:2005, profit:10 }]
+    expect(__schedulerTest.findAppearedSymbolPositions(before, after, 'XAUUSD')).toEqual([])
+  })
+
+  it('detects a netting position exposure change under the same identity', () => {
+    const before = [{
+      symbol:'XAUUSD.s', ticket:7001, type:'buy', volume:0.02,
+      open_price:2000, time_msc:1785885654984,
+    }]
+    const volumeChanged = [{ ...before[0], volume:0.03, price_current:2005 }]
+    const openPriceChanged = [{ ...before[0], open_price:1999, price_current:2005 }]
+    expect(__schedulerTest.findAppearedSymbolPositions(before, volumeChanged, 'XAUUSD'))
+      .toEqual(volumeChanged)
+    expect(__schedulerTest.findAppearedSymbolPositions(before, openPriceChanged, 'XAUUSD'))
+      .toEqual(openPriceChanged)
+  })
+
+  it('detects a new position while tolerating broker symbol suffix changes', () => {
+    const before = [{
+      symbol:'XAUUSD.s', ticket:7001, type:'buy', volume:0.02,
+      open_price:2000, time_msc:1785885654984,
+    }]
+    const after = [
+      { ...before[0], symbol:'XAUUSD.c', price_current:2005 },
+      { symbol:'XAUUSD.c', ticket:7002, type:'buy', volume:0.01,
+        open_price:1995, time_msc:1785885655000 },
+    ]
+    expect(__schedulerTest.findAppearedSymbolPositions(before, after, 'XAUUSD'))
+      .toEqual([after[1]])
+  })
+
+  it('uses a stable composite key when terminal rows have no identity fields', () => {
+    const before = [{
+      symbol:'XAUUSD.s', type:'sell', volume:0.01, open_price:2010,
+      time_msc:1785885654984,
+    }]
+    const after = [{
+      symbol:'XAUUSD.c', type:'sell', volume:0.01, open_price:2010,
+      time_msc:1785885654984, price_current:2005,
+    }]
+    expect(__schedulerTest.findAppearedSymbolPositions(before, after, 'XAUUSD')).toEqual([])
+  })
+
+  it('accepts a broker identity alias change between position snapshots', () => {
+    const before = [{
+      symbol:'XAUUSD.s', type:'buy', volume:0.01, open_price:2000,
+      position_id:'7001', time_msc:1785885654984,
+    }]
+    const after = [{
+      symbol:'XAUUSD.s', type:'buy', volume:0.01, open_price:2000,
+      ticket:'7001', time_msc:1785885654984, price_current:2005,
+    }]
+    expect(__schedulerTest.findAppearedSymbolPositions(before, after, 'XAUUSD')).toEqual([])
+  })
+
+  it('does not let an identical composite hide a second identified position', () => {
+    const before = [{
+      symbol:'XAUUSD.s', ticket:'7001', type:'buy', volume:0.01,
+      open_price:2000, time_msc:1785885654984,
+    }]
+    const after = [
+      { ...before[0], price_current:2005 },
+      { symbol:'XAUUSD.s', ticket:'7002', type:'buy', volume:0.01,
+        open_price:2000, time_msc:1785885654984, price_current:2005 },
+    ]
+    expect(__schedulerTest.findAppearedSymbolPositions(before, after, 'XAUUSD'))
+      .toEqual([after[1]])
   })
 })
 

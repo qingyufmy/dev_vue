@@ -5,13 +5,7 @@ import { stripBrokerSuffix } from './utils.js'
 import { riskRuleIsEnforced } from './rollout-governance.js'
 
 const toNumber = value => Number.isFinite(Number(value)) ? Number(value) : 0
-const parseJson = (value, fallback = {}) => {
-  if (value == null) return fallback
-  if (typeof value === 'object') return value
-  try { return JSON.parse(value) } catch { return fallback }
-}
 const txOne = async (run, sql, params = []) => ((await run(sql, params))[0] || [])[0] || null
-const txAll = async (run, sql, params = []) => (await run(sql, params))[0] || []
 const nowDate = () => beijingNow().slice(0, 10)
 const validTimezoneOffset = value => value !== null && value !== undefined && value !== ''
   && Number.isInteger(Number(value)) && Number(value) >= -720 && Number(value) <= 840
@@ -463,22 +457,6 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
       remaining_seconds: Math.max(0, policy.min_open_interval_seconds - elapsedSeconds),
       minimum_seconds: policy.min_open_interval_seconds,
     }); if (rejected) return rejected
-  }
-  const duplicates = await txAll(run, `SELECT id, approved_order_json FROM order_intents WHERE trading_account_id = ? AND id <> ?
-    AND symbol = ? AND status IN ('preparing','prepared','bridge_sending','uncertain','succeeded')
-    AND created_at >= DATE_SUB(NOW(), INTERVAL ? SECOND) ORDER BY id DESC LIMIT 20`,
-  [accountId, intentId, request.symbol, policy.dedup_window_seconds])
-  for (const duplicate of duplicates) {
-    const prior = parseJson(duplicate.approved_order_json)
-    const currentPrice = toNumber(request.limit_price || request.reference_price || request.quote_price)
-    const priorPrice = toNumber(prior.limit_price || prior.reference_price || prior.quote_price)
-    if (prior.order_type === request.order_type && Math.abs(currentPrice - priorPrice) <= toNumber(request.atr_anchor) * policy.dedup_price_atr) {
-      const rejected = rolloutBlock('R2.4_PRICE_TIME_DUPLICATE', {
-        prior_intent_id: duplicate.id,
-        current_price: currentPrice,
-        prior_price: priorPrice,
-      }); if (rejected) return rejected
-    }
   }
   const approvedVolume = toNumber(request.volume)
   if (approvedVolume < toNumber(snapshot.instrument?.volume_min)) return blocked('R1.9_BELOW_MINIMUM_AFTER_RISK', {

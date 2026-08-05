@@ -107,6 +107,16 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema).not.toHaveProperty('stop_limit_price')
   })
 
+  it('leaves same-direction pending quantity to the model instead of imposing a one-order rule', () => {
+    const schema = JSON.parse(buildStrategyOutputFormat(null, ['limit']).outputFormat)
+    const rendered = JSON.stringify(schema)
+    expect(rendered).not.toContain('最多1笔')
+    expect(schema.pending_action).toContain('可以同时存在多笔挂单')
+    expect(schema.pending_action).toContain('系统不按数量限制')
+    expect(schema.pending_action).toContain('none 表示本轮不管理现有挂单')
+    expect(schema.pending_action).toContain('keep 表示保留现有挂单且本轮不新增')
+  })
+
   it('requires the model to report usage only for retrieved experience ids', () => {
     const schema = JSON.parse(buildStrategyOutputFormat(null, ['market'], { selectedItemIds:[7, 9] }).outputFormat)
     expect(schema.experience_usage.considered_ids).toEqual([7, 9])
@@ -1069,6 +1079,41 @@ describe('maybeAiSignal', () => {
     expect(evidence.outputSchemaVersion).toMatch(/^[a-f0-9]{64}$/)
   })
 
+  it('preserves every platform strategy reference position and pending order', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({
+        signal_type: 'hold', entry_method: 'observe', confidence: 0.6, recommended_volume: 0,
+        stop_loss_price: null, take_profit_1_price: null, analysis: '等待', reasoning: '逐笔评估参考组合',
+      }) } }] }),
+    })
+    let evidence
+    await maybeAiSignal(null, {
+      api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
+      _market_only: true, _onInferencePrepared: value => { evidence = value },
+    }, {
+      symbol: 'XAUUSD', standard_symbol: 'XAUUSD', timeframe: 'M5', latest_price: 2000,
+      strategy_context: { timeframes: {} },
+      strategy_reference_portfolio: {
+        role: 'platform_strategy_reference_portfolio', strategy_id: 7,
+        positions: [
+          { reference_id: 'outcome:701', side: 'buy', entry_price: 1990 },
+          { reference_id: 'outcome:702', side: 'buy', entry_price: 1980 },
+        ],
+        pending_orders: [
+          { reference_id: 'outcome:801', side: 'buy', trigger_price: 1970 },
+          { reference_id: 'outcome:802', side: 'buy', trigger_price: 1960 },
+          { reference_id: 'outcome:803', side: 'sell', trigger_price: 2010 },
+        ],
+      },
+    })
+    const payload = JSON.parse(evidence.userPrompt.replace('市场数据 JSON：\n', ''))
+    expect(payload.strategy_reference_portfolio.positions.map(item => item.reference_id))
+      .toEqual(['outcome:701', 'outcome:702'])
+    expect(payload.strategy_reference_portfolio.pending_orders.map(item => item.reference_id))
+      .toEqual(['outcome:801', 'outcome:802', 'outcome:803'])
+  })
+
   it('does not discourage automatic close in private portfolio boundaries', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -1087,6 +1132,34 @@ describe('maybeAiSignal', () => {
     })
     expect(evidence.systemPrompt).toContain('私有策略账户上下文')
     expect(evidence.systemPrompt).not.toContain('\u6682\u4e0d\u5efa\u8bae\u81ea\u52a8\u5e73\u4ed3')
+  })
+
+  it('passes every live position and pending order to private portfolio inference', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({
+        signal_type: 'hold', entry_method: 'observe', confidence: 0.6, recommended_volume: 0,
+        stop_loss_price: null, take_profit_1_price: null, analysis: '等待', reasoning: '逐笔评估',
+      }) } }] }),
+    })
+    let evidence
+    await maybeAiSignal(null, {
+      api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
+      _include_portfolio_context: true, _onInferencePrepared: value => { evidence = value },
+    }, {
+      symbol: 'XAUUSD', timeframe: 'M5', latest_price: 2000,
+      account: { balance: 10000 },
+      positions: { total_positions: 2, details: [{ ticket: 701, type: 'buy' }, { ticket: 702, type: 'buy' }] },
+      pending_orders: [
+        { ticket: 801, pending_type: 'buy_limit', price: 1990 },
+        { ticket: 802, pending_type: 'buy_limit', price: 1980 },
+        { ticket: 803, pending_type: 'sell_limit', price: 2010 },
+      ],
+      strategy_context: { timeframes: {} },
+    })
+    const payload = JSON.parse(evidence.userPrompt.replace('市场数据 JSON：\n', ''))
+    expect(payload.positions.details.map(item => item.ticket)).toEqual([701, 702])
+    expect(payload.pending_orders.map(item => item.ticket)).toEqual([801, 802, 803])
   })
 
   it('keeps personal memory content out of the system prompt and sends it as untrusted user data', async () => {

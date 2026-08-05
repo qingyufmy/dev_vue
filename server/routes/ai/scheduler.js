@@ -413,24 +413,11 @@ function calculateRecoverySeconds(deadlineMs, nowMs = Date.now()) {
   return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000))
 }
 
-function countPendingForSymbol(orders, symbol) {
-  const normalizedSymbol = stripBrokerSuffix(symbol)
-  return orders.filter(order => stripBrokerSuffix(String(order?.symbol || '')) === normalizedSymbol).length
-}
-
-function countPendingForSymbolDirection(orders, symbol, direction) {
-  const normalizedSymbol = stripBrokerSuffix(symbol)
-  const buySide = String(direction || '').toLowerCase().startsWith('buy')
-  return (Array.isArray(orders) ? orders : []).filter(order => {
-    if (stripBrokerSuffix(String(order?.symbol || '')) !== normalizedSymbol) return false
-    return String(order?.pending_type || order?.order_type || '').toLowerCase().startsWith('buy') === buySide
-  }).length
-}
-
 function selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, direction) {
   const expectedSymbol = stripBrokerSuffix(symbol)
   const expectedDirection = String(direction || '').toLowerCase()
-  if (!['buy', 'sell'].includes(expectedDirection)) return []
+  const filterDirection = direction !== undefined && direction !== null
+  if (filterDirection && !['buy', 'sell'].includes(expectedDirection)) return []
   const strategyTickets = new Set((Array.isArray(strategyDeliveries) ? strategyDeliveries : [])
     .map(item => String(item?.pending_ticket || '').trim())
     .filter(Boolean))
@@ -439,8 +426,94 @@ function selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, sym
     if (!ticket || !strategyTickets.has(ticket)) return false
     if (Number(item?.magic || 0) !== 234000) return false
     if (stripBrokerSuffix(String(item?.symbol || '')) !== expectedSymbol) return false
+    if (!filterDirection) return true
     const pendingSide = String(item?.side || item?.pending_type || item?.order_type || '').toLowerCase()
     return pendingSide.startsWith(expectedDirection)
+  })
+}
+
+/**
+ * Resolve the model's pending-order action without imposing a quantity rule.
+ *
+ * `none` deliberately proceeds even when the current strategy already owns
+ * pending orders: the model saw those orders in its portfolio input and is
+ * the authority on whether a new signal should add another one. `keep` is the
+ * explicit no-new-order decision, while cancellation actions require matched
+ * targets selected by the caller (including the model's direction for
+ * cancel/cancel_replace).
+ */
+function resolvePendingActionGate({ pendingAction, pendingOrders = [] } = {}) {
+  const action = String(pendingAction || 'none').trim().toLowerCase()
+  const targets = Array.isArray(pendingOrders) ? pendingOrders : []
+  if (action === 'keep') {
+    return {
+      action: 'skip',
+      reason: targets.length ? 'existing_pending_kept' : 'reference_pending_not_matched',
+      count: targets.length,
+      targets,
+    }
+  }
+  if (action === 'cancel' || action === 'cancel_replace') {
+    if (!targets.length) {
+      return { action: 'skip', reason: 'reference_pending_not_matched', count: 0, targets: [] }
+    }
+    return { action: 'manage', reason: null, count: targets.length, targets }
+  }
+  return { action: 'proceed', reason: null, count: targets.length, targets: [] }
+}
+
+const POSITION_ID_FIELDS = Object.freeze(['ticket', 'order', 'order_ticket', 'position_id', 'identifier'])
+
+function positionIdentityTokens(position) {
+  const tokens = new Set()
+  let hasBrokerIdentity = false
+  for (const field of POSITION_ID_FIELDS) {
+    const value = String(position?.[field] ?? '').trim()
+    if (!value) continue
+    hasBrokerIdentity = true
+    // Keep a value-only token so the Bridge can change the alias used for the
+    // same position (for example ticket -> position_id) between snapshots.
+    tokens.add(`identity:${value}`)
+    tokens.add(`${field}:${value}`)
+  }
+  if (hasBrokerIdentity) return tokens
+  const symbol = stripBrokerSuffix(String(position?.symbol || '')).toUpperCase()
+  const side = String(position?.type ?? position?.side ?? '').trim().toLowerCase()
+  const volume = String(position?.volume ?? position?.volume_current ?? position?.volume_initial ?? '').trim()
+  const openPrice = String(position?.open_price ?? position?.price_open ?? position?.price ?? '').trim()
+  const openedAt = String(position?.time_msc ?? position?.open_time_msc ?? position?.time
+    ?? position?.open_time ?? position?.time_utc_msc ?? '').trim()
+  // Rows without a broker identity still need a stable comparison key. Open
+  // time/price/side/volume remain stable while current price and profit move.
+  tokens.add(`composite:${symbol}|${side}|${volume}|${openPrice}|${openedAt}`)
+  return tokens
+}
+
+function positionExposureSignature(position) {
+  const side = String(position?.type ?? position?.side ?? '').trim().toLowerCase()
+  const rawVolume = position?.volume ?? position?.volume_current ?? position?.volume_initial ?? ''
+  const rawOpenPrice = position?.open_price ?? position?.price_open ?? position?.price ?? ''
+  const volume = Number.isFinite(Number(rawVolume)) ? Number(rawVolume) : String(rawVolume).trim()
+  const openPrice = Number.isFinite(Number(rawOpenPrice)) ? Number(rawOpenPrice) : String(rawOpenPrice).trim()
+  return `${side}|${volume}|${openPrice}`
+}
+
+function findAppearedSymbolPositions(beforePositions, afterPositions, symbol) {
+  const expectedSymbol = stripBrokerSuffix(String(symbol || '')).toUpperCase()
+  const beforeRows = (Array.isArray(beforePositions) ? beforePositions : [])
+    .filter(item => stripBrokerSuffix(String(item?.symbol || '')).toUpperCase() === expectedSymbol)
+  return (Array.isArray(afterPositions) ? afterPositions : []).filter(item => {
+    if (stripBrokerSuffix(String(item?.symbol || '')).toUpperCase() !== expectedSymbol) return false
+    const afterTokens = positionIdentityTokens(item)
+    const previous = beforeRows.find(before => {
+      const beforeTokens = positionIdentityTokens(before)
+      return [...afterTokens].some(token => beforeTokens.has(token))
+    })
+    if (!previous) return true
+    // A netting account may merge a newly-filled pending order into an
+    // existing position identity. Treat a side/volume/open-price change as a
+    // newly appeared exposure, but ignore live quote/profit movement.
+    return positionExposureSignature(previous) !== positionExposureSignature(item)
   })
 }
 
@@ -2488,9 +2561,9 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     }
 
     // Strategy inference locks are independent, but all strategies for this
-    // user share one terminal inventory. Serialize the final snapshot, limit
-    // check and send per account+symbol to prevent concurrent strategies from
-    // consuming the same pending-order slot.
+    // user share one terminal inventory. Serialize the final snapshot and
+    // order send per account+symbol to prevent concurrent strategies from
+    // racing on the same terminal inventory.
     if (/^(buy|sell)/.test(String(signal.signal_type || '').toLowerCase())) {
       inventoryLock = await acquireDeliveryInventoryLock(userId, symbol)
       if (!inventoryLock.token) {
@@ -2545,25 +2618,21 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const pendingAction = String(signal.pending_action || 'none').toLowerCase()
     const pendingActionReason = String(signal.pending_action_reason || '').trim()
     const managementDirection = String(signal.management_direction || (isTradeSignal ? (signalIsBuy ? 'buy' : 'sell') : 'none')).toLowerCase()
-    const sameDirectionPending = selectOwnedStrategyPendingOrders(
-      pendingOrders, strategyDeliveries, symbol, managementDirection)
+    // `keep` intentionally has no management direction in the model contract:
+    // it evaluates every current-strategy pending order for this symbol. Only
+    // cancel/cancel_replace use the model-provided direction to select targets.
+    const pendingTargets = pendingAction === 'keep'
+      ? selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol)
+      : selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, managementDirection)
     const strategyPendingTickets = new Set(strategyDeliveries.map(item => String(item.pending_ticket || '')).filter(Boolean))
-    if (pendingAction === 'keep') {
-      await finishBeforeRisk('skipped', sameDirectionPending.length ? 'existing_pending_kept' : 'reference_pending_not_matched',
-        { count:sameDirectionPending.length })
-      return
-    }
-    if (sameDirectionPending.length && pendingAction === 'none') {
-      await finishBeforeRisk('skipped', 'existing_pending_no_replace', { count:sameDirectionPending.length })
+    const pendingDecision = resolvePendingActionGate({ pendingAction, pendingOrders:pendingTargets })
+    if (pendingDecision.action === 'skip') {
+      await finishBeforeRisk('skipped', pendingDecision.reason, { count:pendingDecision.count })
       return
     }
     let replacementTargets = []
-    if (['cancel', 'cancel_replace'].includes(pendingAction)) {
-      const cancellable = sameDirectionPending
-      if (!cancellable.length) {
-        await finishBeforeRisk('skipped', 'reference_pending_not_matched')
-        return
-      }
+    if (pendingDecision.action === 'manage') {
+      const cancellable = pendingDecision.targets
       try {
         await assertAiPendingCancelEnabled()
       } catch {
@@ -2708,25 +2777,8 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       return
     }
 
-    // Project the pending count without mutating MT5. Actual replacement only
-    // runs after the new order intent is risk-approved and reserved.
     const replacementTicketSet = new Set(replacementTargets
       .map(item => String(item.ticket ?? item.mt5_ticket ?? '')).filter(Boolean))
-    const projectedPendingOrders = pendingOrders.filter(item =>
-      !replacementTicketSet.has(String(item.ticket ?? item.mt5_ticket ?? '')))
-    let remainingPendingCount = countPendingForSymbol(projectedPendingOrders, symbol)
-    const newOrderDirection = order.order_type || 'buy'
-
-    // Hard limit: skip if too many pending orders (including new order = 1 more)
-    const MAX_PENDING_PER_SYMBOL = 2
-    if (remainingPendingCount + 1 > MAX_PENDING_PER_SYMBOL && order.entry_method && order.entry_method !== 'market' && order.entry_method !== 'observe') {
-      l(`skipped: ${remainingPendingCount} pending orders remain + 1 new > max ${MAX_PENDING_PER_SYMBOL}`)
-      await setTerminalStatus('skipped', 'pending_limit_reached', { remaining:remainingPendingCount, maximum:MAX_PENDING_PER_SYMBOL })
-      await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
-        { signal_id: signalId, delivery_signal_id: signalId, prompt_type_id: promptTypeId, reason: 'pending_limit_reached', pending_count: remainingPendingCount },
-        { status: 'skipped' }, 'info')
-      return
-    }
 
     // Final lock check before sending MT5 order (Fix 2)
     if (subscriberWeeklyWindow()) {
@@ -2826,21 +2878,23 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       if (!confirmResp || confirmResp.status === 'error' || !Array.isArray(confirmOrders)) {
         throw reject('pending_list_confirm_unavailable')
       }
-      const sameDirectionRemaining = countPendingForSymbolDirection(confirmOrders, symbol, newOrderDirection)
-      if (sameDirectionRemaining > 0) {
-        throw reject('pending_supersede_incomplete', { remaining_same_direction:sameDirectionRemaining })
+      const confirmedTickets = new Set(confirmOrders
+        .map(item => String(item?.ticket ?? item?.mt5_ticket ?? '').trim())
+        .filter(Boolean))
+      const remainingReplacementTickets = [...replacementTicketSet]
+        .filter(ticket => confirmedTickets.has(ticket))
+      if (remainingReplacementTickets.length) {
+        throw reject('pending_supersede_incomplete', {
+          remaining_same_direction:remainingReplacementTickets.length,
+          remaining_tickets:remainingReplacementTickets,
+        })
       }
       const positionsAfterCancel = await mt5Bridge(userId, 'positions', { symbol }, { noFallback:true })
       const currentPositions = positionsAfterCancel?.positions
       if (!Array.isArray(currentPositions)) throw reject('portfolio_state_unavailable_after_replacement')
-      const appearedPositions = currentPositions.filter(item =>
-        stripBrokerSuffix(String(item?.symbol || '')) === stripBrokerSuffix(symbol))
+      const appearedPositions = findAppearedSymbolPositions(symbolPositions, currentPositions, symbol)
       if (appearedPositions.length) {
         throw reject('replacement_pending_filled_before_send', { position_count:appearedPositions.length })
-      }
-      remainingPendingCount = countPendingForSymbol(confirmOrders, symbol)
-      if (isAiPendingOrderRequest(order, 'auto_delivery') && remainingPendingCount + 1 > MAX_PENDING_PER_SYMBOL) {
-        throw reject('pending_limit_reached', { remaining:remainingPendingCount, maximum:MAX_PENDING_PER_SYMBOL })
       }
     } : undefined
     const beforeBridgeSend = async () => {
@@ -3529,9 +3583,9 @@ function buildSignalDeliveryRows({ signalId, userIds, onlineUserIds, promptTypeI
 export const __schedulerTest = {
   isUserEligibleForAutoExecution,
   calculateRecoverySeconds,
-  countPendingForSymbol,
-  countPendingForSymbolDirection,
   selectOwnedStrategyPendingOrders,
+  resolvePendingActionGate,
+  findAppearedSymbolPositions,
   buildSignalDeliveryRows,
   reconcileUnattemptedSignalDeliveries,
   signalDeliveryRecoveryDeadline,

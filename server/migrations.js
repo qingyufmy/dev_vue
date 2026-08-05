@@ -15,6 +15,25 @@ export function applyPendingLifecycleSchema(schema) {
   }
 }
 
+const LEGACY_SINGLE_DIRECTION_PENDING_RULE = '。挂单管理：同品种同方向最多保留1笔挂单，如果market_data_json.pending_orders中已有同品种同方向挂单且价格合理则返回hold不挂新单，仅在现有挂单价格明显不合理时才用cancel_pending取消旧单挂新单'
+const MODEL_DRIVEN_PENDING_RULE = '。挂单管理：系统不按同品种或同方向的挂单数量限制新增挂单。必须结合输入中的全部持仓与挂单逐笔判断；需要保留现有挂单并新增时使用 pending_action=none，仅保留且不新增时返回 hold 并使用 keep，取消或替换时使用 cancel 或 cancel_replace。'
+
+export function applyModelDrivenPendingSchema(schema) {
+  const updated = schema && typeof schema === 'object' && !Array.isArray(schema) ? { ...schema } : {}
+  const signalType = String(updated.signal_type || '')
+  updated.signal_type = signalType.includes(LEGACY_SINGLE_DIRECTION_PENDING_RULE)
+    ? signalType.replace(LEGACY_SINGLE_DIRECTION_PENDING_RULE, MODEL_DRIVEN_PENDING_RULE)
+    : signalType.includes('系统不按同品种或同方向的挂单数量限制新增挂单')
+      ? signalType
+      : `${signalType}${signalType ? MODEL_DRIVEN_PENDING_RULE : MODEL_DRIVEN_PENDING_RULE.slice(1)}`
+  updated.pending_action = '必须字段。仅允许 none | keep | cancel | cancel_replace。已有挂单不会触发系统侧数量限制；保留现有挂单并新增时使用 none，仅保留现有挂单且不新增时返回 hold 并使用 keep。只有原逻辑失效时才能 cancel，方向反转且新挂单成立时才能 cancel_replace。'
+  updated.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 或 cancel_replace 时填写被管理挂单方向；none 或 keep 时填 none。'
+  const reasoning = String(updated.reasoning || '')
+  const modelDecisionRule = '挂单数量本身不能作为拒绝新信号的理由；是否新增必须由模型结合全部持仓、挂单价格、方向与当前结构决定。'
+  updated.reasoning = reasoning.includes(modelDecisionRule) ? reasoning : `${reasoning}${reasoning ? ' ' : ''}${modelDecisionRule}`
+  return updated
+}
+
 const migrations = [
   {
     id: '001_add_bridge_heartbeat',
@@ -852,7 +871,7 @@ const migrations = [
         let changed = false
         // Update signal_type: add pending management rule
         if (schema.signal_type && !schema.signal_type.includes('挂单管理')) {
-          schema.signal_type += '。挂单管理：同品种同方向最多保留1笔挂单，如果market_data_json.pending_orders中已有同品种同方向挂单且价格合理则返回hold不挂新单，仅在现有挂单价格明显不合理时才用cancel_pending取消旧单挂新单'
+          schema.signal_type += MODEL_DRIVEN_PENDING_RULE
           changed = true
         }
         // Update reasoning: add item 5
@@ -5086,6 +5105,25 @@ const migrations = [
       // Bridge V3 terminal sessions are now the sole connection authority.
       // This legacy table contained only ephemeral online status.
       await queryRun('DROP TABLE IF EXISTS bridge_connection_status')
+    }
+  },
+  {
+    id: '171_model_driven_pending_inventory',
+    async up() {
+      const schemas = await queryAll('SELECT id, schema_json FROM ai_signal_schema WHERE is_active = 1')
+      for (const row of schemas) {
+        let schema
+        try {
+          schema = JSON.parse(row.schema_json || '{}')
+        } catch {
+          throw new Error(`Active AI signal schema ${row.id} contains invalid JSON`)
+        }
+        const updated = applyModelDrivenPendingSchema(schema)
+        await queryRun(
+          'UPDATE ai_signal_schema SET schema_json = ?, updated_at = NOW() WHERE id = ?',
+          [JSON.stringify(updated, null, 2), row.id]
+        )
+      }
     }
   }
 ]

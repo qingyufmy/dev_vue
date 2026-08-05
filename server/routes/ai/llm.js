@@ -202,7 +202,7 @@ let _schemaCacheTs = 0
 const SCHEMA_CACHE_TTL = 300_000 // 5 minutes
 
 const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
-  signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价立即执行; buy_limit/sell_limit=挂限价单; buy_stop/sell_stop=突破追单; buy_stop_limit/sell_stop_limit=突破后限价。方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时必须返回hold。挂单管理：同品种同方向最多保留1笔挂单，如果market_data_json.pending_orders中已有同品种同方向挂单且价格合理则返回hold不挂新单，仅在现有挂单价格明显不合理时才用cancel_pending取消旧单挂新单",
+  signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价立即执行; buy_limit/sell_limit=挂限价单; buy_stop/sell_stop=突破追单; buy_stop_limit/sell_stop_limit=突破后限价。方向优势不清晰、关键位距离过近、短线波动过大、已有持仓风险不合适时必须返回hold。挂单管理必须逐笔查看输入中的实时挂单，不得按数量替代判断：同品种同方向可以同时存在多笔挂单，模型要结合每笔价格、方向、市场结构和风险决定新增、保留、取消或替换，不得无条件加挂",
   entry_method: "必须字段。仅允许 market | limit | stop | stop_limit | observe，并且必须与signal_type一致：buy/sell=market，*_limit=limit，*_stop=stop，*_stop_limit=stop_limit，hold=observe",
   confidence: "0.00-1.00，动态估算，禁止固定值。按趋势强度、位置结构、波动噪音、风险状态综合评估。BUY/SELL弱优势0.52-0.62，中等0.63-0.74，强共振>0.75。HOLD时0.55-0.68，明确回避风险可>0.70。hold时也不得为0",
   bullish_score: "0-100，市场偏多倾向分。必须与bearish_score合计为100；表示当前行情方向倾向，不代表胜率或执行概率",
@@ -210,7 +210,7 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   position_size_tier: "必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓、标准仓。不得返回具体手数或自定义系数",
   position_size_reason: "必须字段。使用简体中文说明为什么选择该仓位档位，不得猜测用户账户余额或手数",
   position_action: "必须字段。仅允许 open | hold_no_add | allow_add | observe。参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add；不得建议自动平仓",
-  pending_action: "必须字段。仅允许 none | keep | cancel | cancel_replace。参考组合无挂单时返回 none；旧挂单仍符合当前逻辑时返回 keep，禁止无条件替换",
+  pending_action: "必须字段。仅允许 none | keep | cancel | cancel_replace。输入中的同品种同方向可以同时存在多笔挂单，必须逐笔评估，系统不按数量限制也不做相同价格去重。none 表示本轮不管理现有挂单，若当前交易信号成立可以新增一笔；keep 表示保留现有挂单且本轮不新增；只有价格、结构或方向依据明确失效时才用 cancel 或 cancel_replace。不得无条件加挂或无条件替换",
   pending_action_reason: "中文说明挂单处理依据。pending_action 为 cancel 或 cancel_replace 时必须具体说明原挂单在哪个价格、市场结构或方向依据上已经失效，不得只写‘逻辑失效’，不得使用过期或超时作为原因；其他动作可返回空字符串",
   management_direction: "必须字段。仅允许 buy | sell | none。需要取消或替换挂单时填写被管理挂单方向；其他情况填 none",
   limit_price: "挂单价。buy_limit/sell_limit:入场价,订单直接挂在此价; buy_stop/sell_stop:触发价,价格到达后以市价成交; buy_stop_limit/sell_stop_limit:触发价,到达后按stop_limit_price挂限价单。方向：限价买单须低于当前价,限价卖单须高于当前价;突破单相反,买单触发价须高于当前价,卖单触发价须低于当前价。距离参考：M15一般0.5-2 ATR,H1一般1-3 ATR",
@@ -228,7 +228,7 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   key_reasons: ["2至4条关键行情依据，每条不超过60字，不包含账户、持仓或风控结论"],
   risk_factors: ["0至4条市场层面的不利因素，每条不超过60字，不包含账户或仓位信息"],
   analysis: "中文，按以下顺序：1.当前趋势方向和强度 2.关键支撑/阻力位 3.当前价与均线关系 4.波动率状态 5.潜在催化剂或风险事件",
-  reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望） 5.挂单管理：检查现有挂单状态，是否需要取消、是否已有同方向挂单"
+  reasoning: "中文，按以下结构：1.信号方向依据（哪些指标/形态支持） 2.入场方式选择理由（为什么用市价/限价/挂单） 3.风险评估（潜在不利因素） 4.执行建议（为什么可以执行或为什么观望） 5.挂单管理：逐笔检查现有挂单状态和价格，说明本轮选择新增、保留、取消或替换的依据"
 }, null, 2)
 
 export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, experienceSelection = null) {
@@ -244,7 +244,7 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   schema.position_size_tier = '必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓和标准仓。不得返回具体手数或自定义系数。'
   schema.position_size_reason = '必须字段。使用简体中文说明仓位档位的行情依据；不得猜测用户账户余额或手数。'
   schema.position_action = '必须字段。仅允许 open | hold_no_add | allow_add | observe。平台参考组合已有同向持仓且不建议加仓时必须返回 hold_no_add，同时 signal_type 必须为 hold、entry_method 必须为 observe；候选入场价只能写入分析正文或触发条件，不得伪装成可执行信号。只有明确延续信号才可 allow_add；暂不支持自动平仓。'
-  schema.pending_action = '必须字段。仅允许 none | keep | cancel | cancel_replace。旧挂单仍符合当前行情逻辑时必须 keep，只有逻辑失效或方向反转时才能 cancel 或 cancel_replace。'
+  schema.pending_action = '必须字段。仅允许 none | keep | cancel | cancel_replace。同品种同方向可以同时存在多笔挂单，必须逐笔结合价格、方向、市场结构和风险评估；系统不按数量限制，也不做相同价格去重。none 表示本轮不管理现有挂单，若交易信号成立可以新增一笔；keep 表示保留现有挂单且本轮不新增；只有逻辑失效或方向反转时才能 cancel 或 cancel_replace。不得无条件加挂或无条件替换。'
   schema.pending_action_reason = '中文字符串。pending_action 为 cancel 或 cancel_replace 时必须说明可核验的具体依据，例如关键位被突破、原结构被破坏、方向逻辑反转或挂单价格已不符合当前结构；必须包含对应的价格、结构或方向变化，不得只写“逻辑失效”，不得以过期、超时或有效期为理由。其他动作返回空字符串。'
   schema.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 或 cancel_replace 时填写被管理挂单方向；其他情况填 none。'
   const experienceIds = [...new Set((experienceSelection?.selectedItemIds || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
@@ -1146,10 +1146,10 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     if (DEBUG_LLM) console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
 
     const marketOnlyRule = config._market_only
-      ? '\n\n## 共享市场推理边界\n你只能分析输入中的市场行情、K线、技术指标和 platform_strategy_reference_portfolio。该参考组合仅表示本平台策略已经产生的持仓与挂单，不代表任何订阅用户的真实账户。禁止推测订阅用户的账户、余额、权益、持仓、挂单或个人风控信息。你只能选择不建仓、试探仓、轻仓或标准仓，不得返回绝对手数；用户实际手数由独立风控根据净值、真实止损亏损和 MT5 合约规格计算。参考组合已有同向持仓时，除非行情形成明确的延续加仓机会，否则 position_action 必须为 hold_no_add；即使允许加仓，系统也会限制为试探仓。参考挂单仍符合当前逻辑时必须 keep，只有原逻辑失效时才能 cancel，方向反转且新挂单成立时才能 cancel_replace。'
+      ? '\n\n## 共享市场推理边界\n你只能分析输入中的市场行情、K线、技术指标和 platform_strategy_reference_portfolio。该参考组合仅表示本平台策略已经产生的持仓与挂单，不代表任何订阅用户的真实账户。禁止推测订阅用户的账户、余额、权益、持仓、挂单或个人风控信息。你只能选择不建仓、试探仓、轻仓或标准仓，不得返回绝对手数；用户实际手数由独立风控根据净值、真实止损亏损和 MT5 合约规格计算。参考组合已有同向持仓时，除非行情形成明确的延续加仓机会，否则 position_action 必须为 hold_no_add；即使允许加仓，系统也会限制为试探仓。参考挂单可以有多笔同品种同方向订单，必须逐笔结合价格、结构和风险决定动作：keep 表示保留且本轮不新增，none 表示不管理现有挂单且交易信号成立时可以新增，cancel/cancel_replace 只能取消或替换管理方向对应且由当前策略产生的挂单。系统不以数量代替模型判断，也不应无条件加挂。'
       : ''
     const privatePortfolioRule = !config._market_only && config._include_portfolio_context
-      ? '\n\n## 私有策略账户上下文\n输入中的 positions 与 pending_orders 是当前用户账户的实时数据。请结合它们判断 position_action 与 pending_action，但不得把余额或现有手数直接复制成新订单手数；新订单仍只返回固定仓位档位，实际手数由风控精算。'
+      ? '\n\n## 私有策略账户上下文\n输入中的 positions 与 pending_orders 是当前用户账户的完整实时数据，可能同时包含多笔同品种同方向挂单。请逐笔结合价格、方向、市场结构和风险判断 position_action 与 pending_action；系统不按数量限制或相同价格去重，由模型决定是否新增、保留、取消或替换。keep 表示保留现有挂单且本轮不新增，none 表示本轮不管理现有挂单且交易信号成立时可以新增；不得把余额或现有手数直接复制成新订单手数，新订单仍只返回固定仓位档位，实际手数由风控精算。'
       : ''
     // Personal memory is untrusted data. Keep its content out of the system
     // prompt and append it to the user payload below. Shared platform inference
