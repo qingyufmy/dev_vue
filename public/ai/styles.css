@@ -863,6 +863,21 @@ button {
 .signal-pending-action > i { margin-top:1px; }
 .signal-pending-action strong { display:block; color:var(--text-primary); font-size:13px; line-height:1.4; }
 .signal-pending-action p { margin:3px 0 0; color:var(--text-secondary); font-size:12px; line-height:1.5; }
+.signal-management-actions { margin:0 0 12px; padding:14px 16px; border:1px solid color-mix(in srgb,var(--brand-gold) 30%,var(--border-default)); border-radius:14px; background:color-mix(in srgb,var(--brand-gold) 5%,var(--bg-input-soft)); }
+.signal-management-actions .analysis-section-title { margin:0 0 10px; }
+.signal-management-actions .analysis-section-title span { margin-left:auto; color:var(--text-tertiary); font-size:12px; font-weight:500; }
+.signal-management-action-list { display:grid; gap:8px; }
+.signal-management-action { display:grid; gap:8px; padding:11px 12px; border:1px solid var(--border-default); border-radius:10px; background:var(--bg-surface); }
+.signal-management-action.confirmation_completed { border-color:color-mix(in srgb,var(--status-connected) 38%,var(--border-default)); background:var(--status-connected-bg); }
+.signal-management-action.confirmation_reset,.signal-management-action.invalid_reset { border-color:color-mix(in srgb,var(--color-warning) 35%,var(--border-default)); background:var(--color-warning-bg); }
+.signal-management-action-head { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+.signal-management-action-head strong { color:var(--text-primary); font-size:13px; line-height:1.4; }
+.signal-management-action-head .management-state { margin-left:auto; }
+.signal-management-action-meta { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:6px 10px; color:var(--text-secondary); font-size:12px; }
+.signal-management-action-meta span { color:var(--text-muted); }
+.signal-management-action-meta b { min-width:0; color:var(--text-primary); font-size:13px; overflow-wrap:anywhere; }
+.signal-management-action-meta .management-state { justify-self:start; }
+.signal-management-action p { margin:0; color:var(--text-secondary); font-size:13px; line-height:1.5; text-wrap:pretty; }
 .decision-summary { display:grid; grid-template-columns:94px minmax(0,1fr); gap:12px; align-items:start; margin-bottom:12px; padding:14px 16px; border-radius:12px; background:color-mix(in srgb,var(--bg-input-soft) 82%,transparent); }
 .decision-summary span { color:var(--text-secondary); font-size:12px; padding-top:3px; }
 .decision-summary strong { color:var(--text-primary); font-size:15px; line-height:1.55; }

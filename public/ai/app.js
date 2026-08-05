@@ -43,6 +43,7 @@ const state = {
   positionManagementFilters: { status: "", page: 1, pageSize: 10, total: 0 },
   selectedPositionManagementId: null,
   positionManagementRealtimeTimer: null,
+  signalManagementRealtimeTimer: null,
   positions: [],
   pendingOrders: [],
   positionProtectionPreview: null,
@@ -1784,6 +1785,7 @@ function invalidateSession() {
   if (_signalMonitorUpdateTimer) { clearTimeout(_signalMonitorUpdateTimer); _signalMonitorUpdateTimer = null; }
   if (state._posRefreshTimer) { clearTimeout(state._posRefreshTimer); state._posRefreshTimer = null; }
   if (state.positionManagementRealtimeTimer) { clearTimeout(state.positionManagementRealtimeTimer); state.positionManagementRealtimeTimer = null; }
+  if (state.signalManagementRealtimeTimer) { clearTimeout(state.signalManagementRealtimeTimer); state.signalManagementRealtimeTimer = null; }
   stopRealtimeSync();
   stopPresenceHeartbeat();
   stopUiTimer();
@@ -1883,6 +1885,40 @@ async function handleAccountTransferred(msg = {}) {
   state.autoEnabled = false;
   toast(`此 ${bridgePlatformLabel(msg.platform || state.bridgePlatform)} 账户已由另一个平台账号重新连接，当前账号的自动分析和交易发送已关闭`, "warning");
   await Promise.allSettled([loadStatus(), loadStrategyCatalog(), refreshTabData(activeTabId())]);
+}
+
+function signalManagementTaskAffects(signal, task = {}) {
+  if (!signal?.id || !task?.id) return false;
+  const actions = Array.isArray(signal.management_actions)
+    ? signal.management_actions : (Array.isArray(signal.position_management_actions) ? signal.position_management_actions : []);
+  if (actions.some(action => Number(action?.task_id) === Number(task.id))) return true;
+  return [task.decision_signal_id, task.origin_signal_id]
+    .some(id => id != null && sameSignalId(id, signal.id));
+}
+
+function scheduleSignalManagementRefresh(task = {}) {
+  const candidates = [state.selectedSignal, state.dashboardSignal].filter(Boolean);
+  const signalIds = [...new Set(candidates
+    .filter(signal => signalManagementTaskAffects(signal, task))
+    .map(signal => String(signal.id)))];
+  if (!signalIds.length) return;
+  if (state.signalManagementRealtimeTimer) clearTimeout(state.signalManagementRealtimeTimer);
+  state.signalManagementRealtimeTimer = setTimeout(() => {
+    state.signalManagementRealtimeTimer = null;
+    const selectedId = String(state.selectedSignal?.id || "");
+    const selectedRefresh = signalIds.includes(selectedId);
+    if (selectedRefresh) {
+      openAnalysisFromHistory(state.selectedSignal.id, {
+        navigate:false, forceRefresh:true, preserveSelectionMode:true,
+      }).catch(() => {});
+    }
+    for (const signalId of signalIds) {
+      const dashboard = state.dashboardSignal;
+      if (dashboard && String(dashboard.id) === signalId) {
+        loadDashboardSignal(dashboard.id, null, { forceRefresh:true }).catch(() => {});
+      }
+    }
+  }, 180);
 }
 
 // Real-time bridge status via WebSocket + command channel
@@ -2092,6 +2128,7 @@ function connectBridgeStatusWs(onReady) {
             && document.querySelector('[data-workspace-tab="trading"].active')?.dataset.workspaceTarget === "management";
           if (managementVisible) loadPositionManagement({ quiet:true, preserveSelection:true }).catch(() => {});
         }, 180);
+        if (msg.type === 'position_management_task_updated') scheduleSignalManagementRefresh(msg.task || {});
       } else if (msg.type === 'result' && msg.command_id) {
         const pending = _wsPending.get(msg.command_id);
         if (pending) {
@@ -2482,7 +2519,7 @@ async function loadDashboardSignal(signalId, fallbackSignal = null, options = {}
 
   const current = sameSignalId(state.dashboardSignal?.id, signalId) ? state.dashboardSignal : null;
   let signal = current ? { ...current, ...(fallbackSignal || {}) } : fallbackSignal;
-  if (!signal?.detail_loaded) {
+  if (options.forceRefresh || !signal?.detail_loaded) {
     try {
       const data = await wsApi("signal_detail", { signal_id:Number(signalId) });
       if (data.status === "success" && data.signal) signal = { ...(signal || {}), ...data.signal, detail_loaded:true };
@@ -7014,15 +7051,27 @@ function renderCandidateEntryReference(candidate) {
 
 function renderSignalPendingActions(signal) {
   const actions = Array.isArray(signal?.pending_actions) ? signal.pending_actions : [];
-  if (!actions.length) return "";
+  const managementActions = Array.isArray(signal?.management_actions)
+    ? signal.management_actions : (Array.isArray(signal?.position_management_actions) ? signal.position_management_actions : []);
+  const managedCancelTickets = new Set(managementActions
+    .filter(action => action?.action_type === "pending_cancel" || action?.task_type === "pending_cancel")
+    .map(action => String(action?.target_ticket || action?.ticket || "").trim())
+    .filter(Boolean));
+  const hasManagedCancel = managementActions.some(action => action?.action_type === "pending_cancel" || action?.task_type === "pending_cancel");
+  const visibleActions = actions.filter(action => {
+    const ticket = String(action?.ticket || "").trim();
+    if (hasManagedCancel && !ticket && Number(action?.count || 0) > 0) return false;
+    return !ticket || !managedCancelTickets.has(ticket);
+  });
+  if (!visibleActions.length) return "";
   const labels = {
     cancelled: { title:"挂单已取消", icon:"circle-x" },
     superseded: { title:"旧挂单已取消并替换", icon:"replace" },
     failed: { title:"挂单取消失败", icon:"circle-alert" },
   };
   return `<section class="signal-pending-actions">
-    <div class="analysis-section-title"><i data-lucide="list-x" size="15"></i><strong>挂单处理</strong><span>共 ${actions.length} 条</span></div>
-    <div class="signal-pending-action-list">${actions.map(action => {
+    <div class="analysis-section-title"><i data-lucide="list-x" size="15"></i><strong>挂单处理</strong><span>共 ${visibleActions.length} 条</span></div>
+    <div class="signal-pending-action-list">${visibleActions.map(action => {
       const actionState = labels[action.status] || labels.cancelled;
       const detail = action.status === "failed"
         ? userVisibleText(action.message, "系统未返回具体失败原因")
@@ -7031,6 +7080,66 @@ function renderSignalPendingActions(signal) {
       return `<article class="signal-pending-action ${escapeHtml(action.status || "cancelled")}">
         <i data-lucide="${actionState.icon}" size="17"></i>
         <div><strong>${actionState.title}${action.ticket ? ` · #${escapeHtml(action.ticket)}` : countText}</strong><p>${escapeHtml(detail)}</p></div>
+      </article>`;
+    }).join("")}</div>
+  </section>`;
+}
+
+function renderSignalManagementActions(signal) {
+  const actions = Array.isArray(signal?.management_actions)
+    ? signal.management_actions : (Array.isArray(signal?.position_management_actions) ? signal.position_management_actions : []);
+  if (!actions.length) return "";
+  const pendingOutcomes = Array.isArray(signal?.pending_actions) ? signal.pending_actions : [];
+  const effectLabel = action => {
+    const effect = String(action?.inference_effect || "display_only");
+    const required = Math.max(1, Number(action?.required_confirmations || (action?.action_type === "pending_cancel" ? 1 : 2)));
+    const count = Math.max(0, Math.min(required, Number(action?.confirmation_count || 0)));
+    if (action?.action_type === "pending_cancel") return effect === "first_confirmation"
+      ? "本次建议取消，已进入处理" : "本次建议取消";
+    if (effect === "first_confirmation") return `本次第 ${count || 1} 次确认（${count || 1}/${required}）`;
+    if (effect === "confirmation_completed") return `本次完成连续确认（${required}/${required}）`;
+    if (effect === "confirmation_reset") return `本次继续持有并清零（0/${required}）`;
+    if (effect === "invalid_reset") return `本次结果无效并清零（0/${required}）`;
+    if (action?.action_type === "pending_cancel") return `本次模型单轮判断成立但未进入自动任务（1/${required}）`;
+    return `仅展示本轮建议，未进入连续确认（0/${required}）`;
+  };
+  const effectTone = action => ({
+    first_confirmation:action?.action_type === "pending_cancel" ? "confirmed" : "candidate",
+    confirmation_completed:"confirmed",
+    confirmation_reset:"completed",
+    invalid_reset:"failed",
+    display_only:"candidate",
+  })[String(action?.inference_effect || "display_only")] || "candidate";
+  const actionTitle = action => action?.action_type === "pending_cancel"
+    ? "建议取消挂单" : action?.action === "hold" ? "继续持有并清零" : "建议平仓";
+  const pendingOutcomeFor = action => {
+    if (action?.action_type !== "pending_cancel" || !pendingOutcomes.length) return null;
+    const ticket = String(action?.target_ticket || action?.ticket || "").trim();
+    return pendingOutcomes.find(item => ticket && String(item?.ticket || "").trim() === ticket)
+      || (pendingOutcomes.length === 1 ? pendingOutcomes[0] : null);
+  };
+  const taskLabel = (action, pendingOutcome = null) => {
+    const statusCode = typeof action?.task_status === "string" ? action.task_status : action?.task?.status;
+    if (!statusCode && pendingOutcome) return ({
+      cancelled:"挂单已取消", superseded:"旧挂单已取消并替换", failed:"取消挂单失败",
+    })[String(pendingOutcome.status || "")] || "挂单处理结果已记录";
+    if (!statusCode) return "仅显示模型建议";
+    return positionManagementStatus(statusCode).label || "状态待确认";
+  };
+  return `<section class="signal-management-actions">
+    <div class="analysis-section-title"><i data-lucide="briefcase-business" size="15"></i><strong>持仓与挂单管理</strong><span>本次推理归因</span></div>
+    <div class="signal-management-action-list">${actions.map(action => {
+      const type = action?.action_type === "pending_cancel" ? "pending-cancel" : "position-exit";
+      const ticket = String(action?.target_ticket || action?.ticket || "").trim();
+      const reason = userVisibleText(action?.reason, type === "pending-cancel" ? "原挂单条件已经失效" : "本轮继续依据当前持仓判断");
+      const taskStatus = typeof action?.task_status === "string" ? action.task_status : action?.task?.status;
+      const pendingOutcome = pendingOutcomeFor(action);
+      const taskTone = taskStatus ? positionManagementStatus(taskStatus).tone
+        : pendingOutcome?.status === "failed" ? "failed" : pendingOutcome ? "confirmed" : "";
+      return `<article class="signal-management-action ${type} ${escapeHtml(String(action?.inference_effect || "display_only"))}">
+        <div class="signal-management-action-head"><strong>${actionTitle(action)}</strong><span class="management-state ${escapeHtml(effectTone(action))}">${escapeHtml(effectLabel(action))}</span></div>
+        <div class="signal-management-action-meta"><span>目标票号</span><b>${ticket ? `#${escapeHtml(ticket)}` : "票号待同步"}</b><span>处理当前状态</span><b class="management-state ${escapeHtml(taskTone)}">${escapeHtml(taskLabel(action, pendingOutcome))}</b></div>
+        <p>${escapeHtml(reason)}</p>
       </article>`;
     }).join("")}</div>
   </section>`;
@@ -7464,6 +7573,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <div><span>执行建议</span><strong>${escapeHtml(advice.title || executionStatus(signal))}</strong><p>${escapeHtml(advice.description || "")}</p></div>
       <span class="analysis-direction-badge ${dir}">${directionText(signal.signal_type)}</span>
     </section>
+    ${renderSignalManagementActions(signal)}
     ${renderSignalPendingActions(signal)}
     <div class="decision-summary"><span>一句话结论</span><strong>${escapeHtml(decision.summary)}</strong></div>
     ${renderDirectionBias(decision)}

@@ -768,7 +768,9 @@ async function createAutomaticExitTask({ signalId, context, target, evaluation, 
   ])
   const task = { id:taskId, user_id:Number(target.user_id), status, state_version:confirmed ? 2 : 1,
     execution_mode:mode, task_type:'position_exit', management_group_id:target.management_group_id,
-    thesis_id:target.thesis_id, candidate_action:'exit', confirmation_count:record.confirmation_count,
+    thesis_id:target.thesis_id, origin_signal_id:target.origin_signal_id || null,
+    decision_signal_id:Number(signalId), outcome_id:target.outcome_id,
+    candidate_action:'exit', confirmation_count:record.confirmation_count,
     required_confirmations:AUTO_EXIT_CONFIRMATIONS_REQUIRED, updated_at:now }
   broadcastPositionManagementTask(task, confirmed ? 'automatic_confirmation_completed' : 'automatic_confirmation_recorded')
   return task
@@ -903,7 +905,9 @@ export async function persistPositionManagementEvaluations({
       ])
       const task = { id:taskId, user_id:Number(target.user_id), status:'EVIDENCE_CONFIRMED', state_version:1, execution_mode:mode,
         task_type:evaluation.taskType, management_group_id:target.management_group_id,
-        thesis_id:target.thesis_id, candidate_action:evaluation.action,
+        thesis_id:target.thesis_id, origin_signal_id:target.origin_signal_id || null,
+        decision_signal_id:Number(signalId), outcome_id:target.outcome_id,
+        candidate_action:evaluation.action,
         confirmation_count:1, required_confirmations:1, updated_at:now }
       created.push(task)
       broadcastPositionManagementTask(task, 'single_inference_pending_cancel_confirmed')
@@ -1148,11 +1152,275 @@ export async function getPositionManagementTask(taskId, { userId = null, admin =
   return { task, events, commands, evaluations }
 }
 
+function parseManagementJson(value, fallback = {}) {
+  if (!value) return fallback
+  if (typeof value === 'object') return value
+  try { return JSON.parse(value) } catch { return fallback }
+}
+
+function managementNumber(value) {
+  const result = Number(value)
+  return Number.isFinite(result) && result > 0 ? result : null
+}
+
+function managementText(value, max = 500) {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value).slice(0, max)
+  return text(value, max)
+}
+
+function managementTaskSummary(task) {
+  if (!task) return null
+  const id = managementNumber(task.id)
+  if (!id) return null
+  return {
+    id,
+    task_type:text(task.task_type, 32) || null,
+    status:text(task.status, 40).toUpperCase() || null,
+    execution_mode:text(task.execution_mode, 20) || null,
+    updated_at:task.updated_at || null,
+  }
+}
+
+function managementTaskEvidence(task) {
+  return parseManagementJson(task?.evidence_validation_json, {})
+}
+
+function managementTaskModel(task) {
+  return parseManagementJson(task?.model_evaluation_json, {})
+}
+
+function taskContainsEvaluation(task, evaluation, signalId) {
+  if (!task || !evaluation) return false
+  const evidence = managementTaskEvidence(task)
+  const evaluationId = managementNumber(evaluation.id)
+  const evaluationIds = [
+    ...(Array.isArray(evidence.evaluation_ids) ? evidence.evaluation_ids : []),
+    evidence.reset_evaluation_id,
+  ].map(managementNumber).filter(Boolean)
+  const signalIds = [
+    ...(Array.isArray(evidence.decision_signal_ids) ? evidence.decision_signal_ids : []),
+    evidence.reset_decision_signal_id,
+  ].map(managementNumber).filter(Boolean)
+  return (evaluationId && evaluationIds.includes(evaluationId))
+    || (Number(signalId) > 0 && signalIds.includes(Number(signalId)))
+}
+
+function taskResetByEvaluation(task, evaluation, signalId) {
+  if (!task || !evaluation) return false
+  const evidence = managementTaskEvidence(task)
+  const evaluationId = managementNumber(evaluation.id)
+  const resetEvaluationId = managementNumber(evidence.reset_evaluation_id)
+  const resetSignalId = managementNumber(evidence.reset_decision_signal_id)
+  const evaluationIds = Array.isArray(evidence.evaluation_ids)
+    ? evidence.evaluation_ids.map(managementNumber).filter(Boolean) : []
+  return (evaluationId && resetEvaluationId === evaluationId)
+    || (Number(signalId) > 0 && resetSignalId === Number(signalId))
+    || (evaluationId && evaluationIds.includes(evaluationId) && evidence.status === 'reset')
+}
+
+function taskForManagementAction(spec, evaluation, tasks, signalId) {
+  const candidates = (tasks || []).filter(task => {
+    if (String(task?.task_type || '') !== spec.task_type) return false
+    if (spec.management_group_id && String(task.management_group_id || '') !== spec.management_group_id) return false
+    if (evaluation?.outcome_id && Number(task.outcome_id) !== Number(evaluation.outcome_id)) return false
+    return true
+  })
+  if (!candidates.length) return null
+  const exact = candidates.find(task => taskContainsEvaluation(task, evaluation, signalId))
+  if (exact) return exact
+  const signalMatch = candidates.find(task => [task.decision_signal_id, task.origin_signal_id]
+    .map(managementNumber).includes(Number(signalId)))
+  return signalMatch || null
+}
+
+function managementTargetTicket(spec, task, evaluation = null) {
+  const taskTicket = spec.task_type === 'pending_cancel'
+    ? task?.target_pending_ticket
+    : task?.target_position_id
+  const evaluationTicket = spec.task_type === 'position_exit' ? evaluation?.position_id : null
+  const value = taskTicket || evaluationTicket
+  return managementText(value, 96) || null
+}
+
+function managementReason(spec, evaluation, task) {
+  const model = managementTaskModel(task)
+  return text(spec.reason || evaluation?.reason || model.reason || model.message, 1000) || null
+}
+
+/**
+ * Build the user-visible management contribution of one inference.  The
+ * decision payload is authoritative for which actions were proposed; rows in
+ * the two management tables only enrich that proposal with confirmation and
+ * current task state.  This keeps the first inference's effect stable even
+ * after its task advances to a terminal state.
+ */
+export function buildSignalManagementActions({
+  signalId = null, management = null, evaluations = [], tasks = [],
+} = {}) {
+  const source = management?.position_management && typeof management.position_management === 'object'
+    ? management.position_management : management
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return []
+  const signalNumber = managementNumber(signalId)
+  const specs = [
+    ...(Array.isArray(source.pending_evaluations) ? source.pending_evaluations : [])
+      .filter(item => String(item?.action || '').toLowerCase() === 'cancel')
+      .map(item => ({ ...item, task_type:'pending_cancel', action_type:'pending_cancel', action:'cancel' })),
+    ...(Array.isArray(source.position_evaluations) ? source.position_evaluations : [])
+      .filter(item => ['exit', 'hold'].includes(String(item?.action || '').toLowerCase()))
+      .map(item => ({ ...item, task_type:'position_exit', action_type:'position_exit', action:String(item.action).toLowerCase() })),
+  ]
+  const result = []
+  for (const spec of specs) {
+    const matchingEvaluations = (evaluations || []).filter(row =>
+      String(row?.management_group_id || '') === String(spec.management_group_id || '')
+      && (!spec.thesis_id || !row?.thesis_id || String(row.thesis_id) === String(spec.thesis_id)))
+    const directTasks = (tasks || []).filter(task =>
+      String(task?.task_type || '') === spec.task_type
+      && (!spec.management_group_id || String(task.management_group_id || '') === spec.management_group_id)
+      && signalNumber
+      && [task.decision_signal_id, task.origin_signal_id]
+        .map(managementNumber).includes(signalNumber))
+    const targets = matchingEvaluations.length
+      ? matchingEvaluations.map(evaluation => ({
+        evaluation,
+        task:taskForManagementAction(spec, evaluation, tasks, signalNumber),
+      }))
+      : directTasks.length ? directTasks.map(task => ({ evaluation:null, task })) : [{ evaluation:null, task:null }]
+
+    for (const { evaluation, task } of targets) {
+      const validationStatus = String(evaluation?.validation_status || '').toLowerCase() === 'invalid' ? 'invalid' : 'valid'
+      const count = Math.max(0, Number(evaluation?.consecutive_exit_count || 0))
+      let inferenceEffect = 'display_only'
+      let confirmationCount = spec.task_type === 'pending_cancel' ? 1 : count
+      const requiredConfirmations = spec.task_type === 'pending_cancel' ? 1 : AUTO_EXIT_CONFIRMATIONS_REQUIRED
+
+      if (spec.task_type === 'pending_cancel') {
+        // A persisted task proves that this one-round decision entered the
+        // executable management domain. Without it the decision remains a
+        // display-only recommendation (for example, platform display mode).
+        inferenceEffect = task ? 'first_confirmation' : 'display_only'
+      } else if (spec.action === 'hold') {
+        const reset = taskResetByEvaluation(task, evaluation, signalNumber)
+        if (!reset) continue
+        inferenceEffect = validationStatus === 'invalid' ? 'invalid_reset' : 'confirmation_reset'
+        confirmationCount = 0
+      } else if (evaluation) {
+        if (validationStatus === 'invalid') {
+          inferenceEffect = taskResetByEvaluation(task, evaluation, signalNumber) ? 'invalid_reset' : 'display_only'
+          confirmationCount = 0
+        } else if (count >= requiredConfirmations) {
+          inferenceEffect = 'confirmation_completed'
+          confirmationCount = requiredConfirmations
+        } else if (count === 1) {
+          inferenceEffect = 'first_confirmation'
+          confirmationCount = 1
+        }
+      }
+
+      const taskSummary = managementTaskSummary(task)
+      const targetTicket = managementTargetTicket(spec, task, evaluation)
+      result.push({
+        action_type:spec.action_type,
+        task_type:spec.task_type,
+        action:spec.action,
+        management_group_id:text(spec.management_group_id, 80) || null,
+        thesis_id:text(spec.thesis_id, 80) || text(evaluation?.thesis_id, 80) || null,
+        signal_id:signalNumber,
+        evaluation_id:managementNumber(evaluation?.id),
+        ticket:targetTicket,
+        target_ticket:targetTicket,
+        reason:managementReason(spec, evaluation, task),
+        validation_status:validationStatus,
+        inference_effect:inferenceEffect,
+        confirmation_count:confirmationCount,
+        required_confirmations:requiredConfirmations,
+        task_id:taskSummary?.id || null,
+        task_status:taskSummary?.status || null,
+        task:taskSummary,
+      })
+    }
+  }
+  return result.slice(0, 50)
+}
+
+/**
+ * Load management evidence for a signal while enforcing the requested user
+ * scope.  Missing/older management tables degrade to the decision-only
+ * payload so signal detail remains usable during rolling upgrades.
+ */
+export async function loadSignalManagementActions(userId, signalId, {
+  management = null,
+} = {}) {
+  const scopedUserId = Number(userId)
+  const scopedSignalId = Number(signalId)
+  if (!Number.isInteger(scopedUserId) || scopedUserId <= 0
+    || !Number.isInteger(scopedSignalId) || scopedSignalId <= 0) return []
+
+  // The caller must provide the already-authorized decision payload.  Do not
+  // fetch an unscoped signal row here: shared/observer signals can be owned by
+  // another account even though the current user has a delivery for them.
+  const source = management
+  const decision = source?.position_management && typeof source.position_management === 'object'
+    ? source.position_management : source
+  const hasVisibleDecision = decision && typeof decision === 'object' && !Array.isArray(decision)
+    && ((Array.isArray(decision.pending_evaluations) && decision.pending_evaluations
+      .some(item => String(item?.action || '').toLowerCase() === 'cancel'))
+      || (Array.isArray(decision.position_evaluations) && decision.position_evaluations
+        .some(item => ['exit', 'hold'].includes(String(item?.action || '').toLowerCase()))))
+  if (!hasVisibleDecision) return []
+
+  let evaluations = []
+  try {
+    evaluations = await queryAll(`SELECT * FROM ai_position_management_evaluations
+      WHERE user_id = ? AND decision_signal_id = ?
+      ORDER BY id ASC LIMIT 100`, [scopedUserId, scopedSignalId])
+  } catch (error) {
+    console.warn(`[PositionManagement] Failed to load evaluations for signal ${scopedSignalId}:`, error.message)
+    evaluations = []
+  }
+  evaluations = (evaluations || []).filter(row => row?.user_id == null || Number(row.user_id) === scopedUserId)
+
+  const groups = [...new Map((evaluations || []).map(row => [
+    `${Number(row?.outcome_id) || 0}:${String(row?.management_group_id || '')}`,
+    [Number(row?.outcome_id) || 0, String(row?.management_group_id || '')],
+  ])).values()].filter(([outcomeId, groupId]) => outcomeId > 0 && groupId)
+  const taskConditions = [
+    'tasks.decision_signal_id = ?',
+    'tasks.origin_signal_id = ?',
+    'outcomes.signal_id = ?',
+  ]
+  const taskParams = [scopedSignalId, scopedSignalId, scopedSignalId]
+  for (const [outcomeId, groupId] of groups) {
+    taskConditions.push('(tasks.outcome_id = ? AND tasks.management_group_id = ?)')
+    taskParams.push(outcomeId, groupId)
+  }
+  let tasks = []
+  try {
+    tasks = await queryAll(`SELECT tasks.*, outcomes.position_id AS target_position_id,
+        outcomes.pending_ticket AS target_pending_ticket
+      FROM ai_position_management_tasks tasks
+      LEFT JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
+      WHERE tasks.user_id = ? AND tasks.task_type IN ('position_exit','pending_cancel')
+        AND (${taskConditions.join(' OR ')})
+      ORDER BY tasks.updated_at DESC, tasks.id DESC LIMIT 100`, [scopedUserId, ...taskParams])
+  } catch (error) {
+    console.warn(`[PositionManagement] Failed to load tasks for signal ${scopedSignalId}:`, error.message)
+    tasks = []
+  }
+  tasks = (tasks || []).filter(row => row?.user_id == null || Number(row.user_id) === scopedUserId)
+
+  return buildSignalManagementActions({
+    signalId:scopedSignalId, management:source, evaluations, tasks,
+  })
+}
+
 export function broadcastPositionManagementTask(task, reason = 'updated') {
   const payload = { type:'position_management_task_updated', reason, task:{
     id:Number(task.id), status:task.status, state_version:Number(task.state_version || 1),
     execution_mode:task.execution_mode, task_type:task.task_type,
     management_group_id:task.management_group_id, thesis_id:task.thesis_id,
+    origin_signal_id:managementNumber(task.origin_signal_id),
+    decision_signal_id:managementNumber(task.decision_signal_id),
     candidate_action:task.candidate_action, updated_at:task.updated_at || beijingNow(),
   } }
   sendToBrowsers(Number(task.user_id), payload)

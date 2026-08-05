@@ -16,12 +16,14 @@ import {
   AUTO_EXIT_CONFIRMATIONS_REQUIRED,
   buildPositionManagementAsOf,
   buildPositionManagementOutputFormat,
+  buildSignalManagementActions,
   canTransitionPositionManagement,
   claimPositionManagementLease,
   createTradeThesisTx,
   getPositionManagementSettings,
   isActivePositionManagementOutcome,
   loadActivePositionManagementContext,
+  loadSignalManagementActions,
   positionProtectionStatus,
   persistPositionManagementEvaluations,
   resolveAutomaticExitConfirmation,
@@ -742,9 +744,116 @@ describe('durable state and protection boundaries', () => {
     expect(migrations).toContain('ai_pending_cancel_enabled')
     expect(migrations).toContain("MODIFY execution_mode VARCHAR(20) NOT NULL DEFAULT 'auto_exit'")
     expect(positionManagement).toContain("if (mode === 'display') continue")
+    expect(positionManagement).not.toContain('fallback.pending_ticket')
+    expect(positionManagement).not.toContain('fallback.trade_ticket')
     expect(positionManagement).not.toContain('server_hard_condition')
     expect(bridgeAdapter).toContain('params.operation_id')
     expect(bridgeAdapter).toContain('managementPreconditionError')
     expect(bridgeLedger).toContain('ON CONFLICT(command_id) DO NOTHING')
+  })
+
+  it('keeps each inference effect stable while exposing the task current status', () => {
+    const management = {
+      position_evaluations:[{
+        management_group_id:'position_group_01', thesis_id:'thesis_01', action:'exit', reason:'失效',
+      }],
+    }
+    const first = buildSignalManagementActions({ signalId:101, management,
+      evaluations:[{ id:11, decision_signal_id:101, outcome_id:4, management_group_id:'position_group_01',
+        thesis_id:'thesis_01', action:'exit', validation_status:'valid', consecutive_exit_count:1 }],
+      tasks:[{ id:55, task_type:'position_exit', status:'CLOSE_CONFIRMED', outcome_id:4,
+        management_group_id:'position_group_01', target_position_id:'POS-1',
+        evidence_validation_json:JSON.stringify({ status:'confirmed', evaluation_ids:[11,12] }) }],
+    })
+    expect(first[0]).toMatchObject({ inference_effect:'first_confirmation', confirmation_count:1,
+      required_confirmations:2, task_id:55, task_status:'CLOSE_CONFIRMED', target_ticket:'POS-1' })
+
+    const second = buildSignalManagementActions({ signalId:102, management,
+      evaluations:[{ id:12, decision_signal_id:102, outcome_id:4, management_group_id:'position_group_01',
+        thesis_id:'thesis_01', action:'exit', validation_status:'valid', consecutive_exit_count:2 }],
+      tasks:[{ id:55, task_type:'position_exit', status:'CLOSE_CONFIRMED', outcome_id:4,
+        management_group_id:'position_group_01', target_position_id:'POS-1',
+        evidence_validation_json:JSON.stringify({ status:'confirmed', evaluation_ids:[11,12] }) }],
+    })
+    expect(second[0]).toMatchObject({ inference_effect:'confirmation_completed', confirmation_count:2,
+      task_status:'CLOSE_CONFIRMED' })
+  })
+
+  it('renders a hold or invalid result only when it actually resets a candidate', () => {
+    const management = { position_evaluations:[{
+      management_group_id:'position_group_01', thesis_id:'thesis_01', action:'hold', reason:'继续持有',
+    }] }
+    const reset = buildSignalManagementActions({ signalId:103, management,
+      evaluations:[{ id:13, decision_signal_id:103, outcome_id:4, management_group_id:'position_group_01',
+        thesis_id:'thesis_01', action:'hold', validation_status:'valid', consecutive_exit_count:0 }],
+      tasks:[{ id:56, task_type:'position_exit', status:'HELD', outcome_id:4,
+        management_group_id:'position_group_01', target_position_id:'POS-1',
+        evidence_validation_json:JSON.stringify({ status:'reset', reset_evaluation_id:13, reset_decision_signal_id:103 }) }],
+    })
+    expect(reset[0]).toMatchObject({ action:'hold', inference_effect:'confirmation_reset', confirmation_count:0,
+      task_status:'HELD' })
+
+    const ordinaryHold = buildSignalManagementActions({ signalId:104, management,
+      evaluations:[{ id:14, decision_signal_id:104, outcome_id:4, management_group_id:'position_group_01',
+        thesis_id:'thesis_01', action:'hold', validation_status:'valid', consecutive_exit_count:0 }], tasks:[] })
+    expect(ordinaryHold).toEqual([])
+
+    const invalidReset = buildSignalManagementActions({ signalId:105, management,
+      evaluations:[{ id:15, decision_signal_id:105, outcome_id:4, management_group_id:'position_group_01',
+        thesis_id:'thesis_01', action:'hold', validation_status:'invalid', consecutive_exit_count:0 }],
+      tasks:[{ id:57, task_type:'position_exit', status:'HELD', outcome_id:4,
+        management_group_id:'position_group_01', target_position_id:'POS-1',
+        evidence_validation_json:JSON.stringify({ status:'reset', reset_evaluation_id:15, reset_decision_signal_id:105 }) }],
+    })
+    expect(invalidReset[0]).toMatchObject({ inference_effect:'invalid_reset', confirmation_count:0,
+      task_id:57, task_status:'HELD' })
+  })
+
+  it('does not attach another inference task and keeps every directly affected target', () => {
+    const positionManagementDecision = { position_evaluations:[{
+      management_group_id:'position_group_01', thesis_id:'thesis_01', action:'exit', reason:'失效',
+    }] }
+    const unrelated = buildSignalManagementActions({ signalId:106, management:positionManagementDecision,
+      evaluations:[{ id:16, decision_signal_id:106, outcome_id:4, management_group_id:'position_group_01',
+        thesis_id:'thesis_01', action:'exit', validation_status:'valid', consecutive_exit_count:0 }],
+      tasks:[{ id:58, task_type:'position_exit', status:'COMPLETED', outcome_id:4,
+        management_group_id:'position_group_01', decision_signal_id:99, target_position_id:'POS-OLD',
+        evidence_validation_json:JSON.stringify({ evaluation_ids:[9], decision_signal_ids:[99] }) }],
+    })
+    expect(unrelated[0]).toMatchObject({ inference_effect:'display_only', task_id:null,
+      task_status:null, target_ticket:null })
+
+    const pendingManagementDecision = { pending_evaluations:[{
+      management_group_id:'pending_group_01', action:'cancel', reason:'挂单条件失效',
+    }] }
+    const multiple = buildSignalManagementActions({ signalId:107, management:pendingManagementDecision,
+      tasks:[
+        { id:59, task_type:'pending_cancel', status:'EVIDENCE_CONFIRMED', outcome_id:5,
+          management_group_id:'pending_group_01', decision_signal_id:107, target_pending_ticket:'P-1' },
+        { id:60, task_type:'pending_cancel', status:'EVIDENCE_CONFIRMED', outcome_id:6,
+          management_group_id:'pending_group_01', decision_signal_id:107, target_pending_ticket:'P-2' },
+      ],
+    })
+    expect(multiple).toHaveLength(2)
+    expect(multiple.map(item => item.target_ticket)).toEqual(['P-1', 'P-2'])
+  })
+
+  it('keeps pending cancellation display-only when no task exists and scopes enrichment by user', async () => {
+    expect(await loadSignalManagementActions(7, 105, { management:null })).toEqual([])
+    expect(queryAll).not.toHaveBeenCalled()
+
+    const management = { pending_evaluations:[{
+      management_group_id:'pending_group_01', action:'cancel', reason:'挂单条件失效',
+    }] }
+    const displayOnly = buildSignalManagementActions({ signalId:105, management, fallback:{ pending_ticket:'P-1', trade_ticket:'T-1' } })
+    expect(displayOnly[0]).toMatchObject({ action_type:'pending_cancel', inference_effect:'display_only',
+      confirmation_count:1, required_confirmations:1, target_ticket:null, task_id:null })
+
+    queryAll.mockResolvedValueOnce([]).mockResolvedValueOnce([])
+    await loadSignalManagementActions(7, 105, { management })
+    expect(queryAll.mock.calls[0][0]).toContain('WHERE user_id = ? AND decision_signal_id = ?')
+    expect(queryAll.mock.calls[0][1]).toEqual([7, 105])
+    expect(queryAll.mock.calls[1][0]).toContain('tasks.user_id = ?')
+    expect(queryAll.mock.calls[1][1][0]).toBe(7)
   })
 })

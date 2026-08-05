@@ -1285,6 +1285,7 @@ export { getInferenceVisualizationSnapshot, inferenceVisualizationSnapshot } fro
 export { POSITION_MANAGEMENT_CONTRACT_VERSION, buildPositionManagementAsOf,
   buildPositionManagementOutputFormat, validatePositionManagementResponse,
   createTradeThesisTx, loadActivePositionManagementContext, persistPositionManagementEvaluations,
+  buildSignalManagementActions, loadSignalManagementActions,
   canTransitionPositionManagement, transitionPositionManagementTask,
   claimPositionManagementLease, createPositionManagementCommand,
   getPositionManagementSettings, savePositionManagementSettings,

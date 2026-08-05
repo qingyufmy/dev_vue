@@ -112,6 +112,25 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('signal?.pending_actions')
     expect(app).toContain('${renderSignalPendingActions(signal)}')
     expect(app).toContain('userVisibleText(action.message')
+    expect(app).toContain('function renderSignalManagementActions(signal)')
+    expect(app).toContain('signal?.management_actions')
+    expect(app).toContain('持仓与挂单管理')
+    expect(app).toContain('本次建议取消，已进入处理')
+    expect(app).toContain('本次第 ${count || 1} 次确认')
+    expect(app).toContain('本次完成连续确认')
+    expect(app).toContain('本次继续持有并清零')
+    expect(app).toContain('effectTone(action)')
+    expect(app).toContain('class="management-state ${escapeHtml(taskTone)}"')
+    expect(app).toContain('pendingOutcomeFor(action)')
+    expect(app).toContain('处理当前状态')
+    expect(app).toContain('managedCancelTickets')
+  })
+
+  it('refreshes only affected signal management cards after task updates', () => {
+    expect(app).toContain('function signalManagementTaskAffects(signal, task = {})')
+    expect(app).toContain('function scheduleSignalManagementRefresh(task = {})')
+    expect(app).toContain('scheduleSignalManagementRefresh(msg.task || {})')
+    expect(app).toContain('navigate:false, forceRefresh:true, preserveSelectionMode:true')
   })
 
   it('keeps concrete execution outcomes visible even after the signal expires', () => {

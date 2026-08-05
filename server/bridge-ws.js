@@ -1657,6 +1657,9 @@ async function handleBrowserCommand(ws, userId, msg) {
             Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
               requesterUserId: userId, requesterRole: user?.role || 'user',
             })))
+            item.management_actions = await ai.loadSignalManagementActions(detailUserId, signalId, {
+              management:item.position_management,
+            })
             result = { status: 'success', signal: item }
           } else {
             result = { status: 'error', message: 'signal not found' }
@@ -1680,6 +1683,9 @@ async function handleBrowserCommand(ws, userId, msg) {
           Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
             requesterUserId: userId, requesterRole: user?.role || 'user',
           })))
+          item.management_actions = await ai.loadSignalManagementActions(detailUserId, signalId, {
+            management:item.position_management,
+          })
           result = { status: 'success', signal: item }
         } else {
           result = { status: 'error', message: 'signal not found' }
