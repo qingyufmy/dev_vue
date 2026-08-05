@@ -1037,27 +1037,10 @@ export async function requestJsonObject({
   }
 }
 
-function adaptLegacyPositionSizing(value) {
-  if (!value || typeof value !== 'object') return value
-  const signalType = String(value.signal_type || 'hold').toLowerCase()
-  const isHold = signalType === 'hold'
-  if (!value.position_size_tier) value.position_size_tier = isHold ? 'observe' : 'light'
-  if (!String(value.position_size_reason || '').trim()) {
-    value.position_size_reason = isHold
-      ? '当前不满足建仓条件'
-      : '旧版结果未提供仓位档位，系统按中性档位交由风控精算'
-  }
-  if (!value.position_action) value.position_action = isHold ? 'observe' : 'open'
-  if (!value.pending_action) value.pending_action = 'none'
-  if (value.pending_action_reason === undefined) value.pending_action_reason = ''
-  if (!value.management_direction) value.management_direction = 'none'
-  return value
-}
-
 export function validateAiSignalResponse(value, allowedEntryMethods) {
   if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('ai_response_not_object')
-  adaptLegacyPositionSizing(value)
-  const required = ['signal_type', 'entry_method', 'confidence', 'position_size_tier', 'position_size_reason', 'position_action', 'pending_action', 'management_direction', 'analysis', 'reasoning']
+  const required = ['signal_type', 'entry_method', 'confidence', 'position_size_tier', 'position_size_reason',
+    'position_action', 'pending_action', 'pending_action_reason', 'management_direction', 'analysis', 'reasoning']
   const missing = required.filter(key => !(key in value))
   if (missing.length) throw new Error(`ai_response_missing_required_fields:${missing.join(',')}`)
 
@@ -1091,11 +1074,7 @@ export function validateAiSignalResponse(value, allowedEntryMethods) {
     throw new Error('ai_response_management_direction_required')
   }
   if (pendingAction === 'cancel' && (typeof value.pending_action_reason !== 'string' || !value.pending_action_reason.trim())) {
-    const legacyReason = Array.isArray(value.cancel_pending)
-      ? value.cancel_pending.find(item => item && typeof item === 'object' && String(item.reason || '').trim())?.reason
-      : ''
-    if (legacyReason) value.pending_action_reason = legacyReason
-    else throw new Error('ai_response_pending_action_reason_required')
+    throw new Error('ai_response_pending_action_reason_required')
   }
   if (typeof value.analysis !== 'string' || !value.analysis.trim()) throw new Error('ai_response_analysis_required')
   if (typeof value.reasoning !== 'string' || !value.reasoning.trim()) throw new Error('ai_response_reasoning_required')
@@ -1310,7 +1289,9 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       modelProfileId:config._model_profile_id || null,
       timeout: Math.max(1, requestDeadlineAtMs - Date.now()),
       deadlineAtMs:requestDeadlineAtMs,
-      followupValidUntilMs:Number(config._resultValidUntilUtcMs) || deadlines.taskDeadlineUtcMs,
+      followupValidUntilMs:Number(config._followupValidUntilUtcMs)
+        || Number(config._resultValidUntilUtcMs)
+        || deadlines.taskDeadlineUtcMs,
       messages: [
         { role: 'system', content: cleanPrompt },
         { role: 'user', content: renderedUserPrompt },
@@ -1473,7 +1454,22 @@ export function buildModelComparisonSignal(raw, normalized, config = {}, market 
 
 export function normalizeAiSignal(parsed, config, market) {
   const strictInference = parsed?._inference_source === 'ai'
-  adaptLegacyPositionSizing(parsed)
+  // Offline comparison/history callers may provide older read-only payloads.
+  // Keep their presentation stable without allowing this path to grant live
+  // execution eligibility; live AI responses are validated before reaching
+  // this function and never use these defaults.
+  if (!strictInference && parsed && typeof parsed === 'object') {
+    const legacySignalType = String(parsed.signal_type || 'hold').toLowerCase()
+    const legacyHold = legacySignalType === 'hold'
+    if (!parsed.position_size_tier) parsed.position_size_tier = legacyHold ? 'observe' : 'light'
+    if (!String(parsed.position_size_reason || '').trim()) parsed.position_size_reason = legacyHold
+      ? '当前不满足建仓条件'
+      : '离线结果未提供仓位档位，仅用于历史展示'
+    if (!parsed.position_action) parsed.position_action = legacyHold ? 'observe' : 'open'
+    if (!parsed.pending_action) parsed.pending_action = 'none'
+    if (parsed.pending_action_reason === undefined) parsed.pending_action_reason = ''
+    if (!parsed.management_direction) parsed.management_direction = 'none'
+  }
   localizeAiSignalUserVisibleFields(parsed)
   const cleanText = (value, maxLength) => typeof value === 'string' ? localizeInferenceNarrative(value).slice(0, maxLength) : ''
   const cleanList = value => Array.isArray(value)
@@ -1483,10 +1479,7 @@ export function normalizeAiSignal(parsed, config, market) {
   parsed.trigger_condition = cleanText(parsed.trigger_condition, 240)
   parsed.invalidation_condition = cleanText(parsed.invalidation_condition, 240)
   parsed.position_size_reason = cleanText(parsed.position_size_reason, 240)
-  const legacyPendingReason = Array.isArray(parsed.cancel_pending)
-    ? parsed.cancel_pending.find(item => item && typeof item === 'object' && String(item.reason || '').trim())?.reason
-    : ''
-  parsed.pending_action_reason = cleanText(parsed.pending_action_reason || legacyPendingReason, 320)
+  parsed.pending_action_reason = cleanText(parsed.pending_action_reason, 320)
   parsed.position_action = String(parsed.position_action || '').trim().toLowerCase()
   parsed.pending_action = String(parsed.pending_action || '').trim().toLowerCase()
   parsed.management_direction = String(parsed.management_direction || 'none').trim().toLowerCase()
@@ -1582,9 +1575,11 @@ export function normalizeAiSignal(parsed, config, market) {
     signalType = 'hold'
   }
   if (strictInference) {
-    const strictRequired = ['signal_type', 'entry_method', 'position_size_tier', 'position_size_reason', 'position_action', 'pending_action', 'management_direction']
+    const strictRequired = ['signal_type', 'entry_method', 'position_size_tier', 'position_size_reason',
+      'position_action', 'pending_action', 'pending_action_reason', 'management_direction']
     if (signalType !== 'hold') strictRequired.push('stop_loss_price', 'take_profit_1_price')
-    const missing = strictRequired.filter(key => parsed[key] === undefined || parsed[key] === null || parsed[key] === '')
+    const missing = strictRequired.filter(key => parsed[key] === undefined || parsed[key] === null
+      || (key !== 'pending_action_reason' && parsed[key] === ''))
     if (missing.length) return schemaHold(`missing:${missing.join(',')}`)
   }
 

@@ -147,6 +147,16 @@ describe('attachSignalTiming', () => {
     const result = attachSignalTiming({ timeframe:'M5', created_at:'invalid', created_at_utc_msc:Date.now() - 5_000 })
     expect(result.is_stale).toBe(false)
   })
+
+  it('模型刚完成时仍按原行情快照的执行期限判定为过期', () => {
+    const result = attachSignalTiming({
+      timeframe:'H1', created_at_utc_msc:Date.now(),
+      decision_json:JSON.stringify({ execution_valid_until_utc_msc:Date.now() - 1_000 }),
+    })
+    expect(result.age_seconds).toBeLessThan(1)
+    expect(result.is_stale).toBe(true)
+    expect(result.execution_valid_until_utc_msc).toBeLessThan(Date.now())
+  })
 })
 
 describe('timeframeIntervalMs', () => {

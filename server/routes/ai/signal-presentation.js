@@ -157,6 +157,7 @@ function executionDescription(execution, fallback) {
 export function normalizeDecisionFields(signal = {}) {
   const direction = String(signal.signal_type || 'hold').toLowerCase()
   const isHold = direction === 'hold' || String(signal.entry_method || '') === 'observe'
+  const executionValidUntilUtcMsc = Number(signal.execution_valid_until_utc_msc)
   const summaryFallback = isHold
     ? '当前条件不足，建议继续观望。'
     : `${direction.startsWith('buy') ? '偏多' : '偏空'}机会成立，等待风控复核后执行。`
@@ -167,13 +168,15 @@ export function normalizeDecisionFields(signal = {}) {
     invalidation_condition: cleanText(signal.invalidation_condition, 240),
     key_reasons: cleanList(signal.key_reasons),
     risk_factors: cleanList(signal.risk_factors),
-    position_size_tier:String(signal.position_size_tier || (isHold ? 'observe' : 'light')).toLowerCase(),
+    position_size_tier:String(signal.position_size_tier || (isHold ? 'observe' : '')).toLowerCase(),
     position_size_factor:Number(signal.position_size_factor || 0),
     position_size_reason:cleanText(signal.position_size_reason, 240),
-    position_action:String(signal.position_action || (isHold ? 'observe' : 'open')).toLowerCase(),
+    position_action:String(signal.position_action || (isHold ? 'observe' : '')).toLowerCase(),
     pending_action:String(signal.pending_action || 'none').toLowerCase(),
     pending_action_reason:cleanText(signal.pending_action_reason, 320),
     management_direction:String(signal.management_direction || 'none').toLowerCase(),
+    execution_valid_until_utc_msc:Number.isFinite(executionValidUntilUtcMsc) && executionValidUntilUtcMsc > 0
+      ? Math.trunc(executionValidUntilUtcMsc) : null,
     candidate_entry:candidateEntry(signal),
     position_management:positionManagementDecision(signal),
     experience_usage:experienceUsage(signal),
@@ -205,6 +208,12 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
     executable:false,
   }
 
+  if (execution?.reason === 'market_snapshot_expired') return {
+    state:'expired', title:'行情快照已过期',
+    description:'本次推理结果已保留，但生成时使用的行情快照已经过期，因此不会发送任何交易指令。',
+    executable:false,
+  }
+
   if (executed || pending) return {
     state: pending ? 'pending' : 'executed',
     title: pending ? '挂单已提交' : '订单已执行',
@@ -222,6 +231,11 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
     title: execution.status === 'rejected' ? '风控未放行' : execution.status === 'skipped' ? '本次未执行' : '执行未完成',
     description: executionDescription(execution, '请查看风控中心中的具体决策原因。'),
     executable: false,
+  }
+  if (direction !== 'hold' && entryMethod !== 'observe' && !positionAction) return {
+    state:'unavailable', title:'执行信息不完整',
+    description:'该记录缺少当前版本要求的仓位处理结论，仅保留用于历史查看，不能执行。',
+    executable:false,
   }
   if (stale) return { state: 'expired', title: '信号已过期', description: '请重新推理，过期信号不会发送到交易端。', executable: false }
   if (direction === 'hold' || entryMethod === 'observe') return { state: 'observe', title: '暂不执行', description: '当前建议为观望，等待触发条件或市场结构改善。', executable: false }

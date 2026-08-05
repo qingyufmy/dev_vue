@@ -621,6 +621,11 @@ function priceDisplay(value, digits = 2) {
 function signalIsStale(signal) {
   if (!signal) return false;
   if (signal.is_executed) return false;
+  if (signal.is_stale === true) return true;
+  const executionValidUntilUtcMsc = Number(signal.execution_valid_until_utc_msc);
+  if (Number.isFinite(executionValidUntilUtcMsc) && executionValidUntilUtcMsc > 0) {
+    return Date.now() > executionValidUntilUtcMsc;
+  }
   const ttl = Number(signal.ttl_seconds);
   if (!Number.isFinite(ttl)) return !!signal.is_stale;
   const createdAt = parseBeijingServerTime(signal.created_at);

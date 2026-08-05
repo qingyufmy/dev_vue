@@ -153,12 +153,22 @@ export function signalAgeSeconds(createdAt, createdAtUtcMsc = null) {
 export function attachSignalTiming(signal, timezoneOffsetMinutes = null) {
   const ttl = signalTtlSeconds(signal.timeframe || '')
   const age = signalAgeSeconds(signal.created_at, signal.created_at_utc_msc)
+  let storedDecision = null
+  if (signal.decision_json && typeof signal.decision_json === 'object') storedDecision = signal.decision_json
+  else if (typeof signal.decision_json === 'string') {
+    try { storedDecision = JSON.parse(signal.decision_json) } catch { storedDecision = null }
+  }
+  const executionValidUntilUtcMsc = Number(
+    signal.execution_valid_until_utc_msc ?? storedDecision?.execution_valid_until_utc_msc,
+  )
+  const hasExecutionDeadline = Number.isFinite(executionValidUntilUtcMsc) && executionValidUntilUtcMsc > 0
   signal.ttl_seconds = ttl
   signal.age_seconds = Math.round(age * 10) / 10
   signal.expires_at = signal.created_at
     ? (() => { const d = parseBeijing(signal.created_at); if (!d) return null; d.setSeconds(d.getSeconds() + ttl); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` })()
     : null
-  signal.is_stale = age > ttl
+  signal.execution_valid_until_utc_msc = hasExecutionDeadline ? Math.trunc(executionValidUntilUtcMsc) : null
+  signal.is_stale = age > ttl || (hasExecutionDeadline && Date.now() > executionValidUntilUtcMsc)
   const storedClock = {
     timezone_offset_minutes:signal.terminal_timezone_offset_minutes,
     clock_status:signal.terminal_clock_status,

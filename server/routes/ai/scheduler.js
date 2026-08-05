@@ -209,7 +209,7 @@ async function assertModelTaskOwned(tracker, phase) {
 }
 
 async function assertAutoInferenceApplyGate({ tracker, lockGuard, promptTypeId, strategy,
-  cycleId, key, resultValidUntilUtcMsc, marketMeta, phase, config = null, frozenModel = null }) {
+  cycleId, key, taskDeadlineAtUtcMsc, marketMeta, phase, config = null, frozenModel = null }) {
   if (lockGuard && !(await lockGuard.assertOwned(phase))) {
     return { allowed:false, type:'rejected', reason:'lock_lost' }
   }
@@ -220,9 +220,9 @@ async function assertAutoInferenceApplyGate({ tracker, lockGuard, promptTypeId, 
   if (!currentState?.running || currentState.cycleId !== cycleId) {
     return { allowed:false, type:'stale', reason:'auto_cycle_changed' }
   }
-  const validUntil = Number(resultValidUntilUtcMsc)
-  if (!Number.isFinite(validUntil) || Date.now() > validUntil) {
-    return { allowed:false, type:'stale', reason:'model_task_result_expired' }
+  const taskDeadline = Number(taskDeadlineAtUtcMsc)
+  if (!Number.isFinite(taskDeadline) || Date.now() > taskDeadline) {
+    return { allowed:false, type:'stale', reason:'model_task_deadline_exceeded' }
   }
   if (!trustedTerminalClock(marketMeta || {})) {
     return { allowed:false, type:'stale', reason:'terminal_clock_untrusted' }
@@ -246,9 +246,11 @@ async function assertAutoInferenceApplyGate({ tracker, lockGuard, promptTypeId, 
   return { allowed:true }
 }
 
-async function assertAutoInferenceBusinessGate({ tracker, lockGuard, resultValidUntilUtcMsc, phase }) {
+async function assertAutoInferenceBusinessGate({ tracker, lockGuard, resultValidUntilUtcMsc, phase,
+  requireFreshResult = true }) {
   if (lockGuard && !(await lockGuard.assertOwned(phase))) return false
   if (!(await assertModelTaskOwned(tracker, phase))) return false
+  if (!requireFreshResult) return true
   const validUntil = Number(resultValidUntilUtcMsc)
   return Number.isFinite(validUntil) && Date.now() <= validUntil
 }
@@ -2138,9 +2140,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       nowUtcMs:cycleStartedAtMs,
     }).taskDeadlineUtcMs
     const resultValidUntilUtcMsc = Math.min(
-      Date.now() + Math.max(1, Number(signalTtlSeconds(primaryTf)) || 120) * 1000,
+      cycleStartedAtMs + Math.max(1, Number(signalTtlSeconds(primaryTf)) || 120) * 1000,
       taskDeadlineAtUtcMsc,
-      cycleStartedAtMs + 10 * 60_000,
     )
     const modelTaskInput = buildAutoModelTaskInput({
       promptTypeId, symbol, cycleId, cycleStartedAtMs, strategy:pt, config,
@@ -2159,6 +2160,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     config._modelTaskId = modelTaskTracker.taskId
     config._taskDeadlineAtUtcMs = taskDeadlineAtUtcMsc
     config._resultValidUntilUtcMs = resultValidUntilUtcMsc
+    config._followupValidUntilUtcMs = taskDeadlineAtUtcMsc
     previousOnProviderRequest = config._onProviderRequest
     previousOnProviderUsage = config._onProviderUsage
     previousOnProviderActivity = config._onProviderActivity
@@ -2212,6 +2214,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     market.inference_source = signal._inference_source || 'unknown'
     const aiSource = signal._inference_source
     delete signal._inference_source
+    const executionWindowExpired = Date.now() > resultValidUntilUtcMsc
+    signal.execution_valid_until_utc_msc = resultValidUntilUtcMsc
     if (strategyPolicyRuntime) {
       const workflow = validateWorkflowTrace(config._strategy_policy.compiledPolicy, signal, {
         indicators:strategyPolicyRuntime.indicators,
@@ -2271,7 +2275,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     // 4. Write shared signal and deliveries in one transaction.
     const applyGate = await assertAutoInferenceApplyGate({
       tracker:modelTaskTracker, lockGuard, promptTypeId, strategy:pt,
-      cycleId, key, resultValidUntilUtcMsc, marketMeta:ratesResp.market_meta,
+      cycleId, key, taskDeadlineAtUtcMsc, marketMeta:ratesResp.market_meta,
       phase:'signal_write', config, frozenModel:modelTaskInput,
     })
     if (!applyGate.allowed) {
@@ -2296,18 +2300,18 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     const signalId = await withTransaction(async run => {
       if (typeof modelTaskTracker.assertOwnedTx === 'function') {
         await modelTaskTracker.assertOwnedTx(run)
-        const taskResult = await run(`SELECT result_valid_until_utc_msc
+        const taskResult = await run(`SELECT task_deadline_at_utc_msc
           FROM ai_model_tasks WHERE task_id = ? FOR UPDATE`, [modelTaskTracker.taskId])
         const taskRows = Array.isArray(taskResult?.[0]) ? taskResult[0]
           : (Array.isArray(taskResult) ? taskResult : [])
-        if (!taskRows?.[0] || Number(taskRows[0].result_valid_until_utc_msc) < Date.now()) {
-          throw new Error('model_task_result_expired')
+        if (!taskRows?.[0] || Number(taskRows[0].task_deadline_at_utc_msc) < Date.now()) {
+          throw new Error('model_task_deadline_exceeded')
         }
       } else {
         const rows = await run(`SELECT task_id, status, lease_token, fencing_token,
-            result_valid_until_utc_msc FROM ai_model_tasks WHERE task_id = ? FOR UPDATE`, [modelTaskTracker.taskId])
+            task_deadline_at_utc_msc FROM ai_model_tasks WHERE task_id = ? FOR UPDATE`, [modelTaskTracker.taskId])
         const taskRow = Array.isArray(rows?.[0]) ? rows[0][0] : rows?.[0]
-        if (!taskRow || taskRow.status !== 'applying' || Number(taskRow.result_valid_until_utc_msc) < Date.now()) {
+        if (!taskRow || taskRow.status !== 'applying' || Number(taskRow.task_deadline_at_utc_msc) < Date.now()) {
           throw new Error('model_task_fence_lost')
         }
       }
@@ -2375,6 +2379,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         createdAt,
         signalType:signal.signal_type,
         pendingAction:signal.pending_action,
+        executionExpired:executionWindowExpired,
       })) {
         deliveryValues.push('(?, ?, ?, ?, ?, ?, ?, ?, ?)')
         deliveryParams.push(delivery.signalId, delivery.userId, delivery.promptTypeId, delivery.symbol,
@@ -2390,7 +2395,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       return insertedSignalId
     })
     signal.id = signalId
-    if (signal._position_management && positionManagementContext) {
+    if (!executionWindowExpired && signal._position_management && positionManagementContext) {
       try {
         await persistPositionManagementEvaluations({
           signalId,
@@ -2439,6 +2444,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     }
     if (!(await assertAutoInferenceBusinessGate({
       tracker:modelTaskTracker, lockGuard, resultValidUntilUtcMsc, phase:'delivery_publish',
+      requireFreshResult:false,
     }))) {
       l('BLOCKED: model task/lock gate before signal publish')
       await finishModelTaskAfterSignalGate('rejected', 'model_task_business_gate_failed')
@@ -2455,6 +2461,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       }
       if (!(await assertAutoInferenceBusinessGate({
         tracker:modelTaskTracker, lockGuard, resultValidUntilUtcMsc, phase:'delivery_user',
+        requireFreshResult:false,
       }))) {
         l('BLOCKED: model task/lock gate before subscriber delivery')
         await finishModelTaskAfterSignalGate('rejected', 'model_task_business_gate_failed')
@@ -2491,6 +2498,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     }
     if (!(await assertAutoInferenceBusinessGate({
       tracker:modelTaskTracker, lockGuard, resultValidUntilUtcMsc, phase:'delivery',
+      requireFreshResult:false,
     }))) {
       l('BLOCKED: model task/lock gate before delivery')
       await finishModelTaskAfterSignalGate('rejected', 'model_task_business_gate_failed')
@@ -2498,14 +2506,15 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     }
 
     // 8. Auto-trade for eligible subscribers (limited concurrency) (lock check)
-    if (!(await assertAutoInferenceBusinessGate({
+    if (!executionWindowExpired && !(await assertAutoInferenceBusinessGate({
       tracker:modelTaskTracker, lockGuard, resultValidUntilUtcMsc, phase:'auto_trade',
     }))) {
       l('BLOCKED: model task/lock gate before auto-trade')
       await finishModelTaskAfterSignalGate('rejected', 'model_task_business_gate_failed')
       return { status:'error', reason:'model_task_business_gate_failed' }
     }
-    if ((signal.signal_type !== 'hold' || signal.pending_action === 'cancel') && aiSource === 'ai' && !signal.is_stale) {
+    if (!executionWindowExpired && (signal.signal_type !== 'hold' || signal.pending_action === 'cancel')
+      && aiSource === 'ai' && !signal.is_stale) {
       // Single JOIN query instead of N+1 per subscriber
       const onlineUserIds = [...onlineSubscribers]
       let eligibleSubs = []
@@ -2553,7 +2562,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     await broadcastAutoProgress(promptTypeId, symbol, { stage: 'complete', label: '推理结果已生成', progress_percent: 100 })
     l(`<<< cycle complete (signal=#${signalId}, subscribers=${allSubscribers.size}, online=${onlineSubscribers.size})`)
     return { status:'success', signalId, subscriberCount:allSubscribers.size,
-      onlineSubscriberCount:onlineSubscribers.size, createdAt }
+      onlineSubscriberCount:onlineSubscribers.size, createdAt, executionExpired:executionWindowExpired }
   } catch (err) {
     cycleError = err
     l(`<<< EXCEPTION: ${err.message}`)
@@ -3675,13 +3684,27 @@ function durableDeliveryRecovery(intent) {
 }
 
 function buildSignalDeliveryRows({ signalId, userIds, onlineUserIds, promptTypeId, symbol, createdAt,
-  signalType = null, pendingAction = null }) {
+  signalType = null, pendingAction = null, executionExpired = false }) {
   const online = onlineUserIds instanceof Set ? onlineUserIds : new Set(onlineUserIds || [])
   const normalizedSignalType = String(signalType || '').trim().toLowerCase()
   const normalizedPendingAction = String(pendingAction || '').trim().toLowerCase()
   const holdWithoutCancel = normalizedSignalType === 'hold' && normalizedPendingAction !== 'cancel'
   return [...new Set(userIds || [])].map(userId => {
     const isOnline = online.has(userId)
+    if (executionExpired) {
+      return {
+        signalId,
+        userId,
+        promptTypeId,
+        symbol,
+        deliveryStatus:isOnline ? 'delivered' : 'stored_offline',
+        executionStatus:'skipped',
+        executionResult:JSON.stringify({
+          status:'skipped', reason:'market_snapshot_expired', history_available:true,
+        }),
+        createdAt,
+      }
+    }
     if (holdWithoutCancel) {
       return {
         signalId,

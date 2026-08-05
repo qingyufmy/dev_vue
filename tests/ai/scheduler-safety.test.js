@@ -709,6 +709,29 @@ describe('automatic inference bridge snapshot', () => {
       }),
     ])
   })
+
+  it('keeps an expired model result in history but closes every execution delivery', () => {
+    expect(__schedulerTest.buildSignalDeliveryRows({
+      signalId:14,
+      userIds:new Set([7, 8]),
+      onlineUserIds:new Set([7]),
+      promptTypeId:3,
+      symbol:'XAUUSD',
+      createdAt:'2026-07-24 12:00:00',
+      signalType:'buy',
+      pendingAction:'none',
+      executionExpired:true,
+    })).toEqual([
+      expect.objectContaining({
+        userId:7, deliveryStatus:'delivered', executionStatus:'skipped',
+        executionResult:JSON.stringify({ status:'skipped', reason:'market_snapshot_expired', history_available:true }),
+      }),
+      expect.objectContaining({
+        userId:8, deliveryStatus:'stored_offline', executionStatus:'skipped',
+        executionResult:JSON.stringify({ status:'skipped', reason:'market_snapshot_expired', history_available:true }),
+      }),
+    ])
+  })
 })
 
 describe('unattempted signal delivery recovery', () => {

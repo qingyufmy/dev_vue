@@ -25,6 +25,16 @@ describe('model usage phase accounting contract', () => {
     expect(source).toContain("(request_phase = 'request' OR request_phase IS NULL)")
   })
 
+  it('uses the provider follow-up deadline independently from market execution freshness', () => {
+    expect(source).toContain('Number(config._followupValidUntilUtcMs)')
+    expect(source).toContain('Number(config._resultValidUntilUtcMs)')
+  })
+
+  it('does not keep the live legacy intent adapter', () => {
+    expect(source).not.toContain('adaptLegacyPositionSizing')
+    expect(source).not.toContain('legacyPendingReason')
+  })
+
   it('treats Chan structure age as diagnostics and legacy stale fields as non-current', () => {
     expect(source).toContain('confirmed_structure_age_bars 仅是距最近确认线段终点的K线根数诊断值')
     expect(source).toContain('confirmed_structure_stale，只能将其视为旧版历史快照的兼容字段')
@@ -730,11 +740,23 @@ describe('requestJsonObject', () => {
 describe('validateAiSignalResponse', () => {
   const hold = {
     signal_type: 'hold', entry_method: 'observe', confidence: 0.62,
-    recommended_volume: 0, analysis: '暂无优势', reasoning: '等待结构确认',
+    recommended_volume: 0, position_size_tier:'observe', position_size_reason:'当前不满足建仓条件',
+    position_action:'observe', pending_action:'none', pending_action_reason:'', management_direction:'none',
+    analysis: '暂无优势', reasoning: '等待结构确认',
   }
 
   it('accepts a complete HOLD contract', () => {
     expect(validateAiSignalResponse(hold, ['market'])).toBe(hold)
+  })
+
+  it('fails closed on missing live intent fields without mutating the model response', () => {
+    const incomplete = { ...hold }
+    delete incomplete.position_action
+    delete incomplete.pending_action_reason
+    expect(() => validateAiSignalResponse(incomplete, ['market']))
+      .toThrow('ai_response_missing_required_fields:position_action,pending_action_reason')
+    expect(incomplete).not.toHaveProperty('position_action')
+    expect(incomplete).not.toHaveProperty('pending_action_reason')
   })
 
   it('rejects missing fields and mismatched entry methods before normalization', () => {
@@ -759,8 +781,8 @@ describe('validateAiSignalResponse', () => {
       ...hold, pending_action:'cancel', management_direction:'buy',
       cancel_pending:[{ symbol:'XAUUSD', reason:'M15 跌破 4102 支撑，原买入依据已经失效' }],
     }
-    expect(validateAiSignalResponse(legacy, ['market']).pending_action_reason)
-      .toBe('M15 跌破 4102 支撑，原买入依据已经失效')
+    expect(() => validateAiSignalResponse(legacy, ['market']))
+      .toThrow('ai_response_pending_action_reason_required')
   })
 })
 
@@ -941,6 +963,8 @@ describe('maybeAiSignal', () => {
       ok:true,
       json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify({
         signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+        position_size_tier:'observe', position_size_reason:'等待', position_action:'observe',
+        pending_action:'none', pending_action_reason:'', management_direction:'none',
         analysis:'等待', reasoning:'预算记录完成',
       }) } }] }),
     })
@@ -993,6 +1017,12 @@ describe('maybeAiSignal', () => {
               entry_method: 'market',
               confidence: 0.7,
               recommended_volume: 0.03,
+              position_size_tier:'light',
+              position_size_reason:'结构确认后采用轻仓',
+              position_action:'open',
+              pending_action:'none',
+              pending_action_reason:'',
+              management_direction:'none',
               stop_loss_price: 1990,
               take_profit_1_price: 2010,
               take_profit_2_price: 2020,
@@ -1534,10 +1564,19 @@ describe('normalizeAiSignal - SL/TP fallback', () => {
 describe('normalizeAiSignal - L5 strict schema', () => {
   const market = { latest_price: 2000, atr_anchor: 10, strategy_score: {}, volatility_pct: 0 }
   const config = { risk_level: 'medium', max_position_size: 0.05 }
+  const strictHoldFields = {
+    position_size_tier:'observe', position_size_reason:'等待结构确认', position_action:'observe',
+    pending_action:'none', pending_action_reason:'', management_direction:'none',
+  }
+  const strictTradeFields = {
+    position_size_tier:'light', position_size_reason:'结构确认后采用轻仓', position_action:'open',
+    pending_action:'none', pending_action_reason:'', management_direction:'none',
+  }
 
   it('keeps a valid AI hold with nullable trade prices and calibrated confidence', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'hold', entry_method: 'observe', confidence: 0.65,
+      ...strictHoldFields,
       recommended_volume: 0, stop_loss_price: null, take_profit_1_price: null,
     }, config, market)
     expect(result.signal_type).toBe('hold')
@@ -1564,7 +1603,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     const result = normalizeAiSignal({
       _inference_source:'ai', signal_type:'buy_limit', entry_method:'limit', confidence:0.8,
       position_size_tier:'probe', position_size_reason:'等待回踩', position_action:'hold_no_add',
-      pending_action:'none', management_direction:'none', limit_price:1995,
+      pending_action:'none', pending_action_reason:'', management_direction:'none', limit_price:1995,
       stop_loss_price:1985, take_profit_1_price:2010, recommended_take_profit_tier:1,
       analysis:'偏多但不加仓', reasoning:'已有同向持仓',
     }, { ...config, _allowed_entry_methods:['limit'] }, market)
@@ -1581,6 +1620,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
   it('invalid explicit entry_method degrades to hold instead of market', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'instant', confidence: 0.8,
+      ...strictTradeFields,
       recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2020,
     }, config, market)
     expect(result).toMatchObject({ signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, normalization_info: { type: 'l5_schema_hold' } })
@@ -1589,6 +1629,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
   it('degrades a model response that uses an entry method disabled by the strategy', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy_limit', entry_method: 'limit', confidence: 0.8,
+      ...strictTradeFields,
       recommended_volume: 0.02, limit_price: 1995, stop_loss_price: 1985, take_profit_1_price: 2015,
     }, { ...config, _allowed_entry_methods: ['market'] }, market)
     expect(result).toMatchObject({
@@ -1600,6 +1641,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
   it('ignores a legacy absolute model volume and uses the configured execution ceiling', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
+      ...strictTradeFields,
       recommended_volume: 0.06, stop_loss_price: 1990, take_profit_1_price: 2020,
       recommended_take_profit_tier: 1,
     }, config, market)
@@ -1609,6 +1651,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
   it('uses the configured platform volume range instead of a hard-coded maximum', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
+      ...strictTradeFields,
       recommended_volume: 0.08, stop_loss_price: 1990, take_profit_1_price: 2020,
       recommended_take_profit_tier: 1,
     }, { ...config, max_position_size: 0.1, _ai_volume_min: 0.02, _ai_volume_max: 0.1, _ai_volume_step: 0.02 }, market)
@@ -1618,6 +1661,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
   it('does not let a legacy absolute volume control the new risk-tier contract', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
+      ...strictTradeFields,
       recommended_volume: 0.07, stop_loss_price: 1990, take_profit_1_price: 2020,
       recommended_take_profit_tier: 1,
     }, { ...config, max_position_size: 0.1, _ai_volume_min: 0.02, _ai_volume_max: 0.1, _ai_volume_step: 0.02 }, market)
@@ -1627,6 +1671,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
   it('requires an explicit AI take-profit recommendation for executable signals', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
+      ...strictTradeFields,
       recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2020,
     }, config, market)
     expect(result).toMatchObject({
@@ -1638,6 +1683,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
   it('degrades a sell stop-limit whose trigger is above the current market price', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'sell_stop_limit', entry_method: 'stop_limit', confidence: 0.8,
+      ...strictTradeFields,
       recommended_volume: 0.02, limit_price: 2005, stop_limit_price: 2010,
       stop_loss_price: 2020, take_profit_1_price: 1980, recommended_take_profit_tier: 1,
     }, { ...config, _allowed_entry_methods: ['stop_limit'] }, market)
@@ -1653,6 +1699,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
   it('degrades a sell stop-limit whose post-trigger limit is below its trigger', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'sell_stop_limit', entry_method: 'stop_limit', confidence: 0.8,
+      ...strictTradeFields,
       recommended_volume: 0.02, limit_price: 1995, stop_limit_price: 1990,
       stop_loss_price: 2020, take_profit_1_price: 1980, recommended_take_profit_tier: 1,
     }, { ...config, _allowed_entry_methods: ['stop_limit'] }, market)
@@ -1668,6 +1715,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     try {
       const result = normalizeAiSignal({
         _inference_source: 'ai', signal_type: 'sell_stop_limit', entry_method: 'stop_limit', confidence: 0.8,
+        ...strictTradeFields,
         recommended_volume: 0.02, limit_price: 1995, stop_limit_price: 1998, pending_valid_minutes: 240,
         stop_loss_price: 2020, take_profit_1_price: 1980, recommended_take_profit_tier: 1,
       }, { ...config, _allowed_entry_methods: ['stop_limit'] }, market)

@@ -153,9 +153,20 @@ describe('signal presentation', () => {
     expect(advice.description).toBe('风控条件未满足')
   })
 
-  it('adapts legacy rows without a decision payload', () => {
+  it('keeps legacy rows without a decision payload non-executable', () => {
     const result = attachSignalPresentation({ id: 1, signal_type: 'sell', entry_method: 'market' })
     expect(result.decision.schema_version).toBe(4)
-    expect(result.execution_advice.executable).toBe(true)
+    expect(result.decision.position_action).toBe('')
+    expect(result.execution_advice).toMatchObject({ state:'unavailable', executable:false })
+  })
+
+  it('presents a retained stale inference as expired rather than a generic skip', () => {
+    expect(buildExecutionAdvice({
+      signal_type:'buy', position_action:'open', is_stale:true,
+      execution_status:'skipped',
+      execution_result:{ status:'skipped', reason:'market_snapshot_expired' },
+    })).toMatchObject({ state:'expired', title:'行情快照已过期', executable:false })
+    expect(app).toContain('if (signal.is_stale === true) return true;')
+    expect(app).toContain('execution_valid_until_utc_msc')
   })
 })

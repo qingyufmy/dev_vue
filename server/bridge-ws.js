@@ -1,6 +1,6 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
-import { queryOne, queryAll, queryRun, withTransaction, beijingNow, parseBeijing } from './db.js'
+import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from './db.js'
 import { ADMIN_CACHE_TTL_MS, CORS_ORIGINS } from './config.js'
 import { isCorsOriginAllowed } from './cors-origin.js'
 import { getRedis, isRedisAvailable } from './redis.js'
@@ -1585,14 +1585,14 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         // Old user signals
         const oldRow = await queryOne(
-          `SELECT id, signal_type, is_executed, created_at, ttl_seconds, timeframe, 'manual' as signal_source FROM ai_signals WHERE user_id = ? ${sessionFilter} ${observerSignalFilter} ORDER BY created_at DESC, id DESC LIMIT 1`,
+          `SELECT id, signal_type, is_executed, created_at, created_at_utc_msc, ttl_seconds, timeframe, decision_json, 'manual' as signal_source FROM ai_signals WHERE user_id = ? ${sessionFilter} ${observerSignalFilter} ORDER BY created_at DESC, id DESC LIMIT 1`,
           [queryUserId, ...sessionParam, ...observerSignalParam]
         )
 
         // Shared delivery signals
         const delivSessionFilter = params.session_id ? 'AND s.session_id = ?' : ''
         const delivRow = await queryOne(
-          `SELECT s.id, s.signal_type, d.is_executed, s.created_at, s.ttl_seconds, s.timeframe, 'auto_shared' as signal_source, d.execution_status
+          `SELECT s.id, s.signal_type, d.is_executed, s.created_at, s.created_at_utc_msc, s.ttl_seconds, s.timeframe, s.decision_json, 'auto_shared' as signal_source, d.execution_status
            FROM auto_signal_deliveries d
            JOIN ai_signals s ON s.id = d.signal_id
            WHERE d.user_id = ? ${delivSessionFilter} ${observerStrategyId ? 'AND d.prompt_type_id = ?' : ''} ORDER BY s.created_at DESC, s.id DESC LIMIT 1`,
@@ -1608,11 +1608,8 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
 
         if (row) {
-          const now = Date.now()
-          const createdAt = parseBeijing(row.created_at)?.getTime() ?? 0
-          const ttl = (row.ttl_seconds || 3600) * 1000
-          row.is_stale = (now - createdAt) > ttl
-          row.age_seconds = Math.floor((now - createdAt) / 1000)
+          ai.attachSignalTiming(row)
+          delete row.decision_json
           delete row.signal_source
           if (row.execution_status !== undefined) delete row.execution_status
         }

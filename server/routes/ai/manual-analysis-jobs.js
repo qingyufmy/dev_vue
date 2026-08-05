@@ -7,12 +7,14 @@ import { modelTaskDeadlines } from './model-task-budget.js'
 import { beginModelTaskAttempt, claimModelTaskById, createModelTask,
   finishModelTaskAttempt, persistModelTaskBudget, renewModelTaskLease, transitionModelTask,
   cancelModelTaskById, markModelTaskStatusUnknownById,
-  markModelTaskSucceededFromResult, markModelTaskCompletedStaleById } from './model-task-runtime.js'
+  markModelTaskSucceededFromResult, markModelTaskCompletedStaleById,
+  requeueAbandonedModelTaskById, touchModelTaskActivity } from './model-task-runtime.js'
 
 const INLINE_WAIT_MS = Math.max(100, Number(process.env.MANUAL_ANALYSIS_INLINE_WAIT_MS) || 1500)
 const LEASE_MS = 120 * 1000
 const RENEW_MS = 30 * 1000
 const MAX_JSON_BYTES = 1024 * 1024
+const PROVIDER_ACTIVITY_PERSIST_MS = 5 * 1000
 
 const activeJobs = new Map()
 let recoveryTimer = null
@@ -438,6 +440,34 @@ async function processManualAnalysisJob(jobId) {
     let attempt = null
     let attemptSequence = 0
     let providerAttemptState = { submitted:false, responseReceived:false, providerRequestId:null, httpStatus:null }
+    let lastProviderActivityPersistAtUtcMs = 0
+    let firstProviderActivityPersisted = false
+    let lastProviderJobStagePersistAtUtcMs = 0
+    let lastProviderJobStage = null
+    const persistProviderJobStage = async (stage, { force = false } = {}) => {
+      const now = Date.now()
+      const stageChanged = stage !== lastProviderJobStage
+      if (!force && !stageChanged && now - lastProviderJobStagePersistAtUtcMs < PROVIDER_ACTIVITY_PERSIST_MS) return
+      await updateJob(key, { stage })
+      lastProviderJobStage = stage
+      lastProviderJobStagePersistAtUtcMs = now
+    }
+    const persistProviderActivity = async event => {
+      if (!task || !attempt) return
+      const now = Date.now()
+      const firstByte = event?.firstByte === true
+      const terminal = event?.state === 'provider_terminal'
+      const shouldPersist = terminal || (firstByte && !firstProviderActivityPersisted)
+        || !lastProviderActivityPersistAtUtcMs
+        || now - lastProviderActivityPersistAtUtcMs >= PROVIDER_ACTIVITY_PERSIST_MS
+      if (!shouldPersist) return
+      await touchModelTaskActivity(task, attempt, {
+        firstByte,
+        lastActivityAtUtcMs:now,
+      })
+      lastProviderActivityPersistAtUtcMs = now
+      firstProviderActivityPersisted = firstProviderActivityPersisted || firstByte
+    }
     const assertCanApply = async () => {
       await leaseChain
       if (leaseLost || controller.signal.aborted) {
@@ -533,7 +563,7 @@ async function processManualAnalysisJob(jobId) {
           providerAttemptState = { submitted:true, responseReceived:false,
             providerRequestId:event?.providerRequestId || null, httpStatus:null }
           attempt = await beginModelTaskAttempt(task, { attemptNo:(Math.max(1, Number(task.attempt_count)) - 1) * 10 + (++attemptSequence), providerRequestId:event?.providerRequestId || null })
-          await updateJob(key, { stage:'provider_running' })
+          await persistProviderJobStage('provider_running')
         },
         onProviderUsage:async event => {
           const httpStatus = Number(event?.httpStatus)
@@ -549,24 +579,28 @@ async function processManualAnalysisJob(jobId) {
               inputTokens:event?.inputTokens, outputTokens:event?.outputTokens, reasoningTokens:event?.reasoningTokens,
               cachedTokens:event?.cachedTokens, totalTokens:event?.totalTokens || event?.tokenCount,
               requestBytes:event?.requestBytes, responseBytes:event?.responseBytes,
-              finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails, errorCode:event?.errorCode })
+              finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails,
+              httpStatus:event?.httpStatus, errorCode:event?.errorCode })
             attempt = null
           }
           if (event?.status === 'success' && ['submitted', 'provider_running', 'provider_quiet'].includes(task.status)) {
             task = await transitionModelTask(task, 'response_received', { finishReason:event?.finishReason, incompleteDetails:event?.incompleteDetails })
           }
         },
-        onProviderActivity:async () => {
+        onProviderActivity:async event => {
           if (task.status === 'submitted' || task.status === 'provider_quiet') {
             task = await transitionModelTask(task, 'provider_running')
           }
-          await updateJob(key, { stage:'provider_running' })
+          await persistProviderActivity(event)
+          await persistProviderJobStage('provider_running', {
+            force:event?.state === 'provider_terminal',
+          })
         },
         onProviderQuiet:async () => {
           if (task.status === 'submitted' || task.status === 'provider_running') {
             task = await transitionModelTask(task, 'provider_quiet')
           }
-          await updateJob(key, { stage:'provider_quiet' })
+          await persistProviderJobStage('provider_quiet')
         },
       })
       await assertCanApply()
@@ -678,37 +712,125 @@ export async function cancelManualAnalysisJob(userId, jobId) {
 }
 
 export async function recoverManualAnalysisJobs() {
-  const rows = await queryAll(`SELECT j.*, t.status AS task_status, t.frozen_model_profile_id
-      , t.task_deadline_at_utc_msc
+  const rows = await queryAll(`SELECT j.*, t.status AS task_status,
+      t.task_deadline_at_utc_msc, t.lease_expires_at_utc_msc AS task_lease_expires_at_utc_msc,
+      t.fencing_token AS task_fencing_token,
+      EXISTS (SELECT 1 FROM ai_model_task_attempts attempts
+        WHERE attempts.task_id = t.task_id) AS provider_attempt_started
     FROM ai_manual_analysis_jobs j LEFT JOIN ai_model_tasks t ON t.task_id = j.model_task_id
     WHERE j.status IN ('queued','running','status_unknown') ORDER BY j.created_at_utc_msc LIMIT 100`)
   for (const row of rows) {
     try {
       const taskStatus = String(row.task_status || '')
+      const jobId = String(row.job_id)
+      // The in-process worker owns its lease and renews it independently. Do
+      // not let a periodic recovery scan fence or rewrite a live request,
+      // even when the database snapshot was read at an unlucky boundary.
+      if (activeJobs.has(jobId)) continue
+      const now = Date.now()
+      const leaseExpiresAt = Number(row.task_lease_expires_at_utc_msc)
+      const leaseExpired = !Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= now
+      const deadlineAt = Number(row.task_deadline_at_utc_msc || row.deadline_at_utc_msc || 0)
+      const deadlineReached = Number.isFinite(deadlineAt) && deadlineAt > 0 && deadlineAt <= now
+      const guard = {
+        expectedStatus:taskStatus,
+        fencingToken:Number(row.task_fencing_token || 0),
+        nowUtcMs:now,
+      }
       if (row.status === 'status_unknown' || taskStatus === 'status_unknown') {
-        const deadlineAt = Number(row.task_deadline_at_utc_msc || row.deadline_at_utc_msc || 0)
-        if (deadlineAt > 0 && deadlineAt <= Date.now()) {
+        if (deadlineReached) {
           const stale = await markModelTaskCompletedStaleById(row.model_task_id,
-            'manual_analysis_status_unknown_deadline_expired', { requireDeadlineReached:true, nowUtcMs:Date.now() })
+            'manual_analysis_status_unknown_deadline_expired', { ...guard, requireDeadlineReached:true })
           if (stale) {
-            await updateJob(row.job_id, { status:'completed_stale', stage:'completed_stale',
+            await updateJob(jobId, { status:'completed_stale', stage:'completed_stale',
               errorCode:'manual_analysis_status_unknown_deadline_expired',
-              errorMessage:'provider outcome remained unknown until the task deadline', completedAtUtcMs:Date.now() })
+              errorMessage:'provider outcome remained unknown until the task deadline', completedAtUtcMs:now })
           }
         }
         continue
       }
       if (['submitted','provider_running','provider_quiet'].includes(taskStatus)) {
-        await markModelTaskStatusUnknownById(row.model_task_id, 'provider_status_unknown').catch(() => {})
-        await updateJob(row.job_id, { status:'status_unknown', stage:'status_unknown', errorCode:'provider_status_unknown', errorMessage:'provider request was submitted before restart and cannot be polled' })
+        if (leaseExpired || deadlineReached) {
+          const reason = deadlineReached ? 'provider_status_unknown_after_deadline' : 'provider_status_unknown_after_recovery'
+          const changed = deadlineReached
+            ? await markModelTaskCompletedStaleById(row.model_task_id, reason, { ...guard, requireDeadlineReached:true })
+            : await markModelTaskStatusUnknownById(row.model_task_id, reason, { ...guard, requireLeaseExpired:true, requireDeadlineNotReached:true })
+          if (changed) {
+            await updateJob(jobId, {
+              status:deadlineReached ? 'completed_stale' : 'status_unknown',
+              stage:deadlineReached ? 'completed_stale' : 'status_unknown',
+              errorCode:reason,
+              errorMessage:deadlineReached
+                ? 'provider outcome remained unknown until the task deadline'
+                : 'provider request was submitted before restart and cannot be polled',
+              completedAtUtcMs:deadlineReached ? now : undefined,
+            })
+          }
+        }
         continue
       }
       if (taskStatus === 'leased' || taskStatus === 'preparing') {
-        await queryRun(`UPDATE ai_model_tasks SET status='queued', lease_token=NULL, lease_owner=NULL,
-          lease_expires_at_utc_msc=NULL, updated_at_utc_msc=? WHERE task_id=? AND status IN ('leased','preparing')`,
-        [Date.now(), row.model_task_id])
+        if (leaseExpired && !deadlineReached) {
+          if (Number(row.provider_attempt_started) > 0) {
+            const changed = await markModelTaskStatusUnknownById(row.model_task_id,
+              'provider_status_unknown_after_recovery', {
+                ...guard, requireLeaseExpired:true, requireDeadlineNotReached:true,
+              })
+            if (changed) await updateJob(jobId, { status:'status_unknown', stage:'status_unknown',
+              errorCode:'provider_status_unknown_after_recovery',
+              errorMessage:'provider request was submitted before restart and cannot be polled' })
+          } else {
+            const requeued = await requeueAbandonedModelTaskById(row.model_task_id,
+              'manual_analysis_worker_abandoned_before_provider', {
+                ...guard, requireLeaseExpired:true, requireDeadlineNotReached:true,
+              })
+            if (requeued) {
+              await updateJob(jobId, { status:'queued', stage:'queued', errorCode:null, errorMessage:null })
+              processManualAnalysisJob(jobId).catch(error =>
+                console.error('[ManualAnalysis] recovery failed:', error.message))
+            }
+          }
+        } else if (deadlineReached) {
+          const stale = await markModelTaskCompletedStaleById(row.model_task_id,
+            'manual_analysis_deadline_expired_before_provider', { ...guard, requireDeadlineReached:true })
+          if (stale) await updateJob(jobId, { status:'completed_stale', stage:'completed_stale',
+            errorCode:'manual_analysis_deadline_expired_before_provider',
+            errorMessage:'analysis deadline expired before the provider request started', completedAtUtcMs:now })
+        }
+        continue
       }
-      processManualAnalysisJob(String(row.job_id)).catch(error => console.error('[ManualAnalysis] recovery failed:', error.message))
+      if (isTerminalTaskStatus(taskStatus)) {
+        // A worker can commit the model envelope immediately before the
+        // business job update. Re-enter the normal reconciliation path so an
+        // already persisted signal is surfaced instead of being marked stale.
+        processManualAnalysisJob(jobId).catch(error => console.error('[ManualAnalysis] recovery failed:', error.message))
+        continue
+      }
+      if (taskStatus === 'queued' && !deadlineReached) {
+        if (Number(row.provider_attempt_started) > 0) {
+          const stale = await markModelTaskCompletedStaleById(row.model_task_id,
+            'manual_analysis_provider_attempt_untracked', { ...guard, requireLeaseOrDeadline:true })
+          if (stale) await updateJob(jobId, { status:'completed_stale', stage:'completed_stale',
+            errorCode:'manual_analysis_provider_attempt_untracked',
+            errorMessage:'provider attempt evidence exists for a queued task; analysis was stopped safely', completedAtUtcMs:now })
+        } else {
+          processManualAnalysisJob(jobId).catch(error => console.error('[ManualAnalysis] recovery failed:', error.message))
+        }
+        continue
+      }
+      if (deadlineReached || leaseExpired) {
+        const stale = await markModelTaskCompletedStaleById(row.model_task_id,
+          deadlineReached ? 'manual_analysis_deadline_expired' : 'manual_analysis_intermediate_result_missing', {
+            ...guard, requireLeaseOrDeadline:true,
+          })
+        if (stale) {
+          await updateJob(jobId, { status:'completed_stale', stage:'completed_stale',
+            errorCode:deadlineReached ? 'manual_analysis_deadline_expired' : 'manual_analysis_intermediate_result_missing',
+            errorMessage:'analysis could not be safely recovered after the worker stopped', completedAtUtcMs:now })
+        }
+        continue
+      }
+      processManualAnalysisJob(jobId).catch(error => console.error('[ManualAnalysis] recovery failed:', error.message))
     } catch (error) { console.error('[ManualAnalysis] recovery inspection failed:', error.message) }
   }
   return { inspected:rows.length }

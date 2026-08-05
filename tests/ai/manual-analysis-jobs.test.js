@@ -5,12 +5,14 @@ const {
   createModelTask, claimModelTaskById, beginModelTaskAttempt, finishModelTaskAttempt,
   renewModelTaskLease, transitionModelTask, cancelModelTaskById, markModelTaskStatusUnknownById,
   markModelTaskSucceededFromResult, markModelTaskCompletedStaleById,
+  requeueAbandonedModelTaskById, touchModelTaskActivity,
 } = vi.hoisted(() => ({
   queryAll:vi.fn(), queryOne:vi.fn(), queryRun:vi.fn(), withTransaction:vi.fn(), handleAnalyze:vi.fn(),
   getStrategyById:vi.fn(), getAnalyzeApiKey:vi.fn(), createModelTask:vi.fn(),
   claimModelTaskById:vi.fn(), beginModelTaskAttempt:vi.fn(), finishModelTaskAttempt:vi.fn(),
   renewModelTaskLease:vi.fn(), transitionModelTask:vi.fn(), cancelModelTaskById:vi.fn(), markModelTaskStatusUnknownById:vi.fn(),
   markModelTaskSucceededFromResult:vi.fn(), markModelTaskCompletedStaleById:vi.fn(),
+  requeueAbandonedModelTaskById:vi.fn(), touchModelTaskActivity:vi.fn(),
 }))
 
 vi.mock('../../server/db.js', () => ({ queryAll, queryOne, queryRun, withTransaction }))
@@ -21,6 +23,7 @@ vi.mock('../../server/routes/ai/model-task-runtime.js', () => ({
   createModelTask, claimModelTaskById, beginModelTaskAttempt, finishModelTaskAttempt,
   renewModelTaskLease, transitionModelTask, cancelModelTaskById, markModelTaskStatusUnknownById,
   markModelTaskSucceededFromResult, markModelTaskCompletedStaleById,
+  requeueAbandonedModelTaskById, touchModelTaskActivity,
 }))
 
 import { createManualAnalysisJob, recoverManualAnalysisJobs, __manualAnalysisJobsTest } from '../../server/routes/ai/manual-analysis-jobs.js'
@@ -37,6 +40,7 @@ function mockManualJobLookups(job, task = null) {
 describe('manual analysis durable jobs', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    __manualAnalysisJobsTest.activeJobs.clear()
     markModelTaskSucceededFromResult.mockResolvedValue(true)
     markModelTaskCompletedStaleById.mockResolvedValue(true)
     getStrategyById.mockResolvedValue({ id:7, version:3, system_prompt:'prompt' })
@@ -185,6 +189,121 @@ describe('manual analysis durable jobs', () => {
         'manual_analysis_status_unknown_deadline_expired', expect.objectContaining({ requireDeadlineReached:true }))
       expect(queryRun).toHaveBeenCalledWith(expect.stringContaining('UPDATE ai_manual_analysis_jobs SET'),
         expect.arrayContaining(['completed_stale']))
+    } finally { vi.useRealTimers() }
+  })
+
+  it('does not rewrite a live unexpired task during recovery', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(100_000)
+      queryAll.mockResolvedValueOnce([{ job_id:'job-live', model_task_id:'task-live', status:'running',
+        task_status:'provider_running', task_lease_expires_at_utc_msc:160_000,
+        task_deadline_at_utc_msc:300_000, task_fencing_token:4 }])
+      await recoverManualAnalysisJobs()
+      expect(markModelTaskStatusUnknownById).not.toHaveBeenCalled()
+      expect(markModelTaskCompletedStaleById).not.toHaveBeenCalled()
+      expect(requeueAbandonedModelTaskById).not.toHaveBeenCalled()
+      expect(queryRun).not.toHaveBeenCalledWith(expect.stringContaining('ai_model_tasks'), expect.anything())
+    } finally { vi.useRealTimers() }
+  })
+
+  it('skips a task owned by the in-process worker even when its lease snapshot is expired', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(100_000)
+      __manualAnalysisJobsTest.activeJobs.set('job-active', { controller:new AbortController(), promise:Promise.resolve() })
+      queryAll.mockResolvedValueOnce([{ job_id:'job-active', model_task_id:'task-active', status:'running',
+        task_status:'provider_running', task_lease_expires_at_utc_msc:90_000,
+        task_deadline_at_utc_msc:300_000, task_fencing_token:8 }])
+      await recoverManualAnalysisJobs()
+      expect(markModelTaskStatusUnknownById).not.toHaveBeenCalled()
+      expect(markModelTaskCompletedStaleById).not.toHaveBeenCalled()
+      expect(requeueAbandonedModelTaskById).not.toHaveBeenCalled()
+    } finally {
+      __manualAnalysisJobsTest.activeJobs.clear()
+      vi.useRealTimers()
+    }
+  })
+
+  it('requeues an expired pre-provider task through the fenced recovery primitive', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(100_000)
+      requeueAbandonedModelTaskById.mockResolvedValueOnce(true)
+      queryAll.mockResolvedValueOnce([{ job_id:'job-abandoned', model_task_id:'task-abandoned', status:'running',
+        task_status:'preparing', task_lease_expires_at_utc_msc:90_000,
+        task_deadline_at_utc_msc:300_000, task_fencing_token:12 }])
+      await recoverManualAnalysisJobs()
+      expect(requeueAbandonedModelTaskById).toHaveBeenCalledWith('task-abandoned',
+        'manual_analysis_worker_abandoned_before_provider', expect.objectContaining({
+          expectedStatus:'preparing', fencingToken:12, requireLeaseExpired:true,
+          requireDeadlineNotReached:true,
+        }))
+      expect(queryRun).toHaveBeenCalledWith(expect.stringContaining('UPDATE ai_manual_analysis_jobs SET'),
+        expect.arrayContaining(['queued']))
+    } finally { vi.useRealTimers() }
+  })
+
+  it('does not requeue an expired task that already has a provider attempt', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(100_000)
+      markModelTaskStatusUnknownById.mockResolvedValueOnce(true)
+      queryAll.mockResolvedValueOnce([{ job_id:'job-submitted', model_task_id:'task-submitted', status:'running',
+        task_status:'preparing', task_lease_expires_at_utc_msc:90_000,
+        task_deadline_at_utc_msc:300_000, task_fencing_token:13, provider_attempt_started:1 }])
+      await recoverManualAnalysisJobs()
+      expect(requeueAbandonedModelTaskById).not.toHaveBeenCalled()
+      expect(markModelTaskStatusUnknownById).toHaveBeenCalledWith('task-submitted',
+        'provider_status_unknown_after_recovery', expect.objectContaining({
+          expectedStatus:'preparing', fencingToken:13, requireLeaseExpired:true,
+        }))
+    } finally { vi.useRealTimers() }
+  })
+
+  it('throttles manual provider activity writes while retaining fenced tracker updates', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(100_000)
+      const job = { job_id:'job-stream', user_id:9, model_task_id:'task-stream', strategy_id:7,
+        strategy_version:3, strategy_prompt_hash:__manualAnalysisJobsTest.sha256('prompt'), status:'queued',
+        stage:'queued', params_json:'{"symbol":"XAUUSD","strategy_id":7}', deadline_at_utc_msc:300_000,
+        created_at_utc_msc:1 }
+      const task = { task_id:'task-stream', status:'leased', lease_token:'lease-stream', fencing_token:3,
+        attempt_count:1, task_deadline_at_utc_msc:300_000, result_valid_until_utc_msc:300_000,
+        frozen_provider:null, frozen_model:null, frozen_model_profile_id:null, frozen_credential_source:null }
+      queryOne.mockImplementation(async sql => {
+        if (sql.includes('FROM ai_manual_analysis_jobs WHERE job_id')) return job
+        if (sql.includes('FROM ai_signals')) return null
+        if (sql.includes('FROM ai_model_tasks WHERE task_id = ? LIMIT 1')) return task
+        if (sql.includes('SELECT status, cancel_requested')) return {
+          status:'running', cancel_requested:0, deadline_at_utc_msc:300_000,
+          strategy_version:3, strategy_prompt_hash:__manualAnalysisJobsTest.sha256('prompt'),
+        }
+        if (sql.includes('SELECT version, system_prompt')) return { version:3, system_prompt:'prompt' }
+        if (sql.includes('SELECT status, lease_token, fencing_token')) return task
+        return null
+      })
+      claimModelTaskById.mockResolvedValue({ ...task, status:'leased' })
+      beginModelTaskAttempt.mockResolvedValue({ id:31, task_id:'task-stream', fencing_token:3 })
+      transitionModelTask.mockImplementation(async (current, status) => ({ ...current, status }))
+      finishModelTaskAttempt.mockResolvedValue(true)
+      touchModelTaskActivity.mockResolvedValue(true)
+      handleAnalyze.mockImplementation(async (_userId, _params, options) => {
+        await options.onProviderRequest({ providerRequestId:'provider-stream' })
+        await options.onProviderActivity({ state:'response_headers', firstByte:false })
+        for (let index = 0; index < 20; index += 1) {
+          await options.onProviderActivity({ state:'provider_event', firstByte:index === 0 })
+        }
+        await options.onProviderActivity({ state:'provider_terminal', firstByte:false })
+        await options.onProviderUsage({ status:'success', responseReceived:true, httpStatus:200 })
+        return { status:'success', signal:{ id:91 } }
+      })
+      await __manualAnalysisJobsTest.processManualAnalysisJob('job-stream')
+      expect(touchModelTaskActivity).toHaveBeenCalledTimes(3)
+      const providerStageWrites = queryRun.mock.calls.filter(([sql, params]) => String(sql).includes('UPDATE ai_manual_analysis_jobs SET')
+        && String(sql).includes('stage = ?') && Array.isArray(params) && params.includes('provider_running'))
+      expect(providerStageWrites.length).toBeLessThanOrEqual(2)
     } finally { vi.useRealTimers() }
   })
 
