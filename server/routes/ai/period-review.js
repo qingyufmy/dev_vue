@@ -32,6 +32,11 @@ import {
 const DAY_MS = 86400000
 const DAILY_GRACE_MINUTES = 30
 const MONTHLY_GRACE_MINUTES = 120
+// A period's grace boundary is also the beginning of its first-creation
+// window.  Existing cases are maintained independently of these bounds; the
+// scheduler only uses them when it would create a case for the first time.
+const DAILY_CREATION_WINDOW_END_MINUTES = 120
+const MONTHLY_CREATION_WINDOW_END_MINUTES = 360
 const DAILY_COMPLETE_RECHECK_MS = 15 * 60 * 1000
 const DAILY_INCOMPLETE_RECHECK_MS = 60 * 60 * 1000
 const DAILY_SETTLE_MS = 24 * 60 * 60 * 1000
@@ -554,6 +559,27 @@ export function monthlyReviewStatistics(dailyCases) {
   }
 }
 
+/**
+ * Return the first-creation window state for a completed period.  The window
+ * is [period end + grace, period end + end), with the right edge exclusive.
+ * `periodEndUtcMs` is already derived from the account's terminal offset by
+ * reviewPeriodBounds(), so this helper never assumes a platform timezone.
+ */
+export function periodReviewCreationWindowState(periodType, periodEndUtcMs, asOfUtcMs = Date.now()) {
+  const end = Number(periodEndUtcMs)
+  const now = Number(asOfUtcMs)
+  if (!Number.isFinite(end) || !Number.isFinite(now)) throw new Error('invalid_review_period_time')
+  const graceMinutes = periodType === 'daily' ? DAILY_GRACE_MINUTES
+    : periodType === 'monthly' ? MONTHLY_GRACE_MINUTES : null
+  const endMinutes = periodType === 'daily' ? DAILY_CREATION_WINDOW_END_MINUTES
+    : periodType === 'monthly' ? MONTHLY_CREATION_WINDOW_END_MINUTES : null
+  if (graceMinutes == null || endMinutes == null) throw new Error('invalid_review_period_type')
+  const windowStartUtcMs = end + graceMinutes * 60000
+  const windowEndUtcMs = end + endMinutes * 60000
+  const state = now < windowStartUtcMs ? 'before' : now < windowEndUtcMs ? 'within' : 'after'
+  return { state, windowStartUtcMs, windowEndUtcMs }
+}
+
 const DAILY_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidence'])
 const CHAN_SOURCES = new Set(['data', 'calculation', 'confirmation_lag', 'ai_interpretation', 'strategy_rule', 'none', 'unknown'])
 const MEMORY_CATEGORIES = new Set(['general', 'market_regime', 'entry_setup', 'chan_structure', 'risk_execution'])
@@ -708,7 +734,11 @@ export function validateMonthlyReviewMergeContent(input, dailyCaseIds = [], appr
 async function eligibleOutcomeRows(limit) {
   const batchLimit = Math.min(2000, Math.max(2, Number(limit || 500)))
   const backlogLimit = Math.max(1, Math.ceil(batchLimit * 0.7))
-  const recentLimit = Math.max(1, batchLimit - backlogLimit)
+  // Keep a full recent lane after removing historical unassociated rows from
+  // the maintenance lane. This lets a busy period converge even when more
+  // than 30% of a batch belongs to newly eligible outcomes; both queries stay
+  // explicitly bounded and the merged result remains de-duplicated below.
+  const recentLimit = batchLimit
   const select = `SELECT so.*, snap.strategy_id, snap.strategy_version, snap.strategy_scope,
       u.role AS user_role, u.plan_source AS user_plan_source,
       ta.broker_server, mds.timezone_offset_minutes, mds.clock_status,
@@ -725,14 +755,16 @@ async function eligibleOutcomeRows(limit) {
     AND ((snap.strategy_scope = 'private' AND NOT ${platformManagerSql})
       OR (snap.strategy_scope = 'platform' AND ${platformManagerSql}))`
   const [backlog, recent] = await Promise.all([
-    queryAll(`${select} WHERE ${eligible} AND (
-      NOT EXISTS (SELECT 1 FROM period_review_sources prs WHERE prs.outcome_id = so.id)
-      OR EXISTS (SELECT 1 FROM period_review_sources prs
+    // Only associated, incomplete evidence belongs to the maintenance lane.
+    // Unassociated historical outcomes are intentionally excluded here: the
+    // recent lane below gives new source rows a bounded, deterministic path to
+    // first creation without allowing an old backlog to occupy every batch.
+    queryAll(`${select} WHERE ${eligible} AND EXISTS (SELECT 1 FROM period_review_sources prs
         JOIN period_review_cases cases ON cases.id = prs.period_case_id
         WHERE prs.outcome_id = so.id AND cases.period_type = 'daily' AND cases.evidence_status <> 'complete'
           AND cases.updated_at <= DATE_SUB(NOW(), INTERVAL 1 HOUR)
           AND COALESCE(cases.evidence_reason, '') NOT IN ('inference_snapshot_incomplete','historical_prompt_missing'))
-      ) ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [backlogLimit]),
+      ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [backlogLimit]),
     queryAll(`${select} WHERE ${eligible} ORDER BY so.review_eligible_at DESC, so.id DESC LIMIT ?`, [recentLimit]),
   ])
   const merged = new Map()
@@ -784,6 +816,15 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
     AND user_id = ? AND trading_account_id = ? AND strategy_id = ?
     ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
   [group.periodKey, group.userId, group.tradingAccountId, group.strategyId])
+  const creationWindow = periodReviewCreationWindowState('daily', group.endUtcMs, asOfUtcMs)
+  // Look up the case first so an existing review can always be maintained;
+  // only a genuinely new case is subject to the first-creation window.
+  if (!existingCase && creationWindow.state !== 'within') {
+    return { id:null, periodKey:group.periodKey, complete:false, sourceCount:0,
+      evidenceHash:null, skippedCreationWindow:true, creationWindowState:creationWindow.state }
+  }
+  const existingMaintainedResult = value => ({ complete:existingCase?.evidence_status === 'complete', ...value,
+    existingMaintained:true, creationWindowState:creationWindow.state })
   let existingSources = []
   if (existingCase) {
     group.strategyVersion = Number(existingCase.strategy_version || group.strategyVersion || 1)
@@ -798,9 +839,9 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
     const needsPeriodMarketUpgrade = shouldUpgradePeriodMarketEvidence(existingCase, existingEvidence)
     const refresh = shouldRefreshDailyReviewCase(existingCase, group, existingSources, asOfUtcMs)
-    if (!refresh.refresh && !needsPeriodMarketUpgrade) return { id: Number(existingCase.id), periodKey: group.periodKey,
+    if (!refresh.refresh && !needsPeriodMarketUpgrade) return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
       complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0),
-      evidenceHash: existingCase.evidence_hash, reused:true, refreshReason:refresh.reason }
+      evidenceHash: existingCase.evidence_hash, reused:true, refreshReason:refresh.reason })
     if (existingJob?.status === 'skipped' && !existingCase.current_version_id) {
       const now = beijingNow()
       if (existingCase.evidence_hash) {
@@ -811,14 +852,14 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
           attempt_count = 0, last_error_code = NULL, model_task_id = NULL, next_attempt_at = NULL,
           completed_at = NULL, updated_at = ? WHERE id = ?`, [now, now, existingJob.id])
       }
-      return { id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
-        sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash, requeued:true }
+      return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
+        sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash, requeued:true })
     }
-    if (existingJob && !existingCase.current_version_id && !needsPeriodMarketUpgrade) return { id: Number(existingCase.id), periodKey: group.periodKey,
-      complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
+    if (existingJob && !existingCase.current_version_id && !needsPeriodMarketUpgrade) return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
+      complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash })
     if (!existingJob && existingCase.evidence_status === 'incomplete' && isTerminalTradeEvidenceReason(existingCase.evidence_reason) && !refresh.refresh) {
-      return { id: Number(existingCase.id), periodKey: group.periodKey,
-        complete: false, sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, terminal: true, reused: true }
+      return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
+        complete: false, sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, terminal: true, reused: true })
     }
   }
   const prepared = []
@@ -855,17 +896,18 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
     const nextSemanticHash = dailyEvidenceSemanticHash(evidence)
     if (previousSemanticHash === nextSemanticHash) {
       await queryRun('UPDATE period_review_cases SET updated_at = ? WHERE id = ?', [now, existingCase.id])
-      return { id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
+      return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
         sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash, reused:true, refreshReason:'semantic_evidence_unchanged' }
+      )
     }
     const stillSettling = Number(asOfUtcMs) <= Number(group.endUtcMs || 0) + DAILY_SETTLE_MS
     const stabilityRows = [
       ...prepared.map(item => ({ updated_at:item.reviewCase?.updated_at })),
     ]
     if (stillSettling && !isPeriodReviewEvidenceStable(stabilityRows, asOfUtcMs)) {
-      return { id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
+      return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
         sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash,
-        reused:true, refreshReason:'evidence_stability_wait' }
+        reused:true, refreshReason:'evidence_stability_wait' })
     }
     await withTransaction(async run => {
       const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [existingCase.id])
@@ -909,7 +951,8 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
   if (complete && !periodCase.current_version_id) await queryRun(`INSERT IGNORE INTO period_review_jobs
     (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
     VALUES (?, 'daily_review', ?, 'queued', 0, 3, ?, ?)`, [periodCase.id, `daily:${periodCase.id}:${evidenceHash}`, now, now])
-  return { id: Number(periodCase.id), periodKey: group.periodKey, complete, sourceCount: sourceIds.length, evidenceHash }
+  return { id: Number(periodCase.id), periodKey: group.periodKey, complete, sourceCount: sourceIds.length, evidenceHash,
+    ...(existingCase ? { existingMaintained:true } : { created:true }), creationWindowState:creationWindow.state }
 }
 
 export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Date.now() } = {}) {
@@ -922,10 +965,16 @@ export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Dat
   const result = { scanned: rows.length, skippedDisabled:rows.length - enabledRows.length,
     skippedClock:enabledRows.filter(row => row.timezone_offset_minutes == null
       || row.timezone_offset_minutes === '' || !Number.isInteger(Number(row.timezone_offset_minutes))).length,
-    groups: groups.length, ready: 0, incomplete: 0, clock:{ status:'per_account' } }
+    groups: groups.length, ready: 0, incomplete: 0,
+    beforeCreationWindow: 0, outsideCreationWindow: 0, created: 0, existingMaintained: 0,
+    clock:{ status:'per_account' } }
   for (const group of groups) {
     const prepared = await upsertDailyGroup(group, { status:group.clockStatus || 'account_terminal' }, asOfUtcMs)
-    result[prepared.complete ? 'ready' : 'incomplete'] += 1
+    if (prepared.skippedCreationWindow && prepared.creationWindowState === 'before') result.beforeCreationWindow += 1
+    if (prepared.skippedCreationWindow && prepared.creationWindowState === 'after') result.outsideCreationWindow += 1
+    if (prepared.created) result.created += 1
+    if (prepared.existingMaintained) result.existingMaintained += 1
+    if (!prepared.skippedCreationWindow) result[prepared.complete ? 'ready' : 'incomplete'] += 1
   }
   return result
 }
@@ -942,6 +991,10 @@ async function eligibleMonthlyReviewRows(limit) {
   // month-end grace window do not consume the output group cap. The definitive
   // timezone/month-end check remains in groupMonthlyReviewCases(), which uses
   // each daily row's authoritative offset rather than an aggregate offset.
+  // Recent months are considered first so a closed month outside its six-hour
+  // creation window cannot consume the bounded scan before a newly eligible
+  // month is seen. Existing monthly cases remain in the HAVING source-change/
+  // recovery lanes below and are still maintained.
   const scanLimit = Math.min(MONTHLY_REVIEW_GROUP_SCAN_MAX, Math.max(groupLimit, groupLimit * 4))
   return queryAll(`WITH candidate_groups AS (
       SELECT daily.user_id,
@@ -986,7 +1039,7 @@ async function eligibleMonthlyReviewRows(limit) {
               AND (monthly_job_id IS NULL OR monthly_job_skipped = 1))
             OR (monthly_current_version_id IS NOT NULL
               AND (monthly_updated_at IS NULL OR latest_daily_updated_at > monthly_updated_at)))
-        ORDER BY LEFT(daily.period_key, 7) ASC, latest_daily_updated_at ASC,
+        ORDER BY LEFT(daily.period_key, 7) DESC, latest_daily_updated_at DESC,
           daily.user_id ASC, COALESCE(daily.trading_account_id, 0) ASC,
           daily.strategy_id ASC, LEFT(daily.period_key, 7) ASC
         LIMIT ?
@@ -1004,7 +1057,7 @@ async function eligibleMonthlyReviewRows(limit) {
     WHERE cases.evidence_status = 'complete'
       AND cases.strategy_compatibility_hash IS NOT NULL
       AND cases.status IN ('draft','edited','approved','needs_revision','deferred')
-    ORDER BY cases.period_key ASC, cases.id ASC`, [scanLimit])
+    ORDER BY cases.period_key DESC, cases.id ASC`, [scanLimit])
 }
 
 async function upsertMonthlyGroup(group, clock, asOfUtcMs = Date.now()) {
@@ -1012,6 +1065,15 @@ async function upsertMonthlyGroup(group, clock, asOfUtcMs = Date.now()) {
     AND user_id = ? AND trading_account_id = ? AND strategy_id = ? AND status <> 'superseded'
     ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
   [group.periodKey, group.userId, group.tradingAccountId, group.strategyId])
+  const creationWindow = periodReviewCreationWindowState('monthly', group.endUtcMs, asOfUtcMs)
+  // Existing monthly cases continue source-change maintenance and recovery
+  // outside this window. Only a first case creation is deferred.
+  if (!existingCase && creationWindow.state !== 'within') {
+    return { id:null, periodKey:group.periodKey, complete:false, sourceCount:0,
+      evidenceHash:null, skippedCreationWindow:true, creationWindowState:creationWindow.state }
+  }
+  const existingMaintainedResult = value => ({ complete:existingCase?.evidence_status === 'complete', ...value,
+    existingMaintained:true, creationWindowState:creationWindow.state })
   let sourceChangedForExisting = false
   let existingJob = null
   if (existingCase) {
@@ -1024,12 +1086,12 @@ async function upsertMonthlyGroup(group, clock, asOfUtcMs = Date.now()) {
     sourceChangedForExisting = sourceChanged
     if (existingCase.current_version_id && sourceChanged
       && !isPeriodReviewEvidenceStable(group.dailyCases.map(row => ({ updated_at:row.updated_at })), asOfUtcMs)) {
-      return { id: Number(existingCase.id), periodKey: group.periodKey,
+      return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
         sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash,
-        reused:true, refreshReason:'source_stability_wait' }
+        reused:true, refreshReason:'source_stability_wait' })
     }
-    if (existingCase.current_version_id && !sourceChanged) return { id: Number(existingCase.id), periodKey: group.periodKey,
-      sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, reused:true }
+    if (existingCase.current_version_id && !sourceChanged) return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
+      sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, reused:true })
     if (existingJob?.status === 'skipped' && !existingCase.current_version_id) {
       const now = beijingNow()
       if (existingCase.evidence_hash) {
@@ -1040,11 +1102,11 @@ async function upsertMonthlyGroup(group, clock, asOfUtcMs = Date.now()) {
           attempt_count = 0, last_error_code = NULL, model_task_id = NULL, next_attempt_at = NULL,
           completed_at = NULL, updated_at = ? WHERE id = ?`, [now, now, existingJob.id])
       }
-      return { id:Number(existingCase.id), periodKey:group.periodKey, sourceCount:Number(existingCase.source_count || 0),
-        evidenceHash:existingCase.evidence_hash, requeued:true }
+      return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey, sourceCount:Number(existingCase.source_count || 0),
+        evidenceHash:existingCase.evidence_hash, requeued:true })
     }
-    if (!sourceChanged && existingJob) return { id: Number(existingCase.id), periodKey: group.periodKey,
-      sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash }
+    if (!sourceChanged && existingJob) return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
+      sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash })
   }
   const refreshStages = monthlyReviewJobRefreshStages(existingCase, sourceChangedForExisting, existingJob)
   const sources = group.dailyCases.map(row => ({ period_case_id: Number(row.id), period_key: row.period_key,
@@ -1116,7 +1178,8 @@ async function upsertMonthlyGroup(group, clock, asOfUtcMs = Date.now()) {
         evidenceHash, now })
     }
   }
-  return { id: Number(periodCase.id), periodKey: group.periodKey, sourceCount: sources.length, evidenceHash }
+  return { id: Number(periodCase.id), periodKey: group.periodKey, sourceCount: sources.length, evidenceHash,
+    complete:true, ...(existingCase ? { existingMaintained:true } : { created:true }), creationWindowState:creationWindow.state }
 }
 
 export async function prepareEligibleMonthlyReviews({ limit = MONTHLY_REVIEW_GROUP_LIMIT_DEFAULT, asOfUtcMs = Date.now() } = {}) {
@@ -1127,13 +1190,26 @@ export async function prepareEligibleMonthlyReviews({ limit = MONTHLY_REVIEW_GRO
   // Candidate selection is bounded in SQL; grace, timezone, and duplicate-day
   // rules are authoritative in the existing grouping helper. Apply the caller's
   // group cap only after those rules have produced complete monthly groups.
-  const groups = groupMonthlyReviewCases(rows, { asOfUtcMs }).slice(0, groupLimit)
+  // The grouping helper keeps its deterministic ascending order for callers
+  // that render a calendar. Preparation is a bounded scheduler, so consume
+  // the newest month groups first; otherwise an old no-case month could still
+  // occupy the post-grouping cap even though SQL selected recent candidates.
+  const groups = groupMonthlyReviewCases(rows, { asOfUtcMs })
+    .sort((a, b) => b.periodKey.localeCompare(a.periodKey) || a.strategyId - b.strategyId
+      || a.tradingAccountId - b.tradingAccountId)
+    .slice(0, groupLimit)
   const result = { scanned: rows.length, candidateGroups:candidateGroupKeys.size,
     skippedDisabled:0,
-    groups: groups.length, ready: 0, clock:{ status:'per_account' } }
+    groups: groups.length, ready: 0, incomplete: 0,
+    beforeCreationWindow: 0, outsideCreationWindow: 0, created: 0, existingMaintained: 0,
+    clock:{ status:'per_account' } }
   for (const group of groups) {
-    await upsertMonthlyGroup(group, { status:'account_terminal' }, asOfUtcMs)
-    result.ready += 1
+    const prepared = await upsertMonthlyGroup(group, { status:'account_terminal' }, asOfUtcMs)
+    if (prepared.skippedCreationWindow && prepared.creationWindowState === 'before') result.beforeCreationWindow += 1
+    if (prepared.skippedCreationWindow && prepared.creationWindowState === 'after') result.outsideCreationWindow += 1
+    if (prepared.created) result.created += 1
+    if (prepared.existingMaintained) result.existingMaintained += 1
+    if (!prepared.skippedCreationWindow) result[prepared.complete === false ? 'incomplete' : 'ready'] += 1
   }
   return result
 }

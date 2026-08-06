@@ -14,7 +14,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   validateMonthlyReviewMergeContent,
   validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase,
   refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
-  isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback } from '../../server/routes/ai/period-review.js'
+  prepareEligibleDailyReviews, isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback,
+  periodReviewCreationWindowState } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review lease heartbeat', () => {
@@ -198,6 +199,20 @@ describe('period review calendar', () => {
     expect(new Date(bounds.startUtcMs).toISOString()).toBe('2026-01-31T21:00:00.000Z')
     expect(new Date(bounds.endUtcMs).toISOString()).toBe('2026-02-28T21:00:00.000Z')
   })
+
+  it('uses a left-closed, right-open first-creation window per terminal offset', () => {
+    const dailyUtcPlus2 = reviewPeriodBounds('daily', '2026-07-17', 120)
+    expect(periodReviewCreationWindowState('daily', dailyUtcPlus2.endUtcMs, dailyUtcPlus2.endUtcMs + 29 * 60 * 1000).state).toBe('before')
+    expect(periodReviewCreationWindowState('daily', dailyUtcPlus2.endUtcMs, dailyUtcPlus2.endUtcMs + 30 * 60 * 1000).state).toBe('within')
+    expect(periodReviewCreationWindowState('daily', dailyUtcPlus2.endUtcMs, dailyUtcPlus2.endUtcMs + 120 * 60 * 1000).state).toBe('after')
+
+    const dailyUtcPlus3 = reviewPeriodBounds('daily', '2026-07-17', 180)
+    expect(periodReviewCreationWindowState('daily', dailyUtcPlus3.endUtcMs, dailyUtcPlus3.endUtcMs + 30 * 60 * 1000).state).toBe('within')
+    const monthly = reviewPeriodBounds('monthly', '2026-02', 180)
+    expect(periodReviewCreationWindowState('monthly', monthly.endUtcMs, monthly.endUtcMs + 119 * 60 * 1000).state).toBe('before')
+    expect(periodReviewCreationWindowState('monthly', monthly.endUtcMs, monthly.endUtcMs + 120 * 60 * 1000).state).toBe('within')
+    expect(periodReviewCreationWindowState('monthly', monthly.endUtcMs, monthly.endUtcMs + 360 * 60 * 1000).state).toBe('after')
+  })
 })
 
 describe('daily review grouping', () => {
@@ -318,6 +333,57 @@ describe('daily review grouping', () => {
   })
 })
 
+describe('daily review preparation candidates', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    periodReviewDb.queryRun.mockResolvedValue({ affectedRows:1 })
+  })
+
+  it('keeps the maintenance lane associated-only and defers an old unassociated period', async () => {
+    const closeUtcMs = Date.parse('2026-07-17T10:00:00Z')
+    const row = { id:91, user_id:7, user_role:'user', trading_account_id:11, strategy_id:3,
+      strategy_version:2, strategy_scope:'private', status:'closed', review_eligible_at:'2026-07-17 10:00:00',
+      timezone_offset_minutes:180, clock_status:'account_terminal', net_profit:10,
+      last_deal_raw_json:JSON.stringify({ time_utc_msc:closeUtcMs }) }
+    periodReviewDb.queryAll.mockResolvedValueOnce([]).mockResolvedValueOnce([row])
+    periodReviewDb.queryOne.mockImplementation(async sql => {
+      if (sql.includes('period_review_cases')) return null
+      return { review_generation_enabled:1 }
+    })
+
+    const result = await prepareEligibleDailyReviews({ limit:10, asOfUtcMs:Date.parse('2026-07-20T00:00:00Z') })
+    const maintenanceSql = periodReviewDb.queryAll.mock.calls[0][0]
+    expect(maintenanceSql).toContain('EXISTS (SELECT 1 FROM period_review_sources')
+    expect(maintenanceSql).not.toContain('NOT EXISTS (SELECT 1 FROM period_review_sources')
+    expect(periodReviewDb.queryAll.mock.calls[0][1]).toEqual([7])
+    expect(periodReviewDb.queryAll.mock.calls[1][1]).toEqual([10])
+    expect(result).toMatchObject({ groups:1, outsideCreationWindow:1, created:0, existingMaintained:0 })
+    expect(periodReviewDb.queryRun).not.toHaveBeenCalled()
+  })
+
+  it('maintains an existing daily case outside the creation window without counting it as a skip', async () => {
+    const closeUtcMs = Date.parse('2026-07-17T10:00:00Z')
+    const row = { id:91, user_id:7, user_role:'user', trading_account_id:11, strategy_id:3,
+      strategy_version:2, strategy_scope:'private', status:'closed', review_eligible_at:'2026-07-17 10:00:00',
+      timezone_offset_minutes:180, clock_status:'account_terminal', net_profit:10,
+      last_deal_raw_json:JSON.stringify({ time_utc_msc:closeUtcMs }) }
+    periodReviewDb.queryAll.mockResolvedValueOnce([]).mockResolvedValueOnce([row]).mockResolvedValueOnce([
+      { outcome_id:91, source_hash:null, current_evidence_hash:null, current_evidence_updated_at:null },
+    ])
+    periodReviewDb.queryOne.mockImplementation(async sql => {
+      if (sql.includes('period_review_cases')) return { id:99, status:'draft', evidence_status:'complete',
+        current_version_id:1, approved_version_id:null, evidence_json:'{}', evidence_hash:'e', source_count:1,
+        updated_at:'2026-07-18 00:00:00' }
+      if (sql.includes('period_review_jobs')) return null
+      return { review_generation_enabled:1 }
+    })
+
+    const result = await prepareEligibleDailyReviews({ limit:10, asOfUtcMs:Date.parse('2026-07-20T00:00:00Z') })
+    expect(result).toMatchObject({ groups:1, ready:1, outsideCreationWindow:0, created:0, existingMaintained:1 })
+    expect(periodReviewDb.queryRun).not.toHaveBeenCalled()
+  })
+})
+
 describe('daily review model boundary', () => {
   it('requires full trade coverage and explicit Chan diagnosis sources', () => {
     const value = validateDailyReviewContent({
@@ -411,10 +477,10 @@ describe('monthly review preparation candidate groups', () => {
     periodReviewDb.queryOne.mockImplementation(async sql => {
       if (sql.includes("scope = 'global'")) return { review_generation_enabled:1 }
       if (sql.includes("scope = 'user'")) return { review_generation_enabled:1 }
-      if (sql.includes("status <> 'superseded'")) return null
       if (sql.includes("SELECT * FROM period_review_cases WHERE period_type = 'monthly'")) {
         return { id:500, period_type:'monthly', current_version_id:null, evidence_json:null, evidence_hash:null, source_count:0 }
       }
+      if (sql.includes("status <> 'superseded'")) return null
       return null
     })
     periodReviewDb.queryRun.mockResolvedValue({ affectedRows:1, insertId:500 })
@@ -439,6 +505,7 @@ describe('monthly review preparation candidate groups', () => {
     expect(candidateQuery[0]).toContain('LEFT JOIN ai_feature_flags user_flags')
     expect(candidateQuery[0]).toContain('COALESCE(global_flags.review_generation_enabled, 0) = 1')
     expect(candidateQuery[0]).toContain('COALESCE(user_flags.review_generation_enabled, 1) = 1')
+    expect(candidateQuery[0]).toContain('ORDER BY LEFT(daily.period_key, 7) DESC')
     expect(candidateQuery[0].indexOf('COALESCE(global_flags.review_generation_enabled, 0) = 1'))
       .toBeLessThan(candidateQuery[0].lastIndexOf('LIMIT ?'))
     expect(candidateQuery[0]).not.toContain('MAX(daily.timezone_offset_minutes)')
@@ -446,7 +513,29 @@ describe('monthly review preparation candidate groups', () => {
     expect(candidateQuery[0]).toContain('LEFT(cases.period_key, 7) = candidates.period_key')
     expect(candidateQuery[0]).not.toContain("predicates.join(' OR ')")
     expect(periodReviewDb.queryOne.mock.calls.some(([sql]) => sql.includes('ai_feature_flags'))).toBe(false)
-    expect(result).toMatchObject({ candidateGroups:1, scanned:3, groups:1, ready:1 })
+    expect(result).toMatchObject({ candidateGroups:1, scanned:3, groups:1, ready:1,
+      existingMaintained:1, outsideCreationWindow:0 })
+  })
+
+  it('consumes the newest month after complete grouping, not the helper\'s calendar order', async () => {
+    mockPreparationDb({ rows:[daily(1, '2026-01-15'), daily(2, '2026-02-15')] })
+
+    const result = await prepareEligibleMonthlyReviews({ limit:1, asOfUtcMs })
+    const sourceInsert = periodReviewDb.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO period_review_sources'))
+    expect(result).toMatchObject({ candidateGroups:2, groups:1, ready:1 })
+    expect(sourceInsert?.[1]?.[1]).toBe(2)
+  })
+
+  it('skips an old monthly candidate when no case exists outside its creation window', async () => {
+    mockPreparationDb({ rows:[daily(1, '2026-02-15')] })
+    periodReviewDb.queryOne.mockImplementation(async sql => {
+      if (sql.includes("scope = 'global'") || sql.includes("scope = 'user'")) return { review_generation_enabled:1 }
+      return null
+    })
+
+    const result = await prepareEligibleMonthlyReviews({ limit:1, asOfUtcMs })
+    expect(result).toMatchObject({ candidateGroups:1, groups:1, ready:0, created:0, outsideCreationWindow:1 })
+    expect(periodReviewDb.queryRun).not.toHaveBeenCalled()
   })
 
   it('keeps synced groups out, reselects changed or recoverable groups, and hard-caps the group limit', async () => {
