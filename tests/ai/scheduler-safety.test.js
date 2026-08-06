@@ -304,6 +304,36 @@ describe('model-driven pending action gate', () => {
     })).toMatchObject({ mode:'pre_order_cancel', continue_to_new_order:false, targets })
   })
 
+  it('decouples trade cancellation failures from the new-order branch', () => {
+    const tradePlan = __schedulerTest.resolvePendingCancellationPlan({
+      signalType:'buy_limit', pendingAction:'cancel', pendingTargets:[],
+    })
+    expect(__schedulerTest.resolvePendingCancellationOutcome({
+      cancellationPlan:tradePlan, reason:'pending_cancel_target_unmatched',
+    })).toMatchObject({ continue_to_new_order:true })
+    expect(__schedulerTest.resolvePendingCancellationOutcome({
+      cancellationPlan:tradePlan, reason:'pending_cancel_failed',
+    })).toMatchObject({ continue_to_new_order:true })
+    expect(__schedulerTest.resolvePendingCancellationOutcome({
+      cancellationPlan:tradePlan, reason:'ai_pending_cancel_disabled',
+    })).toMatchObject({ continue_to_new_order:true })
+    expect(__schedulerTest.resolvePendingCancellationOutcome({
+      cancellationPlan:tradePlan, reason:'weekly_flatten_window',
+    })).toMatchObject({ continue_to_new_order:false, blocked_by_safety_gate:true })
+  })
+
+  it('keeps hold cancellation-only failures terminal', () => {
+    const holdPlan = __schedulerTest.resolvePendingCancellationPlan({
+      signalType:'hold', pendingAction:'cancel', pendingTargets:[{ ticket:'10' }],
+    })
+    expect(__schedulerTest.resolvePendingCancellationOutcome({
+      cancellationPlan:holdPlan, reason:'pending_cancel_failed',
+    })).toMatchObject({ continue_to_new_order:false })
+    expect(__schedulerTest.resolvePendingCancellationPlan({
+      signalType:'hold', pendingAction:'cancel', pendingTargets:[],
+    })).toMatchObject({ mode:'skip', continue_to_new_order:false })
+  })
+
   it('does not expose the retired recovery replacement gate', () => {
     expect(__schedulerTest.recoveryReplacementUnsafe).toBeUndefined()
   })

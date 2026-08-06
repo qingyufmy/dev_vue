@@ -547,17 +547,41 @@ function resolvePendingCancellationPlan({
   }
   if (action === 'cancel') {
     if (!targets.length) return {
-      mode:'skip', continue_to_new_order:false, requires_targets:false,
+      mode:'skip', continue_to_new_order:isTradeSignal, requires_targets:false,
       reason:'reference_pending_not_matched', count:0, targets:[],
     }
     return {
-      mode:'pre_order_cancel', continue_to_new_order:normalizedSignalType !== 'hold', requires_targets:false,
+      mode:'pre_order_cancel', continue_to_new_order:isTradeSignal, requires_targets:false,
       reason:null, count:targets.length, targets,
     }
   }
   return {
     mode:'none', continue_to_new_order:true, requires_targets:false,
     reason:null, count:0, targets:[],
+  }
+}
+
+// These gates protect the whole new-order operation and must not be bypassed
+// just because the independent pending-cancellation operation failed. A
+// cancellation switch being disabled is deliberately not in this set: the
+// model may still have a valid new-order signal when cancellation is off.
+const PENDING_CANCELLATION_BLOCKING_REASONS = new Set([
+  'auto_execution_permission_changed',
+  'delivery_recovery_expired',
+  'delivery_recovery_untrusted',
+  'model_task_business_gate_failed',
+  'lock_lost_before_pending_cancel',
+  'weekly_flatten_window',
+])
+
+function resolvePendingCancellationOutcome({ cancellationPlan, reason } = {}) {
+  const normalizedReason = String(reason || '').trim()
+  const blockedBySafetyGate = PENDING_CANCELLATION_BLOCKING_REASONS.has(normalizedReason)
+  const continueToNewOrder = Boolean(cancellationPlan?.continue_to_new_order)
+  return {
+    continue_to_new_order:continueToNewOrder && !blockedBySafetyGate,
+    blocked_by_safety_gate:blockedBySafetyGate,
+    reason:normalizedReason || null,
   }
 }
 
@@ -2923,8 +2947,8 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         WHERE d.user_id = ? AND d.prompt_type_id = ? AND (d.pending_ticket IS NOT NULL OR d.trade_ticket IS NOT NULL)
         ORDER BY d.id DESC LIMIT 200`, [userId, promptTypeId]),
     ])
-    const positions = Array.isArray(positionsResponse?.positions) ? positionsResponse.positions : null
-    const pendingOrders = pendingResponse?.orders ?? pendingResponse?.pending_list
+    let positions = Array.isArray(positionsResponse?.positions) ? positionsResponse.positions : null
+    let pendingOrders = pendingResponse?.orders ?? pendingResponse?.pending_list
     if (!positions || !Array.isArray(pendingOrders)) {
       await finishBeforeRisk('rejected', 'portfolio_state_unavailable')
       return
@@ -2932,10 +2956,6 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const signalType = String(signal.signal_type || '').toLowerCase()
     const isTradeSignal = signalType.startsWith('buy') || signalType.startsWith('sell')
     const signalIsBuy = signalType.startsWith('buy')
-    const symbolPositions = positions.filter(item => stripBrokerSuffix(String(item.symbol || '')) === stripBrokerSuffix(symbol))
-    const sameDirectionPositions = symbolPositions.filter(item => String(item.type || '').toLowerCase().startsWith(signalIsBuy ? 'buy' : 'sell'))
-    const oppositePositions = symbolPositions.filter(item => !sameDirectionPositions.includes(item))
-    const positionAction = String(signal.position_action || (sameDirectionPositions.length ? 'hold_no_add' : 'open')).toLowerCase()
     const pendingAction = String(signal.pending_action || 'none').toLowerCase()
     const pendingActionReason = String(signal.pending_action_reason || '').trim()
     const managementDirection = String(signal.management_direction || (isTradeSignal ? (signalIsBuy ? 'buy' : 'sell') : 'none')).toLowerCase()
@@ -2952,140 +2972,182 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const pendingDecision = syncPendingCancelGroupIds.size > 0 && isTradeSignal
       ? { action:'manage', reason:null, count:pendingTargets.length, targets:pendingTargets }
       : resolvePendingActionGate({ pendingAction, pendingOrders:pendingTargets })
-    if (pendingDecision.action === 'skip') {
-      await finishBeforeRisk('skipped', pendingDecision.reason, { count:pendingDecision.count })
-      return
-    }
     const cancellationPlan = resolvePendingCancellationPlan({
       signalType, pendingAction, pendingTargets:pendingDecision.targets,
       synchronousPendingCancelGroupIds:syncPendingCancelGroupIds,
     })
-    if (pendingDecision.action === 'manage') {
-      const cancellable = cancellationPlan.targets
-      if (cancellationPlan.requires_targets && !cancellable.length) {
-        await finishBeforeRisk('rejected', 'pending_cancel_target_unmatched', {
-          count:0, management_group_ids:[...syncPendingCancelGroupIds],
+
+    const auditPendingCancellationFailure = async (reason, details = {}, continueToNewOrder = null) => {
+      const normalizedReason = String(reason || 'pending_cancel_failed')
+      const shouldContinue = continueToNewOrder == null
+        ? Boolean(cancellationPlan.continue_to_new_order)
+        : Boolean(continueToNewOrder)
+      await insertAudit(null, userId, 'ai_cancel_pending_failed', symbol,
+        { signal_id:signalId, prompt_type_id:promptTypeId, ticket:details.ticket || null,
+          reason:pendingActionReason, cancellation_reason:normalizedReason,
+          continue_to_new_order:shouldContinue, ...details },
+        { status:'error', reason:normalizedReason,
+          message:details.bridge_message || normalizedReason,
+          continue_to_new_order:shouldContinue }, 'warning').catch(() => {})
+    }
+
+    // `keep` remains an explicit no-new-order decision. A trade cancellation
+    // with no matching target is different: cancellation is best-effort and
+    // the independent new-order branch must still get its own fresh snapshot.
+    if (pendingDecision.action === 'skip') {
+      const cancellationTargetMissing = pendingAction === 'cancel'
+        && pendingDecision.reason === 'reference_pending_not_matched'
+      if (cancellationTargetMissing) {
+        await auditPendingCancellationFailure('pending_cancel_target_unmatched', {
+          count:0, target_unmatched:true,
         })
+      }
+      const canContinueAfterSkip = isTradeSignal
+        && pendingAction === 'cancel'
+        && cancellationPlan.continue_to_new_order
+        && pendingDecision.reason === 'reference_pending_not_matched'
+      if (!canContinueAfterSkip) {
+        await finishBeforeRisk('skipped', pendingDecision.reason, { count:pendingDecision.count })
         return
       }
-      try {
-        await assertAiPendingCancelEnabled()
-        if (subscriberWeeklyWindow()) {
-          const error = new Error('weekly_flatten_window')
-          error.reason = 'weekly_flatten_window'
-          throw error
+    }
+
+    if (pendingDecision.action === 'manage') {
+      const cancellable = cancellationPlan.targets
+      let cancellationError = null
+      const cancelledTickets = []
+      if (cancellationPlan.requires_targets && !cancellable.length) {
+        cancellationError = new Error('pending_cancel_target_unmatched')
+        cancellationError.reason = 'pending_cancel_target_unmatched'
+        cancellationError.details = {
+          count:0, management_group_ids:[...syncPendingCancelGroupIds],
         }
-        if (lockGuard && !(await lockGuard.assertOwned('pending_cancel'))) {
-          const error = new Error('lock_lost_before_pending_cancel')
-          error.reason = 'lock_lost_before_pending_cancel'
-          throw error
-        }
-        if (modelTaskTracker && !(await assertAutoInferenceBusinessGate({
-          tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc, phase:'pending_cancel',
-        }))) {
-          const error = new Error('model_task_business_gate_failed')
-          error.reason = 'model_task_business_gate_failed'
-          throw error
-        }
-        if (!(await isUserEligibleForAutoExecution(userId))) {
-          const error = new Error('auto_execution_permission_changed')
-          error.reason = 'auto_execution_permission_changed'
-          throw error
-        }
-        const currentResp = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true })
-        const currentOrders = currentResp?.orders ?? currentResp?.pending_list
-        if (!currentResp || currentResp.status === 'error' || !Array.isArray(currentOrders)) {
-          const error = new Error('pending_cancel_list_unavailable')
-          error.reason = 'pending_cancel_list_unavailable'
-          throw error
-        }
-        const currentByTicket = new Map(currentOrders.map(item =>
-          [String(item.ticket ?? item.mt5_ticket ?? '').trim(), item]))
-        const cancelledTickets = []
-        for (const item of cancellable) {
-          const ticket = String(item.ticket ?? item.mt5_ticket ?? '').trim()
-          const current = currentByTicket.get(ticket)
-          if (!ticket || !current) {
-            const error = new Error('pending_cancel_target_unmatched')
-            error.reason = 'pending_cancel_target_unmatched'
-            error.details = { ticket:ticket || null }
+      } else {
+        try {
+          await assertAiPendingCancelEnabled()
+          if (subscriberWeeklyWindow()) {
+            const error = new Error('weekly_flatten_window')
+            error.reason = 'weekly_flatten_window'
             throw error
           }
-          if (Number(current.magic || 0) !== 234000
-            || !strategyPendingTickets.has(ticket)
-            || stripBrokerSuffix(String(current.symbol || '')) !== stripBrokerSuffix(symbol)) {
-            const error = new Error('pending_cancel_ownership_changed')
-            error.reason = 'pending_cancel_ownership_changed'
-            error.details = { ticket }
-            throw error
-          }
-          if (recoveryContext) await assertSignalDeliveryRecoveryLive({ recoveryContext, userId, signalId })
-          if (lockGuard && !(await lockGuard.assertOwned(`pending_cancel:${ticket}`))) {
+          if (lockGuard && !(await lockGuard.assertOwned('pending_cancel'))) {
             const error = new Error('lock_lost_before_pending_cancel')
             error.reason = 'lock_lost_before_pending_cancel'
-            error.details = { ticket }
             throw error
           }
           if (modelTaskTracker && !(await assertAutoInferenceBusinessGate({
-            tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc,
-            phase:`pending_cancel:${ticket}`,
+            tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc, phase:'pending_cancel',
           }))) {
             const error = new Error('model_task_business_gate_failed')
             error.reason = 'model_task_business_gate_failed'
-            error.details = { ticket }
             throw error
           }
-          await assertAiPendingCancelEnabled()
-          const cancelled = await mt5Bridge(userId, 'cancel_pending', {
-            ticket,
-            expected_state: pendingManagementExpectedState(current),
-          }, { noFallback:true })
-          if (cancelled?.status !== 'success') {
-            await insertAudit(null, userId, 'ai_cancel_pending_failed', symbol,
-              { signal_id:signalId, prompt_type_id:promptTypeId, ticket, reason:pendingActionReason, error:cancelled?.message },
-              { status:'error', message:cancelled?.message }, 'warning').catch(() => {})
-            const error = new Error('pending_cancel_failed')
-            error.reason = 'pending_cancel_failed'
-            error.details = { ticket, bridge_message:cancelled?.message || null }
+          if (!(await isUserEligibleForAutoExecution(userId))) {
+            const error = new Error('auto_execution_permission_changed')
+            error.reason = 'auto_execution_permission_changed'
             throw error
           }
-          cancelledTickets.push(ticket)
-          await queryRun(
-            "UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE pending_ticket = ? AND user_id = ?",
-            [ticket, userId]).catch(() => {})
-          await insertAudit(null, userId, 'ai_cancel_pending', symbol,
-            { signal_id:signalId, prompt_type_id:promptTypeId, ticket, pending_type:current.side || current.pending_type || current.order_type || null, reason:pendingActionReason },
-            { status:'cancelled', ticket }, 'success').catch(() => {})
+          const currentResp = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true })
+          const currentOrders = currentResp?.orders ?? currentResp?.pending_list
+          if (!currentResp || currentResp.status === 'error' || !Array.isArray(currentOrders)) {
+            const error = new Error('pending_cancel_list_unavailable')
+            error.reason = 'pending_cancel_list_unavailable'
+            throw error
+          }
+          const currentByTicket = new Map(currentOrders.map(item =>
+            [String(item.ticket ?? item.mt5_ticket ?? '').trim(), item]))
+          for (const item of cancellable) {
+            const ticket = String(item.ticket ?? item.mt5_ticket ?? '').trim()
+            const current = currentByTicket.get(ticket)
+            if (!ticket || !current) {
+              const error = new Error('pending_cancel_target_unmatched')
+              error.reason = 'pending_cancel_target_unmatched'
+              error.details = { ticket:ticket || null }
+              throw error
+            }
+            if (Number(current.magic || 0) !== 234000
+              || !strategyPendingTickets.has(ticket)
+              || stripBrokerSuffix(String(current.symbol || '')) !== stripBrokerSuffix(symbol)) {
+              const error = new Error('pending_cancel_ownership_changed')
+              error.reason = 'pending_cancel_ownership_changed'
+              error.details = { ticket }
+              throw error
+            }
+            if (recoveryContext) await assertSignalDeliveryRecoveryLive({ recoveryContext, userId, signalId })
+            if (lockGuard && !(await lockGuard.assertOwned(`pending_cancel:${ticket}`))) {
+              const error = new Error('lock_lost_before_pending_cancel')
+              error.reason = 'lock_lost_before_pending_cancel'
+              error.details = { ticket }
+              throw error
+            }
+            if (modelTaskTracker && !(await assertAutoInferenceBusinessGate({
+              tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc,
+              phase:`pending_cancel:${ticket}`,
+            }))) {
+              const error = new Error('model_task_business_gate_failed')
+              error.reason = 'model_task_business_gate_failed'
+              error.details = { ticket }
+              throw error
+            }
+            await assertAiPendingCancelEnabled()
+            const cancelled = await mt5Bridge(userId, 'cancel_pending', {
+              ticket,
+              expected_state: pendingManagementExpectedState(current),
+            }, { noFallback:true })
+            if (cancelled?.status !== 'success') {
+              const error = new Error('pending_cancel_failed')
+              error.reason = 'pending_cancel_failed'
+              error.details = { ticket, bridge_message:cancelled?.message || null }
+              throw error
+            }
+            cancelledTickets.push(ticket)
+            await queryRun(
+              "UPDATE auto_signal_deliveries SET pending_state = 'cancelled' WHERE pending_ticket = ? AND user_id = ?",
+              [ticket, userId]).catch(() => {})
+            await insertAudit(null, userId, 'ai_cancel_pending', symbol,
+              { signal_id:signalId, prompt_type_id:promptTypeId, ticket, pending_type:current.side || current.pending_type || current.order_type || null, reason:pendingActionReason },
+              { status:'cancelled', ticket }, 'success').catch(() => {})
+          }
+          const confirmResp = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true })
+          const confirmOrders = confirmResp?.orders ?? confirmResp?.pending_list
+          if (!confirmResp || confirmResp.status === 'error' || !Array.isArray(confirmOrders)) {
+            const error = new Error('pending_cancel_confirm_unavailable')
+            error.reason = 'pending_cancel_confirm_unavailable'
+            throw error
+          }
+          const remaining = new Set(confirmOrders
+            .map(item => String(item?.ticket ?? item?.mt5_ticket ?? '').trim())
+            .filter(Boolean))
+          const stillPending = cancelledTickets.filter(ticket => remaining.has(ticket))
+          if (stillPending.length) {
+            const error = new Error('pending_cancel_unconfirmed')
+            error.reason = 'pending_cancel_unconfirmed'
+            error.details = { tickets:stillPending }
+            throw error
+          }
+        } catch (error) {
+          cancellationError = error
         }
-        const confirmResp = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true })
-        const confirmOrders = confirmResp?.orders ?? confirmResp?.pending_list
-        if (!confirmResp || confirmResp.status === 'error' || !Array.isArray(confirmOrders)) {
-          const error = new Error('pending_cancel_confirm_unavailable')
-          error.reason = 'pending_cancel_confirm_unavailable'
-          throw error
+      }
+
+      if (cancellationError) {
+        const reason = cancellationError.reason || cancellationError.message || 'pending_cancel_failed'
+        const outcome = resolvePendingCancellationOutcome({ cancellationPlan, reason })
+        await auditPendingCancellationFailure(reason, {
+          ...(cancellationError.details || {}), count:cancellable.length,
+          cancelled_tickets:cancelledTickets,
+        }, outcome.continue_to_new_order)
+        if (!outcome.continue_to_new_order) {
+          const skippedReasons = new Set([
+            'ai_pending_cancel_disabled', 'auto_execution_permission_changed', 'delivery_recovery_expired',
+            'delivery_recovery_untrusted', 'model_task_business_gate_failed',
+            'lock_lost_before_pending_cancel', 'weekly_flatten_window',
+          ])
+          await finishBeforeRisk(skippedReasons.has(reason) ? 'skipped' : 'rejected', reason, {
+            ...(cancellationError.details || {}), count:cancellable.length,
+          })
+          return
         }
-        const remaining = new Set(confirmOrders
-          .map(item => String(item?.ticket ?? item?.mt5_ticket ?? '').trim())
-          .filter(Boolean))
-        const stillPending = cancelledTickets.filter(ticket => remaining.has(ticket))
-        if (stillPending.length) {
-          const error = new Error('pending_cancel_unconfirmed')
-          error.reason = 'pending_cancel_unconfirmed'
-          error.details = { tickets:stillPending }
-          throw error
-        }
-      } catch (error) {
-        const reason = error.reason || error.message || 'pending_cancel_failed'
-        const skippedReasons = new Set([
-          'ai_pending_cancel_disabled', 'auto_execution_permission_changed',
-          'delivery_recovery_expired', 'delivery_recovery_untrusted',
-          'model_task_business_gate_failed', 'lock_lost_before_pending_cancel',
-          'weekly_flatten_window',
-        ])
-        await finishBeforeRisk(skippedReasons.has(reason) ? 'skipped' : 'rejected', reason, {
-          ...(error.details || {}), count:cancellable.length,
-        })
-        return
       }
       if (!cancellationPlan.continue_to_new_order) {
         await finishBeforeRisk('success', 'pending_cancelled', {
@@ -3094,6 +3156,50 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         return
       }
     }
+
+    // Cancellation and new-order decisions are independent. Once a trade
+    // signal enters the new-order branch, discard the pre-cancel snapshot and
+    // obtain both terminal views again, even if cancellation failed or had no
+    // matching target. Any refresh failure is fail-closed.
+    const cancellationRequested = pendingAction === 'cancel' || syncPendingCancelGroupIds.size > 0
+    if (isTradeSignal && cancellationRequested && cancellationPlan.continue_to_new_order) {
+      // Permission/Bridge eligibility may change while cancellation is in
+      // flight. Re-check it for the independent new-order branch instead of
+      // treating the cancellation-phase check as authorization for both.
+      if (!(await isUserEligibleForAutoExecution(userId))) {
+        await finishBeforeRisk('skipped', 'auto_execution_permission_changed')
+        return
+      }
+      let refreshedPositionsResponse
+      let refreshedPendingResponse
+      try {
+        [refreshedPositionsResponse, refreshedPendingResponse] = await Promise.all([
+          mt5Bridge(userId, 'positions', { symbol }, { noFallback:true }),
+          mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true }),
+        ])
+      } catch (error) {
+        await finishBeforeRisk('rejected', 'portfolio_state_refresh_unavailable', {
+          bridge_message:error?.message || null,
+        })
+        return
+      }
+      const refreshedPositions = Array.isArray(refreshedPositionsResponse?.positions)
+        ? refreshedPositionsResponse.positions : null
+      const refreshedPendingOrders = refreshedPendingResponse?.orders ?? refreshedPendingResponse?.pending_list
+      if (!refreshedPositions || !Array.isArray(refreshedPendingOrders)
+        || refreshedPositionsResponse?.status === 'error'
+        || refreshedPendingResponse?.status === 'error') {
+        await finishBeforeRisk('rejected', 'portfolio_state_refresh_unavailable')
+        return
+      }
+      positions = refreshedPositions
+      pendingOrders = refreshedPendingOrders
+    }
+
+    const symbolPositions = positions.filter(item => stripBrokerSuffix(String(item.symbol || '')) === stripBrokerSuffix(symbol))
+    const sameDirectionPositions = symbolPositions.filter(item => String(item.type || '').toLowerCase().startsWith(signalIsBuy ? 'buy' : 'sell'))
+    const oppositePositions = symbolPositions.filter(item => !sameDirectionPositions.includes(item))
+    const positionAction = String(signal.position_action || (sameDirectionPositions.length ? 'hold_no_add' : 'open')).toLowerCase()
 
     // Position exposure gates belong to the independent new-order axis. A
     // successful pending cancellation above must remain effective even when
@@ -4011,6 +4117,7 @@ export const __schedulerTest = {
   synchronousPendingCancelGroupIds,
   resolvePendingActionGate,
   resolvePendingCancellationPlan,
+  resolvePendingCancellationOutcome,
   buildSignalDeliveryRows,
   reconcileUnattemptedSignalDeliveries,
   signalDeliveryRecoveryDeadline,
