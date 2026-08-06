@@ -5473,10 +5473,12 @@ let _klinePositionSeries = [];
 let _klinePositionTooltip = null;
 const KLINE_POSITION_ENTRY_BUY_COLOR = '#ef4444';
 const KLINE_POSITION_ENTRY_SELL_COLOR = '#10b981';
+const KLINE_POSITION_HIT_RADIUS = 18;
 let _klineVolRefreshTimer = null;
 let _klineMutationObserver = null;
 let _klineResizeObserver = null;
 let _klineDeferredObserver = null;
+let _klineVisibleRangeSyncing = false;
 
 function mt5BrokerTimeSeconds(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -5595,23 +5597,71 @@ function ensureKlinePositionTooltip() {
   return _klinePositionTooltip;
 }
 
-function syncKlinePositionEntries() {
-  clearKlinePositionEntries();
-  if (!_klineChart || !_klineSeries || !_klineCandles.length) return;
-  const symbol = $('quoteSymbolSelect')?.value || $('tradeSymbolSelect')?.value || 'XAUUSD';
+function klinePositionEntryStructureKey(position, side, markerTime) {
+  return JSON.stringify([
+    String(position?.ticket ?? ''),
+    klineSymbolKey(position?.symbol),
+    side,
+    Number(position?.price_open),
+    Number.isFinite(Number(markerTime)) ? Number(markerTime) : null,
+    klinePositionPriceDigits(position),
+    _klineTimeframe,
+  ]);
+}
+
+function buildKlinePositionDescriptors(symbol) {
   const positions = (state.positions || []).filter(position =>
     klinePositionMatchesSymbol(position, symbol)
       && Number.isFinite(Number(position.price_open))
       && Number(position.price_open) > 0
   );
+  return positions.map(position => {
+    const side = positionDirectionType(position);
+    const entryTime = klinePositionTimeSeconds(position);
+    const start = klinePositionStartIndex(_klineCandles, entryTime);
+    const markerTime = start.visible ? _klineCandles[start.index].time : null;
+    return {
+      position,
+      side,
+      entryTime,
+      start,
+      markerTime,
+      structureKey: side && Number.isFinite(Number(markerTime))
+        ? klinePositionEntryStructureKey(position, side, markerTime)
+        : null,
+    };
+  });
+}
+
+function syncKlinePositionEntries() {
+  if (!_klineChart || !_klineSeries || !_klineCandles.length) {
+    clearKlinePositionEntries();
+    return;
+  }
+  const symbol = $('quoteSymbolSelect')?.value || $('tradeSymbolSelect')?.value || 'XAUUSD';
+  const descriptors = buildKlinePositionDescriptors(symbol);
+  const desiredKeys = descriptors.map(item => item.structureKey).filter(Boolean);
+  const previousKeys = _klinePositionSeries.map(item => item.structureKey).filter(Boolean);
+  const desiredKeyCounts = new Map();
+  const previousKeyCounts = new Map();
+  desiredKeys.forEach(key => desiredKeyCounts.set(key, (desiredKeyCounts.get(key) || 0) + 1));
+  previousKeys.forEach(key => previousKeyCounts.set(key, (previousKeyCounts.get(key) || 0) + 1));
+  const structureChanged = desiredKeys.length !== previousKeys.length
+    || [...desiredKeyCounts].some(([key, count]) => previousKeyCounts.get(key) !== count);
+  const previousByKey = new Map();
+  for (const item of _klinePositionSeries) {
+    if (!previousByKey.has(item.structureKey)) previousByKey.set(item.structureKey, []);
+    previousByKey.get(item.structureKey).push(item);
+  }
+  const nextSeries = [];
+  if (structureChanged) clearKlinePositionEntries();
   const markerSummary = [];
   const unknownDirectionSummary = [];
-  for (const position of positions) {
+  for (const descriptor of descriptors) {
+    const { position, start } = descriptor;
     const side = positionDirectionType(position);
     const direction = side === 'buy' ? '多仓' : side === 'sell' ? '空仓' : '方向未知';
     const price = Number(position.price_open);
-    const entryTime = klinePositionTimeSeconds(position);
-    const start = klinePositionStartIndex(_klineCandles, entryTime);
     const summary = `${direction} ${volumeText(position.volume)}，入场价 ${fmt(price, klinePositionPriceDigits(position))}${start.visible ? '' : '，入场时间在当前图表范围外'}`;
     if (!side) {
       unknownDirectionSummary.push(`${summary}（未绘制标记）`);
@@ -5619,6 +5669,19 @@ function syncKlinePositionEntries() {
     }
     markerSummary.push(summary);
     if (!start.visible) continue;
+    const markerTime = descriptor.markerTime;
+    const structureKey = descriptor.structureKey;
+    if (!structureChanged) {
+      const existing = previousByKey.get(structureKey)?.shift();
+      if (existing) {
+        existing.position = position;
+        existing.direction = direction;
+        existing.side = side;
+        existing.markerTime = markerTime;
+        nextSeries.push(existing);
+        continue;
+      }
+    }
     const markerColor = side === 'buy' ? KLINE_POSITION_ENTRY_BUY_COLOR : KLINE_POSITION_ENTRY_SELL_COLOR;
     const series = _klineChart.addLineSeries({
       color:markerColor,
@@ -5629,7 +5692,6 @@ function syncKlinePositionEntries() {
       priceLineVisible:false,
       priceFormat:{ type:'price', precision:klinePositionPriceDigits(position), minMove:10 ** -klinePositionPriceDigits(position) },
     });
-    const markerTime = _klineCandles[start.index].time;
     series.setData([{ time:markerTime, value:price }]);
     series.setMarkers([{
       time:markerTime,
@@ -5638,8 +5700,9 @@ function syncKlinePositionEntries() {
       shape:side === 'buy' ? 'arrowUp' : 'arrowDown',
       size:1.5,
     }]);
-    _klinePositionSeries.push({ series, position, direction, side });
+    nextSeries.push({ series, position, direction, side, markerTime, structureKey });
   }
+  _klinePositionSeries = nextSeries;
   const container = document.getElementById('klineChart');
   if (container) {
     container.setAttribute('role', 'img');
@@ -5656,11 +5719,13 @@ function syncKlinePositionEntries() {
 function handleKlinePositionCrosshair(param) {
   const tooltip = ensureKlinePositionTooltip();
   const container = document.getElementById('klineChart');
-  if (!tooltip || !container || !param?.point || !param.seriesData) return hideKlinePositionTooltip();
+  if (!tooltip || !container || !param?.point) return hideKlinePositionTooltip();
   const matches = _klinePositionSeries.filter(item => {
-    if (!param.seriesData.has(item.series)) return false;
-    const coordinate = item.series.priceToCoordinate(Number(item.position.price_open));
-    return Number.isFinite(coordinate) && Math.abs(param.point.y - coordinate) <= 12;
+    const timeCoordinate = _klineChart?.timeScale().timeToCoordinate(item.markerTime);
+    const priceCoordinate = item.series.priceToCoordinate(Number(item.position.price_open));
+    return Number.isFinite(timeCoordinate) && Number.isFinite(priceCoordinate)
+      && Math.abs(param.point.x - timeCoordinate) <= KLINE_POSITION_HIT_RADIUS
+      && Math.abs(param.point.y - priceCoordinate) <= KLINE_POSITION_HIT_RADIUS;
   });
   if (!matches.length || param.point.x < 0 || param.point.y < 0
     || param.point.x > container.clientWidth || param.point.y > container.clientHeight) {
@@ -5692,6 +5757,51 @@ function disconnectKlineObservers() {
   if (_klineDeferredObserver) { _klineDeferredObserver.disconnect(); _klineDeferredObserver = null; }
   if (_klineMutationObserver) { _klineMutationObserver.disconnect(); _klineMutationObserver = null; }
   if (_klineResizeObserver) { _klineResizeObserver.disconnect(); _klineResizeObserver = null; }
+}
+
+function getKlineVisibleLogicalRange() {
+  try {
+    const timeScale = _klineChart?.timeScale?.();
+    return timeScale?.getVisibleLogicalRange?.() || null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeKlineVisibleLogicalRange(range, total) {
+  const count = Number(total);
+  const from = Number(range?.from);
+  const to = Number(range?.to);
+  if (!Number.isFinite(count) || count < 1 || !Number.isFinite(from) || !Number.isFinite(to) || from > to) return null;
+  const max = count - 1;
+  const span = Math.max(0, to - from);
+  if (span >= max) return { from:0, to:max };
+  let nextFrom = from;
+  let nextTo = to;
+  if (nextFrom < 0) {
+    nextTo = Math.min(max, nextTo - nextFrom);
+    nextFrom = 0;
+  }
+  if (nextTo > max) {
+    nextFrom = Math.max(0, nextFrom - (nextTo - max));
+    nextTo = max;
+  }
+  return { from:nextFrom, to:nextTo };
+}
+
+function setKlineVisibleLogicalRange(range, total) {
+  const next = normalizeKlineVisibleLogicalRange(range, total);
+  if (!next || !_klineChart) return false;
+  const current = getKlineVisibleLogicalRange();
+  if (current && Math.abs(Number(current.from) - next.from) < 0.001
+    && Math.abs(Number(current.to) - next.to) < 0.001) return false;
+  _klineVisibleRangeSyncing = true;
+  try {
+    _klineChart.timeScale().setVisibleLogicalRange(next);
+  } finally {
+    _klineVisibleRangeSyncing = false;
+  }
+  return true;
 }
 
 function initKlineChart() {
@@ -5797,13 +5907,12 @@ function _createKlineChart(container) {
 
   // Zoom limit: don't allow zooming out beyond all loaded data
   _klineChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-    if (!range) return;
+    if (!range || _klineVisibleRangeSyncing) return;
     const total = _klineSeries.data().length;
     if (total < 2) return;
     const span = range.to - range.from;
-    if (span >= total) {
-      _klineChart.timeScale().setVisibleLogicalRange({ from: 0, to: total - 1 });
-    }
+    if (span < total) return;
+    setKlineVisibleLogicalRange(range, total);
   });
 }
 
@@ -5814,6 +5923,7 @@ async function loadKlineData() {
   const timeframe = _klineTimeframe;
   const requestVersion = ++_klineRequestVersion;
   const requestKey = klineRequestKey(symbol, timeframe);
+  const preserveVisibleRange = _klineDataAvailable && _klineDataKey === requestKey;
   const isCurrentRequest = () => requestVersion === _klineRequestVersion
     && requestKey === klineRequestKey(
       $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD",
@@ -5860,6 +5970,7 @@ async function loadKlineData() {
       color: candle.close >= candle.open ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
     }));
 
+    const previousRange = preserveVisibleRange ? getKlineVisibleLogicalRange() : null;
     _klineSeries.setData(candles);
     _klineVolumeSeries.setData(volumes);
     _klineCandles = candles;
@@ -5872,7 +5983,8 @@ async function loadKlineData() {
     // Update last price display
     setText('klineLastPrice', candles.at(-1).close.toFixed(2));
 
-    _klineChart.timeScale().fitContent();
+    if (preserveVisibleRange && previousRange) setKlineVisibleLogicalRange(previousRange, candles.length);
+    else _klineChart.timeScale().fitContent();
   } catch (e) {
     if (!isCurrentRequest()) return;
     clearKlineData('读取失败', requestKey);

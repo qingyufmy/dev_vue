@@ -23,6 +23,10 @@ describe('dashboard current-position entry markers', () => {
     expect(app).toContain("const KLINE_POSITION_ENTRY_BUY_COLOR = '#ef4444'")
     expect(app).toContain("const KLINE_POSITION_ENTRY_SELL_COLOR = '#10b981'")
     expect(syncBlock).toContain('const side = positionDirectionType(position)')
+    expect(syncBlock).toContain('const descriptors = buildKlinePositionDescriptors(symbol)')
+    expect(syncBlock).toContain('const structureChanged = desiredKeys.length !== previousKeys.length')
+    expect(syncBlock).toContain('existing.position = position')
+    expect(syncBlock).toContain('markerTime')
     expect(syncBlock).toContain('if (!side)')
     expect(syncBlock).toContain('lineVisible:false')
     expect(syncBlock).toContain('pointMarkersVisible:false')
@@ -45,7 +49,11 @@ describe('dashboard current-position entry markers', () => {
   it('shows volume details only when the crosshair is close to a visible entry point', () => {
     expect(app).toContain('function handleKlinePositionCrosshair(param)')
     expect(app).toContain('escapeHtml(volumeText(position.volume))')
-    expect(app).toContain('Math.abs(param.point.y - coordinate) <= 12')
+    expect(app).toContain('timeToCoordinate(item.markerTime)')
+    expect(app).toContain('priceToCoordinate(Number(item.position.price_open))')
+    expect(app).toContain('Math.abs(param.point.x - timeCoordinate) <= KLINE_POSITION_HIT_RADIUS')
+    expect(app).toContain('Math.abs(param.point.y - priceCoordinate) <= KLINE_POSITION_HIT_RADIUS')
+    expect(app).not.toContain('param.seriesData.has(item.series)')
     expect(app).toContain("if (entryTime < candles[0].time) return { index:0, visible:false };")
     expect(css).toContain('.kline-position-tooltip')
     expect(css).toContain('pointer-events: none')
@@ -108,7 +116,7 @@ describe('shared current-position table contract', () => {
     const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const responsiveVersion = html.match(/responsive\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const appVersion = html.match(/app\.js\?v=([0-9a-z._-]+)/i)?.[1]
-    expect(stylesheetVersion).toBe('20260806positions1')
+    expect(stylesheetVersion).toBe('20260806kline2')
     expect(responsiveVersion).toBe(stylesheetVersion)
     expect(appVersion).toBe(stylesheetVersion)
   })

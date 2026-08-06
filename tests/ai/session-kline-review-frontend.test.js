@@ -28,6 +28,19 @@ describe('AI session and stale-data guards', () => {
     expect(app).toContain('if (!_klineSeries || !_klineDataAvailable || state.marketTradeMode === 0) return;')
   })
 
+  it('fits only the initial/recovered/timeframe data and restores the same-key viewport', () => {
+    const blockStart = app.indexOf('async function loadKlineData()')
+    const blockEnd = app.indexOf('// Lightweight: fetch only the last bar', blockStart)
+    const block = app.slice(blockStart, blockEnd)
+    expect(block).toContain('const preserveVisibleRange = _klineDataAvailable && _klineDataKey === requestKey')
+    expect(block).toContain('const previousRange = preserveVisibleRange ? getKlineVisibleLogicalRange() : null')
+    expect(block).toContain('setKlineVisibleLogicalRange(previousRange, candles.length)')
+    expect(block).toContain('else _klineChart.timeScale().fitContent()')
+    expect(app).toContain('function normalizeKlineVisibleLogicalRange(range, total)')
+    expect(app).toContain('let _klineVisibleRangeSyncing = false')
+    expect(app).toContain('if (!range || _klineVisibleRangeSyncing) return')
+  })
+
   it('keeps period-review detail errors and stale responses scoped to the selected request', () => {
     const start = app.indexOf('async function openPeriodReviewDetail')
     const end = app.indexOf('const memoryCategoryLabels', start)
