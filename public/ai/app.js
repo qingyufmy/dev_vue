@@ -1818,8 +1818,8 @@ function clearAccountContextCaches() {
   state.tradingAccounts = [];
   state.strategySubscriptions = [];
   _prevPositionCount = 0;
-  if ($("positionsBody")) $("positionsBody").innerHTML = renderPositionRows([], true);
-  if ($("dashboardPositionsBody")) $("dashboardPositionsBody").innerHTML = renderPositionRows([], false);
+  if ($("positionsBody")) $("positionsBody").innerHTML = renderPositionRows([]);
+  if ($("dashboardPositionsBody")) $("dashboardPositionsBody").innerHTML = renderPositionRows([]);
 }
 
 function invalidateSession() {
@@ -2379,7 +2379,12 @@ function handleBridgeData(msg) {
         }, 500);
       }
     }
-    patchPositionLiveCells(msg.positions);
+    // A bridge push normally contains the complete position snapshot. Patch
+    // live fields in both tables when the structure is unchanged; rebuild the
+    // shared rows when a position opens, closes, or changes shape.
+    const patched = patchPositionLiveCells(msg.positions);
+    state.positions = msg.positions;
+    if (!patched) renderPositionTables(msg.positions);
   }
   _maybeRefreshSignal();
 }
@@ -2667,8 +2672,7 @@ function handleHeartbeat(msg) {
       }).catch(() => {});
     }
     else if (!usingFallback) {
-      state.positions = [];
-      renderPositionRows();
+      renderPositionTables([]);
     }
   }
 }
@@ -5467,7 +5471,8 @@ let _klineRequestVersion = 0;
 let _klineDataAvailable = false;
 let _klinePositionSeries = [];
 let _klinePositionTooltip = null;
-const KLINE_POSITION_ENTRY_COLOR = '#d4af37';
+const KLINE_POSITION_ENTRY_BUY_COLOR = '#ef4444';
+const KLINE_POSITION_ENTRY_SELL_COLOR = '#10b981';
 let _klineVolRefreshTimer = null;
 let _klineMutationObserver = null;
 let _klineResizeObserver = null;
@@ -5508,6 +5513,13 @@ function klineSymbolKey(value) {
 
 function klineSymbolStem(value) {
   return klineSymbolKey(value).split(/[._-]/, 1)[0];
+}
+
+function positionDirectionType(position = {}) {
+  const value = String(position.type ?? position.direction ?? position.side ?? '').trim().toLowerCase();
+  if (value === 'buy') return 'buy';
+  if (value === 'sell') return 'sell';
+  return '';
 }
 
 function klinePositionMatchesSymbol(position, symbol) {
@@ -5593,16 +5605,23 @@ function syncKlinePositionEntries() {
       && Number(position.price_open) > 0
   );
   const markerSummary = [];
+  const unknownDirectionSummary = [];
   for (const position of positions) {
-    const buy = String(position.type || '').toLowerCase() === 'buy';
-    const direction = buy ? '多仓' : '空仓';
+    const side = positionDirectionType(position);
+    const direction = side === 'buy' ? '多仓' : side === 'sell' ? '空仓' : '方向未知';
     const price = Number(position.price_open);
     const entryTime = klinePositionTimeSeconds(position);
     const start = klinePositionStartIndex(_klineCandles, entryTime);
-    markerSummary.push(`${direction} ${volumeText(position.volume)}，入场价 ${fmt(price, klinePositionPriceDigits(position))}${start.visible ? '' : '，入场时间在当前图表范围外'}`);
+    const summary = `${direction} ${volumeText(position.volume)}，入场价 ${fmt(price, klinePositionPriceDigits(position))}${start.visible ? '' : '，入场时间在当前图表范围外'}`;
+    if (!side) {
+      unknownDirectionSummary.push(`${summary}（未绘制标记）`);
+      continue;
+    }
+    markerSummary.push(summary);
     if (!start.visible) continue;
+    const markerColor = side === 'buy' ? KLINE_POSITION_ENTRY_BUY_COLOR : KLINE_POSITION_ENTRY_SELL_COLOR;
     const series = _klineChart.addLineSeries({
-      color:KLINE_POSITION_ENTRY_COLOR,
+      color:markerColor,
       lineVisible:false,
       pointMarkersVisible:false,
       crosshairMarkerVisible:false,
@@ -5615,17 +5634,20 @@ function syncKlinePositionEntries() {
     series.setMarkers([{
       time:markerTime,
       position:'inBar',
-      color:KLINE_POSITION_ENTRY_COLOR,
-      shape:buy ? 'arrowUp' : 'arrowDown',
+      color:markerColor,
+      shape:side === 'buy' ? 'arrowUp' : 'arrowDown',
       size:1.5,
     }]);
-    _klinePositionSeries.push({ series, position, direction });
+    _klinePositionSeries.push({ series, position, direction, side });
   }
   const container = document.getElementById('klineChart');
   if (container) {
     container.setAttribute('role', 'img');
-    container.setAttribute('aria-label', markerSummary.length
-      ? `K 线图；当前品种持仓入场点使用金色箭头标记：${markerSummary.join('；')}`
+    const descriptions = [];
+    if (markerSummary.length) descriptions.push(`多仓使用红色向上箭头、空仓使用绿色向下箭头：${markerSummary.join('；')}`);
+    if (unknownDirectionSummary.length) descriptions.push(`方向未知持仓未绘制入场标记：${unknownDirectionSummary.join('；')}`);
+    container.setAttribute('aria-label', descriptions.length
+      ? `K 线图；当前品种持仓入场点。${descriptions.join('。')}`
       : 'K 线图；当前品种没有持仓入场标记');
   }
   ensureKlinePositionTooltip();
@@ -5644,8 +5666,8 @@ function handleKlinePositionCrosshair(param) {
     || param.point.x > container.clientWidth || param.point.y > container.clientHeight) {
     return hideKlinePositionTooltip();
   }
-  tooltip.innerHTML = matches.map(({ position, direction }) => {
-    const buy = direction === '多仓';
+  tooltip.innerHTML = matches.map(({ position, direction, side }) => {
+    const buy = side === 'buy';
     const digits = klinePositionPriceDigits(position);
     return `<div class="kline-position-tooltip-row ${buy ? 'is-buy' : 'is-sell'}">
       <strong>${direction}</strong><span class="num">${escapeHtml(volumeText(position.volume))}</span>
@@ -5989,15 +6011,17 @@ function switchKlineTimeframe(tf) {
   startKlineRefreshTimer();
 }
 
-function renderPositionRows(positions = [], withAction) {
+const POSITION_COLUMN_COUNT = 11;
+
+function renderPositionRows(positions = []) {
   if (!positions.length) {
-    return `<tr class="empty-row"><td colspan="${withAction ? 11 : 8}">当前无持仓</td></tr>`;
+    return `<tr class="empty-row"><td colspan="${POSITION_COLUMN_COUNT}">当前无持仓</td></tr>`;
   }
   const tickets = state.signalTickets || {};
   return positions.map((position) => {
-    const type = String(position.type || "").toLowerCase();
-    const directionLabel = type === "buy" ? "买入 多" : "卖出 空";
-    const directionClass = type === "buy" ? "dir-buy" : type === "close" ? "dir-close" : "dir-sell";
+    const side = positionDirectionType(position);
+    const directionLabel = side === "buy" ? "买入 多" : side === "sell" ? "卖出 空" : "方向未知";
+    const directionClass = side === "buy" ? "dir-buy" : side === "sell" ? "dir-sell" : "dir-unknown";
     const priceDigits = positionPriceDigits(position);
     return `
       <tr data-ticket="${escapeHtml(position.ticket)}">
@@ -6008,12 +6032,13 @@ function renderPositionRows(positions = [], withAction) {
         <td data-label="开仓价" class="num">${fmt(position.price_open, priceDigits)}</td>
         <td data-label="现价" data-position-live="price" class="num">${fmt(position.price_current, priceDigits)}</td>
         <td data-label="开仓时间" class="num">${escapeHtml(formatTime(position.time))}</td>
-        ${withAction ? `<td data-label="止损" class="num">${Number(position.sl) ? fmt(position.sl, priceDigits) : "--"}</td><td data-label="止盈" class="num">${Number(position.tp) ? fmt(position.tp, priceDigits) : "--"}</td>` : ""}
-        <td data-label="浮动盈亏" data-position-live="profit" class="num ${profitClass(position.profit)}">${fmt(position.profit)}</td>
-        ${withAction ? `<td data-label="操作" class="position-row-actions-cell">
+        <td data-label="止损" class="num">${Number(position.sl) ? fmt(position.sl, priceDigits) : "--"}</td>
+        <td data-label="止盈" class="num">${Number(position.tp) ? fmt(position.tp, priceDigits) : "--"}</td>
+        <td data-label="盈亏" data-position-live="profit" class="num ${profitClass(position.profit)}">${fmt(position.profit)}</td>
+        <td data-label="操作" class="position-row-actions-cell">
           ${state.user?.role === "admin" && Number(position.magic) === 234000 ? `<button class="btn small position-protection-edit" type="button" data-edit-protection-ticket="${escapeHtml(position.ticket)}"><i data-lucide="pencil" size="13"></i>编辑保护</button>` : ""}
           <button class="btn small" type="button" data-close-ticket="${escapeHtml(position.ticket)}"><i data-lucide="x" size="12"></i>平仓</button>
-        </td>` : ""}
+        </td>
       </tr>
     `;
   }).join("");
@@ -6070,8 +6095,8 @@ function renderPositionTables(positions = [], { liveOnly = false } = {}) {
   $('positionsEmpty').classList.toggle('hidden', positions.length > 0);
   $('dashboardPositionsTable').classList.toggle('hidden', positions.length === 0);
   if (patched) return 'live';
-  $('positionsBody').innerHTML = renderPositionRows(positions, true);
-  $('dashboardPositionsBody').innerHTML = renderPositionRows(positions, false);
+  $('positionsBody').innerHTML = renderPositionRows(positions);
+  $('dashboardPositionsBody').innerHTML = renderPositionRows(positions);
   initIcons();
   return 'full';
 }

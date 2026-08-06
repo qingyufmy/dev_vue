@@ -1773,8 +1773,8 @@ textarea:focus {
 .kline-position-tooltip-row strong,
 .kline-position-tooltip-row span { font-size: 12px; line-height: 1.4; }
 .kline-position-tooltip-row small { grid-column: 1 / -1; color: var(--text-secondary); font-size: 10px; line-height: 1.45; }
-.kline-position-tooltip-row.is-buy strong { color: #ff7b84; }
-.kline-position-tooltip-row.is-sell strong { color: #43cfa3; }
+.kline-position-tooltip-row.is-buy strong { color: var(--color-positive); }
+.kline-position-tooltip-row.is-sell strong { color: var(--color-negative); }
 .kline-chart-container a[href*="tradingview"],
 .kline-chart-container #tv-attr-logo {
   display: none !important;
@@ -2980,6 +2980,11 @@ textarea:focus {
 .tag.sell {
   color: var(--color-negative);
   font-weight: 800;
+}
+
+.dir-unknown {
+  color: var(--text-muted);
+  font-weight: 700;
 }
 
 .dir-close,

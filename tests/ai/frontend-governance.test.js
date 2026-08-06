@@ -1112,7 +1112,7 @@ describe('AI governance navigation and DOM contract', () => {
   })
 
   it('turns complex trading and review flows into mobile-native views', () => {
-    expect(app).toContain('data-label="浮动盈亏"')
+    expect(app).toContain('data-label="盈亏"')
     expect(app).toContain('data-label="挂单价"')
     expect(app).toContain('data-review-action="back-list"')
     expect(app).toContain('reviewLayout?.classList.add("has-mobile-detail")')

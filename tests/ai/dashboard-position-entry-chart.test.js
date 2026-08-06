@@ -1,18 +1,29 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 
+const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
+const responsiveCss = readFileSync(new URL('../../public/ai/responsive.css', import.meta.url), 'utf8')
+
+function positionTableHeaders() {
+  return [...html.matchAll(/<table[^>]*position-list-table[^>]*>[\s\S]*?<thead><tr>([\s\S]*?)<\/tr><\/thead>/g)]
+    .map(match => [...match[1].matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)]
+      .map(header => header[1].replace(/<[^>]+>/g, '').trim()))
+}
 
 describe('dashboard current-position entry markers', () => {
-  it('draws current-symbol entries as explicit gold arrows without persistent price lines or labels', () => {
+  it('draws current-symbol entries with semantic red/green arrows without persistent price lines', () => {
     const syncStart = app.indexOf('function syncKlinePositionEntries()')
     const syncEnd = app.indexOf('function handleKlinePositionCrosshair', syncStart)
     const syncBlock = app.slice(syncStart, syncEnd)
     expect(app).toContain('function syncKlinePositionEntries()')
     expect(app).toContain('function klinePositionPriceDigits(position = {})')
     expect(app).toContain('klinePositionMatchesSymbol(position, symbol)')
-    expect(app).toContain("const KLINE_POSITION_ENTRY_COLOR = '#d4af37'")
+    expect(app).toContain("const KLINE_POSITION_ENTRY_BUY_COLOR = '#ef4444'")
+    expect(app).toContain("const KLINE_POSITION_ENTRY_SELL_COLOR = '#10b981'")
+    expect(syncBlock).toContain('const side = positionDirectionType(position)')
+    expect(syncBlock).toContain('if (!side)')
     expect(syncBlock).toContain('lineVisible:false')
     expect(syncBlock).toContain('pointMarkersVisible:false')
     expect(syncBlock).toContain('lastValueVisible:false')
@@ -20,12 +31,14 @@ describe('dashboard current-position entry markers', () => {
     expect(syncBlock).toContain('series.setData([{ time:markerTime, value:price }])')
     expect(syncBlock).toContain('series.setMarkers([{')
     expect(syncBlock).toContain("position:'inBar'")
-    expect(syncBlock).toContain('color:KLINE_POSITION_ENTRY_COLOR')
-    expect(syncBlock).toContain("shape:buy ? 'arrowUp' : 'arrowDown'")
+    expect(syncBlock).toContain('color:markerColor')
+    expect(syncBlock).toContain("shape:side === 'buy' ? 'arrowUp' : 'arrowDown'")
     expect(syncBlock).toContain('size:1.5')
+    expect(syncBlock).not.toContain('#d4af37')
     expect(syncBlock).not.toContain('pointMarkersRadius')
     expect(syncBlock).not.toContain('LineStyle.Dashed')
     expect(syncBlock).not.toContain('title:`${direction}入场`')
+    expect(app).not.toContain('使用金色箭头')
     expect(app).toContain('syncKlinePositionEntries();')
   })
 
@@ -36,10 +49,67 @@ describe('dashboard current-position entry markers', () => {
     expect(app).toContain("if (entryTime < candles[0].time) return { index:0, visible:false };")
     expect(css).toContain('.kline-position-tooltip')
     expect(css).toContain('pointer-events: none')
+    expect(css).toContain('.kline-position-tooltip-row.is-buy strong { color: var(--color-positive); }')
+    expect(css).toContain('.kline-position-tooltip-row.is-sell strong { color: var(--color-negative); }')
   })
 
-  it('adds a readable non-canvas description for the current position markers', () => {
-    expect(app).toContain("container.setAttribute('role', 'img')")
-    expect(app).toContain("container.setAttribute('aria-label', markerSummary.length")
+  it('describes long/short marker colors and leaves unknown directions unmarked', () => {
+    expect(app).toContain('function positionDirectionType(position = {})')
+    expect(app).toContain("if (value === 'buy') return 'buy'")
+    expect(app).toContain("if (value === 'sell') return 'sell'")
+    expect(app).toContain('方向未知持仓未绘制入场标记')
+    expect(app).toContain('多仓使用红色向上箭头、空仓使用绿色向下箭头')
+    expect(app).not.toContain("const buy = String(position.type || '').toLowerCase() === 'buy'")
+  })
+})
+
+describe('shared current-position table contract', () => {
+  it('uses the same eleven headers for dashboard and AI trader tables', () => {
+    const expected = ['票号', '品种', '方向', '手数', '开仓价', '现价', '开仓时间（交易平台）', '止损', '止盈', '盈亏', '操作']
+    const headers = positionTableHeaders()
+    expect(headers).toHaveLength(2)
+    expect(headers[0]).toEqual(expected)
+    expect(headers[1]).toEqual(expected)
+  })
+
+  it('renders one shared row function with permissions and live patching for both tables', () => {
+    const renderStart = app.indexOf('const POSITION_COLUMN_COUNT = 11')
+    const renderEnd = app.indexOf('function positionPriceDigits', renderStart)
+    const renderBlock = app.slice(renderStart, renderEnd)
+    expect(renderBlock).toContain('function renderPositionRows(positions = [])')
+    expect(renderBlock).toContain('colspan="${POSITION_COLUMN_COUNT}"')
+    expect(renderBlock).toContain('data-label="止损"')
+    expect(renderBlock).toContain('data-label="止盈"')
+    expect(renderBlock).toContain('data-label="盈亏"')
+    expect(renderBlock).toContain('data-label="操作"')
+    expect(renderBlock).toContain('state.user?.role === "admin" && Number(position.magic) === 234000')
+    expect(renderBlock).toContain('data-edit-protection-ticket=')
+    expect(renderBlock).toContain('data-close-ticket=')
+    expect(app.match(/renderPositionRows\(positions\)/g)).toHaveLength(2)
+    expect(app).not.toContain('renderPositionRows(positions,')
+    expect(app).toContain("const bodies = [$('positionsBody'), $('dashboardPositionsBody')].filter(Boolean)")
+    expect(app).toContain('data-position-live="price"')
+    expect(app).toContain('data-position-live="profit"')
+  })
+
+  it('keeps dashboard position cards aligned with AI trader cards on mobile', () => {
+    expect(html).toContain('class="positions-table-wrap position-list-table-wrap hidden"')
+    expect(html).toContain('class="table-wrap position-list-table-wrap"')
+    expect(html).toContain('class="positions-table position-list-table"')
+    expect(html).toContain('class="data-table position-list-table"')
+    expect(responsiveCss).toContain('@media (max-width: 767px)')
+    expect(responsiveCss).toContain('.position-list-table tbody')
+    expect(responsiveCss).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));')
+    expect(responsiveCss).toContain('.position-list-table td[data-label="操作"]')
+    expect(responsiveCss).toContain('min-height: 44px;')
+  })
+
+  it('keeps all three AI assets on one cache version', () => {
+    const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z._-]+)/i)?.[1]
+    const responsiveVersion = html.match(/responsive\.css\?v=([0-9a-z._-]+)/i)?.[1]
+    const appVersion = html.match(/app\.js\?v=([0-9a-z._-]+)/i)?.[1]
+    expect(stylesheetVersion).toBe('20260806positions1')
+    expect(responsiveVersion).toBe(stylesheetVersion)
+    expect(appVersion).toBe(stylesheetVersion)
   })
 })

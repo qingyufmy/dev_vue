@@ -1172,6 +1172,94 @@
     display: none;
   }
 
+  /* The dashboard and AI 交易员 position tables deliberately share the
+     same two-column information-card treatment on small screens. */
+  .position-list-table-wrap {
+    overflow: visible;
+    border: 0;
+  }
+
+  .position-list-table,
+  .position-list-table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .position-list-table thead {
+    display: none;
+  }
+
+  .position-list-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .position-list-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: hidden;
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
+    background: var(--bg-input-soft);
+  }
+
+  .position-list-table td {
+    display: grid;
+    min-width: 0;
+    min-height: 54px;
+    align-content: center;
+    gap: 3px;
+    padding: 9px 10px;
+    border-right: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+
+  .position-list-table td:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .position-list-table td::before {
+    color: var(--text-muted);
+    content: attr(data-label);
+    font-family: var(--font-ui);
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  .position-list-table td[data-label="操作"] {
+    grid-column: 1 / -1;
+    border-right: 0;
+  }
+
+  .position-list-table td[data-label="操作"] .btn {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .position-list-table .position-row-actions-cell .btn + .btn {
+    margin-top: 6px;
+    margin-left: 0;
+  }
+
+  .position-list-table tr.empty-row {
+    display: block;
+  }
+
+  .position-list-table tr.empty-row td {
+    display: block;
+    min-height: 82px;
+    padding: 28px 12px;
+    border: 0;
+    text-align: center;
+  }
+
+  .position-list-table tr.empty-row td::before {
+    display: none;
+  }
+
   .risk-overview-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;

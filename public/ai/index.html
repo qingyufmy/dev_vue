@@ -27,8 +27,8 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260806remediation3" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260806remediation3" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260806positions1" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260806positions1" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -450,9 +450,9 @@
                 <p class="empty-title">当前无持仓</p>
                 <p class="empty-sub">账户空仓，等待入场信号</p>
               </div>
-              <div id="dashboardPositionsTable" class="positions-table-wrap hidden">
-                <table class="positions-table">
-                  <thead><tr><th>票号</th><th>品种</th><th>方向</th><th>手数</th><th>开仓价</th><th>现价</th><th data-bridge-platform-template="开仓时间（{platform}）">开仓时间（交易平台）</th><th>浮盈</th></tr></thead>
+              <div id="dashboardPositionsTable" class="positions-table-wrap position-list-table-wrap hidden">
+                <table class="positions-table position-list-table">
+                  <thead><tr><th>票号</th><th>品种</th><th>方向</th><th>手数</th><th>开仓价</th><th>现价</th><th data-bridge-platform-template="开仓时间（{platform}）">开仓时间（交易平台）</th><th>止损</th><th>止盈</th><th>盈亏</th><th>操作</th></tr></thead>
                   <tbody id="dashboardPositionsBody"></tbody>
                 </table>
               </div>
@@ -799,9 +799,9 @@
                 <span class="card-title">持仓管理</span>
                 <button class="card-action-btn" data-action="refresh-positions"><i data-lucide="refresh-cw" size="12"></i>持仓</button>
               </div>
-              <div class="table-wrap">
-                <table class="data-table">
-                  <thead><tr><th>票号</th><th>品种</th><th>方向</th><th>手数</th><th>开仓价</th><th>现价</th><th data-bridge-platform-template="开仓时间（{platform}）">开仓时间（交易平台）</th><th>SL</th><th>TP</th><th>盈亏</th><th>操作</th></tr></thead>
+              <div class="table-wrap position-list-table-wrap">
+                <table class="data-table position-list-table">
+                  <thead><tr><th>票号</th><th>品种</th><th>方向</th><th>手数</th><th>开仓价</th><th>现价</th><th data-bridge-platform-template="开仓时间（{platform}）">开仓时间（交易平台）</th><th>止损</th><th>止盈</th><th>盈亏</th><th>操作</th></tr></thead>
                   <tbody id="positionsBody"></tbody>
                 </table>
               </div>
@@ -1283,7 +1283,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260806remediation3"></script>
+    <script src="/ai/app.js?v=20260806positions1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">
