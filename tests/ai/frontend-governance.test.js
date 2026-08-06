@@ -40,7 +40,19 @@ function loadAutoRuntimeRemainingSeconds() {
   return new Function(`${source}\nreturn autoRuntimeRemainingSeconds;`)()
 }
 
+function loadPeriodReviewEffectiveStatus() {
+  const start = app.indexOf('function periodReviewEffectiveStatus')
+  const end = app.indexOf('\n\nfunction renderReviewSummary', start)
+  return new Function(`${app.slice(start, end)}\nreturn periodReviewEffectiveStatus;`)()
+}
+
 describe('AI governance navigation and DOM contract', () => {
+  it('treats a persisted period-review version as authoritative over a stale leased job', () => {
+    const effectiveStatus = loadPeriodReviewEffectiveStatus()
+    expect(effectiveStatus({ current_version_id:191, status:'draft', job_status:'leased', progress_stage:'model_request' })).toBe('draft')
+    expect(app).toContain('const stage = Number(review.current_version_id || 0) > 0 ? "succeeded"')
+  })
+
   it('falls back to the absolute scheduler deadline when seconds are missing', () => {
     const remainingSeconds = loadAutoRuntimeRemainingSeconds()
     const nowMs = Date.parse('2026-08-05T05:00:00.000Z')
@@ -138,7 +150,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('setText("quoteAsk", priceDisplay(q.ask))')
     expect(app).toContain('setText("quoteBid", priceDisplay(data.bid))')
     expect(app).toContain('setText("quoteAsk", priceDisplay(data.ask))')
-    expect(html).toContain('/ai/app.js?v=20260805scheduler3')
+    expect(html).toContain('/ai/app.js?v=20260806review1')
     expect(app).toContain('wsApi("platform_quote", { symbol })')
     expect(app).toContain('state.platformMarketSourceActive = platformQuote.available === true')
     expect(app).toContain('state.lastObserverQuote = {')
@@ -688,7 +700,7 @@ describe('AI governance navigation and DOM contract', () => {
     const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z]+)/)?.[1]
     const appVersion = html.match(/app\.js\?v=([0-9a-z]+)/)?.[1]
     expect(stylesheetVersion).toBeTruthy()
-    expect(appVersion).toBe('20260805scheduler3')
+    expect(appVersion).toBe('20260806review1')
     expect(appVersion).toBe(stylesheetVersion)
   })
 

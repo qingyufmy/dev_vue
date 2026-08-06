@@ -13,7 +13,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   startPeriodReviewLeaseHeartbeat, validateDailyReviewContent, validateMonthlyReviewContent,
   validateMonthlyReviewMergeContent,
   validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase,
-  refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews } from '../../server/routes/ai/period-review.js'
+  refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
+  isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review lease heartbeat', () => {
@@ -35,6 +36,24 @@ describe('period review lease heartbeat', () => {
     expect(heartbeat.signal.aborted).toBe(false)
     expect(() => heartbeat.assertOwned()).not.toThrow()
     await heartbeat.stop()
+  })
+})
+
+describe('period review model attempt accounting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    periodReviewDb.queryRun.mockResolvedValue({ affectedRows:1 })
+  })
+
+  it('counts a business retry only at the provider request callback', async () => {
+    const tracker = { onProviderRequest:vi.fn().mockResolvedValue(true) }
+    const job = { id:7, lease_token:'lease-a', attempt_count:0 }
+    const callback = periodReviewProviderRequestCallback(job, tracker)
+    await callback({ phase:'request' })
+    await callback({ phase:'repair' })
+    expect(job.attempt_count).toBe(1)
+    expect(periodReviewDb.queryRun).toHaveBeenCalledTimes(1)
+    expect(periodReviewDb.queryRun.mock.calls[0][0]).toContain('attempt_count = attempt_count + 1')
   })
 })
 
@@ -261,9 +280,14 @@ describe('daily review grouping', () => {
     expect(shouldRefreshDailyReviewCase(recent, group, sources, Date.parse('2026-07-17T22:00:00Z'))).toMatchObject({ refresh:true, reason:'incomplete_recheck_due' })
     expect(shouldRefreshDailyReviewCase(recent, { ...group, outcomes:[...group.outcomes, { id:9 }] }, sources,
       Date.parse('2026-07-17T21:31:00Z'))).toMatchObject({ refresh:true, reason:'outcome_set_changed' })
-    expect(shouldRefreshDailyReviewCase(recent, group, [
+    expect(shouldRefreshDailyReviewCase({ ...recent, current_version_id:11 }, group, [
       { outcome_id:3, source_hash:'old', current_evidence_hash:'new' },
       { outcome_id:8, source_hash:'same', current_evidence_hash:'same' },
+    ], Date.parse('2026-07-17T21:31:00Z'))).toMatchObject({ refresh:false, reason:'evidence_stability_wait' })
+
+    expect(shouldRefreshDailyReviewCase({ ...recent, current_version_id:11 }, group, [
+      { outcome_id:3, source_hash:'old', current_evidence_hash:'new', current_evidence_updated_at:'2026-07-17 20:00:00' },
+      { outcome_id:8, source_hash:'same', current_evidence_hash:'same', current_evidence_updated_at:'2026-07-17 20:00:00' },
     ], Date.parse('2026-07-17T21:31:00Z'))).toMatchObject({ refresh:true, reason:'trade_evidence_changed' })
 
     const settled = { evidence_status:'complete', current_version_id:11, updated_at:'2026-07-18 05:00:00' }
@@ -354,6 +378,20 @@ describe('monthly review aggregation', () => {
       review_status:'draft', evidence_hash:'e1', content_hash:'v1' }]))
     expect(monthlyReviewSourceHash([source])).not.toBe(monthlyReviewSourceHash([{ ...source, status:'approved' }]))
     expect(monthlyReviewSourceHash([source])).not.toBe(monthlyReviewSourceHash([{ ...source, current_content_hash:'v2' }]))
+  })
+})
+
+describe('period review state convergence', () => {
+  it('treats a persisted version as a completed draft when the job row is stale', () => {
+    expect(normalizePeriodReviewState({ current_version_id:19, status:'generating', job_status:'leased', progress_stage:'preparing', last_error_code:'old' }))
+      .toMatchObject({ status:'draft', job_status:'succeeded', progress_stage:'succeeded', last_error_code:null })
+  })
+
+  it('requires a timestamped quiet window before evidence refresh', () => {
+    const now = Date.parse('2026-07-17T13:31:00Z')
+    expect(isPeriodReviewEvidenceStable([{ updated_at:'2026-07-17 21:20:00' }], now)).toBe(false)
+    expect(isPeriodReviewEvidenceStable([{ updated_at:'2026-07-17 20:00:00' }], now)).toBe(true)
+    expect(isPeriodReviewEvidenceStable([{ updated_at:null }], now)).toBe(false)
   })
 })
 

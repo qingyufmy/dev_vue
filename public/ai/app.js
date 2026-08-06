@@ -3760,6 +3760,7 @@ function periodReviewEvidenceReasonText(value) {
     || (/bridge not connected/i.test(item) ? "管理员桥接未连接，暂时无法补齐历史行情" : item)))].join("；");
 }
 function periodReviewEffectiveStatus(item) {
+  if (Number(item.current_version_id || 0) > 0) return item.status || "draft";
   if (item.job_status === "leased") return item.progress_stage || "generating";
   if (item.job_status === "queued" && item.next_attempt_at) return "retry_wait";
   if (item.job_status === "queued") return "queued";
@@ -4049,7 +4050,9 @@ function periodReviewEventLabel(event) {
 
 function periodReviewProgressHtml(review) {
   if (!review?.job_id && !review?.job_status) return "";
-  const stage = periodReviewEffectiveStatus(review);
+  // A persisted version is the authoritative completion fact. A stale leased
+  // job must not make an already generated review look active again.
+  const stage = Number(review.current_version_id || 0) > 0 ? "succeeded" : periodReviewEffectiveStatus(review);
   const stages = ["preparing", "model_request", "validating", "succeeded"];
   const stageIndex = stage === "queued" || stage === "retry_wait" ? 0 : stage === "repairing" ? 2 : Math.max(0, stages.indexOf(stage));
   const terminal = ["succeeded", "failed"].includes(stage) || ["draft", "edited", "approved"].includes(review.status);

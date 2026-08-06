@@ -14,7 +14,7 @@ import { applyDefaultObserverClockBootstrap } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
 import { createModelTaskTracker } from './model-task-tracker.js'
 import { MODEL_TASK_TERMINAL_STATES, recoverAbandonedBusinessModelTasks } from './model-task-runtime.js'
-import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget } from './model-task-budget.js'
+import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
 import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import {
   MONTHLY_REVIEW_CHECKPOINT_STATUSES,
@@ -35,6 +35,11 @@ const MONTHLY_GRACE_MINUTES = 120
 const DAILY_COMPLETE_RECHECK_MS = 15 * 60 * 1000
 const DAILY_INCOMPLETE_RECHECK_MS = 60 * 60 * 1000
 const DAILY_SETTLE_MS = 24 * 60 * 60 * 1000
+// Evidence is produced by several asynchronous collectors.  Do not rebuild a
+// user-visible review while one of those collectors is still changing the
+// snapshot; a single quiet window is enough to debounce the settled-period
+// scheduler without adding another state machine or database column.
+const PERIOD_REVIEW_EVIDENCE_STABILITY_MS = 15 * 60 * 1000
 const MONTHLY_REVIEW_GROUP_LIMIT_MAX = 200
 const MONTHLY_REVIEW_GROUP_LIMIT_DEFAULT = 100
 const MONTHLY_REVIEW_GROUP_SCAN_MAX = 800
@@ -63,6 +68,27 @@ async function preparePeriodReviewModelCall(taskKind, resolved, messages, schema
     console.warn(`[PeriodReview] provider capability lookup unavailable for ${taskKind}:`, safeError(error))
   }
   const estimatedInputTokens = estimateModelInputTokens(messages)
+  let outputHistory = summarizeModelOutputHistory([])
+  if (Number(resolved?.model_profile_id) > 0) {
+    try {
+      const lowerInputBound = Math.max(1, Math.floor(estimatedInputTokens * 0.5))
+      const upperInputBound = Math.max(lowerInputBound, Math.ceil(estimatedInputTokens * 2))
+      const historyRows = await queryAll(`SELECT output_tokens, request_status, error_code,
+          finish_reason, accounting_status
+          FROM ai_model_usage_logs
+          WHERE model_profile_id = ? AND \`usage\` = 'review' AND input_tokens BETWEEN ? AND ?
+            AND output_tokens > 0
+            AND (request_phase = 'request' OR request_phase IS NULL)
+          ORDER BY id DESC LIMIT 100`, [
+        resolved.model_profile_id, lowerInputBound, upperInputBound,
+      ])
+      outputHistory = summarizeModelOutputHistory(historyRows)
+    } catch (error) {
+      // Budget selection must remain available if observability data is being
+      // rotated or the usage table is temporarily unavailable.
+      console.warn(`[PeriodReview] model output history unavailable for ${taskKind}:`, safeError(error))
+    }
+  }
   const budget = selectModelTaskBudget({
     taskKind,
     profileHardCap:Number(resolved?.model?.max_tokens) || undefined,
@@ -70,6 +96,8 @@ async function preparePeriodReviewModelCall(taskKind, resolved, messages, schema
     contextWindowTokens:capabilities.context_window_tokens,
     estimatedInputTokens,
     schemaNeedTokens,
+    historicalOutputP95:outputHistory.historicalOutputP95,
+    truncatedOutputHighWatermark:outputHistory.truncatedOutputHighWatermark,
   })
   // The profile/provider/context limits are hard caps. Fail explicitly when
   // those caps cannot satisfy the output contract; never restore a fixed
@@ -154,6 +182,80 @@ function beijingDateTimeMs(value) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+function reviewTimestampUtcMs(value) {
+  const text = String(value || '').trim()
+  if (!text) return 0
+  const parsed = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text)
+    ? Date.parse(text)
+    : beijingDateTimeMs(text)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+export function isPeriodReviewEvidenceStable(rows = [], asOfUtcMs = Date.now()) {
+  const timestamps = (rows || []).map(row => reviewTimestampUtcMs(
+    row?.current_evidence_updated_at || row?.updated_at || row?.generated_at || row,
+  )).filter(value => value > 0)
+  // Missing timestamps are not trustworthy evidence of a quiet window.  The
+  // caller will retry on the next scheduler cycle after the source exposes one.
+  if (!timestamps.length) return false
+  const newest = Math.max(...timestamps)
+  return Number(asOfUtcMs) - newest >= PERIOD_REVIEW_EVIDENCE_STABILITY_MS
+}
+
+export function normalizePeriodReviewState(row) {
+  if (!row || Number(row.current_version_id || 0) <= 0) return row
+  const normalized = { ...row }
+  if (['evidence_pending', 'incomplete', 'ready', 'generating', 'failed'].includes(String(normalized.status || ''))) {
+    normalized.status = 'draft'
+  }
+  // A durable version is the authoritative result.  If a worker died between
+  // persisting that version and updating its business job, expose the result
+  // as completed instead of leaving the UI in an endless generating state.
+  if (Object.prototype.hasOwnProperty.call(normalized, 'job_status')) {
+    normalized.job_status = 'succeeded'
+    if (Object.prototype.hasOwnProperty.call(normalized, 'progress_stage')) normalized.progress_stage = 'succeeded'
+    if (Object.prototype.hasOwnProperty.call(normalized, 'next_attempt_at')) normalized.next_attempt_at = null
+    if (Object.prototype.hasOwnProperty.call(normalized, 'last_error_code')) normalized.last_error_code = null
+  }
+  return normalized
+}
+
+async function reconcilePersistedPeriodReviewState(reviewCase, existingJob) {
+  if (!reviewCase?.current_version_id) return
+  const now = beijingNow()
+  if (existingJob?.id && existingJob.status !== 'succeeded') {
+    await queryRun(`UPDATE period_review_jobs SET status = 'succeeded', progress_stage = 'succeeded',
+        stage_updated_at = ?, last_error_code = NULL, next_attempt_at = NULL,
+        completed_at = COALESCE(completed_at, ?), lease_token = NULL, lease_expires_at = NULL,
+        updated_at = ? WHERE id = ? AND status <> 'succeeded'`,
+    [now, now, now, existingJob.id])
+  }
+  if (['evidence_pending','incomplete','ready','generating','failed'].includes(String(reviewCase.status || ''))) {
+    await queryRun(`UPDATE period_review_cases SET status = 'draft', updated_at = ?
+      WHERE id = ? AND current_version_id IS NOT NULL`, [now, reviewCase.id])
+  }
+}
+
+async function markPeriodReviewModelAttemptStarted(job) {
+  if (job._businessAttemptStarted) return
+  const result = await queryRun(`UPDATE period_review_jobs SET attempt_count = attempt_count + 1, updated_at = ?
+    WHERE id = ? AND status = 'leased' AND lease_token = ? AND attempt_count < max_attempts`,
+  [beijingNow(), job.id, job.lease_token])
+  const affected = Number(result?.affectedRows ?? result?.changes ?? 0)
+  if (affected !== 1) throw new Error('period_review_job_attempt_exhausted')
+  job.attempt_count = Number(job.attempt_count || 0) + 1
+  job._businessAttemptStarted = true
+}
+
+export function periodReviewProviderRequestCallback(job, tracker) {
+  return async event => {
+    await tracker.onProviderRequest(event)
+    // llm.js invokes this callback immediately before fetch().  Counting here
+    // means retry_wait/queued task claims never consume a business attempt.
+    await markPeriodReviewModelAttemptStarted(job)
+  }
+}
+
 export function shouldRefreshDailyReviewCase(reviewCase, group, sources = [], asOfUtcMs = Date.now()) {
   if (!reviewCase) return { refresh:true, reason:'new_case' }
   if (!samePeriodOutcomeSet(group?.outcomes || [], sources)) return { refresh:true, reason:'outcome_set_changed' }
@@ -165,17 +267,21 @@ export function shouldRefreshDailyReviewCase(reviewCase, group, sources = [], as
   if (reviewCase.status === 'approved' && reviewCase.current_version_id && reviewCase.approved_version_id) {
     return { refresh:false, reason:'approved_snapshot_frozen' }
   }
-  if (sources.some(source => source.current_evidence_hash
-    && source.current_evidence_hash !== source.source_hash)) {
+  const elapsed = Math.max(0, Number(asOfUtcMs) - beijingDateTimeMs(reviewCase.updated_at))
+  const stillSettling = Number(asOfUtcMs) <= Number(group?.endUtcMs || 0) + DAILY_SETTLE_MS
+  const changedSources = sources.filter(source => source.current_evidence_hash
+    && source.current_evidence_hash !== source.source_hash)
+  if (changedSources.length) {
+    if (reviewCase.current_version_id && stillSettling && !isPeriodReviewEvidenceStable(changedSources, asOfUtcMs)) {
+      return { refresh:false, reason:'evidence_stability_wait' }
+    }
     return { refresh:true, reason:'trade_evidence_changed' }
   }
-  const elapsed = Math.max(0, Number(asOfUtcMs) - beijingDateTimeMs(reviewCase.updated_at))
   if (reviewCase.evidence_status !== 'complete') {
     if (isTerminalTradeEvidenceReason(reviewCase.evidence_reason)) return { refresh:false, reason:'terminal_evidence_incomplete' }
     return { refresh:elapsed >= DAILY_INCOMPLETE_RECHECK_MS, reason:elapsed >= DAILY_INCOMPLETE_RECHECK_MS ? 'incomplete_recheck_due' : 'incomplete_recheck_wait' }
   }
   if (!reviewCase.current_version_id) return { refresh:true, reason:'draft_missing' }
-  const stillSettling = Number(asOfUtcMs) <= Number(group?.endUtcMs || 0) + DAILY_SETTLE_MS
   if (stillSettling && elapsed >= DAILY_COMPLETE_RECHECK_MS) return { refresh:true, reason:'settlement_recheck_due' }
   return { refresh:false, reason:stillSettling ? 'settlement_recheck_wait' : 'finalized_unchanged' }
 }
@@ -673,7 +779,7 @@ export function compactPeriodTradeEvidence(evidence) {
   }
 }
 
-async function upsertDailyGroup(group, clock) {
+async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
   const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'daily' AND period_key = ?
     AND user_id = ? AND trading_account_id = ? AND strategy_id = ?
     ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
@@ -682,15 +788,16 @@ async function upsertDailyGroup(group, clock) {
   if (existingCase) {
     group.strategyVersion = Number(existingCase.strategy_version || group.strategyVersion || 1)
     existingSources = await queryAll(`SELECT source.outcome_id, source.source_hash,
-      review_case.evidence_hash AS current_evidence_hash
+      review_case.evidence_hash AS current_evidence_hash, review_case.updated_at AS current_evidence_updated_at
       FROM period_review_sources source
       LEFT JOIN trade_review_cases review_case ON review_case.id = source.trade_review_case_id
       WHERE source.period_case_id = ? ORDER BY source.outcome_id`, [existingCase.id])
     const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
+    await reconcilePersistedPeriodReviewState(existingCase, existingJob)
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
     const needsPeriodMarketUpgrade = shouldUpgradePeriodMarketEvidence(existingCase, existingEvidence)
-    const refresh = shouldRefreshDailyReviewCase(existingCase, group, existingSources)
+    const refresh = shouldRefreshDailyReviewCase(existingCase, group, existingSources, asOfUtcMs)
     if (!refresh.refresh && !needsPeriodMarketUpgrade) return { id: Number(existingCase.id), periodKey: group.periodKey,
       complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0),
       evidenceHash: existingCase.evidence_hash, reused:true, refreshReason:refresh.reason }
@@ -751,6 +858,15 @@ async function upsertDailyGroup(group, clock) {
       return { id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
         sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash, reused:true, refreshReason:'semantic_evidence_unchanged' }
     }
+    const stillSettling = Number(asOfUtcMs) <= Number(group.endUtcMs || 0) + DAILY_SETTLE_MS
+    const stabilityRows = [
+      ...prepared.map(item => ({ updated_at:item.reviewCase?.updated_at })),
+    ]
+    if (stillSettling && !isPeriodReviewEvidenceStable(stabilityRows, asOfUtcMs)) {
+      return { id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
+        sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash,
+        reused:true, refreshReason:'evidence_stability_wait' }
+    }
     await withTransaction(async run => {
       const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [existingCase.id])
       if (!locked[0] || Number(locked[0].current_version_id || 0) !== Number(existingCase.current_version_id)) throw new Error('period_review_version_conflict')
@@ -808,7 +924,7 @@ export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Dat
       || row.timezone_offset_minutes === '' || !Number.isInteger(Number(row.timezone_offset_minutes))).length,
     groups: groups.length, ready: 0, incomplete: 0, clock:{ status:'per_account' } }
   for (const group of groups) {
-    const prepared = await upsertDailyGroup(group, { status:group.clockStatus || 'account_terminal' })
+    const prepared = await upsertDailyGroup(group, { status:group.clockStatus || 'account_terminal' }, asOfUtcMs)
     result[prepared.complete ? 'ready' : 'incomplete'] += 1
   }
   return result
@@ -891,7 +1007,7 @@ async function eligibleMonthlyReviewRows(limit) {
     ORDER BY cases.period_key ASC, cases.id ASC`, [scanLimit])
 }
 
-async function upsertMonthlyGroup(group, clock) {
+async function upsertMonthlyGroup(group, clock, asOfUtcMs = Date.now()) {
   const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'monthly' AND period_key = ?
     AND user_id = ? AND trading_account_id = ? AND strategy_id = ? AND status <> 'superseded'
     ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
@@ -902,9 +1018,16 @@ async function upsertMonthlyGroup(group, clock) {
     group.strategyVersion = Number(existingCase.strategy_version || group.strategyVersion || 1)
     existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'monthly_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
+    await reconcilePersistedPeriodReviewState(existingCase, existingJob)
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
     const sourceChanged = monthlyReviewSourceHash(group.dailyCases) !== monthlyReviewSourceHash(existingEvidence.sources || [])
     sourceChangedForExisting = sourceChanged
+    if (existingCase.current_version_id && sourceChanged
+      && !isPeriodReviewEvidenceStable(group.dailyCases.map(row => ({ updated_at:row.updated_at })), asOfUtcMs)) {
+      return { id: Number(existingCase.id), periodKey: group.periodKey,
+        sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash,
+        reused:true, refreshReason:'source_stability_wait' }
+    }
     if (existingCase.current_version_id && !sourceChanged) return { id: Number(existingCase.id), periodKey: group.periodKey,
       sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, reused:true }
     if (existingJob?.status === 'skipped' && !existingCase.current_version_id) {
@@ -1009,7 +1132,7 @@ export async function prepareEligibleMonthlyReviews({ limit = MONTHLY_REVIEW_GRO
     skippedDisabled:0,
     groups: groups.length, ready: 0, clock:{ status:'per_account' } }
   for (const group of groups) {
-    await upsertMonthlyGroup(group, { status:'account_terminal' })
+    await upsertMonthlyGroup(group, { status:'account_terminal' }, asOfUtcMs)
     result.ready += 1
   }
   return result
@@ -1381,6 +1504,22 @@ async function releaseMonthlyReviewParentAfterChunk(job, checkpoint, {
   return { status, nextAttemptAtUtcMs:nextAttemptAtUtcMs == null ? null : Number(nextAttemptAtUtcMs), checkpointId:Number(checkpoint?.id || 0) }
 }
 
+function periodReviewProviderRequestStarted(tracker) {
+  return tracker?.providerRequestState?.submitted === true
+}
+
+async function restoreUnstartedMonthlyCheckpointAttempt(checkpoint) {
+  if (!checkpoint || Number(checkpoint.attempt_count || 0) <= 0) return false
+  const result = await queryRun(`UPDATE period_review_monthly_checkpoints
+    SET attempt_count = GREATEST(attempt_count - 1, 0), updated_at_utc_msc = ?
+    WHERE id = ? AND status = 'leased' AND lease_token = ? AND fencing_token = ?
+      AND attempt_count > 0`, [Date.now(), checkpoint.id, checkpoint.lease_token, checkpoint.fencing_token])
+  const affected = Number(result?.affectedRows ?? result?.changes ?? 0)
+  if (affected !== 1) return false
+  checkpoint.attempt_count = Math.max(0, Number(checkpoint.attempt_count || 0) - 1)
+  return true
+}
+
 async function failMonthlyReviewChunk(job, checkpoint, tracker, error) {
   let modelTask = null
   let failure = error
@@ -1476,10 +1615,10 @@ async function claimDailyReviewJob() {
     if (!rows[0]) return null
     const token = crypto.randomUUID()
     await run(`UPDATE period_review_jobs SET status = 'leased', progress_stage = 'preparing', stage_updated_at = ?, lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
-      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [beijingNow(), token, afterSeconds(120), beijingNow(), rows[0].id])
+      updated_at = ? WHERE id = ?`, [beijingNow(), token, afterSeconds(120), beijingNow(), rows[0].id])
     await run(`UPDATE period_review_cases SET status = 'generating', updated_at = ?
       WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), rows[0].period_case_id])
-    return { ...rows[0], lease_token: token, attempt_count: Number(rows[0].attempt_count) + 1 }
+    return { ...rows[0], lease_token: token, attempt_count: Number(rows[0].attempt_count || 0) }
   })
 }
 
@@ -1530,7 +1669,7 @@ async function generateDailyReview(job, requestModel) {
     signal:requestSignal,
     messages,
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
-    onProviderRequest:event => tracker.onProviderRequest(event),
+    onProviderRequest:periodReviewProviderRequestCallback(job, tracker),
     onProviderUsage:event => tracker.onProviderUsage(event),
     onProviderActivity:event => tracker.onProviderActivity(event),
     onProviderQuiet:event => tracker.onProviderQuiet(event),
@@ -1719,6 +1858,9 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
     followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs, signal:requestSignal,
     messages,
     usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
+    // Chunk retries are accounted by their fenced checkpoint. The parent
+    // business attempt is reserved for the final monthly merge; otherwise a
+    // month with more chunks than max_attempts could exhaust before merging.
     onProviderRequest:event => tracker.onProviderRequest(event),
     onProviderUsage:event => tracker.onProviderUsage(event),
     onProviderActivity:event => tracker.onProviderActivity(event),
@@ -1730,15 +1872,6 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
   const content = validateMonthlyReviewChunkContent(output, expectedIds)
   await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
   return { content, resolved, tracker, checkpointLease }
-}
-
-async function beginMonthlyReviewMergeAttempt(job) {
-  const result = await queryRun(`UPDATE period_review_jobs SET attempt_count = attempt_count + 1, updated_at = ?
-    WHERE id = ? AND status = 'leased' AND lease_token = ? AND attempt_count < max_attempts`,
-  [beijingNow(), job.id, job.lease_token])
-  const affected = Number(result?.affectedRows ?? result?.changes ?? 0)
-  if (affected !== 1) throw new Error('monthly_review_job_attempt_exhausted')
-  job.attempt_count = Number(job.attempt_count || 0) + 1
 }
 
 function verifiedMonthlyMergeEvidence(evidence, checkpointResult) {
@@ -1764,7 +1897,6 @@ function verifiedMonthlyMergeEvidence(evidence, checkpointResult) {
 }
 
 async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpointResult) {
-  await beginMonthlyReviewMergeAttempt(job)
   const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review' })
   if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
   const endpoint = modelEndpoint(resolved.model)
@@ -1811,7 +1943,7 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
     followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs, signal:requestSignal,
     messages,
     usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
-    onProviderRequest:event => tracker.onProviderRequest(event), onProviderUsage:event => tracker.onProviderUsage(event),
+    onProviderRequest:periodReviewProviderRequestCallback(job, tracker), onProviderUsage:event => tracker.onProviderUsage(event),
     onProviderActivity:event => tracker.onProviderActivity(event), onProviderQuiet:event => tracker.onProviderQuiet(event),
     onProgress:stage => setPeriodReviewJobStage(job, stage),
     validateObject:value => validateMonthlyReviewMergeContent(value, dailyCaseIds, approvedDailyCaseIds,
@@ -1948,6 +2080,11 @@ export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObj
         checkpointId:Number(job._checkpoint.id) }
     }
     if (job._checkpoint && !job._chunkPersisted) {
+      if (!periodReviewProviderRequestStarted(job._modelTracker)) {
+        try { await restoreUnstartedMonthlyCheckpointAttempt(job._checkpoint) } catch (restoreError) {
+          console.error(`[PeriodReview case=${job.period_case_id}] monthly chunk attempt restore:`, safeError(restoreError))
+        }
+      }
       const chunkFailure = await failMonthlyReviewChunk(job, job._checkpoint, job._modelTracker, error)
       await setPeriodReviewJobStage(job, chunkFailure.status === 'status_unknown' ? 'status_unknown'
         : chunkFailure.status === 'failed' ? 'failed' : 'retry_wait', 'error', chunkFailure.error)
@@ -2004,7 +2141,13 @@ export async function listPeriodReviewCases(actor, { periodType = null, status =
     where += ` AND cases.status IN ('evidence_pending','incomplete','ready','generating','failed')`
   } else if (status) {
     if (!['draft', 'approved', 'needs_revision'].includes(status)) throw new Error('invalid_review_status')
-    where += ' AND cases.status = ?'; params.push(status)
+    if (status === 'draft') {
+      where += ` AND (cases.status = 'draft'
+        OR (cases.current_version_id IS NOT NULL
+          AND cases.status IN ('evidence_pending','incomplete','ready','generating','failed')))`
+    } else {
+      where += ' AND cases.status = ?'; params.push(status)
+    }
   }
   const safeLimit = Math.min(100, Math.max(1, Number(limit || 50)))
   const safeOffset = Math.max(0, Number(offset || 0))
@@ -2029,7 +2172,8 @@ export async function listPeriodReviewCases(actor, { periodType = null, status =
     ORDER BY cases.created_at DESC, cases.id DESC LIMIT ? OFFSET ?`, params)
   const logicalRows = []
   const logicalIndexes = new Map()
-  for (const row of rows) {
+  for (const rawRow of rows) {
+    const row = normalizePeriodReviewState(rawRow)
     const key = [row.user_id, row.period_type, row.period_key, row.trading_account_id || 0, row.strategy_id].join(':')
     if (!logicalIndexes.has(key)) {
       logicalIndexes.set(key, logicalRows.length); logicalRows.push(row); continue
@@ -2080,7 +2224,8 @@ export async function getPeriodReviewCase(periodCaseId, actor) {
     queryAll(`SELECT id, attempt_no, stage, event_status, message_code, metadata_json, created_at
       FROM period_review_job_events WHERE period_case_id = ? ORDER BY id DESC LIMIT 30`, [periodCaseId]),
   ])
-  return { ...reviewCase, evidence: parse(reviewCase.evidence_json, null), evidence_json: undefined, sources,
+  const normalizedReviewCase = normalizePeriodReviewState(reviewCase)
+  return { ...normalizedReviewCase, evidence: parse(normalizedReviewCase.evidence_json, null), evidence_json: undefined, sources,
     job_events: events.map(row => ({ ...row, metadata: parse(row.metadata_json, null), metadata_json: undefined })),
     versions: versions.map(row => ({ ...row, content: parse(row.content_json, {}), content_json: undefined })) }
 }
@@ -2101,7 +2246,8 @@ export async function getPeriodReviewSummary(actor) {
     daily_attention:0, monthly_attention:0, daily_pending:0, monthly_pending:0,
     derivation_pending:0, derivation_failed:0 }
   const logical = new Map()
-  for (const row of rows) {
+  for (const rawRow of rows) {
+    const row = normalizePeriodReviewState(rawRow)
     const key = [row.user_id, row.period_type, row.period_key, row.trading_account_id || 0, row.strategy_id].join(':')
     const current = logical.get(key)
     if (!current || (row.status === 'approved' && current.status !== 'approved')
@@ -2162,7 +2308,7 @@ export async function getPeriodReviewJobStatus(periodCaseId, actor) {
   if (!status) throw new Error('period_review_not_found')
   const events = await queryAll(`SELECT id, attempt_no, stage, event_status, message_code, metadata_json, created_at
     FROM period_review_job_events WHERE period_case_id = ? ORDER BY id DESC LIMIT 12`, [periodCaseId])
-  return { ...status, job_events:events.map(row => ({ ...row, metadata:parse(row.metadata_json, null), metadata_json:undefined })) }
+  return { ...normalizePeriodReviewState(status), job_events:events.map(row => ({ ...row, metadata:parse(row.metadata_json, null), metadata_json:undefined })) }
 }
 
 export async function editPeriodReviewCase({ periodCaseId, actor, content, expectedVersionId, changeNote = null }) {

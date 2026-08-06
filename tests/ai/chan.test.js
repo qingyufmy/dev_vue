@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { __chanTest } from '../../server/routes/ai/market-data.js'
 
-const { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, computeChan, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence } = __chanTest
+const { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, computeChan, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence } = __chanTest
 
 function makeRates(n, base = 4000) {
   const rates = []
@@ -385,7 +385,7 @@ describe('buildSegments', () => {
   })
 
   it('keeps candidate segment direction consistent with its extreme', () => {
-    const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
+    const makeBi = (id, dir, start, end) => ({ id, dir, raw_start_idx:id * 2 - 2, raw_end_idx:id * 2 - 1, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
     const bis = [
       makeBi(1, 'up', 100, 110),
       makeBi(2, 'down', 110, 95),
@@ -393,8 +393,12 @@ describe('buildSegments', () => {
       makeBi(4, 'down', 105, 90),
     ]
     const { candidate } = buildSegments(bis)
-    expect(candidate).toMatchObject({ dir: 'up', start_price: 100, end_price: 110 })
+    expect(candidate).toMatchObject({ dir: 'up', start_price: 100, end_price: 110, endpoint_raw_idx:1 })
     expect(candidate.end_price).toBeGreaterThan(candidate.start_price)
+
+    const rates = Array.from({ length:8 }, (_, index) => ({ time:`t${index}`, time_utc_msc:1000 + index }))
+    const summary = summarizeSegment(buildFormingSegment(candidate, bis, 1), bis, rates)
+    expect(summary).toMatchObject({ end_price:110, end_index:1, end_time:'t1', end_time_utc_msc:1001 })
   })
 
   it('多组交替笔序列始终满足线段结构不变量', () => {

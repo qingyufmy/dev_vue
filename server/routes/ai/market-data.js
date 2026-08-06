@@ -434,16 +434,25 @@ function buildSegmentsFromAnchor(confirmedBis, options = {}) {
   let candidate = null
   if (tailBis.length > 0) {
     const dir = tailBis[0].dir
-    const directionalEnds = tailBis
+    const directionalBis = tailBis
       .filter(b => b.dir === dir)
-      .map(b => Number(b.end_price))
-      .filter(Number.isFinite)
-    const endPrice = dir === 'up' ? Math.max(...directionalEnds) : Math.min(...directionalEnds)
+      .filter(b => Number.isFinite(Number(b.end_price)))
+    const endpointBi = directionalBis.reduce((best, bi) => {
+      if (!best) return bi
+      return dir === 'up'
+        ? (Number(bi.end_price) > Number(best.end_price) ? bi : best)
+        : (Number(bi.end_price) < Number(best.end_price) ? bi : best)
+    }, null)
+    const endPrice = Number(endpointBi?.end_price)
     candidate = {
       dir,
       bi_ids: tailBis.map(b => b.id),
       start_price: tailBis[0].start_price,
       end_price: endPrice,
+      // The candidate may already contain a reverse stroke after its price
+      // extreme. Keep the full stroke span for structure calculations, while
+      // pairing the displayed endpoint price with the bar where it occurred.
+      endpoint_raw_idx: Number.isFinite(Number(endpointBi?.raw_end_idx)) ? Number(endpointBi.raw_end_idx) : null,
     }
   }
 
@@ -741,7 +750,9 @@ function segmentLocation(segment, bis, rates = []) {
   const startIndex = Number.isFinite(Number(segment.raw_start_idx))
     ? Number(segment.raw_start_idx)
     : segmentBis.length ? Math.min(...segmentBis.map(b => Number(b.raw_start_idx))) : null
-  const endIndex = Number.isFinite(Number(segment.raw_end_idx))
+  const endIndex = segment.endpoint_raw_idx != null && Number.isFinite(Number(segment.endpoint_raw_idx))
+    ? Number(segment.endpoint_raw_idx)
+    : Number.isFinite(Number(segment.raw_end_idx))
     ? Number(segment.raw_end_idx)
     : segmentBis.length ? Math.max(...segmentBis.map(b => Number(b.raw_end_idx))) : null
   const startUtcMs = startIndex != null && Number.isFinite(Number(rates[startIndex]?.time_utc_msc)) ? Number(rates[startIndex].time_utc_msc) : null
