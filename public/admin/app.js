@@ -9,7 +9,7 @@ const state = {
   modelCompare:{ setup:null, strategyId:0, symbol:'', result:'all', page:1, snapshots:[], pagination:null, selected:new Map(), modelIds:new Set(), jobs:[], loading:false, polling:null },
   platformStrategies:{items:[],models:[],loaded:false,scope:'all',search:''}, platformModels:{profiles:[],policy:null,governance:null,scope:'all',search:''}, platformMemory:null,
   riskTab:'status', riskData:null, riskPolicy:null, riskPage:1, riskDecision:'all', riskAccountPage:1, riskAccountPageSize:8, auditPage:1, auditSearch:'', auditTarget:'all', riskPolicySearch:'', riskPolicyHasChanges:false,
-  contentTab:'courses', contentOverview:null, contentPage:1, contentSearch:'', contentStatus:'all', feedbackPage:1, feedbackSearch:'', systemConfig:null, systemConfigSecurity:null, systemConfigCategory:'plan_prices', systemConfigSearch:'', systemConfigDirty:false, courseAssets:{courses:[],episodeId:0,resources:null,questions:[],editingQuestion:null},
+  contentTab:'courses', contentOverview:null, releaseNotesRevision:'', releaseNotesVersion:0, releaseNotesPreviewTimer:null, contentPage:1, contentSearch:'', contentStatus:'all', feedbackPage:1, feedbackSearch:'', systemConfig:null, systemConfigSecurity:null, systemConfigCategory:'plan_prices', systemConfigSearch:'', systemConfigDirty:false, courseAssets:{courses:[],episodeId:0,resources:null,questions:[],editingQuestion:null},
 }
 
 const viewLabels = {
@@ -931,33 +931,51 @@ function bindAiJumpActions(root = document) {
   }))
 }
 function aiHealthContent(data) {
-  const summary = data.summary
+  const summary = data.summary || {}
+  const health = data.health || { state:'insufficient_data', reasons:[], components:{}, freshness:{} }
   const requests = Number(summary.model_requests_today || 0)
   const failures = Number(summary.model_failures_today || 0)
   const alerts = Array.isArray(data.rollout?.alerts) ? data.rollout.alerts : []
   const pendingReviews = (data.review_health?.cases || []).filter(item => ['draft','edited','ready','generating'].includes(item.status)).reduce((sum, item) => sum + Number(item.case_count || 0), 0)
   const failedReviews = (data.review_health?.cases || []).filter(item => item.status === 'failed').reduce((sum, item) => sum + Number(item.case_count || 0), 0)
-  const healthy = failures === 0 && alerts.length === 0 && failedReviews === 0
-  const successRate = requests > 0 ? Math.max(0, (requests - failures) / requests * 100) : 100
+  const healthStates = {
+    healthy:{ label:'运行正常', title:'AI 核心链路运行正常', copy:'有明确运行预期的链路均有可用证据，未发现阻断性异常。', tone:'is-healthy' },
+    attention:{ label:'需要关注', title:'AI 核心链路需要关注', copy:'已有运行证据显示部分链路异常，请按原因优先处理。', tone:'needs-attention' },
+    critical:{ label:'严重异常', title:'AI 核心链路存在严重异常', copy:'关键链路已失效或权威数据源不可用，需要立即处理。', tone:'is-critical' },
+    insufficient_data:{ label:'数据不足', title:'当前无法确认 AI 链路健康', copy:'没有足够的运行预期或样本，页面不会把零请求判定为正常。', tone:'is-unknown' },
+  }
+  const healthMeta = healthStates[health.state] || healthStates.insufficient_data
+  const successRate = requests > 0 ? Math.max(0, (requests - failures) / requests * 100) : null
   const latencySeconds = Number(summary.avg_model_latency_ms || 0) / 1000
   const signalErrors = Number(summary.signal_errors_today || 0)
+  const signalCount = Number(summary.signals_today || 0)
   const connectedBridges = Number(summary.connected_bridges || 0)
   const connectedMt4Bridges = Number(summary.connected_mt4_bridges || 0)
   const connectedMt5Bridges = Number(summary.connected_mt5_bridges || 0)
   const queueCount = alerts.length + pendingReviews + failedReviews
   const terminalTime = formatTerminalTime(state.realtime.terminalTime)
   const terminalLabel = terminalPlatformLabel()
-  return `<section class="ai-command-status ${healthy ? 'is-healthy' : 'needs-attention'}">
+  const reasonLabels = {
+    scheduler_runtime_unavailable:'自动分析已配置，但实时调度状态不可用', signal_errors_24h:'过去 24 小时出现异常信号',
+    observer_source_unavailable:'启用中的观摩频道失去权威数据源', review_jobs_failed:'周期复盘存在失败任务',
+    memory_compression_stale:'长期记忆压缩任务积压', uncertain_order_age:'存在长期未确认订单',
+    model_requests_failed:'模型请求出现失败', governance_alert:'AI 治理规则触发告警',
+  }
+  const componentLabels={manual:'手动分析',model_compare:'模型评测',auto_inference:'自动分析',review:'周期复盘',memory:'长期记忆',observer_delivery:'观摩交付'}
+  const componentStates={healthy:'正常',attention:'关注',critical:'严重',insufficient_data:'数据不足'}
+  const reasons=(Array.isArray(health.reasons)?health.reasons:[]).slice(0,3)
+  const componentRows=Object.entries(health.components||{}).map(([key,item])=>`<div><span class="provider-dot health-${escapeHtml(item.state||'insufficient_data')}"></span><div><strong>${componentLabels[key]||'未登记链路'}</strong><small>${item.expected?'当前有运行预期':'当前无运行预期'} · 样本 ${Number(item.sample_count||0)}</small></div><b>${componentStates[item.state]||'数据不足'}</b></div>`).join('')
+  return `<section class="ai-command-status ${healthMeta.tone}">
       <div class="ai-command-signal"><span data-icon="activity" aria-hidden="true"></span></div>
-      <div class="ai-command-copy"><span class="eyebrow">实时运行结论</span><h2>${healthy ? 'AI 核心链路运行稳定' : '核心链路存在待处置事项'}</h2><p>${healthy ? '模型、调度、信号与复盘链路均未发现阻断性异常。' : `今日模型失败 ${failures} 次，治理告警 ${alerts.length} 项，失败复盘 ${failedReviews} 条。`}</p></div>
-      <div class="ai-command-meta"><span><span data-terminal-platform-label>${terminalLabel}</span> 时间 <strong>${terminalTime}</strong></span><span>待办队列 <strong>${queueCount}</strong></span></div>
+      <div class="ai-command-copy"><span class="eyebrow">过去 24 小时运行结论 · ${healthMeta.label}</span><h2>${healthMeta.title}</h2><p>${healthMeta.copy}</p>${reasons.length?`<ul class="ai-health-reasons">${reasons.map(item=>`<li>${escapeHtml(reasonLabels[item.code]||'检测到未分类运行异常')}（${Number(item.value||0)}）</li>`).join('')}</ul>`:''}</div>
+      <div class="ai-command-meta"><span><span data-terminal-platform-label>${terminalLabel}</span> 时间 <strong>${terminalTime}</strong></span><span>评估样本 <strong>${Number(health.sample_count||0)}</strong></span></div>
       <button class="secondary-button" type="button" data-ai-jump="scheduler">查看调度</button>
     </section>
     <section class="ai-kpi-grid" aria-label="今日 AI 核心指标">
-      <article class="ai-kpi-card ${successRate >= 98 ? 'is-good' : successRate >= 95 ? 'is-watch' : 'is-critical'}"><div class="ai-kpi-head"><span>模型成功率</span><em>${failures ? `${failures} 次失败` : '稳定'}</em></div><strong>${successRate.toFixed(1)}%</strong><small>${requests.toLocaleString('zh-CN')} 次模型请求</small><div class="ai-kpi-track"><span style="width:${Math.max(4,Math.min(100,successRate))}%"></span></div></article>
-      <article class="ai-kpi-card ${latencySeconds > 30 ? 'is-watch' : 'is-good'}"><div class="ai-kpi-head"><span>平均响应</span><em>${latencySeconds > 30 ? '需关注' : '正常'}</em></div><strong>${summary.avg_model_latency_ms ? `${latencySeconds.toFixed(1)} 秒` : '--'}</strong><small>仅统计成功请求</small><div class="ai-kpi-track"><span style="width:${latencySeconds ? Math.max(8,Math.min(100,latencySeconds / 60 * 100)) : 0}%"></span></div></article>
-      <article class="ai-kpi-card ${signalErrors ? 'is-critical' : 'is-good'}"><div class="ai-kpi-head"><span>推理信号</span><em>${signalErrors ? `${signalErrors} 条异常` : '零异常'}</em></div><strong>${Number(summary.signals_today || 0).toLocaleString('zh-CN')}</strong><small>今日已生成信号</small><div class="ai-kpi-track"><span style="width:${signalErrors ? 54 : 100}%"></span></div></article>
-      <article class="ai-kpi-card ${connectedBridges ? 'is-good' : 'is-critical'}"><div class="ai-kpi-head"><span>在线桥接</span><em>${connectedBridges ? '实时在线' : '全部离线'}</em></div><strong>${connectedBridges}</strong><small>MT4 ${connectedMt4Bridges} · MT5 ${connectedMt5Bridges}</small><div class="ai-kpi-track"><span style="width:${connectedBridges ? 100 : 4}%"></span></div></article>
+      <article class="ai-kpi-card ${successRate===null?'is-unknown':successRate >= 98 ? 'is-good' : successRate >= 95 ? 'is-watch' : 'is-critical'}"><div class="ai-kpi-head"><span>今日模型成功率</span><em>${requests?failures?`${failures} 次失败`:'稳定':'无样本'}</em></div><strong>${successRate===null?'--':`${successRate.toFixed(1)}%`}</strong><small>${requests.toLocaleString('zh-CN')} 次模型请求</small><div class="ai-kpi-track"><span style="width:${successRate===null?0:Math.max(4,Math.min(100,successRate))}%"></span></div></article>
+      <article class="ai-kpi-card ${requests===0?'is-unknown':latencySeconds > 30 ? 'is-watch' : 'is-good'}"><div class="ai-kpi-head"><span>平均响应</span><em>${requests===0?'无样本':latencySeconds > 30 ? '需关注' : '正常'}</em></div><strong>${summary.avg_model_latency_ms ? `${latencySeconds.toFixed(1)} 秒` : '--'}</strong><small>仅统计成功请求</small><div class="ai-kpi-track"><span style="width:${latencySeconds ? Math.max(8,Math.min(100,latencySeconds / 60 * 100)) : 0}%"></span></div></article>
+      <article class="ai-kpi-card ${signalCount===0?'is-unknown':signalErrors ? 'is-critical' : 'is-good'}"><div class="ai-kpi-head"><span>推理信号</span><em>${signalCount===0?'今日无样本':signalErrors ? `${signalErrors} 条异常` : '零异常'}</em></div><strong>${signalCount.toLocaleString('zh-CN')}</strong><small>今日已生成信号</small><div class="ai-kpi-track"><span style="width:${signalCount===0?0:signalErrors ? 54 : 100}%"></span></div></article>
+      <article class="ai-kpi-card ${health.components?.observer_delivery?.expected?(connectedBridges?'is-good':'is-critical'):'is-unknown'}"><div class="ai-kpi-head"><span>在线桥接</span><em>${health.components?.observer_delivery?.expected?(connectedBridges?'实时在线':'预期连接离线'):'当前无连接预期'}</em></div><strong>${connectedBridges}</strong><small>MT4 ${connectedMt4Bridges} · MT5 ${connectedMt5Bridges}</small><div class="ai-kpi-track"><span style="width:${connectedBridges?100:0}%"></span></div></article>
     </section>
     <section class="ai-overview-grid">
       <article class="panel ai-action-queue"><header class="section-head"><div><span class="eyebrow">治理队列</span><h2>需要处理</h2><p>只列出需要人工关注或继续跟进的事项。</p></div><span class="badge ${queueCount ? 'expired' : 'active'}">${queueCount} 项</span></header><div class="ai-action-list">
@@ -965,12 +983,7 @@ function aiHealthContent(data) {
         <article class="ai-action-row ${failedReviews ? 'is-critical' : ''}"><span class="ai-action-indicator"></span><div><strong>周期复盘队列</strong><small>${pendingReviews} 条待处理 · ${failedReviews} 条失败</small></div><a class="text-button" href="/ai/">AI 实验室处理</a></article>
         <article class="ai-action-row"><span class="ai-action-indicator"></span><div><strong>风控正常拒绝</strong><small>今日 ${Number(summary.risk_rejections_today || 0)} 次，不计入系统故障</small></div><button class="text-button" type="button" data-ai-jump="scheduler">详情</button></article>
       </div></article>
-      <article class="panel ai-chain-panel"><header class="section-head"><div><span class="eyebrow">链路状态</span><h2>运行组成</h2><p>快速确认请求、信号、桥接和复盘四个环节。</p></div></header><div class="ai-chain-list">
-        <div><span class="provider-dot ${failures ? '' : 'ok'}"></span><div><strong>模型请求</strong><small>${requests} 次调用</small></div><b>${failures ? `${failures} 失败` : '正常'}</b></div>
-        <div><span class="provider-dot ${signalErrors ? '' : 'ok'}"></span><div><strong>信号生成</strong><small>${Number(summary.signals_today || 0)} 条输出</small></div><b>${signalErrors ? `${signalErrors} 异常` : '正常'}</b></div>
-        <div><span class="provider-dot ${connectedBridges ? 'ok' : ''}"></span><div><strong>桥接交付</strong><small>${connectedBridges} 个在线连接</small></div><b>${connectedBridges ? '在线' : '离线'}</b></div>
-        <div><span class="provider-dot ${failedReviews ? '' : 'ok'}"></span><div><strong>复盘沉淀</strong><small>${pendingReviews} 条正在处理</small></div><b>${failedReviews ? `${failedReviews} 失败` : '可用'}</b></div>
-      </div></article>
+      <article class="panel ai-chain-panel"><header class="section-head"><div><span class="eyebrow">链路状态</span><h2>运行组成</h2><p>基于运行预期、24 小时样本与权威数据源逐项评估。</p></div></header><div class="ai-chain-list">${componentRows||'<div class="empty-state compact-empty">暂无可评估链路</div>'}</div></article>
     </section>`
 }
 function schedulerCards(data) {
@@ -1584,48 +1597,18 @@ function riskDecisionsContent(data) {
 }
 const auditTargetLabels={user:'用户',account:'交易账户',trading_account:'交易账户',strategy:'策略',model:'模型',order:'订单',system:'系统',system_config:'系统配置',referral_rules:'返佣规则',platform:'平台',risk_restore_request:'风险恢复'}
 const auditTargetFilters=[['all','全部范围'],['user','用户'],['account','交易账户'],['strategy','策略'],['model','模型'],['order','订单'],['system','系统'],['system_config','系统配置'],['referral_rules','返佣规则'],['platform','平台']]
-const auditDetailLabels={auto_reasoning_enabled:'自动推理',trade_send_enabled:'交易发送',connected:'桥接连接',trade_applied:'交易发送已应用',trade_error:'交易发送错误',previous_plan:'原会员',plan:'新会员',previous_expires_at:'原到期时间',expires_at:'新到期时间',password_reset:'重置密码',email:'邮箱',nickname:'昵称',role:'角色',plan_source:'会员来源',category:'配置分类',keys:'配置项',detail:'详情',reason:'原因',request_id:'申请编号',title:'标题',scope:'范围',version:'版本',active_subscription_count:'有效订阅',affected_user_count:'涉及用户',enabled:'启用状态',previous_value:'原值',value:'新值',status:'状态',account_id:'账户编号',user_id:'用户编号'}
-const auditDetailValueLabels={platform:'平台',user:'普通用户',observer_source:'观摩源',active:'启用',disabled:'停用',success:'成功',failed:'失败'}
-const auditSensitiveDetailKey=/(password(?!_reset)|secret|token|api[_-]?key|private[_-]?key|credential)/i
-function auditDetailSource(value){
-  if(value&&typeof value==='object')return value
-  const text=String(value??'').trim();if(!text)return {}
-  if(text==='[object Object]')return {detail:'历史记录格式无法展开'}
-  try{return JSON.parse(text)}catch{return {detail:text}}
-}
-function auditDetailValue(key,value){
-  if(auditSensitiveDetailKey.test(key))return '已隐藏'
-  if(value===null||value===undefined||value==='')return '未设置'
-  if(typeof value==='boolean')return value?'是':'否'
-  if(Array.isArray(value))return value.map(item=>typeof item==='object'?JSON.stringify(item):String(item)).join('、')||'无'
-  if(typeof value==='object')return JSON.stringify(value)
-  const text=String(value)
-  return auditDetailValueLabels[text]||text
-}
-function auditDetailEntries(value){
-  const source=auditDetailSource(value),result=[]
-  const walk=(input,prefix='')=>{
-    if(result.length>=10)return
-    if(!input||typeof input!=='object'||Array.isArray(input)){result.push([prefix||'详情',auditDetailValue(prefix,input)]);return}
-    Object.entries(input).forEach(([key,item])=>{
-      if(result.length>=10)return
-      const rawKey=prefix?`${prefix}.${key}`:key,label=auditDetailLabels[key]||key.replaceAll('_',' ')
-      if(item&&typeof item==='object'&&!Array.isArray(item))walk(item,label)
-      else result.push([label,auditDetailValue(rawKey,item)])
-    })
-  }
-  walk(source)
-  return result.length?result:[['详情','已记录操作，无附加参数']]
-}
-function auditDetailText(value){return auditDetailEntries(value).map(([label,item])=>`${label}：${item}`).join(' · ')}
 function auditEventIcon(targetType){return ({user:'users',account:'shield',trading_account:'shield',strategy:'activity',model:'settings',order:'commercial',system_config:'settings',referral_rules:'users',platform:'shield',system:'file'})[targetType]||'file'}
 function auditEventCard(item){
-  const details=auditDetailEntries(item.detail),actor=item.user_nickname||item.user_email||`管理员 #${item.user_id}`,target=auditTargetLabels[item.target_type]||'其他对象'
+  const details=Array.isArray(item.details||item.change_summary)?(item.details||item.change_summary).map(entry=>[entry.field_label||'未登记字段',entry.value||'未设置']):[['详情','服务端未返回可展示变更']]
+  const actor=item.user_nickname||item.user_email||`管理员 #${item.user_id}`,target=item.target_label||item.target_type_label||auditTargetLabels[item.target_type]||'其他对象'
+  const technical=item.action_label==='未登记的管理动作'||item.target_type_label==='未登记的管理对象'
   return `<article class="audit-event-card">
     <div class="audit-event-rail" aria-hidden="true"><span data-icon="${auditEventIcon(item.target_type)}"></span><i></i></div>
     <div class="audit-event-body"><header><div><span>事件 #${Number(item.id)||'--'}</span><h3>${escapeHtml(item.action_label||'管理操作')}</h3></div><time datetime="${escapeHtml(item.created_at||'')}">${escapeHtml(formatDate(item.created_at,true))}</time></header>
-      <div class="audit-event-meta"><span data-icon="users" aria-hidden="true"></span><strong>${escapeHtml(actor)}</strong><span class="audit-target-badge">${escapeHtml(target)}${item.target_id?` #${escapeHtml(item.target_id)}`:''}</span><span class="audit-ip">IP ${escapeHtml(item.ip||'未记录')}</span></div>
+      <p class="audit-event-summary">${escapeHtml(item.summary||item.action_label||'已记录管理操作')}</p>
+      <div class="audit-event-meta"><span data-icon="users" aria-hidden="true"></span><strong>${escapeHtml(actor)}</strong><span class="audit-target-badge">${escapeHtml(target)}</span><span class="audit-ip">IP ${escapeHtml(item.ip||'未记录')}</span></div>
       <dl class="audit-detail-grid">${details.map(([label,value])=>`<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>
+      ${technical?`<details class="audit-technical-evidence"><summary>查看技术代码</summary><code>${escapeHtml(item.raw_action||item.action_code||'未记录')}</code></details>`:''}
     </div>
   </article>`
 }
@@ -2202,13 +2185,45 @@ async function loadSystemConfig(){
   if(!available.includes(state.systemConfigCategory))state.systemConfigCategory=available[0]||''
   state.systemConfigDirty=false;renderSystemConfigNavigation();renderSystemConfigCategory();refreshSystemSettingsOverview()
 }
+function updateReleaseNotesImpact(root){
+  const version=Number(root.querySelector('#releaseVersion')?.value||0),current=Number(state.releaseNotesVersion||0),target=root.querySelector('#releaseNotificationImpact')
+  if(!target)return
+  if(version>current)target.textContent='本次保存将提高通知序号，用户会再次看到这条更新。'
+  else if(version===current&&current>0)target.textContent='本次仅修正文案，不会重新通知已读用户。'
+  else target.textContent='通知序号必须不小于当前序号。'
+}
+function applyReleaseNotesPreview(root,result){
+  const preview=root.querySelector('#releasePreview'),removed=root.querySelector('#releasePreviewRemoved')
+  if(preview){preview.innerHTML=result?.content||'<p class="release-preview-empty">暂无可预览内容</p>'}
+  if(removed){const categories=Array.isArray(result?.removed_categories)?result.removed_categories:[];removed.textContent=categories.length?`已移除：${categories.join('、')}`:'未发现需要移除的内容';removed.dataset.state=categories.length?'changed':'clean'}
+}
+function scheduleReleaseNotesPreview(root){
+  const content=root.querySelector('#releaseContent')?.value||''
+  clearTimeout(state.releaseNotesPreviewTimer)
+  state.releaseNotesPreviewTimer=setTimeout(async()=>{try{const result=await api('/api/admin/release-notes/preview',{method:'POST',body:JSON.stringify({content})});if(root.isConnected)applyReleaseNotesPreview(root,result)}catch(error){if(root.isConnected){const removed=root.querySelector('#releasePreviewRemoved');if(removed)removed.textContent=error.message||'预览暂时不可用'}}},240)
+}
+async function loadReleaseNotesEditor(root){
+  try{
+    const result=await api('/api/admin/release-notes');if(!root.isConnected)return
+    state.releaseNotesRevision=String(result.revision||'');state.releaseNotesVersion=Number(result.version||1)
+    const version=root.querySelector('#releaseVersion'),content=root.querySelector('#releaseContent')
+    if(version)version.value=String(result.version||1)
+    if(content){content.value=String(result.content||'');root.querySelector('#releaseContentCount').textContent=content.value.length}
+    if(result.revision)applyReleaseNotesPreview(root,result)
+    else applyReleaseNotesPreview(root,{content:`<p>${escapeHtml(String(result.content||''))}</p>`,removed_categories:['legacy_response_not_sanitized']})
+    updateReleaseNotesImpact(root)
+  }catch(error){const marker=root.querySelector('#releasePreviewRemoved');if(marker)marker.textContent=error.message||'读取发布说明失败'}
+}
 function renderContentSystem(){
   const o=state.contentOverview||{},release=o.release||{},root=document.querySelector('#contentSystemBody')
-  root.innerHTML=`<section class="system-workbench"><section class="system-overview-strip" id="systemSettingsOverview" aria-label="系统配置概览">${systemSettingsOverviewHtml()}</section><article class="panel system-release-panel"><div class="system-release-intro"><span class="system-release-icon" data-icon="file" aria-hidden="true"></span><div><span class="eyebrow">版本发布</span><h2>发布说明</h2><p>主站与 AI 实验室共用当前版本说明，保存后立即对用户可见。</p></div><time>${release.updated_at?`最近更新 ${formatDate(release.updated_at,true)}`:'尚未记录更新时间'}</time></div><form class="system-release-form" id="releaseForm"><label class="field" for="releaseVersion"><span>版本号</span><input class="input" id="releaseVersion" required inputmode="numeric" pattern="[0-9]+" value="${escapeHtml(release.version||'')}"></label><label class="field" for="releaseContent"><span>更新内容</span><textarea class="input release-textarea" id="releaseContent" required>${escapeHtml(release.content||'')}</textarea><small><b id="releaseContentCount">${String(release.content||'').length}</b> 个字符</small></label><button class="primary-button" type="submit"><span data-icon="save"></span>保存发布说明</button></form></article><section class="settings-workbench"><aside class="panel system-config-sidebar"><header><div><span class="eyebrow">配置目录</span><h2>平台服务</h2></div><span id="systemConfigSearchResult">读取中</span></header><label class="system-config-search" for="systemConfigSearch"><span data-icon="search" aria-hidden="true"></span><input class="input" id="systemConfigSearch" value="${escapeHtml(state.systemConfigSearch)}" placeholder="搜索分类或配置项"><small>/</small></label><nav class="config-nav" id="systemConfigCategoryList" role="tablist" aria-label="系统配置分类"><div class="empty-inline">正在读取配置分类…</div></nav></aside><article class="panel system-config-editor" id="systemConfigEditor" role="tabpanel"><div class="empty-state">正在读取系统配置…</div></article></section></section>`
+  root.innerHTML=`<section class="system-workbench"><section class="system-overview-strip" id="systemSettingsOverview" aria-label="系统配置概览">${systemSettingsOverviewHtml()}</section><article class="panel system-release-panel"><div class="system-release-intro"><span class="system-release-icon" data-icon="file" aria-hidden="true"></span><div><span class="eyebrow">版本发布</span><h2>发布说明</h2><p>主站与 AI 实验室共用当前版本说明，保存后立即对用户可见。</p><small class="release-contract-note">通知序号 1～2147483647；软件版本请写在内容标题中。</small></div><time>${release.updated_at?`最近更新 ${formatDate(release.updated_at,true)}`:'尚未记录更新时间'}</time></div><form class="system-release-form" id="releaseForm"><label class="field" for="releaseVersion"><span>通知序号</span><input class="input" id="releaseVersion" required inputmode="numeric" pattern="[0-9]+" min="1" max="2147483647" value="${escapeHtml(release.version||'')}"><small class="field-help">相同序号修正文案不会重新通知；递增才会通知。</small></label><label class="field" for="releaseContent"><span>更新内容（安全 HTML）</span><textarea class="input release-textarea" id="releaseContent" required maxlength="50000">${escapeHtml(release.content||'')}</textarea><small><b id="releaseContentCount">${String(release.content||'').length}</b> / 50000 个字符</small></label><button class="primary-button" type="submit"><span data-icon="save"></span>保存发布说明</button><div class="release-notification-impact" id="releaseNotificationImpact" aria-live="polite"></div></form><section class="release-preview-panel" aria-label="安全预览"><header><strong>安全预览</strong><span>由服务端白名单净化后展示</span></header><div class="release-preview" id="releasePreview"><p class="release-preview-empty">正在读取预览…</p></div><p class="release-preview-removed" id="releasePreviewRemoved" aria-live="polite">正在检查被移除内容…</p><p class="release-supported-tags">支持标题、段落、列表、强调、链接和代码；脚本、表单、事件属性及危险样式会被移除。</p></section></article><section class="settings-workbench"><aside class="panel system-config-sidebar"><header><div><span class="eyebrow">配置目录</span><h2>平台服务</h2></div><span id="systemConfigSearchResult">读取中</span></header><label class="system-config-search" for="systemConfigSearch"><span data-icon="search" aria-hidden="true"></span><input class="input" id="systemConfigSearch" value="${escapeHtml(state.systemConfigSearch)}" placeholder="搜索分类或配置项"><small>/</small></label><nav class="config-nav" id="systemConfigCategoryList" role="tablist" aria-label="系统配置分类"><div class="empty-inline">正在读取配置分类…</div></nav></aside><article class="panel system-config-editor" id="systemConfigEditor" role="tabpanel"><div class="empty-state">正在读取系统配置…</div></article></section></section>`
   renderIcons(root)
   const search=root.querySelector('#systemConfigSearch');search.oninput=()=>{state.systemConfigSearch=search.value.trim();renderSystemConfigNavigation()};search.onkeydown=event=>{if(event.key==='Escape'){search.value='';state.systemConfigSearch='';renderSystemConfigNavigation()}}
-  root.querySelector('#releaseContent').oninput=event=>{root.querySelector('#releaseContentCount').textContent=event.currentTarget.value.length}
-  root.querySelector('#releaseForm').onsubmit=async event=>{event.preventDefault();const button=event.submitter,version=root.querySelector('#releaseVersion').value.trim(),content=root.querySelector('#releaseContent').value.trim();if(!/^\d+$/.test(version))return handleError(new Error('版本号只能填写整数'));button.disabled=true;try{await api('/api/admin/release-notes',{method:'POST',body:JSON.stringify({version,content})});toast('发布说明已保存','success');await loadContentOverview()}catch(error){handleError(error);button.disabled=false}}
+  const versionInput=root.querySelector('#releaseVersion'),contentInput=root.querySelector('#releaseContent')
+  versionInput.oninput=()=>updateReleaseNotesImpact(root)
+  contentInput.oninput=event=>{root.querySelector('#releaseContentCount').textContent=event.currentTarget.value.length;scheduleReleaseNotesPreview(root)}
+  root.querySelector('#releaseForm').onsubmit=async event=>{event.preventDefault();const button=event.submitter,version=versionInput.value,content=contentInput.value;if(!/^[0-9]+$/.test(version)||Number(version)<1||Number(version)>2147483647)return handleError(new Error('通知序号必须是 1 到 2147483647 的整数'));if(content.length>50000)return handleError(new Error('更新内容不能超过 50000 个字符'));button.disabled=true;try{const body={version,content,expected_revision:state.releaseNotesRevision||undefined};const result=await api('/api/admin/release-notes',{method:'POST',body:JSON.stringify(body)});state.releaseNotesRevision=String(result.revision||'');state.releaseNotesVersion=Number(result.version||version);state.contentOverview={...(state.contentOverview||{}),release:{...((state.contentOverview||{}).release||{}),version:result.version,content:result.content}};versionInput.value=String(result.version);contentInput.value=String(result.content||'');root.querySelector('#releaseContentCount').textContent=contentInput.value.length;applyReleaseNotesPreview(root,result);updateReleaseNotesImpact(root);toast('发布说明已保存','success')}catch(error){handleError(error)}finally{button.disabled=false}}
+  loadReleaseNotesEditor(root).catch(handleError)
   loadSystemConfig().catch(handleError)
 }
 function contentOverviewStrip(){
@@ -2222,7 +2237,14 @@ function contentOverviewStrip(){
   ]
   return cards.map(([icon,label,value,note,tone])=>`<article class="content-overview-card ${tone}"><span class="content-overview-icon" data-icon="${icon}" aria-hidden="true"></span><div><span>${label}</span><strong>${value.toLocaleString('zh-CN')}</strong><small>${note}</small></div></article>`).join('')
 }
-function refreshContentOverviewChrome(){const strip=document.querySelector('#contentOverviewStrip');if(strip){strip.innerHTML=contentOverviewStrip();renderIcons(strip)}const release=document.querySelector('#contentReleaseVersion');if(release)release.textContent=state.contentOverview?.release?.version||'未设置'}
+function contentHealthPanel(){
+  const health=state.contentOverview?.content_health
+  if(!health)return '<div class="content-overview-skeleton"></div>'
+  const total=Number(health.published_total||0),complete=Number(health.complete_count||0),percent=health.completeness_percent==null?null:Number(health.completeness_percent)
+  const issues=[['缺课程说明',health.missing_description],['缺视频来源',health.missing_video],['缺附件',health.missing_attachment],['缺测验',health.missing_quiz],['缺可视化资料',health.missing_visual],['30 天未更新',health.stale_30d]]
+  return `<section class="content-health-panel panel" aria-label="已发布课程完整度"><div class="content-health-score"><span>已发布课程完整度</span><strong>${percent==null?'--':`${percent.toFixed(1)}%`}</strong><small>${complete} / ${total} 门课程达到完整标准</small><div><i style="width:${percent==null?0:Math.max(0,Math.min(100,percent))}%"></i></div></div><div class="content-health-issues">${issues.map(([label,value])=>`<span class="${Number(value)>0?'has-issue':''}"><b>${Number(value||0)}</b>${label}</span>`).join('')}</div><p>${Number(health.incomplete_with_learning||0)>0?`优先处理 ${Number(health.incomplete_with_learning)} 门已有学习记录但仍不完整的课程。`:'暂无已有学习记录的不完整课程。'}${health.feedback_workflow_available?'':' 反馈数据库暂无处理状态字段，本页不伪造待办闭环。'}</p></section>`
+}
+function refreshContentOverviewChrome(){const strip=document.querySelector('#contentOverviewStrip');if(strip){strip.innerHTML=contentOverviewStrip();renderIcons(strip)}const health=document.querySelector('#contentHealthPanel');if(health)health.innerHTML=contentHealthPanel();const release=document.querySelector('#contentReleaseVersion');if(release)release.textContent=state.contentOverview?.release?.version||'未设置'}
 async function loadContentOverview(){const data=await api('/api/admin/content-system/overview');state.contentOverview=data.overview;refreshContentOverviewChrome();if(state.contentTab==='system')renderContentSystem()}
 function uploadCourseVideo(file,onProgress){
   return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest(),form=new FormData();form.append('file',file);xhr.open('POST','/api/video-upload');if(token())xhr.setRequestHeader('Authorization',`Bearer ${token()}`);xhr.upload.onprogress=event=>{if(event.lengthComputable)onProgress(Math.round(event.loaded/event.total*100))};xhr.onerror=()=>reject(new Error('视频上传网络中断'));xhr.onload=()=>{let result={};try{result=JSON.parse(xhr.responseText||'{}')}catch{}if(xhr.status>=200&&xhr.status<300&&result.ok!==false)resolve(result);else reject(new Error(result.error||'视频上传失败'))};xhr.send(form)})
@@ -2276,6 +2298,7 @@ async function renderContentOperationsPage(){
     <div class="content-head-actions"><div class="content-release-state"><span>主站内容版本</span><strong id="contentReleaseVersion">${escapeHtml(state.contentOverview?.release?.version||'读取中')}</strong><small>发布内容已与主站同步</small></div><button class="primary-button" data-new-course type="button"><span data-icon="plus"></span>新建课程</button></div>
   </header>
   <section class="content-overview-strip" id="contentOverviewStrip" aria-label="内容运营概览">${contentOverviewStrip()}</section>
+  <div id="contentHealthPanel" class="content-health-slot">${contentHealthPanel()}</div>
   <section class="content-workbench-shell"><header class="content-workbench-heading"><div><span class="eyebrow">运营工作区</span><strong>选择要处理的内容模块</strong></div><span><i aria-hidden="true"></i>数据来自当前生产环境</span></header>${contentTabs()}</section>
   <div id="contentSystemBody" role="tabpanel" aria-labelledby="contentTab_${state.contentTab}"><div class="panel"><div class="empty-state">正在读取内容数据…</div></div></div>`
   renderIcons(main)

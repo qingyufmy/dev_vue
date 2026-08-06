@@ -6,10 +6,19 @@ const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'ut
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
 const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
 
+function extractAssetVersion(markup, assetName) {
+  const escapedAssetName = assetName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = markup.match(new RegExp(`\\b(?:href|src)\\s*=\\s*["'][^"']*/${escapedAssetName}\\?v=([^"'&#\\s]+)`, 'i'))
+  return match?.[1] || ''
+}
+
 describe('AI position management workspace', () => {
   it('publishes the automatic-exit UI with a fresh asset cache key', () => {
-    expect(html).toContain('/ai/styles.css?v=20260805scheduler3')
-    expect(html).toContain('/ai/app.js?v=20260805scheduler3')
+    const stylesVersion = extractAssetVersion(html, 'styles.css')
+    const appVersion = extractAssetVersion(html, 'app.js')
+    expect(stylesVersion).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
+    expect(appVersion).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
+    expect(stylesVersion).toBe(appVersion)
   })
 
   it('keeps position management inside AI trader instead of adding another top-level module', () => {

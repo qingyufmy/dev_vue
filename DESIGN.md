@@ -14,6 +14,8 @@ colors:
   border-default: "#1e293b"
   positive: "#ef4444"
   negative: "#10b981"
+  system-success: "#2fd6a2"
+  system-danger: "#ff6878"
   warning: "#f59e0b"
   information: "#3b82f6"
 typography:
@@ -70,14 +72,14 @@ components:
     typography: "{typography.label}"
     rounded: "{rounded.md}"
     padding: "8px 16px"
-    height: "36px"
+    height: "40px"
   button-secondary:
     backgroundColor: "{colors.background-input}"
     textColor: "{colors.text-secondary}"
     typography: "{typography.label}"
     rounded: "{rounded.md}"
     padding: "8px 16px"
-    height: "36px"
+    height: "40px"
   card:
     backgroundColor: "{colors.background-card}"
     textColor: "{colors.text-primary}"
@@ -89,7 +91,7 @@ components:
     typography: "{typography.body}"
     rounded: "{rounded.sm}"
     padding: "8px 10px"
-    height: "36px"
+    height: "40px"
   chip:
     backgroundColor: "{colors.background-input}"
     textColor: "{colors.text-secondary}"
@@ -103,7 +105,7 @@ components:
     typography: "{typography.title}"
     rounded: "{rounded.md}"
     padding: "9px 12px"
-    height: "38px"
+    height: "40px"
 ---
 
 # Design System: AURUM AI Trading System
@@ -128,7 +130,7 @@ components:
 
 ## 2. Colors
 
-配色以冷静的深蓝黑为工作背景，以协作金标记当前任务和关键行动，交易红绿与系统橙蓝只表达明确语义。
+配色以冷静的深蓝黑为工作背景，以协作金标记当前任务和关键行动。交易方向红绿与系统运行状态色是两套独立语义，不得互相借用。
 
 ### Primary
 
@@ -137,8 +139,10 @@ components:
 
 ### Secondary
 
-- **上涨红**（#ef4444）：遵循中文交易语境，仅用于做多、盈利方向或危险状态，文案必须消除歧义。
-- **下跌绿**（#10b981）：遵循中文交易语境，仅用于做空、下跌方向或成功状态，文案必须消除歧义。
+- **上涨红**（#ef4444）：遵循中文交易语境，仅用于做多、上涨和交易收益方向。
+- **下跌绿**（#10b981）：遵循中文交易语境，仅用于做空、下跌和交易亏损方向。
+- **系统成功青绿**（#2fd6a2）：仅用于连接正常、保存成功、任务完成等非交易状态。
+- **系统故障红**（#ff6878）：仅用于系统失败、服务中断、危险操作等非交易状态。
 
 ### Tertiary
 
@@ -161,6 +165,8 @@ components:
 **The One Gold Voice Rule.** 协作金只属于当前任务、关键行动和焦点状态；不得让多个区域同时争夺金色强调。
 
 **The Semantic Color Rule.** 红、绿、橙、蓝只表达状态，不作装饰；任何颜色状态都必须同时有中文文本或图标。
+
+**The Trading/System Separation Rule.** `positive/negative` 只描述交易方向；系统成功与故障必须使用 `system-success/system-danger`，避免把“上涨”误读为“故障”或把“下跌”误读为“成功”。
 
 ## 3. Typography
 
@@ -205,7 +211,7 @@ components:
 
 ### Buttons
 
-- **Shape:** 轻柔圆角（10px），常规高度 36px，小按钮最低 28px。
+- **Shape:** 轻柔圆角（10px），桌面常规高度 40px；触摸环境、主要操作和图标按钮不低于 44px。
 - **Primary:** 协作金实色、深色文字、水平内边距 16px；每个操作区域只保留一个主按钮。
 - **Hover / Focus:** 150ms 状态过渡；悬停增强亮度，键盘焦点使用清晰金色轮廓，不改变布局。
 - **Secondary / Ghost:** 输入层背景或透明背景配 1px 结构边界；危险按钮必须使用中文动词和明确危险色。
@@ -225,7 +231,7 @@ components:
 
 ### Inputs / Fields
 
-- **Style:** 输入层背景、1px 结构边界、6px 圆角，常规高度 36px。
+- **Style:** 输入层背景、1px 结构边界、6px 圆角，桌面常规高度 40px；触摸环境不低于 44px。
 - **Focus:** 金色边界加 3px 低透明度焦点环，必须支持 `:focus-visible`。
 - **Error / Disabled:** 错误同时显示中文原因；禁用态降低对比度但保持文字可读，并说明不可操作原因。
 
@@ -245,7 +251,7 @@ components:
 - **Do** 使用 4/8/12/16/20/24/32/40px 间距尺度和 6/10/14px 常用圆角，保持各页面节奏一致。
 - **Do** 让协作金保持稀缺，让红绿橙蓝只承担明确状态语义。
 - **Do** 为加载、等待、成交、拒绝和失败提供自然中文原因与下一步。
-- **Do** 在 820px 以下将多列工作区收敛为单列，并确保主要操作至少 36px 高。
+- **Do** 在 820px 以下将多列工作区收敛为单列，并确保主要操作和表单控件至少 44px 高。
 
 ### Don't:
 

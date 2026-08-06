@@ -43,6 +43,8 @@
   --color-shared-text: #eab308;
   --color-info: #3b82f6;
   --color-info-bg: rgba(59, 130, 246, 0.1);
+  --system-success: #2fd6a2;
+  --system-danger: #ff6878;
   --status-connected: #10b981;
   --status-connected-bg: rgba(16, 185, 129, 0.1);
   --status-connected-border: rgba(16, 185, 129, 0.35);
@@ -5097,7 +5099,9 @@ input:checked + .slider::before { transform: translateX(18px); }
 }
 
 .audit-result-text {
-  display: block;
+  display: flex;
+  align-items: center;
+  min-height: 40px;
   width: 100%;
   padding: 0;
   border: 0;
@@ -10225,6 +10229,7 @@ a.signal-link:hover {
   .review-period-tabs button,
   .review-status-tabs button,
   .pager button,
+  .audit-result-text,
   select,
   summary {
     min-height: 44px;

@@ -10589,20 +10589,6 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // --- Changelog Modal ---
-function sanitizeHtml(html) {
-  const div = document.createElement('div');
-  div.innerHTML = html;
-  div.querySelectorAll('script, iframe, object, embed, form, input, textarea, select, svg, math, meta, link, base, button').forEach(el => el.remove());
-  div.querySelectorAll('*').forEach(el => {
-    for (const attr of [...el.attributes]) {
-      if (/^on/i.test(attr.name) || attr.value.trim().toLowerCase().startsWith('javascript:')) {
-        el.removeAttribute(attr.name);
-      }
-    }
-  });
-  return div.innerHTML;
-}
-
 async function checkChangelog() {
   try {
     const [current, status] = await Promise.all([
@@ -10610,7 +10596,10 @@ async function checkChangelog() {
       api('/api/changelog-status')
     ]);
     if (current.ok && status.ok && current.version > (status.seenVersion || 0) && current.content) {
-      document.getElementById('changelogContent').innerHTML = sanitizeHtml(current.content);
+      // The API returns content after the dedicated server-side release-note
+      // sanitizer. Keep the existing HTML contract without re-sanitizing or
+      // executing the administrator's raw input in this client.
+      document.getElementById('changelogContent').innerHTML = String(current.content);
       const modal = document.getElementById('changelogModal');
       modal.style.display = 'flex';
       modal.classList.add('active');

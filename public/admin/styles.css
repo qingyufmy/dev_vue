@@ -14,6 +14,8 @@
   --gold-soft:rgba(223,183,47,.1);
   --green:#37c99a;
   --red:#f16878;
+  --system-success:#2fd6a2;
+  --system-danger:#ff6878;
   --blue:#6baee8;
   --radius:12px;
   --shadow:0 20px 56px rgba(0,0,0,.38);
@@ -2613,15 +2615,66 @@ input[type="checkbox"],input[type="radio"] { accent-color:var(--gold); }
 .system-release-icon svg { width:18px; height:18px; }
 .system-release-intro h2 { margin:2px 0; color:var(--text); font-size:15px; }
 .system-release-intro p { margin:0; color:var(--muted); font-size:11px; line-height:1.5; }
+.system-release-intro .release-contract-note { display:block; margin-top:4px; color:var(--gold-strong); font-size:10px; line-height:1.4; }
 .system-release-intro time { grid-column:2; margin-top:4px; color:var(--muted); font:600 10px/1.4 var(--font-mono); }
 .system-release-form { min-width:0; display:grid; grid-template-columns:120px minmax(280px,1fr) auto; align-items:end; gap:9px; padding:13px 14px; background:var(--surface); }
 .system-release-form .field { min-width:0; gap:4px; }
 .system-release-form .field > span { color:var(--muted); font-size:11px; font-weight:750; }
+.system-release-form .field-help { margin-top:2px; color:var(--muted); font-size:10px; line-height:1.35; }
 .system-release-form .release-textarea { min-height:58px; max-height:96px; resize:vertical; }
 .system-release-form .field small { align-self:flex-end; margin-top:-18px; padding-right:8px; color:var(--muted); font-size:10px; text-align:right; pointer-events:none; }
 .system-release-form .field small b { color:var(--muted); font-family:var(--font-mono); }
 .system-release-form .primary-button { min-height:38px; margin-bottom:1px; white-space:nowrap; }
 .system-release-form .primary-button svg { width:14px; height:14px; }
+.release-notification-impact { grid-column:1 / -1; min-height:18px; color:var(--gold-strong); font-size:10px; line-height:1.4; }
+.release-preview-panel { grid-column:1 / -1; min-width:0; padding:12px 14px 14px; border-top:1px solid var(--border); background:var(--surface-2); }
+.release-preview-panel header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+.release-preview-panel header strong { color:var(--text); font-size:12px; }
+.release-preview-panel header span,.release-supported-tags,.release-preview-removed { color:var(--muted); font-size:10px; line-height:1.45; }
+.release-preview { min-height:72px; max-height:220px; overflow:auto; padding:10px 12px; border:1px solid var(--border); border-radius:7px; background:var(--surface); color:var(--text-2); line-height:1.6; }
+.release-preview h1,.release-preview h2,.release-preview h3,.release-preview h4,.release-preview h5,.release-preview h6 { margin:0 0 6px; color:var(--text); }
+.release-preview p { margin:0 0 7px; }
+.release-preview ul,.release-preview ol { margin:0 0 7px; padding-left:20px; }
+.release-preview-empty { margin:0; color:var(--muted); }
+.release-preview-removed { margin:7px 0 0; }
+.release-preview-removed[data-state="changed"] { color:var(--gold-strong); }
+.release-supported-tags { margin:5px 0 0; }
+
+.ai-command-status.is-critical { border-color:color-mix(in srgb,var(--system-danger) 45%,var(--border)); background:color-mix(in srgb,var(--system-danger) 8%,var(--surface)); }
+.ai-command-status.is-unknown { border-color:var(--border-strong); background:var(--surface); }
+.ai-health-reasons { display:grid; gap:3px; margin:7px 0 0; padding-left:18px; color:var(--text-2); font-size:11px; }
+.provider-dot.health-healthy { background:var(--system-success); box-shadow:0 0 0 4px color-mix(in srgb,var(--system-success) 12%,transparent); }
+.provider-dot.health-attention { background:var(--gold); }
+.provider-dot.health-critical { background:var(--system-danger); }
+.provider-dot.health-insufficient_data { background:var(--muted); }
+.ai-kpi-card.is-unknown .ai-kpi-track span { background:var(--muted); }
+.audit-event-summary { margin:7px 0; color:var(--text-2); font-size:12px; line-height:1.55; }
+.audit-technical-evidence { margin-top:8px; color:var(--muted); font-size:10px; }
+.audit-technical-evidence summary { min-height:40px; display:flex; align-items:center; cursor:pointer; }
+.audit-technical-evidence code { display:block; overflow-wrap:anywhere; padding:7px 8px; border-radius:7px; background:var(--bg); color:var(--text-2); }
+.content-health-slot { margin-bottom:12px; }
+.content-health-panel { display:grid; grid-template-columns:minmax(220px,.7fr) minmax(0,1.3fr); gap:16px; padding:15px; }
+.content-health-score { display:grid; gap:3px; }
+.content-health-score > span,.content-health-score small { color:var(--muted); font-size:11px; }
+.content-health-score > strong { color:var(--text); font:750 26px/1.1 var(--font-mono); }
+.content-health-score > div { height:6px; overflow:hidden; border-radius:999px; background:var(--surface-3); }
+.content-health-score > div i { display:block; height:100%; border-radius:inherit; background:var(--system-success); }
+.content-health-issues { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+.content-health-issues span { min-width:0; padding:8px; border:1px solid var(--border); border-radius:8px; color:var(--muted); font-size:10px; }
+.content-health-issues b { display:block; color:var(--text); font:700 15px/1.2 var(--font-mono); }
+.content-health-issues .has-issue { border-color:color-mix(in srgb,var(--gold) 30%,var(--border)); background:var(--gold-soft); }
+.content-health-panel > p { grid-column:1 / -1; margin:0; color:var(--muted); font-size:10px; line-height:1.5; }
+
+@media (max-width:760px) {
+  .content-health-panel { grid-template-columns:1fr; }
+  .content-health-issues { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .content-health-panel > p { grid-column:auto; }
+  .mobile-menu,.topbar-actions .icon-button,.account-button,.nav-item { min-width:44px; min-height:44px; height:44px; }
+}
+
+@media (pointer:coarse) {
+  button,.icon-button,.account-button,.nav-item,summary { min-height:44px; }
+}
 
 .system-settings-page .settings-workbench { display:grid; grid-template-columns:292px minmax(0,1fr); align-items:start; gap:12px; }
 .system-config-sidebar { position:sticky; top:76px; overflow:hidden; }

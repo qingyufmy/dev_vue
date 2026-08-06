@@ -1676,6 +1676,7 @@
   }
 
   #audit .audit-result-text {
+    min-height: 44px;
     white-space: normal;
     overflow: visible;
     text-overflow: clip;

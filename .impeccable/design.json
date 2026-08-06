@@ -58,6 +58,18 @@
         "canonical": "#10b981",
         "tonalRamp": ["#04281d", "#075139", "#0a7955", "#0da171", "#10b981", "#48cda2", "#8ae2c4", "#dcf8ed"]
       },
+      "system-success": {
+        "role": "tertiary",
+        "displayName": "系统成功青绿",
+        "canonical": "#2fd6a2",
+        "tonalRamp": ["#05291f", "#0b513e", "#137a5e", "#20a47e", "#2fd6a2", "#68e3bd", "#a4efd8", "#e4fbf3"]
+      },
+      "system-danger": {
+        "role": "tertiary",
+        "displayName": "系统故障红",
+        "canonical": "#ff6878",
+        "tonalRamp": ["#33090f", "#67131f", "#9b2230", "#cf3949", "#ff6878", "#ff8f9b", "#ffbac1", "#ffe8ea"]
+      },
       "warning": {
         "role": "tertiary",
         "displayName": "警戒橙",
@@ -102,7 +114,7 @@
       "refersTo": "button-primary",
       "description": "每个操作区域唯一的关键行动。",
       "html": "<button class=\"ds-btn-primary\">确认执行</button>",
-      "css": ".ds-btn-primary{min-height:36px;padding:8px 16px;border:1px solid var(--gold-primary);border-radius:var(--radius-md);background:var(--gold-primary);color:var(--text-inverse);font:700 13px var(--font-ui);cursor:pointer;transition:background var(--transition-fast),box-shadow var(--transition-fast),transform var(--transition-fast)}.ds-btn-primary:hover{background:var(--gold-light);box-shadow:0 0 0 3px var(--gold-glow)}.ds-btn-primary:focus-visible{outline:2px solid var(--gold-light);outline-offset:2px}.ds-btn-primary:active{transform:translateY(1px)}"
+      "css": ".ds-btn-primary{min-height:40px;padding:8px 16px;border:1px solid var(--gold-primary);border-radius:var(--radius-md);background:var(--gold-primary);color:var(--text-inverse);font:700 13px var(--font-ui);cursor:pointer;transition:background var(--transition-fast),box-shadow var(--transition-fast),transform var(--transition-fast)}.ds-btn-primary:hover{background:var(--gold-light);box-shadow:0 0 0 3px var(--gold-glow)}.ds-btn-primary:focus-visible{outline:2px solid var(--gold-light);outline-offset:2px}.ds-btn-primary:active{transform:translateY(1px)}"
     },
     {
       "name": "次级按钮",
@@ -110,7 +122,7 @@
       "refersTo": "button-secondary",
       "description": "刷新、取消、返回和次要操作。",
       "html": "<button class=\"ds-btn-secondary\">查看详情</button>",
-      "css": ".ds-btn-secondary{min-height:36px;padding:8px 16px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--bg-input);color:var(--text-secondary);font:700 13px var(--font-ui);cursor:pointer;transition:background var(--transition-fast),color var(--transition-fast),border-color var(--transition-fast)}.ds-btn-secondary:hover{background:var(--bg-card-hover);color:var(--text-primary);border-color:var(--gold-primary)}.ds-btn-secondary:focus-visible{outline:2px solid var(--gold-primary);outline-offset:2px}"
+      "css": ".ds-btn-secondary{min-height:40px;padding:8px 16px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--bg-input);color:var(--text-secondary);font:700 13px var(--font-ui);cursor:pointer;transition:background var(--transition-fast),color var(--transition-fast),border-color var(--transition-fast)}.ds-btn-secondary:hover{background:var(--bg-card-hover);color:var(--text-primary);border-color:var(--gold-primary)}.ds-btn-secondary:focus-visible{outline:2px solid var(--gold-primary);outline-offset:2px}"
     },
     {
       "name": "表单输入框",
@@ -118,7 +130,7 @@
       "refersTo": "input",
       "description": "策略、模型和风控设置的标准字段。",
       "html": "<label class=\"ds-field\"><span>账户单笔最大手数</span><input value=\"0.05\" aria-label=\"账户单笔最大手数\"></label>",
-      "css": ".ds-field{display:grid;gap:7px;color:var(--text-secondary);font:600 12px var(--font-ui)}.ds-field input{min-height:36px;padding:8px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);outline:none;background:var(--bg-input);color:var(--text-primary);font:400 13px var(--font-ui);transition:border-color var(--transition-fast),box-shadow var(--transition-fast)}.ds-field input:focus-visible{border-color:var(--gold-primary);box-shadow:0 0 0 3px var(--gold-glow)}"
+      "css": ".ds-field{display:grid;gap:7px;color:var(--text-secondary);font:600 12px var(--font-ui)}.ds-field input{min-height:40px;padding:8px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);outline:none;background:var(--bg-input);color:var(--text-primary);font:400 14px var(--font-ui);transition:border-color var(--transition-fast),box-shadow var(--transition-fast)}.ds-field input:focus-visible{border-color:var(--gold-primary);box-shadow:0 0 0 3px var(--gold-glow)}"
     },
     {
       "name": "当前导航项",
@@ -126,7 +138,7 @@
       "refersTo": "navigation-active",
       "description": "侧边栏当前 AI 团队角色。",
       "html": "<button class=\"ds-nav-active\" aria-current=\"page\"><span aria-hidden=\"true\">◆</span><span>AI分析师</span></button>",
-      "css": ".ds-nav-active{display:flex;align-items:center;gap:12px;width:100%;min-height:38px;padding:9px 12px;border:1px solid rgba(212,175,55,.24);border-radius:var(--radius-md);background:var(--gold-glow);color:var(--gold-primary);font:700 13.5px var(--font-ui);text-align:left;cursor:pointer}.ds-nav-active:hover{border-color:var(--gold-primary)}.ds-nav-active:focus-visible{outline:2px solid var(--gold-light);outline-offset:2px}"
+      "css": ".ds-nav-active{display:flex;align-items:center;gap:12px;width:100%;min-height:40px;padding:9px 12px;border:1px solid rgba(212,175,55,.24);border-radius:var(--radius-md);background:var(--gold-glow);color:var(--gold-primary);font:700 13.5px var(--font-ui);text-align:left;cursor:pointer}.ds-nav-active:hover{border-color:var(--gold-primary)}.ds-nav-active:focus-visible{outline:2px solid var(--gold-light);outline-offset:2px}"
     },
     {
       "name": "工作面板",
@@ -165,6 +177,7 @@
     "rules": [
       { "name": "The One Gold Voice Rule", "body": "协作金只属于当前任务、关键行动和焦点状态；不得让多个区域同时争夺金色强调。", "section": "colors" },
       { "name": "The Semantic Color Rule", "body": "红、绿、橙、蓝只表达状态，不作装饰；任何颜色状态都必须同时有中文文本或图标。", "section": "colors" },
+      { "name": "The Trading/System Separation Rule", "body": "positive/negative 只描述交易方向；系统成功与故障必须使用 system-success/system-danger。", "section": "colors" },
       { "name": "The Human First Rule", "body": "用户可见结论必须用自然中文；等宽字体和内部代码不能替代解释。", "section": "typography" },
       { "name": "The One Page Title Rule", "body": "一个页面只保留一个 24px 主标题，后续层级逐级收敛，禁止用多个超大标题制造噪声。", "section": "typography" },
       { "name": "The Layer Before Shadow Rule", "body": "先用背景层级和边界表达结构，阴影只用于悬浮、模态或当前焦点。", "section": "elevation" }
@@ -174,7 +187,7 @@
       "Do 使用 4/8/12/16/20/24/32/40px 间距尺度和 6/10/14px 常用圆角，保持各页面节奏一致。",
       "Do 让协作金保持稀缺，让红绿橙蓝只承担明确状态语义。",
       "Do 为加载、等待、成交、拒绝和失败提供自然中文原因与下一步。",
-      "Do 在 820px 以下将多列工作区收敛为单列，并确保主要操作至少 36px 高。"
+      "Do 在 820px 以下将多列工作区收敛为单列，并确保主要操作和表单控件至少 44px 高。"
     ],
     "donts": [
       "Don't 制造“信息密集却没有优先级”的页面，或让次要统计压过当前结论。",
