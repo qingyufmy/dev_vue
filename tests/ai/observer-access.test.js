@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
   buildAiAccessContext, observerHttpRequestAllowed, observerWsActionAllowed,
-  PLUS_OBSERVER_TABS, PRO_OBSERVER_TABS,
+  normalizeAiRequestPath, PLUS_OBSERVER_TABS, PRO_OBSERVER_TABS,
 } from '../../server/routes/ai/observer-access.js'
 
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
@@ -10,6 +10,18 @@ const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url),
 const bridgeWs = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
 
 describe('AI observer access', () => {
+  it('normalizes only one known API prefix and one trailing slash', () => {
+    expect(normalizeAiRequestPath('/api/ai/access-context?channel_id=1')).toBe('/ai/access-context')
+    expect(normalizeAiRequestPath('/aurum-api/ai/access-context/')).toBe('/ai/access-context')
+    expect(normalizeAiRequestPath('/api')).toBe('/')
+    expect(normalizeAiRequestPath('/aurum-api/')).toBe('/')
+    expect(normalizeAiRequestPath('/api/ai/access-context//')).toBe('/ai/access-context//')
+    expect(normalizeAiRequestPath('/api//ai/access-context')).toBe('//ai/access-context')
+    expect(normalizeAiRequestPath('/api/%2Fai/access-context')).toBe('/%2Fai/access-context')
+    expect(normalizeAiRequestPath('/apiary/ai/access-context')).toBe('/apiary/ai/access-context')
+    expect(normalizeAiRequestPath('/api/aurum-api/ai/access-context')).toBe('/aurum-api/ai/access-context')
+  })
+
   it('keeps Plus permanently read-only and removes bridge download access', () => {
     const access = buildAiAccessContext({ role:'user', plan:'plus' }, { ownBridgeConnected:true })
     expect(access).toMatchObject({ mode:'observer', reason:'plus_plan', read_only:true, can_download_bridge:false, data_source:'platform_admin_account' })
@@ -50,6 +62,48 @@ describe('AI observer access', () => {
     expect(observerHttpRequestAllowed(pro, 'GET', '/ai/model-profiles')).toBe(true)
     expect(observerHttpRequestAllowed(pro, 'GET', '/ai/risk-center')).toBe(false)
     expect(observerHttpRequestAllowed(pro, 'POST', '/ai/strategies')).toBe(false)
+  })
+
+  it('keeps both API prefixes and every observer identity method-consistent', () => {
+    const identities = [
+      { name:'admin', access:buildAiAccessContext({ role:'admin', plan:'plus' }, { ownBridgeConnected:false }), readOnly:false },
+      { name:'plus observer', access:buildAiAccessContext({ role:'user', plan:'plus' }, { ownBridgeConnected:false }), readOnly:true },
+      { name:'pro bridge offline', access:buildAiAccessContext({ role:'user', plan:'pro' }, { ownBridgeConnected:false }), readOnly:true },
+      { name:'pro bridge online', access:buildAiAccessContext({ role:'user', plan:'pro' }, { ownBridgeConnected:true }), readOnly:false },
+      { name:'free', access:buildAiAccessContext({ role:'user', plan:'free' }, { ownBridgeConnected:false }), readOnly:true },
+      { name:'expired', access:buildAiAccessContext({ role:'user', plan:'pro', plan_expires_at:'2020-01-01 00:00:00' }, { ownBridgeConnected:true }), readOnly:true },
+    ]
+    const prefixes = ['/api', '/aurum-api']
+    const methods = ['GET', 'POST', 'PUT', 'DELETE']
+
+    for (const identity of identities) {
+      for (const method of methods) {
+        const results = prefixes.map(prefix => observerHttpRequestAllowed(
+          identity.access, method, `${prefix}/ai/access-context/`,
+        ))
+        expect(results, `${identity.name} ${method}`).toEqual([results[0], results[0]])
+        if (identity.readOnly) {
+          expect(results[0], `${identity.name} ${method}`).toBe(method === 'GET')
+        } else {
+          expect(results[0], `${identity.name} ${method}`).toBe(true)
+        }
+      }
+    }
+
+    const plus = identities.find(identity => identity.name === 'plus observer').access
+    const proOffline = identities.find(identity => identity.name === 'pro bridge offline').access
+    const free = identities.find(identity => identity.name === 'free').access
+    for (const prefix of prefixes) {
+      expect(observerHttpRequestAllowed(plus, 'GET', `${prefix}/ai/observer-channels`)).toBe(true)
+      expect(observerHttpRequestAllowed(plus, 'GET', `${prefix}/ai/model-profiles`)).toBe(false)
+      expect(observerHttpRequestAllowed(proOffline, 'GET', `${prefix}/ai/model-profiles`)).toBe(true)
+      expect(observerHttpRequestAllowed(proOffline, 'GET', `${prefix}/ai/risk-center`)).toBe(false)
+      expect(observerHttpRequestAllowed(free, 'GET', `${prefix}/ai/access-context`)).toBe(true)
+      expect(observerHttpRequestAllowed(free, 'GET', `${prefix}/ai/observer-channels`)).toBe(false)
+      expect(observerHttpRequestAllowed(plus, 'GET', `${prefix}/ai/access-context//`)).toBe(false)
+    }
+    expect(observerHttpRequestAllowed(plus, 'GET', '/api/aurum-api/ai/access-context')).toBe(false)
+    expect(observerHttpRequestAllowed(plus, 'GET', '/aurum-api/api/ai/access-context')).toBe(false)
   })
 
   it('allows only observer page data over the browser WebSocket', () => {

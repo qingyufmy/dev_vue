@@ -15,6 +15,148 @@ function parseUtcMs(value) {
   return Number.isFinite(timestamp) ? timestamp : null
 }
 
+const HEALTH_STATE_RANK = {
+  healthy:0,
+  insufficient_data:1,
+  attention:2,
+  critical:3,
+}
+
+const HEALTH_USAGE_GROUPS = {
+  manual:['manual'],
+  model_compare:['model_compare'],
+  auto_inference:['auto_private', 'auto_platform'],
+  review:['review'],
+  memory:['memory_compression'],
+}
+
+function healthCount(rows, key, usages) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter(row => usages.includes(String(row?.usage || '')))
+    .reduce((sum, row) => sum + number(row?.[key]), 0)
+}
+
+function latestHealthTimestamp(rows, usages) {
+  const timestamps = (Array.isArray(rows) ? rows : [])
+    .filter(row => usages.includes(String(row?.usage || '')))
+    .map(row => parseUtcMs(row?.last_request_at))
+    .filter(value => value !== null)
+  return timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null
+}
+
+function healthComponent(usageRows, usages, expected) {
+  const sampleCount = healthCount(usageRows, 'request_count', usages)
+  const failureCount = healthCount(usageRows, 'failure_count', usages)
+  return {
+    state:failureCount > 0 ? 'attention' : sampleCount > 0 ? 'healthy' : 'insufficient_data',
+    expected:Boolean(expected),
+    sample_count:sampleCount,
+    failure_count:failureCount,
+    last_success_at:latestHealthTimestamp(
+      (Array.isArray(usageRows) ? usageRows : []).map(row => ({ ...row, last_request_at:row.last_success_at })),
+      usages,
+    ),
+    last_request_at:latestHealthTimestamp(usageRows, usages),
+  }
+}
+
+function promoteHealthComponent(component, state) {
+  if (HEALTH_STATE_RANK[state] > HEALTH_STATE_RANK[component.state]) component.state = state
+}
+
+function reviewQueueCount(reviewHealth, statuses) {
+  const caseCount = (reviewHealth?.cases || [])
+    .filter(row => statuses.includes(String(row?.status || '')))
+    .reduce((sum, row) => sum + number(row?.case_count), 0)
+  const jobCount = (reviewHealth?.jobs || [])
+    .filter(row => statuses.includes(String(row?.status || '')))
+    .reduce((sum, row) => sum + number(row?.job_count), 0)
+  return caseCount + jobCount
+}
+
+export function deriveAdminAiHealth(input = {}) {
+  const usageRows = Array.isArray(input.usageRows) ? input.usageRows : []
+  const schedulerExpected = number(input.schedulerConfiguredCount) > 0
+  const modelCompareExpected = number(input.modelCompareActiveJobs) > 0
+  const reviewExpected = reviewQueueCount(input.reviewHealth, ['draft', 'edited', 'ready', 'generating', 'queued', 'leased', 'retry_wait', 'status_unknown']) > 0
+  const memoryExpected = (input.rollout?.metrics?.compression_queue || [])
+    .some(row => ['queued', 'leased', 'retry_wait', 'status_unknown'].includes(String(row?.status || '')) && number(row?.count) > 0)
+  const activeChannels = (input.observer?.channels || []).filter(channel => String(channel?.status || 'active') === 'active')
+  const sourceById = new Map((input.observer?.sources || []).map(source => [number(source?.id), source]))
+  const unavailableChannels = activeChannels.filter(channel => {
+    const source = sourceById.get(number(channel?.source_id))
+    return !source || String(source.status || 'active') !== 'active' || !source.bridge_online
+  })
+
+  const components = {
+    manual:healthComponent(usageRows, HEALTH_USAGE_GROUPS.manual, false),
+    model_compare:healthComponent(usageRows, HEALTH_USAGE_GROUPS.model_compare, modelCompareExpected),
+    auto_inference:healthComponent(usageRows, HEALTH_USAGE_GROUPS.auto_inference, schedulerExpected),
+    review:healthComponent(usageRows, HEALTH_USAGE_GROUPS.review, reviewExpected),
+    memory:healthComponent(usageRows, HEALTH_USAGE_GROUPS.memory, memoryExpected),
+    observer_delivery:{
+      state:activeChannels.length === 0 ? 'insufficient_data' : unavailableChannels.length ? 'critical' : 'healthy',
+      expected:activeChannels.length > 0,
+      sample_count:activeChannels.length,
+      failure_count:unavailableChannels.length,
+      last_success_at:null,
+      last_request_at:null,
+    },
+  }
+  const reasons = []
+  const addReason = (code, severity, value, component) => {
+    reasons.push({ code, severity, value:number(value), component })
+    if (components[component]) promoteHealthComponent(components[component], severity)
+  }
+
+  if (schedulerExpected && !input.schedulerRuntimeAvailable) addReason('scheduler_runtime_unavailable', 'critical', input.schedulerConfiguredCount, 'auto_inference')
+  if (number(input.signalErrors24h) > 0) addReason('signal_errors_24h', 'attention', input.signalErrors24h, 'auto_inference')
+  if (unavailableChannels.length > 0) addReason('observer_source_unavailable', 'critical', unavailableChannels.length, 'observer_delivery')
+
+  const failedReviews = reviewQueueCount(input.reviewHealth, ['failed'])
+  if (failedReviews > 0) addReason('review_jobs_failed', 'attention', failedReviews, 'review')
+
+  for (const alert of Array.isArray(input.rollout?.alerts) ? input.rollout.alerts : []) {
+    const severity = alert?.severity === 'critical' ? 'critical' : 'attention'
+    const component = alert?.code === 'review_jobs_failed'
+      ? 'review'
+      : alert?.code === 'memory_compression_stale' ? 'memory' : 'auto_inference'
+    if (!reasons.some(reason => reason.code === alert?.code && reason.component === component)) {
+      addReason(String(alert?.code || 'governance_alert'), severity, alert?.value, component)
+    }
+  }
+
+  for (const [component, value] of Object.entries(components)) {
+    if (value.failure_count > 0 && !reasons.some(reason => reason.component === component)) {
+      addReason('model_requests_failed', 'attention', value.failure_count, component)
+    }
+  }
+
+  const relevantComponents = Object.values(components).filter(component => component.expected
+    || ['attention', 'critical'].includes(component.state))
+  const state = relevantComponents.length
+    ? relevantComponents.reduce((worst, component) => HEALTH_STATE_RANK[component.state] > HEALTH_STATE_RANK[worst] ? component.state : worst, 'healthy')
+    : 'insufficient_data'
+  const lastModelRequestMs = usageRows.map(row => parseUtcMs(row?.last_request_at)).filter(value => value !== null)
+  const schedulerStateMs = (input.schedulerRuntime || []).map(row => parseUtcMs(row?.state_updated_at_utc)).filter(value => value !== null)
+  const lastSignalMs = parseUtcMs(input.lastSignalAt)
+
+  return {
+    state,
+    headline_code:reasons[0]?.code || (state === 'healthy' ? 'all_expected_components_healthy' : 'no_runtime_expectation'),
+    evaluated_at:new Date(number(input.nowMs) || Date.now()).toISOString(),
+    window:'24h',
+    sample_count:Object.values(components).reduce((sum, component) => sum + number(component.sample_count), 0),
+    components,
+    freshness:{
+      last_model_request_at:lastModelRequestMs.length ? new Date(Math.max(...lastModelRequestMs)).toISOString() : null,
+      last_signal_at:lastSignalMs !== null ? new Date(lastSignalMs).toISOString() : null,
+      last_scheduler_state_at:schedulerStateMs.length ? new Date(Math.max(...schedulerStateMs)).toISOString() : null,
+    },
+    reasons:reasons.sort((left, right) => HEALTH_STATE_RANK[right.severity] - HEALTH_STATE_RANK[left.severity]),
+  }
+}
+
 function runtimeNextRun(state, cooldownTtl, nowMs = Date.now()) {
   const waitReason = String(state?.wait_reason || '')
   const cooldownWait = ['cooldown', 'cooldown_recovered'].includes(waitReason)
@@ -126,7 +268,7 @@ export async function readSchedulerRuntime(dbRows) {
 
 export async function getAdminAiOperationsOverview() {
   const bridgeStats = getConnectedBridgeStats()
-  const [summary, modelUsage, schedulerRows, rollout, reviewHealth, sources, channels] = await Promise.all([
+  const [summary, healthSummary, healthUsage, modelCompareState, modelUsage, schedulerRows, rollout, reviewHealth, sources, channels] = await Promise.all([
     queryOne(`SELECT
       (SELECT COUNT(*) FROM ai_signals WHERE created_at >= CURDATE()) AS signals_today,
       (SELECT COUNT(*) FROM ai_signals WHERE created_at >= CURDATE() AND signal_type = 'error') AS signal_errors_today,
@@ -140,6 +282,20 @@ export async function getAdminAiOperationsOverview() {
         AND request_status = 'success') AS avg_model_latency_ms,
       (SELECT COUNT(*) FROM risk_decisions WHERE created_at >= CURDATE()
         AND decision_status = 'reject') AS risk_rejections_today`),
+    queryOne(`SELECT
+      (SELECT COUNT(*) FROM ai_signals WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+        AND signal_type = 'error') AS signal_errors_24h,
+      (SELECT MAX(created_at) FROM ai_signals WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)) AS last_signal_at`),
+    queryAll(`SELECT \`usage\`, COUNT(*) AS request_count,
+      SUM(request_status = 'error') AS failure_count,
+      MAX(created_at) AS last_request_at,
+      MAX(CASE WHEN request_status = 'success' THEN created_at END) AS last_success_at
+      FROM ai_model_usage_logs
+      WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+        AND request_status IN ('success','error')
+      GROUP BY \`usage\``),
+    queryOne(`SELECT COUNT(*) AS active_jobs FROM ai_model_compare_jobs
+      WHERE status IN ('queued','running','cancelling','status_unknown')`),
     queryAll(`SELECT COALESCE(profiles.model_name, usage_logs.credential_source) AS model_name,
       usage_logs.credential_source, COUNT(*) AS requests,
       SUM(usage_logs.request_status = 'error') AS failures,
@@ -165,8 +321,36 @@ export async function getAdminAiOperationsOverview() {
     listObserverChannels(),
   ])
   const runtime = await readSchedulerRuntime(schedulerRows)
+  const observer = {
+    sources:sources.map(source => ({ ...source, bridge_online:isBridgeAlive(Number(source.bridge_user_id)) })),
+    channels,
+  }
+  const health = deriveAdminAiHealth({
+    usageRows:healthUsage,
+    signalErrors24h:healthSummary?.signal_errors_24h,
+    lastSignalAt:healthSummary?.last_signal_at,
+    schedulerRuntimeAvailable:runtime.available,
+    schedulerRuntime:runtime.schedulers,
+    schedulerConfiguredCount:schedulerRows.length,
+    modelCompareActiveJobs:modelCompareState?.active_jobs,
+    rollout,
+    reviewHealth,
+    observer,
+  })
   return {
     generated_at:new Date().toISOString(),
+    health,
+    health_metrics:{
+      window:'24h',
+      signal_errors_24h:number(healthSummary?.signal_errors_24h),
+      usage:(healthUsage || []).map(row => ({
+        usage:String(row.usage || ''),
+        request_count:number(row.request_count),
+        failure_count:number(row.failure_count),
+        last_request_at:row.last_request_at || null,
+        last_success_at:row.last_success_at || null,
+      })),
+    },
     mt5_clock:getLatestBridgeMt5Clock(),
     summary:{
       ...Object.fromEntries(Object.entries(summary || {}).map(([key, value]) => [key, number(value)])),
@@ -178,9 +362,6 @@ export async function getAdminAiOperationsOverview() {
     scheduler:{ runtime_available:runtime.available, runtime:runtime.schedulers, configured:schedulerRows.map(row => ({ ...row, strategy_id:number(row.strategy_id), subscriber_count:number(row.subscriber_count), interval_minutes:number(row.interval_minutes) })) },
     rollout,
     review_health:reviewHealth,
-    observer:{
-      sources:sources.map(source => ({ ...source, bridge_online:isBridgeAlive(Number(source.bridge_user_id)) })),
-      channels,
-    },
+    observer,
   }
 }

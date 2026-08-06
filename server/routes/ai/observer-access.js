@@ -34,6 +34,39 @@ const BLOCKED_HTTP_GET_PATTERNS = Object.freeze([
   /^\/ai\/access-context$/,
 ])
 
+const AI_API_PREFIXES = Object.freeze(['/aurum-api', '/api'])
+
+/**
+ * Convert a request URL from either API mount point to the route-local path.
+ *
+ * This intentionally only removes one known prefix at the beginning of the
+ * path. Query parameters are ignored for authorization, while encoded or
+ * repeated slashes remain untouched so that an unknown path cannot become an
+ * allowed observer endpoint through normalization.
+ */
+export function normalizeAiRequestPath(path) {
+  let normalized = String(path || '').split('?')[0]
+  if (!normalized) return '/'
+
+  for (const prefix of AI_API_PREFIXES) {
+    if (normalized === prefix) {
+      normalized = '/'
+      break
+    }
+    if (normalized.startsWith(`${prefix}/`)) {
+      normalized = normalized.slice(prefix.length) || '/'
+      break
+    }
+  }
+
+  // Express's default non-strict routing accepts one trailing slash. Do not
+  // strip from a repeated suffix (`//`), which must remain an unknown path.
+  if (normalized.length > 1 && normalized.endsWith('/') && !normalized.endsWith('//')) {
+    normalized = normalized.slice(0, -1)
+  }
+  return normalized || '/'
+}
+
 export function buildAiAccessContext(user, options = {}) {
   const role = String(user?.role || 'user').toLowerCase()
   const plan = getEffectivePlan(user)
@@ -75,13 +108,31 @@ export function buildAiAccessContext(user, options = {}) {
 export function observerHttpRequestAllowed(access, method, path) {
   if (!access?.read_only) return true
   if (String(method || 'GET').toUpperCase() !== 'GET') return false
+  const normalizedPath = normalizeAiRequestPath(path)
   if (access.mode === 'blocked') {
-    return BLOCKED_HTTP_GET_PATTERNS.some(pattern => pattern.test(String(path || '').split('?')[0]))
+    return BLOCKED_HTTP_GET_PATTERNS.some(pattern => pattern.test(normalizedPath))
   }
   const patterns = access.reason === 'plus_plan'
     ? PLUS_OBSERVER_HTTP_GET_PATTERNS
     : PRO_OBSERVER_HTTP_GET_PATTERNS
-  return patterns.some(pattern => pattern.test(String(path || '').split('?')[0]))
+  return patterns.some(pattern => pattern.test(normalizedPath))
+}
+
+export function createAiAccessMiddleware({ isBridgeAlive = () => false } = {}) {
+  return (req, res, next) => {
+    const access = buildAiAccessContext(req.user, {
+      ownBridgeConnected: isBridgeAlive(req.user?.id) === true,
+    })
+    req.aiAccess = access
+    const requestPath = req.originalUrl || req.url || ''
+    if (observerHttpRequestAllowed(access, req.method, requestPath)) return next()
+    return res.status(403).json({
+      ok:false,
+      error:observerAccessError(access, { page:req.method === 'GET' }),
+      code:req.method === 'GET' ? 'observer_page_forbidden' : 'observer_read_only',
+      access,
+    })
+  }
 }
 
 export function observerWsActionAllowed(access, action) {

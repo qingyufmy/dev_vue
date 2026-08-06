@@ -14,7 +14,7 @@ import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistory
   buildStrategyContextFromTags, startHistoryCompareRecoveryWorker } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
 import { applyBridgeRuntimeState, getBridgeDiagnostics, isBridgeAlive } from '../../bridge-ws.js'
-import { buildAiAccessContext, observerAccessError, observerHttpRequestAllowed } from './observer-access.js'
+import { createAiAccessMiddleware } from './observer-access.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource,
   listObserverChannelAssignments, listObserverChannels, listObserverChannelsForUser, listObserverSources,
   replaceObserverChannelAssignments, resolveObserverSourceForUser,
@@ -89,18 +89,7 @@ router.get('/bridge/ws-health', authMiddleware, async (req, res) => {
 
 // AI Lab access is server-authoritative. The frontend consumes the same
 // context for presentation, while this middleware prevents direct API bypass.
-router.use('/ai', authMiddleware, (req, res, next) => {
-  const access = buildAiAccessContext(req.user, { ownBridgeConnected:isBridgeAlive(req.user.id) })
-  req.aiAccess = access
-  const aiPath = String(req.originalUrl || req.url || '').split('?')[0].replace(/^\/api/, '')
-  if (observerHttpRequestAllowed(access, req.method, aiPath)) return next()
-  return res.status(403).json({
-    ok:false,
-    error:observerAccessError(access, { page:req.method === 'GET' }),
-    code:req.method === 'GET' ? 'observer_page_forbidden' : 'observer_read_only',
-    access,
-  })
-})
+router.use('/ai', authMiddleware, createAiAccessMiddleware({ isBridgeAlive }))
 
 router.get('/ai/access-context', async (req, res) => {
   try {
