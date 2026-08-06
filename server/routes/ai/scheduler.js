@@ -41,6 +41,35 @@ import { readAutoInferenceDeploymentDrain } from './auto-inference-deployment-dr
 export const autoSchedulerState = {}
 registerAutoSchedulerState(autoSchedulerState)
 
+// A scheduler key can be reached by more than one timer callback (for example
+// when a callback is delayed while the event loop is busy).  Keep the
+// in-process guard separate from the Redis lease: Redis remains the
+// cross-instance execution fence, while this Promise only prevents duplicate
+// work within this process.
+const AUTO_SCHEDULER_STOP_TIMEOUT_MS = 10_000
+let autoSchedulersStopping = false
+let autoSchedulersStopPromise = null
+
+function boundedWait(promise, timeoutMs, label = 'background task') {
+  if (!promise || typeof promise.then !== 'function') return Promise.resolve({ settled:true })
+  const timeout = Math.max(0, Number(timeoutMs) || 0)
+  if (timeout === 0) return Promise.resolve({ settled:false, timedOut:true, label })
+  return Promise.race([
+    Promise.resolve(promise).then(() => ({ settled:true }), error => ({ settled:true, error })),
+    new Promise(resolve => setTimeout(() => resolve({ settled:false, timedOut:true, label }), timeout)),
+  ])
+}
+
+function recordSchedulerOverlap(key, state) {
+  state.skippedOverlapCount = Number(state.skippedOverlapCount || 0) + 1
+  state.lastSkippedOverlapAtUtc = new Date().toISOString()
+  console.warn(`[UnifiedScheduler] ${key}: skipped-overlap (count=${state.skippedOverlapCount})`)
+  // Do not wait for observability writes on the skipped callback.  The current
+  // cycle owns the scheduler lease and the write is best effort, just like the
+  // existing runtime-state publication path.
+  void updateSchedulerRedisState(key, state)
+}
+
 const MARKET_WAIT_REASONS = new Set([
   'market_closed',
   'market_restricted',
@@ -630,6 +659,7 @@ function schedulerStateEventData(key, state, updatedAtUtc) {
     stage_label:String(state?.stageLabel || ''),
     progress_percent:Number(state?.progressPercent || 0),
     progress_seq:Number(state?.progressSeq || 0),
+    skipped_overlap_count:Number(state?.skippedOverlapCount || 0),
     subscriber_count:Number(state?.subscriberCount || state?.subscribers?.size || 0),
     next_run_in_seconds:Number(state?.nextRunInSeconds || 0),
     next_run_at_utc:String(state?.nextRunAtUtc || ''),
@@ -642,7 +672,9 @@ function schedulerStateEventSignature(data) {
     key:data.key, running:data.running, in_flight:data.in_flight,
     wait_reason:data.wait_reason, last_error:data.last_error,
     stage:data.stage, stage_label:data.stage_label,
-    subscriber_count:data.subscriber_count, next_run_at_utc:data.next_run_at_utc,
+    subscriber_count:data.subscriber_count,
+    skipped_overlap_count:data.skipped_overlap_count,
+    next_run_at_utc:data.next_run_at_utc,
   })
 }
 
@@ -862,6 +894,7 @@ export async function updateSchedulerRedisState(key, state) {
       stage_label: state.stageLabel || '',
       progress_percent: String(state.progressPercent || 0),
       progress_seq: String(state.progressSeq || 0),
+      skipped_overlap_count: String(state.skippedOverlapCount || 0),
       cycle_id: state.cycleId || '',
       cycle_started_at: state.cycleStartedAt || '',
       stage_updated_at: state.stageUpdatedAt || ''
@@ -1427,6 +1460,7 @@ export function selectSchedulerFallbackStrategy(strategies, userId) {
 }
 
 export async function reconcileAutoSchedulers({ suppressErrors = false } = {}) {
+  if (autoSchedulersStopping) return { ok:false, error:'scheduler_stopping' }
   try {
     // Repair legacy enabled rows without crossing private-strategy ownership.
     const unassigned = await queryAll(`
@@ -1520,6 +1554,7 @@ export async function reconcileAutoSchedulers({ suppressErrors = false } = {}) {
 
 // === Unified Scheduler Start/Stop ===
 async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) {
+  if (autoSchedulersStopping) return
   const key = buildSchedulerKey(promptTypeId, symbol)
   if (autoSchedulerState[key]?.running) {
     // Reconcile is also a Redis repair pass.  A process/Redis restart may
@@ -1562,12 +1597,22 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     _lastLoggedWaitReason: '',
     _lastWaitLogAtMs: 0,
     _consecutiveModelFailures: 0,
+    skippedOverlapCount: 0,
+    lastSkippedOverlapAtUtc: '',
   }
 
   console.log(`[UnifiedScheduler] Started ${key} (subscribers=${subSet.size}, interval=${intervalMinutes}min)`)
   await updateSchedulerRedisState(key, autoSchedulerState[key])
 
-  const tick = async () => {
+  const scheduleTick = delayMs => {
+    const current = autoSchedulerState[key]
+    if (!current?.running) return
+    if (current.timer) clearTimeout(current.timer)
+    const timer = setTimeout(tick, Math.max(0, Number(delayMs) || 0))
+    current.timer = timer
+  }
+
+  const runTick = async () => {
     const st = autoSchedulerState[key]
     if (!st?.running) return
 
@@ -1580,7 +1625,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       const delay = retryDelayMs('redis_unavailable')
       schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      scheduleTick(delay)
       return
     }
 
@@ -1590,7 +1635,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
         schedulerNextRun(st, ttl)
         st.waitReason = 'cooldown'
         await updateSchedulerRedisState(key, st)
-        autoSchedulerState[key].timer = setTimeout(tick, Math.min(ttl * 1000, 30000))
+        scheduleTick(Math.min(ttl * 1000, 30000))
         return
       }
     } catch (e) {
@@ -1599,7 +1644,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.lastError = 'cooldown_check_failed'
       schedulerNextRun(st, 15)
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, 15000)
+      scheduleTick(15000)
       return
     }
 
@@ -1617,7 +1662,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.waitReason = 'deployment_drain_check_failed'
       schedulerNextRun(st, Math.ceil(retryDelayMs('deployment_drain_check_failed') / 1000))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, retryDelayMs('deployment_drain_check_failed'))
+      scheduleTick(retryDelayMs('deployment_drain_check_failed'))
       return
     }
     if (deploymentDrain.active) {
@@ -1634,7 +1679,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       const drainDelayMs = drainDeadlineMs
         ? Math.max(1000, Math.min(drainDeadlineMs - Date.now(), 30_000))
         : retryDelayMs('deployment_draining')
-      autoSchedulerState[key].timer = setTimeout(tick, drainDelayMs)
+      scheduleTick(drainDelayMs)
       return
     }
 
@@ -1662,7 +1707,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       const delay = retryDelayMs('strategy_disabled')
       schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      scheduleTick(delay)
       return
     }
     const marketBridge = await resolveStrategyMarketBridge(ptRow)
@@ -1676,7 +1721,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.waitReason = 'weekly_flatten_window'
       schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      scheduleTick(delay)
       return
     }
     const updateMaintenanceReason = schedulerUpdateMaintenanceReason(ptRow, marketUserId)
@@ -1686,7 +1731,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       const delay = retryDelayMs(st.waitReason)
       schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      scheduleTick(delay)
       return
     }
     if (!marketUserId || !isBridgeAlive(marketUserId)) {
@@ -1697,7 +1742,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       const delay = retryDelayMs(st.waitReason)
       schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      scheduleTick(delay)
       return
     }
 
@@ -1715,7 +1760,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       const delay = retryDelayMs(marketState.reason)
       schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      scheduleTick(delay)
       return
     }
 
@@ -1736,7 +1781,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.waitReason = 'model_task_gate_failed'
       schedulerNextRun(st, Math.round(retryDelayMs('exception') / 1000))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, retryDelayMs('exception'))
+      scheduleTick(retryDelayMs('exception'))
       return
     }
     if (!modelTaskGate.allowed) {
@@ -1751,7 +1796,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       const modelTaskDelayMs = hasModelTaskDeadline
         ? Math.max(1000, modelTaskDeadlineMs - Date.now())
         : Math.max(1000, st.nextRunInSeconds * 1000)
-      autoSchedulerState[key].timer = setTimeout(tick, modelTaskDelayMs)
+      scheduleTick(modelTaskDelayMs)
       return
     }
 
@@ -1766,15 +1811,23 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       const delay = retryDelayMs(st.lastError)
       schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      scheduleTick(delay)
       return
     }
 
+    // Shutdown can be requested while the preflight awaits DB/Bridge/model
+    // configuration.  Fence the cycle again immediately before taking the
+    // distributed lock so no new provider work is admitted after stop.
+    if (!st.running || autoSchedulersStopping) return
     if (st.inFlight) {
-      autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+      scheduleTick(tickIntervalMs)
       return
     }
     const lockToken = await acquireLock(key)
+    if (!st.running || autoSchedulersStopping) {
+      if (lockToken) await finalizeLock(key, lockToken, 0).catch(() => {})
+      return
+    }
     if (!lockToken) {
       // Another scheduler (or the previous process lease after a restart) is
       // still finishing this key. Treat contention as a wait state rather
@@ -1785,7 +1838,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       st.stage = 'idle'
       st.stageLabel = ''
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, Math.min(tickIntervalMs, st.nextRunInSeconds * 1000))
+      scheduleTick(Math.min(tickIntervalMs, st.nextRunInSeconds * 1000))
       return
     }
     const maintenanceBeganWhileLocking = schedulerUpdateMaintenanceReason(ptRow, marketUserId)
@@ -1796,7 +1849,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       const delay = retryDelayMs(st.waitReason)
       schedulerNextRun(st, Math.round(delay / 1000))
       await updateSchedulerRedisState(key, st)
-      autoSchedulerState[key].timer = setTimeout(tick, delay)
+      scheduleTick(delay)
       return
     }
     st.inFlight = true
@@ -1923,7 +1976,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
           recoveryState.lastError = ''
           schedulerNextRun(recoveryState, 0)
           await updateSchedulerRedisState(key, recoveryState)
-          if (isCurrent()) recoveryState.timer = setTimeout(tick, 0)
+          if (isCurrent()) scheduleTick(0)
         }
         // Recovery polls Redis state only. It resumes normal tick after the
         // original post-completion cooldown deadline instead of extending it.
@@ -1991,12 +2044,27 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       } else {
         const delay = cycleStatus === 'success' ? tickIntervalMs
           : retryDelayMs(cycleReason, st._consecutiveModelFailures)
-        autoSchedulerState[key].timer = setTimeout(tick, delay)
+        scheduleTick(delay)
       }
     }
   }
 
-  autoSchedulerState[key].timer = setTimeout(tick, tickIntervalMs)
+  const tick = () => {
+    const state = autoSchedulerState[key]
+    if (!state?.running) return Promise.resolve({ skipped:'stopped' })
+    if (state._tickPromise) {
+      recordSchedulerOverlap(key, state)
+      return state._tickPromise
+    }
+    const promise = Promise.resolve().then(runTick)
+    state._tickPromise = promise
+    promise.finally(() => {
+      if (state._tickPromise === promise) state._tickPromise = null
+    }).catch(() => {})
+    return promise
+  }
+
+  scheduleTick(tickIntervalMs)
 }
 
 async function stopUnifiedScheduler(promptTypeId, symbol) {
@@ -2005,8 +2073,19 @@ async function stopUnifiedScheduler(promptTypeId, symbol) {
   if (state?.timer) clearTimeout(state.timer)
   if (state?._lockGuard?.renewTimer) clearInterval(state._lockGuard.renewTimer)
   if (state?._recoveryTimer) clearTimeout(state._recoveryTimer)
-  if (autoSchedulerState[key]) autoSchedulerState[key].running = false
-  delete autoSchedulerState[key]
+  if (state) {
+    state.running = false
+    state.stopRequested = true
+    // A stop can happen while the current tick is awaiting DB/Bridge work.
+    // Keep its state object until the Promise settles so late continuations
+    // cannot accidentally start a new timer against an undefined entry.
+    const pending = state._tickPromise
+    const cleanup = () => {
+      if (autoSchedulerState[key] === state && !state._tickPromise) delete autoSchedulerState[key]
+    }
+    if (pending) pending.then(cleanup, cleanup)
+    else cleanup()
+  }
   console.log(`[UnifiedScheduler] Stopped ${key}`)
   await updateSchedulerRedisState(key, { running: false, intervalMinutes: 0, subscriberCount: 0, lastError: '', lastRunAt: '' })
 }
@@ -3318,17 +3397,81 @@ export async function initAutoSchedulers() {
 }
 
 let _reconcileInterval = null
+let _reconcileInFlight = null
+let _reconcileStopping = false
+let _reconcileSkippedOverlap = 0
+
+function runAutoSchedulerReconcile() {
+  if (_reconcileStopping || autoSchedulersStopping) return Promise.resolve({ ok:false, error:'scheduler_stopping' })
+  if (_reconcileInFlight) {
+    _reconcileSkippedOverlap += 1
+    console.warn(`[Reconciler] Auto scheduler skipped-overlap (count=${_reconcileSkippedOverlap})`)
+    return _reconcileInFlight
+  }
+  const promise = reconcileAutoSchedulers({ suppressErrors:true })
+  _reconcileInFlight = promise
+  promise.finally(() => {
+    if (_reconcileInFlight === promise) _reconcileInFlight = null
+  }).catch(() => {})
+  return promise
+}
+
 export function startAutoSchedulerReconciler() {
   if (_reconcileInterval) return
-  _reconcileInterval = setInterval(async () => {
-    await reconcileAutoSchedulers({ suppressErrors:true })
-  }, 60_000)
+  _reconcileStopping = false
+  _reconcileInterval = setInterval(runAutoSchedulerReconcile, 60_000)
+  _reconcileInterval.unref?.()
   console.log('[Reconciler] Started periodic reconciliation (every 60s)')
+}
+
+export function stopAutoSchedulerReconciler() {
+  _reconcileStopping = true
+  if (_reconcileInterval) clearInterval(_reconcileInterval)
+  _reconcileInterval = null
+  return _reconcileInFlight
+}
+
+export async function stopAutoSchedulers({ timeoutMs = AUTO_SCHEDULER_STOP_TIMEOUT_MS } = {}) {
+  if (autoSchedulersStopPromise) return autoSchedulersStopPromise
+  autoSchedulersStopping = true
+  const waiters = []
+  const reconcilerPromise = stopAutoSchedulerReconciler()
+  if (reconcilerPromise) waiters.push({ promise:reconcilerPromise, label:'auto scheduler reconciler' })
+  const states = Object.values(autoSchedulerState)
+  for (const state of states) {
+    state.running = false
+    state.stopRequested = true
+    if (state.timer) clearTimeout(state.timer)
+    if (state._recoveryTimer) clearTimeout(state._recoveryTimer)
+    if (state._lockGuard?.renewTimer) clearInterval(state._lockGuard.renewTimer)
+    if (state._tickPromise) waiters.push({ promise:state._tickPromise, label:`scheduler ${state.key}` })
+  }
+
+  autoSchedulersStopPromise = (async () => {
+    const timeout = Math.max(0, Number(timeoutMs) || AUTO_SCHEDULER_STOP_TIMEOUT_MS)
+    for (const waiter of waiters) {
+      const result = await boundedWait(waiter.promise, timeout, waiter.label)
+      if (result.timedOut) {
+        console.error(`[Shutdown] ${waiter.label} did not settle within ${timeout}ms`)
+      } else if (result.error) {
+        console.error(`[Shutdown] ${waiter.label} failed while stopping:`, result.error.message)
+      }
+    }
+    for (const state of states) {
+      if (autoSchedulerState[state.key] !== state || state._tickPromise) continue
+      delete autoSchedulerState[state.key]
+    }
+    return { stopped:states.length, timedOut:states.filter(state => state._tickPromise).map(state => state.key) }
+  })()
+  return autoSchedulersStopPromise
 }
 
 // === Pending Order Reconciler ===
 const PENDING_RECONCILE_INTERVAL_SEC = 30
 let _pendingReconcileInterval = null
+let _pendingReconcileInFlight = null
+let _pendingReconcileStopping = false
+let _pendingSkippedOverlap = 0
 const SIGNAL_DELIVERY_RECOVERY_BATCH_SIZE = 50
 const SIGNAL_DELIVERY_RECOVERY_WAIT_TASK_STATES = new Set([
   'queued', 'leased', 'preparing', 'submitted', 'provider_running', 'provider_quiet',
@@ -3337,14 +3480,31 @@ const SIGNAL_DELIVERY_RECOVERY_WAIT_TASK_STATES = new Set([
 ])
 
 export function stopPendingReconciler() {
+  _pendingReconcileStopping = true
   if (_pendingReconcileInterval) { clearInterval(_pendingReconcileInterval); _pendingReconcileInterval = null }
+  return _pendingReconcileInFlight
 }
 
 export function startPendingReconciler() {
   if (_pendingReconcileInterval) return
-  _pendingReconcileInterval = setInterval(async () => {
-    try { await reconcilePendingOrders() } catch (e) { console.error('[PendingReconciler] Error:', e.message) }
-  }, PENDING_RECONCILE_INTERVAL_SEC * 1000)
+  _pendingReconcileStopping = false
+  const run = () => {
+    if (_pendingReconcileStopping) return Promise.resolve({ skipped:'stopped' })
+    if (_pendingReconcileInFlight) {
+      _pendingSkippedOverlap += 1
+      console.warn(`[PendingReconciler] skipped-overlap (count=${_pendingSkippedOverlap})`)
+      return _pendingReconcileInFlight
+    }
+    const promise = Promise.resolve().then(() => reconcilePendingOrders())
+      .catch(e => { console.error('[PendingReconciler] Error:', e.message) })
+    _pendingReconcileInFlight = promise
+    promise.finally(() => {
+      if (_pendingReconcileInFlight === promise) _pendingReconcileInFlight = null
+    }).catch(() => {})
+    return promise
+  }
+  _pendingReconcileInterval = setInterval(run, PENDING_RECONCILE_INTERVAL_SEC * 1000)
+  _pendingReconcileInterval.unref?.()
   console.log(`[PendingReconciler] Started (every ${PENDING_RECONCILE_INTERVAL_SEC}s)`)
 }
 
@@ -3882,4 +4042,11 @@ export const __schedulerTest = {
   schedulerUpdateMaintenanceReason,
   isMarketWaitReason,
   summarizeRuntimeMarketStates,
+  getPeriodicRuntime: () => ({
+    autoReconcilerInFlight:Boolean(_reconcileInFlight),
+    autoReconcilerSkippedOverlap:_reconcileSkippedOverlap,
+    pendingReconcilerInFlight:Boolean(_pendingReconcileInFlight),
+    pendingReconcilerSkippedOverlap:_pendingSkippedOverlap,
+    autoSchedulersStopping,
+  }),
 }

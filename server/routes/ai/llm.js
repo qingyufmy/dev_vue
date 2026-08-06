@@ -17,7 +17,9 @@ import { resolveModelProviderCapabilities } from './model-provider-capabilities.
 import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
 import { acquireModelTaskCapacity, retainModelTaskCapacityLease, releaseModelTaskCapacityLease } from './model-task-capacity.js'
 
-const DEBUG_LLM_PAYLOAD = process.env.DEBUG_LLM_PAYLOAD === '1'
+// Production must never emit prompts, market context, or model payloads even if
+// a stale environment flag survives a deployment.
+const DEBUG_LLM_PAYLOAD = process.env.NODE_ENV !== 'production' && process.env.DEBUG_LLM_PAYLOAD === '1'
 const DEBUG_LLM = process.env.DEBUG_LLM === '1' || DEBUG_LLM_PAYLOAD
 const TP_FROM_SL = { tp1: 1.5, tp2: 2.5, tp3: 4.0 }
 export const AUTO_INFERENCE_MAX_PROMPT_CHARS = 120_000

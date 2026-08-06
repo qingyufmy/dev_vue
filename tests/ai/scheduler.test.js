@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock 依赖 — 路径必须与 scheduler.js 的导入路径一致
 vi.mock('../../server/db.js', () => ({
@@ -92,11 +92,18 @@ vi.mock('../../server/redis.js', () => ({
   isRedisAvailable: vi.fn(() => false),
 }))
 
-import { __schedulerTest, autoSchedulerState, getSubscriptionIndexHealth, getUserAutoRuntimeStatus, isAutoSchedulerRunning, rebuildRedisSubscriptions, updateSchedulerRedisState } from '../../server/routes/ai/scheduler.js'
+import { __schedulerTest, autoSchedulerState, getSubscriptionIndexHealth, getUserAutoRuntimeStatus, isAutoSchedulerRunning, rebuildRedisSubscriptions, updateSchedulerRedisState,
+  startPendingReconciler, stopPendingReconciler, startAutoSchedulerReconciler, stopAutoSchedulerReconciler } from '../../server/routes/ai/scheduler.js'
 import * as db from '../../server/db.js'
 import * as marketData from '../../server/routes/ai/market-data.js'
 import * as bridgeWs from '../../server/bridge-ws.js'
 import * as redis from '../../server/redis.js'
+
+afterEach(() => {
+  stopPendingReconciler()
+  stopAutoSchedulerReconciler()
+  vi.useRealTimers()
+})
 
 describe('isAutoSchedulerRunning', () => {
   it('未启动的调度器返回 false', () => {
@@ -281,6 +288,66 @@ describe('Pending order lifecycle exports', () => {
   it('stopPendingReconciler 是函数', async () => {
     const mod = await import('../../server/routes/ai/scheduler.js')
     expect(typeof mod.stopPendingReconciler).toBe('function')
+  })
+})
+
+describe('periodic reconciler single-flight', () => {
+  it('skips an overlapping pending tick, reruns after settle, and stops cleanly', async () => {
+    vi.useFakeTimers()
+    let releaseFirst
+    let first = true
+    db.queryAll.mockImplementation(() => {
+      if (first) {
+        first = false
+        return new Promise(resolve => { releaseFirst = resolve })
+      }
+      return Promise.resolve([])
+    })
+
+    startPendingReconciler()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(__schedulerTest.getPeriodicRuntime().pendingReconcilerInFlight).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(__schedulerTest.getPeriodicRuntime().pendingReconcilerSkippedOverlap).toBe(1)
+
+    releaseFirst([])
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+    expect(__schedulerTest.getPeriodicRuntime().pendingReconcilerInFlight).toBe(false)
+
+    const callsAfterSettle = db.queryAll.mock.calls.length
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(db.queryAll.mock.calls.length).toBeGreaterThan(callsAfterSettle)
+
+    stopPendingReconciler()
+    const callsAfterStop = db.queryAll.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(db.queryAll.mock.calls.length).toBe(callsAfterStop)
+  })
+
+  it('skips an overlapping auto-scheduler reconciliation tick', async () => {
+    vi.useFakeTimers()
+    let releaseFirst
+    let first = true
+    db.queryAll.mockImplementation(() => {
+      if (first) {
+        first = false
+        return new Promise(resolve => { releaseFirst = resolve })
+      }
+      return Promise.resolve([])
+    })
+
+    startAutoSchedulerReconciler()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(__schedulerTest.getPeriodicRuntime().autoReconcilerInFlight).toBe(true)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(__schedulerTest.getPeriodicRuntime().autoReconcilerSkippedOverlap).toBe(1)
+
+    releaseFirst([])
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+    expect(__schedulerTest.getPeriodicRuntime().autoReconcilerInFlight).toBe(false)
   })
 })
 

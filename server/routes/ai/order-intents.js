@@ -20,6 +20,9 @@ const DEFINITIVE_ABSENCE_GRACE_MS = 5 * 60_000
 const MAX_RECONCILIATION_LOOKBACK_SECONDS = 30 * 24 * 60 * 60
 
 let reconcileTimer = null
+let reconcileInFlight = null
+let reconcileStopping = false
+let skippedOverlapCount = 0
 
 function toPositiveId(value) {
   const id = Number(value)
@@ -788,21 +791,45 @@ export async function reconcileUncertainOrderIntents({ bridge = mt5Bridge, limit
 
 export function startOrderIntentReconciler() {
   if (reconcileTimer) return
-  const run = async () => {
-    try {
-      await recoverExpiredOrderIntentLeases()
-      await reconcileUncertainOrderIntents()
-    } catch (error) {
-      console.error('[OrderIntent] Reconciler failed:', error.message)
+  reconcileStopping = false
+  const run = () => {
+    if (reconcileStopping) return Promise.resolve({ skipped:'stopped' })
+    if (reconcileInFlight) {
+      skippedOverlapCount += 1
+      console.warn(`[OrderIntent] Reconciler skipped-overlap (count=${skippedOverlapCount})`)
+      return reconcileInFlight
     }
+    const promise = (async () => {
+      try {
+        await recoverExpiredOrderIntentLeases()
+        await reconcileUncertainOrderIntents()
+      } catch (error) {
+        console.error('[OrderIntent] Reconciler failed:', error.message)
+      }
+    })()
+    reconcileInFlight = promise
+    promise.finally(() => {
+      if (reconcileInFlight === promise) reconcileInFlight = null
+    }).catch(() => {})
+    return promise
   }
   reconcileTimer = setInterval(run, RECONCILE_INTERVAL_MS)
   reconcileTimer.unref?.()
-  run()
+  void run()
 }
 
 export function stopOrderIntentReconciler() {
-  if (!reconcileTimer) return
-  clearInterval(reconcileTimer)
+  reconcileStopping = true
+  if (reconcileTimer) clearInterval(reconcileTimer)
   reconcileTimer = null
+  return reconcileInFlight
+}
+
+export const __orderIntentTest = {
+  getReconcilerRuntime: () => ({
+    timerActive:Boolean(reconcileTimer),
+    inFlight:Boolean(reconcileInFlight),
+    skippedOverlapCount,
+    stopping:reconcileStopping,
+  }),
 }

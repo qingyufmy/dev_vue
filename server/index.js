@@ -8,7 +8,7 @@ import { JWT_SECRET, PORT, JSON_BODY_LIMIT, PUBLIC_UPLOAD_DIR, AUTH_RATE_LIMIT_M
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync } from 'fs'
-import { initDB, queryOne, queryRun } from './db.js'
+import { initDB, getDB, queryOne, queryRun } from './db.js'
 import { runMigrations } from './migrations.js'
 import { isEncryptionAvailable } from './ai-credential.js'
 import { assertModelProfileSchemaReady, migrateLegacyConfigs, recoverStaleModelUsageReservations } from './routes/ai/model-profiles.js'
@@ -35,13 +35,14 @@ import bridgeReleaseRoutes from './routes/bridge-release.js'
 import bridgeMaintenanceRoutes from './routes/bridge-maintenance.js'
 import bridgeRuntimeControlRoutes from './routes/bridge-runtime-control.js'
 import { fetchSentiment } from './services/sentiment.js'
-import { cacheSetJSON } from './redis.js'
+import { cacheSetJSON, getRedis } from './redis.js'
 import { initAutoSchedulers, startPeriodReviewWorker, startMemoryCompressionWorker, startManualAnalysisJobs,
   startHistoryCompareRecoveryWorker } from './routes/ai/index.js'
 import { recoverAbandonedAutoInferenceTasks } from './routes/ai/model-task-runtime.js'
 import { recoverAbandonedPeriodReviewModelTasks } from './routes/ai/period-review.js'
 import { recoverAbandonedMemoryCompressionModelTasks } from './routes/ai/memory-system.js'
-import { startOrderIntentReconciler } from './routes/ai/order-intents.js'
+import { startOrderIntentReconciler, stopOrderIntentReconciler } from './routes/ai/order-intents.js'
+import { stopAutoSchedulers, stopPendingReconciler } from './routes/ai/scheduler.js'
 import { startPositionManagementWorker } from './routes/ai/position-management-worker.js'
 import { tokenVersionMatches } from './middleware/auth.js'
 import { initBridgeWS } from './bridge-ws.js'
@@ -306,12 +307,129 @@ app.get('*', (req, res) => {
 // Init DB and start
 const server = http.createServer(app)
 const autoInferenceRecoveryLogDeduper = createAutoInferenceRecoveryLogDeduper()
+const shutdownTimers = new Set()
+const SHUTDOWN_TIMEOUT_MS = 15_000
+let shutdownPromise = null
+let shutdownSignalHandled = false
+
+function trackShutdownTimer(timer) {
+  if (timer) shutdownTimers.add(timer)
+  return timer
+}
+
+function clearShutdownTimers() {
+  for (const timer of shutdownTimers) {
+    clearTimeout(timer)
+    clearInterval(timer)
+  }
+  shutdownTimers.clear()
+}
+
+async function waitForShutdownTask(promise, label, timeoutMs) {
+  if (!promise || typeof promise.then !== 'function') return { label, settled:true }
+  const timeout = Math.max(0, Number(timeoutMs) || SHUTDOWN_TIMEOUT_MS)
+  const result = await Promise.race([
+    Promise.resolve(promise).then(() => ({ label, settled:true }), error => ({ label, settled:true, error })),
+    new Promise(resolve => setTimeout(() => resolve({ label, settled:false, timedOut:true }), timeout)),
+  ])
+  if (result.timedOut) console.error(`[Shutdown] ${label} did not settle within ${timeout}ms`)
+  if (result.error) console.error(`[Shutdown] ${label} failed:`, result.error.message)
+  return result
+}
+
+async function closeHttpServer(timeoutMs) {
+  if (!server.listening) return { closed:false, reason:'not_listening' }
+  const closePromise = new Promise(resolve => {
+    server.close(error => resolve({ closed:!error, error }))
+  })
+  const result = await waitForShutdownTask(closePromise, 'HTTP server', timeoutMs)
+  if (result.error && result.error.code !== 'ERR_SERVER_NOT_RUNNING') {
+    console.error('[Shutdown] HTTP server close failed:', result.error.message)
+  }
+  return result
+}
+
+async function closeRedisAndDatabase() {
+  const redis = getRedis()
+  if (redis && typeof redis.quit === 'function') {
+    try {
+      await waitForShutdownTask(redis.quit(), 'Redis client', SHUTDOWN_TIMEOUT_MS)
+      console.log('[Shutdown] Redis client closed')
+    } catch (error) {
+      console.error('[Shutdown] Redis close failed:', error.message)
+    }
+  } else {
+    console.warn('[Shutdown] Redis client has no safe quit capability; leaving it untouched')
+  }
+
+  // mysql2's pool.end() is the existing pool-safe close operation.  Do not
+  // destroy active sockets or issue a forced connection kill here.
+  const db = getDB()
+  if (db && typeof db.end === 'function') {
+    try {
+      await waitForShutdownTask(db.end(), 'MySQL pool', SHUTDOWN_TIMEOUT_MS)
+      console.log('[Shutdown] MySQL pool closed')
+    } catch (error) {
+      console.error('[Shutdown] MySQL pool close failed:', error.message)
+    }
+  } else {
+    console.warn('[Shutdown] MySQL pool has no safe end capability; leaving it untouched')
+  }
+}
+
+export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEOUT_MS } = {}) {
+  if (shutdownPromise) return shutdownPromise
+  shutdownPromise = (async () => {
+    const timeout = Math.max(0, Number(timeoutMs) || SHUTDOWN_TIMEOUT_MS)
+    console.log(`[Shutdown] ${signal}: stopping new scheduler rounds`)
+
+    // First reject new scheduler/reconciler rounds and clear their timers.
+    // Their returned Promises are retained so the next phase can wait on the
+    // work already admitted before shutdown began.
+    const autoStop = stopAutoSchedulers({ timeoutMs:timeout })
+    const pendingStop = stopPendingReconciler()
+    const orderIntentStop = stopOrderIntentReconciler()
+    clearShutdownTimers()
+
+    await Promise.all([
+      waitForShutdownTask(autoStop, 'automatic schedulers', timeout),
+      waitForShutdownTask(pendingStop, 'pending reconciler', timeout),
+      waitForShutdownTask(orderIntentStop, 'order-intent reconciler', timeout),
+    ])
+
+    // Stop accepting HTTP work only after scheduler rounds have been fenced;
+    // then close the network and the existing Redis/MySQL client resources.
+    await closeHttpServer(timeout)
+    await closeRedisAndDatabase()
+    console.log('[Shutdown] graceful shutdown complete')
+    return { ok:true, signal }
+  })()
+  return shutdownPromise
+}
+
+function installGracefulShutdownHandlers() {
+  const handleSignal = signal => {
+    if (shutdownSignalHandled) return
+    shutdownSignalHandled = true
+    void gracefulShutdown({ signal }).then(
+      () => process.exit(0),
+      error => {
+        console.error('[Shutdown] graceful shutdown failed:', error?.stack || error)
+        process.exit(1)
+      }
+    )
+  }
+  process.once('SIGTERM', () => handleSignal('SIGTERM'))
+  process.once('SIGINT', () => handleSignal('SIGINT'))
+}
+
 // HTTP timeout settings — prevent reverse proxy / long-poll issues with WebSocket upgrade
 server.keepAliveTimeout = 5000
 server.headersTimeout = 15000
 server.requestTimeout = 120000
 initBridgeWS(server)
 installFatalProcessHandlers()
+installGracefulShutdownHandlers()
 
 ;(async () => {
   await initDB()
@@ -351,11 +469,11 @@ installFatalProcessHandlers()
     }
   }
   await pruneBridgeCommandHistory()
-  const bridgeCommandPruneTimer = setInterval(pruneBridgeCommandHistory, 24 * 60 * 60 * 1000)
+  const bridgeCommandPruneTimer = trackShutdownTimer(setInterval(pruneBridgeCommandHistory, 24 * 60 * 60 * 1000))
   bridgeCommandPruneTimer.unref?.()
 
   await startHistoryCompareRecoveryWorker()
-  const modelUsageRecoveryTimer = setInterval(recoverModelUsageReservations, 5 * 60 * 1000)
+  const modelUsageRecoveryTimer = trackShutdownTimer(setInterval(recoverModelUsageReservations, 5 * 60 * 1000))
   modelUsageRecoveryTimer.unref?.()
   const recoverAutoInferenceTasks = async () => {
     try {
@@ -368,7 +486,7 @@ installFatalProcessHandlers()
     }
   }
   await recoverAutoInferenceTasks()
-  const autoInferenceRecoveryTimer = setInterval(recoverAutoInferenceTasks, 30_000)
+  const autoInferenceRecoveryTimer = trackShutdownTimer(setInterval(recoverAutoInferenceTasks, 30_000))
   autoInferenceRecoveryTimer.unref?.()
   const recoverBackgroundModelTasks = async () => {
     try {
@@ -413,7 +531,7 @@ installFatalProcessHandlers()
       console.log('[Sentiment] Initial fetch returned no valid data, keeping existing cache')
     }
   }).catch(e => console.error('[Sentiment] Initial fetch failed:', e.message))
-  setInterval(async () => {
+  trackShutdownTimer(setInterval(async () => {
     try {
       const data = await fetchSentiment()
       const hasValid = data.some(d => d.longPct !== null)
@@ -424,7 +542,7 @@ installFatalProcessHandlers()
         console.log('[Sentiment] Refresh returned no valid data, keeping existing cache')
       }
     } catch (e) { console.error('[Sentiment] Refresh failed:', e.message) }
-  }, 30 * 60 * 1000)
+  }, 30 * 60 * 1000))
 })().catch((error) => {
   console.error('[Startup] Fatal initialization error:', error?.stack || error)
   process.exit(1)

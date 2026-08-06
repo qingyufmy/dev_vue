@@ -74,7 +74,7 @@ describe('rollout hardening contract', () => {
   })
 
   it('checks scheduler cooldown before repeated database and model resolution work', () => {
-    const tick = scheduler.slice(scheduler.indexOf('const tick = async () =>'), scheduler.indexOf('const lockToken = await acquireLock(key)'))
+    const tick = scheduler.slice(scheduler.indexOf('const runTick = async () =>'), scheduler.indexOf('const lockToken = await acquireLock(key)'))
     expect(tick.indexOf('redis.ttl')).toBeLessThan(tick.indexOf('getAutoSubscribers'))
     expect(tick.indexOf('redis.ttl')).toBeLessThan(tick.indexOf('getUnifiedAutoInferenceConfig'))
     expect(tick).toContain('Math.min(ttl * 1000, 30000)')

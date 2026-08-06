@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockQueryAll = vi.fn()
 const mockQueryOne = vi.fn()
@@ -29,6 +29,9 @@ import {
   prepareAndExecuteOrderIntent,
   recoverExpiredOrderIntentLeases,
   reconcileUncertainOrderIntents,
+  startOrderIntentReconciler,
+  stopOrderIntentReconciler,
+  __orderIntentTest,
 } from '../../server/routes/ai/order-intents.js'
 
 describe('executionTicket', () => {
@@ -186,6 +189,11 @@ beforeEach(() => {
   })
 })
 
+afterEach(() => {
+  stopOrderIntentReconciler()
+  vi.useRealTimers()
+})
+
 describe('idempotency identity', () => {
   it('is stable for one signal/user/account and changes across accounts', () => {
     const first = buildOrderIdempotencyKey({ userId: 1, tradingAccountId: 2, signalId: 3 })
@@ -197,6 +205,42 @@ describe('idempotency identity', () => {
 
   it('requires a client request id for non-signal orders', () => {
     expect(() => buildOrderIdempotencyKey({ userId: 1 })).toThrow('client_request_id_required')
+  })
+})
+
+describe('order-intent reconciler single-flight', () => {
+  it('skips an overlapping tick, runs again after settle, and stays stopped', async () => {
+    vi.useFakeTimers()
+    let releaseFirst
+    let first = true
+    mockQueryAll.mockImplementation(() => {
+      if (first) {
+        first = false
+        return new Promise(resolve => { releaseFirst = resolve })
+      }
+      return Promise.resolve([])
+    })
+
+    startOrderIntentReconciler()
+    await Promise.resolve()
+    expect(__orderIntentTest.getReconcilerRuntime()).toMatchObject({ timerActive:true, inFlight:true })
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(__orderIntentTest.getReconcilerRuntime().skippedOverlapCount).toBe(1)
+
+    releaseFirst([])
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+    expect(__orderIntentTest.getReconcilerRuntime().inFlight).toBe(false)
+
+    const callsAfterSettle = mockQueryAll.mock.calls.length
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(mockQueryAll.mock.calls.length).toBeGreaterThan(callsAfterSettle)
+
+    stopOrderIntentReconciler()
+    const callsAfterStop = mockQueryAll.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mockQueryAll.mock.calls.length).toBe(callsAfterStop)
   })
 })
 
