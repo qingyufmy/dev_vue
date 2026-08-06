@@ -4,6 +4,7 @@ import {
   buildSafeExecutionOutcome,
   buildSafeExecutionEvent,
   localizeAuditRow,
+  localizeAdminAuditEvent,
   prepareAuditRecord,
   shouldSkipHoldAudit,
 } from '../server/audit-localization.js'
@@ -95,6 +96,53 @@ describe('audit localization', () => {
       .toMatchObject({ status:'已开始', result:{ status:'已开始' } })
     expect(prepareAuditRecord('pending_superseded', {}, { status:'superseded' }, 'success').result.status)
       .toBe('已被替换')
+  })
+
+  it('returns stable codes and a Chinese management change summary', () => {
+    expect(localizeAdminAuditEvent({
+      action:'admin_user_subscription_updated',
+      target_type:'strategy_subscription',
+      detail:JSON.stringify({ target_user_id:7, changes:{ execution_enabled:true, scope:'platform' } }),
+    })).toMatchObject({
+      raw_action:'admin_user_subscription_updated',
+      action_code:'admin_user_subscription_updated',
+      action_label:'用户策略订阅已更新',
+      target_type_code:'strategy_subscription',
+      target_type_label:'策略订阅',
+      status_code:'info',
+      target_label:'策略订阅',
+      sensitive_fields_redacted:false,
+      change_summary:[
+        { field_code:'target_user_id', field_label:'目标用户编号', value:'7' },
+        { field_code:'changes.execution_enabled', field_label:'允许执行', value:'是' },
+        { field_code:'changes.scope', field_label:'范围', value:'平台' },
+      ],
+    })
+  })
+
+  it('marks unknown management vocabulary without hiding its stable code', () => {
+    expect(localizeAdminAuditEvent({
+      action:'future_admin_action', target_type:'future_target', detail:{ future_key:'future_value' },
+    })).toMatchObject({
+      action_code:'future_admin_action',
+      action_label:'未登记的管理动作',
+      target_type_code:'future_target',
+      target_type_label:'未登记的管理对象',
+      change_summary:[{ field_code:'future_key', field_label:'未登记字段', value:'future_value' }],
+    })
+  })
+
+  it('redacts sensitive management details before they reach the browser', () => {
+    const event = localizeAdminAuditEvent({
+      action:'system_config_updated', target_type:'system_config',
+      detail:{ api_key:'secret-value', password_reset:true },
+    })
+    expect(event.sensitive_fields_redacted).toBe(true)
+    expect(event.detail).toBeUndefined()
+    expect(event.details).toEqual([
+      { field_code:'api_key', field_label:'未登记字段', value:'已隐藏' },
+      { field_code:'password_reset', field_label:'重置密码', value:'是' },
+    ])
   })
 
   it('keeps delivery recovery summaries specific and user-readable', () => {

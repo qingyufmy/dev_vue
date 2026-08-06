@@ -26,7 +26,7 @@ function pageParams(page, pageSize) {
 }
 
 export async function getAdminContentSystemOverview() {
-  const [summary, categories, release] = await Promise.all([
+  const [summary, completeness, categories, release] = await Promise.all([
     queryOne(`SELECT
       (SELECT COUNT(*) FROM courses) AS courses_total,
       (SELECT COUNT(*) FROM courses WHERE status = 'published') AS courses_published,
@@ -35,13 +35,65 @@ export async function getAdminContentSystemOverview() {
       (SELECT COUNT(*) FROM feedback WHERE created_at >= CURDATE()) AS feedback_today,
       (SELECT COUNT(*) FROM course_resources WHERE type = 'attachment') AS attachments_total,
       (SELECT COUNT(DISTINCT category) FROM system_config) AS config_categories`),
+    queryOne(`SELECT
+      COUNT(*) AS published_total,
+      SUM(TRIM(COALESCE(courses.description, '')) = '') AS missing_description,
+      SUM(courses.content_type = 'video'
+        AND TRIM(COALESCE(courses.youtube_id, '')) = ''
+        AND TRIM(COALESCE(courses.bilibili_id, '')) = ''
+        AND TRIM(COALESCE(courses.cf_stream_id, '')) = ''
+        AND TRIM(COALESCE(courses.local_video_path, '')) = ''
+        AND COALESCE(courses.has_stream_video, 0) = 0) AS missing_video,
+      SUM(COALESCE(resources.attachment_count, 0) = 0) AS missing_attachment,
+      SUM(COALESCE(courses.quiz_count, 0) = 0) AS missing_quiz,
+      SUM(COALESCE(courses.mindmap_count, 0) + COALESCE(courses.knowledge_count, 0) = 0) AS missing_visual,
+      SUM(COALESCE(courses.updated_at, courses.created_at) < DATE_SUB(NOW(), INTERVAL 30 DAY)) AS stale_30d,
+      SUM(COALESCE(learning.learner_count, 0) > 0 AND (
+        TRIM(COALESCE(courses.description, '')) = ''
+        OR (courses.content_type = 'video'
+          AND TRIM(COALESCE(courses.youtube_id, '')) = ''
+          AND TRIM(COALESCE(courses.bilibili_id, '')) = ''
+          AND TRIM(COALESCE(courses.cf_stream_id, '')) = ''
+          AND TRIM(COALESCE(courses.local_video_path, '')) = ''
+          AND COALESCE(courses.has_stream_video, 0) = 0)
+        OR COALESCE(resources.attachment_count, 0) = 0
+        OR COALESCE(courses.quiz_count, 0) = 0
+        OR COALESCE(courses.mindmap_count, 0) + COALESCE(courses.knowledge_count, 0) = 0
+      )) AS incomplete_with_learning,
+      SUM(TRIM(COALESCE(courses.description, '')) <> ''
+        AND (courses.content_type <> 'video'
+          OR TRIM(COALESCE(courses.youtube_id, '')) <> ''
+          OR TRIM(COALESCE(courses.bilibili_id, '')) <> ''
+          OR TRIM(COALESCE(courses.cf_stream_id, '')) <> ''
+          OR TRIM(COALESCE(courses.local_video_path, '')) <> ''
+          OR COALESCE(courses.has_stream_video, 0) = 1)
+        AND COALESCE(resources.attachment_count, 0) > 0
+        AND COALESCE(courses.quiz_count, 0) > 0
+        AND COALESCE(courses.mindmap_count, 0) + COALESCE(courses.knowledge_count, 0) > 0) AS complete_count
+      FROM courses
+      LEFT JOIN (
+        SELECT episode_id, COUNT(*) AS attachment_count
+        FROM course_resources WHERE type = 'attachment' GROUP BY episode_id
+      ) resources ON resources.episode_id = courses.episode_id
+      LEFT JOIN (
+        SELECT episode_id, COUNT(DISTINCT user_id) AS learner_count
+        FROM progress GROUP BY episode_id
+      ) learning ON learning.episode_id = courses.episode_id
+      WHERE courses.status = 'published'`),
     queryAll(`SELECT category, COUNT(*) AS item_count, MAX(updated_at) AS updated_at
       FROM system_config GROUP BY category ORDER BY category`),
     queryAll("SELECT `key`, `value`, updated_at FROM system_config WHERE category = 'changelog' AND `key` IN ('version','content')"),
   ])
   const releaseMap = Object.fromEntries(release.map(item => [item.key, item]))
+  const publishedTotal = number(completeness?.published_total)
+  const completeCount = number(completeness?.complete_count)
   return {
     summary:Object.fromEntries(Object.entries(summary || {}).map(([key, value]) => [key, number(value)])),
+    content_health:{
+      ...Object.fromEntries(Object.entries(completeness || {}).map(([key, value]) => [key, number(value)])),
+      completeness_percent:publishedTotal > 0 ? Math.round((completeCount / publishedTotal) * 1000) / 10 : null,
+      feedback_workflow_available:false,
+    },
     categories:categories.map(item => ({ ...item, item_count:number(item.item_count) })),
     release:{ version:releaseMap.version?.value || '', content:releaseMap.content?.value || '', updated_at:releaseMap.version?.updated_at || releaseMap.content?.updated_at || null },
   }

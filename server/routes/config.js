@@ -1,11 +1,13 @@
 import { Router } from 'express'
-import { queryOne, queryAll, queryRun, logAudit } from '../db.js'
+import { createHash } from 'crypto'
+import { queryOne, queryAll, queryRun, withTransaction, logAudit } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 import { resetFixedAddressCache } from '../crypto/fixed-address.js'
 import { resetSmsConfigCache } from '../sms.js'
 import { validateAddress } from '../crypto/wallet.js'
 import { isEncryptionAvailable } from '../ai-credential.js'
 import { isSensitiveSystemConfigKey, protectSystemConfigValue, systemConfigRowsToMap } from '../system-config-secrets.js'
+import { sanitizeReleaseNote } from '../html-sanitizer.js'
 
 const router = Router()
 
@@ -13,6 +15,12 @@ const router = Router()
 const PUBLIC_CATEGORIES = new Set(['toolbox', 'market_menu', 'announcements', 'features', 'auth_toggle'])
 
 const BOOLEAN_VALUES = new Set(['true', 'false'])
+const RELEASE_NOTES_CATEGORY = 'changelog'
+const RELEASE_NOTES_VERSION_KEY = 'version'
+const RELEASE_NOTES_CONTENT_KEY = 'content'
+const RELEASE_NOTES_MIN_VERSION = 1
+const RELEASE_NOTES_MAX_VERSION = 2147483647
+const RELEASE_NOTES_MAX_CONTENT_LENGTH = 50000
 const ADMIN_CONFIG_SCHEMA = Object.freeze({
   auth_toggle:{ label:'登录与注册', source:'database', apply_mode:'immediate', keys:{
     email_enabled:{ type:'boolean', default:'true' }, phone_enabled:{ type:'boolean', default:'true' },
@@ -119,6 +127,97 @@ async function auditConfigChange(req, action, category, keys = []) {
   await logAudit({ userId:req.user.id, action, targetType:'system_config', detail:JSON.stringify({ category, keys }), ip:req.ip, userAgent:req.get('user-agent') })
 }
 
+function releaseNotesError(code, error) {
+  const value = new Error(error)
+  value.code = code
+  return value
+}
+
+function parseReleaseNoteVersion(value) {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value < RELEASE_NOTES_MIN_VERSION || value > RELEASE_NOTES_MAX_VERSION) {
+      throw releaseNotesError('release_notes_version_invalid', '通知序号必须是 1 到 2147483647 的整数')
+    }
+    return value
+  }
+  if (typeof value !== 'string' || !/^[0-9]+$/.test(value)) {
+    throw releaseNotesError('release_notes_version_invalid', '通知序号必须是 1 到 2147483647 的整数')
+  }
+  const normalized = Number(value)
+  if (!Number.isSafeInteger(normalized) || normalized < RELEASE_NOTES_MIN_VERSION || normalized > RELEASE_NOTES_MAX_VERSION) {
+    throw releaseNotesError('release_notes_version_invalid', '通知序号必须是 1 到 2147483647 的整数')
+  }
+  return normalized
+}
+
+function parseStoredReleaseNoteVersion(value) {
+  try { return parseReleaseNoteVersion(String(value ?? '')) } catch { return RELEASE_NOTES_MIN_VERSION }
+}
+
+function releaseNotesRevision(version, content) {
+  return createHash('sha256').update(`${version}\u0000${content}`, 'utf8').digest('hex')
+}
+
+function releaseNotesContentHash(content) {
+  return createHash('sha256').update(String(content || ''), 'utf8').digest('hex')
+}
+
+function releaseNotesBodyContent(value) {
+  if (value === undefined) return null
+  if (typeof value !== 'string') throw releaseNotesError('release_notes_content_invalid', '更新内容必须是文本')
+  if (value.length > RELEASE_NOTES_MAX_CONTENT_LENGTH) {
+    throw releaseNotesError('release_notes_content_too_long', '更新内容不能超过 50000 个字符')
+  }
+  return sanitizeReleaseNote(value)
+}
+
+function releaseNotesPayload(version, contentResult, legacyWrite = false) {
+  const content = contentResult?.content || ''
+  return {
+    ok: true,
+    version,
+    content,
+    revision: releaseNotesRevision(version, content),
+    sanitized: Boolean(contentResult?.removed),
+    removed: Boolean(contentResult?.removed),
+    removed_categories: contentResult?.removedCategories || [],
+    legacy_write: legacyWrite,
+  }
+}
+
+function releaseNotesRowsToState(rows) {
+  const map = new Map((rows || []).map(row => [row.key, row.value]))
+  const version = parseStoredReleaseNoteVersion(map.get(RELEASE_NOTES_VERSION_KEY) || String(RELEASE_NOTES_MIN_VERSION))
+  const rawContent = String(map.get(RELEASE_NOTES_CONTENT_KEY) || '')
+  const contentResult = sanitizeReleaseNote(rawContent)
+  return { version, rawContent, contentResult }
+}
+
+async function readReleaseNotesRows() {
+  return releaseNotesRowsToState(await queryAll(
+    'SELECT `key`, `value` FROM system_config WHERE category = ? AND `key` IN (?, ?)',
+    [RELEASE_NOTES_CATEGORY, RELEASE_NOTES_VERSION_KEY, RELEASE_NOTES_CONTENT_KEY],
+  ))
+}
+
+function releaseNotesAuditDetail({ oldVersion, newVersion, oldContent, newContent, removedCategories, legacyWrite }) {
+  return JSON.stringify({
+    old_version:oldVersion,
+    new_version:newVersion,
+    old_content_hash:releaseNotesContentHash(oldContent),
+    new_content_hash:releaseNotesContentHash(newContent),
+    sanitized_removed_categories:removedCategories,
+    legacy_write:Boolean(legacyWrite),
+  })
+}
+
+function releaseNotesErrorResponse(res, error) {
+  const code = String(error?.code || '')
+  const status = code === 'release_notes_revision_conflict' || code === 'release_notes_version_behind' ? 409
+    : code.startsWith('release_notes_') ? 400 : 500
+  return res.status(status).json({ ok:false, code:code || 'release_notes_update_failed', error:error?.message || '更新失败' })
+}
+
 // Public: get config by category (for toolbox and market menu)
 router.get('/system-config-public/:category', async (req, res) => {
   const category = req.params.category
@@ -137,57 +236,91 @@ router.get('/system-config-public/:category', async (req, res) => {
 // Public: get current changelog version + content
 router.get('/changelog/current', async (req, res) => {
   try {
-    const versionRow = await queryOne("SELECT `value` FROM system_config WHERE category = 'changelog' AND `key` = 'version'")
-    const contentRow = await queryOne("SELECT `value` FROM system_config WHERE category = 'changelog' AND `key` = 'content'")
-    res.json({
-      ok: true,
-      version: parseInt(versionRow?.value || '1', 10),
-      content: contentRow?.value || ''
-    })
+    const state = await readReleaseNotesRows()
+    res.json(releaseNotesPayload(state.version, state.contentResult))
   } catch (err) {
     console.error('[Config] Changelog error:', err)
-    res.json({ ok: true, version: 1, content: '' })
+    const contentResult = sanitizeReleaseNote('')
+    res.json(releaseNotesPayload(RELEASE_NOTES_MIN_VERSION, contentResult))
   }
 })
 
 // Admin: get changelog
 router.get('/admin/release-notes', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const versionRow = await queryOne("SELECT `value` FROM system_config WHERE category = 'changelog' AND `key` = 'version'")
-    const contentRow = await queryOne("SELECT `value` FROM system_config WHERE category = 'changelog' AND `key` = 'content'")
-    res.json({ ok: true, version: parseInt(versionRow?.value || '1', 10), content: contentRow?.value || '' })
+    const state = await readReleaseNotesRows()
+    res.json(releaseNotesPayload(state.version, state.contentResult))
   } catch (err) {
     console.error('[Config] Get changelog error:', err)
-    res.json({ ok: false, error: '读取失败' })
+    res.status(500).json({ ok:false, code:'release_notes_read_failed', error:'读取失败' })
+  }
+})
+
+// Admin: read-only server-side release note preview
+router.post('/admin/release-notes/preview', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const contentResult = releaseNotesBodyContent(req.body?.content)
+    if (!contentResult) throw releaseNotesError('release_notes_content_invalid', '请提供更新内容')
+    res.json({
+      ok:true,
+      content:contentResult.content,
+      sanitized:contentResult.sanitized,
+      removed:contentResult.removed,
+      removed_categories:contentResult.removedCategories,
+    })
+  } catch (error) {
+    releaseNotesErrorResponse(res, error)
   }
 })
 
 // Admin: update changelog
 router.post('/admin/release-notes', authMiddleware, adminOnly, async (req, res) => {
-  const { version, content } = req.body
-  if (version === undefined || version === null) {
-    return res.json({ ok: false, error: '版本号必填' })
-  }
+  const { version, content, expected_revision:expectedRevision } = req.body || {}
   try {
-    const verStr = String(parseInt(version, 10))
-    const existing = await queryOne("SELECT id FROM system_config WHERE category = 'changelog' AND `key` = 'version'")
-    if (existing) {
-      await queryRun("UPDATE system_config SET `value` = ? WHERE category = 'changelog' AND `key` = 'version'", [verStr])
-    } else {
-      await queryRun("INSERT INTO system_config (category, `key`, `value`, label) VALUES (?, ?, ?, ?)", ['changelog', 'version', verStr, '当前版本号'])
+    if (version === undefined || version === null) throw releaseNotesError('release_notes_version_required', '通知序号必填')
+    const nextVersion = parseReleaseNoteVersion(version)
+    const nextContentResult = releaseNotesBodyContent(content)
+    if (expectedRevision !== undefined && (typeof expectedRevision !== 'string' || !/^[a-f0-9]{64}$/i.test(expectedRevision))) {
+      throw releaseNotesError('release_notes_revision_invalid', '发布说明版本已失效，请刷新后重试')
     }
-    if (content !== undefined) {
-      const existingContent = await queryOne("SELECT id FROM system_config WHERE category = 'changelog' AND `key` = 'content'")
-      if (existingContent) {
-        await queryRun("UPDATE system_config SET `value` = ? WHERE category = 'changelog' AND `key` = 'content'", [content])
-      } else {
-        await queryRun("INSERT INTO system_config (category, `key`, `value`, label) VALUES (?, ?, ?, ?)", ['changelog', 'content', content, '更新日志内容（HTML）'])
+    const result = await withTransaction(async runner => {
+      // Insert missing rows idempotently before locking both keys in a fixed
+      // order. The unique (category, key) index makes this safe across old
+      // installations that predate the changelog seed.
+      await runner('INSERT INTO system_config (category, `key`, `value`, label) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE `key` = VALUES(`key`)', [RELEASE_NOTES_CATEGORY, RELEASE_NOTES_VERSION_KEY, String(RELEASE_NOTES_MIN_VERSION), '当前通知序号'])
+      await runner('INSERT INTO system_config (category, `key`, `value`, label) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE `key` = VALUES(`key`)', [RELEASE_NOTES_CATEGORY, RELEASE_NOTES_CONTENT_KEY, '', '更新日志内容（HTML）'])
+      const [lockedRows] = await runner(`SELECT \`key\`, \`value\` FROM system_config WHERE category = ? AND \`key\` IN (?, ?) ORDER BY CASE \`key\` WHEN ? THEN 1 WHEN ? THEN 2 END FOR UPDATE`, [RELEASE_NOTES_CATEGORY, RELEASE_NOTES_VERSION_KEY, RELEASE_NOTES_CONTENT_KEY, RELEASE_NOTES_VERSION_KEY, RELEASE_NOTES_CONTENT_KEY])
+      const current = releaseNotesRowsToState(lockedRows)
+      const currentRevision = releaseNotesRevision(current.version, current.contentResult.content)
+      if (expectedRevision !== undefined && expectedRevision.toLowerCase() !== currentRevision) {
+        throw releaseNotesError('release_notes_revision_conflict', '发布说明已被其他管理员修改，请刷新后重试')
       }
-    }
-    res.json({ ok: true })
+      if (nextVersion < current.version) {
+        throw releaseNotesError('release_notes_version_behind', '通知序号不能小于当前序号')
+      }
+      const nextState = nextContentResult || current.contentResult
+      const nextStoredContent = nextContentResult ? nextState.content : current.rawContent
+      if (nextState.content.length > RELEASE_NOTES_MAX_CONTENT_LENGTH) {
+        throw releaseNotesError('release_notes_content_too_long', '更新内容不能超过 50000 个字符')
+      }
+      const removedCategories = [...new Set([
+        ...current.contentResult.removedCategories,
+        ...(nextContentResult?.removedCategories || []),
+      ])].sort()
+      const legacyWrite = expectedRevision === undefined
+      await runner('UPDATE system_config SET `value` = ?, updated_at = NOW() WHERE category = ? AND `key` = ?', [String(nextVersion), RELEASE_NOTES_CATEGORY, RELEASE_NOTES_VERSION_KEY])
+      if (nextContentResult) await runner('UPDATE system_config SET `value` = ?, updated_at = NOW() WHERE category = ? AND `key` = ?', [nextStoredContent, RELEASE_NOTES_CATEGORY, RELEASE_NOTES_CONTENT_KEY])
+      const detail = releaseNotesAuditDetail({ oldVersion:current.version, newVersion:nextVersion, oldContent:current.rawContent, newContent:nextStoredContent, removedCategories, legacyWrite })
+      const [users] = await runner('SELECT email, nickname FROM users WHERE id = ?', [req.user.id])
+      const actor = users?.[0] || {}
+      await runner(`INSERT INTO audit_logs (user_id, user_email, user_nickname, action, target_type, target_id, detail, ip, user_agent)
+        VALUES (?, ?, ?, 'release_notes_updated', 'system_config', NULL, ?, ?, ?)`, [req.user.id, actor.email || '', actor.nickname || '', detail, req.ip || '', req.get('user-agent') || ''])
+      return { version:nextVersion, contentResult:nextState, legacyWrite }
+    })
+    res.json(releaseNotesPayload(result.version, result.contentResult, result.legacyWrite))
   } catch (err) {
     console.error('[Config] Update changelog error:', err)
-    res.json({ ok: false, error: '更新失败' })
+    releaseNotesErrorResponse(res, err)
   }
 })
 

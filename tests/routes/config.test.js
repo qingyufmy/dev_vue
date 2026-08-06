@@ -2,10 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import http from 'http'
 
+const { transactionRunner } = vi.hoisted(() => ({ transactionRunner: vi.fn() }))
+
 vi.mock('../../server/db.js', () => ({
   queryOne: vi.fn(),
   queryAll: vi.fn(),
   queryRun: vi.fn(),
+  withTransaction: vi.fn(async callback => callback(transactionRunner)),
   logAudit: vi.fn(),
 }))
 
@@ -27,9 +30,10 @@ vi.mock('../../server/sms.js', () => ({
   sendSms:vi.fn(),
 }))
 
-import { queryAll, queryOne, queryRun } from '../../server/db.js'
+import { queryAll, queryOne, queryRun, withTransaction } from '../../server/db.js'
 import { loadSmsConfig, sendSms } from '../../server/sms.js'
 import configRouter from '../../server/routes/config.js'
+import { sanitizeReleaseNote } from '../../server/html-sanitizer.js'
 
 function makeApp() {
   const app = express()
@@ -47,6 +51,23 @@ function httpReq(app, method, path, body) {
         let data = ''
         res.on('data', chunk => data += chunk)
         res.on('end', () => { server.close(); resolve(JSON.parse(data)) })
+      })
+      req.on('error', reject)
+      if (body) req.write(JSON.stringify(body))
+      req.end()
+    })
+  })
+}
+
+function httpReqWithStatus(app, method, path, body) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, () => {
+      const port = server.address().port
+      const opts = { hostname: '127.0.0.1', port, path, method, headers: { 'Content-Type': 'application/json' } }
+      const req = http.request(opts, (res) => {
+        let data = ''
+        res.on('data', chunk => data += chunk)
+        res.on('end', () => { server.close(); resolve({ status:res.statusCode, body:JSON.parse(data) }) })
       })
       req.on('error', reject)
       if (body) req.write(JSON.stringify(body))
@@ -111,9 +132,7 @@ describe('config.js — GET /changelog/current', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('返回当前版本号和内容', async () => {
-    queryOne
-      .mockResolvedValueOnce({ value: '5' })
-      .mockResolvedValueOnce({ value: '更新内容' })
+    queryAll.mockResolvedValueOnce([{ key:'version', value:'5' }, { key:'content', value:'更新内容' }])
     const body = await httpReq(makeApp(), 'GET', '/api/changelog/current')
     expect(body.ok).toBe(true)
     expect(body.version).toBe(5)
@@ -121,11 +140,111 @@ describe('config.js — GET /changelog/current', () => {
   })
 
   it('无配置时返回默认值', async () => {
-    queryOne.mockResolvedValue(null)
+    queryAll.mockResolvedValue([])
     const body = await httpReq(makeApp(), 'GET', '/api/changelog/current')
     expect(body.ok).toBe(true)
     expect(body.version).toBe(1)
     expect(body.content).toBe('')
+  })
+})
+
+describe('config.js — release note safety and concurrency contract', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    transactionRunner.mockReset()
+    withTransaction.mockImplementation(async callback => callback(transactionRunner))
+  })
+
+  function configureTransaction({ version = '5', content = '旧内容', user = { email:'admin@example.test', nickname:'管理员' }, failAt = '' } = {}) {
+    let index = 0
+    transactionRunner.mockImplementation(async (sql) => {
+      index += 1
+      if (failAt && sql.includes(failAt)) throw new Error('simulated transaction failure')
+      if (sql.includes('SELECT `key`, `value` FROM system_config')) return [[{ key:'version', value:version }, { key:'content', value:content }], []]
+      if (sql.includes('SELECT email, nickname FROM users')) return [[user], []]
+      return [{ affectedRows:1, insertId:1 }, []]
+    })
+    return () => index
+  }
+
+  it('returns a sanitized public payload and deterministic revision', async () => {
+    queryAll.mockResolvedValueOnce([{ key:'version', value:'5' }, { key:'content', value:'<script>alert(1)</script><h2 style="color:#c90;position:absolute">安全内容</h2>' }])
+    const body = await httpReq(makeApp(), 'GET', '/api/changelog/current')
+    const sanitized = sanitizeReleaseNote('<script>alert(1)</script><h2 style="color:#c90;position:absolute">安全内容</h2>')
+    expect(body.content).toBe(sanitized.content)
+    expect(body.revision).toMatch(/^[a-f0-9]{64}$/)
+    expect(body.content).not.toContain('<script')
+    expect(body.removed_categories).toEqual(expect.arrayContaining(['script', 'dangerous_style']))
+  })
+
+  it('previews through the same server sanitizer without opening a transaction', async () => {
+    const body = await httpReq(makeApp(), 'POST', '/api/admin/release-notes/preview', { content:'<h2>标题</h2><a href="javascript:bad()" onclick="bad()">链接</a>' })
+    expect(body.ok).toBe(true)
+    expect(body.content).toContain('<h2>标题</h2>')
+    expect(body.content).not.toContain('javascript:')
+    expect(body.removed_categories).toEqual(expect.arrayContaining(['dangerous_url', 'event_attribute']))
+    expect(withTransaction).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['0'], ['-1'], ['1.5'], [''], [' '], ['NaN'], ['1abc'], ['2147483648'],
+  ])('rejects invalid notification sequence %j with 400 and no transaction', async (version) => {
+    const result = await httpReqWithStatus(makeApp(), 'POST', '/api/admin/release-notes', { version, content:'内容' })
+    expect(result.status).toBe(400)
+    expect(result.body).toMatchObject({ ok:false, code:'release_notes_version_invalid' })
+    expect(withTransaction).not.toHaveBeenCalled()
+  })
+
+  it('updates both rows and writes an audit without logging body text', async () => {
+    configureTransaction({ version:'5', content:'旧内容' })
+    const result = await httpReqWithStatus(makeApp(), 'POST', '/api/admin/release-notes', { version:'6', content:'<p>新内容</p>' })
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ ok:true, version:6, content:'<p>新内容</p>', legacy_write:true })
+    expect(transactionRunner).toHaveBeenCalledWith(expect.stringContaining('FOR UPDATE'), expect.any(Array))
+    expect(transactionRunner).toHaveBeenCalledWith(expect.stringContaining("'release_notes_updated'"), expect.arrayContaining([expect.anything(), expect.any(String), expect.any(String), expect.stringContaining('old_content_hash')]))
+    const auditCall = transactionRunner.mock.calls.find(([sql]) => sql.includes("'release_notes_updated'"))
+    expect(JSON.stringify(auditCall)).not.toContain('新内容')
+  })
+
+  it('rejects a stale revision and a lower sequence with 409 before updates', async () => {
+    configureTransaction({ version:'5', content:'旧内容' })
+    const stale = await httpReqWithStatus(makeApp(), 'POST', '/api/admin/release-notes', { version:'5', content:'新内容', expected_revision:'0'.repeat(64) })
+    expect(stale.status).toBe(409)
+    expect(stale.body.code).toBe('release_notes_revision_conflict')
+    expect(transactionRunner.mock.calls.some(([sql]) => sql.startsWith('UPDATE system_config'))).toBe(false)
+
+    transactionRunner.mockClear()
+    configureTransaction({ version:'5', content:'旧内容' })
+    const lower = await httpReqWithStatus(makeApp(), 'POST', '/api/admin/release-notes', { version:'4', content:'新内容' })
+    expect(lower.status).toBe(409)
+    expect(lower.body.code).toBe('release_notes_version_behind')
+  })
+
+  it('keeps the transaction boundary when a later write fails', async () => {
+    configureTransaction({ version:'5', content:'旧内容', failAt:'UPDATE system_config SET `value` = ?' })
+    const result = await httpReqWithStatus(makeApp(), 'POST', '/api/admin/release-notes', { version:'6', content:'新内容' })
+    expect(result.status).toBe(500)
+    expect(result.body).toMatchObject({ ok:false, code:'release_notes_update_failed' })
+    expect(withTransaction).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not silently rewrite stored legacy HTML when an old client omits content', async () => {
+    configureTransaction({ version:'5', content:'<div style="display:grid">存量内容</div>' })
+    const result = await httpReqWithStatus(makeApp(), 'POST', '/api/admin/release-notes', { version:'6' })
+    expect(result.status).toBe(200)
+    const contentUpdates = transactionRunner.mock.calls.filter(([sql]) => sql.startsWith('UPDATE system_config SET `value` = ?') && sql.includes('`key` = ?'))
+    expect(contentUpdates).toHaveLength(1)
+    expect(contentUpdates[0][1]).toEqual(['6','changelog','version'])
+  })
+
+  it('is idempotent and keeps only approved release styles', () => {
+    const input = '<p style="color:#123456;padding:4px;position:absolute">正文</p>'
+    const once = sanitizeReleaseNote(input)
+    const twice = sanitizeReleaseNote(once.content)
+    expect(twice.content).toBe(once.content)
+    expect(once.removedCategories).toContain('dangerous_style')
+    expect(once.content).toContain('color:#123456')
+    expect(once.content).not.toContain('position')
   })
 })
 

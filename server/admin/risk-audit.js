@@ -1,5 +1,5 @@
 import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../db.js'
-import { auditActionLabel, auditStatusLabel } from '../audit-localization.js'
+import { adminAuditActionCodesForSearch, localizeAdminAuditEvent } from '../audit-localization.js'
 import { buildPlatformControls, DEFAULT_RISK_POLICY, normalizePlatformRiskConfig, RISK_RULES } from '../routes/ai/risk-policy.js'
 
 function number(value) { return Number(value || 0) }
@@ -59,7 +59,12 @@ export async function listAdminAuditEvents({ page = 1, pageSize = 20, search = '
   const safeTargetType = /^[a-z0-9_]{1,64}$/.test(requestedTarget) ? requestedTarget : ''
   const conditions = ["actors.role = 'admin'", "logs.action NOT IN ('login','register')"]
   const params = []
-  if (keyword) { conditions.push('(logs.user_email LIKE ? OR logs.user_nickname LIKE ? OR logs.action LIKE ? OR logs.detail LIKE ?)'); params.push(...Array(4).fill(`%${keyword}%`)) }
+  if (keyword) {
+    const actionCodes = adminAuditActionCodesForSearch(keyword)
+    const actionClause = actionCodes.length ? ` OR logs.action IN (${actionCodes.map(() => '?').join(',')})` : ''
+    conditions.push(`(logs.user_email LIKE ? OR logs.user_nickname LIKE ? OR logs.action LIKE ? OR logs.detail LIKE ?${actionClause})`)
+    params.push(...Array(4).fill(`%${keyword}%`), ...actionCodes)
+  }
   if (safeTargetType) { conditions.push('logs.target_type = ?'); params.push(safeTargetType) }
   const where = `WHERE ${conditions.join(' AND ')}`
   const [totalRow, rows] = await Promise.all([
@@ -75,7 +80,7 @@ export async function listAdminAuditEvents({ page = 1, pageSize = 20, search = '
   ])
   const total = number(totalRow?.total)
   return {
-    events:rows.map(row => ({ ...row, id:number(row.id), user_id:number(row.user_id), action_label:auditActionLabel(row.action), status_label:auditStatusLabel('info') })),
+    events:rows.map(row => localizeAdminAuditEvent({ ...row, id:number(row.id), user_id:number(row.user_id) })),
     summary:{ total, today:number(totalRow?.today), actors:number(totalRow?.actors), target_types:number(totalRow?.target_types) },
     pagination:{ page:safePage, page_size:safePageSize, total, total_pages:Math.max(1, Math.ceil(total / safePageSize)) },
   }

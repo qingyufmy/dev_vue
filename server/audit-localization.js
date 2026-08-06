@@ -42,7 +42,142 @@ const ACTION_LABELS = {
   risk_recovery_approved: '风险恢复申请已批准',
   risk_recovery_requested: '风险恢复申请已提交',
   strategy_deleted: '策略已删除',
+  user_anonymized: '用户资料已匿名化',
+  position_management_control_updated: '全局持仓管理规则已更新',
+  admin_user_subscription_updated: '用户策略订阅已更新',
+  admin_position_protection_job_created: '已创建持仓保护任务',
+  admin_position_protection_job_retried: '已重试持仓保护任务',
+  observer_source_created: '观摩源已创建',
+  observer_source_updated: '观摩源已更新',
+  observer_source_deleted: '观摩源已删除',
+  ai_model_profile_created: 'AI 模型配置已创建',
+  ai_model_profile_updated: 'AI 模型配置已更新',
+  ai_model_profile_deleted: 'AI 模型配置已删除',
+  ai_model_profile_default_changed: '默认 AI 模型已调整',
+  ai_strategy_created: 'AI 策略已创建',
+  ai_strategy_updated: 'AI 策略已更新',
+  trading_account_created: '交易账户已创建',
+  trading_account_updated: '交易账户已更新',
+  trading_account_deleted: '交易账户已删除',
+  ai_strategy_subscription_created: '策略订阅已创建',
+  ai_strategy_subscription_updated: '策略订阅已更新',
+  ai_strategy_subscription_deleted: '策略订阅已删除',
+  mt5_account_ownership_acquired: 'MT5 账户归属已确认',
+  mt5_account_ownership_transferred: 'MT5 账户归属已转移',
+  user_kill_switch_enabled: '账户紧急停止已开启',
+  user_kill_switch_disabled: '账户紧急停止已解除',
+  global_kill_switch_enabled: '平台紧急停止已开启',
+  global_kill_switch_disabled: '平台紧急停止已解除',
+  release_notes_updated: '发布说明已更新',
 }
+
+const ADMIN_TARGET_LABELS = {
+  user:'用户',
+  account:'交易账户',
+  trading_account:'交易账户',
+  strategy:'策略',
+  ai_strategy:'AI 策略',
+  strategy_subscription:'策略订阅',
+  model:'模型',
+  ai_model_profile:'AI 模型配置',
+  ai_observer_source:'观摩源',
+  order:'订单',
+  system:'系统',
+  system_config:'系统配置',
+  referral_rules:'返佣规则',
+  platform:'平台',
+  risk_restore_request:'风险恢复',
+  global_risk_control:'平台风控总闸门',
+  global_position_management_control:'全局持仓管理',
+  position_protection_job:'持仓保护任务',
+  release_notes:'发布说明',
+}
+
+const ADMIN_DETAIL_LABELS = {
+  auto_reasoning_enabled:'自动推理',
+  trade_send_enabled:'交易发送',
+  connected:'桥接连接',
+  trade_applied:'交易发送已应用',
+  trade_error:'交易发送错误',
+  previous_plan:'原会员',
+  plan:'新会员',
+  previous_expires_at:'原到期时间',
+  expires_at:'新到期时间',
+  password_reset:'重置密码',
+  email:'邮箱',
+  nickname:'昵称',
+  role:'角色',
+  plan_source:'会员来源',
+  category:'配置分类',
+  keys:'配置项',
+  detail:'详情',
+  reason:'原因',
+  request_id:'申请编号',
+  title:'标题',
+  scope:'范围',
+  version:'版本',
+  previous_version:'原通知序号',
+  new_version:'新通知序号',
+  old_version:'原通知序号',
+  previous_content_sha256:'原内容校验值',
+  new_content_sha256:'新内容校验值',
+  old_content_hash:'原内容校验值',
+  new_content_hash:'新内容校验值',
+  removed_categories:'已移除内容类别',
+  sanitized_removed_categories:'净化移除类别',
+  legacy_write:'旧版管理端写入',
+  active_subscription_count:'有效订阅',
+  affected_user_count:'涉及用户',
+  enabled:'启用状态',
+  previous_value:'原值',
+  value:'新值',
+  status:'状态',
+  account_id:'账户编号',
+  trading_account_id:'交易账户编号',
+  user_id:'用户编号',
+  target_user_id:'目标用户编号',
+  strategy_id:'策略编号',
+  source_id:'观摩源编号',
+  bridge_user_id:'桥接账号编号',
+  runtime:'运行状态',
+  changes:'变更内容',
+  model_name:'模型名称',
+  provider:'模型服务商',
+  visibility_status:'可见状态',
+  is_default:'默认项',
+  execution_enabled:'允许执行',
+  strategy_scope:'策略范围',
+  sync_scope:'同步范围',
+  ticket:'订单编号',
+  preview_hash:'预览校验值',
+  authority:'归属依据',
+  previous_user_ids:'原归属用户',
+  new_user_id:'新归属用户',
+  broker_server:'经纪商服务器',
+  login_account:'登录账号',
+}
+
+const ADMIN_VALUE_LABELS = {
+  platform:'平台',
+  user:'普通用户',
+  admin:'管理员',
+  observer_source:'观摩源',
+  free:'免费版',
+  plus:'Plus',
+  pro:'Pro',
+  active:'启用',
+  inactive:'停用',
+  disabled:'停用',
+  success:'成功',
+  failed:'失败',
+  draft:'草稿',
+  archived:'已归档',
+  private:'用户私有',
+  true:'是',
+  false:'否',
+}
+
+const ADMIN_SENSITIVE_DETAIL_KEY = /(password(?!_reset)|secret|token|api[_-]?key|private[_-]?key|credential)/i
 
 const STATUS_LABELS = {
   success: '成功',
@@ -253,7 +388,101 @@ export function auditStatusCode(value) {
 export function auditActionLabel(value) {
   if (ACTION_LABELS[value]) return ACTION_LABELS[value]
   if (ACTION_CODES.has(value)) return value
-  return '系统审计操作'
+  return '未登记的管理动作'
+}
+
+export function auditTargetLabel(value) {
+  return ADMIN_TARGET_LABELS[String(value || '').trim()] || '未登记的管理对象'
+}
+
+export function adminAuditActionCodesForSearch(value) {
+  const keyword = String(value || '').trim().toLocaleLowerCase('zh-CN')
+  if (!keyword) return []
+  return Object.entries(ACTION_LABELS)
+    .filter(([code, label]) => code.toLocaleLowerCase('zh-CN').includes(keyword) || label.toLocaleLowerCase('zh-CN').includes(keyword))
+    .map(([code]) => code)
+}
+
+function parseAdminAuditDetail(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  const text = String(value ?? '').trim()
+  if (!text) return {}
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : { detail:parsed }
+  } catch {
+    return { detail:text.slice(0, 500) }
+  }
+}
+
+function adminAuditValue(key, value) {
+  if (ADMIN_SENSITIVE_DETAIL_KEY.test(key)) return '已隐藏'
+  if (value === null || value === undefined || value === '') return '未设置'
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (Array.isArray(value)) {
+    if (value.some(item => item && typeof item === 'object')) return `共 ${value.length} 项`
+    return value.slice(0, 20).map(item => ADMIN_VALUE_LABELS[String(item)] || String(item)).join('、') || '无'
+  }
+  if (typeof value === 'object') return '已记录结构化变更'
+  const text = String(value).slice(0, 500)
+  return ADMIN_VALUE_LABELS[text] || text
+}
+
+export function adminAuditChangeSummary(detail, limit = 12) {
+  const result = []
+  const walk = (value, prefix = '') => {
+    if (result.length >= limit) return
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      result.push({ field_code:prefix || 'detail', field_label:ADMIN_DETAIL_LABELS[prefix] || '详情', value:adminAuditValue(prefix, value) })
+      return
+    }
+    for (const [key, item] of Object.entries(value)) {
+      if (result.length >= limit) break
+      const fieldCode = prefix ? `${prefix}.${key}` : key
+      if (item && typeof item === 'object' && !Array.isArray(item)) walk(item, fieldCode)
+      else result.push({
+        field_code:fieldCode,
+        field_label:ADMIN_DETAIL_LABELS[key] || '未登记字段',
+        value:adminAuditValue(fieldCode, item),
+      })
+    }
+  }
+  walk(parseAdminAuditDetail(detail))
+  return result.length ? result : [{ field_code:'detail', field_label:'详情', value:'已记录操作，无附加参数' }]
+}
+
+function adminAuditContainsSensitiveDetail(detail) {
+  const visit = value => {
+    if (!value || typeof value !== 'object') return false
+    if (Array.isArray(value)) return value.some(visit)
+    return Object.entries(value).some(([key, item]) => ADMIN_SENSITIVE_DETAIL_KEY.test(key) || visit(item))
+  }
+  return visit(parseAdminAuditDetail(detail))
+}
+
+export function localizeAdminAuditEvent(row = {}) {
+  const actionCode = String(row.action || '').trim() || 'unknown'
+  const targetTypeCode = String(row.target_type || '').trim() || 'unknown'
+  const actionLabel = auditActionLabel(actionCode)
+  const targetTypeLabel = auditTargetLabel(targetTypeCode)
+  const targetLabel = `${targetTypeLabel}${row.target_id ? ` #${row.target_id}` : ''}`
+  const details = adminAuditChangeSummary(row.detail)
+  return {
+    ...row,
+    detail:undefined,
+    raw_action:actionCode,
+    action_code:actionCode,
+    action_label:actionLabel,
+    target_type_code:targetTypeCode,
+    target_type_label:targetTypeLabel,
+    target_label:targetLabel,
+    status_code:'info',
+    status_label:auditStatusLabel('info'),
+    summary:`${actionLabel}：${details.slice(0, 2).map(item => `${item.field_label}${item.value}`).join('，')}`,
+    details,
+    change_summary:details,
+    sensitive_fields_redacted:adminAuditContainsSensitiveDetail(row.detail),
+  }
 }
 
 export function auditStatusLabel(value) {
