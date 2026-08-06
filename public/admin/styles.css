@@ -2617,16 +2617,16 @@ input[type="checkbox"],input[type="radio"] { accent-color:var(--gold); }
 .system-release-intro p { margin:0; color:var(--muted); font-size:11px; line-height:1.5; }
 .system-release-intro .release-contract-note { display:block; margin-top:4px; color:var(--gold-strong); font-size:10px; line-height:1.4; }
 .system-release-intro time { grid-column:2; margin-top:4px; color:var(--muted); font:600 10px/1.4 var(--font-mono); }
-.system-release-form { min-width:0; display:grid; grid-template-columns:120px minmax(280px,1fr) auto; align-items:end; gap:9px; padding:13px 14px; background:var(--surface); }
-.system-release-form .field { min-width:0; gap:4px; }
-.system-release-form .field > span { color:var(--muted); font-size:11px; font-weight:750; }
-.system-release-form .field-help { margin-top:2px; color:var(--muted); font-size:10px; line-height:1.35; }
+.system-release-form { min-width:0; display:grid; grid-template-columns:minmax(180px,.46fr) minmax(280px,1fr) auto; align-items:start; column-gap:12px; row-gap:8px; padding:13px 14px; background:var(--surface); }
+.system-release-form .field { min-width:0; gap:4px; align-content:start; }
+.system-release-form .field > span { color:var(--muted); font-size:11px; font-weight:750; line-height:1.35; }
+.system-release-form .release-version-field .field-help { margin-top:0; color:var(--muted); font-size:10px; line-height:1.35; }
 .system-release-form .release-textarea { min-height:58px; max-height:96px; resize:vertical; }
-.system-release-form .field small { align-self:flex-end; margin-top:-18px; padding-right:8px; color:var(--muted); font-size:10px; text-align:right; pointer-events:none; }
-.system-release-form .field small b { color:var(--muted); font-family:var(--font-mono); }
-.system-release-form .primary-button { min-height:38px; margin-bottom:1px; white-space:nowrap; }
+.system-release-form .release-content-count { display:block; margin-top:4px; padding-right:0; color:var(--muted); font-size:10px; line-height:1.35; text-align:right; pointer-events:none; }
+.system-release-form .release-content-count b { color:var(--muted); font-family:var(--font-mono); }
+.system-release-form .primary-button { min-height:44px; align-self:end; margin-bottom:0; white-space:nowrap; }
 .system-release-form .primary-button svg { width:14px; height:14px; }
-.release-notification-impact { grid-column:1 / -1; min-height:18px; color:var(--gold-strong); font-size:10px; line-height:1.4; }
+.release-notification-impact { grid-column:1 / -1; min-height:18px; padding-top:6px; border-top:1px solid color-mix(in srgb,var(--gold) 18%,var(--border)); color:var(--gold-strong); font-size:10px; line-height:1.4; }
 .release-preview-panel { grid-column:1 / -1; min-width:0; padding:12px 14px 14px; border-top:1px solid var(--border); background:var(--surface-2); }
 .release-preview-panel header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
 .release-preview-panel header strong { color:var(--text); font-size:12px; }
@@ -2889,13 +2889,18 @@ input[type="checkbox"],input[type="radio"] { accent-color:var(--gold); }
 .system-settings-page .config-action-form button { min-height:42px; }
 
 @media (max-width:1120px) {
-  .system-release-panel { grid-template-columns:minmax(250px,.62fr) minmax(480px,1.38fr); }
-  .system-release-form { grid-template-columns:100px minmax(240px,1fr) auto; }
+  .system-release-panel { grid-template-columns:1fr; }
+  .system-release-intro { border-right:0; border-bottom:1px solid var(--border); }
+  .system-release-form { grid-template-columns:minmax(180px,.46fr) minmax(280px,1fr) auto; }
   .system-settings-page .settings-workbench { grid-template-columns:265px minmax(0,1fr); }
   .system-settings-page .config-editor-row { grid-template-columns:minmax(210px,.65fr) minmax(280px,1.35fr); gap:14px; }
   .config-secret-control { grid-template-columns:1fr; }
   .plan-price-cycle { grid-template-columns:80px minmax(140px,1fr) minmax(140px,1fr); }
   .plan-price-calculation { grid-column:2 / -1; min-height:44px; }
+}
+@media (min-width:1121px) and (max-width:1240px) {
+  .system-release-panel { grid-template-columns:1fr; }
+  .system-release-intro { border-right:0; border-bottom:1px solid var(--border); }
 }
 @media (max-width:900px) {
   .system-release-panel { grid-template-columns:1fr; }
