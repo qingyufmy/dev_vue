@@ -81,7 +81,9 @@ describe('dashboard current-position entry markers', () => {
     expect(navBlock).toContain('button.dataset.tab === "ai-analyze" ? { selectLatest:true } : {}')
     expect(app).toContain('refreshTabData(tabId, options)')
     expect(refreshBlock).toContain('const selectLatest = options.selectLatest === true')
-    expect(refreshBlock).toContain('loadSignals(selectLatest ? { selectLatest:true } : { skipResultRender:true })')
+    expect(refreshBlock).toContain('loadSignals(selectLatest')
+    expect(refreshBlock).toContain('{ selectLatest:true, loadDashboard:false }')
+    expect(refreshBlock).toContain('{ skipResultRender:true, loadDashboard:false }')
     expect(refreshBlock).toContain('historyList.scrollTop = 0')
   })
 
@@ -149,7 +151,7 @@ describe('shared current-position table contract', () => {
     const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const responsiveVersion = html.match(/responsive\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const appVersion = html.match(/app\.js\?v=([0-9a-z._-]+)/i)?.[1]
-    expect(stylesheetVersion).toBe('20260807kline3')
+    expect(stylesheetVersion).toBe('20260807demand1')
     expect(responsiveVersion).toBe(stylesheetVersion)
     expect(appVersion).toBe(stylesheetVersion)
   })

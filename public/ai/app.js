@@ -179,7 +179,7 @@ function standardMarketSymbol(symbol) {
   return String(symbol || "").trim().replace(/\.(a|s|c|pro|std|z|ecn|m|raw|mini)$/i, "").toUpperCase();
 }
 
-function setGlobalSymbol(symbol) {
+function setGlobalSymbol(symbol, options = {}) {
   localStorage.setItem(SYMBOL_STORAGE_KEY, symbol);
   state.platformMarketSourceActive = false;
   state.lastObserverQuote = null;
@@ -188,8 +188,10 @@ function setGlobalSymbol(symbol) {
     if (el && el._symSet) el._symSet(symbol);
   }
   wsApi("set_quote_symbol", { symbol }).catch(() => {});
-  refreshQuote().catch(() => {});
-  loadKlineData().catch(() => {});
+  if (options.refreshData !== false) {
+    refreshQuote().catch(() => {});
+    loadKlineData().catch(() => {});
+  }
 }
 
 // ===== Searchable Symbol Selector =====
@@ -1630,8 +1632,13 @@ function syncAiAccess(access) {
 }
 
 let _personalBridgeRefreshTimer = null;
+let _initialDashboardBootstrapInFlight = false;
 
 function schedulePersonalBridgeRefresh() {
+  // The initial dashboard loader already reconciles access, symbols and the
+  // active page. Scheduling the legacy global recovery in parallel would
+  // duplicate every heavyweight startup request.
+  if (_initialDashboardBootstrapInFlight) return;
   if (_personalBridgeRefreshTimer) return;
   _personalBridgeRefreshTimer = setTimeout(() => {
     _personalBridgeRefreshTimer = null;
@@ -2142,8 +2149,12 @@ function connectBridgeStatusWs(onReady) {
       } else if (msg.type === 'signal_execution_updated') {
         // Execution can complete after the signal itself was pushed. Reload the
         // same signal so pending/executed state disables duplicate submission.
-        loadSignals({ skipResultRender:true }).then(() => {
-          if (sameSignalId(state.selectedSignal?.id, msg.signal_id)) {
+        const isAnalyst = activeTabId() === "ai-analyze";
+        const refreshOptions = isAnalyst
+          ? { skipResultRender:true, loadDashboard:false }
+          : { limit:1, summaryOnly:true, skipResultRender:true };
+        loadSignals(refreshOptions).then(() => {
+          if (isAnalyst && sameSignalId(state.selectedSignal?.id, msg.signal_id)) {
             return openAnalysisFromHistory(msg.signal_id, { navigate:false, forceRefresh:true, preserveSelectionMode:true });
           }
         }).catch(() => {});
@@ -2449,10 +2460,15 @@ async function refreshForNewSignal(signalId, signalMeta = null) {
   const previousLatestId = state.latestSignalId ?? _lastSignalId;
   if (sameSignalId(signalId, previousLatestId)) return;
   const autoFollow = shouldAutoFollowNewSignal(previousLatestId);
+  const isAnalyst = activeTabId() === "ai-analyze";
 
   state.latestSignalId = signalId;
   _lastSignalId = signalId;
-  await loadSignals({ skipResultRender:true, announceDashboardSignal:true });
+  await loadSignals(isAnalyst
+    ? { skipResultRender:true, loadDashboard:false }
+    : activeTabId() === "dashboard"
+      ? { limit:1, summaryOnly:true, skipResultRender:true, announceDashboardSignal:true }
+      : { limit:1, summaryOnly:true, skipResultRender:true });
 
   const incoming = state.signals.find(item => sameSignalId(item.id, signalId)) || signalMeta;
   if (incoming) showSignalNotification(incoming);
@@ -2578,7 +2594,11 @@ async function loadDashboardSignal(signalId, fallbackSignal = null, options = {}
   if (options.forceRefresh || !signal?.detail_loaded) {
     try {
       const data = await wsApi("signal_detail", { signal_id:Number(signalId) });
-      if (data.status === "success" && data.signal) signal = { ...(signal || {}), ...data.signal, detail_loaded:true };
+      if (data.status === "success" && data.signal) {
+        signal = { ...(signal || {}), ...data.signal, detail_loaded:true };
+        const index = state.signals.findIndex(item => sameSignalId(item.id, signalId));
+        if (index >= 0) state.signals[index] = { ...state.signals[index], ...signal };
+      }
     } catch (error) {
       console.warn("[Dashboard] 最新 AI 建议详情读取失败，使用基础数据:", error.message);
     }
@@ -2663,7 +2683,7 @@ function handleHeartbeat(msg) {
   // Bridge state changed → update role-based UI
   if (isLive !== wasLive || usingFallback !== wasFallback) {
     applyRoleUI();
-    if (isLive && !accessTransition.personalBridgeRestored) {
+    if (isLive && !accessTransition.personalBridgeRestored && !_initialDashboardBootstrapInFlight) {
       // Clear caches so bridge-dependent data refreshes
       _historyCache = null;
       _historyChartCache = null;
@@ -4445,12 +4465,15 @@ function setTab(tabId, options = {}) {
   const main = document.querySelector(".main");
   if (main) main.scrollTop = 0;
   if (tabId === "model-strategy") setModelStrategySubtab(modelStrategyTarget || state.modelStrategySubtab || "strategies");
-  if (tabId === "ai-analyze") setAnalystView(legacySignalsTarget ? "records" : (options.analystView || "detail"));
+  if (tabId === "ai-analyze") setAnalystView(
+    legacySignalsTarget ? "records" : (options.analystView || "detail"),
+    { loadData:false },
+  );
   initIcons();
   if (!options.skipRefresh) refreshTabData(tabId, options).catch((error) => toast(error.message, "error"));
 }
 
-function setAnalystView(target) {
+function setAnalystView(target, options = {}) {
   const next = target === "records" ? "records" : "detail";
   state.analystView = next;
   document.querySelectorAll("[data-analyst-view]").forEach(button => {
@@ -4464,7 +4487,7 @@ function setAnalystView(target) {
     panel.classList.toggle("active", active);
     panel.hidden = !active;
   });
-  if (next === "records" && state.token) loadSignalTable().catch(error => toast(error.message, "error"));
+  if (next === "records" && state.token && options.loadData !== false) loadSignalTable().catch(error => toast(error.message, "error"));
   initIcons();
 }
 
@@ -4508,9 +4531,17 @@ async function refreshTabData(tabId) {
   if (tabId === "trading") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadPendingOrders(), refreshQuote(), loadPositionManagement({ quiet:true, preserveSelection:true })]);
   } else if (tabId === "dashboard") {
-    await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), refreshQuote(), loadKlineData()]);
+    await Promise.allSettled([
+      loadAccount(),
+      loadPositions(),
+      loadStatus(),
+      refreshQuote(),
+      loadKlineData(),
+      loadSignals({ limit:1, summaryOnly:true, skipResultRender:true }),
+    ]);
     startKlineRefreshTimer();
     startKlineVolumeRefreshTimer();
+    startLiveQuoteRefreshTimer();
   } else if (tabId === "history") {
     updateHistoryRangeUI();
     await loadHistoryViews({ forceRefresh:true, includeAccount:true });
@@ -4519,8 +4550,14 @@ async function refreshTabData(tabId) {
   } else if (tabId === "model-strategy") {
     await Promise.allSettled([loadStrategyCatalog(), loadModelManagement()]);
   } else if (tabId === "ai-analyze") {
+    if (state.analystView === "records") {
+      await loadSignalTable();
+      return;
+    }
     const selectLatest = options.selectLatest === true;
-    const tasks = [loadSignals(selectLatest ? { selectLatest:true } : { skipResultRender:true })];
+    const tasks = [loadSignals(selectLatest
+      ? { selectLatest:true, loadDashboard:false }
+      : { skipResultRender:true, loadDashboard:false })];
     if (!isObserverMode()) tasks.push(loadStrategyCatalog());
     await Promise.allSettled(tasks);
     if (selectLatest) {
@@ -4811,20 +4848,24 @@ async function bootstrap() {
       });
     });
     // Render the default tab without requesting terminal data yet. The MT4
-    // broker symbol (for example XAUUSD.s) is discovered by refreshAll first;
-    // requesting rates here with the generic XAUUSD fallback is invalid on
-    // suffix-only brokers and produces rates_params_invalid.
+    // broker symbol (for example XAUUSD.s) is discovered by the initial
+    // dashboard load before any quote or rates request is made.
     setTab('dashboard', { skipRefresh:true });
     startPresenceHeartbeat();
-    await refreshAll();
-    startLiveQuoteRefreshTimer();
+    _initialDashboardBootstrapInFlight = true;
+    const marketReady = await loadInitialDashboard();
+    _initialDashboardBootstrapInFlight = false;
+    if (marketReady) {
+      startKlineRefreshTimer();
+      startKlineVolumeRefreshTimer();
+      startLiveQuoteRefreshTimer();
+    }
     if (!isObserverMode()) {
       await loadReviewSummary({ announce:false });
       startReviewSummaryPolling();
     }
-    // Data loads on-demand: tab switch + manual refresh + bridge data push
-    refreshTabData(activeTabId());
   } catch (error) {
+    _initialDashboardBootstrapInFlight = false;
     if (error?.name === "ApiError" && Number(error.status) === 401) {
       invalidateSession();
       return;
@@ -4832,6 +4873,36 @@ async function bootstrap() {
     console.error("[Bootstrap] AI 实验室初始化失败:", error);
     renderBootstrapError(error);
   }
+}
+
+// The first dashboard render intentionally follows a strict dependency order:
+// health/access state -> broker symbols -> dashboard data.  Hidden pages stay
+// untouched until their tab is opened.  Keep failures non-fatal so an offline
+// bridge can still render the signed-in observer shell and recover later.
+async function loadInitialDashboard() {
+  const results = [];
+  results.push(...await Promise.allSettled([loadStatus()]));
+  const symbolsResults = await Promise.allSettled([loadSymbolsWhenReady()]);
+  results.push(...symbolsResults);
+
+  const dashboardTasks = [
+    loadAccount(),
+    loadPositions(),
+    loadSignals({ limit:1, summaryOnly:true, skipResultRender:true }),
+  ];
+  // Do not fall back to the generic XAUUSD symbol if terminal discovery
+  // failed.  A suffix-only broker (for example XAUUSD.s) must fail closed
+  // until its actual symbol list is available.
+  if (symbolsResults[0]?.status === "fulfilled") {
+    dashboardTasks.push(refreshQuote(), loadKlineData());
+  }
+  results.push(...await Promise.allSettled(dashboardTasks));
+
+  const rejected = results.find(item => item.status === "rejected");
+  if (rejected && state.token) {
+    toast(`部分首页数据加载失败：${rejected.reason?.message || rejected.reason}`, "warning");
+  }
+  return symbolsResults[0]?.status === "fulfilled";
 }
 
 let _refreshAllPromise = null;
@@ -4846,7 +4917,10 @@ async function refreshAll() {
     const tasks = [
       loadAccount(),
       loadPositions(),
-      loadSignals(),
+      // This path is reserved for account/Bridge recovery and explicit
+      // internal reconciliation.  Keep the full signal table available here
+      // without making it part of normal bootstrap or the refresh button.
+      loadSignals({ loadTable:true }),
       loadHistory(),
       loadHistoryChart(),
       refreshQuote(),
@@ -5320,7 +5394,9 @@ async function loadSymbols() {
   }
 
   // Set initial value
-  if (preferred) setGlobalSymbol(preferred.name);
+  // Initial dashboard loading owns the first quote and chart reads. Keep the
+  // server-side stream symbol in sync here without duplicating those reads.
+  if (preferred) setGlobalSymbol(preferred.name, { refreshData:false });
   updateManualStrategySelection();
   // Don't call refreshQuote here — tick stream handles it at 1s
 
@@ -5399,8 +5475,13 @@ function startLiveQuoteRefreshTimer() {
   stopLiveQuoteRefreshTimer();
   if (document.hidden
       || state._lastGatewayLive !== true
-      || state.bridgeWs?.readyState !== WebSocket.OPEN) return;
-  void refreshLiveQuote(true);
+      || state.bridgeWs?.readyState !== WebSocket.OPEN
+      || !state.symbols.length) return;
+  const selectedSymbol = String($('quoteSymbolSelect')?.value || $('tradeSymbolSelect')?.value || getGlobalSymbol()).toUpperCase();
+  const currentQuote = isObserverMode() ? state.lastObserverQuote : state.lastQuote;
+  if (!currentQuote || String(currentQuote.symbol || '').toUpperCase() !== selectedSymbol) {
+    void refreshLiveQuote(true);
+  }
   if (isObserverMode()) return;
   _liveQuoteRefreshTimer = setInterval(() => {
     void refreshLiveQuote(false);
@@ -7999,7 +8080,7 @@ async function applyManualAnalysisSignal(best, elapsedMs = null, { autoExecute =
   renderSignal(best, elapsedMs);
   setManualInferenceModal(false);
   showSignalNotification(best);
-  await loadSignals({ skipResultRender: true });
+  await loadSignals({ skipResultRender:true, loadDashboard:false });
   const firstItem = document.querySelector(".analysis-history-item");
   if (firstItem) firstItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
   if (!announce) return;
@@ -8373,7 +8454,7 @@ async function executeSignal() {
     if (result.status === "success") state.selectedSignal.is_executed = state.selectedSignal.entry_method === "market";
     renderSignal(state.selectedSignal, null, { keepLatency:true });
     toast(localizeReason(result.message) || (result.status === "success" ? "执行请求已处理" : `结果：${result.status}`), result.status === "success" ? "success" : "warning");
-    await Promise.allSettled([loadPositions(), loadAccount(), loadSignals()]);
+    await Promise.allSettled([loadPositions(), loadAccount(), loadSignals({ skipResultRender:true, loadDashboard:false })]);
   } catch (error) {
     toast(localizeReason(error.message), "error");
   }
@@ -9005,6 +9086,9 @@ function renderSignalRows() {
 async function loadSignals(options = {}) {
   const limit = options.limit || ANALYSIS_HISTORY_PAGE_SIZE;
   const offset = options.offset || 0;
+  const summaryOnly = options.summaryOnly === true;
+  const loadDashboard = options.loadDashboard !== false && !summaryOnly;
+  const loadTable = options.loadTable === true;
   const requestVersion = options.append ? _signalsListRequestVersion : ++_signalsListRequestVersion;
   const loadedIds = options.append ? state.signals.map(item => Number(item.id)).filter(Number.isFinite) : [];
   const beforeId = loadedIds.length ? Math.min(...loadedIds) : null;
@@ -9031,8 +9115,15 @@ async function loadSignals(options = {}) {
   }
   if (!options.append) {
     if (state.signals[0]) {
-      await loadDashboardSignal(state.signals[0].id, state.signals[0], { announceNew:options.announceDashboardSignal === true });
-    } else {
+      if (summaryOnly) {
+        // Dashboard summary rows are deliberately lightweight. Do not turn
+        // the homepage limit:1 request into a heavyweight signal_detail
+        // fetch; the analyst page loads details only when it selects a row.
+        updateSignalDisplay(state.signals[0], { announceNew:options.announceDashboardSignal === true });
+      } else if (loadDashboard) {
+        await loadDashboardSignal(state.signals[0].id, state.signals[0], { announceNew:options.announceDashboardSignal === true });
+      }
+    } else if (summaryOnly || loadDashboard) {
       updateSignalDisplay(null);
     }
   }
@@ -9063,13 +9154,15 @@ async function loadSignals(options = {}) {
     state.selectedSignal = previousSelected;
   }
   renderAnalysisHistory(state.signals);
-  if (!options.skipResultRender && !options.append) {
+  if (!options.skipResultRender && !options.append && !summaryOnly) {
     if (activeSignal) await openAnalysisFromHistory(activeSignal.id, { navigate:false });
     else renderSignal(null, null);
   }
 
-  // Also refresh signal table on non-append loads
-  if (!options.append) loadSignalTable();
+  // The paginated records table is loaded only by its own view or by an
+  // explicit internal reconciliation call. A homepage/analyst history
+  // refresh must never pull the second signals endpoint implicitly.
+  if (!options.append && loadTable) await loadSignalTable();
 }
 
 // Load signal table data (server-side filtering + pagination, 20/page)
@@ -10048,7 +10141,15 @@ function bindEvents() {
     if (event.key === "Escape" && !$("accountCenterModal")?.classList.contains("hidden")) closeAccountCenter();
     if (event.key === "Escape" && !$("mt5BridgeModal")?.classList.contains("hidden")) closeBridgeControlModal();
   });
-  $("refreshAllBtn").addEventListener("click", () => { _historyCache = null; _historyChartCache = null; refreshAll(); });
+  $("refreshAllBtn").addEventListener("click", () => {
+    const tabId = activeTabId();
+    if (tabId === "history") {
+      _historyCache = null;
+      _historyChartCache = null;
+    }
+    withBusy($("refreshAllBtn"), () => refreshTabData(tabId, { manualRefresh:true }))
+      .catch(error => toast(error.message, "error"));
+  });
   $("gatewayMode")?.addEventListener("click", handleGatewayModeClick);
   $("analyzeStrategy")?.addEventListener("change", updateManualStrategySelection);
   $("subscriptionSymbolOptions")?.addEventListener("change", event => {
@@ -10680,8 +10781,10 @@ function bindEvents() {
         "refresh-account": loadAccount,
         "refresh-positions": loadPositions,
         "refresh-quote": refreshQuote,
-        "refresh-signals": loadSignals,
-        "refresh-analysis-history": loadSignals,
+        "refresh-signals": () => state.analystView === "records"
+          ? loadSignalTable()
+          : loadSignals({ skipResultRender:true, loadDashboard:false }),
+        "refresh-analysis-history": () => loadSignals({ skipResultRender:true, loadDashboard:false }),
         "refresh-history": () => loadHistoryViews({ forceRefresh:true }),
         "refresh-trading-page": refreshTradingPage,
         "refresh-history-page": refreshHistoryPage,
