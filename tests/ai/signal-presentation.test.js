@@ -76,6 +76,48 @@ describe('signal presentation', () => {
     expect(result.experience_usage.rejected_refs).toEqual(['short:7'])
   })
 
+  it.each([
+    '参考了平台经验：当前结构不足，因此观望',
+    '采用记忆9：当前结构不足，继续等待',
+    '记忆#9指出当前应等待，适用该经验，故选择观望',
+    '经验指出当前应等待，因此选择观望，符合该经验',
+  ])('recovers historical adoption from explicit influence: %s', influence => {
+    const result = normalizeDecisionFields({ experience_usage:{ source:'platform',
+      considered_ids:[], used_ids:[], rejected_ids:[], considered_refs:['platform:9'], used_refs:[], rejected_refs:[], influence } })
+    expect(result.experience_usage).toMatchObject({ used_ids:[9], used_refs:['platform:9'], rejected_ids:[], rejected_refs:[] })
+  })
+
+  it('corrects historical rejected usage when a strong unique claim says adopted', () => {
+    const result = normalizeDecisionFields({ experience_usage:{ source:'platform',
+      considered_ids:[9], used_ids:[], rejected_ids:[9], considered_refs:['platform:9'], used_refs:[],
+      rejected_refs:['platform:9'], influence:'采用记忆9，因此选择观望' } })
+    expect(result.experience_usage).toMatchObject({ used_ids:[9], used_refs:['platform:9'], rejected_ids:[], rejected_refs:[] })
+  })
+
+  it('keeps historical negative influence and ambiguous candidates fail-closed', () => {
+    const negative = normalizeDecisionFields({ experience_usage:{ source:'platform', considered_ids:[9], used_ids:[],
+      rejected_ids:[9], considered_refs:['platform:9'], used_refs:[], rejected_refs:['platform:9'], influence:'不符合该经验，未采用' } })
+    expect(negative.experience_usage.used_ids).toEqual([])
+    expect(negative.experience_usage.rejected_refs).toEqual(['platform:9'])
+    const ambiguous = normalizeDecisionFields({ experience_usage:{ source:'personal', considered_ids:[], used_ids:[],
+      rejected_ids:[], considered_refs:['short:9', 'long:9'], used_refs:[], rejected_refs:[], influence:'采用记忆9，因此观望' } })
+    expect(ambiguous.experience_usage.used_ids).toEqual([])
+    expect(ambiguous.experience_usage.used_refs).toEqual([])
+    for (const influence of ['没有按照该经验执行', '该经验适用性不足', '该经验适用范围有限', '该经验不完全适用']) {
+      const result = normalizeDecisionFields({ experience_usage:{ source:'platform', considered_ids:[9], used_ids:[],
+        rejected_ids:[], considered_refs:['platform:9'], used_refs:[], rejected_refs:[], influence } })
+      expect(result.experience_usage.used_ids).toEqual([])
+      expect(result.experience_usage.used_refs).toEqual([])
+    }
+  })
+
+  it('backfills historical id from a unique explicit used ref', () => {
+    const result = normalizeDecisionFields({ experience_usage:{ source:'platform', considered_ids:[], used_ids:[],
+      considered_refs:['platform:9'], used_refs:['platform:9'], rejected_refs:[] } })
+    expect(result.experience_usage.used_ids).toEqual([9])
+    expect(result.experience_usage.used_refs).toEqual(['platform:9'])
+  })
+
   it('normalizes direction inclination without presenting it as confidence', () => {
     expect(normalizeDecisionFields({ bullish_score: 2, bearish_score: 1 })).toMatchObject({ bullish_score: 66.7, bearish_score: 33.3 })
     expect(normalizeDecisionFields({ bullish_score: 'bad', bearish_score: 50 })).toMatchObject({ bullish_score: null, bearish_score: null })

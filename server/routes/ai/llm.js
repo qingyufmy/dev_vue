@@ -16,6 +16,7 @@ import { assertModelQuotaAvailable, buildModelQuotaCircuitContext, deferModelQuo
 import { resolveModelProviderCapabilities } from './model-provider-capabilities.js'
 import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
 import { acquireModelTaskCapacity, retainModelTaskCapacityLease, releaseModelTaskCapacityLease } from './model-task-capacity.js'
+import { normalizeExperienceAttribution, normalizeExperienceRefs } from './experience-attribution.js'
 
 // Production must never emit prompts, market context, or model payloads even if
 // a stale environment flag survives a deployment.
@@ -244,10 +245,10 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   const experienceRefs = [...new Set((experienceSelection?.selectedRefs || experienceIds.map(id => `item:${id}`))
     .map(value => String(value || '').trim()).filter(Boolean))]
   schema.experience_usage = experienceRefs.length
-    ? { considered_refs:experienceRefs, used_refs:`只能填写实际采用的记忆引用，且必须来自 ${experienceRefs.join('、')}`,
+    ? { considered_refs:experienceRefs, used_refs:`只能填写实际采用的记忆引用，且必须来自 ${experienceRefs.join('、')}；填写后必须同步填写唯一对应的 used_ids`,
       rejected_refs:'已评估但不适用于当前行情的记忆引用', considered_ids:experienceIds,
-      used_ids:`兼容字段；平台记忆填写实际采用的编号，且只能来自 ${experienceIds.join('、') || '空集合'}`,
-      rejected_ids:'兼容字段；平台记忆未采用的编号', influence:'中文说明记忆对方向、入场方式或观望结论的具体影响；used_refs 为空时不得声称采用了任何记忆' }
+      used_ids:`兼容字段；填写实际采用的编号，且只能来自 ${experienceIds.join('、') || '空集合'}；used_refs 与 used_ids 必须同步，无法唯一对应时不要猜测`,
+      rejected_ids:'兼容字段；平台记忆未采用的编号', influence:'中文说明记忆对方向、入场方式或观望结论的具体影响；若明确声称采用、参考、符合或依据某条记忆，必须同步填写对应 used_refs 与 used_ids；若未采用或仅供参考，填写 rejected 字段且不得声称采用' }
     : { considered_refs:[], used_refs:[], rejected_refs:[], considered_ids:[], used_ids:[], rejected_ids:[], influence:'本次没有提供记忆，必须返回空字符串' }
   const hasPending = methods.some(item => item !== 'market')
   if (!hasPending) {
@@ -1481,64 +1482,29 @@ export function normalizeAiSignal(parsed, config, market) {
   parsed.reasoning = cleanText(parsed.reasoning, 4000)
   const configuredExperienceIds = [...new Set((config?._experienceSelection?.selectedItemIds || [])
     .map(Number).filter(id => Number.isInteger(id) && id > 0))]
-  const availableExperienceRefs = [...new Set((config?._experienceSelection?.selectedRefs || configuredExperienceIds.map(id => `item:${id}`))
-    .map(value => String(value || '').trim())
-    .filter(value => /^(?:platform|short|long|summary|item):\d+$/.test(value)))]
+  const availableExperienceRefs = normalizeExperienceRefs(config?._experienceSelection?.selectedRefs
+    || configuredExperienceIds.map(id => `item:${id}`))
   const availableExperienceIds = [...new Set([
     ...(config?._experienceSelection?.selectedItemIds || []),
     ...availableExperienceRefs.map(ref => Number(ref.split(':').at(-1))),
   ].map(Number).filter(id => Number.isInteger(id) && id > 0))]
-  const allowedExperienceIds = new Set(availableExperienceIds)
   const usage = parsed.experience_usage && typeof parsed.experience_usage === 'object' ? parsed.experience_usage : {}
-  const validUsageIds = value => [...new Set((Array.isArray(value) ? value : []).map(Number)
-    .filter(id => allowedExperienceIds.has(id)))]
-  const usedExperienceIds = validUsageIds(usage.used_ids)
-  const allowedExperienceRefs = new Set(availableExperienceRefs)
-  const validUsageRefs = value => [...new Set((Array.isArray(value) ? value : []).map(item => String(item || '').trim())
-    .filter(item => allowedExperienceRefs.has(item)))]
-  const refsById = new Map()
-  for (const ref of availableExperienceRefs) {
-    const id = Number(ref.split(':').at(-1))
-    if (!Number.isInteger(id) || id <= 0) continue
-    const refs = refsById.get(id) || []
-    refs.push(ref)
-    refsById.set(id, refs)
-  }
-  const uniqueRefsForIds = ids => ids.flatMap(id => {
-    const matches = refsById.get(Number(id)) || []
-    return matches.length === 1 ? matches : []
+  // Explicit legal used refs/ids remain authoritative. Only when both are
+  // absent may a strong, unique influence claim correct a conflicting
+  // rejected attribution; vague or ambiguous prose stays fail-closed.
+  const experienceAttribution = normalizeExperienceAttribution({
+    availableIds:availableExperienceIds,
+    availableRefs:availableExperienceRefs,
+    usedIds:usage.used_ids,
+    usedRefs:usage.used_refs,
+    rejectedIds:usage.rejected_ids,
+    rejectedRefs:usage.rejected_refs,
+    influence:usage.influence,
   })
-  let usedExperienceRefs = validUsageRefs(usage.used_refs)
-  let usedIds = usedExperienceIds
-  // Explicit legal references are authoritative. Legacy numeric ids only
-  // fill the corresponding ref when that id has exactly one available scope;
-  // short/long (or any other same-id) collisions stay unresolved.
-  usedExperienceRefs = [...new Set([...usedExperienceRefs, ...uniqueRefsForIds(usedIds)])]
-  if (!usedExperienceRefs.length && !usedIds.length && availableExperienceRefs.length && /采用|使用|参考了/.test(String(usage.influence || ''))) {
-    const influenceText = String(usage.influence || '')
-    const directRefs = availableExperienceRefs.filter(ref => influenceText.includes(ref))
-    const mentionedIds = [...influenceText.matchAll(/#\s*(\d+)/g)].map(match => Number(match[1]))
-    const unambiguousRefs = mentionedIds.flatMap(id => {
-      const matches = refsById.get(id) || []
-      return matches.length === 1 ? matches : []
-    })
-    usedExperienceRefs = [...new Set([...directRefs, ...unambiguousRefs])]
-    usedIds = [...new Set(mentionedIds.filter(id => allowedExperienceIds.has(id)))]
-  }
-  const rejectedIds = validUsageIds(usage.rejected_ids).filter(id => !usedIds.includes(id))
-  const rejectedRefs = [...new Set([
-    ...validUsageRefs(usage.rejected_refs),
-    ...uniqueRefsForIds(rejectedIds),
-  ])].filter(ref => !usedExperienceRefs.includes(ref))
   const influence = cleanText(usage.influence, 400)
   parsed.experience_usage = {
     source:config?._experienceSelection?.source || null,
-    considered_ids:availableExperienceIds,
-    used_ids:usedIds,
-    rejected_ids:rejectedIds,
-    considered_refs:availableExperienceRefs,
-    used_refs:usedExperienceRefs,
-    rejected_refs:rejectedRefs,
+    ...experienceAttribution,
     influence:availableExperienceRefs.length ? influence : '',
   }
   const bullishRaw = Number(parsed.bullish_score)

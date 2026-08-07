@@ -158,6 +158,16 @@ describe('buildStrategyOutputFormat', () => {
     }).outputFormat)
     expect(schema.experience_usage.considered_refs).toEqual(['short:7', 'long:7', 'summary:3'])
   })
+
+  it('requires structured usage fields to agree with adoption language', () => {
+    const schema = JSON.parse(buildStrategyOutputFormat(null, ['market'], {
+      selectedItemIds:[9], selectedRefs:['platform:9'],
+    }).outputFormat)
+    expect(schema.experience_usage.used_refs).toContain('used_ids')
+    expect(schema.experience_usage.used_ids).toContain('used_refs')
+    expect(schema.experience_usage.influence).toContain('必须同步')
+    expect(schema.experience_usage.influence).toContain('不得声称采用')
+  })
 })
 
 describe('experience usage normalization', () => {
@@ -220,6 +230,83 @@ describe('experience usage normalization', () => {
     { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
     expect(result.experience_usage.used_ids).toEqual([7])
     expect(result.experience_usage.used_refs).toEqual(['long:7'])
+  })
+
+  it.each([
+    '参考了平台经验：当前结构不足，因此观望',
+    '采用记忆9：当前结构不足，继续等待',
+    '记忆#9指出当前应等待，适用该经验，故选择观望',
+    '经验指出当前应等待，因此选择观望，符合该经验',
+  ])('recovers strong adoption semantics from production influence: %s', influence => {
+    const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ influence } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'platform', selectedItemIds:[9], selectedRefs:['platform:9'] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.experience_usage).toMatchObject({ used_ids:[9], used_refs:['platform:9'], rejected_ids:[], rejected_refs:[] })
+  })
+
+  it('corrects explicit rejected attribution when a strong unique adoption claim names the candidate', () => {
+    const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ rejected_ids:[9], rejected_refs:['platform:9'], influence:'采用记忆9，因此选择观望' } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'platform', selectedItemIds:[9], selectedRefs:['platform:9'] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.experience_usage).toMatchObject({ used_ids:[9], used_refs:['platform:9'], rejected_ids:[], rejected_refs:[] })
+  })
+
+  it.each([
+    '本次未采用该经验，仅供参考',
+    '不采用记忆9，当前只保留观望',
+    '没有采用平台经验',
+    '该经验不适用当前行情',
+    '当前不符合该经验的适用条件',
+    '未符合该经验，继续观望',
+    '没有按照该经验执行',
+    '该经验适用性不足',
+    '该经验适用范围有限',
+    '该经验不完全适用',
+  ])('does not infer adoption from negative influence: %s', influence => {
+    const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ influence } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'platform', selectedItemIds:[9], selectedRefs:['platform:9'] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.experience_usage.used_ids).toEqual([])
+    expect(result.experience_usage.used_refs).toEqual([])
+  })
+
+  it('does not guess an unnumbered adoption across multiple candidates', () => {
+    const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ influence:'参考了平台经验，因此选择观望' } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'platform', selectedItemIds:[9, 10], selectedRefs:['platform:9', 'platform:10'] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.experience_usage.used_ids).toEqual([])
+    expect(result.experience_usage.used_refs).toEqual([])
+  })
+
+  it('does not guess a same-number cross-scope adoption', () => {
+    const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ influence:'采用记忆9，因此选择观望' } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'personal', selectedItemIds:[9], selectedRefs:['short:9', 'long:9'] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.experience_usage.used_ids).toEqual([])
+    expect(result.experience_usage.used_refs).toEqual([])
+  })
+
+  it('backfills a unique numeric id from an explicit legal used ref', () => {
+    const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ used_refs:['platform:9'] } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'platform', selectedItemIds:[9], selectedRefs:['platform:9'] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.experience_usage.used_refs).toEqual(['platform:9'])
+    expect(result.experience_usage.used_ids).toEqual([9])
+  })
+
+  it('maps an explicit ref mentioned in influence only within the available whitelist', () => {
+    const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ influence:'采用 platform:9，因此选择观望' } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'platform', selectedItemIds:[9], selectedRefs:['platform:9'] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.experience_usage.used_refs).toEqual(['platform:9'])
+    expect(result.experience_usage.used_ids).toEqual([9])
   })
 })
 
