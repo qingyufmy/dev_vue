@@ -4447,7 +4447,7 @@ function setTab(tabId, options = {}) {
   if (tabId === "model-strategy") setModelStrategySubtab(modelStrategyTarget || state.modelStrategySubtab || "strategies");
   if (tabId === "ai-analyze") setAnalystView(legacySignalsTarget ? "records" : (options.analystView || "detail"));
   initIcons();
-  if (!options.skipRefresh) refreshTabData(tabId).catch((error) => toast(error.message, "error"));
+  if (!options.skipRefresh) refreshTabData(tabId, options).catch((error) => toast(error.message, "error"));
 }
 
 function setAnalystView(target) {
@@ -4503,12 +4503,14 @@ function setWorkspaceSubtab(group, target) {
 }
 
 async function refreshTabData(tabId) {
+  const options = arguments[1] || {};
   if (!state.token) return;
   if (tabId === "trading") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadPendingOrders(), refreshQuote(), loadPositionManagement({ quiet:true, preserveSelection:true })]);
   } else if (tabId === "dashboard") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), refreshQuote(), loadKlineData()]);
     startKlineRefreshTimer();
+    startKlineVolumeRefreshTimer();
   } else if (tabId === "history") {
     updateHistoryRangeUI();
     await loadHistoryViews({ forceRefresh:true, includeAccount:true });
@@ -4517,9 +4519,14 @@ async function refreshTabData(tabId) {
   } else if (tabId === "model-strategy") {
     await Promise.allSettled([loadStrategyCatalog(), loadModelManagement()]);
   } else if (tabId === "ai-analyze") {
-    const tasks = [loadSignals({ skipResultRender:true })];
+    const selectLatest = options.selectLatest === true;
+    const tasks = [loadSignals(selectLatest ? { selectLatest:true } : { skipResultRender:true })];
     if (!isObserverMode()) tasks.push(loadStrategyCatalog());
     await Promise.allSettled(tasks);
+    if (selectLatest) {
+      const historyList = $("analysisHistoryBody");
+      if (historyList) historyList.scrollTop = 0;
+    }
   } else if (tabId === "risk-center") {
     await loadRiskCenter();
   } else if (tabId === "review-memory") {
@@ -5695,7 +5702,7 @@ function syncKlinePositionEntries() {
     series.setData([{ time:markerTime, value:price }]);
     series.setMarkers([{
       time:markerTime,
-      position:'inBar',
+      position:side === 'buy' ? 'belowBar' : 'aboveBar',
       color:markerColor,
       shape:side === 'buy' ? 'arrowUp' : 'arrowDown',
       size:1.5,
@@ -6020,9 +6027,12 @@ async function refreshKlineVolume() {
       clearKlineData('暂无行情', requestKey);
       return;
     }
-    const vol = Number(b.tick_volume || b.volume || 0);
+    const barTime = mt5BrokerTimeSeconds(b?.time);
+    if (!Number.isFinite(barTime) || !Number.isFinite(Number(_klineLastBar.time))
+      || barTime !== Number(_klineLastBar.time)) return;
+    const vol = Math.max(0, Number(b.tick_volume || b.volume || 0) || 0);
     const color = close >= open ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)';
-    _klineVolumeSeries.update({ time: _klineLastBar.time, value: vol, color: color });
+    _klineVolumeSeries.update({ time: barTime, value: vol, color: color });
   } catch (e) {
     if (requestVersion === _klineRequestVersion && requestKey === _klineDataKey) clearKlineData('读取失败', requestKey);
   }
@@ -10321,7 +10331,10 @@ function bindEvents() {
 
   document.querySelectorAll(".nav-item").forEach((button) => {
     if (button.dataset.tab) {
-      button.addEventListener("click", () => setTab(button.dataset.tab));
+      button.addEventListener("click", () => setTab(
+        button.dataset.tab,
+        button.dataset.tab === "ai-analyze" ? { selectLatest:true } : {},
+      ));
     }
   });
 

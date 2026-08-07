@@ -34,7 +34,8 @@ describe('dashboard current-position entry markers', () => {
     expect(syncBlock).toContain('if (!start.visible) continue;')
     expect(syncBlock).toContain('series.setData([{ time:markerTime, value:price }])')
     expect(syncBlock).toContain('series.setMarkers([{')
-    expect(syncBlock).toContain("position:'inBar'")
+    expect(syncBlock).toContain("position:side === 'buy' ? 'belowBar' : 'aboveBar'")
+    expect(syncBlock).not.toContain("position:'inBar'")
     expect(syncBlock).toContain('color:markerColor')
     expect(syncBlock).toContain("shape:side === 'buy' ? 'arrowUp' : 'arrowDown'")
     expect(syncBlock).toContain('size:1.5')
@@ -68,6 +69,38 @@ describe('dashboard current-position entry markers', () => {
     expect(app).toContain('方向未知持仓未绘制入场标记')
     expect(app).toContain('多仓使用红色向上箭头、空仓使用绿色向下箭头')
     expect(app).not.toContain("const buy = String(position.type || '').toLowerCase() === 'buy'")
+  })
+
+  it('keeps analyst navigation latest-first while preserving background selection refreshes', () => {
+    const navStart = app.lastIndexOf('document.querySelectorAll(".nav-item").forEach((button) => {')
+    const navEnd = app.indexOf('document.querySelectorAll("[data-model-strategy-tab]")', navStart)
+    const navBlock = app.slice(navStart, navEnd)
+    const refreshStart = app.indexOf('async function refreshTabData(tabId)')
+    const refreshEnd = app.indexOf('async function withBusy', refreshStart)
+    const refreshBlock = app.slice(refreshStart, refreshEnd)
+    expect(navBlock).toContain('button.dataset.tab === "ai-analyze" ? { selectLatest:true } : {}')
+    expect(app).toContain('refreshTabData(tabId, options)')
+    expect(refreshBlock).toContain('const selectLatest = options.selectLatest === true')
+    expect(refreshBlock).toContain('loadSignals(selectLatest ? { selectLatest:true } : { skipResultRender:true })')
+    expect(refreshBlock).toContain('historyList.scrollTop = 0')
+  })
+
+  it('restarts both dashboard K-line timers and validates the broker volume bar timestamp', () => {
+    const refreshStart = app.indexOf('async function refreshTabData(tabId)')
+    const refreshEnd = app.indexOf('async function withBusy', refreshStart)
+    const refreshBlock = app.slice(refreshStart, refreshEnd)
+    const dashboardStart = refreshBlock.indexOf('} else if (tabId === "dashboard")')
+    const dashboardEnd = refreshBlock.indexOf('} else if (tabId === "history")', dashboardStart)
+    const dashboardBlock = refreshBlock.slice(dashboardStart, dashboardEnd)
+    const volumeStart = app.indexOf('async function refreshKlineVolume()')
+    const volumeEnd = app.indexOf('function updateKlineTick', volumeStart)
+    const volumeBlock = app.slice(volumeStart, volumeEnd)
+    expect(dashboardBlock).toContain('startKlineRefreshTimer()')
+    expect(dashboardBlock).toContain('startKlineVolumeRefreshTimer()')
+    expect(volumeBlock).toContain('const barTime = mt5BrokerTimeSeconds(b?.time)')
+    expect(volumeBlock).toContain('barTime !== Number(_klineLastBar.time)')
+    expect(volumeBlock).toContain('_klineVolumeSeries.update({ time: barTime')
+    expect(volumeBlock).not.toContain('_klineVolumeSeries.update({ time: _klineLastBar.time')
   })
 })
 
@@ -116,7 +149,7 @@ describe('shared current-position table contract', () => {
     const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const responsiveVersion = html.match(/responsive\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const appVersion = html.match(/app\.js\?v=([0-9a-z._-]+)/i)?.[1]
-    expect(stylesheetVersion).toBe('20260806kline2')
+    expect(stylesheetVersion).toBe('20260807kline3')
     expect(responsiveVersion).toBe(stylesheetVersion)
     expect(appVersion).toBe(stylesheetVersion)
   })
