@@ -10,6 +10,49 @@ const nowDate = () => beijingNow().slice(0, 10)
 const validTimezoneOffset = value => value !== null && value !== undefined && value !== ''
   && Number.isInteger(Number(value)) && Number(value) >= -720 && Number(value) <= 840
 
+const IDENTITY_SYNC_MAX_ATTEMPTS = 3
+const IDENTITY_SYNC_RETRY_BASE_DELAY_MS = 10
+const IDENTITY_SYNC_RETRY_MAX_DELAY_MS = 100
+const IDENTITY_SYNC_RETRY_JITTER_MS = 10
+const identitySyncFlights = new Map()
+
+// MySQL deadlocks are safe to retry only for this idempotent identity transaction.
+const isIdentityDeadlock = error => {
+  const code = String(error?.code || '').trim().toUpperCase()
+  const sqlState = String(error?.sqlState ?? error?.sqlstate ?? '').trim().toUpperCase()
+  return code === 'ER_LOCK_DEADLOCK' || Number(error?.errno) === 1213 || sqlState === '40001'
+}
+
+const identityRetryDelay = attempt => {
+  const exponentialDelay = IDENTITY_SYNC_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1))
+  const jitter = Math.floor(Math.random() * (IDENTITY_SYNC_RETRY_JITTER_MS + 1))
+  return Math.min(IDENTITY_SYNC_RETRY_MAX_DELAY_MS, exponentialDelay + jitter)
+}
+
+const sleepForIdentityRetry = delayMs => new Promise(resolve => setTimeout(resolve, delayMs))
+
+async function withIdentityDeadlockRetry(transaction) {
+  for (let attempt = 1; attempt <= IDENTITY_SYNC_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await withTransaction(transaction)
+    } catch (error) {
+      if (attempt >= IDENTITY_SYNC_MAX_ATTEMPTS || !isIdentityDeadlock(error)) throw error
+      await sleepForIdentityRetry(identityRetryDelay(attempt))
+    }
+  }
+  throw new Error('identity_transaction_retry_exhausted')
+}
+
+function enqueueIdentitySync(identityKey, operation) {
+  const previous = identitySyncFlights.get(identityKey) || Promise.resolve()
+  const current = previous.catch(() => {}).then(operation)
+  const tracked = current.finally(() => {
+    if (identitySyncFlights.get(identityKey) === tracked) identitySyncFlights.delete(identityKey)
+  })
+  identitySyncFlights.set(identityKey, tracked)
+  return tracked
+}
+
 export class StatefulRiskReject extends Error {
   constructor(reason, details = {}) {
     super(reason); this.reason = reason; this.details = details
@@ -228,10 +271,12 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
       : Number.isInteger(numericMarginMode) && numericMarginMode >= 0
         ? (numericMarginMode === 2 ? 'hedging' : 'netting')
         : null
-  const result = await withTransaction(async run => {
+  const serverKey = server.toUpperCase()
+  const identityKey = `${serverKey}\n${login}`
+  const result = await enqueueIdentitySync(identityKey, async () => {
+    const transactionResult = await withIdentityDeadlockRetry(async run => {
     const now = beijingNow()
     const rows = (await run('SELECT * FROM trading_accounts WHERE user_id = ? FOR UPDATE', [userId]))[0]
-    const serverKey = server.toUpperCase()
     let matched = rows.find(row => String(row.broker_server).toUpperCase() === serverKey && String(row.login_account) === login)
     const activeDifferent = rows.filter(row => !row.is_deleted && (String(row.broker_server).toUpperCase() !== serverKey || String(row.login_account) !== login))
     const identityRows = (await run(`SELECT * FROM trading_accounts
@@ -362,18 +407,20 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
       ownershipTransferred: uniquePreviousOwnerUserIds.length > 0,
       previousOwnerUserIds: uniquePreviousOwnerUserIds,
     }
-  })
-  if (result.ownershipTransferred) {
+    })
+    if (transactionResult.ownershipTransferred) {
     const detail = JSON.stringify({
       broker_server:server, login_account:login, new_user_id:Number(userId),
-      previous_user_ids:result.previousOwnerUserIds, trading_account_id:result.accountId,
+      previous_user_ids:transactionResult.previousOwnerUserIds, trading_account_id:transactionResult.accountId,
       authority:'mt5_trade_allowed',
     })
-    await logAudit({ userId, action:'mt5_account_ownership_acquired', targetType:'trading_account', targetId:result.accountId, detail })
-    for (const previousUserId of result.previousOwnerUserIds) {
-      await logAudit({ userId:previousUserId, action:'mt5_account_ownership_transferred', targetType:'trading_account', targetId:result.accountId, detail })
+    await logAudit({ userId, action:'mt5_account_ownership_acquired', targetType:'trading_account', targetId:transactionResult.accountId, detail })
+    for (const previousUserId of transactionResult.previousOwnerUserIds) {
+      await logAudit({ userId:previousUserId, action:'mt5_account_ownership_transferred', targetType:'trading_account', targetId:transactionResult.accountId, detail })
     }
-  }
+    }
+    return transactionResult
+  })
   return result
 }
 

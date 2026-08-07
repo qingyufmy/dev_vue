@@ -34,6 +34,13 @@ const snapshot = (overrides = {}) => ({
   ...overrides,
 })
 const request = { symbol: 'XAUUSD', order_type: 'buy', volume: 0.01, quote_price: 2000, reference_price: 2000, atr_anchor: 10 }
+const identityRun = async sql => {
+  if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[], []]
+  if (sql.startsWith('SELECT * FROM trading_accounts\n      WHERE UPPER')) return [[], []]
+  if (sql.includes('FROM mt5_account_bindings')) return [[], []]
+  if (sql.startsWith('INSERT INTO trading_accounts')) return [{ insertId: 5 }, []]
+  return [{ affectedRows: 1 }, []]
+}
 
 function runner({ state = stateRow, reserved = { volume: 0, daily_count: 0, notional: 0 }, successes = 0, latest = null, duplicates = [], updates = [] } = {}) {
   return vi.fn(async (sql, params = []) => {
@@ -303,6 +310,158 @@ describe('stateful gate', () => {
 
 describe('identity and platform permissions', () => {
   beforeEach(() => vi.clearAllMocks())
+
+  it('retries the whole identity transaction once after a MySQL deadlock', async () => {
+    const deadlock = Object.assign(new Error('deadlock'), { code: 'ER_LOCK_DEADLOCK' })
+    const delays = []
+    const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay) => {
+      delays.push(delay)
+      callback()
+      return 0
+    })
+    db.withTransaction.mockImplementationOnce(async () => { throw deadlock })
+    db.withTransaction.mockImplementation(async callback => callback(identityRun))
+
+    try {
+      await expect(syncTradingAccountIdentity(2, { server: 'Demo', login: 123, trade_allowed: true }))
+        .resolves.toMatchObject({ accountId: 5, verified: true })
+    } finally {
+      timer.mockRestore()
+    }
+
+    expect(db.withTransaction).toHaveBeenCalledTimes(2)
+    expect(delays).toHaveLength(1)
+    expect(delays[0]).toBeGreaterThanOrEqual(10)
+    expect(delays[0]).toBeLessThanOrEqual(20)
+  })
+
+  it('stops after three MySQL deadlock transaction attempts', async () => {
+    const deadlock = Object.assign(new Error('deadlock'), { errno: 1213 })
+    const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation(callback => {
+      callback()
+      return 0
+    })
+    db.withTransaction.mockImplementation(async () => { throw deadlock })
+
+    try {
+      await expect(syncTradingAccountIdentity(2, { server: 'Demo', login: 123, trade_allowed: true }))
+        .rejects.toBe(deadlock)
+    } finally {
+      timer.mockRestore()
+    }
+
+    expect(db.withTransaction).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not retry an ordinary transaction error even when its message mentions deadlock', async () => {
+    const error = new Error('ER_LOCK_DEADLOCK')
+    db.withTransaction.mockImplementation(async () => { throw error })
+
+    await expect(syncTradingAccountIdentity(2, { server: 'Demo', login: 123, trade_allowed: true }))
+      .rejects.toBe(error)
+    expect(db.withTransaction).toHaveBeenCalledTimes(1)
+  })
+
+  it('serializes same-identity syncs while allowing a failed flight to be retried', async () => {
+    let txCount = 0
+    let active = 0
+    let maxActive = 0
+    let resolveStarted
+    const started = new Promise(resolve => { resolveStarted = resolve })
+    let releaseFirst
+    const firstGate = new Promise(resolve => { releaseFirst = resolve })
+    db.withTransaction.mockImplementation(async callback => {
+      txCount += 1
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      if (txCount === 1) resolveStarted()
+      if (txCount === 1) await firstGate
+      try {
+        return await callback(identityRun)
+      } finally {
+        active -= 1
+      }
+    })
+
+    const first = syncTradingAccountIdentity(2, { server: ' Demo ', login: '123', trade_allowed: true })
+    await started
+    const second = syncTradingAccountIdentity(3, { server: 'demo', login: 123, trade_allowed: true })
+    await Promise.resolve()
+    expect(txCount).toBe(1)
+    expect(maxActive).toBe(1)
+    releaseFirst()
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2)
+    expect(txCount).toBe(2)
+
+    const failure = new Error('identity transaction failed')
+    db.withTransaction.mockImplementationOnce(async () => { throw failure })
+    await expect(syncTradingAccountIdentity(2, { server: 'DEMO', login: '123', trade_allowed: true }))
+      .rejects.toBe(failure)
+    await expect(syncTradingAccountIdentity(2, { server: 'demo', login: '123', trade_allowed: true }))
+      .resolves.toMatchObject({ accountId: 5, verified: true })
+  })
+
+  it('runs different-identity syncs in parallel', async () => {
+    let txCount = 0
+    let active = 0
+    let maxActive = 0
+    let resolveFirstStarted, resolveSecondStarted
+    const firstStarted = new Promise(resolve => { resolveFirstStarted = resolve })
+    const secondStarted = new Promise(resolve => { resolveSecondStarted = resolve })
+    const releases = []
+    db.withTransaction.mockImplementation(async callback => {
+      txCount += 1
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      if (txCount === 1) resolveFirstStarted()
+      if (txCount === 2) resolveSecondStarted()
+      await new Promise(resolve => { releases.push(resolve) })
+      try {
+        return await callback(identityRun)
+      } finally {
+        active -= 1
+      }
+    })
+
+    const first = syncTradingAccountIdentity(2, { server: 'Demo-A', login: 123, trade_allowed: true })
+    await firstStarted
+    const second = syncTradingAccountIdentity(2, { server: 'Demo-B', login: 123, trade_allowed: true })
+    await secondStarted
+    expect(txCount).toBe(2)
+    expect(maxActive).toBe(2)
+    releases.forEach(resolve => resolve())
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2)
+  })
+
+  it('emits ownership audit side effects only once after a retried transaction succeeds', async () => {
+    const deadlock = Object.assign(new Error('deadlock'), { sqlState: '40001' })
+    const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation(callback => {
+      callback()
+      return 0
+    })
+    db.withTransaction.mockImplementationOnce(async () => { throw deadlock })
+    db.withTransaction.mockImplementation(async callback => callback(async sql => {
+      if (sql.startsWith('SELECT * FROM trading_accounts WHERE user_id')) return [[], []]
+      if (sql.startsWith('SELECT * FROM trading_accounts\n      WHERE UPPER')) return [[{ id: 99, user_id: 8, observe_status: 'active' }], []]
+      if (sql.includes('FROM mt5_account_bindings')) return [[{ current_user_id: 8, current_trading_account_id: 99 }], []]
+      if (sql.startsWith('INSERT INTO trading_accounts')) return [{ insertId: 5 }, []]
+      if (sql.includes('SELECT id FROM mt5_account_ownership_history')) return [[], []]
+      return [{ affectedRows: 1 }, []]
+    }))
+
+    try {
+      await expect(syncTradingAccountIdentity(2, { server: 'Demo', login: 123, trade_allowed: true }))
+        .resolves.toMatchObject({ ownershipTransferred: true, previousOwnerUserIds: [8] })
+    } finally {
+      timer.mockRestore()
+    }
+
+    expect(db.withTransaction).toHaveBeenCalledTimes(2)
+    expect(db.logAudit).toHaveBeenCalledTimes(2)
+    expect(db.logAudit.mock.calls.map(([entry]) => entry.action)).toEqual([
+      'mt5_account_ownership_acquired', 'mt5_account_ownership_transferred',
+    ])
+  })
 
   it('persists the Bridge-reported account margin mode instead of assuming netting', async () => {
     const writes = []
