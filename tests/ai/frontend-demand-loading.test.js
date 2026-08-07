@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
+const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
 
 function block(startMarker, endMarker) {
   const start = app.indexOf(startMarker)
@@ -65,6 +66,32 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const analystView = block('function setAnalystView(target, options = {})', 'function setModelStrategySubtab')
     expect(analystView).toContain('options.loadData !== false')
     expect(app).toContain('"refresh-signals": () => state.analystView === "records"')
+  })
+
+  it('hydrates the analyst history page on ticket navigation without expanding dashboard loading', () => {
+    const ensureHistory = block('async function ensureAnalysisHistoryPageLoaded()', 'function renderAnalysisDetailLoading')
+    expect(ensureHistory).toContain('if (state.analysisHistoryPageLoaded) return')
+    expect(ensureHistory).toContain('if (_analysisHistoryLoadPromise) return _analysisHistoryLoadPromise')
+    expect(ensureHistory).toContain('limit: ANALYSIS_HISTORY_PAGE_SIZE')
+    expect(ensureHistory).toContain('skipResultRender: true')
+    expect(ensureHistory).toContain('loadDashboard: false')
+    const signals = block('async function loadSignals(options = {})', '// Load signal table data')
+    expect(signals).toContain('state.analysisHistoryPageLoaded = !summaryOnly && limit >= ANALYSIS_HISTORY_PAGE_SIZE')
+
+    const openDetail = block('async function openAnalysisFromHistory(signalId, options = {})', 'function renderSignalRows()')
+    expect(openDetail).toContain('if (navigate) {')
+    expect(openDetail).toContain('await ensureAnalysisHistoryPageLoaded()')
+    expect(openDetail).toContain("signal = state.signals.find(item => String(item.id) === requestedId) || signal")
+    expect(openDetail.indexOf('await ensureAnalysisHistoryPageLoaded()')).toBeLessThan(openDetail.indexOf('wsApi("signal_detail"'))
+
+    const byTicket = block('async function navigateToSignalByTicket(ticket)', 'async function cancelPendingOrder(ticket)')
+    expect(byTicket).toContain('await openAnalysisFromHistory(signal.id, { source:"ticket", forcePinned:true })')
+    expect(byTicket).not.toContain('setTab("ai-analyze")')
+
+    const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
+    expect(initial).toContain('loadSignals({ limit:1, summaryOnly:true, skipResultRender:true })')
+    expect(initial).not.toContain('ensureAnalysisHistoryPageLoaded()')
+    expect(html).toContain('/ai/app.js?v=20260807history1')
   })
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {

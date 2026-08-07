@@ -54,6 +54,7 @@ const state = {
   analysisHistoryOffset: 0,
   analysisHistoryHasMore: true,
   analysisHistoryLoading: false,
+  analysisHistoryPageLoaded: false,
   modelProfiles: [],
   strategyFilter: "all",
   reviewCases: [],
@@ -1824,6 +1825,13 @@ function clearAccountContextCaches() {
   state.pendingOrders = [];
   state.tradingAccounts = [];
   state.strategySubscriptions = [];
+  state.signals = [];
+  state.selectedSignal = null;
+  state.latestSignalId = null;
+  state.analysisHistoryOffset = 0;
+  state.analysisHistoryHasMore = true;
+  state.analysisHistoryPageLoaded = false;
+  _analysisHistoryLoadPromise = null;
   _prevPositionCount = 0;
   if ($("positionsBody")) $("positionsBody").innerHTML = renderPositionRows([]);
   if ($("dashboardPositionsBody")) $("dashboardPositionsBody").innerHTML = renderPositionRows([]);
@@ -8787,11 +8795,10 @@ async function navigateToSignalByTicket(ticket) {
     const data = await wsApi("signal_by_ticket", { ticket });
     if (data.status === "success" && data.signal) {
       const signal = data.signal;
-      setAnalysisSelectionIntent(signal.id, { source:"ticket", forcePinned:true });
-      state.selectedSignal = signal;
-      setTab("ai-analyze");
-      renderSignal(signal, null);
-      highlightActiveAnalysis(signal.id);
+      const existingIndex = state.signals.findIndex(item => sameSignalId(item.id, signal.id));
+      if (existingIndex >= 0) state.signals[existingIndex] = { ...state.signals[existingIndex], ...signal };
+      else state.signals.unshift(signal);
+      await openAnalysisFromHistory(signal.id, { source:"ticket", forcePinned:true });
       toast(`已定位信号 #${signal.id}`, "success");
     } else {
       toast(data.message || "未找到关联信号", "warning");
@@ -9008,6 +9015,24 @@ function highlightActiveAnalysis(signalId) {
 let _analysisDetailRequestVersion = 0;
 let _signalsListRequestVersion = 0;
 let _signalTableRequestVersion = 0;
+let _analysisHistoryLoadPromise = null;
+
+// The dashboard deliberately keeps only a one-row signal summary.  Entering
+// the analyst detail view is the demand boundary at which the first history
+// page is fetched.  Keep the in-flight promise shared so a ticket click and a
+// concurrent navigation cannot issue duplicate `signals` list requests.
+async function ensureAnalysisHistoryPageLoaded() {
+  if (state.analysisHistoryPageLoaded) return;
+  if (_analysisHistoryLoadPromise) return _analysisHistoryLoadPromise;
+  _analysisHistoryLoadPromise = loadSignals({
+    limit: ANALYSIS_HISTORY_PAGE_SIZE,
+    skipResultRender: true,
+    loadDashboard: false,
+  }).finally(() => {
+    _analysisHistoryLoadPromise = null;
+  });
+  return _analysisHistoryLoadPromise;
+}
 
 function renderAnalysisDetailLoading(signalId) {
   destroyInferenceChart();
@@ -9043,6 +9068,16 @@ async function openAnalysisFromHistory(signalId, options = {}) {
   state.selectedSignal = signal || { id: signalId };
   highlightActiveAnalysis(signalId);
   if (navigate) setTab("ai-analyze", { skipRefresh:true, analystView:"detail" });
+
+  if (navigate) {
+    try {
+      await ensureAnalysisHistoryPageLoaded();
+      if (requestVersion !== _analysisDetailRequestVersion) return;
+      signal = state.signals.find(item => String(item.id) === requestedId) || signal;
+    } catch (error) {
+      console.error('[Inference] signal history load failed:', error);
+    }
+  }
 
   if (!signal?.detail_loaded || forceRefresh) {
     renderAnalysisDetailLoading(signalId);
@@ -9137,6 +9172,9 @@ async function loadSignals(options = {}) {
   }
   state.analysisHistoryOffset = state.signals.length;
   state.analysisHistoryHasMore = hasMore;
+  if (!options.append) {
+    state.analysisHistoryPageLoaded = !summaryOnly && limit >= ANALYSIS_HISTORY_PAGE_SIZE;
+  }
 
   // The server-sorted first row is the canonical latest signal. Keep it
   // separate from the selected row because history navigation may inject an
