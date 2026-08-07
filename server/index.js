@@ -53,6 +53,7 @@ import { startWeeklySystemFlatten } from './jobs/weekly-system-flatten.js'
 import { startMembershipExpiryNotificationWorker } from './membership-expiry-notifications.js'
 import { startPaymentOrderCleanup } from './jobs/payment-order-cleanup.js'
 import { startPaymentSideEffectWorker } from './jobs/payment-side-effects.js'
+import { startStorageMaintenance } from './storage/storage-operations.js'
 import { securityHeaders } from './security-headers.js'
 import { blockPrivateVideoStatic } from './video-access.js'
 import { installFatalProcessHandlers, listenHttpServer } from './runtime-lifecycle.js'
@@ -520,6 +521,7 @@ installGracefulShutdownHandlers()
     console.error('[CryptoMonitor] Failed to start:', err.message)
   }
   startPaymentOrderCleanup()
+  trackShutdownTimer(startStorageMaintenance())
   startPaymentSideEffectWorker()
   // Sentiment data: non-blocking initial fetch + 30-min refresh
   fetchSentiment().then(data => {

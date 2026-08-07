@@ -5,6 +5,9 @@ import { fetchBilibiliVideo } from '../utils.js'
 import { canAccessMembershipLevel } from '../membership.js'
 import { existsSync } from 'fs'
 import { parseCourseAttachmentMetadata, resolveCourseAttachmentPath, serializeCourseAttachment } from '../course-attachments.js'
+import { createStorageService } from '../storage/storage-service.js'
+import { loadStoredFile } from '../storage/stored-file-service.js'
+import { sendStoredFile } from '../storage/stored-file-response.js'
 
 const router = Router()
 
@@ -69,7 +72,7 @@ router.get('/course-items/:id/attachments', optionalAuth, async (req, res) => {
     if (!canAccessMembershipLevel(req.user, course.access_level)) {
       return res.status(403).json({ ok:false, error:'当前会员权限不可下载该课程附件' })
     }
-    const rows = await queryAll("SELECT * FROM course_resources WHERE episode_id = ? AND type = 'attachment' ORDER BY sort_order, id", [req.params.id])
+    const rows = await queryAll("SELECT cr.*, sf.storage_provider, sf.original_name, sf.mime_type, sf.size_bytes FROM course_resources cr LEFT JOIN stored_files sf ON sf.id = cr.stored_file_id WHERE cr.episode_id = ? AND cr.type = 'attachment' ORDER BY cr.sort_order, cr.id", [req.params.id])
     res.json({ ok:true, attachments:rows.map(serializeCourseAttachment) })
   } catch (error) {
     console.error('Course attachments error:', error)
@@ -88,6 +91,14 @@ router.get('/course-items/:id/attachments/:attachmentId/download', optionalAuth,
     if (!canAccessMembershipLevel(req.user, attachment.access_level)) {
       return res.status(403).json({ ok:false, error:'当前会员权限不可下载该课程附件' })
     }
+    if (attachment.stored_file_id) {
+      const stored = await loadStoredFile(attachment.stored_file_id)
+      if (!stored) return res.status(404).json({ ok:false, error:'附件文件不存在' })
+      const storage = await createStorageService()
+      const served = await sendStoredFile({ res, storage, row:stored, download:true })
+      if (!served && !res.headersSent) return res.status(404).json({ ok:false, error:'附件文件不存在' })
+      return
+    }
     const filePath = resolveCourseAttachmentPath(attachment)
     if (!filePath || !existsSync(filePath)) return res.status(404).json({ ok:false, error:'附件文件不存在' })
     const metadata = parseCourseAttachmentMetadata(attachment)
@@ -99,6 +110,23 @@ router.get('/course-items/:id/attachments/:attachmentId/download', optionalAuth,
   } catch (error) {
     console.error('Course attachment download error:', error)
     if (!res.headersSent) res.status(500).json({ ok:false, error:'附件下载失败' })
+  }
+})
+
+// New private-root course resources use a stable application URL. Legacy
+// /uploads/resources/... URLs continue to be returned unchanged.
+router.get('/course-resources/:resourceId/file', optionalAuth, async (req, res) => {
+  try {
+    const resource = await queryOne("SELECT * FROM course_resources WHERE id = ? AND stored_file_id IS NOT NULL", [req.params.resourceId])
+    if (!resource) return res.status(404).json({ ok:false, error:'资源不存在' })
+    const stored = await loadStoredFile(resource.stored_file_id)
+    if (!stored) return res.status(404).json({ ok:false, error:'资源文件不存在' })
+    const storage = await createStorageService()
+    const served = await sendStoredFile({ res, storage, row:stored })
+    if (!served && !res.headersSent) res.status(404).json({ ok:false, error:'资源文件不存在' })
+  } catch (error) {
+    console.error('Course resource file error:', error)
+    if (!res.headersSent) res.status(404).json({ ok:false, error:'资源文件不存在' })
   }
 })
 
@@ -134,7 +162,7 @@ router.get('/course-items/:id/resources', authMiddleware, async (req, res) => {
     if (!course || !canAccessMembershipLevel(req.user, course.access_level)) {
       return res.status(403).json({ ok:false, error:'当前会员权限不可访问该课程资料' })
     }
-    const resources = await queryAll('SELECT * FROM course_resources WHERE episode_id = ? ORDER BY sort_order', [req.params.id])
+    const resources = await queryAll('SELECT cr.*, sf.storage_provider, sf.original_name, sf.mime_type, sf.size_bytes FROM course_resources cr LEFT JOIN stored_files sf ON sf.id = cr.stored_file_id WHERE cr.episode_id = ? ORDER BY cr.sort_order', [req.params.id])
 
     const knowledgePoints = resources.filter(r => r.type === 'knowledge').map(r => ({
       id: r.id, title: r.title, content: r.content, url: r.url

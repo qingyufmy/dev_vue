@@ -5148,6 +5148,137 @@ const migrations = [
       // must not remain an alternate source of model instructions.
       await queryRun('DROP TABLE IF EXISTS ai_signal_schema')
     }
+  },
+  {
+    id: '174_unified_media_storage_foundation',
+    async up() {
+      // New storage facts are append-only. Existing upload tables and paths
+      // remain readable and are intentionally not backfilled here.
+      await queryRun(`CREATE TABLE IF NOT EXISTS stored_files (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        purpose VARCHAR(24) NOT NULL,
+        storage_provider VARCHAR(16) NOT NULL,
+        object_key VARCHAR(512) NOT NULL,
+        original_name VARCHAR(255) NOT NULL DEFAULT '',
+        mime_type VARCHAR(128) NOT NULL DEFAULT '',
+        extension VARCHAR(32) NOT NULL DEFAULT '',
+        size_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        sha256 CHAR(64) DEFAULT NULL,
+        visibility VARCHAR(24) NOT NULL DEFAULT 'authenticated',
+        owner_type VARCHAR(48) DEFAULT NULL,
+        owner_id BIGINT UNSIGNED DEFAULT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'uploading',
+        created_by INT DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        deleted_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_stored_files_provider_object (storage_provider, object_key),
+        KEY idx_stored_files_purpose_status (purpose, status, created_at),
+        KEY idx_stored_files_owner (owner_type, owner_id, status),
+        KEY idx_stored_files_provider_status (storage_provider, status, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      const configs = [
+        ['media_storage', 'default_provider', 'local', '默认存储位置（初始本地，连接后可启用七牛）', 0],
+        ['media_storage', 'video_provider', 'inherit', '课程视频存储位置', 1],
+        ['media_storage', 'attachment_provider', 'inherit', '课程附件存储位置', 2],
+        ['media_storage', 'image_provider', 'inherit', '图片存储位置', 3],
+        ['media_storage', 'resource_provider', 'inherit', '其他资源存储位置', 4],
+        ['media_storage', 'local_root', '', '本地存储目录（只读）', 5],
+        ['media_storage', 'qiniu_connection_test_version', '', '七牛连接测试配置版本（只读）', 6],
+        ['media_storage', 'qiniu_connection_test_status', 'not_tested', '七牛连接测试状态（只读）', 7],
+        ['media_storage', 'qiniu_connection_test_stage', '', '七牛连接测试阶段（只读）', 8],
+        ['media_storage', 'qiniu_connection_tested_at', '', '七牛连接测试时间（只读）', 9],
+        ['media_storage', 'qiniu_connection_test_error', '', '七牛连接测试安全错误（只读）', 10],
+        ['media_storage', 'qiniu_connection_test_cleanup_pending', 'false', '七牛测试对象待清理（只读）', 11],
+        ['qiniu', 'private_bucket', 'true', '私有空间（系统固定）', 5],
+      ]
+      for (const [category, key, value, label, sortOrder] of configs) {
+        await queryRun(
+          'INSERT IGNORE INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)',
+          [category, key, value, label, sortOrder],
+        )
+      }
+    }
+  },
+  {
+    id: '175_unified_media_business_links',
+    async up() {
+      // Phase 2/3 links are nullable by design. Legacy URLs and
+      // course-attachment:// records remain the read fallback until a
+      // business row is explicitly written with a stored_file_id.
+      for (const table of ['course_resources', 'post_assets']) {
+        const column = await queryAll(
+          'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = \'stored_file_id\'',
+          [table],
+        )
+        if (!column.length) {
+          await queryRun(`ALTER TABLE ${table} ADD COLUMN stored_file_id BIGINT UNSIGNED DEFAULT NULL`)
+        }
+      }
+      const indexes = [
+        ['course_resources', 'idx_course_resources_stored_file', 'stored_file_id'],
+        ['post_assets', 'idx_post_assets_stored_file', 'stored_file_id'],
+      ]
+      for (const [table, indexName, column] of indexes) {
+        const existing = await queryAll(
+          'SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?',
+          [table, indexName],
+        )
+        if (!existing.length) await queryRun(`ALTER TABLE ${table} ADD INDEX ${indexName} (${column})`)
+      }
+      // Direct-upload state contains no credentials or signed URLs. It is
+      // intentionally a small, append-only coordination record; expiry and
+      // status make stale browser sessions harmless.
+      await queryRun(`CREATE TABLE IF NOT EXISTS storage_upload_sessions (
+        id CHAR(36) PRIMARY KEY,
+        stored_file_id BIGINT UNSIGNED NOT NULL,
+        provider VARCHAR(16) NOT NULL,
+        purpose VARCHAR(24) NOT NULL,
+        object_key VARCHAR(512) NOT NULL,
+        original_name VARCHAR(255) NOT NULL DEFAULT '',
+        mime_type VARCHAR(128) NOT NULL DEFAULT '',
+        size_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        owner_type VARCHAR(48) DEFAULT NULL,
+        owner_id BIGINT UNSIGNED DEFAULT NULL,
+        created_by INT DEFAULT NULL,
+        config_version CHAR(64) DEFAULT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        expires_at DATETIME NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        confirmed_at DATETIME DEFAULT NULL,
+        KEY idx_storage_upload_sessions_status (status, expires_at),
+        KEY idx_storage_upload_sessions_stored_file (stored_file_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
+  },
+  {
+    id: '176_unified_video_storage_links',
+    async up() {
+      // Managed video links are nullable so legacy Bilibili/YouTube,
+      // local-path, and qiniu-key rows remain readable without a backfill.
+      const columns = await queryAll(
+        'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = \'video_streams\' AND COLUMN_NAME IN (\'stored_file_id\', \'video_source\')',
+      )
+      const names = new Set(columns.map(row => row.COLUMN_NAME))
+      if (!names.has('stored_file_id')) {
+        await queryRun('ALTER TABLE video_streams ADD COLUMN stored_file_id BIGINT UNSIGNED DEFAULT NULL')
+      }
+      if (!names.has('video_source')) {
+        await queryRun("ALTER TABLE video_streams ADD COLUMN video_source VARCHAR(24) DEFAULT NULL")
+      }
+      const indexes = [
+        ['idx_video_streams_stored_file', 'stored_file_id'],
+        ['idx_video_streams_source_episode', 'video_source, episode_id'],
+      ]
+      for (const [indexName, expression] of indexes) {
+        const existing = await queryAll(
+          'SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = \'video_streams\' AND INDEX_NAME = ?',
+          [indexName],
+        )
+        if (!existing.length) await queryRun(`ALTER TABLE video_streams ADD INDEX ${indexName} (${expression})`)
+      }
+    }
   }
 ]
 

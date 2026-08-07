@@ -28,13 +28,23 @@ function cleanOriginalName(value) {
 }
 
 export function validateCourseAttachmentFile(file = {}) {
+  const metadata = validateCourseAttachmentMetadata(file)
+  if (!metadata.ok) return metadata
+  if (!file.buffer) return { ok:false, error:'附件内容为空' }
+  return metadata
+}
+
+// Browser direct-upload sessions have no multipart buffer yet. Validate the
+// same name/extension/size contract before issuing a qiniu token, then let the
+// confirm phase verify the remote object size and MIME metadata.
+export function validateCourseAttachmentMetadata(file = {}) {
   const originalName = cleanOriginalName(file.originalname)
   const extension = extname(originalName).toLowerCase()
   const size = Number(file.size || file.buffer?.length || 0)
   if (!originalName || !extension || !allowedExtensions.has(extension)) {
     return { ok:false, error:'仅支持 PDF、Office 文档、表格、文本和压缩包' }
   }
-  if (!file.buffer || size <= 0) return { ok:false, error:'附件内容为空' }
+  if (size <= 0) return { ok:false, error:'附件内容为空' }
   if (size > COURSE_ATTACHMENT_MAX_BYTES) return { ok:false, error:'单个附件不能超过 20 MB' }
   return {
     ok:true,
@@ -74,13 +84,13 @@ export function storeCourseAttachmentFile(episodeValue, file) {
 export function parseCourseAttachmentMetadata(row = {}) {
   let metadata = {}
   try { metadata = JSON.parse(row.structure || '{}') || {} } catch {}
-  const fileName = cleanOriginalName(metadata.original_name || row.title || '课程附件') || '课程附件'
-  const extension = String(metadata.extension || extname(fileName) || '').toLowerCase()
+  const fileName = cleanOriginalName(row.original_name || metadata.original_name || row.title || '课程附件') || '课程附件'
+  const extension = String(row.extension || metadata.extension || extname(fileName) || '').toLowerCase()
   return {
     fileName,
     extension,
-    mimeType:String(metadata.mime_type || 'application/octet-stream'),
-    fileSize:Math.max(0, Number(metadata.file_size || 0)),
+    mimeType:String(row.mime_type || metadata.mime_type || 'application/octet-stream'),
+    fileSize:Math.max(0, Number(row.size_bytes ?? metadata.file_size ?? 0)),
     uploadedAt:metadata.uploaded_at || row.created_at || null,
   }
 }
@@ -98,6 +108,8 @@ export function serializeCourseAttachment(row = {}) {
     mime_type:metadata.mimeType,
     extension:metadata.extension,
     uploaded_at:metadata.uploadedAt,
+    storage_provider:row.storage_provider || 'legacy',
+    stored_file_id:row.stored_file_id ? Number(row.stored_file_id) : null,
     sort_order:Number(row.sort_order || 0),
     download_url:`/api/course-items/${episodeId}/attachments/${id}/download`,
   }

@@ -352,8 +352,11 @@ router.get('/admin/content-system/engagement',authMiddleware,adminOnly,async(req
 router.get('/admin/content-system/videos',authMiddleware,adminOnly,async(req,res)=>{
   try{
     const rows=await queryAll(`SELECT c.episode_id,c.number,c.title,c.access_level,c.has_stream_video,c.local_video_path,c.bilibili_id,c.youtube_id,
-      vs.id AS stream_id,vs.local_path,vs.qiniu_key,vs.duration,vs.title AS stream_title,vs.access_level AS stream_access_level
+      vs.id AS stream_id,vs.local_path,vs.qiniu_key,vs.duration,vs.title AS stream_title,vs.access_level AS stream_access_level,
+      vs.video_source,vs.stored_file_id,sf.storage_provider AS stored_file_provider,sf.status AS stored_file_status
+      ,CASE WHEN vs.video_source='local_mp4' THEN '本地 MP4' WHEN vs.video_source='qiniu_mp4' THEN '七牛 MP4' WHEN c.bilibili_id<>'' OR vs.bilibili_id<>'' THEN 'Bilibili' WHEN c.youtube_id<>'' THEN 'YouTube' ELSE '外部来源' END AS video_source_label
       FROM courses c LEFT JOIN video_streams vs ON vs.episode_id=c.episode_id
+      LEFT JOIN stored_files sf ON sf.id=vs.stored_file_id
       ORDER BY c.sort_order,c.number,c.episode_id`)
     res.json({ok:true,courses:rows.map(row=>({...row,id:Number(row.episode_id),number:Number(row.number||0),has_stream_video:Boolean(Number(row.has_stream_video)),access_level:row.stream_access_level||row.access_level||'free'}))})
   }catch(error){console.error('[AdminConsole] hosted videos failed:',error);res.status(500).json({ok:false,error:'课程视频数据加载失败'})}

@@ -8,6 +8,9 @@ import { validateAddress } from '../crypto/wallet.js'
 import { isEncryptionAvailable } from '../ai-credential.js'
 import { isSensitiveSystemConfigKey, protectSystemConfigValue, systemConfigRowsToMap } from '../system-config-secrets.js'
 import { sanitizeReleaseNote } from '../html-sanitizer.js'
+import { getStorageConfigSummary, invalidateStorageConfigCache, isQiniuConfigured, loadStorageConfig, readStorageConfigFromRows } from '../storage/storage-config.js'
+import { testStorageConnection } from '../storage/storage-service.js'
+import { getStorageOperationsSummary } from '../storage/storage-operations.js'
 
 const router = Router()
 
@@ -47,6 +50,29 @@ const ADMIN_CONFIG_SCHEMA = Object.freeze({
     host:{ type:'string', max:255 }, port:{ type:'integer', min:1, max:65535, default:'587' }, user:{ type:'string', max:255 },
     pass:{ type:'secret' }, from:{ type:'email', max:255 }, from_name:{ type:'string', max:100 }, secure:{ type:'boolean', default:'false' },
   }},
+  qiniu:{ label:'七牛连接', source:'database_encrypted', apply_mode:'immediate', keys:{
+    access_key:{ type:'secret' }, secret_key:{ type:'secret' }, bucket:{ type:'string', max:255 },
+    // Keep the two legacy region labels accepted by the original admin
+    // selector so an existing qiniu configuration remains editable after the
+    // storage settings are exposed. The SDK still resolves the actual upload
+    // endpoint from the bucket and credentials.
+    domain:{ type:'https_origin', max:255 }, region:{ type:'enum', values:['z0','z1','z2','na0','as0','cn-east','cn-south'], default:'z0' },
+    private_bucket:{ type:'boolean', default:'true', read_only:true },
+  }},
+  media_storage:{ label:'文件与媒体存储', source:'database', apply_mode:'immediate', keys:{
+    default_provider:{ type:'enum', values:['local','qiniu'], default:'local' },
+    video_provider:{ type:'enum', values:['inherit','local','qiniu'], default:'inherit' },
+    attachment_provider:{ type:'enum', values:['inherit','local','qiniu'], default:'inherit' },
+    image_provider:{ type:'enum', values:['inherit','local','qiniu'], default:'inherit' },
+    resource_provider:{ type:'enum', values:['inherit','local','qiniu'], default:'inherit' },
+    local_root:{ type:'string', read_only:true },
+    qiniu_connection_test_version:{ type:'string', read_only:true },
+    qiniu_connection_test_status:{ type:'string', read_only:true },
+    qiniu_connection_test_stage:{ type:'string', read_only:true },
+    qiniu_connection_tested_at:{ type:'string', read_only:true },
+    qiniu_connection_test_error:{ type:'string', read_only:true },
+    qiniu_connection_test_cleanup_pending:{ type:'boolean', read_only:true },
+  }},
   market_menu:{ label:'股票研究菜单', source:'database', apply_mode:'immediate', keys:{ items:{ type:'json_array', max:500000, default:'[]' } }},
   toolbox:{ label:'金融工具箱', source:'database', apply_mode:'immediate', keys:{ items:{ type:'json_array', max:500000, default:'[]' } }},
 })
@@ -79,6 +105,15 @@ function normalizeConfigValue(category, key, value) {
     if (!validateAddress('TRON', text)) throw new Error('config_tron_address_invalid')
     return text
   }
+  if (meta.type === 'https_origin') {
+    try {
+      const url = new URL(text)
+      if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('invalid')
+    } catch {
+      throw new Error('config_https_origin_invalid')
+    }
+    return text
+  }
   if (meta.type === 'json_array') {
     if (text.length > meta.max) throw new Error('config_json_too_large')
     let parsed
@@ -98,7 +133,13 @@ function configErrorMessage(error) {
     config_integer_out_of_range:'数值超出允许范围', config_tron_address_invalid:'TRON 收款地址格式无效',
     config_json_invalid:'JSON 格式无效', config_json_array_required:'配置内容必须是数组', config_json_too_large:'配置内容过大',
     config_email_invalid:'邮箱格式无效', config_text_too_long:'配置内容过长',
+    config_https_origin_invalid:'请填写不带路径和参数的 HTTPS 域名',
     credential_encryption_unavailable:'凭证加密服务未就绪，敏感配置未保存',
+    storage_qiniu_configuration_invalid:'七牛配置不完整或域名不是 HTTPS',
+    storage_qiniu_connection_test_required:'切换到七牛前，请先测试当前七牛配置连接',
+    storage_qiniu_bucket_locked:'已有七牛文件时不可切换存储空间，请先完成迁移或清理旧文件',
+    storage_connection_provider_invalid:'连接测试提供商无效',
+    storage_config_changed_during_test:'测试期间配置发生变化，请重新测试',
   }
   return messages[error?.message] || '配置校验失败'
 }
@@ -109,18 +150,47 @@ function redactItems(items) {
     : it)
 }
 
-function serializeAdminConfig(rows) {
+function serializeAdminConfig(rows, storageConfig = null) {
   const byKey = new Map(rows.map(row => [`${row.category}:${row.key}`, row]))
   const grouped = {}
   for (const [category, categoryMeta] of Object.entries(ADMIN_CONFIG_SCHEMA)) {
     grouped[category] = Object.entries(categoryMeta.keys).map(([key, keyMeta], index) => {
       const row = byKey.get(`${category}:${key}`) || { id:null, category, key, value:keyMeta.default ?? '', label:'', sort_order:index, created_at:null, updated_at:null }
       const redacted = redactItems([row])[0]
+      if (category === 'media_storage' && key === 'local_root' && storageConfig) redacted.value = storageConfig.media.local_root
       return { ...redacted, config_meta:{ type:keyMeta.type, source:categoryMeta.source, apply_mode:categoryMeta.apply_mode,
         editable:!keyMeta.read_only, sensitive:isSensitiveSystemConfigKey(key), min:keyMeta.min, max:keyMeta.max } }
     })
   }
   return grouped
+}
+
+function assertStorageUpdateAllowed(category, prospective) {
+  if (category !== 'media_storage') return
+  const activatesQiniu = Object.values(prospective.effectiveProviders).includes('qiniu')
+  if (!activatesQiniu) return
+  if (!isQiniuConfigured(prospective.qiniu)) throw new Error('storage_qiniu_configuration_invalid')
+  if (!prospective.qiniuTest.valid || prospective.qiniuTest.configVersion !== prospective.configVersion) {
+    throw new Error('storage_qiniu_connection_test_required')
+  }
+}
+
+async function assertQiniuBucketImmutable(runner, category, currentRows, prospective) {
+  if (category !== 'qiniu') return
+  const current = readStorageConfigFromRows(currentRows)
+  if (current.qiniu.bucket === prospective.qiniu.bucket) return
+  const [rows] = await runner("SELECT id FROM stored_files WHERE storage_provider = 'qiniu' AND status NOT IN ('deleted', 'failed') LIMIT 1 FOR UPDATE")
+  if (rows?.length) throw new Error('storage_qiniu_bucket_locked')
+}
+
+function applyStorageRows(rows, category, updates) {
+  const nextRows = (rows || []).map(row => ({ ...row }))
+  for (const update of updates) {
+    const existing = nextRows.find(row => row.category === category && row.key === update.key)
+    if (existing) existing.value = update.value
+    else nextRows.push({ category, key:update.key, value:update.value })
+  }
+  return nextRows
 }
 
 async function auditConfigChange(req, action, category, keys = []) {
@@ -328,7 +398,10 @@ router.post('/admin/release-notes', authMiddleware, adminOnly, async (req, res) 
 router.get('/system-config', authMiddleware, adminOnly, async (req, res) => {
   try {
     const rows = await queryAll('SELECT * FROM system_config ORDER BY category, sort_order, id')
-    res.json({ ok: true, config:serializeAdminConfig(rows), security:{ credential_encryption_available:isEncryptionAvailable() } })
+    const storageConfig = readStorageConfigFromRows(rows)
+    const storage = getStorageConfigSummary(storageConfig)
+    storage.operations = await getStorageOperationsSummary()
+    res.json({ ok: true, config:serializeAdminConfig(rows, storageConfig), storage, security:{ credential_encryption_available:isEncryptionAvailable() } })
   } catch (err) {
     console.error('[Config] Load config error:', err)
     res.json({ ok: false, error: '加载配置失败' })
@@ -340,7 +413,11 @@ router.get('/system-config/:category', authMiddleware, adminOnly, async (req, re
   try {
     if (!ADMIN_CONFIG_SCHEMA[req.params.category]) return res.status(404).json({ ok:false, error:'配置分类不存在' })
     const rows = await queryAll('SELECT * FROM system_config WHERE category = ? ORDER BY sort_order, id', [req.params.category])
-    res.json({ ok: true, items: serializeAdminConfig(rows)[req.params.category] || [] })
+    const storageRows = ['media_storage', 'qiniu'].includes(req.params.category)
+      ? await queryAll('SELECT category, `key`, `value` FROM system_config WHERE category IN (?, ?) ORDER BY category, sort_order, id', ['media_storage', 'qiniu'])
+      : rows
+    const storageConfig = readStorageConfigFromRows(storageRows)
+    res.json({ ok: true, items: serializeAdminConfig(rows, storageConfig)[req.params.category] || [], storage:getStorageConfigSummary(storageConfig) })
   } catch (err) {
     console.error('[Config] Load category error:', err)
     res.json({ ok: false, error: '加载配置失败' })
@@ -357,16 +434,36 @@ router.post('/system-config', authMiddleware, adminOnly, async (req, res) => {
     const normalized = normalizeConfigValue(category, key, value)
     const storedValue = protectSystemConfigValue(key, normalized)
 
-    const existing = await queryOne('SELECT id FROM system_config WHERE category = ? AND `key` = ?', [category, key])
-    if (existing) {
-      await queryRun('UPDATE system_config SET `value` = ?, label = ?, sort_order = ?, updated_at = NOW() WHERE id = ?',
-        [storedValue, label || '', sort_order || 0, existing.id])
+    let existing = null
+    if (category === 'media_storage' || category === 'qiniu') {
+      existing = await withTransaction(async runner => {
+        const [rows] = await runner('SELECT category, `key`, `value` FROM system_config WHERE category IN (?, ?) ORDER BY category, sort_order, id FOR UPDATE', ['media_storage', 'qiniu'])
+        const prospective = readStorageConfigFromRows(applyStorageRows(rows, category, [{ key, value:normalized }]))
+        await assertQiniuBucketImmutable(runner, category, rows, prospective)
+        assertStorageUpdateAllowed(category, prospective)
+        const [existingRows] = await runner('SELECT id FROM system_config WHERE category = ? AND `key` = ? FOR UPDATE', [category, key])
+        if (existingRows?.[0]) {
+          await runner('UPDATE system_config SET `value` = ?, label = ?, sort_order = ?, updated_at = NOW() WHERE id = ?',
+            [storedValue, label || '', sort_order || 0, existingRows[0].id])
+          return existingRows[0]
+        }
+        await runner('INSERT INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)',
+          [category, key, storedValue, label || '', sort_order || 0])
+        return null
+      })
     } else {
-      await queryRun('INSERT INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)',
-        [category, key, storedValue, label || '', sort_order || 0])
+      existing = await queryOne('SELECT id FROM system_config WHERE category = ? AND `key` = ?', [category, key])
+      if (existing) {
+        await queryRun('UPDATE system_config SET `value` = ?, label = ?, sort_order = ?, updated_at = NOW() WHERE id = ?',
+          [storedValue, label || '', sort_order || 0, existing.id])
+      } else {
+        await queryRun('INSERT INTO system_config (category, `key`, `value`, label, sort_order) VALUES (?, ?, ?, ?, ?)',
+          [category, key, storedValue, label || '', sort_order || 0])
+      }
     }
     if (category === 'crypto_wallet') resetFixedAddressCache()
     if (category === 'sms') resetSmsConfigCache()
+    if (category === 'media_storage' || category === 'qiniu') invalidateStorageConfigCache()
     await auditConfigChange(req, 'system_config_updated', category, [key])
     res.json({ ok: true, id: existing?.id, action: existing ? 'updated' : 'created' })
   } catch (err) {
@@ -384,20 +481,39 @@ router.put('/system-config/:category', authMiddleware, adminOnly, async (req, re
     if (!Array.isArray(items)) return res.status(400).json({ ok: false, error: 'items 必须是数组' })
 
     const changedKeys = []
+    const normalizedItems = []
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
       if (item.value === '***REDACTED***') continue
       const normalized = normalizeConfigValue(category, item.key, item.value)
-      const storedValue = protectSystemConfigValue(item.key, normalized)
-      await queryRun(`
-        INSERT INTO system_config (category, \`key\`, \`value\`, label, sort_order)
-        VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`), label = VALUES(label), sort_order = VALUES(sort_order), updated_at = NOW()
-      `, [category, item.key, storedValue, item.label || '', item.sort_order ?? i])
-      changedKeys.push(item.key)
+      normalizedItems.push({ item, normalized, storedValue:protectSystemConfigValue(item.key, normalized), index:i })
     }
+    const writeItems = async runner => {
+      let currentRows = []
+      if (category === 'media_storage' || category === 'qiniu') {
+        const result = await runner('SELECT category, `key`, `value` FROM system_config WHERE category IN (?, ?) ORDER BY category, sort_order, id FOR UPDATE', ['media_storage', 'qiniu'])
+        currentRows = result?.[0] || []
+        const prospective = readStorageConfigFromRows(applyStorageRows(currentRows, category, normalizedItems.map(entry => ({ key:entry.item.key, value:entry.normalized }))))
+        await assertQiniuBucketImmutable(runner, category, currentRows, prospective)
+        assertStorageUpdateAllowed(category, prospective)
+      }
+      for (const entry of normalizedItems) {
+        await runner(`
+          INSERT INTO system_config (category, \`key\`, \`value\`, label, sort_order)
+          VALUES (?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`), label = VALUES(label), sort_order = VALUES(sort_order), updated_at = NOW()
+        `, [category, entry.item.key, entry.storedValue, entry.item.label || '', entry.item.sort_order ?? entry.index])
+        changedKeys.push(entry.item.key)
+      }
+    }
+    if (category === 'media_storage' || category === 'qiniu') await withTransaction(writeItems)
+    else await writeItems(async (...args) => {
+      const result = await queryRun(...args)
+      return [result]
+    })
     if (category === 'crypto_wallet') resetFixedAddressCache()
     if (category === 'sms') resetSmsConfigCache()
+    if (category === 'media_storage' || category === 'qiniu') invalidateStorageConfigCache()
     if (changedKeys.length) await auditConfigChange(req, 'system_config_batch_updated', category, changedKeys)
     res.json({ ok: true, count: changedKeys.length })
   } catch (err) {
@@ -415,6 +531,7 @@ router.delete('/system-config/:id', authMiddleware, adminOnly, async (req, res) 
     await queryRun('DELETE FROM system_config WHERE id = ?', [req.params.id])
     if (item?.category === 'crypto_wallet') resetFixedAddressCache()
     if (item?.category === 'sms') resetSmsConfigCache()
+    if (item?.category === 'media_storage' || item?.category === 'qiniu') invalidateStorageConfigCache()
     await auditConfigChange(req, 'system_config_deleted', item.category, [item.key])
     res.json({ ok: true })
   } catch (err) {
@@ -430,11 +547,97 @@ router.delete('/system-config/category/:category', authMiddleware, adminOnly, as
     await queryRun('DELETE FROM system_config WHERE category = ?', [req.params.category])
     if (req.params.category === 'crypto_wallet') resetFixedAddressCache()
     if (req.params.category === 'sms') resetSmsConfigCache()
+    if (req.params.category === 'media_storage' || req.params.category === 'qiniu') invalidateStorageConfigCache()
     await auditConfigChange(req, 'system_config_category_deleted', req.params.category, Object.keys(ADMIN_CONFIG_SCHEMA[req.params.category].keys))
     res.json({ ok: true })
   } catch (err) {
     console.error('[Config] Delete category error:', err)
     res.status(400).json({ ok: false, error: configErrorMessage(err) })
+  }
+})
+
+const STORAGE_TEST_ERROR_CODES = new Set([
+  'storage_qiniu_configuration_invalid', 'storage_qiniu_connection_test_failed', 'storage_qiniu_upload_failed',
+  'storage_qiniu_stat_failed', 'storage_qiniu_download_failed', 'storage_qiniu_delete_failed', 'storage_qiniu_cleanup_failed',
+  'storage_qiniu_object_key_mismatch', 'storage_qiniu_object_missing', 'storage_qiniu_object_size_mismatch', 'storage_qiniu_object_mime_mismatch', 'storage_config_changed_during_test',
+])
+
+function storageTestError(error) {
+  const code = STORAGE_TEST_ERROR_CODES.has(error?.code) ? error.code : 'storage_qiniu_connection_test_failed'
+  const messages = {
+    storage_qiniu_configuration_invalid:'七牛配置不完整或域名不是 HTTPS，请检查连接配置。',
+    storage_qiniu_connection_test_failed:'七牛连接测试失败，请检查凭证、空间和网络后重试。',
+    storage_qiniu_upload_failed:'测试对象上传失败，请检查空间写入权限。',
+    storage_qiniu_stat_failed:'测试对象读取失败，请检查空间访问权限。',
+    storage_qiniu_download_failed:'测试对象 HTTPS 读取失败，请检查私有域名、回源和访问权限。',
+    storage_qiniu_delete_failed:'测试对象删除失败，请检查空间删除权限。',
+    storage_qiniu_cleanup_failed:'测试对象清理失败，系统已标记测试失败，请稍后重试。',
+    storage_qiniu_object_key_mismatch:'云端返回的测试对象与本次会话不一致。',
+    storage_qiniu_object_missing:'云端未找到上传对象，不能确认直传结果。',
+    storage_qiniu_object_size_mismatch:'云端测试对象大小校验失败。',
+    storage_qiniu_object_mime_mismatch:'云端测试对象 MIME 与上传会话不一致。',
+    storage_config_changed_during_test:'测试期间配置发生变化，请保存后重新测试。',
+  }
+  return { code, message:messages[code] }
+}
+
+function sqlDateTime(date = new Date()) {
+  return date.toISOString().slice(0, 19).replace('T', ' ')
+}
+
+async function persistStorageTestResult({ configVersion, status, stage, testedAt, errorCode = '', cleanupPending = false }) {
+  return withTransaction(async runner => {
+    const [rows] = await runner('SELECT category, `key`, `value` FROM system_config WHERE category IN (?, ?) ORDER BY category, sort_order, id FOR UPDATE', ['media_storage', 'qiniu'])
+    const current = readStorageConfigFromRows(rows || [])
+    if (current.configVersion !== configVersion) throw new Error('storage_config_changed_during_test')
+    const values = [
+      ['qiniu_connection_test_version', configVersion],
+      ['qiniu_connection_test_status', status],
+      ['qiniu_connection_test_stage', stage || ''],
+      ['qiniu_connection_tested_at', testedAt || sqlDateTime()],
+      ['qiniu_connection_test_error', errorCode || ''],
+      ['qiniu_connection_test_cleanup_pending', cleanupPending ? 'true' : 'false'],
+    ]
+    for (const [key, value] of values) {
+      await runner(`
+        INSERT INTO system_config (category, \`key\`, \`value\`, label, sort_order)
+        VALUES (?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`), updated_at = NOW()
+      `, ['media_storage', key, String(value), `七牛连接测试 ${key}`, 6])
+    }
+    return { configVersion, status, stage:stage || '', testedAt:testedAt || sqlDateTime(), error:errorCode || '', cleanupPending:Boolean(cleanupPending) }
+  })
+}
+
+// Admin: test the current Qiniu configuration. The temporary object is
+// created and deleted by the provider; credentials, tokens and signed URLs
+// never enter the response or the audit detail.
+router.post('/system-config/media_storage/test', authMiddleware, adminOnly, async (req, res) => {
+  let config
+  try {
+    config = await loadStorageConfig({ force:true })
+    if (!isQiniuConfigured(config.qiniu)) throw Object.assign(new Error('storage_qiniu_configuration_invalid'), { code:'storage_qiniu_configuration_invalid', stage:'credentials' })
+    const result = await testStorageConnection(config)
+    const testedAt = sqlDateTime()
+    const stored = await persistStorageTestResult({ configVersion:config.configVersion, status:'succeeded', stage:result.stage || 'completed', testedAt, cleanupPending:false })
+    invalidateStorageConfigCache()
+    await auditConfigChange(req, 'system_config_storage_tested', 'media_storage', ['qiniu_connection_test'])
+    return res.json({ ok:true, provider:'qiniu', config_version:config.configVersion, test:{ status:stored.status, stage:stored.stage, tested_at:stored.testedAt, cleanup_pending:stored.cleanupPending } })
+  } catch (error) {
+    const safe = storageTestError(error)
+    try {
+      if (config?.configVersion) {
+        const stored = await persistStorageTestResult({ configVersion:config.configVersion, status:'failed', stage:error?.stage || 'credentials', testedAt:sqlDateTime(), errorCode:safe.code, cleanupPending:safe.code === 'storage_qiniu_cleanup_failed' || Boolean(error?.cleanupFailed) })
+        invalidateStorageConfigCache()
+        await auditConfigChange(req, 'system_config_storage_tested', 'media_storage', ['qiniu_connection_test'])
+        return res.status(safe.code === 'storage_config_changed_during_test' ? 409 : 400).json({ ok:false, provider:'qiniu', config_version:config.configVersion, test:{ status:stored.status, stage:stored.stage, tested_at:stored.testedAt, cleanup_pending:stored.cleanupPending }, code:safe.code, error:safe.message })
+      }
+    } catch (persistError) {
+      if (persistError?.message === 'storage_config_changed_during_test') {
+        return res.status(409).json({ ok:false, code:'storage_config_changed_during_test', error:'测试期间配置发生变化，请保存后重新测试。' })
+      }
+    }
+    return res.status(400).json({ ok:false, code:safe.code, error:safe.message })
   }
 })
 

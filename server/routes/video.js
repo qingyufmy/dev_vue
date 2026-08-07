@@ -7,8 +7,12 @@ import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, optionalAuth, adminOnly } from '../middleware/auth.js'
 import { fetchBilibiliVideo } from '../utils.js'
 import { canAccessMembershipLevel, decorateMembership } from '../membership.js'
-import { buildSignedVideoUrl, verifySignedVideoUrl } from '../video-access.js'
+import { buildSignedManagedVideoUrl, buildSignedVideoUrl, verifySignedVideoUrl } from '../video-access.js'
 import { PUBLIC_UPLOAD_DIR } from '../config.js'
+import managedVideoRouter from './video-managed.js'
+import { createStorageService } from '../storage/storage-service.js'
+import { loadStoredFile } from '../storage/stored-file-service.js'
+import { isSafeVideoSource } from '../storage/video-validator.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const uploadDir = join(PUBLIC_UPLOAD_DIR, 'videos')
@@ -37,6 +41,11 @@ const upload = multer({
 })
 
 const router = Router()
+
+// Phase 4 managed video endpoints are registered first. Legacy handlers below
+// remain available for old rows and external Bilibili/YouTube integrations;
+// they are never used as a trust boundary for new qiniu confirmations.
+router.use(managedVideoRouter)
 
 // ===== Get video info for an episode =====
 router.get('/video-stream', optionalAuth, async (req, res) => {
@@ -68,6 +77,24 @@ router.get('/video-stream', optionalAuth, async (req, res) => {
     const accessLevel = stream?.access_level || course?.access_level || 'free'
     if (!canAccessMembershipLevel(req.user, accessLevel)) {
       return res.status(403).json({ ok:false, error:'当前会员权限不可播放该课程' })
+    }
+
+    if (stream && stream.stored_file_id && isSafeVideoSource(stream.video_source)) {
+      res.setHeader('Cache-Control', 'private, no-store')
+      const stored = await loadStoredFile(stream.stored_file_id)
+      if (!stored || stored.status !== 'ready') return res.status(404).json({ ok: false, error: 'video_object_unavailable' })
+      let playbackUrl = ''
+      if (stream.video_source === 'local_mp4') playbackUrl = buildSignedManagedVideoUrl(stream.id, req.user?.id || 0)
+      else {
+        const storage = await createStorageService()
+        playbackUrl = await storage.createReadUrl({ provider: 'qiniu', objectKey: stored.object_key, purpose: 'video' }, { ttlSeconds: 300 })
+      }
+      const managedStream = {
+        id: stream.id, episodeId: stream.episode_id, videoSource: stream.video_source, source: stream.video_source,
+        playbackUrl, localPath: stream.video_source === 'local_mp4' ? playbackUrl : '', qiniuKey: '', quality: stream.quality,
+        duration: stream.duration, accessLevel,
+      }
+      return res.json({ ok: true, stream: managedStream, videoSource: stream.video_source, playbackUrl, localPath: managedStream.localPath, qiniuKey: '', bilibiliId: stream.bilibili_id || course?.bilibili_id || '', youtubeId: course?.youtube_id || null })
     }
 
     if (stream) {
@@ -223,6 +250,8 @@ router.get('/video-file/:filename', optionalAuth, async (req, res) => {
         'Accept-Ranges': 'bytes',
         'Content-Length': chunkSize,
         'Content-Type': 'video/mp4',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'private, no-store',
       })
       createReadStream(filePath, { start, end }).pipe(res)
     } else {
@@ -230,6 +259,8 @@ router.get('/video-file/:filename', optionalAuth, async (req, res) => {
         'Content-Length': fileSize,
         'Content-Type': 'video/mp4',
         'Accept-Ranges': 'bytes',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'private, no-store',
       })
       createReadStream(filePath).pipe(res)
     }

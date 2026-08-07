@@ -400,16 +400,43 @@ async function uploadReplyDraftImages(submitBtn) {
       submitBtn.textContent = `上传图片 ${index + 1}/${replyDraftImages.length}...`
     }
 
-    const response = await api.postForm('/api/post-images', formData)
-    if (!response.ok || !response.assetId || !response.url) {
-      throw new Error(response.error || '上传回复图片失败')
-    }
+    const response = await uploadPostImageWithStorage(image.file, formData, phase => { if (submitBtn) submitBtn.textContent = `${phase} ${index + 1}/${replyDraftImages.length}...` })
+    if (!response.ok || !response.assetId || !response.url) throw new Error(response.error || '上传回复图片失败')
 
     uploadedAssetIds.push(response.assetId)
     uploadedUrls.push(response.url)
   }
 
   return { assetIds: uploadedAssetIds, urls: uploadedUrls }
+}
+
+let postImageStorageProviderCache = null
+async function getPostImageStorageProvider() {
+  if (postImageStorageProviderCache && postImageStorageProviderCache.expiresAt > Date.now()) return postImageStorageProviderCache.provider
+  const result = await api.get('/api/post-images/storage-provider')
+  if (!result.ok || !['local', 'qiniu'].includes(result.provider)) throw new Error(result.error || '无法读取图片存储位置')
+  postImageStorageProviderCache = { provider:result.provider, expiresAt:Date.now() + 25_000 }
+  return result.provider
+}
+
+async function uploadPostImageWithStorage(file, multipart, onPhase) {
+  const provider = await getPostImageStorageProvider()
+  if (provider !== 'qiniu') {
+    onPhase?.('上传图片')
+    return api.postForm('/api/post-images', multipart)
+  }
+  onPhase?.('创建直传会话')
+  const session = await api.post('/api/post-images/upload-session', { originalName:file.name || 'post-image', mimeType:file.type || '', sizeBytes:file.size })
+  if (!session.ok || session.provider !== 'qiniu' || !session.uploadUrl || !session.token) return { ok:false, error:session.error || '七牛直传会话无效', code:session.code }
+  onPhase?.('七牛直传中')
+  const upload = new FormData()
+  upload.append('token', session.token)
+  upload.append('key', session.objectKey)
+  upload.append('file', file, file.name || 'post-image')
+  const uploaded = await fetch(session.uploadUrl, { method:'POST', body:upload })
+  if (!uploaded.ok) return { ok:false, error:'七牛直传上传失败', code:'storage_qiniu_upload_failed' }
+  onPhase?.('服务端确认')
+  return api.post('/api/post-images/confirm', { sessionId:session.sessionId, key:session.objectKey })
 }
 
 function closePostImageLightbox() {
@@ -550,10 +577,8 @@ async function uploadEditorImages(editorRoot, submitBtn) {
       submitBtn.textContent = `上传图片 ${index + 1}/${dataImages.length}...`
     }
 
-    const response = await api.postForm('/api/post-images', formData)
-    if (!response.ok || !response.assetId || !response.url) {
-      throw new Error(response.error || '上传图片失败')
-    }
+    const response = await uploadPostImageWithStorage(blob, formData, phase => { if (submitBtn) submitBtn.textContent = `${phase} ${index + 1}/${dataImages.length}...` })
+    if (!response.ok || !response.assetId || !response.url) throw new Error(response.error || '上传图片失败')
 
     uploadedAssetIds.push(response.assetId)
     image.setAttribute('src', response.url)
@@ -1436,7 +1461,7 @@ document.addEventListener('click', (e) => {
   }
 })
 
-function initLocalPlayer(videoUrl) {
+function initLocalPlayer(videoUrl, options = {}) {
   const ep = state.currentEpisode
   if (ep) {
     const p = progress.get(ep.id)
@@ -1446,10 +1471,41 @@ function initLocalPlayer(videoUrl) {
   const container = document.getElementById('videoContainer')
   if (!container) return
 
-  container.innerHTML = '<video id="localPlayer" controls preload="metadata" style="width:100%;height:100%;"><source src="' + escapeHtml(videoUrl) + '" type="video/mp4">您的浏览器不支持视频播放</video>'
+  container.innerHTML = '<video id="localPlayer" controls preload="metadata" playsinline style="width:100%;height:100%;aspect-ratio:16/9;object-fit:contain;"><source src="' + escapeHtml(videoUrl) + '" type="video/mp4">您的浏览器不支持视频播放</video>'
 
   const video = document.getElementById('localPlayer')
   if (!video) return
+
+  let refreshAttempted = false
+  video.addEventListener('error', async () => {
+    if (!options.managed || !ep || state.currentEpisode?.id !== ep.id) return
+    if (refreshAttempted) {
+      const message = document.createElement('div')
+      message.className = 'video-error'
+      message.textContent = '视频链接已失效，请刷新页面后重试'
+      container.replaceChildren(message)
+      return
+    }
+    refreshAttempted = true
+    const currentTime = Number(video.currentTime || 0)
+    const wasPlaying = !video.paused
+    try {
+      const refreshed = await api.get(`/api/video-stream?episode=${ep.id}`)
+      if (!refreshed?.playbackUrl || (refreshed.videoSource !== 'local_mp4' && refreshed.videoSource !== 'qiniu_mp4')) throw new Error('managed_video_refresh_invalid')
+      video.src = refreshed.playbackUrl
+      video.load()
+      video.addEventListener('loadedmetadata', () => {
+        try { video.currentTime = Math.min(currentTime, Number.isFinite(video.duration) ? video.duration : currentTime) } catch {}
+        if (wasPlaying) video.play().catch(() => {})
+      }, { once: true })
+    } catch {
+      if (state.currentEpisode?.id !== ep.id) return
+      const message = document.createElement('div')
+      message.className = 'video-error'
+      message.textContent = '视频链接已失效，请刷新页面后重试'
+      container.replaceChildren(message)
+    }
+  })
 
   video.addEventListener('play', () => startWatchTimer())
   video.addEventListener('pause', () => stopWatchTimer())
@@ -1474,9 +1530,9 @@ function initLocalPlayer(videoUrl) {
   })
 }
 
-function initQiniuPlayer(videoUrl) {
+function initQiniuPlayer(videoUrl, options = {}) {
   // Qiniu CDN serves standard MP4, use same as local player
-  initLocalPlayer(videoUrl)
+  initLocalPlayer(videoUrl, options)
 }
 
 function destroyPlayer() {
@@ -2797,8 +2853,11 @@ function renderArticle() {
       if (state.currentEpisode?.id !== ep.id) return
       if (!r.ok) throw new Error(r.error || '视频加载失败')
 
-      // Priority: Bilibili > Local > Qiniu
-      if (r.bilibiliId) {
+      // Explicit managed source always wins over legacy external fields.
+      if ((r.videoSource === 'local_mp4' || r.videoSource === 'qiniu_mp4') && r.playbackUrl) {
+        if (r.videoSource === 'local_mp4') initLocalPlayer(r.playbackUrl, { managed: true, source: r.videoSource })
+        else initQiniuPlayer(r.playbackUrl, { managed: true, source: r.videoSource })
+      } else if (r.bilibiliId) {
         initBiliPlayer(r.bilibiliId)
       } else if (r.localPath) {
         initLocalPlayer(r.localPath)
@@ -2900,7 +2959,10 @@ function renderVideo() {
       if (state.currentEpisode?.id !== ep.id) return
       if (!r.ok) throw new Error(r.error || '视频加载失败')
 
-      if (r.bilibiliId) {
+      if ((r.videoSource === 'local_mp4' || r.videoSource === 'qiniu_mp4') && r.playbackUrl) {
+        if (r.videoSource === 'local_mp4') initLocalPlayer(r.playbackUrl, { managed: true, source: r.videoSource })
+        else initQiniuPlayer(r.playbackUrl, { managed: true, source: r.videoSource })
+      } else if (r.bilibiliId) {
         const container = document.getElementById('videoContainer')
         const safeBvid = /^BV[a-zA-Z0-9]+$/.test(r.bilibiliId) ? r.bilibiliId : ''
         if (container && safeBvid) {

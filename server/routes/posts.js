@@ -1,12 +1,15 @@
 import { Router } from 'express'
 import multer from 'multer'
 import { join } from 'path'
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs'
-import { queryOne, queryAll, queryRun } from '../db.js'
+import { existsSync, mkdirSync, unlinkSync } from 'fs'
+import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
 import { authMiddleware, optionalAuth } from '../middleware/auth.js'
 import { sanitizeRichContent } from '../html-sanitizer.js'
 import { createImageAssetName, detectImageType } from '../image-upload.js'
 import { PUBLIC_UPLOAD_DIR } from '../config.js'
+import { createStorageService } from '../storage/storage-service.js'
+import { createMultipartStoredFile, createDirectStorageSession, confirmDirectStorageSession, safeStorageError, loadStoredFile, STORED_FILE_OWNERS } from '../storage/stored-file-service.js'
+import { sendStoredFile } from '../storage/stored-file-response.js'
 
 const __uploadDir = PUBLIC_UPLOAD_DIR
 if (!existsSync(__uploadDir)) mkdirSync(__uploadDir, { recursive: true })
@@ -20,8 +23,9 @@ const postImageUpload = multer({
   storage: postImageStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter(req, file, cb) {
-    if (/^image\/(jpeg|png|webp|gif)$/.test(file.mimetype)) cb(null, true)
-    else cb(new Error('仅支持 JPEG/PNG/WebP/GIF 格式'))
+    // Client MIME is advisory. The route validates the actual magic bytes
+    // with detectImageType after multer has buffered the upload.
+    cb(null, true)
   },
 })
 
@@ -398,26 +402,94 @@ router.get('/post-reports', authMiddleware, async (req, res) => {
 
 // Post images upload
 router.post('/post-images', authMiddleware, postImageUpload.single('file'), async (req, res) => {
-  let savedPath = null
   try {
     if (!req.file) return res.json({ ok: false, error: '未收到图片文件' })
 
     const imageType = detectImageType(req.file.buffer)
     if (!imageType) return res.status(400).json({ ok:false, error:'仅支持真实的 JPEG、PNG、WebP 或 GIF 图片' })
     const assetId = createImageAssetName('img')
-    const savedName = `${assetId}${imageType.extension}`
-    savedPath = join(__uploadDir, savedName)
-    writeFileSync(savedPath, req.file.buffer, { flag:'wx' })
-    const url = `/uploads/${savedName}`
-
-    await queryRun('INSERT INTO post_assets (asset_id, user_id, file_name, file_type, file_size, url) VALUES (?, ?, ?, ?, ?, ?)',
-      [assetId, req.user.id, req.file.originalname, imageType.mimeType, req.file.size, url])
-
-    res.json({ ok: true, assetId, url })
+    const storage = await createStorageService()
+    const result = await createMultipartStoredFile({
+      storage, purpose:'image', body:req.file.buffer, originalName:req.file.originalname,
+      mimeType:imageType.mimeType, ownerType:STORED_FILE_OWNERS.POST_IMAGE, ownerId:req.user.id,
+      createdBy:req.user.id, visibility:'public', allowGif:imageType.mimeType === 'image/gif',
+      insertBusiness:async (run, context) => {
+        const url = `/api/post-images/${encodeURIComponent(assetId)}/file`
+        await run(`INSERT INTO post_assets (asset_id, user_id, file_name, file_type, file_size, url, stored_file_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`, [assetId, req.user.id, req.file.originalname, imageType.mimeType, req.file.size, url, context.storedFileId])
+        return { assetId, url }
+      },
+    })
+    res.json({ ok:true, assetId, url:result.business.url, storage_provider:result.provider, upload_phase:'confirmed' })
   } catch (err) {
     console.error('[Posts] Image upload error:', err)
-    if (savedPath) try { unlinkSync(savedPath) } catch {}
-    res.json({ ok: false, error: '上传失败' })
+    const safe = safeStorageError(err)
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code, stage:safe.stage, upload_phase:'failed' })
+  }
+})
+
+// Lightweight preflight used by the browser to avoid sending a multipart
+// body to the app when image storage is configured for qiniu.
+router.get('/post-images/storage-provider', authMiddleware, async (req, res) => {
+  try {
+    const storage = await createStorageService()
+    res.json({ ok:true, provider:storage.config.effectiveProviders?.image || storage.configuredProvider('image'), expiresAt:new Date(Date.now() + 30_000).toISOString() })
+  } catch (error) {
+    const safe = safeStorageError(error, 'storage_provider_lookup_failed')
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code })
+  }
+})
+
+router.post('/post-images/upload-session', authMiddleware, async (req, res) => {
+  try {
+    const storage = await createStorageService()
+    const session = await createDirectStorageSession({
+      storage, purpose:'image', originalName:req.body?.originalName, mimeType:req.body?.mimeType,
+      sizeBytes:req.body?.sizeBytes, ownerType:STORED_FILE_OWNERS.POST_IMAGE, ownerId:req.user.id,
+      createdBy:req.user.id, visibility:'public', allowGif:true,
+    })
+    res.status(201).json({ ok:true, ...session, storage_provider:session.provider, upload_phase:'session_created' })
+  } catch (error) {
+    const safe = safeStorageError(error, 'storage_session_create_failed')
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code, stage:safe.stage, upload_phase:'failed' })
+  }
+})
+
+router.post('/post-images/confirm', authMiddleware, async (req, res) => {
+  try {
+    const storage = await createStorageService()
+    const completed = await confirmDirectStorageSession({
+      storage, sessionId:String(req.body?.sessionId || ''), createdBy:req.user.id, result:{ key:req.body?.key },
+      validateSession:async session => {
+        if (session.owner_type !== STORED_FILE_OWNERS.POST_IMAGE || Number(session.owner_id) !== Number(req.user.id)) throw Object.assign(new Error('storage_session_owner_mismatch'), { code:'storage_session_owner_mismatch' })
+      },
+      insertBusiness:async (run, context) => {
+        const assetId = createImageAssetName('img')
+        const url = `/api/post-images/${encodeURIComponent(assetId)}/file`
+        await run(`INSERT INTO post_assets (asset_id, user_id, file_name, file_type, file_size, url, stored_file_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`, [assetId, req.user.id, context.metadata.originalName, context.metadata.mimeType, context.metadata.sizeBytes, url, context.storedFileId])
+        return { assetId, url }
+      },
+    })
+    res.status(201).json({ ok:true, ...completed.business, storage_provider:completed.provider, upload_phase:'confirmed' })
+  } catch (error) {
+    const safe = safeStorageError(error, 'storage_confirm_failed')
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code, stage:safe.stage, cleanup_pending:!!safe.cleanupPending, upload_phase:'failed' })
+  }
+})
+
+router.get('/post-images/:assetId/file', async (req, res) => {
+  try {
+    const asset = await queryOne('SELECT * FROM post_assets WHERE asset_id = ? AND stored_file_id IS NOT NULL', [req.params.assetId])
+    if (!asset) return res.status(404).json({ ok:false, error:'图片不存在' })
+    const stored = await loadStoredFile(asset.stored_file_id)
+    if (!stored) return res.status(404).json({ ok:false, error:'图片文件不存在' })
+    const storage = await createStorageService()
+    const served = await sendStoredFile({ res, storage, row:stored })
+    if (!served && !res.headersSent) res.status(404).json({ ok:false, error:'图片文件不存在' })
+  } catch (error) {
+    console.error('[Posts] Image read error:', error)
+    if (!res.headersSent) res.status(404).json({ ok:false, error:'图片文件不存在' })
   }
 })
 
@@ -427,9 +499,30 @@ router.delete('/post-images', authMiddleware, async (req, res) => {
     const { id } = req.query
     const asset = await queryOne('SELECT * FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
     if (asset) {
-      const filePath = join(__uploadDir, asset.url?.replace(/^\/uploads\//, '') || '')
-      try { unlinkSync(filePath) } catch {}
-      await queryRun('DELETE FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
+      if (asset.stored_file_id) {
+        const stored = await loadStoredFile(asset.stored_file_id, { includeDeleted:true })
+        await withTransaction(async run => {
+          await run('DELETE FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
+          await run("UPDATE stored_files SET status = 'deleting', updated_at = NOW() WHERE id = ?", [asset.stored_file_id])
+        })
+        if (stored && !['deleted', 'failed'].includes(stored.status)) {
+          const storage = await createStorageService()
+          try { await storage.delete({ provider:stored.storage_provider, objectKey:stored.object_key, configVersion:stored.config_version }) } catch (error) {
+            const safe = safeStorageError(error, 'storage_delete_failed')
+            return res.status(400).json({ ok:false, error:safe.code, code:safe.code, cleanup_pending:true })
+          }
+        }
+        try { await queryRun("UPDATE stored_files SET status = 'deleted', deleted_at = NOW(), updated_at = NOW() WHERE id = ?", [asset.stored_file_id]) } catch {
+          return res.status(400).json({ ok:false, error:'storage_delete_state_pending', code:'storage_delete_state_pending', cleanup_pending:true })
+        }
+      } else {
+        const fileName = String(asset.url || '').replace(/^\/uploads\//, '')
+        if (fileName && !fileName.includes('/') && !fileName.includes('\\')) {
+          const filePath = join(__uploadDir, fileName)
+          try { unlinkSync(filePath) } catch {}
+        }
+        await queryRun('DELETE FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
+      }
     }
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '删除失败' }) }
